@@ -1,0 +1,227 @@
+<%
+  /**
+   * Server-rendered navigation bar.
+   * Replaces the client-side nav.js (injectNav).
+   *
+   * Locals:
+   *   service    — 'core' | 'benchmark' | 'rag'
+   *   activePage — slug of the current page for highlight
+   *   publicUrls — normalized browser-reachable service authorities
+   */
+  const cleanBase = (value) => String(value || '').replace(/\/+$/, '');
+  const urls = typeof publicUrls === 'object' && publicUrls ? publicUrls : {};
+  const configuredBase = (name) => cleanBase(urls[name]);
+  // Same-service links stay relative, preserving whichever HTTP/HTTPS front
+  // door rendered the page. Only cross-service hops use public URL authority.
+  const coreBase = service === 'core' ? '' : configuredBase('core');
+  const benchBase = service === 'benchmark' ? '' : configuredBase('benchmark');
+  const ragBase = service === 'rag' ? '' : configuredBase('rag');
+  const openclawBase = configuredBase(
+    'openclawControl',
+    typeof openclawControl === 'object' ? openclawControl.launchBaseUrl : ''
+  );
+
+  /* Retired pages that fold into nerve-center */
+  const retiredToNerveCenter = [
+    'operations', 'hosts', 'cluster', 'alerts',
+    'dashboard', 'alert-analytics', 'hardware-matrix'
+  ];
+  const remapped = { 'cost-tracking': 'analytics', 'data-toolbox': 'storage' };
+
+  const raw = typeof activePage === 'string' ? activePage : '';
+  const effectiveActive = remapped[raw]
+    || (retiredToNerveCenter.includes(raw) ? 'nerve-center' : raw);
+
+  /* Product-oriented information architecture. The portal remains the full
+     service map; this navigation optimizes common operator journeys. */
+  const navItems = [
+    {
+      label: 'Work', icon: 'fa-list-check', id: 'work-group',
+      children: [
+        { label: 'Pipeline',     href: coreBase + '/pipeline',  icon: 'fa-list-check', id: 'pipeline' },
+        { label: 'Agent Ops handoff', href: coreBase + '/agent-ops', icon: 'fa-users-gear', id: 'agent-ops' },
+        {
+          label: 'Runtime Chat',
+          href: openclawBase
+            ? (service === 'core' ? '/api/openclaw/control-launch/chat' : openclawBase + '/chat')
+            : coreBase + '/agent-ops',
+          icon: 'fa-comments', id: 'openclaw-chat', external: !!openclawBase
+        }
+      ]
+    },
+    {
+      label: 'Operate', icon: 'fa-gauge-high', id: 'operate-group',
+      children: [
+        { label: 'Nerve Center', href: coreBase + '/nerve-center',     icon: 'fa-brain',          id: 'nerve-center' },
+        { label: 'Schedule',     href: coreBase + '/cluster-schedule', icon: 'fa-calendar-alt',   id: 'cluster-schedule' },
+        { label: 'Models',       href: coreBase + '/models',           icon: 'fa-cubes',          id: 'models' },
+        { label: 'Analytics',    href: coreBase + '/analytics',        icon: 'fa-chart-line',     id: 'analytics' },
+        { section: 'Administration' },
+        { label: 'Performance',  href: coreBase + '/performance',      icon: 'fa-tachometer-alt', id: 'performance' },
+        { label: 'Backup',       href: coreBase + '/backup',           icon: 'fa-box-archive',    id: 'backup' },
+        { label: 'Governance',   href: coreBase + '/docs-steward',     icon: 'fa-scale-balanced', id: 'docs-steward' },
+        { label: 'Keyboard Shortcuts', icon: 'fa-keyboard',            id: 'keyboard-shortcuts',  action: 'show-shortcuts' }
+      ]
+    },
+    {
+      label: 'Knowledge', icon: 'fa-book', id: 'knowledge-group',
+      children: [
+        { label: 'RAG Dashboard', href: ragBase + '/',          icon: 'fa-gauge',            id: 'rag' },
+        { label: 'Search',        href: ragBase + '/search',     icon: 'fa-magnifying-glass', id: 'rag-search' },
+        { label: 'Documents',     href: ragBase + '/documents',  icon: 'fa-file-lines',       id: 'rag-documents' },
+        { label: 'Upload',        href: ragBase + '/upload',     icon: 'fa-upload',           id: 'rag-upload' },
+        { section: 'Data estate' },
+        { label: 'Data Toolbox',  href: coreBase + '/data-toolbox#storage', icon: 'fa-database', id: 'storage' },
+        { section: 'Agent memory' },
+        { label: 'Memory Review', href: coreBase + '/memory-review', icon: 'fa-brain', id: 'memory-review' }
+      ]
+    },
+    {
+      label: 'Labs', icon: 'fa-flask', id: 'labs-group',
+      children: [
+        { section: 'Evaluation' },
+        { label: 'Engine Room',      href: benchBase + '/',                icon: 'fa-trophy',     id: 'benchmark' },
+        { label: 'Leaderboard',      href: benchBase + '/leaderboard',     icon: 'fa-medal',      id: 'leaderboard' },
+        { label: 'Profiler',         href: benchBase + '/profiler',        icon: 'fa-microscope', id: 'profiler' },
+        { label: 'Courthouse',       href: benchBase + '/courthouse',      icon: 'fa-gavel',      id: 'courthouse' },
+        { label: 'Results Explorer', href: benchBase + '/results-explorer', icon: 'fa-table-list', id: 'results-explorer' },
+        { label: 'Efficiency Map',   href: benchBase + '/efficiency-map',  icon: 'fa-bolt',       id: 'efficiency-map' },
+        { section: 'Experimental & frozen' },
+        { label: 'Playground',       href: coreBase + '/playground',       icon: 'fa-comments',        id: 'playground' },
+        { label: 'Council',          href: coreBase + '/council',          icon: 'fa-users',           id: 'council' },
+        { label: 'Prompts',          href: coreBase + '/prompts',          icon: 'fa-pen-fancy',       id: 'prompts' },
+        { label: 'Voice',            href: coreBase + '/voice',            icon: 'fa-microphone',      id: 'voice' },
+        { label: 'Voice Personas',   href: coreBase + '/voice-personas',   icon: 'fa-headset',         id: 'voice-personas' },
+        { label: 'Printer Vision',   href: coreBase + '/printer-vision',   icon: 'fa-print',           id: 'printer-vision' },
+        { label: 'Planning · frozen', href: coreBase + '/planning',        icon: 'fa-snowflake',       id: 'planning' }
+      ]
+    }
+  ];
+
+  function isActive(id) { return id === effectiveActive; }
+  function isChildActive(children) {
+    return children.some(function(c) { return c.id && isActive(c.id); });
+  }
+%>
+
+
+<div id="nav-container">
+  <nav class="top-nav">
+    <div class="nav-left">
+      <a href="<%= coreBase %>/portal/" class="nav-brand" title="Open AgentX portal">
+        <i class="fas fa-bolt"></i> AgentX
+      </a>
+      <% if (typeof service === 'string' && service !== 'core') { %>
+        <span class="nav-service-tag"><%= service %></span>
+      <% } %>
+    </div>
+
+    <div class="nav-right">
+      <% navItems.forEach(function(item) { %>
+        <% if (item.children) { %>
+          <%
+            var groupActive = isChildActive(item.children);
+            var gaCls = groupActive ? ' active' : '';
+          %>
+          <div class="nav-item">
+            <button type="button" class="nav-link<%= gaCls %>" aria-haspopup="true" aria-expanded="false">
+              <i class="fas <%= item.icon %>"></i> <%= item.label %>
+              <i class="fas fa-angle-down" style="font-size:10px;margin-left:4px;opacity:0.5;"></i>
+            </button>
+            <div class="nav-dropdown">
+              <% item.children.forEach(function(child) { %>
+                <% if (child.section) { %>
+                  <div class="nav-dropdown-section"><%= child.section %></div>
+                <% } else if (child.action) { %>
+                  <button type="button"
+                          class="dropdown-item<%= isActive(child.id) ? ' active' : '' %>"
+                          data-nav-action="<%= child.action %>">
+                    <i class="fas <%= child.icon %>"></i> <%= child.label %>
+                  </button>
+                <% } else { %>
+                  <a href="<%= child.href %>"
+                     class="dropdown-item<%= isActive(child.id) ? ' active' : '' %>"
+                     <% if (child.external) { %>target="_blank" rel="noopener"<% } %>>
+                    <i class="fas <%= child.icon %>"></i> <%= child.label %>
+                    <% if (child.external) { %>
+                      <i class="fas fa-arrow-up-right-from-square" style="font-size:9px;opacity:0.4;margin-left:2px;"></i>
+                    <% } %>
+                  </a>
+                <% } %>
+              <% }); %>
+            </div>
+          </div>
+        <% } else { %>
+          <%
+            var linkCls = 'nav-link'
+              + (item.primary ? ' primary' : '')
+              + (isActive(item.id) ? ' active' : '');
+          %>
+          <div class="nav-item">
+            <a href="<%= item.href %>" class="<%= linkCls %>">
+              <i class="fas <%= item.icon %>"></i> <%= item.label %>
+            </a>
+          </div>
+        <% } %>
+      <% }); %>
+    </div>
+  </nav>
+</div>
+
+<%- include('shortcuts-modal') %>
+
+<script>
+(function() {
+  /* ── Dropdown click toggle (for touch / accessibility) ─── */
+  var navItems = document.querySelectorAll('#nav-container .nav-item');
+  navItems.forEach(function(item) {
+    var btn = item.querySelector('button.nav-link');
+    if (!btn) return;
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      navItems.forEach(function(other) {
+        if (other !== item) {
+          other.classList.remove('open');
+          var otherButton = other.querySelector('button.nav-link');
+          if (otherButton) otherButton.setAttribute('aria-expanded', 'false');
+        }
+      });
+      item.classList.toggle('open');
+      btn.setAttribute('aria-expanded', item.classList.contains('open') ? 'true' : 'false');
+    });
+  });
+
+  /* Close dropdowns on outside click */
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.nav-item')) {
+      navItems.forEach(function(item) {
+        item.classList.remove('open');
+        var button = item.querySelector('button.nav-link');
+        if (button) button.setAttribute('aria-expanded', 'false');
+      });
+    }
+  });
+
+  /* ── Action handlers (keyboard shortcuts, etc.) ────────── */
+  document.querySelectorAll('#nav-container [data-nav-action]').forEach(function(el) {
+    el.addEventListener('click', function() {
+      var action = el.dataset.navAction;
+      if (action === 'show-shortcuts' && typeof ShortcutsHelpModal !== 'undefined') {
+        navItems.forEach(function(item) { item.classList.remove('open'); });
+        ShortcutsHelpModal.show();
+      }
+    });
+  });
+
+  /* ── Ctrl+/ opens shortcuts modal ──────────────────────── */
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+      e.preventDefault();
+      if (typeof ShortcutsHelpModal !== 'undefined') {
+        ShortcutsHelpModal.show();
+      }
+    }
+  });
+})();
+</script>

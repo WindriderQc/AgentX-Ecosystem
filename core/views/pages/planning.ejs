@@ -1,0 +1,391 @@
+<main class="planning-page" id="planningRoot" data-lifecycle="frozen">
+  <header class="planning-topbar">
+    <div class="planning-title-block">
+      <span class="planning-app-icon"><i class="fas fa-compass-drafting"></i></span>
+      <div>
+        <div class="planning-title-line">
+          <h1>Planning</h1>
+          <span class="planning-live-badge planning-frozen-badge"><i class="fas fa-snowflake"></i> Frozen</span>
+        </div>
+        <p>Historical strategy and evidence reference</p>
+      </div>
+    </div>
+    <div class="planning-topbar-actions">
+      <button class="planning-icon-btn" id="planningRefreshBtn" type="button" title="Refresh planning data" aria-label="Refresh planning data">
+        <i class="fas fa-rotate"></i>
+      </button>
+      <button class="planning-btn planning-btn-secondary" id="planningBootstrapBtn" type="button" hidden>
+        <i class="fas fa-inbox"></i> Review delivery intake
+      </button>
+      <div class="planning-create-wrap" hidden>
+        <button class="planning-btn planning-btn-primary" id="planningCreateBtn" type="button" aria-expanded="false">
+          <i class="fas fa-plus"></i> Create
+          <i class="fas fa-chevron-down planning-btn-chevron"></i>
+        </button>
+        <div class="planning-create-menu" id="planningCreateMenu" hidden>
+          <button type="button" data-planning-create-type="workstream">
+            <i class="fas fa-diagram-project"></i>
+            <span><strong>Workstream</strong><small>A durable strategic area</small></span>
+          </button>
+          <button type="button" data-planning-create-type="outcome">
+            <i class="fas fa-bullseye"></i>
+            <span><strong>Goal / outcome</strong><small>A measurable definition of success</small></span>
+          </button>
+          <button type="button" data-planning-create-type="milestone">
+            <i class="fas fa-flag-checkered"></i>
+            <span><strong>Milestone</strong><small>A dated delivery checkpoint</small></span>
+          </button>
+          <button type="button" data-planning-create-type="idea">
+            <i class="fas fa-lightbulb"></i>
+            <span><strong>Idea</strong><small>Capture before committing</small></span>
+          </button>
+          <button type="button" data-planning-create-type="decision">
+            <i class="fas fa-scale-balanced"></i>
+            <span><strong>Decision</strong><small>Preserve context and rationale</small></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="planning-freeze-banner" role="status">
+    <i class="fas fa-snowflake" aria-hidden="true"></i>
+    <div>
+      <strong>Planning is frozen by the platform realignment.</strong>
+      <span>No reconcile automation runs here. Existing records remain available for reference and correction; current delivery belongs in Pipeline.</span>
+    </div>
+    <a class="planning-btn planning-btn-primary" href="/pipeline"><i class="fas fa-list-check"></i> Open Pipeline</a>
+  </section>
+
+  <section class="planning-app-shell">
+    <aside class="planning-navigation">
+      <div class="planning-nav-section">
+        <span class="planning-nav-label">Plan</span>
+        <nav class="planning-view-tabs" id="planningViewTabs" aria-label="Planning views">
+          <button type="button" class="active" data-planning-view="portfolio">
+            <i class="fas fa-house"></i><span>Home</span>
+          </button>
+          <button type="button" data-planning-view="goals">
+            <i class="fas fa-bullseye"></i><span>Goals</span><em id="planningNavGoalCount">0</em>
+          </button>
+          <button type="button" data-planning-view="roadmap">
+            <i class="fas fa-road"></i><span>Roadmap</span>
+          </button>
+          <button type="button" data-planning-view="board">
+            <i class="fas fa-table-columns"></i><span>Delivery</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="planning-nav-section">
+        <span class="planning-nav-label">Think</span>
+        <nav class="planning-view-tabs">
+          <button type="button" data-planning-view="ideas">
+            <i class="fas fa-lightbulb"></i><span>Ideas</span><em id="planningNavIdeaCount">0</em>
+          </button>
+          <button type="button" data-planning-view="decisions">
+            <i class="fas fa-scale-balanced"></i><span>Decisions</span><em id="planningNavDecisionCount">0</em>
+          </button>
+        </nav>
+      </div>
+
+      <div class="planning-nav-section">
+        <span class="planning-nav-label">Learn</span>
+        <nav class="planning-view-tabs">
+          <button type="button" data-planning-view="evidence">
+            <i class="fas fa-folder-open"></i><span>Evidence</span><em id="planningNavEvidenceCount">0</em>
+          </button>
+        </nav>
+      </div>
+
+      <div class="planning-nav-section planning-execution-links">
+        <span class="planning-nav-label">Execute</span>
+        <a href="/pipeline"><i class="fas fa-list-check"></i><span>Pipeline</span><i class="fas fa-arrow-up-right"></i></a>
+        <a href="/cluster-schedule"><i class="fas fa-calendar-alt"></i><span>Runtime schedule</span><i class="fas fa-arrow-up-right"></i></a>
+      </div>
+
+      <div class="planning-workflow-card">
+        <span class="planning-nav-label">Operating rhythm</span>
+        <ol>
+          <li class="is-active"><i class="fas fa-lightbulb"></i><span>Capture</span></li>
+          <li><i class="fas fa-shapes"></i><span>Shape</span></li>
+          <li><i class="fas fa-bullseye"></i><span>Commit</span></li>
+          <li><i class="fas fa-bolt"></i><span>Deliver</span></li>
+          <li><i class="fas fa-link"></i><span>Prove</span></li>
+        </ol>
+      </div>
+    </aside>
+
+    <section class="planning-center">
+      <section class="planning-pulse" aria-label="Portfolio pulse">
+        <button class="planning-pulse-card planning-pulse-progress" type="button" data-planning-view-target="portfolio">
+          <span><small>Portfolio</small><strong id="planningPortfolioProgress">--</strong><em id="planningPortfolioProgressMeta">Across active work</em></span>
+          <span class="planning-mini-ring" id="planningPortfolioRing" style="--ring-progress:0"></span>
+        </button>
+        <button class="planning-pulse-card planning-pulse-attention" type="button" data-planning-view-target="board" data-planning-attention="true">
+          <span><small>Attention</small><strong id="planningCountAttention">--</strong><em id="planningAttentionMetaTop">Risk, blocks, overdue</em></span>
+          <i class="fas fa-triangle-exclamation"></i>
+        </button>
+        <button class="planning-pulse-card planning-pulse-alignment" type="button" data-planning-view-target="board">
+          <span><small>Pipeline linked</small><strong id="planningPipelineCoverage">--</strong><em id="planningCoverageMeta">Tasks tied to intent</em></span>
+          <i class="fas fa-diagram-project"></i>
+        </button>
+        <button class="planning-pulse-card planning-pulse-ideas" type="button" data-planning-view-target="ideas">
+          <span><small>Idea inbox</small><strong id="planningCountIdeas">--</strong><em id="planningIdeasMeta">Waiting for triage</em></span>
+          <i class="fas fa-lightbulb"></i>
+        </button>
+      </section>
+
+      <section class="planning-commandbar">
+        <div>
+          <div class="planning-section-kicker">Workspace</div>
+          <h2 id="planningWorkspaceTitle">Home</h2>
+          <p id="planningWorkspaceMeta">Loading the AgentX planning spine…</p>
+        </div>
+        <div class="planning-command-actions">
+          <label class="planning-search">
+            <i class="fas fa-magnifying-glass"></i>
+            <input id="planningSearchInput" type="search" placeholder="Search" aria-label="Search planning records">
+          </label>
+          <select id="planningTypeFilter" aria-label="Filter by type">
+            <option value="">All types</option>
+            <option value="workstream">Workstreams</option>
+            <option value="outcome">Goals</option>
+            <option value="milestone">Milestones</option>
+            <option value="idea">Ideas</option>
+            <option value="decision">Decisions</option>
+          </select>
+          <select id="planningStatusFilter" aria-label="Filter by status">
+            <option value="">All states</option>
+            <option value="inbox">Inbox</option>
+            <option value="draft">Draft</option>
+            <option value="triaged">Triaged</option>
+            <option value="planned">Planned</option>
+            <option value="active">Active</option>
+            <option value="at_risk">At risk</option>
+            <option value="blocked">Blocked</option>
+            <option value="completed">Completed</option>
+            <option value="promoted">Promoted</option>
+            <option value="parked">Parked</option>
+            <option value="rejected">Rejected</option>
+            <option value="proposed">Proposed</option>
+            <option value="accepted">Accepted</option>
+            <option value="superseded">Superseded</option>
+          </select>
+          <div class="planning-workspace-actions" id="planningWorkspaceActions"></div>
+        </div>
+      </section>
+
+      <section class="planning-main-panel">
+        <div class="planning-canvas" id="planningCanvas" aria-live="polite">
+          <div class="planning-loading-state">
+            <span class="planning-loading-orbit"><i class="fas fa-compass-drafting"></i></span>
+            <strong>Assembling portfolio</strong>
+            <small>Connecting strategy, delivery, runtime, and evidence.</small>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <aside class="planning-rail">
+      <section class="planning-rail-panel planning-rail-focus">
+        <header>
+          <div><span class="planning-section-kicker">Focus</span><h3>What needs you</h3></div>
+          <span class="planning-rail-count" id="planningAttentionCountRail">0</span>
+        </header>
+        <p class="planning-rail-meta" id="planningAttentionMeta">Risk, blocked work, and approaching dates</p>
+        <div class="planning-side-list" id="planningAttentionList">
+          <div class="planning-empty planning-empty-compact">Loading…</div>
+        </div>
+      </section>
+
+      <section class="planning-rail-panel" id="planningUnlinkedPanel">
+        <header>
+          <div><span class="planning-section-kicker">Delivery intake</span><h3>Unlinked pipeline</h3></div>
+          <button type="button" class="planning-text-btn" data-planning-review-intake>Review all <i class="fas fa-arrow-right"></i></button>
+        </header>
+        <p class="planning-rail-meta" id="planningUnlinkedMeta">Open work outside the planning structure</p>
+        <div class="planning-side-list" id="planningUnlinkedList">
+          <div class="planning-empty planning-empty-compact">Loading…</div>
+        </div>
+      </section>
+
+      <section class="planning-rail-panel">
+        <header>
+          <div><span class="planning-section-kicker">Execution layer</span><h3>Runtime schedule</h3></div>
+          <a href="/cluster-schedule">Open <i class="fas fa-arrow-up-right"></i></a>
+        </header>
+        <p class="planning-rail-meta" id="planningScheduleMeta">Upcoming automated work</p>
+        <div class="planning-side-list" id="planningScheduleList">
+          <div class="planning-empty planning-empty-compact">Loading…</div>
+        </div>
+      </section>
+    </aside>
+  </section>
+</main>
+
+<div class="planning-drawer-backdrop" id="planningDrawerBackdrop" hidden></div>
+<aside class="planning-drawer" id="planningDrawer" aria-hidden="true" aria-label="Planning item details">
+  <div id="planningDrawerContent"></div>
+</aside>
+
+<div class="planning-modal-backdrop" id="planningModalBackdrop" hidden>
+  <section class="planning-modal" role="dialog" aria-modal="true" aria-labelledby="planningModalTitle">
+    <header class="planning-modal-header">
+      <div class="planning-modal-heading">
+        <span class="planning-modal-type-icon" id="planningModalTypeIcon"><i class="fas fa-diagram-project"></i></span>
+        <div>
+          <div class="planning-eyebrow" id="planningModalTypeLabel">Workstream</div>
+          <h2 id="planningModalTitle">Create</h2>
+          <p id="planningModalSubtitle">A durable strategic area for related goals and delivery.</p>
+        </div>
+      </div>
+      <button type="button" class="planning-icon-btn" id="planningModalCloseBtn" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </header>
+    <form id="planningItemForm">
+      <input type="hidden" id="planningFormId">
+      <input type="hidden" id="planningFormStatus" value="draft">
+      <div class="planning-form-grid">
+        <label id="planningTypeField" hidden>
+          <span>Type</span>
+          <select id="planningFormType" required>
+            <option value="workstream">Workstream</option>
+            <option value="outcome">Goal / outcome</option>
+            <option value="milestone">Milestone</option>
+            <option value="idea">Idea</option>
+            <option value="decision">Decision</option>
+          </select>
+        </label>
+        <label class="planning-form-wide">
+          <span>Title</span>
+          <input id="planningFormTitle" maxlength="200" required placeholder="What are we trying to accomplish?">
+        </label>
+        <label class="planning-form-wide">
+          <span>Summary</span>
+          <textarea id="planningFormSummary" rows="4" maxlength="8000" placeholder="Purpose, context, and definition of success"></textarea>
+        </label>
+        <label id="planningPriorityField">
+          <span>Priority</span>
+          <select id="planningFormPriority">
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="normal">Normal</option>
+            <option value="low">Low</option>
+            <option value="someday">Someday</option>
+          </select>
+        </label>
+        <label id="planningOwnerField">
+          <span>Owner</span>
+          <input id="planningFormOwner" maxlength="120" placeholder="Example User, LeadX, Codex…">
+        </label>
+        <label id="planningWorkstreamField">
+          <span>Workstream</span>
+          <select id="planningFormWorkstream"><option value="">None</option></select>
+        </label>
+        <label id="planningParentField">
+          <span>Parent item</span>
+          <select id="planningFormParent"><option value="">No direct parent</option></select>
+        </label>
+        <label id="planningTagsField">
+          <span>Tags</span>
+          <input id="planningFormTags" placeholder="core, governance, reliability">
+        </label>
+        <label id="planningProgressField">
+          <span>Progress source</span>
+          <select id="planningFormProgressMode">
+            <option value="tasks">Linked tasks</option>
+            <option value="children">Child items</option>
+            <option value="metric">Measured goal</option>
+            <option value="manual">Manual percentage</option>
+          </select>
+        </label>
+        <label id="planningStartField">
+          <span>Start</span>
+          <input id="planningFormStartAt" type="date">
+        </label>
+        <label id="planningTargetField">
+          <span>Target</span>
+          <input id="planningFormTargetAt" type="date">
+        </label>
+        <label id="planningManualField">
+          <span>Manual progress (%)</span>
+          <input id="planningFormManual" type="number" min="0" max="100" value="0">
+        </label>
+      </div>
+
+      <fieldset class="planning-form-section" id="planningMetricFields">
+        <legend>Goal metric</legend>
+        <div class="planning-form-grid">
+          <label><span>Metric</span><input id="planningMetricLabel" placeholder="Stale critical alerts"></label>
+          <label><span>Unit</span><input id="planningMetricUnit" placeholder="count, %, ms"></label>
+          <label><span>Baseline</span><input id="planningMetricBaseline" type="number" step="any"></label>
+          <label><span>Current</span><input id="planningMetricCurrent" type="number" step="any"></label>
+          <label><span>Target</span><input id="planningMetricTarget" type="number" step="any"></label>
+          <label>
+            <span>Direction</span>
+            <select id="planningMetricDirection">
+              <option value="increase">Higher is better</option>
+              <option value="decrease">Lower is better</option>
+            </select>
+          </label>
+          <label class="planning-form-wide">
+            <span>Metric source</span>
+            <input id="planningMetricSource" placeholder="/api/nerve-center/ecosystem or benchmark batch id">
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="planning-form-section" id="planningDecisionFields">
+        <legend>Decision record</legend>
+        <div class="planning-form-grid">
+          <label class="planning-form-wide"><span>Context</span><textarea id="planningDecisionContext" rows="3"></textarea></label>
+          <label class="planning-form-wide"><span>Decision</span><textarea id="planningDecisionChoice" rows="3"></textarea></label>
+          <label class="planning-form-wide"><span>Rationale</span><textarea id="planningDecisionRationale" rows="3"></textarea></label>
+          <label class="planning-form-wide"><span>Alternatives, one per line</span><textarea id="planningDecisionAlternatives" rows="3"></textarea></label>
+        </div>
+      </fieldset>
+
+      <footer class="planning-modal-actions">
+        <button type="button" class="planning-btn planning-btn-secondary" id="planningModalCancelBtn">Cancel</button>
+        <button type="submit" class="planning-btn planning-btn-primary" id="planningFormSubmitBtn">
+          <i class="fas fa-check"></i> Save
+        </button>
+      </footer>
+    </form>
+  </section>
+</div>
+
+<div class="planning-modal-backdrop planning-task-modal-backdrop" id="planningTaskModalBackdrop" hidden>
+  <section class="planning-task-modal" role="dialog" aria-modal="true" aria-labelledby="planningTaskModalTitle">
+    <header>
+      <div>
+        <div class="planning-eyebrow">Connect delivery</div>
+        <h2 id="planningTaskModalTitle">Link pipeline task</h2>
+        <p id="planningTaskModalMeta">Choose the intent this work advances.</p>
+      </div>
+      <button type="button" class="planning-icon-btn" id="planningTaskCloseBtn" aria-label="Close"><i class="fas fa-xmark"></i></button>
+    </header>
+    <div class="planning-task-modal-body">
+      <div class="planning-task-context" id="planningTaskContext"></div>
+      <label>
+        <span>Find a planning item</span>
+        <div class="planning-task-search">
+          <i class="fas fa-magnifying-glass"></i>
+          <input id="planningTaskItemSearch" type="search" placeholder="Search milestones, goals, or workstreams">
+        </div>
+      </label>
+      <label>
+        <span>Link to</span>
+        <select id="planningTaskItemSelect"></select>
+        <small id="planningTaskItemHelp">Milestones are shown first because they are the clearest delivery checkpoint.</small>
+      </label>
+      <div class="planning-task-modal-actions">
+        <button type="button" class="planning-btn planning-btn-secondary" id="planningTaskCancelBtn">Cancel</button>
+        <button type="button" class="planning-btn planning-btn-secondary" id="planningTaskCreateBtn"><i class="fas fa-plus"></i> Create milestone</button>
+        <button type="button" class="planning-btn planning-btn-primary" id="planningTaskLinkBtn"><i class="fas fa-link"></i> Link task</button>
+      </div>
+    </div>
+  </section>
+</div>

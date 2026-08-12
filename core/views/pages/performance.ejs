@@ -1,0 +1,286 @@
+    <div class="bg-grid"></div>
+
+    <div class="performance-page">
+
+        <!-- Header -->
+        <header class="performance-header">
+            <div class="header-content">
+                <div class="eyebrow">SYSTEM PERFORMANCE</div>
+                <h1><i class="fas fa-chart-line"></i>Performance Monitoring Dashboard</h1>
+                <p class="lede">Real-time performance metrics, load test results, and baseline comparisons</p>
+            </div>
+            <div class="header-controls">
+                <select id="timeRangeSelect">
+                    <option value="1">Last Hour</option>
+                    <option value="6">Last 6 Hours</option>
+                    <option value="24" selected>Last 24 Hours</option>
+                    <option value="168">Last 7 Days</option>
+                </select>
+                <select id="endpointFilter">
+                    <option value="">All Endpoints</option>
+                </select>
+                <button id="refreshBtn"><i class="fas fa-sync-alt"></i> Refresh</button>
+                <div class="auto-refresh-toggle">
+                    <input type="checkbox" id="autoRefreshToggle">
+                    <label for="autoRefreshToggle" style="margin: 0; font-size: 13px; cursor: pointer;">Auto-refresh</label>
+                    <span class="countdown" id="refreshCountdown"></span>
+                </div>
+            </div>
+        </header>
+
+        <div class="sources-indicator" id="sourcesIndicator">
+            <strong>Sources:</strong> Production request snapshots (hourly) &bull; Load tests &bull; Baselines
+        </div>
+
+        <!-- System Health Overview -->
+        <div class="stats-grid">
+            <div class="stat-card" data-tooltip="Overall system health status based on error rates and response times">
+                <div class="label">System Status</div>
+                <div class="value">
+                    <span class="badge healthy" id="systemStatus">Healthy</span>
+                </div>
+                <div class="sub">Overall health</div>
+            </div>
+            <div class="stat-card" data-tooltip="Average response time across all requests in the selected time period">
+                <div class="label">Avg Response Time</div>
+                <div class="value">
+                    <span id="avgResponseTime">—</span>
+                    <span class="trend" id="responseTrend"></span>
+                </div>
+                <div class="sub">24h average</div>
+            </div>
+            <div class="stat-card" data-tooltip="Requests per second processed by the system">
+                <div class="label">Throughput</div>
+                <div class="value">
+                    <span id="throughput">—</span>
+                    <span class="trend" id="throughputTrend"></span>
+                </div>
+                <div class="sub">Requests/second</div>
+            </div>
+            <div class="stat-card" data-tooltip="Percentage of requests that resulted in errors">
+                <div class="label">Error Rate</div>
+                <div class="value">
+                    <span id="errorRate">—</span>
+                    <span class="trend" id="errorTrend"></span>
+                </div>
+                <div class="sub">Error percentage</div>
+            </div>
+            <div class="stat-card" data-tooltip="System uptime percentage over the last 24 hours">
+                <div class="label">Uptime</div>
+                <div class="value" id="uptime">—</div>
+                <div class="sub">24h uptime</div>
+            </div>
+            <div class="stat-card" data-tooltip="95th percentile latency - 95% of requests completed faster than this">
+                <div class="label">P95 Latency</div>
+                <div class="value">
+                    <span id="p95Latency">—</span>
+                    <span class="trend" id="p95Trend"></span>
+                </div>
+                <div class="sub">95th percentile</div>
+            </div>
+        </div>
+
+        <!-- Latency Analysis Charts -->
+        <div class="two-column">
+            <!-- Latency Trends -->
+            <div class="section-card">
+                <div class="section-header">
+                    <h2><i class="fas fa-wave-square"></i> Latency Trends</h2>
+                    <div class="controls">
+                        <span style="font-size: 11px; color: var(--muted); margin-right: 8px;">
+                            <span style="color: #22c55e;">&#9632;</span> P50
+                            <span style="color: #fbbf24; margin-left: 8px;">&#9632;</span> P95
+                            <span style="color: #ef4444; margin-left: 8px;">&#9632;</span> P99
+                        </span>
+                    </div>
+                </div>
+                <div class="section-body">
+                    <div class="chart-container">
+                        <canvas id="latencyTrendsChart"></canvas>
+                    </div>
+                    <div class="chart-empty" id="latencyTrendsEmpty">No latency data available for this time range.</div>
+                </div>
+            </div>
+
+            <!-- Percentile Distribution -->
+            <div class="section-card">
+                <div class="section-header">
+                    <h2><i class="fas fa-chart-bar"></i> Percentile Distribution</h2>
+                </div>
+                <div class="section-body">
+                    <div class="chart-container">
+                        <canvas id="percentileChart"></canvas>
+                    </div>
+                    <div class="chart-empty" id="percentileEmpty">No percentile data available.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Throughput Trends -->
+        <div class="section-card">
+            <div class="section-header">
+                <h2><i class="fas fa-tachometer-alt"></i> Throughput Trends</h2>
+                <div class="controls">
+                    <span style="font-size: 11px; color: var(--muted);">
+                        <span style="color: var(--accent);">&#9632;</span> Requests/sec
+                        <span style="color: var(--accent-2); margin-left: 8px;">&#9632;</span> Total Requests
+                    </span>
+                </div>
+            </div>
+            <div class="section-body">
+                <div class="chart-container">
+                    <canvas id="throughputChart"></canvas>
+                </div>
+                <div class="chart-empty" id="throughputEmpty">No throughput data available for this time range.</div>
+            </div>
+        </div>
+
+        <!-- Load Test Results -->
+        <div class="section-card">
+            <div class="section-header">
+                <h2><i class="fas fa-bolt"></i> Load Test Results</h2>
+                <div class="controls">
+                    <button id="importTestBtn"><i class="fas fa-file-upload"></i> Import Test</button>
+                </div>
+            </div>
+            <div class="section-body">
+                <div class="loading-spinner" id="loadTestsLoading">
+                    <div class="spinner"></div>
+                    <p style="margin-top: 16px; color: var(--muted);">Loading test results...</p>
+                </div>
+                <div style="overflow-x: auto;" id="loadTestsTableContainer">
+                    <table class="data-table" id="loadTestsTable">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-sort="date">Date</th>
+                                <th class="sortable" data-sort="scenario">Scenario</th>
+                                <th class="sortable text-right" data-sort="duration">Duration</th>
+                                <th class="sortable text-right" data-sort="rps">RPS Peak</th>
+                                <th class="sortable text-right" data-sort="success">Success Rate</th>
+                                <th class="sortable text-right" data-sort="p95">P95 Latency</th>
+                                <th class="text-center">Status</th>
+                                <th class="text-center">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="loadTestsBody">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+                <div class="empty-state" id="loadTestsEmpty" style="display: none;">
+                    <i class="fas fa-inbox"></i>
+                    <h3>No Load Tests Found</h3>
+                    <p>Import Artillery JSON results to get started</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Regression Alerts -->
+        <div id="regressionAlerts">
+            <!-- Populated dynamically if regressions detected -->
+        </div>
+
+        <!-- Baseline Comparison -->
+        <div class="section-card">
+            <div class="section-header">
+                <h2><i class="fas fa-flag-checkered"></i> Baseline Comparison</h2>
+                <div class="controls">
+                    <button id="createBaselineBtn"><i class="fas fa-plus"></i> Create Baseline</button>
+                </div>
+            </div>
+            <div class="section-body">
+                <div class="loading-spinner" id="baselineLoading">
+                    <div class="spinner"></div>
+                </div>
+
+                <!-- Active Baseline Card -->
+                <div id="activeBaselineCard" style="display: none;">
+                    <div class="baseline-card">
+                        <h3><i class="fas fa-star"></i> Active Baseline: <span id="activeBaselineName"></span></h3>
+                        <p style="font-size: 12px; color: var(--muted); margin: 0 0 16px 0;">
+                            Created: <span id="activeBaselineDate"></span>
+                        </p>
+                        <div class="comparison-grid" id="comparisonGrid">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Baseline List -->
+                <div>
+                    <h3 style="font-size: 16px; margin: 0 0 16px 0; color: var(--text);">All Baselines</h3>
+                    <div class="baseline-list" id="baselineList">
+                        <!-- Populated by JS -->
+                    </div>
+                    <div class="empty-state" id="baselinesEmpty" style="display: none;">
+                        <i class="fas fa-flag"></i>
+                        <h3>No Baselines Created</h3>
+                        <p>Create a baseline to track performance over time</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Create Baseline Modal -->
+    <div class="modal-overlay" id="createBaselineModal">
+        <div class="modal">
+            <h2>Create Performance Baseline</h2>
+            <form id="createBaselineForm">
+                <div class="form-group">
+                    <label for="baselineName">Baseline Name *</label>
+                    <input type="text" id="baselineName" placeholder="e.g., Production Release v2.1" required>
+                </div>
+                <div class="form-group">
+                    <label for="baselineDescription">Description</label>
+                    <textarea id="baselineDescription" placeholder="Optional description of this baseline..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="baselineSource">Source</label>
+                    <select id="baselineSource">
+                        <option value="current">Current Metrics</option>
+                        <option value="loadtest">Load Test Result</option>
+                    </select>
+                </div>
+                <div class="form-group" id="loadTestSelectGroup" style="display: none;">
+                    <label for="baselineLoadTest">Load Test</label>
+                    <select id="baselineLoadTest">
+                        <option value="">Select a load test...</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" id="cancelBaselineBtn">Cancel</button>
+                    <button type="submit" class="btn-primary">Create Baseline</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Import Load Test Modal -->
+    <div class="modal-overlay" id="importTestModal">
+        <div class="modal">
+            <h2>Import Load Test Results</h2>
+            <form id="importTestForm">
+                <div class="form-group">
+                    <label for="testFile">Artillery JSON Report *</label>
+                    <input type="file" id="testFile" accept=".json" required>
+                    <p style="font-size: 11px; color: var(--muted); margin: 8px 0 0 0;">
+                        Upload the JSON output from Artillery (artillery run --output report.json)
+                    </p>
+                </div>
+                <div class="form-group">
+                    <label for="testScenario">Scenario Name</label>
+                    <input type="text" id="testScenario" placeholder="e.g., Chat API Load Test">
+                </div>
+                <div class="form-group">
+                    <label for="testNotes">Notes</label>
+                    <textarea id="testNotes" placeholder="Optional notes about this test run..."></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" id="cancelImportBtn">Cancel</button>
+                    <button type="submit" class="btn-primary">Import Test</button>
+                </div>
+            </form>
+        </div>
+    </div>

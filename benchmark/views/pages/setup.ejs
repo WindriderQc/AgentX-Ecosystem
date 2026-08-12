@@ -1,0 +1,61 @@
+<div class="setup-container">
+
+  <div class="setup-header">
+    <div class="setup-logo">&#9889;</div>
+    <h1>AgentX Benchmark</h1>
+    <p class="setup-subtitle">Let's connect to your Ollama instance</p>
+  </div>
+
+  <!-- Step 1: Connect -->
+  <div id="step-connect" class="step-card">
+    <h2>1. Where's your Ollama?</h2>
+    <p>Enter the IP address (or hostname) of the machine running Ollama.<br>
+       If Ollama is on this machine, just use <code>localhost</code>.</p>
+    <div class="input-row">
+      <span class="input-prefix">http://</span>
+      <input type="text" id="ollama-ip" placeholder="192.168.1.100" autocomplete="off" spellcheck="false">
+      <span class="input-suffix">:11434</span>
+    </div>
+    <div class="input-hint">
+      <details>
+        <summary>Using a different port?</summary>
+        <div style="margin-top:0.4rem;">
+          Enter the full address instead, e.g. <code>192.168.1.100:8080</code>
+        </div>
+      </details>
+    </div>
+    <button id="btn-connect" class="setup-btn primary">Test Connection</button>
+    <div id="connect-status" class="status-msg"></div>
+  </div>
+
+  <!-- Step 2: Models found -->
+  <div id="step-models" class="step-card" style="display:none">
+    <h2>2. Models Found</h2>
+    <p id="models-subtitle"></p>
+    <div id="model-grid" class="model-grid"></div>
+  </div>
+
+  <!-- Step 3: Judge + Save -->
+  <div id="step-judge" class="step-card" style="display:none">
+    <h2>3. Judge Model</h2>
+    <p>The judge evaluates benchmark responses for quality scoring.
+       We picked a good default — you can change it later.</p>
+    <div class="judge-field">
+      <label for="judge-model">Judge Model</label>
+      <select id="judge-model" class="setup-select"></select>
+    </div>
+    <button id="btn-save" class="setup-btn primary large">Save &amp; Start Benchmarking &#8594;</button>
+  </div>
+
+  <!-- Already configured banner -->
+  <div id="already-configured" style="display:none">
+    <div class="step-card" style="text-align:center;">
+      <h2 style="color:var(--r-good);">&#10003; Already Configured</h2>
+      <p>Your Ollama connection is set up. You can reconfigure below or go to the benchmark.</p>
+      <a href="/" class="setup-btn primary" style="display:inline-block;text-decoration:none;">
+        Go to Benchmark &#8594;
+      </a>
+    </div>
+  </div>
+
+</div>

@@ -1,0 +1,134 @@
+<div class="bg-grid"></div>
+
+<main class="ds-page">
+  <header class="ds-header">
+    <div>
+      <div class="ds-eyebrow">AgentX Governance</div>
+      <h1><i class="fas fa-scale-balanced"></i> Docs Steward</h1>
+      <div class="ds-ownership">
+        <span><i class="fas fa-database"></i> AgentX capability</span>
+        <span><i class="fas fa-plug"></i> Core API</span>
+        <span><i class="fas fa-clock"></i> OpenClaw executor</span>
+      </div>
+    </div>
+    <div class="ds-actions">
+      <button id="dsRefreshBtn" class="ds-btn ds-btn-secondary" type="button" title="Refresh">
+        <i class="fas fa-rotate"></i>
+        <span>Refresh</span>
+      </button>
+      <button id="dsRunBtn" class="ds-btn ds-btn-primary" type="button">
+        <i class="fas fa-play"></i>
+        <span>Run audit</span>
+      </button>
+    </div>
+  </header>
+
+  <section class="ds-status-grid" aria-label="Docs Steward status">
+    <div class="ds-metric">
+      <span class="ds-metric-label">Status</span>
+      <strong id="dsStatus">--</strong>
+      <small id="dsGenerated">--</small>
+    </div>
+    <div class="ds-metric">
+      <span class="ds-metric-label">Findings</span>
+      <strong id="dsFindingsTotal">--</strong>
+      <small id="dsSeverityLine">--</small>
+    </div>
+    <div class="ds-metric">
+      <span class="ds-metric-label">Docs Map</span>
+      <strong id="dsMapStatus">--</strong>
+      <small id="dsMapEntries">--</small>
+    </div>
+    <div class="ds-metric">
+      <span class="ds-metric-label">Schedule</span>
+      <strong>Weekly</strong>
+      <small>Mon 10:30 America/Toronto</small>
+    </div>
+  </section>
+
+  <section class="ds-main-grid">
+    <div class="ds-main-column">
+      <section class="ds-panel">
+        <div class="ds-panel-header">
+          <div>
+            <h2><i class="fas fa-triangle-exclamation"></i> Findings</h2>
+            <p id="dsFindingsMeta">--</p>
+          </div>
+          <div class="ds-segmented" aria-label="Finding severity filter">
+            <button class="active" type="button" data-severity-filter="all">All</button>
+            <button type="button" data-severity-filter="critical">Critical</button>
+            <button type="button" data-severity-filter="high">High</button>
+            <button type="button" data-severity-filter="medium">Medium</button>
+            <button type="button" data-severity-filter="low">Low</button>
+          </div>
+        </div>
+        <div id="dsFindingsList" class="ds-findings-list">
+          <div class="ds-empty">Loading findings...</div>
+        </div>
+      </section>
+
+      <section class="ds-panel">
+        <div class="ds-panel-header">
+          <div>
+            <h2><i class="fas fa-file-lines"></i> Summary</h2>
+            <p id="dsSummaryPath">--</p>
+          </div>
+        </div>
+        <pre id="dsSummary" class="ds-summary">Loading summary...</pre>
+      </section>
+    </div>
+
+    <aside class="ds-side-column">
+      <section class="ds-panel">
+        <div class="ds-panel-header">
+          <div>
+            <h2><i class="fas fa-route"></i> Capability Contract</h2>
+            <p>Authority split</p>
+          </div>
+        </div>
+        <dl class="ds-contract-list">
+          <div>
+            <dt>Owner</dt>
+            <dd>AgentX Core</dd>
+          </div>
+          <div>
+            <dt>Consumer</dt>
+            <dd>OpenClaw <code>leadx</code></dd>
+          </div>
+          <div>
+            <dt>Mode</dt>
+            <dd>API + artifacts</dd>
+          </div>
+          <div>
+            <dt>Boundary</dt>
+            <dd>No separate persona, memory, or registry</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="ds-panel">
+        <div class="ds-panel-header">
+          <div>
+            <h2><i class="fas fa-folder-tree"></i> Artifacts</h2>
+            <p id="dsOutputDir">--</p>
+          </div>
+        </div>
+        <div id="dsArtifactList" class="ds-artifact-list"></div>
+      </section>
+
+      <section class="ds-panel">
+        <div class="ds-panel-header">
+          <div>
+            <h2><i class="fas fa-list-check"></i> Runs</h2>
+            <p id="dsRunsMeta">--</p>
+          </div>
+        </div>
+        <div id="dsRunsList" class="ds-runs-list">
+          <div class="ds-empty">Loading runs...</div>
+        </div>
+      </section>
+    </aside>
+  </section>
+</main>
+
+<div id="dsToast" class="ds-toast" role="status" aria-live="polite"></div>

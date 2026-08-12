@@ -1,0 +1,63 @@
+<main class="reader-parent-log" id="readerParentLog" data-pack-id="kidx_reader" data-scope-id="family">
+  <header class="reader-parent-header">
+    <div>
+      <p class="reader-parent-kicker">KidX Reader</p>
+      <h1>Parent learning log</h1>
+    </div>
+    <div class="reader-parent-actions">
+      <a class="reader-parent-link" href="/lecture" title="Open reader">
+        <i class="fa-solid fa-book-open-reader" aria-hidden="true"></i>
+        <span>Lecture</span>
+      </a>
+      <a class="reader-parent-link" href="/panel" title="Open panel">
+        <i class="fa-solid fa-house" aria-hidden="true"></i>
+        <span>Panel</span>
+      </a>
+      <button class="reader-parent-refresh" id="readerLogRefresh" type="button" title="Refresh log">
+        <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+        <span>Refresh</span>
+      </button>
+    </div>
+  </header>
+
+  <section class="reader-parent-summary" aria-label="Reader summary">
+    <article class="reader-summary-tile">
+      <span>Turns</span>
+      <strong id="readerLogCount">--</strong>
+    </article>
+    <article class="reader-summary-tile">
+      <span>Needs attention</span>
+      <strong id="readerLogAttention">--</strong>
+    </article>
+    <article class="reader-summary-tile">
+      <span>Voice turns</span>
+      <strong id="readerLogVoice">--</strong>
+    </article>
+    <article class="reader-summary-tile">
+      <span>Latest</span>
+      <strong id="readerLogLatest">--</strong>
+    </article>
+  </section>
+
+  <section class="reader-parent-alert" id="readerAlertPanel" data-status="loading" aria-live="polite">
+    <div>
+      <span id="readerAlertStatus">Loading</span>
+      <strong id="readerAlertTitle">Safety check</strong>
+    </div>
+    <p id="readerAlertMessage">--</p>
+  </section>
+
+  <section class="reader-parent-status" id="readerLogStatus" role="status" aria-live="polite">
+    Loading recent reader turns...
+  </section>
+
+  <section class="reader-parent-list" id="readerLogList" aria-label="Recent reader turns"></section>
+
+  <footer class="reader-parent-sources">
+    Lexical grounding uses adapted data from
+    <a href="https://fr.wiktionary.org/wiki/Wiktionnaire:Licence" target="_blank" rel="noreferrer">Wiktionnaire (CC BY-SA 3.0)</a>
+    selected with
+    <a href="https://www.lexique.org/" target="_blank" rel="noreferrer">Lexique 4 (CC BY-SA 4.0)</a>.
+    The generated local artifact records its exact source revisions and modifications.
+  </footer>
+</main>

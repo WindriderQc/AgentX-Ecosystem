@@ -1,0 +1,1923 @@
+[
+  {
+    "level": 1,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Single Token Output",
+    "prompt": "Reply with the word ALPHA in all caps. Do not add punctuation, spaces, or newlines.",
+    "expected_tokens": 1,
+    "expected_answer": "Exactly the text \"ALPHA\" and nothing else.",
+    "judge_criteria": [
+      "Output equals ALPHA exactly",
+      "No extra whitespace or newlines",
+      "All caps",
+      "No punctuation or additional characters"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Exact JSON Literals",
+    "prompt": "Output the JSON array [true,false,null] exactly, with no spaces or newlines.",
+    "expected_tokens": 3,
+    "expected_answer": "Exactly the JSON text [true,false,null] with no extra characters.",
+    "judge_criteria": [
+      "Valid JSON array",
+      "Exact order true,false,null",
+      "No whitespace or newlines",
+      "No extra tokens"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Two-Sentence Constraint",
+    "prompt": "Write exactly two sentences about packing for rain. The second sentence must start with \"Because\". Total length must be 18-22 words. Include the words \"rain\" and \"umbrellas\".",
+    "expected_tokens": 25,
+    "expected_answer": "Two sentences, second begins with \"Because\", total 18-22 words, includes \"rain\" and \"umbrellas\".",
+    "judge_criteria": [
+      "Exactly two sentences",
+      "Second sentence starts with \"Because\"",
+      "Word count between 18 and 22 inclusive",
+      "Contains both words \"rain\" and \"umbrellas\""
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Alphabetical Bullets",
+    "prompt": "Provide three bullet points using a '-' prefix. Each bullet must be a single word. The words must start with A, B, and C respectively and be in alphabetical order. No extra text.",
+    "expected_tokens": 15,
+    "expected_answer": "Three hyphen bullets, one word each, starting with A/B/C in alphabetical order, with no extra text.",
+    "judge_criteria": [
+      "Exactly three bullet lines with '-' prefix",
+      "Each bullet is a single word",
+      "Words start with A, B, C in order",
+      "No extra lines or text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Compute and Format",
+    "prompt": "Given the numbers 7, -2, and 5, output: sum=<value>,product=<value>,max=<value> with no spaces. Output only that line.",
+    "expected_tokens": 6,
+    "expected_answer": "sum=10,product=-70,max=7 with no spaces and no extra text.",
+    "judge_criteria": [
+      "Correct sum 10, product -70, max 7",
+      "Exact format sum=...,product=...,max=...",
+      "No spaces",
+      "No extra text or lines"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Uppercase Underscore Transform",
+    "prompt": "Transform the phrase \"Open the pod bay doors\" to uppercase, replace spaces with underscores, and remove punctuation. Output only the transformed string.",
+    "expected_tokens": 5,
+    "expected_answer": "OPEN_THE_POD_BAY_DOORS only.",
+    "judge_criteria": [
+      "All letters uppercase",
+      "Spaces replaced by underscores",
+      "No punctuation",
+      "Output only the transformed string"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Acrostic Poem Constraints",
+    "prompt": "Write a 4-line poem as an acrostic with lines starting D, A, T, A in order. Each line must be 6-8 words and end with a period. Do not use the word \"data\" anywhere.",
+    "expected_tokens": 60,
+    "expected_answer": "Four lines starting with D/A/T/A, each 6-8 words, each ending with a period, and the word \"data\" does not appear.",
+    "judge_criteria": [
+      "Exactly four lines starting with D, A, T, A",
+      "Each line has 6-8 words",
+      "Each line ends with a period",
+      "Word \"data\" is not used"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "CSV Totals",
+    "prompt": "Return a CSV with header \"item,count,price,total\" and two rows: apple (count 2, price 1.50) and pear (count 3, price 2.00). Compute total as count*price with two decimal places. No extra lines.",
+    "expected_tokens": 20,
+    "expected_answer": "CSV with header and two rows; apple total 3.00, pear total 6.00; no extra lines.",
+    "judge_criteria": [
+      "Header is exactly item,count,price,total",
+      "Two rows for apple and pear with correct counts/prices",
+      "Totals computed correctly with two decimals",
+      "No extra lines or text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Length-Sort JSON",
+    "prompt": "Given the list [\"kiwi\",\"fig\",\"banana\",\"date\"], output a JSON array sorted by length ascending, then alphabetically for ties. No extra whitespace.",
+    "expected_tokens": 10,
+    "expected_answer": "[\"fig\",\"date\",\"kiwi\",\"banana\"] exactly, with no extra whitespace.",
+    "judge_criteria": [
+      "Correct length-then-alpha ordering",
+      "Valid JSON array",
+      "Exact items with quotes",
+      "No extra whitespace"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Recursive Factorial Function",
+    "prompt": "Write a Python function using recursion only (no loops) that returns the factorial of n. Include type hints and a docstring of exactly one line. Output only the function code.",
+    "expected_tokens": 80,
+    "expected_answer": "A single Python function with type hints, one-line docstring, recursive factorial logic, and no loops.",
+    "judge_criteria": [
+      "Uses recursion and no loops",
+      "Includes type hints in signature",
+      "Has a one-line docstring",
+      "Returns correct factorial for base and recursive cases"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Ordered JSON Object",
+    "prompt": "Produce a JSON object with keys in this order: \"id\",\"tags\",\"meta\". id is string \"x-17\". tags is an array of the words cloud, rain, sun sorted alphabetically. meta is an object with keys \"valid\" (true) and \"count\" (3). No extra keys or whitespace.",
+    "expected_tokens": 30,
+    "expected_answer": "{\"id\":\"x-17\",\"tags\":[\"cloud\",\"rain\",\"sun\"],\"meta\":{\"valid\":true,\"count\":3}} exactly.",
+    "judge_criteria": [
+      "Keys appear in specified order",
+      "tags array is alphabetically sorted",
+      "meta contains valid=true and count=3",
+      "No extra keys or whitespace"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Comma Constrained Steps",
+    "prompt": "Create a 5-step numbered list (1.-5.) of instructions for making tea. Each step must be 6-9 words, contain exactly one comma, and include these verbs in order: boil, steep, pour, add, serve. No other text.",
+    "expected_tokens": 90,
+    "expected_answer": "Five numbered lines 1-5, each 6-9 words with exactly one comma, containing the verbs boil/steep/pour/add/serve in order.",
+    "judge_criteria": [
+      "Exactly five numbered steps 1.-5.",
+      "Each step has 6-9 words and exactly one comma",
+      "Verbs appear in specified order, one per step",
+      "No extra text outside the list"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Grid Path With Visit Constraint",
+    "prompt": "On a 3x3 grid with coordinates (1,1) to (3,3), output a path from (1,1) to (3,3) using only moves Right (R) or Up (U). You must make exactly 4 moves, visit (2,2), and output the moves as a comma-separated sequence like R,U,R,U. No extra text.",
+    "expected_tokens": 8,
+    "expected_answer": "R,U,R,U (or any valid 4-move sequence visiting (2,2)); comma-separated only.",
+    "judge_criteria": [
+      "Exactly four moves using only R or U",
+      "Path visits (2,2) and ends at (3,3)",
+      "Moves are comma-separated with no spaces",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Sequential Task Schedule JSON",
+    "prompt": "Return a JSON object with keys \"tasks\" and \"total_minutes\". tasks is an array of 4 objects with fields name,start,end for tasks A,B,C,D in that order, no overlaps, each 30 minutes, starting at 09:00. Use 24h HH:MM. total_minutes must be 120. Output only JSON.",
+    "expected_tokens": 70,
+    "expected_answer": "JSON object with tasks A-D at 09:00-09:30, 09:30-10:00, 10:00-10:30, 10:30-11:00 and total_minutes 120.",
+    "judge_criteria": [
+      "Valid JSON object with keys tasks and total_minutes",
+      "Tasks A-D in order, 30-minute slots, no overlap",
+      "Times start at 09:00 and increment correctly",
+      "total_minutes equals 120"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "YAML API Spec",
+    "prompt": "Design a minimal REST API spec for a notes service. Constraints: exactly 3 endpoints: POST /notes, GET /notes/{id}, DELETE /notes/{id}. For each provide method, path, request, success, error. Output as YAML with a top-level key endpoints containing a list. Within each endpoint, keys must appear in order: method, path, request, success, error. No extra sections.",
+    "expected_tokens": 140,
+    "expected_answer": "YAML with top-level endpoints list containing exactly three entries for POST/GET/DELETE with required keys in order.",
+    "judge_criteria": [
+      "Exactly three specified endpoints",
+      "YAML structure with top-level endpoints list",
+      "Each endpoint includes method/path/request/success/error in order",
+      "No extra sections or endpoints"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "SQL With CTE Constraint",
+    "prompt": "Write a PostgreSQL query to return the top 3 customers by total spend in the last 30 days. Constraints: use a CTE named recent_orders, avoid subqueries, include a JOIN between customers and orders, output columns customer_id and total_spend, order by total_spend desc, limit 3. Output only SQL.",
+    "expected_tokens": 120,
+    "expected_answer": "SQL using CTE recent_orders, join customers to orders, sum spend, order desc, limit 3, projecting customer_id and total_spend.",
+    "judge_criteria": [
+      "Uses a CTE named recent_orders",
+      "Includes JOIN between customers and orders",
+      "Outputs customer_id and total_spend only",
+      "Orders by total_spend desc and limits to 3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "DFA JSON Spec",
+    "prompt": "Create a deterministic finite automaton in JSON for recognizing binary strings divisible by 3. Constraints: exactly 3 states named S0,S1,S2; S0 is start and only accepting state; include transitions for inputs 0 and 1 for each state. Output JSON with keys states,start,accepting,transitions and no extra whitespace.",
+    "expected_tokens": 120,
+    "expected_answer": "JSON with states [S0,S1,S2], start S0, accepting [S0], and complete transitions for 0/1 per state matching mod-3 DFA.",
+    "judge_criteria": [
+      "Exactly three states S0,S1,S2",
+      "S0 is start and only accepting state",
+      "Transitions defined for input 0 and 1 for each state",
+      "Valid JSON with required keys and no extra whitespace"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Paragraph Format Constraints",
+    "prompt": "Provide a deployment plan as 3 paragraphs. Each paragraph must have exactly 2 sentences. The first paragraph must mention \"canary\". The second must mention \"rollback\". The third must include a sentence containing exactly \"Checklist: A; B\". No bullet points.",
+    "expected_tokens": 140,
+    "expected_answer": "Three paragraphs of two sentences each; first mentions canary, second mentions rollback, third includes the exact phrase \"Checklist: A; B\".",
+    "judge_criteria": [
+      "Exactly three paragraphs, two sentences each",
+      "First paragraph mentions \"canary\"",
+      "Second paragraph mentions \"rollback\"",
+      "Third paragraph contains the exact phrase \"Checklist: A; B\" and no bullets"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 9,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Distributed Lock Message Schema",
+    "prompt": "Draft a protocol message format for a distributed lock service. Constraints: define exactly 4 message types; each type must list fields and types; include a top-level version field and an idempotency_key field in every message. Output as a single JSON object with keys \"version\" and \"messages\" only. messages must be an array of 4 objects with keys name and fields.",
+    "expected_tokens": 180,
+    "expected_answer": "JSON object with version and messages array of four message definitions; each message includes idempotency_key in its fields list.",
+    "judge_criteria": [
+      "Top-level JSON has only version and messages keys",
+      "Exactly four message types listed",
+      "Each message includes fields with types and idempotency_key",
+      "All messages follow name/fields structure"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 10,
+    "category": "instruction-following",
+    "category_test": true,
+    "name": "Constrained Job Shop Schedule",
+    "prompt": "Schedule five jobs on two machines with these constraints: J2 must start at time 0 on M1 and lasts 4. J1 must run on M2, lasts 3, and must start at the earliest time allowed in window [0,1]. J3 lasts 2, must run on the same machine as J1, and starts immediately after J1. J4 lasts 3, must run on M1, and starts immediately after J2. J5 lasts 2, starts after both J3 and J4, and runs on the machine that is free earliest at its earliest start (if tie choose M1). Output a JSON object with keys \"schedule\" and \"makespan\" only. schedule is an array of job objects sorted by start time; if two jobs share a start time, order by id ascending. Each job object has keys id, machine, start, end. No extra keys or text.",
+    "expected_tokens": 180,
+    "expected_answer": "JSON with schedule: J1 M2 0-3, J2 M1 0-4, J3 M2 3-5, J4 M1 4-7, J5 M2 7-9; makespan 9; ordered by start time then id.",
+    "judge_criteria": [
+      "Schedule satisfies all machine, duration, and dependency constraints",
+      "Jobs ordered by start time with tie broken by id",
+      "J5 placed on earliest-free machine at earliest start",
+      "JSON has only schedule and makespan with correct values"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Garden Reopening Note",
+    "prompt": "Summarize the following text in one sentence (15-20 words).\n\nYesterday the community garden reopened after a week of repairs. Volunteers rebuilt two raised beds and replaced broken hoses. The soil delivery arrived late, so planting was limited to herbs and lettuce. The coordinator thanked the local hardware store for donating tools. The next workday is Saturday at 9 a.m.",
+    "expected_tokens": 25,
+    "expected_answer": "One sentence noting the garden reopened after repairs, planting was limited due to late soil, and the next workday is Saturday at 9 a.m.",
+    "judge_criteria": [
+      "One sentence, 15-20 words",
+      "Mentions reopening after repairs",
+      "Mentions late soil limiting planting",
+      "Mentions next workday Saturday at 9 a.m."
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 1,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Cafe Early Close",
+    "prompt": "Summarize the following notice in one sentence (18-22 words).\n\nBluebird Cafe will close at 2 p.m. this Friday for staff training. Morning service is normal, and mobile orders will stop at 1:30. Customers with prepaid pickups should reschedule. The cafe will reopen Saturday at 7 a.m. The manager apologized for the short notice and said a new pastry menu will launch next week.",
+    "expected_tokens": 30,
+    "expected_answer": "One sentence stating the Friday 2 p.m. closure for training, 1:30 mobile order cutoff, and Saturday 7 a.m. reopening.",
+    "judge_criteria": [
+      "One sentence, 18-22 words",
+      "Mentions 2 p.m. Friday closure for training",
+      "Mentions mobile orders stop at 1:30",
+      "Mentions Saturday 7 a.m. reopening"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 2,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Project Email Update",
+    "prompt": "Summarize the email in two sentences (30-40 words).\n\nHi team, the client approved the logo color changes yesterday. They want the homepage draft by Tuesday noon, not Wednesday. Priya is updating the style guide and will send it tonight. Please stop work on the old landing-page layout; it no longer matches the new navigation. I will hold a 20-minute check-in Monday at 10 a.m. to review progress and divide remaining tasks. Also log any blockers in the tracker before the meeting. If you are out Monday, message me today.",
+    "expected_tokens": 60,
+    "expected_answer": "Two sentences covering client approval, Tuesday-noon deadline, halt of old layout, Priya's style guide, and the Monday 10 a.m. check-in with blocker logging.",
+    "judge_criteria": [
+      "Two sentences, 30-40 words",
+      "Includes client approval and Tuesday noon deadline",
+      "Notes stopping old layout and Priya sending style guide",
+      "Mentions Monday 10 a.m. check-in and blocker logging"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 2,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Transit Advisory",
+    "prompt": "Summarize the advisory in two sentences (35-45 words).\n\nCity Transit announced weekend maintenance on the Green Line. Trains will not run between Oak Street and Riverside on Saturday and Sunday. Shuttle buses will operate every 12 minutes, adding about 15 minutes to trips. Riders should use the east entrance at Oak Street because the west stairs are closed. Normal rail service resumes Monday at 5 a.m. The agency expects minor delays but no fare changes. Bikes are allowed on shuttles only if space permits. Alerts will be posted on the app.",
+    "expected_tokens": 60,
+    "expected_answer": "Two sentences noting the weekend service suspension between Oak and Riverside, shuttle details, entrance change, and Monday 5 a.m. resumption.",
+    "judge_criteria": [
+      "Two sentences, 35-45 words",
+      "Mentions no trains between Oak Street and Riverside Saturday and Sunday",
+      "Notes shuttles every 12 minutes and added travel time or entrance change",
+      "Mentions service resumes Monday at 5 a.m."
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 3,
+    "category": "summarization",
+    "category_test": true,
+    "name": "TrailLite Jacket Review",
+    "prompt": "Summarize the product review in three bullet points (10-14 words each).\n\nThe new TrailLite jacket is designed for spring hikes. It uses a thin recycled-nylon shell with a breathable liner and weighs just 280 grams. Two hand pockets are sealed with water-resistant zippers, and the hood has a single pull cord. Early reviewers praised the light weight and packability but noted that the sleeves feel short when arms are raised. Several users said the fabric wets out after an hour of steady rain, although it dries quickly. The company positions it as a windbreaker, not a true rain shell, and recommends layering in cold weather. Sizing runs small for tall wearers, while the hem is adjustable. Retail price is $89 and colors are slate, fern, and ember. A limited warranty covers defects for one year.",
+    "expected_tokens": 80,
+    "expected_answer": "Three bullets covering design/weight/features, reviewer pros and cons, and positioning with price or warranty.",
+    "judge_criteria": [
+      "Exactly three bullet points, 10-14 words each",
+      "Mentions lightweight recycled-nylon design and key features",
+      "Includes reviewer feedback on packability, sleeve length, or wet-out",
+      "Notes positioning as windbreaker plus price or warranty"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 3,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Cleanup Meeting Recap",
+    "prompt": "Summarize the meeting recap in three sentences (45-60 words).\n\nThe neighborhood association met on March 3 to plan the spring cleanup. Attendance was 18 residents. The group voted to rent a 20-yard dumpster for Saturday, April 6, and to request extra recycling bins from the city. Maria will lead volunteer signups, and Ken will coordinate with the parks department about tree trimming. A debate about repainting the playground fence ended with a decision to postpone until summer because the budget is tight. Members also agreed to post flyers at the library and cafe, and to cap spending at $1,200. They will start at 8 a.m. and provide gloves and bags. Residents with trucks were asked to help haul debris, and a rain date of April 13 was proposed if weather is bad.",
+    "expected_tokens": 90,
+    "expected_answer": "Three sentences that state the April 6 cleanup plan and dumpster decision, roles and schedule, and the budget cap with postponed fence repainting or rain date.",
+    "judge_criteria": [
+      "Three sentences, 45-60 words",
+      "Mentions April 6 cleanup with dumpster and recycling bins",
+      "Includes roles or logistics (Maria, Ken, 8 a.m., supplies)",
+      "Notes budget cap and postponed fence repainting or rain date"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 4,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Library Budget Update",
+    "prompt": "Summarize the report in 70-90 words.\n\nThe city library released a midyear budget update. Revenue from fines dropped 22% after the board eliminated late fees for children's books. Donations, however, increased due to a spring gala that raised $48,000, exceeding the $35,000 target. Operating costs rose because of a new e-book licensing contract and higher utility bills during a cold winter. To offset expenses, the library delayed replacing two staff laptops and reduced weekend program hours at three branches. Attendance at adult literacy classes grew by 14%, while teen program attendance dipped slightly. The director recommended reallocating $12,000 from the building maintenance reserve to fund additional digital subscriptions, arguing that demand is shifting toward online materials. The finance committee will vote next month. Patrons borrowed 6% fewer print books but logged 28% more e-book checkouts. A roof repair at the East Branch is expected to cost $19,000 and is scheduled for July. Staff turnover remained low, with one retirement and two part-time hires. The report notes that the state grant of $75,000 will arrive in September and cannot be used for payroll. Officials said no branch closures are planned.",
+    "expected_tokens": 110,
+    "expected_answer": "A 70-90 word summary covering the fine revenue drop and donation increase, cost pressures and cutbacks, usage trends toward e-books, and the proposed $12,000 reallocation with an upcoming vote.",
+    "judge_criteria": [
+      "70-90 words",
+      "Mentions fine revenue drop and gala donation increase",
+      "Notes cost increases and offset actions",
+      "Covers e-book usage trend and $12,000 reallocation with vote timing"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 4,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Energy Merger Release",
+    "prompt": "Summarize the press release in four bullet points (12-16 words each).\n\nNorthlake Energy announced it will acquire Riverbend Solar in a cash-and-stock deal valued at $620 million. Northlake will pay $14 per Riverbend share, a 27% premium over Friday's close. The companies said the combined firm will operate 1.8 gigawatts of solar assets across five states and will retain the Riverbend brand for its residential business. The CEO of Northlake expects $45 million in annual cost synergies from consolidated procurement and shared maintenance teams. Riverbend's headquarters in Tucson will remain open, but corporate finance and HR roles will move to Denver over the next year. The transaction is expected to close in Q4 pending shareholder and regulatory approval. Analysts noted that Northlake assumes $110 million of Riverbend debt, raising leverage but providing access to a pipeline of utility-scale projects. The companies estimate $30 million in integration costs over two years. Riverbend's CEO will join Northlake's board, and 250 field jobs are expected to be retained. Customer contracts and warranties are not expected to change. The announcement did not provide a dividend policy for the combined company, which will keep its current ticker.",
+    "expected_tokens": 120,
+    "expected_answer": "Four bullets covering deal value and premium, asset footprint and brand, synergies and role moves, and closing conditions with debt assumption.",
+    "judge_criteria": [
+      "Exactly four bullet points, 12-16 words each",
+      "Includes deal value and 27% premium",
+      "Covers combined assets and brand retention",
+      "Mentions synergies, role moves, closing conditions, or debt assumption"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 4,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Lab Battery Guidelines",
+    "prompt": "Summarize the safety guidelines in 80-100 words.\n\nThe campus lab issued new guidelines for handling lithium batteries. Batteries must be stored in metal cabinets, with terminals taped to prevent short circuits. Damaged cells should be placed in sand-filled buckets and labeled with the date, room, and supervisor. Charging must occur on ceramic trays, and the charger should be unplugged when unattended. Staff should inspect for swelling, heat, or odor before and after charging. If smoke appears, use the Class D extinguisher and pull the fire alarm; do not use water. Incidents must be reported within 24 hours via the safety portal. The policy also bans personal e-scooters from charging in offices after a recent fire. Supervisors are required to keep monthly inspection logs and train new students before they access the charging room. The guidelines apply to AA-sized cells used in sensors as well as larger packs in robotics projects. Exceptions require written approval from the safety officer. Signage will be posted by next Monday, and compliance checks will start in May. Labs that fail an inspection will lose access to shared equipment until issues are corrected.",
+    "expected_tokens": 120,
+    "expected_answer": "An 80-100 word summary covering storage and charging rules, emergency response and reporting, scope and bans, and training or enforcement measures.",
+    "judge_criteria": [
+      "80-100 words",
+      "Covers storage and charging precautions",
+      "Includes emergency response and 24-hour reporting",
+      "Mentions scope or bans plus training or enforcement"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 5,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Hypertension Text Study",
+    "prompt": "Summarize the study in 90-110 words.\n\nA public health team evaluated a pilot program that sent text reminders to patients with hypertension. The study enrolled 420 adults from three clinics. Half received weekly messages about medication adherence and diet tips; the control group received usual care. Over six months, the intervention group showed an average systolic blood pressure drop of 6.8 mmHg, compared with 2.1 mmHg in the control group. Medication refill rates improved by 12% in the reminder group. However, the effect was smaller among patients over 70, and no significant change occurred in self-reported exercise. The program cost $8 per patient per month, mostly for messaging services and staff time to monitor replies. Researchers noted that 18% of participants opted out within the first month, citing message fatigue. The authors concluded that text reminders can be a low-cost supplement but should be paired with periodic clinician outreach. Baseline blood pressure averaged 148/92 and participants were on at least one medication. The study used random assignment and adjusted for age, sex, and clinic. Satisfaction surveys showed 64% found the messages helpful, while 21% found them annoying. The team plans a larger trial with two-way messaging and multilingual content. No adverse events were linked to the program, and appointment attendance did not change. Researchers cautioned that the clinics were urban and may not generalize to rural settings.",
+    "expected_tokens": 140,
+    "expected_answer": "A 90-110 word summary stating the randomized design and sample, key blood pressure and refill improvements, costs and opt-out rate, and limitations with plans for a larger trial.",
+    "judge_criteria": [
+      "90-110 words",
+      "Includes study design and sample size",
+      "Mentions key outcomes and costs",
+      "Notes limitations and planned follow-up"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 5,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Login Outage Timeline",
+    "prompt": "Summarize the incident report in 100-120 words.\n\nOn May 14, customers reported failed logins to the Acme mobile app. The incident began at 08:05 UTC after a database connection pool was misconfigured during a routine update. Authentication requests spiked retries, causing CPU usage on the auth service to hit 95%. Engineers rerouted traffic to a standby cluster at 08:40, which reduced error rates but did not restore logins fully because cached tokens were still invalid. At 09:10, the team rolled back the configuration change and cleared the cache. Full recovery occurred by 09:25. Approximately 38% of login attempts failed during the outage, affecting about 120,000 users. Support tickets doubled, and social media complaints increased. The team plans to add config validation, limit retry storms, and improve alerting for token cache failures. A postmortem is scheduled for Friday. The update was applied by an on-call engineer following the standard runbook, but a new parameter default had been introduced earlier that week. Internal monitoring showed partial degradation at 08:12, yet the alert threshold for login failure was set too high. Customer success emailed enterprise clients at 09:30 with a brief apology and status page link. The incident is classified as SEV-2 and will include a review of change management. No data loss occurred, and billing services were unaffected. A follow-up task will test failover quarterly and document cache invalidation steps.",
+    "expected_tokens": 140,
+    "expected_answer": "A 100-120 word summary noting the misconfigured pool cause, timeline and recovery actions, impact metrics, and planned fixes plus communication steps.",
+    "judge_criteria": [
+      "100-120 words",
+      "Identifies root cause and key timeline events",
+      "Includes impact metrics on failures and users",
+      "Mentions planned remediation and communications"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 5,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Hybrid Work Policy",
+    "prompt": "Summarize the policy memo in 100-120 words.\n\nThe HR department circulated a memo about the new hybrid work policy. Starting July 1, employees in customer-facing roles must be on-site three days per week, while other roles require two days. Teams may choose their anchor days but must publish schedules in the shared calendar. Requests for fully remote status will be evaluated case by case and require director approval. The memo emphasizes that meeting equity is a priority, so meetings should default to video even if some attendees are in the office. The company will reimburse up to $50 per month for home internet and provide one-time stipends for chairs or desks if receipts are submitted by August 15. The policy also notes that office access outside 7 a.m. to 7 p.m. requires security registration. Managers are instructed to review team attendance monthly and address repeated noncompliance through performance plans. The memo cites employee survey results showing a preference for flexibility but also concerns about collaboration and onboarding. Exceptions include employees with medical accommodations, who must coordinate with HR to update documentation. Conference rooms will be reconfigured to improve hybrid audio, and IT will host training on the new scheduling tool. The policy will be reviewed after six months, with metrics on retention, productivity, and office utilization. Leaders are asked to avoid scheduling standing meetings before 10 a.m. on Mondays to reduce commute strain. Employees should update their desk reservations weekly and keep badge access logs current. The memo takes effect immediately for scheduling, even before July 1.",
+    "expected_tokens": 150,
+    "expected_answer": "A 100-120 word summary covering on-site requirements and scheduling, reimbursements and stipends, meeting and security rules, enforcement and review metrics, and key dates.",
+    "judge_criteria": [
+      "100-120 words",
+      "Mentions on-site day requirements and scheduling rules",
+      "Includes reimbursements or stipends and meeting equity guidance",
+      "Notes enforcement and review metrics or timing"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 6,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Session Store RFC",
+    "prompt": "Summarize the RFC in 110-130 words.\n\nRFC: We propose replacing the current session store with Redis Cluster. Today sessions live in a single Postgres table, causing write contention at peak. The new design shards sessions across three Redis nodes with automatic failover. Each session will have a 24-hour TTL and be refreshed on activity; logout will delete the key. The app will read from Redis first and fall back to Postgres during migration. To preserve audit trails, a nightly job will append expired session metadata to an immutable S3 log. The team estimates a 40% reduction in auth latency and a 60% drop in database CPU. Risks include cache eviction during node failures and loss of session continuity if TTL refresh fails. To mitigate, we will pin hot sessions with a higher TTL and alert on refresh errors. Rollout will be phased by region, starting with internal staff. If Redis latency exceeds 15 ms for 10 minutes, traffic will revert to Postgres. The change requires updating the auth service, adding a new Redis client library, and provisioning VPC security rules. Estimated effort is three weeks with two engineers. Monitoring will include keyspace size, eviction rate, and failover time. Data will be encrypted in transit and at rest with managed keys. The team will run a load test at 2x peak traffic before enabling customer traffic. A rollback plan includes disabling Redis reads and clearing DNS entries for the cluster. Success criteria are p95 auth latency under 120 ms and zero increase in logout errors. No schema changes are needed, but the migration script will backfill active sessions over 48 hours.",
+    "expected_tokens": 160,
+    "expected_answer": "A 110-130 word summary explaining the Postgres contention, Redis design and TTLs, expected performance gains, risks and mitigations, rollout and rollback triggers, and success criteria.",
+    "judge_criteria": [
+      "110-130 words",
+      "Identifies current issue and new Redis design",
+      "Includes expected benefits and key risks with mitigations",
+      "Mentions rollout/rollback and success criteria"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 6,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Harbor Festival Planning",
+    "prompt": "Summarize the meeting narrative in four sentences (90-110 words).\n\nOn Monday, Lina, Omar, and Priya met to finalize plans for the Harbor Festival. Lina wanted to spend the remaining $4,000 on a larger stage, arguing that last year's sound complaints hurt attendance. Omar preferred to use the money for additional security after a nearby event had a pickpocket incident. Priya suggested splitting the budget: $2,500 for stage upgrades and $1,500 for security, but that would leave no funds for a children's tent. The group checked the sponsorship list and found a new $1,200 pledge from a local bank, which arrived too late to print on posters. They agreed to thank the bank on social media and at the opening remarks. After reviewing last year's survey, they decided to keep the festival's start time at noon to avoid the morning heat. They also confirmed that the ferry company would provide two extra boats at a discounted rate. By the end of the meeting, Lina accepted the split-budget plan, Omar drafted a security schedule, and Priya emailed volunteers about setup shifts. The final action item was to confirm the food vendor permits with the city by Friday. They debated whether to add a fireworks display, but the permit fee of $900 and the noise curfew made it impractical. A local school band offered to perform for free if they could sell CDs at their table, which the team approved. The festival will include a shoreline cleanup at 9 a.m. for volunteers only, followed by coffee donated by a bakery. Priya noted that the backup rain location is the civic gym, but moving would cut the vendor count in half. Omar promised to draft a rain notice template in advance.",
+    "expected_tokens": 160,
+    "expected_answer": "Four sentences describing the budget split and sponsorship, schedule and transport choices, added activities and constraints, and final action items like permits and rain planning.",
+    "judge_criteria": [
+      "Four sentences, 90-110 words",
+      "Mentions budget decision and sponsorship update",
+      "Includes schedule or transport details",
+      "Notes action items such as permits or rain planning"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 7,
+    "category": "summarization",
+    "category_test": true,
+    "name": "ArborTech Q2 Results",
+    "prompt": "Summarize the earnings excerpt in 130-150 words.\n\nArborTech reported Q2 results with revenue of $412 million, up 9% year over year. Growth was driven by its industrial sensors division, which rose 18%, while the consumer gadgets segment declined 4% due to inventory reductions. Gross margin improved to 38.5% from 36.2% as component prices eased, but operating margin slipped to 12.1% because of higher R&D and marketing spend tied to a new product launch. The company generated $54 million in free cash flow and ended the quarter with $210 million in cash and $310 million in debt. Management raised full-year revenue guidance to $1.63-$1.67 billion but kept operating margin guidance flat at 12%. CEO Maya Chen said demand from logistics customers remains strong but warned of longer sales cycles in Europe. The firm also announced a $50 million share repurchase authorization and plans to open a manufacturing line in Ohio in 2025. Risks cited in the call included supply-chain disruptions for specialized chips, regulatory delays for its medical sensors, and competitive pricing pressure in Asia. Analysts asked about the impact of a recent patent lawsuit; management said legal costs are included in guidance and expects a preliminary ruling in Q4. The company’s backlog stands at $780 million, up 6%. Operating expenses rose 14% year over year, with headcount up 6%. Capital expenditures were $22 million, mostly for automation equipment. The board approved a 5% increase to the quarterly dividend to $0.21 per share. A pilot subscription service for predictive maintenance reached 1,200 paying customers, and management expects it to be breakeven by mid-2025. Currency headwinds reduced reported revenue by roughly $8 million. The company reiterated its target of 15% operating margin by 2026, contingent on scaling the Ohio line. Customer churn in the consumer segment ticked up to 6.4%, while enterprise retention held at 94%. The company signed a five-year supply agreement with Nexus Chips that covers 70% of sensor needs. Management said the integration of last year's micro-analytics acquisition is 80% complete and already contributes $12 million in quarterly revenue.",
+    "expected_tokens": 190,
+    "expected_answer": "A 130-150 word summary capturing revenue growth and segment mix, margin changes and guidance, capital actions like buyback and dividend, key risks and lawsuit, and backlog or other notable metrics.",
+    "judge_criteria": [
+      "130-150 words",
+      "Includes revenue growth and segment performance",
+      "Covers margin changes and guidance updates",
+      "Mentions capital actions and key risks or lawsuit/backlog"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 7,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Rural Broadband Hearing",
+    "prompt": "Summarize the hearing excerpt in five bullet points (12-18 words each).\n\nSenate Hearing on Rural Broadband, excerpt. Chair Alvarez opened by noting that 14% of rural households lack reliable internet. She asked providers to explain how recent grants are used. Witness 1, Carla Nguyen from FrontierLink, said her company received $90 million to build fiber in three states. She argued that permitting delays, not funding, are the biggest obstacle and cited a county that took nine months to approve pole attachments. Witness 2, Jamal Ortiz of the Rural Access Coalition, countered that providers often overpromise and that residents are still paying $85 per month for slow speeds. He presented a survey showing average rural speeds of 18 Mbps and said affordability should be tied to grant compliance. Senator Park pressed Nguyen on why service maps overstate coverage; Nguyen replied that maps rely on census blocks and are being updated quarterly. Ortiz recommended a public dashboard and penalties for missed build milestones. The chair asked about satellite options; Nguyen said they are helpful for the most remote areas but cannot replace fiber for schools and clinics. Ortiz agreed but urged the committee to set minimum latency standards. The hearing closed with a request for written answers within two weeks and a follow-up session planned for May. Senator Lin asked whether state matching funds were slowing projects; Nguyen said some states require a 25% match that small providers struggle to raise. Ortiz responded that cooperatives have met those matches through local bonds and argued that large providers should not be given waivers. Senator Kim asked both witnesses about workforce shortages; Nguyen said fiber splicing crews are booked for months, while Ortiz suggested using apprenticeship programs at community colleges. The committee clerk entered into the record letters from two school districts describing frequent outages during testing. Chair Alvarez concluded by asking for a joint proposal on transparency metrics. Nguyen also noted that her company will pilot a $30 low-income plan in two counties. Ortiz urged the panel to require uptime reporting at the zip-code level and to allow community-owned networks to compete for grants.",
+    "expected_tokens": 190,
+    "expected_answer": "Five bullets covering key stats, Nguyen's permitting and funding points, Ortiz's affordability and oversight points, map and standards issues, and the hearing's requested follow-ups.",
+    "judge_criteria": [
+      "Exactly five bullet points, 12-18 words each",
+      "Includes key stats like 14% unserved or 18 Mbps and $90 million",
+      "Contrasts Nguyen and Ortiz positions on obstacles and affordability",
+      "Mentions oversight requests or follow-up actions"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 8,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Readmission Case Study",
+    "prompt": "Summarize the case study in 150-170 words.\n\nCase study: A mid-sized hospital implemented a discharge coaching program to reduce 30-day readmissions for heart failure patients. In 2022, baseline readmission was 19.4% across 680 patients. The program introduced bedside coaching, a simplified medication card, and a follow-up call within 72 hours. Two nurse educators and one pharmacist were assigned, costing $180,000 annually. The hospital compared outcomes for 2023: 710 patients, similar age and comorbidities. Readmissions dropped to 14.1%, and average length of stay fell from 4.8 to 4.3 days. Patient satisfaction scores rose from 3.7 to 4.2 on a five-point scale. The biggest gains were among patients with limited health literacy, though non-English speakers still had higher readmission rates. The program also increased follow-up appointment attendance from 62% to 78%. However, emergency department revisits within 7 days remained flat at 9%. Staff reported that the call schedule was hard to maintain on weekends, and 22% of calls were unanswered. An external evaluator noted that the hospital did not adjust for socioeconomic factors in the analysis and recommended a randomized design. Leadership is considering expanding the program to COPD but is unsure whether the same staffing model will scale. The program will be funded for another year while the team tests automated text reminders. Nurses used a teach-back checklist covering diet, fluid limits, and warning symptoms. Pharmacists reconciled medications and highlighted changes in red. The hospital built a dashboard that tracked calls and readmission triggers, but data entry took 10 minutes per patient. Clinicians were divided: some said the coaching reduced confusion, while others felt discharge delays increased. A small focus group of patients praised the medication card but wanted larger font. Finance estimated net savings of $240,000 from reduced readmissions, but this depended on penalty avoidance assumptions. The quality committee asked for clearer attribution because a new heart failure clinic also opened midyear. Community partners, including a home health agency, provided occasional visits, yet coverage varied by neighborhood. The next evaluation will include bilingual coaches and weekend staffing. Implementation required staff training sessions totaling 18 hours and a revised discharge checklist in the EHR. The hospital translated the medication card into Spanish and Vietnamese, but only 40% of eligible patients received the translated version due to printing delays. Readmissions for patients over 80 dropped only slightly, from 22% to 20%. Leadership debated whether to invest in remote weight monitoring, estimated at $60 per patient per month. The board requested a plan to sustain funding if grant support ends.",
+    "expected_tokens": 220,
+    "expected_answer": "A 150-170 word summary with baseline and post-program readmission rates, core interventions and staffing cost, key outcomes and mixed results, limitations, and future expansion plans.",
+    "judge_criteria": [
+      "150-170 words",
+      "Includes baseline and post readmission rates with sample sizes",
+      "Describes program components and staffing cost",
+      "Covers outcomes, limitations, and future plans"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 8,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Dune Erosion Drone Study",
+    "prompt": "Write a four-sentence summary with roles: Sentence 1 background/goal; Sentence 2 methods/data; Sentence 3 key results; Sentence 4 implications/limitations. Keep total length 160-180 words.\n\nResearchers monitored dune erosion on the Atlantic shore over two winters using drone imagery and ground stakes. The study area covered 12 kilometers near Cape Ellery. Drones flew monthly and after storms, producing 2 cm resolution elevation maps. The team compared erosion during a calm winter (Year 1) and a stormier winter (Year 2) that included four noreasters. Average dune crest height fell by 0.4 m in Year 1 and 1.1 m in Year 2. The largest single-storm loss was 0.6 m after a January gale. Beaches with planted marram grass lost 30% less volume than unplanted sections, but the protective effect weakened where footpaths cut through vegetation. Sediment sampling showed a higher fraction of fine sand in the eroded zones.\n\nThe researchers validated drone models against 48 ground stakes, with mean error of 3.2 cm. They found that dunes backed by hard seawalls experienced more toe scouring, while natural backshore areas recovered slightly during spring. A regression model suggested that wave energy explained 62% of variance in height loss, while human trampling explained 18%. The authors noted limitations: the site lacks cliffs, and results may not apply to rocky coasts. They also did not measure offshore sand bars that might replenish dunes. Management implications include restricting beach access after storms, adding boardwalks over sensitive sections, and prioritizing planting in high-traffic areas. The team plans to repeat the survey after a planned beach nourishment project next year.\n\nLocal officials said the drone data will inform a new coastal setback ordinance. Property owners expressed concern that access restrictions could reduce tourism revenue, which averages $12 million each summer. The researchers proposed a pilot program with removable fencing and signage to redirect walkers. They also tested a low-cost smartphone photogrammetry method on two beaches, but accuracy was poor at 9 cm. Storm surge height and wind direction were recorded from a nearby buoy; the strongest event reached 2.8 m. The study was funded by the state resilience grant and involved three graduate students. The authors recommended expanding monitoring to include marsh edges and to track how nourishment sand migrates over time. They stressed that dune restoration is cheaper than seawall repairs but requires community buy-in and consistent maintenance. During community workshops, residents favored boardwalks but opposed seasonal closures. The team noted that enforcement costs were not included in the budget and that volunteer monitoring may be unreliable. They suggested tracking dune volume, vegetation cover, and footpath counts each quarter.",
+    "expected_tokens": 220,
+    "expected_answer": "Four sentences following the required roles, covering the goal, drone-based methods and data, main erosion results and drivers, plus management implications and limitations.",
+    "judge_criteria": [
+      "Exactly four sentences, 160-180 words total",
+      "Sentence roles match background, methods, results, implications or limitations",
+      "Includes key results like height loss and grass effect or wave energy share",
+      "Mentions limitations and management or policy implications"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 9,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Multi-Region Payments Outage",
+    "prompt": "Summarize the incident in 180-200 words.\n\nIncident report: On Nov 2, the Atlas payments platform experienced a multi-region outage. At 03:12 UTC, a routine certificate rotation in Region A caused the internal API gateway to reject service-to-service traffic. Because Region A handled 55% of global load, retries spilled into Regions B and C, saturating their request queues. A rate limiter rule that normally dampens spikes failed to load due to a configuration bug introduced the previous week. By 03:25, payment authorization latency exceeded 12 seconds, and 31% of transactions were timing out. The on-call team initially suspected a network issue and disabled a new firewall policy, but errors persisted. At 03:40, engineers noticed TLS handshake failures in logs and rolled back the certificate bundle. Region A recovered at 03:52, but cross-region traffic remained degraded because stale DNS entries continued to route clients to a blackholed gateway. The SRE team purged DNS caches at 04:05 and pushed an updated TTL to 30 seconds. Full recovery occurred at 04:18. The outage affected approximately 2.4 million payment attempts, with an estimated $6.2 million in delayed settlements. No transactions were lost; most failed attempts were retried successfully within 24 hours. Merchants in Asia were hit hardest due to their peak hours.\n\nPost-incident analysis found that the certificate package lacked an intermediate chain file after a build script change. The test suite did not validate the chain because it ran against a mocked gateway. The failed rate limiter rule compounded the issue by allowing retry storms. Customer support received 1,800 tickets and posted a status update at 04:00. A draft notice to regulators was prepared but not sent because the incident fell below mandatory reporting thresholds. The team plans to add a canary check that verifies TLS handshakes in each region, enforce config validation before deploy, and implement an emergency retry cap. They also will align DNS TTLs across regions and require certificate rotation rehearsals quarterly. A follow-up tabletop exercise is scheduled next month.\n\nThe incident commander rotated at 03:30, and communication between payments and infrastructure teams lagged because the chat bridge was overloaded. The status page displayed investigating for 38 minutes before a partial recovery note. Some merchants switched to offline mode, creating reconciliation work for the next day. The root-cause review identified three contributing factors: missing chain file, failed rate limiter config, and stale DNS caches. Action items include adding synthetic checkout probes, expanding runbook steps for certificate rollback, and improving blast-radius analysis for region A load concentration. Finance estimated potential churn risk but did not revise revenue guidance. Legal asked for a summary of whether any SLA credits apply to top-tier merchants. A retrospective noted that Region A carried disproportionate traffic because a previous cost-optimization diverted load from Region C. The team will rebalance to 40/30/30 by quarter end.",
+    "expected_tokens": 240,
+    "expected_answer": "A 180-200 word summary covering the timeline, root causes and contributing factors, impact metrics, response actions and communication issues, and remediation plans including traffic rebalancing.",
+    "judge_criteria": [
+      "180-200 words",
+      "Includes timeline with key recovery actions",
+      "Identifies root causes and contributing factors",
+      "States impact metrics and remediation items"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 10,
+    "category": "summarization",
+    "category_test": true,
+    "name": "Congestion Pricing Policy Brief",
+    "prompt": "Summarize the policy brief in 200-220 words.\n\nPolicy brief: The Metro City Council is considering a congestion pricing program for the downtown core. The proposal would charge vehicles entering the 5-square-mile zone between 7 a.m. and 7 p.m. on weekdays. The base fee is $12 per entry, with a $6 discount for residents and exemptions for emergency vehicles, paratransit, and low-income drivers approved by the mobility office. Revenue is projected at $210 million per year, with 55% earmarked for transit upgrades, 25% for street maintenance, and 20% for air-quality initiatives. A pilot would begin next March with automatic license-plate readers at 48 entry points. The transportation department estimates a 14% reduction in peak traffic and a 9% drop in downtown emissions. Critics argue the models undercount diverted traffic to adjacent neighborhoods.\n\nThe Chamber of Commerce supports the concept but wants a $20 million fund to assist small retailers and insists on a cap that prevents fees from rising more than inflation for five years. The Downtown Residents Alliance backs the plan for quieter streets but opposes the resident discount, arguing it favors higher-income drivers who already own cars. The Taxi and Ride-hail Association wants per-trip charges instead of per-entry to avoid multiple fees in a day. Delivery companies request a carve-out between 10 p.m. and 6 a.m., saying off-peak logistics reduce congestion. The Public Health Coalition favors higher fees for diesel vehicles and faster implementation. A labor union representing bus operators demands that the revenue guarantee at least 200 new operator positions and improved safety measures.\n\nDuring the last hearing, council members raised concerns about privacy and enforcement. The proposal stores plate data for 30 days for appeals, but a civil liberties group wants it deleted within 7 days and stored locally. A state senator warned that state approval is needed if fees are collected on state-owned roads. The city attorney said the program could proceed under existing environmental authority but acknowledged litigation risk. The mayor wants the pilot limited to two years and to include an independent evaluation. The transportation department plans to invest first in bus lanes on 4th and 9th avenues and a new fare-capping system.\n\nOpen questions include how to define low-income eligibility, whether to offer credits for electric vehicles, and how to prevent spillover parking on residential streets. A compromise package suggests lowering the base fee to $10, adding a $2 surcharge for diesel vehicles, and creating a neighborhood mitigation fund. The council will vote in six weeks. An economic analysis commissioned by the city projects that average commute times could improve by 6 minutes, but warns that ride-hail demand might rebound unless fleet caps are enforced. The plan includes a hardship credit of up to 20 trips per month for qualified workers who must drive, though funding for the credit is not yet identified. Transit advocates want the pilot to start earlier, while the mayor's office says procurement of cameras requires 10 months.",
+    "expected_tokens": 260,
+    "expected_answer": "A 200-220 word summary describing the pricing proposal and revenue split, major stakeholder positions, privacy and state approval concerns, proposed compromises and open questions, and the pilot timeline and vote.",
+    "judge_criteria": [
+      "200-220 words",
+      "Includes core proposal details and revenue allocation",
+      "Covers major stakeholder positions and conflicts",
+      "Notes privacy or state approval concerns and timeline"
+    ],
+    "scoring_type": "summarization"
+  },
+  {
+    "level": 1,
+    "category": "translation",
+    "category_test": true,
+    "name": "Basic Morning Greeting",
+    "prompt": "Translate to Spanish: 'Good morning, see you tomorrow.'",
+    "expected_tokens": 8,
+    "expected_answer": "Buenos días, nos vemos mañana. (also acceptable: Buenos días, hasta mañana.)",
+    "judge_criteria": [
+      "Correct Spanish greeting and farewell",
+      "Uses appropriate accents",
+      "Natural phrasing",
+      "Complete translation of both clauses"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "translation",
+    "category_test": true,
+    "name": "Basic Location Question",
+    "prompt": "Translate to French: 'Where is the station?'",
+    "expected_tokens": 8,
+    "expected_answer": "Où est la gare ? (also acceptable: Où se trouve la gare ?)",
+    "judge_criteria": [
+      "Correct meaning of the location question",
+      "Proper French question form",
+      "Accent on Où",
+      "Natural phrasing"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "translation",
+    "category_test": true,
+    "name": "Simple Prescription Request",
+    "prompt": "Translate to English: 'Necesito una receta para este medicamento.'",
+    "expected_tokens": 12,
+    "expected_answer": "I need a prescription for this medication. (also acceptable: I need a prescription for this medicine.)",
+    "judge_criteria": [
+      "Correct meaning conveyed",
+      "Uses the word prescription",
+      "Natural English phrasing",
+      "Complete translation"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "translation",
+    "category_test": true,
+    "name": "Weather Status",
+    "prompt": "Translate to English: 'Il fait froid aujourd'hui, mais le ciel est clair.'",
+    "expected_tokens": 14,
+    "expected_answer": "It's cold today, but the sky is clear. (also acceptable: It's cold today, but the sky is bright.)",
+    "judge_criteria": [
+      "Weather expressed with it is",
+      "Contrast with but preserved",
+      "Natural English phrasing",
+      "Complete translation"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "translation",
+    "category_test": true,
+    "name": "Polite Window Request",
+    "prompt": "Translate to Spanish: 'Please close the window because it's cold.' Use a polite request.",
+    "expected_tokens": 18,
+    "expected_answer": "Por favor, cierre la ventana porque hace frío. (also acceptable: Por favor, podría cerrar la ventana porque hace frío.)",
+    "judge_criteria": [
+      "Polite register in Spanish",
+      "Uses hace frío correctly",
+      "Because clause preserved",
+      "Natural phrasing"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "translation",
+    "category_test": true,
+    "name": "Past Call With Work",
+    "prompt": "Translate to French: 'I called you yesterday, but you were at work.'",
+    "expected_tokens": 18,
+    "expected_answer": "Je t'ai appelé hier, mais tu étais au travail. (also acceptable: Je vous ai appelé hier, mais vous étiez au travail.)",
+    "judge_criteria": [
+      "Past tense rendered correctly",
+      "Contrast with but preserved",
+      "Natural French phrasing",
+      "Pronoun choice is consistent"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "translation",
+    "category_test": true,
+    "name": "Raining Cats and Dogs",
+    "prompt": "Translate to Spanish, preserving the idiomatic meaning: 'It's raining cats and dogs.'",
+    "expected_tokens": 12,
+    "expected_answer": "Está lloviendo a cántaros. (also acceptable: Llueve a mares.)",
+    "judge_criteria": [
+      "Idiomatic meaning preserved",
+      "No literal cats or dogs",
+      "Natural Spanish expression",
+      "Correct spelling and accents"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "translation",
+    "category_test": true,
+    "name": "Pulled My Leg",
+    "prompt": "Translate to English, preserving the idiom: 'Me tomó el pelo con esa historia.'",
+    "expected_tokens": 14,
+    "expected_answer": "He or she was pulling my leg with that story. (also acceptable: He or she was messing with me with that story.)",
+    "judge_criteria": [
+      "Conveys teasing or deception",
+      "Uses an English idiom or natural equivalent",
+      "Keeps the reference to the story",
+      "Natural English phrasing"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "translation",
+    "category_test": true,
+    "name": "Running Late Text",
+    "prompt": "Translate to French with an informal text-message tone: 'I'm running late, save me a seat. Be there in 10.'",
+    "expected_tokens": 20,
+    "expected_answer": "Je suis en retard, garde-moi une place. J'arrive dans 10 minutes. (also acceptable: J'arrive dans dix.)",
+    "judge_criteria": [
+      "Informal tone preserved",
+      "Running late meaning captured",
+      "Save me a seat translated naturally",
+      "Time in 10 conveyed"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "translation",
+    "category_test": true,
+    "name": "Formal Attachment Email",
+    "prompt": "Translate to English, maintaining formal tone: 'Madame, Monsieur, veuillez trouver ci-joint le contrat signé.'",
+    "expected_tokens": 24,
+    "expected_answer": "Dear Sir or Madam, please find the signed contract attached. (also acceptable: Dear Madam, Sir, please find attached the signed contract.)",
+    "judge_criteria": [
+      "Formal salutation preserved",
+      "Attached meaning conveyed",
+      "Signed contract included",
+      "Professional English tone"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "translation",
+    "category_test": true,
+    "name": "Formal Response Time",
+    "prompt": "Translate to Spanish with formal register (usted): 'We have received your request and will respond within 24 hours.'",
+    "expected_tokens": 26,
+    "expected_answer": "Hemos recibido su solicitud y responderemos en un plazo de 24 horas. (also acceptable: ... y le responderemos dentro de 24 horas.)",
+    "judge_criteria": [
+      "Formal usted register",
+      "Correct 24-hour timeframe",
+      "Accurate meaning of received and respond",
+      "Natural Spanish phrasing"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "translation",
+    "category_test": true,
+    "name": "Between a Rock",
+    "prompt": "Translate to English: 'Estoy entre la espada y la pared con esta decisión.'",
+    "expected_tokens": 16,
+    "expected_answer": "I'm between a rock and a hard place with this decision. (also acceptable: I'm stuck between a rock and a hard place.)",
+    "judge_criteria": [
+      "Idiomatic meaning of dilemma preserved",
+      "Natural English idiom used",
+      "Decision context included",
+      "Complete translation"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "translation",
+    "category_test": true,
+    "name": "Sarcastic Punctuality",
+    "prompt": "Translate to Spanish, keeping the sarcasm: After someone arrives 30 minutes late, you say, 'Nice of you to be on time.'",
+    "expected_tokens": 18,
+    "expected_answer": "Qué amable de tu parte llegar a tiempo. (also acceptable: Muy puntual, eh.)",
+    "judge_criteria": [
+      "Sarcasm preserved",
+      "Refers to punctuality",
+      "Natural Spanish phrasing",
+      "Not a literal sincere compliment"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "translation",
+    "category_test": true,
+    "name": "Missed Train Sarcasm",
+    "prompt": "Translate to English, keeping the sarcasm: 'Il a encore raté son train, quelle surprise.'",
+    "expected_tokens": 18,
+    "expected_answer": "He missed his train again, what a surprise. (also acceptable: He missed his train again, as if that's surprising.)",
+    "judge_criteria": [
+      "Sarcasm preserved",
+      "Again included",
+      "Natural English phrasing",
+      "Complete translation"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "translation",
+    "category_test": true,
+    "name": "Rain Check on the Fourth",
+    "prompt": "Translate to French, preserving the cultural reference and idiom: 'On the Fourth of July, he took a rain check on the barbecue.'",
+    "expected_tokens": 22,
+    "expected_answer": "Le 4 juillet, il a remis le barbecue à plus tard. (also acceptable: Le 4 juillet, il a demandé à reporter le barbecue.)",
+    "judge_criteria": [
+      "Fourth of July reference preserved",
+      "Rain check rendered as postponing",
+      "Natural French phrasing",
+      "Overall meaning intact"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "translation",
+    "category_test": true,
+    "name": "Polite Request With Deadline",
+    "prompt": "Translate to English: 'Le agradeceríamos que adjunte los recibos antes del viernes.'",
+    "expected_tokens": 20,
+    "expected_answer": "We would appreciate it if you could attach the receipts before Friday. (also acceptable: We would be grateful if you attached the receipts before Friday.)",
+    "judge_criteria": [
+      "Formal and polite tone",
+      "Receipts and attachment included",
+      "Deadline before Friday included",
+      "Natural English phrasing"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "translation",
+    "category_test": true,
+    "name": "Verlaine Line",
+    "prompt": "Translate to English, preserving poetic tone: 'Il pleure dans mon coeur comme il pleut sur la ville.'",
+    "expected_tokens": 22,
+    "expected_answer": "My heart weeps as it rains upon the town. (also acceptable: It weeps in my heart as it rains on the city.)",
+    "judge_criteria": [
+      "Poetic tone preserved",
+      "Imagery of heart and rain retained",
+      "Natural English phrasing",
+      "Meaning accurately conveyed"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "translation",
+    "category_test": true,
+    "name": "Legal Exception Clause",
+    "prompt": "Translate to Spanish for a legal notice, keeping formal tone: 'By using this service, you agree to the terms, unless prohibited by law.'",
+    "expected_tokens": 26,
+    "expected_answer": "Al usar este servicio, usted acepta los términos, salvo que la ley lo prohíba. (also acceptable: ... salvo disposición legal en contrario.)",
+    "judge_criteria": [
+      "Formal legal register",
+      "Exception clause preserved",
+      "Terms and law correctly translated",
+      "Accents and spelling correct"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 9,
+    "category": "translation",
+    "category_test": true,
+    "name": "Two Idioms Contrast",
+    "prompt": "Translate to English, preserving the contrast and idioms: 'Il n'a pas la langue dans sa poche, mais il sait tenir sa langue quand il faut.'",
+    "expected_tokens": 24,
+    "expected_answer": "He doesn't mince words, but he knows when to keep his mouth shut. (also acceptable: ... keep quiet when needed.)",
+    "judge_criteria": [
+      "Both idioms conveyed in English",
+      "Contrast between speaking and keeping quiet preserved",
+      "Natural English phrasing",
+      "Not a literal word-for-word translation"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 10,
+    "category": "translation",
+    "category_test": true,
+    "name": "Duende in Flamenco",
+    "prompt": "Translate to English, capturing the cultural concept and tone: 'En el flamenco, el duende no se explica; se siente en la piel como un temblor oscuro.'",
+    "expected_tokens": 30,
+    "expected_answer": "In flamenco, duende cannot be explained; it is felt on the skin like a dark shiver. (also acceptable: ... like a dark tremor.)",
+    "judge_criteria": [
+      "Cultural concept of duende conveyed",
+      "Imagery preserved",
+      "Natural English phrasing",
+      "Not reduced to a literal explanation"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Three-Step Arithmetic A",
+    "prompt": "Step 1: Compute 3+4. Step 2 (using 1): Multiply the result by 2. Step 3 (combining 1&2): Subtract the Step 1 result from the Step 2 result. Output the final number only.",
+    "expected_tokens": 3,
+    "expected_answer": "7",
+    "judge_criteria": [
+      "Step 1 result is 7",
+      "Step 2 result is 14",
+      "Step 3 result is 7",
+      "Outputs only the final number"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Word Repeat Count",
+    "prompt": "Step 1: Count the letters in the word map. Step 2 (using 1): Repeat the word go that many times separated by hyphens. Step 3 (combining 1&2): Append the number in parentheses to the end. Output the final string only.",
+    "expected_tokens": 6,
+    "expected_answer": "go-go-go(3)",
+    "judge_criteria": [
+      "Step 1 count is 3",
+      "Step 2 repeats go three times with hyphens",
+      "Step 3 appends (3)",
+      "Outputs only the final string"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Time Conversion Simple",
+    "prompt": "Step 1: Convert 5 minutes to seconds. Step 2 (using 1): Add 30 seconds. Step 3 (combining 1&2): Express the result as mm:ss with two digits each. Output only the mm:ss string.",
+    "expected_tokens": 4,
+    "expected_answer": "05:30",
+    "judge_criteria": [
+      "Step 1 is 300 seconds",
+      "Step 2 is 330 seconds",
+      "Step 3 formats as mm:ss",
+      "Outputs only 05:30"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Remainder and Half",
+    "prompt": "Step 1: Find the remainder when 48 is divided by 5. Step 2 (using 1): Add 10. Step 3 (combining 1&2): Divide by 2. Output the final number.",
+    "expected_tokens": 4,
+    "expected_answer": "6.5",
+    "judge_criteria": [
+      "Step 1 remainder is 3",
+      "Step 2 result is 13",
+      "Step 3 result is 6.5",
+      "Outputs only the final number"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Max-Min Square",
+    "prompt": "Step 1: From the list [4,9,2,7], find the maximum and minimum. Step 2 (using 1): Subtract the minimum from the maximum. Step 3 (combining 1&2): Square the result. Output the final number only.",
+    "expected_tokens": 3,
+    "expected_answer": "49",
+    "judge_criteria": [
+      "Maximum is 9 and minimum is 2",
+      "Difference is 7",
+      "Square is 49",
+      "Outputs only the final number"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Reverse Slice",
+    "prompt": "Step 1: Reverse the string stressed. Step 2 (using 1): Take the first three letters of the reversed string. Step 3 (combining 1&2): Append an exclamation mark. Output the final string.",
+    "expected_tokens": 4,
+    "expected_answer": "des!",
+    "judge_criteria": [
+      "Reversed string is desserts",
+      "First three letters are des",
+      "Exclamation mark appended",
+      "Outputs only des!"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Pace Calculation",
+    "prompt": "Step 1: Convert 2500 meters to kilometers. Step 2 (using 1): If the time is 12 minutes 30 seconds, compute the pace per kilometer in seconds. Step 3 (combining 1&2): Express the pace as mm:ss per km. Output only the mm:ss string.",
+    "expected_tokens": 4,
+    "expected_answer": "05:00",
+    "judge_criteria": [
+      "Distance is 2.5 km",
+      "Total time is 750 seconds",
+      "Pace is 300 seconds per km",
+      "Outputs 05:00"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Sort Unique Sum",
+    "prompt": "Step 1: Sort the list [3,1,4,1,5] in ascending order. Step 2 (using 1): Remove duplicate values, keeping the first occurrence. Step 3 (combining 1&2): Sum the remaining numbers. Output the final sum.",
+    "expected_tokens": 3,
+    "expected_answer": "13",
+    "judge_criteria": [
+      "Sorted list is 1,1,3,4,5",
+      "Duplicates removed to 1,3,4,5",
+      "Sum is 13",
+      "Outputs only the final sum"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Discount Then Tax",
+    "prompt": "Step 1: Apply a 15 percent discount to 120. Step 2 (using 1): Add 8 percent tax to the discounted price. Step 3 (combining 1&2): Round to two decimals. Output only the final price.",
+    "expected_tokens": 5,
+    "expected_answer": "110.16",
+    "judge_criteria": [
+      "Discounted price is 102",
+      "Taxed price is 110.16",
+      "Rounded to two decimals",
+      "Outputs only the final price"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Letter Frequency Filter",
+    "prompt": "Step 1: Count the frequency of each letter in aabccde. Step 2 (using 1): List the letters with count at least 2 in alphabetical order. Step 3 (combining 1&2): Output them as a comma-separated list. Output only the list.",
+    "expected_tokens": 4,
+    "expected_answer": "a,c",
+    "judge_criteria": [
+      "Counts are a2 b1 c2 d1 e1",
+      "Letters with count at least 2 are a and c",
+      "Alphabetical order preserved",
+      "Outputs only a,c"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Fibonacci Digits",
+    "prompt": "Step 1: Compute the Fibonacci number for n=6 with F0=0, F1=1. Step 2 (using 1): Sum the digits of the result. Step 3 (combining 1&2): Multiply that sum by n. Output the final number.",
+    "expected_tokens": 3,
+    "expected_answer": "48",
+    "judge_criteria": [
+      "F6 equals 8",
+      "Digit sum is 8",
+      "Final result is 48",
+      "Outputs only the final number"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Matrix Determinant",
+    "prompt": "Step 1: Compute the determinant of the matrix [[1,2],[3,4]]. Step 2 (using 1): Take the absolute value. Step 3 (combining 1&2): Add 5. Output the final number only.",
+    "expected_tokens": 3,
+    "expected_answer": "7",
+    "judge_criteria": [
+      "Determinant is -2",
+      "Absolute value is 2",
+      "Final result is 7",
+      "Outputs only the final number"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Largest Time Gap",
+    "prompt": "Step 1: Convert 09:10, 09:45, and 10:05 to minutes past 09:00. Step 2 (using 1): Compute the gaps between consecutive times. Step 3 (combining 1&2): Output the largest gap in minutes as a number.",
+    "expected_tokens": 3,
+    "expected_answer": "35",
+    "judge_criteria": [
+      "Converted minutes are 10, 45, 65",
+      "Gaps are 35 and 20",
+      "Largest gap is 35",
+      "Outputs only 35"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Shortest Paths Count",
+    "prompt": "Step 1: In the graph with edges A-B, B-C, C-D, and A-D, find the shortest path length from A to C. Step 2 (using 1): Count the number of shortest paths. Step 3 (combining 1&2): Output length:count using a colon.",
+    "expected_tokens": 4,
+    "expected_answer": "2:2",
+    "judge_criteria": [
+      "Shortest path length is 2",
+      "Two shortest paths exist",
+      "Outputs in length:count format",
+      "Result is 2:2"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Critical Path",
+    "prompt": "Step 1: Tasks: A takes 2, B takes 3 after A, C takes 4 after A, D takes 1 after B and C. Compute earliest finish time for each task. Step 2 (using 1): Find the critical path length. Step 3 (combining 1&2): Output one critical path and the length as path=A-C-D; length=7.",
+    "expected_tokens": 10,
+    "expected_answer": "path=A-C-D; length=7",
+    "judge_criteria": [
+      "Earliest finishes are A2, B5, C6, D7",
+      "Critical path length is 7",
+      "Path includes A then C then D",
+      "Output matches the required format"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Equal Partition",
+    "prompt": "Step 1: Determine whether the list [3,1,1,2,2,1] can be split into two subsets with equal sum. Step 2 (using 1): Provide one subset that achieves the split if possible. Step 3 (combining 1&2): Output YES:<subset> using plus signs between numbers, for example YES:3+1+1.",
+    "expected_tokens": 10,
+    "expected_answer": "YES:3+1+1 (also acceptable: YES:2+2+1 or any valid subset summing to 5)",
+    "judge_criteria": [
+      "Correctly identifies that an equal split is possible",
+      "Subset sums to 5",
+      "Uses YES:<subset> format",
+      "Subset uses numbers from the list"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Weighted Path Choice",
+    "prompt": "Step 1: In a weighted graph with edges S-A:4, S-B:2, A-T:5, B-A:1, B-T:7, compute the shortest path cost from S to T. Step 2 (using 1): Compute the cost of the second-best simple path. Step 3 (combining 1&2): Output which path is cheaper and by how much.",
+    "expected_tokens": 14,
+    "expected_answer": "S-B-A-T is cheaper by 1 (shortest cost 8, second-best cost 9).",
+    "judge_criteria": [
+      "Shortest path is S-B-A-T with cost 8",
+      "Second-best simple path cost is 9",
+      "Difference is 1",
+      "Output states the cheaper path and margin"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Shift Assignment Cost",
+    "prompt": "Step 1: Assign two shifts, morning and evening, to workers X, Y, Z with no one working twice. Constraints: morning must be X or Z, evening must be Y or Z, and Y must do evening if Z does morning. Costs per shift: X=80, Y=70, Z=60. Step 2 (using 1): Compute total cost for each feasible assignment. Step 3 (combining 1&2): Output the cheapest assignment as morning=<worker>, evening=<worker>, total=<cost>.",
+    "expected_tokens": 16,
+    "expected_answer": "morning=Z, evening=Y, total=130",
+    "judge_criteria": [
+      "Respects all assignment constraints",
+      "Computes costs correctly",
+      "Chooses the minimum total cost",
+      "Outputs in the required format"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 9,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Mini Knapsack",
+    "prompt": "Step 1: List all subsets of items A(w3,v4), B(w4,v5), C(w2,v3) that fit capacity 6. Step 2 (using 1): Choose the subset with maximum total value. Step 3 (combining 1&2): Output the chosen items and total value as items=B+C; value=8.",
+    "expected_tokens": 12,
+    "expected_answer": "items=B+C; value=8",
+    "judge_criteria": [
+      "Considers only subsets within capacity 6",
+      "Selects B+C as maximum value",
+      "Total value is 8",
+      "Outputs in the required format"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 10,
+    "category": "multi-turn-reasoning",
+    "category_test": true,
+    "name": "Constraint Digits Checksum",
+    "prompt": "Step 1: Find digits a,b,c such that a+b=9, b+c=8, a is even, c is odd. Step 2 (using 1): Form the largest possible three-digit number abc. Step 3 (combining 1&2): Compute checksum = abc mod 7 and output abc=<number>, checksum=<value>.",
+    "expected_tokens": 12,
+    "expected_answer": "abc=817, checksum=5",
+    "judge_criteria": [
+      "Finds valid digits and selects the largest abc",
+      "Largest abc is 817",
+      "Computes modulo 7 correctly as 5",
+      "Outputs in abc=<number>, checksum=<value> format"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Community Center Renovation Memo",
+    "prompt": "Read the following memo about a community center renovation. Then answer Q1-Q3.\n\nEastside Community Center has served the River Park neighborhood since 1978. The board voted on Jan 5 to approve a full renovation because the roof leaked, the HVAC failed twice in winter, and the gym floor warped. The design firm Stone and Reed was selected after a short bid process. The goal is to modernize the building without changing its basic layout so long time users can still find the pool, the art room, and the after school lounge in the same wing.\n\nFunding was assembled in late February. The total budget is 1.2 million dollars. A city grant covers 600k, private donations add 250k, and the center reserve provides the remaining 350k. The single largest line item is the new elevator at 180k, followed by roof replacement at 140k and HVAC at 125k. Smaller items include new lockers, lighting, repainting, and acoustic panels in the multipurpose hall.\n\nConstruction starts with a full closure on March 1. Demolition begins March 10, and plumbing upgrades finish on April 22. The roof work is scheduled for May 15 if weather holds, and the gym floor is expected to cure by June 5. Inspections are booked for September 18, with a soft opening for staff training two weeks later. The public reopening date is October 12, timed to the fall program calendar.\n\nDuring closure, most classes move to the public library annex and the church basement on Cedar Street. The youth robotics club will meet at the high school lab on Tuesdays. After reopening, weekday hours will be 7 a.m. to 9 p.m., and weekend hours will be 9 a.m. to 6 p.m. A new digital sign in kiosk will replace paper cards, but the front desk will still accept cash for drop in visits and day passes.\n\nStaffing plans emphasize volunteer support for the reopening month. Maya Chen is the volunteer coordinator and will manage schedules, background checks, and the welcome desk. Facilities lead Luis Park will oversee vendors and weekly safety walks. Two part time custodians are being added for the first eight weeks. The communications team will send monthly email updates and post construction photos on Fridays.\n\nRisks include late delivery of the elevator cab and possible delays in city inspections. To reduce surprises, the board approved a 40k contingency and asked Stone and Reed to hold a biweekly site call. Community feedback sessions will be held on April 8 and July 20. The center will not book outside events until December to avoid overloading the new systems. A reopening open house is planned for October 19 with local vendors and youth performances.\n\nQuestions: Q1: What is the public reopening date? Q2: What is the total renovation budget? Q3: Who is the volunteer coordinator? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 90,
+    "expected_answer": "Q1: October 12. Q2: 1.2 million dollars. Q3: Maya Chen.",
+    "judge_criteria": [
+      "Identifies the reopening date as October 12",
+      "States the total budget as 1.2 million dollars",
+      "Names Maya Chen as volunteer coordinator",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Lake Trip Journal",
+    "prompt": "Read the journal entry and answer Q1-Q3.\n\nWe left the city at dawn on Friday and reached the lakeside ranger station before lunch. The ranger warned us that the Pine Ridge trail was closed after a washout and suggested the East Fork loop instead. We signed the log, checked in our permit number, and bought a map even though most of the route follows the shoreline. The sky was clear but the wind was sharp and cold across the water.\n\nThe East Fork loop was quiet, with only a few hikers heading out as we came in. We paused at the old bridge where a wooden beam still shows a 1996 flood mark. Around mid afternoon the clouds thickened and we pulled on light rain shells. The trail markers were faded near the marsh, so we followed the cairns and kept the lake on our left. A pair of deer crossed ahead of us and disappeared into the reeds.\n\nFor lunch we unpacked rye sandwiches, apples, and a small thermos of tea. The sandwiches had smoked turkey and mustard, which tasted better than expected in the cold. We also had a bag of trail mix but saved it for later. After lunch we checked the map again to confirm the side path to the overlook. The view was worth the short climb even though the wind made it hard to stand still for photos.\n\nWe reached Alder Cove just before sunset and chose a flat spot near the west edge of the campsite. The ground was damp so we laid an extra tarp under the tent. Another pair of campers told us the water pump at the north end was working fine, so we did not need to boil water. We cooked lentils and rice on the small stove and watched the light fade behind the ridge.\n\nOvernight rain tapped the fly and stopped by morning. We broke camp early, packed out all trash, and left a note in the trail log at the station. On the drive home we stopped for coffee in Milltown and agreed to return in late summer when the berries are ripe.\n\nQuestions: Q1: Which trail was closed? Q2: What main lunch item was packed? Q3: What was the campsite name? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 80,
+    "expected_answer": "Q1: Pine Ridge trail. Q2: Rye sandwiches. Q3: Alder Cove.",
+    "judge_criteria": [
+      "Names Pine Ridge as the closed trail",
+      "Identifies rye sandwiches as the main lunch item",
+      "Names Alder Cove as the campsite",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "School Science Fair Plan",
+    "prompt": "Read the planning brief and answer Q1-Q3.\n\nThe Roosevelt Middle School science fair committee met on Monday to review the upcoming spring event. Last year the fair drew 86 projects, and the judges awarded a 500 dollar scholarship funded by the alumni group. That scholarship went to Elise Moreno for a project on soil microbes and plant growth. The same alumni group agreed to renew the scholarship if the school secures at least two new local sponsors this year.\n\nThis year the committee expects closer to 100 projects because the eighth grade classes are larger. The main fair date is May 9, with judging on May 8 after lunch. Volunteers will set up tables the night before, and the custodial team will mark power outlets with tape. The librarian offered the media center for overflow posters if the gym gets crowded. The PTA president said the bake sale will run from 3 p.m. to 7 p.m. on the night of the fair.\n\nThe committee discussed prizes for special categories. A local engineering firm will again sponsor the prototype grant, which last year went to a project called Solar Litter Collector. The firm wants a short video of the winning team for its website. The student council agreed to cover the cost of ribbons and certificates, and a retired teacher will order them by April 15.\n\nDuring the planning meeting, two concerns surfaced. First, several projects failed safety review last year because of open flames and loose wiring. The science teachers plan to hold a safety clinic on April 12 to reduce those issues. Second, the gym sound system is still broken, so the school will rent a portable speaker for the awards ceremony. The rental fee is estimated at 85 dollars.\n\nThe committee scheduled the next planning meeting for April 3 at 4 p.m. in room 214. They asked each grade level team to submit a list of judges by March 27. Ms. Patel will update the website with the new submission deadline and the required consent forms for photography.\n\nQuestions: Q1: Which project won the prototype grant last year? Q2: How much was the scholarship? Q3: When is the next planning meeting? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 90,
+    "expected_answer": "Q1: Solar Litter Collector. Q2: 500 dollars. Q3: April 3 at 4 p.m.",
+    "judge_criteria": [
+      "Names Solar Litter Collector for the prototype grant",
+      "States the scholarship amount as 500 dollars",
+      "Gives the meeting time as April 3 at 4 p.m.",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Product Launch Brief",
+    "prompt": "Read the brief and answer Q1-Q3.\n\nThe Orion team circulated a launch brief for the EchoBand fitness tracker. The product targets casual runners and commuters who want basic health metrics without a subscription. Industrial design finalized the curved screen and a single side button, while the operations team confirmed that the new strap material will pass sweat tests. The launch goal is mid September, with preorders opening two weeks earlier.\n\nPricing was the first major decision. The recommended retail price is 149, which positions EchoBand between low cost pedometers and premium smartwatches. A limited introductory bundle will include a spare strap and a travel pouch at the same price for the first month. Marketing will avoid price promotions during the holiday season to protect margins.\n\nThe pilot market will be the Iberian region. Sales and support will focus on Spain and Portugal before expanding to France and Italy. The customer success lead requested a Spanish FAQ and live chat support for the first sixty days. Logistics confirmed that a warehouse in Valencia can handle the initial shipments without new equipment.\n\nSeveral features were deprioritized in the last sprint. The offline workout mode is delayed because it conflicts with the new battery firmware. A social sharing tab will ship at launch, but custom watch faces are pushed to the second quarter update. The firmware team also noted that the heart rate LED supplier can only deliver two batches per month, so inventory should be managed carefully.\n\nThe brief ends with a note about press outreach. A demo unit will be sent to three tech reviewers by August 10, and a local event in Madrid will host a small launch run. The team will measure success by preorder volume, support ticket rate, and first month retention.\n\nQuestions: Q1: What is the target price? Q2: Which region is the pilot market? Q3: Which feature was delayed due to battery firmware? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 90,
+    "expected_answer": "Q1: 149. Q2: The Iberian region, Spain and Portugal. Q3: Offline workout mode.",
+    "judge_criteria": [
+      "States the target price as 149",
+      "Identifies the pilot market as Spain and Portugal",
+      "Names offline workout mode as the delayed feature",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Museum Exhibit Guide",
+    "prompt": "Read the exhibit guide and answer Q1-Q3.\n\nThe Harbor Museum opened a new exhibit called Tides and Trade, which traces coastal commerce from 1750 to 1920. The entry hall features a wall map showing trade routes and a short film narrated by local historian Dana Ross. Visitors are encouraged to start on the left wing, where wooden ship models are arranged by decade. A recorded bell rings every fifteen minutes, echoing the sound of the old harbor tower.\n\nThe second gallery focuses on navigation tools and includes a brass compass dated 1812. The label notes it was carried on the schooner Marigold during patrols in the War of 1812 and later donated by Elaine Foster, a descendant of the captain. Nearby cases show sextants, logbooks, and a worn leather chart tube with penciled notes. A small interactive station lets children plot a course using magnet tiles.\n\nIn the third gallery, the exhibit shifts to immigration and port labor. Black and white photos of dock workers line the corridor, and an oral history recording plays every hour. The museum built a new diorama of the fish market using archival photos from 1891. A display case on labor strikes in 1904 includes a printed leaflet and a union pin that belonged to the organizer Tomas Ruiz.\n\nThe final section covers the rise of steam shipping and the decline of small schooners. A cutaway model of the iron steamer Foxlight anchors the room. The caption mentions that the ship was the first in the region to install electric lighting. A recreated ticket booth includes period price lists and a bench from the original passenger hall. The exhibit ends with a timeline of harbor rebuilding after the 1917 fire.\n\nMuseum policies are listed at the exit. Tickets are 12 for adults and 6 for students. Entry is free for children under five. The museum offers a discount on Thursdays after 5 p.m., and members can bring one guest at no charge. Audio guides are available in English and Spanish, and tours in French must be booked in advance.\n\nQuestions: Q1: Which 1812 artifact is mentioned? Q2: Who donated it? Q3: On which day and time does the museum offer a discount? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 95,
+    "expected_answer": "Q1: A brass compass dated 1812. Q2: Elaine Foster. Q3: Thursdays after 5 p.m.",
+    "judge_criteria": [
+      "Identifies the brass compass from 1812",
+      "Names Elaine Foster as the donor",
+      "Gives the discount time as Thursdays after 5 p.m.",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "River Crossing Story",
+    "prompt": "Read the story and answer Q1-Q3.\n\nMara promised her brother she would meet him at the old bridge at dawn, before the fishing boats left the inlet. She spent the night in the boathouse, listening to the wind and the clink of rigging against the masts. In the morning she found the skiff half sunk and the oarlock cracked, so she dragged it to the shore and searched the tool shed for something to fix it.\n\nShe remembered the tin box of supplies under the bench. Inside were nails, a bent hinge, and a coil of copper wire. The wire was thin but strong, so she wrapped it around the broken oarlock and tested the fit. It held well enough for a short crossing, even if it looked messy. She shoved the skiff into the water, pushed off, and let the current carry her toward the eastern bank.\n\nHalfway across, rain started to fall. Mara kept her eyes on the dark line of reeds that marked the shallow channel. She could see the outline of the old bridge in the distance, but the tide was moving faster than she expected. When she reached the bank, she pulled the skiff into the mud and covered it with a canvas tarp so it would not drift away.\n\nHer brother was not there. Instead, an old fisherman told her that the bridge was closed for repairs and the market had moved to the town square. Mara climbed the hill, crossed the quiet street, and found the square already busy with carts and lanterns. She checked the clocktower, where she had waited with her brother years ago during a summer festival.\n\nAt last she saw him near the fountain, holding two cups of warm cider. He laughed at the wire repair and thanked her for coming anyway. They walked through the market stalls together, relieved that a promise kept can bend without breaking.\n\nQuestions: Q1: Where did Mara promise to meet her brother at dawn? Q2: What item did she use to fix the oarlock? Q3: Where did they finally meet? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 85,
+    "expected_answer": "Q1: The old bridge. Q2: A coil of copper wire. Q3: The town square near the clocktower.",
+    "judge_criteria": [
+      "Names the old bridge as the promised meeting place",
+      "Identifies copper wire as the repair item",
+      "States the meeting place as the town square by the clocktower",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Operations Runbook",
+    "prompt": "Read the runbook and answer Q1-Q3.\n\nThis runbook describes the quarterly upgrade for the Atlas billing cluster. The environment includes three application nodes, two database replicas, and a shared cache. The change window is Sunday from 04:30 to 06:00 local time, chosen to avoid the midnight batch jobs and the 07:00 invoice cycle. The on call manager, Priya Shah, has final approval authority for go or no go decisions. The primary engineer is Mateo Ruiz, and the comms lead is Dana Li.\n\nPreparation begins two days before. The team validates that the nightly backup completed at 01:00 on Friday and stores the snapshot in the cold archive. On Saturday they run a dry start of the database failover script and confirm that the rollback package matches the current build. A short checklist is sent to support with a reminder to monitor ticket spikes.\n\nOn Sunday at 03:45, the team announces the maintenance on the status page and posts a short message in the customer portal. At 04:00 they set the cluster to read only mode and drain background jobs. At 04:10 the cache is flushed, and at 04:20 the upgrade package is copied to each node. The upgrade begins at 04:30, with node one first, then node two, and node three last. Each node takes about eight minutes to update and rejoin the pool.\n\nValidation follows. The engineer runs three smoke tests, confirms billing writes, and checks the dashboard for error rates. If any test fails, the rollback step is triggered, which requires Priya Shah to approve it and Dana Li to notify customers. The rollback script restores the previous build and replays queued jobs from the archive.\n\nAfter a successful upgrade, the cluster is returned to read write mode, and background jobs are re enabled. The team posts a completion note and monitors for thirty minutes. A brief summary is added to the weekly change log.\n\nQuestions: Q1: Which step includes the backup verification and what time is the backup referenced? Q2: How much time passes between the backup time and the upgrade start time? Q3: Who must approve a rollback? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 110,
+    "expected_answer": "Q1: The preparation step verifies the nightly backup at 01:00 on Friday. Q2: 3 hours 30 minutes between 01:00 and 04:30. Q3: Priya Shah.",
+    "judge_criteria": [
+      "Identifies the preparation step and 01:00 backup time",
+      "Computes the 3 hours 30 minutes gap",
+      "Names Priya Shah as rollback approver",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Annual Budget Review",
+    "prompt": "Read the budget review and answer Q1-Q3.\n\nThe River County Arts Council published its annual budget review for fiscal year 2024. The baseline operating budget was 5.4 million, covering staff salaries, grants, and program delivery. Early in the year, the council faced rising utility costs at two historic theaters, prompting a plan to tighten discretionary spending. The executive director, Carla Green, emphasized that the core mission programs would be protected even if smaller line items were trimmed.\n\nThe first set of adjustments came in February. Travel spending was reduced by 120k through fewer out of state conferences. Software subscriptions were trimmed by 80k after a renegotiated contract. A delayed equipment purchase saved another 150k, though the finance team warned that the savings were temporary because the replacement will be needed next year.\n\nIn April, two new revenue sources were confirmed. A state grant added 200k for a rural outreach initiative, and a local foundation donated 60k to support youth arts camps. The outreach funds are restricted and must be spent on travel and materials in five northern towns. The donation is flexible and will be used to offset instructor stipends.\n\nDepartment allocations were adjusted midyear. The Public Health arts program received an extra 90k to expand a partnership with clinics. By contrast, the marketing budget was held flat, and the festival committee was asked to reduce print costs by shifting to digital flyers. The board also voted to keep a 75k reserve for emergency building repairs.\n\nA final note in the review states that the largest cut by dollar amount was the equipment delay, while the most sensitive cut was travel because it affected staff development. The council plans a small audit in September and will revisit the reserve policy in December.\n\nQuestions: Q1: What is the revised total budget after the cuts and additions listed? Q2: Which line item had the largest cut? Q3: Which department received an extra 90k? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 110,
+    "expected_answer": "Q1: 5.31 million. Q2: The equipment purchase delay of 150k. Q3: The Public Health arts program.",
+    "judge_criteria": [
+      "Computes the revised total as 5.31 million",
+      "Identifies the equipment delay as the largest cut",
+      "Names the Public Health arts program",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Regional Sales Report",
+    "prompt": "Read the sales report and answer Q1-Q3.\n\nThe Q2 sales review opened with a summary of the product mix. The TrailPro bag lagged in several markets because of a zipper defect that was fixed in late May. By contrast, the new Ridge bottle exceeded forecasts in urban stores, especially when paired with the spring promotional display. The product team expects the TrailPro to recover in Q3 after the updated stock clears the pipeline.\n\nRevenue by region was listed for both Q1 and Q2. In Q1, North reported 2.4 million, South 1.8 million, East 2.1 million, and West 1.5 million. In Q2, North grew to 2.6 million, South dipped to 1.7 million, East rose to 2.5 million, and West climbed to 1.9 million. The report noted that the West region achieved the highest percentage growth because a new distributor in Phoenix added 120 stores and improved shelf placement.\n\nCustomer satisfaction in the East improved after a new support team reduced response time. The South region, however, struggled with backorders for the Ridge bottle. North stayed stable but saw higher returns on the TrailPro due to the defect. The report also mentioned that online sales now account for 22 percent of total revenue, up from 18 percent in Q1.\n\nMarketing activity was concentrated around two campaigns. The first was a commuter focused message in April, while the second was a limited run collaboration with a local artist in June. The finance appendix included a note that shipping costs increased by 6 percent after the new carrier contract took effect.\n\nQuestions: Q1: What is the total revenue for East and West combined across Q1 and Q2? Q2: Which region had the highest growth and why? Q3: Which product underperformed due to a defect? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 120,
+    "expected_answer": "Q1: 8.0 million. Q2: West, driven by the new Phoenix distributor and better shelf placement. Q3: TrailPro bag.",
+    "judge_criteria": [
+      "Totals East and West to 8.0 million across both quarters",
+      "Identifies West as highest growth and cites the distributor/shelf placement",
+      "Names TrailPro bag as the underperforming product",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Hospital Shift Handoff",
+    "prompt": "Read the handoff note and answer Q1-Q3.\n\nNight shift handed off to the day team at 07:00 with five patients on the medical floor. Room 201 holds Rita Gomez, age 68, admitted for a COPD flare. She is on 2 liters of oxygen, uses a rescue inhaler, and reports a penicillin allergy that causes rash and swelling. The plan is to monitor her oxygen saturation and reassess after morning nebulizer treatments.\n\nRoom 202 has Jordan Lee, age 41, recovering from a laparoscopic appendectomy. Pain is controlled with acetaminophen, and he is ambulating with a walker. A CT abdomen is scheduled for 14:00 to confirm no complications. He is NPO until the scan, after which a light diet may resume if the surgeon agrees.\n\nRoom 203 is occupied by Priya Nair, age 55, admitted for uncontrolled hypertension. She is on lisinopril and a low sodium diet. The order note says to hold lisinopril if systolic blood pressure drops below 100 or if she reports dizziness. Labs are stable and renal function is normal. The team should encourage hydration and recheck vitals at noon.\n\nRoom 204 has Leo Bryant, age 73, treated for cellulitis on his left leg. He received IV antibiotics overnight and will transition to oral therapy if redness continues to fade. Physical therapy is planned for 11:30, and the wound care nurse will change the dressing at 16:00. He is eager for discharge but needs clearance from the infectious disease consult.\n\nRoom 205 has Anika Patel, age 29, admitted for migraine management and dehydration. She improved overnight after IV fluids and antiemetics. She prefers a dark room and requested a discharge summary for her employer. She has no known drug allergies.\n\nQuestions: Q1: Which patient has a penicillin allergy? Q2: Which patient has a CT scheduled at 14:00? Q3: Which medication should be held if blood pressure is low? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 110,
+    "expected_answer": "Q1: Rita Gomez. Q2: Jordan Lee. Q3: Lisinopril.",
+    "judge_criteria": [
+      "Identifies Rita Gomez as having the penicillin allergy",
+      "Names Jordan Lee for the 14:00 CT scan",
+      "States lisinopril as the medication to hold",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Research Expedition Log",
+    "prompt": "Read the expedition log and answer Q1-Q3.\n\nThe Seabright field team set out for a six day coastal survey to map eelgrass beds and collect water samples. The crew included Dr. Harper, technician Luis, and two graduate students, Mei and Jonah. They departed from Port Gray on the small research vessel Kestrel and towed a skiff named Heron for near shore work. The objective was to sample five sites named Alpha through Echo and to test a new drone camera for shallow water imagery.\n\nDay 1 focused on Site Alpha near the lighthouse. The team deployed the drone at 08:10, ran two transects, and collected 12 core samples. The wind was low and the water clear, so visibility was excellent. After lunch they calibrated the dissolved oxygen sensor and logged temperature profiles. The Heron skiff was used only to place markers; all samples were brought back on the Kestrel.\n\nDay 2 targeted Site Beta, which is farther offshore and requires a longer transit. The crew left the dock at 05:30 to catch the slack tide. A pod of dolphins lingered near the bow, but sampling remained on schedule. They collected 18 samples and took three sediment grabs. Mei noted that eelgrass density appeared lower than last spring. That evening, the drone batteries were recharged and the camera lens was cleaned.\n\nDay 3 moved to Site Gamma, a narrow inlet with a rocky bottom. The team used the skiff to reach shallower pockets and recorded salinity every 15 minutes. Two samples were contaminated by sand and were discarded. Jonah also repaired a frayed cable on the sonar unit. The group returned late and skipped the planned night survey because fog rolled in.\n\nDay 4 was the toughest. A storm system arrived early and the salinity probe began to fail, reading wildly high values. Dr. Harper decided to stop using the probe and relied on backup strips for the rest of the day. The wind forced a reduced schedule, and the Heron skiff returned early to Port Gray while the Kestrel remained offshore to finish the core samples. Only 9 samples were collected at Site Delta that afternoon.\n\nDay 5 improved slightly, and the team revisited Site Delta to complete the grid. With calmer water they added 42 samples and ran a full drone pass. Luis noted that the drone footage showed a narrow patch of seagrass recovery near the south buoy. The team also recovered one lost marker from Day 4 and replaced two damaged flags.\n\nDay 6 was spent at Site Echo near the river mouth. The group collected 15 samples, packed up equipment, and logged final notes. Back in Port Gray, they held a short debrief and listed next steps, including sensor repair and data cleaning.\n\nQuestions: Q1: Which instrument failed on Day 4? Q2: How many samples were collected at Site Delta on Day 5? Q3: Which boat returned early due to weather? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 110,
+    "expected_answer": "Q1: The salinity probe. Q2: 42 samples. Q3: The Heron skiff.",
+    "judge_criteria": [
+      "Identifies the salinity probe as the failed instrument",
+      "States 42 samples at Site Delta on Day 5",
+      "Names the Heron skiff as returning early",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "City Council Minutes",
+    "prompt": "Read the minutes and answer Q1-Q3.\n\nThe May 14 city council meeting opened with a presentation on traffic safety near Jefferson High. The transportation director reported a 12 percent drop in speeding after new signage was installed. Several residents asked about crosswalk lighting, and the director said a pilot would begin in August with two solar powered units. The mayor thanked the PTA for organizing volunteers during morning drop off.\n\nAgenda item two covered the downtown tree ordinance. The proposed ordinance would require a permit for removing any tree with a trunk diameter over 12 inches. Councilor Reyes raised concerns about delays for small property owners. Councilor Liu offered an amendment to exempt removals related to certified storm damage. After discussion, the amendment was added to the ordinance draft.\n\nThe finance report followed. The treasurer noted that sales tax revenue was slightly above forecast, while parking revenue lagged. A midyear transfer of 200k from the capital reserve was proposed to cover a bridge inspection. The council agreed to revisit the transfer after receiving an updated engineering estimate.\n\nPublic comments included requests for extended library hours and a complaint about late night noise near the riverfront plaza. The police chief said weekend patrols would be adjusted to address the issue. A representative from the Historical Society asked for support in restoring the old courthouse clock, estimated at 35k.\n\nThe council then voted on the tree ordinance as amended. The final vote was 6 in favor and 3 opposed. Councilors Reyes, Patel, and Nguyen voted no, citing concerns about enforcement. The ordinance will return for a second reading next month, with a public hearing scheduled for July 18 at 6 p.m.\n\nThe meeting ended with updates on the summer festival and a reminder that the next regular session is June 4. The clerk distributed the draft minutes and asked for corrections by Friday.\n\nQuestions: Q1: Which councilor proposed the amendment? Q2: What was the vote count on the ordinance? Q3: When is the public hearing? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 95,
+    "expected_answer": "Q1: Councilor Liu. Q2: 6 in favor and 3 opposed. Q3: July 18 at 6 p.m.",
+    "judge_criteria": [
+      "Names Councilor Liu as the amendment proposer",
+      "Reports the vote as 6-3",
+      "Gives the hearing time as July 18 at 6 p.m.",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Supply Chain Incident",
+    "prompt": "Read the incident narrative and answer Q1-Q3.\n\nIn February, the Nova Devices team placed a consolidated order for two critical components: lithium cells from Vendor Arctic and controller boards from Vendor Pacific. The purchase order was issued on March 2 with a requested ship date of March 8. The baseline plan assumed all materials would arrive by March 16 so that assembly could begin on March 18.\n\nOn March 6, Vendor Arctic reported a customs delay on its inbound raw materials and projected a 9 day slip. The account manager promised to expedite once the materials cleared. On March 8, Vendor Pacific notified the team that a line calibration problem would delay its boards by two weeks. The procurement lead escalated both issues and asked engineering to review alternatives.\n\nBy March 10, Nova approved a mitigation plan. The team sourced a limited batch of controller boards from a backup supplier and paid for air freight, adding 24k in unplanned cost. These boards were expected to arrive by March 15, enabling at least a small pilot build. The Arctic lithium cells were still expected to arrive late, but Arctic offered to split the shipment and send half by air when available.\n\nThe backup boards arrived on March 15, and pilot assembly began on March 17. Vendor Arctic finally shipped the main batch on March 18, and the cells arrived on March 25. Vendor Pacific delivered its delayed boards on March 22, too late to change the pilot but helpful for the full run. The total delay forced the team to move the customer demo by one week and shift testing to evenings.\n\nIn the retrospective, the team concluded that Vendor Pacific caused the longer delay and that the air freight mitigation prevented a full shutdown. They also noted that order lead times were too optimistic and that future plans should include a two week buffer for cross border shipments.\n\nQuestions: Q1: Which vendor had the longer delay? Q2: What mitigation was chosen to keep pilot builds moving? Q3: How many days passed between the order date and the arrival of the main lithium cells? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 110,
+    "expected_answer": "Q1: Vendor Pacific. Q2: Sourcing backup boards and shipping them by air freight. Q3: 23 days (from March 2 to March 25).",
+    "judge_criteria": [
+      "Identifies Vendor Pacific as the longer delay",
+      "Describes the air freight backup boards mitigation",
+      "Computes 23 days from March 2 to March 25",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Software Migration Plan",
+    "prompt": "Read the migration plan and answer Q1-Q3.\n\nThe Horizon platform will migrate from the legacy data center to the new cloud stack over four phases. Phase 1 moves the logging pipeline and the metrics aggregator, both of which are low risk and can run in parallel. Phase 2 migrates the notification service, including email and SMS workers, and will introduce a new queue with at least 48 hours of dual running to catch any dropped messages. Phase 3 covers the core billing API and the subscription database, and Phase 4 moves the search index and reporting jobs.\n\nThe plan notes several risks. The highest risk is token drift during Phase 3 because the billing API uses short lived session tokens. To mitigate, engineers will enable dual writes to the auth store and will run a 72 hour reconciliation job. Another risk is that the new queue in Phase 2 could reorder messages; the team will add idempotency keys and a dead letter queue to catch duplicates.\n\nOwnership is defined for each phase. Phase 1 is led by Dev Patel with backup owner Lila Ross. Phase 2 is led by Omar Reed with backup owner Kim Noda. Phase 3 is led by Priya Shah with backup owner Nora Kim. Phase 4 is led by Mateo Ruiz with backup owner Sam Li. The change manager will be Ava Chen, who will coordinate status updates and postmortem notes.\n\nThe schedule lists Phase 1 for the week of June 3, Phase 2 starting June 17, Phase 3 starting July 8, and Phase 4 starting July 29. A rollback playbook is required before each phase begins, and a two hour freeze on deploys will be enforced on cutover days. The plan also calls for a complete performance baseline before Phase 3 starts, including p95 latency and error rate snapshots.\n\nQuestions: Q1: Which service is migrated in Phase 2? Q2: What is the highest risk noted and its mitigation? Q3: Who is the backup owner for Phase 3? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 120,
+    "expected_answer": "Q1: The notification service (email and SMS workers). Q2: Token drift during Phase 3, mitigated by dual writes and reconciliation. Q3: Nora Kim.",
+    "judge_criteria": [
+      "Identifies the notification service as Phase 2",
+      "States the token drift risk and dual write mitigation",
+      "Names Nora Kim as Phase 3 backup owner",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Corporate Strategy Letter",
+    "prompt": "Read the strategy letter and answer Q1-Q3.\n\nThe executive team issued a strategy letter for fiscal years 2025 and 2026. The letter begins with a candid assessment: revenue grew only 4 percent last year, but churn fell and enterprise renewals were strong. The team wants to focus on disciplined growth rather than chasing every new market. Three primary KPIs were highlighted for the next two years: net revenue retention above 92 percent, operating margin above 18 percent, and a customer satisfaction score above 42.\n\nThe product roadmap emphasizes stability. The platform team will concentrate on reducing incident frequency by 30 percent and cutting mean time to recovery under 45 minutes. A planned replatform of the reporting engine is scheduled for the second half of 2025, but a full robotic fulfillment center initiative was deferred to 2026 due to capital constraints. Leadership also plans to expand the developer relations program to improve integration quality.\n\nThe letter discusses expansion options and ultimately rejects one region. After review, the team will not expand into South America in 2025 because of regulatory uncertainty and inconsistent tax rules. Instead, they will deepen partnerships in Canada and the Nordics and pilot two new enterprise bundles in Germany. The letter notes that Asia Pacific will remain a watch list region until the company can hire a local compliance lead.\n\nTalent and culture receive a full section. The company will shift to a 2 day in office policy, create a mentorship track for staff engineers, and standardize promotion criteria across departments. It will also invest in a new training program on reliability engineering, with target completion for all on call staff by October.\n\nFinally, the letter outlines capital priorities. It plans to refinance a portion of the debt in early 2025, keep annual capex under 6 percent of revenue, and reserve 20 million for opportunistic acquisitions. Leaders stress that these choices are meant to protect flexibility while still supporting targeted growth.\n\nQuestions: Q1: What three KPIs are highlighted? Q2: Which region is excluded from expansion and why? Q3: Which initiative is deferred to 2026? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 130,
+    "expected_answer": "Q1: Net revenue retention above 92 percent, operating margin above 18 percent, and customer satisfaction above 42. Q2: South America, due to regulatory uncertainty and tax rules. Q3: The robotic fulfillment center initiative.",
+    "judge_criteria": [
+      "Lists all three KPIs with correct targets",
+      "Names South America and the regulatory/tax rationale",
+      "Identifies the deferred robotic fulfillment center initiative",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Historical Chronicle",
+    "prompt": "Read the historical chronicle and answer Q1-Q3.\n\nThe Chronicle of Redwater describes a frontier settlement founded in 1827 near a natural ford. The first governor, Elias Hale, oversaw the construction of a wooden palisade and a small trading post. In 1835 a flood destroyed the lower mills, and the council ordered a stone bridge that still stands today. The population grew after a treaty signed in 1842 opened the western trade road, but conflict with neighboring groups led to a brief closure of the port.\n\nGovernor Hale died in 1844 and was succeeded by Marin Fox, who negotiated a truce that allowed merchants to return. The port reopened in 1848 with a tax holiday to attract new shipping. A severe drought in 1869, known locally as the Red Plain drought, pushed farming families north toward the lake region. The chroniclers note that many settlers carried cedar saplings with them, a tradition that continued for decades.\n\nBy 1873, Redwater had a rail spur and a telegraph office, which shifted commerce away from the river. The Chronicle credits Mayor Jo Lin with establishing the first public school in 1875. A decade later, a fire destroyed most of the market square, leading to a new building code that required brick facades.\n\nIn the early 1900s, Redwater became a center for grain exports. The mills expanded again in 1908, and a new lighthouse was built at the river mouth in 1912. The Chronicle ends with a reflection on how the original ford is now buried under the widened bridge, yet the town still gathers there each summer for a festival.\n\nQuestions: Q1: Who succeeded Governor Elias Hale? Q2: How many years after the 1842 treaty did the port reopen? Q3: Which drought triggered migration north? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 120,
+    "expected_answer": "Q1: Marin Fox. Q2: Six years after 1842, reopening in 1848. Q3: The Red Plain drought of 1869.",
+    "judge_criteria": [
+      "Names Marin Fox as the successor",
+      "Computes six years between 1842 and 1848",
+      "Identifies the Red Plain drought of 1869",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Grant Proposal",
+    "prompt": "Read the grant proposal summary and answer Q1-Q3.\n\nThe Harbor Health Coalition submitted a grant proposal to expand mobile clinics across three coastal counties. The proposal outlines a two year program to deliver preventive screenings, vaccination drives, and nutrition counseling. The coalition includes the county health office, two nonprofit partners, and a university research team. The narrative opens with data showing that the target counties have a 28 percent higher rate of untreated hypertension compared to the state average.\n\nProgram design is split into three phases. Phase 1, running from January through November, focuses on staffing, vehicle procurement, and route planning. Phase 2, from December through the next August, delivers services at 24 rotating sites and launches community workshops. Phase 3 covers evaluation and sustainability planning, including contracts with local clinics to absorb the mobile routes by year three.\n\nThe total budget is 2.4 million. The federal grant request is 1.8 million, and the coalition will provide 600k in matching funds. The county will contribute 250k in cash, the nonprofits will provide 200k in in kind support, and the university will contribute 150k through staff time and data systems. The budget line items allocate 1.1 million for staffing, 450k for vehicles and maintenance, 300k for medical supplies, 250k for evaluation, and the remainder for outreach and training.\n\nThe evaluation plan assigns leadership to North State University, which will manage surveys, clinical outcomes, and cost analysis. The university will produce quarterly dashboards and a final report six months after Phase 2 ends. A community advisory board will review findings and propose adjustments.\n\nThe proposal includes milestones. The first three vans must be purchased by March 15, route maps finalized by April 30, and initial staff training completed by May 20. Phase 1 concludes with a readiness review on November 30.\n\nQuestions: Q1: What is the total budget and the amount of matching funds? Q2: Which partner leads evaluation? Q3: When does Phase 1 conclude? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 130,
+    "expected_answer": "Q1: Total budget 2.4 million with 600k matching funds. Q2: North State University. Q3: Phase 1 concludes on November 30.",
+    "judge_criteria": [
+      "States total budget as 2.4 million and matching funds as 600k",
+      "Names North State University as evaluation lead",
+      "Identifies Phase 1 conclusion as November 30",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Negotiation Log",
+    "prompt": "Read the negotiation log and answer Q1-Q3.\n\nThe NovaGrid procurement team documented a four week negotiation with LumenSoft for a three year analytics license. The opening offer on May 2 listed a total price of 8.6 million with annual increases of 5 percent and a strict limit on data exports. NovaGrid countered with 7.2 million, a flat price for three years, and unlimited exports for audit purposes.\n\nDuring week two, LumenSoft reduced the price to 8.1 million and offered a 90 day onboarding package. NovaGrid responded by accepting the onboarding but asked for a longer uptime warranty and a cap on overage fees for extra users. LumenSoft agreed to a 99.9 percent uptime warranty but refused to cap overages unless NovaGrid accepted a two year minimum instead of three.\n\nIn week three, both parties moved again. NovaGrid raised its price to 7.6 million and offered to prepay year one if LumenSoft removed the export limit. LumenSoft proposed 7.9 million with a lighter export limit, allowing weekly exports but not daily ones. The legal teams debated data residency, since NovaGrid needed all raw logs stored in country. LumenSoft said its default storage was regional but could offer a dedicated in country instance for an added fee.\n\nThe final session occurred on May 29. The teams agreed on a final price of 7.8 million with no annual increases, a 99.9 percent uptime warranty, and weekly exports plus a special emergency export clause. NovaGrid accepted the three year term, and LumenSoft accepted a cap on overage fees in exchange for a smaller onboarding credit. The data residency clause remained unresolved and was flagged for separate legal review in June.\n\nQuestions: Q1: What final price was agreed? Q2: Which concession was traded for the cap on overage fees? Q3: Which clause remained unresolved? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 120,
+    "expected_answer": "Q1: 7.8 million. Q2: A smaller onboarding credit was traded for the overage cap. Q3: The data residency clause.",
+    "judge_criteria": [
+      "States the final price as 7.8 million",
+      "Identifies the onboarding credit concession for the overage cap",
+      "Names data residency as the unresolved clause",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 9,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Architecture Review",
+    "prompt": "Read the architecture review and answer Q1-Q3.\n\nThe Atlas Payments architecture review covered a redesign of the authorization pipeline. The current system routes traffic through a regional gateway, then to a risk scoring service, and finally to the ledger. Incidents in Q1 exposed that Region A handled 60 percent of traffic, Region B 25 percent, and Region C only 15 percent due to a previous cost optimization. The team wants to rebalance traffic to 40/30/30 by the end of the quarter to reduce single region exposure.\n\nThe proposed design adds a new gateway v2 with built in circuit breakers and a token cache. The cache is intended to reduce calls to the auth database, but early tests showed elevated p95 latency when the cache missed. The review traced this to a dependency on a third party fraud API that is called synchronously when the cache is cold. The API adds an extra 180 ms on average, which compounds during peak hours.\n\nA staged rollout was attempted in a canary on May 6. During the canary, error rates rose to 7 percent within 12 minutes. Investigation showed that the gateway v2 rejected a subset of TLS handshakes due to a missing intermediate certificate. The incident commander rolled the deployment back, and traffic returned to the legacy gateway within 20 minutes. The rollback note emphasized the need for automated certificate validation.\n\nThe review also listed several action items. The team will add a local fraud score cache, update the gateway to support partial token hydration, and run a synthetic checkout probe every minute. For resilience, the database team will replicate the auth store to Region C and test failover quarterly. Finance requested a cost estimate for the new gateway hardware, expected to be 1.1 million over two years.\n\nThe meeting closed with a decision to proceed only after a new staging test passes and the certificate chain is verified. The product team agreed that user facing changes would be delayed until after the rollout stabilizes.\n\nQuestions: Q1: Which component caused the rollback? Q2: What dependency introduced the latency on cache misses? Q3: What traffic balance is the team targeting? Provide answers labeled Q1, Q2, Q3.",
+    "expected_tokens": 130,
+    "expected_answer": "Q1: The gateway v2 caused the rollback due to TLS handshake failures. Q2: The third party fraud API. Q3: A 40/30/30 traffic split across Regions A/B/C.",
+    "judge_criteria": [
+      "Identifies gateway v2 as the rollback trigger",
+      "Names the third party fraud API as the latency source",
+      "States the target 40/30/30 traffic balance",
+      "Answers are labeled Q1, Q2, Q3"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 10,
+    "category": "context-retention",
+    "category_test": true,
+    "name": "Field Study Report",
+    "prompt": "Read the field study report and answer Q1-Q4.\n\nThe Highland Ecology Unit completed a three year field study on shrub recovery after controlled burns across five sites: Alder, Birch, Cedar, Drift, and Echo. The study tracked canopy cover, soil moisture, and pollinator counts from early spring through late fall each year. In Year 1, baseline canopy cover averaged 48 percent across all sites, with Alder the lowest at 39 percent and Cedar the highest at 56 percent. By Year 2, average canopy cover rose to 54 percent, and by Year 3 it reached 61 percent. The team attributed much of the increase to targeted replanting and a wetter than average summer in Year 2.\n\nSoil moisture showed a more mixed pattern. Alder and Birch retained moisture well after mulching, while Drift remained dry in late summer. Echo experienced a sharp drop in moisture during Year 2 because a nearby irrigation line failed for two weeks. That failure coincided with the only significant decline in pollinator visits recorded in the study, although bee trap data later suggested the decline was localized to one sampling grid.\n\nPollinator counts were collected with netting surveys and passive traps. Netting surveys showed a slight decline in Year 3 compared to Year 2, especially at Drift. However, trap data showed a modest increase in overall insect abundance, which the team noted might reflect sampling bias. The report cautioned that both methods have limitations and recommended maintaining both for the next cycle.\n\nVegetation surveys found that Cedar recovered fastest in terms of shrub height, while Alder lagged but showed the most consistent year over year gains. Drift had the greatest variability, with a mid season dieback in Year 2 followed by a strong rebound. Echo was flagged as an outlier because of the irrigation failure and a small fire caused by a lightning strike in late August of Year 3 that burned a narrow strip along the ridge.\n\nThe budget section noted that the original allocation of 420k was stretched by equipment repairs. To stay within budget, the team cut drone flights from monthly to quarterly and reduced external lab testing for soil nutrients. The report recommended seeking an additional 80k in the next cycle to restore those measurements.\n\nIn the conclusion, the team recommended three actions: keep the replanting program, repair irrigation infrastructure before summer, and add a community volunteer monitoring day to improve ground observations. They also noted that canopy recovery appears to be accelerating, but moisture variability could limit long term resilience if not addressed.\n\nQuestions: Q1: By how many percentage points did average canopy cover increase from Year 1 to Year 3? Q2: What conflicting pattern was observed between pollinator netting surveys and trap data? Q3: Which recommendation was tied directly to the budget constraint? Q4: Which site had the late Year 3 anomaly? Provide answers labeled Q1, Q2, Q3, Q4.",
+    "expected_tokens": 150,
+    "expected_answer": "Q1: 13 percentage points. Q2: Netting surveys declined while trap data showed a modest increase. Q3: Cutting drone flights and lab testing due to budget, with a recommendation to seek 80k to restore them. Q4: Echo.",
+    "judge_criteria": [
+      "Computes the canopy cover increase as 13 points",
+      "Describes the netting decline versus trap increase conflict",
+      "Links budget constraint to reduced drone flights and lab testing and the 80k request",
+      "Names Echo as the site with the Year 3 anomaly",
+      "Answers are labeled Q1, Q2, Q3, Q4"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Empty List Average",
+    "prompt": "Compute the average of the list []. If the list is empty, output NA exactly. Output only the result.",
+    "expected_tokens": 2,
+    "expected_answer": "NA",
+    "judge_criteria": [
+      "Detects the list is empty",
+      "Returns NA exactly",
+      "No extra text",
+      "Does not attempt division by zero"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 1,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Divide by Zero Guard",
+    "prompt": "Compute 10/0. If division by zero occurs, output DIV0 exactly. Output only the result.",
+    "expected_tokens": 2,
+    "expected_answer": "DIV0",
+    "judge_criteria": [
+      "Recognizes division by zero",
+      "Outputs DIV0 exactly",
+      "No extra whitespace or text",
+      "Does not output Infinity or an error message"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Null String Length",
+    "prompt": "Return the length of the input string. If the input is null, return 0. Input: null. Output only the number.",
+    "expected_tokens": 2,
+    "expected_answer": "0",
+    "judge_criteria": [
+      "Handles null input",
+      "Returns 0 for null",
+      "Outputs only the number",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 2,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Negative Temperature",
+    "prompt": "Convert -40 degrees C to F using F = C*9/5 + 32. Output only the number.",
+    "expected_tokens": 3,
+    "expected_answer": "-40",
+    "judge_criteria": [
+      "Uses the correct formula",
+      "Handles negative input correctly",
+      "Outputs -40",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Whitespace Only Trim",
+    "prompt": "Trim the input string of leading and trailing whitespace. If the result is empty, output EMPTY. Input is three spaces. Output only the result.",
+    "expected_tokens": 2,
+    "expected_answer": "EMPTY",
+    "judge_criteria": [
+      "Trims whitespace correctly",
+      "Detects empty result",
+      "Outputs EMPTY exactly",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 3,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Malformed CSV Missing Field",
+    "prompt": "Parse the CSV row a,,c into three fields. If a field is missing, replace it with MISSING. Output the fields joined by commas.",
+    "expected_tokens": 6,
+    "expected_answer": "a,MISSING,c",
+    "judge_criteria": [
+      "Detects the missing middle field",
+      "Substitutes MISSING",
+      "Keeps field order",
+      "Outputs a,MISSING,c exactly"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Clamp Range",
+    "prompt": "Clamp each number in [-5,0,5,15] to the range 0 to 10 inclusive. Output the resulting list as [a,b,c,d] with commas and no spaces.",
+    "expected_tokens": 10,
+    "expected_answer": "[0,0,5,10]",
+    "judge_criteria": [
+      "Clamps values below 0 to 0",
+      "Clamps values above 10 to 10",
+      "Keeps middle values unchanged",
+      "Outputs in the required list format"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Invalid Date",
+    "prompt": "Validate the date 2023-02-29. If invalid, output INVALID. Output only the result.",
+    "expected_tokens": 2,
+    "expected_answer": "INVALID",
+    "judge_criteria": [
+      "Recognizes 2023-02-29 is invalid",
+      "Outputs INVALID exactly",
+      "No extra text",
+      "Does not attempt correction"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 4,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Int32 Overflow",
+    "prompt": "Add 2147483600 and 100 as 32-bit signed integers. If overflow occurs, output OVERFLOW. Output only the result.",
+    "expected_tokens": 2,
+    "expected_answer": "OVERFLOW",
+    "judge_criteria": [
+      "Detects 32-bit signed overflow",
+      "Outputs OVERFLOW exactly",
+      "No extra text",
+      "Does not wrap around"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Even Count Median",
+    "prompt": "Compute the median of the sorted list [1,2,100,101]. For even counts, take the average of the two middle values. Output only the number.",
+    "expected_tokens": 3,
+    "expected_answer": "51",
+    "judge_criteria": [
+      "Uses average of the middle two values",
+      "Computes (2+100)/2 correctly",
+      "Outputs 51",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "JSON Missing Keys",
+    "prompt": "Required keys are id, name, email. Given the JSON object {id:7,name:ava}, list the missing keys as a comma-separated string. Output only the missing keys.",
+    "expected_tokens": 4,
+    "expected_answer": "email",
+    "judge_criteria": [
+      "Detects email is missing",
+      "Outputs only email",
+      "Uses comma separation if needed",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 5,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Negative Index",
+    "prompt": "Given the array [9,8,7], an index of -1 refers to the last element. Output the element at index -1.",
+    "expected_tokens": 2,
+    "expected_answer": "7",
+    "judge_criteria": [
+      "Interprets -1 as last element",
+      "Returns 7",
+      "Outputs only the number",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Sqrt Negative",
+    "prompt": "Compute sqrt(-1). If the result is not a real number, output NaN. Output only the result.",
+    "expected_tokens": 2,
+    "expected_answer": "NaN",
+    "judge_criteria": [
+      "Recognizes sqrt of negative is not real",
+      "Outputs NaN exactly",
+      "No extra text",
+      "Does not output a complex number"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 6,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Exponent Cap",
+    "prompt": "Compute 2^100. If the result exceeds 1e12, output TOO_LARGE. Output only the result.",
+    "expected_tokens": 2,
+    "expected_answer": "TOO_LARGE",
+    "judge_criteria": [
+      "Recognizes 2^100 exceeds 1e12",
+      "Outputs TOO_LARGE exactly",
+      "No extra text",
+      "Does not print the full number"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Sparse Matrix Multiply",
+    "prompt": "Multiply a 3x3 matrix by vector [1,2,3]. The matrix rows are: row0=[1,0,0], row1=missing, row2=[0,0,1]. A missing row is treated as all zeros. Output the result as [a,b,c] with commas and no spaces.",
+    "expected_tokens": 10,
+    "expected_answer": "[1,0,3]",
+    "judge_criteria": [
+      "Treats the missing row as zeros",
+      "Computes row0 dot vector as 1",
+      "Computes row2 dot vector as 3",
+      "Outputs [1,0,3] exactly"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 7,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Malformed Log Lines",
+    "prompt": "Count how many valid log lines have status=500. A valid line has format time|status|path. Ignore malformed lines. Input lines: 10:00|200|/a ; 10:01|500|/b ; BADLINE ; 10:02|500|/c ; 10:03|404|/d. Output only the count.",
+    "expected_tokens": 3,
+    "expected_answer": "2",
+    "judge_criteria": [
+      "Ignores the malformed line",
+      "Counts only status 500 in valid lines",
+      "Outputs 2",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Sliding Window Reset",
+    "prompt": "Compute the average value in the final sliding window. The window resets if the gap between timestamps exceeds 10 minutes. Data: (09:00,10), (09:05,20), (09:30,30), (09:35,40). Output only the final window average.",
+    "expected_tokens": 4,
+    "expected_answer": "35",
+    "judge_criteria": [
+      "Resets the window at the 25 minute gap",
+      "Final window includes 09:30 and 09:35",
+      "Average is (30+40)/2 = 35",
+      "Outputs only 35"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 8,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Graph Unreachable",
+    "prompt": "Find the shortest path length from A to D. Graph edges: A-A (self loop), A-B, B-C. If D is unreachable, output INF. Output only the result.",
+    "expected_tokens": 2,
+    "expected_answer": "INF",
+    "judge_criteria": [
+      "Recognizes D is unreachable",
+      "Outputs INF exactly",
+      "Ignores the self loop",
+      "No extra text"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 9,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Counter Floor",
+    "prompt": "Process the operations on a counter starting at 0. Operations: +3, -2, -2, +1, -1. The counter cannot go below 0; any decrement that would go negative is rejected. Output final_value,rejected_count.",
+    "expected_tokens": 6,
+    "expected_answer": "0,1",
+    "judge_criteria": [
+      "Applies increments and decrements in order",
+      "Rejects the decrement that would go below zero",
+      "Final value is 0",
+      "Rejected count is 1"
+    ],
+    "scoring_type": "reasoning"
+  },
+  {
+    "level": 10,
+    "category": "edge-cases",
+    "category_test": true,
+    "name": "Interval Merge With Invalids",
+    "prompt": "Given time window 0 to 100, merge valid intervals and compute total covered time and uncovered time. Intervals: A=5-20, B=18-30, C=40-35 (invalid, discard), D=50-? (missing end, use 100), E=70-80, F=80-80 (zero length). Rules: discard invalid, treat missing end as 100, zero length adds nothing, merge overlaps. Output covered,uncovered.",
+    "expected_tokens": 6,
+    "expected_answer": "75,25",
+    "judge_criteria": [
+      "Discards the invalid interval and handles the open end",
+      "Merges overlaps into [5,30] and [50,100]",
+      "Computes covered time as 75",
+      "Computes uncovered time as 25"
+    ],
+    "scoring_type": "reasoning"
+  }
+]

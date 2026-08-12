@@ -1,0 +1,463 @@
+/* Nerve Center Fastlane surface. Scope: .nc-fastlane-* */
+
+.nc-section.fastlane {
+    border-left-color: #22c55e;
+    scroll-margin-top: 96px;
+}
+
+.nc-section.fastlane .nc-section-icon {
+    color: #22c55e;
+}
+
+.nc-fastlane-shell {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+}
+
+.nc-fastlane-overview {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+    gap: 12px;
+    align-items: stretch;
+}
+
+.nc-fastlane-frontdoor,
+.nc-fastlane-live-panel,
+.nc-fastlane-panel,
+.nc-fastlane-flow-node,
+.nc-fastlane-disposition,
+.nc-fastlane-feature,
+.nc-fastlane-specialist {
+    background: rgba(15, 23, 42, 0.46);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 8px;
+}
+
+.nc-fastlane-frontdoor {
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+}
+
+.nc-fastlane-frontdoor-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.nc-fastlane-avatar {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 8px;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.24);
+    color: #4ade80;
+    flex: 0 0 auto;
+}
+
+.nc-fastlane-kicker,
+.nc-fastlane-axis {
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1.25;
+    text-transform: uppercase;
+}
+
+.nc-fastlane-title {
+    margin-top: 3px;
+    color: var(--text-bright);
+    font-size: 1.2rem;
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.nc-fastlane-subline,
+.nc-fastlane-meta,
+.nc-fastlane-mode,
+.nc-fastlane-muted {
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.35;
+}
+
+.nc-fastlane-model-chain,
+.nc-fastlane-model-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+}
+
+.nc-fastlane-model {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(124, 240, 255, 0.08);
+    border: 1px solid rgba(124, 240, 255, 0.18);
+    color: #b9f7ff;
+    font-size: 0.74rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.nc-fastlane-chain-icon {
+    color: rgba(148, 163, 184, 0.55);
+    font-size: 0.65rem;
+}
+
+.nc-fastlane-boundary {
+    color: var(--muted);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.nc-fastlane-live-panel {
+    padding: 14px;
+    display: grid;
+    gap: 10px;
+}
+
+.nc-fastlane-panel-title {
+    color: var(--text-bright);
+    font-size: 0.88rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    line-height: 1.3;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+}
+
+.nc-fastlane-live-list,
+.nc-fastlane-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.nc-fastlane-live-foot {
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+.nc-fastlane-badge,
+.nc-fastlane-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(148, 163, 184, 0.08);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.nc-fastlane-badge.good {
+    border-color: rgba(74, 222, 128, 0.3);
+    background: rgba(74, 222, 128, 0.1);
+    color: #86efac;
+}
+
+.nc-fastlane-badge.warn {
+    border-color: rgba(245, 158, 11, 0.34);
+    background: rgba(245, 158, 11, 0.1);
+    color: #fbbf24;
+}
+
+.nc-fastlane-badge.blocked {
+    border-color: rgba(248, 113, 113, 0.34);
+    background: rgba(248, 113, 113, 0.1);
+    color: #fca5a5;
+}
+
+.nc-fastlane-badge.neutral {
+    border-color: rgba(124, 240, 255, 0.22);
+    background: rgba(124, 240, 255, 0.07);
+    color: #a5f3fc;
+}
+
+.nc-fastlane-flow {
+    display: grid;
+    grid-template-columns: minmax(130px, 1fr) 18px minmax(130px, 1fr) 18px minmax(160px, 1.05fr) 18px minmax(130px, 1fr) 18px minmax(160px, 1.05fr);
+    gap: 8px;
+    align-items: center;
+}
+
+.nc-fastlane-flow-node {
+    min-height: 88px;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+}
+
+.nc-fastlane-flow-icon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.18);
+}
+
+.nc-fastlane-flow-value {
+    margin-top: 4px;
+    color: var(--text-bright);
+    font-size: 0.82rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.nc-fastlane-flow-arrow {
+    color: rgba(148, 163, 184, 0.52);
+    text-align: center;
+}
+
+.nc-fastlane-matrix {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.nc-fastlane-disposition {
+    padding: 14px;
+    min-width: 0;
+    border-left: 3px solid rgba(148, 163, 184, 0.45);
+}
+
+.nc-fastlane-disposition.good {
+    border-left-color: #4ade80;
+}
+
+.nc-fastlane-disposition.warn {
+    border-left-color: #f59e0b;
+}
+
+.nc-fastlane-disposition.blocked {
+    border-left-color: #f87171;
+}
+
+.nc-fastlane-disposition-head,
+.nc-fastlane-specialist-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+}
+
+.nc-fastlane-disposition-title {
+    margin-top: 10px;
+    color: var(--text-bright);
+    font-size: 1rem;
+    font-weight: 800;
+}
+
+.nc-fastlane-route {
+    margin-top: 6px;
+    color: #dbeafe;
+    font-size: 0.86rem;
+    font-weight: 700;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.nc-fastlane-chip-row {
+    margin-top: 12px;
+}
+
+.nc-fastlane-chip {
+    background: rgba(255, 255, 255, 0.035);
+    color: var(--muted);
+    font-weight: 600;
+}
+
+.nc-fastlane-two-col {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+    gap: 12px;
+}
+
+.nc-fastlane-panel {
+    padding: 14px;
+    min-width: 0;
+}
+
+.nc-fastlane-feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+}
+
+.nc-fastlane-feature {
+    padding: 12px;
+    min-width: 0;
+}
+
+.nc-fastlane-feature.good {
+    border-color: rgba(74, 222, 128, 0.22);
+}
+
+.nc-fastlane-feature.warn {
+    border-color: rgba(245, 158, 11, 0.26);
+}
+
+.nc-fastlane-feature-head {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+}
+
+.nc-fastlane-feature-head i {
+    color: #7cf0ff;
+}
+
+.nc-fastlane-feature-title {
+    color: var(--text-bright);
+    font-size: 0.86rem;
+    font-weight: 800;
+}
+
+.nc-fastlane-feature-status {
+    color: var(--muted);
+    font-size: 0.74rem;
+    line-height: 1.25;
+    text-transform: uppercase;
+}
+
+.nc-fastlane-feature-primary {
+    margin-top: 10px;
+    color: #dbeafe;
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.nc-fastlane-feature-secondary {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.nc-fastlane-specialists {
+    display: grid;
+    gap: 10px;
+}
+
+.nc-fastlane-specialist {
+    padding: 12px;
+    min-width: 0;
+}
+
+.nc-fastlane-specialist strong {
+    color: var(--text-bright);
+    font-size: 0.94rem;
+}
+
+.nc-fastlane-table-wrap {
+    overflow-x: auto;
+}
+
+.nc-fastlane-config-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.nc-fastlane-config-table th,
+.nc-fastlane-config-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    text-align: left;
+    vertical-align: top;
+}
+
+.nc-fastlane-config-table th {
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.nc-fastlane-config-table td {
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.nc-fastlane-config-table code {
+    color: #a5f3fc;
+    font-size: 0.76rem;
+}
+
+.nc-fastlane-warning,
+.nc-fastlane-empty {
+    border: 1px solid rgba(245, 158, 11, 0.28);
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.08);
+    color: #fbbf24;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    padding: 10px 12px;
+}
+
+.nc-fastlane-warning {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 8px;
+}
+
+@media (max-width: 1100px) {
+    .nc-fastlane-overview,
+    .nc-fastlane-two-col {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .nc-fastlane-flow {
+        grid-template-columns: repeat(5, minmax(120px, 1fr));
+    }
+
+    .nc-fastlane-flow-arrow {
+        display: none;
+    }
+}
+
+@media (max-width: 768px) {
+    .nc-fastlane-flow,
+    .nc-fastlane-matrix {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .nc-fastlane-flow-node {
+        min-height: auto;
+    }
+
+    .nc-fastlane-disposition-head,
+    .nc-fastlane-specialist-head {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

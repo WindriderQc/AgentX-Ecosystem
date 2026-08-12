@@ -1,0 +1,283 @@
+const request = require('supertest');
+
+const mockEmbeddingsService = {
+  providerName: 'core-proxy',
+  model: 'nomic-embed-text:v1.5',
+  testConnection: jest.fn().mockResolvedValue(true),
+  getCachedConnectionStatus: jest.fn(() => ({
+    healthy: true,
+    checkedAt: 1710000000000,
+    stale: false,
+  })),
+  refreshConnectionStatus: jest.fn().mockResolvedValue(true),
+  getStatusInfo: jest.fn(() => ({
+    provider: 'core-proxy',
+    model: 'nomic-embed-text:v1.5',
+    endpoint: 'http://localhost:3080',
+    route: '/api/inference/embed'
+  })),
+};
+
+// ── Mock dependencies before requiring app ──
+
+const mockVectorStore = {
+  getStats: jest.fn(),
+  healthCheck: jest.fn(),
+  listDocuments: jest.fn(),
+};
+
+jest.mock('../../src/services/ragStore', () => {
+  const store = {
+    getStats: async () => {
+      const storeStats = await mockVectorStore.getStats();
+      const health = await mockVectorStore.healthCheck();
+      return { ...storeStats, embeddingModel: 'nomic-embed-text:v1.5', vectorStore: health };
+    },
+    listDocuments: (...args) => mockVectorStore.listDocuments(...args),
+    vectorStore: mockVectorStore,
+  };
+  return { getRagStore: () => store, resetRagStore: jest.fn() };
+});
+
+jest.mock('../../src/services/embeddings', () => ({
+  getEmbeddingsService: () => mockEmbeddingsService,
+  resetEmbeddingsService: jest.fn(),
+}));
+
+// Mock embeddingCache if it exists (added by task 0043)
+jest.mock('../../src/services/embeddingCache', () => ({
+  getEmbeddingCache: () => ({
+    clear: jest.fn(),
+    getStats: jest.fn().mockReturnValue({ hits: 0, misses: 0, size: 0 }),
+  }),
+}), { virtual: true });
+
+jest.mock('../../models/RagManifest', () => {
+  const mock = {
+    findOne: jest.fn(),
+  };
+  return mock;
+});
+
+jest.mock('../../src/services/ingestWorker', () => ({
+  runIngestScan: jest.fn(),
+  getConfiguredRoots: jest.fn().mockReturnValue([]),
+  isPathUnderRoot: jest.fn(),
+}));
+
+jest.mock('../../src/services/ingestJobManager', () => ({
+  isRunning: jest.fn().mockReturnValue(false),
+  createJob: jest.fn(),
+  getJob: jest.fn(),
+  getActiveJobId: jest.fn(),
+}));
+
+const app = require('../../app');
+const RagManifest = require('../../models/RagManifest');
+
+// ── Tests ───────────────────────────────────────────────
+
+describe('GET /api/rag/status — dependency health matrix', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEmbeddingsService.testConnection.mockResolvedValue(true);
+    mockEmbeddingsService.getCachedConnectionStatus.mockReturnValue({
+      healthy: true,
+      checkedAt: 1710000000000,
+      stale: false,
+    });
+    mockVectorStore.getStats.mockResolvedValue({
+      documentCount: 10,
+      chunkCount: 50,
+      vectorDimension: 768,
+    });
+    mockVectorStore.healthCheck.mockResolvedValue({
+      healthy: true,
+      type: 'qdrant',
+      url: 'http://qdrant:6333',
+    });
+  });
+
+  it('returns dependencies object with mongodb, embedding, and qdrant', async () => {
+    const res = await request(app).get('/api/rag/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.dependencies).toBeDefined();
+    expect(res.body.data.dependencies.mongodb).toBeDefined();
+    expect(res.body.data.dependencies.embedding).toBeDefined();
+    expect(res.body.data.dependencies.qdrant).toBeDefined();
+  });
+
+  it('returns per-dependency healthy booleans', async () => {
+    const res = await request(app).get('/api/rag/status');
+    const deps = res.body.data.dependencies;
+
+    expect(typeof deps.mongodb.healthy).toBe('boolean');
+    expect(typeof deps.embedding.healthy).toBe('boolean');
+    expect(typeof deps.qdrant.healthy).toBe('boolean');
+  });
+
+  it('returns overall healthy boolean (true when all healthy)', async () => {
+    const res = await request(app).get('/api/rag/status');
+
+    // MongoDB readyState is 0 in test (not connected), so healthy = false
+    expect(typeof res.body.data.healthy).toBe('boolean');
+    expect(res.body.data.healthy).toBe(false); // mongo is disconnected in test
+  });
+
+  it('preserves existing fields (documentCount, chunkCount, embeddingModel)', async () => {
+    const res = await request(app).get('/api/rag/status');
+
+    expect(res.body.data.documentCount).toBe(10);
+    expect(res.body.data.chunkCount).toBe(50);
+    expect(res.body.data.embeddingModel).toBe('nomic-embed-text:v1.5');
+    expect(res.body.data.vectorStore).toBeDefined();
+  });
+
+  it('reports mongodb as unhealthy when disconnected', async () => {
+    const res = await request(app).get('/api/rag/status');
+    const mongo = res.body.data.dependencies.mongodb;
+
+    // In test env, mongoose is not connected (readyState = 0)
+    expect(mongo.healthy).toBe(false);
+    expect(mongo.readyState).toBe(0);
+  });
+
+  it('reports embedding provider info', async () => {
+    const res = await request(app).get('/api/rag/status');
+    const emb = res.body.data.dependencies.embedding;
+
+    expect(emb.healthy).toBe(true);
+    expect(emb.provider).toBe('core-proxy');
+    expect(emb.model).toBe('nomic-embed-text:v1.5');
+    expect(emb.endpoint).toBe('http://localhost:3080');
+  });
+
+  it('marks embedding unhealthy when the connection test returns false', async () => {
+    mockEmbeddingsService.getCachedConnectionStatus.mockReturnValue({
+      healthy: false,
+      checkedAt: 1710000000000,
+      stale: false,
+    });
+
+    const res = await request(app).get('/api/rag/status');
+    const emb = res.body.data.dependencies.embedding;
+
+    expect(emb.healthy).toBe(false);
+    expect(emb.error).toBe('Embedding connection test failed');
+  });
+
+  it('reports qdrant health from vectorStore healthCheck', async () => {
+    const res = await request(app).get('/api/rag/status');
+    const qdrant = res.body.data.dependencies.qdrant;
+
+    expect(qdrant.healthy).toBe(true);
+    expect(qdrant.url).toBe('http://qdrant:6333');
+  });
+
+  it('does not crash if getStats throws', async () => {
+    mockVectorStore.getStats.mockRejectedValue(new Error('Qdrant down'));
+    mockVectorStore.healthCheck.mockRejectedValue(new Error('Qdrant down'));
+
+    const res = await request(app).get('/api/rag/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.dependencies).toBeDefined();
+    expect(res.body.data.dependencies.qdrant.healthy).toBe(false);
+  });
+});
+
+describe('GET /api/rag/metrics', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVectorStore.getStats.mockResolvedValue({
+      documentCount: 42,
+      chunkCount: 310,
+      vectorDimension: 768,
+    });
+    mockVectorStore.healthCheck.mockResolvedValue({ healthy: true, type: 'memory' });
+    mockVectorStore.listDocuments.mockResolvedValue({
+      documents: [
+        { documentId: 'doc1', source: 'nas-scan', chunkCount: 100 },
+        { documentId: 'doc2', source: 'nas-scan', chunkCount: 120 },
+        { documentId: 'doc3', source: 'api', chunkCount: 90 },
+      ],
+      total: 3,
+    });
+  });
+
+  it('returns totals with documents and chunks', async () => {
+    RagManifest.findOne.mockReturnValue({
+      sort: () => ({ lean: () => Promise.resolve(null) }),
+    });
+
+    const res = await request(app).get('/api/rag/metrics');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.totals.documents).toBe(42);
+    expect(res.body.data.totals.chunks).toBe(310);
+  });
+
+  it('returns bySource breakdown grouped correctly', async () => {
+    RagManifest.findOne.mockReturnValue({
+      sort: () => ({ lean: () => Promise.resolve(null) }),
+    });
+
+    const res = await request(app).get('/api/rag/metrics');
+
+    expect(res.body.data.bySource).toHaveLength(2);
+
+    const nasScan = res.body.data.bySource.find((s) => s.source === 'nas-scan');
+    expect(nasScan.documents).toBe(2);
+    expect(nasScan.chunks).toBe(220);
+
+    const api = res.body.data.bySource.find((s) => s.source === 'api');
+    expect(api.documents).toBe(1);
+    expect(api.chunks).toBe(90);
+  });
+
+  it('returns lastIngest from RagManifest', async () => {
+    const fakeDate = new Date('2026-04-01T14:32:00Z');
+    RagManifest.findOne.mockReturnValue({
+      sort: () => ({
+        lean: () =>
+          Promise.resolve({
+            updatedAt: fakeDate,
+            source: 'nas-scan',
+          }),
+      }),
+    });
+
+    const res = await request(app).get('/api/rag/metrics');
+
+    expect(res.body.data.lastIngest).not.toBeNull();
+    expect(res.body.data.lastIngest.timestamp).toBe(fakeDate.toISOString());
+    expect(res.body.data.lastIngest.source).toBe('nas-scan');
+  });
+
+  it('returns lastIngest as null when no manifests exist', async () => {
+    RagManifest.findOne.mockReturnValue({
+      sort: () => ({ lean: () => Promise.resolve(null) }),
+    });
+
+    const res = await request(app).get('/api/rag/metrics');
+
+    expect(res.body.data.lastIngest).toBeNull();
+  });
+
+  it('returns gracefully when listDocuments fails', async () => {
+    mockVectorStore.listDocuments.mockRejectedValue(new Error('Store error'));
+    RagManifest.findOne.mockReturnValue({
+      sort: () => ({ lean: () => Promise.resolve(null) }),
+    });
+
+    const res = await request(app).get('/api/rag/metrics');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.bySource).toEqual([]);
+  });
+});

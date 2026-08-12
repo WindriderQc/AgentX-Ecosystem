@@ -1,0 +1,178 @@
+  <!-- Background Grid -->
+  <div class="bg-grid"></div>
+
+  <!-- Main Content -->
+  <div class="prompts-page">
+
+    <!-- Header -->
+    <header class="prompts-header">
+      <div>
+        <div class="eyebrow">AgentX • Configuration</div>
+        <h1>
+          <i class="fas fa-users"></i>
+          <span class="title-separator"></span>
+          Persona Library
+        </h1>
+        <p class="lede">Manage prompt assets, linked identity surfaces, and archived role patterns. AgentX stores configuration and observability; Hermes commands and OpenClaw works.</p>
+      </div>
+      <div class="header-controls">
+        <!-- Simple Mode Toggle -->
+        <label class="simple-mode-toggle" title="Toggle between simple and advanced mode">
+          <input type="checkbox" id="simpleModeToggle">
+          <span class="toggle-label">
+            <i class="fas fa-toggle-off"></i> Simple Mode
+          </span>
+        </label>
+
+        <button id="exportPromptsBtn" class="ghost btn-sm advanced-feature" title="Export prompt library as JSON">
+          <i class="fas fa-download"></i> Export
+        </button>
+        <button id="importPromptsBtn" class="ghost btn-sm advanced-feature" title="Import prompts from JSON file">
+          <i class="fas fa-upload"></i> Import
+        </button>
+        <button id="compareVersionsBtn" class="ghost btn-sm advanced-feature" title="Compare prompt versions">
+          <i class="fas fa-columns"></i> Compare Versions
+        </button>
+        <button id="showOnboardingBtn" class="ghost btn-sm">
+          <i class="fas fa-graduation-cap"></i> Show Tutorial
+        </button>
+        <button id="createPromptBtn" class="btn-primary">
+          <i class="fas fa-plus"></i> Create Prompt
+        </button>
+      </div>
+      <!-- Hidden file input for import -->
+      <input type="file" id="importFileInput" accept=".json" style="display: none;">
+    </header>
+
+    <!-- Quick Stats -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="label">Prompt Assets</div>
+        <div class="value" id="totalPrompts">—</div>
+        <div class="sub">Runtime-safe prompt configs</div>
+      </div>
+      <div class="stat-card advanced-feature">
+        <div class="label">Active A/B Tests</div>
+        <div class="value" id="activeTests">—</div>
+        <div class="sub">Running experiments</div>
+      </div>
+      <div class="stat-card advanced-feature">
+        <div class="label">Avg. Positive Rate</div>
+        <div class="value" id="avgPositiveRate">—</div>
+        <div class="sub">Across all prompts</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Total Impressions</div>
+        <div class="value" id="totalImpressions">—</div>
+        <div class="sub">Prompt render count</div>
+      </div>
+    </div>
+
+    <!-- Simple Mode Notice -->
+    <div class="advanced-notice">
+      <i class="fas fa-info-circle"></i>
+      <strong>Simple Mode Active:</strong> Advanced features are hidden. Toggle off Simple Mode above to access A/B testing, version comparison, performance metrics, and improvement wizard.
+    </div>
+
+    <!-- Performance Metrics Dashboard -->
+    <div id="metricsDashboard" class="advanced-feature"></div>
+
+    <!-- Prompt Health Alert -->
+    <div id="promptHealthAlert" class="advanced-feature"></div>
+
+    <!-- Filter/Search Bar -->
+    <div class="toolbar">
+      <div class="search-box">
+        <i class="fas fa-search"></i>
+        <input type="text" id="searchInput" placeholder="Search prompt assets, linked identities, and archived patterns...">
+      </div>
+      <div class="filter-controls">
+        <select id="statusFilter">
+          <option value="all">All Status</option>
+          <option value="active">Active Only</option>
+          <option value="inactive">Inactive Only</option>
+        </select>
+        <select id="sortBy">
+          <option value="name">Sort by Name</option>
+          <option value="version">Sort by Version</option>
+          <option value="impressions">Sort by Usage</option>
+          <option value="positiveRate">Sort by Performance</option>
+        </select>
+        <button id="advancedFiltersBtn" class="btn-sm ghost advanced-feature" title="Show Advanced Filters">
+          <i class="fas fa-filter"></i>
+          <span>More Filters</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Advanced Filters Panel (collapsible) -->
+    <div id="advancedFiltersPanel" class="advanced-filters-panel advanced-feature" style="display: none;">
+      <div class="advanced-filters-content">
+        <div class="filter-group">
+          <label>
+            <i class="fas fa-tags"></i>
+            Tags
+          </label>
+          <select id="tagFilter" multiple size="4">
+            <option value="">-- All Tags --</option>
+          </select>
+          <div class="field-note">Hold Ctrl/Cmd to select multiple tags</div>
+        </div>
+
+        <div class="filter-group">
+          <label>
+            <i class="fas fa-calendar"></i>
+            Created Date Range
+          </label>
+          <div class="date-range-inputs">
+            <input type="date" id="dateFrom" placeholder="From">
+            <span>to</span>
+            <input type="date" id="dateTo" placeholder="To">
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <label>
+            <i class="fas fa-user"></i>
+            Author
+          </label>
+          <input type="text" id="authorFilter" placeholder="Filter by author name">
+        </div>
+
+        <div class="filter-actions">
+          <button id="clearFiltersBtn" class="btn-secondary btn-sm">
+            <i class="fas fa-times"></i>
+            Clear All Filters
+          </button>
+          <button id="applyFiltersBtn" class="btn-primary btn-sm">
+            <i class="fas fa-check"></i>
+            Apply Filters
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Prompt List Container -->
+    <div id="promptListContainer" class="prompt-list-container">
+      <!-- PromptListView component renders here -->
+    </div>
+
+    <!-- Empty State -->
+    <div id="emptyState" class="empty-state" style="display: none;">
+      <i class="fas fa-code" style="font-size: 64px; color: var(--muted); margin-bottom: 20px; opacity: 0.3;"></i>
+      <h2>No Prompts Yet</h2>
+      <p>Create your first system prompt to get started with AgentX customization.</p>
+      <button id="emptyCreateBtn" class="btn-primary">
+        <i class="fas fa-plus"></i> Create First Prompt
+      </button>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loadingState" class="loading-state">
+      <div class="spinner"></div>
+      <p>Loading prompts...</p>
+    </div>
+  </div>
+
+  <!-- Modals Container -->
+  <div id="modals"></div>

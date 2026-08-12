@@ -1,0 +1,9 @@
+{
+  "id": "csv-validation",
+  "title": "Parse and validate a name-score CSV",
+  "instructions": "parseScores(csv) must ignore blank lines and return {name, score} objects. Each nonblank row must contain exactly two comma-separated fields, a nonempty trimmed name, and a finite numeric score from 0 through 100 inclusive. Throw an Error containing the one-based source row number for invalid rows.",
+  "language": "javascript",
+  "allowedPaths": ["src/parseScores.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

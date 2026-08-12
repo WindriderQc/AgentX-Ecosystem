@@ -1,0 +1,113 @@
+'use strict';
+
+const DEFAULT_PROFILE = 'demo';
+const DEMO_PROFILE = 'demo';
+const FULL_PROFILE = 'full';
+
+const DEMO_DISABLED_PREFIXES = Object.freeze([
+  '/api/agent-ops',
+  '/api/alerts',
+  '/api/buddy',
+  '/api/cluster',
+  '/api/consumers/nestor',
+  '/api/data',
+  '/api/docs-steward',
+  '/api/hermes',
+  '/api/hermes-openai',
+  '/api/host-monitor',
+  '/api/hosts',
+  '/api/mcp',
+  '/api/memory-review',
+  '/api/nerve-center',
+  '/api/nestor',
+  '/api/openclaw',
+  '/api/openclaw-ollama',
+  '/api/operations',
+  '/api/panel',
+  '/api/pipeline',
+  '/api/planning',
+  '/api/platform-events',
+  '/api/printer-vision',
+  '/api/profile',
+  '/api/secretary',
+  '/api/todos',
+  '/api/voice-personas',
+  '/api/voix',
+  '/mcp',
+  '/agent-ops',
+  '/backup',
+  '/cluster-schedule',
+  '/data-toolbox',
+  '/databases',
+  '/docs-steward',
+  '/files',
+  '/host-agent',
+  '/janitor',
+  '/lecture',
+  '/live-data-dashboard',
+  '/memory-review',
+  '/nestor',
+  '/nerve-center',
+  '/network',
+  '/panel',
+  '/pipeline',
+  '/planning',
+  '/portal',
+  '/printer-vision',
+  '/storage',
+  '/voice',
+  '/voice-personas',
+  '/voix'
+]);
+
+function normalizeAgentXProfile(value) {
+  return String(value || DEFAULT_PROFILE).trim().toLowerCase() === FULL_PROFILE
+    ? FULL_PROFILE
+    : DEFAULT_PROFILE;
+}
+
+function currentAgentXProfile(env = process.env) {
+  return normalizeAgentXProfile(env.AGENTX_PROFILE);
+}
+
+function isDemoProfile(value = process.env.AGENTX_PROFILE) {
+  return normalizeAgentXProfile(value) === DEMO_PROFILE;
+}
+
+function matchesPrefix(pathname, prefix) {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}.`);
+}
+
+function demoSurfaceDisabled(pathname) {
+  const path = String(pathname || '/').split('?')[0];
+  return DEMO_DISABLED_PREFIXES.some((prefix) => matchesPrefix(path, prefix));
+}
+
+function createAgentXProfileGuard(profile = currentAgentXProfile()) {
+  const normalized = normalizeAgentXProfile(profile);
+  return function agentXProfileGuard(req, res, next) {
+    res.setHeader('X-AgentX-Profile', normalized);
+    if (normalized !== DEMO_PROFILE || !demoSurfaceDisabled(req.path || req.url)) return next();
+
+    if (String(req.path || '').startsWith('/api/') || String(req.path || '') === '/mcp') {
+      return res.status(404).json({
+        ok: false,
+        error: 'This integration is not available in the Agent X demo profile.',
+        code: 'AGENTX_DEMO_SURFACE_DISABLED'
+      });
+    }
+    return res.status(404).type('text/plain').send('Not available in the Agent X demo profile.');
+  };
+}
+
+module.exports = {
+  DEFAULT_PROFILE,
+  DEMO_PROFILE,
+  FULL_PROFILE,
+  DEMO_DISABLED_PREFIXES,
+  normalizeAgentXProfile,
+  currentAgentXProfile,
+  isDemoProfile,
+  demoSurfaceDisabled,
+  createAgentXProfileGuard
+};

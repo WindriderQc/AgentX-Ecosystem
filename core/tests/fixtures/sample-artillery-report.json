@@ -1,0 +1,207 @@
+{
+  "aggregate": {
+    "duration": 120000,
+    "counters": {
+      "vusers.created": 100,
+      "vusers.completed": 95,
+      "vusers.failed": 5,
+      "http.requests": 500,
+      "http.responses": 495,
+      "http.downloaded_bytes": 2500000,
+      "errors.total": 5,
+      "errors.ETIMEDOUT": 3,
+      "errors.ECONNREFUSED": 2,
+      "http.codes.200": 450,
+      "http.codes.201": 20,
+      "http.codes.404": 10,
+      "http.codes.500": 5,
+      "plugins.metrics-by-endpoint./api/chat.codes.200": 300,
+      "plugins.metrics-by-endpoint./api/rag/search.codes.200": 150
+    },
+    "rates": {
+      "http.request_rate": {
+        "mean": 4.16,
+        "max": 10.5,
+        "min": 1.2
+      }
+    },
+    "summaries": {
+      "http.response_time": {
+        "min": 10,
+        "max": 1500,
+        "count": 495,
+        "mean": 285,
+        "median": 250,
+        "p50": 250,
+        "p75": 400,
+        "p90": 650,
+        "p95": 800,
+        "p99": 1200,
+        "p999": 1450
+      },
+      "vusers.session_length": {
+        "min": 5000,
+        "max": 60000,
+        "mean": 30000,
+        "median": 28000,
+        "p95": 55000,
+        "p99": 59000
+      }
+    },
+    "histograms": {
+      "http.response_time": {
+        "0": 50,
+        "50": 100,
+        "100": 150,
+        "200": 100,
+        "500": 50,
+        "1000": 30,
+        "2000": 15
+      }
+    }
+  },
+  "intermediate": [
+    {
+      "timestamp": 1704283200000,
+      "counters": {
+        "vusers.created": 25,
+        "vusers.completed": 23,
+        "http.requests": 125,
+        "http.codes.200": 120,
+        "http.codes.500": 1,
+        "errors.total": 1
+      },
+      "summaries": {
+        "http.response_time": {
+          "min": 10,
+          "max": 800,
+          "median": 240,
+          "p95": 650,
+          "p99": 780
+        }
+      }
+    },
+    {
+      "timestamp": 1704283230000,
+      "counters": {
+        "vusers.created": 25,
+        "vusers.completed": 24,
+        "http.requests": 125,
+        "http.codes.200": 118,
+        "http.codes.404": 5,
+        "http.codes.500": 2,
+        "errors.total": 2
+      },
+      "summaries": {
+        "http.response_time": {
+          "min": 15,
+          "max": 1200,
+          "median": 260,
+          "p95": 850,
+          "p99": 1100
+        }
+      }
+    },
+    {
+      "timestamp": 1704283260000,
+      "counters": {
+        "vusers.created": 25,
+        "vusers.completed": 24,
+        "http.requests": 125,
+        "http.codes.200": 115,
+        "http.codes.404": 3,
+        "http.codes.500": 2,
+        "errors.total": 2
+      },
+      "summaries": {
+        "http.response_time": {
+          "min": 12,
+          "max": 1500,
+          "median": 255,
+          "p95": 900,
+          "p99": 1300
+        }
+      }
+    },
+    {
+      "timestamp": 1704283290000,
+      "counters": {
+        "vusers.created": 25,
+        "vusers.completed": 24,
+        "http.requests": 125,
+        "http.codes.200": 97,
+        "http.codes.201": 20,
+        "http.codes.404": 2,
+        "errors.total": 0
+      },
+      "summaries": {
+        "http.response_time": {
+          "min": 8,
+          "max": 950,
+          "median": 245,
+          "p95": 720,
+          "p99": 890
+        }
+      }
+    }
+  ],
+  "config": {
+    "target": "http://localhost:3080",
+    "phases": [
+      {
+        "name": "warm-up",
+        "duration": 30,
+        "arrivalRate": 2,
+        "rampTo": 5
+      },
+      {
+        "name": "sustained-load",
+        "duration": 60,
+        "arrivalRate": 5
+      },
+      {
+        "name": "spike",
+        "duration": 30,
+        "arrivalRate": 10
+      }
+    ],
+    "payload": null,
+    "plugins": {
+      "metrics-by-endpoint": {
+        "stripQueryString": true
+      }
+    },
+    "scenarios": [
+      {
+        "name": "Chat API Test",
+        "weight": 70,
+        "flow": [
+          {
+            "post": {
+              "url": "/api/chat",
+              "json": {
+                "message": "Hello, test",
+                "model": "llama3.2"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "RAG Search Test",
+        "weight": 30,
+        "flow": [
+          {
+            "post": {
+              "url": "/api/rag/search",
+              "json": {
+                "query": "performance testing",
+                "topK": 5
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

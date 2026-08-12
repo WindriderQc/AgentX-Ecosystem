@@ -1,0 +1,10 @@
+--- a/src/reverseStr.js
++++ b/src/reverseStr.js
+@@ -1,6 +1,6 @@
+ function reverseStr(s) {
+   let out = '';
+-  for (let i = s.length - 1; i > 0; i--) {
++  for (let i = s.length - 1; i >= 0; i--) {
+     out += s[i];
+   }
+   return out;

@@ -1,0 +1,23 @@
+--- a/src/parseScores.js
++++ b/src/parseScores.js
+@@ -1,7 +1,16 @@
+ function parseScores(csv) {
+-  return String(csv).split('\n').map((line) => {
+-    const [name, score] = line.split(',');
+-    return { name, score: Number(score) };
+-  });
++  const rows = [];
++  String(csv).split('\n').forEach((line, index) => {
++    if (!line.trim()) return;
++    const fields = line.split(',');
++    const name = fields[0] && fields[0].trim();
++    const rawScore = fields[1] && fields[1].trim();
++    const score = Number(rawScore);
++    if (fields.length !== 2 || !name || rawScore === '' || !Number.isFinite(score) || score < 0 || score > 100) {
++      throw new Error(`invalid row ${index + 1}`);
++    }
++    rows.push({ name, score });
++  });
++  return rows;
+ }
+ module.exports = parseScores;

@@ -1,0 +1,38 @@
+<main>
+  <section id="the-bench" class="ch-bench"></section>
+
+  <nav class="ch-tabs" role="tablist" aria-label="Courthouse sections">
+    <button class="ch-tab is-active" data-tab="review"      role="tab" aria-selected="true">Review <span class="ch-tab-badge" id="ch-tab-review-badge"></span></button>
+    <button class="ch-tab"           data-tab="calibration" role="tab" aria-selected="false">Calibration</button>
+    <button class="ch-tab"           data-tab="tests"       role="tab" aria-selected="false">Tests</button>
+    <button class="ch-tab"           data-tab="ledger"      role="tab" aria-selected="false">Ledger</button>
+    <button class="ch-tab"           data-tab="config"      role="tab" aria-selected="false">Config</button>
+  </nav>
+
+  <section class="ch-tab-panel is-active" data-panel="review" role="tabpanel">
+    <div id="review-queue"          class="r-section"></div>
+    <div id="detail-panel-container"></div>
+  </section>
+
+  <section class="ch-tab-panel" data-panel="calibration" role="tabpanel" hidden>
+    <div id="calibration"           class="r-section"></div>
+    <div id="gap-analysis"          class="r-section"></div>
+    <div id="discrimination"        class="r-section"></div>
+  </section>
+
+  <section class="ch-tab-panel" data-panel="tests" role="tabpanel" hidden>
+    <div id="test-library"          class="r-section"></div>
+  </section>
+
+  <section class="ch-tab-panel" data-panel="ledger" role="tabpanel" hidden>
+    <p class="ch-tab-intro">Every scored result, in review context &mdash; pick a row to open its judgement and approve, override, or reject. For bulk filtering, export, or side-by-side compare, use the <a href="/results-explorer">Results Explorer <i class="fas fa-arrow-up-right-from-square" style="font-size:0.8em;"></i></a>.</p>
+    <div id="results-ledger"        class="r-section"></div>
+  </section>
+
+  <section class="ch-tab-panel" data-panel="config" role="tabpanel" hidden>
+    <div id="judging-config"        class="r-section"></div>
+    <div id="data-management"       class="r-section"></div>
+  </section>
+
+  <div id="judge-roster" hidden></div>
+</main>

@@ -1,0 +1,46 @@
+config:
+  target: "http://localhost:3080"
+  phases:
+    - duration: 30
+      arrivalRate: 5
+      name: "Warm-up phase"
+    - duration: 60
+      arrivalRate: 10
+      name: "Load phase"
+  processor: "./test-helpers.js"
+  defaults:
+    headers:
+      Content-Type: "application/json"
+
+scenarios:
+  - name: "Model Classification"
+    weight: 7
+    flow:
+      - function: "addTimestamp"
+      - post:
+          url: "/api/models/classify"
+          json:
+            message: "Write a python script to optimize database queries"
+          capture:
+            - json: "$.data.taskType"
+              as: "task_type"
+      - think: 1
+      - post:
+          url: "/api/models/classify"
+          json:
+            message: "What is the capital of France?"
+
+  - name: "Auto-Routed Chat"
+    weight: 3
+    flow:
+      - function: "addTimestamp"
+      - post:
+          url: "/api/chat"
+          json:
+            message: "Explain quantum computing briefly"
+            autoRoute: true
+            options:
+              temperature: 0.7
+          capture:
+            - json: "$.routing.taskType"
+              as: "routed_task"

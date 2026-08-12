@@ -1,0 +1,8 @@
+{
+  "id": "sum-sign",
+  "title": "Fix the sign error in sum(a, b)",
+  "language": "javascript",
+  "allowedPaths": ["src/sum.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

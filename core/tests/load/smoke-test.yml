@@ -1,0 +1,27 @@
+config:
+  target: "http://localhost:3080"
+  phases:
+    - duration: 10
+      arrivalRate: 2
+      name: "Quick smoke test"
+
+scenarios:
+  - name: "Basic Health Check"
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200
+            - contentType: json
+
+  - name: "Get Active Prompt"
+    flow:
+      - get:
+          url: "/api/prompts/active"
+          expect:
+            - statusCode: 200
+
+  - name: "Metrics - Cache"
+    flow:
+      - get:
+          url: "/api/metrics/cache"

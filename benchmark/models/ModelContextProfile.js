@@ -1,0 +1,44 @@
+const mongoose = require('mongoose');
+
+const LatestEvidenceSchema = new mongoose.Schema({
+  snapshotId: String,
+  testedNumCtx: Number,
+  promptFillPct: Number,
+  tokensPerSec: Number,
+  vramUsedMiB: Number,
+  gpuPercent: Number,
+  degradationPct: Number,
+  completionTokens: Number,
+  requestedCompletionTokens: Number,
+  minCompletionTokens: Number,
+  testDurationMs: Number,
+  testedAt: Date,
+  source: String
+}, { _id: false });
+
+const ModelContextProfileSchema = new mongoose.Schema({
+  modelName: { type: String, required: true, index: true },
+  hostUrl: { type: String, required: true, index: true },
+  hostId: { type: String, default: null, index: true },
+
+  verifiedMaxContext: { type: Number, default: null },
+  recommendedContext: { type: Number, default: null },
+  stressCeiling: { type: Number, default: null },
+
+  modelTheoreticalMax: { type: Number, default: null },
+  source: { type: String, default: 'context_probe' },
+  stale: { type: Boolean, default: false },
+  staleReason: { type: String, default: null },
+  lastValidatedAt: { type: Date, default: null, index: true },
+  latestEvidence: { type: LatestEvidenceSchema, default: () => ({}) }
+}, {
+  collection: 'modelcontextprofiles',
+  timestamps: true
+});
+
+ModelContextProfileSchema.index(
+  { modelName: 1, hostUrl: 1 },
+  { unique: true, name: 'model_context_profile_model_host_unique' }
+);
+
+module.exports = mongoose.model('ModelContextProfile', ModelContextProfileSchema);

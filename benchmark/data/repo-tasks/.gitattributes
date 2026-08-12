@@ -1,0 +1,5 @@
+# Repository-repair fixtures must be byte-identical on every platform: the
+# executable grader applies solution.diff with `git apply`, which requires the
+# patch's context line endings to match the source files exactly. Pin the whole
+# fixture tree to LF so Windows autocrlf can't desync a diff from its target.
+* text eol=lf

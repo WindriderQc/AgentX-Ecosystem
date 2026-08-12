@@ -1,0 +1,171 @@
+<!-- ═══ ACTION ZONE (sticky — mutates between IDLE and LIVE) ═══ -->
+<header id="action-zone" class="r-action-zone">
+
+  <!-- IDLE top row -->
+  <div id="az-idle" class="az-row">
+    <div class="status-dot idle"></div>
+    <div class="status-label idle-label">IDLE — Ready to launch</div>
+    <div id="host-pills" class="az-host-pills"></div>
+    <div class="az-actions">
+      <button id="btn-history" class="r-nav-btn">History</button>
+    </div>
+  </div>
+
+  <!-- LIVE top row (hidden when idle) -->
+  <div id="az-live" class="az-row" style="display:none;">
+    <div class="status-dot executing"></div>
+    <div class="status-label live-label">EXECUTING</div>
+    <div class="header-meta">
+      <span id="prompt-counter">0 / 0 prompts</span>
+      <span id="elapsed" class="elapsed">0:00</span>
+      <span id="eta" class="eta"></span>
+      <button id="btn-stop" class="stop-btn">&#9632; Stop</button>
+    </div>
+  </div>
+
+  <!-- Pipeline bar (LIVE only) -->
+  <div id="pipeline-bar-wrap" style="display:none;">
+    <div class="pipeline-bar">
+      <div class="pipe-seg s-prep">
+        <div class="pf" id="pf-prep" style="width:0%;border-radius:3px 0 0 3px;"></div>
+      </div>
+      <div class="pipe-seg s-warm">
+        <div class="pf" id="pf-warm" style="width:0%;"></div>
+      </div>
+      <div class="pipe-seg s-exec">
+        <div class="pf" id="pf-exec" style="width:0%;"></div>
+      </div>
+      <div class="pipe-seg s-jdg">
+        <div class="pf" id="pf-jdg" style="width:0%;border-radius:0 3px 3px 0;"></div>
+      </div>
+    </div>
+    <div class="pipe-labels">
+      <span id="pl-prep" style="flex:0.5;">prep</span>
+      <span id="pl-warm" style="flex:1;">warmup</span>
+      <span id="pl-exec" style="flex:4;">generating</span>
+      <span id="pl-jdg"  style="flex:3;">judging</span>
+    </div>
+    <!-- Phase detail — populated from current_test.phase_detail; describes what the
+         orchestrator is doing during pre-execution work (profiler, dedication, claim,
+         per-host warmup, etc.). Stays empty/hidden when nothing useful to surface. -->
+    <div id="pipe-status" class="pipe-status" style="display:none;"></div>
+  </div>
+
+</header>
+
+<main aria-labelledby="benchmark-page-title">
+  <h1 id="benchmark-page-title" class="r-sr-only">Benchmark Engine Room</h1>
+
+  <!-- ═══ IDLE STATE SECTIONS ═══ -->
+  <div id="idle-sections">
+    <section id="workflow-guide" class="workflow-guide" aria-label="Benchmark setup progress">
+      <a class="wf-step wf-current" href="#infrastructure" data-wf-step="host">
+        <span class="wf-index">1</span>
+        <span class="wf-copy">
+          <span class="wf-title">Host</span>
+          <span class="wf-meta" id="wf-host-meta">Select execution target</span>
+        </span>
+      </a>
+      <a class="wf-step wf-locked" href="#batch-config" data-wf-step="models">
+        <span class="wf-index">2</span>
+        <span class="wf-copy">
+          <span class="wf-title">Models</span>
+          <span class="wf-meta" id="wf-models-meta">Pick contenders</span>
+        </span>
+      </a>
+      <a class="wf-step wf-locked" href="#batch-config" data-wf-step="tests">
+        <span class="wf-index">3</span>
+        <span class="wf-copy">
+          <span class="wf-title">Judge & Tests</span>
+          <span class="wf-meta" id="wf-tests-meta">Set scoring depth</span>
+        </span>
+      </a>
+      <a class="wf-step wf-locked" href="#launch-summary" data-wf-step="launch">
+        <span class="wf-index">4</span>
+        <span class="wf-copy">
+          <span class="wf-title">Launch</span>
+          <span class="wf-meta" id="wf-launch-meta">Review and run</span>
+        </span>
+      </a>
+    </section>
+
+    <!-- 1 Execution Host -->
+    <div id="infrastructure" class="r-section" data-workflow-section="host">
+      <div class="r-sec-head">
+        <span class="r-sec-icon bf-section-num">&#x2460;</span>
+        <span class="r-sec-title r-t-green">Execution Host</span>
+        <span id="infra-count" class="r-sec-count"></span>
+      </div>
+      <div id="host-cards" class="hs-grid-wrap">
+        <div class="r-loading">Loading hosts…</div>
+      </div>
+    </div>
+
+    <!-- 2-3 Models + Judge & Tests -->
+    <div id="batch-config" class="r-section" data-workflow-section="config">
+      <div id="config-body">
+        <div class="r-loading">Loading configuration…</div>
+      </div>
+    </div>
+
+    <!-- 4 Launch -->
+    <div id="launch-summary" class="r-section" data-workflow-section="launch">
+      <div class="r-loading">Waiting for configuration…</div>
+    </div>
+
+    <div id="launch-dock" class="launch-dock" aria-live="polite">
+      <div class="ldock-state">
+        <span class="ldock-kicker">Launch readiness</span>
+        <span id="ldock-title" class="ldock-title">Blocked</span>
+        <span id="ldock-meta" class="ldock-meta">Select an execution host</span>
+      </div>
+      <button id="ldock-launch-btn" class="ldock-button" type="button" disabled>Launch</button>
+    </div>
+
+  </div><!-- /idle-sections -->
+
+  <!-- ═══ LIVE STATE SECTIONS ═══ -->
+  <div id="live-sections" style="display:none;">
+
+    <!-- Batch card -->
+    <div id="batch-card" class="batch-card">
+      <div id="bc-row" class="bc-row"></div>
+      <div id="bc-counters" class="bc-counters"></div>
+    </div>
+
+    <!-- Live test detail -->
+    <div id="live-detail" class="live-detail">
+      <div class="ld-header" id="ld-header"></div>
+      <div class="resp-grid" id="resp-grid"></div>
+    </div>
+
+    <!-- Model arena -->
+    <div id="model-arena" class="model-arena">
+      <div class="r-sec-head arena-head">
+        <span class="r-sec-icon">&#9654;</span>
+        <span class="r-sec-title r-t-cyan">Live Rankings</span>
+        <span id="arena-count" class="r-sec-count"></span>
+      </div>
+      <div id="arena-rows"></div>
+    </div>
+
+    <!-- Anomalies -->
+    <div id="anomalies" class="anomalies" style="display:none;">
+      <div class="an-header">
+        <span class="an-icon">&#9888;</span>
+        <span class="an-title">Anomalies</span>
+        <span id="an-count" class="an-count"></span>
+        <a id="an-courthouse-link" href="/courthouse" class="an-link">Open all in Courthouse &#8594;</a>
+      </div>
+      <div id="an-list"></div>
+    </div>
+
+    <!-- Event log -->
+    <div id="event-log" class="event-log">
+      <div class="el-t">Event Log</div>
+      <div id="ev-list"></div>
+    </div>
+
+  </div><!-- /live-sections -->
+
+</main>

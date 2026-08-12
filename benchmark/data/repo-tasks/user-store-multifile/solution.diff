@@ -1,0 +1,24 @@
+--- a/src/normalizeUser.js
++++ b/src/normalizeUser.js
+@@ -1,4 +1,8 @@
+ function normalizeUser(user) {
+-  return { ...user, name: String(user.name).trim(), email: String(user.email).trim() };
++  return {
++    ...user,
++    name: String(user.name).trim(),
++    email: String(user.email).trim().toLowerCase()
++  };
+ }
+ module.exports = normalizeUser;
+--- a/src/userStore.js
++++ b/src/userStore.js
+@@ -4,6 +4,9 @@
+   constructor() { this.users = []; }
+   add(user) {
+     const normalized = normalizeUser(user);
++    if (this.users.some((existing) => existing.email === normalized.email)) {
++      throw new Error('duplicate email');
++    }
+     this.users.push(normalized);
+     return normalized;
+   }

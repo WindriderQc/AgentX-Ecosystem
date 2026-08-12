@@ -1,0 +1,623 @@
+  <div class="bg-grid"></div>
+  <div class="page history-hidden">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <h2>History</h2>
+        <div class="sidebar-actions">
+          <button id="newChatBtn" class="icon-btn" title="New Chat" aria-label="Start new chat">+</button>
+          <button id="closeHistoryBtn" class="icon-btn" title="Hide history" aria-label="Hide conversation history">&times;</button>
+        </div>
+      </div>
+
+      <!-- Search Bar -->
+      <div class="search-bar-container">
+        <div class="search-input-wrapper">
+          <i class="fas fa-search search-icon"></i>
+          <input type="text" id="conversationSearchInput" class="search-input" placeholder="Search conversations..." autocomplete="off" aria-label="Search conversations">
+          <button id="clearSearchBtn" class="clear-search-btn" title="Clear search" aria-label="Clear search" style="display: none;">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+        <button id="toggleFiltersBtn" class="icon-btn filter-btn" title="Show filters" aria-label="Toggle history filters">
+          <i class="fas fa-filter"></i>
+        </button>
+      </div>
+
+      <!-- Filter Panel (collapsible) -->
+      <div id="filterPanel" class="filter-panel" style="display: none;">
+        <div class="filter-section">
+          <label class="filter-label">Date Range</label>
+          <input type="date" id="filterDateFrom" class="filter-input" placeholder="From">
+          <input type="date" id="filterDateTo" class="filter-input" placeholder="To">
+        </div>
+
+        <details class="filter-advanced">
+          <summary style="cursor:pointer;font-size:0.8rem;color:var(--muted);margin-bottom:8px;">More filters</summary>
+          <div class="filter-section">
+            <label class="filter-label">Model</label>
+            <select id="filterModel" class="filter-select" multiple size="3">
+              <option value="">All Models</option>
+            </select>
+          </div>
+
+          <div class="filter-section">
+            <label class="filter-label">
+              <input type="checkbox" id="filterRagOnly" class="filter-checkbox">
+              <span>RAG Only</span>
+            </label>
+          </div>
+
+          <div class="filter-section">
+            <label class="filter-label">Feedback</label>
+            <select id="filterFeedback" class="filter-select">
+              <option value="">All Feedback</option>
+              <option value="1">Positive</option>
+              <option value="-1">Negative</option>
+              <option value="0">Neutral</option>
+            </select>
+          </div>
+
+          <div class="filter-section">
+            <label class="filter-label">Tags</label>
+            <div class="tags-input-container">
+              <input type="text" id="filterTagsInput" class="filter-input" placeholder="Add tag and press Enter">
+              <div id="filterTagsChips" class="tags-chips"></div>
+            </div>
+            <div id="tagsSuggestions" class="tags-suggestions" style="display: none;"></div>
+          </div>
+
+          <div class="filter-section">
+            <label class="filter-label">Sort By</label>
+            <select id="filterSortBy" class="filter-select">
+              <option value="relevance">Relevance</option>
+              <option value="date_desc">Newest First</option>
+              <option value="date_asc">Oldest First</option>
+              <option value="model">Model</option>
+              <option value="feedback">Feedback</option>
+              <option value="messages">Message Count</option>
+            </select>
+          </div>
+        </details>
+
+        <div class="filter-actions">
+          <button id="applyFiltersBtn" class="primary small full">Apply</button>
+          <button id="clearFiltersBtn" class="ghost small full">Clear All</button>
+        </div>
+      </div>
+
+      <!-- History List -->
+      <div id="historyList" class="history-list"></div>
+
+      <!-- Pagination Controls -->
+      <div id="paginationControls" class="pagination-controls" style="display: none;">
+        <button id="prevPageBtn" class="pagination-btn" disabled>
+          <i class="fas fa-chevron-left"></i>
+        </button>
+        <span id="paginationInfo" class="pagination-info">Page 1 of 1</span>
+        <button id="nextPageBtn" class="pagination-btn" disabled>
+          <i class="fas fa-chevron-right"></i>
+        </button>
+      </div>
+    </aside>
+
+    <div class="main-content chat-page-content" style="padding: 0;">
+      <!-- Unified Info Bar -->
+      <div class="chat-header-bar">
+        <div class="chat-header-left">
+          <span class="header-model-badge" id="headerModelBadge"></span>
+          <span class="header-agent-name" id="headerAgentName" style="display:none;"></span>
+          <div class="header-agent-avatar" id="headerAgentAvatar" style="display:none;"></div>
+          <span class="ci-status-sep">|</span>
+          <span class="ci-inline-field"><span class="ci-health-dot"></span> <span class="ci-status-label">host:</span> <span class="ci-status-value" data-ci-field="host">---</span></span>
+          <span class="ci-status-sep">|</span>
+          <span class="ci-inline-field"><span class="ci-status-label">route:</span> <span class="ci-status-value" data-ci-field="route">---</span></span>
+          <span class="ci-status-sep">|</span>
+          <span class="ci-inline-field"><span class="ci-status-label">VRAM:</span> <span class="ci-status-value" data-ci-field="vram">---</span></span>
+          <select id="headerPersonaSelect" class="header-persona-dropdown" style="display: none;">
+            <option value="default_chat">Default</option>
+          </select>
+          <button class="icon-btn" id="headerDevToggle" title="Dev mode — show full config" style="font-size: 0.75rem; opacity: 0.5;">
+            <i class="fas fa-flask"></i>
+          </button>
+          <button class="ghost small" id="headerChangeBtn" title="Change agent" style="display:none;">Change</button>
+        </div>
+        <div class="chat-header-center">
+          <span class="status-chip" id="statusChip">Idle</span>
+        </div>
+        <div class="chat-header-right">
+          <div class="header-pill" id="conversationTokens" style="display: none;">
+            <span class="label">Ctx</span>
+            <strong id="tokenCount">0</strong>
+            <span style="font-size:9px;opacity:0.5"> / </span>
+            <span id="tokenLimit" style="font-size:9px;opacity:0.6;" title="Context window set by the session model on the server.">Auto</span>
+          </div>
+          <div class="header-pill" id="conversationCost" style="display: none;">
+            <span class="label">Cost</span>
+            <strong id="costAmount">$0.00</strong>
+          </div>
+          <button id="headerThinkingBtn" class="icon-btn header-toggle-btn" title="Force thinking mode; unchecked uses automatic lane policy" aria-pressed="false">
+            <i class="fas fa-lightbulb"></i>
+            <span class="header-toggle-label">Think</span>
+          </button>
+          <button id="headerWebSearchBtn" class="icon-btn header-toggle-btn" title="Enable web search before responding" aria-pressed="false">
+            <i class="fas fa-globe"></i>
+            <span class="header-toggle-label">Web</span>
+          </button>
+          <div class="header-pill">
+            <span class="label">Msgs</span>
+            <strong id="statMessages">0</strong>
+          </div>
+          <button id="toggleHistoryBtn" class="icon-btn" title="Toggle history"><i class="fas fa-history"></i></button>
+          <button id="toggleConfigBtn" class="icon-btn" title="Configuration"><i class="fas fa-cog"></i></button>
+          <button id="ciToggleBtn" class="icon-btn" title="Intelligence Panel"><i class="fas fa-brain"></i></button>
+          <button id="showChatTutorialBtn" class="icon-btn" title="Tutorial"><i class="fas fa-graduation-cap"></i></button>
+        </div>
+      </div>
+
+      <section class="chat-layout">
+
+        <!-- Agent Selector (collapsible panel) -->
+        <div class="agent-selector" id="agentSelector">
+          <!-- Collapsed bar -->
+          <div class="agent-selector-bar" id="agentSelectorBar">
+            <div class="agent-selector-bar-left">
+              <i class="fas fa-layer-group" style="color: var(--accent, #7c3aed); margin-right: 8px;"></i>
+              <span class="agent-selector-label" id="selectorLabel">Quick Chat</span>
+            </div>
+            <div class="agent-selector-bar-right">
+              <span class="agent-selector-count" id="selectorCount"></span>
+              <i class="fas fa-chevron-down agent-selector-chevron" id="selectorChevron"></i>
+            </div>
+          </div>
+
+          <!-- Expanded panel (slides open) -->
+          <div class="agent-selector-panel" id="agentSelectorPanel">
+
+            <!-- OpenClaw (hidden when gateway offline) -->
+            <div class="launcher-section" id="launcherOpenClaw" style="display: none;">
+              <div class="launcher-section-label">
+                <i class="fas fa-satellite"></i> OpenClaw
+              </div>
+              <div class="agentx-launcher-grid" id="openclawAgentGrid"></div>
+            </div>
+
+            <!-- Chat Agents -->
+            <div class="launcher-section" id="launcherChat">
+              <div class="launcher-section-label">
+                <i class="fas fa-comments"></i> Chat
+              </div>
+              <div class="agentx-launcher-grid" id="chatLauncherGrid">
+                <div class="agentx-card launcher-default-card selected" id="startChatCard" tabindex="0">
+                  <div class="agentx-card-avatar" style="--avatar-color: #7c3aed">
+                    <i class="fas fa-comments"></i>
+                  </div>
+                  <div class="agentx-card-content">
+                    <div class="agentx-card-header">
+                      <h4 class="agentx-card-name">Quick Chat</h4>
+                    </div>
+                    <p class="agentx-card-description">Default persona with model router — just start typing</p>
+                  </div>
+                  <div class="agentx-card-actions">
+                    <button class="agentx-select-btn selected"><i class="fas fa-check"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tools -->
+            <div class="launcher-section" id="launcherTools">
+              <div class="launcher-section-label">
+                <i class="fas fa-toolbox"></i> Tools
+              </div>
+              <div class="agentx-launcher-grid" id="toolsLauncherGrid"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Window (fills remaining height) -->
+        <div class="chat-window" id="chatWindow">
+          <div class="bubble assistant">
+            <div class="meta">AgentX</div>
+            <p>Hello! I'm online. Pick a model, then ask away.</p>
+          </div>
+        </div>
+
+        <!-- Composer -->
+        <div class="composer">
+          <textarea id="messageInput" rows="1" placeholder="Message AgentX... (Enter to send, Shift+Enter for newline)"></textarea>
+          <div class="composer-actions">
+            <select class="quick-select" id="quickActionSelect" title="Quick prompts">
+              <option value="" disabled selected>Quick...</option>
+              <option value="What can you help me with?">Help</option>
+              <option value="Summarize recent events.">Summary</option>
+              <option value="List available tools.">Tools</option>
+              <option value="Brainstorm next steps for my project.">Brainstorm</option>
+            </select>
+            <button class="icon-btn" id="micBtn" title="Voice Input" aria-label="Voice Input" aria-pressed="false">&#x1f3a4;</button>
+            <button class="icon-btn" id="roundtableBtn" title="Ask Council (multi-model deliberation)" aria-label="Ask Council"><i class="fas fa-users"></i></button>
+            <span id="voiceStatus" class="voice-status" style="display: none; font-size: 0.75rem; color: var(--accent); margin-left: 4px;"></span>
+            <span class="char-count" id="charCount"></span>
+            <div class="flex-spacer"></div>
+            <button class="ghost small" id="clearBtn">Clear</button>
+            <button class="primary" id="sendBtn">Send</button>
+          </div>
+        </div>
+
+        <!-- Thread ID (hidden, used by JS) -->
+        <span id="threadId" style="display:none;"></span>
+      </section>
+    </div>
+  </div>
+
+  <!-- Config Drawer (slides from right) -->
+  <div class="config-drawer-backdrop" id="configDrawerBackdrop"></div>
+  <div class="config-drawer" id="configDrawer">
+    <div class="config-drawer-header">
+      <h2><i class="fas fa-cog" style="margin-right:8px;color:var(--accent);"></i>Configuration</h2>
+      <button class="icon-btn" id="configDrawerClose" title="Close">&times;</button>
+    </div>
+    <div class="config-drawer-body">
+
+      <!-- Quick Access -->
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button class="ghost small" id="profileBtn" style="flex:1;">
+          <i class="fas fa-user" style="margin-right:5px;"></i>Profile
+        </button>
+        <button class="ghost small" id="showShortcutsBtn" style="flex:1;" title="Keyboard Shortcuts (Ctrl+/)">
+          <i class="fas fa-keyboard" style="margin-right:5px;"></i>Shortcuts
+        </button>
+      </div>
+
+      <!-- Config Summary -->
+      <div class="config-summary" id="configSummary" style="margin-bottom:16px;">
+        <div class="summary-items" id="defaultConfigSummary">
+          <span class="summary-item"><strong>Model:</strong> <span id="summaryModel">&mdash;</span></span>
+          <span class="summary-item"><strong>RAG:</strong> <span id="summaryRag">Off</span></span>
+          <span class="summary-item"><strong>Stream:</strong> <span id="summaryStream">On</span></span>
+          <span class="summary-item"><strong>Web:</strong> <span id="summaryWeb">Off</span></span>
+          <span class="summary-item"><strong>Think:</strong> <span id="summaryThink">Auto</span></span>
+          <span class="summary-item"><strong>Temp:</strong> <span id="summaryTemp">0.7</span></span>
+        </div>
+        <div class="summary-items" id="agentConfigSummary" style="display: none;">
+          <span class="summary-item"><i class="fas fa-robot"></i> <strong id="summaryAgentName">Agent</strong></span>
+          <span class="summary-item"><i class="fas fa-tools"></i> <span id="summaryAgentTools">0</span> Tools</span>
+        </div>
+      </div>
+
+      <!-- Active Prompt Pill -->
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+        <span class="header-pill"><span class="label">Prompt</span> <strong id="activePromptName" style="font-size:11px;">&mdash;</strong></span>
+        <span class="header-pill"><span class="label">Config</span> <strong id="chatConfigSummary" style="font-size:11px;">&mdash;</strong></span>
+      </div>
+
+      <!-- Agent Active Panel -->
+      <div class="agent-active-panel" id="agentActivePanel" style="display: none;">
+        <div class="agent-card-mini">
+          <div class="agent-avatar-mini" id="activeAgentAvatar"><i class="fas fa-robot"></i></div>
+          <div class="agent-info-mini">
+            <h3 id="activeAgentName">Agent Name</h3>
+            <p id="activeAgentRole">General Assistant</p>
+          </div>
+          <button class="icon-btn small" id="changeAgentBtn" title="Change Agent" aria-label="Change active agent"><i class="fas fa-exchange-alt"></i></button>
+        </div>
+        <div class="agent-capabilities-list">
+           <div class="capability-tag" id="activeAgentModel"><i class="fas fa-microchip"></i> <span>Model</span></div>
+           <div class="capability-tag" id="activeAgentTools"><i class="fas fa-wrench"></i> <span>0 Tools</span></div>
+        </div>
+        <hr class="panel-divider">
+      </div>
+
+      <div class="field">
+        <label>Chat Mode</label>
+        <select id="routingModeSelect">
+          <option value="quick">Quick — fast, lightweight model</option>
+          <option value="standard">Standard — default chat model</option>
+          <option value="deep">Deep — maximum reasoning</option>
+          <option value="manual">Manual — pick host &amp; model</option>
+        </select>
+        <div class="hint" id="routingModeHint">One model for the whole session — no per-message switching.</div>
+      </div>
+
+      <div class="field">
+        <label>Ollama Host</label>
+        <div class="input-row">
+          <select id="hostInput" style="flex: 1;">
+            <option value="">Loading hosts&hellip;</option>
+          </select>
+        </div>
+        <div class="hint" id="hostInputHint">Hosts are loaded from server configuration.</div>
+      </div>
+
+      <div class="field">
+        <label>Model</label>
+        <div class="input-row">
+          <select id="modelSelect" style="flex: 1;">
+            <option value="">Load available models&hellip;</option>
+          </select>
+          <button class="icon-btn" id="refreshModels" title="Refresh models from Ollama" aria-label="Refresh available models">&orarr;</button>
+        </div>
+        <div class="hint" id="modelSelectHint">Models are loaded from the selected host and sorted by benchmark readiness.</div>
+      </div>
+
+      <div class="field">
+        <label>System Prompt</label>
+        <div class="input-row">
+          <select id="promptSelect" style="flex: 1;">
+            <option value="default_chat">Loading prompts&hellip;</option>
+          </select>
+          <button class="icon-btn" id="promptInfoBtn" title="View prompt details" aria-label="View prompt details">&oplus;</button>
+        </div>
+        <div class="hint">Choose which system prompt to use for AI behavior.</div>
+      </div>
+
+      <div class="note" id="feedback">Waiting for configuration.</div>
+
+      <div class="field inline-toggle">
+        <label>Streaming</label>
+        <label class="switch">
+          <input type="checkbox" id="streamToggle" checked>
+          <span class="slider"></span>
+        </label>
+        <div class="hint">Stream responses in real-time.</div>
+      </div>
+
+      <div class="field inline-toggle">
+        <label>Enable RAG</label>
+        <label class="switch">
+          <input type="checkbox" id="ragToggle" checked>
+          <span class="slider"></span>
+        </label>
+        <div class="hint">Retrieve context from vector store.</div>
+      </div>
+
+      <div class="field inline-toggle">
+        <label>Thinking Mode</label>
+        <label class="switch">
+          <input type="checkbox" id="thinkingToggle">
+          <span class="slider"></span>
+        </label>
+        <div class="hint">Unchecked uses automatic lane policy; checked forces think: true.</div>
+      </div>
+
+      <div class="field inline-toggle">
+        <label>Web Search</label>
+        <label class="switch">
+          <input type="checkbox" id="webSearchToggle">
+          <span class="slider"></span>
+        </label>
+        <div class="hint">Search the web via SearXNG before responding.</div>
+      </div>
+
+      <!-- RAG Advanced Options Panel -->
+      <div class="rag-options-panel" id="ragOptionsPanel" style="display: none;">
+        <div class="rag-panel-header" id="ragPanelHeader">
+          <span><i class="fas fa-sliders-h" style="margin-right: 8px;"></i>RAG Advanced Options</span>
+          <i class="fas fa-chevron-down" id="ragChevron"></i>
+        </div>
+        <div class="rag-panel-content" id="ragOptionsContent" style="display: none;">
+          <div class="rag-option-row">
+            <label class="rag-toggle-label">
+              <input type="checkbox" id="ragExpandQuery">
+              <span><i class="fas fa-expand-arrows-alt" style="margin-right: 6px; font-size: 11px;"></i>Query Expansion</span>
+            </label>
+            <p class="rag-option-help">Generates related search queries via LLM <span style="color: var(--accent);">+300ms</span></p>
+          </div>
+          <div class="rag-option-row">
+            <label class="rag-toggle-label">
+              <input type="checkbox" id="ragHybridSearch">
+              <span><i class="fas fa-layer-group" style="margin-right: 6px; font-size: 11px;"></i>Hybrid Search</span>
+            </label>
+            <p class="rag-option-help">Semantic + keyword matching <span style="color: var(--accent);">+75ms</span></p>
+          </div>
+          <div class="rag-option-row">
+            <label class="rag-toggle-label">
+              <input type="checkbox" id="ragRerankResults">
+              <span><i class="fas fa-sort-amount-down" style="margin-right: 6px; font-size: 11px;"></i>Re-ranking</span>
+            </label>
+            <p class="rag-option-help">LLM judges relevance <span style="color: var(--accent-2);">+1000ms</span></p>
+          </div>
+          <div class="rag-option-row">
+            <label class="rag-toggle-label">
+              <input type="checkbox" id="ragCompress">
+              <span><i class="fas fa-compress-alt" style="margin-right: 6px; font-size: 11px;"></i>Contextual Compression</span>
+            </label>
+            <p class="rag-option-help">Extracts relevant sentences <span style="color: var(--accent);">+500ms</span></p>
+          </div>
+          <div class="rag-option-row">
+            <label class="rag-slider-label">
+              <span><i class="fas fa-list-ol" style="margin-right: 6px; font-size: 11px;"></i>Top K Results: <span id="ragTopKValue">5</span></span>
+              <input type="range" id="ragTopK" min="1" max="20" value="5">
+            </label>
+            <p class="rag-option-help">Number of document chunks (1-20)</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="collapsible-section demo-optional-integration">
+        <div class="section-header" id="voiceHeader">
+          <h3>Voice I/O <span class="voice-health-dot" id="sttHealthDot"></span> <span class="panel-toggle-icon">&#x25bc;</span></h3>
+        </div>
+        <div class="section-content hidden" id="voiceContent">
+          <select id="sttProviderSelect" style="display:none;">
+            <option value="browser">Browser</option>
+            <option value="voix">VoiX</option>
+          </select>
+          <select id="sttLanguageSelect" style="display:none;"><option value="en">English</option></select>
+          <select id="whisperModelSelect" style="display:none;"><option value="">Server default</option></select>
+          <div id="whisperModelField" style="display:none;"></div>
+          <input type="checkbox" id="voiceAutoSend" style="display:none;">
+          <input type="checkbox" id="ttsToggle" style="display:none;">
+          <select id="ttsProviderSelect" style="display:none;">
+            <option value="browser">Browser</option>
+            <option value="voix">VoiX</option>
+          </select>
+          <select id="ttsVoiceSelect" style="display:none;"><option value=""></option></select>
+          <div id="ttsProviderField" style="display:none;"></div>
+          <div id="ttsVoiceField" style="display:none;"></div>
+          <button id="testVoiceBtn" type="button" style="display:none;"></button>
+
+          <div class="field">
+            <label>Voice Defaults <span class="voice-health-dot" id="sttHealthDotInner"></span> <span class="voice-health-dot" id="ttsHealthDot"></span></label>
+            <div class="hint" id="voiceDefaultsSummary">Loading voice defaults...</div>
+            <div class="hint"><a href="/voice" target="_blank" rel="noopener" style="color: var(--accent);">Open Voice config</a></div>
+          </div>
+          <div class="field" id="voixStatusField">
+            <label>VoiX Integration</label>
+            <div class="hint" id="voixHealthSummary">VoiX optional. Not checked yet.</div>
+            <div class="hint" id="voixDevicesSummary">Devices: not checked</div>
+            <div class="hint" id="voixSessionSummary">Session: none</div>
+            <div class="hint" id="convoModeSummary">ConvoMode: inactive</div>
+          </div>
+          <div class="action-row" id="voixActionRow" style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn small" id="voixRefreshBtn" type="button">Refresh VoiX</button>
+            <button class="btn small" id="convoModeBtn" type="button">Start ConvoMode</button>
+            <button class="btn small" id="voixSessionBtn" type="button">New Session</button>
+            <button class="btn small" id="voixTextTurnBtn" type="button">Send Text Turn</button>
+            <button class="btn small" id="voixSmokeBtn" type="button">TTS Smoke</button>
+            <button class="btn small" id="voixFullSmokeBtn" type="button">Full Smoke</button>
+          </div>
+          <div class="field" id="voixResultField">
+            <label>VoiX Result</label>
+            <pre id="voixResultOutput" style="margin: 0; white-space: pre-wrap; max-height: 220px; overflow: auto; background: rgba(0, 0, 0, 0.18); border: 1px solid rgba(124, 240, 255, 0.14); border-radius: 8px; padding: 12px; font-size: 0.8rem;">No VoiX activity yet.</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="field inline-toggle">
+        <label>Show Message Stats</label>
+        <label class="switch">
+          <input type="checkbox" id="statsToggle" checked>
+          <span class="slider"></span>
+        </label>
+        <div class="hint">Display token usage and timing for each message.</div>
+      </div>
+
+      <div class="field">
+        <label>System prompt</label>
+        <textarea id="systemPrompt" rows="3">You are AgentX, a concise and capable local assistant. Keep answers brief and actionable.</textarea>
+      </div>
+
+      <div class="collapsible-section">
+        <div class="section-header" id="tuningHeader">
+          <h3>Model Tuning Parameters <span class="panel-toggle-icon">&#x25bc;</span></h3>
+        </div>
+        <div class="section-content hidden" id="tuningContent">
+          <div class="options-grid">
+            <div class="field">
+              <label>Temperature</label>
+              <input type="range" id="temperature" min="0" max="2" step="0.05" value="0.7">
+              <div class="value" data-for="temperature">0.7</div>
+            </div>
+            <div class="field">
+              <label>Top P</label>
+              <input type="range" id="topP" min="0" max="1" step="0.01" value="0.9">
+              <div class="value" data-for="topP">0.9</div>
+            </div>
+            <div class="field">
+              <label>Top K</label>
+              <input type="number" id="topK" value="64" min="1" max="32000">
+            </div>
+            <div class="field">
+              <label>Context (tokens)</label>
+              <input type="number" id="numCtx" value="" min="256" max="32000" step="256" placeholder="Modelfile default">
+              <div class="hint">Blank uses the model's Modelfile or registry context. Set a value only for an explicit override.</div>
+            </div>
+            <div class="field">
+              <label>Repeat penalty</label>
+              <input type="number" id="repeatPenalty" value="1.05" min="0" max="2" step="0.01">
+            </div>
+            <div class="field">
+              <label>Presence penalty</label>
+              <input type="number" id="presencePenalty" value="0" min="-2" max="2" step="0.01">
+            </div>
+            <div class="field">
+              <label>Frequency penalty</label>
+              <input type="number" id="frequencyPenalty" value="0" min="-2" max="2" step="0.01">
+            </div>
+            <div class="field">
+              <label>Num predict</label>
+              <input type="number" id="numPredict" value="" min="-1" max="8192" step="16" placeholder="Blank or -1 = unlimited">
+              <div class="hint">Leave blank for uncapped responses. Use a number only if you want to limit output.</div>
+            </div>
+            <div class="field">
+              <label>Seed</label>
+              <input type="number" id="seed" value="" placeholder="random">
+            </div>
+            <div class="field">
+              <label>Stop sequences</label>
+              <input type="text" id="stopSequences" placeholder="e.g. ###,END">
+            </div>
+            <div class="field">
+              <label>Keep alive</label>
+              <input type="text" id="keepAlive" placeholder="e.g. 30s or -1">
+              <div class="hint">Keep the model warm between calls.</div>
+            </div>
+          </div>
+          <div class="action-row">
+            <button class="primary full" id="saveDefaults">Save defaults</button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- End config-drawer-body -->
+  </div><!-- End config-drawer -->
+
+  <!-- Context progress (hidden elements for JS references) -->
+  <div style="display:none;">
+    <span id="contextPercentage">0%</span>
+    <div id="contextProgressFill" style="width: 0%"></div>
+  </div>
+
+  <!-- Profile Modal -->
+  <div id="profileModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>User Profile & Memory</h2>
+        <button id="closeProfileBtn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label>About You (Memory)</label>
+          <div class="hint">Facts the agent should remember about you (e.g., job, interests, background).</div>
+          <textarea id="userAbout" rows="5" placeholder="I am a software engineer interested in AI..."></textarea>
+        </div>
+        <div class="field">
+          <label>Preferred Language</label>
+          <input type="text" id="memoryLanguage" placeholder="English">
+        </div>
+        <div class="field">
+          <label>Role / Context</label>
+          <input type="text" id="memoryRole" placeholder="e.g. Product manager focusing on UX">
+        </div>
+        <div class="field">
+          <label>Response Style</label>
+          <textarea id="memoryStyle" rows="2" placeholder="Concise, decisive, include next steps."></textarea>
+        </div>
+        <div class="field">
+          <label>Custom Instructions</label>
+          <div class="hint">How the agent should behave (e.g., always be concise).</div>
+          <textarea id="userInstructions" rows="3" placeholder="Be brief and professional."></textarea>
+        </div>
+        <div class="hint">All profile data is saved to your AgentX database and persisted across conversations.</div>
+        <div class="action-row">
+          <button class="ghost" id="resetProfileBtn">Reset</button>
+          <button class="primary" id="saveProfileBtn">Save Profile</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Wire the chat-header shortcuts button (also available via nav icon + Ctrl+/)
+      const shortcutsBtn = document.getElementById('showShortcutsBtn');
+      if (shortcutsBtn) {
+        shortcutsBtn.addEventListener('click', () => {
+          if (typeof ShortcutsHelpModal !== 'undefined') ShortcutsHelpModal.show();
+        });
+      }
+
+      const tutorialBtn = document.getElementById('showChatTutorialBtn');
+      if (tutorialBtn) tutorialBtn.style.display = 'none';
+    });
+  </script>

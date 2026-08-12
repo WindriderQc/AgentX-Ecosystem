@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "vault": {
+    "hostAuthority": "user-selected",
+    "containerRoot": "/data/imports",
+    "mountMode": "none"
+  },
+  "inventory": {
+    "maxFiles": 1000,
+    "includePathsInResponse": false,
+    "readFileContents": false,
+    "filesystemMutationAllowed": false
+  },
+  "ingestion": {
+    "approvedRoots": [
+      "/data/imports"
+    ],
+    "allowedExtensions": [
+      "md",
+      "txt"
+    ],
+    "maxFileSizeBytes": 1048576,
+    "excludedTopLevel": {},
+    "excludedDirectoryNames": [
+      ".cache",
+      ".git",
+      ".venv",
+      "__pycache__",
+      "coverage",
+      "credentials",
+      "node_modules",
+      "secrets",
+      "ssh",
+      "tokens"
+    ],
+    "secretBasenames": [
+      ".env",
+      "id_ed25519",
+      "id_rsa"
+    ],
+    "secretExtensions": [
+      "key",
+      "p12",
+      "pem",
+      "pfx"
+    ],
+    "secretNameFragments": [
+      "credential",
+      "secret",
+      "token"
+    ],
+    "generatedNameFragments": []
+  },
+  "projection": {
+    "mode": "disabled",
+    "direction": "none",
+    "writeToVault": false,
+    "operationalAuthority": "Agent X product repository",
+    "vaultIndexName": "",
+    "repository": "",
+    "branch": "main",
+    "entries": []
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "stats-refactor",
+  "title": "Refactor statistics filtering without changing the API",
+  "instructions": "Extract one shared finiteNumbers(values) helper and use it in both average(values) and range(values). Both functions must ignore non-finite values, return null when no finite values remain, preserve the exported average/range API, and never mutate the input array.",
+  "language": "javascript",
+  "allowedPaths": ["src/stats.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

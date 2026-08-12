@@ -1,0 +1,126 @@
+/**
+ * Roundtable Service — Facade
+ *
+ * Public surface for multi-agent deliberation. Start a discussion
+ * fire-and-forget (returns the pending doc immediately), subscribe to
+ * streaming events, and fetch the finished record.
+ */
+
+const { EventEmitter } = require('events');
+const logger = require('../../../config/logger');
+const Roundtable = require('../../../models/Roundtable');
+const {
+  runRoundtable,
+  createRoundtable,
+  getRoundtable,
+  listRoundtables,
+  emitterRegistry
+} = require('./orchestrator');
+const { formatTranscript, formatCompactSummary } = require('./formatters');
+const { DEFAULT_PANEL, DEFAULT_SYNTHESIZER, COUNCIL_OPTIONS } = require('./defaults');
+const { notifyCompletion } = require('./notifier');
+const { analyzeQuality } = require('./qualityAnalyzer');
+const {
+  addInterjection,
+  findTelegramRoundtable,
+  parseTelegramCommand,
+  setDecision
+} = require('./controls');
+const { publishRoundtableEvent, sendTelegramText } = require('./telegramPublisher');
+const { validateRuntimeConfiguration } = require('./runtimeParticipantAdapter');
+
+let activeRoundtableId = null;
+function setActiveRoundtable(id) { activeRoundtableId = id; }
+function getActiveRoundtableId() { return activeRoundtableId; }
+
+/**
+ * Create + fire-and-forget execution. Returns the pending doc; the
+ * orchestrator runs in the background. Caller should subscribe to the
+ * streaming emitter (via getEmitter) if they want live updates.
+ */
+async function startRoundtable(options) {
+  validateRuntimeConfiguration(options.panel || DEFAULT_PANEL);
+  if (options.telegram && !(process.env.ROUNDTABLE_TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN)) {
+    const err = new Error('Roundtable Telegram publishing is not configured');
+    err.status = 503;
+    throw err;
+  }
+  const doc = await createRoundtable(options);
+  const id = doc._id.toString();
+  const notifyConfig = options.notify || null;
+  const enableScoring = options.enableScoring === true;
+
+  const emitter = new EventEmitter();
+  emitter.setMaxListeners(20);
+  emitterRegistry.set(id, emitter);
+
+  setActiveRoundtable(id);
+  runRoundtable(id, emitter)
+    .then(async () => {
+      const completedDoc = await getRoundtable(id);
+      if (!completedDoc) return;
+
+      if (enableScoring && completedDoc.status === 'completed') {
+        try {
+          await analyzeQuality(id);
+        } catch (err) {
+          logger.error('Roundtable quality analysis failed', { id, error: err.message });
+        }
+      }
+
+      if (notifyConfig) {
+        try {
+          const finalDoc = enableScoring ? await getRoundtable(id) : completedDoc;
+          await notifyCompletion(finalDoc, notifyConfig);
+        } catch (err) {
+          logger.error('Roundtable notification failed', { id, error: err.message });
+        }
+      }
+    })
+    .catch((err) => logger.error('Background roundtable failed', { id, error: err.message }))
+    .finally(() => {
+      if (activeRoundtableId === id) setActiveRoundtable(null);
+    });
+
+  return doc;
+}
+
+function getEmitter(id) {
+  return emitterRegistry.get(id) || null;
+}
+
+// Graceful shutdown — mark active roundtable as failed so the UI can surface it.
+process.on('SIGTERM', async () => {
+  if (!activeRoundtableId) return;
+  logger.warn('SIGTERM — marking active roundtable as failed', { id: activeRoundtableId });
+  try {
+    await Roundtable.updateOne(
+      { _id: activeRoundtableId, status: 'running' },
+      { $set: { status: 'failed', error: 'Process terminated (SIGTERM)', completedAt: new Date() } }
+    );
+  } catch (err) {
+    logger.error('Failed to mark roundtable on SIGTERM', { error: err.message });
+  }
+});
+
+module.exports = {
+  startRoundtable,
+  runRoundtable,
+  createRoundtable,
+  getRoundtable,
+  listRoundtables,
+  formatTranscript,
+  formatCompactSummary,
+  DEFAULT_PANEL,
+  DEFAULT_SYNTHESIZER,
+  COUNCIL_OPTIONS,
+  getActiveRoundtableId,
+  getEmitter,
+  analyzeQuality,
+  addInterjection,
+  findTelegramRoundtable,
+  parseTelegramCommand,
+  publishRoundtableEvent,
+  sendTelegramText,
+  setDecision
+};

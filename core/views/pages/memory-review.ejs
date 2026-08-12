@@ -1,0 +1,152 @@
+<div class="bg-grid"></div>
+
+<main class="mr-page">
+  <header class="mr-header">
+    <div>
+      <div class="mr-eyebrow">AgentX Ecosystem Memory Review</div>
+      <h1><i class="fas fa-moon"></i> Dreaming Review</h1>
+      <p class="mr-intro">Turn trustworthy moments from Claude Code, Codex, OpenClaw, and Hermes into durable knowledge—only after you approve each proposal.</p>
+      <div class="mr-ownership">
+        <span><i class="fas fa-shield-halved"></i> Raw sessions stay local</span>
+        <span><i class="fas fa-user-check"></i> One-by-one approval</span>
+        <span id="mrModeBadge" class="mr-mode-badge">mode: --</span>
+      </div>
+    </div>
+    <div class="mr-actions">
+      <details class="mr-shortcuts">
+        <summary class="mr-btn mr-btn-secondary"><i class="fas fa-keyboard"></i><span>Shortcuts</span></summary>
+        <div><kbd>J</kbd>/<kbd>K</kbd> move · <kbd>A</kbd> approve · <kbd>R</kbd> reject · <kbd>D</kbd> defer · <kbd>E</kbd> edit</div>
+      </details>
+      <button id="mrShareBtn" class="mr-btn mr-btn-secondary" type="button" title="Copy a statement-free status digest">
+        <i class="fas fa-share-nodes"></i><span>Copy digest</span>
+      </button>
+      <button id="mrRefreshBtn" class="mr-btn mr-btn-secondary" type="button" title="Refresh">
+        <i class="fas fa-rotate"></i><span>Refresh</span>
+      </button>
+    </div>
+  </header>
+
+  <section class="mr-overview" aria-label="Dreaming overview">
+    <article><i class="fas fa-moon"></i><div><strong id="mrStatRuns">—</strong><span>Latest dream</span></div></article>
+    <article><i class="fas fa-inbox"></i><div><strong id="mrStatPending">—</strong><span>Awaiting you</span></div></article>
+    <article><i class="fas fa-circle-check"></i><div><strong id="mrStatApplied">—</strong><span>Applied safely</span></div></article>
+    <article><i class="fas fa-heart-pulse"></i><div><strong id="mrStatHealth">—</strong><span>Ecosystem health</span></div></article>
+  </section>
+
+  <section id="mrPulse" class="mr-pulse mr-pulse-loading" aria-labelledby="mrPulseTitle">
+    <div class="mr-pulse-icon"><i id="mrPulseIcon" class="fas fa-spinner fa-spin"></i></div>
+    <div class="mr-pulse-copy">
+      <div class="mr-eyebrow">Dream Pulse</div>
+      <h2 id="mrPulseTitle">Reading the ecosystem…</h2>
+      <p id="mrPulseText">Summarizing recent runs without exposing candidate statements.</p>
+      <div id="mrPulseFacts" class="mr-pulse-facts"></div>
+    </div>
+  </section>
+
+  <section class="mr-flow" aria-label="How every Dreaming Review works; this is an explanation, not live progress">
+    <strong class="mr-flow-label"><i class="fas fa-circle-info"></i> How it works</strong>
+    <span><i class="fas fa-satellite-dish"></i> Collect locally</span><i class="fas fa-chevron-right"></i>
+    <span><i class="fas fa-shield"></i> Sanitize</span><i class="fas fa-chevron-right"></i>
+    <span><i class="fas fa-wand-magic-sparkles"></i> Propose</span><i class="fas fa-chevron-right"></i>
+    <span><i class="fas fa-user-check"></i> You review</span><i class="fas fa-chevron-right"></i>
+    <span><i class="fas fa-route"></i> Apply to owner</span>
+  </section>
+
+  <details id="mrIntelligence" class="mr-intelligence" open>
+    <summary><span><i class="fas fa-chart-simple"></i> Dream intelligence</span><small>Runtime coverage, quality signals, and memory atlas</small></summary>
+    <div id="mrInsightsState" class="mr-state">Loading insight…</div>
+    <div id="mrInsightsGrid" class="mr-insights-grid" hidden>
+      <article class="mr-insight-card mr-runtime-card">
+        <div class="mr-insight-heading"><div><span class="mr-kicker">Runtime constellation</span><h3>Who contributed</h3></div><i class="fas fa-satellite-dish"></i></div>
+        <div id="mrRuntimeGrid" class="mr-runtime-grid"></div>
+      </article>
+      <article class="mr-insight-card">
+        <div class="mr-insight-heading"><div><span class="mr-kicker">Quality Lab</span><h3>Signal, not noise</h3></div><i class="fas fa-flask"></i></div>
+        <div id="mrQualityGrid" class="mr-quality-grid"></div>
+      </article>
+      <article class="mr-insight-card">
+        <div class="mr-insight-heading"><div><span class="mr-kicker">Memory Atlas</span><h3>What agents are learning</h3></div><i class="fas fa-diagram-project"></i></div>
+        <div id="mrAtlas" class="mr-atlas"></div>
+      </article>
+    </div>
+  </details>
+
+  <section class="mr-main-grid">
+    <aside class="mr-runs-panel">
+      <div class="mr-panel-header">
+        <h2><i class="fas fa-clock-rotate-left"></i> Runs</h2>
+        <p id="mrRunsMeta">--</p>
+      </div>
+      <div class="mr-run-tools">
+        <label><span class="sr-only">Search runs</span><i class="fas fa-magnifying-glass"></i><input id="mrRunSearch" type="search" placeholder="Find a run" autocomplete="off"></label>
+        <select id="mrRunStatus" aria-label="Filter runs by status">
+          <option value="all">All states</option>
+          <option value="attention">Needs attention</option>
+          <option value="active">In progress</option>
+          <option value="completed">Complete</option>
+        </select>
+      </div>
+      <div id="mrRunsState" class="mr-state">Loading runs…</div>
+      <ul id="mrRunList" class="mr-run-list" hidden></ul>
+    </aside>
+
+    <section class="mr-detail-panel">
+      <div id="mrDetailEmpty" class="mr-empty">
+        <i class="fas fa-moon"></i>
+        <h2>Your agents are gathering signal</h2>
+        <p>Select a run to inspect its proposals, evidence, and complete audit trail.</p>
+      </div>
+      <div id="mrDetail" hidden>
+        <div class="mr-run-summary">
+          <div class="mr-run-title-row"><h2 id="mrRunTitle">--</h2><button id="mrCopyLink" class="mr-icon-btn" type="button" title="Copy link to this run"><i class="fas fa-link"></i><span class="sr-only">Copy run link</span></button></div>
+          <div id="mrRunNarrative" class="mr-run-narrative"></div>
+          <div id="mrRunFacts" class="mr-run-facts"></div>
+          <div id="mrCollectors" class="mr-collectors"></div>
+          <p class="mr-guarantee">
+            <i class="fas fa-shield-halved"></i>
+            A scheduled dream can only propose. It cannot change memory, skills, tasks, config, or docs.
+            Approved changes are still applied one at a time through the owning system.
+          </p>
+        </div>
+
+        <div class="mr-panel-header mr-candidates-header">
+          <h3><i class="fas fa-list-check"></i> Candidates</h3>
+          <div id="mrCandidateFilters" class="mr-segmented" aria-label="Candidate status filter">
+            <button class="active" type="button" data-status-filter="all">All <b data-filter-count="all">0</b></button>
+            <button type="button" data-status-filter="proposed">Pending <b data-filter-count="proposed">0</b></button>
+            <button type="button" data-status-filter="approved">Approved <b data-filter-count="approved">0</b></button>
+            <button type="button" data-status-filter="rejected">Rejected <b data-filter-count="rejected">0</b></button>
+            <button type="button" data-status-filter="deferred">Deferred <b data-filter-count="deferred">0</b></button>
+            <button type="button" data-status-filter="applied">Applied <b data-filter-count="applied">0</b></button>
+          </div>
+        </div>
+        <div id="mrCandidatesState" class="mr-state" hidden></div>
+        <ol id="mrCandidateList" class="mr-candidate-list"></ol>
+
+        <details class="mr-audit">
+          <summary><i class="fas fa-scroll"></i> Audit history</summary>
+          <ul id="mrAuditList" class="mr-audit-list"></ul>
+        </details>
+      </div>
+    </section>
+  </section>
+</main>
+
+<div id="mrActionBackdrop" class="mr-modal-backdrop" hidden>
+  <section id="mrActionModal" class="mr-modal" role="dialog" aria-modal="true" aria-labelledby="mrActionTitle" aria-describedby="mrActionDescription">
+    <button id="mrActionClose" class="mr-modal-close" type="button" aria-label="Close"><i class="fas fa-xmark"></i></button>
+    <div class="mr-modal-icon"><i id="mrActionIcon" class="fas fa-user-check"></i></div>
+    <h2 id="mrActionTitle">Review candidate</h2>
+    <p id="mrActionDescription"></p>
+    <div id="mrActionPreview" class="mr-action-preview" hidden></div>
+    <form id="mrActionForm">
+      <label id="mrStatementField" hidden>Approved wording<textarea id="mrActionStatement" maxlength="1200" rows="4"></textarea><small>The original proposal remains in the audit trail.</small></label>
+      <label id="mrNoteField" hidden>Review note <textarea id="mrActionNote" maxlength="600" rows="3" placeholder="Optional context for future reviews"></textarea></label>
+      <div class="mr-modal-actions">
+        <button id="mrActionCancel" class="mr-btn mr-btn-secondary" type="button">Cancel</button>
+        <button id="mrActionSubmit" class="mr-btn mr-btn-approve" type="submit">Confirm</button>
+      </div>
+    </form>
+  </section>
+</div>
+<div id="mrLiveStatus" class="sr-only" role="status" aria-live="polite"></div>

@@ -1,0 +1,9 @@
+{
+  "id": "slugify-feature",
+  "title": "Implement a URL-safe slugify() feature",
+  "instructions": "Make slugify(value) lowercase and trim surrounding whitespace, replace every run of non-alphanumeric characters with one hyphen, and remove leading or trailing hyphens. Return an empty string when nothing remains.",
+  "language": "javascript",
+  "allowedPaths": ["src/slugify.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

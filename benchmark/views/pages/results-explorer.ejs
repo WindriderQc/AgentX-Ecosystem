@@ -1,0 +1,281 @@
+<div class="bg-grid"></div>
+
+<div class="explorer-container">
+    <!-- Header -->
+    <div class="explorer-header">
+        <div class="page-hero-layout">
+            <div class="page-hero-copy">
+                <div class="eyebrow">AgentX &bull; Power User Tools</div>
+                <h1><i class="fas fa-magnifying-glass-chart"></i> Results Explorer</h1>
+                <p>Browse, filter, export, and compare every benchmark result. The raw-data workbench &mdash; to review or override a judge's score, head to the <a href="/courthouse" style="color:var(--accent-secondary,#d29922);text-decoration:none;">Courthouse <i class="fas fa-gavel" style="font-size:0.85em;"></i></a>.</p>
+            </div>
+            <div class="page-hero-actions">
+                <a href="/courthouse" class="btn-secondary" style="height:42px;text-decoration:none;display:inline-flex;align-items:center;gap:0.4rem;" title="Review and calibrate judge scores in the Courthouse">
+                    <i class="fas fa-gavel"></i> Courthouse
+                </a>
+                <a href="/leaderboard" class="btn-secondary" style="height:42px;text-decoration:none;display:inline-flex;align-items:center;gap:0.4rem;">
+                    <i class="fas fa-trophy"></i> Leaderboard
+                </a>
+                <a href="/efficiency-map" class="btn-secondary" style="height:42px;text-decoration:none;display:inline-flex;align-items:center;gap:0.4rem;">
+                    <i class="fas fa-chart-line"></i> Efficiency
+                </a>
+                <button id="refreshBtn" class="btn-secondary" style="height: 42px;">
+                    <i class="fas fa-sync"></i> Refresh
+                </button>
+                <button id="clearFiltersBtn" class="btn-secondary" style="height: 42px;">
+                    <i class="fas fa-filter-circle-xmark"></i> Clear Filters
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary Stats Bar -->
+    <div class="summary-stats-bar" id="summaryStatsBar">
+        <!-- Populated by JS -->
+    </div>
+
+    <!-- Visualizations — standalone chart grid (no parent card wrapper) -->
+    <div class="charts-grid">
+        <div class="chart-card">
+            <h4>Quality Distribution</h4>
+            <canvas id="qualityDistChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <h4>Latency vs Quality</h4>
+            <canvas id="latencyScatterChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <h4>Category Performance</h4>
+            <canvas id="categoryRadarChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <h4>Model Comparison</h4>
+            <canvas id="modelBarChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Category Statistics Table -->
+    <div class="stats-section">
+        <h3><i class="fas fa-table"></i> Category Performance Breakdown</h3>
+        <div class="stats-table-container" id="categoryStatsContainer">
+            <!-- Populated by JS -->
+        </div>
+    </div>
+
+    <!-- Advanced Filters Panel -->
+    <div class="filters-panel">
+        <div class="panel-header" onclick="toggleFiltersPanel()">
+            <h3><i class="fas fa-sliders"></i> Advanced Filters</h3>
+            <button class="collapse-btn collapsed" id="filtersCollapseBtn">
+                <i class="fas fa-chevron-up"></i>
+            </button>
+        </div>
+        <div class="panel-body collapsed" id="filtersPanelBody">
+            <div class="filters-layout">
+                <!-- Left column: selectable lists (models + categories) -->
+                <div class="filters-col filters-col-lists">
+                    <div class="filter-section">
+                        <h4><i class="fas fa-cube"></i> Models</h4>
+                        <div class="filter-group">
+                            <input type="text" id="modelSearch" placeholder="Search models...">
+                        </div>
+                        <div class="multi-select-container" id="modelSelectContainer">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                    <div class="filter-section">
+                        <h4><i class="fas fa-tags"></i> Categories</h4>
+                        <div class="multi-select-container" id="categorySelectContainer">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Center column: ranges + date -->
+                <div class="filters-col filters-col-ranges">
+                    <div class="filter-section">
+                        <h4><i class="fas fa-calendar"></i> Date Range</h4>
+                        <div class="filter-row">
+                            <div class="filter-group">
+                                <label>From</label>
+                                <input type="date" id="dateFrom">
+                            </div>
+                            <div class="filter-group">
+                                <label>To</label>
+                                <input type="date" id="dateTo">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="filter-section">
+                        <h4><i class="fas fa-gauge-high"></i> Level & Quality</h4>
+                        <div class="filter-group">
+                            <label>Level Range: <span id="levelRangeDisplay">1 - 5</span></label>
+                            <div class="range-slider">
+                                <input type="range" id="levelMin" min="1" max="5" value="1">
+                                <input type="range" id="levelMax" min="1" max="5" value="5">
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <label>Quality Score: <span id="qualityRangeDisplay">0 - 10</span></label>
+                            <div class="range-slider">
+                                <input type="range" id="qualityMin" min="0" max="10" step="0.1" value="0">
+                                <input type="range" id="qualityMax" min="0" max="10" step="0.1" value="10">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right column: dropdowns -->
+                <div class="filters-col filters-col-dropdowns">
+                    <div class="filter-section">
+                        <h4><i class="fas fa-server"></i> Infrastructure</h4>
+                        <div class="filter-group">
+                            <label>Host</label>
+                            <select id="hostFilter">
+                                <option value="">All Hosts</option>
+                                <!-- Populated by JS -->
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Backend</label>
+                            <select id="backendFilter">
+                                <option value="">All Backends</option>
+                                <!-- Populated by JS from result data -->
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Quantization</label>
+                            <select id="quantizationFilter">
+                                <option value="">All Quantizations</option>
+                                <!-- Populated by JS -->
+                            </select>
+                        </div>
+                    </div>
+                    <div class="filter-section">
+                        <h4><i class="fas fa-filter"></i> Additional</h4>
+                        <div class="filter-group">
+                            <label>Success Status</label>
+                            <select id="successFilter">
+                                <option value="">All Results</option>
+                                <option value="true">Success Only</option>
+                                <option value="false">Failed Only</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Batch ID</label>
+                            <input type="text" id="batchIdFilter" placeholder="Enter batch ID...">
+                        </div>
+                        <div class="filter-group">
+                            <label title="How the result was scored by the judge">Scoring Method</label>
+                            <select id="scoringMethodFilter">
+                                <option value="">All Methods</option>
+                                <!-- Populated by JS from result data -->
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action Toolbar -->
+    <div class="action-toolbar">
+        <div class="toolbar-left">
+            <span class="results-count" id="resultsCount">0 results</span>
+            <span class="selected-count" id="selectedCount" style="display: none;">0 selected</span>
+        </div>
+        <div class="toolbar-right">
+            <button id="exportCsvBtn" class="btn-action" disabled>
+                <i class="fas fa-file-csv"></i> Export CSV
+            </button>
+            <button id="exportJsonBtn" class="btn-action" disabled>
+                <i class="fas fa-file-code"></i> Export JSON
+            </button>
+            <button id="compareBtn" class="btn-action" disabled>
+                <i class="fas fa-code-compare"></i> Compare Selected
+            </button>
+            <button id="toggleColumnsBtn" class="btn-action">
+                <i class="fas fa-columns"></i> Columns
+            </button>
+        </div>
+    </div>
+
+    <!-- Results Table -->
+    <div class="results-table-container">
+        <div id="resultsTable" class="loading-state">
+            <i class="fas fa-spinner fa-spin"></i>
+            <p>Loading benchmark results...</p>
+        </div>
+    </div>
+
+    <!-- Column Visibility Modal -->
+    <div id="columnsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-columns"></i> Column Visibility</h2>
+                <button class="modal-close" onclick="closeColumnsModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="columns-grid" id="columnsGrid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Comparison Modal -->
+    <div id="comparisonModal" class="modal">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2><i class="fas fa-code-compare"></i> Compare Results</h2>
+                <button class="modal-close" onclick="closeComparisonModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="comparisonContent">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Test Inspector Modal -->
+    <div id="testInspectorModal" class="modal">
+        <div class="modal-content xlarge">
+            <div class="modal-header">
+                <h2><i class="fas fa-microscope"></i> Test Inspector</h2>
+                <button class="modal-close" onclick="closeTestInspector()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <!-- Tab Navigation -->
+                <div class="inspector-tabs">
+                    <button class="inspector-tab active" data-tab="warmup">
+                        <i class="fas fa-fire"></i> Warmup
+                    </button>
+                    <button class="inspector-tab" data-tab="execution">
+                        <i class="fas fa-play"></i> Execution
+                    </button>
+                    <button class="inspector-tab" data-tab="judging">
+                        <i class="fas fa-gavel"></i> Judging
+                    </button>
+                    <button class="inspector-tab" data-tab="hardware">
+                        <i class="fas fa-microchip"></i> Hardware
+                    </button>
+                </div>
+
+                <!-- Tab Content -->
+                <div id="inspectorContent" class="inspector-content">
+                    <div class="inspector-loading">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <p>Loading test details...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

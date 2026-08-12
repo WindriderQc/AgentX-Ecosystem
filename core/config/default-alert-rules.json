@@ -1,0 +1,102 @@
+[
+    {
+        "id": "latency-spike",
+        "name": "Inference latency spike (>10s)",
+        "enabled": true,
+        "severity": "warning",
+        "title": "Slow inference — {{model}} on {{host}}",
+        "message": "{{value}}ms (threshold {{threshold}}ms), task {{taskType}}, lane {{lane}}",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "latency" },
+            { "fact": "value", "operator": "greaterThan", "value": 10000 }
+        ]},
+        "channels": ["dataapi_log"]
+    },
+    {
+        "id": "inference-error",
+        "name": "Inference error",
+        "enabled": true,
+        "severity": "error",
+        "title": "Inference error — {{model}} on {{host}}",
+        "message": "HTTP {{status}}, task {{taskType}}, lane {{lane}}",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "error" }
+        ]},
+        "channels": ["dataapi_log"]
+    },
+    {
+        "id": "host-unreachable",
+        "name": "Ollama host unreachable",
+        "enabled": true,
+        "severity": "critical",
+        "title": "Host unreachable — {{host}}",
+        "message": "{{model}}: {{error}}",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "host_unreachable" }
+        ]},
+        "channels": ["dataapi_log"],
+        "renotifyMs": 900000
+    },
+    {
+        "id": "vram-displacement",
+        "name": "VRAM displacement triggered",
+        "enabled": true,
+        "severity": "info",
+        "title": "VRAM displacement — {{component}}",
+        "message": "Displacement event on {{component}}",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "displacement" }
+        ]},
+        "channels": ["dataapi_log"]
+    },
+    {
+        "id": "capacity-vram-pressure",
+        "name": "GPU VRAM pressure (>90% sustained 15m)",
+        "enabled": true,
+        "severity": "warning",
+        "title": "VRAM pressure on {{component}}",
+        "message": "p95 VRAM at {{value}}% sustained",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "capacity_vram_pressure" },
+            { "fact": "value", "operator": "greaterThan", "value": 90 }
+        ]},
+        "channels": ["dataapi_log"]
+    },
+    {
+        "id": "capacity-gpu-imbalance",
+        "name": "GPU load imbalance (one card hot, other idle)",
+        "enabled": true,
+        "severity": "warning",
+        "title": "GPU load imbalance on {{component}}",
+        "message": "Load spread {{value}}% between GPUs",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "capacity_gpu_imbalance" },
+            { "fact": "value", "operator": "greaterThan", "value": 60 }
+        ]},
+        "channels": ["dataapi_log"]
+    },
+    {
+        "id": "capacity-underused",
+        "name": "Host underused while a busier peer exists",
+        "enabled": true,
+        "severity": "info",
+        "title": "Host underused — {{component}}",
+        "message": "Only {{value}}% of cluster calls while a peer is busy",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "capacity_underused" }
+        ]},
+        "channels": ["dataapi_log"]
+    },
+    {
+        "id": "capacity-host-critical",
+        "name": "Host offline or Ollama service down",
+        "enabled": true,
+        "severity": "critical",
+        "title": "Host down — {{component}}",
+        "message": "{{detail}}",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "capacity_host_critical" }
+        ]},
+        "channels": ["dataapi_log"]
+    }
+]

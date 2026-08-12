@@ -1,0 +1,649 @@
+/* ═══ JUDGE ROSTER ═══ */
+
+.judge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.5rem;
+}
+
+.judge-card {
+  background: var(--r-bg-inner);
+  border: 1px solid var(--r-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  transition: border-color var(--r-transition);
+}
+
+.judge-card:hover {
+  border-color: #333;
+}
+
+/* Default judge — purple border glow */
+.judge-card.is-default {
+  border-color: rgba(167, 139, 250, 0.30);
+  box-shadow:
+    0 0 15px rgba(167, 139, 250, 0.06),
+    0 0 30px rgba(167, 139, 250, 0.03);
+}
+
+.jc-head {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.3rem;
+}
+
+.jc-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #ccc;
+}
+
+.judge-default {
+  font-size: 0.68rem;
+  padding: 0.04rem 0.2rem;
+  border-radius: 3px;
+  background: rgba(167, 139, 250, 0.12);
+  color: var(--r-judge);
+  font-weight: 700;
+}
+
+.jc-stats {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.92rem;
+  color: #666;
+  flex-wrap: wrap;
+}
+
+.jc-stats .jcs-val {
+  color: #aaa;
+  font-weight: 600;
+}
+
+/* Calibration mini bars */
+.jc-calib {
+  margin-top: 0.3rem;
+}
+
+.jc-calib-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.86rem;
+  margin-bottom: 0.15rem;
+}
+
+.jc-calib-row:last-child {
+  margin-bottom: 0;
+}
+
+.jc-calib-label {
+  color: var(--r-text-dim);
+  width: 55px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.jc-calib-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--r-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.jc-calib-fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.jc-calib-val {
+  color: var(--r-text-muted);
+  width: 30px;
+  font-weight: 600;
+}
+
+/* ═══ TEST LIBRARY — PROMPT MATRIX ═══ */
+
+.tm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.tm-table th {
+  text-align: center;
+  color: var(--r-text-dim);
+  font-weight: 600;
+  font-size: 0.86rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--r-border);
+}
+
+.tm-table th:first-child {
+  text-align: left;
+}
+
+.tm-table td {
+  padding: 0.25rem 0.4rem;
+  text-align: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.tm-table td:first-child {
+  text-align: left;
+  color: #aaa;
+  font-weight: 600;
+}
+
+.tm-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Total row separator */
+.tm-table .tm-total-row td {
+  border-top: 1px solid var(--r-border);
+  color: var(--r-text-muted);
+  font-weight: 700;
+}
+
+.tm-table .tm-total-row td:first-child {
+  color: #ccc;
+  font-weight: 700;
+}
+
+.tm-table .tm-total-row td:last-child {
+  color: var(--r-anomaly);
+  font-weight: 800;
+}
+
+/* Level header badges */
+.tm-lbadge {
+  display: inline-block;
+  padding: 0.06rem 0.25rem;
+  border-radius: 2px;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+/* Cell: has prompts */
+.tm-cell {
+  display: inline-block;
+  min-width: 22px;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.tm-cell.has {
+  background: rgba(102, 187, 106, 0.08);
+  color: var(--r-good);
+}
+
+.tm-cell.empty {
+  color: #333;
+}
+
+/* Total column */
+.tm-total {
+  color: var(--r-text-muted);
+  font-weight: 700;
+}
+
+/* ═══ JUDGING CONFIGURATION ═══ */
+
+.config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.cfg-item {
+  background: var(--r-bg-inner);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cfg-icon {
+  font-size: 0.84rem;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.cfg-label {
+  font-size: 0.92rem;
+  color: var(--r-text-dim);
+}
+
+.cfg-val {
+  font-size: 0.98rem;
+  color: #ccc;
+  font-weight: 600;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.cfg-dim {
+  font-size: 1rem;
+  color: var(--r-text-dim);
+  flex-shrink: 0;
+}
+
+/* ═══ QUESTION DISCRIMINATION ═══ */
+
+.disc-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.8rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition: background var(--r-transition);
+}
+
+.disc-row:hover {
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.disc-row:last-child {
+  border-bottom: none;
+}
+
+.disc-q {
+  color: #aaa;
+  flex: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disc-cat {
+  color: var(--r-text-dim);
+  font-size: 0.86rem;
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.disc-bar {
+  flex: 1;
+  height: 7px;
+  background: var(--r-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.disc-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.disc-rate {
+  font-weight: 600;
+  width: 35px;
+  text-align: right;
+  font-size: 0.92rem;
+  flex-shrink: 0;
+}
+
+.disc-flag {
+  font-size: 0.84rem;
+  padding: 0.03rem 0.22rem;
+  border-radius: 3px;
+  font-weight: 600;
+  width: 48px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* Classification badge variants */
+.disc-easy { background: rgba(255, 167, 38, 0.10); color: var(--r-anomaly); }
+.disc-hard { background: rgba(239, 83, 80, 0.10);  color: var(--r-error); }
+.disc-ok   { background: rgba(102, 187, 106, 0.06); color: #4a8a4a; }
+
+/* ═══ RESULTS LEDGER ═══ */
+
+.ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.ledger-table th {
+  text-align: left;
+  color: #444;
+  font-weight: 600;
+  font-size: 0.86rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--r-border);
+}
+
+.ledger-table td {
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  color: #777;
+  transition: background var(--r-transition);
+}
+
+.ledger-table tbody tr:hover td {
+  background: rgba(79, 195, 247, 0.04);
+}
+
+.ledger-row.is-active td {
+  background: rgba(79, 195, 247, 0.08);
+}
+
+.ledger-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Cell type variants */
+.ls-model  { color: #ccc; font-weight: 600; }
+.ls-prompt { color: #999; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ls-score  { font-weight: 700; }
+.ls-score.h { color: var(--r-good); }
+.ls-score.m { color: #eab308; }
+.ls-score.l { color: var(--r-error); }
+
+/* Status badges */
+.ls-status {
+  font-size: 0.86rem;
+  padding: 0.04rem 0.25rem;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.ls-scored   { background: rgba(102, 187, 106, 0.08); color: var(--r-good); }
+.ls-review   { background: rgba(255, 167, 38, 0.08);  color: var(--r-anomaly); }
+.ls-override { background: rgba(79, 195, 247, 0.08);  color: var(--r-active); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CALIBRATION SECTION
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.cal-body { padding: 0.5rem 0; }
+
+.cal-stats {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+/* Heatmap table */
+.cal-table-wrap { overflow-x: auto; }
+
+.cal-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 3px;
+  font-size: 1rem;
+}
+
+.cal-th {
+  text-align: center;
+  padding: 0.35rem 0.5rem;
+  color: var(--r-text-muted);
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.5px;
+}
+
+.cal-th--cat { text-align: left; }
+
+.cal-cat {
+  padding: 0.4rem 0.5rem;
+  font-weight: 500;
+  color: var(--r-text);
+  white-space: nowrap;
+}
+
+.cal-cell {
+  text-align: center;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.84rem;
+  min-width: 3rem;
+}
+
+.cal-cell--empty {
+  color: var(--r-text-dim);
+  font-weight: 400;
+}
+
+.cal-empty {
+  color: var(--r-text-dim);
+  font-size: 0.98rem;
+  padding: 0.5rem 0;
+}
+
+/* Legend */
+.cal-legend {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.cal-legend-item { white-space: nowrap; }
+
+.cal-legend-note {
+  color: var(--r-text-dim);
+  font-style: italic;
+}
+
+/* Run calibration form */
+.cal-run-form {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--r-border);
+}
+
+.cal-run-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--r-text-muted);
+  letter-spacing: 0.5px;
+  margin-bottom: 0.75rem;
+}
+
+.cal-run-fields {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.cal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.cal-field-label {
+  font-size: 0.9rem;
+  color: var(--r-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cal-select {
+  padding: 0.35rem 0.5rem;
+  background: var(--r-bg-inner);
+  color: var(--r-text);
+  border: 1px solid var(--r-border);
+  border-radius: 6px;
+  font-size: 0.84rem;
+  min-width: 10rem;
+}
+
+.cal-select:focus {
+  border-color: var(--r-active);
+  outline: none;
+}
+
+.cal-run-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.cal-run-status {
+  font-size: 0.84rem;
+  color: var(--r-text-muted);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   GAP ANALYSIS SECTION
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.ga-body { padding: 0.5rem 0; }
+
+.ga-stats {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+/* Coverage grid */
+.ga-table-wrap { overflow-x: auto; }
+
+.ga-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 3px;
+  font-size: 1rem;
+}
+
+.ga-th {
+  text-align: center;
+  padding: 0.35rem 0.5rem;
+  color: var(--r-text-muted);
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.5px;
+}
+
+.ga-th--cat { text-align: left; }
+
+.ga-cat {
+  padding: 0.4rem 0.5rem;
+  font-weight: 500;
+  color: var(--r-text);
+  white-space: nowrap;
+}
+
+.ga-cell {
+  text-align: center;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.84rem;
+  min-width: 3rem;
+}
+
+.ga-empty {
+  color: var(--r-text-dim);
+  font-size: 0.98rem;
+  padding: 0.5rem 0;
+}
+
+/* Legend */
+.ga-legend {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.ga-legend-item { white-space: nowrap; }
+
+/* Judge roster calibration section */
+.jc-calib-section {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--r-border);
+}
+
+/* Focus styles for keyboard navigation */
+.rq-chip:focus-visible,
+.rq-item:focus-visible,
+.dp-act:focus-visible {
+  outline: 2px solid var(--r-active);
+  outline-offset: 2px;
+}
+
+/* ═══ DATA MANAGEMENT ═══ */
+.dm-stats { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.dm-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+.dm-actions .ha-btn { font-size: 0.84rem; }
+.dm-status { font-size: 0.84rem; color: var(--r-text-muted); margin-top: 0.5rem; }
+.dm-danger { border-color: var(--r-error); color: var(--r-error); }
+.dm-danger:hover { background: rgba(239, 83, 80, 0.1); }
+
+/* ═══ COURTHOUSE WORKFLOW GUIDE BANNER ═══ */
+.ch-guide-banner {
+  margin: 0.75rem 1rem 0;
+  border: 1px solid var(--r-border);
+  border-radius: 10px;
+  background: var(--r-bg-card);
+  overflow: hidden;
+}
+.ch-guide-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+  user-select: none;
+}
+.ch-guide-header:hover { background: var(--r-bg-inner); }
+.ch-guide-icon { font-size: 1rem; }
+.ch-guide-title { flex: 1; font-size: 1rem; font-weight: 700; color: var(--r-text); }
+.ch-guide-toggle-btn { font-size: 0.95rem; color: var(--r-text-muted); white-space: nowrap; }
+.ch-guide-body {
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid var(--r-border);
+  font-size: 0.84rem;
+  color: var(--r-text-muted);
+  line-height: 1.55;
+}
+.ch-guide-collapsed .ch-guide-body { display: none; }
+.ch-guide-intro { margin-bottom: 0.5rem; color: var(--r-text); }
+.ch-guide-step-head { font-weight: 700; color: var(--r-text); margin: 0.5rem 0 0.25rem; }
+.ch-guide-steps {
+  margin: 0 0 0.5rem 1.25rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.ch-guide-actions {
+  margin: 0.25rem 0 0 1.25rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.ch-guide-heatmap-note {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--r-bg-inner);
+  border-radius: 4px;
+  border-left: 3px solid var(--r-active);
+}

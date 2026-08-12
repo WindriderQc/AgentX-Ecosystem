@@ -1,0 +1,50 @@
+<%
+  /**
+   * Empty-index banner — shown when documentCount === 0.
+   * Shared between dashboard and documents pages.
+   *
+   * Requires client-side JS to toggle display and populate #empty-banner-detail.
+   * See dashboard.js / documents.js for the poll integration.
+   */
+%>
+<section id="empty-index-banner" class="empty-banner" role="alert" style="display:none;">
+  <div class="empty-banner-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  </div>
+  <div class="empty-banner-body">
+    <div class="empty-banner-title">Index is empty — 0 documents, 0 chunks</div>
+    <div class="empty-banner-detail" id="empty-banner-detail">checking…</div>
+  </div>
+  <div class="empty-banner-actions">
+    <a class="empty-banner-btn primary" href="/upload">Upload →</a>
+    <a class="empty-banner-btn" href="/maintenance">Check drift</a>
+  </div>
+</section>
+<style>
+  .empty-banner {
+    display: flex; align-items: center; gap: 14px;
+    margin: 0 0 18px;
+    padding: 14px 18px;
+    background: linear-gradient(180deg, rgba(245,158,11,0.08) 0%, rgba(245,158,11,0.04) 100%);
+    border: 1px solid rgba(245,158,11,0.3);
+    border-left: 3px solid rgba(245,158,11,0.85);
+    border-radius: 10px;
+    color: var(--text, #e8ecf3);
+  }
+  .empty-banner-icon { color: #f59e0b; flex-shrink: 0; }
+  .empty-banner-body { flex: 1; min-width: 0; }
+  .empty-banner-title { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+  .empty-banner-detail { font-size: 12px; color: var(--muted, #8a95a8); font-family: ui-monospace, Menlo, monospace; }
+  .empty-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .empty-banner-btn {
+    display: inline-block; padding: 6px 13px; border-radius: 6px;
+    font-size: 12px; text-decoration: none;
+    border: 1px solid rgba(255,255,255,0.12); color: var(--text, #e8ecf3);
+    background: rgba(255,255,255,0.03); transition: all .12s;
+  }
+  .empty-banner-btn:hover { border-color: rgba(245,158,11,0.55); color: #f59e0b; }
+  .empty-banner-btn.primary {
+    border-color: rgba(245,158,11,0.5); background: rgba(245,158,11,0.12); color: #fbbf24;
+  }
+  .empty-banner-btn.primary:hover { background: rgba(245,158,11,0.22); }
+</style>

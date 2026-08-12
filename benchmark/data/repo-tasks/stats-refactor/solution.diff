@@ -1,0 +1,20 @@
+--- a/src/stats.js
++++ b/src/stats.js
+@@ -1,4 +1,8 @@
++function finiteNumbers(values) {
++  return values.filter(Number.isFinite);
++}
++
+ function average(values) {
+-  const numbers = values.filter(Number.isFinite);
++  const numbers = finiteNumbers(values);
+   return numbers.length ? numbers.reduce((sum, value) => sum + value, 0) / numbers.length : null;
+ }
+@@ -6,4 +10,5 @@
+ function range(values) {
+-  if (!values.length) return null;
+-  return { min: Math.min(...values), max: Math.max(...values) };
++  const numbers = finiteNumbers(values);
++  if (!numbers.length) return null;
++  return { min: Math.min(...numbers), max: Math.max(...numbers) };
+ }

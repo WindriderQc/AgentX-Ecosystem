@@ -1,0 +1,391 @@
+  <div class="bg-grid"></div>
+
+  <!-- Main Content -->
+  <div class="nc-container">
+
+      <!-- Page Header -->
+      <div class="nc-page-header">
+          <div class="nc-header-row">
+              <div>
+                  <div class="nc-eyebrow">AgentX • Command &amp; Control</div>
+                  <h1><i class="fas fa-brain"></i> Nerve Center</h1>
+                  <p>Unified routing, cluster health, host preferences, and performance overview</p>
+              </div>
+          </div>
+      </div>
+
+      <!-- Summary Strip -->
+      <div class="nc-summary-strip">
+          <div class="nc-widget nominal" data-scroll="cluster" id="widgetHostsOnline">
+              <div class="nc-widget-value" id="widgetHostsOnlineValue">--</div>
+              <div class="nc-widget-label">Hosts Online</div>
+          </div>
+          <div class="nc-widget nominal" data-scroll="routing" id="widgetActiveHost" title="The most recent persisted successful proxy or embedding route">
+              <div class="nc-widget-value" id="widgetActiveHostValue">--</div>
+              <div class="nc-widget-label">Last Actual Host</div>
+          </div>
+          <div class="nc-widget nominal" data-scroll="cluster" id="widgetHostPrefs">
+              <div class="nc-widget-value" id="widgetHostPrefsValue">--</div>
+              <div class="nc-widget-label">Host Defaults</div>
+          </div>
+          <div class="nc-widget nominal" data-scroll="health" id="widgetAlerts">
+              <div class="nc-widget-value" id="widgetAlertsValue">--</div>
+              <div class="nc-widget-label">Active Alerts</div>
+          </div>
+          <div class="nc-widget nominal" data-scroll="routing" id="widgetRoutingMode">
+              <div class="nc-widget-value" id="widgetRoutingModeValue">--</div>
+              <div class="nc-widget-label">Routing Mode</div>
+          </div>
+          <div class="nc-widget nominal" data-scroll="fastlane" id="widgetFastlane">
+              <div class="nc-widget-value" id="widgetFastlaneValue">--</div>
+              <div class="nc-widget-label">Nestor Fastlane</div>
+          </div>
+          <div class="nc-widget nominal" data-scroll="ecosystem" id="widgetEcosystem">
+              <div class="nc-widget-value" id="widgetEcosystemValue">--</div>
+              <div class="nc-widget-label">Ecosystem</div>
+          </div>
+          <div class="nc-widget nominal" data-scroll="performance" id="widgetInferences">
+              <div class="nc-widget-value" id="widgetInferencesValue">--</div>
+              <div class="nc-widget-label">Inferences Today</div>
+          </div>
+      </div>
+
+      <div class="nc-view-controls" role="group" aria-label="Nerve Center detail level">
+          <span><i class="fas fa-layer-group"></i> Overview shows the signals needed for a daily health check.</span>
+          <button class="nc-btn" id="ncDetailModeToggle" type="button" aria-expanded="false">
+              <i class="fas fa-sliders"></i> Show operator details
+          </button>
+      </div>
+
+      <!-- Section: Fleet Brain Map (task 0509 — user-visible brain/lane assignments) -->
+      <div class="nc-section brainmap" id="sectionBrainMap">
+          <div class="nc-section-header" data-section="sectionBrainMap">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-sitemap nc-section-icon"></i>
+                  <div>
+                      <h2>Fleet Brain Map</h2>
+                      <span class="nc-section-subtitle">Which brain runs where — GPU roles, warm pins, and the lane each request takes</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <button class="nc-btn" id="btnRefreshBrainMap">
+                      <i class="fas fa-sync"></i> Refresh
+                  </button>
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionBrainMapBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading fleet brain map...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Ecosystem Map -->
+      <div class="nc-section ecosystem" id="sectionEcosystem">
+          <div class="nc-section-header" data-section="sectionEcosystem">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-diagram-project nc-section-icon"></i>
+                  <div>
+                      <h2>Ecosystem Map</h2>
+                      <span class="nc-section-subtitle">Runtime topology, agents, models, memory, schedules, pipeline, and drift</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <button class="nc-btn" id="btnRefreshEcosystem">
+                      <i class="fas fa-sync"></i> Refresh
+                  </button>
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionEcosystemBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading ecosystem map...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Cluster -->
+      <div class="nc-section cluster" id="sectionCluster">
+          <div class="nc-section-header" data-section="sectionCluster">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-server nc-section-icon"></i>
+                  <div>
+                      <h2>Cluster</h2>
+                      <span class="nc-section-subtitle">Host status, vRAM usage, and loaded models</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <button class="nc-btn" id="btnRefreshCluster">
+                      <i class="fas fa-sync"></i> Refresh All
+                  </button>
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionClusterBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading cluster data...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Inference -->
+      <div class="nc-section inference nc-detail-only" id="sectionInference">
+          <div class="nc-section-header" data-section="sectionInference">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-network-wired nc-section-icon"></i>
+                  <div>
+                      <h2>Inference Routing &amp; Activity</h2>
+                      <span class="nc-section-subtitle">GPU fleet, task routing, and recent inference logs</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionInferenceBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading inference data…
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Fleet & Lanes (capacity + inventory + effective routing truth) -->
+      <div class="nc-section capacity nc-detail-only" id="sectionCapacity">
+          <div class="nc-section-header" data-section="sectionCapacity">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-gauge-high nc-section-icon"></i>
+                  <div>
+                      <h2>Fleet &amp; Lanes</h2>
+                      <span class="nc-section-subtitle">Three-host truth: health, VRAM, installed and resident models, and effective task lanes</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <button class="nc-btn" id="btnRefreshCapacity">
+                      <i class="fas fa-sync"></i> Refresh
+                  </button>
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionCapacityBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading host capacity…
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Inference Health (admission gate, benchmark claims, drift) -->
+      <div class="nc-section inference-health nc-detail-only" id="sectionInferenceHealth">
+          <div class="nc-section-header" data-section="sectionInferenceHealth">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-heart-pulse nc-section-icon"></i>
+                  <div>
+                      <h2>Inference Health</h2>
+                      <span class="nc-section-subtitle">Gate queue, benchmark claims, watchdog, and num_ctx drift</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <span class="nc-muted" id="nc-ih-summary" style="margin-right:12px;font-size:12px;"></span>
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionInferenceHealthBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading inference health…
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Routing & Host Preferences -->
+      <div class="nc-section routing nc-detail-only" id="sectionRouting">
+          <div class="nc-section-header" data-section="sectionRouting">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-bolt nc-section-icon"></i>
+                  <div>
+                      <h2>Routing &amp; Host Preferences</h2>
+                      <span class="nc-section-subtitle">Persisted actual-route state and host preferences</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionRoutingBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading routing data...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Nestor Fastlane -->
+      <div class="nc-section fastlane nc-detail-only" id="sectionFastlane">
+          <div class="nc-section-header" data-section="sectionFastlane">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-route nc-section-icon"></i>
+                  <div>
+                      <h2>Nestor Fastlane</h2>
+                      <span class="nc-section-subtitle">Answer/Do routing, RAG reflex, MCP skills, memory, TODO membrane, and cloud budget gates</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <button class="nc-btn" id="btnRefreshFastlane">
+                      <i class="fas fa-sync"></i> Refresh
+                  </button>
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionFastlaneBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading Nestor Fastlane config...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Health & Alerts -->
+      <div class="nc-section health" id="sectionHealth">
+          <div class="nc-section-header" data-section="sectionHealth">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-shield-halved nc-section-icon"></i>
+                  <div>
+                      <h2>Health &amp; Alerts</h2>
+                      <span class="nc-section-subtitle">Alert feed, system events, and monitoring rules</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionHealthBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading health data...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Alerts -->
+      <div class="nc-section alerts nc-detail-only" id="sectionAlerts">
+          <div class="nc-section-header" data-section="sectionAlerts">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-bell nc-section-icon"></i>
+                  <div>
+                      <h2>Alerts &amp; Rules</h2>
+                      <span class="nc-section-subtitle">Active alerts, severity summary, and configured rules</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="nc-alerts-body">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading alerts...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: RAG Knowledge Base -->
+      <div class="nc-section rag nc-detail-only" id="sectionRag">
+          <div class="nc-section-header" data-section="sectionRag">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-brain nc-section-icon"></i>
+                  <div>
+                      <h2>RAG Knowledge Base</h2>
+                      <span class="nc-section-subtitle">Document store, vector health, embedding cache, and recent ingestion</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="nc-rag-body">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading RAG status...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Performance -->
+      <div class="nc-section performance nc-detail-only" id="sectionPerformance">
+          <div class="nc-section-header" data-section="sectionPerformance">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-bolt nc-section-icon"></i>
+                  <div>
+                      <h2>Performance</h2>
+                      <span class="nc-section-subtitle">Inference latency, throughput, and cost metrics</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionPerformanceBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading performance data...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Host Tasks -->
+      <div class="nc-section tasks nc-detail-only" id="sectionTasks">
+          <div class="nc-section-header" data-section="sectionTasks">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-list-check nc-section-icon"></i>
+                  <div>
+                      <h2>Host Tasks</h2>
+                      <span class="nc-section-subtitle">Quick actions, active task status, and recent task history per host</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionTasksBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading tasks...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: Hermes Ops -->
+      <div class="nc-section hermes nc-detail-only" id="sectionHermes">
+          <div class="nc-section-header" data-section="sectionHermes">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-heart-pulse nc-section-icon"></i>
+                  <div>
+                      <h2>Hermes Ops</h2>
+                      <span class="nc-section-subtitle">Dashboard reachability, gateway state, and Hermes handoff</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionHermesBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading Hermes status...
+              </div>
+          </div>
+      </div>
+
+      <!-- Section: OpenClaw Ops -->
+      <div class="nc-section openclaw nc-detail-only" id="sectionOpenclaw">
+          <div class="nc-section-header" data-section="sectionOpenclaw">
+              <div class="nc-section-title-group">
+                  <i class="fas fa-satellite nc-section-icon"></i>
+                  <div>
+                      <h2>OpenClaw Ops</h2>
+                      <span class="nc-section-subtitle">Gateway health, runtime evidence, and official Control UI handoff</span>
+                  </div>
+              </div>
+              <div class="nc-section-actions">
+                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+              </div>
+          </div>
+          <div class="nc-section-body" id="sectionOpenclawBody">
+              <div class="nc-section-placeholder">
+                  <i class="fas fa-spinner fa-spin"></i> Loading OpenClaw status...
+              </div>
+          </div>
+      </div>
+
+  </div>

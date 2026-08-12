@@ -1,0 +1,63 @@
+<div class="container">
+  <h1 class="page-title">Maintenance</h1>
+
+  <%- include('../partials/workflow-map') %>
+
+  <div class="panel-grid">
+
+    <!-- Panel 1: Drift & Cleanup -->
+    <div class="card">
+      <div class="card-title">Drift &amp; Cleanup</div>
+
+      <!-- Source input -->
+      <div class="filter-bar">
+        <label for="drift-source">Source</label>
+        <input id="drift-source" class="input-field" type="text" placeholder="e.g., nas-docs">
+        <button id="btn-check-manifest" class="btn btn-primary">Check</button>
+      </div>
+
+      <!-- Manifest summary -->
+      <div id="manifest-summary" style="display:none;"></div>
+
+      <!-- Check drift button -->
+      <div id="drift-actions" style="display:none;">
+        <button id="btn-check-drift" class="btn btn-secondary" style="margin-bottom:12px;">Check Drift</button>
+      </div>
+
+      <!-- Drift results -->
+      <div id="drift-results"></div>
+
+      <!-- Cleanup button -->
+      <div id="cleanup-actions" style="display:none;">
+        <button id="btn-cleanup" class="btn btn-danger">Clean Up Stale</button>
+      </div>
+
+      <!-- Cleanup result -->
+      <div id="cleanup-result"></div>
+    </div>
+
+    <!-- Panel 2: Embedding Migration Status -->
+    <div class="card">
+      <div class="card-title">Embedding Migration Status</div>
+
+      <div id="migration-status">
+        <p class="loading">Loading migration status...</p>
+      </div>
+
+      <!-- Reindex button -->
+      <div id="reindex-actions" style="display:none; margin-top:16px;">
+        <button id="btn-reindex" class="btn btn-danger" disabled>Reindex All</button>
+      </div>
+
+      <!-- Reindex result -->
+      <div id="reindex-result"></div>
+
+      <div class="banner-info" style="margin-top:16px;">
+        Changing the embedding model requires reindexing all documents. This can take significant time for large collections.
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">AgentX RAG Maintenance</div>
+</div>

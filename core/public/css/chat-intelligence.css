@@ -1,0 +1,439 @@
+/* ==========================================
+   Chat Intelligence — Status Bar & Side Panel
+   ========================================== */
+
+/* ---------- Status Bar (below composer) ---------- */
+
+.ci-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 5px 14px;
+  background: #0d1b2a;
+  border-top: 1px solid rgba(124, 240, 255, 0.08);
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 0.86rem;
+  color: #585f73;
+  overflow-x: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ci-status-bar::-webkit-scrollbar {
+  height: 0;
+}
+
+.ci-status-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ci-status-label {
+  color: #585f73;
+}
+
+.ci-status-value {
+  color: var(--muted);
+}
+
+.ci-status-value.ci-accent {
+  color: var(--accent);
+}
+
+/* Health dot */
+.ci-health-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #585f73;
+  flex-shrink: 0;
+}
+
+.ci-health-dot.online {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(var(--success-rgb), 0.5);
+}
+
+.ci-health-dot.degraded {
+  background: var(--warning);
+  box-shadow: 0 0 6px rgba(var(--warning-rgb), 0.5);
+}
+
+.ci-health-dot.offline {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+/* Separator between status fields */
+.ci-status-sep {
+  color: rgba(124, 240, 255, 0.12);
+  user-select: none;
+}
+
+/* ---------- Side Panel Toggle Button (now in header bar, not floating) ---------- */
+
+.ci-toggle-btn {
+  display: none; /* legacy floating btn — hidden, using #ciToggleBtn in header */
+  position: fixed;
+  top: 60px;
+  right: 14px;
+  z-index: 8500;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(124, 240, 255, 0.15);
+  background: #0d1b2a;
+  color: var(--accent);
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.ci-toggle-btn:hover {
+  background: rgba(124, 240, 255, 0.08);
+  border-color: rgba(124, 240, 255, 0.3);
+  box-shadow: 0 0 10px rgba(124, 240, 255, 0.15);
+}
+
+.ci-toggle-btn.active {
+  background: rgba(124, 240, 255, 0.12);
+  border-color: var(--accent);
+}
+
+/* ---------- Side Panel Backdrop ---------- */
+
+.ci-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 8499;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.ci-backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ---------- Side Panel ---------- */
+
+.ci-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 260px;
+  height: 100vh;
+  background: #0d1b2a;
+  border-left: 1px solid var(--accent-bg);
+  z-index: 8500;
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.5);
+}
+
+.ci-panel.open {
+  transform: translateX(0);
+}
+
+/* Panel header */
+.ci-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(124, 240, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.ci-panel-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ci-panel-title i {
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.ci-panel-close {
+  background: none;
+  border: none;
+  color: #585f73;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.ci-panel-close:hover {
+  color: var(--text);
+  background: rgba(124, 240, 255, 0.08);
+}
+
+/* Panel body (scrollable) */
+.ci-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+
+.ci-panel-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.ci-panel-body::-webkit-scrollbar-thumb {
+  background: rgba(124, 240, 255, 0.15);
+  border-radius: 2px;
+}
+
+/* ---------- Panel Sections ---------- */
+
+.ci-section {
+  margin-bottom: 18px;
+}
+
+.ci-section-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #585f73;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+/* Cluster hosts row */
+.ci-cluster-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ci-host-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(124, 240, 255, 0.06);
+  border-radius: 6px;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.ci-host-item .ci-health-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* Routing mode */
+.ci-routing-mode {
+  padding: 6px 10px;
+  background: rgba(124, 240, 255, 0.04);
+  border: 1px solid rgba(124, 240, 255, 0.08);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.ci-routing-mode strong {
+  color: var(--accent);
+}
+
+/* Host Preferences */
+.ci-host-pref-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.ci-host-pref-item:last-child {
+  border-bottom: none;
+}
+
+.ci-pref-model {
+  color: var(--accent);
+  font-family: 'Fira Code', monospace;
+  font-size: 0.84rem;
+}
+
+.ci-pref-state {
+  font-size: 0.82rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(var(--success-rgb), 0.1);
+  color: var(--success);
+}
+
+.ci-pref-state.bumped {
+  background: rgba(var(--warning-rgb), 0.1);
+  color: var(--warning);
+}
+
+.ci-pref-state.evicted {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+/* Alert count */
+.ci-alert-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(124, 240, 255, 0.06);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.ci-alert-count .ci-badge {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  font-size: 0.84rem;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.ci-alert-count .ci-badge.zero {
+  background: rgba(var(--success-rgb), 0.1);
+  color: var(--success);
+}
+
+/* Recent routing log */
+.ci-routing-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ci-routing-log li {
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  font-size: 0.84rem;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ci-routing-log li:last-child {
+  border-bottom: none;
+}
+
+.ci-routing-log .ci-log-model {
+  color: var(--accent);
+  font-family: 'Fira Code', monospace;
+  font-size: 0.82rem;
+}
+
+.ci-routing-log .ci-log-meta {
+  font-size: 0.78rem;
+  color: #585f73;
+}
+
+/* Empty state */
+.ci-empty {
+  font-size: 0.86rem;
+  color: #585f73;
+  font-style: italic;
+}
+
+/* ---------- Quick Action Button ---------- */
+
+.ci-action-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  margin-top: 6px;
+  background: rgba(124, 240, 255, 0.06);
+  border: 1px solid rgba(124, 240, 255, 0.15);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  text-decoration: none;
+}
+
+.ci-action-btn:hover {
+  background: rgba(124, 240, 255, 0.12);
+  border-color: rgba(124, 240, 255, 0.3);
+}
+
+/* ---------- Per-Message Routing Badge (used by Task 4) ---------- */
+
+.ci-routing-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  background: rgba(124, 240, 255, 0.04);
+  border: 1px solid rgba(124, 240, 255, 0.08);
+  border-radius: 4px;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.8rem;
+  color: #585f73;
+  margin-top: 4px;
+}
+
+.ci-routing-badge .ci-health-dot {
+  width: 5px;
+  height: 5px;
+}
+
+.ci-routing-badge .ci-badge-model {
+  color: var(--accent);
+}
+
+.ci-routing-badge .ci-badge-host {
+  color: var(--muted);
+}
+
+.ci-routing-badge .ci-badge-time {
+  color: #585f73;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 768px) {
+  .ci-panel {
+    width: 100%;
+  }
+
+  .ci-toggle-btn {
+    top: 56px;
+    right: 8px;
+    width: 32px;
+    height: 32px;
+    font-size: 0.9rem;
+  }
+
+  .ci-status-bar {
+    font-size: 0.8rem;
+    gap: 10px;
+    padding: 4px 10px;
+  }
+}

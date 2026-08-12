@@ -1,0 +1,40 @@
+/* ═══════════════════════════════════════════════════════════════
+   Benchmark UI Redesign — Design Tokens
+   Shared CSS custom properties for leaderboard-v2, benchmark-v2,
+   and courthouse-v2 pages.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Palette ── */
+  --r-bg-body:    #080b12;
+  --r-bg-card:    #0f1420;
+  --r-bg-inner:   #0a0f18;
+  --r-border:     rgba(148, 163, 184, 0.14);
+  --r-text:       #edf3fb;
+  --r-text-muted: #a3adbd;
+  --r-text-dim:   #6f7d91;
+
+  /* ── State colors ── */
+  --r-good:        #66bb6a;
+  --r-good-alt:    #22c55e;
+  --r-active:      #4fc3f7;
+  --r-active-alt:  #22d3ee;
+  --r-judge:       #a78bfa;
+  --r-judge-alt:   #7c3aed;
+  --r-anomaly:     #ffa726;
+  --r-anomaly-alt: #f59e0b;
+  --r-error:       #ef5350;
+  --r-error-alt:   #ef4444;
+
+  /* ── Difficulty level scale ── */
+  --r-l1-bg:   #166534; --r-l1-text: #22c55e;
+  --r-l2-bg:   #3f6212; --r-l2-text: #84cc16;
+  --r-l3-bg:   #854d0e; --r-l3-text: #eab308;
+  --r-l4-bg:   #9a3412; --r-l4-text: #f97316;
+  --r-l5-bg:   #7f1d1d; --r-l5-text: #ef4444;
+
+  /* ── Component tokens ── */
+  --r-radius:     8px;
+  --r-font:       Inter, 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+  --r-transition: 0.15s ease;
+}

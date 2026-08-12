@@ -1,0 +1,350 @@
+'use strict';
+
+const {
+  estimateInputTokens,
+  getThinkingCapabilityStatus,
+  hasQualifiedThinkingCapability,
+  resolveCapabilityContract,
+  resolveCapabilities,
+  resolveContextBudget,
+  resolveInferenceContract,
+  resolveInferenceContractSnapshot
+} = require('../../src/services/inferenceContractService');
+
+const HOSTS = [
+  {
+    id: 'primary',
+    name: 'Host Alpha',
+    url: 'http://192.0.2.199:11434'
+  },
+  {
+    id: 'secondary',
+    name: 'Host Beta',
+    url: 'http://192.0.2.12:11434'
+  }
+];
+
+function profileCollection(profile) {
+  return {
+    findOne: jest.fn(async () => profile)
+  };
+}
+
+describe('inferenceContractService', () => {
+  it('resolves thinking from the deployed host/artifact profile rather than its name', async () => {
+    const capabilities = await resolveCapabilities(
+      'ax/plain-custom-model:latest',
+      'http://192.0.2.199:11434',
+      {
+        configuredHosts: HOSTS,
+        hostProfilesCollection: profileCollection({
+          hostId: 'host-alpha',
+          hostUrl: 'http://192.0.2.199:11434',
+          displayName: 'Host Alpha'
+        }),
+        modelProfilesCollection: profileCollection({
+          name: 'plain-custom-model',
+          capabilities: { tools: true },
+          readiness: {
+            host-alpha: { stage: 'adapted', stale: false }
+          },
+          thinkingProfiles: {
+            host-alpha: {
+              supported: true,
+              channel: 'hidden',
+              recommendedPolicy: 'metered',
+              visibleFinalAnswerOk: true,
+              finalAnswerContractOk: true,
+              thinkingOnlyResponse: false,
+              profiledAt: new Date('2026-07-20T00:00:00Z')
+            },
+            secondary: {
+              supported: false,
+              channel: 'none',
+              recommendedPolicy: 'off'
+            }
+          }
+        })
+      }
+    );
+
+    expect(capabilities.artifact).toMatchObject({
+      model: 'ax/plain-custom-model:latest',
+      matchedProfile: 'plain-custom-model',
+      hostId: 'host-alpha'
+    });
+    expect(capabilities.qualification).toMatchObject({
+      state: 'adapted',
+      qualified: true
+    });
+    expect(capabilities.thinking).toMatchObject({
+      supported: true,
+      modes: ['off', 'on'],
+      channel: 'hidden',
+      recommendedPolicy: 'metered',
+      source: 'benchmark_model_profile',
+      visibleFinalAnswer: {
+        required: true,
+        qualified: true,
+        thinkingOnlyObserved: false
+      }
+    });
+    expect(capabilities.tools).toMatchObject({
+      supported: true,
+      qualified: true
+    });
+    expect(hasQualifiedThinkingCapability({
+      qualification: capabilities.qualification,
+      capabilities: { thinking: capabilities.thinking }
+    })).toBe(true);
+  });
+
+  it('does not infer thinking capability from a Qwen-like artifact name', async () => {
+    const capabilities = await resolveCapabilities(
+      'qwen-super-reasoning:99b',
+      'http://192.0.2.199:11434',
+      {
+        configuredHosts: HOSTS,
+        modelProfilesCollection: profileCollection(null)
+      }
+    );
+
+    expect(capabilities.thinking).toMatchObject({
+      supported: null,
+      modes: ['off'],
+      source: 'unqualified'
+    });
+    expect(capabilities.qualification.qualified).toBe(false);
+    expect(hasQualifiedThinkingCapability({
+      qualification: capabilities.qualification,
+      capabilities: { thinking: capabilities.thinking }
+    })).toBe(false);
+  });
+
+  it('calculates a reusable context budget and reports overflow without mutating input', async () => {
+    const messages = [
+      { role: 'system', content: 's'.repeat(400) },
+      { role: 'user', content: 'u'.repeat(4000) }
+    ];
+    const budget = await resolveContextBudget(
+      {
+        model: 'model-a',
+        host: HOSTS[0].url,
+        messages,
+        requestedMaxOutputTokens: 512
+      },
+      {
+        resolveContextDetails: jest.fn(async () => ({
+          num_ctx: 1024,
+          source: 'model_context_profile',
+          authoritative: true
+        }))
+      }
+    );
+
+    expect(budget).toMatchObject({
+      windowTokens: 1024,
+      source: 'model_context_profile',
+      validatedWindowTokens: 1024,
+      output: { reservedTokens: 512, source: 'caller' },
+      enforcement: 'report_only',
+      transformations: {
+        condensation: { applied: false, removedTokens: 0 },
+        truncation: { applied: false, removedTokens: 0 },
+        upstreamTruncationRisk: true
+      }
+    });
+    expect(budget.input.estimatedTokens).toBeGreaterThan(budget.input.availableTokens);
+    expect(budget.input.overflowTokens).toBeGreaterThan(0);
+    expect(budget.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/upstream truncation/i)
+    ]));
+    expect(messages).toHaveLength(2);
+    expect(messages[1].content).toHaveLength(4000);
+  });
+
+  it('keeps an explicit caller context while flagging a validated-limit overrun', async () => {
+    const budget = await resolveContextBudget(
+      {
+        model: 'model-a',
+        host: HOSTS[0].url,
+        prompt: 'hello',
+        requestedNumCtx: 32768,
+        numCtxSource: 'caller'
+      },
+      {
+        resolveContextDetails: jest.fn(async () => ({
+          num_ctx: 16384,
+          source: 'context_test'
+        }))
+      }
+    );
+
+    expect(budget.windowTokens).toBe(32768);
+    expect(budget.source).toBe('caller');
+    expect(budget.validatedWindowTokens).toBe(16384);
+    expect(budget.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/exceeds the latest validated/i)
+    ]));
+  });
+
+  it('returns one versioned contract containing capability and budget evidence', async () => {
+    const contract = await resolveInferenceContract(
+      {
+        model: 'plain-custom-model',
+        host: HOSTS[0].url,
+        prompt: 'hello'
+      },
+      {
+        configuredHosts: HOSTS,
+        modelProfilesCollection: profileCollection({
+          name: 'plain-custom-model',
+          capabilities: { tools: false },
+          readiness: { primary: { stage: 'profiled' } },
+          thinkingProfiles: {
+            primary: {
+              supported: false,
+              channel: 'none',
+              recommendedPolicy: 'off'
+            }
+          }
+        }),
+        resolveContextDetails: jest.fn(async () => ({
+          num_ctx: 49152,
+          source: 'model_context_profile'
+        }))
+      }
+    );
+
+    expect(contract.version).toBe('agentx.inference-contract.v1');
+    expect(contract.artifact.hostId).toBe('primary');
+    expect(contract.capabilities.thinking.supported).toBe(false);
+    expect(contract.contextBudget.windowTokens).toBe(49152);
+    expect(contract.contextBudget.input.fits).toBe(true);
+  });
+
+  it('returns a capability-only contract for catalog and runtime consumers', async () => {
+    const fetchImpl = jest.fn();
+    const contract = await resolveCapabilityContract(
+      {
+        model: 'plain-custom-model',
+        host: HOSTS[0].url
+      },
+      {
+        configuredHosts: HOSTS,
+        modelProfilesCollection: profileCollection(null),
+        registryEntry: {
+          modelName: 'plain-custom-model',
+          capabilities: { supportsThinking: true }
+        },
+        fetchImpl
+      }
+    );
+
+    expect(contract).toMatchObject({
+      version: 'agentx.inference-contract.v1',
+      artifact: { model: 'plain-custom-model', hostId: 'primary' },
+      qualification: { qualified: false },
+      capabilities: {
+        thinking: {
+          supported: true,
+          source: 'model_registry_fallback'
+        }
+      }
+    });
+    expect(contract.contextBudget).toBeUndefined();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getThinkingCapabilityStatus(contract)).toEqual({
+      supported: true,
+      qualified: false,
+      source: 'model_registry_fallback',
+      qualificationState: 'unknown',
+      visibleFinalQualified: false
+    });
+  });
+
+  it('creates a deterministic campaign-freeze snapshot without request text', async () => {
+    const deps = {
+      now: new Date('2026-07-25T04:00:00Z'),
+      configuredHosts: HOSTS,
+      modelProfilesCollection: profileCollection(null),
+      resolveContextDetails: jest.fn(async () => ({
+        num_ctx: 16384,
+        source: 'model_context_profile'
+      }))
+    };
+    const snapshot = await resolveInferenceContractSnapshot({
+      model: 'model-a',
+      host: HOSTS[0].url,
+      prompt: 'this attempt-specific prompt must not enter the frozen snapshot',
+      requestedMaxOutputTokens: 4096
+    }, deps);
+    const repeated = await resolveInferenceContractSnapshot({
+      model: 'model-a',
+      host: HOSTS[0].url,
+      prompt: 'different attempt',
+      requestedMaxOutputTokens: 4096
+    }, {
+      ...deps,
+      now: new Date('2026-07-25T05:00:00Z')
+    });
+
+    expect(snapshot.snapshot).toMatchObject({
+      schemaVersion: 1,
+      resolvedAt: '2026-07-25T04:00:00.000Z',
+      scope: 'deployed_artifact_host',
+      freezeRecommended: true,
+      reusePolicy: 'resolve_once_per_campaign'
+    });
+    expect(snapshot.snapshot.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(snapshot.snapshot.fingerprint).toBe(repeated.snapshot.fingerprint);
+    expect(snapshot.contextBudget.windowTokens).toBe(16384);
+    expect(snapshot.contextBudget.output.reservedTokens).toBe(4096);
+    expect(snapshot.contextBudget.input.estimatedTokens).toBe(0);
+  });
+
+  it('binds a campaign snapshot fingerprint to the deployed Ollama artifact digest', async () => {
+    const baseDeps = {
+      now: new Date('2026-07-25T04:00:00Z'),
+      configuredHosts: HOSTS,
+      modelProfilesCollection: profileCollection(null),
+      resolveContextDetails: jest.fn(async () => ({
+        num_ctx: 32768,
+        source: 'model_context_profile'
+      }))
+    };
+    const first = await resolveInferenceContractSnapshot({
+      model: 'ax/model-a:latest',
+      host: HOSTS[0].url
+    }, {
+      ...baseDeps,
+      resolveArtifactDigest: jest.fn(async () => 'sha256:first')
+    });
+    const repulled = await resolveInferenceContractSnapshot({
+      model: 'ax/model-a:latest',
+      host: HOSTS[0].url
+    }, {
+      ...baseDeps,
+      resolveArtifactDigest: jest.fn(async () => 'sha256:second')
+    });
+
+    expect(first.artifact).toMatchObject({
+      model: 'ax/model-a:latest',
+      digest: 'sha256:first',
+      identityQualified: true,
+      identitySource: 'ollama_tags'
+    });
+    expect(first.snapshot.fingerprint).not.toBe(repulled.snapshot.fingerprint);
+  });
+
+  it('labels token estimates as approximate', () => {
+    expect(estimateInputTokens({
+      messages: [{ role: 'user', content: '12345678' }]
+    })).toEqual({
+      tokens: 8,
+      characters: 8,
+      method: 'token_counter_plus_message_overhead',
+      exact: false
+    });
+  });
+});

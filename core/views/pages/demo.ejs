@@ -1,0 +1,41 @@
+<main class="agentx-demo">
+  <section class="agentx-demo__hero">
+    <p class="agentx-demo__eyebrow">Agent X · local-first AI workbench</p>
+    <h1>Route, ground, and evaluate local AI with evidence.</h1>
+    <p class="agentx-demo__lede">
+      This demo profile combines Ollama inference, a RAG knowledge workspace,
+      and reproducible model evaluation without loading personal operations or external runtimes.
+    </p>
+    <div class="agentx-demo__actions">
+      <a class="agentx-demo__primary" href="/playground">Open the playground</a>
+      <a href="<%= publicUrls.rag %>/upload">Ingest a document</a>
+      <a href="<%= publicUrls.benchmark %>/">Compare models</a>
+    </div>
+  </section>
+
+  <section class="agentx-demo__grid" aria-label="Agent X demo capabilities">
+    <article>
+      <span>01</span>
+      <h2>Inference</h2>
+      <p>Use one or more Ollama hosts through a measured routing and telemetry boundary.</p>
+      <a href="/models">Inspect models →</a>
+    </article>
+    <article>
+      <span>02</span>
+      <h2>Knowledge</h2>
+      <p>Ingest a bounded document, retrieve relevant passages, and inspect the grounded result.</p>
+      <a href="<%= publicUrls.rag %>/search">Search the knowledge base →</a>
+    </article>
+    <article>
+      <span>03</span>
+      <h2>Evaluation</h2>
+      <p>Benchmark models on the same tasks and compare quality, speed, and efficiency.</p>
+      <a href="<%= publicUrls.benchmark %>/leaderboard">Open the leaderboard →</a>
+    </article>
+  </section>
+
+  <aside class="agentx-demo__boundary">
+    <strong>Demo boundary</strong>
+    <p>OpenClaw, Hermès Agent, OctoPrint, personal data, household voice surfaces, and AIOps governance are optional integrations and are disabled here.</p>
+  </aside>
+</main>

@@ -1,0 +1,36 @@
+config:
+  target: "http://localhost:3080"
+  phases:
+    - duration: 30
+      arrivalRate: 2
+      name: "Warm-up phase"
+    - duration: 60
+      arrivalRate: 5
+      name: "Load phase"
+  processor: "./test-helpers.js"
+  defaults:
+    headers:
+      Content-Type: "application/json"
+
+scenarios:
+  - name: "RAG Semantic Search"
+    weight: 10
+    flow:
+      - function: "addTimestamp"
+      - post:
+          url: "/api/rag/search"
+          json:
+            query: "performance optimization strategies"
+            topK: 5
+          capture:
+            - json: "$.results"
+              as: "search_results"
+      - function: "recordSearchLatency"
+      - think: 2
+      - post:
+          url: "/api/rag/search"
+          json:
+            query: "database indexing best practices"
+            topK: 3
+            filters:
+              source: "documentation"

@@ -1,0 +1,95 @@
+/**
+ * AgentX shared design tokens
+ * Built by esbuild -> public/dist/shared-tokens.css
+ * All services import this for consistent theming.
+ */
+
+:root {
+  /* --- Colors --- */
+  --bg-body: #0a0a14;
+  --bg-card: #0d0d1a;
+  --bg-card-inner: #111;
+  --bg-surface: #1a1a2e;
+  --bg-input: #16162a;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --accent: #7cf0ff;
+  --accent-hover: #a5f3ff;
+  --accent-bg: rgba(124, 240, 255, 0.1);
+  --accent-border: rgba(124, 240, 255, 0.25);
+
+  --success: #66bb6a;
+  --warning: #ffa726;
+  --error: #ef5350;
+  --info: #4fc3f7;
+
+  --border: rgba(255, 255, 255, 0.06);
+  --border-light: rgba(255, 255, 255, 0.1);
+
+  /* --- Typography --- */
+  --font-body: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
+
+  /* --- Spacing --- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  /* --- Shadows --- */
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.3);
+  --shadow-dropdown: 0 10px 40px rgba(0, 0, 0, 0.5);
+
+  /* --- Toast colors --- */
+  --toast-bg-success: #1a3a2a;
+  --toast-bg-error: #3a1a1a;
+  --toast-bg-warning: #3a2a1a;
+  --toast-bg-info: #1a2a3a;
+  --toast-text-success: #66bb6a;
+  --toast-text-error: #ef5350;
+  --toast-text-warning: #ffa726;
+  --toast-text-info: #4fc3f7;
+
+  /* --- Transitions --- */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.2s ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg-body);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.data-table th,
+.data-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.data-table th {
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

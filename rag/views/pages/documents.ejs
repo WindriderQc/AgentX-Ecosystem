@@ -1,0 +1,85 @@
+<div class="container">
+  <h1 class="page-title">Documents</h1>
+
+  <%- include('../partials/workflow-map') %>
+
+  <%- include('../partials/empty-index-banner') %>
+
+  <!-- Summary counts -->
+  <div class="doc-summary">
+    <span><strong id="doc-count">--</strong> documents</span>
+    <span class="sep">&middot;</span>
+    <span><strong id="chunk-count">--</strong> total chunks</span>
+  </div>
+  <div id="documents-status" class="flow-status is-loading" role="status" aria-live="polite">
+    <strong>Loading corpus</strong>
+    <span class="flow-status-detail">Fetching document metadata and chunk counts from the active vector store.</span>
+  </div>
+
+  <!-- Filter bar -->
+  <div class="filter-bar">
+    <label for="filter-source">Source</label>
+    <select id="filter-source" class="input-field">
+      <option value="">All sources</option>
+    </select>
+    <label for="filter-tags">Tags</label>
+    <input id="filter-tags" class="input-field" type="text" placeholder="tag1, tag2">
+    <button id="btn-apply" class="btn btn-primary">Apply</button>
+    <button id="btn-clear" class="btn btn-secondary">Clear</button>
+  </div>
+
+  <!-- Document table -->
+  <div id="doc-table-wrap">
+    <table class="data-table" id="doc-table">
+      <thead>
+        <tr>
+          <th>Document ID</th>
+          <th>Source</th>
+          <th>Chunks</th>
+          <th>Tags</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="doc-tbody"></tbody>
+    </table>
+    <div id="empty-state" class="empty-state" style="display:none;">No documents found.</div>
+    <div id="loading-state" class="loading">Loading documents...</div>
+    <div id="error-state" class="error-state" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+  /*
+   * Drill-down support for the Search Playground "View source document" link.
+   * Reads ?source= (and optional &docId=) from the URL and applies the source
+   * filter via the existing documents.js Apply handler. No-op without params,
+   * so the default (unfiltered) view is unchanged.
+   */
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var source = params.get('source');
+    if (!source) return;
+
+    function applyDrilldown() {
+      var sel = document.getElementById('filter-source');
+      var btn = document.getElementById('btn-apply');
+      if (!sel || !btn) return;
+      // Ensure the value is selectable even before the corpus populates options.
+      if (!Array.prototype.some.call(sel.options, function (o) { return o.value === source; })) {
+        var opt = document.createElement('option');
+        opt.value = source;
+        opt.textContent = source;
+        sel.appendChild(opt);
+      }
+      sel.value = source;
+      btn.click(); // documents.js wires this to loadDocuments(getFilters())
+    }
+
+    // Run after documents.js has wired its handlers and done its initial load.
+    if (document.readyState === 'complete') {
+      applyDrilldown();
+    } else {
+      window.addEventListener('load', applyDrilldown);
+    }
+  })();
+</script>

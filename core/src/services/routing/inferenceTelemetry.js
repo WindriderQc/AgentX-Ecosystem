@@ -1,0 +1,116 @@
+'use strict';
+
+/**
+ * Inference telemetry — the write side of routing observability.
+ *
+ * Extracted from `modelRouter` in task 0519. Recording what happened is not
+ * routing, and keeping it here holds modelRouter inside the service file-size
+ * budget while giving the RouteDecision v1 contract a natural home next to it.
+ *
+ * `modelRouter` re-exports `recordInference` for symbol stability, matching the
+ * `benchmarkClaimService` precedent documented in core/CLAUDE.md. Existing
+ * callers keep working; new code SHOULD import from here directly.
+ */
+
+const logger = require('../../../config/logger');
+const { assertNoPayload } = require('./routeDecision');
+
+/**
+ * Last line of defence before a decision is persisted for 30 days.
+ *
+ * `buildRouteDecision` already guarantees no payload, but callers may hand
+ * `recordInference` a hand-assembled object. Dropping the field is strictly
+ * better than storing a transcript: losing one row of routing telemetry is
+ * recoverable, quietly archiving prompt text is not.
+ */
+function sanitizedRouteDecision(decision) {
+    if (!decision) return null;
+    try {
+        assertNoPayload(decision);
+        return decision;
+    } catch (err) {
+        logger.warn('RouteDecision dropped before persistence', { error: err.message, code: err.code });
+        return null;
+    }
+}
+
+/**
+ * Record an inference call to InferenceLog. Fire-and-forget — never throws.
+ *
+ * Call this AFTER your Ollama fetch completes (success or error).
+ *
+ * @param {Object} data
+ * @param {string}  data.host           - Full Ollama host URL used
+ * @param {string}  data.model          - Model name (e.g. 'qwen2.5:7b')
+ * @param {'chat'|'benchmark'|'roundtable'|'automation'|'embedding'|'classification'|'unknown'} [data.caller]
+ * @param {string}  [data.callerDetail] - Agent ID, task ID, cron name, etc.
+ * @param {string}  [data.consumerContract] - Server-attested internal consumer contract
+ * @param {string}  [data.runtime]       - agentx | openclaw | hermes | codex | claude-code | other
+ * @param {string}  [data.correlationId]
+ * @param {string}  [data.workItemId]
+ * @param {number}  [data.attempt]
+ * @param {string}  [data.taskType]     - Routing task type
+ * @param {boolean} [data.routed]       - Whether auto-routing was used
+ * @param {boolean} [data.fallbackUsed]
+ * @param {string}  [data.fallbackReason]
+ * @param {Object}  [data.routeDecision] - RouteDecision v1 (task 0519)
+ * @param {number}  [data.tokensIn]
+ * @param {number}  [data.tokensOut]
+ * @param {number}  [data.durationMs]
+ * @param {'success'|'error'|'timeout'} [data.status]
+ * @param {string}  [data.error]
+ */
+async function recordInference(data) {
+    if (process.env.NODE_ENV === 'test') return; // skip in tests
+    try {
+        const InferenceLog = require('../../../models/InferenceLog');
+        const { boundedIdentifier, inferRuntime, positiveAttempt } = require('../../helpers/llmTelemetryContext');
+        // Lazy so telemetry does not create a load-time cycle with modelRouter.
+        const { resolveHostKey } = require('../modelRouter');
+        const host = data.host || data.routedHostUrl || 'unknown';
+        const routedHost = data.routedHost || resolveHostKey(data.routedHostUrl || data.host);
+        await InferenceLog.create({
+            host,
+            hostKey: resolveHostKey(host),
+            model: data.model || 'unknown',
+            caller: data.caller || 'unknown',
+            callerDetail: data.callerDetail || null,
+            consumerContract: data.consumerContract || null,
+            runtime: inferRuntime(data.runtime || data.callerDetail, 'agentx'),
+            correlationId: boundedIdentifier(data.correlationId),
+            workItemId: boundedIdentifier(data.workItemId),
+            attempt: positiveAttempt(data.attempt),
+            taskType: data.taskType || null,
+            routed: data.routed || false,
+            autoRouted: data.autoRouted || false,
+            classificationMs: data.classificationMs || 0,
+            routedModel: data.routedModel || data.model || null,
+            routedHost,
+            routedHostUrl: data.routedHostUrl || data.host || null,
+            fallbackUsed: data.fallbackUsed || false,
+            fallbackReason: data.fallbackReason || null,
+            swapped: data.swapped || false,
+            routingTrace: data.routingTrace || null,
+            routeDecision: sanitizedRouteDecision(data.routeDecision),
+            num_ctx: data.num_ctx != null ? data.num_ctx : null,
+            num_ctx_source: data.num_ctx_source || null,
+            tokensIn: data.tokensIn || 0,
+            tokensOut: data.tokensOut || 0,
+            durationMs: data.durationMs || 0,
+            status: data.status || 'success',
+            error: data.error || null,
+            timestamp: new Date()
+        });
+    } catch (_e) {
+        // Never break inference because of telemetry failure. Kept at warn
+        // (not debug) so silent schema drifts surface promptly — previously
+        // the 'proxy' caller value was rejected by the enum for weeks without
+        // any user-visible signal.
+        logger.warn('InferenceLog write failed (non-fatal)', { error: _e.message, name: _e.name });
+    }
+}
+
+module.exports = {
+    recordInference,
+    sanitizedRouteDecision,
+};

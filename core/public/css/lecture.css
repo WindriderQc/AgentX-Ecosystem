@@ -1,0 +1,187 @@
+/* KidX Lecteur - dedicated kid reading-aid kiosk view (/lecture). MVP. */
+
+body.lecture-kiosk-page {
+  margin: 0;
+  background: #fdf6ec;
+  color: #3a2f25;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  overscroll-behavior: none;
+}
+
+.lecture {
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px clamp(16px, 4vw, 48px) 32px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(16px, 3vh, 32px);
+  box-sizing: border-box;
+}
+
+.lecture-top { display: flex; align-items: center; justify-content: space-between; }
+.lecture-chip {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: #ffe2b8; color: #8a5a12; font-weight: 600;
+  padding: 10px 18px; border-radius: 999px; font-size: clamp(15px, 2.2vw, 20px);
+}
+.lecture-home {
+  width: 56px; height: 56px; border-radius: 18px; background: #fff;
+  border: 2px solid #f0ddc2; color: #a9794a; text-decoration: none;
+  display: flex; align-items: center; justify-content: center; font-size: 22px;
+}
+.lecture-home:active { transform: scale(0.96); }
+.lecture-home:focus-visible {
+  outline: 4px solid #3f8fcb;
+  outline-offset: 4px;
+}
+
+.lecture-stage {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: clamp(20px, 4vw, 48px);
+  align-items: center;
+}
+.lecture-mascot { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.lecture-face {
+  position: relative;
+  width: clamp(140px, 22vw, 200px); height: clamp(140px, 22vw, 200px);
+  border-radius: 50%; background: #bfe3ff; border: 4px solid #9ccdf2;
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+.lecture-face .eye { position: absolute; top: 38%; width: 14%; height: 14%; border-radius: 50%; background: #33506a; }
+.lecture-face .eye:nth-of-type(1) { left: 28%; }
+.lecture-face .eye:nth-of-type(2) { right: 28%; }
+.lecture-face .mouth {
+  position: absolute; left: 30%; right: 30%; top: 55%; height: 22%;
+  border: 6px solid #33506a; border-top: 0; border-radius: 0 0 80px 80px;
+}
+.lecture-pill {
+  background: #d9f3e2; color: #1f7a4d; font-weight: 600;
+  padding: 8px 18px; border-radius: 999px; font-size: clamp(14px, 2vw, 18px);
+}
+
+.lecture-bubble {
+  background: #fff; border: 3px solid #f0e2cd; border-radius: 28px;
+  padding: clamp(20px, 3vw, 36px);
+  min-height: clamp(180px, 32vh, 300px);
+  display: flex; flex-direction: column; justify-content: center;
+}
+.lecture-kicker { color: #806c51; font-size: clamp(13px, 1.6vw, 16px); margin-bottom: 10px; }
+.lecture-word {
+  align-self: flex-start; background: #ffe2b8; color: #8a5a12; font-weight: 700;
+  padding: 8px 20px; border-radius: 18px; font-size: clamp(28px, 5vw, 46px); line-height: 1.1;
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.lecture-reply { margin: 18px 0 0; font-size: clamp(20px, 3.2vw, 34px); line-height: 1.45; }
+.lecture-hint {
+  margin: 18px 0 0;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: #fff3d6;
+  color: #704b13;
+  font-size: clamp(15px, 2vw, 19px);
+  line-height: 1.35;
+}
+.lecture-hint[data-tone="error"] { background: #ffe2df; color: #842c26; }
+
+.lecture-controls { display: flex; align-items: center; justify-content: center; gap: clamp(24px, 5vw, 56px); }
+.lecture-mic, .lecture-replay, .lecture-retry {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  background: none; border: none; cursor: pointer; font-family: inherit; font-weight: 600;
+  min-width: 88px; min-height: 88px;
+}
+.lecture-mic:disabled, .lecture-replay:disabled, .lecture-retry:disabled, .lecture-text button:disabled, .lecture-text input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.lecture-mic:focus-visible > i, .lecture-replay:focus-visible > i, .lecture-retry:focus-visible > .lecture-retry-icon, .lecture-text input:focus-visible, .lecture-text button:focus-visible {
+  outline: 4px solid #3f8fcb;
+  outline-offset: 4px;
+}
+.lecture-mic { color: #1c6fb0; font-size: clamp(15px, 2vw, 20px); }
+.lecture-mic > i {
+  width: clamp(96px, 15vw, 140px); height: clamp(96px, 15vw, 140px); border-radius: 50%;
+  background: #cfeaff; border: 4px solid #9ccdf2; color: #1c6fb0;
+  display: flex; align-items: center; justify-content: center; font-size: clamp(40px, 7vw, 60px);
+}
+.lecture-mic:active > i { transform: scale(0.95); }
+.lecture-replay { color: #8a7a64; font-size: clamp(13px, 1.6vw, 16px); }
+.lecture-replay > i {
+  width: clamp(68px, 10vw, 96px); height: clamp(68px, 10vw, 96px); border-radius: 50%;
+  background: #fff; border: 3px solid #ecdcc2; color: #a9794a;
+  display: flex; align-items: center; justify-content: center; font-size: clamp(26px, 4vw, 36px);
+}
+.lecture-retry { color: #7b5a26; font-size: clamp(13px, 1.6vw, 16px); }
+.lecture-retry > .lecture-retry-icon {
+  width: clamp(68px, 10vw, 96px); height: clamp(68px, 10vw, 96px); border-radius: 50%;
+  background: #fff4d8; border: 3px solid #e8c97e; color: #8a5a12;
+  display: flex; align-items: center; justify-content: center; font-size: clamp(26px, 4vw, 36px);
+}
+
+.lecture-text { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.lecture-text-label { color: #6f5b42; font-size: 15px; font-weight: 600; }
+.lecture-text-row { display: flex; gap: 10px; justify-content: center; width: 100%; }
+.lecture-text input {
+  width: min(520px, 80vw); height: 54px; border-radius: 16px; border: 2px solid #ecdcc2;
+  padding: 0 18px; font-size: 18px; font-family: inherit; background: #fff; color: #3a2f25;
+}
+.lecture-text button {
+  width: 54px; height: 54px; border-radius: 16px; border: none;
+  background: #ffd089; color: #7a4e10; font-size: 20px; cursor: pointer;
+}
+
+/* State cues on the mascot */
+.lecture[data-state="listening"] .lecture-face { background: #ffd7d7; border-color: #f2a3a3; animation: lecturePulse 1s ease-in-out infinite; }
+.lecture[data-state="transcribing"] .lecture-face,
+.lecture[data-state="thinking"] .lecture-face { background: #ffe9b8; border-color: #f2cd86; }
+.lecture[data-state="speaking"] .lecture-face { background: #d9e7ff; border-color: #8fb0e8; animation: lecturePulse 1.4s ease-in-out infinite; }
+.lecture[data-state="complete"] .lecture-face { background: #d4f3df; border-color: #8fd9ab; }
+.lecture[data-state="retryable_error"] .lecture-face { background: #ffe0dc; border-color: #e89c94; }
+.lecture[data-state="mic_unavailable"] .lecture-face { background: #eee7dd; border-color: #cdbfaa; }
+@keyframes lecturePulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+[hidden] { display: none !important; }
+
+@media (max-width: 680px) {
+  .lecture-stage { grid-template-columns: 1fr; }
+  .lecture-mascot { flex-direction: row; justify-content: center; }
+  .lecture { padding-top: 16px; gap: 14px; }
+  .lecture-bubble { min-height: 150px; }
+  .lecture-controls { gap: 12px; }
+}
+
+@media (max-height: 850px) and (min-width: 681px) {
+  .lecture { padding-top: 12px; padding-bottom: 16px; gap: 12px; }
+  .lecture-home { width: 48px; height: 48px; border-radius: 15px; }
+  .lecture-stage { gap: 24px; }
+  .lecture-face { width: 150px; height: 150px; }
+  .lecture-mascot { gap: 10px; }
+  .lecture-bubble { min-height: 160px; padding: 18px 26px; }
+  .lecture-word { font-size: clamp(25px, 3.2vw, 36px); }
+  .lecture-reply { margin-top: 12px; font-size: clamp(20px, 2.25vw, 27px); line-height: 1.35; }
+  .lecture-hint { margin-top: 12px; padding: 9px 14px; }
+  .lecture-controls { gap: 28px; }
+  .lecture-mic, .lecture-replay, .lecture-retry { min-height: 70px; }
+  .lecture-mic > i { width: 88px; height: 88px; font-size: 38px; }
+  .lecture-replay > i, .lecture-retry > .lecture-retry-icon { width: 62px; height: 62px; font-size: 24px; }
+  .lecture-text { gap: 5px; }
+  .lecture-text input { height: 48px; }
+  .lecture-text button { width: 48px; height: 48px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,60 @@
+config:
+  target: "http://localhost:3080"
+  phases:
+    - duration: 60
+      arrivalRate: 50
+      name: "High load - 50 req/sec"
+    - duration: 30
+      arrivalRate: 100
+      name: "Peak load - 100 req/sec"
+  processor: "./test-helpers.js"
+
+scenarios:
+  - name: "Cache Performance Test"
+    weight: 40
+    flow:
+      - post:
+          url: "/api/rag/search"
+          json:
+            query: "{{ $randomString() }}"
+            topK: 5
+          beforeRequest: "addTimestamp"
+          afterResponse: "recordSearchLatency"
+
+  - name: "Database Query Test"
+    weight: 30
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "admin"
+            password: "admin123"
+      - get:
+          url: "/api/conversations"
+
+  - name: "Metrics Endpoint Test"
+    weight: 20
+    flow:
+      - get:
+          url: "/api/metrics/cache"
+      - think: 1
+      - get:
+          url: "/api/metrics/database"
+      - think: 1
+      - get:
+          url: "/api/metrics/system"
+
+  - name: "Mixed Operations"
+    weight: 10
+    flow:
+      - get:
+          url: "/api/prompts/active"
+      - think: 2
+      - post:
+          url: "/api/rag/search"
+          json:
+            query: "performance test"
+            topK: 3
+      - think: 1
+      - get:
+          url: "/health"

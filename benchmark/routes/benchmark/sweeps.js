@@ -1,0 +1,173 @@
+'use strict';
+
+const express = require('express');
+const router = express.Router();
+const { buildSweepPlan } = require('../../src/services/benchmark/sweepCoordinator');
+const { runSweep } = require('../../src/services/benchmark/sweepRunner');
+const { buildLaneRecommendation, formatLedgerEntry } = require('../../src/services/benchmark/recommendationEngine');
+const { analyzeStaleness, formatStalenessLedgerEntry } = require('../../src/services/benchmark/stalenessCrawler');
+const { gatherCandidates, formatIntakeTable } = require('../../src/services/benchmark/intakeScanner');
+const hfClient = require('../../src/clients/hfClient');
+const ModelContextProfile = require('../../models/ModelContextProfile');
+const ModelProfile = require('../../models/ModelProfile');
+const ModelAdaptation = require('../../models/ModelAdaptation');
+const { startBatch } = require('../../src/services/benchmark/execution');
+const { runPreflight } = require('../../src/services/benchmark/preflight');
+const { findActiveProfilingForHost, activeProfileQueues } = require('../../src/services/profiler/activeProfileState');
+const { startProfileHostQueue } = require('../profiler/pipeline');
+const BenchmarkBatch = require('../../models/BenchmarkBatch');
+const logger = require('../../config/logger');
+
+/**
+ * POST /api/benchmark/sweeps/plan
+ *
+ * Builds a per-host candidate sweep plan without starting long-running work.
+ * The response includes:
+ * - payloads.profileQueue for /api/profiler/pipeline/profile-host
+ * - payloads.benchmark for /api/benchmark/batch when models are ready
+ */
+router.post('/sweeps/plan', async (req, res) => {
+    try {
+        const plan = await buildSweepPlan(req.body || {});
+        res.json({ status: 'success', data: plan });
+    } catch (err) {
+        logger.warn('Sweep plan failed', { error: err.message });
+        const statusCode = /required|not found|unreachable/i.test(err.message) ? 400 : 500;
+        res.status(statusCode).json({ status: 'error', error: err.message });
+    }
+});
+
+/**
+ * POST /api/benchmark/sweeps/run
+ *
+ * Guarded executor over the planner. Requires `execute: true` to do anything
+ * (otherwise returns a dry-run plan). Rejects when a benchmark batch is active
+ * or the host has an active profile queue. Runs preflight before launching a
+ * batch. Never mutates routing truth.
+ *
+ * Auto-profiling: when candidates need profiling the driver starts a profile
+ * queue (reusing the exact /profile-host logic via `startProfileHostQueue`),
+ * polls it to terminal state within `maxWaitMs`, re-plans, then benchmarks. If
+ * the queue is still running at the wait ceiling, it returns `phase: 'profiling'`
+ * with the `queueId` so the caller can re-run once it finishes.
+ */
+router.post('/sweeps/run', async (req, res) => {
+    try {
+        const result = await runSweep(req.body || {}, {
+            buildSweepPlan,
+            getActiveBatches: () => BenchmarkBatch.getActive(),
+            findActiveProfilingForHost,
+            runPreflight,
+            startBatch,
+            startProfileQueue: async (payload) => {
+                const data = await startProfileHostQueue(payload);
+                return { queueId: data.queueId };
+            },
+            getQueueStatus: async (queueId) => {
+                const tracker = activeProfileQueues.get(queueId);
+                return { status: tracker ? tracker.status : 'failed' };
+            }
+        });
+        res.json({ status: 'success', data: result });
+    } catch (err) {
+        logger.warn('Sweep run failed', { error: err.message });
+        const statusCode = err.statusCode || (/required|not found|unreachable/i.test(err.message) ? 400 : 500);
+        res.status(statusCode).json({ status: 'error', error: err.message });
+    }
+});
+
+/**
+ * POST /api/benchmark/sweeps/recommend
+ *
+ * Turns per-lane candidate metrics into a ratification-ready routing diff with
+ * lane-specific weights + margin/latency/reliability guards. Read-only: emits a
+ * recommendation (`promote` | `keep` | `inconclusive`) — it never mutates
+ * routing truth (applying a promotion stays a human step).
+ *
+ * Body: { lane, candidates:[{model,quality?,composite?,latencyMs?,tokensPerSec?,failures?,vramMiB?}],
+ *         incumbent?, host?, weights?, guards? }
+ */
+router.post('/sweeps/recommend', async (req, res) => {
+    try {
+        const rec = buildLaneRecommendation(req.body || {});
+        const ledgerDraft = formatLedgerEntry(rec, {
+            date: new Date().toISOString().slice(0, 10),
+            ...(req.body?.ledger || {})
+        });
+        res.json({ status: 'success', data: { ...rec, ledgerDraft } });
+    } catch (err) {
+        const statusCode = err.statusCode || 500;
+        if (statusCode === 500) logger.error('Sweep recommend failed', { error: err.message });
+        res.status(statusCode).json({ status: 'error', error: err.message });
+    }
+});
+
+/**
+ * GET /api/benchmark/sweeps/staleness?hostId=<optional>
+ *
+ * Read-only crawl of benchmark model state for stale/invalid evidence before it
+ * breaks a sweep: stale context profiles / readiness / adaptations, and
+ * implausible recorded throughput (reuses the B1 physical ceiling). Returns a
+ * per-host report + suggested re-profile payloads (NOT auto-run). The
+ * missing-deployment check additionally accepts `routedModelsByHost` as a JSON
+ * query/body input when callers can supply current routing.
+ */
+router.get('/sweeps/staleness', async (req, res) => {
+    try {
+        const hostFilter = req.query.hostId || null;
+        let routedModelsByHost;
+        if (req.query.routedModelsByHost) {
+            try { routedModelsByHost = JSON.parse(req.query.routedModelsByHost); } catch (_) { /* ignore */ }
+        }
+        const [contextProfiles, profiles, adaptations] = await Promise.all([
+            ModelContextProfile.find({}).lean(),
+            ModelProfile.find({}).select('name readiness').lean(),
+            ModelAdaptation.find({}).lean()
+        ]);
+        const report = analyzeStaleness({ contextProfiles, profiles, adaptations, routedModelsByHost, hostFilter });
+        const ledgerDraft = formatStalenessLedgerEntry(report, { date: new Date().toISOString().slice(0, 10) });
+        res.json({ status: 'success', data: { ...report, ledgerDraft } });
+    } catch (err) {
+        logger.error('Sweep staleness crawl failed', { error: err.message });
+        res.status(500).json({ status: 'error', error: err.message });
+    }
+});
+
+/**
+ * GET /api/benchmark/sweeps/intake?families=qwen,gemma&limit=10[&markdown=1]
+ *
+ * Discovers GGUF candidate models from HuggingFace and returns a prioritized
+ * Backlog-D intake queue (fit/lane/host/priority — reuses the benchmark fit
+ * math). Read-only: discovery only, deploys/benchmarks nothing.
+ */
+router.get('/sweeps/intake', async (req, res) => {
+    try {
+        const families = (req.query.families ? String(req.query.families) : 'qwen,gemma,llama,mistral,phi,deepseek')
+            .split(',').map((s) => s.trim()).filter(Boolean);
+        const limit = Math.min(50, parseInt(req.query.limit, 10) || 12);
+        const records = await gatherCandidates({
+            families,
+            limit,
+            fetchFamily: hfClient.fetchFamily,
+            date: new Date().toISOString().slice(0, 10),
+            onWarn: (m) => logger.warn('Sweep intake fetch', { detail: m })
+        });
+        if (req.query.markdown) {
+            res.type('text/markdown').send(formatIntakeTable(records));
+            return;
+        }
+        res.json({
+            status: 'success',
+            data: {
+                count: records.length,
+                highPriority: records.filter((r) => r.priority === 'high').length,
+                records
+            }
+        });
+    } catch (err) {
+        logger.error('Sweep intake failed', { error: err.message });
+        res.status(500).json({ status: 'error', error: err.message });
+    }
+});
+
+module.exports = router;

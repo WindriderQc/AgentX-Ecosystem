@@ -1,0 +1,8 @@
+{
+  "id": "max-pick",
+  "title": "max(a, b) returns the minimum; make it return the maximum",
+  "language": "javascript",
+  "allowedPaths": ["src/max.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

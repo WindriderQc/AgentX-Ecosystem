@@ -1,0 +1,66 @@
+<div class="container">
+  <h1 class="page-title">Search Playground</h1>
+
+  <%- include('../partials/workflow-map') %>
+
+  <!-- Query input -->
+  <div class="card search-card">
+    <textarea id="search-query" class="input-field search-textarea" aria-label="Search query"
+      placeholder="Enter your search query..." rows="3"></textarea>
+
+    <!-- Controls row -->
+    <div class="search-controls">
+      <div class="control-group">
+        <label for="topk-slider">topK: <span id="topk-value" class="mono">5</span></label>
+        <input id="topk-slider" type="range" min="1" max="20" value="5" class="slider">
+      </div>
+      <div class="control-group">
+        <label for="minscore-slider">minScore: <span id="minscore-value" class="mono">0.00</span></label>
+        <input id="minscore-slider" type="range" min="0" max="100" value="0" class="slider">
+      </div>
+      <div class="control-group">
+        <label for="search-source">Source</label>
+        <input id="search-source" class="input-field input-sm" type="text" placeholder="optional">
+      </div>
+      <div class="control-group">
+        <label for="search-tags">Tags</label>
+        <input id="search-tags" class="input-field input-sm" type="text" placeholder="tag1, tag2">
+      </div>
+    </div>
+
+    <!-- Advanced retrieval (collapsed; all OFF by default to preserve baseline behaviour) -->
+    <details id="advanced-retrieval" class="advanced-retrieval" style="margin-top:8px;">
+      <summary style="cursor:pointer;font-size:0.85rem;color:#a0a0b8;">Advanced retrieval</summary>
+      <div class="adv-options" style="display:flex;flex-direction:column;gap:10px;padding-top:12px;">
+        <label class="adv-toggle" style="display:flex;gap:8px;align-items:flex-start;">
+          <input id="opt-expand" type="checkbox">
+          <span><strong>Query expansion</strong> — rewrites your query into variants to widen recall before retrieval.</span>
+        </label>
+        <label class="adv-toggle" style="display:flex;gap:8px;align-items:flex-start;">
+          <input id="opt-hybrid" type="checkbox">
+          <span><strong>Hybrid (BM25) search</strong> — blends keyword matching with vector similarity to catch exact terms.</span>
+        </label>
+        <label class="adv-toggle" style="display:flex;gap:8px;align-items:flex-start;">
+          <input id="opt-rerank" type="checkbox">
+          <span><strong>LLM re-ranking</strong> — fetches extra candidates and re-orders them by an LLM relevance judge (slower).</span>
+        </label>
+        <label class="adv-toggle" style="display:flex;gap:8px;align-items:flex-start;">
+          <input id="opt-compress" type="checkbox">
+          <span><strong>Contextual compression</strong> — trims each result to only the sentences relevant to your query (slower).</span>
+        </label>
+      </div>
+    </details>
+
+    <button id="btn-search" class="btn btn-primary btn-lg">Search</button>
+    <div id="search-status" class="flow-status is-loading" role="status" aria-live="polite">
+      <strong>Waiting for query</strong>
+      <span class="flow-status-detail">Enter a query to embed it and retrieve the nearest indexed chunks.</span>
+    </div>
+  </div>
+
+  <!-- Results area -->
+  <div id="search-meta" class="search-meta" style="display:none;"></div>
+  <div id="search-results" class="search-results"></div>
+  <div id="search-empty" class="empty-state" style="display:none;">No results found.</div>
+  <div id="search-error" class="error-state" style="display:none;"></div>
+</div>

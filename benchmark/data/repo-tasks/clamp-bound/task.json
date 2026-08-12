@@ -1,0 +1,8 @@
+{
+  "id": "clamp-bound",
+  "title": "clamp() ignores the lower bound (uses min instead of max)",
+  "language": "javascript",
+  "allowedPaths": ["src/clamp.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

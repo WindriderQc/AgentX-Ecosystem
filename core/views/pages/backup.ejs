@@ -1,0 +1,161 @@
+    <div class="bg-grid"></div>
+
+    <div class="backup-page" style="max-width: 1200px; margin: 0 auto; padding: 24px;">
+
+        <header class="backup-header" style="margin-bottom: 24px;">
+            <div class="eyebrow">OPERATIONS</div>
+            <h1><i class="fas fa-database"></i> Backup &amp; Restore</h1>
+            <p class="lede">Manual snapshot management for MongoDB, Qdrant, and ecosystem configuration. Trigger on demand, restore a named snapshot, or delete old ones.</p>
+        </header>
+
+        <div id="toast" style="display:none; position:fixed; top:80px; right:24px; padding:12px 20px; border-radius:6px; color:#fff; z-index:1000; font-weight:500;"></div>
+
+        <!-- Settings section -->
+        <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px; margin-bottom:24px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px;">
+                <div>
+                    <h2 style="margin:0;"><i class="fas fa-gear" style="color:#7cf0ff;"></i> Settings</h2>
+                    <div style="font-size:12px; color:#888; margin-top:4px;">
+                        Runtime settings persist to <code id="cfgFile">.backup-config.json</code> in the backup root. Env values set on boot win unless overridden at runtime.
+                    </div>
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:auto 1fr auto; gap:12px 16px; align-items:center;">
+                <label style="color:#cbd5e1;">Backup root</label>
+                <code id="cfgBackupDir" style="color:#94a3b8;">—</code>
+                <span id="cfgBackupDirSrc" style="font-size:11px; color:#888;">—</span>
+
+                <label style="color:#cbd5e1;">Qdrant local copy</label>
+                <code id="cfgQdrantDir" style="color:#94a3b8;">—</code>
+                <span style="font-size:11px; color:#888;">auto (root/qdrant)</span>
+
+                <label style="color:#cbd5e1;">Retention (days, 0 = forever)</label>
+                <div>
+                    <input id="cfgRetentionDays" type="number" min="0" step="1" style="width:100px; padding:6px 10px; background:#0f1629; border:1px solid #2a3145; color:#fff; border-radius:4px;">
+                    <button id="cfgSaveBtn" class="btn btn-primary" style="padding:6px 14px; margin-left:8px;">Save</button>
+                </div>
+                <span id="cfgRetentionSrc" style="font-size:11px; color:#888;">—</span>
+
+                <label style="color:#cbd5e1;">Mongo URI</label>
+                <code id="cfgMongoUri" style="color:#94a3b8;">—</code>
+                <span style="font-size:11px; color:#888;">env (MONGODB_URI)</span>
+
+                <label style="color:#cbd5e1;">RAG service URL</label>
+                <code id="cfgRagUrl" style="color:#94a3b8;">—</code>
+                <span style="font-size:11px; color:#888;">env (RAG_SERVICE_URL)</span>
+            </div>
+
+            <div style="margin-top:12px; padding:10px 12px; background:rgba(124,240,255,0.05); border-left:3px solid #7cf0ff; font-size:12px; color:#94a3b8;">
+                <i class="fas fa-info-circle"></i>
+                <strong>Backup root</strong> and <strong>Mongo/RAG URLs</strong> are env-only — changing requires editing the relevant <code>.env</code> (or <code>docker-compose.yml</code>) and re-applying with <code>./agentx up</code> to recreate the affected services.
+                <strong>Retention</strong> is runtime-editable and applies to the next backup operation.
+            </div>
+        </section>
+
+        <!-- MongoDB section -->
+        <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px; margin-bottom:24px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px;">
+                <div>
+                    <h2 style="margin:0;"><i class="fas fa-leaf" style="color:#4db33d;"></i> MongoDB</h2>
+                    <div style="font-size:12px; color:#888; margin-top:4px;">Stored at <code id="mongoRoot">—</code> &bull; override via <code>BACKUP_DIR</code> env</div>
+                </div>
+                <div style="display:flex; gap:12px; align-items:center;">
+                    <span id="mongoStatus" style="color:#888; font-size:14px;">—</span>
+                    <button id="mongoBackupBtn" class="btn btn-primary" style="padding:8px 16px;">
+                        <i class="fas fa-plus"></i> Create backup
+                    </button>
+                    <button id="mongoRefreshBtn" class="btn" style="padding:8px 12px;" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            <table style="width:100%; border-collapse:collapse;">
+                <thead>
+                    <tr style="text-align:left; border-bottom:1px solid var(--border, #2a3145);">
+                        <th style="padding:8px 4px;">Name</th>
+                        <th style="padding:8px 4px;">Date</th>
+                        <th style="padding:8px 4px; text-align:right;">Size</th>
+                        <th style="padding:8px 4px;">Location</th>
+                        <th style="padding:8px 4px; text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="mongoBackupsList">
+                    <tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Qdrant section -->
+        <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px; margin-bottom:24px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px;">
+                <div>
+                    <h2 style="margin:0;"><i class="fas fa-cube" style="color:#dc3545;"></i> Qdrant <span style="font-size:14px; color:#888; font-weight:normal;">(collection: <code id="qdrantCollection">agentx_embeddings</code>)</span></h2>
+                    <div style="font-size:12px; color:#888; margin-top:4px;">Stored on Qdrant server disk at <code id="qdrantRoot">—</code></div>
+                </div>
+                <div style="display:flex; gap:12px; align-items:center;">
+                    <span id="qdrantStatus" style="color:#888; font-size:14px;">—</span>
+                    <button id="qdrantBackupBtn" class="btn btn-primary" style="padding:8px 16px;">
+                        <i class="fas fa-plus"></i> Create snapshot
+                    </button>
+                    <button id="qdrantRefreshBtn" class="btn" style="padding:8px 12px;" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            <table style="width:100%; border-collapse:collapse;">
+                <thead>
+                    <tr style="text-align:left; border-bottom:1px solid var(--border, #2a3145);">
+                        <th style="padding:8px 4px;">Name</th>
+                        <th style="padding:8px 4px;">Created</th>
+                        <th style="padding:8px 4px; text-align:right;">Size</th>
+                        <th style="padding:8px 4px;">Location</th>
+                        <th style="padding:8px 4px; text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="qdrantBackupsList">
+                    <tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Config section -->
+        <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px;">
+                <div>
+                    <h2 style="margin:0;"><i class="fas fa-sliders" style="color:#f59e0b;"></i> Config</h2>
+                    <div style="font-size:12px; color:#888; margin-top:4px;">
+                        Tarball of <code>config/secrets.json</code>, all <code>.env</code> files (root, <code>core</code>, <code>benchmark</code>, <code>rag</code>, <code>data</code>), the system <code>crontab</code>, and <code>~/.openclaw/cron/jobs.json</code> — each included only if present. Legacy <code>ecosystem.config.js</code> is also captured when found (historical; PM2 is retired and it is no longer the runtime/env source of truth). Stored at <code id="configRoot">—</code>.
+                    </div>
+                </div>
+                <div style="display:flex; gap:12px; align-items:center;">
+                    <span id="configStatus" style="color:#888; font-size:14px;">—</span>
+                    <button id="configBackupBtn" class="btn btn-primary" style="padding:8px 16px;">
+                        <i class="fas fa-plus"></i> Create backup
+                    </button>
+                    <button id="configRefreshBtn" class="btn" style="padding:8px 12px;" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            <table style="width:100%; border-collapse:collapse;">
+                <thead>
+                    <tr style="text-align:left; border-bottom:1px solid var(--border, #2a3145);">
+                        <th style="padding:8px 4px;">Name</th>
+                        <th style="padding:8px 4px;">Date</th>
+                        <th style="padding:8px 4px; text-align:right;">Size</th>
+                        <th style="padding:8px 4px;">Location</th>
+                        <th style="padding:8px 4px; text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="configBackupsList">
+                    <tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <footer style="margin-top:24px; padding:16px; color:#888; font-size:13px;">
+            <i class="fas fa-info-circle"></i>
+            Config backups are manually restored (extract the tar over its original paths). MongoDB and Qdrant restore replace the current data and require explicit confirmation.
+        </footer>
+    </div>

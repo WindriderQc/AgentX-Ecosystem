@@ -1,0 +1,833 @@
+/* Cluster Schedule Dashboard Styles
+   Prefix: .cs-
+*/
+
+/* ── Container / Layout ──────────────────────────────────────── */
+
+.cs-container {
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 90px 24px 40px;
+    min-height: 100vh;
+    position: relative;
+    z-index: 1;
+}
+
+.cs-empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 40px 20px;
+    font-size: 0.95rem;
+}
+
+.cs-loading {
+    text-align: center;
+    color: var(--muted);
+    padding: 32px 20px;
+    font-size: 0.9rem;
+}
+
+.cs-loading i {
+    margin-right: 8px;
+}
+
+/* ── Page Header ─────────────────────────────────────────────── */
+
+.cs-page-header {
+    margin-bottom: 24px;
+}
+
+.cs-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.cs-eyebrow {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    margin-bottom: 4px;
+}
+
+.cs-page-header h1 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    margin: 0 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.cs-page-header h1 i {
+    color: var(--accent);
+}
+
+.cs-page-header p {
+    color: var(--muted);
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+.cs-header-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.cs-header-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.cs-header-status-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    padding: 4px 10px;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+
+.cs-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.cs-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.cs-btn.active {
+    color: var(--accent);
+    background: var(--accent-bg);
+    border-color: rgba(124, 240, 255, 0.3);
+}
+
+.cs-btn-sm {
+    padding: 5px 10px;
+    font-size: 0.8rem;
+}
+
+.cs-btn-icon {
+    padding: 6px 10px;
+}
+
+.cs-select {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.cs-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* ── Date Navigation ─────────────────────────────────────────── */
+
+.cs-date-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cs-date-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    min-width: 120px;
+    text-align: center;
+}
+
+/* ── View Toggles ────────────────────────────────────────────── */
+
+.cs-view-toggles {
+    display: flex;
+    gap: 4px;
+}
+
+/* ── Spinning animation ──────────────────────────────────────── */
+
+.spinning {
+    animation: cs-spin 1s linear infinite;
+}
+
+@keyframes cs-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* ── Two-Column Layout ───────────────────────────────────────── */
+
+.cs-two-col {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 24px;
+    align-items: start;
+}
+
+.cs-main {
+    min-width: 0;
+}
+
+.cs-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* ── Panels ──────────────────────────────────────────────────── */
+
+.cs-panel {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.cs-panel-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cs-panel-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cs-panel-header h3 i {
+    color: var(--accent);
+    font-size: 0.85rem;
+}
+
+.cs-claims-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+}
+
+.cs-claim-item {
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.025);
+    border-radius: 10px;
+    padding: 12px;
+}
+
+.cs-claim-header,
+.cs-claim-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.cs-claim-model {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 8px 0 6px;
+    word-break: break-word;
+}
+
+.cs-claim-expiry {
+    font-size: 0.78rem;
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.cs-claim-meta {
+    font-size: 0.88rem;
+    color: var(--muted);
+    flex-wrap: wrap;
+}
+
+.cs-claim-meta i {
+    margin-right: 4px;
+}
+
+.cs-claims-empty {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cs-claims-empty i {
+    font-size: 1rem;
+    color: var(--accent);
+}
+
+.cs-claims-empty-note {
+    font-size: 0.8rem;
+    color: var(--muted);
+    max-width: 24ch;
+    margin: 0 auto;
+}
+
+/* ── Live Host Cards ─────────────────────────────────────────── */
+
+.cs-live-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.cs-host-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    padding: 16px;
+    transition: all 0.25s ease;
+}
+
+.cs-host-card:hover {
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.cs-host-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+
+.cs-host-title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.cs-host-name {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.cs-host-ip {
+    font-size: 0.88rem;
+    color: var(--muted);
+    font-family: monospace;
+}
+
+.cs-host-role {
+    font-size: 0.86rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-top: 2px;
+}
+
+.cs-host-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.84rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--muted);
+}
+
+.cs-host-detail {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 4px;
+}
+
+.cs-host-card-footer {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+}
+
+.cs-host-footer-offline {
+    color: var(--danger);
+    font-style: italic;
+}
+
+.cs-host-models-loaded {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.cs-host-models-idle {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-style: italic;
+}
+
+.cs-host-model-summary {
+    font-size: 0.78rem;
+    color: var(--muted);
+}
+
+.cs-host-next {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: var(--text);
+}
+
+.cs-host-next-gpu {
+    font-size: 0.84rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--accent-bg);
+    color: var(--accent);
+}
+
+.cs-host-next-time {
+    font-size: 0.88rem;
+    color: var(--accent);
+    font-weight: 600;
+    font-family: monospace;
+}
+
+.cs-host-queue-count {
+    font-size: 0.84rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+}
+
+.cs-host-standby-note {
+    font-size: 0.88rem;
+    color: var(--muted);
+    font-style: italic;
+}
+
+.cs-host-vram-idle {
+    font-size: 0.88rem;
+    color: var(--muted);
+    font-style: italic;
+}
+
+.cs-host-row-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cs-health-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.86rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 8px;
+    border-radius: 6px;
+}
+
+.cs-health-badge.online {
+    background: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+}
+
+.cs-health-badge.offline {
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
+}
+
+.cs-health-badge.degraded {
+    background: rgba(245, 158, 11, 0.12);
+    color: #f59e0b;
+}
+
+.cs-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.cs-status-dot.green { background: #22c55e; }
+.cs-status-dot.red { background: #f87171; }
+.cs-status-dot.amber { background: #f59e0b; }
+
+/* ── VRAM Bar ────────────────────────────────────────────────── */
+
+.cs-vram-bar {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 6px 0;
+}
+
+.cs-vram-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent), #38bdf8);
+    transition: width 0.6s ease;
+}
+
+.cs-vram-free {
+    font-size: 0.88rem;
+    color: var(--muted);
+}
+
+.cs-vram-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.88rem;
+    color: var(--muted);
+    margin-bottom: 2px;
+}
+
+.cs-model-tag {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.84rem;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    white-space: nowrap;
+}
+
+/* ── Heatmap / Timeline ──────────────────────────────────────── */
+
+.cs-heatmap-container {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+    overflow-x: auto;
+    overflow-y: clip;
+    position: relative;
+}
+
+.cs-heatmap-grid {
+    display: grid;
+    grid-template-columns: 140px repeat(24, 1fr);
+    gap: 2px;
+    min-width: 700px;
+    position: relative;
+}
+
+.cs-hm-cell {
+    min-height: 28px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 3px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    cursor: default;
+    transition: background 0.15s;
+}
+
+.cs-hm-cell:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.cs-hm-slot {
+    position: absolute;
+    top: 0;
+    border-radius: 3px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.cs-hm-slot:hover {
+    opacity: 0.85;
+}
+
+.cs-hm-header {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-align: center;
+    padding: 4px 0;
+    user-select: none;
+}
+
+.cs-hm-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text);
+    padding: 4px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cs-hm-label-infra {
+    color: var(--muted);
+    font-style: italic;
+}
+
+/* Now line */
+.cs-now-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--accent);
+    z-index: 10;
+    pointer-events: none;
+    opacity: 0.8;
+}
+
+.cs-now-label {
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+}
+
+/* Group headers */
+.cs-group-header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.03);
+    transition: background 0.15s;
+    user-select: none;
+}
+
+.cs-group-header:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.cs-group-count {
+    font-size: 0.84rem;
+    font-weight: 500;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 7px;
+    border-radius: 10px;
+}
+
+.cs-group-hidden {
+    display: none !important;
+}
+
+.cs-cadence-pill {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.cs-label-name {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text);
+}
+
+/* ── Timeline Filters ────────────────────────────────────────── */
+
+.cs-timeline-filters {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+}
+
+.cs-filter-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+}
+
+.cs-filter-label input[type="checkbox"] {
+    accent-color: var(--accent);
+}
+
+/* ── Services Strip ──────────────────────────────────────────── */
+
+.cs-services-strip {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+}
+
+.cs-services-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cs-services-count {
+    font-size: 0.86rem;
+    color: var(--muted);
+}
+
+.cs-services-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 12px;
+    transition: max-height 0.3s ease, opacity 0.3s ease;
+}
+
+.cs-services-grid.collapsed {
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    margin-top: 0;
+}
+
+#servicesToggle.collapsed i {
+    transform: rotate(-90deg);
+}
+
+#servicesToggle i {
+    transition: transform 0.2s;
+}
+
+.cs-service-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    height: 32px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.cs-service-chip:hover,
+.cs-service-chip.active {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.cs-service-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.cs-service-cadence {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-left: 2px;
+}
+
+.cs-service-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cs-service-group-header {
+    font-size: 0.86rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+}
+
+.cs-service-group-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}

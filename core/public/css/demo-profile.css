@@ -1,0 +1,36 @@
+.agentx-demo-profile #ciToggleBtn,
+.agentx-demo-profile #profileBtn,
+.agentx-demo-profile #profileModal,
+.agentx-demo-profile .demo-optional-integration {
+  display: none !important;
+}
+
+.agentx-demo-profile .page {
+  min-height: 100vh;
+}
+
+.agentx-demo-profile .agent-selector-panel [hidden] {
+  display: none !important;
+}
+
+.demo-profile-home {
+  position: fixed;
+  z-index: 1100;
+  top: 14px;
+  left: 18px;
+  padding: 7px 11px;
+  border: 1px solid rgba(103, 232, 249, 0.28);
+  border-radius: 999px;
+  background: rgba(8, 18, 30, 0.9);
+  color: #67e8f9;
+  font: 700 0.72rem/1 system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.demo-profile-home:hover,
+.demo-profile-home:focus-visible {
+  border-color: #67e8f9;
+  color: #fff;
+}

@@ -1,0 +1,9 @@
+{
+  "id": "retry-async",
+  "title": "Implement bounded retry for an asynchronous operation",
+  "instructions": "Make retry(operation, maxAttempts) await operation until it succeeds or maxAttempts calls have failed. Return the successful value, rethrow the final error, and reject maxAttempts values that are not positive integers.",
+  "language": "javascript",
+  "allowedPaths": ["src/retry.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

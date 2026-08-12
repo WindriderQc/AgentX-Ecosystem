@@ -1,0 +1,9 @@
+{
+  "id": "user-store-multifile",
+  "title": "Complete normalized duplicate-safe user insertion across two modules",
+  "instructions": "normalizeUser(user) must return a new object with trimmed name and lowercase trimmed email. UserStore.add(user) must store and return that normalized object, and throw an Error containing 'duplicate' when the normalized email already exists. Do not mutate caller objects.",
+  "language": "javascript",
+  "allowedPaths": ["src/normalizeUser.js", "src/userStore.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

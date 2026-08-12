@@ -1,0 +1,154 @@
+    <div class="bg-grid"></div>
+
+    <!-- Main Content -->
+    <div class="cs-container">
+
+        <!-- Page Header -->
+        <div class="cs-page-header">
+            <div class="cs-header-row">
+                <div>
+                    <div class="cs-eyebrow">AgentX &bull; GPU Orchestration</div>
+                    <h1><i class="fas fa-calendar-alt"></i> Cluster Schedule</h1>
+                    <p>Live GPU hosts, 24h timeline, upcoming tasks, and conflict detection</p>
+                </div>
+                <div class="cs-header-controls">
+                    <div id="headerStatus" class="cs-header-status"></div>
+                    <div class="cs-date-nav">
+                        <button class="cs-btn cs-btn-icon" onclick="shiftDate(-1)" title="Previous day"><i class="fas fa-chevron-left"></i></button>
+                        <span id="dateLabel" class="cs-date-label">--</span>
+                        <button class="cs-btn cs-btn-icon" onclick="shiftDate(1)" title="Next day"><i class="fas fa-chevron-right"></i></button>
+                        <button class="cs-btn cs-btn-sm" onclick="goToday()">Today</button>
+                    </div>
+                    <div class="cs-view-toggles">
+                        <button id="viewTask" class="cs-btn cs-btn-sm active" onclick="setViewMode('task')"><i class="fas fa-layer-group"></i> Task</button>
+                        <button id="viewHost" class="cs-btn cs-btn-sm" onclick="setViewMode('host')"><i class="fas fa-server"></i> Host</button>
+                    </div>
+                    <button id="refreshBtn" class="cs-btn" onclick="refreshAll()" title="Refresh all data"><i class="fas fa-sync-alt"></i></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Host Cards -->
+        <div id="liveBar" class="cs-live-bar">
+            <div class="cs-loading"><i class="fas fa-spinner fa-spin"></i> Loading host data...</div>
+        </div>
+
+        <!-- Background Services Strip -->
+        <div id="servicesStrip" class="cs-services-strip" style="display:none">
+            <div class="cs-services-header">
+                <button id="servicesToggle" class="cs-btn cs-btn-sm" onclick="toggleServices()">
+                    <i class="fas fa-caret-down"></i> Background Services <span id="servicesCount" class="cs-services-count"></span>
+                </button>
+            </div>
+            <div id="servicesGrid" class="cs-services-grid"></div>
+        </div>
+
+        <!-- Two-Column Layout: Main + Sidebar -->
+        <div class="cs-two-col">
+
+            <!-- Main Column -->
+            <div class="cs-main">
+
+                <!-- Timeline Filters -->
+                <div id="timelineFilters" class="cs-timeline-filters" style="display:none">
+                    <label class="cs-filter-label">
+                        <input type="checkbox" onchange="setTimelineFilter('highFreq', this.checked)"> Show high-freq light jobs
+                    </label>
+                    <label class="cs-filter-label">
+                        <input type="checkbox" checked onchange="setTimelineFilter('noGpu', this.checked)"> Show non-GPU tasks
+                    </label>
+                </div>
+
+                <!-- Heatmap / Timeline -->
+                <div id="heatmapContainer" class="cs-heatmap-container">
+                    <div class="cs-loading"><i class="fas fa-spinner fa-spin"></i> Loading timeline...</div>
+                </div>
+
+                <!-- Actual Utilization Section -->
+                <div class="cs-actual-section">
+                    <div class="cs-actual-header">
+                        <div class="cs-actual-tabs">
+                            <button id="btnHeatmap" class="cs-btn cs-btn-sm active" onclick="setActualView('heatmap')">
+                                <i class="fas fa-th"></i> Utilization Heatmap
+                            </button>
+                            <button id="btnAvp" class="cs-btn cs-btn-sm" onclick="setActualView('avp')">
+                                <i class="fas fa-chart-bar"></i> Actual vs Planned
+                            </button>
+                        </div>
+                        <div class="cs-actual-controls">
+                            <label class="cs-filter-label">
+                                Days: <select id="heatmapDays" class="cs-select" onchange="actualViewChanged()">
+                                    <option value="1">1</option>
+                                    <option value="3">3</option>
+                                    <option value="7" selected>7</option>
+                                    <option value="14">14</option>
+                                    <option value="30">30</option>
+                                </select>
+                            </label>
+                        </div>
+                    </div>
+                    <div id="utilLegend" class="cs-util-legend" style="display:none">
+                        <span class="cs-util-legend-label">0%</span>
+                        <div id="utilLegendBar" class="cs-util-legend-bar"></div>
+                        <span class="cs-util-legend-label">100%</span>
+                    </div>
+                    <div id="actualContent" class="cs-actual-content"></div>
+                </div>
+            </div>
+
+            <!-- Sidebar -->
+            <div class="cs-sidebar">
+
+                <!-- Conflict Banner -->
+                <div id="conflictBanner" class="cs-conflict-banner hidden">
+                    <div class="cs-conflict-header"><i class="fas fa-exclamation-triangle"></i> Conflicts</div>
+                    <div id="conflictText" class="cs-conflict-text"></div>
+                </div>
+
+                <!-- Upcoming Tasks -->
+                <div class="cs-panel">
+                    <div class="cs-panel-header">
+                        <h3><i class="fas fa-clock"></i> Upcoming Tasks</h3>
+                    </div>
+                    <div id="nextList" class="cs-next-list">
+                        <div class="cs-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+                    </div>
+                </div>
+
+                <div class="cs-panel">
+                    <div class="cs-panel-header">
+                        <h3><i class="fas fa-hand"></i> Live Claims</h3>
+                    </div>
+                    <div id="claimsList" class="cs-claims-list">
+                        <div class="cs-loading"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+                    </div>
+                </div>
+
+                <!-- Attention Items -->
+                <div class="cs-panel">
+                    <div class="cs-panel-header">
+                        <h3><i class="fas fa-bell"></i> Attention</h3>
+                    </div>
+                    <div id="attentionList" class="cs-attention-list"></div>
+                </div>
+
+                <!-- Legend -->
+                <div class="cs-panel">
+                    <div class="cs-panel-header">
+                        <h3><i class="fas fa-palette"></i> Legend</h3>
+                    </div>
+                    <div id="legend" class="cs-legend"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tooltip (hidden by default) -->
+    <div id="tooltip" class="cs-tooltip">
+        <div id="tooltipType" class="cs-tooltip-type"></div>
+        <div id="tooltipName" class="cs-tooltip-name"></div>
+        <div id="tooltipRows" class="cs-tooltip-rows"></div>
+    </div>
+
+    <!-- Service Popover (hidden by default) -->
+    <div id="servicePopover" class="cs-service-popover"></div>

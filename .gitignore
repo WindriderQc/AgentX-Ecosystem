@@ -1,0 +1,36 @@
+# Secrets and local configuration
+.env
+.env.*
+*.local.env
+config/*.local.env
+config/secrets.json
+
+# Dependencies and generated output
+node_modules/
+**/node_modules/
+coverage/
+**/coverage/
+dist/
+build/
+logs/
+**/logs/
+test-results/
+**/test-results/
+playwright-report/
+reports/
+
+# Runtime data and caches
+.agentx/
+.tmp/
+.cache/
+.playwright-cli/
+*.log
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak

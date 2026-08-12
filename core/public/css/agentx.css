@@ -1,0 +1,640 @@
+/**
+ * AgentX Styles
+ * Unified styling for AgentX cards, grid, sidebar, and related components
+ */
+
+/* ============================================
+   CSS Variables
+   ============================================ */
+:root {
+    --agentx-card-bg: rgba(255, 255, 255, 0.03);
+    --agentx-card-border: rgba(255, 255, 255, 0.08);
+    --agentx-card-hover-bg: rgba(255, 255, 255, 0.06);
+    --agentx-card-selected-border: var(--accent, var(--accent));
+    --agentx-sidebar-width: 320px;
+    --agentx-sidebar-collapsed-width: 0px;
+}
+
+/* ============================================
+   AgentX Card Base
+   ============================================ */
+.agentx-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px;
+    background: var(--agentx-card-bg);
+    border: 1px solid var(--agentx-card-border);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+.agentx-card:hover {
+    background: var(--agentx-card-hover-bg);
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-2px);
+}
+
+.agentx-card.selected {
+    background: rgba(124, 240, 255, 0.08);
+    border-color: var(--agentx-card-selected-border);
+    box-shadow: 0 0 20px rgba(124, 240, 255, 0.15);
+}
+
+.agentx-card.compact {
+    padding: 10px 14px;
+    gap: 10px;
+}
+
+.agentx-card.is-default::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent, var(--accent)), transparent);
+    border-radius: 12px 12px 0 0;
+}
+
+/* ============================================
+   Avatar
+   ============================================ */
+.agentx-card-avatar {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--avatar-color, var(--accent))22 0%, var(--avatar-color, var(--accent))11 100%);
+    border: 1px solid var(--avatar-color, var(--accent))44;
+    border-radius: 12px;
+    color: var(--avatar-color, var(--accent));
+    font-size: 20px;
+    transition: all 0.2s ease;
+}
+
+.agentx-card:hover .agentx-card-avatar {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px var(--avatar-color, var(--accent))33;
+}
+
+.agentx-card.compact .agentx-card-avatar {
+    width: 40px;
+    height: 40px;
+    font-size: 16px;
+}
+
+/* ============================================
+   Card Content
+   ============================================ */
+.agentx-card-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.agentx-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.agentx-card-name {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text, #fff);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agentx-default-badge {
+    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--accent, var(--accent))22;
+    border: 1px solid var(--accent, var(--accent))44;
+    border-radius: 4px;
+    color: var(--accent, var(--accent));
+}
+
+.agentx-card-description {
+    margin: 0 0 8px 0;
+    font-size: 12px;
+    color: var(--muted, #888);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* ============================================
+   Meta Row (Category + Model + Tools)
+   ============================================ */
+.agentx-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.agentx-category-badge,
+.agentx-model-badge,
+.agentx-tools-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.agentx-category-badge {
+    background: linear-gradient(135deg, var(--badge-color, var(--text-secondary))22 0%, var(--badge-color, var(--text-secondary))11 100%);
+    border: 1px solid var(--badge-color, var(--text-secondary))44;
+    color: var(--badge-color, var(--text-secondary));
+}
+
+.agentx-model-badge {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--muted, #888);
+}
+
+.agentx-tools-badge {
+    background: rgba(234, 179, 8, 0.15);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    color: #eab308;
+}
+
+.agentx-tools-badge i {
+    font-size: 10px;
+}
+
+/* ============================================
+   Card Actions
+   ============================================ */
+.agentx-card-actions {
+    flex-shrink: 0;
+    align-self: center;
+}
+
+.agentx-select-btn {
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: var(--text, #fff);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.agentx-select-btn:hover {
+    background: var(--accent, var(--accent))22;
+    border-color: var(--accent, var(--accent))66;
+    color: var(--accent, var(--accent));
+}
+
+.agentx-select-btn.selected {
+    background: var(--accent, var(--accent));
+    border-color: var(--accent, var(--accent));
+    color: #000;
+}
+
+.agentx-card.compact .agentx-select-btn {
+    padding: 6px 12px;
+}
+
+/* ============================================
+   Mini Card (inline display)
+   ============================================ */
+.agentx-mini-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    font-size: 12px;
+    color: var(--text, #fff);
+}
+
+.agentx-mini-avatar {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--avatar-color, var(--accent))22;
+    border-radius: 50%;
+    color: var(--avatar-color, var(--accent));
+    font-size: 10px;
+}
+
+.agentx-mini-name {
+    font-weight: 500;
+}
+
+/* ============================================
+   Summary Card (for config panel)
+   ============================================ */
+.agentx-summary-card {
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+}
+
+.agentx-summary-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.agentx-summary-avatar {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--avatar-color, var(--accent))22 0%, var(--avatar-color, var(--accent))11 100%);
+    border: 1px solid var(--avatar-color, var(--accent))44;
+    border-radius: 10px;
+    color: var(--avatar-color, var(--accent));
+    font-size: 16px;
+}
+
+.agentx-summary-info h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text, #fff);
+}
+
+.agentx-summary-category {
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.agentx-summary-desc {
+    margin: 0 0 8px 0;
+    font-size: 11px;
+    color: var(--muted, #888);
+    line-height: 1.4;
+}
+
+.agentx-summary-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--muted, #888);
+}
+
+.agentx-summary-meta span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.agentx-summary-meta i {
+    font-size: 10px;
+    opacity: 0.7;
+}
+
+.agentx-summary-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 20px;
+    color: var(--muted, #888);
+    font-size: 12px;
+}
+
+.agentx-summary-empty i {
+    font-size: 24px;
+    opacity: 0.5;
+}
+
+/* ============================================
+   AgentX Grid
+   ============================================ */
+.agentx-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+    padding: 16px;
+}
+
+.agentx-grid.compact {
+    grid-template-columns: 1fr;
+}
+
+/* ============================================
+   AgentX Sidebar
+   ============================================ */
+.agentx-sidebar {
+    position: fixed;
+    left: 0;
+    top: 60px;
+    bottom: 0;
+    width: var(--agentx-sidebar-width);
+    background: var(--panel-bg, rgba(20, 20, 25, 0.95));
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(20px);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.3s ease, width 0.3s ease;
+}
+
+.agentx-sidebar.collapsed {
+    transform: translateX(-100%);
+}
+
+.agentx-sidebar .sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agentx-sidebar .sidebar-head h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text, #fff);
+}
+
+.agentx-sidebar .sidebar-head h2 i {
+    color: var(--accent, var(--accent));
+}
+
+/* Filters */
+.agentx-filters {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agentx-category-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.agentx-category-tab {
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: var(--muted, #888);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.agentx-category-tab:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text, #fff);
+}
+
+.agentx-category-tab.active {
+    background: var(--accent, var(--accent))22;
+    border-color: var(--accent, var(--accent))66;
+    color: var(--accent, var(--accent));
+}
+
+.agentx-search-input {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: var(--text, #fff);
+    outline: none;
+    transition: all 0.2s ease;
+}
+
+.agentx-search-input:focus {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--accent, var(--accent))66;
+}
+
+.agentx-search-input::placeholder {
+    color: var(--muted, #888);
+}
+
+/* Grid container in sidebar */
+.agentx-grid-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.agentx-grid-container .agentx-card {
+    margin-bottom: 12px;
+}
+
+/* ============================================
+   Launcher Mode (Chat empty state)
+   ============================================ */
+/* Legacy launcher styles — now used inside the collapsible agent-selector panel */
+.agentx-launcher {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+}
+
+.agentx-launcher-header {
+    display: none; /* Header is now the selector bar */
+}
+
+.agentx-launcher-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    width: 100%;
+    max-width: 900px;
+}
+
+/* ============================================
+   Workflow Buttons (in chat panel)
+   ============================================ */
+.agentx-workflow-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.agentx-workflow-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    background: rgba(234, 179, 8, 0.15);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    border-radius: 6px;
+    color: #eab308;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.agentx-workflow-btn:hover {
+    background: rgba(234, 179, 8, 0.25);
+    border-color: rgba(234, 179, 8, 0.5);
+}
+
+.agentx-workflow-btn i {
+    font-size: 10px;
+}
+
+/* ============================================
+   Responsive
+   ============================================ */
+@media (max-width: 768px) {
+    .agentx-sidebar {
+        width: 100%;
+    }
+
+    .agentx-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .agentx-launcher-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .agentx-card {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .agentx-card-avatar {
+        align-self: flex-start;
+    }
+
+    .agentx-card-actions {
+        align-self: stretch;
+        margin-top: 12px;
+    }
+
+    .agentx-select-btn {
+        width: 100%;
+    }
+}
+
+/* ============================================
+   Agent Active Panel (Sidebar)
+   ============================================ */
+.agent-active-panel {
+    padding: 0 0 16px 0;
+    margin-bottom: 16px;
+    animation: fadeIn 0.3s ease;
+}
+
+.agent-card-mini {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    position: relative;
+}
+
+.agent-avatar-mini {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: var(--accent);
+}
+
+.agent-avatar-mini img {
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    object-fit: cover;
+}
+
+.agent-info-mini {
+    flex: 1;
+    min-width: 0;
+}
+
+.agent-info-mini h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-bright);
+}
+
+.agent-info-mini p {
+    margin: 2px 0 0 0;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.agent-capabilities-list {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.capability-tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--panel-border);
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.capability-tag i {
+    color: var(--accent-2);
+}
+
+/* Config Summary Integration */
+#agentConfigSummary {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+}

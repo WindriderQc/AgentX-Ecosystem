@@ -1,0 +1,11 @@
+node_modules/
+.env
+*.log
+coverage/
+.nyc_output/
+
+# esbuild output
+public/dist/
+
+# Runtime config files (persisted overrides)
+config/.voice-config.json

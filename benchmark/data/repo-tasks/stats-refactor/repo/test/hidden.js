@@ -1,0 +1,11 @@
+const fs = require('fs');
+const { average, range } = require('../src/stats');
+const values = [Infinity, 3, -1, Number.NaN];
+const before = values.slice();
+const r = range(values);
+const source = fs.readFileSync(require.resolve('../src/stats'), 'utf8');
+if (average(values) !== 1 || !r || r.min !== -1 || r.max !== 3) process.exit(1);
+if (average([Infinity]) !== null || range([Number.NaN]) !== null) process.exit(1);
+if (JSON.stringify(values) !== JSON.stringify(before)) process.exit(1);
+if (!/function finiteNumbers\s*\(/.test(source)) process.exit(1);
+process.exit(0);

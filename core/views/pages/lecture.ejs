@@ -1,0 +1,49 @@
+<main class="lecture" id="lectureRoot" data-state="ready" aria-busy="false">
+  <header class="lecture-top">
+    <span class="lecture-chip"><i class="fa-solid fa-book-open-reader" aria-hidden="true"></i> Nestor &middot; lecture</span>
+    <a class="lecture-home" href="/panel" title="Maison" aria-label="Retour à l'accueil">
+      <i class="fa-solid fa-house" aria-hidden="true"></i>
+    </a>
+  </header>
+
+  <section class="lecture-stage">
+    <div class="lecture-mascot">
+      <div class="lecture-face" aria-hidden="true">
+        <span class="eye"></span><span class="eye"></span>
+        <span class="mouth"></span>
+      </div>
+      <span class="lecture-pill" id="lecturePill" role="status" aria-live="polite" aria-atomic="true">prêt</span>
+    </div>
+
+    <div class="lecture-bubble">
+      <div class="lecture-kicker">tu as demandé</div>
+      <div class="lecture-word" id="lectureWord" style="display:none"></div>
+      <p class="lecture-reply" id="lectureReply" aria-live="polite" aria-atomic="true">Salut ! Quel mot veux-tu comprendre ? Appuie sur le micro ou écris-le.</p>
+      <p class="lecture-hint" id="lectureHint" role="status" aria-live="polite" hidden></p>
+    </div>
+  </section>
+
+  <section class="lecture-controls">
+    <button class="lecture-mic" id="micBtn" type="button" aria-pressed="false" aria-label="Parle-moi">
+      <i class="fa-solid fa-microphone" aria-hidden="true"></i>
+      <span>parle-moi</span>
+    </button>
+    <button class="lecture-replay" id="replayBtn" type="button" aria-pressed="false" aria-label="Réécoute la réponse" disabled>
+      <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
+      <span>réécoute</span>
+    </button>
+    <button class="lecture-retry" id="retryBtn" type="button" aria-label="Réessayer la dernière demande" aria-hidden="true" hidden>
+      <span class="lecture-retry-icon" aria-hidden="true">↻</span>
+      <span>réessaie</span>
+    </button>
+  </section>
+
+  <form class="lecture-text" id="textForm">
+    <label class="lecture-text-label" for="textInput">Tu peux aussi écrire</label>
+    <div class="lecture-text-row">
+      <input id="textInput" type="text" inputmode="text" autocomplete="off" spellcheck="true" maxlength="180" placeholder="écris ton mot ou ta phrase..." aria-describedby="lectureTextHelp" />
+      <button id="textSubmitBtn" type="submit" aria-label="Demander à Nestor"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+    </div>
+    <span class="sr-only" id="lectureTextHelp">Écris le mot ou la courte phrase que tu veux comprendre.</span>
+  </form>
+</main>

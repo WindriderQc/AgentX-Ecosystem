@@ -1,0 +1,13 @@
+node_modules
+.git
+.env
+.env.*
+logs
+test-results
+coverage
+tests
+scripts
+gift
+*.md
+!README.md
+benchmark.config.json

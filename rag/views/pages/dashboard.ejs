@@ -1,0 +1,106 @@
+<div class="container dashboard-container">
+  <section class="dashboard-hero">
+    <div class="dashboard-eyebrow">AgentX Retrieval Operations</div>
+    <div class="dashboard-hero-row">
+      <div>
+        <h1 class="page-title dashboard-title">RAG Control Surface</h1>
+        <p class="dashboard-subtitle">Live dependency health, active embedding route, and vector inventory for the retrieval stack now serving production queries.</p>
+      </div>
+      <div class="dashboard-sidecar">
+        <div class="sidecar-label">Refresh Cadence</div>
+        <div class="sidecar-value">30s live poll</div>
+      </div>
+    </div>
+  </section>
+
+  <%- include('../partials/workflow-map') %>
+
+  <%- include('../partials/empty-index-banner') %>
+
+  <section id="rag-ops-strip" class="rag-ops-strip" aria-label="RAG operating state" aria-live="polite">
+    <div class="rag-ops-item is-loading" id="ops-service">
+      <span class="rag-ops-label">Service</span>
+      <strong id="ops-service-value">Checking...</strong>
+      <span id="ops-service-detail">Waiting for health response</span>
+    </div>
+    <div class="rag-ops-item is-loading" id="ops-corpus">
+      <span class="rag-ops-label">Corpus</span>
+      <strong id="ops-corpus-value">Checking...</strong>
+      <span id="ops-corpus-detail">Counting indexed documents and chunks</span>
+    </div>
+    <div class="rag-ops-item is-loading" id="ops-embedding">
+      <span class="rag-ops-label">Embeddings</span>
+      <strong id="ops-embedding-value">Checking...</strong>
+      <span id="ops-embedding-detail">Resolving provider and model</span>
+    </div>
+    <div class="rag-ops-item is-loading" id="ops-query">
+      <span class="rag-ops-label">Query Readiness</span>
+      <strong id="ops-query-value">Checking...</strong>
+      <span id="ops-query-detail">Search readiness depends on service, vector store, embeddings, and corpus</span>
+    </div>
+  </section>
+
+  <div class="dashboard-grid">
+
+    <!-- Service Health -->
+    <section class="card health-card">
+      <div class="card-title">Service Health</div>
+      <div class="health-readout">
+        <span id="service-dot" class="status-dot status-dot-lg"></span>
+        <div>
+          <div class="health-label">Runtime State</div>
+          <div id="service-status" class="health-status loading">loading...</div>
+        </div>
+      </div>
+      <p class="card-copy">This reflects process liveness and MongoDB connectivity. Vector store and embedding checks are shown separately so failures are easier to isolate.</p>
+    </section>
+
+    <!-- Dependency Health Matrix -->
+    <section class="card dependency-card">
+      <div class="card-title">Dependencies</div>
+      <p class="card-copy dependency-copy">The embedding row now shows the actual configured model and proxy endpoint, so operators can confirm which retrieval path is active without opening the shell.</p>
+      <table class="dep-table">
+        <tbody>
+          <tr id="dep-mongo">
+            <td class="dep-name">MongoDB</td>
+            <td class="dep-status"><span class="loading">loading...</span></td>
+          </tr>
+          <tr id="dep-qdrant">
+            <td class="dep-name">Qdrant</td>
+            <td class="dep-status"><span class="loading">loading...</span></td>
+          </tr>
+          <tr id="dep-embedding">
+            <td class="dep-name">Embedding Provider</td>
+            <td class="dep-status"><span class="loading">loading...</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Stats -->
+    <section class="card stats-card">
+      <div class="card-title">Collection Stats</div>
+      <div class="stat-grid">
+        <div class="stat-item">
+          <div class="stat-value mono" id="stat-docs">--</div>
+          <div class="stat-label">Documents</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value mono" id="stat-chunks">--</div>
+          <div class="stat-label">Chunks</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value mono" id="stat-dimension">--</div>
+          <div class="stat-label">Vector Dimension</div>
+        </div>
+      </div>
+      <p class="card-copy stats-copy">A zero-document state is healthy right after a collection switch. The first ingest seeds the fresh Qdrant collection with the active vector dimension.</p>
+    </section>
+
+  </div>
+
+  <!-- Footer -->
+  <div class="footer dashboard-footer">
+    Auto-refreshes every 30s &middot; Last updated: <span id="last-updated">--</span>
+  </div>
+</div>

@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentX — Portal</title>
+<style>
+  :root {
+    --bg:        #0a0d12;
+    --bg-2:      #0f141b;
+    --panel:     #141a23;
+    --panel-hi:  #1a2130;
+    --border:    #222c3a;
+    --border-hi: #2f3b4e;
+    --text:      #e8ecf3;
+    --muted:     #8a95a8;
+    --muted-hi:  #aab4c6;
+    --accent:    #6aa6ff;
+    --c-runtime:   #6aa6ff;
+    --c-infra:     #a78bfa;
+    --c-eval:      #f59e0b;
+    --c-knowledge: #4ade80;
+    --c-data:      #fb7185;
+    --c-ops:       #94a3b8;
+    --ok:    #4ade80;
+    --warn:  #f59e0b;
+    --down:  #fb7185;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background:
+      radial-gradient(1200px 800px at 85% -20%, rgba(106,166,255,0.06), transparent 60%),
+      radial-gradient(900px 600px at -10% 110%, rgba(167,139,250,0.05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  .shell { max-width: 1280px; margin: 0 auto; padding: 40px 28px 56px; }
+
+  header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 14px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.3px; display: flex; align-items: baseline; gap: 12px; }
+  h1 .logo {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: 8px;
+    background: linear-gradient(135deg, #6aa6ff 0%, #a78bfa 100%);
+    color: #0a0d12; font-weight: 800; font-size: 14px; letter-spacing: -1px;
+    box-shadow: 0 4px 14px rgba(106,166,255,0.25);
+  }
+  h1 .sub { color: var(--muted); font-weight: 400; font-size: 14px; letter-spacing: 0; }
+  .meta { color: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.3px; }
+  .meta .sep { opacity: 0.4; margin: 0 6px; }
+
+  /* ── System Pulse bar (live status) ───────────────────────── */
+  .pulse {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 16px; margin-bottom: 28px;
+    animation: tilefade .4s ease-out both;
+  }
+  .pulse-left { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .pulse-glyph {
+    width: 11px; height: 11px; border-radius: 50%;
+    background: var(--muted); flex-shrink: 0; position: relative;
+  }
+  .pulse-glyph.ok       { background: var(--ok); box-shadow: 0 0 0 0 rgba(74,222,128,0.5); animation: ping 2.4s ease-out infinite; }
+  .pulse-glyph.degraded { background: var(--warn); }
+  .pulse-glyph.down     { background: var(--down); }
+  @keyframes ping {
+    0%   { box-shadow: 0 0 0 0 rgba(74,222,128,0.45); }
+    70%  { box-shadow: 0 0 0 8px rgba(74,222,128,0); }
+    100% { box-shadow: 0 0 0 0 rgba(74,222,128,0); }
+  }
+  .pulse-headline { font-size: 13.5px; font-weight: 600; letter-spacing: -0.1px; }
+  .pulse-dots { display: flex; gap: 6px; margin-left: 2px; }
+  .pulse-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+    opacity: 0.85; transition: background .2s, transform .2s; cursor: default;
+  }
+  .pulse-dot:hover { transform: scale(1.45); }
+  .pulse-dot.ok { background: var(--ok); }
+  .pulse-dot.degraded { background: var(--warn); }
+  .pulse-dot.down { background: var(--down); }
+  .pulse-dot.loading, .pulse-dot.unknown { background: var(--muted); opacity: 0.5; }
+  .pulse-meta { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .pulse-refresh {
+    background: rgba(0,0,0,0.25); border: 1px solid var(--border); color: var(--muted-hi);
+    border-radius: 7px; width: 26px; height: 24px; cursor: pointer; font-size: 13px;
+    transition: all .12s ease;
+  }
+  .pulse-refresh:hover { border-color: var(--accent); color: var(--accent); transform: rotate(90deg); }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 960px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+
+  .tile {
+    position: relative;
+    background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 20px 16px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    transition: transform .15s ease, border-color .15s, box-shadow .2s;
+    animation: tilefade .45s ease-out both;
+  }
+  .tile::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--tile-color, var(--accent));
+    opacity: 0.7;
+  }
+  .tile:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-hi);
+    box-shadow:
+      0 8px 28px -12px rgba(0,0,0,0.6),
+      0 0 0 1px color-mix(in oklab, var(--tile-color, var(--accent)) 22%, transparent);
+  }
+
+  .tile .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 10px; }
+  .tile .head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .tile .head-right { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+  .tile .icon {
+    width: 32px; height: 32px; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: color-mix(in oklab, var(--tile-color, var(--accent)) 14%, transparent);
+    color: var(--tile-color, var(--accent));
+    flex-shrink: 0;
+  }
+  .tile .icon svg { width: 18px; height: 18px; }
+  .tile .domain { font-size: 11px; letter-spacing: 1.8px; color: var(--tile-color, var(--accent)); text-transform: uppercase; font-weight: 700; }
+  .tile .port {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px; color: var(--muted);
+    padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border);
+    background: rgba(0,0,0,0.2);
+  }
+
+  /* ── Per-tile live status pill ────────────────────────────── */
+  .tile-status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.2px;
+    padding: 2px 9px 2px 7px; border-radius: 999px;
+    border: 1px solid var(--border); background: rgba(0,0,0,0.22);
+    color: var(--muted); white-space: nowrap;
+    transition: color .2s, border-color .2s, background .2s;
+  }
+  .tile-status .sdot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .tile-status[data-status="ok"]       { color: var(--ok);   border-color: color-mix(in oklab, var(--ok) 40%, transparent);   background: color-mix(in oklab, var(--ok) 10%, rgba(0,0,0,0.22)); }
+  .tile-status[data-status="ok"] .sdot { background: var(--ok); box-shadow: 0 0 6px rgba(74,222,128,0.7); }
+  .tile-status[data-status="degraded"]       { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 40%, transparent); background: color-mix(in oklab, var(--warn) 10%, rgba(0,0,0,0.22)); }
+  .tile-status[data-status="degraded"] .sdot { background: var(--warn); }
+  .tile-status[data-status="down"]       { color: var(--down); border-color: color-mix(in oklab, var(--down) 40%, transparent); background: color-mix(in oklab, var(--down) 10%, rgba(0,0,0,0.22)); }
+  .tile-status[data-status="down"] .sdot { background: var(--down); }
+  .tile-status[data-status="loading"] .sdot { animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  .tile h2 { font-size: 18px; font-weight: 600; margin: 2px 0 3px; letter-spacing: -0.2px; }
+  .tile h2 a:hover { color: var(--tile-color, var(--accent)); }
+  .tile .owner { color: var(--muted-hi); font-size: 12.5px; margin-bottom: 14px; }
+
+  .tile ul { list-style: none; padding: 0; margin: 0 0 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .tile li a {
+    display: inline-block;
+    padding: 4px 11px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--text);
+    transition: all .12s ease;
+  }
+  .tile li a:hover {
+    border-color: var(--tile-color, var(--accent));
+    color: var(--tile-color, var(--accent));
+    background: color-mix(in oklab, var(--tile-color, var(--accent)) 10%, rgba(0,0,0,0.25));
+    transform: translateY(-1px);
+  }
+  .tile .note {
+    margin-top: auto; padding-top: 10px;
+    color: var(--muted); font-size: 11.5px; line-height: 1.5;
+    border-top: 1px dashed var(--border);
+  }
+
+  @keyframes tilefade {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .tile:nth-child(1) { animation-delay: 0.00s; }
+  .tile:nth-child(2) { animation-delay: 0.05s; }
+  .tile:nth-child(3) { animation-delay: 0.10s; }
+  .tile:nth-child(4) { animation-delay: 0.15s; }
+  .tile:nth-child(5) { animation-delay: 0.20s; }
+  .tile:nth-child(6) { animation-delay: 0.25s; }
+
+  footer { margin-top: 40px; color: var(--muted); font-size: 12px; display: flex; gap: 20px; flex-wrap: wrap; padding-top: 20px; border-top: 1px solid var(--border); }
+  footer code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted-hi); font-size: 11px; background: rgba(0,0,0,0.3); padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border); }
+  footer a { transition: color .12s; }
+  footer a:hover { color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) {
+    .tile, .pulse { animation: none; }
+    .pulse-glyph.ok { animation: none; }
+    .tile-status[data-status="loading"] .sdot { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header>
+    <h1>
+      <span class="logo">AX</span>
+      AgentX <span class="sub">+ OpenClaw — unified portal</span>
+    </h1>
+    <div class="meta">
+      core <code style="color:var(--muted-hi);font-size:10.5px">:3080</code>
+      <span class="sep">·</span>bench <code style="color:var(--muted-hi);font-size:10.5px">:3081</code>
+      <span class="sep">·</span>rag <code style="color:var(--muted-hi);font-size:10.5px">:3082</code>
+      <span class="sep">·</span>data <code style="color:var(--muted-hi);font-size:10.5px">:3083</code>
+    </div>
+  </header>
+
+  <!-- System Pulse — live, same-origin status from /api/portal/health -->
+  <div class="pulse" id="system-pulse" aria-live="polite" aria-label="System status">
+    <div class="pulse-left">
+      <span class="pulse-glyph" id="pulse-glyph" aria-hidden="true"></span>
+      <span class="pulse-headline" id="pulse-headline">Checking system status…</span>
+    </div>
+    <div class="pulse-dots" id="pulse-dots"></div>
+    <div class="pulse-meta">
+      <span id="pulse-updated">—</span>
+      <button id="pulse-refresh" class="pulse-refresh" type="button" title="Refresh status" aria-label="Refresh status">&#8635;</button>
+    </div>
+  </div>
+
+  <div class="grid">
+
+    <!-- RUNTIME -->
+    <div class="tile" style="--tile-color: var(--c-runtime);">
+      <div class="head">
+        <div class="head-left">
+          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+          <span class="domain">Runtime</span>
+        </div>
+        <div class="head-right">
+          <span class="tile-status" data-status="unknown" title="External runtime — open Agent Ops for observed status"><i class="sdot"></i><span class="stext">handoff</span></span>
+          <span class="port">official</span>
+        </div>
+      </div>
+      <h2><a href="/agent-ops" data-openclaw-path="/">OpenClaw Control</a></h2>
+      <div class="owner">Official OpenClaw UI — native runtime authority</div>
+      <ul>
+        <li><a href="/agent-ops" data-public-service="core" data-public-path="/agent-ops">Agent Ops handoff</a></li>
+        <li><a href="/agent-ops" data-openclaw-path="/chat">Chat</a></li>
+        <li><a href="/agent-ops" data-openclaw-path="/agents">Agents</a></li>
+        <li><a href="/agent-ops" data-openclaw-path="/tasks">Tasks</a></li>
+      </ul>
+      <div class="note">Agent Ops shows observed runtime status; native operations stay in OpenClaw's official Control UI.</div>
+    </div>
+
+    <!-- INFRASTRUCTURE -->
+    <div class="tile" data-service="core" style="--tile-color: var(--c-infra);">
+      <div class="head">
+        <div class="head-left">
+          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="15" width="20" height="6" rx="1"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span>
+          <span class="domain">Infrastructure</span>
+        </div>
+        <div class="head-right">
+          <span class="tile-status" data-status="loading"><i class="sdot"></i><span class="stext">checking…</span></span>
+          <span class="port">:3080</span>
+        </div>
+      </div>
+      <h2><a href="/nerve-center" data-public-service="core" data-public-path="/nerve-center">AgentX Core</a></h2>
+      <div class="owner">Ollama cluster &amp; routing control plane</div>
+      <ul>
+        <li><a href="/nerve-center" data-public-service="core" data-public-path="/nerve-center">Nerve Center</a></li>
+        <li><a href="/pipeline" data-public-service="core" data-public-path="/pipeline">Pipeline</a></li>
+        <li><a href="/models" data-public-service="core" data-public-path="/models">Models</a></li>
+        <li><a href="/voice" data-public-service="core" data-public-path="/voice" style="display:inline-flex; align-items:center; gap:6px;"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px; height:13px;"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>Voice</a></li>
+        <li><a href="/analytics" data-public-service="core" data-public-path="/analytics">Analytics</a></li>
+        <li><a href="/cluster-schedule" data-public-service="core" data-public-path="/cluster-schedule">Schedule</a></li>
+      </ul>
+      <div class="note">Agent ownership, recurring work, GPU pinning, host health, model registry, and routing telemetry.</div>
+    </div>
+
+    <!-- EVALUATION -->
+    <div class="tile" data-service="benchmark" style="--tile-color: var(--c-eval);">
+      <div class="head">
+        <div class="head-left">
+          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M17 3H7a2 2 0 0 0-2 2v6a7 7 0 0 0 14 0V5a2 2 0 0 0-2-2z"/></svg></span>
+          <span class="domain">Evaluation</span>
+        </div>
+        <div class="head-right">
+          <span class="tile-status" data-status="loading"><i class="sdot"></i><span class="stext">checking…</span></span>
+          <span class="port">:3081</span>
+        </div>
+      </div>
+      <h2><a href="/portal/" data-public-service="benchmark" data-public-path="/">Benchmark</a></h2>
+      <div class="owner">Model scoring, profiling, leaderboard</div>
+      <ul>
+        <li><a href="/portal/" data-public-service="benchmark" data-public-path="/">Engine Room</a></li>
+        <li><a href="/portal/" data-public-service="benchmark" data-public-path="/courthouse">Courthouse</a></li>
+        <li><a href="/portal/" data-public-service="benchmark" data-public-path="/leaderboard">Leaderboard</a></li>
+      </ul>
+      <div class="note">Judge governance, context tuning, host adaptations.</div>
+    </div>
+
+    <!-- KNOWLEDGE -->
+    <div class="tile" data-service="rag" style="--tile-color: var(--c-knowledge);">
+      <div class="head">
+        <div class="head-left">
+          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
+          <span class="domain">Knowledge</span>
+        </div>
+        <div class="head-right">
+          <span class="tile-status" data-status="loading"><i class="sdot"></i><span class="stext">checking…</span></span>
+          <span class="port">:3082</span>
+        </div>
+      </div>
+      <h2><a href="/portal/" data-public-service="rag" data-public-path="/">RAG</a></h2>
+      <div class="owner">Documents, embeddings, semantic search</div>
+      <ul>
+        <li><a href="/portal/" data-public-service="rag" data-public-path="/">Dashboard</a></li>
+        <li><a href="/portal/" data-public-service="rag" data-public-path="/documents">Documents</a></li>
+        <li><a href="/portal/" data-public-service="rag" data-public-path="/search">Search</a></li>
+      </ul>
+      <div class="note">Qdrant-backed vector store, hybrid search, LLM rerank.</div>
+    </div>
+
+    <!-- DATA -->
+    <div class="tile" data-service="data" style="--tile-color: var(--c-data);">
+      <div class="head">
+        <div class="head-left">
+          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg></span>
+          <span class="domain">Data</span>
+        </div>
+        <div class="head-right">
+          <span class="tile-status" data-status="loading"><i class="sdot"></i><span class="stext">checking…</span></span>
+          <span class="port">:3080 → :3083</span>
+        </div>
+      </div>
+      <h2><a href="/data-toolbox" data-public-service="core" data-public-path="/data-toolbox">Data Toolbox</a></h2>
+      <div class="owner">NAS, files, live feeds — UI in core, API in data</div>
+      <ul>
+        <li><a href="/data-toolbox#storage" data-public-service="core" data-public-path="/data-toolbox#storage">Storage</a></li>
+        <li><a href="/data-toolbox#files" data-public-service="core" data-public-path="/data-toolbox#files">Files</a></li>
+        <li><a href="/data-toolbox#janitor" data-public-service="core" data-public-path="/data-toolbox#janitor">Janitor</a></li>
+      </ul>
+      <div class="note">Dedup scanner, network discovery, ISS/quakes/weather feeds.</div>
+    </div>
+
+  </div>
+
+  <footer>
+    <div><code>MongoDB</code> mongo:27017 <span style="opacity:0.4">·</span> <code>Ollama</code> Alien · Brutal · Frank</div>
+    <div style="margin-left:auto">
+      <a href="/nerve-center" data-public-service="core" data-public-path="/nerve-center">core</a>
+      <span style="opacity:0.4">·</span>
+      <a href="/portal/" data-public-service="benchmark" data-public-path="/">benchmark</a>
+      <span style="opacity:0.4">·</span>
+      <a href="/portal/" data-public-service="rag" data-public-path="/">rag</a>
+      <span style="opacity:0.4">·</span>
+      <a href="/agent-ops" data-openclaw-path="/">openclaw</a>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+// Resolve every cross-service portal link from Core's public URL contract.
+// Core links intentionally stay relative so an HTTPS front door stays HTTPS.
+(async () => {
+  let publicUrls = {};
+  let openclawControl = '';
+  try {
+    const res = await fetch('/api/config', { credentials: 'include' });
+    const cfg = await res.json();
+    publicUrls = cfg?.publicUrls || {};
+    openclawControl = cfg?.features?.openclaw?.controlUi?.launchBaseUrl
+      || publicUrls.openclawControl
+      || '';
+  } catch { /* keep safe same-origin fallbacks */ }
+  document.querySelectorAll('[data-public-service]').forEach((a) => {
+    const service = a.dataset.publicService;
+    const path = a.dataset.publicPath || '/';
+    if (service === 'core') {
+      a.setAttribute('href', path);
+      return;
+    }
+    const base = String(publicUrls[service] || '').replace(/\/+$/, '');
+    if (base) a.setAttribute('href', base + path);
+  });
+  if (openclawControl) {
+    document.querySelectorAll('[data-openclaw-path]').forEach((a) => {
+      const target = String(a.dataset.openclawPath || '/')
+        .split(/[/?#]/)
+        .filter(Boolean)[0] || 'overview';
+      a.setAttribute('href', `/api/openclaw/control-launch/${encodeURIComponent(target)}`);
+    });
+  }
+})();
+
+// Live Portal — same-origin status from core /api/portal/health (no CORS).
+// Fail-soft: a status outage never breaks the launcher; tiles stay clickable.
+(() => {
+  const STATUS = {
+    ok:       { cls: 'ok',       label: 'online'   },
+    degraded: { cls: 'degraded', label: 'degraded' },
+    down:     { cls: 'down',     label: 'offline'  },
+    loading:  { cls: 'loading',  label: 'checking…'},
+    unknown:  { cls: 'unknown',  label: 'unknown'  }
+  };
+  const glyph    = document.getElementById('pulse-glyph');
+  const headline = document.getElementById('pulse-headline');
+  const dotsWrap = document.getElementById('pulse-dots');
+  const updated  = document.getElementById('pulse-updated');
+  const refresh  = document.getElementById('pulse-refresh');
+
+  function setTile(id, status, latency, issues) {
+    const tiles = document.querySelectorAll('.tile[data-service="' + id + '"] .tile-status');
+    if (!tiles.length) return;
+    const meta = STATUS[status] || STATUS.unknown;
+    tiles.forEach((tile) => {
+      tile.dataset.status = meta.cls;
+      tile.title = Array.isArray(issues) && issues.length ? issues.join(' · ') : meta.label;
+      const text = tile.querySelector('.stext');
+      if (!text) return;
+      text.textContent = (status === 'ok' && Number.isFinite(latency))
+        ? 'online · ' + latency + 'ms'
+        : meta.label;
+    });
+  }
+
+  function render(data) {
+    const services = Array.isArray(data.services) ? data.services : [];
+    dotsWrap.innerHTML = '';
+    services.forEach((s) => {
+      const meta = STATUS[s.status] || STATUS.unknown;
+      const dot = document.createElement('span');
+      dot.className = 'pulse-dot ' + meta.cls;
+      dot.title = s.label + ' — ' + s.status +
+        (Number.isFinite(s.latency_ms) ? ' (' + s.latency_ms + 'ms)' : '');
+      dotsWrap.appendChild(dot);
+      setTile(s.id, s.status, s.latency_ms, s.issues);
+    });
+    const sum = data.summary || {};
+    const ecosystem = sum.ecosystem || {};
+    const ecosystemIssues = Array.isArray(ecosystem.issues) ? ecosystem.issues : [];
+    const state = sum.status || (sum.down > 0 ? 'down' : (sum.degraded > 0 ? 'degraded' : 'ok'));
+    glyph.className = 'pulse-glyph ' + state;
+    headline.textContent = (state === 'ok')
+      ? 'All systems operational — ' + sum.healthy + '/' + sum.total + ' services online'
+      : sum.healthy + '/' + sum.total + ' online' +
+        (sum.degraded ? ' · ' + sum.degraded + ' degraded' : '') +
+        (sum.down ? ' · ' + sum.down + ' offline' : '') +
+        (ecosystem.status === 'degraded' ? ' · ecosystem degraded' : '') +
+        (ecosystem.status === 'down' ? ' · ecosystem down' : '') +
+        (ecosystemIssues.length ? ' · ' + ecosystemIssues[0] : '');
+    const when = new Date(data.generated_at || Date.now());
+    updated.textContent = 'updated ' + when.toLocaleTimeString();
+  }
+
+    async function poll() {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        const res = await fetch('/api/portal/health', {
+          credentials: 'include',
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        if (!res.ok) throw new Error('http ' + res.status);
+        render(await res.json());
+      } catch {
+      glyph.className = 'pulse-glyph down';
+      headline.textContent = 'Status unavailable';
+      updated.textContent = '—';
+      document.querySelectorAll('.tile-status').forEach((el) => {
+        el.dataset.status = 'unknown';
+        const t = el.querySelector('.stext');
+          if (t) t.textContent = 'unknown';
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+  if (refresh) refresh.addEventListener('click', poll);
+  poll();
+  setInterval(poll, 20000);
+})();
+</script>
+
+</body>
+</html>

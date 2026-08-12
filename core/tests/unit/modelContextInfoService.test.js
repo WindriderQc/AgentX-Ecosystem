@@ -1,0 +1,206 @@
+'use strict';
+
+jest.mock('../../config/logger', () => ({
+  info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn()
+}));
+
+jest.mock('../../models/ModelRegistry', () => ({
+  findOne: jest.fn()
+}));
+
+jest.mock('../../models/ModelContextProfile', () => ({
+  findOne: jest.fn()
+}));
+
+jest.mock('../../models/HostPreference', () => ({
+  findOne: jest.fn()
+}));
+
+jest.mock('../../src/helpers/ollamaUtils', () => ({
+  resolveTarget: jest.fn((t) => t)
+}));
+
+const ModelRegistry = require('../../models/ModelRegistry');
+const ModelContextProfile = require('../../models/ModelContextProfile');
+const HostPreference = require('../../models/HostPreference');
+const svc = require('../../src/services/modelContextInfoService');
+
+function mockRegistry(entry) {
+  const chain = {
+    select: jest.fn(() => chain),
+    lean: jest.fn(() => Promise.resolve(entry || null))
+  };
+  ModelRegistry.findOne.mockReturnValue(chain);
+}
+
+function mockProfile(profile) {
+  const chain = {
+    select: jest.fn(() => chain),
+    lean: jest.fn(() => Promise.resolve(profile || null))
+  };
+  ModelContextProfile.findOne.mockReturnValue(chain);
+}
+
+function mockHostPreference(pref) {
+  const chain = {
+    select: jest.fn(() => chain),
+    lean: jest.fn(() => Promise.resolve(pref || null))
+  };
+  HostPreference.findOne.mockReturnValue(chain);
+}
+
+function makeFetch(responseShape, ok = true) {
+  return jest.fn().mockResolvedValue({
+    ok,
+    json: async () => responseShape
+  });
+}
+
+describe('modelContextInfoService', () => {
+  beforeEach(() => {
+    svc._clearCache();
+    jest.clearAllMocks();
+    mockProfile(null);
+    mockHostPreference(null);
+  });
+
+  it('uses Modelfile PARAMETER num_ctx when Ollama returns it', async () => {
+    svc._setFetch(makeFetch({
+      parameters: 'num_ctx 131072\nstop <|im_end|>\ntemperature 0.7',
+      model_info: { 'gemma4.context_length': 131072 }
+    }));
+    const info = await svc.getContextInfo('gemma4:26b', 'http://host:11434');
+    expect(info.num_ctx).toBe(131072);
+    expect(info.source).toBe('modelfile');
+    expect(info.maxContextLength).toBe(131072);
+  });
+
+  it('falls back to registry profiled value when Modelfile lacks num_ctx', async () => {
+    svc._setFetch(makeFetch({
+      parameters: 'stop <|im_end|>',
+      model_info: {}
+    }));
+    mockRegistry({
+      contextTest: { status: 'completed', testedNumCtx: 32768 },
+      executionDefaults: { num_ctx: 8192 }
+    });
+    const info = await svc.getContextInfo('qwen2.5:7b', 'http://host:11434');
+    expect(info.num_ctx).toBe(32768);
+    expect(info.source).toBe('profiled');
+  });
+
+  it('uses a matching HostPreference pin before Modelfile context', async () => {
+    svc._setFetch(makeFetch({
+      parameters: 'num_ctx 157696',
+      model_info: { 'qwen.context_length': 262144 }
+    }));
+    mockHostPreference({
+      displayName: 'Host Beta',
+      pinnedModels: [
+        { model: 'ax/qwen3.5:9b', contextSize: 131072 }
+      ]
+    });
+
+    const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://192.0.2.12:11434');
+
+    expect(info).toEqual(expect.objectContaining({
+      num_ctx: 131072,
+      source: 'host_preference_pin',
+      pinnedModel: 'ax/qwen3.5:9b',
+      hostDisplayName: 'Host Beta',
+      maxContextLength: 262144
+    }));
+  });
+
+  it('uses host/model context profiles before legacy registry values', async () => {
+    const profiledAt = new Date('2026-06-16T00:00:00Z');
+    svc._setFetch(makeFetch({
+      parameters: 'stop <|im_end|>',
+      model_info: { 'qwen.context_length': 262144 }
+    }));
+    mockProfile({
+      modelName: 'ax/qwen3.5:9b',
+      recommendedContext: 131072,
+      verifiedMaxContext: 237568,
+      stressCeiling: 237568,
+      lastValidatedAt: profiledAt
+    });
+    mockRegistry({
+      contextTest: { status: 'completed', testedNumCtx: 32768 },
+      executionDefaults: { num_ctx: 8192 }
+    });
+
+    const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://host:11434');
+
+    expect(info).toEqual(expect.objectContaining({
+      num_ctx: 131072,
+      source: 'model_context_profile',
+      verifiedMaxContext: 237568,
+      stressCeiling: 237568,
+      profiledAt,
+      matchedName: 'ax/qwen3.5:9b',
+      maxContextLength: 262144
+    }));
+    expect(ModelContextProfile.findOne).toHaveBeenCalledWith(expect.objectContaining({
+      modelName: { $in: ['ax/qwen3.5:9b', 'qwen3.5:9b'] },
+      hostUrl: 'http://host:11434',
+      stale: { $ne: true }
+    }));
+  });
+
+  it('falls back to executionDefaults when contextTest is not completed', async () => {
+    svc._setFetch(makeFetch({ parameters: '' }));
+    mockRegistry({
+      contextTest: { status: 'pending' },
+      executionDefaults: { num_ctx: 16384 }
+    });
+    const info = await svc.getContextInfo('model-x', 'http://host:11434');
+    expect(info.num_ctx).toBe(16384);
+    expect(info.source).toBe('registry_default');
+  });
+
+  it('uses model_capacity from /api/show model_info when nothing else', async () => {
+    svc._setFetch(makeFetch({
+      parameters: '',
+      model_info: { 'qwen.context_length': 65536 }
+    }));
+    mockRegistry(null);
+    const info = await svc.getContextInfo('unknown:1b', 'http://host:11434');
+    expect(info.num_ctx).toBe(65536);
+    expect(info.source).toBe('model_capacity');
+  });
+
+  it('returns fallback when everything fails', async () => {
+    svc._setFetch(makeFetch({}, false));
+    mockRegistry(null);
+    const info = await svc.getContextInfo('ghost:1b', 'http://host:11434');
+    expect(info.num_ctx).toBe(8192);
+    expect(info.source).toBe('fallback');
+  });
+
+  it('still resolves when no host is provided (registry-only mode)', async () => {
+    svc._setFetch(jest.fn()); // should not be called
+    mockRegistry({
+      contextTest: { status: 'completed', testedNumCtx: 24576 }
+    });
+    const info = await svc.getContextInfo('model-y');
+    expect(info.num_ctx).toBe(24576);
+    expect(info.source).toBe('profiled');
+  });
+
+  it('caches results per (host, model) for the TTL', async () => {
+    const fetchMock = makeFetch({
+      parameters: 'num_ctx 131072',
+      model_info: {}
+    });
+    svc._setFetch(fetchMock);
+    const first = await svc.getContextInfo('m', 'http://h');
+    const second = await svc.getContextInfo('m', 'http://h');
+    expect(first).toEqual(second);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws when model is missing', async () => {
+    await expect(svc.getContextInfo('')).rejects.toThrow('model is required');
+  });
+});

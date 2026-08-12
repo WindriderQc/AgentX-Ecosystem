@@ -1,0 +1,378 @@
+/**
+ * Roundtable Routes
+ *
+ * POST   /                      — start a new discussion
+ * GET    /                      — list past discussions (paginated)
+ * GET    /defaults              — default panel + synthesizer config
+ * GET    /active                — current running/pending roundtable (if any)
+ * GET    /:id                   — full document
+ * DELETE /:id                   — delete a record
+ * GET    /:id/stream            — live SSE stream of events
+ * GET    /:id/transcript        — markdown transcript
+ * POST   /:id/score             — (re-)run quality analysis
+ * POST   /:id/interjections     — add a chair interjection for the next phase
+ * POST   /:id/decision          — approve/reject an approval-gated verdict
+ * POST   /telegram/webhook      — authenticated Telegram chair commands
+ */
+
+const crypto = require('crypto');
+const express = require('express');
+const router = express.Router();
+const logger = require('../config/logger');
+const roundtableService = require('../src/services/roundtable');
+const Roundtable = require('../models/Roundtable');
+
+function secretMatches(actual, expected) {
+  if (!actual || !expected) return false;
+  const a = Buffer.from(String(actual));
+  const b = Buffer.from(String(expected));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function requireChairToken(req, res) {
+  const expected = process.env.ROUNDTABLE_CHAIR_TOKEN;
+  if (!expected) {
+    res.status(503).json({ status: 'error', message: 'Roundtable chair approval is not configured' });
+    return false;
+  }
+  const supplied = req.get('x-roundtable-chair-token') || '';
+  if (!secretMatches(supplied, expected)) {
+    res.status(401).json({ status: 'error', message: 'Invalid roundtable chair token' });
+    return false;
+  }
+  return true;
+}
+
+function isTelegramChair(userId) {
+  const allowed = new Set(String(process.env.ROUNDTABLE_TELEGRAM_CHAIR_IDS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean));
+  return allowed.has(String(userId ?? ''));
+}
+
+router.post('/', express.json(), async (req, res) => {
+  try {
+    const {
+      question, rounds, panel, synthesizer, tags, source, notify, enableScoring,
+      telegram, governance
+    } = req.body || {};
+
+    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+      return res.status(400).json({ status: 'error', message: 'question is required' });
+    }
+    if (question.length > 5000) {
+      return res.status(400).json({ status: 'error', message: 'question exceeds 5000 char limit' });
+    }
+    const usesRealRuntime = Array.isArray(panel)
+      && panel.some((agent) => String(agent?.runtime || 'model').toLowerCase() !== 'model');
+    if ((usesRealRuntime || telegram || governance?.requireApproval) && !requireChairToken(req, res)) return;
+
+    const doc = await roundtableService.startRoundtable({
+      question: question.trim(),
+      rounds,
+      panel,
+      synthesizer,
+      source: source || 'api',
+      tags: tags || [],
+      notify: notify || null,
+      telegram: telegram || null,
+      governance: governance || {},
+      enableScoring: enableScoring === true
+    });
+
+    res.status(201).json({
+      status: 'ok',
+      data: {
+        _id: doc._id,
+        status: doc.status,
+        question: doc.question,
+        rounds: doc.rounds
+      }
+    });
+  } catch (err) {
+    logger.error('POST /api/roundtable failed', { error: err.message });
+    res.status(err.status || 500).json({ status: 'error', message: err.message });
+  }
+});
+
+router.post('/telegram/webhook', express.json({ limit: '64kb' }), async (req, res) => {
+  const expected = process.env.ROUNDTABLE_TELEGRAM_WEBHOOK_SECRET;
+  const supplied = req.get('x-telegram-bot-api-secret-token') || '';
+  if (!expected) {
+    return res.status(503).json({ ok: false, error: 'Roundtable Telegram webhook is not configured' });
+  }
+  if (!secretMatches(supplied, expected)) {
+    return res.status(401).json({ ok: false, error: 'Invalid Telegram webhook secret' });
+  }
+
+  try {
+    const message = req.body?.message || req.body?.edited_message;
+    if (!message || message.from?.is_bot) return res.json({ ok: true, ignored: true });
+    const command = roundtableService.parseTelegramCommand(message.text);
+    if (!command) return res.json({ ok: true, ignored: true });
+
+    const chatId = message.chat?.id;
+    const threadId = message.message_thread_id ?? null;
+    const doc = await roundtableService.findTelegramRoundtable(chatId, threadId);
+    if (!doc) return res.json({ ok: true, ignored: true, reason: 'no-matching-roundtable' });
+
+    const actor = message.from?.username
+      ? `@${message.from.username}`
+      : [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || 'telegram-chair';
+
+    if (command.command !== 'status' && !isTelegramChair(message.from?.id)) {
+      logger.warn('Ignored unauthorized Roundtable Telegram chair command', {
+        command: command.command,
+        telegramUserId: String(message.from?.id || ''),
+        roundtableId: String(doc._id)
+      });
+      return res.json({ ok: true, ignored: true, reason: 'unauthorized-chair' });
+    }
+
+    if (command.command === 'interject') {
+      if (!command.argument) {
+        await roundtableService.sendTelegramText(doc.telegram, 'Usage: /interject <chair guidance>')
+          .catch(() => {});
+        return res.json({ ok: true, ignored: true, reason: 'missing-interjection' });
+      }
+      const { interjection } = await roundtableService.addInterjection(doc._id, {
+        text: command.argument,
+        author: actor,
+        source: 'telegram'
+      });
+      roundtableService.getEmitter(String(doc._id))?.emit('chunk', {
+        type: 'interjection-added',
+        interjectionId: interjection.interjectionId,
+        author: interjection.author
+      });
+      await roundtableService.sendTelegramText(
+        doc.telegram,
+        `💬 Interjection queued for the next phase.\nFrom: ${actor}`
+      ).catch(() => {});
+      return res.json({ ok: true, action: 'interjection-queued' });
+    }
+
+    if (command.command === 'approve' || command.command === 'reject') {
+      const decision = command.command === 'approve' ? 'approved' : 'rejected';
+      const updated = await roundtableService.setDecision(doc._id, {
+        decision,
+        actor,
+        note: command.argument,
+        source: 'telegram'
+      });
+      await roundtableService.publishRoundtableEvent(updated, {
+        type: 'decision', status: decision, actor, note: command.argument
+      });
+      return res.json({ ok: true, action: decision });
+    }
+
+    await roundtableService.sendTelegramText(
+      doc.telegram,
+      `Roundtable #${String(doc._id).slice(-8)} · ${doc.status}\nDecision: ${doc.governance?.decisionStatus || 'deliberating'}\nPending interjections: ${(doc.interjections || []).filter((item) => item.status === 'pending').length}`
+    ).catch(() => {});
+    return res.json({ ok: true, action: 'status' });
+  } catch (err) {
+    logger.warn('Roundtable Telegram webhook command failed', { error: err.message });
+    return res.status(err.status || 500).json({ ok: false, error: err.message });
+  }
+});
+
+router.get('/', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    const skip = parseInt(req.query.skip, 10) || 0;
+    const { docs, total } = await roundtableService.listRoundtables({ limit, skip });
+    res.json({ status: 'ok', data: docs, total, limit, skip });
+  } catch (err) {
+    logger.error('GET /api/roundtable failed', { error: err.message });
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+router.get('/defaults', (req, res) => {
+  res.json({
+    status: 'ok',
+    data: {
+      panel: roundtableService.DEFAULT_PANEL,
+      synthesizer: roundtableService.DEFAULT_SYNTHESIZER,
+      options: roundtableService.COUNCIL_OPTIONS,
+      policy: {
+        canonicalSurface: '/council',
+        advisoryOnlyDefault: true,
+        executionAuthority: 'none',
+        qualityScoringDefault: false,
+        runtimeParticipantsEnabled: ['1', 'true', 'yes', 'on'].includes(
+          String(process.env.ROUNDTABLE_RUNTIME_PARTICIPANTS_ENABLED || '').trim().toLowerCase()
+        )
+      }
+    }
+  });
+});
+
+router.get('/active', async (req, res) => {
+  try {
+    const activeId = roundtableService.getActiveRoundtableId();
+    if (activeId) {
+      const doc = await roundtableService.getRoundtable(activeId);
+      return res.json({ status: 'ok', data: doc });
+    }
+    // Fallback — look for any doc still marked running/pending
+    const doc = await Roundtable.findOne({ status: { $in: ['pending', 'running'] } }).sort({ createdAt: -1 });
+    res.json({ status: 'ok', data: doc });
+  } catch (err) {
+    logger.error('GET /api/roundtable/active failed', { error: err.message });
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+router.get('/:id', async (req, res) => {
+  try {
+    const doc = await roundtableService.getRoundtable(req.params.id);
+    if (!doc) return res.status(404).json({ status: 'error', message: 'Not found' });
+    res.json({ status: 'ok', data: doc });
+  } catch (err) {
+    logger.error('GET /api/roundtable/:id failed', { error: err.message });
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const result = await Roundtable.deleteOne({ _id: req.params.id });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ status: 'error', message: 'Not found' });
+    }
+    res.json({ status: 'ok', data: { _id: req.params.id, deleted: true } });
+  } catch (err) {
+    logger.error('DELETE /api/roundtable/:id failed', { error: err.message });
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+router.get('/:id/stream', async (req, res) => {
+  try {
+    const doc = await roundtableService.getRoundtable(req.params.id);
+    if (!doc) return res.status(404).json({ status: 'error', message: 'Not found' });
+
+    const sseHeaders = {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    };
+
+    // Already finished — send final and close.
+    if (['completed', 'failed', 'timeout'].includes(doc.status)) {
+      res.writeHead(200, sseHeaders);
+      res.write(`event: done\ndata: ${JSON.stringify({ status: doc.status, totalDurationMs: doc.totalDurationMs })}\n\n`);
+      return res.end();
+    }
+
+    const emitter = roundtableService.getEmitter(req.params.id);
+    if (!emitter) {
+      res.writeHead(200, sseHeaders);
+      res.write(`event: done\ndata: ${JSON.stringify({ status: 'no-stream', message: 'No active stream for this roundtable' })}\n\n`);
+      return res.end();
+    }
+
+    res.writeHead(200, sseHeaders);
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': heartbeat\n\n');
+    }, 15000);
+
+    const onChunk = (data) => {
+      try {
+        res.write(`event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`);
+        if (data.type === 'done') cleanup();
+      } catch {
+        cleanup();
+      }
+    };
+
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      emitter.removeListener('chunk', onChunk);
+      if (!res.writableEnded) res.end();
+    };
+
+    emitter.on('chunk', onChunk);
+    req.on('close', cleanup);
+  } catch (err) {
+    logger.error('GET /api/roundtable/:id/stream failed', { error: err.message });
+    if (!res.headersSent) {
+      res.status(500).json({ status: 'error', message: err.message });
+    }
+  }
+});
+
+router.get('/:id/transcript', async (req, res) => {
+  try {
+    const doc = await roundtableService.getRoundtable(req.params.id);
+    if (!doc) return res.status(404).json({ status: 'error', message: 'Not found' });
+    res.type('text/markdown').send(roundtableService.formatTranscript(doc));
+  } catch (err) {
+    logger.error('GET /api/roundtable/:id/transcript failed', { error: err.message });
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+router.post('/:id/interjections', express.json({ limit: '16kb' }), async (req, res) => {
+  if (!requireChairToken(req, res)) return;
+  try {
+    const { doc, interjection } = await roundtableService.addInterjection(req.params.id, {
+      text: req.body?.text,
+      author: req.body?.author || 'web-chair',
+      source: req.body?.source === 'telegram' ? 'api' : (req.body?.source || 'api')
+    });
+    roundtableService.getEmitter(req.params.id)?.emit('chunk', {
+      type: 'interjection-added',
+      interjectionId: interjection.interjectionId,
+      author: interjection.author
+    });
+    res.status(201).json({
+      status: 'ok',
+      data: { interjection, decisionStatus: doc.governance?.decisionStatus }
+    });
+  } catch (err) {
+    logger.warn('POST /api/roundtable/:id/interjections failed', { error: err.message });
+    res.status(err.status || 400).json({ status: 'error', message: err.message });
+  }
+});
+
+router.post('/:id/decision', express.json({ limit: '16kb' }), async (req, res) => {
+  if (!requireChairToken(req, res)) return;
+  try {
+    const doc = await roundtableService.setDecision(req.params.id, {
+      decision: req.body?.decision,
+      actor: req.body?.actor || 'web-chair',
+      note: req.body?.note || '',
+      source: 'web-ui'
+    });
+    await roundtableService.publishRoundtableEvent(doc, {
+      type: 'decision',
+      status: doc.governance.decisionStatus,
+      actor: doc.governance.decidedBy,
+      note: doc.governance.decisionNote
+    });
+    res.json({ status: 'ok', data: doc.governance });
+  } catch (err) {
+    logger.warn('POST /api/roundtable/:id/decision failed', { error: err.message });
+    res.status(err.status || 400).json({ status: 'error', message: err.message });
+  }
+});
+
+router.post('/:id/score', async (req, res) => {
+  try {
+    const scores = await roundtableService.analyzeQuality(req.params.id);
+    if (!scores) {
+      return res.status(400).json({ status: 'error', message: 'Scoring requires a completed roundtable' });
+    }
+    res.json({ status: 'ok', data: scores });
+  } catch (err) {
+    logger.error('POST /api/roundtable/:id/score failed', { error: err.message });
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+module.exports = router;

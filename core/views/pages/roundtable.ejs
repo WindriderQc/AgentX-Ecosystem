@@ -1,0 +1,288 @@
+    <div class="bg-grid"></div>
+
+    <div class="roundtable-page">
+
+        <header class="rt-header">
+            <div class="eyebrow">BOUNDED MULTI-MODEL DELIBERATION</div>
+            <h1><i class="fas fa-users"></i> Council</h1>
+            <p class="lede">Ask independent model/prompt combinations to challenge one another, then let AgentX synthesize the strongest answer. Council is advisory: it records the discussion, but it cannot execute a proposal.</p>
+        </header>
+
+        <div class="rt-safety-note"><i class="fas fa-shield-halved"></i><div><strong>One authority.</strong> AgentX owns routing, transcripts, and synthesis. Nestor may request and present a Council answer; Hermes may participate as a bounded adviser. Neither becomes a second control plane.</div></div>
+
+        <div id="toast" class="rt-toast"></div>
+
+        <!-- Live / active roundtable -->
+        <section id="liveSection" class="rt-card rt-hidden">
+            <div class="rt-card-head">
+                <div>
+                    <div class="rt-eyebrow" id="liveStatus">—</div>
+                    <h2 id="liveQuestion" class="rt-question">—</h2>
+                </div>
+                <div class="rt-card-actions">
+                    <button id="liveTranscriptBtn" class="btn btn-sm">Markdown transcript</button>
+                    <button id="liveDeleteBtn" class="btn btn-sm rt-danger">Delete</button>
+                </div>
+            </div>
+
+            <!-- Phase progression -->
+            <div class="rt-phases" id="livePhases">
+                <div class="rt-phase" data-phase="round-1"><span class="rt-phase-dot"></span>Round 1 <span class="rt-phase-label">Initial</span></div>
+                <div class="rt-phase" data-phase="round-2"><span class="rt-phase-dot"></span>Round 2 <span class="rt-phase-label">Rebuttal</span></div>
+                <div class="rt-phase" data-phase="round-3"><span class="rt-phase-dot"></span>Round 3 <span class="rt-phase-label">Rebuttal</span></div>
+                <div class="rt-phase" data-phase="synthesis"><span class="rt-phase-dot"></span>Synthesis</div>
+                <div class="rt-phase" data-phase="done"><span class="rt-phase-dot"></span>Done</div>
+            </div>
+
+            <div id="liveChairPanel" class="rt-chair-panel">
+                <div class="rt-chair-head">
+                    <div><span class="rt-eyebrow">CHAIR CONTROL</span><strong id="liveDecisionStatus">deliberating</strong></div>
+                    <div class="rt-chair-actions">
+                        <button id="liveApproveBtn" class="btn btn-sm rt-approve rt-hidden">Approve</button>
+                        <button id="liveRejectBtn" class="btn btn-sm rt-danger rt-hidden">Reject</button>
+                    </div>
+                </div>
+                <div class="rt-chair-row">
+                    <input id="liveInterjection" type="text" class="rt-input" placeholder="Add guidance for the next phase…">
+                    <button id="liveInterjectBtn" class="btn btn-sm">Interject</button>
+                </div>
+                <div class="rt-chair-row">
+                    <input id="liveChairToken" type="password" class="rt-input" autocomplete="off" placeholder="Chair token (required for web chair actions)">
+                    <input id="liveDecisionNote" type="text" class="rt-input" placeholder="Optional decision note">
+                </div>
+                <div id="liveChairHint" class="rt-chair-hint">Interjections are advisory and apply at the next phase boundary. No verdict executes actions.</div>
+            </div>
+
+            <!-- Agent grid -->
+            <div class="rt-agent-grid" id="liveAgentGrid"></div>
+
+            <!-- Synthesis card -->
+            <div id="liveSynthesis" class="rt-synth rt-hidden">
+                <div class="rt-synth-head">
+                    <div class="rt-synth-eyebrow"><i class="fas fa-gavel"></i> VERDICT</div>
+                    <div class="rt-synth-meta" id="liveSynthMeta">—</div>
+                </div>
+                <div class="rt-synth-body" id="liveSynthBody">—</div>
+            </div>
+
+            <!-- Quality scores -->
+            <div id="liveQuality" class="rt-quality rt-hidden">
+                <div class="rt-quality-head">
+                    <div class="rt-eyebrow"><i class="fas fa-chart-bar"></i> QUALITY SCORES</div>
+                    <div id="liveAgreement" class="rt-agreement">—</div>
+                </div>
+                <div id="liveQualityGrid" class="rt-quality-grid"></div>
+            </div>
+        </section>
+
+        <!-- Start form -->
+        <section class="rt-card">
+            <div class="rt-card-head">
+                <div>
+                    <div class="rt-eyebrow"><i class="fas fa-play-circle"></i> NEW DISCUSSION</div>
+                    <h2 class="rt-subtitle">Pose a question to the panel</h2>
+                </div>
+                <button id="formResetBtn" class="btn btn-sm">Reset to defaults</button>
+            </div>
+
+            <label class="rt-label">Question</label>
+            <textarea id="formQuestion" class="rt-textarea" rows="3" placeholder="What should we decide, explore, or evaluate?"></textarea>
+
+            <div class="rt-form-grid">
+                <div>
+                    <label class="rt-label">Deliberation depth</label>
+                    <select id="formRounds" class="rt-input">
+                        <option value="1">Quick consult — independent views</option>
+                        <option value="2" selected>Debate — views + 1 rebuttal</option>
+                        <option value="3">Deep debate — views + 2 rebuttals</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="rt-label">Post-run judge (extra inference)</label>
+                    <select id="formScoring" class="rt-input">
+                        <option value="false" selected>Off — synthesize only</option>
+                        <option value="true">On — add diagnostic scores</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="rt-label">Telegram table chat ID</label>
+                    <input id="formTelegram" type="text" class="rt-input" placeholder="optional — e.g. -1001234567890">
+                </div>
+                <div>
+                    <label class="rt-label">Telegram topic/thread ID</label>
+                    <input id="formTelegramThread" type="number" min="1" class="rt-input" placeholder="optional forum topic ID">
+                </div>
+                <div>
+                    <label class="rt-label">Telegram publishing</label>
+                    <select id="formTelegramTurns" class="rt-input">
+                        <option value="true" selected>Opening, every turn, synthesis</option>
+                        <option value="false">Opening and synthesis only</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="rt-label">Verdict policy</label>
+                    <select id="formApproval" class="rt-input">
+                        <option value="false" selected>Advisory only (recommended)</option>
+                        <option value="true">Record a chair decision</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="rt-label">Chair token</label>
+                    <input id="formChairToken" type="password" class="rt-input" autocomplete="off" placeholder="required for approval, real runtimes, or Telegram">
+                </div>
+                <div>
+                    <label class="rt-label">Webhook notify (URL)</label>
+                    <input id="formWebhook" type="text" class="rt-input" placeholder="optional — e.g. Slack incoming webhook">
+                </div>
+            </div>
+
+            <div class="rt-section-head">
+                <div class="rt-eyebrow">PANEL</div>
+                <button id="formAddAgent" class="btn btn-sm">+ Add agent</button>
+            </div>
+            <div id="formAgents" class="rt-agent-edit-grid"></div>
+
+            <div class="rt-section-head">
+                <div class="rt-eyebrow">SYNTHESIZER</div>
+            </div>
+            <div class="rt-synth-edit">
+                <div>
+                    <label class="rt-label">Model</label>
+                    <input id="formSynthModel" type="text" class="rt-input" placeholder="model name">
+                </div>
+                <div>
+                    <label class="rt-label">System prompt</label>
+                    <textarea id="formSynthPrompt" class="rt-input" rows="3"></textarea>
+                </div>
+            </div>
+
+            <div class="rt-form-actions">
+                <button id="formStartBtn" class="btn btn-primary rt-primary"><i class="fas fa-rocket"></i> Convene Council</button>
+            </div>
+        </section>
+
+        <!-- History -->
+        <section class="rt-card">
+            <div class="rt-card-head">
+                <div>
+                    <div class="rt-eyebrow"><i class="fas fa-history"></i> HISTORY</div>
+                    <h2 class="rt-subtitle">Past discussions</h2>
+                </div>
+                <button id="historyRefreshBtn" class="btn btn-sm"><i class="fas fa-sync-alt"></i></button>
+            </div>
+            <div id="historyList" class="rt-history">Loading…</div>
+        </section>
+
+    </div>
+
+    <style>
+    .roundtable-page { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    .rt-header { margin-bottom: 20px; }
+    .rt-safety-note { display:flex; gap:10px; align-items:flex-start; margin:-6px 0 20px; padding:12px 14px; border:1px solid rgba(124,240,255,0.3); border-radius:8px; background:rgba(124,240,255,0.07); color:#cbd5e1; line-height:1.45; }
+    .rt-safety-note i { color:#7cf0ff; margin-top:3px; }
+    .rt-hidden { display: none !important; }
+    .rt-toast { display:none; position:fixed; top:80px; right:24px; padding:12px 20px; border-radius:6px; color:#fff; z-index:1000; font-weight:500; }
+
+    .rt-card {
+        background: var(--panel-bg, #1a1f2e);
+        border: 1px solid var(--border, #2a3145);
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    .rt-card-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:16px; }
+    .rt-card-actions { display:flex; gap:8px; }
+    .rt-eyebrow { font-size:11px; letter-spacing:0.1em; color:#7cf0ff; text-transform:uppercase; margin-bottom:4px; font-weight:600; }
+    .rt-question { margin:0; font-size:20px; color:#e2e8f0; line-height:1.3; }
+    .rt-subtitle { margin:0; font-size:17px; color:#cbd5e1; }
+    .rt-section-head { display:flex; justify-content:space-between; align-items:center; margin: 16px 0 10px; padding-top:12px; border-top:1px solid rgba(42,49,69,0.5); }
+
+    .rt-label { display:block; font-size:12px; color:#94a3b8; margin-bottom:4px; font-weight:500; }
+    .rt-input { width:100%; padding:8px 10px; background:#0f1629; border:1px solid #2a3145; color:#fff; border-radius:4px; font-size:14px; font-family:inherit; box-sizing:border-box; }
+    .rt-textarea { width:100%; padding:10px 12px; background:#0f1629; border:1px solid #2a3145; color:#fff; border-radius:4px; font-size:15px; font-family:inherit; box-sizing:border-box; resize:vertical; }
+    .rt-form-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap:12px; margin-top:12px; }
+    .rt-form-actions { margin-top:16px; display:flex; justify-content:flex-end; gap:12px; }
+    .rt-primary { padding:10px 24px; font-size:15px; }
+    .rt-danger { background:#dc3545; color:#fff; }
+    .rt-approve { background:#258b46; color:#fff; }
+
+    .rt-chair-panel { background:#0a0f1d; border:1px solid rgba(124,240,255,0.25); border-radius:8px; padding:12px; margin-bottom:18px; }
+    .rt-chair-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
+    .rt-chair-head strong { color:#f59e0b; text-transform:uppercase; font-size:12px; letter-spacing:0.05em; }
+    .rt-chair-actions { display:flex; gap:8px; }
+    .rt-chair-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px; margin-top:8px; }
+    .rt-chair-row + .rt-chair-row { grid-template-columns:1fr 1fr; }
+    .rt-chair-hint { margin-top:8px; color:#94a3b8; font-size:11px; }
+
+    .rt-agent-edit-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap:12px; }
+    .rt-agent-edit-card { background:#0f1629; border:1px solid #2a3145; border-radius:6px; padding:12px; position:relative; }
+    .rt-agent-edit-card .rt-remove { position:absolute; top:6px; right:6px; background:transparent; border:none; color:#888; cursor:pointer; font-size:16px; }
+    .rt-agent-edit-card .rt-remove:hover { color:#dc3545; }
+    .rt-agent-edit-row { display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-bottom:8px; }
+    .rt-synth-edit { display:grid; grid-template-columns: 1fr 2fr; gap:12px; }
+
+    .rt-phases { display:flex; align-items:center; gap:6px; margin-bottom:20px; padding:14px; background:#0a0f1d; border-radius:8px; overflow-x:auto; }
+    .rt-phase { display:flex; align-items:center; gap:8px; padding:6px 12px; border-radius:20px; background:rgba(42,49,69,0.5); color:#666; font-size:13px; white-space:nowrap; transition: all 0.3s; }
+    .rt-phase-label { color:#555; font-size:11px; }
+    .rt-phase-dot { width:8px; height:8px; border-radius:50%; background:#444; transition: all 0.3s; }
+    .rt-phase.active { background: rgba(124,240,255,0.15); color:#7cf0ff; }
+    .rt-phase.active .rt-phase-dot { background:#7cf0ff; box-shadow:0 0 8px rgba(124,240,255,0.8); animation: rt-pulse 1.5s infinite; }
+    .rt-phase.done { color:#4db33d; }
+    .rt-phase.done .rt-phase-dot { background:#4db33d; }
+    .rt-phase.error { color:#dc3545; }
+    .rt-phase.error .rt-phase-dot { background:#dc3545; }
+    @keyframes rt-pulse { 0%, 100% { opacity:1; transform:scale(1); } 50% { opacity:0.6; transform:scale(1.25); } }
+
+    .rt-agent-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:14px; }
+    .rt-agent-card { background:#0a0f1d; border:1px solid #2a3145; border-radius:8px; padding:14px; transition: border-color 0.3s; }
+    .rt-agent-card.active { border-color:#7cf0ff; box-shadow: 0 0 14px rgba(124,240,255,0.15); }
+    .rt-agent-card.done { border-color:#4db33d; }
+    .rt-agent-card.error { border-color:#dc3545; }
+    .rt-agent-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
+    .rt-agent-role { font-size:15px; font-weight:600; color:#e2e8f0; flex:1; min-width:0; }
+    .rt-agent-status { font-size:11px; padding:2px 8px; border-radius:4px; background:rgba(100,100,100,0.2); color:#888; text-transform:uppercase; letter-spacing:0.04em; }
+    .rt-agent-status.running { background:rgba(124,240,255,0.15); color:#7cf0ff; }
+    .rt-agent-status.done { background:rgba(77,179,61,0.2); color:#4db33d; }
+    .rt-agent-status.error { background:rgba(220,53,69,0.2); color:#ff7a7a; }
+    .rt-agent-badges { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+    .rt-badge { font-size:10px; padding:2px 8px; background:rgba(42,49,69,0.8); color:#cbd5e1; border-radius:3px; font-family:monospace; }
+    .rt-badge.host { background:rgba(245,158,11,0.15); color:#f59e0b; }
+    .rt-badge.model { background:rgba(124,240,255,0.1); color:#7cf0ff; }
+    .rt-badge.round { background:rgba(168,85,247,0.15); color:#c084fc; }
+    .rt-agent-body { font-size:13px; line-height:1.5; color:#cbd5e1; max-height:280px; overflow-y:auto; white-space:pre-wrap; padding:8px; background:#070a14; border-radius:4px; }
+    .rt-agent-body:empty::before { content:"—"; color:#555; }
+    .rt-agent-stats { display:flex; gap:14px; font-size:11px; color:#94a3b8; margin-top:10px; padding-top:8px; border-top:1px solid rgba(42,49,69,0.5); flex-wrap:wrap; }
+    .rt-agent-stats span strong { color:#cbd5e1; }
+
+    .rt-synth { background:linear-gradient(180deg, rgba(124,240,255,0.05) 0%, rgba(26,31,46,1) 60%); border:1px solid rgba(124,240,255,0.3); border-radius:10px; padding:18px; margin-top:20px; }
+    .rt-synth-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+    .rt-synth-eyebrow { color:#7cf0ff; font-size:11px; letter-spacing:0.1em; font-weight:700; }
+    .rt-synth-meta { font-size:11px; color:#94a3b8; font-family:monospace; }
+    .rt-synth-body { font-size:15px; line-height:1.6; color:#e2e8f0; white-space:pre-wrap; }
+
+    .rt-quality { background:#0a0f1d; border:1px solid #2a3145; border-radius:8px; padding:16px; margin-top:16px; }
+    .rt-quality-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+    .rt-agreement { font-size:13px; color:#94a3b8; }
+    .rt-agreement strong { color:#f59e0b; font-size:16px; }
+    .rt-quality-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:12px; }
+    .rt-quality-card { background:#0f1629; border:1px solid #2a3145; border-radius:6px; padding:10px; }
+    .rt-quality-card-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:13px; }
+    .rt-quality-card-head strong { color:#cbd5e1; }
+    .rt-quality-overall { color:#f59e0b; font-weight:700; font-size:15px; }
+    .rt-dim-row { display:grid; grid-template-columns: 110px 1fr 36px; gap:6px; align-items:center; font-size:11px; margin-bottom:4px; }
+    .rt-dim-bar { height:6px; background:#070a14; border-radius:3px; overflow:hidden; }
+    .rt-dim-fill { height:100%; transition: width 0.4s; }
+
+    .rt-history { display:flex; flex-direction:column; gap:8px; }
+    .rt-history-item { background:#0a0f1d; border:1px solid #2a3145; border-radius:6px; padding:10px 14px; cursor:pointer; transition:border-color 0.2s; }
+    .rt-history-item:hover { border-color:#7cf0ff; }
+    .rt-history-row { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .rt-history-q { flex:1; font-size:13px; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+    .rt-history-meta { display:flex; gap:10px; font-size:11px; color:#888; font-family:monospace; white-space:nowrap; }
+    .rt-history-status { font-size:10px; padding:2px 8px; border-radius:3px; text-transform:uppercase; }
+    .rt-history-status.completed { background:rgba(77,179,61,0.15); color:#4db33d; }
+    .rt-history-status.failed,
+    .rt-history-status.timeout { background:rgba(220,53,69,0.15); color:#ff7a7a; }
+    .rt-history-status.running,
+    .rt-history-status.pending { background:rgba(124,240,255,0.15); color:#7cf0ff; }
+    </style>

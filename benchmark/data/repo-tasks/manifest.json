@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "description": "Executable repository tasks for coding qualification (task 0452). Each task is a tiny self-contained repo with a bounded bug-fix, feature, refactor, multi-file, validation, async, or test-repair objective; a public test, hidden executable test, allowed edit paths, and golden solution diff. A candidate model is given the editable files, requirements, and public test and must produce a unified diff; executableRepoGrader applies it and decides pass/fail from exit codes and deterministic scope checks only (no LLM judge).",
+  "tasks": [
+    { "dir": "sum-sign", "id": "sum-sign", "category": "arithmetic" },
+    { "dir": "max-pick", "id": "max-pick", "category": "conditional" },
+    { "dir": "is-even", "id": "is-even", "category": "arithmetic" },
+    { "dir": "clamp-bound", "id": "clamp-bound", "category": "conditional" },
+    { "dir": "reverse-offbyone", "id": "reverse-offbyone", "category": "loop-bounds" },
+    { "dir": "factorial-recursion", "id": "factorial-recursion", "category": "recursion" },
+    { "dir": "slugify-feature", "id": "slugify-feature", "category": "feature" },
+    { "dir": "retry-async", "id": "retry-async", "category": "async-error-handling" },
+    { "dir": "stats-refactor", "id": "stats-refactor", "category": "api-preserving-refactor" },
+    { "dir": "user-store-multifile", "id": "user-store-multifile", "category": "multi-file-feature" },
+    { "dir": "csv-validation", "id": "csv-validation", "category": "validation-edge-cases" },
+    { "dir": "public-test-repair", "id": "public-test-repair", "category": "test-repair" }
+  ]
+}

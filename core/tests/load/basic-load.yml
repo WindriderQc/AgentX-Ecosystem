@@ -1,0 +1,115 @@
+config:
+  target: "http://localhost:3080"
+  phases:
+    - duration: 30
+      arrivalRate: 5
+      name: "Warm-up phase"
+    - duration: 60
+      arrivalRate: 10
+      name: "Ramp-up load"
+    - duration: 60
+      arrivalRate: 20
+      name: "Peak load"
+    - duration: 30
+      arrivalRate: 5
+      name: "Cool-down"
+  processor: "./test-helpers.js"
+  plugins:
+    metrics-by-endpoint:
+      stripQueryString: true
+
+scenarios:
+  - name: "Health Check"
+    weight: 5
+    flow:
+      - get:
+          url: "/health"
+          capture:
+            - json: "$.status"
+              as: "health_status"
+
+  - name: "Get Metrics - Cache"
+    weight: 3
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "admin"
+            password: "admin123"
+          capture:
+            - json: "$.token"
+              as: "auth_token"
+      - think: 1
+      - get:
+          url: "/api/metrics/cache"
+          headers:
+            Cookie: "connect.sid={{ auth_token }}"
+
+  - name: "Get Metrics - Database"
+    weight: 3
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "admin"
+            password: "admin123"
+      - think: 1
+      - get:
+          url: "/api/metrics/database"
+
+  - name: "RAG Search"
+    weight: 10
+    flow:
+      - post:
+          url: "/api/rag/search"
+          json:
+            query: "test search query"
+            topK: 5
+          beforeRequest: "addTimestamp"
+          afterResponse: "recordSearchLatency"
+
+  - name: "List Conversations"
+    weight: 8
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "admin"
+            password: "admin123"
+      - think: 2
+      - get:
+          url: "/api/conversations"
+
+  - name: "Create Conversation"
+    weight: 5
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "admin"
+            password: "admin123"
+      - think: 1
+      - post:
+          url: "/api/conversations"
+          json:
+            userId: "load-test-user"
+            title: "Load Test Conversation"
+
+  - name: "Get Active Prompt"
+    weight: 7
+    flow:
+      - get:
+          url: "/api/prompts/active"
+          beforeRequest: "addTimestamp"
+
+  - name: "Analytics Overview"
+    weight: 4
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "admin"
+            password: "admin123"
+      - think: 1
+      - get:
+          url: "/api/analytics/overview"

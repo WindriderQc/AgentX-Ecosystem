@@ -1,0 +1,267 @@
+config:
+  target: "http://localhost:3080"
+  phases:
+    # Phase 1: Warm-up - Sustained streaming load
+    - duration: 60
+      arrivalRate: 5
+      name: "Sustained streaming (5 concurrent users)"
+
+    # Phase 2: Normal load
+    - duration: 120
+      arrivalRate: 10
+      name: "Normal streaming load (10 users)"
+
+    # Phase 3: Burst load
+    - duration: 30
+      arrivalRate: 20
+      name: "Burst streaming (20 users spike)"
+
+    # Phase 4: Stress test
+    - duration: 60
+      arrivalRate: 15
+      name: "Stress test (sustained 15 users)"
+
+    # Phase 5: Cool-down
+    - duration: 30
+      arrivalRate: 3
+      name: "Cool-down phase"
+
+  # Processor for helper functions
+  processor: "./streaming-test-helpers.js"
+
+  # Plugins for metrics
+  plugins:
+    metrics-by-endpoint:
+      stripQueryString: true
+    expect:
+      outputFormat: "json"
+
+# Environment variables (can be overridden)
+variables:
+  test_model: "llama2"
+  test_user: "admin"
+  test_password: "admin123"
+
+scenarios:
+  # Scenario 1: Short streaming responses
+  - name: "Short Streaming Response"
+    weight: 30
+    flow:
+      # Login first
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "{{ test_user }}"
+            password: "{{ test_password }}"
+          capture:
+            - json: "$.token"
+              as: "auth_token"
+
+      - think: 1
+
+      # Stream short response
+      - post:
+          url: "/api/chat/stream"
+          headers:
+            Cookie: "connect.sid={{ auth_token }}"
+          json:
+            model: "{{ test_model }}"
+            message: "Say hello in one sentence"
+          beforeRequest: "startTimer"
+          afterResponse: "recordStreamLatency"
+          expect:
+            - statusCode: 200
+            - contentType: "text/event-stream"
+
+  # Scenario 2: Medium streaming responses
+  - name: "Medium Streaming Response"
+    weight: 25
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "{{ test_user }}"
+            password: "{{ test_password }}"
+          capture:
+            - json: "$.token"
+              as: "auth_token"
+
+      - think: 2
+
+      - post:
+          url: "/api/chat/stream"
+          headers:
+            Cookie: "connect.sid={{ auth_token }}"
+          json:
+            model: "{{ test_model }}"
+            message: "Explain quantum computing in 3 paragraphs"
+          beforeRequest: "startTimer"
+          afterResponse: "recordStreamLatency"
+          expect:
+            - statusCode: 200
+
+  # Scenario 3: Long streaming responses (1000+ tokens)
+  - name: "Long Streaming Response"
+    weight: 15
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "{{ test_user }}"
+            password: "{{ test_password }}"
+          capture:
+            - json: "$.token"
+              as: "auth_token"
+
+      - think: 1
+
+      - post:
+          url: "/api/chat/stream"
+          headers:
+            Cookie: "connect.sid={{ auth_token }}"
+          json:
+            model: "{{ test_model }}"
+            message: "Write a detailed essay about artificial intelligence, covering history, current state, and future implications. Include multiple sections."
+            options:
+              num_predict: 1500
+          beforeRequest: "startTimer"
+          afterResponse: "recordStreamLatency"
+          expect:
+            - statusCode: 200
+
+  # Scenario 4: RAG-enabled streaming
+  - name: "RAG Streaming"
+    weight: 10
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "{{ test_user }}"
+            password: "{{ test_password }}"
+          capture:
+            - json: "$.token"
+              as: "auth_token"
+
+      - think: 1
+
+      # Ingest a test document first
+      - post:
+          url: "/api/rag/ingest"
+          headers:
+            Cookie: "connect.sid={{ auth_token }}"
+          json:
+            text: "Test document content for RAG streaming. This contains important information about streaming performance."
+            metadata:
+              title: "Load Test Document"
+              source: "artillery"
+
+      - think: 2
+
+      # Stream with RAG
+      - post:
+          url: "/api/chat/stream"
+          headers:
+            Cookie: "connect.sid={{ auth_token }}"
+          json:
+            model: "{{ test_model }}"
+            message: "What does the load test document say about streaming?"
+            useRag: true
+            ragTopK: 5
+          beforeRequest: "startTimer"
+          afterResponse: "recordStreamLatency"
+          expect:
+            - statusCode: 200
+
+  # Scenario 5: Multiple concurrent streams per user
+  - name: "Concurrent Streams"
+    weight: 10
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "{{ test_user }}"
+            password: "{{ test_password }}"
+          capture:
+            - json: "$.token"
+              as: "auth_token"
+
+      # Start 3 concurrent streaming requests
+      - parallel:
+          - post:
+              url: "/api/chat/stream"
+              headers:
+                Cookie: "connect.sid={{ auth_token }}"
+              json:
+                model: "{{ test_model }}"
+                message: "Question 1: What is AI?"
+
+          - post:
+              url: "/api/chat/stream"
+              headers:
+                Cookie: "connect.sid={{ auth_token }}"
+              json:
+                model: "{{ test_model }}"
+                message: "Question 2: What is ML?"
+
+          - post:
+              url: "/api/chat/stream"
+              headers:
+                Cookie: "connect.sid={{ auth_token }}"
+              json:
+                model: "{{ test_model }}"
+                message: "Question 3: What is DL?"
+
+  # Scenario 6: Thinking model streaming
+  - name: "Thinking Model Stream"
+    weight: 5
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "{{ test_user }}"
+            password: "{{ test_password }}"
+          capture:
+            - json: "$.token"
+              as: "auth_token"
+
+      - think: 1
+
+      - post:
+          url: "/api/chat/stream"
+          headers:
+            Cookie: "connect.sid={{ auth_token }}"
+          json:
+            model: "deepseek-r1"
+            message: "Solve this math problem: If x^2 + 5x + 6 = 0, what is x?"
+          beforeRequest: "startTimer"
+          afterResponse: "recordStreamLatency"
+          expect:
+            - statusCode: 200
+
+  # Scenario 7: Auto-routing with streaming
+  - name: "Auto-Routed Streaming"
+    weight: 5
+    flow:
+      - post:
+          url: "/api/auth/login"
+          json:
+            username: "{{ test_user }}"
+            password: "{{ test_password }}"
+          capture:
+            - json: "$.token"
+              as: "auth_token"
+
+      - think: 1
+
+      - post:
+          url: "/api/chat/stream"
+          headers:
+            Cookie: "connect.sid={{ auth_token }}"
+          json:
+            message: "Write a Python function to calculate Fibonacci numbers"
+            autoRoute: true
+            taskType: "coding"
+          beforeRequest: "startTimer"
+          afterResponse: "recordStreamLatency"
+          expect:
+            - statusCode: 200

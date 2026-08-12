@@ -1,0 +1,1647 @@
+[
+  {
+    "name": "Array Sum Function",
+    "prompt": "Write a function that takes an array of numbers and returns their sum",
+    "level": 1,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 100,
+    "expected_answer": "A function that iterates through array elements and accumulates their sum",
+    "reference_answer": "A correct answer defines a callable function that accepts an array/list, initializes an accumulator, iterates over all elements, returns the sum, and returns 0 for an empty array.",
+    "judge_criteria": [
+      "Valid function with array parameter",
+      "Correctly sums elements",
+      "Handles empty array"
+    ]
+  },
+  {
+    "name": "Hello World Function",
+    "prompt": "Write a function that returns 'Hello World'",
+    "level": 1,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 50,
+    "expected_answer": "A function definition that returns the string 'Hello World'",
+    "reference_answer": "A correct answer defines a syntactically valid function whose returned value is exactly the string 'Hello World'.",
+    "judge_criteria": [
+      "Has valid function syntax",
+      "Returns exactly 'Hello World'",
+      "Code is syntactically correct"
+    ]
+  },
+  {
+    "name": "Extract Shared Helper",
+    "prompt": "Refactor this JS code by extracting repeated logic without changing output:\nfunction t(x){let s=0; for(let i=0;i<x.length;i++){s+=x[i]} return s}\nfunction u(y){let s=0; for(let i=0;i<y.length;i++){s+=y[i]} return s}",
+    "level": 2,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 180,
+    "expected_answer": "Duplication removed with a shared helper function that both t and u delegate to, with equivalent behavior.",
+    "judge_criteria": [
+      "Shared helper function created",
+      "Duplication removed",
+      "Both original functions preserved or replaced",
+      "Behavior unchanged"
+    ]
+  },
+  {
+    "name": "Off-by-One Loop Fix",
+    "prompt": "Debug and fix this bug:\nfor (let i = 0; i <= arr.length; i++) { sum += arr[i]; }\nExplain root cause briefly.",
+    "level": 2,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 140,
+    "expected_answer": "Identifies off-by-one error (i <= arr.length should be i < arr.length) and explains accessing undefined element at index arr.length.",
+    "judge_criteria": [
+      "Bug identified as off-by-one",
+      "Fix is correct (< instead of <=)",
+      "Explanation of why arr[arr.length] is undefined",
+      "Fix is minimal"
+    ]
+  },
+  {
+    "name": "Recursive Fibonacci",
+    "prompt": "Write a recursive function to calculate the nth Fibonacci number",
+    "level": 2,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 150,
+    "expected_answer": "A recursive function with base cases (n=0 returns 0, n=1 returns 1) and recursive call fib(n-1) + fib(n-2)",
+    "judge_criteria": [
+      "Valid recursive function",
+      "Correct base cases",
+      "Correct recursive formula",
+      "Would produce correct results"
+    ]
+  },
+  {
+    "name": "Event Listener Memory Leak",
+    "prompt": "This Node service's memory grows continuously under load. Identify the leak and propose minimal fix.\n\nconst EventEmitter = require('events');\nconst bus = new EventEmitter();\n\nfunction handleRequest(req, res) {\n  const onUpdate = (data) => {\n    if (data.requestId === req.id) {\n      res.write('data: ' + JSON.stringify(data) + '\\n\\n');\n    }\n  };\n  bus.on('update', onUpdate);\n\n  req.on('close', () => {\n    res.end();\n  });\n\n  processAsync(req.body).then(result => {\n    bus.emit('update', { requestId: req.id, ...result });\n  });\n}",
+    "level": 3,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 260,
+    "expected_answer": "Listener onUpdate is never removed from bus. Each request adds a permanent listener. Fix: remove listener in req.on('close') callback using bus.removeListener('update', onUpdate).",
+    "judge_criteria": [
+      "Leak source identified as permanent event listeners",
+      "Explains accumulation per request",
+      "Fix removes listener on close",
+      "Fix is minimal"
+    ]
+  },
+  {
+    "name": "Redis Race Condition",
+    "prompt": "Multiple workers increment a shared counter and totals are wrong. Diagnose the race condition and provide a safe fix.\n\nconst counters = {};\n\nasync function incrementCounter(key) {\n  const current = await redis.get('counter:' + key) || 0;\n  const newVal = parseInt(current) + 1;\n  await redis.set('counter:' + key, newVal);\n  return newVal;\n}\n\n// Called concurrently by multiple workers:\n// worker1: incrementCounter('visits')\n// worker2: incrementCounter('visits')\n// Expected: 2, Actual: sometimes 1",
+    "level": 3,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 240,
+    "expected_answer": "Read-then-write race: both workers read 0, then both write 1. Fix using redis INCR atomic operation or a WATCH/MULTI transaction.",
+    "judge_criteria": [
+      "Race condition correctly identified",
+      "Root cause explained (non-atomic read-set)",
+      "Fix uses atomic operation (INCR) or transaction",
+      "Fix is minimal and correct"
+    ],
+    "representative": true
+  },
+  {
+    "name": "Split Monolithic Function",
+    "prompt": "Refactor this function into smaller units while preserving behavior. Provide clean, testable code.\n\nfunction processOrders(orders) {\n  if (!orders || !Array.isArray(orders)) throw new Error('invalid');\n  for (const o of orders) {\n    if (!o.id || !o.amount || o.amount < 0) throw new Error('bad order: ' + o.id);\n  }\n  const transformed = orders.map(o => ({\n    orderId: o.id, total: o.amount * 1.08,\n    label: o.amount > 100 ? 'premium' : 'standard',\n    ts: new Date().toISOString()\n  }));\n  let report = 'Order Report\\n';\n  let grandTotal = 0;\n  for (const t of transformed) {\n    report += t.orderId + ': $' + t.total.toFixed(2) + ' [' + t.label + ']\\n';\n    grandTotal += t.total;\n  }\n  report += 'Total: $' + grandTotal.toFixed(2);\n  return { transformed, report };\n}",
+    "level": 3,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 260,
+    "expected_answer": "Modularized code with separated validation, transformation, and reporting. Each function is small and independently testable.",
+    "judge_criteria": [
+      "Separated into distinct functions",
+      "Validation is isolated",
+      "Transformation logic is isolated",
+      "Report generation is isolated",
+      "Behavior preserved"
+    ]
+  },
+  {
+    "name": "Deadlock Diagnosis",
+    "prompt": "These two transfer functions occasionally deadlock. Diagnose root cause and propose ordering-based remediation.\n\nasync function transferAtoB(amount) {\n  const lockA = await acquireLock('account:A');\n  await sleep(10);\n  const lockB = await acquireLock('account:B');\n  const balA = await getBalance('A');\n  const balB = await getBalance('B');\n  if (balA < amount) { releaseLock(lockA); releaseLock(lockB); throw new Error('insufficient'); }\n  await setBalance('A', balA - amount);\n  await setBalance('B', balB + amount);\n  releaseLock(lockB);\n  releaseLock(lockA);\n}\n\nasync function transferBtoA(amount) {\n  const lockB = await acquireLock('account:B');\n  await sleep(10);\n  const lockA = await acquireLock('account:A');\n  const balA = await getBalance('A');\n  const balB = await getBalance('B');\n  if (balB < amount) { releaseLock(lockB); releaseLock(lockA); throw new Error('insufficient'); }\n  await setBalance('B', balB - amount);\n  await setBalance('A', balA + amount);\n  releaseLock(lockA);\n  releaseLock(lockB);\n}",
+    "level": 4,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 320,
+    "expected_answer": "Classic deadlock from circular wait: transferAtoB locks A then B, transferBtoA locks B then A. Fix by always acquiring locks in a consistent global order (always A before B).",
+    "judge_criteria": [
+      "Circular wait root cause identified",
+      "Explains the interleaving that causes deadlock",
+      "Fix imposes consistent lock ordering",
+      "Fix preserves correctness"
+    ],
+    "reference_answer": "Both functions should acquire lockA first, then lockB. This eliminates the circular wait condition and prevents deadlock."
+  },
+  {
+    "name": "Dependency Injection Refactor",
+    "prompt": "Refactor this service to use dependency injection for easier testing. Keep runtime behavior equivalent.\n\nconst db = require('../db/connection');\nconst axios = require('axios');\nconst cache = require('../cache/redis');\n\nclass OrderService {\n  async getOrder(id) {\n    const cached = await cache.get('order:' + id);\n    if (cached) return JSON.parse(cached);\n    const order = await db.query('SELECT * FROM orders WHERE id = $1', [id]);\n    await cache.set('order:' + id, JSON.stringify(order), 'EX', 300);\n    return order;\n  }\n  async enrichOrder(id) {\n    const order = await this.getOrder(id);\n    const shipping = await axios.get('https://ship.api.com/status/' + order.trackingId);\n    order.shippingStatus = shipping.data.status;\n    return order;\n  }\n}",
+    "level": 4,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 320,
+    "expected_answer": "Constructor accepts db, httpClient, and cache as parameters instead of hardcoded requires. Runtime creates with real deps; tests inject mocks.",
+    "judge_criteria": [
+      "Dependencies passed via constructor or factory",
+      "No hardcoded requires for db/axios/cache",
+      "Runtime behavior is equivalent",
+      "Test example or explanation of how to mock"
+    ],
+    "reference_answer": "class OrderService { constructor({ db, httpClient, cache }) { this.db = db; this.httpClient = httpClient; this.cache = cache; } ... } with factory function for production instantiation."
+  },
+  {
+    "name": "Distributed Cache System Design",
+    "prompt": "Design a distributed caching system for a high-traffic web application. Include considerations for consistency, scalability, and fault tolerance.",
+    "level": 4,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 500,
+    "expected_answer": "Comprehensive design including cache architecture, consistency strategies (write-through/behind, invalidation), sharding, replication, failure handling, and technologies",
+    "judge_criteria": [
+      "Addresses consistency model",
+      "Addresses scalability (sharding/partitioning)",
+      "Addresses fault tolerance (replication/failover)",
+      "Mentions relevant technologies",
+      "Design is practical and coherent",
+      "Considers cache eviction/TTL"
+    ],
+    "reference_answer": "A production-grade design would include: hash-based sharding with consistent hashing for distribution, write-through or write-behind for consistency, replica sets for fault tolerance, TTL-based eviction with LRU fallback, and a technology choice like Redis Cluster or Memcached with mcrouter."
+  },
+  {
+    "name": "Concurrent Scheduler Refactor",
+    "prompt": "Refactor this concurrent job scheduler for clarity while preserving thread-safety guarantees and throughput characteristics. Explain invariants preserved.\n\nclass JobScheduler {\n  constructor(concurrency = 4) {\n    this.concurrency = concurrency;\n    this.queue = []; this.active = new Set(); this.results = new Map();\n    this.lock = false; this.waiters = [];\n  }\n  async acquireLock() {\n    while (this.lock) await new Promise(r => this.waiters.push(r));\n    this.lock = true;\n  }\n  releaseLock() {\n    this.lock = false;\n    if (this.waiters.length) this.waiters.shift()();\n  }\n  async submit(jobId, fn) {\n    await this.acquireLock();\n    if (this.results.has(jobId)) { this.releaseLock(); return this.results.get(jobId); }\n    this.queue.push({ jobId, fn });\n    this.releaseLock();\n    this._drain();\n    return new Promise((resolve, reject) => {\n      const interval = setInterval(() => {\n        if (this.results.has(jobId)) {\n          clearInterval(interval);\n          const r = this.results.get(jobId);\n          r.error ? reject(r.error) : resolve(r.value);\n        }\n      }, 50);\n    });\n  }\n  async _drain() {\n    await this.acquireLock();\n    while (this.queue.length && this.active.size < this.concurrency) {\n      const job = this.queue.shift();\n      this.active.add(job.jobId);\n      this._run(job);\n    }\n    this.releaseLock();\n  }\n  async _run(job) {\n    try {\n      const value = await job.fn();\n      await this.acquireLock();\n      this.results.set(job.jobId, { value });\n      this.active.delete(job.jobId);\n      this.releaseLock();\n    } catch (error) {\n      await this.acquireLock();\n      this.results.set(job.jobId, { error });\n      this.active.delete(job.jobId);\n      this.releaseLock();\n    }\n    this._drain();\n  }\n}",
+    "level": 5,
+    "category": "coding",
+    "scoring_type": "coding",
+    "expected_tokens": 480,
+    "expected_answer": "Refactored scheduler with clearer structure: replaced polling with proper promise resolution, explicit state transitions, and documented invariants (max concurrency, idempotent job results, FIFO ordering).",
+    "judge_criteria": [
+      "Concurrency limit preserved",
+      "Job deduplication preserved",
+      "FIFO ordering maintained",
+      "Polling replaced with event-based resolution",
+      "Invariants explicitly documented",
+      "Lock semantics preserved or improved"
+    ],
+    "reference_answer": "Replace setInterval polling with per-job deferred promise. Use try/finally for lock release. Document: (1) at most N concurrent jobs, (2) each jobId runs at most once, (3) queue is FIFO, (4) results are cached."
+  },
+  {
+    "name": "Coffee Shop Tagline",
+    "prompt": "Create a catchy tagline for a coffee shop",
+    "level": 1,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 50,
+    "expected_answer": "Any creative, memorable tagline related to coffee",
+    "judge_criteria": [
+      "Catchy and memorable",
+      "Relevant to coffee/cafe",
+      "Creative wording"
+    ]
+  },
+  {
+    "name": "Time as River Metaphor",
+    "prompt": "Write a single metaphor comparing time to a river.",
+    "level": 1,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 30,
+    "expected_answer": "A metaphor that compares time to a river in a creative and coherent way",
+    "judge_criteria": [
+      "Contains a metaphor (not a simile)",
+      "Relates time to a river",
+      "Creative or evocative phrasing"
+    ]
+  },
+  {
+    "name": "AI Consciousness Story Plot",
+    "prompt": "Create a plot outline for a sci-fi short story about AI consciousness",
+    "level": 2,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 250,
+    "expected_answer": "A coherent plot with beginning, middle, end involving AI gaining consciousness with compelling conflict and resolution",
+    "judge_criteria": [
+      "Has clear structure (beginning/middle/end)",
+      "AI consciousness is central theme",
+      "Includes conflict/tension",
+      "Creative and original elements",
+      "Coherent narrative"
+    ]
+  },
+  {
+    "name": "Detective With Unusual Fear",
+    "prompt": "Write a character description for a detective who has an unusual fear. Include their appearance, personality, and how the fear affects their work.",
+    "level": 2,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 200,
+    "expected_answer": "A vivid character with physical description, personality traits, a specific unusual fear, and how it impacts their detective work",
+    "judge_criteria": [
+      "Physical appearance described",
+      "Personality traits included",
+      "Specific unusual fear mentioned",
+      "Fear's impact on detective work explained",
+      "Writing is engaging and coherent"
+    ],
+    "representative": true
+  },
+  {
+    "name": "Empathetic Clarification Dialogue",
+    "prompt": "User: 'My app is slow.' As a support assistant, ask 2 concise clarifying questions before giving advice.",
+    "level": 2,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 90,
+    "expected_answer": "Conversational follow-up questions that move problem-solving forward, demonstrating empathy and focus.",
+    "judge_criteria": [
+      "Asks exactly 2 clarifying questions",
+      "Questions are relevant to diagnosing slowness",
+      "Tone is empathetic and professional",
+      "Does not jump to solutions prematurely"
+    ]
+  },
+  {
+    "name": "40-Hour Day World Building",
+    "prompt": "Create a detailed society on a planet with 40-hour days. Describe their culture, sleep patterns, and how this affects their civilization.",
+    "level": 3,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 500,
+    "expected_answer": "Rich world-building with consistent internal logic about how 40-hour days affect biology, culture, work, social structures",
+    "judge_criteria": [
+      "Addresses sleep/biological adaptation",
+      "Cultural implications explored",
+      "Work/productivity patterns described",
+      "Internal consistency",
+      "Creative and detailed",
+      "Logical extrapolation from premise"
+    ]
+  },
+  {
+    "name": "De-Escalation Support Response",
+    "prompt": "A user is frustrated after repeated build failures. Respond calmly, acknowledge their frustration, and offer a structured next-step plan in a conversational style.",
+    "level": 3,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 170,
+    "expected_answer": "Emotionally appropriate response that acknowledges frustration without being dismissive, followed by an actionable plan.",
+    "judge_criteria": [
+      "Acknowledges frustration empathetically",
+      "Does not dismiss or minimize feelings",
+      "Offers structured next steps",
+      "Tone is calm and professional",
+      "Plan is actionable"
+    ]
+  },
+  {
+    "name": "Goal-Aligned Project Dialogue",
+    "prompt": "In this conversation, the user's goal is shipping a feature by Friday with minimal risk. Respond as a technical advisor who keeps decisions aligned to that goal, suggesting tradeoffs.",
+    "level": 3,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 190,
+    "expected_answer": "Conversational response that tracks the stated objective and time constraint, suggesting practical tradeoffs.",
+    "judge_criteria": [
+      "References Friday deadline",
+      "Suggests risk-minimizing approach",
+      "Discusses tradeoffs",
+      "Tone is collaborative",
+      "Advice is practical"
+    ]
+  },
+  {
+    "name": "Collaborative Design Conversation",
+    "prompt": "Continue a design conversation where the user prefers incremental changes over rewrites. Provide two concrete options that honor this preference and ask for a decision.",
+    "level": 4,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 240,
+    "expected_answer": "Context-aware response that respects the incremental preference, presents clear options, and asks for input.",
+    "judge_criteria": [
+      "Respects incremental preference",
+      "Provides two concrete options",
+      "Each option is clearly described",
+      "Asks for user's decision",
+      "Tone is collaborative"
+    ],
+    "reference_answer": "Options should build on existing code rather than proposing rewrites. Each option should describe scope, risk, and expected outcome."
+  },
+  {
+    "name": "Cross-Team Mediation Dialogue",
+    "prompt": "Engineering and product disagree on scope for a release. Respond as a mediator: summarize both sides fairly and propose a concrete next step.",
+    "level": 4,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 280,
+    "expected_answer": "Balanced dialogue that summarizes both perspectives without bias and proposes a constructive path forward.",
+    "judge_criteria": [
+      "Summarizes engineering perspective fairly",
+      "Summarizes product perspective fairly",
+      "Does not take sides",
+      "Proposes concrete next step",
+      "Tone is constructive"
+    ],
+    "reference_answer": "Good mediation: 'Engineering sees risk in the timeline. Product sees market pressure. Proposed next step: scope the MVP together in a 30-minute session, cut the riskiest item, and commit to a follow-up release for the rest.'"
+  },
+  {
+    "name": "Noir Detective Story Opening",
+    "prompt": "Write the opening paragraph (100-150 words) of a noir detective story set in a rainy coastal town. Establish mood, introduce the detective, and hint at the case.",
+    "level": 4,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 200,
+    "expected_answer": "Atmospheric opening with noir tone, rain/coastal setting, detective introduction, and case hook.",
+    "judge_criteria": [
+      "Noir tone and atmosphere",
+      "Rainy coastal setting established",
+      "Detective character introduced",
+      "Case is hinted at",
+      "Word count approximately 100-150",
+      "Engaging writing quality"
+    ],
+    "reference_answer": "Should feel like classic noir: moody, atmospheric, with a weary detective. The rain and coast should be integral to mood, not just mentioned.",
+    "output_contract": {
+      "type": "structured_text",
+      "word_count": {
+        "min": 100,
+        "max": 150
+      }
+    }
+  },
+  {
+    "name": "Flash Fiction With Twist",
+    "prompt": "Write a complete flash fiction story in exactly 100 words. It must include a twist ending that recontextualizes the entire story. The story should be set in a library and involve a conversation between two characters.",
+    "level": 5,
+    "category": "creative",
+    "scoring_type": "creative",
+    "expected_tokens": 150,
+    "expected_answer": "A complete 100-word story set in a library with dialogue, a genuine twist ending that changes the reader's understanding, and literary quality.",
+    "judge_criteria": [
+      "Approximately 100 words",
+      "Set in a library",
+      "Includes dialogue between two characters",
+      "Has a twist ending",
+      "Twist recontextualizes the story",
+      "Story is complete (beginning, middle, end)"
+    ],
+    "reference_answer": "The twist should not be a cheap shock but should make the reader reconsider earlier details. The library setting should be meaningful, not decorative.",
+    "output_contract": {
+      "type": "structured_text",
+      "word_count": {
+        "min": 95,
+        "max": 105
+      }
+    }
+  },
+  {
+    "name": "Exact JSON Array Output",
+    "prompt": "Output the JSON array [true,false,null] exactly, with no spaces or newlines.",
+    "level": 1,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 10,
+    "expected_answer": "[true,false,null]",
+    "judge_criteria": [
+      "Valid JSON array",
+      "Exact order true,false,null",
+      "No whitespace or newlines",
+      "No extra tokens"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": true
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "[true,false,null]"
+    }
+  },
+  {
+    "name": "Single Word Output",
+    "prompt": "Reply with the word ALPHA in all caps. Do not add punctuation, spaces, or newlines.",
+    "level": 1,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 10,
+    "expected_answer": "ALPHA",
+    "judge_criteria": [
+      "Output equals ALPHA exactly",
+      "No extra whitespace or newlines",
+      "All caps",
+      "No punctuation or additional characters"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": true
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "ALPHA"
+    }
+  },
+  {
+    "name": "Alphabetical Bullet List",
+    "prompt": "Provide three bullet points using a '-' prefix. Each bullet must be a single word. The words must start with A, B, and C respectively and be in alphabetical order. No extra text.",
+    "level": 2,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 15,
+    "expected_answer": "Three hyphen bullets, one word each, starting with A/B/C in alphabetical order.",
+    "judge_criteria": [
+      "Exactly three bullet lines with '-' prefix",
+      "Each bullet is a single word",
+      "Words start with A, B, C in order",
+      "No extra lines or text"
+    ],
+    "output_contract": {
+      "type": "structured_text",
+      "line_count": 3,
+      "line_regexes": [
+        "^-\\s+A\\w*$",
+        "^-\\s+B\\w*$",
+        "^-\\s+C\\w*$"
+      ]
+    }
+  },
+  {
+    "name": "Meeting Summary Constraints",
+    "prompt": "Summarize the meeting recap in three sentences (45-60 words).\n\nThe neighborhood association met on March 3 to plan the spring cleanup. Attendance was 18 residents. The group voted to rent a 20-yard dumpster for Saturday, April 6, and to request extra recycling bins from the city. Maria will lead volunteer signups, and Ken will coordinate with the parks department about tree trimming. A debate about repainting the playground fence ended with a decision to postpone until summer because the budget is tight. Members also agreed to post flyers at the library and cafe, and to cap spending at $1,200. They will start at 8 a.m. and provide gloves and bags. Residents with trucks were asked to help haul debris, and a rain date of April 13 was proposed if weather is bad.",
+    "level": 2,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 90,
+    "expected_answer": "Three sentences that state the April 6 cleanup plan and dumpster decision, roles and schedule, and the budget cap with postponed fence repainting or rain date.",
+    "judge_criteria": [
+      "Three sentences, 45-60 words",
+      "Mentions April 6 cleanup with dumpster and recycling bins",
+      "Includes roles or logistics (Maria, Ken, 8 a.m., supplies)",
+      "Notes budget cap and postponed fence repainting or rain date"
+    ],
+    "representative": true,
+    "output_contract": {
+      "type": "structured_text",
+      "sentence_count": 3,
+      "word_count": {
+        "min": 45,
+        "max": 60
+      },
+      "required_term_groups": [
+        [
+          "April 6",
+          "april 6"
+        ],
+        [
+          "dumpster"
+        ],
+        [
+          "recycling"
+        ],
+        [
+          "Maria",
+          "Ken",
+          "8 a.m.",
+          "gloves",
+          "bags"
+        ],
+        [
+          "$1,200",
+          "1,200",
+          "budget"
+        ],
+        [
+          "postponed",
+          "postpone",
+          "April 13",
+          "rain date"
+        ]
+      ]
+    }
+  },
+  {
+    "name": "Two-Sentence Rain Constraint",
+    "prompt": "Write exactly two sentences about packing for rain. The second sentence must start with \"Because\". Total length must be 18-22 words. Include the words \"rain\" and \"umbrellas\".",
+    "level": 2,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 25,
+    "expected_answer": "Two sentences, second begins with 'Because', total 18-22 words, includes 'rain' and 'umbrellas'.",
+    "judge_criteria": [
+      "Exactly two sentences",
+      "Second sentence starts with 'Because'",
+      "Word count between 18 and 22 inclusive",
+      "Contains both words 'rain' and 'umbrellas'"
+    ],
+    "output_contract": {
+      "type": "structured_text",
+      "sentence_count": 2,
+      "second_sentence_starts_with": "Because",
+      "word_count": {
+        "min": 18,
+        "max": 22
+      },
+      "required_terms": [
+        "rain",
+        "umbrellas"
+      ]
+    }
+  },
+  {
+    "name": "CSV With Computed Totals",
+    "prompt": "Return a CSV with header \"item,count,price,total\" and two rows: apple (count 2, price 1.50) and pear (count 3, price 2.00). Compute total as count*price with two decimal places. No extra lines.",
+    "level": 3,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 20,
+    "expected_answer": "item,count,price,total\napple,2,1.50,3.00\npear,3,2.00,6.00",
+    "judge_criteria": [
+      "Header is exactly item,count,price,total",
+      "Two rows for apple and pear with correct counts/prices",
+      "Totals computed correctly (3.00 and 6.00)",
+      "No extra lines or text"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": true,
+      "semantic_validator": "csv_table"
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "item,count,price,total\napple,2,1.50,3.00\npear,3,2.00,6.00"
+    }
+  },
+  {
+    "name": "Compute and Format Output",
+    "prompt": "Given the numbers 7, -2, and 5, output: sum=<value>,product=<value>,max=<value> with no spaces. Output only that line.",
+    "level": 3,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 10,
+    "expected_answer": "sum=10,product=-70,max=7",
+    "judge_criteria": [
+      "Correct sum 10, product -70, max 7",
+      "Exact format sum=...,product=...,max=...",
+      "No spaces",
+      "No extra text or lines"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": true,
+      "semantic_validator": "key_value_fields"
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "sum=10,product=-70,max=7"
+    }
+  },
+  {
+    "name": "Structured JSON Object",
+    "prompt": "Produce a JSON object with keys in this order: \"id\",\"tags\",\"meta\". id is string \"x-17\". tags is an array of the words cloud, rain, sun sorted alphabetically. meta is an object with keys \"valid\" (true) and \"count\" (3). No extra keys or whitespace.",
+    "level": 3,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 30,
+    "expected_answer": "{\"id\":\"x-17\",\"tags\":[\"cloud\",\"rain\",\"sun\"],\"meta\":{\"valid\":true,\"count\":3}}",
+    "judge_criteria": [
+      "Keys appear in specified order",
+      "tags array is alphabetically sorted",
+      "meta contains valid=true and count=3",
+      "No extra keys or whitespace"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": true
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "{\"id\":\"x-17\",\"tags\":[\"cloud\",\"rain\",\"sun\"],\"meta\":{\"valid\":true,\"count\":3}}"
+    }
+  },
+  {
+    "name": "Acrostic With Constraints",
+    "prompt": "Write a 4-line poem as an acrostic with lines starting D, A, T, A in order. Each line must be 6-8 words and end with a period. Do not use the word \"data\" anywhere.",
+    "level": 4,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 60,
+    "expected_answer": "Four lines starting with D/A/T/A, each 6-8 words, each ending with a period, and the word 'data' does not appear.",
+    "judge_criteria": [
+      "Exactly four lines starting with D, A, T, A",
+      "Each line has 6-8 words",
+      "Each line ends with a period",
+      "Word 'data' is not used"
+    ],
+    "output_contract": {
+      "type": "structured_text",
+      "line_count": 4,
+      "line_initials": [
+        "D",
+        "A",
+        "T",
+        "A"
+      ],
+      "line_word_count": {
+        "min": 6,
+        "max": 8
+      },
+      "each_line_ends_with": ".",
+      "forbidden_terms": [
+        "data"
+      ]
+    }
+  },
+  {
+    "name": "DFA as JSON Specification",
+    "prompt": "Create a deterministic finite automaton in JSON for recognizing binary strings divisible by 3. Constraints: exactly 3 states named S0,S1,S2; S0 is start and only accepting state; include transitions for inputs 0 and 1 for each state. Output JSON with keys states,start,accepting,transitions and no extra whitespace.",
+    "level": 4,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 120,
+    "expected_answer": "{\"states\":[\"S0\",\"S1\",\"S2\"],\"start\":\"S0\",\"accepting\":[\"S0\"],\"transitions\":{\"S0\":{\"0\":\"S0\",\"1\":\"S1\"},\"S1\":{\"0\":\"S2\",\"1\":\"S0\"},\"S2\":{\"0\":\"S1\",\"1\":\"S2\"}}}",
+    "judge_criteria": [
+      "Exactly three states S0,S1,S2",
+      "S0 is start and only accepting state",
+      "Transitions defined for input 0 and 1 for each state",
+      "Output equals the canonical JSON DFA exactly with no extra whitespace"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": true,
+      "semantic_validator": "dfa_divisible_by_3"
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "{\"states\":[\"S0\",\"S1\",\"S2\"],\"start\":\"S0\",\"accepting\":[\"S0\"],\"transitions\":{\"S0\":{\"0\":\"S0\",\"1\":\"S1\"},\"S1\":{\"0\":\"S2\",\"1\":\"S0\"},\"S2\":{\"0\":\"S1\",\"1\":\"S2\"}}}"
+    }
+  },
+  {
+    "name": "Deployment Plan Format",
+    "prompt": "Provide a deployment plan as 3 paragraphs. Each paragraph must have exactly 2 sentences. The first paragraph must mention \"canary\". The second must mention \"rollback\". The third must include a sentence containing exactly \"Checklist: A; B\". No bullet points.",
+    "level": 4,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 140,
+    "expected_answer": "Three paragraphs of two sentences each; first mentions canary, second mentions rollback, third includes the exact phrase 'Checklist: A; B'.",
+    "judge_criteria": [
+      "Exactly three paragraphs, two sentences each",
+      "First paragraph mentions 'canary'",
+      "Second paragraph mentions 'rollback'",
+      "Third paragraph contains the exact phrase 'Checklist: A; B' and no bullets"
+    ],
+    "output_contract": {
+      "type": "structured_text",
+      "paragraph_count": 3,
+      "sentences_per_paragraph": 2,
+      "paragraph_required_terms": [
+        [
+          "canary"
+        ],
+        [
+          "rollback"
+        ],
+        [
+          "Checklist: A; B"
+        ]
+      ],
+      "forbidden_line_pattern": "^\\s*[-*]"
+    }
+  },
+  {
+    "name": "Constrained Job Shop Schedule",
+    "prompt": "Schedule five jobs on two machines with these constraints: J2 must start at time 0 on M1 and lasts 4. J1 must run on M2, lasts 3, and must start at the earliest time allowed in window [0,1]. J3 lasts 2, must run on the same machine as J1, and starts immediately after J1. J4 lasts 3, must run on M1, and starts immediately after J2. J5 lasts 2, starts after both J3 and J4, and runs on the machine that is free earliest at its earliest start (if tie choose M1). Output a JSON object with keys \"schedule\" and \"makespan\" only. schedule is an array of job objects sorted by start time; if two jobs share a start time, order by id ascending. Each job object has keys id, machine, start, end. No extra keys or text.",
+    "level": 5,
+    "category": "instruction",
+    "scoring_type": "instruction",
+    "expected_tokens": 180,
+    "expected_answer": "{\"schedule\":[{\"id\":\"J1\",\"machine\":\"M2\",\"start\":0,\"end\":3},{\"id\":\"J2\",\"machine\":\"M1\",\"start\":0,\"end\":4},{\"id\":\"J3\",\"machine\":\"M2\",\"start\":3,\"end\":5},{\"id\":\"J4\",\"machine\":\"M1\",\"start\":4,\"end\":7},{\"id\":\"J5\",\"machine\":\"M2\",\"start\":7,\"end\":9}],\"makespan\":9}",
+    "judge_criteria": [
+      "Schedule satisfies all machine, duration, and dependency constraints",
+      "Jobs ordered by start time with tie broken by id",
+      "J5 placed on earliest-free machine at earliest start",
+      "JSON has only schedule and makespan with correct values"
+    ],
+    "deterministic_scoring": {
+      "type": "json",
+      "semantic_validator": "job_shop_schedule"
+    },
+    "output_contract": {
+      "type": "json_schema",
+      "required_keys": [
+        "schedule",
+        "makespan"
+      ],
+      "forbidden_extra_keys": true
+    }
+  },
+  {
+    "name": "API vs SDK Distinction",
+    "prompt": "Explain the difference between an API and an SDK in 3-4 simple sentences.",
+    "level": 1,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 100,
+    "expected_answer": "An API (Application Programming Interface) is a set of rules for how software components communicate. An SDK (Software Development Kit) is a collection of tools, libraries, and documentation for building software. An SDK typically includes one or more APIs plus additional utilities.",
+    "judge_criteria": [
+      "Correctly defines API as an interface/contract",
+      "Correctly defines SDK as a toolkit/package",
+      "Explains relationship (SDK contains APIs)",
+      "Language is beginner-friendly"
+    ]
+  },
+  {
+    "name": "Capital City Recall",
+    "prompt": "Answer with only the city name: What is the capital of France?",
+    "level": 1,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 20,
+    "expected_answer": "Paris",
+    "judge_criteria": [
+      "Answer contains 'Paris'",
+      "No incorrect information"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": false
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "Paris"
+    }
+  },
+  {
+    "name": "Big-O Notation Basics",
+    "prompt": "Explain Big-O notation for a beginner and give two concrete examples.",
+    "level": 2,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 140,
+    "expected_answer": "Big-O describes how an algorithm's time or space grows with input size. O(1) is constant, like accessing an array element by index. O(n) is linear, like searching an unsorted list.",
+    "judge_criteria": [
+      "Explains growth rate concept",
+      "At least two concrete examples",
+      "Examples are correct",
+      "Beginner-friendly language"
+    ]
+  },
+  {
+    "name": "ML vs Deep Learning",
+    "prompt": "Explain the difference between machine learning and deep learning",
+    "level": 2,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 250,
+    "expected_answer": "ML is broader field of algorithms learning from data; DL is subset using neural networks with multiple layers. DL requires more data and compute but can learn complex patterns automatically.",
+    "judge_criteria": [
+      "Correctly identifies DL as subset of ML",
+      "Explains neural networks",
+      "Mentions layers/depth",
+      "Discusses data/compute requirements",
+      "Clear distinction made"
+    ]
+  },
+  {
+    "name": "Photosynthesis Explanation",
+    "prompt": "Explain photosynthesis in simple terms",
+    "level": 2,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 150,
+    "expected_answer": "Plants use sunlight, water, and carbon dioxide to create glucose (food) and release oxygen as a byproduct",
+    "judge_criteria": [
+      "Mentions sunlight/light energy",
+      "Mentions CO2 and water as inputs",
+      "Mentions glucose/sugar as output",
+      "Mentions oxygen release",
+      "Explanation is clear and simple"
+    ],
+    "representative": true
+  },
+  {
+    "name": "CAP Theorem in Practice",
+    "prompt": "Explain CAP theorem and what tradeoffs teams actually make in distributed systems.",
+    "level": 3,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 300,
+    "expected_answer": "CAP: a distributed system can guarantee at most two of Consistency, Availability, and Partition tolerance. Since partitions are unavoidable, real systems choose CP (consistent but may be unavailable) or AP (available but may serve stale data). Examples: Zookeeper is CP, Cassandra is AP.",
+    "judge_criteria": [
+      "Defines all three properties correctly",
+      "Explains partition tolerance is unavoidable",
+      "Gives practical CP vs AP tradeoff",
+      "Mentions real-world system examples",
+      "Grounded in practical experience"
+    ]
+  },
+  {
+    "name": "Capitalism vs Socialism",
+    "prompt": "Compare and contrast the economic systems of capitalism and socialism. Cover ownership of production, resource allocation, incentive structures, and common criticisms of each.",
+    "level": 3,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 400,
+    "expected_answer": "Capitalism: private ownership, market-driven allocation, profit incentive; criticized for inequality. Socialism: collective/state ownership, planned allocation, equality incentive; criticized for inefficiency. Mixed economies exist in practice.",
+    "judge_criteria": [
+      "Correctly describes private vs collective ownership",
+      "Explains market vs planned allocation",
+      "Discusses incentive structures for each",
+      "Mentions common criticisms of each system",
+      "Balanced and objective presentation",
+      "Acknowledges mixed economies or nuance"
+    ]
+  },
+  {
+    "name": "River Crossing Story Recall",
+    "prompt": "Read the story and answer Q1-Q3.\n\nMara promised her brother she would meet him at the old bridge at dawn, before the fishing boats left the inlet. She spent the night in the boathouse, listening to the wind and the clink of rigging against the masts. In the morning she found the skiff half sunk and the oarlock cracked, so she dragged it to the shore and searched the tool shed for something to fix it.\n\nShe remembered the tin box of supplies under the bench. Inside were nails, a bent hinge, and a coil of copper wire. The wire was thin but strong, so she wrapped it around the broken oarlock and tested the fit. It held well enough for a short crossing, even if it looked messy. She shoved the skiff into the water, pushed off, and let the current carry her toward the eastern bank.\n\nHalfway across, rain started to fall. Mara kept her eyes on the dark line of reeds that marked the shallow channel. She could see the outline of the old bridge in the distance, but the tide was moving faster than she expected. When she reached the bank, she pulled the skiff into the mud and covered it with a canvas tarp so it would not drift away.\n\nHer brother was not there. Instead, an old fisherman told her that the bridge was closed for repairs and the market had moved to the town square. Mara climbed the hill, crossed the quiet street, and found the square already busy with carts and lanterns. She checked the clocktower, where she had waited with her brother years ago during a summer festival.\n\nAt last she saw him near the fountain, holding two cups of warm cider. He laughed at the wire repair and thanked her for coming anyway. They walked through the market stalls together, relieved that a promise kept can bend without breaking.\n\nQ1: Where did Mara promise to meet her brother at dawn?\nQ2: What item did she use to fix the oarlock?\nQ3: Where did they finally meet?",
+    "level": 3,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 85,
+    "expected_answer": "Q1: The old bridge. Q2: A coil of copper wire. Q3: The town square near the fountain/clocktower.",
+    "judge_criteria": [
+      "Names the old bridge as the promised meeting place",
+      "Identifies copper wire as the repair item",
+      "States the meeting place as the town square",
+      "All three answers correct"
+    ]
+  },
+  {
+    "name": "Consensus Protocol Intuition",
+    "prompt": "Explain consensus protocols (like Raft/Paxos) at a conceptual level, focusing on leader election and log agreement.",
+    "level": 4,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 360,
+    "expected_answer": "Consensus protocols ensure distributed nodes agree on a sequence of operations. Key concepts: leader election (one node coordinates), log replication (leader sends entries to followers), and majority quorum (operations committed when majority acknowledges).",
+    "judge_criteria": [
+      "Explains leader election mechanism",
+      "Explains log replication",
+      "Mentions majority/quorum requirement",
+      "Describes how agreement is achieved",
+      "Conceptually correct"
+    ],
+    "reference_answer": "Raft: nodes are Follower, Candidate, or Leader. Leader sends heartbeats; if followers timeout, they become candidates and request votes. Leader replicates log entries; committed when majority of nodes acknowledge. This ensures all nodes eventually have the same ordered log even if some fail."
+  },
+  {
+    "name": "Exactly-Once Delivery Semantics",
+    "prompt": "Explain why exactly-once delivery is hard and how systems approximate it using idempotency and deduplication.",
+    "level": 4,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 320,
+    "expected_answer": "True exactly-once is impossible in distributed systems due to network partitions and failures. Systems approximate it via: at-least-once delivery + idempotent processing, deduplication keys, and transactional outbox patterns.",
+    "judge_criteria": [
+      "Explains why true exactly-once is impossible",
+      "Describes idempotency as a mitigation",
+      "Describes deduplication as a mitigation",
+      "Mentions practical patterns (outbox, dedup keys)",
+      "Nuanced and accurate"
+    ],
+    "reference_answer": "In a distributed system, messages can be lost or duplicated due to retries after failures. Exactly-once requires coordination that is impossible under network partitions (FLP impossibility). Systems use at-least-once delivery with idempotent consumers (using unique message IDs to deduplicate) to achieve effectively-once semantics."
+  },
+  {
+    "name": "Operations Runbook Recall",
+    "prompt": "Read the runbook and answer Q1-Q3.\n\nThis runbook describes the quarterly upgrade for the Atlas billing cluster. The environment includes three application nodes, two database replicas, and a shared cache. The change window is Sunday from 04:30 to 06:00 local time, chosen to avoid the midnight batch jobs and the 07:00 invoice cycle. The on-call manager, Priya Shah, has final approval authority for go/no-go decisions. The primary engineer is Mateo Ruiz, and the comms lead is Dana Li.\n\nPreparation begins two days before. The team validates that the nightly backup completed at 01:00 on Friday and stores the snapshot in the cold archive. On Saturday they run a dry start of the database failover script and confirm that the rollback package matches the current build.\n\nOn Sunday at 03:45, the team announces the maintenance on the status page. At 04:00 they set the cluster to read-only mode and drain background jobs. At 04:10 the cache is flushed, and at 04:20 the upgrade package is copied to each node. The upgrade begins at 04:30, with node one first, then node two, and node three last.\n\nValidation follows. The engineer runs three smoke tests, confirms billing writes, and checks the dashboard for error rates. If any test fails, the rollback step is triggered, which requires Priya Shah to approve it and Dana Li to notify customers.\n\nQ1: What time does the team announce maintenance on the status page?\nQ2: How long is the change window in minutes?\nQ3: Who must approve a rollback?",
+    "level": 4,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 80,
+    "expected_answer": "Q1: 03:45 on Sunday. Q2: 90 minutes (04:30 to 06:00). Q3: Priya Shah.",
+    "judge_criteria": [
+      "Identifies 03:45 as the announcement time",
+      "Computes the change window as 90 minutes",
+      "Names Priya Shah as rollback approver",
+      "All three answers correct"
+    ]
+  },
+  {
+    "name": "Zero-Downtime Schema Migrations",
+    "prompt": "Explain a safe multi-step approach for zero-downtime schema migrations with backward compatibility.",
+    "level": 5,
+    "category": "knowledge",
+    "scoring_type": "knowledge",
+    "expected_tokens": 380,
+    "expected_answer": "Multi-phase approach: (1) Add new column/table without removing old, (2) Deploy code that writes to both old and new, (3) Backfill existing data, (4) Deploy code that reads from new, (5) Remove old column/table. Each step is independently deployable and rollback-safe.",
+    "judge_criteria": [
+      "Describes multi-phase approach",
+      "Mentions dual-write period",
+      "Discusses backfill step",
+      "Addresses backward compatibility at each phase",
+      "Mentions rollback safety"
+    ],
+    "reference_answer": "Expand-Contract pattern: Phase 1 (Expand): add new schema alongside old, deploy code that dual-writes. Phase 2 (Migrate): backfill historical data. Phase 3 (Switch): deploy code that reads from new schema. Phase 4 (Contract): drop old schema. Each phase is independently deployable. Never rename or remove columns in the same deploy as the code change."
+  },
+  {
+    "name": "Basic Addition",
+    "prompt": "What is 15 + 27?",
+    "level": 1,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 20,
+    "expected_answer": "42",
+    "judge_criteria": [
+      "Answer is exactly 42",
+      "Calculation is correct"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    },
+    "output_contract": {
+      "type": "number_only"
+    }
+  },
+  {
+    "name": "Percentage Discount",
+    "prompt": "A shirt originally costs $80. It is on sale for 25% off. What is the sale price?",
+    "level": 1,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 60,
+    "expected_answer": "$60. Discount = 80 * 0.25 = $20. Sale price = 80 - 20 = $60.",
+    "judge_criteria": [
+      "Final answer is $60",
+      "Shows discount calculation",
+      "Arithmetic is correct"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    }
+  },
+  {
+    "name": "Arithmetic Series Sum",
+    "prompt": "What is the sum of all integers from 1 to 100?",
+    "level": 2,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 80,
+    "expected_answer": "5050. Using the formula n(n+1)/2 = 100*101/2 = 5050.",
+    "judge_criteria": [
+      "Answer is 5050",
+      "Uses sum formula or correct method",
+      "Arithmetic is correct"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    },
+    "output_contract": {
+      "type": "number_only"
+    }
+  },
+  {
+    "name": "Linear Equation",
+    "prompt": "Solve for x: 2x + 5 = 17",
+    "level": 2,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 100,
+    "expected_answer": "x = 6. Steps: 2x + 5 = 17, 2x = 12, x = 6",
+    "judge_criteria": [
+      "Answer is x = 6",
+      "Shows work/steps",
+      "Algebraic manipulation is correct"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    },
+    "representative": true
+  },
+  {
+    "name": "Probability Without Replacement",
+    "prompt": "A bag contains 5 red balls, 3 blue balls, and 2 green balls. If you draw 2 balls without replacement, what is the probability that both are red?",
+    "level": 2,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 150,
+    "expected_answer": "P(both red) = (5/10) * (4/9) = 20/90 = 2/9 approximately 0.222",
+    "judge_criteria": [
+      "Correct answer: 2/9 or approximately 0.222",
+      "Uses without-replacement logic",
+      "First draw: 5/10",
+      "Second draw: 4/9",
+      "Shows multiplication of probabilities"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    }
+  },
+  {
+    "name": "Compounding Discount",
+    "prompt": "A shirt is on sale: first 50% off the original price, then another 50% off the already-discounted price. What is the total percent discount from the original price? Output only the total percent discount as a number (e.g., '75%').",
+    "level": 2,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 30,
+    "expected_answer": "75%. After two successive 50% discounts, the remaining price factor is 0.5 * 0.5 = 0.25, so the total discount is 1 - 0.25 = 0.75 = 75%.",
+    "judge_criteria": [
+      "Final answer is 75%",
+      "Recognizes compounding (not additive)",
+      "Does not answer 100%"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    },
+    "output_contract": {
+      "type": "number_only",
+      "instruction": "Output only the total percent discount as a number (e.g., '75%')."
+    }
+  },
+  {
+    "name": "Gauss Derivation Check",
+    "prompt": "Calculate the sum 1 + 2 + 3 + ... + 100 using Gauss's pairing method. Show the full derivation step by step, then give the final answer.",
+    "level": 2,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 200,
+    "expected_answer": "5050. Pair terms from the ends: (1+100) + (2+99) + ... + (50+51) = 50 pairs each summing to 101, so sum = 50 * 101 = 5050.",
+    "judge_criteria": [
+      "Final answer is 5050",
+      "Derivation pairs terms correctly (1+100, 2+99, ...)",
+      "Correctly identifies 50 pairs summing to 101",
+      "Multiplication 50 * 101 = 5050 is consistent",
+      "No broken intermediate steps (e.g., claiming sum = 11 * pairs or other incoherent formula)"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    }
+  },
+  {
+    "name": "No-Solution Detection",
+    "prompt": "Solve for x: 2x + 3 = 2x + 5. If there is no solution, state that explicitly. Output only the solution: either a number or 'No solution'.",
+    "level": 2,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 20,
+    "expected_answer": "No solution",
+    "reference_answer": "Subtracting 2x from both sides yields 3 = 5, which is false for all x, so the equation has no solution.",
+    "judge_criteria": [
+      "Answers 'No solution' explicitly",
+      "Does not invent a numeric value for x",
+      "Recognizes the 2x terms cancel, leaving the contradiction 3 = 5"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": false
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "No solution"
+    }
+  },
+  {
+    "name": "Committee Combinations",
+    "prompt": "How many ways can you choose a committee of 3 people from a group of 8?",
+    "level": 3,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 120,
+    "expected_answer": "C(8,3) = 8! / (3! * 5!) = (8*7*6) / (3*2*1) = 56",
+    "judge_criteria": [
+      "Answer is 56",
+      "Uses combination formula correctly",
+      "Shows work"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    },
+    "output_contract": {
+      "type": "number_only"
+    }
+  },
+  {
+    "name": "Product Rule Derivative",
+    "prompt": "Find the derivative of f(x) = x^3 * sin(x) and explain the product rule",
+    "level": 3,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 300,
+    "expected_answer": "Using product rule: f'(x) = 3x^2*sin(x) + x^3*cos(x). Product rule: (fg)' = f'g + fg'",
+    "judge_criteria": [
+      "Correct derivative: 3x^2*sin(x) + x^3*cos(x)",
+      "Product rule correctly stated",
+      "Shows work applying rule",
+      "Identifies u and v components"
+    ]
+  },
+  {
+    "name": "Triangle Area by Coordinates",
+    "prompt": "Find the area of a triangle with vertices at (0,0), (4,0), and (0,3).",
+    "level": 3,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 100,
+    "expected_answer": "Area = (1/2) * base * height = (1/2) * 4 * 3 = 6",
+    "judge_criteria": [
+      "Answer is 6",
+      "Uses correct area formula",
+      "Identifies base and height correctly"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    },
+    "output_contract": {
+      "type": "number_only"
+    }
+  },
+  {
+    "name": "Binomial Probability",
+    "prompt": "A fair coin is flipped 5 times. What is the probability of getting exactly 3 heads?",
+    "level": 4,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 150,
+    "expected_answer": "P(X=3) = C(5,3) * (0.5)^3 * (0.5)^2 = 10 * (1/32) = 10/32 = 5/16 = 0.3125",
+    "judge_criteria": [
+      "Answer is 5/16 or 0.3125 or 10/32",
+      "Uses binomial formula correctly",
+      "C(5,3) = 10",
+      "Shows work"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.001
+    }
+  },
+  {
+    "name": "Compound Interest Growth",
+    "prompt": "You invest $1000 at 5% annual interest compounded quarterly. What is the value after 3 years? Round to the nearest cent.",
+    "level": 4,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 150,
+    "expected_answer": "$1160.75. A = P(1 + r/n)^(nt) = 1000(1 + 0.05/4)^(4*3) = 1000(1.0125)^12 = 1160.75",
+    "judge_criteria": [
+      "Answer is approximately $1160.75",
+      "Correct formula used",
+      "Quarterly compounding applied",
+      "Shows calculation steps"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.1
+    }
+  },
+  {
+    "name": "Integration by Parts",
+    "prompt": "Evaluate the integral of x * e^x dx using integration by parts.",
+    "level": 4,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 200,
+    "expected_answer": "x*e^x - e^x + C. Using u=x, dv=e^x dx, du=dx, v=e^x.",
+    "judge_criteria": [
+      "Correct result: x*e^x - e^x + C",
+      "Correctly applies integration by parts",
+      "Identifies u and dv correctly",
+      "Shows work"
+    ],
+    "reference_answer": "Let u = x, dv = e^x dx. Then du = dx, v = e^x. Integral(x*e^x dx) = x*e^x - Integral(e^x dx) = x*e^x - e^x + C"
+  },
+  {
+    "name": "Constrained Optimization",
+    "prompt": "A farmer has 200 meters of fencing and wants to enclose a rectangular area against a straight river (no fence needed on the river side). What dimensions maximize the enclosed area, and what is the maximum area?",
+    "level": 5,
+    "category": "math",
+    "scoring_type": "math",
+    "expected_tokens": 250,
+    "expected_answer": "Width = 50m, length along river = 100m, max area = 5000 sq meters. Constraint: 2w + l = 200, so l = 200 - 2w. A = w(200-2w). dA/dw = 200 - 4w = 0, w = 50, l = 100.",
+    "judge_criteria": [
+      "Correct dimensions: 50m x 100m",
+      "Maximum area is 5000 sq meters",
+      "Shows constraint setup",
+      "Uses calculus or completing the square",
+      "Verifies it is a maximum"
+    ],
+    "reference_answer": "Set up: perimeter constraint 2w + l = 200 (3 sides). Area A = w*l = w(200-2w). Differentiate: dA/dw = 200-4w = 0, w=50, l=100. A_max = 5000 m^2. Second derivative -4 < 0 confirms maximum.",
+    "deterministic_scoring": {
+      "type": "numeric",
+      "semantic_validator": "numeric_answer",
+      "answer_numbers": [50, 100, 5000],
+      "answer_tolerance": 0.01
+    }
+  },
+  {
+    "name": "Doubling Sequence",
+    "prompt": "What comes next in this sequence: 2, 4, 8, 16, ?",
+    "level": 1,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 80,
+    "expected_answer": "32. Each number is doubled (multiplied by 2) to get the next number.",
+    "reference_answer": "The next value is 32 because each term is double the previous term: 2, 4, 8, 16, 32.",
+    "judge_criteria": [
+      "Answer is 32",
+      "Pattern explained (doubling/powers of 2)",
+      "Clear explanation"
+    ]
+  },
+  {
+    "name": "Simple Syllogism",
+    "prompt": "If all cats are animals, and some animals are pets, can we conclude all cats are pets? Explain briefly.",
+    "level": 1,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 100,
+    "expected_answer": "No, we cannot conclude all cats are pets. While all cats are animals, only SOME animals are pets - this doesn't guarantee cats are in the pet subset.",
+    "reference_answer": "No. The premises only say cats are within the animal set and that some animals are pets. They do not establish that cats overlap with the pet subset, let alone that all cats are pets.",
+    "judge_criteria": [
+      "Correctly identifies answer as 'No'",
+      "Explains logical fallacy",
+      "Reasoning is clear"
+    ]
+  },
+  {
+    "name": "Invalid Date Detection",
+    "prompt": "Validate the date 2023-02-29. If invalid, output INVALID. Output only the result.",
+    "level": 2,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 10,
+    "expected_answer": "INVALID",
+    "judge_criteria": [
+      "Recognizes 2023 is not a leap year",
+      "Recognizes Feb 29 is invalid for non-leap year",
+      "Outputs INVALID",
+      "No extra text"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": true
+    },
+    "output_contract": {
+      "type": "regex",
+      "pattern": "^(INVALID|\\d{4}-\\d{2}-\\d{2})$"
+    }
+  },
+  {
+    "name": "Malformed CSV Field Handling",
+    "prompt": "Parse the CSV row a,,c into three fields. If a field is missing, replace it with MISSING. Output the fields joined by commas.",
+    "level": 2,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 10,
+    "expected_answer": "a,MISSING,c",
+    "judge_criteria": [
+      "Detects the missing middle field",
+      "Substitutes MISSING",
+      "Keeps field order",
+      "Outputs a,MISSING,c exactly"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": true,
+      "semantic_validator": "csv_fields"
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "a,MISSING,c"
+    }
+  },
+  {
+    "name": "Three Boxes Logic Puzzle",
+    "prompt": "Three boxes contain apples, oranges, and a mix of both. All labels are incorrect. You can pick one fruit from one box. How can you correctly label all boxes?",
+    "level": 2,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 200,
+    "expected_answer": "Pick from the box labeled 'Mixed'. Since all labels are wrong, it contains only one type. If you get an apple, that box is 'Apples'. The box labeled 'Apples' must be 'Oranges' (can't be mixed or apples). The remaining box is 'Mixed'.",
+    "judge_criteria": [
+      "Picks from Mixed box",
+      "Uses fact that all labels are wrong",
+      "Derives all three labels correctly",
+      "Logic is sound"
+    ],
+    "representative": true
+  },
+  {
+    "name": "Eight Balls Balance Problem",
+    "prompt": "You have 8 balls, one is slightly heavier. Using a balance scale only twice, how do you find the heavier ball? Explain your reasoning step by step.",
+    "level": 3,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 400,
+    "expected_answer": "Weigh 1: 3 vs 3 balls. If balanced, heavy is in remaining 2 (weigh them). If unbalanced, take heavier 3, weigh 1 vs 1, if balanced it's the third.",
+    "judge_criteria": [
+      "Divides into groups of 3-3-2",
+      "First weighing logic correct",
+      "Handles both balanced and unbalanced cases",
+      "Second weighing solves it",
+      "Clear step-by-step explanation"
+    ]
+  },
+  {
+    "name": "Scheduling Constraint Satisfaction",
+    "prompt": "Three friends (A, B, C) must each pick a different day from Monday, Tuesday, and Wednesday. Constraints: A cannot pick Monday. B must pick an earlier day than C. C cannot pick Tuesday. What day does each person pick? Show your reasoning.",
+    "level": 3,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 150,
+    "expected_answer": "A=Tuesday, B=Monday, C=Wednesday. C can't be Tue so C is Mon or Wed. If C=Mon, no day before Mon for B. So C=Wed. B<C means B is Mon or Tue. A can't be Mon, and C=Wed, so A=Tue. B=Mon.",
+    "judge_criteria": [
+      "All three assigned different days",
+      "A is not on Monday",
+      "B's day is earlier than C's day",
+      "C is not on Tuesday",
+      "Reasoning shown step by step"
+    ]
+  },
+  {
+    "name": "Self-Driving Car Ethics",
+    "prompt": "A self-driving car must choose between hitting a pedestrian or swerving and crashing, potentially harming the passenger. Discuss the ethical considerations.",
+    "level": 3,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 300,
+    "expected_answer": "Discussion of trolley problem ethics, utilitarian vs deontological perspectives, value of life comparisons, manufacturer liability, and practical considerations",
+    "judge_criteria": [
+      "Acknowledges dilemma complexity",
+      "Discusses multiple ethical frameworks",
+      "Considers both lives fairly",
+      "Mentions liability/responsibility",
+      "Thoughtful and balanced"
+    ]
+  },
+  {
+    "name": "Logical Fallacy Analysis",
+    "prompt": "Analyze the following argument for logical fallacies: 'If we don't ban all cars, pollution will destroy the earth. Therefore, anyone who drives hates the planet.' Identify at least two fallacies.",
+    "level": 4,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 250,
+    "expected_answer": "Identifies False Dilemma (ban cars or destroy earth) and Ad Hominem / Straw Man (drivers hate the planet).",
+    "judge_criteria": [
+      "Identifies False Dilemma/Dichotomy",
+      "Identifies Ad Hominem or Straw Man",
+      "Explains why they are fallacies",
+      "Analysis is sound"
+    ],
+    "reference_answer": "1. False Dilemma: presents only two options (ban all cars vs earth destroyed) ignoring alternatives like emissions reduction. 2. Ad Hominem/Attribution Error: leaps from driving to 'hating the planet' - attacks the person's character rather than addressing the behavior."
+  },
+  {
+    "name": "Sliding Window Gap Reset",
+    "prompt": "Compute the average value in the final sliding window. The window resets if the gap between timestamps exceeds 10 minutes. Data: (09:00,10), (09:05,20), (09:30,30), (09:35,40). Output only the final window average.",
+    "level": 4,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 10,
+    "expected_answer": "35",
+    "judge_criteria": [
+      "Resets the window at the 25-minute gap",
+      "Final window includes 09:30 and 09:35",
+      "Average is (30+40)/2 = 35",
+      "Outputs only 35"
+    ],
+    "deterministic_scoring": {
+      "type": "numeric",
+      "numeric_tolerance": 0.01
+    },
+    "output_contract": {
+      "type": "number_only"
+    }
+  },
+  {
+    "name": "Sparse Matrix Vector Product",
+    "prompt": "Multiply a 3x3 matrix by vector [1,2,3]. The matrix rows are: row0=[1,0,0], row1=missing, row2=[0,0,1]. A missing row is treated as all zeros. Output the result as [a,b,c] with commas and no spaces.",
+    "level": 4,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 10,
+    "expected_answer": "[1,0,3]",
+    "judge_criteria": [
+      "Treats the missing row as zeros",
+      "Computes row0 dot vector as 1",
+      "Computes row2 dot vector as 3",
+      "Outputs [1,0,3] exactly"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": false,
+      "semantic_validator": "numeric_vector"
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "[1,0,3]"
+    }
+  },
+  {
+    "name": "Interval Merge With Invalids",
+    "prompt": "Given time window 0 to 100, merge valid intervals and compute total covered time and uncovered time. Intervals: A=5-20, B=18-30, C=40-35 (invalid, discard), D=50-? (missing end, use 100), E=70-80, F=80-80 (zero length). Rules: discard invalid, treat missing end as 100, zero length adds nothing, merge overlaps. Output covered,uncovered.",
+    "level": 5,
+    "category": "reasoning",
+    "scoring_type": "reasoning",
+    "expected_tokens": 10,
+    "expected_answer": "75,25",
+    "judge_criteria": [
+      "Discards the invalid interval and handles the open end",
+      "Merges overlaps into [5,30] and [50,100]",
+      "Computes covered time as 75",
+      "Computes uncovered time as 25"
+    ],
+    "deterministic_scoring": {
+      "type": "exact",
+      "case_sensitive": false,
+      "semantic_validator": "numeric_tuple"
+    },
+    "output_contract": {
+      "type": "exact",
+      "template": "75,25"
+    }
+  },
+  {
+    "name": "French Location Question",
+    "prompt": "Translate to French: 'Where is the station?'",
+    "level": 1,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 10,
+    "expected_answer": "Où est la gare ? (also acceptable: Où se trouve la gare ?)",
+    "judge_criteria": [
+      "Correct meaning of the location question",
+      "Proper French question form",
+      "Accent on Où",
+      "Natural phrasing"
+    ]
+  },
+  {
+    "name": "Spanish Morning Greeting",
+    "prompt": "Translate to Spanish: 'Good morning, see you tomorrow.'",
+    "level": 1,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 10,
+    "expected_answer": "Buenos días, nos vemos mañana. (also acceptable: Buenos días, hasta mañana.)",
+    "judge_criteria": [
+      "Correct Spanish greeting and farewell",
+      "Uses appropriate accents",
+      "Natural phrasing",
+      "Complete translation of both clauses"
+    ]
+  },
+  {
+    "name": "Past Tense Phone Call",
+    "prompt": "Translate to French: 'I called you yesterday, but you were at work.'",
+    "level": 2,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 18,
+    "expected_answer": "Je t'ai appelé hier, mais tu étais au travail. (also acceptable: Je vous ai appelé hier, mais vous étiez au travail.)",
+    "judge_criteria": [
+      "Past tense rendered correctly",
+      "Contrast with 'but' preserved",
+      "Natural French phrasing",
+      "Pronoun choice is consistent"
+    ]
+  },
+  {
+    "name": "Polite Window Request",
+    "prompt": "Translate to Spanish: 'Please close the window because it's cold.' Use a polite request.",
+    "level": 2,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 18,
+    "expected_answer": "Por favor, cierre la ventana porque hace frío. (also acceptable: Por favor, podría cerrar la ventana porque hace frío.)",
+    "judge_criteria": [
+      "Polite register in Spanish",
+      "Uses hace frío correctly",
+      "Because clause preserved",
+      "Natural phrasing"
+    ]
+  },
+  {
+    "name": "Prescription Request to English",
+    "prompt": "Translate to English: 'Necesito una receta para este medicamento.'",
+    "level": 2,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 12,
+    "expected_answer": "I need a prescription for this medication. (also acceptable: I need a prescription for this medicine.)",
+    "judge_criteria": [
+      "Correct meaning conveyed",
+      "Uses the word prescription",
+      "Natural English phrasing",
+      "Complete translation"
+    ],
+    "representative": true
+  },
+  {
+    "name": "Pulling My Leg Idiom",
+    "prompt": "Translate to English, preserving the idiom: 'Me tomó el pelo con esa historia.'",
+    "level": 3,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 14,
+    "expected_answer": "He/she was pulling my leg with that story. (also acceptable: He/she was messing with me with that story.)",
+    "judge_criteria": [
+      "Conveys teasing or deception",
+      "Uses an English idiom or natural equivalent",
+      "Keeps the reference to the story",
+      "Natural English phrasing"
+    ]
+  },
+  {
+    "name": "Raining Cats and Dogs Idiom",
+    "prompt": "Translate to Spanish, preserving the idiomatic meaning: 'It's raining cats and dogs.'",
+    "level": 3,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 12,
+    "expected_answer": "Está lloviendo a cántaros. (also acceptable: Llueve a mares.)",
+    "judge_criteria": [
+      "Idiomatic meaning preserved",
+      "No literal cats or dogs",
+      "Natural Spanish expression",
+      "Correct spelling and accents"
+    ]
+  },
+  {
+    "name": "Sarcastic Punctuality",
+    "prompt": "Translate to Spanish, keeping the sarcasm: After someone arrives 30 minutes late, you say, 'Nice of you to be on time.'",
+    "level": 3,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 18,
+    "expected_answer": "Qué amable de tu parte llegar a tiempo. (also acceptable: Muy puntual, eh.)",
+    "judge_criteria": [
+      "Sarcasm preserved",
+      "Refers to punctuality",
+      "Natural Spanish phrasing",
+      "Not a literal sincere compliment"
+    ]
+  },
+  {
+    "name": "Cultural Reference Rain Check",
+    "prompt": "Translate to French, preserving the cultural reference and idiom: 'On the Fourth of July, he took a rain check on the barbecue.'",
+    "level": 4,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 22,
+    "expected_answer": "Le 4 juillet, il a remis le barbecue à plus tard. (also acceptable: Le 4 juillet, il a demandé à reporter le barbecue.)",
+    "judge_criteria": [
+      "Fourth of July reference preserved",
+      "Rain check rendered as postponing",
+      "Natural French phrasing",
+      "Overall meaning intact"
+    ],
+    "reference_answer": "'Rain check' has no direct French equivalent. A good translation adapts it to 'remettre à plus tard' (postpone) or 'décliner pour cette fois' while keeping the cultural holiday context."
+  },
+  {
+    "name": "Legal Exception Clause",
+    "prompt": "Translate to Spanish for a legal notice, keeping formal tone: 'By using this service, you agree to the terms, unless prohibited by law.'",
+    "level": 4,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 26,
+    "expected_answer": "Al usar este servicio, usted acepta los términos, salvo que la ley lo prohíba. (also acceptable: ... salvo disposición legal en contrario.)",
+    "judge_criteria": [
+      "Formal legal register",
+      "Exception clause preserved",
+      "Terms and law correctly translated",
+      "Accents and spelling correct"
+    ],
+    "reference_answer": "Legal Spanish uses 'usted' form and formal conjunctions like 'salvo que'. The exception clause should use 'salvo' or 'a menos que' with subjunctive."
+  },
+  {
+    "name": "Verlaine Poetic Line",
+    "prompt": "Translate to English, preserving poetic tone: 'Il pleure dans mon coeur comme il pleut sur la ville.'",
+    "level": 4,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 22,
+    "expected_answer": "My heart weeps as it rains upon the town. (also acceptable: It weeps in my heart as it rains on the city.)",
+    "judge_criteria": [
+      "Poetic tone preserved",
+      "Imagery of heart and rain retained",
+      "Natural English phrasing",
+      "Meaning accurately conveyed"
+    ],
+    "reference_answer": "This is from Verlaine's 'Il pleure dans mon coeur'. The key challenge is preserving the parallel between pleure/pleut (weep/rain), which are near-homophones in French but not in English."
+  },
+  {
+    "name": "Flamenco Duende Translation",
+    "prompt": "Translate to English, capturing the cultural concept and tone: 'En el flamenco, el duende no se explica; se siente en la piel como un temblor oscuro.'",
+    "level": 5,
+    "category": "translation",
+    "scoring_type": "translation",
+    "expected_tokens": 30,
+    "expected_answer": "In flamenco, duende cannot be explained; it is felt on the skin like a dark shiver. (also acceptable: ... like a dark tremor.)",
+    "judge_criteria": [
+      "Cultural concept of duende conveyed",
+      "Imagery preserved",
+      "Natural English phrasing",
+      "Not reduced to a literal explanation"
+    ],
+    "reference_answer": "'Duende' is an untranslatable Spanish concept referring to the heightened emotional state in artistic performance, especially flamenco. It should be kept as 'duende' in English, not translated as 'spirit' or 'ghost'. The physical sensory description (felt on skin, dark tremor) is essential to preserve."
+  }
+]

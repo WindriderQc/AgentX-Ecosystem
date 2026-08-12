@@ -1,0 +1,1318 @@
+/**
+ * Integration Tests for Nerve Center API Routes
+ *
+ * Tests all endpoints under /api/nerve-center/ using supertest.
+ * Mocks external services (fetch, alertService, hostPreferenceService,
+ * InferenceLog) while letting the real modelRouter/modelRouterConfig
+ * load with test env vars so routing logic is exercised.
+ */
+
+// ── Env setup (before any require) ──────────────────────────────────────────
+process.env.OLLAMA_HOST = 'http://primary:11434';
+process.env.OLLAMA_HOST_SECONDARY = 'http://secondary:11434';
+process.env.OLLAMA_HOST_TERTIARY = 'http://tertiary:11434';
+
+const mockRouterTaskOverrideState = new Map();
+
+// ── InferenceLog chainable mock ─────────────────────────────────────────────
+const mockLean = jest.fn();
+const mockLimit = jest.fn(() => ({ lean: mockLean }));
+const mockSort = jest.fn(() => ({ limit: mockLimit }));
+const mockFind = jest.fn(() => ({ sort: mockSort }));
+const mockLatestLean = jest.fn();
+const mockLatestSort = jest.fn(() => ({ lean: mockLatestLean }));
+
+jest.mock('../../models/InferenceLog', () => ({
+  find: (...args) => mockFind(...args),
+  findOne: jest.fn(() => ({ sort: mockLatestSort })),
+  countDocuments: jest.fn(() => Promise.resolve(0))
+}));
+
+jest.mock('../../models/RouterTaskConfig', () => ({
+  find: jest.fn(() => ({
+    lean: jest.fn(() => Promise.resolve([...mockRouterTaskOverrideState.values()]))
+  })),
+  findOneAndUpdate: jest.fn((_query, update) => {
+    mockRouterTaskOverrideState.set(update.taskType, {
+      taskType: update.taskType,
+      model: update.model,
+      host: update.host
+    });
+    return Promise.resolve(update);
+  }),
+  deleteOne: jest.fn(({ taskType }) => {
+    mockRouterTaskOverrideState.delete(taskType);
+    return Promise.resolve({ deletedCount: 1 });
+  }),
+  deleteMany: jest.fn(() => {
+    const deletedCount = mockRouterTaskOverrideState.size;
+    mockRouterTaskOverrideState.clear();
+    return Promise.resolve({ deletedCount });
+  })
+}));
+
+jest.mock('../../models/ModelRegistry', () => ({
+  find: jest.fn(() => {
+    const chain = {
+      sort: jest.fn(() => chain),
+      select: jest.fn(() => chain),
+      lean: jest.fn(() => Promise.resolve([
+        { modelName: 'qwen3.5:9b' },
+        { modelName: 'qwen3-2507-30b-long-48k' },
+        { modelName: 'qwen2.5:7b' }
+      ]))
+    };
+    return chain;
+  })
+}));
+
+// ── Logger mock ─────────────────────────────────────────────────────────────
+jest.mock('../../config/logger', () => ({
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+  debug: jest.fn()
+}));
+
+// ── node-fetch mock (healthy by default) ────────────────────────────────────
+jest.mock('node-fetch', () =>
+  jest.fn(() =>
+    Promise.resolve({ ok: true, json: () => Promise.resolve({ models: [] }) })
+  )
+);
+
+// ── Alert service mock ──────────────────────────────────────────────────────
+jest.mock('../../src/services/alertService', () => {
+  const mock = {
+    getRecentAlerts: jest.fn(),
+    getStatistics: jest.fn(),
+    getAlertService: jest.fn()
+  };
+  mock.getAlertService.mockReturnValue(mock);
+  return mock;
+});
+
+// ── Host preference service mock ────────────────────────────────────────────
+jest.mock('../../src/services/hostPreferenceService', () => ({
+  ...jest.requireActual('../../src/services/hostPreferenceIdentity'),
+  getAll: jest.fn(),
+  get: jest.fn(),
+  upsert: jest.fn(),
+  reload: jest.fn(),
+  getHealthCheckIntervalMs: jest.fn(() => 30000),
+  getPinnedEntries: jest.fn((pref) => pref.pinnedModels || []),
+  claimBenchmark: jest.fn(),
+  heartbeatBenchmarkClaim: jest.fn(),
+  releaseBenchmarkClaim: jest.fn(),
+  listBenchmarkClaims: jest.fn()
+}));
+
+jest.mock('../../src/services/agentRuntimeConfigService', () => ({
+  buildAgentRuntimeConfigExport: jest.fn(),
+  validateRuntimeConfigs: jest.fn()
+}));
+
+const mockBuildEcosystemSnapshot = jest.fn();
+jest.mock('../../src/services/ecosystemSnapshotService', () => ({
+  buildEcosystemSnapshot: (...args) => mockBuildEcosystemSnapshot(...args)
+}));
+
+// ── Require modules AFTER mocks ─────────────────────────────────────────────
+const express = require('express');
+const request = require('supertest');
+
+const alertService = require('../../src/services/alertService');
+const hostPrefService = require('../../src/services/hostPreferenceService');
+const agentRuntimeConfigService = require('../../src/services/agentRuntimeConfigService');
+const {
+  HOSTS,
+  TASK_MODELS,
+  resetAllTaskModelOverrides
+} = require('../../src/services/modelRouterConfig');
+
+// Snapshot original config values so we can restore after PUT mutations
+const ORIGINAL_TASK_MODELS = JSON.parse(JSON.stringify(TASK_MODELS));
+
+// ── Express app ─────────────────────────────────────────────────────────────
+const app = express();
+app.use(express.json());
+app.use('/api/nerve-center', require('../../routes/nerve-center'));
+
+// ── Test suite ──────────────────────────────────────────────────────────────
+
+describe('Nerve Center API Routes', () => {
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockRouterTaskOverrideState.clear();
+
+    // Default mock returns
+    mockLean.mockResolvedValue([]);
+    mockLatestLean.mockResolvedValue(null);
+    alertService.getRecentAlerts.mockResolvedValue([]);
+    hostPrefService.getAll.mockResolvedValue([]);
+    hostPrefService.get.mockResolvedValue(null);
+    hostPrefService.upsert.mockResolvedValue({});
+    hostPrefService.reload.mockResolvedValue();
+    hostPrefService.getHealthCheckIntervalMs.mockReturnValue(30000);
+    hostPrefService.getPinnedEntries.mockImplementation((pref) => pref.pinnedModels || []);
+    agentRuntimeConfigService.buildAgentRuntimeConfigExport.mockResolvedValue({
+      lanes: { daily: { model: 'ax/gemma4:26b-a4b-it-qat', contextSize: 65536 } }
+    });
+    agentRuntimeConfigService.validateRuntimeConfigs.mockReturnValue({
+      hermes: { status: 'ok', drift: [] },
+      openclaw: { status: 'ok', drift: [] }
+    });
+    mockBuildEcosystemSnapshot.mockResolvedValue({
+      status: 'ok',
+      generatedAt: '2026-07-02T00:00:00.000Z',
+      sources: {},
+      runtimes: {},
+      hosts: {},
+      agents: {},
+      models: {},
+      rag: {},
+      prompts: {},
+      memory: {},
+      schedules: {},
+      pipeline: {},
+      alerts: {},
+      drift: [],
+      recommendations: []
+    });
+
+    // Restore config objects to original state
+    Object.keys(TASK_MODELS).forEach(k => delete TASK_MODELS[k]);
+    Object.assign(TASK_MODELS, JSON.parse(JSON.stringify(ORIGINAL_TASK_MODELS)));
+
+    await resetAllTaskModelOverrides();
+  });
+
+  describe('GET /agent-runtime-config/export', () => {
+    it('returns the generated Hermes/OpenClaw runtime export', async () => {
+      const res = await request(app)
+        .get('/api/nerve-center/agent-runtime-config/export?coreBaseUrl=http://agentx.test:3080')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.lanes.daily.model).toBe('ax/gemma4:26b-a4b-it-qat');
+      expect(agentRuntimeConfigService.buildAgentRuntimeConfigExport).toHaveBeenCalledWith({
+        coreBaseUrl: 'http://agentx.test:3080',
+        includeCandidates: true
+      });
+    });
+  });
+
+  describe('POST /agent-runtime-config/validate', () => {
+    it('returns expected config plus validation result', async () => {
+      const res = await request(app)
+        .post('/api/nerve-center/agent-runtime-config/validate?includeCandidates=false')
+        .send({ hermesConfig: { model: { default: 'x' } }, openclawConfig: {} })
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.validation.hermes.status).toBe('ok');
+      expect(agentRuntimeConfigService.buildAgentRuntimeConfigExport).toHaveBeenCalledWith({
+        coreBaseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/),
+        includeCandidates: false
+      });
+      expect(agentRuntimeConfigService.validateRuntimeConfigs).toHaveBeenCalledWith(
+        expect.objectContaining({ lanes: expect.any(Object) }),
+        { hermesConfig: { model: { default: 'x' } }, openclawConfig: {} }
+      );
+    });
+  });
+
+  describe('GET /ecosystem', () => {
+    it('returns the sanitized ecosystem snapshot', async () => {
+      const res = await request(app)
+        .get('/api/nerve-center/ecosystem')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toHaveProperty('generatedAt');
+      expect(res.body.data).toHaveProperty('sources');
+      expect(res.body.data).toHaveProperty('drift');
+      expect(mockBuildEcosystemSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+        coreBaseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/)
+      }));
+    });
+
+    it('preserves source-of-truth fields for docs/runtime alignment', async () => {
+      mockBuildEcosystemSnapshot.mockResolvedValueOnce({
+        status: 'ok',
+        generatedAt: '2026-07-03T00:00:00.000Z',
+        sources: {
+          runtime: { status: 'ok' },
+          pipeline: { status: 'ok' }
+        },
+        runtimes: {
+          hermes: {
+            expected: { model: 'openrouter/z-ai/glm-5.2', contextLength: 131072 },
+            authority: { status: 'drifted', live: { configValidation: 'protected' } }
+          },
+          openclaw: {
+            expected: { providerId: 'ollama', apiBase: 'http://192.0.2.99:3080/api/openclaw-ollama' },
+            registryPolicy: {
+              mcpSkillBus: { tools: ['agentx__ecosystem_snapshot'] },
+              providerAliases: [{ id: 'host-alpha-ollama', aliasOf: 'ollama' }],
+              contextOverrides: [{ provider: 'host-alpha-ollama', model: 'ax/qwen3-coder:30b', contextWindow: 74854 }]
+            }
+          }
+        },
+        hosts: {
+          preferences: [
+            { displayName: 'Host Alpha', hostKey: 'primary' },
+            { displayName: 'Host Beta', hostKey: 'secondary' },
+            { displayName: 'Host Gamma', hostKey: 'tertiary' }
+          ]
+        },
+        agents: {},
+        models: {},
+        rag: {},
+        prompts: { count: 2, activeCount: 1, configs: [] },
+        memory: {},
+        schedules: {},
+        pipeline: { sourceOfTruth: 'mongodb:pipelinetasks', counts: { queued: 1 }, active: [] },
+        alerts: {},
+        drift: [{
+          id: 'hermes-live-config-protected',
+          severity: 'medium',
+          owner: '0330',
+          current: 'protected',
+          expected: 'validated_or_documented_override'
+        }],
+        recommendations: [{ owner: '0330', driftCount: 1 }]
+      });
+
+      const res = await request(app)
+        .get('/api/nerve-center/ecosystem')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.pipeline.sourceOfTruth).toBe('mongodb:pipelinetasks');
+      expect(res.body.data.hosts.preferences).toEqual(expect.arrayContaining([
+        expect.objectContaining({ displayName: 'Host Alpha', hostKey: 'primary' }),
+        expect.objectContaining({ displayName: 'Host Beta', hostKey: 'secondary' }),
+        expect.objectContaining({ displayName: 'Host Gamma', hostKey: 'tertiary' })
+      ]));
+      expect(res.body.data.runtimes.hermes.expected.model).toBe('openrouter/z-ai/glm-5.2');
+      expect(res.body.data.runtimes.openclaw.registryPolicy.mcpSkillBus.tools)
+        .toContain('agentx__ecosystem_snapshot');
+      expect(res.body.data.prompts).toEqual(expect.objectContaining({
+        count: 2,
+        activeCount: 1
+      }));
+      expect(res.body.data.drift).toEqual([
+        expect.objectContaining({ id: 'hermes-live-config-protected', owner: '0330' })
+      ]);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 1. GET /api/nerve-center/intelligence
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe('GET /intelligence', () => {
+    it('returns success with all expected nested fields', async () => {
+      hostPrefService.getAll.mockResolvedValue([
+        { hostUrl: 'http://primary:11434', preferredModel: 'qwen3-2507-30b-long-48k:latest' }
+      ]);
+      alertService.getRecentAlerts.mockResolvedValue([{ title: 'test alert' }]);
+      mockLean.mockResolvedValue([{ model: 'qwen3:14b', host: 'primary' }]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/intelligence')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toHaveProperty('cluster');
+      expect(res.body.data).toHaveProperty('routing');
+      expect(res.body.data).toHaveProperty('hostPreferences');
+      expect(res.body.data).toHaveProperty('alerts');
+      expect(res.body.data).toHaveProperty('recentRouting');
+
+      // cluster comes from getAllModelsHealth — array of host health objects
+      expect(Array.isArray(res.body.data.cluster)).toBe(true);
+
+      // hostPreferences reflects our mock
+      expect(res.body.data.hostPreferences).toEqual([
+        { hostUrl: 'http://primary:11434', preferredModel: 'qwen3-2507-30b-long-48k:latest' }
+      ]);
+
+      // alerts reflect our mock
+      expect(res.body.data.alerts).toEqual([{ title: 'test alert' }]);
+
+      // recentRouting reflects InferenceLog mock
+      expect(res.body.data.recentRouting).toEqual([
+        { model: 'qwen3:14b', host: 'primary' }
+      ]);
+    });
+
+    it('returns routing with failover status properties', async () => {
+      const res = await request(app)
+        .get('/api/nerve-center/intelligence')
+        .expect(200);
+
+      const routing = res.body.data.routing;
+      expect(routing).toHaveProperty('currentHost');
+      expect(routing).toHaveProperty('isFailedOver');
+      expect(routing).toHaveProperty('failoverCount');
+      expect(routing).toHaveProperty('primaryHost', 'http://primary:11434');
+      expect(routing).toHaveProperty('authority', 'inference_log');
+      expect(routing).toHaveProperty('statePersisted', true);
+    });
+
+    it('reports the latest persisted actual fallback instead of manual intent', async () => {
+      mockLatestLean.mockResolvedValueOnce({
+        _id: 'fallback-log',
+        caller: 'embedding',
+        model: 'nomic-embed-text:v1.5',
+        host: 'http://secondary:11434',
+        routedHostUrl: 'http://primary:11434',
+        fallbackUsed: true,
+        fallbackReason: 'primary unreachable',
+        status: 'success',
+        timestamp: new Date('2026-07-23T12:00:00.000Z')
+      });
+
+      const res = await request(app)
+        .get('/api/nerve-center/intelligence')
+        .expect(200);
+
+      expect(res.body.data.routing).toEqual(expect.objectContaining({
+        currentHost: 'http://secondary:11434',
+        isFailedOver: true,
+        reason: 'primary unreachable',
+        authority: 'inference_log'
+      }));
+      expect(res.body.data.routing.observedRequest).toEqual(expect.objectContaining({
+        actualHost: 'http://secondary:11434',
+        requestedHost: 'http://primary:11434',
+        fallbackUsed: true
+      }));
+    });
+
+    it('returns /status as a compatibility alias for /intelligence', async () => {
+      const res = await request(app)
+        .get('/api/nerve-center/status')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.meta).toEqual({ aliasFor: '/intelligence' });
+      expect(res.body.data).toHaveProperty('cluster');
+      expect(res.body.data).toHaveProperty('routing');
+      expect(res.body.data).toHaveProperty('hostPreferences');
+      expect(res.body.data).toHaveProperty('alerts');
+      expect(res.body.data).toHaveProperty('recentRouting');
+    });
+
+    it('returns 500 when getAllModelsHealth throws', async () => {
+      // node-fetch is used by getAllModelsHealth → getModelHealth → checkHostHealth
+      // Force fetch to throw to trigger the error path
+      const fetch = require('node-fetch');
+      fetch.mockImplementationOnce(() => { throw new Error('network down'); });
+
+      // getAllModelsHealth catches individual host errors, so we need ALL hosts to fail
+      // Actually, the intelligence endpoint wraps buildIntelligenceSummary in try/catch.
+      // Let's instead make the InferenceLog.find throw to trigger the catch.
+      mockLean.mockRejectedValue(new Error('db connection lost'));
+
+      const res = await request(app)
+        .get('/api/nerve-center/intelligence')
+        .expect(500);
+
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toBe('db connection lost');
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 2. GET /api/nerve-center/routing/config
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe('GET /routing/config', () => {
+    it('returns merged taskModels plus config metadata', async () => {
+      const res = await request(app)
+        .get('/api/nerve-center/routing/config')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      const {
+        taskModels,
+        hosts,
+        taskMetadata,
+        explainerSteps,
+        classification,
+        defaults,
+        overrides,
+        taskConfigState,
+        availableModels
+      } = res.body.data;
+
+      expect(taskModels).toBeDefined();
+      expect(hosts).toBeDefined();
+      expect(taskMetadata).toBeDefined();
+      expect(Array.isArray(explainerSteps)).toBe(true);
+      expect(classification).toHaveProperty('prompt');
+      expect(defaults.taskModels.quick_chat).toBeDefined();
+      expect(overrides.taskModels).toEqual({});
+      expect(taskConfigState.quick_chat.isOverride).toBe(false);
+      expect(availableModels).toContain('qwen3.5:9b');
+    });
+
+    it('taskModels.code_generation has model and host properties', async () => {
+      const res = await request(app)
+        .get('/api/nerve-center/routing/config')
+        .expect(200);
+
+      const cg = res.body.data.taskModels.code_generation;
+      expect(cg).toBeDefined();
+      expect(cg).toHaveProperty('model');
+      expect(cg).toHaveProperty('host');
+    });
+
+    it('hosts has primary, secondary, tertiary keys', async () => {
+      const res = await request(app)
+        .get('/api/nerve-center/routing/config')
+        .expect(200);
+
+      const { hosts } = res.body.data;
+      expect(hosts).toHaveProperty('primary', 'http://primary:11434');
+      expect(hosts).toHaveProperty('secondary', 'http://secondary:11434');
+      expect(hosts).toHaveProperty('tertiary', 'http://tertiary:11434');
+    });
+
+    it('includes persisted overrides in the effective config payload', async () => {
+      await request(app)
+        .put('/api/nerve-center/routing/config')
+        .send({ taskModels: { quick_chat: { model: 'qwen2.5:7b', host: 'tertiary' } } })
+        .expect(200);
+
+      const res = await request(app)
+        .get('/api/nerve-center/routing/config')
+        .expect(200);
+
+      expect(res.body.data.taskModels.quick_chat).toEqual({
+        model: 'qwen2.5:7b',
+        host: 'tertiary'
+      });
+      expect(res.body.data.taskConfigState.quick_chat.isOverride).toBe(true);
+      expect(res.body.data.overrides.taskModels.quick_chat).toEqual({
+        model: 'qwen2.5:7b',
+        host: 'tertiary'
+      });
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 3. PUT /api/nerve-center/routing/config
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe('PUT /routing/config', () => {
+    it('updates taskModels and returns updated config', async () => {
+      const res = await request(app)
+        .put('/api/nerve-center/routing/config')
+        .send({ taskModels: { code_generation: { model: 'new-model:30b', host: 'secondary' } } })
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.taskModels.code_generation.model).toBe('new-model:30b');
+      expect(res.body.data.taskModels.code_generation.host).toBe('secondary');
+      expect(res.body.data.taskConfigState.code_generation.isOverride).toBe(true);
+    });
+
+    it('persists taskModels change across subsequent GET', async () => {
+      await request(app)
+        .put('/api/nerve-center/routing/config')
+        .send({ taskModels: { quick_chat: { model: 'patched:1b', host: 'tertiary' } } })
+        .expect(200);
+
+      const res = await request(app)
+        .get('/api/nerve-center/routing/config')
+        .expect(200);
+
+      expect(res.body.data.taskModels.quick_chat.model).toBe('patched:1b');
+      expect(res.body.data.taskConfigState.quick_chat.isOverride).toBe(true);
+    });
+
+    it('handles empty body without crashing', async () => {
+      const res = await request(app)
+        .put('/api/nerve-center/routing/config')
+        .send({})
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+    });
+
+    it('ignores non-object taskModels', async () => {
+      const res = await request(app)
+        .put('/api/nerve-center/routing/config')
+        .send({ taskModels: 'not-an-object' })
+        .expect(200);
+
+      // Should not crash, existing config unchanged
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.taskModels.code_generation).toBeDefined();
+    });
+
+    it('resets a task back to defaults when requested', async () => {
+      await request(app)
+        .put('/api/nerve-center/routing/config')
+        .send({ taskModels: { quick_chat: { model: 'patched:1b', host: 'tertiary' } } })
+        .expect(200);
+
+      const res = await request(app)
+        .put('/api/nerve-center/routing/config')
+        .send({ taskModels: { quick_chat: { resetToDefault: true } } })
+        .expect(200);
+
+      expect(res.body.data.taskModels.quick_chat).toEqual(ORIGINAL_TASK_MODELS.quick_chat);
+      expect(res.body.data.taskConfigState.quick_chat.isOverride).toBe(false);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 4. GET /api/nerve-center/routing/log
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe('GET /routing/log', () => {
+    it('returns routing log with default limit', async () => {
+      mockLean.mockResolvedValue([{ model: 'qwen3:14b' }]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/routing/log')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toEqual([{ model: 'qwen3:14b' }]);
+
+      // Default limit is 20
+      expect(mockLimit).toHaveBeenCalledWith(20);
+      expect(mockSort).toHaveBeenCalledWith({ timestamp: -1 });
+    });
+
+    it('respects ?limit=5', async () => {
+      mockLean.mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/nerve-center/routing/log?limit=5')
+        .expect(200);
+
+      expect(mockLimit).toHaveBeenCalledWith(5);
+    });
+
+    it('caps limit at 100 for ?limit=500', async () => {
+      mockLean.mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/nerve-center/routing/log?limit=500')
+        .expect(200);
+
+      expect(mockLimit).toHaveBeenCalledWith(100);
+    });
+
+    it('passes taskType filter to query', async () => {
+      mockLean.mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/nerve-center/routing/log?taskType=code_generation')
+        .expect(200);
+
+      expect(mockFind).toHaveBeenCalledWith(
+        expect.objectContaining({ taskType: 'code_generation' })
+      );
+    });
+
+    it('passes model filter to query', async () => {
+      mockLean.mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/nerve-center/routing/log?model=qwen3:14b')
+        .expect(200);
+
+      expect(mockFind).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'qwen3:14b' })
+      );
+    });
+
+    it('passes host filter to query', async () => {
+      mockLean.mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/nerve-center/routing/log?host=primary')
+        .expect(200);
+
+      expect(mockFind).toHaveBeenCalledWith(
+        expect.objectContaining({ host: 'primary' })
+      );
+    });
+
+    it('passes multiple filters simultaneously', async () => {
+      mockLean.mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/nerve-center/routing/log?taskType=analysis&model=qwen3:14b&host=primary')
+        .expect(200);
+
+      expect(mockFind).toHaveBeenCalledWith({
+        taskType: 'analysis',
+        model: 'qwen3:14b',
+        host: 'primary'
+      });
+    });
+
+    it('returns 500 on database error', async () => {
+      mockLean.mockRejectedValue(new Error('query failed'));
+
+      const res = await request(app)
+        .get('/api/nerve-center/routing/log')
+        .expect(500);
+
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toBe('query failed');
+    });
+  });
+
+  describe('GET /routing/analytics', () => {
+    it('returns UI-ready routing distribution data for the requested time window', async () => {
+      mockLean.mockResolvedValue([
+        {
+          taskType: 'analysis',
+          autoRouted: true,
+          classificationMs: 20,
+          routedModel: 'qwen3:14b',
+          routedHost: 'primary',
+          durationMs: 1200
+        },
+        {
+          taskType: 'analysis',
+          autoRouted: true,
+          classificationMs: 40,
+          routedModel: 'qwen3:14b',
+          routedHost: 'primary',
+          durationMs: 1800
+        },
+        {
+          taskType: 'translation',
+          autoRouted: false,
+          classificationMs: 0,
+          routedModel: 'qwen3.5:9b',
+          routedHost: 'secondary',
+          durationMs: 900
+        }
+      ]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/routing/analytics?hours=12')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.summary).toEqual(expect.objectContaining({
+        windowHours: 12,
+        totalRequests: 3,
+        autoRoutedCount: 2,
+        autoRoutedPct: 66.7,
+        avgDurationMs: 1300,
+        avgClassificationMs: 20
+      }));
+      expect(res.body.data.taskDistribution[0]).toEqual(expect.objectContaining({
+        taskType: 'analysis',
+        count: 2,
+        percentage: 66.7,
+        avgDurationMs: 1500,
+        avgClassificationMs: 30
+      }));
+      expect(res.body.data.modelDistribution[0]).toEqual(expect.objectContaining({
+        model: 'qwen3:14b',
+        count: 2
+      }));
+      expect(res.body.data.hostDistribution[0]).toEqual(expect.objectContaining({
+        host: 'primary',
+        count: 2
+      }));
+      expect(mockFind).toHaveBeenCalledWith(expect.objectContaining({
+        caller: 'chat',
+        timestamp: expect.any(Object)
+      }));
+    });
+
+    it('returns empty analytics buckets when there is little or no telemetry data', async () => {
+      mockLean.mockResolvedValue([]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/routing/analytics')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.summary).toEqual(expect.objectContaining({
+        windowHours: 24,
+        totalRequests: 0,
+        autoRoutedCount: 0,
+        avgDurationMs: 0,
+        avgClassificationMs: 0
+      }));
+      expect(res.body.data.taskDistribution).toEqual([]);
+      expect(res.body.data.modelDistribution).toEqual([]);
+      expect(res.body.data.hostDistribution).toEqual([]);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 5. POST /api/nerve-center/failover
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe('POST /failover', () => {
+    it('returns 400 when hostUrl is missing', async () => {
+      const res = await request(app)
+        .post('/api/nerve-center/failover')
+        .send({})
+        .expect(400);
+
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toBe('hostUrl is required');
+    });
+
+    it('switches host and returns failover status on valid hostUrl', async () => {
+      const res = await request(app)
+        .post('/api/nerve-center/failover')
+        .send({ hostUrl: 'http://secondary:11434', reason: 'test_failover' })
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toHaveProperty('currentHost', 'http://secondary:11434');
+      expect(res.body.data).toHaveProperty('isFailedOver', true);
+      expect(res.body.data).toHaveProperty('reason', 'test_failover');
+    });
+
+    it('uses default reason when none provided', async () => {
+      const res = await request(app)
+        .post('/api/nerve-center/failover')
+        .send({ hostUrl: 'http://tertiary:11434' })
+        .expect(200);
+
+      expect(res.body.data.reason).toBe('manual_nerve_center');
+    });
+
+    it('increments failoverCount', async () => {
+      const first = await request(app)
+        .post('/api/nerve-center/failover')
+        .send({ hostUrl: 'http://secondary:11434' })
+        .expect(200);
+
+      const second = await request(app)
+        .post('/api/nerve-center/failover')
+        .send({ hostUrl: 'http://tertiary:11434' })
+        .expect(200);
+
+      expect(second.body.data.failoverCount).toBeGreaterThan(first.body.data.failoverCount);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 6. POST /api/nerve-center/failover/reset
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe('POST /failover/reset', () => {
+    it('resets to primary and returns status', async () => {
+      // First failover to secondary
+      await request(app)
+        .post('/api/nerve-center/failover')
+        .send({ hostUrl: 'http://secondary:11434' })
+        .expect(200);
+
+      const res = await request(app)
+        .post('/api/nerve-center/failover/reset')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.currentHost).toBe('http://primary:11434');
+      expect(res.body.data.isFailedOver).toBe(false);
+    });
+
+    it('is idempotent — calling twice both return 200', async () => {
+      const first = await request(app)
+        .post('/api/nerve-center/failover/reset')
+        .expect(200);
+
+      const second = await request(app)
+        .post('/api/nerve-center/failover/reset')
+        .expect(200);
+
+      expect(first.body.status).toBe('success');
+      expect(second.body.status).toBe('success');
+      expect(first.body.data.currentHost).toBe(second.body.data.currentHost);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // 7. GET /api/nerve-center/health/feed
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe('GET /health/feed', () => {
+    it('merges alerts and inference errors into unified feed', async () => {
+      const now = new Date().toISOString();
+      const earlier = new Date(Date.now() - 60000).toISOString();
+
+      alertService.getRecentAlerts.mockResolvedValue([
+        {
+          _id: 'alert-1',
+          severity: 'critical',
+          title: 'Host unreachable — host-alpha',
+          message: 'Host down',
+          ruleName: 'Ollama host unreachable',
+          occurrenceCount: 5,
+          context: {
+            component: 'host-alpha',
+            metric: 'host_unreachable',
+            currentValue: 1,
+            additionalData: { model: 'ax/gemma4:e4b', host: 'host-alpha' }
+          },
+          createdAt: now,
+          lastOccurrence: now
+        }
+      ]);
+
+      mockLean.mockResolvedValue([
+        {
+          _id: 'log-1',
+          status: 'error',
+          model: 'qwen3:14b',
+          host: 'primary',
+          error: 'connection refused',
+          fallbackUsed: false,
+          timestamp: earlier
+        }
+      ]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data).toHaveLength(2);
+
+      // Sorted by timestamp descending — alert (now) first, then log (earlier)
+      const [first, second] = res.body.data;
+      expect(first.type).toBe('alert');
+      // source is the affected component, never a hardcoded 'alertService'
+      expect(first.source).toBe('host-alpha');
+      expect(first.id).toBe('alert-1');
+      expect(first.severity).toBe('critical');
+      expect(first.title).toBe('Host unreachable — host-alpha · 5×');
+      expect(first.ruleName).toBe('Ollama host unreachable');
+      expect(first.occurrenceCount).toBe(5);
+      expect(first.description).toContain('Host down');
+      expect(first.description).toContain('ax/gemma4:e4b');
+
+      expect(second.type).toBe('inference_error');
+      expect(second.source).toBe('inferenceLog');
+      expect(second.id).toBe('log-1');
+      expect(second.severity).toBe('error');
+      expect(second.title).toContain('error');
+      expect(second.title).toContain('qwen3:14b');
+    });
+
+    it('events have required shape: type, severity, source, title, timestamp, id', async () => {
+      alertService.getRecentAlerts.mockResolvedValue([
+        { _id: 'a1', severity: 'warning', message: 'Disk full', createdAt: new Date().toISOString() }
+      ]);
+      mockLean.mockResolvedValue([]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      const event = res.body.data[0];
+      expect(event).toHaveProperty('type');
+      expect(event).toHaveProperty('severity');
+      expect(event).toHaveProperty('source');
+      expect(event).toHaveProperty('title');
+      expect(event).toHaveProperty('timestamp');
+      expect(event).toHaveProperty('id');
+    });
+
+    it('normalizes failover events distinctly from errors', async () => {
+      alertService.getRecentAlerts.mockResolvedValue([]);
+      mockLean.mockResolvedValue([
+        {
+          _id: 'log-2',
+          status: 'error',
+          model: 'qwen3:14b',
+          hostKey: 'primary',
+          fallbackUsed: true,
+          fallbackReason: 'primary down',
+          timestamp: new Date().toISOString()
+        }
+      ]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      const event = res.body.data[0];
+      expect(event.type).toBe('failover');
+      expect(event.title).toContain('Failover');
+      expect(event.description).toBe('primary down');
+    });
+
+    it('timeout inference events have warning severity', async () => {
+      alertService.getRecentAlerts.mockResolvedValue([]);
+      mockLean.mockResolvedValue([
+        {
+          _id: 'log-3',
+          status: 'timeout',
+          model: 'deepseek-r1:8b',
+          host: 'secondary',
+          fallbackUsed: false,
+          error: 'request timed out after 30s',
+          timestamp: new Date().toISOString()
+        }
+      ]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      expect(res.body.data[0].severity).toBe('warning');
+    });
+
+    it('uses default limit 30 and caps at 100', async () => {
+      alertService.getRecentAlerts.mockResolvedValue([]);
+      mockLean.mockResolvedValue([]);
+
+      // Default limit
+      await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      expect(alertService.getRecentAlerts).toHaveBeenCalledWith(30);
+
+      jest.clearAllMocks();
+      mockLean.mockResolvedValue([]);
+      alertService.getRecentAlerts.mockResolvedValue([]);
+
+      // Exceeding limit — should be capped to 100
+      await request(app)
+        .get('/api/nerve-center/health/feed?limit=500')
+        .expect(200);
+
+      expect(alertService.getRecentAlerts).toHaveBeenCalledWith(100);
+    });
+
+    it('custom limit is respected', async () => {
+      alertService.getRecentAlerts.mockResolvedValue([]);
+      mockLean.mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/nerve-center/health/feed?limit=10')
+        .expect(200);
+
+      expect(alertService.getRecentAlerts).toHaveBeenCalledWith(10);
+    });
+
+    it('returns empty array when no alerts or errors', async () => {
+      alertService.getRecentAlerts.mockResolvedValue([]);
+      mockLean.mockResolvedValue([]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('handles null alerts gracefully', async () => {
+      alertService.getRecentAlerts.mockResolvedValue(null);
+      mockLean.mockResolvedValue(null);
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('returns 500 on service error', async () => {
+      alertService.getRecentAlerts.mockRejectedValue(new Error('alert db unavailable'));
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(500);
+
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toBe('alert db unavailable');
+    });
+
+    it('sorts merged events by timestamp descending', async () => {
+      const t1 = '2026-03-27T10:00:00Z';
+      const t2 = '2026-03-27T11:00:00Z';
+      const t3 = '2026-03-27T12:00:00Z';
+
+      alertService.getRecentAlerts.mockResolvedValue([
+        { _id: 'a1', severity: 'info', message: 'Old alert', createdAt: t1 },
+        { _id: 'a2', severity: 'warning', message: 'New alert', createdAt: t3 }
+      ]);
+
+      mockLean.mockResolvedValue([
+        {
+          _id: 'log-1',
+          status: 'error',
+          model: 'qwen3:14b',
+          host: 'primary',
+          fallbackUsed: false,
+          timestamp: t2
+        }
+      ]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      const timestamps = res.body.data.map(e => e.timestamp);
+      expect(timestamps[0]).toBe(t3);
+      expect(timestamps[1]).toBe(t2);
+      expect(timestamps[2]).toBe(t1);
+    });
+  });
+
+  describe('GET /host-preferences', () => {
+    let originalFetch;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      global.fetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({ models: [] })
+      }));
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it('normalizes duplicate persisted primary keys to configured active keys', async () => {
+      hostPrefService.getAll.mockResolvedValue([
+        {
+          hostUrl: 'http://primary:11434',
+          hostKey: 'primary',
+          displayName: 'Host Alpha',
+          pinnedModels: [{ model: 'ax/qwen3-coder:30b' }]
+        },
+        {
+          hostUrl: 'http://secondary:11434',
+          hostKey: 'secondary',
+          displayName: 'Host Beta',
+          pinnedModels: [{ model: 'ax/qwen3.5:9b' }]
+        },
+        {
+          hostUrl: 'http://tertiary:11434',
+          hostKey: 'primary',
+          displayName: 'Host Gamma',
+          pinnedModels: []
+        }
+      ]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/host-preferences')
+        .expect(200);
+
+      const byName = Object.fromEntries(res.body.data.map((host) => [host.displayName, host]));
+
+      expect(byName.Host Alpha.hostKey).toBe('primary');
+      expect(byName.Host Beta.hostKey).toBe('secondary');
+      expect(byName.Host Gamma.hostKey).toBe('tertiary');
+      expect(byName.Host Gamma.persistedHostKey).toBe('primary');
+      expect(byName.Host Gamma.hostKeyDrift).toEqual(expect.objectContaining({
+        type: 'host_key_mismatch',
+        persisted: 'primary',
+        configured: 'tertiary'
+      }));
+      expect(res.body.hostIdentityDrift.duplicatePersistedHostKeys).toEqual([
+        expect.objectContaining({ hostKey: 'primary', count: 2 })
+      ]);
+      expect(res.body.hostIdentityDrift.duplicateActiveHostKeys).toEqual([]);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Benchmark Coordination
+  // ════════════════════════════════════════════════════════════════════════
+
+  describe('POST /host-preferences/:hostUrl/benchmark-claim', () => {
+    const HOST_URL = 'http://primary:11434';
+    const path = `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim`;
+
+    it('returns 400 when batchId missing', async () => {
+      const res = await request(app).post(path).send({}).expect(400);
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toMatch(/batchId/);
+    });
+
+    it('returns 200 with claim data on success', async () => {
+      hostPrefService.claimBenchmark.mockResolvedValue({
+        claimed: true,
+        pref: { hostUrl: HOST_URL, status: 'benchmarking', benchmarkClaim: { batchId: 'b1', prevStatus: 'ready' } }
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({ batchId: 'b1', estimatedDurationMs: 60000 })
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.claimed).toBe(true);
+      expect(hostPrefService.claimBenchmark).toHaveBeenCalledWith(HOST_URL, 'b1', 60000);
+    });
+
+    it('passes optional manual claim metadata to the service', async () => {
+      hostPrefService.claimBenchmark.mockResolvedValue({
+        claimed: true,
+        pref: {
+          hostUrl: HOST_URL,
+          status: 'benchmarking',
+          benchmarkClaim: { batchId: 'manual-b1', source: 'manual', owner: 'operator' }
+        }
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({
+          batchId: 'manual-b1',
+          estimatedDurationMs: 60000,
+          source: 'manual',
+          owner: 'operator',
+          note: 'scout',
+          heartbeatTtlMs: 30000
+        })
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(hostPrefService.claimBenchmark).toHaveBeenCalledWith(
+        HOST_URL,
+        'manual-b1',
+        60000,
+        {
+          source: 'manual',
+          owner: 'operator',
+          note: 'scout',
+          heartbeatTtlMs: 30000
+        }
+      );
+    });
+
+    it('returns 409 when claim is rejected (host already claimed)', async () => {
+      hostPrefService.claimBenchmark.mockResolvedValue({
+        claimed: false,
+        reason: 'host already claimed by batch other'
+      });
+
+      const res = await request(app)
+        .post(path)
+        .send({ batchId: 'b2' })
+        .expect(409);
+
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toContain('other');
+    });
+
+    it('returns 500 when service throws', async () => {
+      hostPrefService.claimBenchmark.mockRejectedValue(new Error('db down'));
+
+      const res = await request(app)
+        .post(path)
+        .send({ batchId: 'b3' })
+        .expect(500);
+
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toBe('db down');
+    });
+  });
+
+  describe('POST /host-preferences/:hostUrl/benchmark-claim/:batchId/heartbeat', () => {
+    const HOST_URL = 'http://primary:11434';
+
+    it('refreshes an active claim heartbeat', async () => {
+      hostPrefService.heartbeatBenchmarkClaim.mockResolvedValue({
+        heartbeat: true,
+        pref: { hostUrl: HOST_URL, status: 'benchmarking', benchmarkClaim: { batchId: 'b1' } }
+      });
+
+      const res = await request(app)
+        .post(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`)
+        .send({ owner: 'operator', heartbeatTtlMs: 30000 })
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.heartbeat).toBe(true);
+      expect(hostPrefService.heartbeatBenchmarkClaim).toHaveBeenCalledWith(
+        HOST_URL,
+        'b1',
+        expect.objectContaining({ owner: 'operator', heartbeatTtlMs: 30000 })
+      );
+    });
+
+    it('returns 409 when heartbeat no longer owns the claim', async () => {
+      hostPrefService.heartbeatBenchmarkClaim.mockResolvedValue({
+        heartbeat: false,
+        reason: 'claim belongs to batch other'
+      });
+
+      const res = await request(app)
+        .post(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`)
+        .send({})
+        .expect(409);
+
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toContain('other');
+    });
+  });
+
+  describe('DELETE /host-preferences/:hostUrl/benchmark-claim/:batchId', () => {
+    const HOST_URL = 'http://primary:11434';
+
+    it('releases claim and returns released=true', async () => {
+      hostPrefService.releaseBenchmarkClaim.mockResolvedValue({
+        released: true,
+        pref: { hostUrl: HOST_URL, status: 'ready' }
+      });
+
+      const res = await request(app)
+        .delete(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1`)
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.released).toBe(true);
+      expect(hostPrefService.releaseBenchmarkClaim).toHaveBeenCalledWith(HOST_URL, 'b1');
+    });
+
+    it('returns 200 with released=false when claim mismatched (idempotent)', async () => {
+      hostPrefService.releaseBenchmarkClaim.mockResolvedValue({
+        released: false,
+        reason: 'claim belongs to batch other'
+      });
+
+      const res = await request(app)
+        .delete(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/bX`)
+        .expect(200);
+
+      expect(res.body.data.released).toBe(false);
+    });
+  });
+
+  describe('GET /host-preferences/benchmark-claims/active', () => {
+    it('returns active claims list', async () => {
+      hostPrefService.listBenchmarkClaims.mockResolvedValue([
+        { hostUrl: 'http://primary:11434', batchId: 'b1', prevStatus: 'ready' }
+      ]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/host-preferences/benchmark-claims/active')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.claims).toHaveLength(1);
+      expect(res.body.data.count).toBe(1);
+    });
+  });
+});

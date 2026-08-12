@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+ENV_FILE="$ROOT/config/agentx.env"
+COMPOSE=(--project-name agentx-ecosystem --env-file "$ENV_FILE" -f docker-compose.yml)
+OLLAMA_COMPOSE=("${COMPOSE[@]}" -f docker-compose.ollama.yml)
+
+usage() {
+  cat <<'EOF'
+Agent X Ecosystem
+
+Usage: ./agentx <command> [args...]
+
+Commands:
+  up                    Start Core, Benchmark, RAG, MongoDB, and Qdrant
+  down                  Stop the product stack; preserve data volumes
+  status                Show product service status
+  logs [service]        Follow logs; defaults to core
+  rebuild [service]     Rebuild images, then start the requested services
+  ollama-doctor         Detect native Ollama; never install or download
+  ollama-up             Start the opt-in isolated Docker Ollama stack
+  ollama-status         Show Docker Ollama status and installed models
+  ollama-pull <model>   Explicitly download one model into its named volume
+  ollama-down           Stop the Ollama-backed stack; preserve volumes
+  reset                 Delete only agentx-ecosystem containers and volumes
+
+Open http://localhost:3180/ after startup.
+EOF
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  up)
+    docker compose "${COMPOSE[@]}" up -d mongo qdrant core benchmark rag "$@"
+    echo "Agent X started: http://localhost:3180/"
+    ;;
+  down)
+    docker compose "${COMPOSE[@]}" down "$@"
+    ;;
+  status|ps)
+    docker compose "${COMPOSE[@]}" ps
+    ;;
+  logs)
+    service="${1:-core}"
+    docker compose "${COMPOSE[@]}" logs -f --tail=200 "$service"
+    ;;
+  rebuild)
+    docker compose "${COMPOSE[@]}" build --no-cache "$@"
+    docker compose "${COMPOSE[@]}" up -d "$@"
+    ;;
+  ollama-doctor)
+    ollama_cli="$(command -v ollama 2>/dev/null || true)"
+    if command -v curl >/dev/null 2>&1 && curl --fail --silent --max-time 3 http://127.0.0.1:11434/api/version >/dev/null; then
+      echo "Native Ollama is healthy at http://127.0.0.1:11434."
+      [[ -n "$ollama_cli" ]] && echo "CLI: $ollama_cli"
+      exit 0
+    fi
+    if [[ -n "$ollama_cli" ]]; then
+      echo "Ollama is installed at $ollama_cli, but its API is not responding."
+      echo "Start its service or run 'ollama serve' in another terminal."
+      exit 1
+    fi
+    echo "Ollama is not installed or not on PATH."
+    echo "Review https://docs.ollama.com/linux; Agent X will not install it automatically."
+    exit 1
+    ;;
+  ollama-up)
+    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama up -d ollama mongo qdrant core benchmark rag "$@"
+    echo "Agent X started with isolated Docker Ollama. No model was downloaded."
+    ;;
+  ollama-status)
+    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama ps
+    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama exec ollama ollama list
+    ;;
+  ollama-pull)
+    if [[ $# -ne 1 ]]; then
+      echo "Usage: ./agentx ollama-pull <model>" >&2
+      exit 2
+    fi
+    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama exec ollama ollama pull "$1"
+    ;;
+  ollama-down)
+    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama down "$@"
+    ;;
+  reset)
+    echo "This deletes only agentx-ecosystem containers, network, and named data volumes."
+    read -r -p "Type 'delete agentx-ecosystem data' to continue: " confirm
+    if [[ "$confirm" == "delete agentx-ecosystem data" ]]; then
+      docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama down --volumes
+    else
+      echo "Cancelled."
+    fi
+    ;;
+  ''|-h|--help|help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage
+    exit 2
+    ;;
+esac

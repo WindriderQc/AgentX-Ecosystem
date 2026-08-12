@@ -1,0 +1,138 @@
+<%
+  const pipelineCfg = locals.leantimePipeline || {};
+  const leantimeUrl = pipelineCfg.boardUrl || pipelineCfg.baseUrl || '';
+  const projectId = pipelineCfg.projectId || 3;
+%>
+
+<main class="pipeline-page">
+  <header class="pipeline-header">
+    <div>
+      <div class="pipeline-eyebrow">AgentX Pipeline</div>
+      <h1><i class="fas fa-list-check"></i> Pipeline</h1>
+      <div class="pipeline-ownership">
+        <span><i class="fas fa-database"></i> Mongo task truth</span>
+        <span><i class="fas fa-table-columns"></i> Leantime board</span>
+        <span><i class="fas fa-rotate"></i> 2h sync loop</span>
+      </div>
+    </div>
+    <div class="pipeline-actions">
+      <button id="pipelineRefreshBtn" class="pipeline-btn pipeline-btn-secondary" type="button" title="Refresh status">
+        <i class="fas fa-rotate"></i>
+        <span>Refresh</span>
+      </button>
+      <a id="pipelineLeantimeLink" class="pipeline-btn pipeline-btn-primary" href="<%= leantimeUrl %>" target="_blank" rel="noopener">
+        <i class="fas fa-arrow-up-right-from-square"></i>
+        <span>Open Leantime</span>
+      </a>
+    </div>
+  </header>
+
+  <section class="pipeline-banner" aria-label="Pipeline ownership">
+    <div>
+      <strong>Leantime is the working board.</strong>
+      <span>AgentX shows the Mongo-backed status snapshot so operators can find the board and spot blocked or stale work quickly.</span>
+    </div>
+    <code>project <%= projectId %></code>
+  </section>
+
+  <section class="pipeline-status-grid" aria-label="Pipeline status counts">
+    <div class="pipeline-metric pipeline-metric-queued">
+      <span>Queued</span>
+      <strong id="pipelineCountQueued">--</strong>
+      <small>Ready for worker claim</small>
+    </div>
+    <div class="pipeline-metric pipeline-metric-progress">
+      <span>In Progress</span>
+      <strong id="pipelineCountProgress">--</strong>
+      <small>Claimed or actively moving</small>
+    </div>
+    <div class="pipeline-metric pipeline-metric-review">
+      <span>Review</span>
+      <strong id="pipelineCountReview">--</strong>
+      <small>Waiting for overseer acceptance</small>
+    </div>
+    <div class="pipeline-metric pipeline-metric-blocked">
+      <span>Blocked</span>
+      <strong id="pipelineCountBlocked">--</strong>
+      <small>Needs operator or upstream action</small>
+    </div>
+    <div class="pipeline-metric pipeline-metric-done">
+      <span>Done</span>
+      <strong id="pipelineCountDone">--</strong>
+      <small>Closed task records</small>
+    </div>
+  </section>
+
+  <section class="pipeline-main-grid">
+    <section class="pipeline-panel">
+      <div class="pipeline-panel-header">
+        <div>
+          <h2><i class="fas fa-wave-square"></i> Open Work</h2>
+          <p id="pipelineOpenMeta">Loading task status...</p>
+        </div>
+      </div>
+      <div class="pipeline-table-wrap">
+        <table class="pipeline-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Task</th>
+              <th>Status</th>
+              <th>Owner</th>
+              <th>Service</th>
+              <th>Heartbeat</th>
+            </tr>
+          </thead>
+          <tbody id="pipelineOpenRows">
+            <tr><td colspan="6" class="pipeline-empty">Loading tasks...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <aside class="pipeline-side">
+      <section class="pipeline-panel">
+        <div class="pipeline-panel-header">
+          <div>
+            <h2><i class="fas fa-route"></i> Source Split</h2>
+            <p>One queue, two surfaces</p>
+          </div>
+        </div>
+        <dl class="pipeline-contract-list">
+          <div>
+            <dt>Truth</dt>
+            <dd>Core Mongo <code>pipelinetasks</code></dd>
+          </div>
+          <div>
+            <dt>Human UI</dt>
+            <dd>Leantime AgentX Pipeline kanban</dd>
+          </div>
+          <div>
+            <dt>Agent API</dt>
+            <dd><code>/api/pipeline/tasks</code></dd>
+          </div>
+          <div>
+            <dt>AgentX UI</dt>
+            <dd>Status snapshot and board entry point</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="pipeline-panel">
+        <div class="pipeline-panel-header">
+          <div>
+            <h2><i class="fas fa-triangle-exclamation"></i> Attention</h2>
+            <p id="pipelineAttentionMeta">--</p>
+          </div>
+        </div>
+        <div id="pipelineAttentionList" class="pipeline-attention-list">
+          <div class="pipeline-empty">Loading attention items...</div>
+        </div>
+      </section>
+    </aside>
+  </section>
+</main>
+
+<script>
+  window.__AGENTX_PIPELINE__ = <%- JSON.stringify(pipelineCfg) %>;
+</script>

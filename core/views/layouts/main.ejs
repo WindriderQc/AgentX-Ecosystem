@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %></title>
+  <%- include('../partials/head-cdn') %>
+  <%- locals.headCss ? headCss : '' %>
+</head>
+<body class="<%= locals.bodyClass || '' %>" data-agentx-profile="<%= locals.agentxProfile || 'full' %>">
+  <% if (locals.showNav !== false) { %>
+    <%- include('../partials/nav', { service: service, activePage: activePage }) %>
+  <% } %>
+  <% if (locals.agentxProfile === 'demo' && activePage !== 'demo') { %>
+    <a class="demo-profile-home" href="/demo" aria-label="Back to Agent X demo">Agent X · Demo</a>
+  <% } %>
+
+  <%- include(pageView) %>
+
+  <%- include('../partials/toast') %>
+  <%- include('../partials/footer-scripts') %>
+  <%- locals.footerJs ? footerJs : '' %>
+</body>
+</html>
