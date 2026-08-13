@@ -26,6 +26,13 @@ boundary is being tightened; the default product profile blocks them.
 Prerequisite: Docker Desktop on Windows or Docker Engine with Compose on
 Linux. Ollama and models are optional.
 
+Clone the repository once, then run the command for your operating system:
+
+```text
+git clone https://github.com/WindriderQc/AgentX-Ecosystem.git
+cd AgentX-Ecosystem
+```
+
 Windows:
 
 ```powershell
