@@ -172,9 +172,11 @@ class AlertService extends EventEmitter {
 
   _fingerprintFor(rule, data) {
     // host/model included so distinct hosts/models don't collapse into one alert
+    // `incidentKey` lets a server-owned detector distinguish contracts or
+    // campaigns without placing high-cardinality request IDs in the key.
     return crypto
       .createHash('md5')
-      .update(`${rule?.id || rule?.ruleId || 'rule'}|${data.component || data.source || ''}|${data.host || ''}|${data.model || ''}|${data.metric || ''}`)
+      .update(`${rule?.id || rule?.ruleId || 'rule'}|${data.component || data.source || ''}|${data.host || ''}|${data.model || ''}|${data.metric || ''}|${data.incidentKey || ''}`)
       .digest('hex');
   }
 

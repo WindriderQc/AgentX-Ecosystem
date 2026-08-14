@@ -60,7 +60,7 @@ describe('roundtable runtime participant adapter', () => {
       {
         env: {
           ROUNDTABLE_RUNTIME_PARTICIPANTS_ENABLED: 'true',
-          ROUNDTABLE_RUNTIME_SSH_TARGET: 'yb@192.0.2.66',
+          ROUNDTABLE_RUNTIME_SSH_TARGET: 'operator@192.0.2.66',
           ROUNDTABLE_OPENCLAW_AGENT_ALLOWLIST: 'leadx'
         },
         sshRunner: async (target, command) => {
@@ -74,7 +74,7 @@ describe('roundtable runtime participant adapter', () => {
     expect(result.response).toBe('Use the existing gateway.');
     expect(result.thinking).toBeNull();
     expect(result.runtimeRef).toBe('agent:leadx:roundtable-test');
-    expect(captured.target).toBe('yb@192.0.2.66');
+    expect(captured.target).toBe('operator@192.0.2.66');
     expect(captured.command).toContain("'leadx'");
     expect(captured.command).toContain('advisory only');
     expect(captured.command).not.toContain('--deliver');
@@ -119,7 +119,7 @@ describe('roundtable runtime participant adapter', () => {
       {
         env: {
           ROUNDTABLE_RUNTIME_PARTICIPANTS_ENABLED: 'true',
-          ROUNDTABLE_RUNTIME_SSH_TARGET: 'yb@192.0.2.66',
+          ROUNDTABLE_RUNTIME_SSH_TARGET: 'operator@192.0.2.66',
           ROUNDTABLE_HERMES_TOOLSETS: 'roundtable-readonly'
         },
         sshRunner: async (_target, value) => {
@@ -158,14 +158,14 @@ describe('roundtable runtime participant adapter', () => {
       [{ runtime: 'openclaw', agentId: 'leadx' }],
       {
         ROUNDTABLE_RUNTIME_PARTICIPANTS_ENABLED: 'true',
-        ROUNDTABLE_RUNTIME_SSH_TARGET: 'yb@192.0.2.66'
+        ROUNDTABLE_RUNTIME_SSH_TARGET: 'operator@192.0.2.66'
       }
     )).toThrow('not allowlisted');
     expect(validateRuntimeConfiguration(
       [{ runtime: 'hermes' }, { runtime: 'codex' }],
       {
         ROUNDTABLE_RUNTIME_PARTICIPANTS_ENABLED: 'true',
-        ROUNDTABLE_RUNTIME_SSH_TARGET: 'yb@192.0.2.66',
+        ROUNDTABLE_RUNTIME_SSH_TARGET: 'operator@192.0.2.66',
         ROUNDTABLE_HERMES_TOOLSETS: 'roundtable-readonly',
         ROUNDTABLE_CODEX_BRIDGE_URL: 'http://codex.internal/turn'
       }

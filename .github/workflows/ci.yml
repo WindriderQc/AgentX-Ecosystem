@@ -1,0 +1,46 @@
+name: product-ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: core/package-lock.json
+      - run: npm ci
+        working-directory: core
+      - name: Validate product profile and extension boundary
+        run: npm test -- --runInBand --runTestsByPath tests/unit/agentxRuntimeProfile.test.js tests/unit/extensionLoader.test.js tests/unit/laneObservabilityService.test.js
+        working-directory: core
+      - name: Validate service entrypoints
+        run: |
+          node --check core/server.js
+          node --check benchmark/server.js
+          node --check rag/server.js
+      - name: Validate standalone Compose
+        run: docker compose config --quiet
+
+  image-builds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [core, benchmark, rag]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.service }} image without publishing
+        run: docker build --file docker/${{ matrix.service }}.Dockerfile --tag agentx-${{ matrix.service }}:ci .

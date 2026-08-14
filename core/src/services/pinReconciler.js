@@ -34,6 +34,7 @@ const hostGate = require('./hostGate');
 const logger = require('../../config/logger');
 const HostPreference = require('../../models/HostPreference');
 const { hasActiveBenchmarkClaim } = require('./benchmarkClaimService');
+const { observePinRestoreFailure } = require('./laneObservabilityService');
 const {
   getPinnedEntries,
   getWarmOrder,
@@ -235,6 +236,12 @@ async function checkAndReloadDefaults() {
           }
         } else {
           logger.warn(`[HostPreference] Failed to reload ${entry.model} on ${pref.hostUrl}: ${result.error}`);
+          void observePinRestoreFailure({
+            host: pref.hostUrl,
+            model: entry.model,
+            error: result.error,
+            source: 'pin-reconciler'
+          });
           if (entry.model === primary.model) {
             await setHostStatus(pref.hostUrl, 'idle');
           }

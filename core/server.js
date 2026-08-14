@@ -422,6 +422,25 @@ async function startServer() {
     }
   }
 
+  // Observe benchmark-qualified inference lanes without touching routing,
+  // claims, pins, or model residency (task 0465). Event-driven contract and
+  // lifecycle signals flow through the same service; this singleton daemon
+  // only runs the sample-gated latency comparison.
+  try {
+    const laneObservability = require('./src/services/laneObservabilityService');
+    await startCoreSingletonDaemon({
+      name: 'lane-observability-monitor',
+      label: 'Lane Observability',
+      start: async () => {
+        laneObservability.start();
+        console.log('   ✓ Lane Observability: Active (observe-only, 5m latency scan)');
+      },
+      stop: async () => laneObservability.stop()
+    });
+  } catch (err) {
+    console.log(`   ⚠ Lane Observability: ${err.message}`);
+  }
+
   // Host capacity monitor — emits capacity alerts (VRAM pressure, GPU imbalance,
   // underused-while-busier, host/Ollama down) for the configured Ollama hosts.
   // Disable with HOST_CAPACITY_MONITOR=0; cadence via HOST_CAPACITY_MONITOR_INTERVAL_MS.

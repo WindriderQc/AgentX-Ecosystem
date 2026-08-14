@@ -10,8 +10,8 @@
  * hand-written workspace content is preserved.
  *
  * Usage:
- *   node core/scripts/sync-agent-prompts.js --ssh yb@192.0.2.66
- *   node core/scripts/sync-agent-prompts.js --ssh yb@192.0.2.66 --apply
+ *   node core/scripts/sync-agent-prompts.js --ssh operator@192.0.2.66
+ *   node core/scripts/sync-agent-prompts.js --ssh operator@192.0.2.66 --apply
  *   node core/scripts/sync-agent-prompts.js --local /home/agentx/.openclaw --agent main
  *
  * Options:

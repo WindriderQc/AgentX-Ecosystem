@@ -363,7 +363,7 @@ describe('review workflow', () => {
     // second review of a decided candidate is refused
     const again = await request(server)
       .post(`/api/memory-review/runs/${run.runId}/candidates/${candidateId}/review`)
-      .send({ action: 'reject', by: 'yanik' }).expect(409);
+      .send({ action: 'reject', by: 'operator' }).expect(409);
     expect(again.body.code).toBe('MEMORY_REVIEW_WRONG_STATE');
     const doc = await MemoryReviewRun.findOne({ runId: run.runId });
     expect(doc.status).toBe('completed'); // all candidates reviewed
@@ -405,7 +405,7 @@ describe('review workflow', () => {
     const { run, candidateId } = await runWithCandidate('test-rev-e', 'Owner prefers tabs.');
     const res = await request(server)
       .post(`/api/memory-review/runs/${run.runId}/candidates/${candidateId}/review`)
-      .send({ action: 'edit_approve', by: 'yanik', editedStatement: 'Owner prefers tabs in Python only.' })
+      .send({ action: 'edit_approve', by: 'operator', editedStatement: 'Owner prefers tabs in Python only.' })
       .expect(200);
     expect(res.body.data.status).toBe('approved');
     expect(res.body.data.statement).toBe('Owner prefers tabs.');
@@ -416,13 +416,13 @@ describe('review workflow', () => {
     const { run, candidateId } = await runWithCandidate('test-rev-d');
     await request(server)
       .post(`/api/memory-review/runs/${run.runId}/candidates/${candidateId}/review`)
-      .send({ action: 'defer', by: 'yanik' }).expect(200);
+      .send({ action: 'defer', by: 'operator' }).expect(200);
     const doc = await MemoryReviewRun.findOne({ runId: run.runId });
     expect(doc.candidates[0].status).toBe('deferred');
     expect(doc.status).not.toBe('completed');
     await request(server)
       .post(`/api/memory-review/runs/${run.runId}/candidates/${candidateId}/review`)
-      .send({ action: 'approve', by: 'yanik' }).expect(200);
+      .send({ action: 'approve', by: 'operator' }).expect(200);
   });
 
   test('there is no bulk approve surface', async () => {
@@ -436,7 +436,7 @@ describe('review workflow', () => {
     const { run, candidateId } = await runWithCandidate('test-suppress', statement);
     await request(server)
       .post(`/api/memory-review/runs/${run.runId}/candidates/${candidateId}/review`)
-      .send({ action: 'reject', by: 'yanik' }).expect(200);
+      .send({ action: 'reject', by: 'operator' }).expect(200);
 
     // second run, SAME evidence text -> suppressed
     const seeded2 = await seedRunWithObservation('test-suppress-2', `please remember: ${statement}`);
@@ -477,7 +477,7 @@ describe('apply gating and adapters', () => {
     const candidateId = doc.candidates[0].candidateId;
     await request(server)
       .post(`/api/memory-review/runs/${seeded.run.runId}/candidates/${candidateId}/review`)
-      .send({ action: 'approve', by: 'yanik' }).expect(200);
+      .send({ action: 'approve', by: 'operator' }).expect(200);
     return { runId: seeded.run.runId, candidateId };
   }
 
@@ -493,7 +493,7 @@ describe('apply gating and adapters', () => {
     const { runId, candidateId } = await approvedCandidate('test-apply-shadow');
     const res = await request(server)
       .post(`/api/memory-review/runs/${runId}/candidates/${candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(403);
+      .send({ by: 'operator' }).expect(403);
     expect(res.body.code).toBe('MEMORY_REVIEW_APPLY_DISABLED');
   });
 
@@ -511,7 +511,7 @@ describe('apply gating and adapters', () => {
     );
     const res = await request(server)
       .post(`/api/memory-review/runs/${seeded.run.runId}/candidates/${doc.candidates[0].candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(409);
+      .send({ by: 'operator' }).expect(409);
     expect(res.body.code).toBe('MEMORY_REVIEW_NOT_APPROVED');
   });
 
@@ -520,7 +520,7 @@ describe('apply gating and adapters', () => {
     await authorizeRun(runId);
     const first = await request(server)
       .post(`/api/memory-review/runs/${runId}/candidates/${candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(200);
+      .send({ by: 'operator' }).expect(200);
     expect(first.body.data.status).toBe('applied');
     expect(first.body.data.result).toContain('nestor-memory');
     expect(fakeRag.upsertDocumentWithChunks).toHaveBeenCalledTimes(1);
@@ -530,7 +530,7 @@ describe('apply gating and adapters', () => {
 
     const second = await request(server)
       .post(`/api/memory-review/runs/${runId}/candidates/${candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(200);
+      .send({ by: 'operator' }).expect(200);
     expect(second.body.data.alreadyApplied).toBe(true);
     expect(fakeRag.upsertDocumentWithChunks).toHaveBeenCalledTimes(1);
   });
@@ -566,7 +566,7 @@ describe('apply gating and adapters', () => {
     await authorizeRun(runId);
     const res = await request(server)
       .post(`/api/memory-review/runs/${runId}/candidates/${candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(200);
+      .send({ by: 'operator' }).expect(200);
     expect(res.body.data.result).toMatch(/pipeline task \d{4} created/);
     const pipelineId = res.body.data.result.match(/(\d{4})/)[1];
     const task = await PipelineTask.findOne({ pipelineId });
@@ -581,7 +581,7 @@ describe('apply gating and adapters', () => {
     await authorizeRun(runId);
     const res = await request(server)
       .post(`/api/memory-review/runs/${runId}/candidates/${candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(200);
+      .send({ by: 'operator' }).expect(200);
     expect(res.body.data.result).toContain('runtime-local proposal generated for codex');
     expect(res.body.data.result).toContain('NEVER by editing its SQLite');
     expect(fakeRag.upsertDocumentWithChunks).not.toHaveBeenCalled();
@@ -594,14 +594,14 @@ describe('apply gating and adapters', () => {
     fakeRag.upsertDocumentWithChunks.mockRejectedValueOnce(new Error('rag exploded'));
     await request(server)
       .post(`/api/memory-review/runs/${runId}/candidates/${candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(502);
+      .send({ by: 'operator' }).expect(502);
     let doc = await MemoryReviewRun.findOne({ runId });
     expect(doc.candidates[0].status).toBe('apply_failed');
     expect(doc.audit.some((a) => a.event === 'candidate_apply_failed')).toBe(true);
     // retry succeeds
     const retry = await request(server)
       .post(`/api/memory-review/runs/${runId}/candidates/${candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(200);
+      .send({ by: 'operator' }).expect(200);
     expect(retry.body.data.status).toBe('applied');
   });
 
@@ -615,7 +615,7 @@ describe('apply gating and adapters', () => {
     await authorizeRun(runId);
     const res = await request(server)
       .post(`/api/memory-review/runs/${runId}/candidates/${candidateId}/apply`)
-      .send({ by: 'yanik' }).expect(400);
+      .send({ by: 'operator' }).expect(400);
     expect(res.body.code).toBe('MEMORY_REVIEW_SECRET_REFUSED');
     expect(fakeRag.upsertDocumentWithChunks).not.toHaveBeenCalled();
   });

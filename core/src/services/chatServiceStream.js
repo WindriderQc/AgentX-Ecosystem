@@ -251,6 +251,8 @@ const handleChatRequestStream = async ({
         let fullContent = '';
         let thinkingContent = '';
         let stats = null;
+        let sawDone = false;
+        let finishReason = null;
 
         const decoder = new TextDecoder();
         let lineBuffer = '';
@@ -270,6 +272,8 @@ const handleChatRequestStream = async ({
                 }
 
                 if (data.done) {
+                    sawDone = true;
+                    finishReason = data.done_reason || data.stop_reason || data.finish_reason || null;
                     stats = buildOllamaStats(data, fullContent);
                     if (stats?.performance) {
                         stats.performance.promptEvalDuration = data.prompt_eval_duration || 0;
@@ -313,6 +317,17 @@ const handleChatRequestStream = async ({
             routedHostUrl: routingInfo?.target || effectiveTarget || null,
             // RouteDecision v1 (task 0519): built by routeRequest, durable here.
             routeDecision: routingInfo?.decision || null,
+            observability: {
+                contract: inferenceContract,
+                lane: 'interactive',
+                outcome: {
+                    visibleFinal: fullContent.trim().length > 0,
+                    thinkingOnly: fullContent.trim().length === 0 && thinkingContent.trim().length > 0,
+                    completed: sawDone,
+                    truncated: !sawDone || /^(length|max(?:imum)?[_ -]?(?:tokens|context)|token_limit)$/i.test(String(finishReason || '')),
+                    finishReason: finishReason ? String(finishReason).slice(0, 64) : null
+                }
+            },
             num_ctx: streamSanitized.num_ctx || null,
             num_ctx_source: streamNumCtxSource,
             tokensIn: stats?.usage?.promptTokens || 0,

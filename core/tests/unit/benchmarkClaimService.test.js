@@ -21,6 +21,13 @@ jest.mock('../../config/logger', () => ({
   debug: jest.fn()
 }));
 
+const mockObserveClaimReleaseFailure = jest.fn(async () => ({ emitted: 1, matched: 1 }));
+const mockObservePinRestoreFailure = jest.fn(async () => ({ emitted: 1, matched: 1 }));
+jest.mock('../../src/services/laneObservabilityService', () => ({
+  observeClaimReleaseFailure: (...args) => mockObserveClaimReleaseFailure(...args),
+  observePinRestoreFailure: (...args) => mockObservePinRestoreFailure(...args)
+}));
+
 const HostPreference = require('../../models/HostPreference');
 const service = require('../../src/services/benchmarkClaimService');
 const hostPrefService = require('../../src/services/hostPreferenceService');
@@ -143,6 +150,7 @@ describe('benchmarkClaimService', () => {
     });
 
     it('refuses to release another batch\'s claim', async () => {
+      mockObserveClaimReleaseFailure.mockClear();
       await service.claimBenchmark(HOST_URL, BATCH_A);
       const refused = await service.releaseBenchmarkClaim(HOST_URL, BATCH_B, RELEASE_OPTS);
       expect(refused.released).toBe(false);
@@ -150,11 +158,18 @@ describe('benchmarkClaimService', () => {
       // Status should still be benchmarking
       const still = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
       expect(still.status).toBe('benchmarking');
+      expect(mockObserveClaimReleaseFailure).toHaveBeenCalledWith(expect.objectContaining({
+        host: HOST_URL,
+        batchId: BATCH_B,
+        source: 'benchmark-claim-release'
+      }));
     });
 
     it('returns released=false when host preference missing', async () => {
+      mockObserveClaimReleaseFailure.mockClear();
       const res = await service.releaseBenchmarkClaim('http://nohost:11434', BATCH_A, RELEASE_OPTS);
       expect(res.released).toBe(false);
+      expect(mockObserveClaimReleaseFailure).toHaveBeenCalledTimes(1);
     });
 
     // 0175 / 0215 — auto-restore on legitimate release

@@ -32,6 +32,10 @@
 const HostPreference = require('../../models/HostPreference');
 const logger = require('../../config/logger');
 const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
+const {
+  observeClaimReleaseFailure,
+  observePinRestoreFailure
+} = require('./laneObservabilityService');
 
 let benchmarkClaimReaperInterval = null;
 let benchmarkClaimReaperIntervalMs = parseInt(process.env.BENCHMARK_CLAIM_REAP_INTERVAL_MS, 10) || 300_000;
@@ -281,12 +285,24 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
 
   const existing = await HostPreference.findOne({ hostUrl }).lean();
   if (!existing) {
+    void observeClaimReleaseFailure({
+      host: hostUrl,
+      batchId,
+      error: 'host preference not found',
+      source: 'benchmark-claim-release'
+    });
     return { released: false, reason: 'host preference not found' };
   }
 
   // Only release if the claim still belongs to this batch — prevents a
   // late-returning batch from clobbering a newer claim.
   if (existing.benchmarkClaim?.batchId && existing.benchmarkClaim.batchId !== batchId) {
+    void observeClaimReleaseFailure({
+      host: hostUrl,
+      batchId,
+      error: 'claim belongs to another owner',
+      source: 'benchmark-claim-release'
+    });
     return {
       released: false,
       reason: `claim belongs to batch ${existing.benchmarkClaim.batchId}, not ${batchId}`,
@@ -295,26 +311,46 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
   }
 
   const restoreStatus = existing.benchmarkClaim?.prevStatus || 'idle';
-  const updated = await HostPreference.findOneAndUpdate(
-    { hostUrl },
-    {
-      $set: {
-        status: restoreStatus,
-        benchmarkClaim: {
-          batchId: null,
-          prevStatus: null,
-          claimedAt: null,
-          estimatedDurationMs: null,
-          source: null,
-          owner: null,
-          note: null,
-          heartbeatAt: null,
-          heartbeatTtlMs: null
+  let updated;
+  try {
+    updated = await HostPreference.findOneAndUpdate(
+      { hostUrl },
+      {
+        $set: {
+          status: restoreStatus,
+          benchmarkClaim: {
+            batchId: null,
+            prevStatus: null,
+            claimedAt: null,
+            estimatedDurationMs: null,
+            source: null,
+            owner: null,
+            note: null,
+            heartbeatAt: null,
+            heartbeatTtlMs: null
+          }
         }
-      }
-    },
-    { new: true }
-  ).lean();
+      },
+      { new: true }
+    ).lean();
+  } catch (err) {
+    void observeClaimReleaseFailure({
+      host: hostUrl,
+      batchId,
+      error: err.message,
+      source: 'benchmark-claim-release'
+    });
+    throw err;
+  }
+  if (!updated) {
+    void observeClaimReleaseFailure({
+      host: hostUrl,
+      batchId,
+      error: 'claim release update did not match',
+      source: 'benchmark-claim-release'
+    });
+    return { released: false, reason: 'claim release update did not match' };
+  }
 
   // 0175: now that we gate warmHost / restorePinnedModels on active claims,
   // the bench's pre-release restoreAllDedication call becomes a no-op (good
@@ -478,6 +514,13 @@ async function reapStaleBenchmarkClaims(opts = {}) {
       } catch (err) {
         logger.warn('[hostPreferenceService] reaper pin restore failed', {
           hostUrl: pref.hostUrl, error: err.message
+        });
+        void observePinRestoreFailure({
+          host: pref.hostUrl,
+          models: entries.map(entry => entry.model),
+          batchId: claim.batchId,
+          error: err.message,
+          source: 'benchmark-claim-reaper'
         });
       }
     }

@@ -90,6 +90,7 @@ const {
 const { telemetryContextFromRequest } = require('../src/helpers/llmTelemetryContext');
 const { trustedNestorConsumer } = require('../src/services/nestorConsumerAttribution');
 const { getAlertService } = require('../src/services/alertService');
+const { summarizeOllamaOutcome } = require('../src/services/laneObservabilityService');
 const ragStore = getRagServiceClient();
 
 const INFERENCE_FETCH_TIMEOUT_MS =
@@ -1139,6 +1140,7 @@ router.post('/inference/generate', async (req, res) => {
         attempt,
         attemptData,
         attemptTrace,
+        attemptContract = inferenceContract,
         attemptOptions,
         attemptNumCtxSource,
         durationMs,
@@ -1164,6 +1166,14 @@ router.post('/inference/generate', async (req, res) => {
             hostUrl, hostKey, attemptModel, attempt, attemptOptions,
             fallbackUsed, fallbackReason, durationMs,
         }),
+        observability: {
+            contract: attemptContract,
+            outcome: attemptData && status === 'success'
+                ? summarizeOllamaOutcome(attemptData)
+                : null,
+            lane: laneName,
+            campaignId: body.campaignId || body.batchId || telemetryContext.workItemId || null,
+        },
         attempt,
         taskType: taskType || null,
         routed: !!taskType,

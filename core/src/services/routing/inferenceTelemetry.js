@@ -54,6 +54,7 @@ function sanitizedRouteDecision(decision) {
  * @param {boolean} [data.fallbackUsed]
  * @param {string}  [data.fallbackReason]
  * @param {Object}  [data.routeDecision] - RouteDecision v1 (task 0519)
+ * @param {Object}  [data.observability] - Safe contract/outcome summary; never payload
  * @param {number}  [data.tokensIn]
  * @param {number}  [data.tokensOut]
  * @param {number}  [data.durationMs]
@@ -62,6 +63,8 @@ function sanitizedRouteDecision(decision) {
  */
 async function recordInference(data) {
     if (process.env.NODE_ENV === 'test') return; // skip in tests
+    const decision = sanitizedRouteDecision(data.routeDecision);
+    let telemetryId = null;
     try {
         const InferenceLog = require('../../../models/InferenceLog');
         const { boundedIdentifier, inferRuntime, positiveAttempt } = require('../../helpers/llmTelemetryContext');
@@ -69,7 +72,7 @@ async function recordInference(data) {
         const { resolveHostKey } = require('../modelRouter');
         const host = data.host || data.routedHostUrl || 'unknown';
         const routedHost = data.routedHost || resolveHostKey(data.routedHostUrl || data.host);
-        await InferenceLog.create({
+        const row = await InferenceLog.create({
             host,
             hostKey: resolveHostKey(host),
             model: data.model || 'unknown',
@@ -91,7 +94,7 @@ async function recordInference(data) {
             fallbackReason: data.fallbackReason || null,
             swapped: data.swapped || false,
             routingTrace: data.routingTrace || null,
-            routeDecision: sanitizedRouteDecision(data.routeDecision),
+            routeDecision: decision,
             num_ctx: data.num_ctx != null ? data.num_ctx : null,
             num_ctx_source: data.num_ctx_source || null,
             tokensIn: data.tokensIn || 0,
@@ -101,12 +104,39 @@ async function recordInference(data) {
             error: data.error || null,
             timestamp: new Date()
         });
+        telemetryId = row?._id?.toString?.() || null;
     } catch (_e) {
         // Never break inference because of telemetry failure. Kept at warn
         // (not debug) so silent schema drifts surface promptly — previously
         // the 'proxy' caller value was rejected by the enum for weeks without
         // any user-visible signal.
         logger.warn('InferenceLog write failed (non-fatal)', { error: _e.message, name: _e.name });
+    }
+
+    // 0465: the telemetry funnel is also the single observation seam for all
+    // inference paths. Callers pass only a safe contract/outcome summary —
+    // never prompt, completion, or thinking text. Alerting remains best-effort
+    // and cannot make an inference fail.
+    if (data.observability && typeof data.observability === 'object') {
+        try {
+            const { observeInference } = require('../laneObservabilityService');
+            void observeInference({
+                ...data.observability,
+                telemetryId,
+                host: data.host || data.routedHostUrl || null,
+                hostKey: data.routedHost || null,
+                model: data.model || null,
+                caller: data.caller || null,
+                taskType: data.taskType || null,
+                workItemId: data.workItemId || null,
+                correlationId: data.correlationId || null,
+                routeDecision: decision,
+                durationMs: data.durationMs || 0,
+                status: data.status || 'success',
+            });
+        } catch (_e) {
+            logger.warn('Lane observation dispatch failed (non-fatal)', { error: _e.message });
+        }
     }
 }
 

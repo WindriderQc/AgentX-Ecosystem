@@ -10,6 +10,11 @@ jest.mock('../../config/logger', () => ({
   debug: jest.fn()
 }));
 
+const mockObservePinRestoreFailure = jest.fn(async () => ({ emitted: 1, matched: 1 }));
+jest.mock('../../src/services/laneObservabilityService', () => ({
+  observePinRestoreFailure: (...args) => mockObservePinRestoreFailure(...args)
+}));
+
 const HostPreference = require('../../models/HostPreference');
 const service = require('../../src/services/hostPreferenceService');
 
@@ -389,6 +394,20 @@ describe('hostPreferenceService', () => {
       } finally {
         global.fetch = originalFetch;
       }
+    });
+
+    it('emits safe observability when a pin restore fails', async () => {
+      const hostUrl = 'http://no-pin-host:11434';
+      mockObservePinRestoreFailure.mockClear();
+      await HostPreference.create({ hostUrl, hostKey: 'secondary', pinnedModels: [] });
+
+      const result = await service.restorePinnedModels(hostUrl);
+
+      expect(result).toEqual(expect.objectContaining({ status: 'error' }));
+      expect(mockObservePinRestoreFailure).toHaveBeenCalledWith(expect.objectContaining({
+        host: hostUrl,
+        source: 'host-preference-service'
+      }));
     });
   });
 

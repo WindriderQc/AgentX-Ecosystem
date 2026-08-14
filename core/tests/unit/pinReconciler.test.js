@@ -24,6 +24,12 @@ jest.mock('../../config/logger', () => ({
   debug: jest.fn()
 }));
 
+const mockObservePinRestoreFailure = jest.fn(async () => ({ emitted: 1, matched: 1 }));
+jest.mock('../../src/services/laneObservabilityService', () => ({
+  observeClaimReleaseFailure: jest.fn(),
+  observePinRestoreFailure: (...args) => mockObservePinRestoreFailure(...args)
+}));
+
 const HostPreference = require('../../models/HostPreference');
 const reconciler = require('../../src/services/pinReconciler');
 
@@ -136,6 +142,31 @@ describe('pinReconciler — pin auto-restore grace period (0176)', () => {
     );
     expect(generateCalls.length).toBeGreaterThanOrEqual(1);
     expect(after.pinFirstDisplacedAt).toBeFalsy();
+  });
+
+  it('observes a failed reconciler warm without changing the retry state machine', async () => {
+    reconciler.setPinRestoreGraceMs(50);
+    mockObservePinRestoreFailure.mockClear();
+    await HostPreference.findOneAndUpdate(
+      { hostUrl: HOST_URL },
+      { $set: { pinFirstDisplacedAt: new Date(Date.now() - 1_000) } }
+    );
+    global.fetch = jest.fn(async (url) => {
+      if (typeof url === 'string' && url.endsWith('/api/ps')) {
+        return { ok: true, json: async () => ({ models: [{ name: OTHER_MODEL }] }) };
+      }
+      return { ok: false, text: async () => 'warm failed' };
+    });
+
+    await reconciler.checkAndReloadDefaults();
+
+    expect(mockObservePinRestoreFailure).toHaveBeenCalledWith(expect.objectContaining({
+      host: HOST_URL,
+      model: PIN_MODEL,
+      source: 'pin-reconciler'
+    }));
+    const after = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+    expect(after.pinFirstDisplacedAt).toBeTruthy();
   });
 
   it('clears stamp when displacement resolves before grace elapses', async () => {

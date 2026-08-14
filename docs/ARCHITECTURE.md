@@ -28,9 +28,10 @@ routes. Empty integration variables are deliberate and must not fall back to a
 private or production address.
 
 The first extraction keeps some optional-adapter implementation inside Core
-to avoid a risky all-at-once rewrite. Those modules are not product
-dependencies and are not enabled by Compose. A later change may move them to
-versioned adapter packages once their contracts and deployments are stable.
+while each family moves behind the trusted extension seam. Those modules are
+not product dependencies and are not enabled by Compose. A full-profile
+operations workspace may mount reviewed adapter modules by absolute path;
+duplicate capability ownership fails startup and the demo never loads them.
 
 ## Contract rules
 

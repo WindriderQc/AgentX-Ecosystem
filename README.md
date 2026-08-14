@@ -77,10 +77,22 @@ Detailed steps live in [Demo guide](docs/DEMO.md). The current architecture is
 defined by [Architecture](docs/ARCHITECTURE.md) and the rendered Compose model,
 not by dated plans or AIOps operational history.
 
+## Install and update
+
+Normal users should follow the latest stable GitHub release. Controlled
+deployments pin the Core, Benchmark, and RAG container digests. Advanced users
+may opt into the moving `main`/`test` channel. Exact commands and rollback
+expectations are in [Install and update modes](docs/RELEASES.md).
+
+Agent X does not require a particular operations repository. An advanced user
+may keep host-specific configuration and integrations in a separate private
+workspace and load trusted adapters through the small, full-profile-only
+[extension seam](docs/EXTENSIONS.md). The default demo never loads them.
+
 ## Relationship with AIOps
 
-This repository is the presentable Agent X product. AIOps remains the separate
-operator control plane for deployments, infrastructure, migrations, audits,
-personal integrations, and ecosystem memory. AIOps may orchestrate this
-checkout locally through explicit contracts, but neither repository should
-infer the other's runtime from historical documents.
+This repository is the presentable Agent X product. AIOps is one separate
+operator workspace for deployments, infrastructure, migrations, audits,
+personal integrations, and ecosystem memory. It consumes deliberately pinned
+product releases; it does not own or fork reusable product source. Neither
+repository should infer the other's runtime from historical documents.

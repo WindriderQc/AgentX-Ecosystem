@@ -51,7 +51,7 @@ describe('openclawClient capability helpers', () => {
   });
 
   it('enables integration when an official inventory SSH target is provided', () => {
-    process.env.OPENCLAW_INVENTORY_SSH_TARGET = 'yb@192.0.2.66';
+    process.env.OPENCLAW_INVENTORY_SSH_TARGET = 'operator@192.0.2.66';
 
     const { isOpenClawIntegrationEnabled } = loadModule();
     expect(isOpenClawIntegrationEnabled()).toBe(true);

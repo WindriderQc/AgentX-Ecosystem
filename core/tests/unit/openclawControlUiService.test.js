@@ -31,7 +31,7 @@ describe('openclawControlUiService', () => {
     const config = getOpenClawControlUiConfig({
       gatewayUrl: 'http://192.0.2.66:18789',
       localBaseUrl: 'http://127.0.0.1:18790',
-      tunnelTarget: 'yb@192.0.2.66'
+      tunnelTarget: 'operator@192.0.2.66'
     });
 
     expect(config).toMatchObject({
@@ -62,7 +62,7 @@ describe('openclawControlUiService', () => {
     const config = getOpenClawControlUiConfig({
       gatewayUrl: 'http://192.0.2.66:18789',
       localBaseUrl: 'http://127.0.0.1:18790',
-      tunnelTarget: 'yb@192.0.2.66',
+      tunnelTarget: 'operator@192.0.2.66',
       mode: 'ssh-tunnel'
     });
 
@@ -71,7 +71,7 @@ describe('openclawControlUiService', () => {
       launchBaseUrl: 'http://127.0.0.1:18790',
       mode: 'ssh-tunnel',
       requiresTunnel: true,
-      tunnelCommand: 'ssh -N -L 18790:127.0.0.1:18789 yb@192.0.2.66'
+      tunnelCommand: 'ssh -N -L 18790:127.0.0.1:18789 operator@192.0.2.66'
     });
   });
 

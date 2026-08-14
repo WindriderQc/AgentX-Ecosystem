@@ -1,6 +1,7 @@
 const Conversation = require('../../models/Conversation');
 const { getOrCreateProfile } = require('../helpers/userHelpers');
 const { extractResponse, buildOllamaPayload } = require('../helpers/ollamaResponseHandler');
+const { summarizeOllamaOutcome } = require('./laneObservabilityService');
 const { sanitizeOptions, resolveTarget } = require('../helpers/ollamaUtils');
 const { tryHandleToolCommand } = require('./toolService');
 const { executeTool, parseToolCalls } = require('./toolExecutor');
@@ -236,6 +237,7 @@ const handleChatRequest = async ({
     // Model call
     let assistantMessageContent, thinking, warning, stats;
     let inferenceContract = null;
+    let observabilityOutcome = null;
     let sanitized = {};
     let numCtxSource = null;
     try {
@@ -305,6 +307,7 @@ const handleChatRequest = async ({
         }
 
         const data = await response.json();
+        observabilityOutcome = summarizeOllamaOutcome(data);
 
         const extracted = extractResponse(data, effectiveModel, {
             thinkingSupported: hasQualifiedThinkingCapability(inferenceContract)
@@ -334,6 +337,11 @@ const handleChatRequest = async ({
             // is where it becomes durable. Failed chats are the rows an
             // alerting surface most needs attributed.
             routeDecision: routingInfo?.decision || null,
+            observability: {
+                contract: inferenceContract,
+                outcome: observabilityOutcome,
+                lane: 'interactive'
+            },
             num_ctx: sanitized.num_ctx || null,
             num_ctx_source: numCtxSource,
             status: err.name === 'AbortError' ? 'timeout' : 'error',
@@ -357,6 +365,11 @@ const handleChatRequest = async ({
         routedHostUrl: routingInfo?.target || effectiveTarget || null,
         // RouteDecision v1 (task 0519): built by routeRequest, durable here.
         routeDecision: routingInfo?.decision || null,
+        observability: {
+            contract: inferenceContract,
+            outcome: observabilityOutcome,
+            lane: 'interactive'
+        },
         num_ctx: sanitized.num_ctx || null,
         num_ctx_source: numCtxSource,
         tokensIn: stats?.usage?.promptTokens || 0,

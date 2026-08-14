@@ -327,7 +327,7 @@ describe('openclawAgentInventoryService', () => {
     });
 
     const state = await collectRemoteOpenClawState({
-      sshTarget: 'yb@example',
+      sshTarget: 'operator@example',
       remoteOpenClawHome: home,
       sshRunner,
     });
@@ -337,7 +337,7 @@ describe('openclawAgentInventoryService', () => {
     });
 
     expect(sshRunner).toHaveBeenCalledWith(
-      'yb@example',
+      'operator@example',
       expect.stringContaining('AGENTX_OPENCLAW_HOME='),
       expect.any(Object)
     );
@@ -389,7 +389,7 @@ describe('openclawAgentInventoryService', () => {
     });
 
     const state = await collectRemoteOpenClawState({
-      sshTarget: 'yb@example',
+      sshTarget: 'operator@example',
       remoteOpenClawHome: home,
       includeAgentBindings: false,
       includeMemoryStatus: false,
@@ -449,7 +449,7 @@ describe('openclawAgentInventoryService', () => {
     });
 
     const state = await collectRemoteOpenClawState({
-      sshTarget: 'yb@example',
+      sshTarget: 'operator@example',
       remoteOpenClawHome: home,
       includeAgentBindings: false,
       includeMemoryStatus: false,

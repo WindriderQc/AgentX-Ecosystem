@@ -120,7 +120,7 @@ describe('Roundtable v2 orchestrator', () => {
       stats: { tokensPerSecond: null, latencyMs: 25 },
       error: null,
       target: 'openclaw://agent/leadx',
-      hostName: 'yb@192.0.2.66',
+      hostName: 'operator@192.0.2.66',
       runtime: 'openclaw',
       runtimeRef: 'agent:leadx:roundtable-rt-1',
       startedAt: new Date(),

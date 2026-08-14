@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const mongoose = require('mongoose');
 const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -22,6 +23,10 @@ const {
   isDemoProfile,
   createAgentXProfileGuard,
 } = require('../../shared/agentxRuntimeProfile');
+const {
+  loadAgentXExtensions,
+  extensionOwnsCapability
+} = require('./extensions/extensionLoader');
 
 // Browser-reachable URLs for each service. Distinct from server-to-server
 // URLs (BENCHMARK_SERVICE_URL etc.) which use container-DNS names inside
@@ -282,12 +287,27 @@ app.use('/api/hermes-openai', automationControlLimiter);
 // Apply general API rate limiter to all /api routes (except specific ones)
 app.use('/api/', apiLimiter);
 
+// Trusted operator extensions are explicit, absolute-path modules and only
+// load in the full profile. Register them before built-ins so an operations
+// repository can own a declared capability without patching product source.
+const agentxExtensions = loadAgentXExtensions({
+  app,
+  express,
+  mongoose,
+  logger,
+  profile: agentxProfile,
+  standardJsonParser
+});
+app.locals.agentxExtensions = agentxExtensions;
+
 // Alert routes (Track 1: Alerts & Notifications)
 const alertRoutes = require('../routes/alerts');
 app.use('/api/alerts', standardJsonParser, alertRoutes);
 
-const printerVisionRoutes = require('../routes/printer-vision');
-app.use('/api/printer-vision', standardJsonParser, printerVisionRoutes);
+if (!extensionOwnsCapability(agentxExtensions, 'printer-vision')) {
+  const printerVisionRoutes = require('../routes/printer-vision');
+  app.use('/api/printer-vision', standardJsonParser, printerVisionRoutes);
+}
 
 // V4: Mount Analytics routes
 const analyticsRoutes = require('../routes/analytics');
