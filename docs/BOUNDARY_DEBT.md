@@ -1,6 +1,10 @@
 # Product boundary debt
 
-Status: current engineering boundary, reviewed 2026-08-12.
+Status: current engineering boundary, reviewed 2026-08-14.
+
+OpenClaw schedule projection is operations-layer code and was removed from the
+product tree on 2026-08-14. AIOps owns the dependency-free adapter and its host
+scheduling wrapper; Agent X exposes only the bounded runtime APIs it uses.
 
 The first extraction deliberately preserves working product behavior before
 attempting a large internal rewrite. The default profile is safe and
