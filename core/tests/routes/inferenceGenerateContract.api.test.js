@@ -155,6 +155,23 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
         expect.objectContaining({ callerDetail: 'nestor/panel/ask' })
       );
     });
+
+    test('telemetry carries a safe contract/outcome observation without response text', async () => {
+      mockOllamaOk();
+      await request(app)
+        .post('/api/inference/generate')
+        .send({ model: 'test-model', prompt: 'hello' })
+        .expect(200);
+
+      const entry = recordInference.mock.calls[0][0];
+      expect(entry.observability).toEqual(expect.objectContaining({
+        contract: expect.objectContaining({ version: 'agentx.inference-contract.v1' }),
+        outcome: expect.objectContaining({ visibleFinal: true, completed: true }),
+      }));
+      expect(entry.observability.outcome).not.toHaveProperty('content');
+      expect(entry.observability.outcome).not.toHaveProperty('response');
+      expect(entry.observability.contract).not.toHaveProperty('prompt');
+    });
   });
 
   describe('host gate', () => {

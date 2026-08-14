@@ -92,6 +92,7 @@ async function tryAndRespondDegraded(context) {
       attempt: (Number(telemetryContext.attempt) || 1) + 1,
       attemptData: degradedOutcome.data,
       attemptTrace: fallbackTrace,
+      attemptContract: degradedOutcome.contract,
       attemptOptions: degradedOutcome.payload?.options,
       attemptNumCtxSource: degradedOutcome.numCtxSource,
       durationMs: degradedOutcome.durationMs,

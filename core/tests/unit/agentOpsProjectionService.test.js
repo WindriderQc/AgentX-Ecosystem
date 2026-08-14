@@ -136,7 +136,7 @@ describe('agentOpsProjectionService', () => {
         directBaseUrl: 'http://192.0.2.66:18789',
         requiresSecureContext: true,
         requiresTunnel: true,
-        tunnelCommand: 'ssh -N -L 18790:127.0.0.1:18789 yb@192.0.2.66',
+        tunnelCommand: 'ssh -N -L 18790:127.0.0.1:18789 operator@192.0.2.66',
         nativeCapabilities: [{ id: 'agents', label: 'Agents', path: '/agents', href: 'http://127.0.0.1:18790/agents' }],
         agentx: {
           authority: 'cross-platform-complements',

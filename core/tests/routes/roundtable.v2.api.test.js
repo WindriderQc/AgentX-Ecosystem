@@ -190,7 +190,7 @@ describe('Roundtable v2 API', () => {
     });
     roundtableService.addInterjection.mockResolvedValue({
       doc: {},
-      interjection: { interjectionId: 'i-1', author: '@yanik' }
+      interjection: { interjectionId: 'i-1', author: '@operator' }
     });
     roundtableService.sendTelegramText.mockResolvedValue({});
     const accepted = await request(app)
@@ -201,14 +201,14 @@ describe('Roundtable v2 API', () => {
           text: '/interject Check the rollback path.',
           chat: { id: -100123 },
           message_thread_id: 42,
-          from: { id: 95100785879, username: 'yanik', is_bot: false }
+          from: { id: 95100785879, username: 'operator', is_bot: false }
         }
       });
 
     expect(accepted.status).toBe(200);
     expect(accepted.body.action).toBe('interjection-queued');
     expect(roundtableService.addInterjection).toHaveBeenCalledWith('rt-1', {
-      text: 'Check the rollback path.', author: '@yanik', source: 'telegram'
+      text: 'Check the rollback path.', author: '@operator', source: 'telegram'
     });
   });
 

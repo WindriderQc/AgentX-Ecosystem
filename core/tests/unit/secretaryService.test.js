@@ -134,11 +134,11 @@ describe('completePersonalTask', () => {
     const doc = personalDoc();
     PipelineTask.findOne.mockResolvedValue(doc);
 
-    const result = await completePersonalTask({ ref: '0319', by: 'yanik' });
+    const result = await completePersonalTask({ ref: '0319', by: 'operator' });
 
     expect(doc.status).toBe('done');
     expect(doc.save).toHaveBeenCalled();
-    expect(doc.feedback[0].by).toBe('yanik');
+    expect(doc.feedback[0].by).toBe('operator');
     expect(result.alreadyDone).toBe(false);
     expect(result.task.status).toBe('done');
   });

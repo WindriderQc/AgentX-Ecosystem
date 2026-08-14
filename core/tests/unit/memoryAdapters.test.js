@@ -111,7 +111,7 @@ describe('memoryAdapters', () => {
     const r = await searchMemory({ sources: ['openclaw'], query: 'host-beta wedge', k: 5 });
     expect(r.length).toBeGreaterThan(0);
     expect(r[0].source).toBe('openclaw');
-    expect(r[0].text.toLowerCase()).toContain('host-beta');
+    expect(r[0].text.toLowerCase()).toContain('host beta');
     expect(r[0].ref).toMatch(/^openclaw:/);
   });
 
@@ -140,7 +140,7 @@ describe('memoryAdapters', () => {
   });
 
   it('reports OpenClaw live inventory status when SSH inventory is configured', async () => {
-    process.env.OPENCLAW_INVENTORY_SSH_TARGET = 'yb@openclaw.test';
+    process.env.OPENCLAW_INVENTORY_SSH_TARGET = 'operator@openclaw.test';
     const buildOpenClawAgentInventory = jest.fn().mockResolvedValue({
       generated_at: '2026-07-02T12:00:00.000Z',
       source: {
@@ -222,7 +222,7 @@ describe('memoryAdapters', () => {
   });
 
   it('falls back to local OpenClaw status when live inventory fails', async () => {
-    process.env.OPENCLAW_INVENTORY_SSH_TARGET = 'yb@openclaw.test';
+    process.env.OPENCLAW_INVENTORY_SSH_TARGET = 'operator@openclaw.test';
     const ws = path.join(process.env.OPENCLAW_HOME, 'workspace');
     await fsp.mkdir(ws);
     await fsp.writeFile(path.join(ws, 'MEMORY.md'), 'Local fallback memory notes.');
@@ -342,7 +342,7 @@ describe('memoryAdapters', () => {
   });
 
   it('builds ecosystem memory alignment status across AgentX RAG, Hermes, and OpenClaw', async () => {
-    process.env.OPENCLAW_INVENTORY_SSH_TARGET = 'yb@openclaw.test';
+    process.env.OPENCLAW_INVENTORY_SSH_TARGET = 'operator@openclaw.test';
     jest.resetModules();
     jest.doMock('../../src/services/ragServiceClient', () => ({
       getRagServiceClient: () => ({
@@ -432,7 +432,8 @@ describe('memoryAdapters', () => {
   it('builds an FTS5-safe MATCH from free-form query', async () => {
     const { buildFtsMatch } = require('../../src/services/memoryAdapters');
     const m = buildFtsMatch('Tell me about Host Beta & qwen2.5');
-    expect(m).toMatch(/Host Beta/);
+    expect(m).toMatch(/"Host"\*/);
+    expect(m).toMatch(/"Beta"\*/);
     expect(m).not.toMatch(/&/);
     expect(m).toMatch(/OR/);
   });

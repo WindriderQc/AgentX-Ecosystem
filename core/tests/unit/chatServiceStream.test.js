@@ -270,7 +270,11 @@ describe('chatServiceStream', () => {
     }));
     expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
       status: 'success',
-      routeDecision: decision
+      routeDecision: decision,
+      observability: expect.objectContaining({
+        contract: expect.objectContaining({ version: 'agentx.inference-contract.v1' }),
+        outcome: expect.objectContaining({ visibleFinal: true, completed: true })
+      })
     }));
   });
 

@@ -38,6 +38,7 @@ async function seedDefaultRules() {
         channels: rule.channels || ['dataapi_log'],
         title: rule.title || '',
         message: rule.message || '',
+        description: rule.description || '',
         renotifyMs: rule.renotifyMs || 0,
         builtIn: true,
       });

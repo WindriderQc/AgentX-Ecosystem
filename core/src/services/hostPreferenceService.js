@@ -27,6 +27,7 @@
 const HostPreference = require('../../models/HostPreference');
 const hostGate = require('./hostGate');
 const logger = require('../../config/logger');
+const { observePinRestoreFailure } = require('./laneObservabilityService');
 const benchmarkClaimService = require('./benchmarkClaimService');
 const hostHealthDaemon = require('./hostHealthDaemon');
 const pinReconciler = require('./pinReconciler');
@@ -397,14 +398,23 @@ async function unloadModel(hostUrl, model) {
  * are actually resident before reporting success.
  */
 async function restorePinnedModels(hostUrl) {
-  if (activePinRestores.has(hostUrl)) {
-    return activePinRestores.get(hostUrl);
+  let restorePromise = activePinRestores.get(hostUrl);
+  if (!restorePromise) {
+    restorePromise = restorePinnedModelsInternal(hostUrl)
+      .finally(() => activePinRestores.delete(hostUrl));
+    activePinRestores.set(hostUrl, restorePromise);
   }
 
-  const restorePromise = restorePinnedModelsInternal(hostUrl)
-    .finally(() => activePinRestores.delete(hostUrl));
-  activePinRestores.set(hostUrl, restorePromise);
-  return restorePromise;
+  const result = await restorePromise;
+  if (result?.status === 'error') {
+    void observePinRestoreFailure({
+      host: hostUrl,
+      models: result.pinnedModels || result.results?.map(entry => entry.model),
+      error: result.error,
+      source: 'host-preference-service'
+    });
+  }
+  return result;
 }
 
 async function restorePinnedModelsInternal(hostUrl) {

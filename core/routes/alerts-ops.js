@@ -17,6 +17,7 @@ const logger = require('../config/logger');
 const { getNotificationService } = require('../src/services/notificationService');
 const { seedDefaultRules, syncRulesToEngine } = require('../src/services/alertRuleSeeder');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
+const { getStatusProjection } = require('../src/services/laneObservabilityService');
 
 /**
  * PUT /api/alerts/:id/acknowledge
@@ -212,6 +213,21 @@ router.get('/stats/summary', async (req, res) => {
       message: 'Failed to get alert statistics',
       error: error.message
     });
+  }
+});
+
+/**
+ * GET /api/alerts/lane-observability
+ * Read-only detector/rule/coverage status. This route never runs a detector
+ * or changes alert, routing, claim, pin, or residency state.
+ */
+router.get('/lane-observability', async (_req, res) => {
+  try {
+    const projection = await getStatusProjection();
+    res.json({ status: 'success', data: projection });
+  } catch (error) {
+    logger.error('Failed to get lane observability status', { error: error.message });
+    res.status(500).json({ status: 'error', message: 'Failed to get lane observability status' });
   }
 });
 

@@ -13,10 +13,13 @@ assistant, host/fleet, backup, storage, voice, and panel modules remain in the
 imported Core tree. They are unreachable in the default profile and receive no
 endpoint, credential, or host mount from product Compose.
 
-Before moving them, define a stable adapter contract and prove that AIOps can
-own deployment/configuration without duplicating Core inference or telemetry.
-Remove one adapter family at a time with route, UI, and Compose conformance
-tests. Do not infer that file presence means active product scope.
+The minimal adapter contract now exists in `core/src/extensions/extensionLoader.js`.
+The printer-vision capability is the first seam proof: a full-profile operations
+extension can claim it before the transitional built-in route is registered.
+Remove one built-in family at a time only after route, data, image, mount, and
+rollback conformance pass. OpenClaw and Hermès remain coupled more deeply and
+must not be moved by blind file copying. Do not infer that file presence means
+active product scope.
 
 ## Shared contract candidates
 
@@ -52,11 +55,9 @@ because renaming coordinated UI selectors would be cosmetic and risky.
   90-second gate and remains non-conclusive. It must not be represented as a
   pass until CI provides observable progress or useful sharding.
 
-## Decisions before publication
+## Remaining release decisions
 
-- choose the future remote and repository visibility;
-- confirm the repository license and add a root license file;
-- decide whether optional adapters move to AIOps packages or versioned
-  integration repositories;
-- choose a CI matrix and Windows Mongo test strategy;
+- complete the first hosted CI baseline and publish the initial stable release;
+- make the first GHCR packages public before documenting anonymous pulls;
+- move optional adapters through the proven seam one family at a time;
 - add a GPU Ollama override only for explicitly supported hardware.

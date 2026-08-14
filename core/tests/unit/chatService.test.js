@@ -216,7 +216,11 @@ describe('chatService', () => {
             expect(result.numCtx).toBe(49152);
             expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
                 num_ctx: 49152,
-                num_ctx_source: 'host_preference_pin'
+                num_ctx_source: 'host_preference_pin',
+                observability: expect.objectContaining({
+                    contract: expect.objectContaining({ version: 'agentx.inference-contract.v1' }),
+                    outcome: expect.objectContaining({ visibleFinal: true, completed: true })
+                })
             }));
         });
 
