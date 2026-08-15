@@ -98,14 +98,14 @@ const ConversationSchema = new mongoose.Schema({
   promptName: { type: String },     // Snapshot: e.g. "default_chat"
   promptVersion: { type: Number },  // Snapshot: e.g. 5
 
-  // OpenClaw integration: track conversation source
+  // Product-owned conversation origin. External callers use the bounded API.
   source: {
     type: String,
-    enum: ['agentx', 'openclaw'],
+    enum: ['agentx', 'external'],
     default: 'agentx',
     index: true
   },
-  openclawAgentId: { type: String, default: undefined },
+  clientRef: { type: String, default: undefined, maxlength: 160 },
 
   // V5: Total conversation cost (sum of all message costs)
   totalCost: {

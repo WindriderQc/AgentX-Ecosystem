@@ -130,12 +130,12 @@ router.delete('/backups/:backupName', requireOperatorAccess, (req, res) => {
 });
 
 // ========================================
-// Config backups (ecosystem.config.js + .env files + crontab + openclaw)
+// Product configuration backups
 // ========================================
 
 /**
  * POST /api/operations/config/backup
- * Tar ecosystem config, .env files, crontab, openclaw jobs.json
+ * Archive the bounded product configuration sources.
  */
 router.post('/config/backup', requireOperatorAccess, async (req, res) => {
   try {

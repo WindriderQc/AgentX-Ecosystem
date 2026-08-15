@@ -132,7 +132,7 @@ async function restoreDedication(hostUrlOrKey) {
 // ── Benchmark Coordination ──────────────────────────────────────────────────
 //
 // Announce to core that a benchmark batch is taking over a host, so that
-// other consumers (chat, buddy, OpenClaw) can route around us while we
+// other consumers (chat, buddy, bounded API clients) can route around us while we
 // swap models in and out of VRAM. Callers treat claim acquisition as a
 // required startup guard; a failed claim must block the batch before warmup.
 

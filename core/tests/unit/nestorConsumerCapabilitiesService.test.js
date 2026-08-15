@@ -11,7 +11,7 @@ jest.mock('../../src/services/nestorConsumerMemoryService', () => ({
 }));
 jest.mock('../../src/services/nestorConsumerPersonalityService', () => ({
   getPersonalitySources: jest.fn().mockResolvedValue({
-    sources: { agentx: { available: true }, hermes: { available: true }, openclaw: { available: true } },
+    sources: { agentx: { available: true } },
   }),
 }));
 jest.mock('../../src/services/voixClientService', () => ({
@@ -35,7 +35,7 @@ describe('Nestor consumer capability discovery', () => {
       modelCatalogEndpoint: '/api/models/all',
       operations: ['chat', 'react', 'analyze'],
     }));
-    expect(result.memory.sources).toEqual(['agentx', 'rag', 'hermes', 'openclaw']);
+    expect(result.memory.sources).toEqual(['agentx', 'rag']);
     expect(result.voix.proxy.synthesize).toBe('/api/voix/synthesize');
     expect(result.events).toEqual(expect.objectContaining({
       ingressEndpoint: '/api/platform-events',
@@ -48,26 +48,8 @@ describe('Nestor consumer capability discovery', () => {
       messageCount: 50,
       totalMessageCharacters: 32000,
       memoryResultsPerSource: 20,
-      rawNotesCharacters: 65536,
-      migrationNotesChunkBytes: 1048576,
-      migrationNotesMaxBytes: 268435456,
-      migrationHistoryItems: 1000,
     }));
-    expect(result.migration).toEqual(expect.objectContaining({
-      profileSchemaVersion: 2,
-      profileSchemaNegotiation: 'query:schemaVersion=2',
-      defaultProfileSchemaVersion: 1,
-      factProjectionSha256: true,
-      snapshotDomain: 'agentx.nestor.migration-snapshot.v2',
-      snapshotValidated: true,
-      notesEncoding: 'base64',
-      notesChunkBytes: 1048576,
-      notesMaxBytes: 268435456,
-      snapshotLeaseSeconds: 600,
-      notesArchiveEndpoint: '/api/consumers/nestor/v1/migration/notes',
-      preservesRawMongo: true,
-      access: 'loopback-or-operator-token',
-    }));
+    expect(result).not.toHaveProperty('migration');
     expect(result.legacyBuddy).toEqual(expect.objectContaining({
       apiSupported: true,
       uiSupported: false,

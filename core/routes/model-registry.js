@@ -291,52 +291,6 @@ router.get('/:name/context-info', async (req, res) => {
 });
 
 /**
- * GET /api/models/registry/export/openclaw
- *
- * Returns ModelRegistry entries shaped as an OpenClaw provider block so the
- * operator can paste them into ~/.openclaw/openclaw.json. One provider
- * suggestion per sourceHost. Read-only; never writes to openclaw.json.
- *
- * contextWindow and params.num_ctx are kept aligned. Explicit
- * executionOverrides.num_ctx wins. Profiler/probe-derived values expose their
- * verified ceiling in _source.contextMaxVerified but are capped to the
- * operational runtime default unless overridden.
- */
-router.get('/export/openclaw', async (_req, res) => {
-  try {
-    const { buildExport } = require('../src/services/openclawExportService');
-    const data = await buildExport();
-    res.json({ status: 'success', data });
-  } catch (err) {
-    logger.error('openclaw export failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-/**
- * GET /api/models/registry/export/openclaw/diff
- *
- * Compares the export above against the live ~/.openclaw/openclaw.json and
- * reports what's new, what has drifted contextWindow or params.num_ctx values,
- * and what's in openclaw.json but not in the registry.
- *
- * Path to openclaw.json can be overridden via OPENCLAW_CONFIG_PATH env.
- */
-router.get('/export/openclaw/diff', async (_req, res) => {
-  try {
-    const { buildDiff } = require('../src/services/openclawExportService');
-    const data = await buildDiff();
-    if (data.error) {
-      return res.status(404).json({ status: 'error', message: data.error, configPath: data.configPath });
-    }
-    res.json({ status: 'success', data });
-  } catch (err) {
-    logger.error('openclaw diff failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-/**
  * GET /api/models/registry/:name
  *
  * Get specific model details

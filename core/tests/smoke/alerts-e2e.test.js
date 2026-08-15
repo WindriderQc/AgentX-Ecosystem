@@ -200,7 +200,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
           title: 'Test Alert for Retrieval',
           message: 'This is a test alert',
           source: 'smoke-test',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         });
 
       testAlertId = response.body.data.alert._id;
@@ -239,7 +239,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
         title: 'Critical Test',
         message: 'Critical message',
         source: 'smoke-test',
-        channels: ['dataapi_log']
+        channels: ['local_log']
       });
 
       const response = await request(app)
@@ -278,7 +278,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
           title: 'Info Alert',
           message: 'Info message',
           source: 'smoke-test',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         }),
         request(app).post('/api/alerts').send({
           ruleId: 'stats-warning',
@@ -286,7 +286,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
           title: 'Warning Alert',
           message: 'Warning message',
           source: 'smoke-test',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         }),
         request(app).post('/api/alerts').send({
           ruleId: 'stats-critical',
@@ -294,7 +294,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
           title: 'Critical Alert',
           message: 'Critical message',
           source: 'smoke-test',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         })
       ]);
 
@@ -311,15 +311,15 @@ describe('Alerts End-to-End Smoke Tests', () => {
   });
 
   describe('5. Notification Channel Verification', () => {
-    test('should log dataapi_log channel notifications', async () => {
+    test('should log local_log channel notifications', async () => {
       const response = await request(app)
         .post('/api/alerts')
         .send({
           severity: 'info',
-          ruleId: 'test-channel-dataapi', title: 'Channel Test',
+          ruleId: 'test-channel-local-log', title: 'Channel Test',
           message: 'Testing notification channels',
           source: 'smoke-test',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         })
         .expect(201);
 
@@ -335,7 +335,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
           ruleId: 'test-channel-multi', title: 'Multi-Channel Test',
           message: 'Testing multiple channels',
           source: 'smoke-test',
-          channels: ['slack', 'email', 'dataapi_log']
+          channels: ['slack', 'email', 'local_log']
         })
         .expect(201);
 
@@ -382,7 +382,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
           title: 'Test',
           message: 'Test message',
           source: 'smoke-test',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         })
         .expect(400);
 
@@ -401,7 +401,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
             title: `Test ${severity}`,
             message: 'Test message',
             source: 'smoke-test',
-            channels: ['dataapi_log']
+            channels: ['local_log']
           })
           .expect(201);
 
@@ -433,7 +433,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
           title: 'Complex Context Test',
           message: 'Testing context preservation',
           source: 'smoke-test',
-          channels: ['dataapi_log'],
+          channels: ['local_log'],
           context: complexContext
         })
         .expect(201);
@@ -462,7 +462,7 @@ describe('Alerts End-to-End Smoke Tests', () => {
           ruleId: 'test-metadata', title: 'Metadata Test',
           message: 'Testing metadata preservation',
           source: 'smoke-test',
-          channels: ['dataapi_log'],
+          channels: ['local_log'],
           metadata
         })
         .expect(201);

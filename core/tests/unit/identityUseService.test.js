@@ -72,11 +72,11 @@ describe('identity use evidence (0529)', () => {
 
   test('the 90-day answer is unknown for every identity', async () => {
     const model = fakeModel([
-      [{ _id: { caller: 'chat', callerDetail: 'leadx', runtime: 'openclaw' }, count: 1, lastSeen: NOW }],
-      [{ _id: { caller: 'chat', callerDetail: 'leadx', runtime: 'openclaw' }, count: 1, lastSeen: NOW }],
+      [{ _id: { caller: 'chat', callerDetail: 'client-42', runtime: 'external' }, count: 1, lastSeen: NOW }],
+      [{ _id: { caller: 'chat', callerDetail: 'client-42', runtime: 'external' }, count: 1, lastSeen: NOW }],
     ]);
     const summary = await summarizeIdentityUse({ windows: [7, 30, 90], now: NOW, model });
-    const leadx = summary.identities.find((i) => i.identity === 'leadx');
+    const leadx = summary.identities.find((i) => i.identity === 'client-42');
 
     expect(leadx.windows[90]).toMatchObject({
       status: EVIDENCE.UNKNOWN,

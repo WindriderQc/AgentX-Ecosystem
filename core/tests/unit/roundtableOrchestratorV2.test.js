@@ -65,7 +65,7 @@ describe('Roundtable v2 orchestrator', () => {
     await createRoundtable({
       question: 'Discuss runtime routing.',
       panel: [{
-        agentId: 'leadx', role: 'LeadX', runtime: 'openclaw',
+        agentId: 'codex-reviewer', role: 'Codex reviewer', runtime: 'codex',
         runtimeConfig: {
           sessionKey: 'agent:leadx:roundtable-routing',
           endpoint: 'http://attacker.invalid'
@@ -78,7 +78,7 @@ describe('Roundtable v2 orchestrator', () => {
 
     expect(Roundtable.create).toHaveBeenCalledWith(expect.objectContaining({
       panelConfig: [expect.objectContaining({
-        runtime: 'openclaw',
+        runtime: 'codex',
         model: 'runtime-managed',
         runtimeConfig: {
           sessionKey: 'agent:leadx:roundtable-routing',
@@ -94,8 +94,8 @@ describe('Roundtable v2 orchestrator', () => {
     await expect(createRoundtable({
       question: 'Duplicate?',
       panel: [
-        { agentId: 'leadx', role: 'One', runtime: 'openclaw', systemPrompt: 'One.' },
-        { agentId: 'leadx', role: 'Two', runtime: 'hermes', systemPrompt: 'Two.' }
+        { agentId: 'same', role: 'One', runtime: 'model', model: 'qwen3:8b', systemPrompt: 'One.' },
+        { agentId: 'same', role: 'Two', runtime: 'codex', systemPrompt: 'Two.' }
       ]
     })).rejects.toThrow('duplicate panel agentId');
     expect(Roundtable.create).not.toHaveBeenCalled();
@@ -119,10 +119,10 @@ describe('Roundtable v2 orchestrator', () => {
       thinking: null,
       stats: { tokensPerSecond: null, latencyMs: 25 },
       error: null,
-      target: 'openclaw://agent/leadx',
-      hostName: 'operator@192.0.2.66',
-      runtime: 'openclaw',
-      runtimeRef: 'agent:leadx:roundtable-rt-1',
+      target: 'codex://bridge',
+      hostName: 'codex.example',
+      runtime: 'codex',
+      runtimeRef: 'roundtable-rt-1',
       startedAt: new Date(),
       completedAt: new Date()
     });
@@ -131,7 +131,7 @@ describe('Roundtable v2 orchestrator', () => {
       telegram: { chatId: '-100123', threadId: 42 }
     };
     const agent = {
-      agentId: 'leadx', role: 'LeadX', runtime: 'openclaw',
+      agentId: 'codex-reviewer', role: 'Codex reviewer', runtime: 'codex',
       model: 'runtime-managed', systemPrompt: 'Assess operations.', enableWebSearch: false
     };
 
@@ -141,13 +141,13 @@ describe('Roundtable v2 orchestrator', () => {
       5000, null
     );
 
-    expect(results.leadx.response).toBe('Bounded operational position.');
+    expect(results['codex-reviewer'].response).toBe('Bounded operational position.');
     expect(Roundtable.updateOne).toHaveBeenCalledWith(
       { _id: 'rt-1' },
       { $push: { turns: expect.objectContaining({
-        runtime: 'openclaw',
+        runtime: 'codex',
         thinking: null,
-        runtimeRef: 'agent:leadx:roundtable-rt-1'
+        runtimeRef: 'roundtable-rt-1'
       }) } }
     );
     expect(publishRoundtableEvent).toHaveBeenCalledWith(

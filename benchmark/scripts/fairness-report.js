@@ -89,7 +89,9 @@ async function pairedHostComparison(batchId) {
 }
 
 (async () => {
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://192.0.2.33:27017/agentx');
+    const mongoUri = String(process.env.MONGODB_URI || '').trim();
+    if (!mongoUri) throw new Error('MONGODB_URI is required');
+    await mongoose.connect(mongoUri);
     const batchId = await resolveBatchId(process.argv[2]);
 
     console.log('═══ 1. num_ctx + sampling actually used (per host × model) ═══');

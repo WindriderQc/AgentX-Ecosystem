@@ -55,7 +55,7 @@ describe('Roundtable v2 API', () => {
       .set('x-roundtable-chair-token', 'chair-secret')
       .send({
         question: 'Discuss?',
-        panel: [{ agentId: 'leadx', role: 'LeadX', runtime: 'openclaw' }],
+        panel: [{ agentId: 'codex-reviewer', role: 'Codex reviewer', runtime: 'codex' }],
         telegram: { chatId: '-100123', threadId: 42, publishTurns: true },
         governance: { requireApproval: true }
       });
@@ -112,8 +112,8 @@ describe('Roundtable v2 API', () => {
     const response = await request(app)
       .post('/api/roundtable')
       .send({
-        question: 'Ask LeadX?',
-        panel: [{ agentId: 'leadx', runtime: 'openclaw' }]
+        question: 'Ask Codex?',
+        panel: [{ agentId: 'codex-reviewer', runtime: 'codex' }]
       });
     expect(response.status).toBe(401);
     expect(roundtableService.startRoundtable).not.toHaveBeenCalled();

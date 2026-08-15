@@ -233,32 +233,12 @@
                 </button>
                 <span id="tryRecordTimer" style="font-family:monospace; font-size:14px; color:#888; min-width:60px;">—</span>
                 <input id="tryRecLang" type="text" value="" placeholder="language (e.g. fr, en) — blank = auto" style="width:240px; padding:8px 10px; background:#0f1629; border:1px solid #2a3145; color:#fff; border-radius:4px; font-size:14px;">
-                <label style="display:flex; flex:0 0 auto; align-items:center; gap:6px; white-space:nowrap; font-size:13px; color:#cbd5e1; cursor:pointer;">
-                    <input id="tryAskNestor" type="checkbox" checked style="accent-color:#7cf0ff;">
-                    <i class="fas fa-brain" style="color:#7cf0ff;"></i> Ask Nestor &amp; speak the reply
-                </label>
-                <label for="tryNestorLane" title="Auto keeps simple answers local and sends actions, live platform questions, memory, and deep work to Nestor Complete." style="display:flex; flex:0 0 auto; align-items:center; gap:6px; white-space:nowrap; font-size:13px; color:#cbd5e1;">
-                    <i class="fas fa-route" style="color:#4db33d;"></i> Nestor route
-                </label>
-                <select id="tryNestorLane" style="padding:8px 10px; background:#0f1629; border:1px solid #2a3145; color:#fff; border-radius:4px; font-size:13px;">
-                    <option value="auto" selected>Auto — recommended</option>
-                    <option value="answer_light">Fast local</option>
-                    <option value="front_door">Complete</option>
-                </select>
             </div>
             <div id="tryRecResult" style="display:none; padding:12px; background:#0f1629; border:1px solid #2a3145; border-radius:4px;">
                 <audio id="tryRecAudio" controls style="width:100%; margin-bottom:8px;"></audio>
                 <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">Transcript</div>
                 <div id="tryRecTranscript" style="padding:8px 10px; background:#0a0f1d; border:1px solid #2a3145; border-radius:4px; color:#cbd5e1; min-height:32px; font-size:14px;">—</div>
                 <div id="tryRecMeta" style="font-size:12px; color:#94a3b8; margin-top:8px;">—</div>
-                <div id="tryNestorBlock" style="display:none; margin-top:12px;">
-                    <div style="font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">
-                        <i class="fas fa-brain" style="color:#7cf0ff;"></i> Nestor <span id="tryNestorBrainBadge"></span>
-                    </div>
-                    <div id="tryNestorReply" role="status" aria-live="polite" aria-atomic="true" style="padding:8px 10px; background:#0a0f1d; border:1px solid #2a3145; border-radius:4px; color:#e2e8f0; min-height:32px; font-size:14px;">—</div>
-                    <audio id="tryNestorAudio" controls style="width:100%; margin-top:8px; display:none;"></audio>
-                    <div id="tryNestorMeta" style="font-size:12px; color:#94a3b8; margin-top:8px;">—</div>
-                </div>
             </div>
         </section>
 

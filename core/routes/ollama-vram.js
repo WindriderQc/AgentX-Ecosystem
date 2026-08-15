@@ -1,7 +1,7 @@
 /**
  * Ollama VRAM Routes
- * Fetches NVIDIA VRAM usage for each configured Ollama host via SSH + nvidia-smi.
- * Supports manual VRAM overrides for hosts where SSH detection fails (e.g. Windows).
+ * Returns explicitly configured VRAM totals for Ollama endpoints.
+ * The product never probes operating systems or SSH identities.
  */
 
 const express = require('express');

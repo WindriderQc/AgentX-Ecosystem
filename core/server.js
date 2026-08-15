@@ -310,22 +310,6 @@ async function startServer() {
     console.log(`   ⚠ Alert Auto-Resolver: ${err.message}`);
   }
 
-  // Start Host Monitor service (stale-host detection)
-  try {
-    const hostMonitorService = require('./src/services/hostMonitorService');
-    await startCoreSingletonDaemon({
-      name: 'host-monitor-stale-detection',
-      label: 'Host Monitor',
-      start: async () => {
-        hostMonitorService.start();
-        console.log(`   ✓ Host Monitor: Active`);
-      },
-      stop: async () => hostMonitorService.stop()
-    });
-  } catch (err) {
-    console.log(`   ⚠ Host Monitor: ${err.message}`);
-  }
-
   // Start Ollama Enrichment service (polls configured Ollama hosts for telemetry)
   try {
     const ollamaEnrichmentService = require('./src/services/ollamaEnrichmentService');
@@ -457,44 +441,6 @@ async function startServer() {
     console.log(`   ⚠ Lane Observability: ${err.message}`);
   }
 
-  // Host capacity monitor — emits capacity alerts (VRAM pressure, GPU imbalance,
-  // underused-while-busier, host/Ollama down) for the configured Ollama hosts.
-  // Disable with HOST_CAPACITY_MONITOR=0; cadence via HOST_CAPACITY_MONITOR_INTERVAL_MS.
-  try {
-    const flag = String(process.env.HOST_CAPACITY_MONITOR ?? '1').toLowerCase();
-    if (['0', 'false', 'off'].includes(flag)) {
-      console.log('   ⓘ Host Capacity Monitor: Disabled (HOST_CAPACITY_MONITOR)');
-    } else {
-      const { checkCapacityAlerts } = require('./src/services/hostCapacityService');
-      const intervalMs = Math.max(60_000, parseInt(process.env.HOST_CAPACITY_MONITOR_INTERVAL_MS, 10) || 300_000);
-      const run = () => checkCapacityAlerts().catch(err => console.warn('Host capacity check failed:', err.message));
-      let firstRunTimer = null;
-      let capacityInterval = null;
-      await startCoreSingletonDaemon({
-        name: 'host-capacity-monitor',
-        label: 'Host Capacity Monitor',
-        start: async () => {
-          // Defer the first run so host metrics/telemetry are warm after boot.
-          firstRunTimer = setTimeout(run, 60_000);
-          capacityInterval = setInterval(run, intervalMs);
-          console.log(`   ✓ Host Capacity Monitor: Active (every ${Math.round(intervalMs / 1000)}s)`);
-        },
-        stop: async () => {
-          if (firstRunTimer) {
-            clearTimeout(firstRunTimer);
-            firstRunTimer = null;
-          }
-          if (capacityInterval) {
-            clearInterval(capacityInterval);
-            capacityInterval = null;
-          }
-        }
-      });
-    }
-  } catch (err) {
-    console.log(`   ⚠ Host Capacity Monitor: ${err.message}`);
-  }
-
   // Durable platform backups. Docker enables this by default after wiring a
   // host-visible /backups mount and the MongoDB database tools into Core. Each
   // cycle attempts Mongo, runtime config, and Qdrant independently so one
@@ -519,7 +465,7 @@ async function startServer() {
     console.log(`   ⚠ Backup Scheduler: ${err.message}`);
   }
   } else {
-    console.log('   ⓘ Alerts, capacity monitoring, lane monitoring, and backups: Disabled in demo profile');
+    console.log('   ⓘ Alerts, lane monitoring, and backups: Disabled in demo profile');
   }
 
   // Start Express server
@@ -555,24 +501,6 @@ async function startServer() {
       healthy: isHealthy
     });
 
-    // Live Data → Buddy demo (TODO 0288) — opt-in via LIVEDATA_BUDDY_DEMO=true.
-    if (!DEMO_RUNTIME && process.env.LIVEDATA_BUDDY_DEMO === 'true') {
-      try {
-        const liveDataWatcher = require('./src/services/liveDataWatcher');
-        startCoreSingletonDaemon({
-          name: 'live-data-buddy-demo',
-          label: 'Live Data → Buddy demo',
-          start: async () => {
-            if (liveDataWatcher.start()) console.log('   ✓ Live Data → Buddy demo: watching data quake feed');
-          },
-          stop: async () => liveDataWatcher.stop()
-        }).catch(err => {
-          console.warn('   ⚠ Live Data → Buddy demo:', err.message);
-        });
-      } catch (err) {
-        console.warn('   ⚠ Live Data → Buddy demo:', err.message);
-      }
-    }
   });
 }
 

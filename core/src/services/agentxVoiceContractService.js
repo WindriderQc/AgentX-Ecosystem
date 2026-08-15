@@ -125,7 +125,7 @@ function buildAgentXVoiceContract({ generatedAt = new Date() } = {}) {
       agentxVoiceV1Target: AGENTX_VOICE_V1_TARGET_ENDPOINTS
     },
     eventTypes: VOICE_EVENT_TYPES,
-    migration: {
+    boundaryEvolution: {
       currentCanonicalPath: '/api/voix/*',
       targetBoundary: 'AgentX Voice v1 can start as a Core module or thin wrapper, then extract to an independently deployable service.',
       compatibilityRule: 'Do not add wake-word or VAD behavior to browser surfaces until a native satellite reports those capabilities.'

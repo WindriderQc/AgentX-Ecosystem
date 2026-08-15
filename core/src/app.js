@@ -12,10 +12,6 @@ const { requestLogger, errorLogger } = require('./middleware/logging');
 const systemHealth = require('./systemHealth');
 const { normalizeHostUrl } = require('./helpers/ollamaHostConfig');
 const { refreshOllamaHealth } = require('./services/ollamaHealthProbe');
-const {
-  getOpenClawRuntimeConfig,
-  isOpenClawIntegrationEnabled,
-} = require('./services/openclawClient');
 const voiceSettings = require('./services/voixSettingsService');
 const { normalizePublicUrls } = require('../../shared/browserPublicUrls');
 const {
@@ -23,9 +19,6 @@ const {
   isDemoProfile,
   createAgentXProfileGuard,
 } = require('../../shared/agentxRuntimeProfile');
-const {
-  loadAgentXExtensions
-} = require('./extensions/extensionLoader');
 
 // Browser-reachable URLs for each service. Distinct from server-to-server
 // URLs (BENCHMARK_SERVICE_URL etc.) which use container-DNS names inside
@@ -38,9 +31,6 @@ function getPublicUrls() {
     core: process.env.CORE_PUBLIC_URL,
     benchmark: process.env.BENCHMARK_PUBLIC_URL,
     rag: process.env.RAG_PUBLIC_URL,
-    data: process.env.DATAAPI_PUBLIC_URL,
-    hermes: process.env.HERMES_PUBLIC_URL || process.env.HERMES_DASHBOARD_URL,
-    openclawControl: process.env.OPENCLAW_CONTROL_UI_PUBLIC_URL || process.env.OPENCLAW_GATEWAY_URL,
   });
 }
 
@@ -63,8 +53,6 @@ const agentxProfile = currentAgentXProfile();
 // Expose browser-reachable service URLs to all rendered views.
 app.locals.publicUrls = getPublicUrls();
 app.locals.agentxProfile = agentxProfile;
-app.locals.openclawControl = getOpenClawRuntimeConfig().controlUi;
-app.locals.publicUrls.openclawControl = app.locals.openclawControl.launchBaseUrl;
 const IN_PROD = process.env.NODE_ENV === 'production';
 const IN_TEST = process.env.NODE_ENV === 'test';
 // Service identity for the canonical health envelope (task 0355). Read once at
@@ -183,7 +171,7 @@ app.use(compression({
   }
 }));
 
-// Default payload limit — kept generous for data-proxy and RAG uploads.
+// Default payload limit — kept generous for RAG uploads.
 // Parse the Nestor contract before the broad compatibility parser so its
 // advertised 1 MiB transport limit cannot be bypassed by global middleware.
 function requireNestorJsonEntity(req, res, next) {
@@ -280,24 +268,9 @@ app.use('/api/inference/generate', inferenceCallerRouter);
 // Keep agent lifecycle and inference proxies out of the external/browser API
 // bucket. Each path still has a finite, independently tracked 5000/15min cap.
 app.use('/api/pipeline', automationControlLimiter);
-app.use('/api/openclaw-ollama', automationControlLimiter);
-app.use('/api/hermes-openai', automationControlLimiter);
 
 // Apply general API rate limiter to all /api routes (except specific ones)
 app.use('/api/', apiLimiter);
-
-// Trusted operator extensions are explicit, absolute-path modules and only
-// load in the full profile. Register them before built-ins so an operations
-// repository can own a declared capability without patching product source.
-const agentxExtensions = loadAgentXExtensions({
-  app,
-  express,
-  mongoose,
-  logger,
-  profile: agentxProfile,
-  standardJsonParser
-});
-app.locals.agentxExtensions = agentxExtensions;
 
 // Alert routes (Track 1: Alerts & Notifications)
 const alertRoutes = require('../routes/alerts');
@@ -323,11 +296,6 @@ app.use('/api/custom-models', customModelsRoutes);
 const historyRoutes = require('../routes/history');
 app.use('/api/history', historyRoutes);
 
-// Host monitoring (agent heartbeats + dashboard)
-const hostMonitorRoutes = require('../routes/host-monitor');
-app.use('/api/hosts', hostMonitorRoutes);
-app.use('/api/host-monitor', hostMonitorRoutes);
-
 // Model Registry routes
 const modelRegistryRoutes = require('../routes/model-registry');
 app.use('/api/models/registry', modelRegistryRoutes);
@@ -335,11 +303,6 @@ app.use('/api/models/registry', modelRegistryRoutes);
 // Nerve Center (intelligence summary, routing, failover, host preferences, health feed)
 const nerveCenterRoutes = require('../routes/nerve-center');
 app.use('/api/nerve-center', nerveCenterRoutes);
-
-// Agent Ops — read-only projection of agent ownership, runtime state,
-// recurring work, and pipeline responsibility.
-const agentOpsRoutes = require('../routes/agent-ops');
-app.use('/api/agent-ops', agentOpsRoutes);
 
 // Unified Models API (Aggregates Ollama + custom + registry)
 const modelsUnifiedRoutes = require('../routes/models-unified');
@@ -349,7 +312,7 @@ app.use('/api/models', modelsUnifiedRoutes);
 const ollamaHostsRoutes = require('../routes/ollama-hosts');
 app.use('/api/ollama-hosts', ollamaHostsRoutes);
 
-// Ollama VRAM metrics (via SSH + nvidia-smi)
+// Explicit Ollama VRAM configuration (no host probing)
 const ollamaVramRoutes = require('../routes/ollama-vram');
 app.use('/api/ollama-vram', ollamaVramRoutes);
 
@@ -399,15 +362,11 @@ app.use('/api/profile', profileRoutes);
 const ragRoutes = require('../routes/rag');
 app.use('/api/rag', ragRoutes);
 
-// Data service proxy routes (storage, files, network, live data, databases)
-const dataProxyRoutes = require('../routes/data-proxy');
-app.use('/api/data', dataProxyRoutes);
-
 // Benchmark service proxy routes (recommendations)
 const benchmarkProxyRoutes = require('../routes/benchmark-proxy');
 app.use('/api/benchmark-proxy', benchmarkProxyRoutes);
 
-// Consolidated report endpoints for OpenClaw agents
+// Consolidated product report endpoints.
 const reportsRoutes = require('../routes/reports');
 app.use('/api/reports', reportsRoutes);
 
@@ -448,12 +407,6 @@ app.use('/api/mcp', standardJsonParser, mcpRoutes);
 const nestorMemoryRoutes = require('../routes/nestor-memory');
 app.use('/api/nestor/memory', standardJsonParser, nestorMemoryRoutes);
 
-// Nestor one-brain turn endpoint: every surface (voice console, Surface
-// panel, desktop app) reaches the SAME brain — OpenClaw `main` — with a
-// local-inference fallback when the gateway is down (task 0453).
-const nestorTurnRoutes = require('../routes/nestor-turn');
-app.use('/api/nestor/turn', standardJsonParser, nestorTurnRoutes);
-
 // Nestor fallback prewarm: functionally checks the effective local Ollama
 // quick-chat route without fighting host pins (task 0454). The endpoint is
 // safe to invoke from the platform maintenance scheduler.
@@ -483,17 +436,6 @@ app.use(
   createNestorConsumerV1Routes({ systemHealth })
 );
 
-// OpenClaw integration routes (agent control, chat, sessions, config)
-if (isOpenClawIntegrationEnabled()) {
-  const openclawRoutes = require('../routes/openclaw');
-  app.use('/api/openclaw', standardJsonParser, openclawRoutes);
-  logger.info('OpenClaw integration routes enabled', getOpenClawRuntimeConfig());
-} else {
-  logger.info('OpenClaw integration routes disabled');
-}
-
-app.use('/api/hermes', require('../routes/hermes'));
-
 // System metrics (process, OS, database stats)
 const metricsRoutes = require('../routes/metrics');
 app.use('/api/metrics', metricsRoutes);
@@ -501,10 +443,6 @@ app.use('/api/metrics', metricsRoutes);
 // Inference telemetry aggregation (host/model/caller summaries, timeline)
 const inferenceTelemetryRoutes = require('../routes/inference-telemetry');
 app.use('/api/telemetry', inferenceTelemetryRoutes);
-
-// Host capacity report + verdict (underused / balanced / vram-constrained / saturated)
-const hostCapacityRoutes = require('../routes/host-capacity');
-app.use('/api/host-capacity', hostCapacityRoutes);
 
 // Budget status (token burn summary + health indicator)
 const budgetRoutes = require('../routes/budget');
@@ -597,9 +535,7 @@ app.get('/api/config', (_req, res) => {
       port,
       fullUrl: ollamaHost
     },
-    features: demo
-      ? {}
-      : { openclaw: getOpenClawRuntimeConfig(), voice: voiceSettings.getSettings() },
+    features: demo ? {} : { voice: voiceSettings.getSettings() },
     // Browser-reachable URLs for cross-service navigation. Public JS
     // and EJS pages use these instead of hardcoded localhost:<port>
     // so remote browsers reach the right host. (0208)
@@ -625,7 +561,6 @@ app.get('/api/portal/health', async (_req, res) => {
 // 301 REDIRECTS (formerly meta-refresh HTML pages)
 // ============================================
 app.get('/nerve-center.html', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/agent-ops.html', (req, res) => res.redirect(301, '/agent-ops'));
 app.get('/models.html', (req, res) => res.redirect(301, '/models'));
 app.get('/cluster-schedule.html', (req, res) => res.redirect(301, '/cluster-schedule'));
 app.get('/analytics.html', (req, res) => res.redirect(301, '/analytics'));
@@ -646,20 +581,6 @@ app.get('/hardware-matrix', (req, res) => res.redirect(301, '/nerve-center'));
 app.get('/hardware-matrix.html', (req, res) => res.redirect(301, '/nerve-center'));
 app.get('/hosts', (req, res) => res.redirect(301, '/nerve-center'));
 app.get('/hosts.html', (req, res) => res.redirect(301, '/nerve-center'));
-
-// Redirects for old data pages → data-toolbox
-app.get('/storage', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/storage.html', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/files', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/files.html', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/janitor', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/janitor.html', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/network', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/network.html', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/databases', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/databases.html', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/live-data-dashboard', (req, res) => res.redirect(301, '/data-toolbox'));
-app.get('/live-data-dashboard.html', (req, res) => res.redirect(301, '/data-toolbox'));
 
 // ============================================
 // EJS PAGE ROUTES
@@ -688,16 +609,7 @@ app.get('/demo', (_req, res) => {
 // Legacy alias: redirect /chat \u2192 /playground (page rename 2026-04-23)
 app.get('/chat', (req, res) => res.redirect(301, '/playground'));
 
-// Short, bookmarkable Nestor runtime entry point. The second hop mints the
-// browser-only OpenClaw token fragment without exposing it in page markup.
-app.get('/nestor', (_req, res) => {
-  res.set({
-    'Cache-Control': 'no-store, max-age=0',
-    Pragma: 'no-cache',
-    'Referrer-Policy': 'no-referrer'
-  });
-  return res.redirect(302, '/api/openclaw/control-launch/chat');
-});
+app.get('/nestor', (_req, res) => res.redirect(302, '/playground'));
 
 app.get('/playground', (req, res) => {
   const demo = isDemoProfile(agentxProfile);
@@ -788,26 +700,19 @@ app.get('/nerve-center', (req, res) => {
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
       '<link rel="stylesheet" href="/css/nerve-center.css">',
-      '<link rel="stylesheet" href="/css/nerve-center-fastlane.css">',
       '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>'
     ].join('\n'),
     footerJs: [
       '<script src="/js/nerve-center-mode.js"></script>',
       '<script src="/js/nerve-center.js"></script>',
-      '<script src="/js/nerve-center-brainmap.js"></script>',
-      '<script src="/js/nerve-center-fastlane.js"></script>',
       '<script src="/js/nerve-center-routing.js"></script>',
       '<script src="/js/nerve-center-cluster.js"></script>',
       '<script src="/js/nerve-center-health.js"></script>',
       '<script src="/js/nerve-center-performance.js"></script>',
       '<script src="/js/nerve-center-inference.js"></script>',
       '<script src="/js/nerve-center-inference-health.js"></script>',
-      '<script src="/js/nerve-center-capacity.js"></script>',
       '<script src="/js/nerve-center-alerts.js"></script>',
-      '<script src="/js/nerve-center-rag.js"></script>',
-      '<script src="/js/nerve-center-tasks.js"></script>',
-      '<script src="/js/nerve-center-hermes.js"></script>',
-      '<script src="/js/nerve-center-openclaw.js"></script>'
+      '<script src="/js/nerve-center-rag.js"></script>'
     ].join('\n')
   });
 });
@@ -862,25 +767,6 @@ app.get('/memory-review', (req, res) => {
       '<link rel="stylesheet" href="/css/memory-review.css">'
     ].join('\n'),
     footerJs: '<script src="/js/memory-review.js"></script>'
-  });
-});
-
-app.get('/agent-ops', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/agent-ops',
-    title: 'AgentX • Agent Ops',
-    service: 'core',
-    activePage: 'agent-ops',
-    bodyClass: 'agent-ops-surface',
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/agent-ops.css">',
-      '<link rel="stylesheet" href="/css/agent-ops-advanced.css">'
-    ].join('\n'),
-    footerJs: [
-      '<script src="/js/agent-ops-advanced.js"></script>',
-      '<script src="/js/agent-ops.js"></script>'
-    ].join('\n')
   });
 });
 
@@ -989,37 +875,6 @@ app.get('/prompts', (req, res) => {
   });
 });
 
-app.get('/data-toolbox', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/data-toolbox',
-    title: 'AgentX \u2022 Data Toolbox',
-    service: 'core',
-    activePage: 'data-toolbox',
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      // Leaflet CSS from cdnjs (allowed by styleSrc); JS from jsdelivr below (allowed by scriptSrc). Live Data map — no external tiles (0287).
-      '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">'
-    ].join('\n'),
-    footerJs: [
-      '<script src="/js/utils/data-commons.js"></script>',
-      '<script src="/js/data-toolbox-ops.js"></script>',
-      '<script src="/js/storage.js"></script>',
-      '<script src="/js/files.js"></script>',
-      '<script src="/js/janitor.js"></script>',
-      '<script src="/js/janitor-profiles.js"></script>',
-      '<script src="/js/shared-drive-janitor.js"></script>',
-      '<script src="/js/docjanitor.js"></script>',
-      '<script src="/js/network.js"></script>',
-      '<script src="/js/databases.js"></script>',
-      // Live Data tab libs — Leaflet (map), satellite.js (TLE propagation), Chart.js (series). All from jsdelivr (scriptSrc-allowed).
-      '<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>',
-      '<script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>',
-      '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>',
-      '<script src="/js/live-data-dashboard.js"></script>'
-    ].join('\n')
-  });
-});
-
 app.get('/backup', (req, res) => {
   res.render('layouts/main', {
     pageView: '../pages/backup',
@@ -1039,10 +894,7 @@ app.get('/voice', (req, res) => {
     service: 'core',
     activePage: 'voice',
     headCss: '<link rel="stylesheet" href="/styles.css">',
-    footerJs: [
-      '<script src="/js/nestor-voice-stream.js"></script>',
-      '<script src="/js/voice.js"></script>'
-    ].join('')
+    footerJs: '<script src="/js/voice.js"></script>'
   });
 });
 app.get('/voice.html', (req, res) => res.redirect(301, '/voice'));

@@ -559,7 +559,7 @@ router.get('/weekly-review', async (req, res) => {
 
 /**
  * Builds a human-readable one-liner for system-status.
- * @param {object} services — { core, benchmark, rag, data }
+ * @param {object} services — { core, benchmark, rag }
  * @returns {string}
  */
 function composeSystemStatusSummary(services) {
@@ -581,24 +581,22 @@ function composeSystemStatusSummary(services) {
 /**
  * GET /system-status
  *
- * Returns a live liveness check across all four platform services.
+ * Returns a live liveness check across the three product services.
  * Core is always ok (if we're responding, we're up).
- * Benchmark, RAG, and Data are pinged via the service client.
+ * Benchmark and RAG are pinged via the service client.
  */
 router.get('/system-status', async (req, res) => {
   const svc = getReportsServiceClient();
 
-  const [benchmarkRaw, ragRaw, dataRaw] = await Promise.all([
+  const [benchmarkRaw, ragRaw] = await Promise.all([
     safe(() => svc.fetchBenchmarkAnalyticsSummary(), null),
-    safe(() => svc.fetchRagStatus(), null),
-    safe(() => svc.fetchDataHealth(), null)
+    safe(() => svc.fetchRagStatus(), null)
   ]);
 
   const services = {
     core:      { status: 'ok' },
     benchmark: benchmarkRaw !== null ? { ...benchmarkRaw, status: 'ok' } : { status: 'unreachable' },
-    rag:       ragRaw       !== null ? { ...ragRaw,       status: 'ok' } : { status: 'unreachable' },
-    data:      dataRaw      !== null ? { ...dataRaw,      status: 'ok' } : { status: 'unreachable' }
+    rag:       ragRaw       !== null ? { ...ragRaw,       status: 'ok' } : { status: 'unreachable' }
   };
 
   const summary = composeSystemStatusSummary(services);

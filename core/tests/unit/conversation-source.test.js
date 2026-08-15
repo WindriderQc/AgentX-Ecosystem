@@ -4,17 +4,17 @@ describe('Conversation source fields', () => {
   it('defaults source to agentx', () => {
     const conv = new Conversation({ model: 'test' });
     expect(conv.source).toBe('agentx');
-    expect(conv.openclawAgentId).toBeUndefined();
+    expect(conv.clientRef).toBeUndefined();
   });
 
-  it('accepts openclaw source with agentId', () => {
+  it('accepts a bounded external source with an opaque client ref', () => {
     const conv = new Conversation({
       model: 'qwen3-coder:30b',
-      source: 'openclaw',
-      openclawAgentId: 'clawdx-coder'
+      source: 'external',
+      clientRef: 'client-42'
     });
-    expect(conv.source).toBe('openclaw');
-    expect(conv.openclawAgentId).toBe('clawdx-coder');
+    expect(conv.source).toBe('external');
+    expect(conv.clientRef).toBe('client-42');
   });
 
   it('rejects invalid source enum', async () => {

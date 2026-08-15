@@ -197,21 +197,6 @@ const CALLER_POLICIES = Object.freeze([
     telemetryCaller: 'chat',
   },
 
-  // ── automated: agent runtimes through core's proxies ──────────────────────
-  {
-    id: 'openclaw',
-    pattern: /^openclaw-/,
-    lane: 'automated',
-    // DRIFT: OpenClaw runtime traffic is a known internal caller by every other
-    // measure, but has no rate-limiter prefix.
-    rateBucket: 'general',
-    rateBucketDrift: 'lane=automated (explicit rule) but no rate-limiter prefix; falls to general',
-    admission: true,
-    adaptation: 'bare',
-    cloudEligible: true,
-    routingMode: 'passthrough',
-    telemetryCaller: 'proxy',
-  },
 ]);
 
 /**

@@ -279,7 +279,7 @@ async function reconcileSustainedAlert(surface, deps = {}) {
       message: `${failing} of the latest ${recent.length} turns breached a user-visible SLO.`,
       context,
       fingerprint,
-      channels: ['dataapi_log'],
+      channels: ['local_log'],
       source: 'voice-observability',
       lastOccurrence: now
     });

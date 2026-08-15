@@ -222,7 +222,7 @@ router.post('/', async (req, res) => {
       message,
       source,
       context = {},
-      channels = ['dataapi_log'],
+      channels = ['local_log'],
       channelConfig = {},
       tags = [],
       metadata = {}
@@ -246,7 +246,7 @@ router.post('/', async (req, res) => {
     }
 
     // Validate and filter channels (graceful handling of unknown channels)
-    const validChannels = ['email', 'slack', 'telegram', 'webhook', 'dataapi_log'];
+    const validChannels = ['email', 'slack', 'telegram', 'webhook', 'local_log'];
     let filteredChannels = channels.filter(c => validChannels.includes(c));
     const normalizedChannelConfig = normalizeChannelConfig(channelConfig);
 
@@ -257,12 +257,12 @@ router.post('/', async (req, res) => {
       filteredChannels.push('webhook');
     }
 
-    // If all channels were invalid, default to dataapi_log
+    // If all channels were invalid, default to local_log
     if (filteredChannels.length === 0) {
-      logger.warn('All provided channels were invalid, defaulting to dataapi_log', {
+      logger.warn('All provided channels were invalid, defaulting to local_log', {
         providedChannels: channels
       });
-      filteredChannels = ['dataapi_log'];
+      filteredChannels = ['local_log'];
     }
 
     // Generate fingerprint

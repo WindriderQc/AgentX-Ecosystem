@@ -4,9 +4,9 @@ function baseDocument(overrides = {}) {
   return new Roundtable({
     question: 'How should the council proceed?',
     panelConfig: [{
-      agentId: 'leadx',
-      role: 'OpenClaw LeadX',
-      runtime: 'openclaw',
+      agentId: 'codex-reviewer',
+      role: 'Codex reviewer',
+      runtime: 'codex',
       systemPrompt: 'Provide an operational assessment.'
     }],
     synthesizerConfig: {
@@ -37,11 +37,11 @@ describe('Roundtable v2 model', () => {
   test('stores real-runtime participants without accepting command or endpoint overrides', () => {
     const doc = baseDocument({
       panelConfig: [{
-        agentId: 'leadx',
-        role: 'OpenClaw LeadX',
-        runtime: 'openclaw',
+        agentId: 'codex-reviewer',
+        role: 'Codex reviewer',
+        runtime: 'codex',
         runtimeConfig: {
-          sessionKey: 'agent:leadx:roundtable-council',
+          sessionKey: 'roundtable-council',
           endpoint: 'http://attacker.invalid',
           command: 'rm -rf /'
         },
@@ -51,7 +51,7 @@ describe('Roundtable v2 model', () => {
     expect(doc.validateSync()).toBeUndefined();
     expect(doc.panelConfig[0].model).toBe('runtime-managed');
     expect(doc.panelConfig[0].runtimeConfig.toObject()).toEqual({
-      sessionKey: 'agent:leadx:roundtable-council',
+      sessionKey: 'roundtable-council',
       sessionId: null
     });
   });

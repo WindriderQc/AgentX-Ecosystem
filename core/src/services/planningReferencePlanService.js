@@ -171,9 +171,9 @@ const NERVE_CENTER_PLAN = {
         }
       },
       scheduleRefs: [
-        'oc-morning-briefing',
-        'oc-daily-digest',
-        'oc-weekly-review'
+        'agentx-morning-briefing',
+        'agentx-daily-digest',
+        'agentx-weekly-review'
       ],
       evidenceBindings: [{ source: 'schedule', params: { events: ['run'] } }],
       evidence: [
@@ -214,14 +214,6 @@ const NERVE_CENTER_PLAN = {
       context: 'Displayed failover state can contradict the path requests actually take.',
       choice: 'Failover state derives from actual routing behavior and persists across process restarts.',
       rationale: 'The control plane must report the real route, not process-local intent.'
-    },
-    {
-      key: 'agentx:nerve-center-alerting:decision:delivery-channel',
-      title: 'Use Telegram through OpenClaw and Hermes for operator-facing delivery',
-      status: 'accepted',
-      context: 'Email, Slack, and webhook delivery are not currently proven ready.',
-      choice: 'Keep Telegram as the operator-facing channel through the existing OpenClaw and Hermes communication paths.',
-      rationale: 'This preserves the established operator channel and runtime ownership without adding a second messaging integration to Planning or Core.'
     },
     {
       key: 'agentx:nerve-center-alerting:decision:routing-trace-policy',

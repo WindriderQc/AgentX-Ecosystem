@@ -102,20 +102,12 @@ describe('Rate Limiting Middleware', () => {
     const makeReq = (originalUrl) => ({ originalUrl });
     expect(isAutomationControlPath(makeReq('/api/pipeline'))).toBe(true);
     expect(isAutomationControlPath(makeReq('/api/pipeline/tasks?status=queued'))).toBe(true);
-    expect(isAutomationControlPath(makeReq('/api/openclaw-ollama/api/tags'))).toBe(true);
-    expect(isAutomationControlPath(makeReq('/api/hermes-openai/v1/models'))).toBe(true);
     expect(isAutomationControlPath(makeReq('/api/pipeline-evil'))).toBe(false);
-    expect(isAutomationControlPath(makeReq('/api/openclaw-ollama-old'))).toBe(false);
-    expect(isAutomationControlPath(makeReq('/api/hermes-openai-old'))).toBe(false);
     expect(isAutomationControlPath(makeReq('/api/conversations'))).toBe(false);
   });
 
   it('keeps all automation prefixes out of the general 500-request bucket', async () => {
-    const paths = [
-      '/api/pipeline/tasks',
-      '/api/openclaw-ollama/api/tags',
-      '/api/hermes-openai/v1/models'
-    ];
+    const paths = ['/api/pipeline/tasks'];
 
     for (const [index, path] of paths.entries()) {
       const batchSize = 50;

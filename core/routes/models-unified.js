@@ -312,25 +312,20 @@ router.delete('/ollama/:name', requireOperatorUiAccess, async (req, res) => {
 
 /**
  * GET /api/models/cluster-summary
- * Compact view of the local Ollama cluster for cross-app consumers
- * (notably the official OpenClaw runtime). Read-only snapshot of host preferences
- * + pinned model list. No auth, stable shape — keep backward compatible.
+ * Compact view of the local Ollama cluster for bounded API consumers.
+ * Read-only snapshot of host preferences + pinned model list. No auth,
+ * stable shape — keep backward compatible.
  */
 router.get('/cluster-summary', async (_req, res) => {
   try {
-    const Host = require('../models/Host');
     const HostPreference = require('../models/HostPreference');
 
-    const [hosts, prefs] = await Promise.all([
-      Host.find({}, { hostname: 1, name: 1, status: 1, ollamaStatus: 1 }).lean(),
-      HostPreference.find({}, {
+    const prefs = await HostPreference.find({}, {
         hostId: 1, hostUrl: 1, hostKey: 1, displayName: 1, pinnedModels: 1,
         loadedModel: 1, loadedModels: 1, status: 1, vramTotalMiB: 1, vramReservedMiB: 1,
         gpu: 1, tags: 1
-      }).lean()
-    ]);
+      }).lean();
 
-    const hostById = new Map(hosts.map(h => [String(h._id), h]));
     const prefByUrl = new Map(prefs.map(p => [hostUrlKey(p.hostUrl), p]).filter(([key]) => key));
     const configuredHosts = getConfiguredHosts();
     const configuredKeys = new Set(configuredHosts.map(h => hostUrlKey(h.url)).filter(Boolean));
@@ -345,14 +340,13 @@ router.get('/cluster-summary', async (_req, res) => {
 
     const rows = configuredHosts.map(configured => {
       const p = prefByUrl.get(hostUrlKey(configured.url)) || {};
-      const h = hostById.get(String(p.hostId)) || {};
       const pinned = buildPinned(p);
       return {
         hostKey: configured.id,
-        name: p.displayName || configured.name || h.name || h.hostname || configured.id,
+        name: p.displayName || configured.name || configured.id,
         hostUrl: configured.url,
-        hostname: h.hostname || '',
-        online: h.status ? h.status === 'online' && h.ollamaStatus !== 'offline' : p.status !== 'offline',
+        hostname: '',
+        online: p.status !== 'offline',
         status: p.status || 'idle',
         loadedModel: p.loadedModel || null,
         loadedModels: Array.isArray(p.loadedModels) && p.loadedModels.length > 0

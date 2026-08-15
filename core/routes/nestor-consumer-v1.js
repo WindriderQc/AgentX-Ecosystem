@@ -3,15 +3,9 @@
 const express = require('express');
 const envelope = require('../src/helpers/responseEnvelope');
 const logger = require('../config/logger');
-const { operatorAccessAllowed } = require('../src/middleware/operatorAccess');
 const buddyEvents = require('../src/services/buddyEvents');
 const panelService = require('../src/services/panelService');
 const { getCapabilities } = require('../src/services/nestorConsumerCapabilitiesService');
-const {
-  exportLegacyProfile,
-  exportLegacyProfileV1,
-  getMigrationNotesPage,
-} = require('../src/services/nestorConsumerProfileService');
 const { executeInference, getRouterSnapshot } = require('../src/services/nestorConsumerRuntimeService');
 const { getMemoryStatus, searchMemory } = require('../src/services/nestorConsumerMemoryService');
 const {
@@ -19,7 +13,6 @@ const {
   resolvePersonalityCandidate,
 } = require('../src/services/nestorConsumerPersonalityService');
 const { getNestorMetrics } = require('../src/services/nestorConsumerMetricsService');
-const { NestorConsumerError } = require('../src/services/nestorConsumerContract');
 
 function sendError(res, error) {
   const statusCode = Number(error.statusCode) || 500;
@@ -45,16 +38,6 @@ function asyncRoute(handler) {
   };
 }
 
-function requireMigrationAccess(req, res, next) {
-  res.set('Cache-Control', 'no-store');
-  if (operatorAccessAllowed(req)) return next();
-  return sendError(res, new NestorConsumerError(
-    'Nestor migration export requires loopback access or a valid AgentX operator token.',
-    403,
-    'NESTOR_MIGRATION_OPERATOR_TOKEN_REQUIRED'
-  ));
-}
-
 function writePlatformEvent(res, event) {
   res.write(`id: ${event.id}\n`);
   res.write('event: platform\n');
@@ -66,30 +49,6 @@ function createNestorConsumerV1Routes({ systemHealth } = {}) {
 
   router.get('/capabilities', asyncRoute(async (_req, res) => {
     envelope.success(res, await getCapabilities({ systemHealth }));
-  }));
-
-  router.get('/migration/profile', requireMigrationAccess, asyncRoute(async (req, res) => {
-    const includeRawNotes = ['1', 'true'].includes(String(req.query.includeRawNotes || '').toLowerCase());
-    const schemaVersion = String(req.query.schemaVersion || '1').trim();
-    if (!['1', '2'].includes(schemaVersion)) {
-      throw new NestorConsumerError(
-        'schemaVersion must be 1 or 2',
-        400,
-        'NESTOR_MIGRATION_UNSUPPORTED_SCHEMA'
-      );
-    }
-    res.set('Cache-Control', 'no-store');
-    const exportProfile = schemaVersion === '2' ? exportLegacyProfile : exportLegacyProfileV1;
-    envelope.success(res, await exportProfile({ includeRawNotes }));
-  }));
-
-  router.get('/migration/notes', requireMigrationAccess, asyncRoute(async (req, res) => {
-    res.set('Cache-Control', 'no-store');
-    envelope.success(res, await getMigrationNotesPage({
-      snapshotId: req.query.snapshotId,
-      offset: req.query.offset,
-      limit: req.query.limit,
-    }));
   }));
 
   router.get('/router', asyncRoute(async (_req, res) => {

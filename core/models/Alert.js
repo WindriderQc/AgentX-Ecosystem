@@ -56,7 +56,7 @@ const AlertSchema = new mongoose.Schema({
   // Notification channels and delivery
   channels: [{
     type: String,
-    enum: ['email', 'slack', 'telegram', 'webhook', 'dataapi_log']
+    enum: ['email', 'slack', 'telegram', 'webhook', 'local_log']
   }],
   channelConfig: {
     email: {
@@ -148,7 +148,7 @@ const AlertSchema = new mongoose.Schema({
       attempts: { type: Number, default: 0 },
       lastError: String
     },
-    dataapi_log: {
+    local_log: {
       sent: { type: Boolean, default: false },
       sentAt: Date,
       eventId: String,

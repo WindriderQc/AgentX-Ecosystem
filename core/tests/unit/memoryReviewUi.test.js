@@ -49,9 +49,9 @@ describe('Dreaming Review UI contract', () => {
     expect(controller).toContain('Copy clarification question');
     expect(controller).toContain('Summary unavailable; derived from run history');
     expect(controller).toContain('Application enabled · review still required');
-    expect(controller).toContain('Hermes collector');
-    expect(controller).toContain('Hermes reviewer not called');
-    expect(controller).toContain('Hermes reviewer pending');
+    expect(controller).toContain('No current collector errors');
+    expect(controller).toContain('the review model was not called');
+    expect(controller).toContain('No collectors');
     expect(controller).toContain('A Dreaming handoff is overdue');
     expect(controller).toContain('Waiting for reconciliation');
     expect(controller).toContain('No review candidates');

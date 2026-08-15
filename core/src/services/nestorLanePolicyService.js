@@ -19,7 +19,7 @@ const COMPLETE_RULES = [
   },
   {
     reason: 'live-platform',
-    pattern: /\b(agentx|openclaw|hermes|pipeline|ollama|qdrant|mongo(?:db)?|voix|host-beta|host-alpha|host-gamma|nerve\s+center|service\s+health|system\s+status|statut\s+(?:du\s+)?syst[eè]me)\b/iu
+    pattern: /\b(agentx|pipeline|ollama|qdrant|mongo(?:db)?|voix|service\s+health|system\s+status|statut\s+(?:du\s+)?syst[eè]me)\b/iu
   },
   {
     reason: 'deep-or-council',

@@ -1,6 +1,6 @@
 'use strict';
 
-const RUNTIMES = new Set(['agentx', 'openclaw', 'hermes', 'codex', 'claude-code', 'other']);
+const RUNTIMES = new Set(['agentx', 'codex', 'claude-code', 'external', 'other']);
 
 function boundedIdentifier(value, max = 160) {
   if (value == null) return null;
@@ -12,8 +12,6 @@ function boundedIdentifier(value, max = 160) {
 function inferRuntime(value, fallback = 'agentx') {
   const explicit = String(value || '').trim().toLowerCase();
   if (RUNTIMES.has(explicit)) return explicit;
-  if (explicit.includes('openclaw') || explicit.includes('clawdx')) return 'openclaw';
-  if (explicit.includes('hermes')) return 'hermes';
   if (explicit.includes('codex')) return 'codex';
   if (explicit.includes('claude')) return 'claude-code';
   return RUNTIMES.has(fallback) ? fallback : 'other';

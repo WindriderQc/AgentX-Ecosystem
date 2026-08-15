@@ -65,14 +65,12 @@ describe('Panel API', () => {
     expect(response.text).toContain('/css/panel.css');
   });
 
-  test('provides a short no-cache Nestor runtime handoff', async () => {
+  test('redirects the retired Nestor route to the product playground', async () => {
     const response = await request(app)
       .get('/nestor')
       .expect(302);
 
-    expect(response.headers.location).toBe('/api/openclaw/control-launch/chat');
-    expect(response.headers['cache-control']).toContain('no-store');
-    expect(response.headers['referrer-policy']).toBe('no-referrer');
+    expect(response.headers.location).toBe('/playground');
   });
 
   test('returns panel status even when VoiX is unavailable and Home Assistant is disabled', async () => {

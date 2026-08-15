@@ -18,12 +18,6 @@ const CAT_COLORS = {
     judge:      { bg: 'rgba(245,158,11,0.15)',  border: '#f59e0b',  text: '#fbbf24' },
 };
 
-const HOST_HARDWARE = {
-    Host Alpha: { gpu: '2x RTX 3090', vramGb: 48 },
-    Host Beta: { gpu: 'RTX 5070 Ti', vramGb: 16 },
-    Host Gamma: { gpu: 'RTX 3080 Ti', vramGb: 12 },
-};
-
 /* ── Score color helper ─────────────────────────────────── */
 function scoreColor(score) {
     if (score >= 80) return '#22c55e';
@@ -354,7 +348,7 @@ class UnifiedModels {
     }
 
     getHostHardware(hostName) {
-        return HOST_HARDWARE[hostName] || { gpu: 'GPU', vramGb: null };
+        return { gpu: 'GPU', vramGb: null };
     }
 
     getHostSummaries() {

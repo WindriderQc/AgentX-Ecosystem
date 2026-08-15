@@ -810,7 +810,7 @@ async function runBatchOrchestrator({
     }
 
     // Announce to core that these hosts are in use for the duration of the
-    // batch. Other consumers (chat, buddy, OpenClaw) can see status==='benchmarking'
+    // batch. Other consumers (chat, buddy, bounded API clients) can see status==='benchmarking'
     // on HostPreference and route around them. Claiming is a hard startup
     // guard: if any affected host cannot be reserved, the batch aborts before
     // releasing pinned models.

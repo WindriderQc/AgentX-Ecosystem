@@ -14,7 +14,7 @@ class AlertService extends EventEmitter {
       email: { enabled: false },
       slack: { enabled: false },
       webhook: { enabled: false },
-      dataapi: { enabled: true, url: process.env.DATAAPI_BASE_URL },
+      localLog: { enabled: true },
       cooldownMs: 300000, // 5 minutes
       maxOccurrences: 10,
       // Auto-resolve alerts whose condition stopped recurring (task 0361).
@@ -251,7 +251,7 @@ class AlertService extends EventEmitter {
           additionalData: extra || data
         },
         fingerprint,
-        channels: rule?.channels || rule?.event?.params?.channels || ['dataapi_log'],
+        channels: rule?.channels || rule?.event?.params?.channels || ['local_log'],
         channelConfig: rule?.channelConfig || rule?.event?.params?.channelConfig,
         source: event.source || data.source || 'agentx',
         lastOccurrence: now,
@@ -364,8 +364,8 @@ class AlertService extends EventEmitter {
 
     for (const channel of channels) {
       try {
-        if (channel === 'dataapi_log') {
-          logger.info(`[AlertService] Sending to DataAPI Log: ${alert.title}`);
+        if (channel === 'local_log') {
+          logger.info(`[AlertService] Sending to local log: ${alert.title}`);
           // In real impl, might call external API
           results[channel] = { sent: true };
         } else if (['email', 'slack', 'telegram', 'webhook'].includes(channel)) {

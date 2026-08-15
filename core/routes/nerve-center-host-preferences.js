@@ -20,12 +20,6 @@ const { modelsMatch } = require('../src/helpers/modelNameNormalization');
 const { validateHostUrl } = require('../src/helpers/ollamaHostConfig');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 
-function requestCoreBaseUrl(req) {
-  const explicit = typeof req.query.coreBaseUrl === 'string' ? req.query.coreBaseUrl.trim() : '';
-  if (explicit) return explicit;
-  return `${req.protocol}://${req.get('host')}`;
-}
-
 function resolveHostPreferenceUrl(req, res) {
   let rawHostUrl;
   try {
@@ -137,42 +131,6 @@ router.get('/host-preferences', async (_req, res) => {
     });
   } catch (err) {
     logger.error('[NerveCenter] host preferences fetch failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-// ========================================
-// Agent runtime config export / validation
-// ========================================
-
-router.get('/agent-runtime-config/export', async (req, res) => {
-  try {
-    const { buildAgentRuntimeConfigExport } = require('../src/services/agentRuntimeConfigService');
-    const data = await buildAgentRuntimeConfigExport({
-      coreBaseUrl: requestCoreBaseUrl(req),
-      includeCandidates: req.query.includeCandidates !== 'false'
-    });
-    res.json({ status: 'success', data });
-  } catch (err) {
-    logger.error('[NerveCenter] agent runtime config export failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-router.post('/agent-runtime-config/validate', async (req, res) => {
-  try {
-    const {
-      buildAgentRuntimeConfigExport,
-      validateRuntimeConfigs
-    } = require('../src/services/agentRuntimeConfigService');
-    const data = await buildAgentRuntimeConfigExport({
-      coreBaseUrl: requestCoreBaseUrl(req),
-      includeCandidates: req.query.includeCandidates !== 'false'
-    });
-    const validation = validateRuntimeConfigs(data, req.body || {});
-    res.json({ status: 'success', data: { expected: data, validation } });
-  } catch (err) {
-    logger.error('[NerveCenter] agent runtime config validation failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });
   }
 });

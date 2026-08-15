@@ -11,7 +11,6 @@ const NerveCenter = (() => {
     const HOST_ORDER = ['primary', 'secondary', 'tertiary'];
 
     let _poller = null;
-    const _scriptPromises = {};
 
     function fetchJson(url, options) {
         return fetch(url, options).then(async response => {
@@ -97,48 +96,16 @@ const NerveCenter = (() => {
 
     function getSectionLoader(name) {
         const loaders = {
-            ecosystem: () => loadEcosystemSection(),
-            fastlane: () => window.NerveCenterFastlane?.loadFastlane?.(),
             routing: () => window.NerveCenterRouting?.loadRouting?.(),
             cluster: () => window.NerveCenterCluster?.loadCluster?.(),
             health: () => window.NerveCenterHealth?.loadHealth?.(),
             performance: () => window.NerveCenterPerformance?.loadPerformance?.(),
             inference: () => window.NerveCenterInference?.loadInference?.(),
             'inference-health': () => window.NerveCenterInferenceHealth?.loadInferenceHealth?.(),
-            capacity: () => window.NerveCenterCapacity?.loadCapacity?.(),
             alerts: () => window.NerveCenterAlerts?.loadAlerts?.(),
-            rag: () => window.NerveCenterRag?.loadRag?.(),
-            tasks: () => window.NerveCenterTasks?.loadTasks?.(),
-            hermes: () => window.NerveCenterHermes?.loadHermes?.(),
-            openclaw: () => window.NerveCenterOpenclaw?.loadOpenclaw?.()
+            rag: () => window.NerveCenterRag?.loadRag?.()
         };
         return loaders[name];
-    }
-
-    function loadScriptOnce(src) {
-        if (_scriptPromises[src]) return _scriptPromises[src];
-        _scriptPromises[src] = new Promise((resolve, reject) => {
-            const existing = document.querySelector(`script[src="${src}"]`);
-            if (existing) {
-                existing.addEventListener('load', resolve, { once: true });
-                existing.addEventListener('error', () => reject(new Error(`Failed to load ${src}`)), { once: true });
-                return;
-            }
-            const script = document.createElement('script');
-            script.src = src;
-            script.async = false;
-            script.onload = resolve;
-            script.onerror = () => reject(new Error(`Failed to load ${src}`));
-            document.head.appendChild(script);
-        });
-        return _scriptPromises[src];
-    }
-
-    async function loadEcosystemSection() {
-        if (!window.NerveCenterEcosystem?.loadEcosystem) {
-            await loadScriptOnce('/js/nerve-center-ecosystem.js');
-        }
-        return window.NerveCenterEcosystem?.loadEcosystem?.();
     }
 
     function loadSection(name) {
@@ -182,20 +149,14 @@ const NerveCenter = (() => {
         setupControls();
 
         loadSummary();
-        loadSection('ecosystem');
         loadSection('cluster');
         loadSection('routing');
-        loadSection('fastlane');
         loadSection('health');
         loadSection('performance');
         loadSection('inference');
         loadSection('inference-health');
-        loadSection('capacity');
         loadSection('alerts');
         loadSection('rag');
-        loadSection('tasks');
-        loadSection('hermes');
-        loadSection('openclaw');
 
         _poller = new window.PollingController();
         _poller.addTask('summary', loadSummary, POLL_INTERVAL);
@@ -223,7 +184,7 @@ const NerveCenter = (() => {
     }
 
     // Sections collapsed by default for new users (no saved prefs)
-    const DEFAULT_COLLAPSED = ['sectionHealth', 'sectionInference', 'sectionAlerts', 'sectionPerformance', 'sectionRag', 'sectionTasks', 'sectionHermes', 'sectionOpenclaw'];
+    const DEFAULT_COLLAPSED = ['sectionHealth', 'sectionInference', 'sectionAlerts', 'sectionPerformance', 'sectionRag'];
 
     function restoreSectionStates() {
         try {
@@ -260,9 +221,7 @@ const NerveCenter = (() => {
     function setupWidgetClicks() {
         const sectionMap = {
             cluster: 'sectionCluster',
-            ecosystem: 'sectionEcosystem',
             routing: 'sectionRouting',
-            fastlane: 'sectionFastlane',
             health: 'sectionHealth',
             performance: 'sectionPerformance'
         };
@@ -302,14 +261,6 @@ const NerveCenter = (() => {
             btnRefresh.addEventListener('click', async () => {
                 Toast.info('Refreshing cluster data...');
                 await Promise.all([loadSummary(), loadSection('cluster')]);
-            });
-        }
-
-        const btnRefreshEcosystem = document.getElementById('btnRefreshEcosystem');
-        if (btnRefreshEcosystem) {
-            btnRefreshEcosystem.addEventListener('click', async () => {
-                Toast.info('Refreshing ecosystem map...');
-                await loadSection('ecosystem');
             });
         }
 
@@ -447,9 +398,7 @@ const NerveCenter = (() => {
         init,
         toggleSection,
         loadSummary,
-        loadEcosystem: () => loadSection('ecosystem'),
         loadRouting: () => loadSection('routing'),
-        loadFastlane: () => loadSection('fastlane'),
         loadCluster: () => loadSection('cluster'),
         loadHealth: () => loadSection('health'),
         loadPerformance: () => loadSection('performance')

@@ -20,7 +20,6 @@
     --c-infra:     #a78bfa;
     --c-eval:      #f59e0b;
     --c-knowledge: #4ade80;
-    --c-data:      #fb7185;
     --c-ops:       #94a3b8;
     --ok:    #4ade80;
     --warn:  #f59e0b;
@@ -216,13 +215,12 @@
   <header>
     <h1>
       <span class="logo">AX</span>
-      AgentX <span class="sub">operations portal</span>
+      AgentX <span class="sub">product portal</span>
     </h1>
     <div class="meta">
       core <code style="color:var(--muted-hi);font-size:10.5px">:3080</code>
       <span class="sep">·</span>bench <code style="color:var(--muted-hi);font-size:10.5px">:3081</code>
       <span class="sep">·</span>rag <code style="color:var(--muted-hi);font-size:10.5px">:3082</code>
-      <span class="sep">·</span>data <code style="color:var(--muted-hi);font-size:10.5px">:3083</code>
     </div>
   </header>
 
@@ -240,29 +238,6 @@
   </div>
 
   <div class="grid">
-
-    <!-- RUNTIME -->
-    <div class="tile" style="--tile-color: var(--c-runtime);">
-      <div class="head">
-        <div class="head-left">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-          <span class="domain">Runtime</span>
-        </div>
-        <div class="head-right">
-          <span class="tile-status" data-status="unknown" title="External runtime — open Agent Ops for observed status"><i class="sdot"></i><span class="stext">handoff</span></span>
-          <span class="port">official</span>
-        </div>
-      </div>
-      <h2><a href="/agent-ops" data-openclaw-path="/">OpenClaw Control</a></h2>
-      <div class="owner">Official OpenClaw UI — native runtime authority</div>
-      <ul>
-        <li><a href="/agent-ops" data-public-service="core" data-public-path="/agent-ops">Agent Ops handoff</a></li>
-        <li><a href="/agent-ops" data-openclaw-path="/chat">Chat</a></li>
-        <li><a href="/agent-ops" data-openclaw-path="/agents">Agents</a></li>
-        <li><a href="/agent-ops" data-openclaw-path="/tasks">Tasks</a></li>
-      </ul>
-      <div class="note">Agent Ops shows observed runtime status; native operations stay in OpenClaw's official Control UI.</div>
-    </div>
 
     <!-- INFRASTRUCTURE -->
     <div class="tile" data-service="core" style="--tile-color: var(--c-infra);">
@@ -333,28 +308,6 @@
       <div class="note">Qdrant-backed vector store, hybrid search, LLM rerank.</div>
     </div>
 
-    <!-- DATA -->
-    <div class="tile" data-service="data" style="--tile-color: var(--c-data);">
-      <div class="head">
-        <div class="head-left">
-          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg></span>
-          <span class="domain">Data</span>
-        </div>
-        <div class="head-right">
-          <span class="tile-status" data-status="loading"><i class="sdot"></i><span class="stext">checking…</span></span>
-          <span class="port">:3080 → :3083</span>
-        </div>
-      </div>
-      <h2><a href="/data-toolbox" data-public-service="core" data-public-path="/data-toolbox">Data Toolbox</a></h2>
-      <div class="owner">NAS, files, live feeds — UI in core, API in data</div>
-      <ul>
-        <li><a href="/data-toolbox#storage" data-public-service="core" data-public-path="/data-toolbox#storage">Storage</a></li>
-        <li><a href="/data-toolbox#files" data-public-service="core" data-public-path="/data-toolbox#files">Files</a></li>
-        <li><a href="/data-toolbox#janitor" data-public-service="core" data-public-path="/data-toolbox#janitor">Janitor</a></li>
-      </ul>
-      <div class="note">Dedup scanner, network discovery, ISS/quakes/weather feeds.</div>
-    </div>
-
   </div>
 
   <footer>
@@ -365,8 +318,6 @@
       <a href="/portal/" data-public-service="benchmark" data-public-path="/">benchmark</a>
       <span style="opacity:0.4">·</span>
       <a href="/portal/" data-public-service="rag" data-public-path="/">rag</a>
-      <span style="opacity:0.4">·</span>
-      <a href="/agent-ops" data-openclaw-path="/">openclaw</a>
     </div>
   </footer>
 
@@ -377,14 +328,10 @@
 // Core links intentionally stay relative so an HTTPS front door stays HTTPS.
 (async () => {
   let publicUrls = {};
-  let openclawControl = '';
   try {
     const res = await fetch('/api/config', { credentials: 'include' });
     const cfg = await res.json();
     publicUrls = cfg?.publicUrls || {};
-    openclawControl = cfg?.features?.openclaw?.controlUi?.launchBaseUrl
-      || publicUrls.openclawControl
-      || '';
   } catch { /* keep safe same-origin fallbacks */ }
   document.querySelectorAll('[data-public-service]').forEach((a) => {
     const service = a.dataset.publicService;
@@ -396,14 +343,6 @@
     const base = String(publicUrls[service] || '').replace(/\/+$/, '');
     if (base) a.setAttribute('href', base + path);
   });
-  if (openclawControl) {
-    document.querySelectorAll('[data-openclaw-path]').forEach((a) => {
-      const target = String(a.dataset.openclawPath || '/')
-        .split(/[/?#]/)
-        .filter(Boolean)[0] || 'overview';
-      a.setAttribute('href', `/api/openclaw/control-launch/${encodeURIComponent(target)}`);
-    });
-  }
 })();
 
 // Live Portal — same-origin status from core /api/portal/health (no CORS).

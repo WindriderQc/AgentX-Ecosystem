@@ -254,7 +254,7 @@ function formatLedgerEntry(rec, opts = {}) {
     lines.push(`## ${date} — ${rec.lane} lane${hostStr}: ${rec.incumbent || '(none)'} → ${rec.winner}`);
     lines.push('');
     lines.push(`- **Actor:** ${actor}`);
-    lines.push(`- **Target:** ${pend(opts.target, 'routing key for this lane (.env / openclaw.json / agent-registry.yml)')}${opts.backup ? ` · backup: ${opts.backup}` : ''}`);
+    lines.push(`- **Target:** ${pend(opts.target, 'routing key for this lane (environment or model registry)')}${opts.backup ? ` · backup: ${opts.backup}` : ''}`);
     const ev = [
       `${rec.lane} sweep`,
       w ? `\`${rec.winner}\` composite **${w.composite}**` : `winner \`${rec.winner}\``,

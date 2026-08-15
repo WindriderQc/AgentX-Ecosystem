@@ -24,7 +24,7 @@ describe('roundtable Telegram publisher', () => {
       {
         type: 'turn',
         turn: {
-          role: 'Hermes', round: 1, runtime: 'hermes',
+          role: 'Codex reviewer', round: 1, runtime: 'codex',
           response: 'Visible conclusion.', thinking: 'private chain of thought'
         }
       }

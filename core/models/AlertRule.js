@@ -15,7 +15,7 @@ const alertRuleSchema = new mongoose.Schema({
   conditions: {
     all: [conditionSchema],
   },
-  channels: { type: [String], default: ['dataapi_log'] },
+  channels: { type: [String], default: ['local_log'] },
   // Optional {{var}} templates rendered against the event (component, metric,
   // value, threshold, host, model, …). Empty → alertService builds a fallback.
   title: { type: String, default: '' },

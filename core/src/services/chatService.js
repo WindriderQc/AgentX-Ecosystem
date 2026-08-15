@@ -3,8 +3,6 @@ const { getOrCreateProfile } = require('../helpers/userHelpers');
 const { extractResponse, buildOllamaPayload } = require('../helpers/ollamaResponseHandler');
 const { summarizeOllamaOutcome } = require('./laneObservabilityService');
 const { sanitizeOptions, resolveTarget } = require('../helpers/ollamaUtils');
-const { tryHandleToolCommand } = require('./toolService');
-const { executeTool, parseToolCalls } = require('./toolExecutor');
 const { recordInference } = require('./modelRouter');
 const hostPreferenceService = require('./hostPreferenceService');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
@@ -18,7 +16,7 @@ const {
     hasQualifiedThinkingCapability,
     resolveInferenceContract
 } = require('./inferenceContractService');
-const { persistConversation, findConversationForUpdate } = require('./chat/conversationPersistence');
+const { persistConversation } = require('./chat/conversationPersistence');
 const { prepareChatOrchestration } = require('./chat/chatOrchestrationPrelude');
 const {
     readOllamaErrorDetail,
@@ -48,68 +46,6 @@ function buildRoutingPayload(routingInfo, effectiveModel, effectiveTarget, autoR
     };
 }
 
-async function handleToolCommandResponse({
-    toolCommand,
-    userId,
-    model,
-    message,
-    system,
-    personaName,
-    conversationId
-}) {
-    const activePrompt = await getActivePrompt(system, personaName);
-    const userProfile = await getOrCreateProfile(userId);
-    const effectiveSystemPrompt = buildSystemPrompt(activePrompt.systemPrompt, userProfile, null);
-    const toolModel = model || 'tool-command';
-
-    let conversation;
-    let assistantMessageId = null;
-
-    try {
-        if (conversationId) {
-            conversation = await findConversationForUpdate({ conversationId, userId });
-        }
-        if (!conversation) {
-            conversation = new Conversation({
-                userId, model: toolModel,
-                systemPrompt: effectiveSystemPrompt, messages: []
-            });
-        }
-
-        conversation.messages.push({ role: 'user', content: message.trim() });
-
-        const assistantMsg = conversation.messages.create({
-            role: 'assistant', content: toolCommand.responseText.trim()
-        });
-        assistantMsg.metadata = {
-            tool: toolCommand.tool || null,
-            toolResult: toolCommand.toolResult || null
-        };
-        conversation.messages.push(assistantMsg);
-        assistantMessageId = assistantMsg._id;
-
-        if (conversation.messages.length <= 2) {
-            conversation.title = (message || 'New Conversation').substring(0, 50);
-        }
-
-        conversation.promptConfigId = activePrompt._id;
-        conversation.promptName = activePrompt.name;
-        conversation.promptVersion = activePrompt.version;
-
-        await conversation.save();
-    } catch (err) {
-        logger.error('Failed to save tool conversation', { error: err.message });
-    }
-
-    return {
-        response: toolCommand.responseText,
-        conversationId: conversation ? conversation._id : null,
-        assistantMessageId,
-        tool: toolCommand.tool || null,
-        toolOk: toolCommand.ok === true
-    };
-}
-
 const handleChatRequest = async ({
     userId,
     model,
@@ -132,19 +68,6 @@ const handleChatRequest = async ({
     thinkingMode
 }) => {
     let personaName = persona || options.persona || 'default_chat';
-
-    const toolCommand = await tryHandleToolCommand(message);
-    if (toolCommand) {
-        return handleToolCommandResponse({
-            toolCommand,
-            userId,
-            model,
-            message,
-            system,
-            personaName,
-            conversationId
-        });
-    }
 
     // Shared orchestration prelude — routing decision.
     //     RAG + web-search happen later (after tool/image branches), so we
@@ -379,34 +302,18 @@ const handleChatRequest = async ({
         status: 'success'
     });
 
-    // 3. Tool Execution Loop
-    let finalContent = assistantMessageContent;
-    let toolExecutionResult = null;
-
-    const toolCall = parseToolCalls(assistantMessageContent);
-    if (toolCall) {
-        logger.info('Tool call detected', { tool: toolCall.tool });
-        try {
-            const result = await executeTool(toolCall.tool, toolCall.params);
-            toolExecutionResult = result;
-            finalContent += `\n\n--- Tool Execution ---\nTool: ${toolCall.tool}\nStatus: ${result.status}\nResult: ${JSON.stringify(result.data, null, 2)}`;
-        } catch (err) {
-            finalContent += `\n\n--- Tool Execution Failed ---\nError: ${err.message}`;
-        }
-    }
-
     // Persist conversation
     const routingPayload = buildRoutingPayload(routingInfo, effectiveModel, effectiveTarget, autoRoute);
     const { conversation, assistantMessageId } = await persistConversation({
         userId, conversationId, model: effectiveModel,
-        effectiveSystemPrompt, message, assistantContent: finalContent,
+        effectiveSystemPrompt, message, assistantContent: assistantMessageContent,
         activePrompt,
-        metadata: { thinking, toolExecution: toolExecutionResult, options, webSearchResults, routingInfo: routingPayload },
+        metadata: { thinking, options, webSearchResults, routingInfo: routingPayload },
         stats, ragUsed, useRag, ragSources
     });
 
     return {
-        response: finalContent,
+        response: assistantMessageContent,
         conversationId: conversation?._id || null,
         messageId: assistantMessageId,
         model: effectiveModel,

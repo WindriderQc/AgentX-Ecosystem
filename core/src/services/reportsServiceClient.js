@@ -2,7 +2,7 @@
  * Reports Service Client
  *
  * Thin HTTP client for cross-service calls needed by report aggregation endpoints.
- * Covers agentx-benchmark (3081), agentx-rag (3082), and agentx-data (3083).
+ * Covers the product-owned Benchmark (3081) and RAG (3082) services.
  *
  * Key design principle: ALL methods degrade gracefully — they return null instead
  * of throwing when a service is unreachable. Report endpoints must be able to
@@ -19,7 +19,6 @@ const { requestJson: coreRequestJson } = require('../helpers/crossServiceClient'
 
 const DEFAULT_BENCHMARK_URL = 'http://localhost:3081';
 const DEFAULT_RAG_URL       = 'http://localhost:3082';
-const DEFAULT_DATA_URL      = 'http://localhost:3083';
 const FETCH_TIMEOUT_MS      = 5000;
 
 class ReportsServiceClientError extends Error {
@@ -44,10 +43,6 @@ function getBenchmarkBaseUrl() {
 
 function getRagBaseUrl() {
   return sanitizeEnvUrl(process.env.RAG_SERVICE_URL, DEFAULT_RAG_URL);
-}
-
-function getDataBaseUrl() {
-  return sanitizeEnvUrl(process.env.DATAAPI_BASE_URL, DEFAULT_DATA_URL);
 }
 
 function unwrapServiceEnvelope(parsed) {
@@ -124,12 +119,6 @@ class ReportsServiceClient {
     return fetchJson(getRagBaseUrl(), '/api/rag/metrics');
   }
 
-  // ─── Data API (port 3083) ───────────────────────────────────────────────────
-
-  /** GET /health */
-  async fetchDataHealth() {
-    return fetchJson(getDataBaseUrl(), '/health');
-  }
 }
 
 let client = null;

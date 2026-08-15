@@ -9,8 +9,6 @@ let TMP_ROOT;
 function setTempHomes() {
   TMP_ROOT = path.join(os.tmpdir(), 'buddy-facts-it-' + crypto.randomBytes(6).toString('hex'));
   process.env.BUDDY_HOME = path.join(TMP_ROOT, '.buddy');
-  process.env.OPENCLAW_HOME = path.join(TMP_ROOT, '.openclaw');
-  process.env.HERMES_HOME = path.join(TMP_ROOT, '.hermes');
 }
 setTempHomes();
 
@@ -130,27 +128,25 @@ describe('/api/buddy/facts (Phase 6h, file-based)', () => {
     expect(content).toMatch(/mig fact 3/);
   });
 
-  it('source switch leaves the prior file untouched (no auto-migration)', async () => {
-    // Add a fact under standalone.
+  it('product personality changes cannot redirect the notes authority', async () => {
     await request(app).post('/api/buddy/facts')
       .set('x-test-client', clientId + '-srcA').send({ text: 'standalone fact' });
     const standaloneFile = path.join(TMP_ROOT, '.buddy', 'notes.md');
     expect(fs.existsSync(standaloneFile)).toBe(true);
     const standaloneBefore = await fsp.readFile(standaloneFile, 'utf8');
 
-    // Switch personality.source -> hermes.
     const sw = await request(app).post('/api/buddy/singleton')
       .set('x-test-client', clientId + '-switch')
-      .send({ personality: { source: 'hermes' } });
+      .send({ personality: { source: 'agentx' } });
     expect(sw.status).toBe(200);
 
-    // GET facts now points to hermes path and starts empty.
     const get = await request(app).get('/api/buddy/facts')
       .set('x-test-client', clientId + '-srcB');
-    expect(get.body.data.facts.length).toBe(0);
-    expect(get.body.data.file).toBe(path.join(TMP_ROOT, '.hermes', 'buddy.md'));
+    expect(get.body.data.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'standalone fact' }),
+    ]));
+    expect(get.body.data.file).toBe(standaloneFile);
 
-    // Standalone file is untouched.
     const standaloneAfter = await fsp.readFile(standaloneFile, 'utf8');
     expect(standaloneAfter).toBe(standaloneBefore);
   });

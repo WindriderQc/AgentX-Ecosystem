@@ -807,8 +807,8 @@
         <!--
           Side-by-side view of local Ollama inference (AgentX inferencelogs)
           and cloud-provider inference routed through AgentX. The two stores
-          are NOT merged; OpenClaw's native Usage view remains authoritative
-          for provider plans, balances, and calls that bypass AgentX.
+          are NOT merged; provider-native billing remains authoritative for
+          plans, balances, and calls that bypass Agent X.
         -->
         <div class="analytics-grid full" id="federatedSection">
             <div class="section-card">
@@ -900,7 +900,7 @@
                     </div>
                     <div style="margin-top: 10px; font-size: 11px; color: var(--muted);">
                         <i class="fas fa-info-circle"></i>
-                        AgentX records only calls routed through its own inference path. For native OpenClaw provider plans, balances and complete upstream usage, use OpenClaw's official Usage view.
+                        Agent X records only calls routed through its own inference path. Use the provider's billing console for plans, balances, and complete upstream usage.
                     </div>
                 </div>
             </div>

@@ -1,5 +1,5 @@
 /**
- * Chat agents - launcher, OpenClaw handoff, and tool cards.
+ * Chat agents - product launcher and tool cards.
  */
 
 const agentSystemLog = {
@@ -55,7 +55,6 @@ export async function initAgentSystem(elements, state) {
   });
 
   if (document.body.dataset.agentxProfile === 'demo') {
-    document.getElementById('launcherOpenClaw')?.setAttribute('hidden', '');
     document.getElementById('launcherTools')?.setAttribute('hidden', '');
     updateLauncherCount(agentElements);
     collapseSelector(agentElements);
@@ -63,39 +62,18 @@ export async function initAgentSystem(elements, state) {
   }
 
   try {
-    const [openclawAgents, dedicatedPersonas] = await Promise.all([
-      loadOpenClawAgents(),
-      loadDedicatedPersonas()
-    ]);
-
-    renderOpenClawAgents(openclawAgents);
+    const dedicatedPersonas = await loadDedicatedPersonas();
     renderTools(dedicatedPersonas);
     updateLauncherCount(agentElements);
 
-    const urlAgent = new URLSearchParams(window.location.search).get('agent');
-    if (urlAgent && openclawAgents.some((agent) => agent.id === urlAgent)) {
-      agentSystemLog.info('OpenClaw agent URL parameter detected; use the OpenClaw card to launch the official Control UI.', { agent: urlAgent });
-    }
-
     window.dispatchEvent(new CustomEvent('agentx:agents-loaded', {
-      detail: { openclawCount: openclawAgents.length, toolCount: dedicatedPersonas.length }
+      detail: { toolCount: dedicatedPersonas.length }
     }));
   } catch (error) {
     agentSystemLog.error('Failed to initialize launcher cards:', error);
   }
 
   collapseSelector(agentElements);
-}
-
-async function loadOpenClawAgents() {
-  try {
-    const res = await fetch('/api/openclaw/agents', { credentials: 'include' });
-    if (!res.ok) return [];
-    const result = await res.json();
-    return Array.isArray(result.data) ? result.data : [];
-  } catch {
-    return [];
-  }
 }
 
 async function loadDedicatedPersonas() {
@@ -122,47 +100,6 @@ async function loadDedicatedPersonas() {
   }
 }
 
-function renderOpenClawAgents(agents) {
-  const grid = document.getElementById('openclawAgentGrid');
-  const section = document.getElementById('launcherOpenClaw');
-  if (!grid || !section) return;
-
-  if (!agents.length) {
-    section.style.display = 'none';
-    return;
-  }
-
-  section.style.display = '';
-  grid.innerHTML = agents.map((agent) => {
-    const name = escapeHtml(agent.identity?.name || agent.name || agent.id);
-    const emoji = escapeHtml(agent.identity?.emoji || agent.emoji || '');
-    const iconHtml = emoji
-      ? `<span style="font-size:1.3em">${emoji}</span>`
-      : '<i class="fas fa-robot"></i>';
-    const model = escapeHtml(agent.model?.primary || agent.model || 'unknown');
-    return `
-      <div class="agentx-card openclaw-card" tabindex="0" data-agent-id="${escapeHtml(agent.id)}">
-        <div class="agentx-card-avatar" style="--avatar-color: #22c55e">
-          ${iconHtml}
-        </div>
-        <div class="agentx-card-content">
-          <div class="agentx-card-header">
-            <h4 class="agentx-card-name">${name}</h4>
-          </div>
-          <p class="agentx-card-description">${model}</p>
-        </div>
-        <div class="agentx-card-actions">
-          <button class="agentx-select-btn">Chat</button>
-        </div>
-      </div>`;
-  }).join('');
-
-  bindCardActivation(grid, '.openclaw-card', (card) => {
-    const agent = agents.find((item) => item.id === card.dataset.agentId);
-    if (agent) handleOpenClawAgentSelection(agent);
-  });
-}
-
 function renderTools(dedicatedPersonas = []) {
   const grid = document.getElementById('toolsLauncherGrid');
   if (!grid) return;
@@ -170,15 +107,6 @@ function renderTools(dedicatedPersonas = []) {
   const personaIcons = {
     repo_watcher: 'fa-shield-alt'
   };
-
-  const pageTools = [
-    { id: 'janitor', label: 'Janitor', icon: 'fa-broom', href: '/janitor.html' },
-    { id: 'files', label: 'Files', icon: 'fa-folder-open', href: '/files.html' },
-    { id: 'network', label: 'Network', icon: 'fa-network-wired', href: '/network.html' },
-    { id: 'storage', label: 'Storage', icon: 'fa-hdd', href: '/storage.html' },
-    { id: 'databases', label: 'Databases', icon: 'fa-database', href: '/databases.html' },
-    { id: 'live-data', label: 'Live Data', icon: 'fa-satellite-dish', href: '/live-data-dashboard.html' }
-  ];
 
   const personaCards = dedicatedPersonas.map((persona) => {
     const route = persona.uiConfig?.route || '#';
@@ -202,23 +130,7 @@ function renderTools(dedicatedPersonas = []) {
       </div>`;
   }).join('');
 
-  const pageCards = pageTools.map((tool) => `
-      <div class="agentx-card tool-card" data-tool-href="${escapeHtml(tool.href)}" tabindex="0">
-        <div class="agentx-card-avatar" style="--avatar-color: #34d399">
-          <i class="fas ${escapeHtml(tool.icon)}"></i>
-        </div>
-        <div class="agentx-card-content">
-          <div class="agentx-card-header">
-            <h4 class="agentx-card-name">${escapeHtml(tool.label)}</h4>
-          </div>
-        </div>
-        <div class="agentx-card-actions">
-          <button class="agentx-select-btn"><i class="fas fa-external-link-alt"></i> Open</button>
-        </div>
-      </div>
-    `).join('');
-
-  grid.innerHTML = personaCards + pageCards;
+  grid.innerHTML = personaCards;
   bindCardActivation(grid, '.tool-card', (card) => {
     window.location.href = card.dataset.toolHref;
   });
@@ -235,11 +147,6 @@ function bindCardActivation(container, selector, activate) {
   });
 }
 
-function handleOpenClawAgentSelection(agent) {
-  const agentParam = agent?.id ? `?agent=${encodeURIComponent(agent.id)}` : '';
-  window.open(`/api/openclaw/control-launch/chat${agentParam}`, '_blank', 'noopener');
-}
-
 function markQuickChatSelected() {
   document.querySelectorAll('.agent-selector-panel .agentx-card').forEach((card) => {
     card.classList.toggle('selected', card.id === 'startChatCard');
@@ -249,7 +156,7 @@ function markQuickChatSelected() {
       button.innerHTML = '<i class="fas fa-check"></i>';
     } else if (button?.classList.contains('selected')) {
       button.classList.remove('selected');
-      button.textContent = button.closest('.openclaw-card') ? 'Chat' : 'Open';
+      button.textContent = 'Open';
     }
   });
 }

@@ -9,7 +9,6 @@
 const { getOrCreateProfile } = require('../helpers/userHelpers');
 const { buildOllamaPayload, buildOllamaStats } = require('../helpers/ollamaResponseHandler');
 const { sanitizeOptions, resolveTarget } = require('../helpers/ollamaUtils');
-const { tryHandleToolCommand } = require('./toolService');
 const { recordInference } = require('./modelRouter');
 const hostPreferenceService = require('./hostPreferenceService');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
@@ -61,7 +60,6 @@ const handleChatRequestStream = async ({
     conversationId,
     persist = true,
     callerDetail = null,
-    allowTools = true,
     allowRag = true,
     loadUserProfile = true,
     useRag,
@@ -96,19 +94,7 @@ const handleChatRequestStream = async ({
     try {
         if (abortSignal?.aborted) return;
 
-        // 1. Check for Tool Commands (no streaming for tools) — handled
-        //    before orchestration so we don't route/RAG/search for tool cmds.
-        const toolCommand = allowTools === false ? null : await tryHandleToolCommand(message);
-        if (toolCommand) {
-            onComplete({
-                response: toolCommand.responseText,
-                tool: toolCommand.tool || null,
-                toolOk: toolCommand.ok === true
-            });
-            return;
-        }
-
-        // 2. Standard Chat Flow with Streaming
+        // Standard Chat Flow with Streaming
         const activePrompt = await getActivePrompt(system, personaName, {
             preferSystem: authoritativeSystem === true
         });

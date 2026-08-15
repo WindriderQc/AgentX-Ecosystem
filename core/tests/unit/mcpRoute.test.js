@@ -37,16 +37,16 @@ describe('mcp route', () => {
     expect(handleMcpMessage).toHaveBeenCalledWith({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
   });
 
-  test('passes ecosystem snapshot tool calls through the MCP route', async () => {
+  test('passes bounded product tool calls through the MCP route', async () => {
     delete process.env.AGENTX_MCP_TOKEN;
     handleMcpMessage.mockImplementationOnce(async (body) => ({
       jsonrpc: '2.0',
       id: body.id,
       result: {
-        content: [{ type: 'text', text: '{"mode":"driftOnly"}' }],
+        content: [{ type: 'text', text: '{"count":1}' }],
         structuredContent: {
-          mode: body.params.arguments.mode,
-          drift: { count: 1, records: [{ id: 'hermes-live-config-protected', owner: '0330' }] },
+          count: 1,
+          results: [{ text: 'bounded result' }],
         },
         isError: false,
       },
@@ -56,7 +56,7 @@ describe('mcp route', () => {
       jsonrpc: '2.0',
       id: 3,
       method: 'tools/call',
-      params: { name: 'ecosystem_snapshot', arguments: { mode: 'driftOnly' } },
+      params: { name: 'rag_search', arguments: { query: 'bounded result' } },
     };
     const res = await request(makeApp())
       .post('/mcp')
@@ -64,10 +64,7 @@ describe('mcp route', () => {
       .expect(200);
 
     expect(handleMcpMessage).toHaveBeenCalledWith(body);
-    expect(res.body.result.structuredContent).toEqual(expect.objectContaining({
-      mode: 'driftOnly',
-      drift: expect.objectContaining({ count: 1 }),
-    }));
+    expect(res.body.result.structuredContent).toEqual(expect.objectContaining({ count: 1 }));
   });
 
   test('requires token when AGENTX_MCP_TOKEN is set', async () => {

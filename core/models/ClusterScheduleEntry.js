@@ -4,6 +4,8 @@ const ClusterScheduleEntrySchema = new mongoose.Schema({
   source: {
     type: String,
     required: true,
+    // `openclaw` is retained only to read schedules created before the adapter
+    // extraction; new product schedules use an AgentX-owned source.
     enum: ['agentx', 'agentx-system', 'ollama-persistent', 'openclaw'],
     index: true
   },

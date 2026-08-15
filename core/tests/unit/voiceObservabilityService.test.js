@@ -53,7 +53,7 @@ describe('voiceObservabilityService', () => {
       transcript: 'private transcript',
       reply: 'private reply',
       rawAudio: 'not allowed',
-      fallback: { reason: 'OPENCLAW_DOWN' },
+      fallback: { reason: 'EXTERNAL_RUNTIME_DOWN' },
       timings: { firstSentenceMs: 1234, totalTurnMs: 9999999 }
     });
 

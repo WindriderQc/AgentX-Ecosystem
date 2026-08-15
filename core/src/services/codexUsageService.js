@@ -237,9 +237,7 @@ async function readCodexSubscriptionValue(now = Date.now(), models = {}) {
 
 function tokenAllowed(req) {
   const expected = String(
-    process.env.AGENTX_CODEX_USAGE_TOKEN
-    || process.env.OPENCLAW_GATEWAY_TOKEN
-    || ''
+    process.env.AGENTX_CODEX_USAGE_TOKEN || ''
   ).trim();
   if (!expected) return false;
   const actual = String(req.get('x-agentx-codex-usage-token') || '').trim();

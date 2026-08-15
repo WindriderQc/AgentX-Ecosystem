@@ -35,7 +35,7 @@ async function seedDefaultRules() {
         enabled: rule.enabled !== false,
         severity: rule.severity,
         conditions: rule.conditions,
-        channels: rule.channels || ['dataapi_log'],
+        channels: rule.channels || ['local_log'],
         title: rule.title || '',
         message: rule.message || '',
         description: rule.description || '',

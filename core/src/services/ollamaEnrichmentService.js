@@ -1,19 +1,16 @@
 /**
  * Ollama Enrichment Service
  *
- * Polls configured Ollama hosts every 60s and enriches Host documents with:
+ * Polls configured Ollama hosts every 60s and keeps a bounded in-memory view:
  * - Ollama reachability, version, latency
  * - Available model list and count
  * - Running/loaded models with VRAM breakdown
- * - GPU VRAM totals (from agent heartbeat or SSH nvidia-smi)
- *
- * Matching strategy: ollamaHostKey > ollamaUrl > IP match.
+ * - Explicitly configured VRAM totals
  */
 
-const Host = require('../../models/Host');
 const logger = require('../../config/logger');
 const { getFetchOptions } = require('../helpers/httpAgent');
-const { getConfiguredHosts, parseHostIp } = require('../helpers/ollamaHostConfig');
+const { getConfiguredHosts } = require('../helpers/ollamaHostConfig');
 const ollamaVramService = require('./ollamaVramService');
 
 const DEFAULT_INTERVAL_MS = 60_000;
@@ -21,7 +18,6 @@ const FETCH_TIMEOUT_MS = 5_000;
 
 let _interval = null;
 let _state = new Map(); // hostKey → last poll result (for API consumers)
-const _missingHostLogCache = new Set();
 
 const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
 
@@ -57,43 +53,6 @@ async function fetchVersion(hostUrl) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   return data.version || '';
-}
-
-// ── Host matching ─────────────────────────────────────────
-
-async function findMatchingHost(hostConfig) {
-  const hostIp = parseHostIp(hostConfig.url);
-  const configuredName = String(hostConfig.name || '').trim();
-  const matchers = [
-    { ollamaHostKey: hostConfig.id },
-    { ollamaUrl: hostConfig.url }
-  ];
-
-  if (hostIp) {
-    matchers.push({ ip: hostIp });
-  }
-
-  if (configuredName) {
-    const configuredNameRegex = new RegExp(`^${escapeRegex(configuredName)}$`, 'i');
-    matchers.push({ hostname: configuredNameRegex });
-    matchers.push({ hostId: configuredNameRegex });
-  }
-
-  return Host.findOne({ $or: matchers });
-}
-
-function escapeRegex(value) {
-  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// ── VRAM from agent heartbeat ─────────────────────────────
-
-function getAgentGpuVram(host) {
-  if (!host.gpus || host.gpus.length === 0) return null;
-  const totalMiB = host.gpus.reduce((s, g) => s + (g.vramTotal || 0), 0);
-  const usedMiB = host.gpus.reduce((s, g) => s + (g.vramUsed || 0), 0);
-  if (totalMiB <= 0) return null;
-  return { totalMiB, usedMiB, source: 'agent-gpu' };
 }
 
 // ── Poll a single host ───────────────────────────────────
@@ -150,7 +109,7 @@ async function pollHost(hostConfig) {
     const modelVramBytes = runningModels.reduce((s, m) => s + (m.size_vram || 0), 0);
     const modelVramMiB = Math.round(modelVramBytes / (1024 * 1024));
 
-    // Try SSH VRAM detection
+    // Read an explicit product configuration; no host probing is performed.
     try {
       const vramResult = await ollamaVramService.getHostVram(hostConfig.url);
       if (vramResult.ok && vramResult.memoryTotalMiBTotal > 0) {
@@ -158,12 +117,12 @@ async function pollHost(hostConfig) {
           totalMiB: vramResult.memoryTotalMiBTotal,
           usedMiB: vramResult.memoryUsedMiBTotal || 0,
           modelVramMiB,
-          source: vramResult._source || 'ssh-nvidia-smi'
+          source: vramResult._source || 'configured-profile'
         };
       }
-    } catch { /* SSH VRAM not available */ }
+    } catch { /* Explicit VRAM configuration is optional. */ }
 
-    // If no SSH VRAM, set modelVramMiB only
+    // If no configured total exists, retain only Ollama's loaded-model value.
     if (!result.vram) {
       result.vram = { totalMiB: 0, usedMiB: 0, modelVramMiB, source: '' };
     }
@@ -172,51 +131,6 @@ async function pollHost(hostConfig) {
   }
 
   return result;
-}
-
-// ── Write results to Host doc ─────────────────────────────
-
-async function writeToHost(hostConfig, pollResult) {
-  const host = await findMatchingHost(hostConfig);
-  if (!host) {
-    const cacheKey = `${hostConfig.id}:${hostConfig.url}`;
-    if (!_missingHostLogCache.has(cacheKey)) {
-      _missingHostLogCache.add(cacheKey);
-      logger.debug('Ollama Enrichment: No matching Host doc for configured host', {
-        hostKey: hostConfig.id,
-        name: hostConfig.name,
-        url: hostConfig.url
-      });
-    }
-    return;
-  }
-
-  _missingHostLogCache.delete(`${hostConfig.id}:${hostConfig.url}`);
-
-  const update = {
-    ollamaUrl: hostConfig.url,
-    ollamaStatus: pollResult.status,
-    ollamaModels: pollResult.models,
-    ollamaRunningModels: pollResult.runningModels,
-    ollamaModelCount: pollResult.modelCount,
-    ollamaVersion: pollResult.version,
-    ollamaLatencyMs: pollResult.latencyMs,
-    ollamaLastChecked: new Date(),
-    ollamaHostKey: hostConfig.id
-  };
-
-  // VRAM: prefer SSH/override, fall back to agent heartbeat GPUs
-  if (pollResult.vram && pollResult.vram.totalMiB > 0) {
-    update.ollamaVram = pollResult.vram;
-  } else {
-    const agentVram = getAgentGpuVram(host);
-    if (agentVram) {
-      agentVram.modelVramMiB = pollResult.vram?.modelVramMiB || 0;
-      update.ollamaVram = agentVram;
-    }
-  }
-
-  await Host.updateOne({ _id: host._id }, { $set: update });
 }
 
 // ── Poll cycle ────────────────────────────────────────────
@@ -229,7 +143,6 @@ async function pollAll() {
     try {
       const result = await pollHost(hostConfig);
       _state.set(hostConfig.id, result);
-      await writeToHost(hostConfig, result);
     } catch (err) {
       logger.warn('Ollama Enrichment: poll failed', { hostKey: hostConfig.id, error: err.message });
     }

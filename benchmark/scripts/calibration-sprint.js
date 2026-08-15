@@ -5,7 +5,7 @@
  * result as the active CalibrationBaseline (0129 loop).
  *
  *   node scripts/calibration-sprint.js \
- *     [--judge-model=qwen2.5:14b-instruct-q4_K_M] [--judge-host=http://192.0.2.12:11434] \
+ *     [--judge-model=qwen2.5:14b-instruct-q4_K_M] [--judge-host=http://127.0.0.1:11434] \
  *     [--category=math] [--limit=N] [--no-config] [--materialize-config] \
  *     [--stamp] [--ratify] [--label=baseline-2026-06-12]
  *

@@ -23,10 +23,10 @@ describe('analytics effectiveness API', () => {
 
   test('returns the source-separated effectiveness snapshot', async () => {
     service.readEffectivenessSnapshot.mockResolvedValue({ ok: true, summary: { productiveOutcomes: 3 } });
-    const response = await request(app()).get('/api/analytics/effectiveness?window=7d&runtime=hermes');
+    const response = await request(app()).get('/api/analytics/effectiveness?window=7d&runtime=external');
     expect(response.status).toBe(200);
     expect(response.body.summary.productiveOutcomes).toBe(3);
-    expect(service.readEffectivenessSnapshot).toHaveBeenCalledWith({ window: '7d', runtime: 'hermes' });
+    expect(service.readEffectivenessSnapshot).toHaveBeenCalledWith({ window: '7d', runtime: 'external' });
   });
 
   test('rejects an unknown runtime before querying storage', async () => {

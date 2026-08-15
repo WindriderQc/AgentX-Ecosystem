@@ -6,8 +6,6 @@ const PromptConfig = require('../../models/PromptConfig');
 const { getOrCreateProfile } = require('../../src/helpers/userHelpers');
 const { extractResponse, buildOllamaPayload } = require('../../src/helpers/ollamaResponseHandler');
 const { sanitizeOptions, resolveTarget } = require('../../src/helpers/ollamaUtils');
-const { tryHandleToolCommand } = require('../../src/services/toolService');
-const { executeTool, parseToolCalls } = require('../../src/services/toolExecutor');
 const { routeRequest, recordInference } = require('../../src/services/modelRouter');
 const hostPreferenceService = require('../../src/services/hostPreferenceService');
 const { calculateMessageCost, calculateConversationCost } = require('../../src/services/costCalculator');
@@ -45,8 +43,6 @@ jest.mock('../../models/PromptConfig', () => ({
 jest.mock('../../src/helpers/userHelpers');
 jest.mock('../../src/helpers/ollamaResponseHandler');
 jest.mock('../../src/helpers/ollamaUtils');
-jest.mock('../../src/services/toolService');
-jest.mock('../../src/services/toolExecutor');
 jest.mock('../../src/services/modelRouter');
 jest.mock('../../src/services/hostPreferenceService', () => {
     const primitives = jest.requireActual('../../src/services/hostPinPrimitives');
@@ -138,11 +134,6 @@ describe('chatService', () => {
         // Routing defaults
         routeRequest.mockResolvedValue({ routed: false, model: 'llama2', target: 'local' });
         hostPreferenceService.getByHost.mockResolvedValue(null);
-        // Tool defaults
-        tryHandleToolCommand.mockResolvedValue(null);
-        parseToolCalls.mockReturnValue(null);
-        executeTool.mockResolvedValue({ status: 'success', data: 'tool result' });
-
         // Cost calculation defaults
         calculateMessageCost.mockResolvedValue(mockCost);
         calculateConversationCost.mockReturnValue({ sum: 0.0002 });
@@ -384,48 +375,6 @@ describe('chatService', () => {
                 status: 'error',
                 routeDecision: decision
             }));
-        });
-    });
-
-    describe('Tool Execution', () => {
-        it('should handle command-line style tools (tryHandleToolCommand)', async () => {
-            tryHandleToolCommand.mockResolvedValue({
-                responseText: 'Command executed',
-                ok: true,
-                tool: 'calculator'
-            });
-
-            const request = {
-                userId: 'user123',
-                model: 'llama2',
-                message: '/calc 2+2'
-            };
-
-            const result = await handleChatRequest(request);
-
-            expect(tryHandleToolCommand).toHaveBeenCalledWith('/calc 2+2');
-            expect(result.response).toBe('Command executed');
-            expect(result.toolOk).toBe(true);
-            // Verify normal chat flow (ollama fetch) was SKIPPED
-            expect(mockFetch).not.toHaveBeenCalled();
-        });
-
-        it('should handle LLM-initiated tool calls', async () => {
-            parseToolCalls.mockReturnValue({ tool: 'weather', params: { city: 'London' } });
-            executeTool.mockResolvedValue({ status: 'success', data: { temp: 20 } });
-
-            const request = {
-                userId: 'user123',
-                model: 'llama2',
-                message: 'Check weather'
-            };
-
-            const result = await handleChatRequest(request);
-
-            expect(parseToolCalls).toHaveBeenCalledWith('Test response');
-            expect(executeTool).toHaveBeenCalledWith('weather', { city: 'London' });
-            expect(result.response).toContain('Tool Execution');
-            expect(result.response).toContain('Test response'); // Assuming result is appended
         });
     });
 

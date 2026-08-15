@@ -14,7 +14,7 @@ const AgentTurnSchema = new mongoose.Schema({
   role: { type: String, required: true },
   round: { type: Number, required: true },
   model: { type: String, required: true },
-  runtime: { type: String, enum: ['model', 'openclaw', 'hermes', 'codex'], default: 'model' },
+  runtime: { type: String, enum: ['model', 'codex'], default: 'model' },
   runtimeRef: { type: String, default: null },
   target: { type: String, default: null },
   hostName: { type: String, default: null },
@@ -44,7 +44,7 @@ const RuntimeConfigSchema = new mongoose.Schema({
 const PanelAgentConfigSchema = new mongoose.Schema({
   agentId: { type: String, required: true },
   role: { type: String, required: true },
-  runtime: { type: String, enum: ['model', 'openclaw', 'hermes', 'codex'], default: 'model' },
+  runtime: { type: String, enum: ['model', 'codex'], default: 'model' },
   model: { type: String, default: 'runtime-managed' },
   runtimeConfig: { type: RuntimeConfigSchema, default: () => ({}) },
   systemPrompt: { type: String, required: true },

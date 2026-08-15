@@ -169,44 +169,6 @@ describe('ReportsServiceClient', () => {
     });
   });
 
-  describe('fetchDataHealth', () => {
-    it('should call localhost:3083/health and return data', async () => {
-      const mockData = { status: 'ok', uptime: 3600 };
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: async () => ({ status: 'success', data: mockData })
-      });
-
-      const result = await client.fetchDataHealth();
-
-      expect(result).toEqual(mockData);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(mockFetch.mock.calls[0][0]).toContain('localhost:3083');
-      expect(mockFetch.mock.calls[0][0]).toContain('/health');
-    });
-
-    it('should return null when data service is unreachable', async () => {
-      mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
-
-      const result = await client.fetchDataHealth();
-      expect(result).toBeNull();
-    });
-
-    it('should respect DATAAPI_BASE_URL env var', async () => {
-      const orig = process.env.DATAAPI_BASE_URL;
-      process.env.DATAAPI_BASE_URL = 'http://custom-data:3083';
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: async () => ({ data: {} })
-      });
-
-      await client.fetchDataHealth();
-
-      expect(mockFetch.mock.calls[0][0]).toContain('http://custom-data:3083');
-      restoreEnv('DATAAPI_BASE_URL', orig);
-    });
-  });
-
   describe('other fetch methods — graceful null on failure', () => {
     it('fetchBenchmarkTrends returns null on ECONNREFUSED', async () => {
       mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));

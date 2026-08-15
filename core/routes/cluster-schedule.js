@@ -1,8 +1,8 @@
 /**
  * Cluster Schedule Routes
  *
- * Unified view of scheduled tasks across the cluster:
- * OpenClaw cron jobs, AgentX internal timers, persistent GPU loads.
+ * Unified view of Agent X timers, bounded external schedules, and persistent
+ * GPU loads. External schedulers remain outside this repository.
  *
  * Mounted at /api/cluster
  */

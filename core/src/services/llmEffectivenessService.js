@@ -13,7 +13,7 @@ const {
 const VERDICTS = new Set(['success', 'partial', 'failure', 'abandoned']);
 const OUTCOME_TYPES = new Set(['task', 'deployment', 'incident', 'benchmark', 'document', 'conversation', 'other']);
 const VERIFICATION_METHODS = new Set(['none', 'automated-tests', 'operator-review', 'deployment', 'benchmark', 'external']);
-const USAGE_SOURCES = new Set(['none', 'reported', 'agentx-inference', 'openclaw', 'hermes', 'codex', 'provider']);
+const USAGE_SOURCES = new Set(['none', 'reported', 'agentx-inference', 'external', 'codex', 'provider']);
 const FORBIDDEN_PAYLOAD_KEYS = new Set(['prompt', 'response', 'content', 'messages', 'transcript', 'tooloutput', 'tool_output']);
 const WINDOW_MS = {
   '1h': 60 * 60 * 1000,
@@ -157,8 +157,6 @@ function pipelineRuntime(assignee) {
   const value = String(assignee || '').toLowerCase();
   if (value.includes('codex')) return 'codex';
   if (value.includes('claude')) return 'claude-code';
-  if (value.includes('hermes')) return 'hermes';
-  if (value.includes('openclaw') || value.includes('clawdx') || ['main', 'leadx', 'overseer'].includes(value)) return 'openclaw';
   if (value.includes('agentx') || value.includes('terminal-ops')) return 'agentx';
   return 'other';
 }

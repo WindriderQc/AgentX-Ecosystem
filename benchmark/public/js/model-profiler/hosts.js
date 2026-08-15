@@ -30,17 +30,8 @@ function normalizeGpuName(name) {
     .trim();
 }
 
-function getHostIdentityName(host, probeState) {
-  const configuredName = host.displayName || host.hostId || 'host';
-  const agentName = probeState?.agent?.hostname;
-
-  // Some configured names include hardware to disambiguate same-hostname boxes.
-  // Once the live agent reports the real hostname, show hardware separately.
-  if (agentName && configuredName.toLowerCase().startsWith(`${agentName.toLowerCase()}-`)) {
-    return agentName;
-  }
-
-  return configuredName;
+function getHostIdentityName(host) {
+  return host.displayName || host.hostId || 'host';
 }
 
 function summarizeGpuNames(gpus, fallbackName) {
@@ -395,20 +386,19 @@ function fmtMiB(mib) {
 function getHostVramDisplay(host, probeState) {
   const baselineUsed = host.gpu?.vramUsedMiB || host.baseline?.vramUsedMiB || 0;
   const telemetry = probeState?.telemetry || {};
-  const agentLive = !!probeState?.agent?.ok;
   const source = String(telemetry.source || '');
   const liveTotal = Number(telemetry.vramTotalMiB || 0);
   const liveUsed = Number(telemetry.vramUsedMiB || 0);
   const used = liveUsed || baselineUsed;
 
-  if (agentLive && liveTotal > 0) {
+  if (liveTotal > 0) {
     return {
       total: liveTotal,
       used,
       stat: fmtMiB(liveTotal),
       totalLabel: `${fmtMiB(liveTotal)} live`,
       usedLabel: `${fmtMiB(used)} used`,
-      title: `${fmtMiB(used)} / ${fmtMiB(liveTotal)} live (${source || 'host-agent'})`
+      title: `${fmtMiB(used)} / ${fmtMiB(liveTotal)} (${source || 'configured profile'})`
     };
   }
 
@@ -419,23 +409,23 @@ function getHostVramDisplay(host, probeState) {
       stat: 'N/D',
       totalLabel: 'N/D total',
       usedLabel: `${fmtMiB(liveUsed)} loaded`,
-      title: 'Ollama reports loaded VRAM, but host runner is needed for total VRAM.'
+      title: 'Ollama reports loaded VRAM; configure the host profile to record total VRAM.'
     };
   }
 
   return {
     total: 0,
     used: 0,
-    stat: 'runner needed',
-    totalLabel: 'runner needed',
+    stat: 'N/D',
+    totalLabel: 'N/D total',
     usedLabel: '— live used',
-    title: 'Host runner is needed for live VRAM telemetry.'
+    title: 'No running-model VRAM or configured total is available.'
   };
 }
 
-function formatProbeVram(telemetry, agent) {
+function formatProbeVram(telemetry) {
   const used = telemetry.vramUsedMiB != null ? fmtMiB(telemetry.vramUsedMiB) : null;
-  const total = telemetry.vramTotalMiB != null && agent?.ok ? fmtMiB(telemetry.vramTotalMiB) : null;
+  const total = telemetry.vramTotalMiB != null ? fmtMiB(telemetry.vramTotalMiB) : null;
   if (used && total) return `${used} / ${total}`;
   if (used) return `${used} loaded / N/D total`;
   return 'N/D';
@@ -457,18 +447,10 @@ function uniqueProbeMessages(messages) {
     });
 }
 
-function buildProbeAlerts({ agent, telemetry }) {
+function buildProbeAlerts({ telemetry }) {
   const diagnostics = telemetry?.diagnostics || {};
   const notes = Array.isArray(diagnostics.notes) ? diagnostics.notes : [];
   const alerts = [];
-
-  if (!agent?.ok) {
-    alerts.push({
-      tone: 'critical',
-      title: 'Host runner is not reporting',
-      detail: 'Profiler can still use Ollama, but GPU name, PCIe link, utilization, power, temperature, topology, and true per-GPU VRAM are unavailable.'
-    });
-  }
 
   if (telemetry?.actionRequired && telemetry?.error) {
     alerts.push({
@@ -483,14 +465,14 @@ function buildProbeAlerts({ agent, telemetry }) {
     alerts.push({
       tone: 'warn',
       title: 'Using fallback telemetry',
-      detail: `Source is ${fallbackSource}; total VRAM is hidden until host-agent confirms live hardware telemetry.`
+      detail: `Source is ${fallbackSource}; the product reports only Ollama runtime data and explicitly configured host metadata.`
     });
   }
 
   for (const note of uniqueProbeMessages(notes)) {
     if (note === telemetry?.error) continue;
     alerts.push({
-      tone: /ssh|runner|host-agent|reported vram|pressure/i.test(note) ? 'warn' : 'info',
+      tone: /reported vram|pressure/i.test(note) ? 'warn' : 'info',
       title: 'Hardware note',
       detail: note
     });
@@ -509,12 +491,12 @@ function renderProbeAlerts(alerts) {
   </div>`;
 }
 
-function renderProbePanel(result, { showPlan = false } = {}) {
+function renderProbePanel(result) {
   if (!result) {
-    return `<div class="mp-probe-panel"><div class="mp-probe-title">Live probes <span>Checking runner...</span></div></div>`;
+    return `<div class="mp-probe-panel"><div class="mp-probe-title">Live probes <span>Checking runtime...</span></div></div>`;
   }
   if (result.loading) {
-    return `<div class="mp-probe-panel"><div class="mp-probe-title">Live probes <span>Checking runner...</span></div></div>`;
+    return `<div class="mp-probe-panel"><div class="mp-probe-title">Live probes <span>Checking runtime...</span></div></div>`;
   }
   if (result.error) {
     return `<div class="mp-probe-panel mp-probe-panel--error">
@@ -524,15 +506,13 @@ function renderProbePanel(result, { showPlan = false } = {}) {
   }
 
   const telemetry = result.telemetry || {};
-  const agent = result.agent || {};
   const ollama = result.ollama || {};
   const statusLabel = result.status === 'ready' ? 'Ready' : result.status === 'offline' ? 'Offline' : 'Partial';
-  const plan = result.install || {};
-  const vram = formatProbeVram(telemetry, agent);
+  const vram = formatProbeVram(telemetry);
   const running = Array.isArray(telemetry.runningModels) && telemetry.runningModels.length
     ? telemetry.runningModels.map(m => m.name).slice(0, 3).join(', ')
     : 'none';
-  const alerts = buildProbeAlerts({ agent, telemetry });
+  const alerts = buildProbeAlerts({ telemetry });
   const panelClass = alerts.some(alert => alert.tone === 'critical')
     ? 'mp-probe-panel mp-probe-panel--critical'
     : alerts.length ? 'mp-probe-panel mp-probe-panel--warn'
@@ -542,26 +522,15 @@ function renderProbePanel(result, { showPlan = false } = {}) {
     <div class="mp-probe-title">Live probes <span>${esc(statusLabel)}</span></div>
     <div class="mp-probe-pills">
       ${probePill('Ollama', !!ollama.ok, ollama.ok ? `${ollama.modelCount || 0} models` : (ollama.error || 'unreachable'))}
-      ${probePill('Agent', !!agent.ok, agent.ok ? `${agent.hostname || agent.hostId || 'live'} ${agent.ageSeconds ?? '?'}s` : (agent.reason || 'missing'))}
       ${probePill('GPU', !!telemetry.ok, telemetry.ok ? `${telemetry.source || 'live'} ${vram}` : 'no telemetry')}
     </div>
     ${renderProbeAlerts(alerts)}
     <div class="mp-probe-grid">
-      <div><span>Core</span><strong>${esc(result.core?.url || '—')}</strong></div>
+      <div><span>Host</span><strong>${esc(result.hostUrl || '—')}</strong></div>
       <div><span>GPU</span><strong>${esc(telemetry.gpuName || telemetry.source || '—')}</strong></div>
       <div><span>Util</span><strong>${telemetry.utilization == null ? '—' : `${telemetry.utilization}%`}</strong></div>
       <div><span>Running</span><strong>${esc(running)}</strong></div>
     </div>
-    ${showPlan ? `<div class="mp-probe-plan">
-      <div class="mp-probe-plan-title">Linux</div>
-      <pre>${esc((plan.linux || []).join('\n'))}</pre>
-      ${Array.isArray(plan.linuxSystemd) && plan.linuxSystemd.length ? `
-      <div class="mp-probe-plan-title">Linux systemd (reboot-resistant)</div>
-      <pre>${esc(plan.linuxSystemd.join('\n'))}</pre>` : ''}
-      <div class="mp-probe-plan-title">Windows PowerShell</div>
-      <pre>${esc((plan.windows || []).join('\n'))}</pre>
-      <div class="mp-probe-foot">${esc(plan.reason || '')}</div>
-    </div>` : ''}
   </div>`;
 }
 
@@ -583,9 +552,7 @@ function buildHostCard(host, state) {
   const modelCount = host.modelCount ?? host.models?.length ?? null;
   const note = buildActionCopy(host, runState);
   const profileQueueRunning = !!getActiveHostProfileQueue(state, host.hostId);
-  const runnerNeedsFix = probeState?.agent && !probeState.agent.ok || probeState?.telemetry?.actionRequired;
-  const installButtonLabel = runnerNeedsFix ? 'Fix Runner' : 'Install Plan';
-  const identityName = getHostIdentityName(host, probeState);
+  const identityName = getHostIdentityName(host);
   const hardwareSummary = getHostHardwareSummary(host, probeState);
 
   // VRAM bar
@@ -671,12 +638,6 @@ function buildHostCard(host, state) {
           data-host-id="${esc(host.hostId)}"
         >
           Validate Probes
-        </button>
-        <button
-          class="mp-action mp-host-install-plan"
-          data-host-id="${esc(host.hostId)}"
-        >
-          ${installButtonLabel}
         </button>
         <button
           class="mp-action mp-host-fit-report"
@@ -932,13 +893,6 @@ function patchProbeSlot(container, state, hostId, options = {}) {
   const slot = card?.querySelector('.mp-probe-slot');
   if (!slot) return;
   slot.innerHTML = renderProbePanel(getProbeState(state, hostId), options);
-  const installBtn = card.querySelector('.mp-host-install-plan');
-  const probeState = getProbeState(state, hostId);
-  if (installBtn && probeState && !probeState.loading) {
-    installBtn.textContent = (probeState.agent && !probeState.agent.ok) || probeState.telemetry?.actionRequired
-      ? 'Fix Runner'
-      : 'Install Plan';
-  }
 }
 
 function patchHostVramDisplay(container, state, host) {
@@ -1061,19 +1015,18 @@ function wireActions(container, state, api) {
       return;
     }
 
-    const validateProbeBtn = e.target.closest('.mp-host-validate-probes, .mp-host-install-plan');
+    const validateProbeBtn = e.target.closest('.mp-host-validate-probes');
     if (validateProbeBtn) {
       const hostId = validateProbeBtn.dataset.hostId;
-      const showPlan = validateProbeBtn.classList.contains('mp-host-install-plan');
       validateProbeBtn.disabled = true;
       const originalText = validateProbeBtn.textContent;
-      validateProbeBtn.textContent = showPlan ? 'Loading Plan...' : 'Validating...';
+      validateProbeBtn.textContent = 'Validating...';
       setProbeState(state, hostId, { loading: true });
       patchProbeSlot(container, state, hostId);
       try {
         const status = await api.getLiveProbeStatus(hostId);
         setProbeState(state, hostId, status?.data || status);
-        patchProbeSlot(container, state, hostId, { showPlan });
+        patchProbeSlot(container, state, hostId);
       } catch (err) {
         setProbeState(state, hostId, { error: err.message || 'Probe validation failed' });
         patchProbeSlot(container, state, hostId);

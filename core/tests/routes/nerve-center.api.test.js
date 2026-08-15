@@ -107,23 +107,12 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
   listBenchmarkClaims: jest.fn()
 }));
 
-jest.mock('../../src/services/agentRuntimeConfigService', () => ({
-  buildAgentRuntimeConfigExport: jest.fn(),
-  validateRuntimeConfigs: jest.fn()
-}));
-
-const mockBuildEcosystemSnapshot = jest.fn();
-jest.mock('../../src/services/ecosystemSnapshotService', () => ({
-  buildEcosystemSnapshot: (...args) => mockBuildEcosystemSnapshot(...args)
-}));
-
 // ── Require modules AFTER mocks ─────────────────────────────────────────────
 const express = require('express');
 const request = require('supertest');
 
 const alertService = require('../../src/services/alertService');
 const hostPrefService = require('../../src/services/hostPreferenceService');
-const agentRuntimeConfigService = require('../../src/services/agentRuntimeConfigService');
 const {
   HOSTS,
   TASK_MODELS,
@@ -155,157 +144,12 @@ describe('Nerve Center API Routes', () => {
     hostPrefService.reload.mockResolvedValue();
     hostPrefService.getHealthCheckIntervalMs.mockReturnValue(30000);
     hostPrefService.getPinnedEntries.mockImplementation((pref) => pref.pinnedModels || []);
-    agentRuntimeConfigService.buildAgentRuntimeConfigExport.mockResolvedValue({
-      lanes: { daily: { model: 'ax/gemma4:26b-a4b-it-qat', contextSize: 65536 } }
-    });
-    agentRuntimeConfigService.validateRuntimeConfigs.mockReturnValue({
-      hermes: { status: 'ok', drift: [] },
-      openclaw: { status: 'ok', drift: [] }
-    });
-    mockBuildEcosystemSnapshot.mockResolvedValue({
-      status: 'ok',
-      generatedAt: '2026-07-02T00:00:00.000Z',
-      sources: {},
-      runtimes: {},
-      hosts: {},
-      agents: {},
-      models: {},
-      rag: {},
-      prompts: {},
-      memory: {},
-      schedules: {},
-      pipeline: {},
-      alerts: {},
-      drift: [],
-      recommendations: []
-    });
 
     // Restore config objects to original state
     Object.keys(TASK_MODELS).forEach(k => delete TASK_MODELS[k]);
     Object.assign(TASK_MODELS, JSON.parse(JSON.stringify(ORIGINAL_TASK_MODELS)));
 
     await resetAllTaskModelOverrides();
-  });
-
-  describe('GET /agent-runtime-config/export', () => {
-    it('returns the generated Hermes/OpenClaw runtime export', async () => {
-      const res = await request(app)
-        .get('/api/nerve-center/agent-runtime-config/export?coreBaseUrl=http://agentx.test:3080')
-        .expect(200);
-
-      expect(res.body.status).toBe('success');
-      expect(res.body.data.lanes.daily.model).toBe('ax/gemma4:26b-a4b-it-qat');
-      expect(agentRuntimeConfigService.buildAgentRuntimeConfigExport).toHaveBeenCalledWith({
-        coreBaseUrl: 'http://agentx.test:3080',
-        includeCandidates: true
-      });
-    });
-  });
-
-  describe('POST /agent-runtime-config/validate', () => {
-    it('returns expected config plus validation result', async () => {
-      const res = await request(app)
-        .post('/api/nerve-center/agent-runtime-config/validate?includeCandidates=false')
-        .send({ hermesConfig: { model: { default: 'x' } }, openclawConfig: {} })
-        .expect(200);
-
-      expect(res.body.status).toBe('success');
-      expect(res.body.data.validation.hermes.status).toBe('ok');
-      expect(agentRuntimeConfigService.buildAgentRuntimeConfigExport).toHaveBeenCalledWith({
-        coreBaseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/),
-        includeCandidates: false
-      });
-      expect(agentRuntimeConfigService.validateRuntimeConfigs).toHaveBeenCalledWith(
-        expect.objectContaining({ lanes: expect.any(Object) }),
-        { hermesConfig: { model: { default: 'x' } }, openclawConfig: {} }
-      );
-    });
-  });
-
-  describe('GET /ecosystem', () => {
-    it('returns the sanitized ecosystem snapshot', async () => {
-      const res = await request(app)
-        .get('/api/nerve-center/ecosystem')
-        .expect(200);
-
-      expect(res.body.status).toBe('success');
-      expect(res.body.data).toHaveProperty('generatedAt');
-      expect(res.body.data).toHaveProperty('sources');
-      expect(res.body.data).toHaveProperty('drift');
-      expect(mockBuildEcosystemSnapshot).toHaveBeenCalledWith(expect.objectContaining({
-        coreBaseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/)
-      }));
-    });
-
-    it('preserves source-of-truth fields for docs/runtime alignment', async () => {
-      mockBuildEcosystemSnapshot.mockResolvedValueOnce({
-        status: 'ok',
-        generatedAt: '2026-07-03T00:00:00.000Z',
-        sources: {
-          runtime: { status: 'ok' },
-          pipeline: { status: 'ok' }
-        },
-        runtimes: {
-          hermes: {
-            expected: { model: 'openrouter/z-ai/glm-5.2', contextLength: 131072 },
-            authority: { status: 'drifted', live: { configValidation: 'protected' } }
-          },
-          openclaw: {
-            expected: { providerId: 'ollama', apiBase: 'http://192.0.2.99:3080/api/openclaw-ollama' },
-            registryPolicy: {
-              mcpSkillBus: { tools: ['agentx__ecosystem_snapshot'] },
-              providerAliases: [{ id: 'host-alpha-ollama', aliasOf: 'ollama' }],
-              contextOverrides: [{ provider: 'host-alpha-ollama', model: 'ax/qwen3-coder:30b', contextWindow: 74854 }]
-            }
-          }
-        },
-        hosts: {
-          preferences: [
-            { displayName: 'Host Alpha', hostKey: 'primary' },
-            { displayName: 'Host Beta', hostKey: 'secondary' },
-            { displayName: 'Host Gamma', hostKey: 'tertiary' }
-          ]
-        },
-        agents: {},
-        models: {},
-        rag: {},
-        prompts: { count: 2, activeCount: 1, configs: [] },
-        memory: {},
-        schedules: {},
-        pipeline: { sourceOfTruth: 'mongodb:pipelinetasks', counts: { queued: 1 }, active: [] },
-        alerts: {},
-        drift: [{
-          id: 'hermes-live-config-protected',
-          severity: 'medium',
-          owner: '0330',
-          current: 'protected',
-          expected: 'validated_or_documented_override'
-        }],
-        recommendations: [{ owner: '0330', driftCount: 1 }]
-      });
-
-      const res = await request(app)
-        .get('/api/nerve-center/ecosystem')
-        .expect(200);
-
-      expect(res.body.status).toBe('success');
-      expect(res.body.data.pipeline.sourceOfTruth).toBe('mongodb:pipelinetasks');
-      expect(res.body.data.hosts.preferences).toEqual(expect.arrayContaining([
-        expect.objectContaining({ displayName: 'Host Alpha', hostKey: 'primary' }),
-        expect.objectContaining({ displayName: 'Host Beta', hostKey: 'secondary' }),
-        expect.objectContaining({ displayName: 'Host Gamma', hostKey: 'tertiary' })
-      ]));
-      expect(res.body.data.runtimes.hermes.expected.model).toBe('openrouter/z-ai/glm-5.2');
-      expect(res.body.data.runtimes.openclaw.registryPolicy.mcpSkillBus.tools)
-        .toContain('agentx__ecosystem_snapshot');
-      expect(res.body.data.prompts).toEqual(expect.objectContaining({
-        count: 2,
-        activeCount: 1
-      }));
-      expect(res.body.data.drift).toEqual([
-        expect.objectContaining({ id: 'hermes-live-config-protected', owner: '0330' })
-      ]);
-    });
   });
 
   // ════════════════════════════════════════════════════════════════════════

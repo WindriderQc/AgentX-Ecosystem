@@ -4,9 +4,6 @@ const DEFAULT_PUBLIC_URLS = Object.freeze({
   core: 'http://localhost:3080',
   benchmark: 'http://localhost:3081',
   rag: 'http://localhost:3082',
-  data: 'http://localhost:3083',
-  hermes: '',
-  openclawControl: '',
 });
 
 function normalizeUrl(value) {
@@ -25,9 +22,6 @@ function getPublicUrls(env = process.env) {
     core: env.CORE_PUBLIC_URL,
     benchmark: env.BENCHMARK_PUBLIC_URL,
     rag: env.RAG_PUBLIC_URL,
-    data: env.DATAAPI_PUBLIC_URL,
-    hermes: env.HERMES_PUBLIC_URL || env.HERMES_DASHBOARD_URL,
-    openclawControl: env.OPENCLAW_CONTROL_UI_PUBLIC_URL || env.OPENCLAW_GATEWAY_URL,
   });
 }
 

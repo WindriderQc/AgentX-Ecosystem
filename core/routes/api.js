@@ -8,15 +8,6 @@ const logger = require('../config/logger');
 router.use('/', require('./inference'));
 router.use('/', require('./chat'));
 
-// OpenClaw → Ollama claim-aware passthrough (task 0180). Forwards
-// OpenClaw runtime requests to Ollama only when no benchmark claim is
-// held on the upstream host. See routes/openclaw-ollama-proxy.js.
-router.use('/openclaw-ollama', require('./openclaw-ollama-proxy'));
-
-// Hermes → OpenAI-compatible Ollama passthrough. Hermes speaks `/v1/*`,
-// so it cannot use the OpenClaw Ollama-native proxy directly.
-router.use('/hermes-openai', require('./hermes-openai-proxy'));
-
 // DEBUG: Temporary endpoint to inspect conversation
 // SECURITY: Disabled in production, requires authentication
 router.get('/debug/conversation/:id', async (req, res) => {

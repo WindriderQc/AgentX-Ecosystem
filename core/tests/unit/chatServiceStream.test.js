@@ -48,13 +48,6 @@ jest.mock('../../src/helpers/ollamaUtils', () => ({
   sanitizeOptions: jest.fn((options) => ({ ...options })),
   resolveTarget: jest.fn((target) => target || 'http://192.0.2.66:11434')
 }));
-jest.mock('../../src/services/toolService', () => ({
-  tryHandleToolCommand: jest.fn(() => Promise.resolve(null))
-}));
-jest.mock('../../src/services/toolExecutor', () => ({
-  executeTool: jest.fn(),
-  parseToolCalls: jest.fn()
-}));
 jest.mock('../../src/services/modelRouter', () => ({
   routeRequest: jest.fn(),
   getTargetForModel: jest.fn(() => 'http://192.0.2.66:11434'),
@@ -87,7 +80,6 @@ jest.mock('../../models/Conversation', () => jest.fn());
 const { handleChatRequestStream } = require('../../src/services/chatServiceStream');
 const { routeRequest, recordInference } = require('../../src/services/modelRouter');
 const { buildOllamaPayload, buildOllamaStats } = require('../../src/helpers/ollamaResponseHandler');
-const { tryHandleToolCommand } = require('../../src/services/toolService');
 
 describe('chatServiceStream', () => {
   beforeEach(() => {
@@ -362,7 +354,7 @@ describe('chatServiceStream', () => {
     }));
   });
 
-  it('keeps authoritative stateless Nestor turns tool-free with exact telemetry', async () => {
+  it('keeps authoritative stateless external turns bounded with exact telemetry', async () => {
     routeRequest.mockResolvedValue({
       routed: true,
       model: 'ax/gemma4:26b-a4b-it-qat',
@@ -410,7 +402,6 @@ describe('chatServiceStream', () => {
       { preferSystem: true }
     );
     expect(onToken).toHaveBeenCalledWith('Bonjour.');
-    expect(tryHandleToolCommand).not.toHaveBeenCalled();
     expect(mockGetOrCreateProfile).not.toHaveBeenCalled();
     expect(mockPersistConversation).not.toHaveBeenCalled();
     expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({

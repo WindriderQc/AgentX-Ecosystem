@@ -12,14 +12,14 @@ const logger = require('../config/logger');
 // ============================================================================
 
 /**
- * CREATE / APPEND: Save messages to a conversation (used by OpenClaw chat).
+ * CREATE / APPEND: Save messages to an Agent X conversation.
  * POST /api/history
- * Body: { conversationId?, model, source?, openclawAgentId?, messages: [{role, content}] }
+ * Body: { conversationId?, model, source?, clientRef?, messages: [{role, content}] }
  */
 router.post('/', async (req, res) => {
     try {
         const userId = getUserId(res);
-        const { conversationId, model, source, openclawAgentId, messages } = req.body;
+        const { conversationId, model, source, clientRef, messages } = req.body;
 
         if (!messages || !Array.isArray(messages) || messages.length === 0) {
             return res.status(400).json({ status: 'error', message: 'messages array is required' });
@@ -42,12 +42,12 @@ router.post('/', async (req, res) => {
         }
 
         if (!conv) {
-            const title = messages[0]?.content?.slice(0, 60) || 'OpenClaw Chat';
+            const title = messages[0]?.content?.slice(0, 60) || 'Agent X Chat';
             conv = await Conversation.create({
                 userId,
                 model: model || 'unknown',
                 source: source || 'agentx',
-                openclawAgentId: openclawAgentId || undefined,
+                clientRef: clientRef || undefined,
                 messages: stamped,
                 title,
             });

@@ -19,7 +19,7 @@ const TASK_TYPE_METADATA = Object.freeze({
   voice_persona_reader: { title: 'Voice Persona Reader', description: 'Low-latency kid reading-aid turns from the KidX Lecteur persona pack.' },
   janitor_ai: { title: 'Janitor AI', description: 'Disk janitor advisory reasoning for storage cleanup workflows.' },
   embeddings: { title: 'Embeddings', description: 'Vectorization requests for retrieval and similarity workflows.' },
-  daily_operator: { title: 'Daily Operator', description: 'Direct-only Hermes/OpenClaw daily lane; hidden from user auto-routing.' },
+  daily_operator: { title: 'Daily Operator', description: 'Direct-only external automation lane; hidden from user auto-routing.' },
   nestor_answer_light: { title: 'Nestor Answer Light', description: 'Low-latency local Nestor answers on the dedicated pinned model and host.' }
 });
 

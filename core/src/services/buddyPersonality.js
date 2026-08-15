@@ -1,7 +1,6 @@
 // Server-side personality prompt builder for the buddy singleton.
-// Phase 6f: composes a soul string passed in by caller (which may have come
-// from AgentX local DB, Hermes SOUL, or an OpenClaw agent) with stats,
-// mood, event hint, and optional memory snippets.
+// Composes the AgentX-owned soul string with stats, mood, event hints, and
+// optional product memory snippets.
 
 const personalityAdapters = require('./personalityAdapters');
 
@@ -64,7 +63,7 @@ function buildSoulTemplate(buddy, soulOverride) {
   const name = b.name || 'Buddy';
   const rarity = b.rarity || 'common';
   const species = b.species || 'creature';
-  // Caller may pass an already-resolved soul (e.g. from Hermes/OpenClaw).
+  // Caller may pass an already-resolved AgentX soul.
   const soul = (typeof soulOverride === 'string' && soulOverride.trim())
     ? soulOverride.trim()
     : ((typeof b.soul === 'string' && b.soul.trim()) ? b.soul.trim() : '');

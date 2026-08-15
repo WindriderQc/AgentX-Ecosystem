@@ -167,14 +167,6 @@ function buildPersonalityWarnings(buddy, resolved) {
   const resolvedSource = (resolved && resolved.source) || 'standalone';
   const agentId = configuredAgentId(buddy);
 
-  if (configured === 'hermes' && agentId) {
-    warnings.push(warning(
-      'personality_agent_id_ignored',
-      'personality.agentId is ignored while Buddy uses Hermes; it only applies to OpenClaw personalities.',
-      { source: 'hermes', agentId, severity: 'info' }
-    ));
-  }
-
   if (configured !== resolvedSource) {
     warnings.push(warning(
       'personality_source_unavailable',
@@ -305,9 +297,9 @@ router.post('/singleton', async (req, res) => {
   if (stats && typeof stats === 'object') $set.stats = stats;
   if (personality && typeof personality === 'object') {
     const p = {};
-    if (['standalone', 'agentx', 'hermes', 'openclaw'].includes(personality.source)) p.source = personality.source;
+    if (['standalone', 'agentx'].includes(personality.source)) p.source = personality.source;
     if (typeof personality.agentId === 'string') {
-      p.agentId = p.source === 'openclaw' ? personality.agentId : '';
+      p.agentId = '';
     }
     if (Object.keys(p).length > 0) $set.personality = p;
   }
@@ -810,17 +802,15 @@ router.get('/hosts', (req, res) => {
 
 /**
  * GET /api/buddy/personality-sources
- * Returns metadata for the linkage UI: openclaw agents + reachability hints.
+ * Returns the product-owned personality sources available to Buddy.
  */
 router.get('/personality-sources', async (req, res) => {
   try {
-    const [openclawAgents, hermes] = await Promise.all([
-      personalityAdapters.listOpenclawAgents(),
-      personalityAdapters.getHermesPersonalitySourceStatus(),
-    ]);
     return envelope.success(res, {
-      openclawAgents,
-      hermes,
+      sources: [
+        { source: 'standalone', available: true },
+        { source: 'agentx', available: true, ref: 'agentx:buddy.soul' },
+      ],
     });
   } catch (err) {
     return envelope.error(res, 500, err.message);
@@ -895,7 +885,7 @@ router.post('/personality-preview', async (req, res) => {
     const personality = req.body && req.body.personality;
     if (personality && typeof personality === 'object') {
       const source = String(personality.source || '').trim();
-      if (!['standalone', 'agentx', 'hermes', 'openclaw'].includes(source)) {
+      if (!['standalone', 'agentx'].includes(source)) {
         return envelope.error(res, 400, 'invalid personality source');
       }
       candidate.personality = {

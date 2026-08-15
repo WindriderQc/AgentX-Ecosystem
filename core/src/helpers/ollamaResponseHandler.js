@@ -297,10 +297,9 @@ function stripReasoningFields(data) {
 /**
  * Normalize an Ollama response for AgentX application callers.
  *
- * The dedicated OpenClaw/Hermes proxy routes preserve raw upstream payloads.
- * This helper is for `/api/inference/generate`, Buddy, RAG, Data, and other
- * internal callers that need a stable final-answer contract instead of raw
- * Ollama reasoning fields.
+ * This helper is for `/api/inference/generate`, Buddy, RAG, and other product
+ * callers that need a stable final-answer contract instead of raw Ollama
+ * reasoning fields.
  */
 function normalizeOllamaResponse(data, model, options = {}) {
   const {

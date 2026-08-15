@@ -16,17 +16,12 @@
   const coreBase = service === 'core' ? '' : configuredBase('core');
   const benchBase = service === 'benchmark' ? '' : configuredBase('benchmark');
   const ragBase = service === 'rag' ? '' : configuredBase('rag');
-  const openclawBase = configuredBase(
-    'openclawControl',
-    typeof openclawControl === 'object' ? openclawControl.launchBaseUrl : ''
-  );
-
   /* Retired pages that fold into nerve-center */
   const retiredToNerveCenter = [
     'operations', 'hosts', 'cluster', 'alerts',
     'dashboard', 'alert-analytics', 'hardware-matrix'
   ];
-  const remapped = { 'cost-tracking': 'analytics', 'data-toolbox': 'storage' };
+  const remapped = { 'cost-tracking': 'analytics' };
 
   const raw = typeof activePage === 'string' ? activePage : '';
   const effectiveActive = remapped[raw]
@@ -38,15 +33,7 @@
     {
       label: 'Work', icon: 'fa-list-check', id: 'work-group',
       children: [
-        { label: 'Pipeline',     href: coreBase + '/pipeline',  icon: 'fa-list-check', id: 'pipeline' },
-        { label: 'Agent Ops handoff', href: coreBase + '/agent-ops', icon: 'fa-users-gear', id: 'agent-ops' },
-        {
-          label: 'Runtime Chat',
-          href: openclawBase
-            ? (service === 'core' ? '/api/openclaw/control-launch/chat' : openclawBase + '/chat')
-            : coreBase + '/agent-ops',
-          icon: 'fa-comments', id: 'openclaw-chat', external: !!openclawBase
-        }
+        { label: 'Pipeline',     href: coreBase + '/pipeline',  icon: 'fa-list-check', id: 'pipeline' }
       ]
     },
     {
@@ -69,8 +56,6 @@
         { label: 'Search',        href: ragBase + '/search',     icon: 'fa-magnifying-glass', id: 'rag-search' },
         { label: 'Documents',     href: ragBase + '/documents',  icon: 'fa-file-lines',       id: 'rag-documents' },
         { label: 'Upload',        href: ragBase + '/upload',     icon: 'fa-upload',           id: 'rag-upload' },
-        { section: 'Data estate' },
-        { label: 'Data Toolbox',  href: coreBase + '/data-toolbox#storage', icon: 'fa-database', id: 'storage' },
         { section: 'Agent memory' },
         { label: 'Memory Review', href: coreBase + '/memory-review', icon: 'fa-brain', id: 'memory-review' }
       ]

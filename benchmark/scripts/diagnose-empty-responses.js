@@ -7,16 +7,17 @@
  * model return nothing" — cross-references scoring_method, done_reason,
  * latency, tokens, and execution_settings.num_predict.
  *
- * Usage:   node scripts/diagnose-empty-responses.js
- * Require: MONGODB_URI env (falls back to 192.0.2.33:27017/agentx).
+ * Usage:   MONGODB_URI=mongodb://... node scripts/diagnose-empty-responses.js
+ * Requires an explicit MONGODB_URI.
  */
 
 require('dotenv').config();
 const mongoose = require('mongoose');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://192.0.2.33:27017/agentx';
+const MONGODB_URI = String(process.env.MONGODB_URI || '').trim();
 
 async function run() {
+    if (!MONGODB_URI) throw new Error('MONGODB_URI is required');
     await mongoose.connect(MONGODB_URI);
     const BenchmarkResult = require('../models/BenchmarkResult');
 

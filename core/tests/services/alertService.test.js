@@ -80,7 +80,7 @@ describe('AlertService', () => {
           severity: 'warning',
           title: 'Slow Response: {{component}}',
           message: 'Response time ({{value}}ms) exceeded threshold',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         },
         {
           id: 'error_rate_rule',
@@ -92,7 +92,7 @@ describe('AlertService', () => {
           severity: 'error',
           title: 'High Error Rate',
           message: 'Error rate is {{value}}',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         }
       ];
 
@@ -139,7 +139,7 @@ describe('AlertService', () => {
           severity: 'warning',
           title: 'Alert 1',
           message: 'Message 1',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         },
         {
           id: 'rule_2',
@@ -151,7 +151,7 @@ describe('AlertService', () => {
           severity: 'error',
           title: 'Alert 2',
           message: 'Message 2',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         }
       ];
 
@@ -182,7 +182,7 @@ describe('AlertService', () => {
           severity: 'info',
           title: 'Test Alert',
           message: 'Test message',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         }
       ];
 
@@ -222,7 +222,7 @@ describe('AlertService', () => {
           severity: 'info',
           title: 'Alert for {{component}} - {{metric}}',
           message: 'Value {{value}} exceeded threshold {{threshold}}',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         }
       ];
 
@@ -258,7 +258,7 @@ describe('AlertService', () => {
         title: 'Test Notification',
         message: 'Testing notifications',
         fingerprint: 'notif_test_fp',
-        channels: ['email', 'slack', 'webhook', 'dataapi_log']
+        channels: ['email', 'slack', 'webhook', 'local_log']
       });
 
       await alert.save();
@@ -269,7 +269,7 @@ describe('AlertService', () => {
       expect(results.email?.sent || results.email?.error).toBeTruthy();
       expect(results.slack?.sent || results.slack?.error).toBeTruthy();
       expect(results.webhook?.sent || results.webhook?.error).toBeTruthy();
-      expect(results.dataapi_log?.sent || results.dataapi_log?.error).toBeTruthy();
+      expect(results.local_log?.sent || results.local_log?.error).toBeTruthy();
     });
   });
 
@@ -411,7 +411,7 @@ describe('AlertService', () => {
           severity: 'warning',
           title: 'Concurrent Alert',
           message: 'Testing race condition',
-          channels: ['dataapi_log']
+          channels: ['local_log']
         }
       ];
       alertService.loadRules(rules);
@@ -555,8 +555,8 @@ describe('AlertService', () => {
     test('resolves active alerts past the window, keeps fresh ones', async () => {
       const stale = new Date(Date.now() - 60 * 60 * 1000);
       const fresh = new Date();
-      await Alert.create({ ruleId: 'r', ruleName: 'R', severity: 'critical', title: 'stale', message: 'm', fingerprint: 'fp-stale', status: 'active', channels: ['dataapi_log'], lastOccurrence: stale });
-      await Alert.create({ ruleId: 'r', ruleName: 'R', severity: 'critical', title: 'fresh', message: 'm', fingerprint: 'fp-fresh', status: 'active', channels: ['dataapi_log'], lastOccurrence: fresh });
+      await Alert.create({ ruleId: 'r', ruleName: 'R', severity: 'critical', title: 'stale', message: 'm', fingerprint: 'fp-stale', status: 'active', channels: ['local_log'], lastOccurrence: stale });
+      await Alert.create({ ruleId: 'r', ruleName: 'R', severity: 'critical', title: 'fresh', message: 'm', fingerprint: 'fp-fresh', status: 'active', channels: ['local_log'], lastOccurrence: fresh });
 
       const n = await alertService.resolveStaleAlerts(15 * 60 * 1000);
 
@@ -578,7 +578,7 @@ describe('AlertService', () => {
         title: 'incident',
         message: 'incident',
         status: 'active',
-        channels: ['dataapi_log'],
+        channels: ['local_log'],
         lastOccurrence: new Date()
       };
       await Alert.create([
@@ -631,7 +631,7 @@ describe('AlertService', () => {
         message: 'slow',
         fingerprint: 'still-slow',
         status: 'active',
-        channels: ['dataapi_log'],
+        channels: ['local_log'],
         context: { component: 'primary', additionalData: { host: 'http://primary:11434', model: 'model:1' } }
       });
 

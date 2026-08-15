@@ -167,7 +167,7 @@ function selectRetryCandidate(candidates = [], failedCandidate = {}) {
  * The shadow resolver owns hard filtering and deterministic scoring. The live
  * retry adds two stricter boundaries: a candidate must be explicitly online,
  * and its host key must be in the operator-approved fallback set. Unknown host
- * rows and the tertiary/Host Gamma host therefore fail closed before selection.
+ * rows and tertiary runtimes therefore fail closed before selection.
  */
 function resolveRetryCandidates(candidates = [], options = {}) {
   const allowedHostKeys = new Set(options.allowedHostKeys || ['primary', 'secondary']);

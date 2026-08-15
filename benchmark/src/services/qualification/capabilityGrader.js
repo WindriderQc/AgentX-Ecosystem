@@ -4,7 +4,7 @@
  * capabilityGrader — the single deterministic capability-tier decision engine
  * (task 0296). PURE: no DB, no network, no LLM. The LLM judge is NEVER an input.
  *
- * It consumes raw, deterministic signals (from the OpenClaw contract matrix, the
+ * It consumes raw, deterministic signals (from the product contract matrix, the
  * C4 worktree harness, and model readiness) and returns the highest CONTIGUOUS
  * capability tier earned. "Contiguous" enforces the ladder: a model cannot be C3
  * without also clearing C0–C2.

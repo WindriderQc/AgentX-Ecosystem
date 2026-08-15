@@ -622,8 +622,8 @@ async function swapModel(hostUrl, model) {
 // ── Exports ─────────────────────────────────────────────────
 
 // Task 0183 — claim-lifecycle names re-export benchmarkClaimService for
-// symbol stability. Existing callers (routes/openclaw-ollama-proxy.js,
-// routes/nerve-center.js, server.js, clusterScheduleService,
+// symbol stability. Existing callers (routes/nerve-center.js, server.js,
+// clusterScheduleService,
 // inferenceHealthService, and the test mocks that replace this module
 // wholesale) continue to call `hostPreferenceService.releaseBenchmarkClaim`
 // etc. New code SHOULD import directly from `./benchmarkClaimService`.

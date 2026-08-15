@@ -81,7 +81,7 @@ const HostPreferenceSchema = new mongoose.Schema({
   },
   // Primary-loaded model hint, kept for back-compat with callers that only
   // care about "one model per host". New code should read loadedModels[] —
-  // on multi-model hosts (e.g. Host Gamma with qwen2.5:7b + nomic-embed-text)
+  // on multi-model hosts (for example, an inference + embedding model pair)
   // this scalar drops everything after the first running model.
   loadedModel: {
     type: String,

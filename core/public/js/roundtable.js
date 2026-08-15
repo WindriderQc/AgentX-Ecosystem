@@ -42,7 +42,7 @@
 
   function renderAgentCard(agent, index) {
     const runtime = agent.runtime || 'model';
-    const runtimeOptions = ['model', 'openclaw', 'hermes', 'codex']
+    const runtimeOptions = ['model', 'codex']
       .map((value) => `<option value="${value}" ${runtime === value ? 'selected' : ''}>${value}</option>`)
       .join('');
     return `
@@ -87,9 +87,7 @@
       });
       const session = card.querySelector('[data-runtime-field="sessionKey"]')?.value.trim();
       if (session) {
-        agent.runtimeConfig = agent.runtime === 'hermes'
-          ? { sessionId: session }
-          : { sessionKey: session };
+        agent.runtimeConfig = { sessionKey: session };
       }
       if (agent.agentId && (agent.runtime !== 'model' || agent.model)) panel.push(agent);
     });

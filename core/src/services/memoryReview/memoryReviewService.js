@@ -63,7 +63,7 @@ async function openRun(input = {}) {
     collectorVersion: String(input.collectorVersion || '').slice(0, 80),
     promptVersion: String(input.promptVersion || '').slice(0, 80),
     model: {
-      provider: String(input.model?.provider || 'agentx-hermes-proxy').slice(0, 64),
+      provider: String(input.model?.provider || 'agentx-inference').slice(0, 64),
       model: String(input.model?.model || '').slice(0, 128),
       temperature: Number(input.model?.temperature) || 0,
     },

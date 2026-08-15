@@ -19,8 +19,6 @@ let TMP_ROOT;
 function setTempHomes() {
   TMP_ROOT = path.join(os.tmpdir(), 'nestor-memory-api-' + crypto.randomBytes(6).toString('hex'));
   process.env.BUDDY_HOME = path.join(TMP_ROOT, '.buddy');
-  process.env.OPENCLAW_HOME = path.join(TMP_ROOT, '.openclaw');
-  process.env.HERMES_HOME = path.join(TMP_ROOT, '.hermes');
 }
 setTempHomes();
 

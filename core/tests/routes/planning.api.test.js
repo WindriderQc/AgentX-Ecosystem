@@ -50,7 +50,7 @@ describe('AgentX Planning API', () => {
       status: 'queued'
     });
     await ClusterScheduleEntry.create({
-      source: 'openclaw',
+      source: 'agentx',
       sourceId: 'weekly-review',
       name: 'Weekly Review',
       taskType: 'monitoring',
@@ -136,8 +136,8 @@ describe('AgentX Planning API', () => {
       status: 'queued'
     });
     await ClusterScheduleEntry.create({
-      source: 'openclaw',
-      sourceId: 'oc-weekly-review',
+      source: 'agentx',
+      sourceId: 'agentx-weekly-review',
       name: 'Weekly Review',
       taskType: 'monitoring',
       schedule: { type: 'cron', cron: '0 9 * * 1' }
@@ -148,7 +148,7 @@ describe('AgentX Planning API', () => {
       .expect(200);
     expect(catalog.body.data.plans).toContainEqual(expect.objectContaining({
       key: 'nerve-center-alerting',
-      itemCount: 28
+      itemCount: 27
     }));
 
     const preview = await request(app)
@@ -158,10 +158,10 @@ describe('AgentX Planning API', () => {
     expect(preview.body.data).toMatchObject({
       dryRun: true,
       summary: {
-        items: 28,
-        create: 28,
+        items: 27,
+        create: 27,
         availableTasks: ['0374'],
-        availableSchedules: ['oc-weekly-review']
+        availableSchedules: ['agentx-weekly-review']
       }
     });
     expect(await PlanningItem.countDocuments({})).toBe(0);
@@ -172,7 +172,7 @@ describe('AgentX Planning API', () => {
       .expect(200);
     expect(applied.body.data).toMatchObject({
       dryRun: false,
-      itemsCreated: 28,
+      itemsCreated: 27,
       itemsReused: 0,
       tasksLinked: 4,
       schedulesLinked: 1,
@@ -181,7 +181,7 @@ describe('AgentX Planning API', () => {
     expect(await PlanningItem.countDocuments({ type: 'workstream' })).toBe(1);
     expect(await PlanningItem.countDocuments({ type: 'outcome' })).toBe(5);
     expect(await PlanningItem.countDocuments({ type: 'milestone' })).toBe(16);
-    expect(await PlanningItem.countDocuments({ type: 'decision', status: 'accepted' })).toBe(6);
+    expect(await PlanningItem.countDocuments({ type: 'decision', status: 'accepted' })).toBe(5);
     expect((await PipelineTask.findOne({ pipelineId: '0374' })).planningItemIds).toHaveLength(4);
     expect(await PlanningItem.countDocuments({
       type: 'outcome',
@@ -198,7 +198,7 @@ describe('AgentX Planning API', () => {
       .expect(200);
     expect(second.body.data).toMatchObject({
       itemsCreated: 0,
-      itemsReused: 28,
+      itemsReused: 27,
       tasksLinked: 0,
       schedulesLinked: 0,
       evidenceAdded: 0,
@@ -211,7 +211,7 @@ describe('AgentX Planning API', () => {
       .expect(200);
     expect(third.body.data).toMatchObject({
       itemsCreated: 0,
-      itemsReused: 28,
+      itemsReused: 27,
       evidenceBindingsUpdated: 0
     });
   });
@@ -536,7 +536,7 @@ describe('AgentX Planning API', () => {
 
   test('links runtime schedules and stores evidence with history', async () => {
     await ClusterScheduleEntry.create({
-      source: 'openclaw',
+      source: 'agentx',
       sourceId: 'release-check',
       name: 'Release Check',
       taskType: 'diagnostics',
