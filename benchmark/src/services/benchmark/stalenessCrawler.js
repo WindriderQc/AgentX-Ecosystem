@@ -42,12 +42,14 @@ function normModel(name) {
  * (host-agnostic); then the B1 physical ceiling when host bandwidth + an
  * explicit quant are known. Returns a reason string or null.
  */
-function throughputReason(tokensPerSec, modelName, hostUrl) {
+function throughputReason(tokensPerSec, modelName, hostUrl, explicitHostBandwidthGBs = null) {
   const tps = num(tokensPerSec);
   if (tps == null || tps <= 0) return null;
   if (tps > FLAT_CAP_TOK_S) return `${tps} tok/s exceeds sane cap ${FLAT_CAP_TOK_S}`;
   const quant = parseQuantization(modelName);
-  const bw = resolveHostBandwidthGBs(hostUrl);
+  const bw = Number.isFinite(explicitHostBandwidthGBs) && explicitHostBandwidthGBs > 0
+    ? explicitHostBandwidthGBs
+    : resolveHostBandwidthGBs(hostUrl);
   if (quant && bw) {
     const r = isImplausibleThroughput(tps, { modelName, hostBandwidthGBs: bw, marginFactor: CEILING_MARGIN });
     if (r.implausible) return `${tps.toFixed(1)} tok/s exceeds physical ceiling ${r.ceilingTokSec.toFixed(1)} (×${CEILING_MARGIN})`;
@@ -87,7 +89,12 @@ function analyzeStaleness(input = {}) {
       e.reasons.add('context_profile_stale');
       if (cp.staleReason) e.evidence.contextStaleReason = cp.staleReason;
     }
-    const tr = throughputReason(cp.latestEvidence?.tokensPerSec, cp.modelName, cp.hostUrl);
+    const tr = throughputReason(
+      cp.latestEvidence?.tokensPerSec,
+      cp.modelName,
+      cp.hostUrl,
+      cp.hostBandwidthGBs ?? cp.latestEvidence?.hostBandwidthGBs
+    );
     if (tr) {
       const e = entryFor(hostKey, cp.modelName);
       e.reasons.add('implausible_throughput');
@@ -112,7 +119,12 @@ function analyzeStaleness(input = {}) {
     const hostKey = a.hostId || a.hostUrl;
     if (a.staleness?.stale) entryFor(hostKey, a.modelName).reasons.add('adaptation_stale');
     const tps = a.profile?.tokensPerSec ?? a.latestEvidence?.tokensPerSec;
-    const tr = throughputReason(tps, a.modelName, a.hostUrl || a.hostId);
+    const tr = throughputReason(
+      tps,
+      a.modelName,
+      a.hostUrl || a.hostId,
+      a.hostBandwidthGBs ?? a.profile?.hostBandwidthGBs ?? a.latestEvidence?.hostBandwidthGBs
+    );
     if (tr) {
       const e = entryFor(hostKey, a.modelName);
       e.reasons.add('implausible_throughput');
@@ -166,7 +178,7 @@ function analyzeStaleness(input = {}) {
  */
 function formatStalenessLedgerEntry(report, opts = {}) {
   const date = opts.date || 'YYYY-MM-DD';
-  const actor = opts.actor || 'Self-Tuning Lane (Claude Code)';
+  const actor = opts.actor || 'Self-Tuning Lane';
   const lines = [];
   lines.push(`## ${date} — Staleness crawl: ${report.totals.staleModels} model(s) flagged`);
   lines.push('');

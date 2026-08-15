@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "vault": {
+  "source": {
     "hostAuthority": "user-selected",
     "containerRoot": "/data/imports",
     "mountMode": "none"
@@ -28,6 +28,7 @@
       "__pycache__",
       "coverage",
       "credentials",
+      "keys",
       "node_modules",
       "secrets",
       "ssh",
@@ -49,16 +50,9 @@
       "secret",
       "token"
     ],
-    "generatedNameFragments": []
-  },
-  "projection": {
-    "mode": "disabled",
-    "direction": "none",
-    "writeToVault": false,
-    "operationalAuthority": "Agent X product repository",
-    "vaultIndexName": "",
-    "repository": "",
-    "branch": "main",
-    "entries": []
+    "generatedNameFragments": [
+      "generated_",
+      "export_"
+    ]
   }
 }

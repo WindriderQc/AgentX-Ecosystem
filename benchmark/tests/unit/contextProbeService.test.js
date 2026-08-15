@@ -238,16 +238,20 @@ describe('assessThroughputPlausibility (B1 physical ceiling layered on flat cap)
   });
 
   it('catches a sub-cap artifact via the physical ceiling (explicit-quant model, known host)', () => {
-    // 30B Q4 on Host Gamma (.99, 936 GB/s): ceiling ≈ 55 tok/s, ×2 margin ≈ 110.
+    // 30B Q4 on a reference GPU (936 GB/s): ceiling ≈ 55 tok/s, ×2 margin ≈ 110.
     // 5000 tok/s is well under the flat 10000 cap but physically impossible.
-    const r = assess(5000, { modelName: 'ax/qwen3-coder:30b-instruct-q4_K_M', hostUrl: 'http://192.0.2.99:11434' });
+    const r = assess(5000, {
+      modelName: 'ax/qwen3-coder:30b-instruct-q4_K_M',
+      hostUrl: 'http://192.0.2.10:11434',
+      hostBandwidthGBs: 936
+    });
     expect(r.plausible).toBe(false);
     expect(r.detail).toMatch(/exceeds physical ceiling/);
   });
 
   it('does NOT false-flag a *-qat MoE model (ambiguous quant → ceiling skipped)', () => {
     // gemma4:26b-a4b-it-qat has no parseable quant → B1 skipped, flat backstop only.
-    const r = assess(5000, { modelName: 'ax/gemma4:26b-a4b-it-qat', hostUrl: 'http://192.0.2.99:11434' });
+    const r = assess(5000, { modelName: 'ax/gemma4:26b-a4b-it-qat', hostUrl: 'http://192.0.2.10:11434' });
     expect(r.plausible).toBe(true);
   });
 
@@ -257,20 +261,32 @@ describe('assessThroughputPlausibility (B1 physical ceiling layered on flat cap)
   });
 
   it('accepts a realistic reading for an explicit-quant model on a known host', () => {
-    // qwen3.6:27b q8 on .99: ceiling ≈ 35 tok/s, ×2 ≈ 70. 30 tok/s is fine.
-    const r = assess(30, { modelName: 'ax/qwen3.6:27b-mtp-q8_0', hostUrl: 'http://192.0.2.99:11434' });
+    // qwen3.6:27b q8 on the example host: ceiling ≈ 35 tok/s, ×2 ≈ 70. 30 tok/s is fine.
+    const r = assess(30, {
+      modelName: 'ax/qwen3.6:27b-mtp-q8_0',
+      hostUrl: 'http://192.0.2.10:11434',
+      hostBandwidthGBs: 936
+    });
     expect(r.plausible).toBe(true);
     expect(r.detail).toBeNull();
   });
 
   it('does not quarantine a reading within one reported tenth of the ceiling', () => {
-    const r = assess(69.4, { modelName: 'ax/qwen3.6:27b-mtp-q8_0', hostUrl: 'http://192.0.2.199:11434' });
+    const r = assess(69.4, {
+      modelName: 'ax/qwen3.6:27b-mtp-q8_0',
+      hostUrl: 'http://192.0.2.199:11434',
+      hostBandwidthGBs: 936
+    });
     expect(r.plausible).toBe(true);
     expect(r.detail).toBeNull();
   });
 
   it('still rejects a reading beyond the narrow boundary tolerance', () => {
-    const r = assess(69.5, { modelName: 'ax/qwen3.6:27b-mtp-q8_0', hostUrl: 'http://192.0.2.199:11434' });
+    const r = assess(69.5, {
+      modelName: 'ax/qwen3.6:27b-mtp-q8_0',
+      hostUrl: 'http://192.0.2.199:11434',
+      hostBandwidthGBs: 936
+    });
     expect(r.plausible).toBe(false);
     expect(r.detail).toMatch(/exceeds physical ceiling/);
   });
@@ -279,6 +295,7 @@ describe('assessThroughputPlausibility (B1 physical ceiling layered on flat cap)
     const r = assess(130.5, {
       modelName: 'ornith:35b-q4_K_M',
       hostUrl: 'http://192.0.2.199:11434',
+      hostBandwidthGBs: 936,
       architecture: 'qwen35moe',
       modelInfo: {
         'general.architecture': 'qwen35moe',

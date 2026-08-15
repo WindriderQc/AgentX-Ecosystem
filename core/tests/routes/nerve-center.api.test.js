@@ -1119,11 +1119,11 @@ describe('Nerve Center API Routes', () => {
 
       const byName = Object.fromEntries(res.body.data.map((host) => [host.displayName, host]));
 
-      expect(byName.Host Alpha.hostKey).toBe('primary');
-      expect(byName.Host Beta.hostKey).toBe('secondary');
-      expect(byName.Host Gamma.hostKey).toBe('tertiary');
-      expect(byName.Host Gamma.persistedHostKey).toBe('primary');
-      expect(byName.Host Gamma.hostKeyDrift).toEqual(expect.objectContaining({
+      expect(byName['Host Alpha'].hostKey).toBe('primary');
+      expect(byName['Host Beta'].hostKey).toBe('secondary');
+      expect(byName['Host Gamma'].hostKey).toBe('tertiary');
+      expect(byName['Host Gamma'].persistedHostKey).toBe('primary');
+      expect(byName['Host Gamma'].hostKeyDrift).toEqual(expect.objectContaining({
         type: 'host_key_mismatch',
         persisted: 'primary',
         configured: 'tertiary'

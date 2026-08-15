@@ -12,7 +12,8 @@
     <%- include('../partials/nav', { service: service, activePage: activePage }) %>
   <% } %>
   <% if (locals.agentxProfile === 'demo' && activePage !== 'demo') { %>
-    <a class="demo-profile-home" href="/demo" aria-label="Back to Agent X demo">Agent X · Demo</a>
+    <% const demoCoreBase = String(locals.publicUrls && locals.publicUrls.core || '').replace(/\/+$/, ''); %>
+    <a class="demo-profile-home" href="<%= demoCoreBase %>/demo" aria-label="Back to Agent X demo">Agent X · Demo</a>
   <% } %>
 
   <%- include(pageView) %>

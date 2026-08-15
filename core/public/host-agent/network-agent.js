@@ -16,9 +16,9 @@
  * COMMANDS mirror data/services/networkScanner.js exactly; keep them in sync.
  *
  * Run (Windows, elevated for ARP + -O):
- *   set DATA_URL=http://192.0.2.99:3083 && set SCANNER_ID=host-beta && node network-agent.js
+ *   set DATA_URL=http://127.0.0.1:3083 && set SCANNER_ID=example-host && node network-agent.js
  * Run (Linux, with privileges):
- *   DATA_URL=http://192.0.2.99:3083 SCANNER_ID=host-gamma sudo -E node network-agent.js
+ *   DATA_URL=http://127.0.0.1:3083 SCANNER_ID=example-host sudo -E node network-agent.js
  */
 
 const os = require('os');
@@ -41,7 +41,7 @@ function resolveNmapBin() {
   return 'nmap';
 }
 const NMAP_BIN = resolveNmapBin();
-const DATA_URL = (process.env.DATA_URL || process.env.DATAAPI_BASE_URL || 'http://192.0.2.99:3083').replace(/\/+$/, '');
+const DATA_URL = (process.env.DATA_URL || process.env.DATAAPI_BASE_URL || 'http://127.0.0.1:3083').replace(/\/+$/, '');
 const SCANNER_ID = process.env.SCANNER_ID || process.env.NETWORK_SCANNER_ID || os.hostname();
 const HOSTNAME = process.env.HOSTNAME_OVERRIDE || os.hostname();
 const SCAN_CIDR = process.env.SCAN_CIDR || '192.0.2.0/24';

@@ -11,14 +11,9 @@
 import { escHtml } from '../utils/format.js';
 import { apiFetch } from '../utils/api.js';
 
-const EMOJI = { clawdx: 'Cx', brutal: 'Br', frank: 'Fk' };
-
-function hostKey(name) {
-    const n = String(name || '').toLowerCase();
-    if (n.includes('clawd')) return 'clawdx';
-    if (n.includes('brutal')) return 'brutal';
-    if (n.includes('frank')) return 'frank';
-    return 'host';
+function hostBadge(name) {
+    const parts = String(name || 'Host').trim().split(/\s+/).filter(Boolean);
+    return parts.slice(0, 2).map(part => part[0]).join('').toUpperCase() || 'H';
 }
 
 function calBadge(cal) {
@@ -55,8 +50,8 @@ function candidateRow(host, judge, isActive, cal) {
         </div>`;
 }
 
-function hostColumn(host, calMap) {
-    const key = hostKey(host.hostName);
+function hostColumn(host, calMap, index) {
+    const tone = index % 3;
     const active = host.defaultJudgeModel || null;
     const candidates = (host.judges || []).slice(0, 6);
 
@@ -77,9 +72,9 @@ function hostColumn(host, calMap) {
         : `<div class="tb-host-idle">no judge assigned</div>`;
 
     return `
-        <div class="tb-host tb-host-${key}">
+        <div class="tb-host tb-host-tone-${tone}">
             <div class="tb-host-head">
-                <span class="tb-host-ring">${EMOJI[key] || 'H'}</span>
+                <span class="tb-host-ring">${escHtml(hostBadge(host.hostName))}</span>
                 <div class="tb-host-ident">
                     <div class="tb-host-name">${escHtml(host.hostName)}</div>
                     <div class="tb-host-url">${escHtml(host.hostUrl)}</div>
@@ -165,7 +160,7 @@ export async function renderBench(container, { dashboard } = {}) {
         };
     }
 
-    const columns = hostPanels.map(h => hostColumn(h, calMap)).join('');
+    const columns = hostPanels.map((host, index) => hostColumn(host, calMap, index)).join('');
     const counts = deriveDashboardCounts(dashboard);
     const assigned = hostPanels.filter(h => h.defaultJudgeModel).length;
     const totalHosts = hostPanels.length;

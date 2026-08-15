@@ -100,7 +100,7 @@ describe('Panel API', () => {
     expect(response.body.data.reader.status).toBe('ok');
     expect(response.body.data.reader.pack.id).toBe('kidx_reader');
     expect(response.body.data.reader.mode.id).toBe('reader');
-    expect(response.body.data.deviceTarget.kioskUrl).toBe('https://192.0.2.99/panel');
+    expect(response.body.data.deviceTarget.kioskUrl).toBe('');
     expect(response.body.data.reader.lexicon).toEqual(expect.objectContaining({
       status: expect.stringMatching(/^(ready|unavailable)$/),
       entryCount: expect.any(Number)

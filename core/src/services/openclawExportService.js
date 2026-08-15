@@ -23,18 +23,9 @@ const {
 const OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH
   || path.join(os.homedir(), '.openclaw', 'openclaw.json');
 
-// Heuristic: which OpenClaw provider block should this sourceHost map to?
-// Uses the last octet of the IP to pick human-recognisable names.
+// Derive a stable provider block without encoding a deployment's host inventory.
 function suggestProviderId(host) {
   if (!host) return 'agentx-unknown';
-  const m = host.match(/192\.168\.2\.(\d+)/);
-  if (m) {
-    const octet = m[1];
-    if (octet === '66') return 'agentx-host-delta';
-    if (octet === '12') return 'agentx-host-beta';
-    if (octet === '99') return 'agentx-host-gamma';
-    if (octet === '105') return 'agentx-host-alpha';
-  }
   return 'agentx-' + host.replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
 }
 

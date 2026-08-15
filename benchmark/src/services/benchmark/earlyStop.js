@@ -6,8 +6,8 @@
  * early-stopped on BenchmarkBatch.model_timings and a timeline event is
  * emitted. Other models in the batch keep running.
  *
- * Hoisted out of batchOrchestrator.js to keep the orchestrator under the
- * file-size ideal (parent CLAUDE.md: orchestrators 400–600 lines, max 800).
+ * Kept separate from batchOrchestrator.js so the orchestration path remains
+ * focused.
  */
 
 const logger = require('../../../config/logger');

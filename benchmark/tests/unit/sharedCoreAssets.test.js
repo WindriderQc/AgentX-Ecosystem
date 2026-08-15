@@ -2,8 +2,14 @@
 
 const request = require('supertest');
 const app = require('../../server');
+const api = request.agent(app);
 const originalFetch = global.fetch;
 const originalCoreUrl = process.env.CORE_URL;
+
+afterAll((done) => {
+  if (api.app.listening) return api.app.close(done);
+  return done();
+});
 
 afterEach(() => {
   global.fetch = originalFetch;
@@ -26,17 +32,32 @@ function catalogResponse() {
 
 describe('shared Core assets', () => {
   it('serves the non-Buddy polling controller required by shared-utils', async () => {
-    const response = await request(app).get('/public/js/utils/polling-controller.js');
+    const response = await api.get('/public/js/utils/polling-controller.js');
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toMatch(/javascript/);
     expect(response.text).toContain('class PollingController');
+  });
+
+  it('does not expose unrelated Core public pages', async () => {
+    await api.get('/portal/index.html').expect(404);
+    await api.get('/host-agent/agent.js').expect(404);
+  });
+
+  it('renders product-only navigation in the demo profile', async () => {
+    const response = await api.get('/leaderboard').expect(200);
+    expect(response.text).toContain('data-agentx-profile="demo"');
+    expect(response.text).toContain('Product');
+    expect(response.text).toContain('Knowledge');
+    expect(response.text).toContain('Evaluation');
+    expect(response.text).not.toContain('Nerve Center');
+    expect(response.text).not.toContain('OpenClaw');
   });
 
   it('proxies model-catalog filters and readiness headers without restoring Buddy routes', async () => {
     process.env.CORE_URL = 'http://core.test:3080/';
     global.fetch = jest.fn().mockResolvedValue(catalogResponse());
 
-    const response = await request(app)
+    const response = await api
       .get('/api/models/all?host=primary&status=available')
       .expect(200);
 

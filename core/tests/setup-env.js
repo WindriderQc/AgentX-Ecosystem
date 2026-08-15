@@ -12,6 +12,11 @@ const { destroyAgents } = require('../src/helpers/httpAgent');
 const { getMongoFiles, LEGACY_URI_FILE } = require('./mongoMemoryFiles');
 const { pickMongoMemoryPort } = require('./mongoMemoryPort');
 
+// Most Core suites exercise the complete internal contract. Product launchers
+// set the externally shareable demo profile explicitly; tests opt into full so
+// integration routes are not silently replaced by the demo boundary guard.
+process.env.AGENTX_PROFILE = process.env.AGENTX_PROFILE || 'full';
+
 const TEST_DB_STATE_KEY = Symbol.for('agentx.testDbState');
 const SHARED_MONGO_HEALTH_KEY = Symbol.for('agentx.sharedMongoHealth');
 

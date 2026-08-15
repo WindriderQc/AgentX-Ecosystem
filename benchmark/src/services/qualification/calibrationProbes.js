@@ -2,7 +2,7 @@
 
 /**
  * calibrationProbes — fixture builders + post-state observers for the K1–K4
- * calibration probes (task 0297). Pairs with calibrationGrader.js.
+ * calibration probes. Pairs with calibrationGrader.js.
  *
  * Each probe:
  *   1. buildScratch(rootDir)  — materialises an adversarial scenario inside an
@@ -17,9 +17,8 @@
  * scratch/temp/worktree path. assertScratchRoot() is the tripwire that keeps a
  * grader from ever mutating the repo.
  *
- * The harness (clawdx-contract-matrix.py) implements the equivalent build/observe
- * in Python against the OpenClaw agent workspace; this JS module is the canonical,
- * unit-testable reference and the in-process path for Node-driven runs.
+ * This JS module is the canonical, unit-testable implementation for Node-driven
+ * runs.
  */
 
 const fs = require('fs');

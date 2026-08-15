@@ -4,21 +4,21 @@ const { aggregateCapability, unitKey, tierRank } = require('../../../src/service
 
 const row = (over = {}) => ({
   model: 'qwen3-coder:30b',
-  agent: 'clawdx_coder',
+  agent: 'candidate-agent',
   task_class: 'code_worker',
-  host: 'host-gamma',
+  host: 'host-a',
   batch_id: 'batch1',
   timestamp: '2026-06-23T00:00:00Z',
-  qualification: { tier: 'C2', passed: true, host: 'host-gamma' },
+  qualification: { tier: 'C2', passed: true, host: 'host-a' },
   ...over
 });
 
 describe('aggregateCapability', () => {
   test('returns the highest PASSED tier per unit', () => {
     const rows = [
-      row({ qualification: { tier: 'C1', passed: true, host: 'host-gamma' } }),
-      row({ qualification: { tier: 'C3', passed: true, host: 'host-gamma' } }),
-      row({ qualification: { tier: 'C2', passed: true, host: 'host-gamma' } })
+      row({ qualification: { tier: 'C1', passed: true, host: 'host-a' } }),
+      row({ qualification: { tier: 'C3', passed: true, host: 'host-a' } }),
+      row({ qualification: { tier: 'C2', passed: true, host: 'host-a' } })
     ];
     const out = aggregateCapability(rows);
     expect(out).toHaveLength(1);
@@ -29,20 +29,20 @@ describe('aggregateCapability', () => {
 
   test('splits units by host', () => {
     const rows = [
-      row({ host: 'host-gamma', qualification: { tier: 'C3', passed: true, host: 'host-gamma' } }),
-      row({ host: 'host-beta', qualification: { tier: 'C2', passed: true, host: 'host-beta' } })
+      row({ host: 'host-a', qualification: { tier: 'C3', passed: true, host: 'host-a' } }),
+      row({ host: 'host-b', qualification: { tier: 'C2', passed: true, host: 'host-b' } })
     ];
     const out = aggregateCapability(rows);
     expect(out).toHaveLength(2);
     const byHost = Object.fromEntries(out.map((u) => [u.unit.host, u.capability_tier]));
-    expect(byHost.host-gamma).toBe('C3');
-    expect(byHost.host-beta).toBe('C2');
+    expect(byHost['host-a']).toBe('C3');
+    expect(byHost['host-b']).toBe('C2');
   });
 
   test('a failed higher-tier probe sets ceiling but not capability_tier', () => {
     const rows = [
-      row({ qualification: { tier: 'C2', passed: true, host: 'host-gamma' } }),
-      row({ qualification: { tier: 'C3', passed: false, host: 'host-gamma' } })
+      row({ qualification: { tier: 'C2', passed: true, host: 'host-a' } }),
+      row({ qualification: { tier: 'C3', passed: false, host: 'host-a' } })
     ];
     const out = aggregateCapability(rows);
     expect(out[0].capability_tier).toBe('C2');
@@ -62,7 +62,7 @@ describe('aggregateCapability', () => {
   });
 
   test('unitKey and tierRank helpers behave', () => {
-    expect(unitKey(row())).toBe('qwen3-coder:30b||clawdx_coder||code_worker||host-gamma');
+    expect(unitKey(row())).toBe('qwen3-coder:30b||candidate-agent||code_worker||host-a');
     expect(tierRank('C3')).toBeGreaterThan(tierRank('C2'));
     expect(tierRank(null)).toBe(-1);
   });

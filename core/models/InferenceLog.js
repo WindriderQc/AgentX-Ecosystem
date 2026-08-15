@@ -8,7 +8,7 @@ const { Schema } = mongoose;
  */
 const InferenceLogSchema = new mongoose.Schema({
   // Routing
-  host: { type: String, required: true },          // full URL e.g. http://192.0.2.99:11434
+  host: { type: String, required: true },          // full URL e.g. http://ollama.example.test:11434
   hostKey: { type: String, default: null },         // 'primary' | 'secondary' | 'tertiary'
   model: { type: String, required: true },
 

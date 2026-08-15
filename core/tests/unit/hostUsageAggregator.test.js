@@ -31,11 +31,11 @@ describe('hostUsageAggregator host labels', () => {
     expect(lookup.get('example')).toBe('UGExample');
   });
 
-  it('labels known hosts from config/platform-map.yml instead of hardcoded IP branches', () => {
-    expect(hostUsageAggregator.hostLabel('http://192.0.2.12:11434')).toBe('Host Beta');
-    expect(hostUsageAggregator.hostLabel('http://192.0.2.99:11434')).toBe('Host Gamma');
-    expect(hostUsageAggregator.hostLabel('http://192.0.2.199:11434')).toBe('Host Alpha');
-    expect(hostUsageAggregator.hostLabel('http://octopi.local:80')).toBe('OctoPi');
+  it('does not require an untracked platform map for host labels', () => {
+    expect(hostUsageAggregator.hostLabel('http://192.0.2.12:11434')).toBe('192.0.2.12');
+    expect(hostUsageAggregator.hostLabel('http://192.0.2.10:11434')).toBe('192.0.2.10');
+    expect(hostUsageAggregator.hostLabel('http://192.0.2.199:11434')).toBe('192.0.2.199');
+    expect(hostUsageAggregator.hostLabel('http://example-device.local:80')).toBe('example-device.local');
   });
 
   it('falls back to parsed hostnames for unregistered hosts', () => {

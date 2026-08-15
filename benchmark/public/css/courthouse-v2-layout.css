@@ -1242,13 +1242,13 @@
   transition: border-color var(--r-transition), box-shadow var(--r-transition);
 }
 
-.tb-host-clawdx { border-left-color: rgba(79, 195, 247, 0.4); }
-.tb-host-brutal { border-left-color: rgba(239, 83,  80, 0.4); }
-.tb-host-frank  { border-left-color: rgba(167, 139, 250, 0.4); }
+.tb-host-tone-0 { border-left-color: rgba(79, 195, 247, 0.4); }
+.tb-host-tone-1 { border-left-color: rgba(239, 83, 80, 0.4); }
+.tb-host-tone-2 { border-left-color: rgba(167, 139, 250, 0.4); }
 
-.tb-host-clawdx:hover { box-shadow: -2px 0 18px rgba(79, 195, 247, 0.08);  border-color: rgba(79, 195, 247, 0.35); }
-.tb-host-brutal:hover { box-shadow: -2px 0 18px rgba(239, 83,  80, 0.08);  border-color: rgba(239,  83, 80, 0.35); }
-.tb-host-frank:hover  { box-shadow: -2px 0 18px rgba(167, 139, 250, 0.08); border-color: rgba(167, 139, 250, 0.35); }
+.tb-host-tone-0:hover { box-shadow: -2px 0 18px rgba(79, 195, 247, 0.08); border-color: rgba(79, 195, 247, 0.35); }
+.tb-host-tone-1:hover { box-shadow: -2px 0 18px rgba(239, 83, 80, 0.08); border-color: rgba(239, 83, 80, 0.35); }
+.tb-host-tone-2:hover { box-shadow: -2px 0 18px rgba(167, 139, 250, 0.08); border-color: rgba(167, 139, 250, 0.35); }
 
 .tb-host-head {
   display: grid;
@@ -1274,9 +1274,9 @@
   border: 2px solid rgba(255, 167, 38, 0.25);
 }
 
-.tb-host-clawdx .tb-host-ring { border-color: rgba(79, 195, 247, 0.35); color: var(--r-active); background: rgba(79, 195, 247, 0.08); }
-.tb-host-brutal .tb-host-ring { border-color: rgba(239, 83, 80, 0.35);  color: var(--r-error);  background: rgba(239, 83, 80, 0.08); }
-.tb-host-frank  .tb-host-ring { border-color: rgba(167, 139, 250, 0.35); color: var(--r-judge); background: rgba(167, 139, 250, 0.08); }
+.tb-host-tone-0 .tb-host-ring { border-color: rgba(79, 195, 247, 0.35); color: var(--r-active); background: rgba(79, 195, 247, 0.08); }
+.tb-host-tone-1 .tb-host-ring { border-color: rgba(239, 83, 80, 0.35); color: var(--r-error); background: rgba(239, 83, 80, 0.08); }
+.tb-host-tone-2 .tb-host-ring { border-color: rgba(167, 139, 250, 0.35); color: var(--r-judge); background: rgba(167, 139, 250, 0.08); }
 
 .tb-host-ident { min-width: 0; }
 .tb-host-name  { font-size: 0.92rem; font-weight: 700; color: var(--r-text); }

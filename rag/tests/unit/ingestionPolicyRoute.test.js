@@ -20,25 +20,17 @@ function buildApp() {
   return app;
 }
 
-describe('read-only product filesystem contract', () => {
+describe('read-only product ingestion contract', () => {
   it('publishes the bounded import policy without a host mount', async () => {
-    const response = await request(buildApp()).get('/api/rag/vault/policy').expect(200);
+    const response = await request(buildApp()).get('/api/rag/ingestion/policy').expect(200);
 
     expect(response.body.data).toMatchObject({
-      vault: { containerRoot: '/data/imports', mountMode: 'none' },
+      source: { containerRoot: '/data/imports', mountMode: 'none' },
       ingestion: {
         approvedRoots: ['/data/imports'],
         allowedExtensions: ['md', 'txt']
-      },
-      projection: { mode: 'disabled', writeToVault: false, direction: 'none' }
+      }
     });
-  });
-
-  it('keeps the legacy vault index endpoint disabled', async () => {
-    const response = await request(buildApp()).get('/api/rag/vault/index').expect(200);
-
-    expect(response.body.data.writeToVault).toBe(false);
-    expect(response.body.data.mode).toBe('disabled');
-    expect(response.body.data.entries).toEqual([]);
+    expect(response.body.data).not.toHaveProperty('projection');
   });
 });

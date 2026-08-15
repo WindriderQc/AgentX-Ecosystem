@@ -64,11 +64,21 @@ const PHYSICAL_CEILING_MARGIN = (() => {
  *     positives on MoE models whose active-params aren't encoded in the name.
  * @returns {{ plausible: boolean, detail: string|null }}
  */
-function assessThroughputPlausibility(tokensPerSec, { modelName, hostUrl, family, families, architecture, modelInfo } = {}) {
+function assessThroughputPlausibility(tokensPerSec, {
+  modelName,
+  hostUrl,
+  hostBandwidthGBs: explicitHostBandwidthGBs,
+  family,
+  families,
+  architecture,
+  modelInfo
+} = {}) {
   if (!isSaneTokensPerSec(tokensPerSec)) {
     return { plausible: false, detail: `${tokensPerSec} tok/s exceeds sane cap ${maxSaneTokensPerSec()} tok/s` };
   }
-  const hostBandwidthGBs = resolveHostBandwidthGBs(hostUrl);
+  const hostBandwidthGBs = Number.isFinite(explicitHostBandwidthGBs) && explicitHostBandwidthGBs > 0
+    ? explicitHostBandwidthGBs
+    : resolveHostBandwidthGBs(hostUrl);
   const quant = parseQuantization(modelName);
   if (hostBandwidthGBs && quant) {
     const ceiling = isImplausibleThroughput(tokensPerSec, {

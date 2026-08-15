@@ -7,6 +7,7 @@ const {
   createCorePublicUrlsResolver,
   getPublicUrls,
 } = require('../shared/browserPublicUrls');
+const { currentAgentXProfile } = require('../shared/agentxRuntimeProfile');
 
 require('dotenv').config({
   path: path.join(__dirname, '.env')
@@ -37,6 +38,7 @@ process.stderr.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
 
 const app = express();
 app.locals.publicUrls = getPublicUrls();
+app.locals.agentxProfile = currentAgentXProfile();
 const resolvePublicUrls = createCorePublicUrlsResolver({
   enabled: process.env.NODE_ENV !== 'test',
 });
@@ -102,7 +104,7 @@ app.get('/public/js/utils/polling-controller.js', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'core', 'public', 'js', 'utils', 'polling-controller.js'));
 });
 
-// Static files — benchmark first, core fallback for shared assets (dist/, js/utils/)
+// Static files — Benchmark plus an explicit allowlist of shared Core assets.
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
     if (filePath.includes(`${path.sep}model-profiler${path.sep}`)) {
@@ -110,7 +112,22 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
   }
 }));
-app.use(express.static(path.join(__dirname, '..', 'core', 'public')));
+
+const sharedPublicRoot = path.join(__dirname, '..', 'core', 'public');
+const sharedAssets = {
+  '/dist/shared-tokens.css': ['dist', 'shared-tokens.css'],
+  '/dist/shared-utils.js': ['dist', 'shared-utils.js'],
+  '/css/platform-chrome.css': ['css', 'platform-chrome.css'],
+  '/js/utils/polling-controller.js': ['js', 'utils', 'polling-controller.js'],
+  '/js/utils/polling-controller-global.js': ['js', 'utils', 'polling-controller-global.js'],
+  '/js/utils/shared.js': ['js', 'utils', 'shared.js'],
+  '/js/utils/shortcut-hints.js': ['js', 'utils', 'shortcut-hints.js'],
+  '/js/utils/shortcuts-modal.js': ['js', 'utils', 'shortcuts-modal.js'],
+  '/js/utils/toast.js': ['js', 'utils', 'toast.js']
+};
+for (const [route, segments] of Object.entries(sharedAssets)) {
+  app.get(route, (_req, res) => res.sendFile(path.join(sharedPublicRoot, ...segments)));
+}
 
 // Core's /api/config is the browser URL authority in the composed platform.
 // Standalone Benchmark keeps the environment-driven localhost defaults.

@@ -11,16 +11,16 @@
  * @param {number} degradationThreshold - % drop from baseline before bars fade (default 50)
  */
 
-const HOST_COLORS = {
-  host-delta: '#4ecdc4',
-  host-beta: '#e94560',
-  host-gamma:  '#f39c12'
-};
+const HOST_COLORS = Object.freeze(['#4ecdc4', '#e94560', '#f39c12', '#8892b0']);
 
 const CHART_HEIGHT = 120; // px — bar max height
 
 function hostColor(hostId) {
-  return HOST_COLORS[hostId.toLowerCase()] || '#8892b0';
+  const key = String(hostId || 'host');
+  const hash = Array.from(key).reduce((value, character) => (
+    ((value * 31) + character.charCodeAt(0)) >>> 0
+  ), 0);
+  return HOST_COLORS[hash % HOST_COLORS.length];
 }
 
 function formatCtx(numCtx) {

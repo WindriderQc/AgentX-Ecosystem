@@ -9,7 +9,7 @@
  * Sub-step outcomes are first-class: each records status = ok | skipped |
  * failed so partial failures are visible rather than silently swallowed.
  *
- * Collection ownership: benchmark (per CLAUDE.md).
+ * The Benchmark service owns this collection.
  */
 
 const mongoose = require('mongoose');

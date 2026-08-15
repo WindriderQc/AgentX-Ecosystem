@@ -41,11 +41,11 @@ const REGISTRY = {
     }
   },
   capabilities: {
-    docs_steward: {
-      type: 'documentation_governance_capability',
+    release_check: {
+      type: 'release_validation_capability',
       not_an_agent: true,
-      boundary: 'AgentX-owned documentation governance.',
-      provided_by: { service: 'core', ui: '/docs-steward' }
+      boundary: 'Agent X-owned product validation.',
+      provided_by: { service: 'core', ui: '/health' }
     }
   },
   runtimes: {
@@ -179,7 +179,7 @@ describe('agentOpsProjectionService', () => {
       status: 'unobserved'
     });
     expect(projection.capabilities[0]).toMatchObject({
-      id: 'docs_steward',
+      id: 'release_check',
       notAnAgent: true
     });
     expect(projection.runtimeLayers[0]).toMatchObject({

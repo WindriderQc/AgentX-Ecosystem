@@ -5,7 +5,7 @@
  * Both invocations go through execFile (no shell injection risk).
  *
  * Ported from legacy AgentX src/helpers/zip.js — first consumer is
- * rag/scripts/extract-rag-zips.js, which unpacks zips dropped into
+ * the ingestion worker, which unpacks accepted archives into
  * INGEST_ROOTS so the normal scanner + ingest worker can pick up the
  * contents on the next poll cycle.
  */

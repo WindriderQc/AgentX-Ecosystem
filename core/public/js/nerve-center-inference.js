@@ -3,26 +3,12 @@
 
     const shared = window.NerveCenterShared;
 
-    const HOST_META = {
-        'http://192.0.2.199:11434': { name: 'Host Alpha', ip: '192.0.2.199', gpu: '2x RTX 3090', vram: '48 GB' },
-        'http://192.0.2.12:11434': { name: 'Host Beta', ip: '192.0.2.12', gpu: 'RTX 5070 Ti', vram: '16 GB' },
-        'http://192.0.2.99:11434': { name: 'Host Gamma', ip: '192.0.2.99', gpu: 'RTX 3080 Ti', vram: '12 GB' },
-    };
-
     let _poller = null;
     let throughputChart = null;
     let latencyChart = null;
 
-    const HOST_LABELS = {
-        'http://192.0.2.199:11434': 'Host Alpha',
-        'http://192.0.2.12:11434': 'Host Beta',
-        'http://192.0.2.99:11434': 'Host Gamma',
-    };
-    const HOST_COLORS = {
-        'http://192.0.2.199:11434': '#7cf0ff',
-        'http://192.0.2.12:11434': '#4ade80',
-        'http://192.0.2.99:11434': '#f59e0b',
-    };
+    const HOST_LABELS = {};
+    const HOST_COLORS = {};
 
     function formatTaskLabel(task, metadata = {}) {
         return metadata.title || task.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());

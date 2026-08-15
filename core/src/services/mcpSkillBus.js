@@ -5,7 +5,6 @@ const { createTaskInMongo } = require('./pipelineTaskService');
 const { saveMemory } = require('./nestorMemoryService');
 const { ecosystemSnapshotTool } = require('./mcpEcosystemSnapshotTool');
 const { lookupExact: lookupFrenchWord } = require('./kidxLexiconService');
-const { addEmailAction } = require('./emailActionService');
 const {
   addPersonalTask,
   listPersonalTasks,
@@ -150,22 +149,6 @@ const TOOLS = [
       by: { type: 'string', maxLength: 120 },
     }, ['ref']),
     annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
-  },
-  {
-    name: 'add_email_action',
-    title: 'Add Email Action to Leantime',
-    description: 'Idempotently create or reuse one card in the restricted Secretary — Email Actions Leantime project for one inspected Gmail thread. Use only for Urgent, Needs Reply, or Waiting. The Gmail thread id is the deduplication key; never include the message body.',
-    inputSchema: objectSchema({
-      gmailThreadId: { type: 'string', minLength: 8, maxLength: 256 },
-      gmailMessageId: { type: 'string', minLength: 8, maxLength: 256 },
-      category: { type: 'string', enum: ['Urgent', 'Needs Reply', 'Waiting'] },
-      action: { type: 'string', minLength: 1, maxLength: 200 },
-      subject: { type: 'string', maxLength: 300 },
-      sender: { type: 'string', maxLength: 200 },
-      messageDate: { type: 'string', maxLength: 60 },
-      dueAt: { type: 'string', maxLength: 40 },
-    }, ['gmailThreadId', 'category', 'action']),
-    annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false },
   },
 ];
 
@@ -371,11 +354,6 @@ async function completePersonalTaskTool(args, deps) {
   return closer(ensurePlainObject(args));
 }
 
-async function addEmailActionTool(args, deps) {
-  const writer = deps.emailActionWriter || addEmailAction;
-  return writer(ensurePlainObject(args));
-}
-
 const TOOL_HANDLERS = {
   rag_search: ragSearch,
   check_health: checkHealth,
@@ -387,7 +365,6 @@ const TOOL_HANDLERS = {
   add_personal_task: addPersonalTaskTool,
   list_personal_tasks: listPersonalTasksTool,
   complete_personal_task: completePersonalTaskTool,
-  add_email_action: addEmailActionTool,
 };
 
 async function callTool(params, deps = {}) {
@@ -418,7 +395,7 @@ async function handleMcpMessage(message, deps = {}) {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
       serverInfo: SERVER_INFO,
-      instructions: 'AgentX exposes a narrow skill bus: rag_search, check_health, the fail-closed cloud escalation recommendation, lookup_french_word, ecosystem_snapshot, create_todo, save_memory, the personal secretary list, and idempotent Gmail action capture into the restricted Leantime email-actions project.',
+      instructions: 'AgentX exposes a narrow skill bus for product health, RAG, model-routing recommendations, vocabulary lookup, ecosystem snapshots, tasks, and memory.',
     });
   }
   if (method === 'tools/list') {

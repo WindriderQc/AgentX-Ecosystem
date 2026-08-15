@@ -1,6 +1,10 @@
 const express = require('express');
 const request = require('supertest');
-const { publicExposureGuard } = require('../../src/middleware/publicExposureGuard');
+const {
+  DEFAULT_PUBLIC_HOSTS,
+  configuredPublicHosts,
+  publicExposureGuard
+} = require('../../src/middleware/publicExposureGuard');
 
 function buildApp() {
   const app = express();
@@ -31,7 +35,7 @@ describe('publicExposureGuard', () => {
   beforeEach(() => {
     delete process.env.AGENTX_OPERATOR_TOKEN;
     delete process.env.AGENTX_ADMIN_TOKEN;
-    delete process.env.AGENTX_PUBLIC_HOSTS;
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
     delete process.env.AGENTX_PUBLIC_URL;
     app = buildApp();
   });
@@ -50,7 +54,7 @@ describe('publicExposureGuard', () => {
   it('blocks public-host API requests without an operator token even from loopback', async () => {
     const res = await request(app)
       .get('/api/nerve-center/status')
-      .set('Host', 'agentx.specialblend.icu')
+      .set('Host', 'agentx.example.test')
       .expect(403);
 
     expect(res.body).toEqual(expect.objectContaining({
@@ -64,7 +68,7 @@ describe('publicExposureGuard', () => {
 
     await request(app)
       .post('/api/chat')
-      .set('Host', 'agentx.specialblend.icu')
+      .set('Host', 'agentx.example.test')
       .set('Authorization', 'Bearer operator-token')
       .send({ message: 'hello' })
       .expect(200);
@@ -81,7 +85,7 @@ describe('publicExposureGuard', () => {
   it('protects the MCP endpoint on public hosts', async () => {
     await request(app)
       .post('/mcp')
-      .set('Host', 'agentx.specialblend.icu')
+      .set('Host', 'agentx.example.test')
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
       .expect(403);
   });
@@ -89,7 +93,7 @@ describe('publicExposureGuard', () => {
   it('leaves non-API health checks open on public hosts', async () => {
     await request(app)
       .get('/health')
-      .set('Host', 'agentx.specialblend.icu')
+      .set('Host', 'agentx.example.test')
       .expect(200);
   });
 
@@ -100,6 +104,12 @@ describe('publicExposureGuard', () => {
       .get('/api/nerve-center/status')
       .set('Host', 'agentx.example.test')
       .expect(403);
+  });
+
+  it('has no maintainer-specific public host default', () => {
+    delete process.env.AGENTX_PUBLIC_HOSTS;
+    expect(DEFAULT_PUBLIC_HOSTS).toEqual([]);
+    expect(configuredPublicHosts()).toEqual(new Set());
   });
 
   it('does not classify LAN CORE_PUBLIC_URL as public exposure', async () => {

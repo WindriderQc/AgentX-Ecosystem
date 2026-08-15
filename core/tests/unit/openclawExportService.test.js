@@ -57,11 +57,9 @@ describe('openclawExportService', () => {
   });
 
   describe('suggestProviderId', () => {
-    it('maps known host IPs to named providers', () => {
-      expect(suggestProviderId('http://192.0.2.66:11434')).toBe('agentx-host-delta');
-      expect(suggestProviderId('http://192.0.2.12:11434')).toBe('agentx-host-beta');
-      expect(suggestProviderId('http://192.0.2.99:11434')).toBe('agentx-host-gamma');
-      expect(suggestProviderId('http://192.0.2.105:11434')).toBe('agentx-host-alpha');
+    it('derives stable provider IDs without a hardcoded host inventory', () => {
+      expect(suggestProviderId('http://192.0.2.66:11434')).toBe('agentx-192-0-2-66-11434');
+      expect(suggestProviderId('http://192.0.2.10:11434')).toBe('agentx-192-0-2-10-11434');
     });
 
     it('handles unknown hosts with a sanitised id', () => {
@@ -89,7 +87,7 @@ describe('openclawExportService', () => {
         contextTest: { status: 'completed', testedNumCtx: 32768 },
         executionDefaults: { num_ctx: 8192 },
         capabilities: { maxContext: 200000 },
-        sourceHost: 'http://192.0.2.99:11434'
+        sourceHost: 'http://192.0.2.10:11434'
       };
       const m = toOpenClawModel(entry);
       expect(m.contextWindow).toBe(32768);
@@ -255,12 +253,12 @@ describe('openclawExportService', () => {
         },
         {
           modelName: 'qwen2.5:7b-instruct-q5_K_M',
-          sourceHost: 'http://192.0.2.99:11434',
+          sourceHost: 'http://192.0.2.10:11434',
           contextTest: { status: 'completed', testedNumCtx: 32768 }
         },
         {
           modelName: 'nomic-embed-text:v1.5',
-          sourceHost: 'http://192.0.2.99:11434',
+          sourceHost: 'http://192.0.2.10:11434',
           categories: ['embedding'],
           executionDefaults: { num_ctx: 2048 }
         }
@@ -269,16 +267,16 @@ describe('openclawExportService', () => {
       const data = await buildExport();
       expect(data.registryCount).toBe(3);
       expect(Object.keys(data.providers).sort()).toEqual([
-        'agentx-host-delta',
-        'agentx-host-gamma'
+        'agentx-192-0-2-10-11434',
+        'agentx-192-0-2-66-11434'
       ]);
-      expect(data.providers['agentx-host-delta'].models).toHaveLength(1);
-      expect(data.providers['agentx-host-gamma'].models).toHaveLength(2);
+      expect(data.providers['agentx-192-0-2-66-11434'].models).toHaveLength(1);
+      expect(data.providers['agentx-192-0-2-10-11434'].models).toHaveLength(2);
 
-      const qwen = data.providers['agentx-host-gamma'].models.find(m => m.id === 'qwen2.5:7b-instruct-q5_K_M');
+      const qwen = data.providers['agentx-192-0-2-10-11434'].models.find(m => m.id === 'qwen2.5:7b-instruct-q5_K_M');
       expect(qwen.contextWindow).toBe(32768);
       expect(qwen.params.num_ctx).toBe(32768);
-      expect(qwen._source.host).toBe('http://192.0.2.99:11434');
+      expect(qwen._source.host).toBe('http://192.0.2.10:11434');
       expect(qwen.reasoning).toBe(false);
       expect(qwen._source.thinkingSource).toBe('unqualified');
     });

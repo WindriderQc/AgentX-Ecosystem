@@ -4,7 +4,7 @@ const os = require('os');
 const { execFile } = require('child_process');
 
 const VERSION = 'lite-1.0.0';
-const CORE_URL = (process.env.CORE_URL || process.env.AGENTX_CORE_URL || 'http://192.0.2.99:3080').replace(/\/+$/, '');
+const CORE_URL = (process.env.CORE_URL || process.env.AGENTX_CORE_URL || 'http://127.0.0.1:3080').replace(/\/+$/, '');
 const HOST_ID = process.env.HOST_ID || process.env.AGENTX_HOST_ID || os.hostname();
 const HOSTNAME = process.env.HOSTNAME_OVERRIDE || process.env.AGENTX_HOSTNAME || os.hostname();
 const OLLAMA_URL = (process.env.OLLAMA_URL || process.env.OLLAMA_HOST || 'http://localhost:11434').replace(/\/+$/, '');

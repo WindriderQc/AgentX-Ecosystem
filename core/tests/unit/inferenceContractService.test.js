@@ -46,10 +46,10 @@ describe('inferenceContractService', () => {
           name: 'plain-custom-model',
           capabilities: { tools: true },
           readiness: {
-            host-alpha: { stage: 'adapted', stale: false }
+            'host-alpha': { stage: 'adapted', stale: false }
           },
           thinkingProfiles: {
-            host-alpha: {
+            'host-alpha': {
               supported: true,
               channel: 'hidden',
               recommendedPolicy: 'metered',

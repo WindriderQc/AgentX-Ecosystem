@@ -74,6 +74,12 @@ jest.mock('../../src/services/ingestJobManager', () => ({
 
 const app = require('../../app');
 const RagManifest = require('../../models/RagManifest');
+const api = request.agent(app);
+
+afterAll((done) => {
+  if (api.app.listening) return api.app.close(done);
+  return done();
+});
 
 // ── Tests ───────────────────────────────────────────────
 
@@ -99,7 +105,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
   });
 
   it('returns dependencies object with mongodb, embedding, and qdrant', async () => {
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -110,7 +116,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
   });
 
   it('returns per-dependency healthy booleans', async () => {
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
     const deps = res.body.data.dependencies;
 
     expect(typeof deps.mongodb.healthy).toBe('boolean');
@@ -119,7 +125,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
   });
 
   it('returns overall healthy boolean (true when all healthy)', async () => {
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
 
     // MongoDB readyState is 0 in test (not connected), so healthy = false
     expect(typeof res.body.data.healthy).toBe('boolean');
@@ -127,7 +133,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
   });
 
   it('preserves existing fields (documentCount, chunkCount, embeddingModel)', async () => {
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
 
     expect(res.body.data.documentCount).toBe(10);
     expect(res.body.data.chunkCount).toBe(50);
@@ -136,7 +142,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
   });
 
   it('reports mongodb as unhealthy when disconnected', async () => {
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
     const mongo = res.body.data.dependencies.mongodb;
 
     // In test env, mongoose is not connected (readyState = 0)
@@ -145,7 +151,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
   });
 
   it('reports embedding provider info', async () => {
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
     const emb = res.body.data.dependencies.embedding;
 
     expect(emb.healthy).toBe(true);
@@ -161,7 +167,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
       stale: false,
     });
 
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
     const emb = res.body.data.dependencies.embedding;
 
     expect(emb.healthy).toBe(false);
@@ -169,7 +175,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
   });
 
   it('reports qdrant health from vectorStore healthCheck', async () => {
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
     const qdrant = res.body.data.dependencies.qdrant;
 
     expect(qdrant.healthy).toBe(true);
@@ -180,7 +186,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
     mockVectorStore.getStats.mockRejectedValue(new Error('Qdrant down'));
     mockVectorStore.healthCheck.mockRejectedValue(new Error('Qdrant down'));
 
-    const res = await request(app).get('/api/rag/status');
+    const res = await api.get('/api/rag/status');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -213,7 +219,7 @@ describe('GET /api/rag/metrics', () => {
       sort: () => ({ lean: () => Promise.resolve(null) }),
     });
 
-    const res = await request(app).get('/api/rag/metrics');
+    const res = await api.get('/api/rag/metrics');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -226,7 +232,7 @@ describe('GET /api/rag/metrics', () => {
       sort: () => ({ lean: () => Promise.resolve(null) }),
     });
 
-    const res = await request(app).get('/api/rag/metrics');
+    const res = await api.get('/api/rag/metrics');
 
     expect(res.body.data.bySource).toHaveLength(2);
 
@@ -234,9 +240,9 @@ describe('GET /api/rag/metrics', () => {
     expect(nasScan.documents).toBe(2);
     expect(nasScan.chunks).toBe(220);
 
-    const api = res.body.data.bySource.find((s) => s.source === 'api');
-    expect(api.documents).toBe(1);
-    expect(api.chunks).toBe(90);
+    const apiSource = res.body.data.bySource.find((s) => s.source === 'api');
+    expect(apiSource.documents).toBe(1);
+    expect(apiSource.chunks).toBe(90);
   });
 
   it('returns lastIngest from RagManifest', async () => {
@@ -251,7 +257,7 @@ describe('GET /api/rag/metrics', () => {
       }),
     });
 
-    const res = await request(app).get('/api/rag/metrics');
+    const res = await api.get('/api/rag/metrics');
 
     expect(res.body.data.lastIngest).not.toBeNull();
     expect(res.body.data.lastIngest.timestamp).toBe(fakeDate.toISOString());
@@ -263,7 +269,7 @@ describe('GET /api/rag/metrics', () => {
       sort: () => ({ lean: () => Promise.resolve(null) }),
     });
 
-    const res = await request(app).get('/api/rag/metrics');
+    const res = await api.get('/api/rag/metrics');
 
     expect(res.body.data.lastIngest).toBeNull();
   });
@@ -274,7 +280,7 @@ describe('GET /api/rag/metrics', () => {
       sort: () => ({ lean: () => Promise.resolve(null) }),
     });
 
-    const res = await request(app).get('/api/rag/metrics');
+    const res = await api.get('/api/rag/metrics');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);

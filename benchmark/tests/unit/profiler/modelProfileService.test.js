@@ -12,11 +12,11 @@ const svc = require('../../../src/services/profiler/modelProfileService');
 const mockProfiles = [
   {
     name: 'llama3.1:8b',
-    readiness: { host-delta: { stage: 'profiled' }, host-gamma: { stage: 'available' } }
+    readiness: { 'host-a': { stage: 'profiled' }, 'host-b': { stage: 'available' } }
   },
   {
     name: 'gemma3:12b',
-    readiness: { host-delta: { stage: 'benchmarked' } }
+    readiness: { 'host-a': { stage: 'benchmarked' } }
   },
   {
     name: 'phi4:14b',
@@ -53,7 +53,7 @@ describe('getAll()', () => {
   it('excludes profiles with no readiness entries', async () => {
     ModelProfile.find.mockReturnValue({ lean: jest.fn().mockResolvedValue(mockProfiles) });
     const result = await svc.getAll({ stage: 'available' });
-    // phi4:14b has empty readiness, should not appear; host-gamma on llama3.1:8b is 'available'
+    // phi4:14b has empty readiness, should not appear; host-b on llama3.1:8b is 'available'
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe('llama3.1:8b');
   });
@@ -94,48 +94,48 @@ describe('upsert()', () => {
 describe('updateReadiness()', () => {
   it('sets stage and no timestamp for "available"', async () => {
     ModelProfile.findOneAndUpdate.mockResolvedValue({});
-    await svc.updateReadiness('llama3.1:8b', 'host-delta', 'available');
+    await svc.updateReadiness('llama3.1:8b', 'host-a', 'available');
     const [, update] = ModelProfile.findOneAndUpdate.mock.calls[0];
-    expect(update.$set['readiness.host-delta.stage']).toBe('available');
-    expect(update.$set['readiness.host-delta.profiledAt']).toBeUndefined();
-    expect(update.$set['readiness.host-delta.adaptedAt']).toBeUndefined();
-    expect(update.$set['readiness.host-delta.benchmarkedAt']).toBeUndefined();
+    expect(update.$set['readiness.host-a.stage']).toBe('available');
+    expect(update.$set['readiness.host-a.profiledAt']).toBeUndefined();
+    expect(update.$set['readiness.host-a.adaptedAt']).toBeUndefined();
+    expect(update.$set['readiness.host-a.benchmarkedAt']).toBeUndefined();
   });
 
   it('sets stage + profiledAt when stage is "profiled"', async () => {
     ModelProfile.findOneAndUpdate.mockResolvedValue({});
-    await svc.updateReadiness('llama3.1:8b', 'host-delta', 'profiled');
+    await svc.updateReadiness('llama3.1:8b', 'host-a', 'profiled');
     const [, update] = ModelProfile.findOneAndUpdate.mock.calls[0];
-    expect(update.$set['readiness.host-delta.stage']).toBe('profiled');
-    expect(update.$set['readiness.host-delta.profiledAt']).toBeInstanceOf(Date);
+    expect(update.$set['readiness.host-a.stage']).toBe('profiled');
+    expect(update.$set['readiness.host-a.profiledAt']).toBeInstanceOf(Date);
   });
 
   it('sets stage + adaptedAt when stage is "adapted"', async () => {
     ModelProfile.findOneAndUpdate.mockResolvedValue({});
-    await svc.updateReadiness('llama3.1:8b', 'host-gamma', 'adapted');
+    await svc.updateReadiness('llama3.1:8b', 'host-b', 'adapted');
     const [, update] = ModelProfile.findOneAndUpdate.mock.calls[0];
-    expect(update.$set['readiness.host-gamma.stage']).toBe('adapted');
-    expect(update.$set['readiness.host-gamma.adaptedAt']).toBeInstanceOf(Date);
+    expect(update.$set['readiness.host-b.stage']).toBe('adapted');
+    expect(update.$set['readiness.host-b.adaptedAt']).toBeInstanceOf(Date);
   });
 
   it('sets stage + benchmarkedAt when stage is "benchmarked"', async () => {
     ModelProfile.findOneAndUpdate.mockResolvedValue({});
-    await svc.updateReadiness('gemma3:12b', 'host-delta', 'benchmarked');
+    await svc.updateReadiness('gemma3:12b', 'host-a', 'benchmarked');
     const [, update] = ModelProfile.findOneAndUpdate.mock.calls[0];
-    expect(update.$set['readiness.host-delta.stage']).toBe('benchmarked');
-    expect(update.$set['readiness.host-delta.benchmarkedAt']).toBeInstanceOf(Date);
+    expect(update.$set['readiness.host-a.stage']).toBe('benchmarked');
+    expect(update.$set['readiness.host-a.benchmarkedAt']).toBeInstanceOf(Date);
   });
 
   it('merges extraFields into $set', async () => {
     ModelProfile.findOneAndUpdate.mockResolvedValue({});
-    await svc.updateReadiness('llama3.1:8b', 'host-delta', 'profiled', { 'readiness.host-delta.stale': false });
+    await svc.updateReadiness('llama3.1:8b', 'host-a', 'profiled', { 'readiness.host-a.stale': false });
     const [, update] = ModelProfile.findOneAndUpdate.mock.calls[0];
-    expect(update.$set['readiness.host-delta.stale']).toBe(false);
+    expect(update.$set['readiness.host-a.stale']).toBe(false);
   });
 
   it('queries by model name', async () => {
     ModelProfile.findOneAndUpdate.mockResolvedValue({});
-    await svc.updateReadiness('phi4:14b', 'host-gamma', 'available');
+    await svc.updateReadiness('phi4:14b', 'host-b', 'available');
     const [filter, , options] = ModelProfile.findOneAndUpdate.mock.calls[0];
     expect(filter).toEqual({ name: 'phi4:14b' });
     expect(options).toEqual({
@@ -151,7 +151,7 @@ describe('updateThinkingCapability()', () => {
   it('sets top-level capability and host-specific thinking profile', async () => {
     ModelProfile.findOneAndUpdate.mockResolvedValue({});
 
-    await svc.updateThinkingCapability('qwen3:8b', 'host-gamma', {
+    await svc.updateThinkingCapability('qwen3:8b', 'host-b', {
       profiledAt: new Date('2026-07-07T00:00:00Z'),
       supported: true,
       channel: 'hidden',
@@ -169,8 +169,8 @@ describe('updateThinkingCapability()', () => {
     expect(filter).toEqual({ name: 'qwen3:8b' });
     expect(update.$set['capabilities.thinking']).toBe(true);
     expect(update.$set['capabilities.thinkingPolicy']).toBe('metered');
-    expect(update.$set['thinkingProfiles.host-gamma']).toMatchObject({
-      hostId: 'host-gamma',
+    expect(update.$set['thinkingProfiles.host-b']).toMatchObject({
+      hostId: 'host-b',
       supported: true,
       channel: 'hidden',
       finalAnswerContractOk: true,

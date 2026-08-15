@@ -1,5 +1,9 @@
 # Guided Agent X demos
 
+Start with `agentx.ps1 up` on Windows or `./agentx up` on Linux, then run the
+matching `health` command. The root page and service navigation work without
+Ollama; inference workflows require models chosen by the tester.
+
 ## Demo 1 — route a local answer
 
 1. Start the stack and open <http://localhost:3180/>.
@@ -21,5 +25,6 @@ inference is unavailable.
 4. Explain how RAG evidence and Benchmark results can inform a routing choice
    before it is promoted.
 
-OpenClaw, Hermès Agent, OctoPrint, personal data, and AIOps operational
-surfaces are intentionally absent from both demos.
+This workflow also needs the configured embedding model. Environment-specific
+operations, private data, and external adapters are intentionally absent from
+both demos.

@@ -130,7 +130,7 @@
             statusLabel: 'Gateway Offline',
             statusDetail: detail,
             messageTitle: 'OpenClaw Gateway is offline.',
-            messageBody: 'Make sure the gateway and the official OpenClaw runtime on .66 are reachable from AgentX.'
+            messageBody: 'Make sure the configured gateway and runtime are reachable from AgentX.'
         });
     }
 

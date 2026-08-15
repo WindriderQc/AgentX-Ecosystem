@@ -3,7 +3,7 @@
 // Mounted in src/app.js with a dedicated 1mb JSON parser: observation batches
 // are bounded by policy, and raw transcript payloads are refused at the
 // validation layer. There is deliberately NO bulk-approve endpoint — review is
-// candidate-by-candidate (docs/ai-ops/ecosystem-memory-review.md).
+// candidate-by-candidate through the bounded review contract.
 
 const express = require('express');
 

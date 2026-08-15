@@ -32,7 +32,7 @@ const GIB = 1024 * 1024 * 1024;
 const QWEN35MOE_ACTIVE_PARAMS_B = 3;
 
 /**
- * Memory bandwidth (GB/s) for GPUs in the AgentX fleet, plus a CUDA fallback.
+ * Reference memory bandwidth (GB/s) for common GPUs, plus a CUDA fallback.
  * Vendor spec figures; used only for analytical bounds, calibrate the
  * efficiency factor from hostperformancesnapshots for predictions.
  */
@@ -44,18 +44,15 @@ const GPU_BANDWIDTH_GBS = {
 };
 
 /**
- * Example TEST-NET host IP → memory bandwidth (GB/s). Real installations
- * should identify hardware by GPU name or provide measured profiles.
+ * Product defaults never map an IP address to hardware inventory. Real
+ * installations should identify hardware by GPU name or provide measured
+ * profiles.
  */
-const HOST_BANDWIDTH_GBS_BY_IP = {
-  '192.0.2.199': 936,
-  '192.0.2.12': 896,
-  '192.0.2.99': 912
-};
+const HOST_BANDWIDTH_GBS_BY_IP = Object.freeze({});
 
 /**
  * Resolve a host's memory bandwidth from an IP, URL, or GPU name.
- * @param {string} hint - e.g. "192.0.2.99", "http://192.0.2.99:11434", "RTX 3090"
+ * @param {string} hint - a GPU name or other hardware hint, e.g. "RTX 3090"
  * @returns {number|null} GB/s, or null if unresolved
  */
 function resolveHostBandwidthGBs(hint) {

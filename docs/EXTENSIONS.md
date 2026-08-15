@@ -16,7 +16,7 @@ Example configuration for a user-owned operations workspace:
 
 ```text
 AGENTX_PROFILE=full
-AGENTX_EXTENSION_MODULES=["/opt/agentx-extensions/printer-vision"]
+AGENTX_EXTENSION_MODULES=["/opt/agentx-extensions/example-adapter"]
 ```
 
 An extension exports a synchronous manifest:
