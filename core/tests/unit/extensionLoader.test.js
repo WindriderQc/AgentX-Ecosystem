@@ -42,13 +42,19 @@ describe('Agent X extension loader', () => {
       register
     }));
     const app = {};
+    const conversationLifecycle = { capabilities: { contractVersion: 1 } };
 
     const loaded = loadAgentXExtensions({
       app, express: {}, mongoose: {}, logger: {}, profile: 'full',
+      conversationLifecycle,
       env: { AGENTX_EXTENSION_MODULES: modulePath }, requireModule
     });
 
-    expect(register).toHaveBeenCalledWith(expect.objectContaining({ app, profile: 'full' }));
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({
+      app,
+      profile: 'full',
+      conversationLifecycle
+    }));
     expect(loaded).toEqual([expect.objectContaining({ id: 'printer-vision-ops' })]);
     expect(extensionOwnsCapability(loaded, 'printer-vision')).toBe(true);
   });
