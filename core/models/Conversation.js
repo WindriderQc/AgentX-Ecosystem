@@ -98,6 +98,17 @@ const ConversationSchema = new mongoose.Schema({
   promptName: { type: String },     // Snapshot: e.g. "default_chat"
   promptVersion: { type: Number },  // Snapshot: e.g. 5
 
+  // Core-owned conversation lifecycle. Legacy documents without this object
+  // are treated as active by the lifecycle service.
+  lifecycle: {
+    status: {
+      type: String,
+      enum: ['active', 'archived'],
+      default: 'active'
+    },
+    archivedAt: { type: Date, default: null }
+  },
+
   // OpenClaw integration: track conversation source
   source: {
     type: String,
@@ -154,6 +165,7 @@ ConversationSchema.index({ promptConfigId: 1 });
 
 // 0124: Primary history paging index (routes/history.js -> find({ userId }).sort({ updatedAt: -1 }))
 ConversationSchema.index({ userId: 1, updatedAt: -1 });
+ConversationSchema.index({ userId: 1, promptName: 1, 'lifecycle.status': 1, updatedAt: -1 });
 
 ConversationSchema.index({ promptName: 1, promptVersion: 1 });
 ConversationSchema.index({ ragRequested: 1 });

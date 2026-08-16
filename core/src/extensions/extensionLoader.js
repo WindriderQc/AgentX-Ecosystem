@@ -62,6 +62,7 @@ function loadAgentXExtensions({
   logger,
   profile,
   standardJsonParser,
+  conversationLifecycle,
   env = process.env,
   requireModule = require
 }) {
@@ -102,6 +103,7 @@ function loadAgentXExtensions({
       logger,
       profile,
       standardJsonParser,
+      conversationLifecycle,
       extensionRoot
     }));
     if (result && typeof result.then === 'function') {

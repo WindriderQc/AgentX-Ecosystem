@@ -23,7 +23,7 @@ jobs:
       - run: npm ci
         working-directory: core
       - name: Validate product profile and extension boundary
-        run: npm test -- --runInBand --runTestsByPath tests/unit/agentxRuntimeProfile.test.js tests/unit/extensionLoader.test.js tests/unit/laneObservabilityService.test.js
+        run: npm test -- --runInBand --runTestsByPath tests/unit/agentxRuntimeProfile.test.js tests/unit/extensionLoader.test.js tests/services/conversationLifecycleService.test.js tests/unit/laneObservabilityService.test.js
         working-directory: core
       - name: Validate service entrypoints
         run: |

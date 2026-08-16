@@ -12,7 +12,8 @@ async function findConversationForUpdate({ conversationId, userId }) {
 
     return Conversation.findOne({
         _id: conversationId,
-        userId
+        userId,
+        'lifecycle.status': { $ne: 'archived' }
     });
 }
 
