@@ -290,7 +290,7 @@ class UnifiedModels {
                     case 'name':    av = a.name?.toLowerCase() || ''; bv = b.name?.toLowerCase() || ''; return dir * av.localeCompare(bv);
                     case 'host':    av = a.source?.hostName || a.source?.url || ''; bv = b.source?.hostName || b.source?.url || ''; return dir * av.localeCompare(bv);
                     case 'params':  av = parseFloat(a.details?.parameter_size || a.parameterSize || '0'); bv = parseFloat(b.details?.parameter_size || b.parameterSize || '0'); return dir * (av - bv);
-                    case 'context': av = a.executionOverrides?.num_ctx || a.executionDefaults?.num_ctx || a.capabilities?.maxContext || 0; bv = b.executionOverrides?.num_ctx || b.executionDefaults?.num_ctx || b.capabilities?.maxContext || 0; return dir * (av - bv);
+                    case 'context': av = a.executionOverrides?.num_ctx || a.capabilities?.maxContext || 0; bv = b.executionOverrides?.num_ctx || b.capabilities?.maxContext || 0; return dir * (av - bv);
                     case 'score':   av = a.benchmarkStats?.avgCompositeScore || 0; bv = b.benchmarkStats?.avgCompositeScore || 0; return dir * (av - bv);
                     case 'speed':   av = a.capabilities?.avgTokensPerSec || 0; bv = b.capabilities?.avgTokensPerSec || 0; return dir * (av - bv);
                     default: return 0;
@@ -347,19 +347,14 @@ class UnifiedModels {
         return `${value.toFixed(precision)} ${units[unitIndex]}`.trim();
     }
 
-    getHostHardware(hostName) {
-        return { gpu: 'GPU', vramGb: null };
-    }
-
     getHostSummaries() {
         const entries = new Map();
         const configuredHosts = Array.isArray(this.sources?.ollama?.hosts) ? this.sources.ollama.hosts : [];
         const active = this.getActiveModels();
 
-        const ensureEntry = ({ url, name }) => {
+        const ensureEntry = ({ url, name, vramMb = 0, gpu = '' }) => {
             const key = url || `name:${name || 'unknown'}`;
             if (!entries.has(key)) {
-                const hardware = this.getHostHardware(name);
                 entries.set(key, {
                     key,
                     url: url || '',
@@ -369,8 +364,8 @@ class UnifiedModels {
                     loadedModels: [],
                     idleModels: [],
                     status: 'unknown',
-                    gpu: hardware.gpu,
-                    vramGb: hardware.vramGb,
+                    gpu: gpu || 'GPU',
+                    vramGb: Number(vramMb) > 0 ? Number(vramMb) / 1024 : null,
                 });
             }
             return entries.get(key);
@@ -380,6 +375,8 @@ class UnifiedModels {
             ensureEntry({
                 url: typeof host === 'string' ? host : host?.url,
                 name: typeof host === 'string' ? host : (host?.name || host?.url),
+                vramMb: typeof host === 'string' ? 0 : host?.vramMb,
+                gpu: typeof host === 'string' ? '' : host?.gpu?.model,
             });
         }
 
@@ -584,7 +581,7 @@ class UnifiedModels {
 
         const params = model.details?.parameter_size || model.parameterSize || model.parameters || '-';
         // Effective context: override > auto-detected default > theoretical max
-        const rawCtx = model.executionOverrides?.num_ctx || model.executionDefaults?.num_ctx || model.capabilities?.maxContext || model.details?.context_length || null;
+        const rawCtx = model.executionOverrides?.num_ctx || model.capabilities?.maxContext || model.details?.context_length || null;
         const context = rawCtx ? (rawCtx >= 1024 ? Math.round(rawCtx / 1024) + 'k' : rawCtx) : '--';
 
         // Host
@@ -660,7 +657,7 @@ class UnifiedModels {
                     : hostName ? `<span class="host-badge" title="${escapeHtml(hostUrl)}">${escapeHtml(hostName)}</span>` : `<span class="tag uppercase">${escapeHtml(source)}</span>`}
             </td>
             <td>${escapeHtml(params)}</td>
-            <td class="context-cell" data-model="${escapeHtml(model.name)}" title="${model.executionOverrides?.num_ctx ? 'Override' : model.executionDefaults?.num_ctx ? 'Auto-detected' : 'Max capability'} · Click to configure">${context}</td>
+            <td class="context-cell" data-model="${escapeHtml(model.name)}" title="${model.executionOverrides?.num_ctx ? 'Override' : 'Declared capability'} · Click to configure">${context}</td>
             <td>${catBadges}</td>
             <td>${scoreCell}</td>
             <td>${speedCell}</td>
@@ -769,12 +766,11 @@ class UnifiedModels {
         // Capabilities
         const cap = m.capabilities || {};
         const fmtCtx = (v) => v ? (v >= 1024 ? Math.round(v / 1024) + 'k' : v) : '--';
-        const effectiveCtx = m.executionOverrides?.num_ctx || m.executionDefaults?.num_ctx || cap.maxContext;
+        const effectiveCtx = m.executionOverrides?.num_ctx || cap.maxContext;
         const maxCtx = cap.maxContext;
         const isOverridden = m.executionOverrides?.num_ctx != null;
-        const isAutoDetected = !isOverridden && m.executionDefaults?.num_ctx != null && m.executionDefaults.num_ctx !== maxCtx;
-        const ctxLabel = isOverridden ? 'Override' : isAutoDetected ? 'Auto-detected' : 'Max';
-        const ctxColor = isOverridden ? 'color:#fbbf24;' : isAutoDetected ? 'color:#60a5fa;' : '';
+        const ctxLabel = isOverridden ? 'Override' : 'Max';
+        const ctxColor = isOverridden ? 'color:#fbbf24;' : '';
         sections.push(`
             <div class="detail-section">
                 <h3><i class="fas fa-gauge-high"></i> Capabilities</h3>
@@ -831,7 +827,6 @@ class UnifiedModels {
                 <div class="detail-section">
                     <h3><i class="fas fa-sliders-h"></i> Execution Config</h3>
                     <div class="detail-grid">
-                        <div class="detail-kv"><span class="dk">num_ctx (default)</span><span class="dv">${ed?.num_ctx || 'auto'}</span></div>
                         <div class="detail-kv"><span class="dk">temperature (default)</span><span class="dv">${ed?.temperature ?? 'auto'}</span></div>
                         ${eo?.num_ctx ? `<div class="detail-kv"><span class="dk">num_ctx (override)</span><span class="dv" style="color:#fbbf24;">${eo.num_ctx}</span></div>` : ''}
                         ${eo?.temperature != null ? `<div class="detail-kv"><span class="dk">temperature (override)</span><span class="dv" style="color:#fbbf24;">${eo.temperature}</span></div>` : ''}

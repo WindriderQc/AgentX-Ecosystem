@@ -13,7 +13,7 @@ const { isAdaptedModel, buildAdaptedName } = require('./namingConvention');
  * re-inflate ctx past the host's VRAM envelope.
  *
  * @param {string} model
- * @param {string} host  Full URL including scheme (e.g. http://192.0.2.66:11434)
+ * @param {string} host  Full URL including scheme
  * @returns {Promise<string>} effective model name to send to Ollama
  */
 async function resolveAdaptedModel(model, host) {

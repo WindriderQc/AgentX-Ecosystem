@@ -45,7 +45,7 @@ const BENCHMARK_CLAIM_SOURCE = 'benchmark';
 
 /**
  * True when the host preference currently belongs to an active benchmark
- * batch. Pin-warming code paths (reconciler, /reload endpoint, restorePin)
+ * batch. Pin-warming code paths (reconciler, /reload endpoint, restorePinnedModels)
  * MUST short-circuit on this check — reloading a pinned model on a claimed
  * host evicts the bench's working set mid-run and forces 30–90s reload
  * cycles per prompt (task 0175). The check is defense-in-depth: we look at

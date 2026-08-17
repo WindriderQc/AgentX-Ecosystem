@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { defaultPlanningTimeZone } = require('../src/services/planningDateService');
 
 const ClusterScheduleEntrySchema = new mongoose.Schema({
   source: {
@@ -24,7 +25,7 @@ const ClusterScheduleEntrySchema = new mongoose.Schema({
     type: { type: String, enum: ['cron', 'interval', 'continuous'], required: true },
     cron: { type: String, default: null },
     intervalMs: { type: Number, default: null },
-    timezone: { type: String, default: 'America/Toronto' }
+    timezone: { type: String, default: defaultPlanningTimeZone }
   },
   estimatedDurationMs: { type: Number, default: null },
   vramMb: { type: Number, default: null },

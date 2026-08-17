@@ -58,7 +58,7 @@ async function getDriftSummary(windowMs) {
       acc.total += r.count;
       if (r.source === 'modelfile') acc.modelfile += r.count;
       else if (r.source === 'caller') acc.caller += r.count;
-      else acc.resolved += r.count; // registry/vram/fallback — cascade-risk
+      else acc.resolved += r.count; // any non-resident override is drift evidence
       return acc;
     }, { total: 0, modelfile: 0, caller: 0, resolved: 0, na: 0 });
 

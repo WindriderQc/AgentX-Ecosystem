@@ -1,22 +1,12 @@
 const ModelContextProfile = require('../../models/ModelContextProfile');
 const { getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 
-const DEFAULT_RECOMMENDED_CONTEXT_CAP = 131072;
 const DEFAULT_MAX_SANE_TOKENS_PER_SEC = 10000;
 
 function positiveInteger(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n);
-}
-
-function recommendedContextCap() {
-  return positiveInteger(
-    process.env.MODEL_CONTEXT_RECOMMENDED_CAP
-      ?? process.env.MODEL_CONTEXT_OPERATIONAL_CAP
-      ?? process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP
-      ?? DEFAULT_RECOMMENDED_CONTEXT_CAP
-  );
 }
 
 function maxSaneTokensPerSec() {
@@ -54,13 +44,6 @@ function modelNameCandidates(modelName) {
   return Array.from(new Set([normalized, bare].filter(Boolean)));
 }
 
-function chooseRecommendedContext(verifiedMaxContext) {
-  const verified = positiveInteger(verifiedMaxContext);
-  if (!verified) return null;
-  const cap = recommendedContextCap();
-  return cap ? Math.min(verified, cap) : verified;
-}
-
 function bestStepForSnapshot(snapshot) {
   const tested = positiveInteger(snapshot?.testedNumCtx);
   const steps = Array.isArray(snapshot?.steps) ? snapshot.steps : [];
@@ -92,9 +75,15 @@ async function updateFromProbeSnapshot(snapshot) {
     positiveInteger(existing?.verifiedMaxContext) || 0,
     tested
   );
-  const recommendedContext = chooseRecommendedContext(verifiedMaxContext);
-  const stressCeiling = verifiedMaxContext > recommendedContext ? verifiedMaxContext : null;
+  // Keep the legacy field equal to the measured value while downstream
+  // consumers migrate to verifiedMaxContext. It is no longer a second,
+  // independently capped runtime policy.
+  const recommendedContext = verifiedMaxContext;
   const step = bestStepForSnapshot(snapshot);
+  const verifiedInputTokens = Math.max(
+    positiveInteger(existing?.verifiedInputTokens) || 0,
+    positiveInteger(step?.promptTokens) || 0
+  ) || null;
   const evidenceTokensPerSec = Number(step?.tokensPerSec ?? snapshot.atLimitTokensPerSec ?? 0) || null;
 
   return ModelContextProfile.findOneAndUpdate(
@@ -105,8 +94,8 @@ async function updateFromProbeSnapshot(snapshot) {
         hostUrl,
         hostId: hostIdForUrl(hostUrl),
         verifiedMaxContext,
+        verifiedInputTokens,
         recommendedContext,
-        stressCeiling,
         modelTheoreticalMax: positiveInteger(snapshot.modelTheoreticalMax),
         source: 'context_probe',
         stale: false,
@@ -116,6 +105,7 @@ async function updateFromProbeSnapshot(snapshot) {
           snapshotId: snapshot._id ? String(snapshot._id) : null,
           testedNumCtx: tested,
           promptFillPct: positiveInteger(snapshot.promptFillPct),
+          promptTokens: positiveInteger(step?.promptTokens),
           tokensPerSec: evidenceTokensPerSec,
           vramUsedMiB: positiveInteger(step?.vramUsedMiB ?? snapshot.vramAtLimitMiB),
           gpuPercent: Number(step?.gpuPercent ?? snapshot.gpuPercentAtLimit ?? 0) || null,
@@ -145,7 +135,6 @@ async function findContextProfile(modelName, hostUrl) {
 }
 
 module.exports = {
-  chooseRecommendedContext,
   findContextProfile,
   hasSaneThroughputEvidence,
   isSaneTokensPerSec,

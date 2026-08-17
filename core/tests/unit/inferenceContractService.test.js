@@ -137,7 +137,8 @@ describe('inferenceContractService', () => {
         resolveContextDetails: jest.fn(async () => ({
           num_ctx: 1024,
           source: 'model_context_profile',
-          authoritative: true
+          authoritative: true,
+          details: { verifiedInputTokens: 400 }
         }))
       }
     );
@@ -146,6 +147,7 @@ describe('inferenceContractService', () => {
       windowTokens: 1024,
       source: 'model_context_profile',
       validatedWindowTokens: 1024,
+      validatedInputTokens: 400,
       output: { reservedTokens: 512, source: 'caller' },
       enforcement: 'report_only',
       transformations: {
@@ -156,8 +158,11 @@ describe('inferenceContractService', () => {
     });
     expect(budget.input.estimatedTokens).toBeGreaterThan(budget.input.availableTokens);
     expect(budget.input.overflowTokens).toBeGreaterThan(0);
+    expect(budget.input.validatedOverflowTokens).toBeGreaterThan(0);
+    expect(budget.input.validatedFits).toBe(false);
     expect(budget.warnings).toEqual(expect.arrayContaining([
-      expect.stringMatching(/upstream truncation/i)
+      expect.stringMatching(/upstream truncation/i),
+      expect.stringMatching(/largest measured successful prompt/i)
     ]));
     expect(messages).toHaveLength(2);
     expect(messages[1].content).toHaveLength(4000);
@@ -186,6 +191,73 @@ describe('inferenceContractService', () => {
     expect(budget.warnings).toEqual(expect.arrayContaining([
       expect.stringMatching(/exceeds the latest validated/i)
     ]));
+  });
+
+  it('keeps resident capacity separate from measured window and input limits', async () => {
+    const budget = await resolveContextBudget(
+      {
+        model: 'model-a',
+        host: HOSTS[0].url,
+        prompt: 'short request',
+        requestedMaxOutputTokens: 4096
+      },
+      {
+        resolveContextDetails: jest.fn(async () => ({
+          num_ctx: 262144,
+          source: 'host_preference_pin',
+          verifiedMaxContext: 237568,
+          verifiedInputTokens: 160000
+        }))
+      }
+    );
+
+    expect(budget).toMatchObject({
+      windowTokens: 262144,
+      source: 'host_preference_pin',
+      validatedWindowTokens: 237568,
+      validatedInputTokens: 160000,
+      output: { reservedTokens: 4096 },
+      input: {
+        availableTokens: 258048,
+        fits: true,
+        validatedFits: true
+      }
+    });
+    expect(budget.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/runtime context exceeds the latest validated/i)
+    ]));
+  });
+
+  it('reports unresolved context without inventing a smaller runtime window', async () => {
+    const budget = await resolveContextBudget(
+      {
+        model: 'unprofiled-model',
+        host: HOSTS[0].url,
+        prompt: 'hello'
+      },
+      {
+        resolveContextDetails: jest.fn(async () => ({
+          num_ctx: null,
+          source: 'unresolved'
+        }))
+      }
+    );
+
+    expect(budget).toMatchObject({
+      windowTokens: null,
+      source: 'unresolved',
+      resolvedWindowTokens: null,
+      resolvedSource: 'unresolved',
+      input: {
+        availableTokens: null,
+        remainingTokens: null,
+        overflowTokens: null,
+        fits: null
+      }
+    });
+    expect(budget.warnings).toEqual([
+      expect.stringMatching(/no context window was inferred/i)
+    ]);
   });
 
   it('returns one versioned contract containing capability and budget evidence', async () => {

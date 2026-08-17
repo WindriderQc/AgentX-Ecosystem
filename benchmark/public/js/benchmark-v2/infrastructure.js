@@ -169,7 +169,7 @@ function _buildCard(host) {
     // ── Pill row: GPU, VRAM, model count ──
     const pills = document.createElement('div');
     pills.className = 'hs-pills';
-    const gpuLabel = host.gpu?.model || _vramToGpu(host.gpu?.vramTotalMiB) || '';
+    const gpuLabel = host.gpu?.model || _vramLabel(host.gpu?.vramTotalMiB) || '';
     if (gpuLabel) pills.appendChild(_pill(gpuLabel));
     const vramMiB = host.gpu?.vramTotalMiB;
     if (vramMiB) pills.appendChild(_pill(`${Math.round(vramMiB / 1024)} GB`));
@@ -268,9 +268,8 @@ function _autoSelect(container, hosts) {
 
 // ── Host helpers ────────────────────────────────────────────────────────────
 
-const VRAM_GPU = { 24576: 'RTX 3090', 16384: 'RTX 5070 Ti', 12288: 'RTX 3080 Ti' };
-function _vramToGpu(vramMiB) {
-    return vramMiB ? (VRAM_GPU[vramMiB] || '') : '';
+function _vramLabel(vramMiB) {
+    return vramMiB ? `${Math.round(vramMiB / 1024)} GB VRAM` : '';
 }
 
 // ── DOM helpers ──────────────────────────────────────────────────────────────

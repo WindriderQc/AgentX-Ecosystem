@@ -7,9 +7,8 @@
  * As of task 0151, the legacy `defaultModels` + `pinnedModel` dual-state model
  * has been unified into a single `pinnedModels: [{ model, keepAlive,
  * contextSize, autoRestore }]` array. The service still exposes
- * backward-compat helpers (getDefaultModelForHost, getDefaultModelsMap) that
- * project the new shape onto the old API for callers that haven't migrated
- * yet (modelRouterConfig pin cache, clusterScheduleService recommendHost,
+ * helpers that expose the pinned model collection to routing and scheduling
+ * callers (modelRouterConfig pin cache, clusterScheduleService recommendHost,
  * inference.js keep-alive lookup).
  *
  * Task 0227 — this file was 1042 lines (cap 700) and mixed four concerns:
@@ -94,13 +93,6 @@ async function deletePreference(hostUrl) {
 // fetchRunningModelInfos, verifyPinnedEntriesLoaded, the normalize aliases,
 // etc.) live in ./hostPinPrimitives and are imported above. They are
 // re-exported below where they were part of the public surface.
-
-// Legacy API — returns the first pinned model's name. Some callers still
-// expect a single "default" model name.
-async function getDefaultModelForHost(hostUrl) {
-  const pref = await HostPreference.findOne({ hostUrl }).lean();
-  return getPrimaryPinnedModel(pref);
-}
 
 // ── Warmup ──────────────────────────────────────────────────
 
@@ -236,13 +228,9 @@ async function warmAllDefaults() {
 }
 
 /**
- * Backward-compat shim: returns Map<hostUrl, string[]> of pinned model names.
- * Consumers (clusterScheduleService.recommendHost, modelRouterConfig pin
- * cache) care about "which models are preferred on which host" — they don't
- * care whether those come from `defaultModels` or `pinnedModel`. After
- * task 0151 they all come from `pinnedModels[*].model`.
+ * Return Map<hostUrl, string[]> of pinned model names.
  */
-async function getDefaultModelsMap() {
+async function getPinnedModelsMap() {
   const prefs = await getAll();
   const map = new Map();
   for (const p of prefs) {
@@ -560,13 +548,6 @@ async function restorePinnedModelsInternal(hostUrl) {
   };
 }
 
-// Legacy alias for callers (watchdog, nerve-center route) that still use
-// restorePin to refer to "restore the primary pinned model on this host".
-// Now operates on the full pinnedModels array.
-async function restorePin(hostUrl) {
-  return restorePinnedModels(hostUrl);
-}
-
 async function swapModel(hostUrl, model) {
   const pref = await HostPreference.findOne({ hostUrl }).lean();
 
@@ -638,8 +619,7 @@ module.exports = {
   updatePreference,
   deletePreference,
   hasActiveBenchmarkClaim,
-  getDefaultModelForHost,
-  getDefaultModelsMap,
+  getPinnedModelsMap,
   getPinnedEntries,
   getPinnedModelNames,
   getPrimaryPinnedModel,
@@ -669,7 +649,6 @@ module.exports = {
   updateLoadedModel,
   setHostStatus,
   unloadModel,
-  restorePin,
   restorePinnedModels,
   swapModel,
   claimBenchmark: benchmarkClaimService.claimBenchmark,

@@ -100,7 +100,7 @@ async function getDedicationStatuses() {
  * Resolve a host URL to its Nerve Center hostKey.
  * Kept for backward compatibility — callers that already have a hostKey
  * can still use it, but reloadDedication no longer needs it.
- * @param {string} hostUrl - e.g. "http://192.0.2.66:11434"
+ * @param {string} hostUrl - full Ollama base URL
  * @returns {Promise<string|null>} hostKey, or null if not found
  */
 async function resolveHostKey(hostUrl) {

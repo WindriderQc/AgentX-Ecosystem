@@ -4,7 +4,7 @@
  *
  * Updates the existing #tokenLimit pill in the chat header, plus a small
  * source-badge (#contextSourceBadge) so the user can see whether the number
- * came from the Modelfile, the profiler, or a fallback.
+ * came from the Modelfile, an operator pin, a profile, or remains unresolved.
  *
  * Per architectural rule (2026-04-18): chat DISPLAYS context, never configures
  * it. This module is read-only UX; it does not mutate request payloads.
@@ -16,10 +16,10 @@
   const SOURCE_LABELS = {
     modelfile: { label: 'Modelfile', tone: 'ok', tip: 'Context from Ollama Modelfile — the source of truth.' },
     profiled: { label: 'Profiled', tone: 'ok', tip: 'Context verified by benchmark profiler.' },
-    registry_default: { label: 'Registry', tone: 'warn', tip: 'Auto-detected default; profile this model to verify.' },
-    registry_capability: { label: 'Registry', tone: 'warn', tip: 'Capability-level default; profile this model to verify.' },
+    model_context_profile: { label: 'Profiled', tone: 'ok', tip: 'Context verified for this model and host.' },
+    host_preference_pin: { label: 'Pinned', tone: 'ok', tip: 'Resident context explicitly pinned for this model and host.' },
     model_capacity: { label: 'Model max', tone: 'warn', tip: 'Reported model capacity (no Modelfile PARAMETER num_ctx).' },
-    fallback: { label: 'Fallback', tone: 'danger', tip: 'Could not resolve — using 8192. Run the profiler.' }
+    unresolved: { label: 'Unresolved', tone: 'danger', tip: 'No runtime context was inferred. Configure or profile this model and host.' }
   };
 
   // Cache in-memory for the session (server also caches 5 min)
@@ -58,7 +58,7 @@
   function applyBadge(sourceKey) {
     const badge = ensureBadge();
     if (!badge) return;
-    const meta = SOURCE_LABELS[sourceKey] || SOURCE_LABELS.fallback;
+    const meta = SOURCE_LABELS[sourceKey] || SOURCE_LABELS.unresolved;
     badge.textContent = meta.label;
     badge.title = meta.tip;
     const tones = {
@@ -83,15 +83,19 @@
 
   function applyLimit(numCtx) {
     const el = document.getElementById('tokenLimit');
+    const resolved = Number.isFinite(Number(numCtx)) && Number(numCtx) > 0;
     if (el) {
-      el.textContent = formatK(numCtx);
-      el.title = `${Number(numCtx).toLocaleString()} tokens (model context limit)`;
+      el.textContent = resolved ? formatK(numCtx) : '—';
+      el.title = resolved
+        ? `${Number(numCtx).toLocaleString()} tokens (model context limit)`
+        : 'Model context is unresolved';
     }
     // Reveal the pill so the limit is visible even before the first message
     const pill = document.getElementById('conversationTokens');
     if (pill) pill.style.display = 'inline-flex';
     // Expose for updateConversationStats to read as authoritative limit
-    window.__chatContextLimit = Number(numCtx);
+    if (resolved) window.__chatContextLimit = Number(numCtx);
+    else delete window.__chatContextLimit;
   }
 
   /**

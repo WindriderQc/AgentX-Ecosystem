@@ -9,15 +9,9 @@ const { buildAdaptedName } = require('../profiler/namingConvention');
 const { modelNameCandidates } = require('../modelContextResolver');
 const { parseParameterCount, parseQuantization, estimateTotalVram } = require('../parameterDetection');
 const { selectBestQuantForVram, parseActiveParams } = require('../modelFitEstimator');
+const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
 const READY_STAGES = new Set(['profiled', 'adapted', 'benchmarked']);
-// Context used for the advisory analytical fit estimate. Matches the forced
-// utility/lightweight benchmark context; the estimate is a planning hint only.
-const ESTIMATE_NUM_CTX = 8192;
-
-function normalizeModelName(name) {
-    return String(name || '').trim().replace(/:latest$/i, '');
-}
 
 function unique(values) {
     return [...new Set(values.filter(Boolean))];
@@ -57,8 +51,8 @@ function getProfileVramMiB(adaptation) {
  * quant would fit, so an operator can pull the right artifact before spending a
  * profile run. Returns null when params/VRAM can't be determined.
  */
-function estimateCandidateFit(candidate, vramLimitMiB, numCtx = ESTIMATE_NUM_CTX) {
-    if (!vramLimitMiB) return null;
+function estimateCandidateFit(candidate, vramLimitMiB, numCtx) {
+    if (!vramLimitMiB || !Number.isFinite(Number(numCtx)) || Number(numCtx) <= 0) return null;
     const paramB = parseParameterCount(candidate.adaptedModel)
         || parseParameterCount(candidate.rawModel)
         || parseParameterCount(candidate.inputModel)
@@ -77,7 +71,7 @@ function estimateCandidateFit(candidate, vramLimitMiB, numCtx = ESTIMATE_NUM_CTX
     const fitsAsNamed = Number.isFinite(asNamedBytes) ? asNamedBytes <= budgetBytes : null;
     let note;
     if (!walk.fits) {
-        note = `analytically unlikely to fit ${paramB}B in ${vramLimitMiB} MiB even at half context`;
+        note = `analytically unlikely to fit ${paramB}B @ ${numCtx} ctx in ${vramLimitMiB} MiB`;
     } else if (namedQuant && Number.isFinite(asNamedBytes) && asNamedBytes > budgetBytes) {
         note = `named ${namedQuant} ≈ ${Math.round(asNamedBytes / 1024 / 1024)} MiB won't fit; `
             + `${walk.quantization} @ ${walk.num_ctx} ctx would (~${walk.estVramMiB} MiB)`;
@@ -98,7 +92,7 @@ function estimateCandidateFit(candidate, vramLimitMiB, numCtx = ESTIMATE_NUM_CTX
     };
 }
 
-function classifyCandidate({ candidate, inventory, hostId, hostVramMiB, maxVramFraction, profile, adaptation, contextProfile }) {
+function classifyCandidate({ candidate, inventory, hostId, hostVramMiB, maxVramFraction, profile, adaptation, contextProfile, requestedNumCtx }) {
     const onHost = {
         raw: inventory.has(candidate.rawModel),
         adapted: inventory.has(candidate.adaptedModel)
@@ -107,7 +101,8 @@ function classifyCandidate({ candidate, inventory, hostId, hostVramMiB, maxVramF
     const vramLimitMiB = hostVramMiB && maxVramFraction
         ? Math.floor(Number(hostVramMiB) * Number(maxVramFraction))
         : Number(hostVramMiB) || null;
-    const estimate = estimateCandidateFit(candidate, vramLimitMiB);
+    const measuredNumCtx = Number(contextProfile?.verifiedMaxContext || contextProfile?.recommendedContext) || null;
+    const estimate = estimateCandidateFit(candidate, vramLimitMiB, requestedNumCtx || measuredNumCtx);
 
     if (vramLimitMiB && vramUsedMiB && vramUsedMiB > vramLimitMiB) {
         return {
@@ -128,7 +123,7 @@ function classifyCandidate({ candidate, inventory, hostId, hostVramMiB, maxVramF
     const hasProfile = stage && READY_STAGES.has(stage);
     const deployed = adaptation?.deployment?.status === 'deployed';
     const stale = !!(readiness?.stale || adaptation?.staleness?.stale);
-    const contextValidated = Number(contextProfile?.recommendedContext) > 0
+    const contextValidated = Number(contextProfile?.verifiedMaxContext || contextProfile?.recommendedContext) > 0
         && contextProfile?.stale !== true;
 
     const actions = [];
@@ -268,6 +263,9 @@ async function buildSweepPlan(input = {}, deps = {}) {
     // Standard includes the context probe required by the immutable campaign
     // contract. Quick profiling cannot make a candidate benchmark-ready.
     const profileDepth = input.profileDepth || 'standard';
+    const requestedNumCtx = Number(
+        input.execution_config?.force_num_ctx || input.execution_config?.num_ctx || 0
+    ) || null;
 
     const resolvedCandidates = candidatesInput.map(resolveCandidate);
     const candidates = [];
@@ -281,7 +279,8 @@ async function buildSweepPlan(input = {}, deps = {}) {
             maxVramFraction,
             profile: evidence.profile,
             adaptation: evidence.adaptation,
-            contextProfile: evidence.contextProfile
+            contextProfile: evidence.contextProfile,
+            requestedNumCtx
         }));
     }
 

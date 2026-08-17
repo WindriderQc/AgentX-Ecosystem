@@ -22,8 +22,7 @@ const {
   parseParameterCount,
   parseQuantization,
   bytesPerParam,
-  estimateTotalVram,
-  detectOptimalNumCtx
+  estimateTotalVram
 } = require('../parameterDetection');
 
 const MIB = 1024 * 1024;
@@ -206,8 +205,8 @@ function estTpsFromModel(tm, paramB, quant, modelName) {
 }
 
 /** Highest-quality quant that fits a target context within 90% of VRAM. */
-function recommendQuant(paramB, vramTotalMiB, targetCtx = 8192) {
-  if (!paramB || !vramTotalMiB) return null;
+function recommendQuant(paramB, vramTotalMiB, targetCtx) {
+  if (!paramB || !vramTotalMiB || !targetCtx) return null;
   for (const q of QUANT_LADDER) {
     if (estimateTotalVram(paramB, q, targetCtx) / MIB <= vramTotalMiB * 0.9) return q;
   }
@@ -219,20 +218,21 @@ function estimateFit({ paramB, quant, vramTotalMiB }) {
   if (!paramB || !vramTotalMiB) {
     return { verdict: 'unknown', estMaxCtx: null, estVramAt8kMiB: null, estVramPctAt8k: null, recommendedQuant: null };
   }
-  const opt = detectOptimalNumCtx({ parameterSize: `${paramB}B`, quantization: quant, hostVramMiB: vramTotalMiB });
-  const estMaxCtx = opt.num_ctx;
+  const budgetMiB = vramTotalMiB * 0.9;
   const minNeededMiB = estimateTotalVram(paramB, quant, 2048) / MIB;
   const at8kMiB = estimateTotalVram(paramB, quant, 8192) / MIB;
 
   let verdict;
-  if (minNeededMiB > vramTotalMiB) verdict = 'too-large';
-  else if (estMaxCtx >= 8192) verdict = 'fits';
+  if (minNeededMiB > budgetMiB) verdict = 'too-large';
+  else if (at8kMiB <= budgetMiB) verdict = 'fits';
   else verdict = 'tight';
 
-  const rq = (verdict === 'too-large' || verdict === 'tight') ? recommendQuant(paramB, vramTotalMiB) : null;
+  const rq = (verdict === 'too-large' || verdict === 'tight')
+    ? recommendQuant(paramB, vramTotalMiB, 8192)
+    : null;
   return {
     verdict,
-    estMaxCtx,
+    estMaxCtx: null,
     estVramAt8kMiB: round(at8kMiB),
     estVramPctAt8k: round((at8kMiB / vramTotalMiB) * 100),
     recommendedQuant: rq && rq !== (quant || '').toUpperCase() ? rq : null

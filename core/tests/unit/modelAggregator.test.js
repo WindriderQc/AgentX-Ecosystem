@@ -1,7 +1,6 @@
 const mockFetch = jest.fn();
 const mockCustomFind = jest.fn();
 const mockRegistryFind = jest.fn();
-const mockBenchmarkAggregate = jest.fn();
 
 jest.mock('node-fetch', () => mockFetch);
 
@@ -12,10 +11,6 @@ jest.mock('../../models/CustomModel', () => ({
 jest.mock('../../models/ModelRegistry', () => ({
   find: (...args) => mockRegistryFind(...args)
 }));
-
-jest.mock('../../models/BenchmarkResult', () => ({
-  aggregate: (...args) => mockBenchmarkAggregate(...args)
-}), { virtual: true });
 
 jest.mock('../../config/logger', () => ({
   debug: jest.fn(),
@@ -82,7 +77,6 @@ describe('modelAggregator', () => {
         status: 'active'
       }
     ]));
-    mockBenchmarkAggregate.mockResolvedValue([]);
   });
 
   it('deduplicates Ollama catalog entries that differ only by model-name case', async () => {
@@ -135,6 +129,7 @@ describe('modelAggregator', () => {
       'http://secondary:11434'
     ]);
     expect(new Set(installs.map(model => model.id)).size).toBe(2);
+    expect(installs.every(model => model.capabilities.maxContext === null)).toBe(true);
   });
 
   it('does not infer thinking capability from an unprofiled catalog name', async () => {

@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeModelTag } = require('../../../shared/modelNames');
+
 /**
  * Canonical model-name normalization.
  *
@@ -18,7 +20,7 @@
 const WRAPPER_PREFIXES = ['ax/', 'library/', 'hf.co/'];
 
 function normalizeModelName(name) {
-  const trimmed = String(name || '').trim().replace(/:latest$/i, '');
+  const trimmed = normalizeModelTag(name);
   if (!trimmed) return '';
   // Strip only known transport/wrapper prefixes. Owner namespaces such as
   // "igorls/gemma-4..." are part of the model identity and must be preserved.
@@ -52,8 +54,15 @@ function modelsMatch(a, b) {
   return false;
 }
 
+function modelLookupNames(name) {
+  const raw = String(name || '').trim().replace(/:latest$/i, '');
+  if (!raw) return [];
+  return Array.from(new Set([raw, normalizeModelName(raw)].filter(Boolean)));
+}
+
 module.exports = {
   normalizeModelName,
   modelNameIdentityKey,
-  modelsMatch
+  modelsMatch,
+  modelLookupNames
 };

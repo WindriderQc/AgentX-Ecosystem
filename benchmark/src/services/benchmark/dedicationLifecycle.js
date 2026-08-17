@@ -11,10 +11,7 @@ const logger = require('../../../config/logger');
 const { getDedicationStatuses, resolveHostKey, restoreDedication } = require('../../clients/coreApiClient');
 const { benchmarkFetch: fetch } = require('./http');
 const { buildAdaptedName, parseAdaptedName } = require('../profiler/namingConvention');
-
-function normalizeModelName(modelName) {
-    return String(modelName || '').trim().replace(/:latest$/i, '');
-}
+const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
 function baseModelName(modelName) {
     const normalized = normalizeModelName(modelName);

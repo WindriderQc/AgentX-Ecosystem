@@ -2,10 +2,7 @@ const ModelProfile = require('../../../models/ModelProfile');
 const ModelAdaptation = require('../../../models/ModelAdaptation');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const { parseAdaptedName } = require('./namingConvention');
-
-function normalizeModelName(name) {
-  return String(name || '').trim().replace(/:latest$/i, '');
-}
+const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
 function normalizeBenchmarkModelName(name) {
   const normalized = normalizeModelName(name);

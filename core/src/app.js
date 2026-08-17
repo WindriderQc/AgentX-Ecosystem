@@ -36,12 +36,12 @@ function getPublicUrls() {
 
 function getLeantimePipelineConfig() {
   const baseUrl = String(process.env.LEANTIME_BASE_URL || '').replace(/\/+$/, '');
-  const projectId = Number(process.env.AGENTX_PIPELINE_PROJECT_ID || 3);
-  const safeProjectId = Number.isFinite(projectId) && projectId > 0 ? projectId : 3;
+  const projectId = Number(process.env.AGENTX_PIPELINE_PROJECT_ID);
+  const safeProjectId = Number.isInteger(projectId) && projectId > 0 ? projectId : null;
   return {
     baseUrl,
     projectId: safeProjectId,
-    boardUrl: baseUrl
+    boardUrl: baseUrl && safeProjectId
       ? `${baseUrl}/tickets/showKanban?projectId=${encodeURIComponent(safeProjectId)}`
       : ''
   };

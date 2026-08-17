@@ -59,32 +59,10 @@ function brainPatch(brain) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-// One-shot migration: copy legacy model → brain.defaults if defaults are empty.
-async function migrateLegacyBrain(Buddy, seed) {
-  try {
-    const b = await Buddy.findOne({ seed }).lean();
-    if (!b) return;
-    const haveDefaults = b.brain && b.brain.defaults && (b.brain.defaults.host || b.brain.defaults.model);
-    if (haveDefaults) return;
-    const legacy = b.model || {};
-    if (!legacy.host && !legacy.model) return;
-    await Buddy.updateOne(
-      { seed },
-      { $set: { 'brain.defaults.host': legacy.host || '', 'brain.defaults.model': legacy.model || '' } }
-    );
-  } catch (e) {
-    // Tolerated — pure best-effort copy.
-    if (process.env.NODE_ENV !== 'test') {
-      console.warn('[buddyRouting] migrateLegacyBrain failed:', e.message);
-    }
-  }
-}
-
 module.exports = {
   VALID_MEMORY_SOURCES,
   VALID_TASKS,
   resolveTaskModel,
   sanitizeMemorySources,
   brainPatch,
-  migrateLegacyBrain,
 };

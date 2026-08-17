@@ -6,7 +6,8 @@ const {
   parseParameterCount,
   parseQuantization,
   bytesPerParam,
-  detectOptimalNumCtx,
+  estimateKvCacheBytes,
+  estimateTotalVram,
   inferVendor,
   generateDisplayName
 } = require('../../src/services/modelSync/parameterDetection');
@@ -69,53 +70,18 @@ describe('bytesPerParam', () => {
   });
 });
 
-describe('detectOptimalNumCtx', () => {
-  it('should calculate based on VRAM when available', () => {
-    // 7B Q4 model on 24GB VRAM — should get generous context
-    const result = detectOptimalNumCtx({
-      parameterSize: '7B',
-      quantization: 'Q4_K_M',
-      modelSizeBytes: 4_000_000_000,
-      hostVramMiB: 24576 // 24 GB
-    });
-    expect(result.num_ctx).toBeGreaterThanOrEqual(16384);
-    expect(result.reason).toContain('7');
+describe('VRAM estimation', () => {
+  it('estimates fit only at a caller-selected context', () => {
+    const kvBytes = estimateKvCacheBytes(27, 262144);
+    const totalBytes = estimateTotalVram(27, 'Q4_K_M', 262144);
+
+    expect(kvBytes).toBeGreaterThan(0);
+    expect(totalBytes).toBeGreaterThan(kvBytes);
   });
 
-  it('should limit context for large models on small VRAM', () => {
-    // 32B Q4 model on 24GB VRAM — should be conservative
-    const result = detectOptimalNumCtx({
-      parameterSize: '32B',
-      quantization: 'Q4_K_M',
-      modelSizeBytes: 20_000_000_000,
-      hostVramMiB: 24576
-    });
-    expect(result.num_ctx).toBeLessThanOrEqual(8192);
-    expect(result.reason).toContain('32');
-  });
-
-  it('should use conservative lookup table when VRAM unknown', () => {
-    const small = detectOptimalNumCtx({ parameterSize: '7B', quantization: null, modelSizeBytes: null, hostVramMiB: null });
-    expect(small.num_ctx).toBe(8192);
-    expect(small.reason).toContain('conservative');
-
-    const large = detectOptimalNumCtx({ parameterSize: '70B', quantization: null, modelSizeBytes: null, hostVramMiB: null });
-    expect(large.num_ctx).toBe(2048);
-
-    const tiny = detectOptimalNumCtx({ parameterSize: '1.7B', quantization: null, modelSizeBytes: null, hostVramMiB: null });
-    expect(tiny.num_ctx).toBe(8192);
-  });
-
-  it('should use model size bytes as last resort', () => {
-    const result = detectOptimalNumCtx({ parameterSize: null, quantization: null, modelSizeBytes: 4_000_000_000, hostVramMiB: null });
-    expect(result.num_ctx).toBe(16384);
-    expect(result.reason).toContain('size-based');
-  });
-
-  it('should return system default when nothing known', () => {
-    const result = detectOptimalNumCtx({ parameterSize: null, quantization: null, modelSizeBytes: null, hostVramMiB: null });
-    expect(result.num_ctx).toBe(8192);
-    expect(result.reason).toContain('system default');
+  it('does not turn missing artifact metadata into a context recommendation', () => {
+    expect(estimateKvCacheBytes(null, 262144)).toBe(0);
+    expect(estimateTotalVram(null, 'Q4_K_M', 262144)).toBe(Infinity);
   });
 });
 

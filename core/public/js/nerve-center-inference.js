@@ -7,8 +7,16 @@
     let throughputChart = null;
     let latencyChart = null;
 
-    const HOST_LABELS = {};
-    const HOST_COLORS = {};
+    const HOST_COLORS = ['#7cf0ff', '#4ade80', '#f59e0b', '#a78bfa', '#f97316'];
+
+    function hostLabel(host) {
+        return String(host || '--').replace(/^https?:\/\//, '').replace(/:11434$/, '');
+    }
+
+    function hostColor(host) {
+        const index = Math.abs([...String(host || '')].reduce((sum, char) => sum + char.charCodeAt(0), 0)) % HOST_COLORS.length;
+        return HOST_COLORS[index];
+    }
 
     function formatTaskLabel(task, metadata = {}) {
         return metadata.title || task.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
@@ -238,8 +246,8 @@
             });
 
             const throughputDatasets = [...hostKeys].map(host => {
-                const color = HOST_COLORS[host] || '#93a0b5';
-                const label = HOST_LABELS[host] || host;
+                const color = hostColor(host);
+                const label = hostLabel(host);
                 return {
                     label,
                     data: buckets.map(b => {
@@ -378,7 +386,7 @@
         }
         return rows.map(r => {
             const host = r.host || r._id || '--';
-            const label = HOST_LABELS[host] || shared.escapeHtml(host);
+            const label = shared.escapeHtml(hostLabel(host));
             const calls = r.count ?? r.calls ?? '--';
             const avgLat = r.avgLatencyMs != null ? `${Math.round(r.avgLatencyMs)}ms` : '--';
             const errRate = r.errorRate != null ? `${r.errorRate.toFixed(1)}%` : '--';
@@ -402,7 +410,7 @@
             const calls = r.count ?? r.calls ?? '--';
             const avgLat = r.avgLatencyMs != null ? `${Math.round(r.avgLatencyMs)}ms` : '--';
             const errRate = r.errorRate != null ? `${r.errorRate.toFixed(1)}%` : '--';
-            const hosts = Array.isArray(r.hosts) ? r.hosts.map(h => HOST_LABELS[h] || h).join(', ') : (r.hosts || '--');
+            const hosts = Array.isArray(r.hosts) ? r.hosts.map(hostLabel).join(', ') : hostLabel(r.hosts);
             return `<tr>
                 <td class="nc-td-sm"><span class="nc-model-tag">${shared.escapeHtml(shared.shortModel(model))}</span></td>
                 <td class="nc-td-sm">${shared.escapeHtml(String(calls))}</td>

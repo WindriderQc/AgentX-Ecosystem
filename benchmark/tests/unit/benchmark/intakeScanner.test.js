@@ -1,62 +1,58 @@
 'use strict';
 
 const {
-  suggestLane,
   buildIntakeRecord,
   scanIntake,
   gatherCandidates,
-  formatIntakeTable,
-  FLEET_VRAM
+  formatIntakeTable
 } = require('../../../src/services/benchmark/intakeScanner');
 
-describe('suggestLane', () => {
-  it('routes coders by size, small models to utility/lightweight, big to generalist/deep', () => {
-    expect(suggestLane('qwen2.5-coder:7b')).toBe('daily');
-    expect(suggestLane('qwen3.6-coder:30b')).toBe('deep');     // ≥27B coder → deep
-    expect(suggestLane('gemma2:2b')).toBe('utility');
-    expect(suggestLane('llama3.1:8b')).toBe('lightweight');
-    expect(suggestLane('gemma2:27b')).toBe('generalist');
-    expect(suggestLane('llama3.1:70b')).toBe('deep');
-    expect(suggestLane('nomic-embed-text')).toBe('utility');
-  });
-});
+const TEST_HOSTS_VRAM = { small: 12288, medium: 16303, large: 49152 };
 
 describe('buildIntakeRecord', () => {
   it('builds a full Backlog-D record reusing the fit math', () => {
-    const rec = buildIntakeRecord({ id: 'qwen2.5:7b-instruct-q5_K_M', downloads: 250000 });
+    const rec = buildIntakeRecord(
+      { id: 'qwen2.5:7b-instruct-q5_K_M', downloads: 250000 },
+      { hostsVram: TEST_HOSTS_VRAM, numCtx: 8192 }
+    );
     expect(rec).toMatchObject({
       model: 'qwen2.5:7b-instruct-q5_K_M',
       source: 'huggingface:qwen2.5:7b-instruct-q5_K_M',
       params: 7,
       moe: false,
-      expectedLane: 'lightweight',
+      expectedLane: null,
       profileStatus: 'pending',
       benchmarkStatus: 'pending',
       decision: 'pending'
     });
-    // 7B fits the smallest host (.120 12GB) → suggested there, high priority (downloads).
-    expect(rec.suggestedHost).toBe('tertiary');
-    expect(rec.vramFitByHost.tertiary).toBeTruthy();
+    expect(rec.suggestedHost).toBe('small');
+    expect(rec.vramFitByHost.small).toBeTruthy();
     expect(rec.priority).toBe('high');
   });
 
   it('detects MoE active params and uses them for fit', () => {
-    const rec = buildIntakeRecord({ id: 'qwen3.6:35b-a3b-q4_K_M', downloads: 5000 });
+    const rec = buildIntakeRecord(
+      { id: 'qwen3.6:35b-a3b-q4_K_M', downloads: 5000 },
+      { hostsVram: TEST_HOSTS_VRAM, numCtx: 8192 }
+    );
     expect(rec.moe).toBe(true);
     expect(rec.activeParams).toBe(3);
     expect(rec.params).toBe(35);
     // 3B active fits even the small host.
-    expect(rec.suggestedHost).toBe('tertiary');
+    expect(rec.suggestedHost).toBe('small');
   });
 
   it('marks a model that fits no host as low priority with null host', () => {
-    const rec = buildIntakeRecord({ id: 'behemoth:180b-q8_0', downloads: 999999 });
+    const rec = buildIntakeRecord(
+      { id: 'behemoth:180b-q8_0', downloads: 999999 },
+      { hostsVram: TEST_HOSTS_VRAM, numCtx: 8192 }
+    );
     expect(rec.suggestedHost).toBeNull();
     expect(rec.priority).toBe('low'); // popularity cannot save an un-fittable model
   });
 
   it('falls back to a hosts override', () => {
-    const rec = buildIntakeRecord({ id: 'qwen:32b-q4_K_M' }, { hostsVram: { only: 49152 } });
+    const rec = buildIntakeRecord({ id: 'qwen:32b-q4_K_M' }, { hostsVram: { only: 49152 }, numCtx: 8192 });
     expect(rec.suggestedHost).toBe('only');
   });
 });
@@ -107,12 +103,6 @@ describe('formatIntakeTable', () => {
     const md = formatIntakeTable(scanIntake({ models: [{ id: 'gemma2:9b-q4_K_M', downloads: 200000 }] }));
     expect(md).toMatch(/\| Priority \| Model \| Lane \| Host \|/);
     expect(md).toMatch(/`gemma2:9b-q4_K_M`/);
-    expect(md).toMatch(/lightweight/);
-  });
-});
-
-describe('FLEET_VRAM', () => {
-  it('matches the known fleet', () => {
-    expect(FLEET_VRAM).toEqual({ tertiary: 12288, secondary: 16303, primary: 49152 });
+    expect(md).toMatch(/\| — \| — \|/);
   });
 });

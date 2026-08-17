@@ -11,8 +11,6 @@ describe('adaptationService', () => {
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
-    delete process.env.MODEL_CONTEXT_OPERATIONAL_CAP;
-    delete process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP;
     jest.mock('../../../models/ModelAdaptation');
     jest.mock('../../../models/HostProfile');
     jest.mock('../../../src/services/profiler/namingConvention');
@@ -33,31 +31,21 @@ describe('adaptationService', () => {
       expect(config.num_thread).toBe(6); // default 8 cores - 2
     });
 
-    it('falls back to 8192 when optimalNumCtx is absent', () => {
+    it('leaves context unset when optimalNumCtx is absent', () => {
       const config = service.generateConfig({}, null);
-      expect(config.num_ctx).toBe(8192);
+      expect(config).not.toHaveProperty('num_ctx');
     });
 
-    it('caps very large profiled contexts to the conservative operational runtime ceiling', () => {
+    it('uses the profiled context as the runtime context', () => {
       const profile = { optimalNumCtx: 300000 };
       const config = service.generateConfig(profile, null);
-      expect(config.num_ctx).toBe(98304);
+      expect(config.num_ctx).toBe(300000);
     });
 
     it('does not flat-cap a verified context that is below the ceiling', () => {
       const profile = { optimalNumCtx: 65536 };
       const config = service.generateConfig(profile, null);
       expect(config.num_ctx).toBe(65536);
-    });
-
-    it('allows operators to opt into a higher operational runtime ceiling', () => {
-      process.env.MODEL_CONTEXT_OPERATIONAL_CAP = '202752';
-      jest.resetModules();
-      service = require('../../../src/services/profiler/adaptationService');
-
-      const profile = { optimalNumCtx: 202752 };
-      const config = service.generateConfig(profile, null);
-      expect(config.num_ctx).toBe(202752);
     });
 
     it('rejects profiles with implausible throughput before generating config', () => {

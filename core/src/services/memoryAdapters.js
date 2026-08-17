@@ -9,7 +9,6 @@ const { getRagServiceClient } = require('./ragServiceClient');
 const CHUNK_CHAR_CAP = 500;
 const RECENCY_WEIGHT = 1.5;
 const RECENCY_HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000;
-const BENCHMARK_RESPONSE_CAP = 240;
 const FIELD_WEIGHTS = {
   conversation: { title: 3, 'messages.content': 1 },
   alert: {
@@ -18,7 +17,6 @@ const FIELD_WEIGHTS = {
   },
   activitylog: { action: 3, target: 2, errorMessage: 4, status: 2 },
   inferencelog: { model: 1.5, callerDetail: 3, taskType: 3, fallbackReason: 3, status: 2, error: 3 },
-  benchmark: { model: 1.5, prompt: 1.2, task: 1.5, response: 0.15 },
 };
 const ALERT_TERMS = new Set([
   'alert', 'alerts', 'incident', 'incidents', 'outage', 'critical', 'warning',
@@ -64,15 +62,15 @@ function classifyQuery(terms) {
 
 function collectionMultiplier(collection, intent) {
   if (intent.alertLike && !intent.benchmarkLike) {
-    return { alert: 2.6, activitylog: 1.5, inferencelog: 1.25, conversation: 1.05, benchmark: 0.18 }[collection] || 1;
+    return { alert: 2.6, activitylog: 1.5, inferencelog: 1.25, conversation: 1.05 }[collection] || 1;
   }
   if (intent.benchmarkLike && !intent.alertLike) {
-    return { benchmark: 1.8, inferencelog: 1.1, alert: 0.75 }[collection] || 1;
+    return { inferencelog: 1.1, alert: 0.75 }[collection] || 1;
   }
   if (intent.chatLike) {
-    return { conversation: 1.8, inferencelog: 1.4, benchmark: 0.45 }[collection] || 1;
+    return { conversation: 1.8, inferencelog: 1.4 }[collection] || 1;
   }
-  return collection === 'benchmark' ? 0.55 : 1;
+  return 1;
 }
 
 function valuesAtPath(value, dottedPath) {
@@ -137,10 +135,7 @@ function scoreDocument(document, fields, terms, collection, intent, dateField) {
 function documentText(document, fields, collection) {
   const values = [];
   for (const field of fields) {
-    for (let value of textValues(document, field)) {
-      if (collection === 'benchmark' && field === 'response' && value.length > BENCHMARK_RESPONSE_CAP) {
-        value = `${value.slice(0, BENCHMARK_RESPONSE_CAP)}…`;
-      }
+    for (const value of textValues(document, field)) {
       values.push(value);
     }
   }
@@ -188,19 +183,6 @@ function searchTargets() {
   add('../../models/Alert', ['title', 'message', 'ruleName', 'severity', 'status', 'tags', 'context.component', 'context.metric', 'context.trend'], 'lastOccurrence', 'alert');
   add('../../models/ActivityLog', ['action', 'target', 'errorMessage', 'status'], 'timestamp', 'activitylog');
   add('../../models/InferenceLog', ['model', 'callerDetail', 'taskType', 'fallbackReason', 'status', 'error'], 'createdAt', 'inferencelog');
-  try {
-    const mongoose = require('mongoose');
-    let Model;
-    try { Model = require('../../models/BenchmarkResult'); } catch { Model = mongoose.models.BenchmarkResult; }
-    if (Model) targets.push({
-      Model,
-      fields: ['model', 'prompt', 'response', 'task'],
-      dateField: 'createdAt',
-      collection: 'benchmark',
-    });
-  } catch (error) {
-    console.warn('[memoryAdapters/agentx] benchmark result load skipped:', error.message);
-  }
   return targets;
 }
 

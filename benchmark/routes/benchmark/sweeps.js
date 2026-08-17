@@ -11,6 +11,7 @@ const hfClient = require('../../src/clients/hfClient');
 const ModelContextProfile = require('../../models/ModelContextProfile');
 const ModelProfile = require('../../models/ModelProfile');
 const ModelAdaptation = require('../../models/ModelAdaptation');
+const HostProfile = require('../../models/HostProfile');
 const { startBatch } = require('../../src/services/benchmark/execution');
 const { runPreflight } = require('../../src/services/benchmark/preflight');
 const { findActiveProfilingForHost, activeProfileQueues } = require('../../src/services/profiler/activeProfileState');
@@ -119,12 +120,26 @@ router.get('/sweeps/staleness', async (req, res) => {
         if (req.query.routedModelsByHost) {
             try { routedModelsByHost = JSON.parse(req.query.routedModelsByHost); } catch (_) { /* ignore */ }
         }
-        const [contextProfiles, profiles, adaptations] = await Promise.all([
+        const [contextProfiles, profiles, adaptations, hostProfiles] = await Promise.all([
             ModelContextProfile.find({}).lean(),
             ModelProfile.find({}).select('name readiness').lean(),
-            ModelAdaptation.find({}).lean()
+            ModelAdaptation.find({}).lean(),
+            HostProfile.find({}).select('hostId hostUrl gpu.model').lean()
         ]);
-        const report = analyzeStaleness({ contextProfiles, profiles, adaptations, routedModelsByHost, hostFilter });
+        const hostHardwareById = {};
+        for (const host of hostProfiles) {
+            const hardware = { gpuModel: host.gpu?.model || null };
+            if (host.hostId) hostHardwareById[host.hostId] = hardware;
+            if (host.hostUrl) hostHardwareById[host.hostUrl] = hardware;
+        }
+        const report = analyzeStaleness({
+            contextProfiles,
+            profiles,
+            adaptations,
+            routedModelsByHost,
+            hostHardwareById,
+            hostFilter
+        });
         const ledgerDraft = formatStalenessLedgerEntry(report, { date: new Date().toISOString().slice(0, 10) });
         res.json({ status: 'success', data: { ...report, ledgerDraft } });
     } catch (err) {

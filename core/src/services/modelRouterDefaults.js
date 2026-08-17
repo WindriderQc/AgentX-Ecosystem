@@ -1,18 +1,12 @@
 'use strict';
 
+const { normalizeHostUrl } = require('../helpers/ollamaHostConfig');
+
 const HOSTS = {
     primary: null,
     secondary: null,
     tertiary: null
 };
-
-function normalizeHostUrl(rawValue) {
-    if (!rawValue) return null;
-    const trimmed = String(rawValue).trim();
-    if (!trimmed) return null;
-    if (/^https?:\/\//i.test(trimmed)) return trimmed;
-    return `http://${trimmed}`;
-}
 
 function refreshHosts() {
     HOSTS.primary = normalizeHostUrl(process.env.OLLAMA_HOST);
@@ -52,7 +46,7 @@ const ANALYSIS_HOST = envHost('AGENTX_ANALYSIS_HOST', DEFAULT_CHAT_HOST);
 // Operators change lanes through persisted RouterTaskConfig app settings;
 // explicit caller choices and matching runtime pins remain authoritative.
 const DEFAULT_CHAT_MODEL = envModel(
-    ['AGENTX_DEFAULT_CHAT_MODEL', 'AGENTX_CHAT_MODEL'],
+    ['AGENTX_DEFAULT_CHAT_MODEL', 'AGENTX_CHAT_MODEL', 'OLLAMA_MODEL'],
     'ax/gemma4:26b-a4b-it-qat'
 );
 const DEEP_REASONING_MODEL = envModel('AGENTX_DEEP_REASONING_MODEL', DEFAULT_CHAT_MODEL);

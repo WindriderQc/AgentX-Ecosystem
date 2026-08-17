@@ -2,7 +2,7 @@
  * Model Execution Config Module
  *
  * Modal for viewing and editing per-model execution config.
- * Shows auto-detected defaults vs user overrides.
+ * Shows measured context evidence and explicit user overrides.
  *
  * Context test results displayed here are produced by the benchmark service
  * (agentx-benchmark) and written to the shared ModelRegistry collection.
@@ -72,10 +72,11 @@ class ModelExecutionConfig {
         const ctxEff = effective?.num_ctx;
         if (ctxEff) {
             const sourceLabel = this.sourceLabel(ctxEff.source);
-            const defaultVal = defaults?.num_ctx != null ? defaults.num_ctx : 8192;
-            if (this.ctxDefaultEl) this.ctxDefaultEl.innerHTML = `${sourceLabel} <strong>${ctxEff.value}</strong> (auto-detected: ${defaultVal})`;
+            if (this.ctxDefaultEl) this.ctxDefaultEl.innerHTML = ctxEff.value != null
+                ? `${sourceLabel} <strong>${ctxEff.value}</strong>`
+                : `${sourceLabel} Context comes from the runtime model/profile unless explicitly overridden.`;
             if (this.ctxInput) this.ctxInput.value = overrides?.num_ctx ?? '';
-            if (this.ctxInput) this.ctxInput.placeholder = String(ctxEff.value);
+            if (this.ctxInput) this.ctxInput.placeholder = ctxEff.value != null ? String(ctxEff.value) : 'e.g. 262144';
         }
 
         // Temperature
@@ -123,35 +124,11 @@ class ModelExecutionConfig {
             ctSection.style.display = 'none';
         }
 
-        // Reason + conservative warning
         const reason = effective?._reason || defaults?._reason;
         if (this.reasonEl) {
-            const isConservative = reason && (reason.includes('conservative') || reason.includes('VRAM unknown'));
-            if (isConservative) {
-                this.reasonEl.innerHTML = `
-                    <div style="background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); border-radius:6px; padding:0.5rem 0.75rem; margin-top:0.25rem;">
-                        <div style="color:#fbbf24; font-size:0.85rem;">
-                            <i class="fas fa-exclamation-triangle"></i> This model uses conservative defaults because host VRAM is unknown.
-                        </div>
-                        <div style="margin-top:0.25rem;">
-                            <a href="#" class="vram-configure-link" style="color:#60a5fa; font-size:0.8rem; text-decoration:underline;">Configure VRAM →</a>
-                        </div>
-                    </div>`;
-                // Wire up link to open VRAM modal
-                const link = this.reasonEl.querySelector('.vram-configure-link');
-                if (link) {
-                    link.addEventListener('click', (e) => {
-                        e.preventDefault();
-                        this.close();
-                        const card = document.getElementById('statVramCard');
-                        if (card) card.click();
-                    });
-                }
-            } else {
-                this.reasonEl.innerHTML = reason
-                    ? `<i class="fas fa-info-circle"></i> ${this.escapeHtml(reason)}`
-                    : '';
-            }
+            this.reasonEl.innerHTML = reason
+                ? `<i class="fas fa-info-circle"></i> ${this.escapeHtml(reason)}`
+                : '';
         }
     }
 
@@ -160,7 +137,8 @@ class ModelExecutionConfig {
             auto: '<i class="fas fa-cog" style="color:#7cf0ff;" title="Auto-detected"></i>',
             tested: '<i class="fas fa-flask" style="color:#22c55e;" title="Empirically tested"></i>',
             user: '<i class="fas fa-pen" style="color:#fbbf24;" title="User override"></i>',
-            system: '<i class="fas fa-minus" style="color:var(--muted);" title="System default"></i>'
+            system: '<i class="fas fa-minus" style="color:var(--muted);" title="System default"></i>',
+            unresolved: '<i class="fas fa-circle-question" style="color:var(--muted);" title="Resolved by runtime"></i>'
         };
         return icons[source] || icons.system;
     }

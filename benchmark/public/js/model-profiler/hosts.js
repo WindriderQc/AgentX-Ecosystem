@@ -8,7 +8,7 @@ import { runBaselineProbe } from './components/baseline-probe.js';
 
 const HOST_TEST_POLL_MS = 1500;
 const FLEET_POLL_MS = 2000;
-let _baselineModel = 'qwen2.5:3b'; // overridden from /api/profiler/hosts/test/config
+let _baselineModel = ''; // loaded from /api/profiler/hosts/test/config
 
 function esc(s) {
   return String(s ?? '')
@@ -1319,7 +1319,7 @@ export async function renderHosts(container, state, api) {
       </div>
     </div>
     <div class="mp-host-discovery">
-      <input type="text" class="mp-host-detect-input" placeholder="http://192.0.2.x:11434">
+      <input type="text" class="mp-host-detect-input" placeholder="http://localhost:11434">
       <input type="text" class="mp-host-detect-name" placeholder="Host name">
       <button class="mp-action mp-action--teal mp-host-detect-btn">Detect Host</button>
       <span class="mp-host-detect-status"></span>

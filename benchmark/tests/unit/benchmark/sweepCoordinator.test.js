@@ -243,6 +243,7 @@ describe('benchmark sweep coordinator', () => {
         const plan = await buildSweepPlan({
             hostId: 'tertiary',
             candidates: ['qwen2.5:7b-instruct-q5_K_M'],
+            execution_config: { num_ctx: 8192 },
             maxVramFraction: 1
         }, deps);
 
@@ -261,6 +262,7 @@ describe('benchmark sweep coordinator', () => {
         const plan = await buildSweepPlan({
             hostId: 'tertiary',
             candidates: ['huge:70b-instruct-q8_0'],
+            execution_config: { num_ctx: 8192 },
             maxVramFraction: 1
         }, deps);
 
@@ -276,7 +278,8 @@ describe('benchmark sweep coordinator', () => {
         // gemma4:e4b has no parseable total-param count; the e4b tag → 4B.
         const est = _internal.estimateCandidateFit(
             { adaptedModel: 'ax/gemma4:e4b', rawModel: 'gemma4:e4b', inputModel: 'gemma4:e4b' },
-            12288
+            12288,
+            8192
         );
         expect(est).not.toBeNull();
         expect(est.paramBillions).toBe(4);
@@ -287,7 +290,8 @@ describe('benchmark sweep coordinator', () => {
         // 12B Q8 (~13.5 GiB weights) won't fit 12GB, but a lower quant will.
         const est = _internal.estimateCandidateFit(
             { adaptedModel: 'ax/gemma4:12b-it-q8_0', rawModel: 'gemma4:12b-it-q8_0', inputModel: 'gemma4:12b-it-q8_0' },
-            12288
+            12288,
+            8192
         );
         expect(est.namedQuant).toBe('Q8_0');
         expect(est.fitsAsNamed).toBe(false);

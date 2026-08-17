@@ -262,11 +262,6 @@ async function assessBuddySourceHealth(buddy, resolved, memorySources, chunkCoun
   return { warnings, memoryStatuses, notes };
 }
 
-// Phase 6g — best-effort one-shot legacy → brain.defaults migration.
-setImmediate(() => {
-  buddyRouting.migrateLegacyBrain(Buddy, SINGLETON_SEED).catch(() => {});
-});
-
 /**
  * GET /api/buddy/singleton — returns the canonical singleton buddy.
  */

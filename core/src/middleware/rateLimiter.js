@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
 const crypto = require('crypto');
 const logger = require('../../config/logger');
+const { resolveCallerPolicy } = require('../services/routing/callerPolicy');
 
 function getClientKey(req) {
   // In tests, allow callers to isolate rate limit buckets deterministically.
@@ -299,11 +300,8 @@ const buddyReactLimiter = rateLimit({
 /**
  * Caller-aware router for /api/inference/generate
  *
- * Routing rules (task 0132 + 0141):
- *   - `benchmark-*`           → benchmarkLimiter       (5000/15min)
- *   - Any other internal tag  → internalCallerLimiter  (5000/15min, separate bucket)
- *       Recognized prefixes: `nestor/`, `buddy/`, `chat-`, `nerve-center-`, `alerts-`
- *   - Everything else         → apiLimiter             (500/15min)
+ * Caller families are classified by the shared caller policy registry so
+ * rate-limit and inference-lane behavior cannot drift independently.
  *
  * Callers are identified by `req.body.callerDetail`. This middleware must
  * run AFTER body parsing so `req.body` is available.
@@ -313,33 +311,16 @@ const buddyReactLimiter = rateLimit({
  * for corpus-run drift detection; internal bucket is watched for buddy/chat
  * starvation incidents).
  */
-const INTERNAL_CALLER_PREFIXES = [
-  'nestor/',
-  'buddy/',
-  'chat-',
-  'nerve-center-',
-  'alerts-'
-];
-
-function isInternalCaller(caller) {
-  if (typeof caller !== 'string' || !caller) return false;
-  for (const prefix of INTERNAL_CALLER_PREFIXES) {
-    if (caller.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
 function createInferenceCallerRouter() {
   return (req, res, next) => {
     const caller = req.body?.callerDetail || '';
+    const { rateBucket } = resolveCallerPolicy(caller);
 
-    // Benchmark callers — dedicated bucket for corpus runs
-    if (typeof caller === 'string' && caller.startsWith('benchmark-')) {
+    if (rateBucket === 'benchmark') {
       return benchmarkLimiter(req, res, next);
     }
 
-    // Other known internal callers — separate high-ceiling bucket
-    if (isInternalCaller(caller)) {
+    if (rateBucket === 'internal') {
       return internalCallerLimiter(req, res, next);
     }
 
@@ -361,7 +342,6 @@ module.exports = {
   buddyReactLimiter,
   nestorConsumerLimiter,
   inferenceCallerRouter,
-  INTERNAL_CALLER_PREFIXES,
   AUTOMATION_CONTROL_PREFIXES,
   isAutomationControlPath,
   isNestorConsumerPath,

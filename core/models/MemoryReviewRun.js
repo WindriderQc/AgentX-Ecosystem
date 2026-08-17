@@ -7,6 +7,7 @@
 // observation text is a bounded, locally extracted durable claim.
 
 const mongoose = require('mongoose');
+const { defaultPlanningTimeZone } = require('../src/services/planningDateService');
 
 const ObservationSchema = new mongoose.Schema({
   observationId: { type: String, required: true },   // obs-<contentHash[:16]>
@@ -150,7 +151,7 @@ const MemoryReviewRunSchema = new mongoose.Schema({
   window: {
     from: { type: String, default: null },
     to: { type: String, default: null },
-    timezone: { type: String, default: 'America/Toronto' },
+    timezone: { type: String, default: defaultPlanningTimeZone },
   },
   completedAt: { type: Date, default: null },
   collectorVersion: { type: String, default: '' },

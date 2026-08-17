@@ -28,7 +28,7 @@ export const TIER_CONFIG = {
 export const ADV_JUDGE_DEFAULTS = {
     temperature: 0.1,
     num_predict: 800,
-    num_ctx: 8192,
+    num_ctx: null,
     max_retries: 2,
     timeout: 30000,
     voting_count: 1,

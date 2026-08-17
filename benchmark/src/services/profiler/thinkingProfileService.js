@@ -201,7 +201,7 @@ async function _probeCall({ hostUrl, modelName, requestedThink, probe, numCtx, n
       keep_alive: '10m',
       messages: [{ role: 'user', content: prompt }],
       options: {
-        num_ctx: numCtx,
+        ...(numCtx ? { num_ctx: numCtx } : {}),
         num_predict: numPredict,
         temperature: 0,
         seed: 7

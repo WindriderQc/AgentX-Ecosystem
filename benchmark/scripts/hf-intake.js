@@ -8,13 +8,14 @@
  * no new deps. Results cached 7 days in benchmark/data/hf_intake_cache.json.
  *
  * Usage:
- *   node scripts/hf-intake.js --family qwen,gemma,llama --limit 15 [--json] [--no-cache] [--out FILE]
- *   node scripts/hf-intake.js --selftest        # offline, no network
+ *   node scripts/hf-intake.js --family qwen,gemma,llama --limit 15 [--num-ctx N] [--json] [--no-cache] [--out FILE]
+ *   node scripts/hf-intake.js --selftest --num-ctx 262144  # offline, no network
  */
 
 const fs = require('fs');
 const path = require('path');
 const { scanIntake, gatherCandidates, formatIntakeTable } = require('../src/services/benchmark/intakeScanner');
+const { getConfiguredHosts } = require('../src/helpers/ollamaHostConfig');
 const hfClient = require('../src/clients/hfClient');
 
 const CACHE_FILE = path.join(__dirname, '..', 'data', 'hf_intake_cache.json');
@@ -22,11 +23,12 @@ const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_FAMILIES = ['qwen', 'gemma', 'llama', 'mistral', 'phi', 'deepseek'];
 
 function parseArgs(argv) {
-  const args = { families: DEFAULT_FAMILIES, limit: 15, json: false, cache: true, out: null, selftest: false };
+  const args = { families: DEFAULT_FAMILIES, limit: 15, numCtx: null, json: false, cache: true, out: null, selftest: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--family' || a === '--families') args.families = String(argv[++i] || '').split(',').map((s) => s.trim()).filter(Boolean);
     else if (a === '--limit') args.limit = parseInt(argv[++i], 10) || args.limit;
+    else if (a === '--num-ctx') args.numCtx = parseInt(argv[++i], 10) || null;
     else if (a === '--json') args.json = true;
     else if (a === '--no-cache') args.cache = false;
     else if (a === '--out') args.out = argv[++i];
@@ -72,16 +74,23 @@ const SELFTEST_FIXTURE = [
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const date = new Date().toISOString().slice(0, 10);
+  const hostsVram = Object.fromEntries(
+    getConfiguredHosts()
+      .filter(host => Number(host.vramMb) > 0)
+      .map(host => [host.id, Number(host.vramMb)])
+  );
 
   let records;
   if (args.selftest) {
-    records = scanIntake({ models: SELFTEST_FIXTURE, date });
+    records = scanIntake({ models: SELFTEST_FIXTURE, hostsVram, numCtx: args.numCtx, date });
   } else {
     const cachedFetch = makeCachedFetch(args.cache);
     records = await gatherCandidates({
       families: args.families,
       limit: args.limit,
       fetchFamily: cachedFetch,
+      hostsVram,
+      numCtx: args.numCtx,
       date,
       onWarn: (m) => process.stderr.write(`[hf-intake] ${m}\n`)
     });

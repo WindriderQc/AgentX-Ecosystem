@@ -235,12 +235,6 @@ class NotificationService {
     return backoff + jitter;
   }
 
-  // Keeping the old method for backward compatibility if any test calls it directly
-  _calculateWebhookRetryDelay(attempt) {
-      return this._calculateRetryDelay(attempt, this.config.webhook.retry);
-  }
-
-
   /**
    * Send Slack notification
    */

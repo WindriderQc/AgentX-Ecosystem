@@ -18,12 +18,12 @@
  * in the benchmark host-claim lifecycle rather than calling a host cold:
  *
  *   node scripts/with-agentx-claim.js \
- *     --host http://127.0.0.1:11434 \
+ *     --host <ollama-url> \
  *     --owner claude-code --batch repo-coding-qual-$(date +%Y%m%d%H%M%S) \
  *     --estimate-ms 3600000 -- \
  *     node benchmark/scripts/repo-coding-qualification.js \
- *       --host http://127.0.0.1:11434 \
- *       --models ax/qwen3-coder:30b,ax/gemma4:26b-a4b-it-qat --attempts 3
+ *       --host <ollama-url> --core <core-url> \
+ *       --models <model-a,model-b> --attempts 3
  *
  * Verify offline first:
  *   node benchmark/scripts/repo-coding-qualification.js --dry-run
@@ -48,19 +48,6 @@ const {
   resolveStandaloneCampaignInferenceContracts
 } = require('../src/services/benchmark/inferenceContractSnapshot');
 
-// Localhost is the safe default. Remote runtimes must be selected explicitly.
-const DEFAULT_HOST = 'http://127.0.0.1:11434';
-const DEFAULT_CORE = 'http://127.0.0.1:3080';
-const DEFAULT_MODELS = [
-  'ax/gemma4:26b-a4b-it-qat',
-  'ax/gemma4:31b-it-qat',
-  'ax/gemma4:e4b',
-  'ax/qwen2.5:7b-instruct-q5_K_M',
-  'ax/qwen3-coder:30b',
-  'ax/Qwen3.5:35b-a3b-q8_0',
-  'ax/Qwen3.5:9b',
-  'ax/qwen3.6:27b-mtp-q8_0'
-];
 const DEFAULT_ATTEMPTS = 5;
 const DEFAULT_KS = [1, 3, 5];
 const DEFAULT_ATTEMPT_SEEDS = [101, 202, 303, 404, 505];
@@ -95,8 +82,8 @@ function parseArgs(argv) {
     tasks: null,
     out: null,
     dryRun: false,
-    host: DEFAULT_HOST,
-    core: DEFAULT_CORE,
+    host: null,
+    core: null,
     claimId: null,
     numCtx: DEFAULT_NUM_CTX,
     numPredict: DEFAULT_NUM_PREDICT,
@@ -163,6 +150,9 @@ function parseArgs(argv) {
     throw new Error('--seeds must be unique so attempts are independent');
   }
   if (!args.dryRun && !args.claimId) throw new Error('--claim-id is required for live runs');
+  if (!args.dryRun && !args.host) throw new Error('--host is required for live runs');
+  if (!args.dryRun && !args.core) throw new Error('--core is required for live runs');
+  if (!args.dryRun && !args.models?.length) throw new Error('--models is required for live runs');
   // Uniform output budget floor: reasoning models need room to finish thinking
   // AND emit the final answer. A lower budget silently truncates them, so it is
   // rejected rather than allowed to confound a campaign.
@@ -181,11 +171,11 @@ Usage:
 Options:
   --dry-run                 Grade each task's golden diff instead of calling a
                             model. Proves the runner offline (pass@1 = 1.0).
-  --models <a,b,c>          Candidate model ids (default: 8 qualified candidates).
+  --models <a,b,c>          Candidate model ids (required live; dry-run defaults to golden).
   --attempts <n>            Repetitions per (model, task) (default: ${DEFAULT_ATTEMPTS}).
   --tasks <id,id>           Restrict to these fixture task ids.
-  --host <ollama-url>       Ollama host (default: ${DEFAULT_HOST}).
-  --core <agentx-url>       Core contract/claim API (default: ${DEFAULT_CORE}).
+  --host <ollama-url>       Ollama host (required live).
+  --core <agentx-url>       Core contract/claim API (required live).
   --claim-id <id>           Required live: exact active benchmark claim id.
   --num-ctx <n>             Context window for the model call (default: ${DEFAULT_NUM_CTX}).
   --num-predict <n>         Max output tokens; UNIFORM per campaign, floor ${MIN_NUM_PREDICT}
@@ -347,7 +337,7 @@ async function main() {
 
   const allTasks = loadRepoTasks();
   const tasks = selectTasks(allTasks, args.tasks);
-  const models = args.models || DEFAULT_MODELS;
+  const models = args.models || ['golden'];
   const modeLabel = resolveMode(args);
   const attemptSeeds = args.seeds.slice(0, args.attempts);
   const executionConfig = args.dryRun ? null : {

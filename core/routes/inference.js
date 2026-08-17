@@ -88,7 +88,7 @@ const {
 } = require('../src/services/inferenceContractService');
 const { telemetryContextFromRequest } = require('../src/helpers/llmTelemetryContext');
 const { trustedNestorConsumer } = require('../src/services/nestorConsumerAttribution');
-const { getAlertService } = require('../src/services/alertService');
+const alertService = require('../src/services/alertService');
 const { summarizeOllamaOutcome } = require('../src/services/laneObservabilityService');
 const ragStore = getRagServiceClient();
 
@@ -303,7 +303,7 @@ async function isEmbedHostLive(hostUrl) {
 }
 
 function emitEmbedHostFailure(candidate, model, error) {
-    const alertSvc = getAlertService();
+    const alertSvc = alertService;
     if (!alertSvc?.evaluateEvent) return;
     alertSvc.evaluateEvent({
         component: resolveHostKey(candidate) || candidate,
@@ -614,7 +614,7 @@ router.post('/inference/embed', async (req, res) => {
             status: 'success'
         });
 
-        const alertSvc = getAlertService();
+        const alertSvc = alertService;
         alertSvc?.resolveRecoveredInferenceAlerts?.({
             host: target,
             hostKey: resolveHostKey(target),
@@ -1267,8 +1267,7 @@ router.post('/inference/generate', async (req, res) => {
         //   - false: would skip entirely (no lane uses this today)
         if (lane.alert) {
             try {
-                const { getAlertService } = require('../src/services/alertService');
-                const alertSvc = getAlertService();
+                const alertSvc = alertService;
                 if (alertSvc) {
                     const durationMs = Date.now() - startedAt;
                     const alertComponent = routedHostKey || resolveHostKey(target) || 'inference';
@@ -1375,8 +1374,7 @@ router.post('/inference/generate', async (req, res) => {
         // 'error-only' direct lane still emits these; 'false' (no lane today) would skip.
         if (lane.alert) {
             try {
-                const { getAlertService } = require('../src/services/alertService');
-                const alertSvc = getAlertService();
+                const alertSvc = alertService;
                 if (alertSvc) {
                     alertSvc.evaluateEvent({
                         component: routedHostKey || resolveHostKey(target) || 'inference',

@@ -16,9 +16,7 @@
  * The *physical ceiling* uses efficiency = 1.0 (cannot be exceeded by physics),
  * so any observed reading above it (× margin) is an instrumentation artifact.
  *
- * Reuses VRAM math from ./parameterDetection (the de-facto canonical copy,
- * byte-identical to core's). Lives as its own module to avoid adding to the
- * parameterDetection 3-copy sync burden.
+ * Reuses the shared VRAM math exposed by ./parameterDetection.
  */
 
 const {
@@ -44,22 +42,14 @@ const GPU_BANDWIDTH_GBS = {
 };
 
 /**
- * Product defaults never map an IP address to hardware inventory. Real
- * installations should identify hardware by GPU name or provide measured
- * profiles.
- */
-const HOST_BANDWIDTH_GBS_BY_IP = Object.freeze({});
-
-/**
- * Resolve a host's memory bandwidth from an IP, URL, or GPU name.
- * @param {string} hint - a GPU name or other hardware hint, e.g. "RTX 3090"
+ * Resolve memory bandwidth from GPU metadata. Host addresses never imply
+ * hardware; callers without GPU metadata must use measured profiles.
+ * @param {string} hint - e.g. "RTX 3090"
  * @returns {number|null} GB/s, or null if unresolved
  */
 function resolveHostBandwidthGBs(hint) {
   if (!hint) return null;
   const s = String(hint).toLowerCase();
-  const ip = (s.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/) || [])[1];
-  if (ip && HOST_BANDWIDTH_GBS_BY_IP[ip]) return HOST_BANDWIDTH_GBS_BY_IP[ip];
   for (const [name, bw] of Object.entries(GPU_BANDWIDTH_GBS)) {
     if (name.startsWith('_')) continue;
     if (s.includes(name)) return bw;
@@ -216,50 +206,44 @@ const DEFAULT_QUANT_LADDER = ['Q8_0', 'Q6_K', 'Q5_K_M', 'Q4_K_M', 'Q3_K_M', 'Q2_
 /**
  * B2 — Quantization-walk fit. Walks a quality-descending quant ladder and
  * returns the highest-quality quant that fits the host VRAM at the requested
- * context; if none fit at full context, retries at half context (≥2048).
+ * context. It never changes the requested context as a hidden fallback.
  * Uses estimateTotalVram from parameterDetection for the weight+KV+overhead math.
  * @param {object} args
  * @param {number} [args.paramBillions]
  * @param {string} [args.modelName] - used to derive paramBillions if not given
  * @param {number} args.hostVramMiB
- * @param {number} [args.numCtx=8192]
+ * @param {number} args.numCtx - explicit context to evaluate
  * @param {string[]} [args.ladder=DEFAULT_QUANT_LADDER]
  * @param {number} [args.utilization=0.9] - target VRAM utilization budget
- * @param {boolean} [args.allowHalfContext=true]
  * @returns {{ fits: boolean, quantization: string|null, num_ctx: number, estVramMiB: number|null, reason: string }}
  */
 function selectBestQuantForVram({
   paramBillions,
   modelName,
   hostVramMiB,
-  numCtx = 8192,
+  numCtx,
   ladder = DEFAULT_QUANT_LADDER,
-  utilization = 0.9,
-  allowHalfContext = true
+  utilization = 0.9
 }) {
   const paramB = Number.isFinite(paramBillions) && paramBillions > 0
     ? paramBillions
     : parseParameterCount(modelName);
-  if (!Number.isFinite(paramB) || paramB <= 0 || !Number.isFinite(hostVramMiB) || hostVramMiB <= 0) {
-    return { fits: false, quantization: null, num_ctx: numCtx, estVramMiB: null, reason: 'insufficient inputs (paramBillions / hostVramMiB)' };
+  if (!Number.isFinite(paramB) || paramB <= 0 || !Number.isFinite(hostVramMiB) || hostVramMiB <= 0
+      || !Number.isFinite(numCtx) || numCtx <= 0) {
+    return { fits: false, quantization: null, num_ctx: numCtx || null, estVramMiB: null, reason: 'insufficient inputs (paramBillions / hostVramMiB / numCtx)' };
   }
   const budgetBytes = hostVramMiB * 1024 * 1024 * utilization;
-  const contexts = allowHalfContext ? [numCtx, Math.max(2048, Math.floor(numCtx / 2))] : [numCtx];
-
-  for (const ctx of contexts) {
-    for (const quant of ladder) {
-      const needed = estimateTotalVram(paramB, quant, ctx);
-      if (Number.isFinite(needed) && needed <= budgetBytes) {
-        const estVramMiB = Math.round(needed / 1024 / 1024);
-        return {
-          fits: true,
-          quantization: quant,
-          num_ctx: ctx,
-          estVramMiB,
-          reason: `${paramB}B ${quant} @ ${ctx} ctx ≈ ${estVramMiB} MiB ≤ ${Math.round(budgetBytes / 1024 / 1024)} MiB budget (${Math.round(utilization * 100)}% of ${hostVramMiB} MiB)`
-            + (ctx !== numCtx ? ' [half-context fallback]' : '')
-        };
-      }
+  for (const quant of ladder) {
+    const needed = estimateTotalVram(paramB, quant, numCtx);
+    if (Number.isFinite(needed) && needed <= budgetBytes) {
+      const estVramMiB = Math.round(needed / 1024 / 1024);
+      return {
+        fits: true,
+        quantization: quant,
+        num_ctx: numCtx,
+        estVramMiB,
+        reason: `${paramB}B ${quant} @ ${numCtx} ctx ≈ ${estVramMiB} MiB ≤ ${Math.round(budgetBytes / 1024 / 1024)} MiB budget (${Math.round(utilization * 100)}% of ${hostVramMiB} MiB)`
+      };
     }
   }
   return {
@@ -267,13 +251,12 @@ function selectBestQuantForVram({
     quantization: null,
     num_ctx: numCtx,
     estVramMiB: null,
-    reason: `no quant in [${ladder.join(', ')}] fits ${paramB}B in ${hostVramMiB} MiB even at half context`
+    reason: `no quant in [${ladder.join(', ')}] fits ${paramB}B at the requested ${numCtx} context in ${hostVramMiB} MiB`
   };
 }
 
 module.exports = {
   GPU_BANDWIDTH_GBS,
-  HOST_BANDWIDTH_GBS_BY_IP,
   DEFAULT_QUANT_LADDER,
   resolveHostBandwidthGBs,
   parseActiveParams,

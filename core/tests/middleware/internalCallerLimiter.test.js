@@ -24,8 +24,7 @@ jest.isolateModules(() => {
 });
 
 const {
-  inferenceCallerRouter,
-  INTERNAL_CALLER_PREFIXES
+  inferenceCallerRouter
 } = require('../../src/middleware/rateLimiter');
 
 function postInference(clientKey, body) {
@@ -62,12 +61,6 @@ async function fire(clientKey, body, count) {
 
 describe('internalCallerLimiter — routing for Nestor and other interactive callers', () => {
   jest.setTimeout(120000);
-
-  it('exports the documented internal-caller prefix list', () => {
-    expect(INTERNAL_CALLER_PREFIXES).toEqual(
-      expect.arrayContaining(['nestor/', 'buddy/', 'chat-', 'nerve-center-', 'alerts-'])
-    );
-  });
 
   it('passes 600 buddy/react calls without throttling', async () => {
     const { ok, throttled } = await fire(
@@ -107,8 +100,11 @@ describe('internalCallerLimiter — routing for Nestor and other interactive cal
       'buddy/event',
       'chat-stream',
       'chat-completion',
+      'chat',
+      'buddy-reaction',
       'nerve-center-inference-health',
-      'alerts-evaluator'
+      'alerts-evaluator',
+      'openclaw-ollama'
     ];
     for (const tag of samples) {
       // eslint-disable-next-line no-await-in-loop

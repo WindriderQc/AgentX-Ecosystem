@@ -23,7 +23,7 @@ const NUMERIC_PARAMS = new Set([...KNOWN_PARAMS].filter(p => p !== 'stop'));
  * Validates a Modelfile's content against host model availability and parameter rules.
  *
  * @param {string} content  - Raw Modelfile text
- * @param {string} hostUrl  - Ollama host base URL (e.g. http://192.0.2.66:11434)
+ * @param {string} hostUrl  - Ollama host base URL
  * @returns {Promise<{valid: boolean, errors: string[], warnings: string[]}>}
  */
 async function validateModelfile(content, hostUrl) {
@@ -128,23 +128,12 @@ function _bestNumPredict(generationStability) {
   return best;
 }
 
-// Conservative ceiling for baked Modelfile defaults. The probe can still record
-// higher stress ceilings, but high-context probes have produced impossible
-// throughput artifacts; production adaptations must opt in above this cap.
-const DEFAULT_OPERATIONAL_NUM_CTX_CAP = 98304;
 const DEFAULT_MAX_SANE_TOKENS_PER_SEC = 10000;
 
 function _positiveInteger(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n);
-}
-
-function _operationalNumCtxCap() {
-  const raw = process.env.MODEL_CONTEXT_OPERATIONAL_CAP
-    ?? process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP
-    ?? DEFAULT_OPERATIONAL_NUM_CTX_CAP;
-  return _positiveInteger(raw);
 }
 
 function _maxSaneTokensPerSec() {
@@ -189,12 +178,11 @@ function _validateProfileThroughput(profile) {
 
 function _runtimeNumCtx(profile) {
   _validateProfileThroughput(profile);
-  const verified = _positiveInteger(profile?.spill?.lastSafeNumCtx)
-    || _positiveInteger(profile?.optimalNumCtx)
-    || 8192;
-  const cap = _operationalNumCtxCap();
-  if (!cap) return verified;
-  return Math.min(verified, cap);
+  if (profile?.spill?.spillDetected) {
+    return _positiveInteger(profile?.spill?.lastSafeNumCtx);
+  }
+  return _positiveInteger(profile?.optimalNumCtx)
+    || _positiveInteger(profile?.spill?.lastSafeNumCtx);
 }
 
 /**
@@ -222,7 +210,7 @@ function generateConfig(profile, hostProfile) {
   }
 
   return {
-    num_ctx: numCtx,
+    ...(numCtx ? { num_ctx: numCtx } : {}),
     num_gpu: 99,
     num_batch: Math.min(512, Math.max(128, Math.floor(headroom * 512))),
     num_thread: numThread,
@@ -266,7 +254,9 @@ function generateModelfile(modelName, profile, hostProfile) {
         : '(context unknown)');
     spillSummary = `Detected ${detectedAt} -- safe limit: ${profile.spill.lastSafeNumCtx}`;
   } else {
-    spillSummary = `None detected (100% GPU up to ctx ${config.num_ctx})`;
+    spillSummary = config.num_ctx
+      ? `None detected (100% GPU up to ctx ${config.num_ctx})`
+      : 'None detected (runtime context not measured)';
   }
 
   const lines = [
@@ -275,7 +265,7 @@ function generateModelfile(modelName, profile, hostProfile) {
     '# -- AgentX Adaptation -----------------------------------------------',
     `# Host:      ${displayName} (${gpuModel}, ${vramLabel})`,
     `# Profiled:  ${profiledDate} (${depth} depth)`,
-    `# Baseline:  ${profile.tokensPerSec || '?'} tok/s @ ctx ${config.num_ctx}`,
+    `# Baseline:  ${profile.tokensPerSec || '?'} tok/s${config.num_ctx ? ` @ ctx ${config.num_ctx}` : ''}`,
     `# Spill:     ${spillSummary}`,
     `# Parent:    ${modelName}`,
   ];
@@ -286,6 +276,7 @@ function generateModelfile(modelName, profile, hostProfile) {
     '# -- Performance Parameters ------------------------------------------'
   ];
   for (const [key, value] of Object.entries(config)) {
+    if (value === null || value === undefined) continue;
     paramLines.push(`PARAMETER ${key} ${value}`);
   }
 
@@ -413,7 +404,6 @@ module.exports = {
   hashModelfile,
   validateModelfile,
   populateLineage,
-  _operationalNumCtxCap,
   _maxSaneTokensPerSec,
   _validateProfileThroughput
 };

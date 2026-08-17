@@ -19,17 +19,12 @@ const mockModelRegistry = {
 };
 jest.mock('../../models/ModelRegistry', () => mockModelRegistry);
 
-// Mock ollamaVramService
-jest.mock('../../src/services/ollamaVramService', () => ({
-    getHostVram: jest.fn().mockResolvedValue({ ok: true, memoryTotalMiBTotal: 24576 })
-}));
-
 // Mock httpAgent
 jest.mock('../../src/helpers/httpAgent', () => ({
     getFetchOptions: jest.fn(() => ({}))
 }));
 
-// We'll test syncModel and detection logic, but not fetchHostModels (requires network)
+// We'll test syncModel metadata behavior, but not fetchHostModels (requires network)
 const {
     retireUnconfiguredHostModels,
     syncModel
@@ -56,7 +51,7 @@ describe('syncModel', () => {
         mockModelRegistry.findOne.mockResolvedValue(null);
         mockModelRegistry.create.mockResolvedValue({});
 
-        const result = await syncModel(sampleOllamaModel, 'http://192.0.2.99:11434', 24576);
+        const result = await syncModel(sampleOllamaModel, 'http://192.0.2.99:11434');
 
         expect(result).toBe('created');
         expect(mockModelRegistry.create).toHaveBeenCalledTimes(1);
@@ -66,8 +61,7 @@ describe('syncModel', () => {
         expect(createArg.sourceType).toBe('ollama');
         expect(createArg.sourceHost).toBe('http://192.0.2.99:11434');
         expect(createArg.vendor).toBe('alibaba');
-        expect(createArg.executionDefaults.num_ctx).toBeGreaterThan(0);
-        expect(createArg.executionDefaults._source).toBe('auto');
+        expect(createArg.executionDefaults).toBeUndefined();
         expect(createArg.capabilities.supportsThinking).toBe(false);
     });
 
@@ -87,7 +81,7 @@ describe('syncModel', () => {
         });
         mockModelRegistry.updateOne.mockResolvedValue({});
 
-        const result = await syncModel(sampleOllamaModel, 'http://192.0.2.99:11434', 24576);
+        const result = await syncModel(sampleOllamaModel, 'http://192.0.2.99:11434');
 
         expect(result).toBe('updated');
         expect(mockModelRegistry.updateOne).toHaveBeenCalled();
@@ -111,7 +105,7 @@ describe('syncModel', () => {
         });
         mockModelRegistry.updateOne.mockResolvedValue({});
 
-        await syncModel(sampleOllamaModel, 'http://192.0.2.99:11434', 24576);
+        await syncModel(sampleOllamaModel, 'http://192.0.2.99:11434');
 
         // Should still update, but should NOT touch executionDefaults since user has override
         const calls = mockModelRegistry.updateOne.mock.calls;
@@ -137,7 +131,7 @@ describe('syncModel', () => {
         });
         mockModelRegistry.updateOne.mockResolvedValue({});
 
-        const result = await syncModel(sampleOllamaModel, 'http://192.0.2.99:11434', 24576);
+        const result = await syncModel(sampleOllamaModel, 'http://192.0.2.99:11434');
 
         expect(result).toBe('updated');
         const updateSet = mockModelRegistry.updateOne.mock.calls[0][1].$set;
@@ -173,7 +167,7 @@ describe('syncModel', () => {
                 quantization_level: 'Q4_K_M',
                 family: 'gemma3'
             }
-        }, 'http://192.0.2.12:11434', 16384);
+        }, 'http://192.0.2.12:11434');
 
         expect(result).toBe('updated');
         expect(mockModelRegistry.create).not.toHaveBeenCalled();

@@ -7,7 +7,7 @@
 
 const logger = require('../../config/logger');
 const fetch = require('node-fetch');
-const { getAlertService } = require('./alertService');
+const alertService = require('./alertService');
 const { getFetchOptions } = require('../helpers/httpAgent');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const { characterizeRouteRequest } = require('./routing/routeDecision');
@@ -126,12 +126,17 @@ async function classifyAndRoute(message, options = {}) {
 
     // Alert on failover (best-effort)
     try {
-        const svc = typeof getAlertService === 'function' ? getAlertService() : null;
-        if (svc?.triggerAlert) {
-            await svc.triggerAlert('model_failover', 'warning', {
-                primary: primaryHost,
-                backup: secondaryHost,
-                latency: primaryHealth.latency
+        if (alertService?.evaluateEvent) {
+            await alertService.evaluateEvent({
+                component: 'model-router',
+                metric: 'model_failover',
+                value: 1,
+                source: 'model-router',
+                additionalData: {
+                    primary: primaryHost,
+                    backup: secondaryHost,
+                    latency: primaryHealth.latency
+                }
             });
         }
     } catch (_e) {
@@ -344,7 +349,7 @@ async function resolveRouteTarget(message, options = {}) {
     // Default: use front-door
     const defaultTask = getModelForTask('general_chat');
     return {
-        model: process.env.AGENTX_ROUTER_FALLBACK_MODEL || defaultTask.model || 'qwen3:8b',
+        model: defaultTask.model,
         target: HOSTS[defaultTask.host] || HOSTS.secondary || HOSTS.primary,
         taskType: 'default',
         routed: false,
@@ -396,15 +401,11 @@ async function routeRequest(message, options = {}) {
  */
 async function checkHostHealth(hostKey) {
     refreshHosts();
-    // Accept several identifiers:
-    // - 'primary' | 'secondary'
-    // - legacy aliases 'ollama-main' | 'ollama-secondary'
-    // - a full host URL
-    // - a URL equal to HOSTS.primary / HOSTS.secondary
+    // Accept configured host keys or a full configured URL.
     let host = null;
-    if (hostKey === 'primary' || hostKey === 'ollama-main') host = HOSTS.primary;
-    else if (hostKey === 'secondary' || hostKey === 'ollama-secondary') host = HOSTS.secondary;
-    else if (hostKey === 'tertiary' || hostKey === 'ollama-tertiary') host = HOSTS.tertiary;
+    if (hostKey === 'primary') host = HOSTS.primary;
+    else if (hostKey === 'secondary') host = HOSTS.secondary;
+    else if (hostKey === 'tertiary') host = HOSTS.tertiary;
     else if (typeof hostKey === 'string' && hostKey.startsWith('http')) host = hostKey;
     else if (hostKey === HOSTS.primary) host = HOSTS.primary;
     else if (hostKey === HOSTS.secondary) host = HOSTS.secondary;

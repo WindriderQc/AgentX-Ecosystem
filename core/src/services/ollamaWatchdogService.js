@@ -321,7 +321,7 @@ async function probeCycle() {
           const primaryPin = pinStatus.pinnedModels?.[0]?.model || null;
           if (primaryPin) {
             logger.info(`[Watchdog] Restoring pinned model ${primaryPin} on ${host.name}`);
-            await hostPrefService.restorePin(host.url);
+            await hostPrefService.restorePinnedModels(host.url);
             recordEvent('pin_restore_triggered', host, { model: primaryPin });
             pinRestored = true;
           }
@@ -362,8 +362,7 @@ async function probeCycle() {
 
     // Fire alert event (integrates with alertService if wired)
     try {
-      const { getAlertService } = require('./alertService');
-      const alertService = getAlertService();
+      const alertService = require('./alertService');
       if (alertService) {
         await alertService.evaluateEvent({
           type: 'ollama_jam_detected',
@@ -435,7 +434,7 @@ async function forceUnjam(hostUrl) {
       const pinStatus = await hostPrefService.getPinStatus(host.url);
       const primaryPin = pinStatus.pinnedModels?.[0]?.model || null;
       if (primaryPin) {
-        await hostPrefService.restorePin(host.url);
+        await hostPrefService.restorePinnedModels(host.url);
         recordEvent('pin_restore_triggered', host, { model: primaryPin });
         pinRestored = true;
       }

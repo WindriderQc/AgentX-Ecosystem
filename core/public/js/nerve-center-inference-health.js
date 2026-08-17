@@ -12,11 +12,9 @@
         return;
     }
 
-    const HOST_LABELS = {};
-
     function hostLabel(url) {
         if (!url) return '—';
-        return HOST_LABELS[url] || url.replace(/^https?:\/\//, '').replace(/:11434$/, '');
+        return url.replace(/^https?:\/\//, '').replace(/:11434$/, '');
     }
 
     function humanDuration(ms) {
