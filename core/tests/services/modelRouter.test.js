@@ -6,8 +6,16 @@
 process.env.OLLAMA_HOST = 'http://primary:11434';
 process.env.OLLAMA_HOST_SECONDARY = 'http://secondary:11434';
 process.env.OLLAMA_HOST_TERTIARY = 'http://tertiary:11434';
-delete process.env.AGENTX_DEFAULT_CHAT_MODEL;
+process.env.AGENTX_DEFAULT_CHAT_MODEL = 'deployment/default-model';
 delete process.env.AGENTX_CHAT_MODEL;
+delete process.env.AGENTX_GENERAL_CHAT_MODEL;
+delete process.env.AGENTX_LIGHTWEIGHT_MODEL;
+delete process.env.AGENTX_QUICK_CHAT_MODEL;
+delete process.env.AGENTX_UTILITY_MODEL;
+delete process.env.AGENTX_RAG_MODEL;
+delete process.env.AGENTX_DAILY_OPERATOR_MODEL;
+delete process.env.AGENTX_NESTOR_ANSWER_LIGHT_MODEL;
+delete process.env.NESTOR_ANSWER_LIGHT_MODEL;
 delete process.env.AGENTX_MASTER_BRAIN_MODEL;
 delete process.env.AGENTX_MASTER_BRAIN_HOST;
 delete process.env.AGENTX_DEEP_REASONING_MODEL;
@@ -88,13 +96,20 @@ describe('Model Router Service', () => {
 
         it('should return configured code_generation model/host', () => {
             const result = getModelForTask('code_generation');
-            expect(result.model).toBe('ax/qwen3-coder:30b');
+            expect(result.model).toBe('deployment/default-model');
             expect(result.host).toBe(TASK_MODELS.code_generation.host);
         });
 
-        it('keeps deep reasoning on the general lane and reserves Gemma31 for master brain', () => {
-            expect(getModelForTask('deep_reasoning').model).toBe('ax/gemma4:26b-a4b-it-qat');
-            expect(getModelForTask('master_brain').model).toBe('ax/gemma4:31b-it-qat');
+        it('uses one deployment model for non-embedding tasks unless explicitly overridden', () => {
+            const taskTypes = [
+                'quick_chat', 'general_chat', 'code_generation', 'code_review',
+                'deep_reasoning', 'master_brain', 'analysis', 'summarization',
+                'translation', 'daily_operator', 'nestor_answer_light',
+                'buddy_reaction', 'buddy_chat', 'voice_persona_chat',
+                'voice_persona_reader', 'janitor_ai',
+            ];
+            expect(new Set(taskTypes.map(task => getModelForTask(task).model)))
+                .toEqual(new Set(['deployment/default-model']));
         });
 
         it('should return configured deep_reasoning model/host', () => {
