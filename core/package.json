@@ -43,9 +43,8 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.0",
-    "eslint": "^8.57.0",
-    "jest": "^29.7.0",
+    "@types/jest": "^30.0.0",
+    "jest": "^30.4.2",
     "mongodb-memory-server": "^10.2.1",
     "nodemon": "^3.1.10",
     "supertest": "^7.1.4"
@@ -53,6 +52,8 @@
   "overrides": {
     "mongodb": "^6.5.0",
     "bson": "^6.5.0",
+    "glob": "^13.0.6",
+    "test-exclude": "^8.0.0",
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "^4.3.1"
     }

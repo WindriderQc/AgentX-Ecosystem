@@ -211,7 +211,7 @@ describe('Nerve Center Routes — Unit Tests', () => {
         host: 'tertiary'
       });
       expect(config.defaults.taskModels.quick_chat).toEqual({
-        model: 'ax/qwen3.5:9b',
+        model: 'ax/gemma4:26b-a4b-it-qat',
         host: 'secondary'
       });
     });
