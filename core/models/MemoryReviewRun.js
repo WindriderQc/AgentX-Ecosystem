@@ -1,8 +1,8 @@
 // MemoryReviewRun — one ecosystem memory-review run with embedded sanitized
 // observations, synthesized candidates, and a full audit trail.
 //
-// Core-owned collection `memoryreviewruns` (see parent CLAUDE.md ownership
-// table). Structured review state lives HERE, not in RAG: fuzzy recall is
+// Core owns the `memoryreviewruns` collection. Structured review state lives
+// here, not in RAG: fuzzy recall is
 // never the store of approval state. Raw transcripts never enter this model —
 // observation text is a bounded, locally extracted durable claim.
 

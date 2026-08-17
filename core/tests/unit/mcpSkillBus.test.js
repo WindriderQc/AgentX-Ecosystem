@@ -188,9 +188,8 @@ describe('mcpSkillBus', () => {
       'add_personal_task',
       'list_personal_tasks',
       'complete_personal_task',
-      'add_email_action',
     ]);
-    expect(TOOLS).toHaveLength(11);
+    expect(TOOLS).toHaveLength(10);
   });
 
   test('rag_search calls the injected RAG client and returns structured content', async () => {
@@ -322,34 +321,6 @@ describe('mcpSkillBus', () => {
     }, { memoryWriter });
     expect(memoryWriter).toHaveBeenCalledWith({ text: 'Remember this useful fact.' });
     expect(res.result.structuredContent.saved).toBe(true);
-  });
-
-  test('add_email_action delegates one idempotent Gmail-thread receipt', async () => {
-    const emailActionWriter = jest.fn(async () => ({
-      created: true,
-      gmailThreadId: '10f6012a48bd8cb7',
-      leantimeProjectId: 4,
-      leantimeTicketId: 88,
-      state: 'active',
-    }));
-    const args = {
-      gmailThreadId: '10f6012a48bd8cb7',
-      gmailMessageId: '10f6012a48bd8cb7',
-      category: 'Needs Reply',
-      action: 'Reply to Vincent',
-      sender: 'hotmail.com',
-      messageDate: '2006-12-07 22:19',
-    };
-    const res = await handleMcpMessage({
-      jsonrpc: '2.0',
-      id: 63,
-      method: 'tools/call',
-      params: { name: 'add_email_action', arguments: args },
-    }, { emailActionWriter });
-
-    expect(emailActionWriter).toHaveBeenCalledWith(args);
-    expect(res.result.isError).toBe(false);
-    expect(res.result.structuredContent.leantimeTicketId).toBe(88);
   });
 
   test('list_personal_tasks omits notes by default and bounds its reader input', async () => {

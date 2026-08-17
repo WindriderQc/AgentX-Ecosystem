@@ -9,19 +9,19 @@ const mongoose = require('mongoose');
 const logger = require('../../config/logger');
 const { getRagStore } = require('./ragStore');
 const {
-  classifyVaultPath,
-  loadVaultPolicy
-} = require('../../../shared/obsidianVaultPolicy');
+  classifyIngestionPath,
+  loadIngestionPolicy
+} = require('../../../shared/ingestionPolicy');
 
 const execFileAsync = promisify(execFile);
 let pdfParseModule = null;
-const OBSIDIAN_VAULT_POLICY = loadVaultPolicy();
+const INGESTION_POLICY = loadIngestionPolicy();
 
-const DEFAULT_ROOTS = OBSIDIAN_VAULT_POLICY.ingestion.approvedRoots.slice();
-const DEFAULT_MAX_FILE_SIZE_BYTES = OBSIDIAN_VAULT_POLICY.ingestion.maxFileSizeBytes;
+const DEFAULT_ROOTS = INGESTION_POLICY.ingestion.approvedRoots.slice();
+const DEFAULT_MAX_FILE_SIZE_BYTES = INGESTION_POLICY.ingestion.maxFileSizeBytes;
 const DEFAULT_BATCH_DELAY_MS = 100;
 
-const SUPPORTED_EXTENSIONS = new Set(OBSIDIAN_VAULT_POLICY.ingestion.allowedExtensions);
+const SUPPORTED_EXTENSIONS = new Set(INGESTION_POLICY.ingestion.allowedExtensions);
 const SKIP_EXTENSIONS = new Set([
   '7z',
   'avi',
@@ -68,7 +68,7 @@ const SKIP_EXTENSIONS = new Set([
   'yml',
   'zip'
 ]);
-const SKIP_DIRECTORY_NAMES = new Set(OBSIDIAN_VAULT_POLICY.ingestion.excludedDirectoryNames);
+const SKIP_DIRECTORY_NAMES = new Set(INGESTION_POLICY.ingestion.excludedDirectoryNames);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -102,7 +102,7 @@ function getConfiguredRoots(value = process.env.INGEST_ROOTS) {
   const requested = normalizeRoots(value);
   const invalid = requested.filter((root) => !DEFAULT_ROOTS.some((allowed) => isPathUnderRoot(root, allowed)));
   if (invalid.length) {
-    throw new Error(`INGEST_ROOTS contains paths outside the approved Obsidian corpus: ${invalid.join(', ')}`);
+    throw new Error(`INGEST_ROOTS contains paths outside the approved import roots: ${invalid.join(', ')}`);
   }
   return requested;
 }
@@ -194,7 +194,7 @@ function describeSkip(record, options = {}) {
   const roots = options.roots || [];
   const maxFileSizeBytes = Math.min(
     Number(options.maxFileSizeBytes || DEFAULT_MAX_FILE_SIZE_BYTES),
-    Number((options.policy || OBSIDIAN_VAULT_POLICY).ingestion.maxFileSizeBytes)
+    Number((options.policy || INGESTION_POLICY).ingestion.maxFileSizeBytes)
   );
 
   if (!filePath) {
@@ -203,13 +203,13 @@ function describeSkip(record, options = {}) {
   if (roots.length && !getMatchingRoot(filePath, roots)) {
     return { skip: true, reason: 'outside configured roots' };
   }
-  const vaultClassification = classifyVaultPath(filePath, {
-    policy: options.policy || OBSIDIAN_VAULT_POLICY,
+  const ingestionClassification = classifyIngestionPath(filePath, {
+    policy: options.policy || INGESTION_POLICY,
     record: { ext, size: record?.size },
     maxFileSizeBytes
   });
-  if (!vaultClassification.allowed) {
-    return { skip: true, reason: vaultClassification.reason };
+  if (!ingestionClassification.allowed) {
+    return { skip: true, reason: ingestionClassification.reason };
   }
   if (hasSkippedDirectory(filePath)) {
     return { skip: true, reason: 'skip directory' };
@@ -331,7 +331,7 @@ class IngestWorker {
   constructor(options = {}) {
     this.db = options.db || mongoose.connection.db;
     this.logger = options.logger || logger;
-    this.policy = options.policy || OBSIDIAN_VAULT_POLICY;
+    this.policy = options.policy || INGESTION_POLICY;
     const selectedRoots = Array.isArray(options.roots) && options.roots.length
       ? options.roots
       : getConfiguredRoots();
@@ -339,7 +339,7 @@ class IngestWorker {
     const approvedRoots = normalizeRoots(this.policy.ingestion.approvedRoots);
     const invalidRoots = this.roots.filter((root) => !approvedRoots.some((approved) => isPathUnderRoot(root, approved)));
     if (invalidRoots.length) {
-      throw new Error(`Ingest roots are outside the approved Obsidian corpus: ${invalidRoots.join(', ')}`);
+      throw new Error(`Ingest roots are outside the approved import roots: ${invalidRoots.join(', ')}`);
     }
     this.maxFileSizeBytes = Math.min(
       Number(options.maxFileSizeBytes || process.env.INGEST_MAX_FILE_SIZE_BYTES || DEFAULT_MAX_FILE_SIZE_BYTES),

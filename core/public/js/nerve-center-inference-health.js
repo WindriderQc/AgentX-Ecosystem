@@ -12,11 +12,7 @@
         return;
     }
 
-    const HOST_LABELS = {
-        'http://192.0.2.199:11434': 'Host Alpha',
-        'http://192.0.2.12:11434': 'Host Beta',
-        'http://192.0.2.99:11434': 'Host Gamma'
-    };
+    const HOST_LABELS = {};
 
     function hostLabel(url) {
         if (!url) return '—';

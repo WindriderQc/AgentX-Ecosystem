@@ -28,8 +28,7 @@
  * optional boolean `useAdapted` in the request body — `useAdapted: true` to
  * force adapted resolution, `useAdapted: false` to force the bare name.
  *
- * Storage layer (registry, profiles, pins) is unchanged — bare names only;
- * see `core/CLAUDE.md` "Model Name Normalization".
+ * Storage layer (registry, profiles, pins) uses bare model names only.
  *
  * Trust model — LOAD-BEARING ASSUMPTION
  * --------------------------------------

@@ -43,7 +43,7 @@ describe('profile-host queue depth selection', () => {
     hostProfileService.getById.mockResolvedValue({
       hostId: 'host-beta',
       hostUrl: 'http://localhost:11434',
-      displayName: 'UG Brutal'
+      displayName: 'Example Host'
     });
     hostTestService.checkHost.mockResolvedValue({
       available: true,

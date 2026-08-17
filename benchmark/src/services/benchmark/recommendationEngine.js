@@ -236,7 +236,7 @@ function metricsFor(rec, model) {
  */
 function formatLedgerEntry(rec, opts = {}) {
   const date = opts.date || 'YYYY-MM-DD';
-  const actor = opts.actor || 'Self-Tuning Lane (Claude Code), human-directed';
+  const actor = opts.actor || 'Self-Tuning Lane, human-directed';
   const host = rec.host || opts.host || null;
   const hostStr = host ? ` on ${host}` : '';
   const pend = (v, hint) => v || `_pending — ${hint}_`;

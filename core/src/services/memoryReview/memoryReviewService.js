@@ -1,5 +1,5 @@
 // memoryReview/memoryReviewService.js — run lifecycle for the Ecosystem
-// Memory Review capability (docs/ai-ops/ecosystem-memory-review.md).
+// Memory Review capability.
 //
 // Invariants enforced here:
 // - idempotent everywhere: reopening a runKey returns the open run; observation

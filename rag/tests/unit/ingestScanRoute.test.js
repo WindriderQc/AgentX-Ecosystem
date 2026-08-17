@@ -8,7 +8,7 @@ jest.mock('mongoose', () => ({
 
 jest.mock('../../src/services/ingestWorker', () => ({
   runIngestScan: jest.fn(),
-  getConfiguredRoots: jest.fn().mockReturnValue(['/mnt/datalake/RAG/Docs']),
+  getConfiguredRoots: jest.fn().mockReturnValue(['/data/imports/docs']),
   isPathUnderRoot: jest.fn((filePath, root) => {
     const resolved = require('path').resolve(filePath);
     const resolvedRoot = require('path').resolve(root);
@@ -53,7 +53,7 @@ describe('POST /api/rag/ingest-scan (async job pattern)', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/ingest-scan')
-      .send({ limit: 10, roots: ['/mnt/datalake/RAG/Docs'] });
+      .send({ limit: 10, roots: ['/data/imports/docs'] });
 
     expect(res.status).toBe(202);
     expect(res.body.ok).toBe(true);
@@ -65,7 +65,7 @@ describe('POST /api/rag/ingest-scan (async job pattern)', () => {
     const app = buildApp();
     await request(app)
       .post('/api/rag/ingest-scan')
-      .send({ limit: 10, roots: ['/mnt/datalake/RAG/Docs'] });
+      .send({ limit: 10, roots: ['/data/imports/docs'] });
 
     // Wait a tick for the fire-and-forget call
     await new Promise((r) => setTimeout(r, 10));
@@ -73,7 +73,7 @@ describe('POST /api/rag/ingest-scan (async job pattern)', () => {
     expect(runIngestScan).toHaveBeenCalledWith(
       expect.objectContaining({
         limit: 10,
-        roots: ['/mnt/datalake/RAG/Docs']
+        roots: ['/data/imports/docs']
       })
     );
   });

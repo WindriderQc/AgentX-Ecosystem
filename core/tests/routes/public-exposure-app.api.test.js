@@ -9,7 +9,7 @@ describe('public exposure guard app mount', () => {
   beforeEach(() => {
     process.env.AGENTX_OPERATOR_TOKEN = 'operator-token';
     delete process.env.AGENTX_ADMIN_TOKEN;
-    delete process.env.AGENTX_PUBLIC_HOSTS;
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
   });
 
   afterAll(() => {
@@ -26,7 +26,7 @@ describe('public exposure guard app mount', () => {
   it('blocks public-host API traffic before app routes handle it', async () => {
     const res = await request(app)
       .get('/api/config')
-      .set('Host', 'agentx.specialblend.icu')
+      .set('Host', 'agentx.example.test')
       .expect(403);
 
     expect(res.body).toEqual(expect.objectContaining({
@@ -38,7 +38,7 @@ describe('public exposure guard app mount', () => {
   it('allows public-host API traffic with a valid operator token', async () => {
     const res = await request(app)
       .get('/api/config')
-      .set('Host', 'agentx.specialblend.icu')
+      .set('Host', 'agentx.example.test')
       .set('Authorization', 'Bearer operator-token')
       .expect(200);
 
@@ -57,7 +57,7 @@ describe('public exposure guard app mount', () => {
   it('leaves public-host health checks available', async () => {
     const res = await request(app)
       .get('/health')
-      .set('Host', 'agentx.specialblend.icu');
+      .set('Host', 'agentx.example.test');
 
     expect([200, 503]).toContain(res.statusCode);
     expect(res.statusCode).not.toBe(403);

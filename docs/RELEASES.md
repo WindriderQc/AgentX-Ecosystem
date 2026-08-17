@@ -2,6 +2,9 @@
 
 Agent X supports three deliberately simple release modes.
 
+Core, Benchmark, and RAG use the same product version. A release tag, the three
+package versions, and published image tags must agree before publication.
+
 ## Stable release
 
 This is the normal path for a friend, colleague, or customer. Start from the

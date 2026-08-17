@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  contracts:
+  core-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -22,16 +22,107 @@ jobs:
           cache-dependency-path: core/package-lock.json
       - run: npm ci
         working-directory: core
-      - name: Validate product profile and extension boundary
-        run: npm test -- --runInBand --runTestsByPath tests/unit/agentxRuntimeProfile.test.js tests/unit/extensionLoader.test.js tests/services/conversationLifecycleService.test.js tests/unit/laneObservabilityService.test.js
+      - run: npm audit --audit-level=high
         working-directory: core
-      - name: Validate service entrypoints
+      - run: npm run build
+        working-directory: core
+      - name: Validate Core product boundaries
+        run: >-
+          npm test -- --runInBand --runTestsByPath
+          tests/unit/agentxRuntimeProfile.test.js
+          tests/unit/extensionLoader.test.js
+          tests/services/conversationLifecycleService.test.js
+          tests/integration/health.test.js
+          tests/routes/public-exposure-app.api.test.js
+        working-directory: core
+
+  benchmark-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: benchmark/package-lock.json
+      - run: npm ci
+        working-directory: benchmark
+      - run: npm audit --audit-level=high
+        working-directory: benchmark
+      - name: Validate Benchmark product contracts
+        run: >-
+          npm test -- --runInBand --runTestsByPath
+          tests/unit/sharedCoreAssets.test.js
+          tests/unit/modelFitEstimator.test.js
+          tests/unit/contextProbeService.test.js
+        working-directory: benchmark
+
+  rag-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: rag/package-lock.json
+      - run: npm ci
+        working-directory: rag
+      - run: npm audit --audit-level=high
+        working-directory: rag
+      - name: Validate RAG readiness and ingestion contracts
+        run: >-
+          npm test -- --runInBand --runTestsByPath
+          tests/unit/health.test.js
+          tests/unit/ingestionPolicyRoute.test.js
+          tests/unit/ingestWorker.test.js
+          tests/unit/statusAndMetrics.test.js
+        working-directory: rag
+
+  compose-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate command scripts
         run: |
+          bash -n agentx
           node --check core/server.js
           node --check benchmark/server.js
           node --check rag/server.js
-      - name: Validate standalone Compose
-        run: docker compose config --quiet
+      - name: Render default and Ollama Compose profiles
+        run: |
+          docker compose --env-file config/agentx.env -f docker-compose.yml config --format json > /tmp/agentx-base.json
+          docker compose --env-file config/agentx.env -f docker-compose.yml -f docker-compose.ollama.yml --profile ollama config --format json > /tmp/agentx-ollama.json
+          node <<'NODE'
+          const fs = require('fs');
+          const base = JSON.parse(fs.readFileSync('/tmp/agentx-base.json', 'utf8'));
+          const overlay = JSON.parse(fs.readFileSync('/tmp/agentx-ollama.json', 'utf8'));
+          const names = value => Object.keys(value.services).sort().join(',');
+          if (names(base) !== 'benchmark,core,mongo,qdrant,rag') throw new Error(`Unexpected default services: ${names(base)}`);
+          if (names(overlay) !== 'benchmark,core,mongo,ollama,qdrant,rag') throw new Error(`Unexpected Ollama services: ${names(overlay)}`);
+          for (const name of ['core', 'benchmark', 'rag']) {
+            if (base.services[name].environment.AGENTX_PROFILE !== 'demo') throw new Error(`${name} is not in demo profile`);
+            for (const port of base.services[name].ports || []) {
+              if (port.host_ip !== '127.0.0.1') throw new Error(`${name} is not bound to loopback`);
+            }
+            if (!base.services[name].healthcheck.test.at(-1).includes('statusCode===200')) {
+              throw new Error(`${name} health check does not require HTTP 200`);
+            }
+          }
+          for (const service of Object.values(base.services)) {
+            if ((service.volumes || []).some(volume => volume.type === 'bind')) throw new Error('Default Compose contains a bind mount');
+          }
+          const rendered = JSON.stringify({ base, overlay });
+          if (/aiops|obsidian|openclaw|hermes|octoprint|specialblend|192\.168\.|10\.0\.0\.99/i.test(rendered)) {
+            throw new Error('Rendered Compose contains a forbidden environment marker');
+          }
+          NODE
 
   image-builds:
     runs-on: ubuntu-latest

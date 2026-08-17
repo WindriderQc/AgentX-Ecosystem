@@ -7,8 +7,7 @@
  * POST   /ingest-scan          — Start async NAS file scan + ingestion (returns 202 + jobId)
  * GET    /ingest-scan/:jobId   — Poll ingest-scan job progress
  * DELETE /ingest-scan/:jobId   — Cancel a running ingest-scan job
- * GET    /vault/policy         — Read deterministic Obsidian vault policy
- * GET    /vault/index          — Read generated Git-to-vault link index
+ * GET    /ingestion/policy     — Read the bounded local import policy
  * POST   /search               — Search similar chunks
  * GET    /documents            — List ingested documents
  * DELETE /documents/:id        — Delete a document by ID
@@ -29,10 +28,9 @@ const jobManager = require('../src/services/ingestJobManager');
 const IngestJob = require('../models/IngestJob');
 const buddyRagEvents = require('../src/services/buddyRagEvents');
 const {
-  buildProjectionIndex,
-  getPublicVaultPolicy,
-  loadVaultPolicy
-} = require('../../shared/obsidianVaultPolicy');
+  getPublicIngestionPolicy,
+  loadIngestionPolicy
+} = require('../../shared/ingestionPolicy');
 
 const { sendError } = require('../src/utils/response');
 
@@ -341,14 +339,10 @@ router.delete('/ingest-scan/:jobId', (req, res) => {
   res.json({ ok: true, data: { jobId: job.jobId, status: 'cancelled' } });
 });
 
-// ── Read-only Obsidian vault contract ───────────────────
+// ── Read-only local ingestion contract ──────────────────
 
-router.get('/vault/policy', (_req, res) => {
-  res.json({ ok: true, data: getPublicVaultPolicy(loadVaultPolicy()) });
-});
-
-router.get('/vault/index', (_req, res) => {
-  res.json({ ok: true, data: buildProjectionIndex(loadVaultPolicy()) });
+router.get('/ingestion/policy', (_req, res) => {
+  res.json({ ok: true, data: getPublicIngestionPolicy(loadIngestionPolicy()) });
 });
 
 // ── POST /search ─────────────────────────────────────────

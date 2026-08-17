@@ -537,8 +537,8 @@ describe('AgentX Planning API', () => {
   test('links runtime schedules and stores evidence with history', async () => {
     await ClusterScheduleEntry.create({
       source: 'openclaw',
-      sourceId: 'docs-steward-audit',
-      name: 'Docs Steward Audit',
+      sourceId: 'release-check',
+      name: 'Release Check',
       taskType: 'diagnostics',
       schedule: { type: 'cron', cron: '30 10 * * 1' }
     });
@@ -550,25 +550,25 @@ describe('AgentX Planning API', () => {
 
     await request(app)
       .post(`/api/planning/items/${itemId}/schedules`)
-      .send({ sourceId: 'docs-steward-audit', by: 'codex' })
+      .send({ sourceId: 'release-check', by: 'codex' })
       .expect(200);
     const evidenceResponse = await request(app)
       .post(`/api/planning/items/${itemId}/evidence`)
       .send({
         kind: 'document',
-        label: 'Latest Docs Steward report',
-        ref: 'docs/audits/docs-steward/latest',
+        label: 'Latest release report',
+        ref: 'reports/release/latest',
         by: 'codex'
       })
       .expect(201);
 
-    expect(evidenceResponse.body.data.evidence.label).toBe('Latest Docs Steward report');
+    expect(evidenceResponse.body.data.evidence.label).toBe('Latest release report');
 
     const detail = await request(app)
       .get(`/api/planning/items/${itemId}`)
       .expect(200);
 
-    expect(detail.body.data.item.scheduleRefs[0].sourceId).toBe('docs-steward-audit');
+    expect(detail.body.data.item.scheduleRefs[0].sourceId).toBe('release-check');
     expect(detail.body.data.item.evidence).toHaveLength(1);
     expect(detail.body.data.item.history.map((entry) => entry.action)).toEqual(
       expect.arrayContaining(['created', 'schedule_linked', 'evidence_added'])

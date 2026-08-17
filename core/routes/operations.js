@@ -330,7 +330,7 @@ router.get('/health', async (req, res) => {
       }
     }
 
-    // 7. OpenClaw-adjacent Ollama fallback (Host Gamma .99 tertiary/model-store) + OpenClaw status
+    // 7. Optional runtime fallback plus external-adapter status
     const [clawdxTagsProbe, clawdxPsProbe] = await Promise.all([
       probeFirstJson(clawdxOllamaUrl, ['/api/tags']),
       probeFirstJson(clawdxOllamaUrl, ['/api/ps'])

@@ -71,7 +71,7 @@ const NERVE_CENTER_PLAN = {
         }
       },
       taskRefs: ['0361', '0375'],
-      scheduleRefs: ['oc-docs-steward-audit', 'oc-planning-reconcile'],
+      scheduleRefs: ['oc-planning-reconcile'],
       evidenceBindings: [
         { source: 'pipeline', params: { events: ['feedback', 'review', 'done', 'blocked'] } },
         { source: 'alerts', params: { events: ['resolved', 'acknowledged'] } },
@@ -173,8 +173,7 @@ const NERVE_CENTER_PLAN = {
       scheduleRefs: [
         'oc-morning-briefing',
         'oc-daily-digest',
-        'oc-weekly-review',
-        'oc-docs-steward-audit'
+        'oc-weekly-review'
       ],
       evidenceBindings: [{ source: 'schedule', params: { events: ['run'] } }],
       evidence: [

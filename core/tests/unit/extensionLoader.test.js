@@ -36,9 +36,9 @@ describe('Agent X extension loader', () => {
     fs.realpathSync.mockReturnValue(modulePath);
     const register = jest.fn();
     const requireModule = jest.fn(() => ({
-      id: 'printer-vision-ops',
+      id: 'example-operations-adapter',
       version: '1.0.0',
-      capabilities: ['printer-vision'],
+      capabilities: ['example-capability'],
       register
     }));
     const app = {};
@@ -55,8 +55,8 @@ describe('Agent X extension loader', () => {
       profile: 'full',
       conversationLifecycle
     }));
-    expect(loaded).toEqual([expect.objectContaining({ id: 'printer-vision-ops' })]);
-    expect(extensionOwnsCapability(loaded, 'printer-vision')).toBe(true);
+    expect(loaded).toEqual([expect.objectContaining({ id: 'example-operations-adapter' })]);
+    expect(extensionOwnsCapability(loaded, 'example-capability')).toBe(true);
   });
 
   test('rejects duplicate capability ownership', () => {
@@ -65,7 +65,7 @@ describe('Agent X extension loader', () => {
     fs.realpathSync.mockImplementation((value) => value);
     const requireModule = jest.fn((value) => ({
       id: value === a ? 'extension-a' : 'extension-b',
-      capabilities: ['printer-vision'],
+      capabilities: ['example-capability'],
       register: jest.fn()
     }));
 

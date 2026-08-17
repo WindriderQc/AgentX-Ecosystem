@@ -24,8 +24,7 @@ const {
   createAgentXProfileGuard,
 } = require('../../shared/agentxRuntimeProfile');
 const {
-  loadAgentXExtensions,
-  extensionOwnsCapability
+  loadAgentXExtensions
 } = require('./extensions/extensionLoader');
 const { conversationLifecycle } = require('./services/conversationLifecycleService');
 
@@ -306,11 +305,6 @@ app.locals.agentxExtensions = agentxExtensions;
 const alertRoutes = require('../routes/alerts');
 app.use('/api/alerts', standardJsonParser, alertRoutes);
 
-if (!extensionOwnsCapability(agentxExtensions, 'printer-vision')) {
-  const printerVisionRoutes = require('../routes/printer-vision');
-  app.use('/api/printer-vision', standardJsonParser, printerVisionRoutes);
-}
-
 // V4: Mount Analytics routes
 const analyticsRoutes = require('../routes/analytics');
 app.use('/api/analytics', standardJsonParser, analyticsRoutes);
@@ -419,14 +413,10 @@ app.use('/api/benchmark-proxy', benchmarkProxyRoutes);
 const reportsRoutes = require('../routes/reports');
 app.use('/api/reports', reportsRoutes);
 
-// Docs Steward governance audit endpoint for OpenClaw/manual runners
-const docsStewardRoutes = require('../routes/docs-steward');
-app.use('/api/docs-steward', standardJsonParser, docsStewardRoutes);
-
 // Ecosystem Memory Review: approval-first cross-runtime memory candidates.
 // The 1 MiB parser is installed above the broad compatibility parser;
 // observation batches are additionally capped by policy and raw transcript
-// payloads are refused (docs/ai-ops/ecosystem-memory-review.md).
+// payloads are refused by the bounded review contract.
 const memoryReviewRoutes = require('../routes/memory-review');
 app.use('/api/memory-review', memoryReviewRoutes);
 
@@ -610,7 +600,7 @@ app.get('/api/config', (_req, res) => {
       fullUrl: ollamaHost
     },
     features: demo
-      ? { openclaw: { enabled: false }, hermes: { enabled: false }, octoprint: { enabled: false } }
+      ? {}
       : { openclaw: getOpenClawRuntimeConfig(), voice: voiceSettings.getSettings() },
     // Browser-reachable URLs for cross-service navigation. Public JS
     // and EJS pages use these instead of hardcoded localhost:<port>
@@ -863,20 +853,6 @@ app.get('/cluster-schedule', (req, res) => {
   });
 });
 
-app.get('/docs-steward', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/docs-steward',
-    title: 'AgentX \u2022 Docs Steward',
-    service: 'core',
-    activePage: 'docs-steward',
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/docs-steward.css">'
-    ].join('\n'),
-    footerJs: '<script src="/js/docs-steward.js"></script>'
-  });
-});
-
 app.get('/memory-review', (req, res) => {
   res.render('layouts/main', {
     pageView: '../pages/memory-review',
@@ -1073,21 +1049,6 @@ app.get('/voice', (req, res) => {
 });
 app.get('/voice.html', (req, res) => res.redirect(301, '/voice'));
 app.get('/voix', (req, res) => res.redirect(301, '/voice'));
-
-app.get('/printer-vision', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/printer-vision',
-    title: 'AgentX • Vision imprimante',
-    service: 'core',
-    activePage: 'printer-vision',
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/printer-vision.css">'
-    ].join('\n'),
-    footerJs: '<script src="/js/printer-vision.js"></script>'
-  });
-});
-app.get('/printer-vision.html', (req, res) => res.redirect(301, '/printer-vision'));
 
 app.get('/voice-personas', (req, res) => {
   res.render('layouts/main', {

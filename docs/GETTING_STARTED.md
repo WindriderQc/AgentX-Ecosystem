@@ -1,33 +1,32 @@
 # First installation: Windows and Linux
 
-Agent X starts its UI and data services without installing Ollama or
-downloading a model. Inference and embeddings become available only after you
-choose a native, Docker, or remote Ollama endpoint. No default points to an
-AIOps production host.
+Agent X needs Git, Docker, and Docker Compose v2. It starts its UI and data
+services without Ollama or a model. Nothing in this workflow installs software,
+downloads a model, or contacts a private endpoint automatically.
 
 ## Windows
 
-Detect a native installation and its health:
+Start Docker Desktop, then run from the cloned repository:
 
 ```powershell
-Get-Command ollama -ErrorAction SilentlyContinue
-Invoke-RestMethod http://127.0.0.1:11434/api/version
+.\agentx.ps1 doctor
+.\agentx.ps1 up
+.\agentx.ps1 health
+```
+
+Open <http://localhost:3180/>. Core, Benchmark, and RAG bind only to host
+loopback by default. To check an optional native Ollama later:
+
+```powershell
 .\agentx.ps1 ollama-doctor
 ```
 
-If the CLI exists but health fails, start the Ollama app from the Start menu or
-run `ollama serve` in another terminal. If it is absent, review the official
-[Windows guide](https://docs.ollama.com/windows) and choose the installer
-yourself. Agent X never runs an installer or changes Windows services.
+If it is installed but stopped, start the Ollama app or run `ollama serve` in
+another terminal. If it is absent, Agent X remains usable for UI inspection.
+The official [Windows guide](https://docs.ollama.com/windows) is the source for
+an optional installation.
 
-Start Agent X with native Ollama:
-
-```powershell
-$env:AGENTX_OLLAMA_HOST='http://host.docker.internal:11434'
-.\agentx.ps1 up
-```
-
-Choose models only when ready:
+Choose models explicitly only when ready:
 
 ```powershell
 ollama pull llama3.2:3b
@@ -37,32 +36,27 @@ ollama pull nomic-embed-text:v1.5
 
 ## Linux
 
-Detect a native installation and its health:
+Start Docker Engine, then run from the cloned repository:
 
 ```bash
-command -v ollama
-curl --fail --silent http://127.0.0.1:11434/api/version
+chmod +x agentx
+./agentx doctor
+./agentx up
+./agentx health
+```
+
+Open <http://localhost:3180/>. Core, Benchmark, and RAG bind only to host
+loopback by default. To check an optional native Ollama later:
+
+```bash
 ./agentx ollama-doctor
 ```
 
-If installed as a system service:
-
-```bash
-sudo systemctl start ollama
-sudo systemctl status ollama
-```
-
-A CLI-only installation can run `ollama serve` in another terminal. If Ollama
-is absent, review the official [Linux guide](https://docs.ollama.com/linux)
-before running any installer or privileged command. Agent X never installs or
-enables it automatically.
-
-Start Agent X with native Ollama:
-
-```bash
-export AGENTX_OLLAMA_HOST='http://host.docker.internal:11434'
-./agentx up
-```
+If installed as a service, start it using the method appropriate to the Linux
+distribution. A CLI-only installation can run `ollama serve` in another
+terminal. If Ollama is absent, Agent X remains usable for UI inspection. The
+official [Linux guide](https://docs.ollama.com/linux) is the source for an
+optional installation.
 
 Choose models only when ready:
 
@@ -108,7 +102,28 @@ user-owned override.
 | Opt-in Docker Ollama | set to `http://ollama:11434` by the overlay | Isolated named volume; no host API port |
 | User-selected remote | `http://<approved-host>:11434` | Explicit choice; secure and authorize the network separately |
 
-Related pins are `AGENTX_DEFAULT_CHAT_MODEL`,
-`AGENTX_GENERAL_CHAT_MODEL`, `AGENTX_ROUTER_EMBEDDING_MODEL`, and
-`EMBEDDING_MODEL`. `OLLAMA_HOST_NAME` is only a display label. Keep secondary
-hosts empty for first installation.
+`EMBEDDING_MODEL` selects the RAG embedding model and `OLLAMA_HOST_NAME` is only
+a display label. Chat models are selected in the UI. Keep secondary hosts empty
+for first installation.
+
+## Common error paths
+
+- `doctor` says Docker is missing: install Docker separately, reopen the
+  terminal, and retry.
+- `doctor` says the engine is unreachable: start Docker Desktop or Docker
+  Engine. No Agent X container was changed.
+- `up` times out: run `status`, then `logs core`; MongoDB and Core must become
+  healthy before Benchmark and RAG start.
+- A host port is already in use: set `CORE_PORT`, `BENCHMARK_PORT`, and
+  `RAG_PORT` in the shell before `up`.
+- The UI loads but inference fails: this is expected without a reachable
+  Ollama and an explicitly pulled chat model.
+- RAG ingestion fails while the UI is healthy: pull the configured embedding
+  model, then retry with a small non-sensitive document.
+
+## Stop and cleanup
+
+`down` stops product containers and the opt-in Docker Ollama container, if
+present, but preserves data. `reset` deletes this Compose project's named
+volumes after an exact confirmation phrase. Use `ollama-down` when you started
+the Docker Ollama path and want the same full-stack stop explicitly.

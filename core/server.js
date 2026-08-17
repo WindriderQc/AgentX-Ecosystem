@@ -10,10 +10,13 @@ const { app } = require('./src/app');
 const systemHealth = require('./src/systemHealth');
 const { normalizeHostUrl } = require('./src/helpers/ollamaHostConfig');
 const { flagEnabled, startSingletonDaemon } = require('./src/services/leaderLeaseService');
+const { currentAgentXProfile, isDemoProfile } = require('../shared/agentxRuntimeProfile');
 
 const PORT = process.env.PORT || 3080;
 const HOST = process.env.HOST || 'localhost';
 const OLLAMA_HOST = normalizeHostUrl(process.env.OLLAMA_HOST);
+const AGENTX_PROFILE = currentAgentXProfile();
+const DEMO_RUNTIME = isDemoProfile(AGENTX_PROFILE);
 if (!OLLAMA_HOST) {
   logger.warn('OLLAMA_HOST not defined in environment variables. Some features may be disabled.');
 } else if (String(process.env.OLLAMA_HOST || '').includes('0.0.0.0')) {
@@ -109,7 +112,8 @@ app.get('/health/detailed', async (_req, res) => {
   const ollamaStatus = await checkOllamaHealth();
 
   const health = {
-    status: (mongoStatus.healthy && ollamaStatus.healthy) ? 'healthy' : 'degraded',
+    status: mongoStatus.healthy ? 'healthy' : 'degraded',
+    profile: AGENTX_PROFILE,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     services: {
@@ -120,6 +124,7 @@ app.get('/health/detailed', async (_req, res) => {
       },
       ollama: {
         status: ollamaStatus.healthy ? 'connected' : 'error',
+        required: false,
         message: ollamaStatus.message,
         host: OLLAMA_HOST,
         lastCheck: new Date().toISOString()
@@ -135,7 +140,7 @@ app.get('/health/detailed', async (_req, res) => {
     }
   };
 
-  const statusCode = health.status === 'healthy' ? 200 : 503;
+  const statusCode = mongoStatus.healthy ? 200 : 503;
   res.status(statusCode).json(health);
 });
 
@@ -144,7 +149,7 @@ app.get('/health/detailed', async (_req, res) => {
 async function startServer() {
   const packageJson = require('./package.json');
   console.log(`\n╔════════════════════════════════════════════════════════╗`);
-  console.log(`║        AgentX Core v${packageJson.version} - Production Ready           ║`);
+  console.log(`║                   Agent X Core v${packageJson.version}                  ║`);
   console.log(`╚════════════════════════════════════════════════════════╝\n`);
   console.log(`🔍 Checking system dependencies...\n`);
 
@@ -208,38 +213,43 @@ async function startServer() {
       console.log(`   ✓ Ollama:   Connected (${OLLAMA_HOST})`);
       logger.info('Ollama connected successfully', { host: OLLAMA_HOST });
 
-      // Warm default models from host preferences (non-blocking)
-      try {
-        const hostPrefService = require('./src/services/hostPreferenceService');
-        const prefs = await hostPrefService.getAll();
-        console.log(`   ✓ Host Preferences: ${prefs.length} host(s) configured`);
-        hostPrefService.warmAllDefaults().then(results => {
-          for (const r of results) {
-            if (r.status === 'ok') {
-              console.log(`   ✓ Default: ${r.model} loaded on ${r.host} (${r.durationMs}ms)`);
-            } else {
-              console.log(`   ⚠ Default: ${r.model} on ${r.host} — ${r.error}`);
+      // Full-profile operators may explicitly prewarm configured defaults.
+      // The demo only discovers models; it never consumes VRAM implicitly.
+      if (!DEMO_RUNTIME) {
+        try {
+          const hostPrefService = require('./src/services/hostPreferenceService');
+          const prefs = await hostPrefService.getAll();
+          console.log(`   ✓ Host Preferences: ${prefs.length} host(s) configured`);
+          hostPrefService.warmAllDefaults().then(results => {
+            for (const r of results) {
+              if (r.status === 'ok') {
+                console.log(`   ✓ Default: ${r.model} loaded on ${r.host} (${r.durationMs}ms)`);
+              } else {
+                console.log(`   ⚠ Default: ${r.model} on ${r.host} — ${r.error}`);
+              }
             }
-          }
-        }).catch(warmErr => {
-          console.log(`   ⚠ Warm defaults: ${warmErr.message}`);
-        });
-        await startCoreSingletonDaemon({
-          name: 'host-preference-health-check',
-          label: 'Host preference health check',
-          start: async () => {
-            hostPrefService.startHealthCheck();
-            const intervalSec = typeof hostPrefService.getHealthCheckIntervalMs === 'function'
-              ? Math.round(hostPrefService.getHealthCheckIntervalMs() / 1000)
-              : 60;
-            console.log(`   ✓ Host preference health check: Active (${intervalSec}s interval)`);
-          },
-          stop: async () => {
-            if (typeof hostPrefService.stopHealthCheck === 'function') hostPrefService.stopHealthCheck();
-          }
-        });
-      } catch (warmErr) {
-        console.log(`   ⚠ Host Preferences: ${warmErr.message}`);
+          }).catch(warmErr => {
+            console.log(`   ⚠ Warm defaults: ${warmErr.message}`);
+          });
+          await startCoreSingletonDaemon({
+            name: 'host-preference-health-check',
+            label: 'Host preference health check',
+            start: async () => {
+              hostPrefService.startHealthCheck();
+              const intervalSec = typeof hostPrefService.getHealthCheckIntervalMs === 'function'
+                ? Math.round(hostPrefService.getHealthCheckIntervalMs() / 1000)
+                : 60;
+              console.log(`   ✓ Host preference health check: Active (${intervalSec}s interval)`);
+            },
+            stop: async () => {
+              if (typeof hostPrefService.stopHealthCheck === 'function') hostPrefService.stopHealthCheck();
+            }
+          });
+        } catch (warmErr) {
+          console.log(`   ⚠ Host Preferences: ${warmErr.message}`);
+        }
+      } else {
+        console.log('   ⓘ Model prewarm and host health polling: Disabled in demo profile');
       }
     } else {
       throw new Error(ollamaResult.message);
@@ -274,6 +284,8 @@ async function startServer() {
   }, HEALTH_REFRESH_MS);
   if (typeof healthRefreshTimer.unref === 'function') healthRefreshTimer.unref();
 
+  // Full-profile operational daemons never run in the product demo.
+  if (!DEMO_RUNTIME) {
   // Auto-resolve stale alerts (task 0361). Event-driven alerts have no "cleared"
   // signal, so a condition that stops recurring (e.g. a host recovered) would
   // leave its alert active indefinitely. Sweep periodically; the reaper is
@@ -314,7 +326,7 @@ async function startServer() {
     console.log(`   ⚠ Host Monitor: ${err.message}`);
   }
 
-  // Start Ollama Enrichment service (polls Ollama hosts for AI ops data)
+  // Start Ollama Enrichment service (polls configured Ollama hosts for telemetry)
   try {
     const ollamaEnrichmentService = require('./src/services/ollamaEnrichmentService');
     await startCoreSingletonDaemon({
@@ -370,6 +382,9 @@ async function startServer() {
   } catch (err) {
     console.log(`   ⚠ Usage Aggregator: ${err.message}`);
   }
+  } else {
+    console.log('   ⓘ Operational monitors and usage aggregation: Disabled in demo profile');
+  }
 
   // Stale benchmark-claim reaper — if a batch crashes between claim and
   // release, HostPreference.status stays 'benchmarking' and blocks consumers.
@@ -399,6 +414,7 @@ async function startServer() {
     console.log(`   ⚠ Benchmark Claim Reaper: ${err.message}`);
   }
 
+  if (!DEMO_RUNTIME) {
   // Load default alert rules (seed to MongoDB + sync to in-memory engine)
   try {
     const { seedDefaultRules, syncRulesToEngine } = require('./src/services/alertRuleSeeder');
@@ -502,6 +518,9 @@ async function startServer() {
   } catch (err) {
     console.log(`   ⚠ Backup Scheduler: ${err.message}`);
   }
+  } else {
+    console.log('   ⓘ Alerts, capacity monitoring, lane monitoring, and backups: Disabled in demo profile');
+  }
 
   // Start Express server
   app.listen(PORT, () => {
@@ -512,20 +531,19 @@ async function startServer() {
     console.log(`📋 Logs:      logs/combined.log & logs/error.log`);
     console.log(`${'─'.repeat(58)}\n`);
 
-    const isHealthy = systemHealth.mongodb.status === 'connected' &&
-                     systemHealth.ollama.status === 'connected';
+    const isHealthy = systemHealth.mongodb.status === 'connected';
 
     if (isHealthy) {
-      console.log(`✅ All systems operational - Ready for production\n`);
+      console.log(`✅ Required product services are ready\n`);
+      if (systemHealth.ollama.status !== 'connected') {
+        console.log(`   ⓘ Ollama is optional and currently unavailable: ${systemHealth.ollama.error}\n`);
+      }
     } else {
       console.log(`⚠️  WARNING: Running in degraded mode\n`);
       if (systemHealth.mongodb.status !== 'connected') {
         console.log(`   MongoDB Issue: ${systemHealth.mongodb.error}`);
       }
-      if (systemHealth.ollama.status !== 'connected') {
-        console.log(`   Ollama Issue: ${systemHealth.ollama.error}`);
-      }
-      console.log(`\n   Fix these issues for full functionality.\n`);
+      console.log(`\n   Restore required dependencies before using the product.\n`);
     }
 
     logger.info('AgentX Core server started', {
@@ -538,7 +556,7 @@ async function startServer() {
     });
 
     // Live Data → Buddy demo (TODO 0288) — opt-in via LIVEDATA_BUDDY_DEMO=true.
-    if (process.env.LIVEDATA_BUDDY_DEMO === 'true') {
+    if (!DEMO_RUNTIME && process.env.LIVEDATA_BUDDY_DEMO === 'true') {
       try {
         const liveDataWatcher = require('./src/services/liveDataWatcher');
         startCoreSingletonDaemon({
@@ -564,5 +582,3 @@ startServer().catch(err => {
   console.error(`\n❌ Fatal Error: ${err.message}\n`);
   process.exit(1);
 });
-
-// Pipeline validation test — first auto-deploy fire 2026-05-01T05:27:20Z

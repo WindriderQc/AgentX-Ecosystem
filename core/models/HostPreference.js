@@ -6,9 +6,8 @@ const mongoose = require('mongoose');
  * Replaces the old dual representation of `defaultModels`/`pinnedModel`
  * + top-level `keepAlive` / `contextSize` / `autoRestore`.
  *
- * Migration closed 2026-04-22: all hostpreferences docs migrated via
- * `scripts/migrate-pinned-models.js --drop-legacy`; schema is now strict.
- * Legacy field names written by stale clients will be silently ignored.
+ * The schema is strict; obsolete field names written by unsupported clients
+ * are ignored.
  */
 const PinnedModelEntrySchema = new mongoose.Schema({
   model: {

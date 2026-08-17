@@ -8,6 +8,58 @@ ENV_FILE="$ROOT/config/agentx.env"
 COMPOSE=(--project-name agentx-ecosystem --env-file "$ENV_FILE" -f docker-compose.yml)
 OLLAMA_COMPOSE=("${COMPOSE[@]}" -f docker-compose.ollama.yml)
 
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker was not found on PATH. Install Docker Engine or Docker Desktop, then reopen the terminal." >&2
+    exit 3
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "Docker Compose v2 is unavailable. Install or update the Docker Compose plugin." >&2
+    exit 3
+  fi
+  compose_up_help="$(docker compose up --help 2>&1 || true)"
+  if [[ "$compose_up_help" != *"--wait"* || "$compose_up_help" != *"--wait-timeout"* ]]; then
+    echo "Docker Compose is too old for health-aware startup. Update Docker Desktop or the Compose v2 plugin." >&2
+    exit 3
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker is installed, but its engine is not reachable. Start Docker Engine or Docker Desktop and retry." >&2
+    exit 3
+  fi
+}
+
+show_product_health() {
+  local failed=0
+  local spec label container needs_health state runtime health display
+  for spec in \
+    "MongoDB|agentx-ecosystem-mongo|yes" \
+    "Qdrant|agentx-ecosystem-qdrant|no" \
+    "Core|agentx-ecosystem-core|yes" \
+    "Benchmark|agentx-ecosystem-benchmark|yes" \
+    "RAG|agentx-ecosystem-rag|yes"; do
+    IFS='|' read -r label container needs_health <<<"$spec"
+    state="$(docker inspect --format '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container" 2>/dev/null || true)"
+    if [[ -z "$state" ]]; then
+      echo "$label: not created"
+      failed=1
+      continue
+    fi
+    IFS='|' read -r runtime health <<<"$state"
+    display="$runtime"
+    [[ -n "$health" ]] && display="$runtime/$health"
+    echo "$label: $display"
+    if [[ "$runtime" != "running" || ("$needs_health" == "yes" && "$health" != "healthy") ]]; then
+      failed=1
+    fi
+  done
+
+  if [[ $failed -ne 0 ]]; then
+    echo "Agent X is not healthy yet. Run './agentx status' and './agentx logs core' for details." >&2
+    return 1
+  fi
+  echo "Product services are healthy. Ollama and models remain optional."
+}
+
 usage() {
   cat <<'EOF'
 Agent X Ecosystem
@@ -15,8 +67,10 @@ Agent X Ecosystem
 Usage: ./agentx <command> [args...]
 
 Commands:
-  up                    Start Core, Benchmark, RAG, MongoDB, and Qdrant
-  down                  Stop the product stack; preserve data volumes
+  doctor                Check Docker CLI, Compose, and engine availability
+  up                    Start the demo and wait for product health
+  health                Verify the five required product containers
+  down                  Stop product and Docker Ollama; preserve volumes
   status                Show product service status
   logs [service]        Follow logs; defaults to core
   rebuild [service]     Rebuild images, then start the requested services
@@ -35,21 +89,37 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
+  doctor)
+    require_docker
+    echo "Docker CLI, Compose, and engine are ready."
+    ;;
   up)
-    docker compose "${COMPOSE[@]}" up -d mongo qdrant core benchmark rag "$@"
-    echo "Agent X started: http://localhost:3180/"
+    require_docker
+    if ! docker compose "${COMPOSE[@]}" up -d --wait --wait-timeout 180 "$@" mongo qdrant core benchmark rag; then
+      echo "Startup did not become healthy within 180 seconds. Run './agentx status' and './agentx logs core'." >&2
+      exit 1
+    fi
+    echo "Agent X started: http://localhost:${CORE_PORT:-3180}/"
+    ;;
+  health)
+    require_docker
+    show_product_health
     ;;
   down)
-    docker compose "${COMPOSE[@]}" down "$@"
+    require_docker
+    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama down "$@"
     ;;
   status|ps)
-    docker compose "${COMPOSE[@]}" ps
+    require_docker
+    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama ps
     ;;
   logs)
+    require_docker
     service="${1:-core}"
-    docker compose "${COMPOSE[@]}" logs -f --tail=200 "$service"
+    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama logs -f --tail=200 "$service"
     ;;
   rebuild)
+    require_docker
     docker compose "${COMPOSE[@]}" build --no-cache "$@"
     docker compose "${COMPOSE[@]}" up -d "$@"
     ;;
@@ -58,6 +128,11 @@ case "$cmd" in
     if command -v curl >/dev/null 2>&1 && curl --fail --silent --max-time 3 http://127.0.0.1:11434/api/version >/dev/null; then
       echo "Native Ollama is healthy at http://127.0.0.1:11434."
       [[ -n "$ollama_cli" ]] && echo "CLI: $ollama_cli"
+      exit 0
+    fi
+    if [[ -n "$ollama_cli" ]] && ollama list >/dev/null 2>&1; then
+      echo "Native Ollama is healthy through its CLI."
+      echo "CLI: $ollama_cli"
       exit 0
     fi
     if [[ -n "$ollama_cli" ]]; then
@@ -70,10 +145,15 @@ case "$cmd" in
     exit 1
     ;;
   ollama-up)
-    docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama up -d ollama mongo qdrant core benchmark rag "$@"
+    require_docker
+    if ! docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama up -d --wait --wait-timeout 180 "$@" ollama mongo qdrant core benchmark rag; then
+      echo "The Docker Ollama stack did not become healthy within 180 seconds. Run './agentx status' and inspect logs." >&2
+      exit 1
+    fi
     echo "Agent X started with isolated Docker Ollama. No model was downloaded."
     ;;
   ollama-status)
+    require_docker
     docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama ps
     docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama exec ollama ollama list
     ;;
@@ -82,12 +162,15 @@ case "$cmd" in
       echo "Usage: ./agentx ollama-pull <model>" >&2
       exit 2
     fi
+    require_docker
     docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama exec ollama ollama pull "$1"
     ;;
   ollama-down)
+    require_docker
     docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama down "$@"
     ;;
   reset)
+    require_docker
     echo "This deletes only agentx-ecosystem containers, network, and named data volumes."
     read -r -p "Type 'delete agentx-ecosystem data' to continue: " confirm
     if [[ "$confirm" == "delete agentx-ecosystem data" ]]; then

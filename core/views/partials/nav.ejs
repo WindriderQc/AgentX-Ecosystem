@@ -34,7 +34,7 @@
 
   /* Product-oriented information architecture. The portal remains the full
      service map; this navigation optimizes common operator journeys. */
-  const navItems = [
+  const fullNavItems = [
     {
       label: 'Work', icon: 'fa-list-check', id: 'work-group',
       children: [
@@ -59,7 +59,6 @@
         { section: 'Administration' },
         { label: 'Performance',  href: coreBase + '/performance',      icon: 'fa-tachometer-alt', id: 'performance' },
         { label: 'Backup',       href: coreBase + '/backup',           icon: 'fa-box-archive',    id: 'backup' },
-        { label: 'Governance',   href: coreBase + '/docs-steward',     icon: 'fa-scale-balanced', id: 'docs-steward' },
         { label: 'Keyboard Shortcuts', icon: 'fa-keyboard',            id: 'keyboard-shortcuts',  action: 'show-shortcuts' }
       ]
     },
@@ -92,11 +91,40 @@
         { label: 'Prompts',          href: coreBase + '/prompts',          icon: 'fa-pen-fancy',       id: 'prompts' },
         { label: 'Voice',            href: coreBase + '/voice',            icon: 'fa-microphone',      id: 'voice' },
         { label: 'Voice Personas',   href: coreBase + '/voice-personas',   icon: 'fa-headset',         id: 'voice-personas' },
-        { label: 'Printer Vision',   href: coreBase + '/printer-vision',   icon: 'fa-print',           id: 'printer-vision' },
         { label: 'Planning · frozen', href: coreBase + '/planning',        icon: 'fa-snowflake',       id: 'planning' }
       ]
     }
   ];
+
+  const demoNavItems = [
+    {
+      label: 'Product', icon: 'fa-bolt', id: 'product-group',
+      children: [
+        { label: 'Demo home', href: coreBase + '/demo', icon: 'fa-house', id: 'demo' },
+        { label: 'Playground', href: coreBase + '/playground', icon: 'fa-comments', id: 'playground' },
+        { label: 'Models', href: coreBase + '/models', icon: 'fa-cubes', id: 'models' },
+        { label: 'Analytics', href: coreBase + '/analytics', icon: 'fa-chart-line', id: 'analytics' }
+      ]
+    },
+    {
+      label: 'Knowledge', icon: 'fa-book', id: 'knowledge-group',
+      children: [
+        { label: 'RAG Dashboard', href: ragBase + '/', icon: 'fa-gauge', id: 'rag' },
+        { label: 'Search', href: ragBase + '/search', icon: 'fa-magnifying-glass', id: 'rag-search' },
+        { label: 'Documents', href: ragBase + '/documents', icon: 'fa-file-lines', id: 'rag-documents' },
+        { label: 'Upload', href: ragBase + '/upload', icon: 'fa-upload', id: 'rag-upload' }
+      ]
+    },
+    {
+      label: 'Evaluation', icon: 'fa-trophy', id: 'evaluation-group',
+      children: [
+        { label: 'Engine Room', href: benchBase + '/', icon: 'fa-trophy', id: 'benchmark' },
+        { label: 'Leaderboard', href: benchBase + '/leaderboard', icon: 'fa-medal', id: 'leaderboard' },
+        { label: 'Results Explorer', href: benchBase + '/results-explorer', icon: 'fa-table-list', id: 'results-explorer' }
+      ]
+    }
+  ];
+  const navItems = locals.agentxProfile === 'demo' ? demoNavItems : fullNavItems;
 
   function isActive(id) { return id === effectiveActive; }
   function isChildActive(children) {

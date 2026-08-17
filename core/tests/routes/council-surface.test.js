@@ -33,7 +33,6 @@ describe('AgentX Council surface', () => {
     expect(read('core/views/pages/chat.ejs')).toContain('id="roundtableBtn"');
     expect(read('core/views/pages/chat.ejs')).toContain('Ask Council');
     expect(read('core/views/pages/roundtable.ejs')).toContain('Council is advisory');
-    expect(read('docs/operations/roundtable-v2.md')).toContain('AgentX Council');
   });
 
   it('renders Council and preserves old question links through redirects', async () => {

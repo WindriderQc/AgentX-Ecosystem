@@ -1,6 +1,5 @@
-// Phase 6h — buddy notes file. Facts live in a markdown file inside the
-// linked source's workspace; YAML frontmatter is the source of truth.
-// See CLAUDE.md "Phase 6h — Notes file" for the full design.
+// Buddy notes file. Facts live in a markdown file inside the linked source's
+// workspace; YAML frontmatter is the source of truth.
 
 const fs = require('fs').promises;
 const os = require('os');

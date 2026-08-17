@@ -16,17 +16,17 @@ const {
 } = require('../../src/services/modelFitEstimator');
 
 describe('resolveHostBandwidthGBs', () => {
-  it('resolves by IP and by URL', () => {
-    expect(resolveHostBandwidthGBs('192.0.2.199')).toBe(936); // host-alpha 2×3090
-    expect(resolveHostBandwidthGBs('http://192.0.2.12:11434')).toBe(896);
-    expect(resolveHostBandwidthGBs('192.0.2.99')).toBe(912);  // host-gamma 3080 Ti
+  it('does not encode IP-to-hardware inventory', () => {
+    expect(HOST_BANDWIDTH_GBS_BY_IP).toEqual({});
+    expect(resolveHostBandwidthGBs('192.0.2.10')).toBeNull();
+    expect(resolveHostBandwidthGBs('http://192.0.2.20:11434')).toBeNull();
   });
   it('resolves by GPU name', () => {
     expect(resolveHostBandwidthGBs('RTX 3090')).toBe(GPU_BANDWIDTH_GBS['rtx 3090']);
     expect(resolveHostBandwidthGBs('rtx 5070 ti')).toBe(896);
   });
   it('returns null when unresolved', () => {
-    expect(resolveHostBandwidthGBs('192.0.2.66')).toBeNull();
+    expect(resolveHostBandwidthGBs('not-a-host')).toBeNull();
     expect(resolveHostBandwidthGBs(null)).toBeNull();
     expect(resolveHostBandwidthGBs('mystery-gpu')).toBeNull();
   });

@@ -5,7 +5,7 @@
     // runs where, and why". Presentation-only over three existing endpoints:
     // /api/nerve-center/host-preferences (pins + live residency),
     // /api/hosts (GPU truth), /api/nerve-center/routing/config (lanes).
-    // Canonical narrative: docs/ai-ops/fleet-brain-map.md.
+    // Runtime narrative is derived from current product evidence.
 
     const shared = window.NerveCenterShared;
 
@@ -171,9 +171,7 @@
                     <table id="brainMapLanes" style="width:100%;border-collapse:collapse;font-size:0.78rem;">${laneRows(taskModels, routing.defaults, hostNamesByKey)}</table>
                 </div>
                 <div style="margin-top:10px;font-size:0.7rem;color:var(--muted);">
-                    Assignments are evidence-based — see docs/ai-ops/fleet-brain-map.md,
-                    model-pin-qualification-2026-07-31.md, and the 2026-07-24 two-GPU campaign.
-                    Night-mode fusion (one 48 GB brain) arrives with task 0373.
+                        Assignments are derived from current runtime host preferences and routing data.
                 </div>`;
         } catch (err) {
             console.error('[NerveCenter] loadBrainMap error:', err);

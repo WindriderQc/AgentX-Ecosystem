@@ -17,11 +17,13 @@ last_verified: 2026-07-27
 
 ### GET /health
 
-Liveness check (not behind `/api/rag`). Returns 503 when MongoDB is disconnected.
+Readiness check (not behind `/api/rag`). Returns 503 when MongoDB or the
+configured vector store is unavailable. The embedding model remains an
+optional capability and is reported by `/api/rag/status`.
 
 ```bash
 curl http://localhost:3082/health
-# => { "status": "ok", "service": "agentx-rag", "port": 3082, "db": "connected" }
+# => { "ok": true, "status": "ok", "service": "agentx-rag", "db": "connected", "vectorStore": { "healthy": true, "type": "qdrant" } }
 ```
 
 ### GET /api/rag/status
@@ -101,9 +103,10 @@ curl -X POST http://localhost:3082/api/rag/ingest/batch \
 ### POST /api/rag/ingest-scan
 
 Async approved-corpus scan + ingestion. Returns 202 with jobId. Max 1
-concurrent scan. The app policy defaults to `/mnt/datalake/RAG/Docs`, `.md` and
-`.txt`, and 1 MiB per file. Environment/request values may narrow but cannot
-widen that policy. Roots and files are realpath-checked before reads.
+concurrent scan. The product policy defaults to the container-local
+`/data/imports` directory, `.md` and `.txt`, and 1 MiB per file. No host path is
+mounted by default. Environment/request values may narrow but cannot widen the
+policy. Roots and files are realpath-checked before reads.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -143,24 +146,14 @@ curl -X DELETE http://localhost:3082/api/rag/ingest-scan/uuid
 # => { "ok": true, "data": { "jobId": "uuid", "status": "cancelled" } }
 ```
 
-### GET /api/rag/vault/policy
+### GET /api/rag/ingestion/policy
 
-Returns the public read-only vault contract: canonical root, approved corpus,
-extension/size limits, deterministic exclusions, and the Git-to-vault
-projection contract. It contains no secrets or note contents.
-
-```bash
-curl http://localhost:3082/api/rag/vault/policy
-```
-
-### GET /api/rag/vault/index
-
-Generates stable links to canonical AgentX documents on Git `main`. The
-response always reports `writeToVault: false`; it does not create or update an
-Obsidian note.
+Returns the public read-only import contract: container-local root, approved
+roots, extension/size limits, and deterministic exclusions. It contains no
+secrets or document contents.
 
 ```bash
-curl http://localhost:3082/api/rag/vault/index
+curl http://localhost:3082/api/rag/ingestion/policy
 ```
 
 ## Search

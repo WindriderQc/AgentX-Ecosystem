@@ -9,7 +9,7 @@
 // carries a stable idempotency key for crash/lost-response retry safety.
 // The content guard runs AGAIN on the final text immediately before the write.
 //
-// Adapter semantics (docs/ai-ops/ecosystem-memory-review.md):
+// Adapter semantics:
 //   shared_fact    -> nestor-memory via nestorMemoryService (its own secret
 //                     guard runs a fourth time inside saveMemory)
 //   artifact       -> agent-artifacts RAG lane, stable documentId upsert

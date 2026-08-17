@@ -66,7 +66,7 @@ const isValidWebhookUrl = (url) => {
       return false;
     }
 
-    // Block private IPv4 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    // Block private IPv4 ranges (RFC 1918).
     if (/^10\./.test(hostname) ||
         /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
         /^192\.168\./.test(hostname)) {

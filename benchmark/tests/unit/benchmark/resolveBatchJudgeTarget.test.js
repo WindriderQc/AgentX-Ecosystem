@@ -3,37 +3,37 @@ const { JUDGE_CONFIG } = require('../../../src/services/scoring/judgeCall');
 
 const { resolveBatchJudgeTarget, lookupHostJudgeDefault } = core;
 
-const FRANK = 'http://192.0.2.99:11434';
-const BRUTAL = 'http://192.0.2.12:11434';
+const JUDGE_HOST = 'http://192.0.2.99:11434';
+const GENERATION_HOST = 'http://192.0.2.12:11434';
 const HOST_DEFAULT_JUDGE = 'host-default-judge:14b';
 const HOST_DEFAULTS = {
-    [FRANK]: HOST_DEFAULT_JUDGE,
-    [BRUTAL]: HOST_DEFAULT_JUDGE
+    [JUDGE_HOST]: HOST_DEFAULT_JUDGE,
+    [GENERATION_HOST]: HOST_DEFAULT_JUDGE
 };
 
 describe('lookupHostJudgeDefault', () => {
     it('matches by normalized host url (trailing slash / scheme insensitive)', () => {
-        expect(lookupHostJudgeDefault(HOST_DEFAULTS, FRANK)).toBe(HOST_DEFAULT_JUDGE);
-        expect(lookupHostJudgeDefault(HOST_DEFAULTS, `${FRANK}/`)).toBe(HOST_DEFAULT_JUDGE);
+        expect(lookupHostJudgeDefault(HOST_DEFAULTS, JUDGE_HOST)).toBe(HOST_DEFAULT_JUDGE);
+        expect(lookupHostJudgeDefault(HOST_DEFAULTS, `${JUDGE_HOST}/`)).toBe(HOST_DEFAULT_JUDGE);
         expect(lookupHostJudgeDefault(HOST_DEFAULTS, '192.0.2.99:11434')).toBe(HOST_DEFAULT_JUDGE);
     });
 
     it('returns undefined when the host has no recorded default', () => {
         expect(lookupHostJudgeDefault(HOST_DEFAULTS, 'http://10.0.0.1:11434')).toBeUndefined();
-        expect(lookupHostJudgeDefault({}, FRANK)).toBeUndefined();
-        expect(lookupHostJudgeDefault(undefined, FRANK)).toBeUndefined();
+        expect(lookupHostJudgeDefault({}, JUDGE_HOST)).toBeUndefined();
+        expect(lookupHostJudgeDefault(undefined, JUDGE_HOST)).toBeUndefined();
     });
 
     it('ignores empty model entries', () => {
-        expect(lookupHostJudgeDefault({ [FRANK]: '' }, FRANK)).toBeUndefined();
+        expect(lookupHostJudgeDefault({ [JUDGE_HOST]: '' }, JUDGE_HOST)).toBeUndefined();
     });
 });
 
 describe('resolveBatchJudgeTarget judge model precedence', () => {
     it('uses the per-host stored default when no model is pinned (the config-trap fix)', async () => {
         const result = await resolveBatchJudgeTarget(
-            FRANK,
-            { host: FRANK },
+            JUDGE_HOST,
+            { host: JUDGE_HOST },
             { judgeDefaults: HOST_DEFAULTS }
         );
 
@@ -43,21 +43,21 @@ describe('resolveBatchJudgeTarget judge model precedence', () => {
     });
 
     it('keys the host default off the resolved judge host, not the execution host', async () => {
-        // Generation on BRUTAL, judging pinned to FRANK → must pick FRANK's default.
+        // Generation and judging use distinct hosts; the judge host owns its default.
         const result = await resolveBatchJudgeTarget(
-            BRUTAL,
-            { host: FRANK },
-            { judgeDefaults: { [FRANK]: HOST_DEFAULT_JUDGE, [BRUTAL]: 'some-other:7b' } }
+            GENERATION_HOST,
+            { host: JUDGE_HOST },
+            { judgeDefaults: { [JUDGE_HOST]: HOST_DEFAULT_JUDGE, [GENERATION_HOST]: 'some-other:7b' } }
         );
 
-        expect(result.validationHost).toBe(FRANK);
+        expect(result.validationHost).toBe(JUDGE_HOST);
         expect(result.validationModel).toBe(HOST_DEFAULT_JUDGE);
     });
 
     it('lets an explicitly pinned judge model win over the host default', async () => {
         const result = await resolveBatchJudgeTarget(
-            FRANK,
-            { host: FRANK, model: 'pinned-judge:32b' },
+            JUDGE_HOST,
+            { host: JUDGE_HOST, model: 'pinned-judge:32b' },
             { judgeDefaults: HOST_DEFAULTS }
         );
 

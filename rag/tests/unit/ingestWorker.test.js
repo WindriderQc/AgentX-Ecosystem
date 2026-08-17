@@ -26,8 +26,8 @@ const {
 
 describe('ingestWorker utilities', () => {
   it('derives a stable source tag and tags from the first folder beneath the configured root', () => {
-    const filePath = '/mnt/datalake/RAG/finance-docs/2026/plan.md';
-    const roots = ['/mnt/datalake/RAG', '/mnt/datalake/Finance'];
+    const filePath = '/data/imports/finance-docs/2026/plan.md';
+    const roots = ['/data/imports', '/external/imports'];
 
     expect(deriveSourceTag(filePath, roots)).toBe('finance-docs');
     expect(buildTags(filePath, roots)).toEqual(['auto-ingested', 'finance-docs']);
@@ -47,36 +47,36 @@ describe('ingestWorker utilities', () => {
 
   it('skips keys directories and oversized files', () => {
     expect(describeSkip({
-      path: '/mnt/datalake/RAG/Docs/keys/private.txt',
+      path: '/data/imports/docs/keys/private.txt',
       ext: 'txt',
       size: 128
     }, {
-      roots: ['/mnt/datalake/RAG/Docs'],
+      roots: ['/data/imports/docs'],
       maxFileSizeBytes: 1024
     })).toEqual({ skip: true, reason: 'excluded_directory' });
 
     expect(describeSkip({
-      path: '/mnt/datalake/RAG/Docs/big.txt',
+      path: '/data/imports/docs/big.txt',
       ext: 'txt',
       size: 4096
     }, {
-      roots: ['/mnt/datalake/RAG/Docs'],
+      roots: ['/data/imports/docs'],
       maxFileSizeBytes: 1024
     })).toEqual({ skip: true, reason: 'oversized' });
   });
 
   it('excludes secret names, generated exports, and private roots deterministically', () => {
     expect(describeSkip({
-      path: '/mnt/datalake/RAG/Docs/.env', ext: '', size: 10
-    }, { roots: ['/mnt/datalake/RAG/Docs'] })).toEqual({ skip: true, reason: 'secret_material' });
+      path: '/data/imports/docs/.env', ext: '', size: 10
+    }, { roots: ['/data/imports/docs'] })).toEqual({ skip: true, reason: 'secret_material' });
 
     expect(describeSkip({
-      path: '/mnt/datalake/RAG/Docs/files_review_2026.md', ext: 'md', size: 10
-    }, { roots: ['/mnt/datalake/RAG/Docs'] })).toEqual({ skip: true, reason: 'generated_export' });
+      path: '/data/imports/docs/generated_export.md', ext: 'md', size: 10
+    }, { roots: ['/data/imports/docs'] })).toEqual({ skip: true, reason: 'generated_export' });
 
     expect(describeSkip({
-      path: '/mnt/datalake/RAG/Finance/accounts.md', ext: 'md', size: 10
-    }, { roots: ['/mnt/datalake/RAG'] })).toEqual({ skip: true, reason: 'private_financial_material' });
+      path: '/private/imports/accounts.md', ext: 'md', size: 10
+    }, { roots: ['/private/imports'] })).toEqual({ skip: true, reason: 'outside_source' });
   });
 });
 
@@ -121,7 +121,7 @@ describe('IngestWorker', () => {
   it('ingests new files and updates indexed_at metadata in nas_files', async () => {
     const record = {
       _id: 'doc-1',
-      path: '/mnt/datalake/RAG/Docs/report.md',
+      path: '/data/imports/docs/report.md',
       ext: 'md',
       size: 512,
       mtime: 1710000000
@@ -138,7 +138,7 @@ describe('IngestWorker', () => {
 
     const worker = new IngestWorker({
       db,
-      roots: ['/mnt/datalake/RAG/Docs'],
+      roots: ['/data/imports/docs'],
       ingestDocument,
       batchDelayMs: 0
     });
@@ -171,7 +171,7 @@ describe('IngestWorker', () => {
   it('re-ingests changed files and reports them as updated', async () => {
     const record = {
       _id: 'doc-2',
-      path: '/mnt/datalake/RAG/Docs/guide.txt',
+      path: '/data/imports/docs/guide.txt',
       ext: 'txt',
       size: 64,
       mtime: 1710001000,
@@ -183,7 +183,7 @@ describe('IngestWorker', () => {
 
     const worker = new IngestWorker({
       db,
-      roots: ['/mnt/datalake/RAG/Docs'],
+      roots: ['/data/imports/docs'],
       ingestDocument: jest.fn().mockResolvedValue({
         documentId: record.path,
         chunkCount: 1,
@@ -209,7 +209,7 @@ describe('IngestWorker', () => {
   it('records extraction errors and continues instead of throwing', async () => {
     const record = {
       _id: 'doc-3',
-      path: '/mnt/datalake/RAG/Docs/broken.txt',
+      path: '/data/imports/docs/broken.txt',
       ext: 'txt',
       size: 32,
       mtime: 1710002000
@@ -219,7 +219,7 @@ describe('IngestWorker', () => {
 
     const worker = new IngestWorker({
       db,
-      roots: ['/mnt/datalake/RAG/Docs'],
+      roots: ['/data/imports/docs'],
       ingestDocument: jest.fn(),
       batchDelayMs: 0
     });
@@ -246,7 +246,7 @@ describe('IngestWorker', () => {
   it('rejects symlink traversal before reading file content', async () => {
     const record = {
       _id: 'doc-symlink',
-      path: '/mnt/datalake/RAG/Docs/linked-note.md',
+      path: '/data/imports/docs/linked-note.md',
       ext: 'md',
       size: 64,
       mtime: 1710003000
@@ -257,7 +257,7 @@ describe('IngestWorker', () => {
 
     const worker = new IngestWorker({
       db,
-      roots: ['/mnt/datalake/RAG/Docs'],
+      roots: ['/data/imports/docs'],
       ingestDocument: jest.fn(),
       batchDelayMs: 0
     });
@@ -271,7 +271,7 @@ describe('IngestWorker', () => {
     fs.realpath.mockRejectedValueOnce(new Error('ENOENT'));
     const worker = new IngestWorker({
       db,
-      roots: ['/mnt/datalake/RAG/Docs'],
+      roots: ['/data/imports/docs'],
       ingestDocument: jest.fn(),
       batchDelayMs: 0
     });
@@ -280,10 +280,10 @@ describe('IngestWorker', () => {
     expect(collection.find).not.toHaveBeenCalled();
   });
 
-  it('does not mutate vault files while ingesting', async () => {
+  it('does not mutate imported files while ingesting', async () => {
     const record = {
       _id: 'doc-read-only',
-      path: '/mnt/datalake/RAG/Docs/read-only.md',
+      path: '/data/imports/docs/read-only.md',
       ext: 'md',
       size: 64,
       mtime: 1710004000
@@ -292,7 +292,7 @@ describe('IngestWorker', () => {
     fs.readFile.mockResolvedValue('Read-only corpus');
     const worker = new IngestWorker({
       db,
-      roots: ['/mnt/datalake/RAG/Docs'],
+      roots: ['/data/imports/docs'],
       ingestDocument: jest.fn().mockResolvedValue({ chunkCount: 1 }),
       batchDelayMs: 0
     });

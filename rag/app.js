@@ -6,9 +6,11 @@ const {
   createCorePublicUrlsResolver,
   getPublicUrls,
 } = require('../shared/browserPublicUrls');
+const { currentAgentXProfile } = require('../shared/agentxRuntimeProfile');
 
 const app = express();
 app.locals.publicUrls = getPublicUrls();
+app.locals.agentxProfile = currentAgentXProfile();
 const resolvePublicUrls = createCorePublicUrlsResolver({
   enabled: process.env.NODE_ENV !== 'test',
 });
@@ -79,7 +81,22 @@ app.get('/public/js/utils/polling-controller.js', (_req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.static(path.join(__dirname, '..', 'core', 'public')));
+
+const sharedPublicRoot = path.join(__dirname, '..', 'core', 'public');
+const sharedAssets = {
+  '/dist/shared-tokens.css': ['dist', 'shared-tokens.css'],
+  '/dist/shared-utils.js': ['dist', 'shared-utils.js'],
+  '/css/platform-chrome.css': ['css', 'platform-chrome.css'],
+  '/js/utils/polling-controller.js': ['js', 'utils', 'polling-controller.js'],
+  '/js/utils/polling-controller-global.js': ['js', 'utils', 'polling-controller-global.js'],
+  '/js/utils/shared.js': ['js', 'utils', 'shared.js'],
+  '/js/utils/shortcut-hints.js': ['js', 'utils', 'shortcut-hints.js'],
+  '/js/utils/shortcuts-modal.js': ['js', 'utils', 'shortcuts-modal.js'],
+  '/js/utils/toast.js': ['js', 'utils', 'toast.js']
+};
+for (const [route, segments] of Object.entries(sharedAssets)) {
+  app.get(route, (_req, res) => res.sendFile(path.join(sharedPublicRoot, ...segments)));
+}
 
 // Core's /api/config is the browser URL authority in the composed platform.
 // Standalone RAG keeps the environment-driven localhost defaults.
@@ -169,14 +186,29 @@ app.get('/search.html',      (req, res) => res.redirect(301, '/search'));
 app.get('/upload.html',      (req, res) => res.redirect(301, '/upload'));
 app.get('/maintenance.html', (req, res) => res.redirect(301, '/maintenance'));
 
-app.get('/health', (req, res) => {
+async function checkVectorStoreHealth() {
+  const type = String(process.env.VECTOR_STORE_TYPE || '').trim().toLowerCase();
+  if (type === 'memory') return { healthy: true, type: 'memory' };
+  if (type !== 'qdrant') {
+    return { healthy: false, type: type || 'unconfigured', error: 'VECTOR_STORE_TYPE is not configured' };
+  }
+
+  const QdrantVectorStore = require('./src/services/vectorStore/QdrantVectorStore');
+  return new QdrantVectorStore().healthCheck(2000);
+}
+
+app.get('/health', async (req, res) => {
   const dbReady = require('mongoose').connection.readyState === 1;
-  const status = dbReady ? 'ok' : 'degraded';
-  res.status(dbReady ? 200 : 503).json({
+  const vectorStore = await checkVectorStoreHealth();
+  const ready = dbReady && vectorStore.healthy;
+  const status = ready ? 'ok' : 'degraded';
+  res.status(ready ? 200 : 503).json({
+    ok: ready,
     status,
     service: 'agentx-rag',
     port: parseInt(process.env.PORT, 10) || 3082,
-    db: dbReady ? 'connected' : 'disconnected'
+    db: dbReady ? 'connected' : 'disconnected',
+    vectorStore
   });
 });
 
@@ -213,3 +245,4 @@ app.use((err, req, res, next) => {
 });
 
 module.exports = app;
+module.exports.checkVectorStoreHealth = checkVectorStoreHealth;

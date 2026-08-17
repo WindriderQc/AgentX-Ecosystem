@@ -3,7 +3,7 @@
  * Proxy RAG reflex (task 0271) — server-side retrieve-before-answer for the
  * AgentX front-door proxies (openclaw-ollama, hermes-openai).
  *
- * The Fastlane / Nestor design (docs/ai-ops/fastlane-nestor-design.md) makes
+ * The bounded fast-lane design makes
  * retrieval a *reflex*: every chat turn through a proxy retrieves the top-K
  * relevant chunks and injects them as a `## Relevant knowledge` system block,
  * with NO dependence on the model deciding to call a tool. This is the

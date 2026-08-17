@@ -7,9 +7,8 @@
  * routing, and keeping it here holds modelRouter inside the service file-size
  * budget while giving the RouteDecision v1 contract a natural home next to it.
  *
- * `modelRouter` re-exports `recordInference` for symbol stability, matching the
- * `benchmarkClaimService` precedent documented in core/CLAUDE.md. Existing
- * callers keep working; new code SHOULD import from here directly.
+ * `modelRouter` re-exports `recordInference` for symbol stability. Existing
+ * callers keep working; new code should import from here directly.
  */
 
 const logger = require('../../../config/logger');

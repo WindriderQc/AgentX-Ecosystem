@@ -6,7 +6,7 @@ const view = fs.readFileSync(path.join(root, 'views/pages/nerve-center.ejs'), 'u
 const module_ = fs.readFileSync(path.join(root, 'public/js/nerve-center-brainmap.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
 
-describe('Nerve Center Fleet Brain Map UI (0509)', () => {
+describe('Nerve Center Fleet Brain Map UI', () => {
   it('renders the section in overview mode (not operator-detail-only)', () => {
     expect(view).toContain('id="sectionBrainMap"');
     expect(view).toContain('id="sectionBrainMapBody"');
@@ -24,11 +24,10 @@ describe('Nerve Center Fleet Brain Map UI (0509)', () => {
     expect(module_).not.toMatch(/method:\s*['"](POST|PUT|DELETE)/i);
   });
 
-  it('tells the day/night story and cites the evidence docs', () => {
+  it('tells the day/night story and identifies live runtime evidence', () => {
     expect(module_).toContain('Day mode');
     expect(module_).toContain('Deep-work window');
-    expect(module_).toContain('fleet-brain-map.md');
-    expect(module_).toContain('0373');
+    expect(module_).toContain('current runtime host preferences and routing data');
   });
 
   it('is wired into the nerve-center page scripts', () => {

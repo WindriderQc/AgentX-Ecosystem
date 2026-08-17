@@ -6,7 +6,7 @@ describe('analyzeStaleness', () => {
   it('flags context-profile staleness and suggests a re-profile', () => {
     const report = analyzeStaleness({
       contextProfiles: [
-        { modelName: 'ax/qwen3-coder:30b', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', stale: true, staleReason: 'drift' }
+        { modelName: 'ax/qwen3-coder:30b', hostId: 'primary', hostUrl: 'http://192.0.2.10:11434', stale: true, staleReason: 'drift' }
       ]
     });
     expect(report.totals.staleModels).toBe(1);
@@ -19,7 +19,7 @@ describe('analyzeStaleness', () => {
   it('flags implausible throughput above the flat cap', () => {
     const report = analyzeStaleness({
       contextProfiles: [
-        { modelName: 'ax/qwopus:27b-q5_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', stale: false, latestEvidence: { tokensPerSec: 1000000 } }
+        { modelName: 'ax/qwopus:27b-q5_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.10:11434', stale: false, latestEvidence: { tokensPerSec: 1000000 } }
       ]
     });
     expect(report.totals.byReason.implausible_throughput).toBe(1);
@@ -27,10 +27,16 @@ describe('analyzeStaleness', () => {
   });
 
   it('flags sub-cap throughput via the B1 physical ceiling (known host + quant)', () => {
-    // 30B Q4 on Host Gamma (.99): physical ceiling ≈55 tok/s, ×2 ≈110. 5000 is impossible.
+    // 30B Q4 on a reference GPU: physical ceiling ≈55 tok/s, ×2 ≈110. 5000 is impossible.
     const report = analyzeStaleness({
       adaptations: [
-        { modelName: 'ax/huge:30b-instruct-q4_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', profile: { tokensPerSec: 5000 } }
+        {
+          modelName: 'ax/huge:30b-instruct-q4_K_M',
+          hostId: 'primary',
+          hostUrl: 'http://192.0.2.10:11434',
+          hostBandwidthGBs: 936,
+          profile: { tokensPerSec: 5000 }
+        }
       ]
     });
     expect(report.hosts.primary.stale[0].reasons).toContain('implausible_throughput');
@@ -40,7 +46,7 @@ describe('analyzeStaleness', () => {
   it('does NOT flag a realistic sub-cap throughput', () => {
     const report = analyzeStaleness({
       adaptations: [
-        { modelName: 'ax/huge:30b-instruct-q4_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', profile: { tokensPerSec: 45 } }
+        { modelName: 'ax/huge:30b-instruct-q4_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.10:11434', profile: { tokensPerSec: 45 } }
       ]
     });
     expect(report.totals.staleModels).toBe(0);
@@ -90,7 +96,7 @@ describe('analyzeStaleness', () => {
   it('merges multiple reasons for the same model', () => {
     const report = analyzeStaleness({
       contextProfiles: [
-        { modelName: 'ax/m', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', stale: true, latestEvidence: { tokensPerSec: 1000000 } }
+        { modelName: 'ax/m', hostId: 'primary', hostUrl: 'http://192.0.2.10:11434', stale: true, latestEvidence: { tokensPerSec: 1000000 } }
       ],
       adaptations: [
         { modelName: 'ax/m', hostId: 'primary', staleness: { stale: true } }
@@ -118,7 +124,7 @@ describe('formatStalenessLedgerEntry', () => {
   it('renders a maintenance entry with findings and proposed re-profiles', () => {
     const report = analyzeStaleness({
       contextProfiles: [
-        { modelName: 'ax/qwopus:27b-q5_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', stale: true, latestEvidence: { tokensPerSec: 1000000 } }
+        { modelName: 'ax/qwopus:27b-q5_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.10:11434', stale: true, latestEvidence: { tokensPerSec: 1000000 } }
       ]
     });
     const entry = formatStalenessLedgerEntry(report, { date: '2026-06-19' });
@@ -140,6 +146,6 @@ describe('formatStalenessLedgerEntry', () => {
 describe('stalenessCrawler internals', () => {
   it('throughputReason returns null for healthy / missing readings', () => {
     expect(_internal.throughputReason(null, 'm', 'h')).toBeNull();
-    expect(_internal.throughputReason(50, 'ax/x:30b-q4_K_M', 'http://192.0.2.99:11434')).toBeNull();
+    expect(_internal.throughputReason(50, 'ax/x:30b-q4_K_M', 'http://192.0.2.10:11434')).toBeNull();
   });
 });

@@ -87,7 +87,7 @@ function summarizeRows(rows) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const hostUrl = args.host || process.env.CONTEXT_SWEEP_HOST || 'http://192.0.2.99:11434';
+  const hostUrl = args.host || process.env.CONTEXT_SWEEP_HOST || 'http://127.0.0.1:11434';
   const hostId = args.hostId || process.env.CONTEXT_SWEEP_HOST_ID || 'primary';
   const models = csv(args.models || process.env.CONTEXT_SWEEP_MODELS, DEFAULT_MODELS);
   const contexts = intCsv(args.contexts || process.env.CONTEXT_SWEEP_CONTEXTS, DEFAULT_CONTEXTS);

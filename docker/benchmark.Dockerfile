@@ -12,11 +12,18 @@ RUN npm ci --omit=dev
 COPY benchmark/ ./
 COPY shared/ /shared/
 
-COPY core/views /core/views
-COPY core/public /core/public
+COPY core/views/layouts /core/views/layouts
+COPY core/views/partials /core/views/partials
 RUN mkdir -p /core/public/dist
 COPY core/src/frontend/shared-tokens.css /core/public/dist/shared-tokens.css
 COPY core/src/frontend/shared-utils.js /core/public/dist/shared-utils.js
+COPY core/public/css/platform-chrome.css /core/public/css/platform-chrome.css
+COPY core/public/js/utils/polling-controller.js /core/public/js/utils/polling-controller.js
+COPY core/public/js/utils/polling-controller-global.js /core/public/js/utils/polling-controller-global.js
+COPY core/public/js/utils/shared.js /core/public/js/utils/shared.js
+COPY core/public/js/utils/shortcut-hints.js /core/public/js/utils/shortcut-hints.js
+COPY core/public/js/utils/shortcuts-modal.js /core/public/js/utils/shortcuts-modal.js
+COPY core/public/js/utils/toast.js /core/public/js/utils/toast.js
 
 RUN mkdir -p /app/config-data \
   && ln -sf /app/config-data/benchmark.config.json /app/benchmark.config.json \

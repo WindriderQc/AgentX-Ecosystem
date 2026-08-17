@@ -199,8 +199,7 @@ const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
  * Build a comparison key for a host URL: scheme + canonical-hostname + port.
  * Loopback variants (`localhost`, `127.0.0.1`, `::1`) collapse to one canonical
  * form so a configured `http://localhost:11434` and a caller-supplied
- * `http://127.0.0.1:11434` (or vice versa) compare equal — per ecosystem
- * CLAUDE.md "Loopback host guidance".
+ * `http://127.0.0.1:11434` (or vice versa) compare equal.
  */
 function hostUrlKey(raw) {
   const normalized = normalizeHostUrl(raw);

@@ -51,7 +51,7 @@ const {
 // Defaults are hardcoded (no process.env reads) so this script adds no tracked
 // feature-conservation surface. Host/model choices are operator flags.
 const DEFAULT_HOST = 'http://192.0.2.199:11434'; // Host Alpha, 2x3090 primary
-const DEFAULT_CORE = 'http://192.0.2.99:3080';
+const DEFAULT_CORE = 'http://127.0.0.1:3080';
 const DEFAULT_MODELS = [
   'ax/gemma4:26b-a4b-it-qat',
   'ax/gemma4:31b-it-qat',

@@ -3,7 +3,7 @@
 //
 // Mirrors scripts/memory_review/schema.py (the collector-side copy). If you
 // change an enum or bound, change both and the tests that pin them.
-// Design: docs/ai-ops/ecosystem-memory-review.md
+// Memory-review policy boundary.
 
 const crypto = require('crypto');
 

@@ -361,9 +361,9 @@ class QdrantVectorStore extends VectorStoreAdapter {
     return allPoints;
   }
 
-  async healthCheck() {
+  async healthCheck(timeoutMs = Math.min(QDRANT_TIMEOUT, 2000)) {
     try {
-      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections`, {}, QDRANT_TIMEOUT);
+      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections`, {}, timeoutMs);
       return { healthy: res.ok, type: 'qdrant', url: this.qdrantUrl };
     } catch (e) {
       return { healthy: false, type: 'qdrant', error: e.message };

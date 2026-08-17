@@ -3,30 +3,6 @@ const path = require('path');
 
 const DEFAULT_POLICY_PATH = path.resolve(__dirname, '../config/rag-ingestion-policy.json');
 
-function loadVaultPolicy(policyPath = process.env.OBSIDIAN_VAULT_POLICY_PATH || DEFAULT_POLICY_PATH) {
-  const raw = fs.readFileSync(policyPath, 'utf8');
-  const policy = JSON.parse(raw);
-  validateVaultPolicy(policy);
-  return policy;
-}
-
-function validateVaultPolicy(policy) {
-  if (policy?.schemaVersion !== 1) {
-    throw new Error('Obsidian vault policy schemaVersion must be 1');
-  }
-  if (!path.isAbsolute(policy?.vault?.containerRoot || '')) {
-    throw new Error('Obsidian vault containerRoot must be absolute');
-  }
-  if (!Array.isArray(policy?.ingestion?.approvedRoots) || !policy.ingestion.approvedRoots.length) {
-    throw new Error('Obsidian vault policy requires at least one approved ingestion root');
-  }
-  for (const root of policy.ingestion.approvedRoots) {
-    if (!isPathUnderRoot(root, policy.vault.containerRoot)) {
-      throw new Error(`Approved ingestion root is outside the vault: ${root}`);
-    }
-  }
-}
-
 function normalizePath(value) {
   return path.resolve(String(value || ''));
 }
@@ -49,26 +25,49 @@ function getMatchingRoot(filePath, roots) {
     .sort((a, b) => b.length - a.length)[0] || null;
 }
 
+function validateIngestionPolicy(policy) {
+  if (policy?.schemaVersion !== 1) {
+    throw new Error('RAG ingestion policy schemaVersion must be 1');
+  }
+  if (!path.isAbsolute(policy?.source?.containerRoot || '')) {
+    throw new Error('RAG ingestion source containerRoot must be absolute');
+  }
+  if (!Array.isArray(policy?.ingestion?.approvedRoots) || !policy.ingestion.approvedRoots.length) {
+    throw new Error('RAG ingestion policy requires at least one approved root');
+  }
+  for (const root of policy.ingestion.approvedRoots) {
+    if (!isPathUnderRoot(root, policy.source.containerRoot)) {
+      throw new Error(`Approved ingestion root is outside the import source: ${root}`);
+    }
+  }
+}
+
+function loadIngestionPolicy(policyPath = process.env.RAG_INGESTION_POLICY_PATH || DEFAULT_POLICY_PATH) {
+  const policy = JSON.parse(fs.readFileSync(policyPath, 'utf8'));
+  validateIngestionPolicy(policy);
+  return policy;
+}
+
 function getPathSegments(filePath) {
   return normalizePath(filePath).split(path.sep).filter(Boolean);
 }
 
-function classifyVaultPath(filePath, options = {}) {
-  const policy = options.policy || loadVaultPolicy();
+function classifyIngestionPath(filePath, options = {}) {
+  const policy = options.policy || loadIngestionPolicy();
   const record = options.record || {};
   const normalized = normalizePath(filePath);
-  const vaultRoot = normalizePath(options.vaultRoot || policy.vault.containerRoot);
+  const sourceRoot = normalizePath(options.sourceRoot || policy.source.containerRoot);
   const approvedRoots = (options.approvedRoots || policy.ingestion.approvedRoots).map(normalizePath);
   const ext = normalizeExtension(record.ext, normalized);
   const basename = path.basename(normalized).toLowerCase();
   const segments = getPathSegments(normalized).map((segment) => segment.toLowerCase());
-  const relative = path.relative(vaultRoot, normalized);
+  const relative = path.relative(sourceRoot, normalized);
   const topLevel = relative.split(path.sep).filter(Boolean)[0] || '';
   const topLevelReason = Object.entries(policy.ingestion.excludedTopLevel || {})
     .find(([name]) => name.toLowerCase() === topLevel.toLowerCase())?.[1];
 
   if (!filePath) return { allowed: false, reason: 'missing_path' };
-  if (!isPathUnderRoot(normalized, vaultRoot)) return { allowed: false, reason: 'outside_vault' };
+  if (!isPathUnderRoot(normalized, sourceRoot)) return { allowed: false, reason: 'outside_source' };
 
   const secretBasenames = new Set((policy.ingestion.secretBasenames || []).map((value) => value.toLowerCase()));
   const secretExtensions = new Set((policy.ingestion.secretExtensions || []).map((value) => value.toLowerCase()));
@@ -89,9 +88,8 @@ function classifyVaultPath(filePath, options = {}) {
     return { allowed: false, reason: 'generated_export' };
   }
 
-  if (!getMatchingRoot(normalized, approvedRoots)) {
-    return { allowed: false, reason: 'unapproved_root' };
-  }
+  const approvedRoot = getMatchingRoot(normalized, approvedRoots);
+  if (!approvedRoot) return { allowed: false, reason: 'unapproved_root' };
 
   const allowedExtensions = new Set((policy.ingestion.allowedExtensions || []).map((value) => value.toLowerCase()));
   if (!allowedExtensions.has(ext)) {
@@ -103,31 +101,13 @@ function classifyVaultPath(filePath, options = {}) {
     return { allowed: false, reason: 'oversized' };
   }
 
-  return { allowed: true, reason: null, approvedRoot: getMatchingRoot(normalized, approvedRoots) };
+  return { allowed: true, reason: null, approvedRoot };
 }
 
-function buildProjectionIndex(policy = loadVaultPolicy()) {
-  const projection = policy.projection;
-  const repository = projection.repository.replace(/\/+$/, '');
-  const branch = encodeURIComponent(projection.branch);
-  return {
-    mode: projection.mode,
-    direction: projection.direction,
-    writeToVault: false,
-    operationalAuthority: projection.operationalAuthority,
-    vaultIndexName: projection.vaultIndexName,
-    entries: projection.entries.map((entry) => ({
-      label: entry.label,
-      path: entry.path,
-      url: `${repository}/blob/${branch}/${entry.path}`
-    }))
-  };
-}
-
-function getPublicVaultPolicy(policy = loadVaultPolicy()) {
+function getPublicIngestionPolicy(policy = loadIngestionPolicy()) {
   return {
     schemaVersion: policy.schemaVersion,
-    vault: policy.vault,
+    source: policy.source,
     inventory: policy.inventory,
     ingestion: {
       approvedRoots: policy.ingestion.approvedRoots,
@@ -139,19 +119,17 @@ function getPublicVaultPolicy(policy = loadVaultPolicy()) {
         secretExtensions: policy.ingestion.secretExtensions,
         generatedNameFragments: policy.ingestion.generatedNameFragments
       }
-    },
-    projection: buildProjectionIndex(policy)
+    }
   };
 }
 
 module.exports = {
-  buildProjectionIndex,
-  classifyVaultPath,
+  classifyIngestionPath,
   getMatchingRoot,
-  getPublicVaultPolicy,
+  getPublicIngestionPolicy,
   isPathUnderRoot,
-  loadVaultPolicy,
+  loadIngestionPolicy,
   normalizeExtension,
   normalizePath,
-  validateVaultPolicy
+  validateIngestionPolicy
 };

@@ -1,8 +1,9 @@
 {
   "name": "agentx-rag",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "description": "AgentX RAG — Document ingestion, embeddings, and semantic search",
   "main": "server.js",
+  "license": "MIT",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
@@ -24,5 +25,13 @@
   "devDependencies": {
     "jest": "^29.7.0",
     "supertest": "^7.2.2"
+  },
+  "overrides": {
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "^4.3.1"
+    }
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

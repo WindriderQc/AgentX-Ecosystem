@@ -2,7 +2,7 @@
 
 const { operatorTokenAllowed } = require('./operatorAccess');
 
-const DEFAULT_PUBLIC_HOSTS = ['agentx.specialblend.icu'];
+const DEFAULT_PUBLIC_HOSTS = Object.freeze([]);
 const PROTECTED_PATH_PREFIXES = ['/api/', '/mcp', '/api/mcp'];
 
 function splitList(value) {

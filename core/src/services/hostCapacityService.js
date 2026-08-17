@@ -60,10 +60,13 @@ function round1(v) {
 function round0(v) {
   return v == null ? null : Math.round(v);
 }
-const GENERIC_CONFIG_NAME_IDS = new Set(['localollama', 'ollama2', 'ollama3']);
+const GENERIC_CONFIG_NAME_IDS = new Set(['local-ollama', 'ollama-2', 'ollama-3']);
 
 function machineIdFromConfiguredName(name) {
-  const id = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const id = String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
   if (!id || GENERIC_CONFIG_NAME_IDS.has(id)) return null;
   return id;
 }
