@@ -230,7 +230,8 @@ function buildMatchStage(filters) {
   } = filters;
 
   const match = {
-    userId
+    userId,
+    'lifecycle.status': { $ne: 'archived' }
   };
 
   // Model filter (multiple models - OR logic)

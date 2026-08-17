@@ -33,7 +33,11 @@ router.post('/', async (req, res) => {
 
         let conv;
         if (conversationId && mongoose.Types.ObjectId.isValid(conversationId)) {
-            conv = await Conversation.findOne({ _id: conversationId, userId });
+            conv = await Conversation.findOne({
+                _id: conversationId,
+                userId,
+                'lifecycle.status': { $ne: 'archived' }
+            });
             if (conv) {
                 conv.messages.push(...stamped);
                 conv.updatedAt = new Date();
@@ -64,7 +68,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const userId = getUserId(res);
-        const query = { userId };
+        const query = { userId, 'lifecycle.status': { $ne: 'archived' } };
 
         const conversations = await Conversation.find(query)
             .sort({ updatedAt: -1 })
@@ -99,7 +103,7 @@ router.get('/', async (req, res) => {
 router.get('/logs', async (req, res) => {
     try {
         const userId = getUserId(res);
-        const query = { userId };
+        const query = { userId, 'lifecycle.status': { $ne: 'archived' } };
 
         const conversation = await Conversation.findOne(query)
             .sort({ updatedAt: -1 });
@@ -215,7 +219,7 @@ router.get('/tags', async (req, res) => {
 router.get('/conversations', async (req, res) => {
     try {
         const userId = getUserId(res);
-        const query = { userId };
+        const query = { userId, 'lifecycle.status': { $ne: 'archived' } };
 
         const conversations = await Conversation.find(query)
             .sort({ updatedAt: -1 })

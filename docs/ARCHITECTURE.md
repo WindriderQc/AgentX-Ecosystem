@@ -53,3 +53,12 @@ service nor a skill owned or loaded by Agent X.
 - Product documentation is permanent and current. Evolution logs, migration
   plans, incident notes, inventories, and audits do not belong in this
   repository.
+
+## Conversation lifecycle ownership
+
+Core owns transcript persistence and reversible conversation lifecycle. Its
+scoped contract requires `userId` plus `promptName` on every read or mutation
+and provides list/get, rename, archive, restore, permanent delete, and ownership
+checks. Archive is a Core state transition. External callers use bounded
+product APIs and must not add competing transcript stores or write lifecycle
+fields directly. Legacy conversations without lifecycle metadata remain active.
