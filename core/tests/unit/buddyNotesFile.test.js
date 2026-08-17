@@ -10,8 +10,6 @@ let TMP_ROOT;
 function setHomes() {
   TMP_ROOT = path.join(os.tmpdir(), 'buddy-notes-' + crypto.randomBytes(6).toString('hex'));
   process.env.BUDDY_HOME = path.join(TMP_ROOT, '.buddy');
-  process.env.OPENCLAW_HOME = path.join(TMP_ROOT, '.openclaw');
-  process.env.HERMES_HOME = path.join(TMP_ROOT, '.hermes');
 }
 
 beforeEach(() => {
@@ -37,34 +35,10 @@ describe('resolveNotesPath', () => {
     expect(p).toBe(path.join(TMP_ROOT, '.buddy', 'notes.md'));
   });
 
-  test('openclaw -> OPENCLAW_HOME/workspace-X/BUDDY.md', () => {
+  test('personality metadata cannot redirect notes outside Agent X', () => {
     const m = getMod();
-    const p = m.resolveNotesPath({ personality: { source: 'openclaw', agentId: 'leadx' } });
-    expect(p).toBe(path.join(TMP_ROOT, '.openclaw', 'workspace-leadx', 'BUDDY.md'));
-  });
-
-  test('openclaw rejects agent ids that could escape the workspace root', () => {
-    const m = getMod();
-    expect(() => m.resolveNotesPath({
-      personality: { source: 'openclaw', agentId: 'main/../../secrets' },
-    })).toThrow(/unsafe path characters/);
-  });
-
-  test('openclaw preserves discovered single-directory Unicode agent ids', () => {
-    const m = getMod();
-    const p = m.resolveNotesPath({ personality: { source: 'openclaw', agentId: 'équipe locale' } });
-    expect(p).toBe(path.join(TMP_ROOT, '.openclaw', 'workspace-équipe locale', 'BUDDY.md'));
-  });
-
-  test('openclaw without agentId throws', () => {
-    const m = getMod();
-    expect(() => m.resolveNotesPath({ personality: { source: 'openclaw' } })).toThrow();
-  });
-
-  test('hermes -> HERMES_HOME/buddy.md', () => {
-    const m = getMod();
-    const p = m.resolveNotesPath({ personality: { source: 'hermes' } });
-    expect(p).toBe(path.join(TMP_ROOT, '.hermes', 'buddy.md'));
+    const p = m.resolveNotesPath({ personality: { source: 'external-runtime', agentId: '../../outside' } });
+    expect(p).toBe(path.join(TMP_ROOT, '.buddy', 'notes.md'));
   });
 
   test('default (no personality) is standalone', () => {

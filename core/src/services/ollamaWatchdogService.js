@@ -2,7 +2,7 @@
  * Ollama Watchdog Service
  *
  * Detects inference queue jams on Ollama hosts and auto-recovers by unloading
- * the stuck model. This fixes a known issue where OpenClaw (or any client)
+ * the stuck model. This fixes a known issue where any client
  * aborts a timed-out request on its side, but Ollama keeps processing the
  * inference. New requests queue behind the stuck one, creating a permanent jam.
  *

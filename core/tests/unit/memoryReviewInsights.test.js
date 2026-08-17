@@ -11,14 +11,14 @@ describe('Dreaming Review insights read model', () => {
       {
         runId: 'complete-new', status: 'completed', createdAt: new Date('2026-08-12T03:30:00Z'), completedAt: new Date('2026-08-12T03:31:00Z'),
         collectors: [
-          { runtime: 'openclaw', submittedAt: new Date('2026-08-12T03:30:00Z'), errors: [], drift: ['legacy owner marker absent'] },
-          { runtime: 'hermes', submittedAt: new Date('2026-08-12T03:30:00Z'), errors: [], drift: [] },
+          { runtime: 'agentx', submittedAt: new Date('2026-08-12T03:30:00Z'), errors: [], drift: ['legacy owner marker absent'] },
+          { runtime: 'codex', submittedAt: new Date('2026-08-12T03:30:00Z'), errors: [], drift: [] },
         ],
         candidates: [], summary: { noEligibleObservations: true, modelCalled: false },
       },
       {
         runId: 'historical', status: 'completed', createdAt: new Date('2026-08-11T03:30:00Z'),
-        collectors: [{ runtime: 'openclaw', errors: ['old failure'], drift: ['old drift', 'old drift'] }],
+        collectors: [{ runtime: 'agentx', errors: ['old failure'], drift: ['old drift', 'old drift'] }],
         candidates: [], summary: {},
       },
     ];
@@ -26,7 +26,7 @@ describe('Dreaming Review insights read model', () => {
     const result = summarizeRuns(runs, 30, new Date('2026-08-12T03:45:00Z'));
     expect(result.health).toEqual(expect.objectContaining({ state: 'healthy', errors: 0, advisories: 1, collecting: true }));
     expect(result.latest.runId).toBe('complete-new');
-    expect(result.runtimes.find((runtime) => runtime.runtime === 'openclaw')).toEqual(expect.objectContaining({
+    expect(result.runtimes.find((runtime) => runtime.runtime === 'agentx')).toEqual(expect.objectContaining({
       currentErrors: 0, currentAdvisories: 1, health: 'healthy',
     }));
   });
@@ -40,7 +40,7 @@ describe('Dreaming Review insights read model', () => {
       state: 'attention', errors: 0, overdue: 1, collecting: true,
     }));
     expect(result.health.activeRun.reconciliation).toEqual(expect.objectContaining({
-      overdue: true, missingRuntimes: ['codex', 'openclaw', 'hermes'],
+      overdue: true, missingRuntimes: ['agentx', 'codex', 'external'],
     }));
     expect(result.safeDigest).toContain('1 overdue reconciliation(s)');
   });

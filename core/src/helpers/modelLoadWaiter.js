@@ -1,8 +1,8 @@
 /**
  * Model Load Waiter
  *
- * Wait for an Ollama model to finish loading into GPU VRAM by polling
- * nvidia-smi via ollamaVramService, instead of sleeping a fixed timeout.
+ * Wait for an Ollama model to finish loading by polling the configured VRAM
+ * signal when available, instead of sleeping a fixed timeout.
  *
  * Why this exists:
  * - Fixed timeouts are either too short (flaky failures) or too long
@@ -10,9 +10,8 @@
  * - Different models take different times based on size + GPU + host load.
  * - VRAM stabilization is a reliable proxy for "model finished loading."
  *
- * Fallback: if VRAM monitoring is unavailable (ssh unreachable, nvidia-smi
- * disabled), fall back to sending a minimal generate request to test
- * readiness directly.
+ * Fallback: if a VRAM total is not configured, send a minimal generate request
+ * to test readiness directly.
  */
 
 const fetch = require('node-fetch');
@@ -22,7 +21,7 @@ const ollamaVramService = require('../services/ollamaVramService');
 /**
  * Poll VRAM until it stabilizes.
  *
- * @param {string} hostUrl       Ollama host URL (e.g. http://192.0.2.66:11434)
+ * @param {string} hostUrl       Explicit Ollama host URL
  * @param {string} modelName     Model being loaded (for logging)
  * @param {object} [options]
  * @param {number} [options.maxWaitMs=120000]     Hard ceiling before giving up.

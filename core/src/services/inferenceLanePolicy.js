@@ -90,12 +90,6 @@ const LANE_RULES = [
   { pattern: /^nerve-center-/, lane: 'interactive' },
   { pattern: /^alerts-/, lane: 'interactive' },
 
-  // automated lane — explicit family for OpenClaw runtime traffic routed
-  // through core's openclaw-ollama proxy (task 0180). This rule is mostly
-  // documentary (the default for unmatched callers is also `automated`),
-  // but listing it lets telemetry queries group by family without
-  // probing the default branch.
-  { pattern: /^openclaw-/, lane: 'automated' },
 ];
 
 /**

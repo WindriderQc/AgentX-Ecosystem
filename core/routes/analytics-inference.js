@@ -4,8 +4,8 @@
  * Why this exists: the legacy Analytics page reads the `conversations`
  * collection, which is written only by conversationPersistence.js from
  * POST /api/chat and /api/chat/stream. Every other lane — the inference
- * dispatcher, the OpenClaw proxy, the Hermes proxy, embeddings, agent and
- * pipeline traffic — writes `inferencelogs` and never touches
+ * dispatcher, embeddings, agent, and pipeline traffic — writes
+ * `inferencelogs` and never touches
  * `conversations`. Chat is a low-single-digit percentage of real platform
  * traffic, so the legacy page is structurally blind to how the ecosystem is
  * actually used.

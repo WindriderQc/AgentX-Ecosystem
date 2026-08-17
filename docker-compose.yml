@@ -40,7 +40,6 @@ services:
       OLLAMA_HOST_2_NAME: ""
       OLLAMA_HOST_3: ""
       OLLAMA_HOST_3_NAME: ""
-      OLLAMA_SSH_DISABLED_HOSTS: ""
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: agentx_product_embeddings
       BENCHMARK_SERVICE_URL: http://benchmark:3081
@@ -48,8 +47,6 @@ services:
       CORE_PUBLIC_URL: http://localhost:${CORE_PORT:-3180}
       BENCHMARK_PUBLIC_URL: http://localhost:${BENCHMARK_PORT:-3181}
       RAG_PUBLIC_URL: http://localhost:${RAG_PORT:-3182}
-      DATAAPI_BASE_URL: ""
-      DATAAPI_PUBLIC_URL: ""
       OPENROUTER_API_KEY: ""
       OPENROUTER_MANAGEMENT_KEY: ""
       PERPLEXITY_API_KEY: ""
@@ -104,8 +101,6 @@ services:
       OLLAMA_HOST_2_NAME: ""
       OLLAMA_HOST_3: ""
       OLLAMA_HOST_3_NAME: ""
-      OLLAMA_SSH_DISABLED_HOSTS: ""
-      HOST_AGENT_TOKEN: ""
       CORE_URL: http://core:3080
       CORE_PUBLIC_URL: http://localhost:${CORE_PORT:-3180}
       BUDDY_EMIT_TOKEN: ""

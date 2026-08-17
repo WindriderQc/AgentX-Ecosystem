@@ -16,74 +16,10 @@ const fetch = require('node-fetch');
 const { normalizeHostUrl } = require('../src/helpers/ollamaHostConfig');
 
 const DEFAULT_CLAWDX_OLLAMA_URL = '';
-const DEFAULT_OPENCLAW_GATEWAY_URLS = [
-  'http://127.0.0.1:18789',
-  'http://localhost:18789'
-];
-
-function parsePathList(value, fallback) {
-  if (!value || typeof value !== 'string') return fallback;
-  const paths = value
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => (entry.startsWith('/') ? entry : `/${entry}`));
-  return paths.length > 0 ? paths : fallback;
-}
-
 function joinUrl(baseUrl, path) {
   const base = String(baseUrl || '').replace(/\/+$/, '');
   const suffix = String(path || '').startsWith('/') ? path : `/${path || ''}`;
   return `${base}${suffix}`;
-}
-
-function normalizeBaseUrl(value) {
-  if (!value) return null;
-  const trimmed = String(value).trim();
-  if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.replace(/\/+$/, '');
-  }
-  return `http://${trimmed.replace(/\/+$/, '')}`;
-}
-
-function dedupeUrls(urls) {
-  return Array.from(new Set((urls || []).filter(Boolean)));
-}
-
-function deriveOpenclawCandidates(clawdxOllamaUrl) {
-  const explicitList = dedupeUrls(
-    String(process.env.OPENCLAW_GATEWAY_URLS || '')
-      .split(',')
-      .map((entry) => normalizeBaseUrl(entry))
-  );
-  if (explicitList.length > 0) {
-    return explicitList;
-  }
-
-  const explicitSingle = normalizeBaseUrl(process.env.OPENCLAW_GATEWAY_URL);
-  if (explicitSingle) {
-    return [explicitSingle];
-  }
-
-  const candidates = [...DEFAULT_OPENCLAW_GATEWAY_URLS];
-  const gatewayPort = Number(process.env.OPENCLAW_GATEWAY_PORT || 18789);
-  if (Number.isFinite(gatewayPort) && gatewayPort > 0) {
-    candidates.unshift(`http://127.0.0.1:${gatewayPort}`, `http://localhost:${gatewayPort}`);
-  }
-
-  try {
-    const parsed = new URL(normalizeBaseUrl(clawdxOllamaUrl));
-    if (parsed.hostname) {
-      if (Number.isFinite(gatewayPort) && gatewayPort > 0) {
-        candidates.push(`http://${parsed.hostname}:${gatewayPort}`);
-      }
-    }
-  } catch (_err) {
-    // ignore URL parsing failures; fall back to defaults
-  }
-
-  return dedupeUrls(candidates.map((entry) => normalizeBaseUrl(entry)));
 }
 
 async function probeFirstJson(baseUrl, paths, timeoutMs = 5000) {
@@ -131,56 +67,6 @@ async function probeFirstJson(baseUrl, paths, timeoutMs = 5000) {
   return { ok: false, error: lastError, status: lastStatus };
 }
 
-async function probeFirstJsonAcrossBases(baseUrls, paths, timeoutMs = 5000) {
-  let lastResult = { ok: false, error: 'No response', status: null };
-  for (const baseUrl of baseUrls) {
-    const result = await probeFirstJson(baseUrl, paths, timeoutMs);
-    if (result.ok) {
-      return { ...result, baseUrl };
-    }
-    lastResult = { ...result, baseUrl };
-  }
-  return lastResult;
-}
-
-/**
- * Agent names from an OpenClaw payload, or `null` when the payload is not a
- * recognizable agent list.
- *
- * The null return is the point (task 0538). Returning `[]` for an unrecognized
- * shape makes "OpenClaw told us it has no agents" indistinguishable from "we
- * could not read the answer", and the caller then reports a confident zero. In
- * production that surfaced as `agentCount: 0` against eight live agents, because
- * OpenClaw 2026.7.1-2 serves the Control UI (HTML) at `/agents`.
- */
-function extractAgentNames(payload) {
-  let list = null;
-
-  if (Array.isArray(payload)) {
-    list = payload;
-  } else if (Array.isArray(payload?.agents)) {
-    list = payload.agents;
-  } else if (Array.isArray(payload?.data)) {
-    list = payload.data;
-  } else if (Array.isArray(payload?.items)) {
-    list = payload.items;
-  } else if (Array.isArray(payload?.result)) {
-    list = payload.result;
-  }
-
-  if (list === null) return null;
-
-  const names = list
-    .map((item) => {
-      if (typeof item === 'string') return item;
-      if (!item || typeof item !== 'object') return null;
-      return item.name || item.agentName || item.slug || item.id || item.title || item.model || null;
-    })
-    .filter(Boolean);
-
-  return Array.from(new Set(names));
-}
-
 // ========================================
 // Unified Health Check
 // ========================================
@@ -196,17 +82,6 @@ router.get('/health', async (req, res) => {
       process.env.OLLAMA_HOST_TERTIARY ||
       process.env.OLLAMA_HOST_3 ||
       DEFAULT_CLAWDX_OLLAMA_URL;
-    const openclawBaseUrls = deriveOpenclawCandidates(clawdxOllamaUrl);
-    const openclawTimeoutMs = Number(process.env.OPENCLAW_TIMEOUT_MS || 3000);
-    const openclawHealthPaths = parsePathList(
-      process.env.OPENCLAW_HEALTH_PATHS,
-      ['/api/health', '/health', '/healthz', '/api/status']
-    );
-    const openclawAgentsPaths = parsePathList(
-      process.env.OPENCLAW_AGENTS_PATHS,
-      ['/api/agents', '/agents', '/api/v1/agents']
-    );
-
     const healthStatus = {
       timestamp: new Date().toISOString(),
       status: 'healthy', // Will be downgraded if any service fails
@@ -283,30 +158,6 @@ router.get('/health', async (req, res) => {
       healthStatus.status = 'degraded';
     }
 
-    // 4. Data
-    try {
-      const dataapiUrl = process.env.DATAAPI_BASE_URL || 'http://localhost:3083';
-      // Data service has a public /health endpoint (no auth required)
-      const response = await fetch(`${dataapiUrl}/health`, { timeout: 5000 });
-
-      if (response.ok) {
-        const data = await response.json();
-        healthStatus.services.data = {
-          status: 'up',
-          url: dataapiUrl,
-          version: data.version || 'unknown'
-        };
-      } else {
-        healthStatus.services.data = { status: 'down', url: dataapiUrl };
-      }
-    } catch (error) {
-      healthStatus.services.data = {
-        status: 'error',
-        url: process.env.DATAAPI_BASE_URL,
-        error: error.message
-      };
-    }
-
     // 6. Qdrant (if configured)
     if (process.env.VECTOR_STORE_TYPE === 'qdrant') {
       try {
@@ -360,82 +211,6 @@ router.get('/health', async (req, res) => {
         status: 'down',
         host: clawdxOllamaUrl,
         error: clawdxTagsProbe.error || 'Unable to query /api/tags'
-      };
-      healthStatus.status = 'degraded';
-    }
-
-    const [openclawHealthProbe, openclawAgentsProbe] = await Promise.all([
-      probeFirstJsonAcrossBases(openclawBaseUrls, openclawHealthPaths, openclawTimeoutMs),
-      probeFirstJsonAcrossBases(openclawBaseUrls, openclawAgentsPaths, openclawTimeoutMs)
-    ]);
-    const resolvedOpenclawBaseUrl =
-      openclawHealthProbe.baseUrl ||
-      openclawAgentsProbe.baseUrl ||
-      openclawBaseUrls[0] ||
-      null;
-    // `null` means "could not read agents", which is NOT the same as zero.
-    const openclawAgentNames = openclawAgentsProbe.ok && openclawAgentsProbe.json
-      ? extractAgentNames(openclawAgentsProbe.data)
-      : null;
-    const agentsMeasured = Array.isArray(openclawAgentNames);
-    const agentsUnknownReason = agentsMeasured
-      ? null
-      : (!openclawAgentsProbe.ok
-        ? 'agents_endpoint_unreachable'
-        : (!openclawAgentsProbe.json
-          ? 'agents_endpoint_returned_non_json'
-          : 'agents_payload_unrecognized'));
-
-    if (openclawHealthProbe.ok || openclawAgentsProbe.ok) {
-      healthStatus.services.openclaw = {
-        status: 'up',
-        baseUrl: resolvedOpenclawBaseUrl,
-        baseUrls: openclawBaseUrls,
-        healthEndpoint: openclawHealthProbe.ok ? openclawHealthProbe.url : null,
-        // Only claim an agents endpoint when it actually yielded agent data;
-        // pointing at a URL that served HTML implies a reading we did not get.
-        agentsEndpoint: agentsMeasured ? openclawAgentsProbe.url : null,
-        agentsEvidence: agentsMeasured ? 'measured' : 'unknown',
-        agentsUnknownReason,
-        agentCount: agentsMeasured ? openclawAgentNames.length : null,
-        agents: agentsMeasured ? openclawAgentNames.slice(0, 30) : []
-      };
-    } else if (clawdxModels.length > 0) {
-      healthStatus.services.openclaw = {
-        status: 'degraded',
-        baseUrl: resolvedOpenclawBaseUrl,
-        baseUrls: openclawBaseUrls,
-        healthEndpoint: null,
-        agentsEndpoint: null,
-        // Models are not agents. This branch previously reported the Ollama
-        // model list under `agentCount`/`agents`, which reads as a healthy agent
-        // roster when the OpenClaw API is in fact unreachable. The models stay
-        // available under their own name as the weak signal they are.
-        agentsEvidence: 'unknown',
-        agentsUnknownReason: 'openclaw_api_unreachable',
-        agentCount: null,
-        agents: [],
-        fallbackModelCount: clawdxModels.length,
-        fallbackModels: clawdxModels.slice(0, 30),
-        source: 'clawdx_ollama_fallback',
-        error: openclawAgentsProbe.error || openclawHealthProbe.error || 'OpenClaw API unreachable'
-      };
-      healthStatus.status = 'degraded';
-    } else {
-      healthStatus.services.openclaw = {
-        status: 'down',
-        baseUrl: resolvedOpenclawBaseUrl,
-        baseUrls: openclawBaseUrls,
-        healthEndpoint: null,
-        agentsEndpoint: null,
-        // Unreachable means we do not know the roster. A `0` here would claim
-        // OpenClaw is running with no agents, which is a different — and much
-        // less alarming — statement than "OpenClaw is down".
-        agentsEvidence: 'unknown',
-        agentsUnknownReason: 'openclaw_api_unreachable',
-        agentCount: null,
-        agents: [],
-        error: openclawAgentsProbe.error || openclawHealthProbe.error || 'OpenClaw API unreachable'
       };
       healthStatus.status = 'degraded';
     }
@@ -656,4 +431,3 @@ module.exports = router;
 // Exported for tests (task 0538). The empty-vs-unreadable distinction is the
 // contract that keeps a health surface from reporting a confident zero it cannot
 // justify, so it is covered directly rather than only through the route.
-module.exports.extractAgentNames = extractAgentNames;

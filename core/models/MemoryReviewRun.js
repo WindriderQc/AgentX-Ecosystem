@@ -156,7 +156,7 @@ const MemoryReviewRunSchema = new mongoose.Schema({
   collectorVersion: { type: String, default: '' },
   promptVersion: { type: String, default: '' },
   model: {
-    provider: { type: String, default: 'agentx-hermes-proxy' },
+    provider: { type: String, default: 'agentx-inference' },
     model: { type: String, default: '' },
     temperature: { type: Number, default: 0 },
   },

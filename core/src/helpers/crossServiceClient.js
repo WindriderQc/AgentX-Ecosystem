@@ -2,7 +2,7 @@
  * crossServiceClient — shared HTTP primitive for core's cross-service clients.
  *
  * Consolidates the fetch + URL building + timeout + error wrapping plumbing that
- * used to live separately in dataapiClient, ragServiceClient, reportsServiceClient,
+ * used to live separately in ragServiceClient, reportsServiceClient,
  * benchmarkServiceClient, and voixClientService.
  *
  * Design:

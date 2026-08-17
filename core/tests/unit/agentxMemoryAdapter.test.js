@@ -153,7 +153,7 @@ describe('searchAgentx (Phase 6g)', () => {
       {
         _id: 'c1',
         title: 'Buddy personality notes',
-        messages: [{ content: 'Buddy chat should use Hermes personality.' }],
+        messages: [{ content: 'Buddy chat should use the Agent X personality.' }],
         updatedAt: now,
       },
     ]));

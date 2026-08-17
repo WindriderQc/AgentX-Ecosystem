@@ -18,11 +18,11 @@
  * in the benchmark host-claim lifecycle rather than calling a host cold:
  *
  *   node scripts/with-agentx-claim.js \
- *     --host http://192.0.2.199:11434 \
+ *     --host http://127.0.0.1:11434 \
  *     --owner claude-code --batch repo-coding-qual-$(date +%Y%m%d%H%M%S) \
  *     --estimate-ms 3600000 -- \
  *     node benchmark/scripts/repo-coding-qualification.js \
- *       --host http://192.0.2.199:11434 \
+ *       --host http://127.0.0.1:11434 \
  *       --models ax/qwen3-coder:30b,ax/gemma4:26b-a4b-it-qat --attempts 3
  *
  * Verify offline first:
@@ -48,9 +48,8 @@ const {
   resolveStandaloneCampaignInferenceContracts
 } = require('../src/services/benchmark/inferenceContractSnapshot');
 
-// Defaults are hardcoded (no process.env reads) so this script adds no tracked
-// feature-conservation surface. Host/model choices are operator flags.
-const DEFAULT_HOST = 'http://192.0.2.199:11434'; // Host Alpha, 2x3090 primary
+// Localhost is the safe default. Remote runtimes must be selected explicitly.
+const DEFAULT_HOST = 'http://127.0.0.1:11434';
 const DEFAULT_CORE = 'http://127.0.0.1:3080';
 const DEFAULT_MODELS = [
   'ax/gemma4:26b-a4b-it-qat',

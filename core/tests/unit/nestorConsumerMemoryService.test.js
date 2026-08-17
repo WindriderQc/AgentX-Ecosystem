@@ -25,23 +25,21 @@ const {
 describe('Nestor consumer memory adapters', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('keeps healthy sources usable when another source fails', async () => {
-    mockSearchSingle.mockImplementation(async (source) => {
-      if (source === 'hermes') throw new Error('Hermes unavailable');
-      return [{ source, text: `${source} result`, score: 0.8, ref: `${source}:1` }];
-    });
+  it('searches the product-owned Core and RAG sources', async () => {
+    mockSearchSingle.mockImplementation(async (source) => (
+      [{ source, text: `${source} result`, score: 0.8, ref: `${source}:1` }]
+    ));
     mockSearchRag.mockResolvedValue([{ text: 'rag result', score: 0.9, metadata: { documentId: 'doc-1' } }]);
 
     const result = await searchMemory({
-      sources: ['agentx', 'hermes', 'rag'],
+      sources: ['agentx', 'rag'],
       query: 'routing contract',
       k: 5,
     });
 
     expect(result.bySource.agentx).toHaveLength(1);
     expect(result.bySource.rag[0]).toEqual(expect.objectContaining({ source: 'rag', ref: 'doc-1' }));
-    expect(result.bySource.hermes).toEqual([]);
-    expect(result.warnings).toEqual([expect.objectContaining({ source: 'hermes' })]);
+    expect(result.warnings).toEqual([]);
   });
 
   it('rejects unknown sources and oversized queries', async () => {
@@ -53,13 +51,13 @@ describe('Nestor consumer memory adapters', () => {
 
   it('returns fail-soft status for every requested source', async () => {
     mockStatusForSource.mockImplementation(async (source) => {
-      if (source === 'openclaw') throw new Error('offline');
+      if (source === 'agentx') throw new Error('offline');
       return { source, available: true };
     });
     mockGetRagStatus.mockResolvedValue({ healthy: true, documentCount: 4 });
-    const result = await getMemoryStatus(['agentx', 'openclaw', 'rag']);
+    const result = await getMemoryStatus(['agentx', 'rag']);
     expect(result.sources.rag.available).toBe(true);
-    expect(result.sources.openclaw.available).toBe(false);
-    expect(result.warnings[0]).toEqual(expect.objectContaining({ source: 'openclaw' }));
+    expect(result.sources.agentx.available).toBe(false);
+    expect(result.warnings[0]).toEqual(expect.objectContaining({ source: 'agentx' }));
   });
 });

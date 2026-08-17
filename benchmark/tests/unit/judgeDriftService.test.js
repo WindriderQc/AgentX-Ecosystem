@@ -4,7 +4,6 @@
  * Covers:
  *   - classifyDrift threshold logic (15pp drop, 0.5 floor, insufficient data)
  *   - computeDrift path with mocked sample + baseline
- *   - emitDriftEvents best-effort HTTP
  *   - ratifyBaseline toggles active flag
  */
 
@@ -36,7 +35,6 @@ const {
     classifyDrift,
     gatherReviewSample,
     computeDrift,
-    emitDriftEvents,
     ratifyBaseline,
     DRIFT_THRESHOLDS
 } = require('../../src/services/benchmark/judgeDriftService');
@@ -53,7 +51,6 @@ function mockFindChain(docs) {
 
 beforeEach(() => {
     jest.clearAllMocks();
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
 });
 
 describe('classifyDrift', () => {
@@ -213,7 +210,7 @@ describe('computeDrift', () => {
             ]
         });
 
-        const out = await computeDrift({ perCategory: 10, emitEvents: false });
+        const out = await computeDrift({ perCategory: 10 });
         expect(out.overall_status).toBe('ok');
         expect(out.baseline_label).toBe('test-baseline');
         expect(out.categories).toHaveLength(7); // 7 categories
@@ -238,7 +235,7 @@ describe('computeDrift', () => {
             categories: [{ category: 'coding', rho: 0.90, sample_size: 30 }]
         });
 
-        const out = await computeDrift({ perCategory: 10, emitEvents: false });
+        const out = await computeDrift({ perCategory: 10 });
         const coding = out.categories.find(c => c.category === 'coding');
         expect(coding.triggered).toBe(true);
         expect(coding.status).toBe('alert');
@@ -248,50 +245,9 @@ describe('computeDrift', () => {
     test('handles missing baseline gracefully', async () => {
         loadUnionedGoldset.mockResolvedValue([]);
         CalibrationBaseline.getActive.mockResolvedValue(null);
-        const out = await computeDrift({ perCategory: 10, emitEvents: false });
+        const out = await computeDrift({ perCategory: 10 });
         expect(out.baseline_label).toBeNull();
         expect(out.overall_status).toBe('ok');
-    });
-});
-
-describe('emitDriftEvents', () => {
-    test('posts one AppEvent per triggered category', async () => {
-        const rows = [
-            {
-                category: 'coding', triggered: true, current_rho: 0.4,
-                baseline_rho: 0.85, drop_pp: 0.45, sample_size: 20, reasons: ['drop_15pp']
-            },
-            {
-                category: 'reasoning', triggered: false, current_rho: 0.8,
-                baseline_rho: 0.85, drop_pp: 0.05, sample_size: 20, reasons: []
-            }
-        ];
-        const out = await emitDriftEvents(rows, { label: 'b1' });
-        expect(out.emitted).toBe(1);
-        expect(global.fetch).toHaveBeenCalledTimes(1);
-        const [url, opts] = global.fetch.mock.calls[0];
-        expect(url).toContain('/api/v1/events');
-        const body = JSON.parse(opts.body);
-        expect(body.type).toBe('judge_drift_detected');
-        expect(body.meta.category).toBe('coding');
-        expect(body.meta.baseline_label).toBe('b1');
-    });
-
-    test('swallows fetch errors', async () => {
-        global.fetch = jest.fn().mockRejectedValue(new Error('unreachable'));
-        const rows = [
-            { category: 'coding', triggered: true, current_rho: 0.3, baseline_rho: 0.9,
-              drop_pp: 0.6, sample_size: 10, reasons: ['drop_15pp', 'absolute_floor'] }
-        ];
-        const out = await emitDriftEvents(rows, null);
-        expect(out.emitted).toBe(0);
-    });
-
-    test('no-op when nothing triggered', async () => {
-        const rows = [{ triggered: false }];
-        const out = await emitDriftEvents(rows, null);
-        expect(out.emitted).toBe(0);
-        expect(global.fetch).not.toHaveBeenCalled();
     });
 });
 

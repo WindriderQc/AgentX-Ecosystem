@@ -6,8 +6,8 @@ evidence.
 
 ## What belongs here
 
-- **Core** — inference, model discovery and routing, prompts, telemetry, and
-  product APIs;
+- **Core** — inference, model discovery and routing, prompts, telemetry,
+  Dreaming, and product APIs;
 - **Benchmark** — repeatable model evaluation, profiling, scoring, and
   comparison;
 - **RAG** — document ingestion, embeddings, retrieval, and knowledge
@@ -17,9 +17,9 @@ evidence.
 - **Demo and onboarding** — a secret-free Windows/Linux first-run path.
 
 The default `demo` profile does not load private data, environment-specific
-operations, or external adapters. Some transitional adapter modules remain in
-Core, but the product profile blocks their routes and supplies no endpoint,
-credential, or host mount.
+operations, or external adapters. Core contains no private adapter loader or
+implementation, and the product supplies no private endpoint, credential, or
+host mount.
 
 ## First run
 
@@ -107,9 +107,7 @@ export CORE_PORT=3280 BENCHMARK_PORT=3281 RAG_PORT=3282
 
 The small secret-free input file is [`config/agentx.env`](config/agentx.env).
 Keep secrets and machine-specific endpoints outside the repository. See
-[First installation](docs/GETTING_STARTED.md) for error paths and
-[Extensions](docs/EXTENSIONS.md) for the intentionally narrow, disabled-by-default
-extension seam.
+[First installation](docs/GETTING_STARTED.md) for error paths.
 
 ## Install and update
 
@@ -118,10 +116,14 @@ deployments pin the Core, Benchmark, and RAG container digests. Advanced users
 may opt into the moving `main`/`test` channel. Exact commands and rollback
 expectations are in [Install and update modes](docs/RELEASES.md).
 
-Agent X does not require an operations repository. An advanced user may keep
-host-specific configuration and integrations in a separate private workspace
-and load trusted adapters through the small, full-profile-only
-[extension seam](docs/EXTENSIONS.md). The default demo never loads them.
+Agent X does not require an operations repository. Host-specific automation
+and private integrations stay outside this repository and may call the bounded
+product APIs. Agent X does not load private adapter modules or provide an
+operations extension framework.
+
+A separately operated private Data service may expose a bounded, read-only
+API to agents. It is not an Agent X service, an Agent X skill, or an adapter
+implementation owned by this repository.
 
 Agent X is available under the [MIT License](LICENSE). Report security issues
 through the private process described in [Security policy](SECURITY.md).

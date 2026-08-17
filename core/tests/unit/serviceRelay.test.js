@@ -23,13 +23,13 @@ describe('service-edge relay headers (0520)', () => {
     const headers = buildRelayHeaders(fakeRequest({
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
-      'User-Agent': 'hermes/1.0',
+      'User-Agent': 'external-client/1.0',
       'X-Random-Vendor-Header': 'should-not-cross',
     }));
 
     expect(headers['content-type']).toBe('application/json');
     expect(headers.accept).toBe('text/event-stream');
-    expect(headers['user-agent']).toBe('hermes/1.0');
+    expect(headers['user-agent']).toBe('external-client/1.0');
     // Allowlist, not blocklist: an unknown header is simply not relayed.
     expect(headers['x-random-vendor-header']).toBeUndefined();
   });

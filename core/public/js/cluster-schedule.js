@@ -20,14 +20,16 @@ const TASK_COLORS = {
 };
 
 const HOST_META = {
-  primary: { id: 'primary', label: 'Host Alpha', color: '#7cf0ff' },
-  secondary: { id: 'secondary', label: 'Host Beta', color: '#f97316' },
-  tertiary: { id: 'tertiary', label: 'Host Gamma', color: '#22c55e' },
+  primary: { id: 'primary', label: 'Primary runtime', color: '#7cf0ff' },
+  secondary: { id: 'secondary', label: 'Secondary runtime', color: '#f97316' },
+  tertiary: { id: 'tertiary', label: 'Tertiary runtime', color: '#22c55e' },
   unassigned: { id: 'unassigned', label: 'Infra / Shared', color: '#94a3b8' }
 };
 
 const SOURCE_META = {
-  openclaw: { label: 'OpenClaw', color: '#7c3aed' },
+  // Read-only rendering compatibility for records created before extraction.
+  // Agent X has no OpenClaw route, writer, client, or runtime adapter.
+  openclaw: { label: 'External (legacy)', color: '#7c3aed' },
   agentx: { label: 'AgentX', color: '#38bdf8' },
   'agentx-system': { label: 'System Cron', color: '#f59e0b' },
   'ollama-persistent': { label: 'Persistent GPU', color: '#22c55e' }
@@ -39,13 +41,10 @@ const CATEGORY_LABELS = {
   backup: 'BAK', scanning: 'SCAN'
 };
 
-// Known host VRAM capacities (MB): primary=Host Alpha 2x RTX3090 48GB, secondary=Host Beta RTX5070Ti 16GB, tertiary=Host Gamma RTX3080Ti 12GB.
-const HOST_VRAM = { primary: 49152, secondary: 16384, tertiary: 12288 };
-
 const HOST_ROLES = {
-  primary:   '2x RTX 3090 · 48 GB VRAM',
-  secondary: 'RTX 5070 Ti · 16 GB VRAM',
-  tertiary:  'RTX 3080 Ti - 12 GB VRAM',
+  primary:   'Primary inference runtime',
+  secondary: 'Secondary inference runtime',
+  tertiary:  'Tertiary inference runtime',
   unassigned: 'Infra / Shared'
 };
 
@@ -131,7 +130,7 @@ function renderLiveBar(container, hosts, nextTasks) {
 
     // VRAM
     const totalUsed = models.reduce((s, m) => s + (m.sizeVram || 0), 0);
-    const capacityMb = h.vramMb || HOST_VRAM[h.id] || 0;
+    const capacityMb = h.vramMb || 0;
     const capacityGb = (capacityMb / 1024).toFixed(0);
     const usedGb = (totalUsed / 1073741824).toFixed(1);
     const freeBytes = Math.max(0, capacityMb * 1048576 - totalUsed);
@@ -150,7 +149,7 @@ function renderLiveBar(container, hosts, nextTasks) {
     // GPU model (RTX type) from role
     const gpuLine = HOST_ROLES[h.id] || '';
 
-    // IP from URL e.g. http://192.0.2.66:11434
+    // Optional IP from the explicitly configured runtime URL.
     const ipMatch = (h.url || '').match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/);
     const hostIp = ipMatch ? ipMatch[0] : '';
 
@@ -387,7 +386,7 @@ function renderGroupedHeatmap(container, timeline) {
         ${cadence ? `<span class="cs-cadence-pill">${cadence}</span>` : ''}
         ${hostLabel ? `<span class="cs-host-tag ${hostMeta.id}">${esc(hostLabel)}</span>` : ''}
         ${entry.source === 'openclaw' && entry.metadata ? `
-          <div class="schedule-openclaw-meta" style="margin-top: 8px; font-size: 0.75rem; color: var(--muted, #888); line-height: 1.6;">
+          <div class="schedule-external-meta" style="margin-top: 8px; font-size: 0.75rem; color: var(--muted, #888); line-height: 1.6;">
             ${entry.metadata.payloadPreview ? `<div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px;" title="${esc(entry.metadata.payloadPreview)}"><i class="fas fa-quote-left" style="margin-right: 4px; opacity: 0.5;"></i>${esc(entry.metadata.payloadPreview)}</div>` : ''}
             ${entry.metadata.lastStatus ? `<div><i class="fas ${entry.metadata.lastStatus === 'ok' ? 'fa-check-circle' : 'fa-exclamation-triangle'}" style="margin-right: 4px; color: ${entry.metadata.lastStatus === 'ok' ? '#22c55e' : '#ef4444'};"></i>Last: ${esc(entry.metadata.lastStatus)}</div>` : ''}
             ${entry.metadata.consecutiveErrors > 0 ? `<div style="color: #ef4444;"><i class="fas fa-exclamation-circle" style="margin-right: 4px;"></i>${entry.metadata.consecutiveErrors} consecutive errors</div>` : ''}
@@ -744,7 +743,7 @@ function renderNextTasks(container) {
 
 function renderNextItem(task, i) {
   const sourceMeta = getSourceMeta(task.source);
-  const sourceClass = task.source || 'openclaw';
+  const sourceClass = task.source === 'openclaw' ? 'external' : (task.source || 'agentx');
   const hostLabel = task.host ? getHostMeta(task.host).label : '';
   const cadenceLabel = isServiceTick(task) ? `every ${formatInterval(task.intervalMs)}` : '';
   return `

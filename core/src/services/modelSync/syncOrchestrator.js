@@ -90,7 +90,7 @@ async function retireUnconfiguredHostModels(configuredHosts, options = {}) {
 
 /**
  * Fetch model list from a single Ollama host
- * @param {string} hostUrl - e.g. "http://192.0.2.66:11434"
+ * @param {string} hostUrl - explicit Ollama host URL
  * @returns {Promise<Array>} Array of Ollama model objects
  */
 async function fetchHostModels(hostUrl) {
@@ -114,7 +114,7 @@ async function fetchHostModels(hostUrl) {
 async function getHostVramMiB(hostUrl) {
   try {
     const result = await ollamaVramService.getHostVram(hostUrl);
-    const source = result._source || (result.ok ? 'ssh-nvidia-smi' : 'unknown');
+    const source = result._source || (result.ok ? 'configured-profile' : 'unknown');
 
     if (result.ok && result.memoryTotalMiBTotal > 0) {
       logger.info('VRAM detected for host', { hostUrl, vramMiB: result.memoryTotalMiBTotal, source });

@@ -94,7 +94,7 @@ function getBenchmarkClaimReaperIntervalMs() {
 // ── Claim lifecycle ───────────────────────────────────────────
 //
 // When a benchmark batch takes over a host, it announces itself here.
-// Other consumers (chat, buddy, OpenClaw) can read the status and route
+// Other consumers (chat, buddy, bounded API clients) can read the status and route
 // around benchmarking hosts. Enforcement is left to consumers; the claim
 // is a best-effort announcement.
 //

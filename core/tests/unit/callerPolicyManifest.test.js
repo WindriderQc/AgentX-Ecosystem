@@ -30,7 +30,6 @@ const SAMPLES = {
   nestor: 'nestor/panel/ask',
   'nerve-center': 'nerve-center-intelligence',
   alerts: 'alerts-evaluate',
-  openclaw: 'openclaw-ollama',
 };
 
 /** The live rate-bucket decision, mirroring createInferenceCallerRouter. */
@@ -93,7 +92,7 @@ describe('caller policy manifest (0521)', () => {
       // but it is a rate-limit change and must be a conscious one. If it grows,
       // a new caller was added to one matcher list and not the other.
       expect(driftingCallers().map((p) => p.id).sort()).toEqual([
-        'buddy-reaction', 'chat-exact', 'openclaw', 'profiler',
+        'buddy-reaction', 'chat-exact', 'profiler',
       ]);
     });
 

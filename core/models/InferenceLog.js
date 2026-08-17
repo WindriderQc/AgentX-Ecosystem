@@ -22,7 +22,7 @@ const InferenceLogSchema = new mongoose.Schema({
   consumerContract: { type: String, default: null }, // server-attested internal consumer contract
   runtime: {
     type: String,
-    enum: ['agentx', 'openclaw', 'hermes', 'codex', 'claude-code', 'other'],
+    enum: ['agentx', 'codex', 'claude-code', 'external', 'other'],
     default: 'agentx'
   },
   correlationId: { type: String, default: null },

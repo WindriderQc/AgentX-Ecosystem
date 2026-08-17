@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const UsageSchema = new mongoose.Schema({
   source: {
     type: String,
-    enum: ['none', 'reported', 'agentx-inference', 'openclaw', 'hermes', 'codex', 'provider'],
+    enum: ['none', 'reported', 'agentx-inference', 'external', 'codex', 'provider'],
     default: 'none',
   },
   inputTokens: { type: Number, min: 0, default: 0 },
@@ -22,7 +22,7 @@ const LlmOutcomeSchema = new mongoose.Schema({
   correlationId: { type: String, default: null, index: true, maxlength: 160 },
   runtime: {
     type: String,
-    enum: ['agentx', 'openclaw', 'hermes', 'codex', 'claude-code', 'other'],
+    enum: ['agentx', 'codex', 'claude-code', 'external', 'other'],
     required: true,
     index: true,
   },

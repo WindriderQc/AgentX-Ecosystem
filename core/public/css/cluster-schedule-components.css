@@ -683,7 +683,7 @@
 
 /* ── Source Chip Color Variants ─────────────────────────────── */
 
-.cs-source-chip.openclaw    { background: rgba(124, 58, 237, 0.15); color: #7c3aed; }
+.cs-source-chip.external    { background: rgba(124, 58, 237, 0.15); color: #7c3aed; }
 .cs-source-chip.agentx      { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
 .cs-source-chip.agentx-system { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
 .cs-source-chip.ollama-persistent { background: rgba(34, 197, 94, 0.15); color: #22c55e; }

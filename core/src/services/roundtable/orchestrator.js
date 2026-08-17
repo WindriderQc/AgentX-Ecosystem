@@ -523,7 +523,7 @@ async function createRoundtable(options) {
       throw err;
     }
     seenAgentIds.add(agentId);
-    if (!['model', 'openclaw', 'hermes', 'codex'].includes(runtime)) {
+    if (!['model', 'codex'].includes(runtime)) {
       const err = new Error(`unsupported participant runtime: ${runtime}`);
       err.status = 400;
       throw err;

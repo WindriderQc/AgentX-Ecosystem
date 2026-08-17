@@ -1,7 +1,7 @@
 // Phase 6g — small helpers for routes/buddy.js.
 // Per-task model resolution + memory source allow-list.
 
-const VALID_MEMORY_SOURCES = ['hermes', 'openclaw', 'agentx'];
+const VALID_MEMORY_SOURCES = ['agentx'];
 const VALID_TASKS = ['chat', 'react', 'summarize'];
 
 // Resolve {host, model} for a given task.

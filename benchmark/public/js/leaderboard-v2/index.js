@@ -92,7 +92,7 @@ function shortHostName(url) {
 
 /**
  * Build the Hosts selector — one coherent control that replaces BOTH the old
- * "Scope: Host Gamma / Current / All" buttons AND the hero's click-to-filter
+ * host/current/all scope buttons AND the hero's click-to-filter
  * pills. Every host option is data-driven from the configured-host list, so
  * there are no hard-coded host names. Reads left→right as:
  *   [ All hosts ]  ● host gpu  ● host gpu  …  ┊  [ All history ]

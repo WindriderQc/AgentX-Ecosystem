@@ -295,7 +295,7 @@ async function createBackup() {
 }
 
 // ============================================================
-// Config — tarball of ecosystem config, .env files, crontab, openclaw
+// Config — tarball of bounded product configuration files
 // ============================================================
 
 const CONFIG_SOURCES_RELATIVE = [
@@ -358,14 +358,6 @@ async function createConfigBackup() {
       included.push('crontab.txt');
     } catch {
       // No crontab installed — skip silently
-    }
-
-    // Capture openclaw jobs.json if present
-    const openclawSrc = path.join(os.homedir(), '.openclaw', 'cron', 'jobs.json');
-    if (fs.existsSync(openclawSrc)) {
-      const dest = path.join(stagingDir, 'openclaw-jobs.json');
-      fs.copyFileSync(openclawSrc, dest);
-      included.push('openclaw-jobs.json');
     }
 
     if (included.length === 0) {

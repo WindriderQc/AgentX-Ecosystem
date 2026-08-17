@@ -1,5 +1,5 @@
-// Buddy notes file. Facts live in a markdown file inside the linked source's
-// workspace; YAML frontmatter is the source of truth.
+// Buddy notes file. Facts live in AgentX's own Buddy home; YAML frontmatter is
+// the source of truth.
 
 const fs = require('fs').promises;
 const os = require('os');
@@ -13,49 +13,13 @@ const MAX_TEXT = 500;
 function buddyHome() {
   return process.env.BUDDY_HOME || path.join(os.homedir(), '.buddy');
 }
-function hermesHome() {
-  return process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
-}
-function openclawHome() {
-  return process.env.OPENCLAW_HOME || path.join(os.homedir(), '.openclaw');
-}
-
-function resolveNotesRoot(buddy) {
-  const source = buddy?.personality?.source || 'standalone';
-  if (source === 'hermes') return path.resolve(hermesHome());
-  if (source === 'openclaw') return path.resolve(openclawHome());
+function resolveNotesRoot() {
   return path.resolve(buddyHome());
 }
 
 // Resolves the absolute notes file path for a buddy doc.
-function resolveNotesPath(buddy) {
-  const personality = (buddy && buddy.personality) || {};
-  const source = personality.source || 'standalone';
-  if (source === 'hermes') {
-    return path.join(resolveNotesRoot(buddy), 'buddy.md');
-  }
-  if (source === 'openclaw') {
-    const agentId = personality.agentId || '';
-    if (!agentId) throw new Error('openclaw personality requires agentId for notes file');
-    if (
-      typeof agentId !== 'string'
-      || agentId.length > 120
-      || agentId.includes('\0')
-      || /[\\/]/.test(agentId)
-      || agentId === '.'
-      || agentId === '..'
-    ) {
-      throw new Error('openclaw personality agentId contains unsafe path characters');
-    }
-    const root = resolveNotesRoot(buddy);
-    const workspace = path.resolve(root, `workspace-${agentId}`);
-    if (path.dirname(workspace) !== root) {
-      throw new Error('openclaw personality agentId resolves outside the workspace root');
-    }
-    return path.join(workspace, 'BUDDY.md');
-  }
-  // AgentX local and legacy standalone both keep notes in Buddy's own home.
-  return path.join(resolveNotesRoot(buddy), 'notes.md');
+function resolveNotesPath() {
+  return path.join(resolveNotesRoot(), 'notes.md');
 }
 
 async function assertSafeNotesReadPath(buddy, filePath = resolveNotesPath(buddy)) {
@@ -69,7 +33,7 @@ async function assertSafeNotesReadPath(buddy, filePath = resolveNotesPath(buddy)
     throw new Error('notes archive must not be a symbolic link');
   }
   const [realRoot, realFile] = await Promise.all([
-    fs.realpath(resolveNotesRoot(buddy)),
+    fs.realpath(resolveNotesRoot()),
     fs.realpath(candidatePath),
   ]);
   const relative = path.relative(realRoot, realFile);

@@ -3,7 +3,7 @@
 /**
  * passAtK — shared, dependency-free pass@k math for benchmark qualification.
  *
- * Extracted (task 0452) so the code-lane executable grader and the Hermes
+ * Extracted (task 0452) so the code-lane executable grader and external
  * agentic bake-off compute the estimator identically instead of keeping two
  * copies that drift. Only the pure math lives here; each lane keeps its own
  * report builder because their per-sample fields differ (a code run has

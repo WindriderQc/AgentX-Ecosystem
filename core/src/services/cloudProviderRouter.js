@@ -1,13 +1,12 @@
 /**
  * Cloud provider routing for the AgentX OpenAI-compatible gateway (task: #2
  * "AgentX fronts OpenRouter"). Maps a cloud-namespaced model id to an
- * OpenAI-compatible cloud upstream so the Hermes proxy can forward cloud
- * inference *through* AgentX — keeping telemetry + budget visibility — instead
- * of callers reaching the provider directly and bypassing governance.
+ * OpenAI-compatible cloud upstream so product callers can route cloud
+ * inference *through* Agent X — keeping telemetry + budget visibility.
  *
  * Convention: the routing namespace is the FIRST path segment of the model id,
- * matching OpenClaw's existing `openrouter/<vendor>/<model>` scheme. Only the
- * routing prefix is stripped for the upstream; the rest is the provider's native
+ * using `openrouter/<vendor>/<model>`. Only the routing prefix is stripped for
+ * the upstream; the rest is the provider's native
  * model id (e.g. `openrouter/z-ai/glm-5.2` -> OpenRouter model `z-ai/glm-5.2`).
  *
  * OpenRouter-first (decided 2026-07-01): only `openrouter/*` is wired today.

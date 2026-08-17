@@ -84,14 +84,14 @@ describe('llmEffectivenessService', () => {
     const tasks = [{
       pipelineId: '0403',
       status: 'done',
-      assignee: 'clawdx-coder',
+      assignee: 'codex-worker',
       updatedAt: new Date('2026-07-17T12:00:00Z'),
     }];
     const derived = derivePipelineOutcomes(tasks, new Set());
     const snapshot = buildEffectivenessSnapshot({ window, pipelineTasks: tasks });
 
     expect(derived).toHaveLength(1);
-    expect(derived[0].runtime).toBe('openclaw');
+    expect(derived[0].runtime).toBe('codex');
     expect(snapshot.summary.productiveOutcomes).toBe(1);
     expect(snapshot.summary.firstPassSuccessRatePct).toBeNull();
     expect(snapshot.coverage.pipelineDerivedOutcomes).toBe(1);
@@ -100,7 +100,7 @@ describe('llmEffectivenessService', () => {
   test('includes review and blocked pipeline work without pretending it is verified success', () => {
     const tasks = [
       { pipelineId: '0405', status: 'review', assignee: 'codex', updatedAt: new Date() },
-      { pipelineId: '0406', status: 'blocked', assignee: 'hermes-worker', updatedAt: new Date() },
+      { pipelineId: '0406', status: 'blocked', assignee: 'claude-code', updatedAt: new Date() },
     ];
     const snapshot = buildEffectivenessSnapshot({ window, pipelineTasks: tasks });
     expect(snapshot.summary.reportedOutcomes).toBe(2);
@@ -162,12 +162,11 @@ describe('llmEffectivenessService', () => {
     })).toThrow(/must not include prompt/);
   });
 
-  test('classifies runtime ownership without treating every agent as OpenClaw', () => {
+  test('classifies only product-recognized runtime ownership', () => {
     expect(pipelineRuntime('codex')).toBe('codex');
     expect(pipelineRuntime('claude-code')).toBe('claude-code');
-    expect(pipelineRuntime('hermes-worker')).toBe('hermes');
-    expect(pipelineRuntime('clawdx-coder')).toBe('openclaw');
     expect(pipelineRuntime('terminal-ops')).toBe('agentx');
+    expect(pipelineRuntime('external-worker')).toBe('other');
     expect(pipelineRuntime('Example User')).toBe('other');
   });
 
@@ -177,8 +176,8 @@ describe('llmEffectivenessService', () => {
       correlationId: 'corr-4',
       get: () => null,
     };
-    expect(telemetryContextFromRequest(req, 'hermes')).toEqual({
-      runtime: 'hermes',
+    expect(telemetryContextFromRequest(req, 'external')).toEqual({
+      runtime: 'external',
       correlationId: 'corr-4',
       workItemId: '0404',
       attempt: 2,

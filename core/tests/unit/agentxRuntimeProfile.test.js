@@ -14,20 +14,13 @@ describe('Agent X runtime profile', () => {
   });
 
   test.each([
-    '/api/openclaw/status',
-    '/api/hermes/health',
-    '/api/hermes-openai/v1/chat/completions',
-    '/api/openclaw-ollama/api/generate',
     '/api/ollama-vram/status',
     '/api/ollama-watchdog/status',
     '/api/analytics/federated',
     '/api/analytics/codex-usage',
     '/api/analytics/voice',
-    '/api/host-capacity',
     '/api/reports/morning-brief',
     '/api/pipeline/tasks',
-    '/data-toolbox',
-    '/host-agent/agent.js',
     '/portal',
     '/voice-personas.html'
   ])('disables integration surface %s', (pathname) => {
@@ -54,7 +47,7 @@ describe('Agent X runtime profile', () => {
     };
     const next = jest.fn();
 
-    createAgentXProfileGuard('demo')({ path: '/api/openclaw/status' }, res, next);
+    createAgentXProfileGuard('demo')({ path: '/api/pipeline/tasks' }, res, next);
 
     expect(res.setHeader).toHaveBeenCalledWith('X-AgentX-Profile', 'demo');
     expect(res.status).toHaveBeenCalledWith(404);

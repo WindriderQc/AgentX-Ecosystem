@@ -71,7 +71,7 @@ function trackRequest(req, res, next) {
   // This used to read req.path inside the finish handler. Express strips the
   // mount prefix from req.url while inside a mounted router, so by the time
   // 'finish' fired the recorded path was router-relative: every router root
-  // collapsed into a single "/" bucket, and /api/host-monitor/report was stored
+  // collapsed into a single "/" bucket, and /api/widgets/report was stored
   // as "/report". The endpoint table was unusable for diagnosis -- "/" was the
   // busiest "endpoint" on the platform while naming nothing at all, and two
   // unrelated handlers could share one row.

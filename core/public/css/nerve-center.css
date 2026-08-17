@@ -164,8 +164,6 @@
 .nc-section.cluster  { border-left-color: #4ade80; }
 .nc-section.health   { border-left-color: #f59e0b; }
 .nc-section.performance { border-left-color: #93a0b5; }
-.nc-section.hermes { border-left-color: #38bdf8; }
-.nc-section.openclaw { border-left-color: #a78bfa; }
 .nc-section.ecosystem { border-left-color: #22c55e; }
 
 /* Section header */
@@ -199,8 +197,6 @@
 .nc-section.cluster .nc-section-icon  { color: #4ade80; }
 .nc-section.health .nc-section-icon   { color: #f59e0b; }
 .nc-section.performance .nc-section-icon { color: #93a0b5; }
-.nc-section.hermes .nc-section-icon { color: #38bdf8; }
-.nc-section.openclaw .nc-section-icon { color: #a78bfa; }
 .nc-section.ecosystem .nc-section-icon { color: #22c55e; }
 
 .nc-section-title-group h2 {
@@ -836,120 +832,6 @@
     box-shadow: 0 0 0 2px rgba(124, 240, 255, 0.15);
 }
 
-/* ── OpenClaw Ops ─────────────────────────────────────────────── */
-
-.nc-openclaw-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 16px 18px;
-    margin-bottom: 16px;
-    border-radius: 12px;
-    background: rgba(167, 139, 250, 0.08);
-    border: 1px solid rgba(167, 139, 250, 0.2);
-}
-
-.nc-openclaw-status {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-}
-
-.nc-openclaw-status-copy {
-    min-width: 0;
-}
-
-.nc-openclaw-status-label {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: var(--text-bright);
-}
-
-.nc-openclaw-status-detail {
-    font-size: 0.8rem;
-    color: var(--muted);
-    word-break: break-word;
-}
-
-.nc-openclaw-badges {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 8px;
-}
-
-.nc-openclaw-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: var(--muted);
-    font-size: 0.88rem;
-}
-
-.nc-openclaw-badge strong {
-    color: #d8ccff;
-    font-weight: 700;
-}
-
-.nc-openclaw-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
-}
-
-.nc-openclaw-stat-label {
-    font-size: 0.88rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.nc-openclaw-stat-value {
-    font-size: 1.6rem;
-    font-weight: 700;
-    color: var(--text-bright);
-    margin-top: 4px;
-}
-
-.nc-openclaw-note {
-    padding: 16px 18px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.nc-openclaw-note-title {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: var(--text-bright);
-    margin-bottom: 6px;
-}
-
-.nc-openclaw-note p {
-    margin: 0;
-    color: var(--muted);
-    line-height: 1.6;
-}
-
-.nc-openclaw-actions {
-    margin-top: 14px;
-}
-
-.nc-openclaw-link {
-    text-decoration: none;
-}
-
-.nc-hermes-banner {
-    background: rgba(56, 189, 248, 0.08);
-    border-color: rgba(56, 189, 248, 0.2);
-}
-
 /* ── Ecosystem Map ────────────────────────────────────────────── */
 
 .nc-ecosystem-summary {
@@ -1483,15 +1365,6 @@
 
     .nc-host-card-status {
         margin-left: 0;
-    }
-
-    .nc-openclaw-banner {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .nc-openclaw-badges {
-        justify-content: flex-start;
     }
 
     .nc-ecosystem-grid,

@@ -83,22 +83,18 @@ describe('codexUsageService', () => {
 
   it('accepts only the AgentX-named usage token header', () => {
     const previousUsageToken = process.env.AGENTX_CODEX_USAGE_TOKEN;
-    const previousGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     const requestWith = (headers) => ({
       get: (name) => headers[String(name).toLowerCase()],
     });
 
     try {
       process.env.AGENTX_CODEX_USAGE_TOKEN = 'usage-secret';
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
 
       expect(tokenAllowed(requestWith({ 'x-agentx-codex-usage-token': 'usage-secret' }))).toBe(true);
       expect(tokenAllowed(requestWith({ 'x-legacy-usage-token': 'usage-secret' }))).toBe(false);
     } finally {
       if (previousUsageToken === undefined) delete process.env.AGENTX_CODEX_USAGE_TOKEN;
       else process.env.AGENTX_CODEX_USAGE_TOKEN = previousUsageToken;
-      if (previousGatewayToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      else process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayToken;
     }
   });
 });

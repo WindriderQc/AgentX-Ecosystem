@@ -573,7 +573,7 @@ export function buildRoutingInfo(serverData) {
   const usage = stats.usage || {};
   const perf = stats.performance || {};
 
-  // Derive a short host name from the URL (e.g. "192.0.2.66")
+  // Derive a short host name from the explicitly configured URL.
   let hostName = null;
   if (host) {
     try { hostName = new URL(host).hostname; } catch { hostName = host; }

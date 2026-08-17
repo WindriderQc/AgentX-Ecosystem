@@ -33,7 +33,7 @@ describe('Alert Model', () => {
         title: 'Test Alert',
         message: 'This is a test alert',
         fingerprint: 'test_fingerprint_123',
-        channels: ['dataapi_log']
+        channels: ['local_log']
       };
 
       const alert = new Alert(alertData);
@@ -258,7 +258,7 @@ describe('Alert Model', () => {
         title: 'Delivery Test Alert',
         message: 'Testing delivery tracking',
         fingerprint: 'delivery_fp',
-        channels: ['email', 'slack', 'dataapi_log'],
+        channels: ['email', 'slack', 'local_log'],
         delivery: {
           email: {
             sent: true,

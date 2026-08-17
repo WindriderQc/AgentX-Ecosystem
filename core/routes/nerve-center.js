@@ -30,7 +30,6 @@ const { modelsMatch } = require('../src/helpers/modelNameNormalization');
 const alertService = require('../src/services/alertService');
 const { getObservedFailoverStatus } = require('../src/services/failoverStatusService');
 const { calculateMessageCost } = require('../src/services/costCalculator');
-const { buildEcosystemSnapshot } = require('../src/services/ecosystemSnapshotService');
 const InferenceLog = require('../models/InferenceLog');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 
@@ -255,25 +254,6 @@ router.get('/routing/config', async (_req, res) => {
     res.json({ status: 'success', data });
   } catch (err) {
     logger.error('[NerveCenter] routing config fetch failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-// ========================================
-// GET /ecosystem — sanitized cross-runtime snapshot
-// ========================================
-
-router.get('/ecosystem', async (req, res) => {
-  try {
-    const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
-    const data = await buildEcosystemSnapshot({
-      coreBaseUrl: req.query.coreBaseUrl || process.env.CORE_PUBLIC_URL || requestBaseUrl,
-      ragBaseUrl: process.env.RAG_SERVICE_URL || process.env.RAG_PUBLIC_URL,
-      hermesBaseUrl: process.env.HERMES_DASHBOARD_URL || process.env.HERMES_PUBLIC_URL
-    });
-    res.json({ status: 'success', data });
-  } catch (err) {
-    logger.error('[NerveCenter] ecosystem snapshot failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });
   }
 });
@@ -579,46 +559,23 @@ router.get('/inference/heatmap', async (req, res) => {
 
 router.get('/inference/gpu-status', async (req, res) => {
   try {
-    const Host = require('../models/Host');
-    const hosts = await Host.find({ status: { $ne: 'offline' } })
-      .select('hostId hostname ip gpus ollamaUrl ollamaVram ollamaHostKey')
-      .lean();
-
-    const data = hosts.map(h => {
-      // Report ALL cards, not just gpus[0]. A multi-GPU host (e.g. Host Gamma's
-      // dual 3090s) was previously undercounted to a single card's VRAM/util.
-      const gpus = (h.gpus || []).map(g => ({
-        index: g.index ?? 0,
-        name: g.name || '',
-        temperature: g.temperature ?? null,
-        utilization: g.utilization ?? null,
-        vramTotalMiB: g.vramTotal || 0,
-        vramUsedMiB: g.vramUsed || 0,
-      }));
-      const summedTotal = gpus.reduce((s, g) => s + g.vramTotalMiB, 0);
-      const summedUsed = gpus.reduce((s, g) => s + g.vramUsedMiB, 0);
-      const ollamaVram = h.ollamaVram || {};
-      // Prefer Ollama's own VRAM accounting; else sum across all cards.
-      const vramTotalMiB = ollamaVram.totalMiB || summedTotal || 0;
-      const vramUsedMiB = ollamaVram.usedMiB || summedUsed || 0;
-      const first = gpus[0] || {};
-
-      return {
-        hostId: h.hostId,
-        hostname: h.hostname,
-        ip: h.ip,
-        ollamaHostKey: h.ollamaHostKey || '',
-        // Back-compat scalar fields reflect the first card…
-        gpuName: first.name || '',
-        temperature: first.temperature ?? null,
-        utilization: first.utilization ?? null,
-        // …and these expose the full multi-GPU picture.
-        gpuCount: gpus.length,
-        gpus,
-        vramTotalMiB,
-        vramUsedMiB,
-      };
-    });
+    const { getConfiguredHosts } = require('../src/helpers/ollamaHostConfig');
+    const ollamaVramService = require('../src/services/ollamaVramService');
+    const rows = await ollamaVramService.getVramForHosts(getConfiguredHosts());
+    const data = rows.map((host) => ({
+      hostId: host.id,
+      hostname: host.name || host.id,
+      ip: '',
+      ollamaHostKey: host.id,
+      gpuName: '',
+      temperature: null,
+      utilization: null,
+      gpuCount: 0,
+      gpus: [],
+      vramTotalMiB: host.memoryTotalMiBTotal || 0,
+      vramUsedMiB: host.memoryUsedMiBTotal || 0,
+      source: host._source || 'none'
+    }));
 
     res.json({ status: 'success', data });
   } catch (err) {
@@ -712,8 +669,6 @@ router.get('/rag/documents', async (req, res) => {
 });
 
 // Sub-router: Nestor Fastlane / two-level routing config summary
-router.use('/fastlane', require('./nerve-center-fastlane'));
-
 // Sub-router: host preferences (pin management, benchmark claims) — extracted in 0193
 router.use('/', require('./nerve-center-host-preferences'));
 

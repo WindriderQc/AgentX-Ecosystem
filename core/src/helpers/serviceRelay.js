@@ -3,15 +3,11 @@
 /**
  * Service-edge relay primitives — task 0520.
  *
- * Core proxies four services (`/api/data/*`, `/api/benchmark-proxy/*`,
- * `/api/hermes-openai/*`, `/api/openclaw-ollama/*`). Each grew its own header
- * handling, and they disagree in ways that matter:
+ * Shared relay primitives for Core's service proxies. They keep correlation
+ * headers, cancellation, and response streaming consistent at service edges.
  *
- *   - `data-proxy` sends only Content-Type, so correlation ids die at the edge
- *     and a request cannot be traced across services.
- *   - `hermes-openai-proxy` forwards the caller's `Authorization` verbatim to a
- *     local Ollama host that has no use for it.
- *   - Neither aborts the upstream request when the client disconnects, so a
+ *   - A relay must not forward unrelated caller credentials.
+ *   - It must abort the upstream request when the client disconnects, so a
  *     cancelled SSE stream leaves a generation running on a GPU.
  *
  * This module is the one shared answer. It is pure except for stream plumbing,

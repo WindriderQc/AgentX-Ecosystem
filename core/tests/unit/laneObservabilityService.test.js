@@ -20,7 +20,7 @@ const RULES = [
   enabled: true,
   severity: 'warning',
   conditions: { all: [{ fact: 'metric', operator: 'equal', value: metric }] },
-  channels: ['dataapi_log'],
+  channels: ['local_log'],
   title: `${id} — {{model}} on {{host}}`,
   message: '{{failureKind}} {{failureCode}} {{remediation}}',
 }));
@@ -96,7 +96,7 @@ describe('laneObservabilityService', () => {
     const rules = defaults.filter((rule) => laneObservability.RULE_IDS.includes(rule.id));
     expect(rules).toHaveLength(laneObservability.RULE_IDS.length);
     for (const rule of rules) {
-      expect(rule.channels).toEqual(expect.arrayContaining(['dataapi_log', 'telegram']));
+      expect(rule.channels).toEqual(expect.arrayContaining(['local_log', 'telegram']));
       expect(rule.renotifyMs).toBeGreaterThan(0);
       expect(rule.message).toContain('{{remediation}}');
     }
@@ -245,7 +245,7 @@ describe('laneObservabilityService', () => {
       enabled: true,
       severity: 'warning',
       conditions: { all: [{ fact: 'metric', operator: 'equal', value: 'lane_latency_drift' }] },
-      channels: ['dataapi_log'],
+      channels: ['local_log'],
       builtIn: true,
     });
     await InferenceLog.create({

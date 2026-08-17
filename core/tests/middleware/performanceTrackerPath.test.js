@@ -10,8 +10,8 @@ describe('performance tracker path capture', () => {
     test('collapses ids so by_endpoint stays bounded', () => {
       expect(tracker.normalizePath('/api/performance/baselines/6a3b6a182f52dd4a482498fe'))
         .toBe('/api/performance/baselines/:id');
-      expect(tracker.normalizePath('/api/host-monitor/12345/tasks'))
-        .toBe('/api/host-monitor/:id/tasks');
+      expect(tracker.normalizePath('/api/widgets/12345/events'))
+        .toBe('/api/widgets/:id/events');
       expect(tracker.normalizePath('/api/x/3f1a2b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b'))
         .toBe('/api/x/:id');
     });
@@ -19,15 +19,15 @@ describe('performance tracker path capture', () => {
     test('leaves real route segments alone', () => {
       expect(tracker.normalizePath('/api/analytics/inference/summary'))
         .toBe('/api/analytics/inference/summary');
-      // A host id is a name, not an argument — it must survive.
-      expect(tracker.normalizePath('/api/host-monitor/host-beta/tasks'))
-        .toBe('/api/host-monitor/host-beta/tasks');
+      // A semantic name is not an opaque id — it must survive.
+      expect(tracker.normalizePath('/api/widgets/summary/events'))
+        .toBe('/api/widgets/summary/events');
     });
   });
 
   describe('mounted routers', () => {
     // The defect: req.path is router-relative inside a mounted router, so every
-    // router root collapsed into one "/" bucket and /api/host-monitor/report was
+    // router root collapsed into one "/" bucket and /api/widgets/report was
     // recorded as "/report".
     function appWithMountedRouter() {
       const app = express();
@@ -35,7 +35,7 @@ describe('performance tracker path capture', () => {
       inner.get('/report', (_req, res) => res.json({ ok: true }));
       inner.get('/', (_req, res) => res.json({ ok: true }));
       const api = express.Router();
-      api.use('/host-monitor', inner);
+      api.use('/widgets', inner);
       app.use(tracker.trackRequest);
       app.use('/api', api);
       return app;
@@ -45,21 +45,21 @@ describe('performance tracker path capture', () => {
 
     test('records the full path, not the router-relative one', async () => {
       const app = appWithMountedRouter();
-      await request(app).get('/api/host-monitor/report');
-      await request(app).get('/api/host-monitor/');
+      await request(app).get('/api/widgets/report');
+      await request(app).get('/api/widgets/');
 
       const paths = tracker.peekBuffer().map((r) => r.path);
-      expect(paths).toContain('/api/host-monitor/report');
-      expect(paths).toContain('/api/host-monitor/');
+      expect(paths).toContain('/api/widgets/report');
+      expect(paths).toContain('/api/widgets/');
       expect(paths).not.toContain('/report');
       expect(paths).not.toContain('/');
     });
 
     test('drops the query string', async () => {
       const app = appWithMountedRouter();
-      await request(app).get('/api/host-monitor/report?window=7d&x=1');
+      await request(app).get('/api/widgets/report?window=7d&x=1');
       const paths = tracker.peekBuffer().map((r) => r.path);
-      expect(paths).toContain('/api/host-monitor/report');
+      expect(paths).toContain('/api/widgets/report');
     });
   });
 });

@@ -7,7 +7,6 @@ const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
 const crypto = require('crypto');
 const logger = require('../../config/logger');
-const { operatorAccessAllowed } = require('./operatorAccess');
 
 function getClientKey(req) {
   // In tests, allow callers to isolate rate limit buckets deterministically.
@@ -45,19 +44,8 @@ function isNestorConsumerPath(req) {
     || requestPath.startsWith(`${NESTOR_CONSUMER_BASE_PATH}/`);
 }
 
-function isNestorMigrationNotesPath(req) {
-  const requestPath = String(req.originalUrl || '').split('?', 1)[0];
-  return req.method === 'GET' && requestPath === `${NESTOR_CONSUMER_BASE_PATH}/migration/notes`;
-}
-
-function isNestorMigrationNotesBypassAllowed(req) {
-  return isNestorMigrationNotesPath(req) && operatorAccessAllowed(req);
-}
-
 const AUTOMATION_CONTROL_PREFIXES = [
-  '/api/pipeline',
-  '/api/openclaw-ollama',
-  '/api/hermes-openai'
+  '/api/pipeline'
 ];
 
 function isAutomationControlPath(req) {
@@ -85,8 +73,6 @@ const apiLimiter = rateLimit({
   skip: (req) => (
     req.originalUrl.startsWith('/api/benchmark')
     || req.originalUrl.startsWith('/api/buddy')
-    || req.originalUrl.startsWith('/api/hosts')
-    || req.originalUrl.startsWith('/api/host-monitor')
     || req.originalUrl.startsWith('/api/nerve-center')
     || isNestorConsumerPath(req)
     || req.originalUrl.startsWith('/api/inference/generate')  // Route via inferenceCallerRouter instead
@@ -108,8 +94,8 @@ const apiLimiter = rateLimit({
 
 /**
  * Automation control-plane limiter
- * Separate high-volume bucket for Mongo pipeline lifecycle and the Hermes /
- * OpenClaw proxy paths. These are trusted LAN automation surfaces, but they
+ * Separate high-volume bucket for Mongo pipeline lifecycle and bounded
+ * automation paths. These are trusted automation surfaces, but they
  * still retain a finite ceiling and independent rate-limit telemetry.
  */
 const automationControlLimiter = rateLimit({
@@ -265,10 +251,7 @@ const buddyLimiter = rateLimit({
  * Versioned Nestor consumer limiter
  *
  * The desktop contract has a larger independent budget than the legacy Buddy
- * API and always returns the documented v1 error envelope. Exact immutable
- * notes pages are operator-gated and may require thousands of contiguous
- * chunks, so they are excluded from both this limiter and the general API
- * bucket above.
+ * API and always returns the documented v1 error envelope.
  */
 const nestorConsumerLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -277,7 +260,6 @@ const nestorConsumerLimiter = rateLimit({
   validate: { ip: false },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: isNestorMigrationNotesBypassAllowed,
   handler: (req, res) => {
     const retryAfterMs = Math.max(0, req.rateLimit.resetTime - Date.now());
     const message = 'Nestor v1 request rate limit exceeded. Please retry shortly.';
@@ -383,6 +365,4 @@ module.exports = {
   AUTOMATION_CONTROL_PREFIXES,
   isAutomationControlPath,
   isNestorConsumerPath,
-  isNestorMigrationNotesPath,
-  isNestorMigrationNotesBypassAllowed,
 };

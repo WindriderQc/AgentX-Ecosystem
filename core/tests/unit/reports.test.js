@@ -22,7 +22,6 @@ const mockFetchBenchmarkLeaderboard = jest.fn().mockResolvedValue(null);
 const mockFetchBenchmarkRecommendations = jest.fn().mockResolvedValue(null);
 const mockFetchProfilerDashboard = jest.fn().mockResolvedValue(null);
 const mockFetchRagMetrics = jest.fn().mockResolvedValue(null);
-const mockFetchDataHealth = jest.fn().mockResolvedValue(null);
 jest.mock('../../src/services/reportsServiceClient', () => ({
   getReportsServiceClient: () => ({
     fetchBenchmarkAnalyticsSummary: mockFetchBenchmarkSummary,
@@ -31,8 +30,7 @@ jest.mock('../../src/services/reportsServiceClient', () => ({
     fetchBenchmarkLeaderboard: mockFetchBenchmarkLeaderboard,
     fetchBenchmarkRecommendations: mockFetchBenchmarkRecommendations,
     fetchProfilerDashboard: mockFetchProfilerDashboard,
-    fetchRagMetrics: mockFetchRagMetrics,
-    fetchDataHealth: mockFetchDataHealth
+    fetchRagMetrics: mockFetchRagMetrics
   })
 }));
 
@@ -509,7 +507,6 @@ describe('Reports Routes', () => {
     it('happy path: all services reachable', async () => {
       mockFetchBenchmarkSummary.mockResolvedValue({ batches: 5, top_model: 'qwen3' });
       mockFetchRagStatus.mockResolvedValue({ status: 'healthy', documents: 200 });
-      mockFetchDataHealth.mockResolvedValue({ status: 'healthy' });
 
       const res = await request(app).get('/api/reports/system-status');
 
@@ -521,15 +518,13 @@ describe('Reports Routes', () => {
       expect(res.body.data.services.core.status).toBe('ok');
       expect(res.body.data.services.benchmark.status).toBe('ok');
       expect(res.body.data.services.rag.status).toBe('ok');
-      expect(res.body.data.services.data.status).toBe('ok');
 
       expect(res.body.data.summary).toContain('operational');
     });
 
-    it('degraded path: rag and data unreachable', async () => {
+    it('degraded path: rag unreachable', async () => {
       mockFetchBenchmarkSummary.mockResolvedValue({ batches: 3, top_model: 'gemma4' });
       mockFetchRagStatus.mockResolvedValue(null);
-      mockFetchDataHealth.mockResolvedValue(null);
 
       const res = await request(app).get('/api/reports/system-status');
 
@@ -539,11 +534,9 @@ describe('Reports Routes', () => {
       expect(res.body.data.services.core.status).toBe('ok');
       expect(res.body.data.services.benchmark.status).toBe('ok');
       expect(res.body.data.services.rag).toEqual({ status: 'unreachable' });
-      expect(res.body.data.services.data).toEqual({ status: 'unreachable' });
 
       expect(res.body.data.summary).toContain('unreachable');
       expect(res.body.data.summary).toContain('rag');
-      expect(res.body.data.summary).toContain('data');
     });
   });
 });

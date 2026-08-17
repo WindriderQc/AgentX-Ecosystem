@@ -15,7 +15,7 @@
     applied: 'Applied', apply_failed: 'Apply failed', applying: 'Applying',
     shared_fact: 'Shared memory', artifact: 'Knowledge artifact', runtime_local: 'Runtime-local proposal',
     skill_draft: 'Skill draft', pipeline_task: 'Follow-up task', git_change: 'Source change', ignore: 'No action',
-    'claude-code': 'Claude Code', codex: 'Codex', openclaw: 'OpenClaw', hermes: 'Hermes',
+    agentx: 'AgentX', 'claude-code': 'Claude Code', codex: 'Codex', external: 'External',
   };
   const trustHelp = {
     explicit_memory_request: 'You explicitly asked an agent to remember this.',
@@ -184,7 +184,7 @@
       text = 'A partial host submission is open. The completed dream below remains the best current summary.';
     } else if (latest.quiet) {
       tone = 'quiet'; icon = 'fa-moon'; title = 'Quiet night—nothing trustworthy new';
-      text = 'Noise was filtered locally, no proposal was needed, and the Hermes reviewer was not called.';
+      text = 'Noise was filtered locally, no proposal was needed, and the review model was not called.';
     } else if (latest.candidates) {
       title = `${latest.candidates} proposal${latest.candidates === 1 ? '' : 's'} processed safely`;
       text = 'The latest completed dream is fully reflected in the review history below.';
@@ -196,7 +196,7 @@
     $('mrPulseFacts').innerHTML = [
       `<span><i class="fas fa-clock"></i> ${esc(relativeDate(latest.completedAt || latest.createdAt))}</span>`,
       `<span><i class="fas fa-filter"></i> ${totals.filteredObservations} filtered</span>`,
-      `<span><i class="fas fa-leaf"></i> ${totals.modelSkips} Hermes review call${totals.modelSkips === 1 ? '' : 's'} avoided</span>`,
+      `<span><i class="fas fa-leaf"></i> ${totals.modelSkips} review-model call${totals.modelSkips === 1 ? '' : 's'} avoided</span>`,
       health.advisories ? `<span title="Non-blocking schema or identity drift"><i class="fas fa-circle-info"></i> ${health.advisories} ${health.advisories === 1 ? 'advisory' : 'advisories'}</span>` : '<span><i class="fas fa-shield"></i> No semantic automation</span>',
     ].join('');
   }
@@ -218,7 +218,7 @@
     $('mrInsightsState').hidden = true;
     $('mrInsightsGrid').hidden = false;
     $('mrRuntimeGrid').innerHTML = insight.runtimes.map((runtime) => `<div class="mr-runtime-tile mr-runtime-${esc(runtime.health)}">
-      <div><i class="fas ${runtime.health === 'attention' ? 'fa-triangle-exclamation' : runtime.health === 'not_seen' ? 'fa-circle-minus' : 'fa-circle-check'}"></i><strong>${esc(runtime.runtime === 'hermes' ? 'Hermes collector' : label(runtime.runtime))}</strong></div>
+      <div><i class="fas ${runtime.health === 'attention' ? 'fa-triangle-exclamation' : runtime.health === 'not_seen' ? 'fa-circle-minus' : 'fa-circle-check'}"></i><strong>${esc(label(runtime.runtime))}</strong></div>
       <span>${runtime.eligible} ${runtime.eligible === 1 ? 'signal' : 'signals'} · ${runtime.filtered} filtered</span>
       <small>${runtime.lastSeen ? `Seen ${esc(relativeDate(runtime.lastSeen))}` : 'No recent contribution'}${runtime.currentAdvisories ? ` · ${runtime.currentAdvisories} ${runtime.currentAdvisories === 1 ? 'advisory' : 'advisories'}` : ''}</small>
     </div>`).join('');
@@ -227,7 +227,7 @@
     $('mrQualityGrid').innerHTML = [
       metric(filterRate, 'Noise filtered', `${insight.totals.filteredObservations} items stopped before synthesis`),
       metric(precision, 'Approval precision', insight.totals.reviewed ? `${insight.totals.reviewed} decisions measured` : 'Starts after your first decisions'),
-      metric(insight.totals.modelSkips, 'Hermes review calls saved', 'Empty evidence windows stay deterministic'),
+      metric(insight.totals.modelSkips, 'Review-model calls saved', 'Empty evidence windows stay deterministic'),
       metric(insight.quality.crossRuntime, 'Cross-agent consensus', 'Candidates confirmed by multiple runtimes'),
       metric(insight.quality.conflicts, 'Conflicts surfaced', 'Never resolved silently'),
       metric(insight.quality.riskFlags, 'Risk flags', 'Privacy, governance, staleness, or injection'),
@@ -352,15 +352,15 @@
     const eligible = collectors.reduce((sum, item) => sum + (item.eligibleObservations || 0), 0);
     const filtered = collectors.reduce((sum, item) => sum + (item.rejectedObservations || 0), 0);
     if (['collecting', 'synthesizing'].includes(run.status)) {
-      const missing = run.reconciliation?.missingRuntimes || ['claude-code', 'codex', 'openclaw', 'hermes'].filter((runtime) => !collectors.some((item) => item.runtime === runtime));
+      const missing = run.reconciliation?.missingRuntimes || ['agentx', 'claude-code', 'codex', 'external'].filter((runtime) => !collectors.some((item) => item.runtime === runtime));
       if (run.reconciliation?.overdue) {
         return `<i class="fas fa-clock-rotate-left"></i><div><strong>Reconciliation handoff overdue</strong><span>Accepted evidence is preserved safely${missing.length ? ` while waiting for ${missing.map(label).join(' and ')}` : ''}. The next reconciliation run will recover this automatically; no memory change can occur meanwhile.</span></div>`;
       }
       const reflecting = run.status === 'synthesizing';
-      return `<i class="fas ${reflecting ? 'fa-wand-magic-sparkles' : 'fa-satellite-dish'}"></i><div><strong>${reflecting ? 'Hermes review in progress' : 'Collection in progress'}</strong><span>${reflecting ? 'Sanitized evidence is being turned into bounded proposals.' : missing.length ? `Waiting for ${missing.map(label).join(' and ')}.` : 'All contributors have checked in; finalization is next.'} The most recent completed run remains selected by default.</span></div>`;
+      return `<i class="fas ${reflecting ? 'fa-wand-magic-sparkles' : 'fa-satellite-dish'}"></i><div><strong>${reflecting ? 'Review in progress' : 'Collection in progress'}</strong><span>${reflecting ? 'Sanitized evidence is being turned into bounded proposals.' : missing.length ? `Waiting for ${missing.map(label).join(' and ')}.` : 'All contributors have checked in; finalization is next.'} The most recent completed run remains selected by default.</span></div>`;
     }
     if (run.status === 'failed') return `<i class="fas fa-triangle-exclamation"></i><div><strong>This dream needs attention</strong><span>Accepted observations are preserved and the failure is retryable. No apply path is available.</span></div>`;
-    if (!(run.candidates || []).length) return `<i class="fas fa-moon"></i><div><strong>Quiet, healthy reconciliation</strong><span>${filtered} noisy or ineligible item${filtered === 1 ? '' : 's'} filtered; ${eligible ? `${eligible} eligible observation${eligible === 1 ? '' : 's'} produced no durable proposal.` : 'the Hermes reviewer was not needed.'}</span></div>`;
+    if (!(run.candidates || []).length) return `<i class="fas fa-moon"></i><div><strong>Quiet, healthy reconciliation</strong><span>${filtered} noisy or ineligible item${filtered === 1 ? '' : 's'} filtered; ${eligible ? `${eligible} eligible observation${eligible === 1 ? '' : 's'} produced no durable proposal.` : 'the review model was not needed.'}</span></div>`;
     return `<i class="fas fa-sparkles"></i><div><strong>${run.candidates.length} durable proposal${run.candidates.length === 1 ? '' : 's'} found</strong><span>Review each candidate below. Nothing changes until individual approval and apply.</span></div>`;
   }
 
@@ -375,7 +375,7 @@
       `<span class="mr-chip">${run.mode === 'apply' ? 'Human-authorized apply' : 'Proposal-only run'}</span>`,
       `<span title="${esc(shortDate(run.window?.from))} → ${esc(shortDate(run.window?.to))}"><i class="fas fa-calendar"></i> ${esc(evidenceWindow(run.window))}</span>`,
       `<span class="mr-run-id" title="Technical run id"><i class="fas fa-fingerprint"></i> ${esc(run.runId)}</span>`,
-      `<span><i class="fas fa-microchip"></i> ${run.summary?.modelCalled ? `Hermes reviewer · ${esc(model.model || 'model recorded')}` : run.status === 'synthesizing' ? 'Hermes reviewer reflecting' : run.status === 'collecting' ? 'Hermes reviewer pending' : 'Hermes reviewer not called'}</span>`,
+      `<span><i class="fas fa-microchip"></i> ${run.summary?.modelCalled ? `Review model · ${esc(model.model || 'model recorded')}` : run.status === 'synthesizing' ? 'Review model reflecting' : run.status === 'collecting' ? 'Review model pending' : 'Review model not called'}</span>`,
       run.dedupContext?.degraded ? '<span class="mr-chip mr-warn">Duplicate search degraded</span>' : '',
       run.failure?.stage ? `<span class="mr-chip mr-warn">Failed at ${esc(label(run.failure.stage))}</span>` : '',
       state.applyEnabled && run.mode !== 'apply' && hasApproved ? '<button type="button" class="mr-btn mr-btn-apply" id="mrAuthorizeApply"><i class="fas fa-key"></i> Authorize reviewed writes</button>' : '',
@@ -392,7 +392,7 @@
     const sources = collector.sourceFilesSeen || 0;
     return `<details class="mr-collector ${errors ? 'mr-collector-error' : ''}" ${errors ? 'open' : ''}><summary>
       <span class="mr-runtime-icon"><i class="fas ${errors ? 'fa-triangle-exclamation' : 'fa-circle-check'}"></i></span>
-      <strong>${esc(collector.runtime === 'hermes' ? 'Hermes collector' : label(collector.runtime))}</strong><span>${esc(collector.host)}${collector.agentOrProfile ? ` · ${esc(collector.agentOrProfile)}` : ''}</span>
+      <strong>${esc(label(collector.runtime))}</strong><span>${esc(collector.host)}${collector.agentOrProfile ? ` · ${esc(collector.agentOrProfile)}` : ''}</span>
       <span class="mr-collector-counts"><b>${eligible}</b> signal${eligible === 1 ? '' : 's'} · ${collector.rejectedObservations || 0} filtered${advisories ? ` · ${advisories} ${advisories === 1 ? 'advisory' : 'advisories'}` : ''}</span>
     </summary><div class="mr-collector-detail">${sources} source${sources === 1 ? '' : 's'} · ${collector.sourceEventsSeen || 0} new events
       ${(collector.errors || []).map((value) => `<p class="mr-warn-text"><b>Error:</b> ${esc(value)}</p>`).join('')}
@@ -432,9 +432,9 @@
     if (!all.length) {
       message.hidden = false;
       message.innerHTML = ['collecting', 'synthesizing'].includes(state.run?.status)
-        ? '<div class="mr-quiet-state mr-waiting-state"><i class="fas fa-hourglass-half"></i><strong>Waiting for reconciliation</strong><span>No candidate exists yet. Accepted evidence remains inert until collection and the Hermes reviewer finish.</span></div>'
+        ? '<div class="mr-quiet-state mr-waiting-state"><i class="fas fa-hourglass-half"></i><strong>Waiting for reconciliation</strong><span>No candidate exists yet. Accepted evidence remains inert until collection and bounded review finish.</span></div>'
         : state.run?.summary?.noEligibleObservations
-        ? '<div class="mr-quiet-state"><i class="fas fa-moon"></i><strong>Nothing new—and that is healthy.</strong><span>No trustworthy durable observation reached synthesis, so the Hermes reviewer was not called. The healthy Hermes collector row above only confirms that its local source was checked.</span></div>'
+        ? '<div class="mr-quiet-state"><i class="fas fa-moon"></i><strong>Nothing new—and that is healthy.</strong><span>No trustworthy durable observation reached synthesis, so the review model was not called.</span></div>'
         : '<div class="mr-quiet-state"><i class="fas fa-circle-check"></i><strong>No candidate was needed.</strong><span>This run remains part of the audit history.</span></div>';
       $('mrCandidateList').innerHTML = '';
       return;

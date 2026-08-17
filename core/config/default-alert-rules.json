@@ -10,7 +10,7 @@
             { "fact": "metric", "operator": "equal", "value": "latency" },
             { "fact": "value", "operator": "greaterThan", "value": 10000 }
         ]},
-        "channels": ["dataapi_log"]
+        "channels": ["local_log"]
     },
     {
         "id": "inference-error",
@@ -22,7 +22,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "error" }
         ]},
-        "channels": ["dataapi_log"]
+        "channels": ["local_log"]
     },
     {
         "id": "host-unreachable",
@@ -34,7 +34,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "host_unreachable" }
         ]},
-        "channels": ["dataapi_log"],
+        "channels": ["local_log"],
         "renotifyMs": 900000
     },
     {
@@ -47,7 +47,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "displacement" }
         ]},
-        "channels": ["dataapi_log"]
+        "channels": ["local_log"]
     },
     {
         "id": "capacity-vram-pressure",
@@ -60,7 +60,7 @@
             { "fact": "metric", "operator": "equal", "value": "capacity_vram_pressure" },
             { "fact": "value", "operator": "greaterThan", "value": 90 }
         ]},
-        "channels": ["dataapi_log"]
+        "channels": ["local_log"]
     },
     {
         "id": "capacity-gpu-imbalance",
@@ -73,7 +73,7 @@
             { "fact": "metric", "operator": "equal", "value": "capacity_gpu_imbalance" },
             { "fact": "value", "operator": "greaterThan", "value": 60 }
         ]},
-        "channels": ["dataapi_log"]
+        "channels": ["local_log"]
     },
     {
         "id": "capacity-underused",
@@ -85,7 +85,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "capacity_underused" }
         ]},
-        "channels": ["dataapi_log"]
+        "channels": ["local_log"]
     },
     {
         "id": "capacity-host-critical",
@@ -97,7 +97,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "capacity_host_critical" }
         ]},
-        "channels": ["dataapi_log"]
+        "channels": ["local_log"]
     },
     {
         "id": "lane-context-mismatch",
@@ -109,7 +109,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "lane_context_mismatch" }
         ]},
-        "channels": ["dataapi_log", "telegram"],
+        "channels": ["local_log", "telegram"],
         "renotifyMs": 3600000,
         "description": "Observe-only warning when runtime num_ctx exceeds the validated artifact-host context."
     },
@@ -123,7 +123,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "lane_output_contract_failure" }
         ]},
-        "channels": ["dataapi_log", "telegram"],
+        "channels": ["local_log", "telegram"],
         "renotifyMs": 3600000,
         "description": "Evidence-backed truncation, incomplete response, or no-visible-final outcome."
     },
@@ -137,7 +137,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "benchmark_claim_release_failure" }
         ]},
-        "channels": ["dataapi_log", "telegram"],
+        "channels": ["local_log", "telegram"],
         "renotifyMs": 900000,
         "description": "Observe-only signal for a rejected or failed benchmark-claim release."
     },
@@ -151,7 +151,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "pin_restore_failure" }
         ]},
-        "channels": ["dataapi_log", "telegram"],
+        "channels": ["local_log", "telegram"],
         "renotifyMs": 900000,
         "description": "Observe-only signal when the existing restore path cannot verify pinned artifact/context residency."
     },
@@ -165,7 +165,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "lane_latency_drift" }
         ]},
-        "channels": ["dataapi_log", "telegram"],
+        "channels": ["local_log", "telegram"],
         "renotifyMs": 3600000,
         "description": "Recent one-hour median versus the preceding 24-hour baseline, sample-gated and observe-only."
     }

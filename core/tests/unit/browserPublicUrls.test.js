@@ -9,14 +9,10 @@ describe('browser public URL authority', () => {
     expect(getPublicUrls({
       CORE_PUBLIC_URL: 'https://core.example/',
       BENCHMARK_PUBLIC_URL: 'http://bench.example:8444///',
-      OPENCLAW_GATEWAY_URL: 'http://claw.example:18789/',
     })).toEqual({
       core: 'https://core.example',
       benchmark: 'http://bench.example:8444',
       rag: 'http://localhost:3082',
-      data: 'http://localhost:3083',
-      hermes: '',
-      openclawControl: 'http://claw.example:18789',
     });
   });
 
@@ -39,7 +35,6 @@ describe('browser public URL authority', () => {
           core: 'https://192.0.2.99/',
           benchmark: 'http://bench.lan:4081/',
           rag: 'http://rag.lan:4082/',
-          openclawControl: 'http://192.0.2.66:18789/',
         },
       }),
     });
@@ -53,7 +48,6 @@ describe('browser public URL authority', () => {
       core: 'https://192.0.2.99',
       benchmark: 'http://bench.lan:4081',
       rag: 'http://rag.lan:4082',
-      openclawControl: 'http://192.0.2.66:18789',
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       'http://core:3080/api/config',

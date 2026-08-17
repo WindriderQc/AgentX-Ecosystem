@@ -1,4 +1,4 @@
-// Phase 6f — /api/buddy/chat route tests (post-Hermes-delegation rewrite).
+// Phase 6f — /api/buddy/chat product-boundary tests.
 const request = require('supertest');
 
 jest.mock('../../src/services/memoryAdapters', () => ({
@@ -155,11 +155,11 @@ describe('POST /api/buddy/chat (Phase 6f)', () => {
     expect(res.body.source).toBeUndefined();
   });
 
-  it('reports hermes personality and ref when resolver returns hermes', async () => {
+  it('reports the Agent X personality and ref', async () => {
     buddyPersonality.resolvePersonality.mockResolvedValue({
-      soul: 'I am hermes-shaped.',
-      source: 'hermes',
-      ref: '/home/test/.hermes/SOUL.md',
+      soul: 'I am Agent X shaped.',
+      source: 'agentx',
+      ref: 'agentx:buddy.soul',
     });
 
     global.fetch = jest.fn().mockResolvedValue({
@@ -169,11 +169,11 @@ describe('POST /api/buddy/chat (Phase 6f)', () => {
 
     const res = await request(app)
       .post('/api/buddy/chat')
-      .set('x-test-client', clientId + '-hermes-pers')
+      .set('x-test-client', clientId + '-agentx-pers')
       .send({ messages: [{ role: 'user', content: 'who are you' }] });
 
     expect(res.status).toBe(200);
-    expect(res.body.personality).toEqual({ source: 'hermes', ref: '/home/test/.hermes/SOUL.md' });
+    expect(res.body.personality).toEqual({ source: 'agentx', ref: 'agentx:buddy.soul' });
   });
 
   it('honors brain.perTask.chat for per-task model resolution', async () => {
@@ -324,14 +324,14 @@ describe('POST /api/buddy/chat (Phase 6f)', () => {
       seed: 'global',
       mood: 'neutral',
       stats: {},
-      memory: { sources: ['openclaw'], k: 3 },
+      memory: { sources: ['agentx'], k: 3 },
       model: { host: '', model: '' },
       personality: { source: 'standalone', agentId: '' },
       soul: '',
     });
     memoryAdapters.searchMemory.mockResolvedValue([
-      { source: 'openclaw', text: 'Host Beta wedge fingerprint and recovery procedure', score: 5, ref: 'openclaw:notes.md' },
-      { source: 'openclaw', text: 'Pinned models per host', score: 3, ref: 'openclaw:cluster.md' },
+      { source: 'agentx', text: 'Benchmark recovery procedure', score: 5, ref: 'alert:1' },
+      { source: 'agentx', text: 'Pinned models per host', score: 3, ref: 'inferencelog:2' },
     ]);
 
     let captured = null;
@@ -346,9 +346,9 @@ describe('POST /api/buddy/chat (Phase 6f)', () => {
       .send({ messages: [{ role: 'user', content: 'tell me about host-beta' }] });
 
     expect(res.status).toBe(200);
-    expect(res.body.memory).toEqual({ sources: ['openclaw'], chunks: 2 });
+    expect(res.body.memory).toEqual({ sources: ['agentx'], chunks: 2 });
     expect(memoryAdapters.searchMemory).toHaveBeenCalledWith(expect.objectContaining({
-      sources: ['openclaw'],
+      sources: ['agentx'],
       query: 'tell me about host-beta',
       k: 3,
     }));
@@ -356,7 +356,7 @@ describe('POST /api/buddy/chat (Phase 6f)', () => {
     const sysMsg = captured.messages[0];
     expect(sysMsg.role).toBe('system');
     expect(sysMsg.content).toMatch(/Relevant memory/);
-    expect(sysMsg.content).toMatch(/Host Beta wedge/);
+    expect(sysMsg.content).toMatch(/Benchmark recovery/);
   });
 
   it('returns warning metadata when configured memory source is unavailable', async () => {
@@ -364,7 +364,7 @@ describe('POST /api/buddy/chat (Phase 6f)', () => {
       seed: 'global',
       mood: 'neutral',
       stats: {},
-      memory: { sources: ['hermes'], k: 5 },
+      memory: { sources: ['agentx'], k: 5 },
       model: { host: '', model: '' },
       personality: { source: 'standalone', agentId: '' },
       soul: '',
@@ -372,10 +372,8 @@ describe('POST /api/buddy/chat (Phase 6f)', () => {
     });
     memoryAdapters.searchMemory.mockResolvedValue([]);
     memoryAdapters.statusForSource.mockResolvedValue({
-      source: 'hermes',
+      source: 'agentx',
       available: false,
-      home: '/data/hermes',
-      dbPath: '/data/hermes/state.db',
       reason: 'ENOENT',
     });
     global.fetch = jest.fn().mockResolvedValue({
@@ -390,48 +388,10 @@ describe('POST /api/buddy/chat (Phase 6f)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'memory_sources_unavailable', sources: ['hermes'] }),
+      expect.objectContaining({ code: 'memory_sources_unavailable', sources: ['agentx'] }),
     ]));
-    expect(res.body.sourceHealth.memory.hermes).toEqual(expect.objectContaining({
+    expect(res.body.sourceHealth.memory.agentx).toEqual(expect.objectContaining({
       available: false,
-      dbPath: '/data/hermes/state.db',
     }));
-  });
-
-  it('reports stale agentId as ignored when Hermes is configured', async () => {
-    Buddy.findOne.mockResolvedValue({
-      seed: 'global',
-      mood: 'neutral',
-      stats: {},
-      memory: { sources: [], k: 5 },
-      model: { host: '', model: '' },
-      personality: { source: 'hermes', agentId: 'clawdx-coder' },
-      soul: '',
-      facts: [],
-    });
-    buddyPersonality.resolvePersonality.mockResolvedValue({
-      soul: 'Hermes soul',
-      source: 'hermes',
-      ref: 'http://hermes/api/profiles/default/soul',
-      profile: 'default',
-    });
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ message: { content: 'ok.' } }),
-    });
-
-    const res = await request(app)
-      .post('/api/buddy/chat')
-      .set('x-test-client', clientId + '-ignored-agentid')
-      .send({ messages: [{ role: 'user', content: 'hi' }] });
-
-    expect(res.status).toBe(200);
-    expect(res.body.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        code: 'personality_agent_id_ignored',
-        source: 'hermes',
-        agentId: 'clawdx-coder',
-      }),
-    ]));
   });
 });

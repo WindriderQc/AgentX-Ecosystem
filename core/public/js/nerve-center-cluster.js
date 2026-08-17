@@ -13,15 +13,6 @@
         }
     }
 
-    function isLinkLocalIp(ip) {
-        return /^169\.254\.\d{1,3}\.\d{1,3}$/.test(String(ip || '').trim());
-    }
-
-    function resolveDisplayIp(reportedIp, configuredIp) {
-        if (reportedIp && !isLinkLocalIp(reportedIp)) return reportedIp;
-        return configuredIp || reportedIp || '';
-    }
-
     // One-line GPU summary for the host card header. Multi-GPU hosts get a
     // ×count suffix when the cards are identical (e.g. "NVIDIA GeForce RTX
     // 3090 ×2") so the name isn't silently truncated to gpus[0] next to a
@@ -50,9 +41,8 @@
 
     function mergeHostData(ollama, doc, cfg, mem, pref) {
         const hostname = ollama.hostname || doc.hostname || cfg.name || '--';
-        const reportedIp = ollama.ip || doc.ip || '';
         const configuredIp = extractIpFromUrl(cfg.url || pref?.hostUrl || ollama.ollamaUrl || doc.ollamaUrl || '');
-        const ip = resolveDisplayIp(reportedIp, configuredIp);
+        const ip = configuredIp;
         const hostKey = ollama.ollamaHostKey || cfg.id || '';
 
         const ollamaStatus = ollama.ollamaStatus || mem.status || '';
@@ -79,9 +69,7 @@
             hostKey,
             hostname,
             ip,
-            reportedIp,
             configuredIp,
-            hasLinkLocalIpIssue: Boolean(reportedIp && configuredIp && reportedIp !== configuredIp && isLinkLocalIp(reportedIp)),
             status,
             gpuName,
             gpuTemp,
@@ -188,7 +176,6 @@
         if (host.lastSeen) systemRows.push(['Last Heartbeat', shared.timeAgo(host.lastSeen)]);
         if (host.lastChecked) systemRows.push(['Ollama Checked', shared.timeAgo(host.lastChecked)]);
         if (host.configuredIp) systemRows.push(['Configured IP', host.configuredIp]);
-        if (host.reportedIp && host.reportedIp !== host.configuredIp) systemRows.push(['Reported IP', host.reportedIp]);
 
         if (host.disks.length > 0) {
             const mainDisk = host.disks.find(disk => disk.mount === '/') || host.disks[0];
@@ -419,7 +406,7 @@
             }).join(' ')
             : '<span style="font-size:11px;color:var(--muted);">No models loaded</span>';
 
-        // nvidia-smi enrichment
+        // Optional runtime metadata, when provided by the configured endpoint.
         const nvidia = host.nvidia;
         const nGpu = nvidia?.gpus?.[0];
         const gpuTempValue = nGpu?.temperature ?? host.gpuTemp;
@@ -463,9 +450,6 @@
             ${svcDot}<i class="fas fa-${ollamaOk ? 'check-circle' : 'times-circle'}"></i>
             Ollama ${ollamaOk ? 'OK' : 'Down'}${host.ollamaLatency != null && ollamaOk ? ` &middot; ${host.ollamaLatency}ms` : ''}${svcUptime}
         </span>`;
-        const linkLocalBadge = host.hasLinkLocalIpIssue
-          ? `<span class="nc-host-chip warn" title="Host agent reported ${shared.escapeHtml(host.reportedIp)}, so this card is showing configured Ollama IP ${shared.escapeHtml(host.configuredIp)} instead."><i class="fas fa-network-wired"></i> Link-local reported</span>`
-          : '';
 
         return `
             <div class="nc-host-card" data-host="${shared.escapeHtml(host.hostKey)}" style="cursor:pointer;">
@@ -483,7 +467,7 @@
                         ${gpuLine ? `<span>${shared.escapeHtml(gpuLine)}</span>` : ''}
                     </div>
                     <div class="nc-host-chip-row">
-                        ${tempLine}${powerLine}${fanLine}${driverLine}${throttleBadge}${linkLocalBadge}
+                        ${tempLine}${powerLine}${fanLine}${driverLine}${throttleBadge}
                     </div>
                 </div>
                 <div class="nc-host-card-main">
@@ -804,49 +788,26 @@
         body.innerHTML = '<div class="nc-section-placeholder"><i class="fas fa-spinner fa-spin"></i> Loading cluster data...</div>';
 
         try {
-            const [ollamaJson, hostsJson, hostPrefsJson] = await Promise.all([
-                shared.fetchJson('/api/hosts/ollama-status'),
-                shared.fetchJson('/api/hosts'),
+            const [ollamaJson, hostPrefsJson] = await Promise.all([
+                shared.fetchJson('/api/ollama-hosts'),
                 shared.fetchJson('/api/nerve-center/host-preferences')
             ]);
             const hostPrefs = hostPrefsJson.data || [];
             const prefByUrl = new Map(hostPrefs.map(p => [p.hostUrl, p]));
 
             const ollamaData = ollamaJson.data || {};
-            const enrichedHosts = ollamaData.hosts || [];
-            const configuredHosts = ollamaData.configuredHosts || [];
-            const inMemory = ollamaData.inMemoryState || {};
-            const hostDocs = hostsJson.data || [];
-
-            // Match each Ollama host to its metrics doc by IP first — the IP is
-            // the host's true physical identity. Fall back to ollamaHostKey (a
-            // config-slot label) only when no IP match exists. We deliberately do
-            // NOT index hostId into the join map: hostId values ('primary',
-            // 'tertiary') can equal another host's ollamaHostKey, and with
-            // last-write-wins a stale/retired doc would clobber a live host's
-            // match — that is exactly how Host Alpha (2× RTX 3090) ended up showing
-            // a decommissioned 3080 Ti box's GPU name.
-            const hostDocByIp = {};
-            const hostDocByOllamaKey = {};
-            hostDocs.forEach(host => {
-                if (host.ip) hostDocByIp[host.ip] = host;
-                if (host.ollamaHostKey) hostDocByOllamaKey[host.ollamaHostKey] = host;
-            });
-
-            const cards = enrichedHosts.map(ollamaHost => {
-                const doc = hostDocByIp[ollamaHost.ip] || hostDocByOllamaKey[ollamaHost.ollamaHostKey] || {};
-                const cfg = configuredHosts.find(host => host.id === ollamaHost.ollamaHostKey) || {};
-                const mem = inMemory[ollamaHost.ollamaHostKey] || {};
-                const url = cfg.url || ollamaHost.ollamaUrl || '';
-                return mergeHostData(ollamaHost, doc, cfg, mem, prefByUrl.get(url));
-            });
-
-            if (cards.length === 0 && configuredHosts.length > 0) {
-                configuredHosts.forEach(cfg => {
-                    const doc = hostDocByIp[extractIpFromUrl(cfg.url)] || hostDocByOllamaKey[cfg.id] || {};
-                    cards.push(mergeHostData({}, doc, cfg, inMemory[cfg.id] || {}, prefByUrl.get(cfg.url)));
-                });
-            }
+            const configuredHosts = ollamaData.hosts || [];
+            const cards = configuredHosts.map((host) => mergeHostData({
+                hostId: host.id,
+                hostname: host.name || host.id,
+                ollamaHostKey: host.id,
+                ollamaStatus: host.available ? 'online' : 'offline',
+                ollamaUrl: host.url,
+                ollamaVersion: host.ollamaVersion || '',
+                ollamaModelCount: (host.installedModels || []).length,
+                ollamaModels: host.installedModels || host.models || [],
+                ollamaRunningModels: []
+            }, {}, host, {}, prefByUrl.get(host.url)));
 
             if (cards.length === 0) {
                 body.innerHTML = '<div class="nc-section-placeholder nc-muted"><i class="fas fa-server"></i> No cluster hosts found</div>';

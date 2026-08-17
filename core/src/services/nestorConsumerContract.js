@@ -10,8 +10,8 @@ const OPERATION_TASK_TYPES = Object.freeze({
   analyze: 'analysis',
 });
 
-const MEMORY_SOURCES = Object.freeze(['agentx', 'rag', 'hermes', 'openclaw']);
-const PERSONALITY_SOURCES = Object.freeze(['agentx', 'hermes', 'openclaw']);
+const MEMORY_SOURCES = Object.freeze(['agentx', 'rag']);
+const PERSONALITY_SOURCES = Object.freeze(['agentx']);
 
 const LIMITS = Object.freeze({
   messageCount: 50,
@@ -20,10 +20,6 @@ const LIMITS = Object.freeze({
   memoryQueryCharacters: 2000,
   memoryResultsPerSource: 20,
   personalityCharacters: 32768,
-  rawNotesCharacters: 65536,
-  migrationHistoryItems: 1000,
-  migrationNotesChunkBytes: 1048576,
-  migrationNotesMaxBytes: 268435456,
   metricsHours: 720,
   metricsRows: 10000,
 });

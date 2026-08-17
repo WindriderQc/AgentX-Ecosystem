@@ -3,7 +3,6 @@ const fetch = require('node-fetch');
 const { getRagServiceClient } = require('./ragServiceClient');
 const { createTaskInMongo } = require('./pipelineTaskService');
 const { saveMemory } = require('./nestorMemoryService');
-const { ecosystemSnapshotTool } = require('./mcpEcosystemSnapshotTool');
 const { lookupExact: lookupFrenchWord } = require('./kidxLexiconService');
 const {
   addPersonalTask,
@@ -72,17 +71,6 @@ const TOOLS = [
       word: { type: 'string', minLength: 1, maxLength: 80 },
     }, ['word']),
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-  },
-  {
-    name: 'ecosystem_snapshot',
-    title: 'AgentX Ecosystem Snapshot',
-    description: 'Return a sanitized AgentX ecosystem snapshot for routing, drift inspection, or agent-focused context. OpenClaw exposes this as agentx__ecosystem_snapshot.',
-    inputSchema: objectSchema({
-      mode: { type: 'string', enum: ['compact', 'driftOnly', 'full', 'agent'], default: 'compact' },
-      agentId: { type: 'string', minLength: 1, maxLength: 120 },
-      maxChars: { type: 'integer', minimum: 5000, maximum: 60000, default: 45000 },
-    }),
-    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   },
   {
     name: 'create_todo',
@@ -359,7 +347,6 @@ const TOOL_HANDLERS = {
   check_health: checkHealth,
   get_escalation_recommendation: getEscalationRecommendation,
   lookup_french_word: lookupFrenchWordTool,
-  ecosystem_snapshot: ecosystemSnapshotTool,
   create_todo: createTodoTool,
   save_memory: saveMemoryTool,
   add_personal_task: addPersonalTaskTool,
@@ -395,7 +382,7 @@ async function handleMcpMessage(message, deps = {}) {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
       serverInfo: SERVER_INFO,
-      instructions: 'AgentX exposes a narrow skill bus for product health, RAG, model-routing recommendations, vocabulary lookup, ecosystem snapshots, tasks, and memory.',
+      instructions: 'AgentX exposes a narrow skill bus for product health, RAG, model-routing recommendations, vocabulary lookup, tasks, and memory.',
     });
   }
   if (method === 'tools/list') {

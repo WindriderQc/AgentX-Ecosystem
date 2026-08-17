@@ -80,7 +80,7 @@ describe('validateHostUrl (task 0182)', () => {
   });
 
   it('rejects an arbitrary unknown host with allowlist guidance', () => {
-    const result = validateHostUrl('http://10.0.0.99:11434');
+    const result = validateHostUrl('http://192.0.2.77:11434');
     expect(result.valid).toBe(false);
     expect(result.host).toBeNull();
     expect(result.message).toMatch(/not in the configured allowlist/i);

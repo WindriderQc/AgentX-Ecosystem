@@ -7,21 +7,10 @@ const REMOVED_PERSONAS = new Set([
 const ARCHIVED_PERSONAS = new Set([
   'specialx_console',
   'sbqc_ops',
-  'sbqc_workflow_architect'
+  'sbqc_workflow_architect',
+  'datalake_janitor',
+  'repo_watcher'
 ]);
-
-const OPENCLAW_CANDIDATES = {
-  datalake_janitor: {
-    target: 'openclaw-assignment',
-    owner: 'leadx',
-    note: 'Data service owns file operations; OpenClaw may analyze and recommend only.'
-  },
-  repo_watcher: {
-    target: 'openclaw-assignment',
-    owner: 'overseer',
-    note: 'AgentX should expose scan/report state; OpenClaw should reason over findings.'
-  }
-};
 
 const TOOL_SURFACES = {
   repo_watcher: {
@@ -57,21 +46,6 @@ function classifyPersona(prompt) {
       archiveReason: 'Historical prompt content retained as source material only.',
       promotionTarget: null,
       routeStatus: 'archived'
-    };
-  }
-
-  if (OPENCLAW_CANDIDATES[name]) {
-    const candidate = OPENCLAW_CANDIDATES[name];
-    const surface = TOOL_SURFACES[name] || {};
-    return {
-      kind: uiType === 'chat' ? 'prompt_asset' : 'tool_surface',
-      selectable: uiType === 'chat',
-      launchable: surface.launchable === true,
-      archiveReason: null,
-      promotionTarget: candidate.target,
-      recommendedOwner: candidate.owner,
-      routeStatus: surface.routeStatus || (uiType === 'chat' ? 'not_applicable' : 'unknown'),
-      note: surface.note || candidate.note
     };
   }
 

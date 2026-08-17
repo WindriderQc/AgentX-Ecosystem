@@ -189,8 +189,8 @@ describe('planningAutomationService', () => {
       type: 'outcome',
       title: 'Schedule success',
       scheduleRefs: [
-        { source: 'openclaw', sourceId: 'oc-one', label: 'One' },
-        { source: 'openclaw', sourceId: 'oc-two', label: 'Two' }
+        { source: 'agentx', sourceId: 'schedule-one', label: 'One' },
+        { source: 'agentx', sourceId: 'schedule-two', label: 'Two' }
       ],
       progress: {
         mode: 'metric',
@@ -205,16 +205,16 @@ describe('planningAutomationService', () => {
     });
     await ClusterScheduleEntry.create([
       {
-        source: 'openclaw',
-        sourceId: 'oc-one',
+        source: 'agentx',
+        sourceId: 'schedule-one',
         name: 'One',
         taskType: 'monitoring',
         schedule: { type: 'cron', cron: '0 1 * * *' },
         metadata: { lastStatus: 'ok', consecutiveErrors: 0 }
       },
       {
-        source: 'openclaw',
-        sourceId: 'oc-two',
+        source: 'agentx',
+        sourceId: 'schedule-two',
         name: 'Two',
         taskType: 'monitoring',
         schedule: { type: 'cron', cron: '0 2 * * *' },

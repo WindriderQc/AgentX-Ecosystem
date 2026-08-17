@@ -2,8 +2,8 @@
  * Federated Cost & Consumption (task 0166)
  *
  * Returns local Ollama conversations and AgentX-routed cloud inference
- * side-by-side WITHOUT merging. OpenClaw's native Usage view remains the
- * authority for provider plans, balances, and traffic that bypasses AgentX.
+ * side-by-side WITHOUT merging. Provider-native billing remains authoritative
+ * for plans, balances, and traffic that bypasses Agent X.
  *
  * Extracted from `routes/analytics.js` in task 0188 to keep that file
  * under the 700-line cap. Mounted at `/api/analytics` alongside it.
@@ -116,7 +116,7 @@ async function aggregateProviderBucket(window, agentId) {
   return {
     source: 'agentx-cloud',
     scope: 'agentx-routed-calls',
-    authorityNote: 'OpenClaw Usage remains authoritative for native provider plans and balances.',
+    authorityNote: 'Provider-native billing remains authoritative for plans and balances.',
     window: window.key,
     from: fromDate.toISOString(),
     to: toDate.toISOString(),

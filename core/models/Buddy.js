@@ -34,7 +34,7 @@ const buddySchema = new mongoose.Schema({
   modelsUsed: [String],
   // Phase 6f — Linkage
   personality: {
-    source: { type: String, enum: ['standalone', 'agentx', 'hermes', 'openclaw'], default: 'standalone' },
+    source: { type: String, enum: ['standalone', 'agentx'], default: 'standalone' },
     agentId: { type: String, default: '' },
   },
   memory: {

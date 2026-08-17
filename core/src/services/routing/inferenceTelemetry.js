@@ -44,7 +44,7 @@ function sanitizedRouteDecision(decision) {
  * @param {'chat'|'benchmark'|'roundtable'|'automation'|'embedding'|'classification'|'unknown'} [data.caller]
  * @param {string}  [data.callerDetail] - Agent ID, task ID, cron name, etc.
  * @param {string}  [data.consumerContract] - Server-attested internal consumer contract
- * @param {string}  [data.runtime]       - agentx | openclaw | hermes | codex | claude-code | other
+ * @param {string}  [data.runtime]       - agentx | codex | claude-code | external | other
  * @param {string}  [data.correlationId]
  * @param {string}  [data.workItemId]
  * @param {number}  [data.attempt]

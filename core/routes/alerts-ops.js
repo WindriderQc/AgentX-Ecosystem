@@ -282,7 +282,7 @@ router.get('/test/config', async (req, res) => {
     if (alertService.config.email.enabled) enabledChannels.push('email');
     if (alertService.config.slack.enabled) enabledChannels.push('slack');
     if (alertService.config.webhook.enabled) enabledChannels.push('webhook');
-    if (alertService.config.dataapi.enabled) enabledChannels.push('dataapi');
+    if (alertService.config.localLog.enabled) enabledChannels.push('local_log');
 
     const config = {
       email: {
@@ -298,9 +298,8 @@ router.get('/test/config', async (req, res) => {
         enabled: alertService.config.webhook.enabled,
         urlConfigured: !!alertService.config.webhook.url
       },
-      dataapi: {
-        enabled: alertService.config.dataapi.enabled,
-        url: alertService.config.dataapi.url
+      localLog: {
+        enabled: alertService.config.localLog.enabled
       },
       testMode: alertService.testMode,
       cooldownMs: alertService.config.cooldownMs,
@@ -525,7 +524,7 @@ router.post('/rules', async (req, res) => {
     const rule = await AlertRule.create({
       ruleId, name, severity,
       conditions: conditions || { all: [] },
-      channels: channels || ['dataapi_log'],
+      channels: channels || ['local_log'],
       cooldownMs: cooldownMs || 300000,
       renotifyMs: renotifyMs || 0,
       description: description || '',

@@ -32,7 +32,7 @@ function ruleWith(renotifyMs) {
     name: 'Renotify test rule',
     enabled: true,
     severity: 'critical',
-    channels: ['dataapi_log'],
+    channels: ['local_log'],
     conditions: { all: [{ fact: 'metric', operator: 'equal', value: 'host_unreachable' }] },
     renotifyMs
   };

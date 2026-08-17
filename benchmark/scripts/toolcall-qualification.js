@@ -14,7 +14,7 @@
  * LIVE runs are a CONTROLLED CAMPAIGN and refuse to start without the gate:
  *
  *   node scripts/toolcall-qualification.js --live \
- *     --model ax/gemma4:31b-it-qat --host http://192.0.2.199:11434 \
+ *     --model ax/gemma4:31b-it-qat --host http://127.0.0.1:11434 \
  *     --confirm-campaign
  *
  * Campaign prerequisites (task 0468 constraints — enforced, then documented

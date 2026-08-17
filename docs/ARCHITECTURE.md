@@ -1,12 +1,12 @@
 # Agent X architecture
 
-Status: canonical product architecture, verified 2026-08-12.
+Status: canonical product architecture, verified 2026-08-15.
 
 ## Product topology
 
 | Component | Responsibility | Depends on |
 |---|---|---|
-| Core (`core`, internal 3080) | Inference boundary, model discovery/routing, prompts, telemetry, product UI and APIs | MongoDB; optional Ollama; Benchmark and RAG service contracts |
+| Core (`core`, internal 3080) | Inference boundary, model discovery/routing, prompts, telemetry, Dreaming, product UI and APIs | MongoDB; optional Ollama; Benchmark and RAG service contracts |
 | Benchmark (`benchmark`, internal 3081) | Runs evaluations, profiles models, scores evidence, renders comparisons | MongoDB; Core; optional Ollama |
 | RAG (`rag`, internal 3082) | Ingests bounded documents, embeds chunks, retrieves knowledge, exposes the RAG API | MongoDB; Qdrant; Core embedding proxy |
 | `shared/` | Small cross-service contracts with identical semantics | No runtime service |
@@ -29,11 +29,14 @@ routes. It also skips full-profile monitors, backups, host polling, and model
 prewarming. Empty integration variables are deliberate and must not fall back
 to a private or production address.
 
-The first extraction keeps some optional-adapter implementation inside Core
-while each family moves behind the trusted extension seam. Those modules are
-not product dependencies and are not enabled by Compose. A full-profile
-operations workspace may mount reviewed adapter modules by absolute path;
-duplicate capability ownership fails startup and the demo never loads them.
+Environment-specific automation and private adapters live outside this
+repository. They may consume bounded product APIs, but Agent X neither embeds
+their implementations nor loads external adapter modules. The repository does
+not define an operations extension framework.
+
+A private Data service may independently expose a bounded, read-only API to
+agents. Data remains outside the product boundary: it is neither a product
+service nor a skill owned or loaded by Agent X.
 
 ## Contract rules
 
@@ -54,8 +57,8 @@ duplicate capability ownership fails startup and the demo never loads them.
 ## Conversation lifecycle ownership
 
 Core owns transcript persistence and reversible conversation lifecycle. Its
-trusted-extension contract requires `userId` plus `promptName` on every read
-or mutation and provides scoped list/get, rename, archive, restore, permanent
-delete, and ownership checks. Archive is a Core state transition; extensions
-must not add competing transcript stores or write lifecycle fields directly.
-Legacy conversations without lifecycle metadata remain active.
+scoped contract requires `userId` plus `promptName` on every read or mutation
+and provides list/get, rename, archive, restore, permanent delete, and ownership
+checks. Archive is a Core state transition. External callers use bounded
+product APIs and must not add competing transcript stores or write lifecycle
+fields directly. Legacy conversations without lifecycle metadata remain active.

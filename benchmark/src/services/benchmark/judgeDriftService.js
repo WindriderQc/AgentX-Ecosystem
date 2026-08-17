@@ -9,11 +9,9 @@
  *   (a) drops by ≥ 15 percentage points from baseline, OR
  *   (b) falls below 0.5 absolute.
  *
- * Either condition triggers — quarterly-boundary evaluation.
- *
- * Emits an AppEvent (type: judge_drift_detected) to the data service when
- * a category crosses the threshold. Alerts never fire on individual reviews;
- * callers batch reviews into a window before calling computeDrift.
+ * Either condition triggers — quarterly-boundary evaluation. Callers batch
+ * reviews into a window before calling computeDrift; this service only returns
+ * product-owned drift evidence and does not write to an external Data service.
  */
 
 const logger = require('../../../config/logger');
@@ -112,11 +110,11 @@ async function gatherReviewSample(perCategory = 30, categories = CATEGORIES) {
  * Compute drift for every category. Returns structure consumable by the
  * /api/benchmark/drift endpoint and the dashboard row.
  *
- * @param {Object} options - { perCategory=30, emitEvents=false, baseline? }
+ * @param {Object} options - { perCategory=30, baseline? }
  * @returns {Object} { categories: [...], overall_status, baseline_label, ... }
  */
 async function computeDrift(options = {}) {
-    const { perCategory = 30, emitEvents = false } = options;
+    const { perCategory = 30 } = options;
 
     const baseline = options.baseline
         || (await CalibrationBaseline.getActive())
@@ -178,10 +176,6 @@ async function computeDrift(options = {}) {
         categories: rows
     };
 
-    if (emitEvents) {
-        await emitDriftEvents(rows, baseline);
-    }
-
     logger.info('Drift computed', {
         overall_status,
         triggered_count: rows.filter(r => r.triggered).length,
@@ -189,51 +183,6 @@ async function computeDrift(options = {}) {
     });
 
     return payload;
-}
-
-/**
- * Fire AppEvents for each triggered category. Best-effort — never throws.
- * Uses DATA_SERVICE_URL env var (default http://localhost:3083).
- */
-async function emitDriftEvents(rows, baseline) {
-    const triggered = rows.filter(r => r.triggered);
-    if (triggered.length === 0) return { emitted: 0 };
-
-    const url = (process.env.DATA_SERVICE_URL || 'http://localhost:3083').replace(/\/$/, '')
-        + '/api/v1/events';
-
-    let emitted = 0;
-    for (const row of triggered) {
-        const body = {
-            type: 'judge_drift_detected',
-            message: `Judge drift on ${row.category}: ρ=${row.current_rho} vs baseline=${row.baseline_rho ?? 'n/a'} (${row.reasons.join(',')})`,
-            meta: {
-                category: row.category,
-                current_rho: row.current_rho,
-                baseline_rho: row.baseline_rho,
-                drop_pp: row.drop_pp,
-                sample_size: row.sample_size,
-                reasons: row.reasons,
-                baseline_label: baseline ? baseline.label : null
-            }
-        };
-        try {
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            if (res.ok) {
-                emitted++;
-            } else {
-                logger.warn('AppEvent drift emit non-OK', { status: res.status, category: row.category });
-            }
-        } catch (err) {
-            logger.warn('AppEvent drift emit failed', { error: err.message, category: row.category });
-        }
-    }
-    logger.info('Drift events emitted', { emitted, triggered: triggered.length });
-    return { emitted };
 }
 
 /**
@@ -274,7 +223,6 @@ module.exports = {
     classifyDrift,
     gatherReviewSample,
     computeDrift,
-    emitDriftEvents,
     ratifyBaseline,
     DRIFT_THRESHOLDS
 };

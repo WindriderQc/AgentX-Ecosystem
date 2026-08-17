@@ -8,7 +8,7 @@ const fetch = require('node-fetch');
 const { getFetchOptions } = require('../helpers/httpAgent');
 const logger = require('../../config/logger');
 
-const SEARXNG_URL = process.env.SEARXNG_URL || 'http://192.0.2.199:8088';
+const SEARXNG_URL = String(process.env.SEARXNG_URL || '').trim().replace(/\/$/, '');
 const SEARCH_TIMEOUT_MS = 10000;
 const MAX_RESULTS = 5;
 
@@ -22,6 +22,10 @@ const MAX_RESULTS = 5;
  */
 async function searchWeb(query, options = {}) {
   const { maxResults = MAX_RESULTS, language = 'en' } = options;
+
+  if (!SEARXNG_URL) {
+    return { results: [], formatted: '', error: 'SearXNG is not configured' };
+  }
 
   try {
     const params = new URLSearchParams({

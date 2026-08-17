@@ -98,7 +98,7 @@ describe('planningEvidenceService', () => {
     const item = await PlanningItem.create({
       type: 'outcome',
       title: 'Lifecycle proof',
-      scheduleRefs: [{ source: 'openclaw', sourceId: 'oc-proof', label: 'Proof job' }],
+      scheduleRefs: [{ source: 'agentx', sourceId: 'schedule-proof', label: 'Proof job' }],
       automation: {
         evidenceBindings: [
           {
@@ -135,8 +135,8 @@ describe('planningEvidenceService', () => {
       }
     ]);
     await ClusterScheduleEntry.create({
-      source: 'openclaw',
-      sourceId: 'oc-proof',
+      source: 'agentx',
+      sourceId: 'schedule-proof',
       name: 'Proof job',
       taskType: 'monitoring',
       schedule: { type: 'interval', intervalMs: 900000 },
@@ -164,7 +164,7 @@ describe('planningEvidenceService', () => {
     });
     expect(updated.evidence.find((row) => row.source === 'schedule')).toMatchObject({
       label: 'Proof job run ok',
-      metadata: expect.objectContaining({ sourceId: 'oc-proof', status: 'ok' })
+      metadata: expect.objectContaining({ sourceId: 'schedule-proof', status: 'ok' })
     });
     expect(pipelineMutation).not.toHaveBeenCalled();
     expect(alertMutation).not.toHaveBeenCalled();
@@ -179,14 +179,14 @@ describe('planningEvidenceService', () => {
     const item = await PlanningItem.create({
       type: 'outcome',
       title: 'Cursor safety',
-      scheduleRefs: [{ source: 'openclaw', sourceId: 'oc-fail', label: 'Failing write' }],
+      scheduleRefs: [{ source: 'agentx', sourceId: 'schedule-fail', label: 'Failing write' }],
       automation: {
         evidenceBindings: [{ source: 'schedule', params: { events: ['run'] } }]
       }
     });
     await ClusterScheduleEntry.create({
-      source: 'openclaw',
-      sourceId: 'oc-fail',
+      source: 'agentx',
+      sourceId: 'schedule-fail',
       name: 'Failing write',
       taskType: 'monitoring',
       schedule: { type: 'interval', intervalMs: 900000 },
@@ -275,14 +275,14 @@ describe('planningEvidenceService', () => {
     const item = await PlanningItem.create({
       type: 'outcome',
       title: 'Delayed schedule sync',
-      scheduleRefs: [{ source: 'openclaw', sourceId: 'oc-delayed', label: 'Delayed' }],
+      scheduleRefs: [{ source: 'agentx', sourceId: 'schedule-delayed', label: 'Delayed' }],
       automation: {
         evidenceBindings: [{ source: 'schedule', params: { events: ['run'] } }]
       }
     });
     await ClusterScheduleEntry.collection.insertOne({
-      source: 'openclaw',
-      sourceId: 'oc-delayed',
+      source: 'agentx',
+      sourceId: 'schedule-delayed',
       name: 'Delayed',
       taskType: 'monitoring',
       schedule: { type: 'interval', intervalMs: 900000, timezone: 'America/Toronto' },
@@ -309,7 +309,7 @@ describe('planningEvidenceService', () => {
     expect(result.totals.updated).toBe(1);
     const updated = await PlanningItem.findById(item._id);
     expect(updated.evidence[0].occurredAt).toEqual(lastRun);
-    expect(updated.evidence[0].externalKey).toContain('schedule:oc-delayed');
+    expect(updated.evidence[0].externalKey).toContain('schedule:schedule-delayed');
   });
 
   test('rejects unknown selectors without network access', () => {

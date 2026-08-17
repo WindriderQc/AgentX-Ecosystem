@@ -9,7 +9,7 @@ const crypto = require('crypto');
 
 const SCHEMA_VERSION = 1;
 
-const RUNTIMES = ['claude-code', 'codex', 'openclaw', 'hermes'];
+const RUNTIMES = ['agentx', 'claude-code', 'codex', 'external'];
 const RECONCILIATION_GRACE_MINUTES = 120;
 
 const TRUST_ELIGIBLE = [

@@ -155,8 +155,7 @@ function applyRuntimeLocal(run, candidate) {
     suggestedHome: {
       'claude-code': 'project auto-memory (MEMORY.md + topic file) — apply via /remember or a manual edit by Claude Code itself',
       codex: 'Codex-native memory — apply inside a Codex session; NEVER by editing its SQLite directly',
-      openclaw: 'workspace MEMORY.md via the operator or an explicit OpenClaw memory command — never promote --apply from automation',
-      hermes: 'Hermes MEMORY.md/USER.md through its own write-approval flow',
+      external: 'the owning runtime through its own explicit write-approval flow',
     }[owner] || 'owning runtime decides',
     note: 'Proposal only. AgentX did not and will not write this into the runtime; the owner applies it explicitly.',
   };

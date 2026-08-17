@@ -6,10 +6,8 @@
  * model stays hot in VRAM when synthesis fires immediately after. The
  * orchestrator iterates in array order — do not shuffle.
  *
- * Panel note (2026-07 realignment): Host Alpha is primary/masterbrain,
- * Host Beta is secondary/local, and Host Gamma is tertiary/model-store.
- * These defaults are editable per run and should be treated as role defaults,
- * not fixed host authority.
+ * These defaults are editable per run and do not encode host authority or
+ * environment-specific hardware.
  *   - Devil's Advocate  → ax/qwen2.5:7b-instruct-q5_K_M
  *   - Pragmatist        → ax/qwen2.5:7b-instruct-q5_K_M
  *   - Visionary         → ax/gemma4:26b-a4b-it-qat
@@ -129,7 +127,7 @@ const COUNCIL_OPTIONS = [
     label: 'Runtime lab',
     rounds: 1,
     qualityScoring: false,
-    description: 'Bounded OpenClaw, Hermes, or Codex advisers; server feature flags and chair authorization required.'
+    description: 'Bounded Codex advisers; server feature flags and chair authorization required.'
   }
 ];
 

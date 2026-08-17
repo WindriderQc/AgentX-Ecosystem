@@ -5,8 +5,7 @@
  * Best-effort — returns null fields when the host is unreachable or
  * VRAM data is unavailable.
  *
- * This is a lightweight benchmark-local implementation. It does not use SSH
- * or nvidia-smi. It relies only on what Ollama exposes through its REST API.
+ * This lightweight implementation relies only on Ollama's REST API.
  */
 
 const logger = require('../../config/logger');
