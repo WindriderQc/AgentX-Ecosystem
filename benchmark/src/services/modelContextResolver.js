@@ -4,24 +4,13 @@ const { getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostC
 const { findContextProfile } = require('./modelContextProfileService');
 const { normalizeModelTag: normalizeModelName } = require('../../../shared/modelNames');
 
-const DEFAULT_MAX_SANE_TOKENS_PER_SEC = 10000;
-
 function positiveInteger(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n);
 }
 
-function maxSaneTokensPerSec() {
-  return positiveInteger(
-    process.env.MODEL_CONTEXT_MAX_SANE_TOKENS_PER_SEC
-      ?? process.env.CONTEXT_PROBE_MAX_SANE_TOKENS_PER_SEC
-      ?? DEFAULT_MAX_SANE_TOKENS_PER_SEC
-  ) || DEFAULT_MAX_SANE_TOKENS_PER_SEC;
-}
-
-function hasImplausibleProbeThroughput(probe) {
-  const cap = maxSaneTokensPerSec();
+function hasInvalidProbeThroughput(probe) {
   const values = [
     probe?.baselineTokensPerSec,
     probe?.atLimitTokensPerSec,
@@ -30,7 +19,7 @@ function hasImplausibleProbeThroughput(probe) {
   return values.some((value) => {
     if (value === null || value === undefined) return false;
     const n = Number(value);
-    return !Number.isFinite(n) || n < 0 || n > cap;
+    return !Number.isFinite(n) || n <= 0;
   });
 }
 
@@ -169,7 +158,7 @@ async function resolveModelNumCtxDetails(modelName, opts = {}) {
     }
 
     const probe = await findLatestProbe(normalizedModel, targetHost || sourceHost);
-    if (probe?.testedNumCtx != null && !hasImplausibleProbeThroughput(probe)) {
+    if (probe?.testedNumCtx != null && !hasInvalidProbeThroughput(probe)) {
       return {
         num_ctx: Number(probe.testedNumCtx),
         source: 'benchmark_context_probe',

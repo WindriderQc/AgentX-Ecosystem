@@ -14,11 +14,8 @@ const { generateFillPrompt } = require('./contextProbePayload');
 const { isSameOllamaModel } = require('../helpers/ollamaModelIdentity');
 const { normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 const { normalizeModelName, resolveModelNumCtxDetails } = require('./modelContextResolver');
-const { parseQuantization } = require('./parameterDetection');
-const { resolveHostBandwidthGBs, isImplausibleThroughput } = require('./modelFitEstimator');
 const logger = require('../../config/logger');
 
-const DEFAULT_DEGRADATION_PCT = 50;
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_MIN_CTX = 2048;
 const DEFAULT_MAX_CTX = 262144;
@@ -27,87 +24,36 @@ const DEFAULT_MAX_CTX = 262144;
 // the "detected big context but hangs in use" gap. 64 exercises sustained
 // decode at the tested fill without making the probe crawl. Env-overridable.
 const PROBE_NUM_PREDICT = parseInt(process.env.CONTEXT_PROBE_NUM_PREDICT, 10) || 64;
-const DEFAULT_MAX_SANE_TOKENS_PER_SEC = 10000;
 const MIN_PROBE_COMPLETION_TOKENS = Math.min(
   PROBE_NUM_PREDICT,
   parseInt(process.env.CONTEXT_PROBE_MIN_COMPLETION_TOKENS, 10)
     || Math.max(4, Math.floor(PROBE_NUM_PREDICT * 0.5))
 );
 
-function maxSaneTokensPerSec() {
-  const value = Number(process.env.CONTEXT_PROBE_MAX_SANE_TOKENS_PER_SEC);
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_MAX_SANE_TOKENS_PER_SEC;
-}
-
-function isSaneTokensPerSec(tokensPerSec) {
+function isValidTokensPerSec(tokensPerSec) {
   const value = Number(tokensPerSec);
-  return Number.isFinite(value) && value >= 0 && value <= maxSaneTokensPerSec();
+  return Number.isFinite(value) && value > 0;
 }
-
-// Margin above the analytical physical ceiling before a reading is rejected.
-// Generous on purpose: the ceiling is an estimate, and false-flagging a real
-// probe is worse than letting a borderline artifact through (the flat cap is
-// the hard backstop). Env-overridable.
-const PHYSICAL_CEILING_MARGIN = (() => {
-  const v = Number(process.env.CONTEXT_PROBE_CEILING_MARGIN);
-  return Number.isFinite(v) && v > 0 ? v : 2;
-})();
 
 /**
- * Throughput plausibility for a probe reading. Two layers:
- *  1. Flat sane cap (`maxSaneTokensPerSec`) — host-agnostic hard backstop, always on.
- *  2. B1 model-aware physical ceiling (llmfit-derived: bandwidth ÷ active-weight)
- *     — a tighter bound that catches sub-cap artifacts (e.g. 5000 tok/s on a 30B
- *     where the flat 10000 cap would pass). Applied ONLY when inputs are
- *     trustworthy: a resolvable host bandwidth AND an explicit quant in the model
- *     name. Skipped for ambiguous names (`*-qat`, no-quant) to avoid false
- *     positives on MoE models whose active-params aren't encoded in the name.
+ * Reject only structurally impossible/corrupt throughput readings. Hardware,
+ * quantization, and active-weight estimates are not measured context evidence
+ * and must not decide whether a successful probe is persisted.
  * @returns {{ plausible: boolean, detail: string|null }}
  */
-function assessThroughputPlausibility(tokensPerSec, {
-  modelName,
-  hostUrl,
-  hostBandwidthGBs: explicitHostBandwidthGBs,
-  family,
-  families,
-  architecture,
-  modelInfo
-} = {}) {
-  if (!isSaneTokensPerSec(tokensPerSec)) {
-    return { plausible: false, detail: `${tokensPerSec} tok/s exceeds sane cap ${maxSaneTokensPerSec()} tok/s` };
-  }
-  const hostBandwidthGBs = Number.isFinite(explicitHostBandwidthGBs) && explicitHostBandwidthGBs > 0
-    ? explicitHostBandwidthGBs
-    : resolveHostBandwidthGBs(hostUrl);
-  const quant = parseQuantization(modelName);
-  if (hostBandwidthGBs && quant) {
-    const ceiling = isImplausibleThroughput(tokensPerSec, {
-      modelName,
-      hostBandwidthGBs,
-      family,
-      families,
-      architecture,
-      modelInfo,
-      marginFactor: PHYSICAL_CEILING_MARGIN
-    });
-    if (ceiling.implausible) {
-      return {
-        plausible: false,
-        detail: `${Number(tokensPerSec).toFixed(1)} tok/s exceeds physical ceiling `
-          + `${ceiling.ceilingTokSec.toFixed(1)} tok/s (×${PHYSICAL_CEILING_MARGIN}) for ${modelName} on ${hostUrl}`
-      };
-    }
+function validateThroughput(tokensPerSec) {
+  if (!isValidTokensPerSec(tokensPerSec)) {
+    return { plausible: false, detail: `${tokensPerSec} tok/s is not a positive finite measurement` };
   }
   return { plausible: true, detail: null };
 }
 
-function findImplausibleThroughputStep(steps = [], modelContext = null) {
-  return steps.find((step) => !assessThroughputPlausibility(step?.tokensPerSec, modelContext || {}).plausible);
+function findInvalidThroughputStep(steps = []) {
+  return steps.find((step) => !validateThroughput(step?.tokensPerSec).plausible);
 }
 
 function getConfig() {
   return {
-    degradationPct: parseInt(process.env.CONTEXT_PROBE_DEGRADATION_PCT, 10) || DEFAULT_DEGRADATION_PCT,
     timeoutMs: parseInt(process.env.CONTEXT_PROBE_TIMEOUT_MS, 10) || DEFAULT_TIMEOUT_MS,
     minCtx: parseInt(process.env.CONTEXT_PROBE_MIN_CTX, 10) || DEFAULT_MIN_CTX,
     maxCtx: parseInt(process.env.CONTEXT_PROBE_MAX_CTX, 10) || DEFAULT_MAX_CTX
@@ -153,15 +99,18 @@ function buildRefinementStages(lowerBound, upperBound, minIncrement) {
   return stages;
 }
 
-function assessProbeStep(step, baselineSpeed, speedThreshold) {
+function assessProbeStep(step, baselineSpeed) {
   const requestPassed = step.passed;
   const hasGpuSpill = step.gpuPercent !== null && step.gpuPercent < 100;
   const degradationPct = baselineSpeed > 0
     ? Number(((1 - step.tokensPerSec / baselineSpeed) * 100).toFixed(1))
     : null;
-  const speedOk = requestPassed && step.tokensPerSec >= speedThreshold;
 
-  if (speedOk && !hasGpuSpill) {
+  // A larger KV cache is expected to change throughput. Record that change as
+  // benchmark evidence, but do not turn an arbitrary speed delta into a
+  // smaller runtime context contract. Context verification fails only when the
+  // request/decode fails or the model spills off GPU.
+  if (requestPassed && !hasGpuSpill) {
     step.passed = true;
     step.degradationPct = degradationPct;
     step.reason = `${step.tokensPerSec} tok/s (${degradationPct}% drop) GPU=${step.gpuPercent ?? '?'}%`;
@@ -172,7 +121,7 @@ function assessProbeStep(step, baselineSpeed, speedThreshold) {
   step.degradationPct = degradationPct;
   step.reason = hasGpuSpill
     ? `GPU spill: ${step.gpuPercent}% on GPU (${step.tokensPerSec} tok/s)`
-    : (!requestPassed ? (step.reason || 'Request failed') : `${step.tokensPerSec} tok/s < threshold ${speedThreshold.toFixed(1)} tok/s`);
+    : (step.reason || 'Request failed');
   return step;
 }
 
@@ -330,9 +279,9 @@ async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80
   const probeResult = await sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs);
   const shortCompletion = probeResult.ok && probeResult.completionTokens < MIN_PROBE_COMPLETION_TOKENS;
   const plausibility = probeResult.ok
-    ? assessThroughputPlausibility(probeResult.tokensPerSec, { ...modelContext, modelName, hostUrl })
+    ? validateThroughput(probeResult.tokensPerSec)
     : { plausible: true, detail: null };
-  const implausibleThroughput = probeResult.ok && !plausibility.plausible;
+  const invalidThroughput = probeResult.ok && !plausibility.plausible;
   const [vram, offload] = await Promise.all([
     snapshotVram(hostUrl),
     snapshotGpuOffload(hostUrl, modelName)
@@ -353,9 +302,9 @@ async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80
     promptFillPct: Math.round(fillRatio * 100),
     requestedCompletionTokens: PROBE_NUM_PREDICT,
     minCompletionTokens: MIN_PROBE_COMPLETION_TOKENS,
-    passed: probeResult.ok && !shortCompletion && !implausibleThroughput,
-    reason: implausibleThroughput
-      ? `Implausible throughput: ${plausibility.detail}`
+    passed: probeResult.ok && !shortCompletion && !invalidThroughput,
+    reason: invalidThroughput
+      ? `Invalid throughput: ${plausibility.detail}`
       : shortCompletion
       ? `Short completion: ${probeResult.completionTokens}/${PROBE_NUM_PREDICT} tokens generated; probe decode sample is invalid`
       : (probeResult.ok ? null : probeResult.error)
@@ -373,7 +322,6 @@ async function probeModelContext(modelName, options = {}) {
   }
 
   const cfg = getConfig();
-  const degradationPct = options.degradationPct ?? cfg.degradationPct;
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
   const minCtx = options.minCtx ?? cfg.minCtx;
   const maxCtx = options.maxCtx ?? cfg.maxCtx;
@@ -415,7 +363,6 @@ async function probeModelContext(modelName, options = {}) {
     baseline.reason = `Baseline: ${baselineSpeed} tok/s`;
     baseline.degradationPct = 0;
 
-    const speedThreshold = baselineSpeed * (1 - degradationPct / 100);
     let bestPassingStep = baseline;
 
     async function testCandidate(numCtx) {
@@ -423,12 +370,11 @@ async function probeModelContext(modelName, options = {}) {
         return stepCache.get(numCtx);
       }
 
-      // The fill percentage is fixed for a whole probe run so degradation
-      // compares like with like.
+      // The fill percentage is fixed for a whole probe run so throughput
+      // remains comparable across verified windows.
       const evaluatedStep = assessProbeStep(
         await runStep(hostUrl, normalizedModel, numCtx, timeoutMs, promptFillPct, modelContext),
-        baselineSpeed,
-        speedThreshold
+        baselineSpeed
       );
 
       stepCache.set(numCtx, evaluatedStep);
@@ -465,10 +411,10 @@ async function probeModelContext(modelName, options = {}) {
     const degradation = Number(((1 - bestStep.tokensPerSec / baselineSpeed) * 100).toFixed(1));
     probeNotify({ type: 'result', testedNumCtx, degradationPct: degradation });
 
-    const implausibleStep = findImplausibleThroughputStep(steps, modelContext);
-    if (implausibleStep) {
-      const { detail } = assessThroughputPlausibility(implausibleStep.tokensPerSec, modelContext);
-      throw new Error(`Implausible throughput at num_ctx=${implausibleStep.numCtx}: ${detail || `${implausibleStep.tokensPerSec} tok/s implausible`}`);
+    const invalidStep = findInvalidThroughputStep(steps);
+    if (invalidStep) {
+      const { detail } = validateThroughput(invalidStep.tokensPerSec);
+      throw new Error(`Invalid throughput at num_ctx=${invalidStep.numCtx}: ${detail || `${invalidStep.tokensPerSec} tok/s invalid`}`);
     }
 
     const snapshot = await ModelContextProbeSnapshot.create({
@@ -478,7 +424,6 @@ async function probeModelContext(modelName, options = {}) {
       baselineTokensPerSec: baselineSpeed,
       atLimitTokensPerSec: bestStep.tokensPerSec,
       degradationPct: degradation,
-      degradationThreshold: degradationPct,
       promptFillPct,
       vramAtLimitMiB: bestStep.vramUsedMiB ?? null,
       gpuPercentAtLimit: bestStep.gpuPercent ?? null,
@@ -557,9 +502,8 @@ module.exports = {
     runStep,
     MIN_PROBE_COMPLETION_TOKENS,
     PROBE_NUM_PREDICT,
-    findImplausibleThroughputStep,
-    assessThroughputPlausibility,
-    isSaneTokensPerSec,
-    maxSaneTokensPerSec
+    findInvalidThroughputStep,
+    validateThroughput,
+    isValidTokensPerSec
   }
 };

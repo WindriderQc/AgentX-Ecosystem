@@ -48,25 +48,25 @@ describe('Smart Modelfile Generation', () => {
       expect(config.num_ctx).toBe(65536);
     });
 
-    it('rejects implausible profiler throughput before writing a Modelfile', () => {
-      expect(() => service.generateModelfile('llama3.1:8b', {
+    it('does not reject positive measured throughput using an arbitrary ceiling', () => {
+      expect(service.generateModelfile('llama3.1:8b', {
         optimalNumCtx: 8192,
         tokensPerSec: 1000000
-      }, null)).toThrow(/Implausible profiler throughput/);
+      }, null).content).toContain('PARAMETER num_ctx 8192');
     });
 
-    it('auto-detects num_thread from host CPU cores (12 cores -> 10 threads)', () => {
+    it('does not guess num_thread from host CPU cores', () => {
       const profile = { optimalNumCtx: 8192 };
       const hostProfile = { cpu: { cores: 12 } };
       const config = service.generateConfig(profile, hostProfile);
-      expect(config.num_thread).toBe(10);
+      expect(config).not.toHaveProperty('num_thread');
     });
 
-    it('uses all cores when host has <= 4', () => {
+    it('does not guess num_thread for small hosts', () => {
       const profile = { optimalNumCtx: 8192 };
       const hostProfile = { cpu: { cores: 4 } };
       const config = service.generateConfig(profile, hostProfile);
-      expect(config.num_thread).toBe(4);
+      expect(config).not.toHaveProperty('num_thread');
     });
 
     it('respects threadOverride', () => {
@@ -76,36 +76,23 @@ describe('Smart Modelfile Generation', () => {
       expect(config.num_thread).toBe(6);
     });
 
-    it('scales num_batch by VRAM headroom', () => {
-      // 50% headroom: floor(0.5 * 512) = 256, clamped to [128,512] = 256
+    it('does not turn VRAM headroom into a guessed num_batch', () => {
       const profile = { optimalNumCtx: 8192, vramUsedMiB: 5000 };
       const hostProfile = { gpu: { vramTotalMiB: 10000 } };
       const config = service.generateConfig(profile, hostProfile);
-      expect(config.num_batch).toBe(256);
-      expect(config.num_batch).toBeGreaterThanOrEqual(128);
-      expect(config.num_batch).toBeLessThanOrEqual(512);
+      expect(config).not.toHaveProperty('num_batch');
     });
 
-    it('clamps num_batch to 128 minimum (very tight VRAM)', () => {
-      // 5% headroom: floor(0.05 * 512) = 25 → clamped to 128
-      const profile = { optimalNumCtx: 8192, vramUsedMiB: 9500 };
-      const hostProfile = { gpu: { vramTotalMiB: 10000 } };
-      const config = service.generateConfig(profile, hostProfile);
-      expect(config.num_batch).toBe(128);
-    });
-
-    it('includes num_predict and num_keep in output', () => {
+    it('does not create output or prompt-retention limits', () => {
       const profile = { optimalNumCtx: 8192 };
       const config = service.generateConfig(profile, null);
-      expect(config).toHaveProperty('num_predict');
-      expect(config).toHaveProperty('num_keep', 4);
+      expect(config).not.toHaveProperty('num_predict');
+      expect(config).not.toHaveProperty('num_keep');
     });
 
-    it('uses best num_predict from generation stability data', () => {
-      // baseline (64 tokens) = 42 tok/s, threshold = 37.8
-      // 256 = 40 tok/s >= 37.8 => OK
-      // 512 = 30 tok/s < 37.8  => FAIL
-      // Best = 256
+    it('keeps generation stability as evidence instead of a runtime limit', () => {
+      // All three output lengths completed; throughput changes are recorded
+      // but do not manufacture a smaller output limit.
       const profile = {
         optimalNumCtx: 8192,
         generationStability: [
@@ -115,55 +102,7 @@ describe('Smart Modelfile Generation', () => {
         ]
       };
       const config = service.generateConfig(profile, null);
-      expect(config.num_predict).toBe(256);
-    });
-  });
-
-  // ── _bestNumPredict ─────────────────────────────────────────────────────────
-
-  describe('_bestNumPredict()', () => {
-    it('returns 512 when no stability data', () => {
-      expect(service._bestNumPredict(null)).toBe(512);
-      expect(service._bestNumPredict(undefined)).toBe(512);
-    });
-
-    it('returns 512 when stability array is empty', () => {
-      expect(service._bestNumPredict([])).toBe(512);
-    });
-
-    it('returns 512 when baseline tokensPerSec is 0', () => {
-      const stability = [{ numPredict: 64, tokensPerSec: 0 }];
-      expect(service._bestNumPredict(stability)).toBe(512);
-    });
-
-    it('returns the largest numPredict above 90% threshold', () => {
-      const stability = [
-        { numPredict: 64, tokensPerSec: 100 },
-        { numPredict: 256, tokensPerSec: 95 },   // >= 90 OK
-        { numPredict: 512, tokensPerSec: 91 },   // >= 90 OK
-        { numPredict: 1024, tokensPerSec: 85 }   // < 90 FAIL
-      ];
-      expect(service._bestNumPredict(stability)).toBe(512);
-    });
-
-    it('returns 64 when even the first entry drops below threshold', () => {
-      // Only one entry and it IS the baseline, so it always qualifies
-      // Need at least two entries where second drops
-      const stability = [
-        { numPredict: 64, tokensPerSec: 100 },
-        { numPredict: 256, tokensPerSec: 50 }
-      ];
-      // baseline=100, threshold=90, 64 qualifies (100>=90), 256 fails (50<90)
-      expect(service._bestNumPredict(stability)).toBe(64);
-    });
-
-    it('returns all entries if none drop below threshold', () => {
-      const stability = [
-        { numPredict: 64, tokensPerSec: 100 },
-        { numPredict: 256, tokensPerSec: 98 },
-        { numPredict: 512, tokensPerSec: 95 }
-      ];
-      expect(service._bestNumPredict(stability)).toBe(512);
+      expect(config).not.toHaveProperty('num_predict');
     });
   });
 
@@ -184,17 +123,17 @@ describe('Smart Modelfile Generation', () => {
       profileDepth: 'standard'
     };
 
-    it('includes all tuned parameters', () => {
+    it('includes measured context without guessed tuning parameters', () => {
       const result = service.generateModelfile('llama3.1:8b-q4_K_M', profile, hostProfile);
       const content = result.content;
 
       expect(content).toMatch(/^FROM llama3\.1:8b-q4_K_M/m);
       expect(content).toMatch(/PARAMETER num_ctx \d+/);
-      expect(content).toMatch(/PARAMETER num_gpu 99/);
-      expect(content).toMatch(/PARAMETER num_batch \d+/);
-      expect(content).toMatch(/PARAMETER num_thread \d+/);
-      expect(content).toMatch(/PARAMETER num_predict \d+/);
-      expect(content).toMatch(/PARAMETER num_keep 4/);
+      expect(content).not.toContain('PARAMETER num_gpu');
+      expect(content).not.toContain('PARAMETER num_batch');
+      expect(content).not.toContain('PARAMETER num_thread');
+      expect(content).not.toContain('PARAMETER num_predict');
+      expect(content).not.toContain('PARAMETER num_keep');
     });
 
     it('returns content, generatedAt, and hash', () => {

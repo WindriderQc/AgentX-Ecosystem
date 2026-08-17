@@ -26,9 +26,7 @@ describe('adaptationService', () => {
       const config = service.generateConfig(profile, null);
 
       expect(config.num_ctx).toBe(16384);
-      expect(config.num_gpu).toBe(99);
-      expect(config.num_batch).toBe(512);
-      expect(config.num_thread).toBe(6); // default 8 cores - 2
+      expect(config).toEqual({ num_ctx: 16384 });
     });
 
     it('leaves context unset when optimalNumCtx is absent', () => {
@@ -48,41 +46,23 @@ describe('adaptationService', () => {
       expect(config.num_ctx).toBe(65536);
     });
 
-    it('rejects profiles with implausible throughput before generating config', () => {
-      expect(() => service.generateConfig({ optimalNumCtx: 8192, tokensPerSec: 1000000 }, null))
-        .toThrow(/Implausible profiler throughput/);
+    it('does not reject a positive measured throughput using an arbitrary ceiling', () => {
+      expect(service.generateConfig({ optimalNumCtx: 8192, tokensPerSec: 1000000 }, null).num_ctx)
+        .toBe(8192);
     });
 
-    it('scales num_batch proportionally to VRAM headroom', () => {
-      // 7% headroom: floor(0.07 * 512) = 35 → clamped to 128
+    it('does not turn estimated VRAM headroom into hidden runtime parameters', () => {
       const profile = { optimalNumCtx: 8192, vramUsedMiB: 9300 };
       const hostProfile = { gpu: { vramTotalMiB: 10000 } };
       const config = service.generateConfig(profile, hostProfile);
 
-      expect(config.num_batch).toBe(128);
+      expect(config).toEqual({ num_ctx: 8192 });
     });
 
-    it('scales num_batch to 512 when headroom is high', () => {
-      const profile = { optimalNumCtx: 8192, vramUsedMiB: 5800 };
-      const hostProfile = { gpu: { vramTotalMiB: 24576 } }; // headroom ~76%
-      const config = service.generateConfig(profile, hostProfile);
-
-      expect(config.num_batch).toBeGreaterThanOrEqual(128);
-      expect(config.num_batch).toBeLessThanOrEqual(512);
-    });
-
-    it('defaults num_batch to 512 when hostProfile has no gpu info', () => {
-      const profile = { optimalNumCtx: 8192, vramUsedMiB: 9500 };
-      const hostProfile = {}; // no gpu → headroom = 1
-      const config = service.generateConfig(profile, hostProfile);
-
-      expect(config.num_batch).toBe(512);
-    });
-
-    it('includes num_predict and num_keep', () => {
-      const config = service.generateConfig({}, null);
-      expect(config).toHaveProperty('num_predict');
-      expect(config).toHaveProperty('num_keep', 4);
+    it('honors only an explicit thread override', () => {
+      expect(service.generateConfig({ optimalNumCtx: 8192 }, {
+        cpu: { cores: 24, threadOverride: 6 }
+      })).toEqual({ num_ctx: 8192, num_thread: 6 });
     });
   });
 
@@ -116,14 +96,14 @@ describe('adaptationService', () => {
       expect(content.startsWith('FROM llama3.1:8b-q4_K_M')).toBe(true);
     });
 
-    it('includes PARAMETER lines for all config keys', () => {
+    it('includes measured context without guessed tuning parameters', () => {
       const { content } = service.generateModelfile('llama3.1:8b-q4_K_M', profile, hostProfile);
       expect(content).toMatch(/PARAMETER num_ctx 8192/);
-      expect(content).toMatch(/PARAMETER num_gpu 99/);
-      expect(content).toMatch(/PARAMETER num_batch \d+/);
-      expect(content).toMatch(/PARAMETER num_thread 10/);
-      expect(content).toMatch(/PARAMETER num_predict \d+/);
-      expect(content).toMatch(/PARAMETER num_keep 4/);
+      expect(content).not.toContain('PARAMETER num_gpu');
+      expect(content).not.toContain('PARAMETER num_batch');
+      expect(content).not.toContain('PARAMETER num_thread');
+      expect(content).not.toContain('PARAMETER num_predict');
+      expect(content).not.toContain('PARAMETER num_keep');
     });
 
     it('includes host display name in comment', () => {
