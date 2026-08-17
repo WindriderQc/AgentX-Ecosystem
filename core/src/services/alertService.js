@@ -541,17 +541,9 @@ class AlertService extends EventEmitter {
       .limit(limit);
   }
 
-  // Legacy support
-  triggerAlert(type, severity, payload) {
-      logger.warn('Alert triggered (legacy)', { type, severity, payload });
-      return { type, severity, payload };
-  }
 }
 
 // Singleton instance
 const alertService = new AlertService();
-
-// Backward compatibility for { getAlertService } destructuring
-alertService.getAlertService = () => alertService;
 
 module.exports = alertService;

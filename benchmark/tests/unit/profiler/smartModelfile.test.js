@@ -11,8 +11,6 @@ describe('Smart Modelfile Generation', () => {
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
-    delete process.env.MODEL_CONTEXT_OPERATIONAL_CAP;
-    delete process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP;
     jest.mock('../../../models/ModelAdaptation');
     jest.mock('../../../models/HostProfile');
     jest.mock('../../../src/services/profiler/namingConvention');
@@ -38,26 +36,16 @@ describe('Smart Modelfile Generation', () => {
       expect(config.num_ctx).toBe(16384);
     });
 
-    it('caps generated runtime num_ctx at the conservative operational ceiling', () => {
+    it('uses a large profiled num_ctx without imposing an unrelated ceiling', () => {
       const profile = { optimalNumCtx: 300000 };
       const config = service.generateConfig(profile, null);
-      expect(config.num_ctx).toBe(98304);
+      expect(config.num_ctx).toBe(300000);
     });
 
     it('honors a verified context below the ceiling instead of flat-capping it', () => {
       const profile = { optimalNumCtx: 65536 };
       const config = service.generateConfig(profile, null);
       expect(config.num_ctx).toBe(65536);
-    });
-
-    it('honors an explicit higher operational ceiling', () => {
-      process.env.MODEL_CONTEXT_OPERATIONAL_CAP = '131072';
-      jest.resetModules();
-      service = require('../../../src/services/profiler/adaptationService');
-
-      const profile = { optimalNumCtx: 131072 };
-      const config = service.generateConfig(profile, null);
-      expect(config.num_ctx).toBe(131072);
     });
 
     it('rejects implausible profiler throughput before writing a Modelfile', () => {

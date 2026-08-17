@@ -1,5 +1,7 @@
 'use strict';
 
+const { resolveCallerPolicy } = require('./routing/callerPolicy');
+
 /**
  * Inference Lane Policy — caller-aware fast/safe/direct lanes for /api/inference/generate.
  *
@@ -12,9 +14,8 @@
  * This module exports:
  *   - LANE_POLICY: policy map keyed by lane name. Each policy has booleans
  *     `route`, `probe`, `admit`, `recordInferenceSync`, `alert`.
- *   - resolveLane(callerDetail): returns { name, policy } based on regex
- *     match against callerDetail. Mirrors the matcher style used in
- *     core/src/middleware/rateLimiter.js (inferenceCallerRouter).
+ *   - resolveLane(callerDetail): returns { name, policy } from the shared
+ *     caller classifier also used by rate limiting.
  *   - probeCache: small in-memory TTL cache for the ax/-prefix probe.
  *
  * Trust model — LOAD-BEARING ASSUMPTION
@@ -71,27 +72,6 @@ const LANE_POLICY = Object.freeze({
   }),
 });
 
-// Caller patterns evaluated in priority order (most specific first).
-// Mirrors the regex style in core/src/middleware/rateLimiter.js.
-const LANE_RULES = [
-  // direct lane — bench / profiler / warmup / judge self-sequence per host
-  { pattern: /^benchmark-batch-/, lane: 'direct' },
-  { pattern: /^benchmark-warmup$/, lane: 'direct' },
-  { pattern: /^benchmark-host-test-/, lane: 'direct' },
-  { pattern: /^benchmark-decomposed-judge$/, lane: 'direct' },
-  { pattern: /^profiler-/, lane: 'direct' },
-
-  // interactive lane — UI / companion / human-driven
-  { pattern: /^chat$/, lane: 'interactive' },
-  { pattern: /^chat-/, lane: 'interactive' },
-  { pattern: /^buddy\//, lane: 'interactive' },
-  { pattern: /^buddy-reaction$/, lane: 'interactive' },
-  { pattern: /^nestor\//, lane: 'interactive' },
-  { pattern: /^nerve-center-/, lane: 'interactive' },
-  { pattern: /^alerts-/, lane: 'interactive' },
-
-];
-
 /**
  * Resolve the lane for a given callerDetail.
  *
@@ -99,14 +79,8 @@ const LANE_RULES = [
  * @returns {{ name: 'direct'|'interactive'|'automated', policy: object }}
  */
 function resolveLane(callerDetail) {
-  if (typeof callerDetail === 'string' && callerDetail.length > 0) {
-    for (const rule of LANE_RULES) {
-      if (rule.pattern.test(callerDetail)) {
-        return { name: rule.lane, policy: LANE_POLICY[rule.lane] };
-      }
-    }
-  }
-  return { name: 'automated', policy: LANE_POLICY.automated };
+  const { lane } = resolveCallerPolicy(callerDetail);
+  return { name: lane, policy: LANE_POLICY[lane] };
 }
 
 // ── Probe cache ───────────────────────────────────────────────────────────
@@ -154,7 +128,6 @@ function _resetProbeCacheForTests() {
 
 module.exports = {
   LANE_POLICY,
-  LANE_RULES,
   PROBE_CACHE_TTL_MS,
   resolveLane,
   getProbe,

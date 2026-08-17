@@ -327,7 +327,12 @@ describe('repoQualificationRunner.runQualification (offline dry-run)', () => {
 describe('repo-coding-qualification.js CLI (--dry-run smoke test)', () => {
   test('live defaults are the frozen 8K/4K five-seed matrix and require a claim id', () => {
     expect(() => qualificationCli.parseArgs([])).toThrow(/claim-id is required/);
-    const args = qualificationCli.parseArgs(['--claim-id', 'coding-campaign']);
+    const args = qualificationCli.parseArgs([
+      '--claim-id', 'coding-campaign',
+      '--host', 'http://ollama:11434',
+      '--core', 'http://core:3080',
+      '--models', 'candidate'
+    ]);
     expect(args).toMatchObject({
       attempts: 5,
       numCtx: 8192,
@@ -350,7 +355,12 @@ describe('repo-coding-qualification.js CLI (--dry-run smoke test)', () => {
   });
 
   test('rejects a Core contract that changes any frozen campaign setting', () => {
-    const args = qualificationCli.parseArgs(['--claim-id', 'coding-campaign']);
+    const args = qualificationCli.parseArgs([
+      '--claim-id', 'coding-campaign',
+      '--host', 'http://ollama:11434',
+      '--core', 'http://core:3080',
+      '--models', 'candidate'
+    ]);
     const exact = {
       num_ctx: 8192,
       response_max_tokens: 4096,

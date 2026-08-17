@@ -13,7 +13,6 @@
  *   GET    /api/models/registry/category/:cat       - Get models by category
  *   GET    /api/models/registry/tag/:tag            - Get models by tag
  *   GET    /api/models/registry/stats               - Get category statistics
- *   POST   /api/models/registry/:name/sync          - Sync benchmark stats
  *   POST   /api/models/registry/sync-hosts          - Sync registry from Ollama hosts
  *   GET    /api/models/registry/:name/execution-config  - Get per-model execution config
  *   POST   /api/models/registry/:name/execution-config  - Set user config overrides
@@ -268,14 +267,12 @@ router.post('/sync-hosts', async (req, res) => {
  *   'modelfile'           — Ollama's actual PARAMETER num_ctx (truth)
  *   'model_context_profile' — current measured host/model recommendation
  *   'profiled'            — legacy benchmark context probe testedNumCtx
- *   'registry_default'    — auto-detected fallback
- *   'registry_capability' — maxContext from capabilities
  *   'model_capacity'      — model's theoretical max from /api/show
- *   'fallback'            — hard default (8192)
+ *   'unresolved'          — no explicit, deployed, or measured evidence
  *
  * Query params:
  *   host  — optional Ollama host URL; if provided, Modelfile is queried
- *           directly. If omitted, registry fallback is used.
+ *           directly. If omitted, measured registry evidence may be used.
  */
 router.get('/:name/context-info', async (req, res) => {
   try {
@@ -471,50 +468,6 @@ router.delete('/:name', async (req, res) => {
 });
 
 /**
- * POST /api/models/registry/:name/sync
- *
- * Sync benchmark statistics for a model
- *
- * Fetches latest benchmark results and updates model stats
- *
- * Returns: Updated model object
- */
-router.post('/:name/sync', async (req, res) => {
-  try {
-    const { name } = req.params;
-
-    const model = await ModelRegistry.syncBenchmarkStats(name);
-
-    if (!model) {
-      return res.status(404).json({
-        status: 'error',
-        message: `Model not found or no benchmark data available: ${name}`
-      });
-    }
-
-    logger.info(`Synced benchmark stats for model: ${name}`, {
-      avgComposite: model.benchmarkStats.avgCompositeScore,
-      totalTests: model.benchmarkStats.totalTests
-    });
-
-    res.json({
-      status: 'success',
-      message: 'Benchmark stats synced successfully',
-      data: model
-    });
-  } catch (err) {
-    logger.error(`Failed to sync benchmark stats: ${req.params.name}`, {
-      error: err.message
-    });
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to sync benchmark stats',
-      error: err.message
-    });
-  }
-});
-
-/**
  * POST /api/models/registry/:name/categories
  *
  * Add category to a model
@@ -658,8 +611,8 @@ router.post('/:name/execution-config', async (req, res) => {
     const overrides = { _overriddenAt: new Date() };
     if (num_ctx != null) {
       const parsed = Number(num_ctx);
-      if (!Number.isFinite(parsed) || parsed < 512 || parsed > 131072) {
-        return res.status(400).json({ status: 'error', message: 'num_ctx must be a number between 512 and 131072' });
+      if (!Number.isFinite(parsed) || parsed < 512) {
+        return res.status(400).json({ status: 'error', message: 'num_ctx must be a number of at least 512' });
       }
       overrides.num_ctx = Math.round(parsed);
     }

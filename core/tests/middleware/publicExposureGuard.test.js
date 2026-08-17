@@ -1,10 +1,6 @@
 const express = require('express');
 const request = require('supertest');
-const {
-  DEFAULT_PUBLIC_HOSTS,
-  configuredPublicHosts,
-  publicExposureGuard
-} = require('../../src/middleware/publicExposureGuard');
+const { publicExposureGuard } = require('../../src/middleware/publicExposureGuard');
 
 function buildApp() {
   const app = express();
@@ -35,7 +31,7 @@ describe('publicExposureGuard', () => {
   beforeEach(() => {
     delete process.env.AGENTX_OPERATOR_TOKEN;
     delete process.env.AGENTX_ADMIN_TOKEN;
-    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
+    delete process.env.AGENTX_PUBLIC_HOSTS;
     delete process.env.AGENTX_PUBLIC_URL;
     app = buildApp();
   });
@@ -52,6 +48,7 @@ describe('publicExposureGuard', () => {
   });
 
   it('blocks public-host API requests without an operator token even from loopback', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
     const res = await request(app)
       .get('/api/nerve-center/status')
       .set('Host', 'agentx.example.test')
@@ -65,6 +62,7 @@ describe('publicExposureGuard', () => {
 
   it('allows public-host API requests with a valid operator token', async () => {
     process.env.AGENTX_OPERATOR_TOKEN = 'operator-token';
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
 
     await request(app)
       .post('/api/chat')
@@ -83,6 +81,7 @@ describe('publicExposureGuard', () => {
   });
 
   it('protects the MCP endpoint on public hosts', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
     await request(app)
       .post('/mcp')
       .set('Host', 'agentx.example.test')
@@ -91,6 +90,7 @@ describe('publicExposureGuard', () => {
   });
 
   it('leaves non-API health checks open on public hosts', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
     await request(app)
       .get('/health')
       .set('Host', 'agentx.example.test')
@@ -106,10 +106,11 @@ describe('publicExposureGuard', () => {
       .expect(403);
   });
 
-  it('has no maintainer-specific public host default', () => {
-    delete process.env.AGENTX_PUBLIC_HOSTS;
-    expect(DEFAULT_PUBLIC_HOSTS).toEqual([]);
-    expect(configuredPublicHosts()).toEqual(new Set());
+  it('does not assume a deployment-specific public hostname', async () => {
+    await request(app)
+      .get('/api/nerve-center/status')
+      .set('Host', 'unconfigured.example.test')
+      .expect(200);
   });
 
   it('does not classify LAN CORE_PUBLIC_URL as public exposure', async () => {

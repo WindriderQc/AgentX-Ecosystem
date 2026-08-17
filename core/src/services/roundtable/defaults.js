@@ -1,26 +1,20 @@
 /**
  * Roundtable Panel Defaults
  *
- * Agent lineup + system prompts. The array order is deliberate for GPU
- * warmth: the visionary's model (same as synthesizer's) runs LAST so the
- * model stays hot in VRAM when synthesis fires immediately after. The
- * orchestrator iterates in array order — do not shuffle.
- *
- * These defaults are editable per run and do not encode host authority or
- * environment-specific hardware.
- *   - Devil's Advocate  → ax/qwen2.5:7b-instruct-q5_K_M
- *   - Pragmatist        → ax/qwen2.5:7b-instruct-q5_K_M
- *   - Visionary         → ax/gemma4:26b-a4b-it-qat
- *   - Synthesizer       → ax/gemma4:26b-a4b-it-qat
- *
- * The panel is user-editable per-run via the UI / POST body.
+ * Agent lineup + system prompts. All roles use the deployment's product
+ * default model unless the run explicitly chooses another model. This keeps
+ * the reusable product independent from a maintainer's installed model roster
+ * and avoids unnecessary model swaps. The panel remains editable per run.
  */
+
+const { PRODUCT_DEFAULT_MODEL } = require('../modelRouterDefaults');
+const ROUNDTABLE_MODEL = process.env.ROUNDTABLE_MODEL || PRODUCT_DEFAULT_MODEL;
 
 const DEFAULT_PANEL = [
   {
     agentId: 'devils-advocate',
     role: "Devil's Advocate",
-    model: 'ax/qwen2.5:7b-instruct-q5_K_M',
+    model: ROUNDTABLE_MODEL,
     enableWebSearch: false,
     systemPrompt: `You are the Devil's Advocate in a roundtable discussion. Your job is to challenge assumptions, find weaknesses, and stress-test ideas.
 
@@ -34,7 +28,7 @@ Rules:
   {
     agentId: 'pragmatist',
     role: 'Pragmatist',
-    model: 'ax/qwen2.5:7b-instruct-q5_K_M',
+    model: ROUNDTABLE_MODEL,
     enableWebSearch: false,
     systemPrompt: `You are the Pragmatist in a roundtable discussion. Your job is to evaluate feasibility, trade-offs, and real-world constraints.
 
@@ -48,7 +42,7 @@ Rules:
   {
     agentId: 'visionary',
     role: 'Visionary',
-    model: 'ax/gemma4:26b-a4b-it-qat',
+    model: ROUNDTABLE_MODEL,
     enableWebSearch: false,
     systemPrompt: `You are the Visionary in a roundtable discussion. Your job is to see the big picture, identify opportunities, and think beyond immediate constraints.
 
@@ -62,7 +56,7 @@ Rules:
 ];
 
 const DEFAULT_SYNTHESIZER = {
-  model: 'ax/gemma4:26b-a4b-it-qat',
+  model: ROUNDTABLE_MODEL,
   systemPrompt: `You are the Synthesizer closing a roundtable discussion. You have read all agent perspectives and rebuttals.
 
 Your job:

@@ -411,22 +411,6 @@ describe('hostPreferenceService', () => {
     });
   });
 
-  describe('getDefaultModelForHost', () => {
-    it('should return first pinned model for a host URL', async () => {
-      await service.updatePreference('http://host1:11434', {
-        hostKey: 'primary',
-        pinnedModels: [{ model: 'model-a' }, { model: 'model-b' }]
-      });
-      const model = await service.getDefaultModelForHost('http://host1:11434');
-      expect(model).toBe('model-a');
-    });
-
-    it('should return null when no preference exists', async () => {
-      const model = await service.getDefaultModelForHost('http://unknown:11434');
-      expect(model).toBeNull();
-    });
-  });
-
   describe('legacy-doc fallback (pre-0151 shape)', () => {
     // Ensures a doc written in the pre-0151 shape still resolves pinned
     // entries correctly. Simulates the migration not having run yet.

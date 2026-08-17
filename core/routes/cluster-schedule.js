@@ -13,6 +13,7 @@ const clusterScheduleService = require('../src/services/clusterScheduleService')
 const clusterLiveService = require('../src/services/clusterLiveService');
 const HostUsageLedger = require('../models/HostUsageLedger');
 const { getUtilizationHeatmap } = require('../src/services/hostUsageAggregator');
+const { defaultPlanningTimeZone } = require('../src/services/planningDateService');
 
 /**
  * GET /schedule
@@ -43,7 +44,7 @@ router.get('/schedule', async (req, res) => {
 router.get('/schedule/timeline', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().slice(0, 10);
-    const timezone = req.query.timezone || 'America/Toronto';
+    const timezone = req.query.timezone || defaultPlanningTimeZone();
     const timeline = await clusterScheduleService.getTimeline(date, timezone);
     res.json({ status: 'success', data: { date, timezone, timeline } });
   } catch (err) {
@@ -60,7 +61,7 @@ router.get('/schedule/timeline', async (req, res) => {
 router.get('/schedule/timeline-by-host', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().slice(0, 10);
-    const timezone = req.query.timezone || 'America/Toronto';
+    const timezone = req.query.timezone || defaultPlanningTimeZone();
     const hosts = await clusterScheduleService.getTimelineByHost(date, timezone);
     res.json({ status: 'success', data: { date, timezone, hosts } });
   } catch (err) {
@@ -77,7 +78,7 @@ router.get('/schedule/timeline-by-host', async (req, res) => {
 router.get('/schedule/conflicts', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().slice(0, 10);
-    const timezone = req.query.timezone || 'America/Toronto';
+    const timezone = req.query.timezone || defaultPlanningTimeZone();
     const conflicts = await clusterScheduleService.getConflicts(date, timezone);
     res.json({ status: 'success', data: { date, timezone, conflicts, count: conflicts.length } });
   } catch (err) {
@@ -197,7 +198,7 @@ router.get('/schedule/heatmap', async (req, res) => {
 router.get('/schedule/actual-vs-planned', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().slice(0, 10);
-    const timezone = req.query.timezone || 'America/Toronto';
+    const timezone = req.query.timezone || defaultPlanningTimeZone();
 
     // Get planned timeline
     const planned = await clusterScheduleService.getTimelineByHost(date, timezone);
@@ -290,7 +291,7 @@ router.post('/schedule/sync/system-cron', async (req, res) => {
         host: 'primary',          // system crons run on this host
         model: null,               // no model = no GPU/LLM
         agent: null,
-        schedule: schedule ? { type: 'cron', cron: schedule, timezone: 'America/Toronto' } : null,
+        schedule: schedule ? { type: 'cron', cron: schedule, timezone: defaultPlanningTimeZone() } : null,
         estimatedDurationMs: null,
         enabled: true,
         metadata: { command, raw: line }

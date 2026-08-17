@@ -347,7 +347,7 @@ describe('POST /api/inference/generate', () => {
           prompt: 'expand this query',
           system: undefined,
           stream: false,
-          options: { num_predict: 2048 },
+          options: { num_predict: 4096 },
           think: false
         })
       })

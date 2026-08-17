@@ -192,7 +192,7 @@ describe('clusterScheduleService', () => {
       expect(secondary.tasks[0].name).toBe('Secondary Task');
     });
 
-    it('includes VRAM capacity from host config', async () => {
+    it('reports unresolved VRAM when host metadata is not configured', async () => {
       await ClusterScheduleEntry.create({
         source: 'agentx', sourceId: 'v1', name: 'T', taskType: 'benchmark', host: 'primary', enabled: true,
         schedule: { type: 'cron', cron: '0 2 * * *', timezone: 'UTC' }, estimatedDurationMs: 300000
@@ -200,7 +200,7 @@ describe('clusterScheduleService', () => {
 
       const hosts = await clusterScheduleService.getTimelineByHost('2026-03-04', 'UTC');
       const primary = hosts.find(h => h.hostId === 'primary');
-      expect(primary.vramCapacityMb).toBe(49152);
+      expect(primary.vramCapacityMb).toBeNull();
     });
 
     it('puts null-host tasks into unassigned', async () => {
@@ -418,7 +418,7 @@ describe('getModelVramEstimate', () => {
     await ModelRegistry.deleteMany({});
   });
 
-  it('returns registry-based estimate when modelSizeBytes is available', async () => {
+  it('does not treat artifact bytes as runtime VRAM evidence', async () => {
     await ModelRegistry.create({
       modelName: 'qwen3:8b', displayName: 'Qwen3 8B',
       modelSizeBytes: 5_000_000_000, // ~4768 MiB
@@ -426,10 +426,7 @@ describe('getModelVramEstimate', () => {
     });
 
     const est = await clusterScheduleService.getModelVramEstimate('qwen3:8b');
-    expect(est.confidence).toBe('registry');
-    // ~4768 MiB * 1.1 overhead ≈ 5245
-    expect(est.estimatedMiB).toBeGreaterThan(4500);
-    expect(est.estimatedMiB).toBeLessThan(6000);
+    expect(est).toEqual({ estimatedMiB: null, confidence: 'unknown' });
   });
 
   it('returns measured estimate from hostPerformance snapshots', async () => {
@@ -447,18 +444,14 @@ describe('getModelVramEstimate', () => {
     expect(est.estimatedMiB).toBe(5150); // avg of 5100 and 5200
   });
 
-  it('falls back to heuristic from model name parameter count', async () => {
+  it('does not infer runtime VRAM from model-name parameter counts', async () => {
     const est = await clusterScheduleService.getModelVramEstimate('dolphin-phi:2.7b');
-    expect(est.confidence).toBe('heuristic');
-    // 2.7b * 0.6 * 1.15 ≈ 1.863 GiB ≈ 1908 MiB
-    expect(est.estimatedMiB).toBeGreaterThan(1500);
-    expect(est.estimatedMiB).toBeLessThan(2500);
+    expect(est).toEqual({ estimatedMiB: null, confidence: 'unknown' });
   });
 
-  it('returns fallback for unrecognized model names', async () => {
+  it('returns unknown for unrecognized model names', async () => {
     const est = await clusterScheduleService.getModelVramEstimate('mystery-model:latest');
-    expect(est.confidence).toBe('fallback');
-    expect(est.estimatedMiB).toBe(2048);
+    expect(est).toEqual({ estimatedMiB: null, confidence: 'unknown' });
   });
 });
 
@@ -607,13 +600,15 @@ describe('recommendHost', () => {
     }
   });
 
-  it('returns fallback when all hosts are unreachable', async () => {
+  it('does not invent a placement when all hosts are unreachable', async () => {
     mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
 
     const rec = await clusterScheduleService.recommendHost('qwen3:8b', 30000, 'normal');
-    expect(rec.host).toBeDefined(); // fallback to first configured
+    expect(rec.host).toBeNull();
+    expect(rec.hostUrl).toBeNull();
+    expect(rec.reason).toBe('No reachable host');
     expect(rec.confidence).toBe('none');
-    expect(rec.warnings).toContain('All hosts unreachable — returning first configured host as fallback');
+    expect(rec.warnings).toContain('All configured hosts are unreachable; no placement is available');
   });
 
   it('excludes hosts that are running a benchmark batch', async () => {

@@ -15,7 +15,7 @@ const STATUSES = ['queued', 'in_progress', 'review', 'blocked', 'done'];
 // reconciles must be the configured one — never a caller-supplied id (SSRF into
 // arbitrary Leantime projects). Task CRUD below stays open: the live agents
 // (Worker/Overseer/cron) call it with plain curl and no token by design.
-const ALLOWED_PROJECT_ID = Number(process.env.AGENTX_PIPELINE_PROJECT_ID || 3);
+const ALLOWED_PROJECT_ID = Number(process.env.AGENTX_PIPELINE_PROJECT_ID) || null;
 // A worker's feedback verdict maps to a task status. "done" goes to REVIEW (the
 // overseer confirms it to `done` via /status) — workers don't self-certify done.
 const FEEDBACK_STATUS = { done: 'review', blocked: 'blocked', partial: 'in_progress' };
@@ -25,6 +25,9 @@ const ACTIVE_STATUSES = ['queued', 'in_progress', 'review', 'blocked'];
 // Body (optional): { dryRun, syncDone, projectId }
 router.post('/leantime-sync', async (req, res) => {
   const b = req.body || {};
+  if (!ALLOWED_PROJECT_ID) {
+    return envelope.error(res, 503, 'AGENTX_PIPELINE_PROJECT_ID is not configured', 'PIPELINE_NOT_CONFIGURED');
+  }
   if (b.projectId != null && Number(b.projectId) !== ALLOWED_PROJECT_ID) {
     return envelope.error(res, 400, `projectId must be ${ALLOWED_PROJECT_ID}`, 'PROJECT_NOT_ALLOWED');
   }

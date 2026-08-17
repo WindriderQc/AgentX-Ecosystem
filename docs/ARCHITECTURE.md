@@ -1,6 +1,6 @@
 # Agent X architecture
 
-Status: canonical product architecture, verified 2026-08-15.
+Status: canonical product architecture, verified 2026-08-17.
 
 ## Product topology
 
@@ -48,11 +48,21 @@ service nor a skill owned or loaded by Agent X.
   embedding models are reported as optional capabilities, not startup gates.
 - A remote Ollama endpoint is an explicit operator choice. The repository does
   not contain or default to a private or production network.
+- Live qualification and maintenance scripts require their target host, model,
+  context, and external service endpoints explicitly. Fixed benchmark matrices
+  remain valid when the fixed values are the experiment being measured.
+- A service does not recreate another service's Mongoose schema to query its
+  collections. Cross-service evidence moves through the owning service's API;
+  unavailable evidence stays unavailable.
 - Filesystem scanning is disabled by topology: the image has a bounded
   `/data/imports` policy but no host mount. Public demo ingestion uses HTTP.
 - Product documentation is permanent and current. Evolution logs, migration
   plans, incident notes, inventories, and audits do not belong in this
   repository.
+- `callerDetail` performance classification has one authority in Core. Both
+  inference execution and rate limiting consume that classification; neither
+  owns a parallel caller-prefix list. Unknown callers retain full admission and
+  the general rate bucket.
 
 ## Conversation lifecycle ownership
 
@@ -62,3 +72,27 @@ and provides list/get, rename, archive, restore, permanent delete, and ownership
 checks. Archive is a Core state transition. External callers use bounded
 product APIs and must not add competing transcript stores or write lifecycle
 fields directly. Legacy conversations without lifecycle metadata remain active.
+
+## Context ownership
+
+Each deployed model/host pair has one runtime context window. An explicit host
+pin or Modelfile controls that resident window; Benchmark records the largest
+successful measured window and the actual prompt tokens processed by its probe.
+Core reports both capacity and measured evidence without silently shrinking the
+resident configuration.
+
+Thinking mode, output budget, and timeout are request execution choices. They
+must not create alternate context-window lanes for the same resident model.
+Short requests naturally use less prefill work inside the same window, so the
+product does not impose fixed 32K, 64K, 98K, or 131K context tiers.
+
+Runtime topology and hardware facts come from configuration, discovery, or
+measurement. Addresses, host labels, model names, and artifact byte sizes do
+not imply GPU type, VRAM, placement fit, context, or execution role. When
+evidence is absent, APIs report an unresolved value rather than manufacturing
+a conservative default.
+
+Cross-service primitives with identical semantics live in `shared/`; service
+wrappers may add their own I/O but do not fork the underlying policy. Legacy
+aliases remain only for verified external contracts or persisted-data
+migrations, not as speculative compatibility layers.

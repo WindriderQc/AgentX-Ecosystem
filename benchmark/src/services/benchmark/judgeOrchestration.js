@@ -28,7 +28,7 @@ const { JUDGE_CONFIG } = require('../qualityScorer');
 const { warmupModel } = require('./modelWarmup');
 const { judgeResult } = require('./judging');
 const { resolveJudgeHost } = require('./judgeHostResolution');
-const { resolveModelNumCtxDetails } = require('../modelContextResolver');
+const { normalizeJudgeNumCtx } = require('../scoring/judgeRuntimeConfig');
 const { classifyBenchmarkError } = require('./errorClassifier');
 
 function createJudgeOrchestrator({
@@ -71,32 +71,11 @@ function createJudgeOrchestrator({
     }
 
     // ── num_ctx resolution ─────────────────────────────────
-    // Resolve the judge's num_ctx from the profiler (adaptation → probe → VRAM
-    // estimate → explicit config → safety floor). This value is the single
-    // source of truth for the entire judge lifecycle: warmup, evaluation calls,
-    // and any re-warm after infra recovery. Passing it to warmupModel is load-
-    // bearing: without it, Ollama loads the model at its Modelfile default
-    // (e.g. 262144 for gemma4:26b), which either OOMs the host or forces a
-    // reload on every subsequent call at a smaller ctx — both produce 100%
-    // judge-call failures.
-    async function resolveJudgeNumCtx(judgeModel, judgeHostUrl, judgeCfg) {
-        if (judgeCfg && Number.isFinite(Number(judgeCfg.num_ctx))) {
-            return Number(judgeCfg.num_ctx);
-        }
-        const details = await resolveModelNumCtxDetails(judgeModel, {
-            targetHost: judgeHostUrl,
-            fallback: JUDGE_CONFIG.num_ctx || 8192
-        });
-        if (!details.authoritative) {
-            logger.warn('Judge num_ctx resolved from caller fallback — judge model is unprofiled on host', {
-                judge_model: judgeModel, judge_host: judgeHostUrl, num_ctx: details.num_ctx
-            });
-        } else {
-            logger.info('Judge num_ctx resolved from profile', {
-                judge_model: judgeModel, judge_host: judgeHostUrl, num_ctx: details.num_ctx, source: details.source
-            });
-        }
-        return details.num_ctx;
+    // Keep warmup and evaluation aligned only when the operator supplied an
+    // explicit context. Otherwise both omit num_ctx and use the resident
+    // Ollama/Modelfile configuration.
+    async function resolveJudgeNumCtx(_judgeModel, _judgeHostUrl, judgeCfg) {
+        return normalizeJudgeNumCtx(judgeCfg?.num_ctx ?? JUDGE_CONFIG.num_ctx);
     }
 
     // ── Per-host judge target resolution + warmup ──────────

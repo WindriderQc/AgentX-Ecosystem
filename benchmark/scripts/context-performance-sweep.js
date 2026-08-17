@@ -18,19 +18,17 @@ const {
   restoreDedication
 } = require('../src/clients/coreApiClient');
 
-const DEFAULT_MODELS = [
-  'ax/gemma4:26b-a4b-it-qat',
-  'ax/gemma4:31b-it-q8_0',
-  'ax/qwen3.6:35b-a3b-q8_0',
-  'ax/qwen2.5-coder:14b-instruct-q4_K_M'
-];
-
+// These are deliberate measurement buckets, not runtime context lanes.
 const DEFAULT_CONTEXTS = [4096, 8192, 16384, 32768];
 const WARMUP_BUFFER_MS = 5 * 60 * 1000;
 
 function parseArgs(argv) {
   const args = {};
   for (const raw of argv) {
+    if (raw === '--help' || raw === '-h') {
+      args.help = true;
+      continue;
+    }
     const match = String(raw).match(/^--([^=]+)=(.*)$/);
     if (match) args[match[1]] = match[2];
   }
@@ -87,9 +85,24 @@ function summarizeRows(rows) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const hostUrl = args.host || process.env.CONTEXT_SWEEP_HOST || 'http://127.0.0.1:11434';
-  const hostId = args.hostId || process.env.CONTEXT_SWEEP_HOST_ID || 'primary';
-  const models = csv(args.models || process.env.CONTEXT_SWEEP_MODELS, DEFAULT_MODELS);
+  if (args.help) {
+    console.log([
+      'node benchmark/scripts/context-performance-sweep.js \\',
+      '  --host=<ollama-url> --hostId=<id> --models=<model-a,model-b> [options]',
+      '',
+      `Default measurement contexts: ${DEFAULT_CONTEXTS.join(',')}`,
+      'Inputs may also be supplied through CONTEXT_SWEEP_HOST,',
+      'CONTEXT_SWEEP_HOST_ID, and CONTEXT_SWEEP_MODELS.'
+    ].join('\n'));
+    return;
+  }
+
+  const hostUrl = args.host || process.env.CONTEXT_SWEEP_HOST;
+  const hostId = args.hostId || process.env.CONTEXT_SWEEP_HOST_ID;
+  const models = csv(args.models || process.env.CONTEXT_SWEEP_MODELS, []);
+  if (!hostUrl) throw new Error('--host or CONTEXT_SWEEP_HOST is required');
+  if (!hostId) throw new Error('--hostId or CONTEXT_SWEEP_HOST_ID is required');
+  if (!models.length) throw new Error('--models or CONTEXT_SWEEP_MODELS is required');
   const contexts = intCsv(args.contexts || process.env.CONTEXT_SWEEP_CONTEXTS, DEFAULT_CONTEXTS);
   const contextFillPct = asInt(args.fill || process.env.CONTEXT_SWEEP_FILL_PCT, 25);
   const numPredict = asInt(args.predict || process.env.CONTEXT_SWEEP_NUM_PREDICT, 128);
@@ -199,7 +212,11 @@ async function main() {
   console.log(`CONTEXT_SWEEP_SUMMARY ${JSON.stringify(report)}`);
 }
 
-main().catch(err => {
-  console.error(`${now()} Context sweep failed: ${err.stack || err.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error(`${now()} Context sweep failed: ${err.stack || err.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { DEFAULT_CONTEXTS, parseArgs, csv, intCsv, asInt, summarizeRows };

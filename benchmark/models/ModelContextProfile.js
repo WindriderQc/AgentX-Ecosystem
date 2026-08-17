@@ -4,6 +4,7 @@ const LatestEvidenceSchema = new mongoose.Schema({
   snapshotId: String,
   testedNumCtx: Number,
   promptFillPct: Number,
+  promptTokens: Number,
   tokensPerSec: Number,
   vramUsedMiB: Number,
   gpuPercent: Number,
@@ -22,9 +23,10 @@ const ModelContextProfileSchema = new mongoose.Schema({
   hostId: { type: String, default: null, index: true },
 
   verifiedMaxContext: { type: Number, default: null },
+  verifiedInputTokens: { type: Number, default: null },
+  // Compatibility alias for older consumers. New writes keep this equal to
+  // verifiedMaxContext; it is not a separately capped recommendation.
   recommendedContext: { type: Number, default: null },
-  stressCeiling: { type: Number, default: null },
-
   modelTheoreticalMax: { type: Number, default: null },
   source: { type: String, default: 'context_probe' },
   stale: { type: Boolean, default: false },

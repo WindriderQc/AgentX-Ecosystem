@@ -1,16 +1,12 @@
 const { getConfiguredHosts, normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
 const { benchmarkFetch } = require('./http');
+const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
 const CACHE_TTL_MS = 30_000;
 const TAGS_TIMEOUT_MS = 4_000;
 
 let cachedSnapshot = null;
 let cachedAt = 0;
-
-function normalizeModelName(model) {
-    const value = String(model || '').trim();
-    return value.endsWith(':latest') ? value.slice(0, -7) : value;
-}
 
 async function fetchHostTags(host) {
     const controller = new AbortController();

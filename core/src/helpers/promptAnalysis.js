@@ -207,7 +207,8 @@ Be specific and actionable. Focus on changes that directly address the identifie
     const analysisModel = process.env.PROMPT_ANALYSIS_MODEL
       || process.env.OLLAMA_ANALYSIS_MODEL
       || process.env.OLLAMA_MODEL
-      || 'qwen2.5:7b';
+      || process.env.AGENTX_DEFAULT_CHAT_MODEL
+      || 'llama3.2:3b';
 
     // Call Ollama with analysis model (configurable)
     const response = await fetch(`${ollamaHost}/api/generate`, {

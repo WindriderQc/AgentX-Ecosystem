@@ -24,7 +24,7 @@ const PIPELINE_ID_RE = /^\d{3,4}$/;
 
 const leantimeBaseUrl = () => String(process.env.LEANTIME_BASE_URL || '').replace(/\/+$/, '');
 const leantimeUrl = () => `${leantimeBaseUrl()}/api/jsonrpc`;
-const projectId = () => Number(process.env.AGENTX_PIPELINE_PROJECT_ID || 3);
+const projectId = () => Number(process.env.AGENTX_PIPELINE_PROJECT_ID) || null;
 const apiKey = () => process.env.LEANTIME_API_KEY || '';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -294,6 +294,9 @@ async function syncWithLeantime(opts = {}) {
   if (!apiKey()) throw new Error('LEANTIME_API_KEY is not configured');
   if (!leantimeBaseUrl()) throw new Error('LEANTIME_BASE_URL is not configured');
   const proj = Number(opts.projectId || projectId());
+  if (!Number.isInteger(proj) || proj <= 0) {
+    throw new Error('AGENTX_PIPELINE_PROJECT_ID is not configured');
+  }
   const dryRun = !!opts.dryRun;
   const syncDone = !!opts.syncDone;
 

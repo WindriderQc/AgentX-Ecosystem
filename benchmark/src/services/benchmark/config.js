@@ -8,10 +8,10 @@ const DEFAULT_EXECUTION_CONFIG = {
     response_max_tokens: 32000,  // High enough for any response including <think> reasoning
     response_min_tokens: 100,
     response_tokens_multiplier: 1,  // No multiplier games - just use the max
-    // Fallback context window for Ollama when no benchmark-local model hint exists.
-    // Per-model values are auto-detected by modelSync/parameterDetection.js based on
-    // model size and host VRAM when no host-specific benchmark evidence exists.
-    num_ctx: 8192,
+    // Null preserves the resident Ollama/Modelfile context. Campaign contracts
+    // materialize the actual host/model window; operators may still request an
+    // explicit value for a controlled context experiment.
+    num_ctx: null,
     // Fairness override: when set, every host runs at this num_ctx regardless of
     // the per-host model adaptation. Null = honor per-host profile (legacy).
     // Set this to make host-vs-host comparisons apples-to-apples.
@@ -113,17 +113,17 @@ function normalizeExecutionConfig(config = {}) {
         merged.response_max_tokens = merged.response_min_tokens;
     }
     merged.response_max_tokens_source = responseMaxTokensExplicit ? 'caller' : 'default';
-    merged.num_ctx = Math.round(toNumber(
-        merged.num_ctx,
-        DEFAULT_EXECUTION_CONFIG.num_ctx,
-        512,
-        131072
-    ));
+    if (merged.num_ctx === null || merged.num_ctx === undefined || merged.num_ctx === '') {
+        merged.num_ctx = null;
+    } else {
+        merged.num_ctx = Math.round(toNumber(merged.num_ctx, null, 512));
+        if (!Number.isFinite(merged.num_ctx)) merged.num_ctx = null;
+    }
     // force_num_ctx: null = unset (honor profile); number = override
     if (merged.force_num_ctx === null || merged.force_num_ctx === undefined || merged.force_num_ctx === '') {
         merged.force_num_ctx = null;
     } else {
-        merged.force_num_ctx = Math.round(toNumber(merged.force_num_ctx, null, 512, 131072));
+        merged.force_num_ctx = Math.round(toNumber(merged.force_num_ctx, null, 512));
         if (!Number.isFinite(merged.force_num_ctx)) merged.force_num_ctx = null;
     }
     const requestedSamplingProfile = String(

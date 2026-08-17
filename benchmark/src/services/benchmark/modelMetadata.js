@@ -1,10 +1,7 @@
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const HostPerformanceSnapshot = require('../../../models/HostPerformanceSnapshot');
 const ModelProfile = require('../../../models/ModelProfile');
-
-function normalizeModelName(modelName) {
-    return String(modelName || '').trim().replace(/:latest$/i, '');
-}
+const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
 function inferModelCategory(modelName) {
     const normalized = normalizeModelName(modelName).toLowerCase();

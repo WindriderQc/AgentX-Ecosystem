@@ -279,84 +279,6 @@ async function getLatestHostPerformanceForModels(modelNames = []) {
   }, {});
 }
 
-/**
- * Sync benchmark statistics from BenchmarkResult collection
- *
- * @param {string} modelName - Model to update
- * @returns {Promise<Model>} Updated model
- */
-async function syncBenchmarkStats(modelName) {
-  // BenchmarkResult collection is owned by benchmark service — read-only access.
-  // Use existing Mongoose model if registered, otherwise create a minimal schema.
-  const mongoose = require('mongoose');
-  const BenchmarkResult = mongoose.models.BenchmarkResult || mongoose.model('BenchmarkResult',
-    new mongoose.Schema({}, { collection: 'benchmarkresults', strict: false }));
-
-  const stats = await BenchmarkResult.aggregate([
-    { $match: { model: modelName, success: true } },
-    {
-      $group: {
-        _id: null,
-        avgComposite: { $avg: '$composite_score' },
-        avgQuality: { $avg: '$quality_score' },
-        totalTests: { $sum: 1 },
-        avgLatency: { $avg: '$latency' },
-        categories: { $push: '$prompt_category' }
-      }
-    }
-  ]);
-
-  if (stats.length === 0) {
-    return null;
-  }
-
-  const data = stats[0];
-
-  const categoryScores = await BenchmarkResult.aggregate([
-    { $match: { model: modelName, success: true, quality_score: { $ne: null } } },
-    {
-      $group: {
-        _id: '$prompt_category',
-        avgQuality: { $avg: '$quality_score' }
-      }
-    },
-    { $sort: { avgQuality: -1 } }
-  ]);
-
-  const bestCategory = categoryScores[0]?._id || null;
-  const worstCategory = categoryScores[categoryScores.length - 1]?._id || null;
-
-  const latencies = await BenchmarkResult.find(
-    { model: modelName, success: true },
-    { latency: 1 }
-  ).sort({ latency: 1 }).lean();
-
-  const p95Index = latencies.length > 0
-    ? Math.min(Math.ceil(latencies.length * 0.95) - 1, latencies.length - 1)
-    : 0;
-  const p95Latency = latencies[p95Index]?.latency || data.avgLatency;
-
-  const updated = await getModel().findOneAndUpdate(
-    { modelName },
-    {
-      $set: {
-        'benchmarkStats.avgCompositeScore': Math.round(data.avgComposite * 10) / 10,
-        'benchmarkStats.avgQualityScore': Math.round(data.avgQuality * 10) / 10,
-        'benchmarkStats.bestCategory': bestCategory,
-        'benchmarkStats.worstCategory': worstCategory,
-        'benchmarkStats.totalTests': data.totalTests,
-        'benchmarkStats.lastBenchmarked': new Date(),
-        'capabilities.avgLatencyMs': Math.round(data.avgLatency),
-        'capabilities.p95LatencyMs': Math.round(p95Latency),
-        lastUpdated: new Date()
-      }
-    },
-    { new: true }
-  );
-
-  return updated;
-}
-
 module.exports = {
   getActive,
   findByCategory,
@@ -367,6 +289,5 @@ module.exports = {
   getCategoryStats,
   updateHostPerformance,
   summarizeHostPerformance,
-  getLatestHostPerformanceForModels,
-  syncBenchmarkStats
+  getLatestHostPerformanceForModels
 };

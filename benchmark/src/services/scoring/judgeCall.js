@@ -7,7 +7,7 @@ const logger = require('../../../config/logger');
 const { getFetchOptions } = require('../../helpers/httpAgent');
 const { benchmarkFetch: fetch } = require('../benchmark/http');
 const { resolveAdaptedModel } = require('../profiler/adaptedModelResolver');
-const { resolveModelNumCtxDetails } = require('../modelContextResolver');
+const { normalizeJudgeNumCtx } = require('./judgeRuntimeConfig');
 
 // Judge calls always route through the core inference proxy. Lane policy (0168)
 // classifies `callerDetail: 'benchmark-judge'` into the direct lane so admission
@@ -25,12 +25,12 @@ const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 // can wait 20-40s in the gate queue before slot admission; 30s was too tight
 // and caused ~54% of tests to have at least one failed binary call.
 const JUDGE_CONFIG = {
-    model: process.env.JUDGE_MODEL || 'qwen2.5:7b-instruct-q5_K_M',
+    model: process.env.JUDGE_MODEL || process.env.AGENTX_DEFAULT_CHAT_MODEL || 'llama3.2:3b',
     host: normalizeJudgeHost(process.env.JUDGE_HOST || process.env.OLLAMA_HOST || null),
     timeout: 60000,
     temperature: parseFloat(process.env.JUDGE_TEMPERATURE || '0.1'),
     num_predict: parseInt(process.env.JUDGE_NUM_PREDICT || '800', 10),
-    num_ctx: parseInt(process.env.JUDGE_NUM_CTX || '8192', 10),
+    num_ctx: normalizeJudgeNumCtx(process.env.JUDGE_NUM_CTX),
     // Pin judge RNG so verdicts reproduce across runs. With repeat-run variance
     // tracking, we want score variance to come from the model under test, not
     // from the judge re-rolling the same prompt. Set JUDGE_SEED='' to disable.
@@ -46,30 +46,6 @@ let judgeFailureCount = 0;
  * Wildcard bind addresses (0.0.0.0, ::) are remapped to 127.0.0.1 because
  * they describe where a server listens, not where a client should connect.
  */
-/**
- * Best-effort ctx ceiling lookup. Wraps resolveModelNumCtxDetails in a 2s
- * timeout + swallow so a slow/missing Mongo connection can never hang a judge
- * call. When the resolver doesn't answer, the caller falls back to the
- * requested ctx verbatim (no clamp).
- */
-async function safeResolveCtxDetails(model, host, fallback) {
-    const notAuthoritative = { authoritative: false, num_ctx: fallback, source: 'resolver_unavailable' };
-    try {
-        const timeout = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('resolver timeout')), 2000)
-        );
-        return await Promise.race([
-            resolveModelNumCtxDetails(model, { targetHost: host, fallback }),
-            timeout
-        ]);
-    } catch (err) {
-        logger.debug('Judge ctx resolver unavailable, using requested ctx', {
-            error: err.message, model, host
-        });
-        return notAuthoritative;
-    }
-}
-
 function normalizeJudgeHost(rawValue) {
     if (!rawValue) return null;
     const trimmed = String(rawValue).trim();
@@ -241,23 +217,7 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         // the host — ax/ variants have Modelfiles tuned to the host's VRAM
         // envelope, and the ModelAdaptation row carries a matching num_ctx.
         const effectiveJudgeModel = await resolveAdaptedModel(judgeConfig.model, judgeConfig.host);
-        // Clamp judge num_ctx to the host-safe ceiling. Belt-and-suspenders for
-        // cases where no ax/ variant exists — prevents an explicit
-        // judgeConfig.num_ctx (or the 8192 default) from being sent blindly to
-        // a host that was profiled at a lower ctx, which would trigger a model
-        // reload and cook VRAM on the path back up.
-        const requestedCtx = judgeConfig.num_ctx || JUDGE_CONFIG.num_ctx;
-        const ctxDetails = await safeResolveCtxDetails(judgeConfig.model, judgeConfig.host, requestedCtx);
-        const numCtx = ctxDetails.authoritative ? Math.min(requestedCtx, ctxDetails.num_ctx) : requestedCtx;
-        if (numCtx < requestedCtx) {
-            logger.warn('Judge num_ctx clamped to host-safe ceiling', {
-                judge_model: judgeConfig.model,
-                judge_host: judgeConfig.host,
-                requested: requestedCtx,
-                clamped: numCtx,
-                source: ctxDetails.source
-            });
-        }
+        const numCtx = normalizeJudgeNumCtx(judgeConfig.num_ctx);
         if (effectiveJudgeModel !== judgeConfig.model) {
             logger.info('Judge model resolved to adapted variant', {
                 requested: judgeConfig.model,
@@ -273,9 +233,9 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         const judgeSeed = judgeConfig.seed !== undefined ? judgeConfig.seed : JUDGE_CONFIG.seed;
         const judgeOptions = {
             temperature: judgeConfig.temperature,
-            num_predict: judgeConfig.num_predict,
-            num_ctx: numCtx
+            num_predict: judgeConfig.num_predict
         };
+        if (numCtx) judgeOptions.num_ctx = numCtx;
         if (Number.isFinite(judgeSeed)) judgeOptions.seed = judgeSeed;
 
         // Core proxy: host override preserves benchmark's explicit host choice,

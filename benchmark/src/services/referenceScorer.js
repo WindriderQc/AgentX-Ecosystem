@@ -27,7 +27,11 @@ function resolveThink(judgeConfig) {
  */
 function buildGenerateRequest(judgeConfig, prompt, numPredict, callerDetail) {
     const numCtx = normalizeJudgeNumCtx(judgeConfig.num_ctx);
-    const commonOptions = { temperature: 0.1, num_predict: numPredict, num_ctx: numCtx };
+    const commonOptions = {
+        temperature: 0.1,
+        num_predict: numPredict,
+        ...(numCtx ? { num_ctx: numCtx } : {})
+    };
     return {
         url: `${CORE_URL}/api/inference/generate`,
         body: {

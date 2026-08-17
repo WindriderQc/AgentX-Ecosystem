@@ -410,9 +410,8 @@ async function startServer() {
   } catch (err) {
     // Fallback: load from JSON if MongoDB seeding fails
     try {
-      const { getAlertService } = require('./src/services/alertService');
+      const alertService = require('./src/services/alertService');
       const defaultRules = require('./config/default-alert-rules.json');
-      const alertService = getAlertService();
       if (alertService && typeof alertService.loadRules === 'function') {
         alertService.loadRules(defaultRules);
         console.log(`   ✓ Alert Rules: Loaded ${defaultRules.length} default rules (JSON fallback)`);

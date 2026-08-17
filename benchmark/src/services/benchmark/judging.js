@@ -17,9 +17,9 @@
  *    - Populated from the execution plan's per-host judge assignment
  *
  * 3. JUDGE_CONFIG defaults (src/services/scoring/judgeCall.js)
- *    - Hardcoded defaults: model = 'qwen2.5:7b-instruct-q5_K_M', host = null
- *    - host is overridden at module load from OLLAMA_HOST env var if set
- *    - Also provides: timeout, temperature, num_predict, num_ctx, max_retries
+ *    - model uses product configuration; host uses JUDGE_HOST/OLLAMA_HOST
+ *    - num_ctx is omitted unless the operator explicitly configures it
+ *    - Also provides: timeout, temperature, num_predict, and max_retries
  *
  * 4. judgeHostResolution.js -- resolveJudgeHost()
  *    - Used during batch planning (batchPlanner) to determine which host
@@ -28,9 +28,8 @@
  *      the execution host (same-host judging)
  *
  * 5. Execution config defaults (config.js -- DEFAULT_EXECUTION_CONFIG)
- *    - Provides num_ctx, think, and timeout defaults used during execution
- *    - These are separate from judge config but influence the judge's
- *      context window when passed through
+ *    - Provides thinking and timeout defaults; resident context remains
+ *      governed by the deployed model unless explicitly overridden
  */
 
 const logger = require('../../../config/logger');

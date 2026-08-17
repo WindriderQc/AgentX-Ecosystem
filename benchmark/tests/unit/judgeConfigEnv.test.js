@@ -30,10 +30,11 @@ describe('JUDGE_CONFIG env overrides', () => {
         expect(JUDGE_CONFIG.model).toBe('custom-judge:latest');
     });
 
-    it('falls back to hardcoded model when JUDGE_MODEL is unset', () => {
+    it('uses the product default model when JUDGE_MODEL is unset', () => {
         delete process.env.JUDGE_MODEL;
+        process.env.AGENTX_DEFAULT_CHAT_MODEL = 'product-default:latest';
         const { JUDGE_CONFIG } = loadFresh();
-        expect(JUDGE_CONFIG.model).toBe('qwen2.5:7b-instruct-q5_K_M');
+        expect(JUDGE_CONFIG.model).toBe('product-default:latest');
     });
 
     it('uses JUDGE_HOST from env (takes priority over OLLAMA_HOST)', () => {
@@ -66,6 +67,12 @@ describe('JUDGE_CONFIG env overrides', () => {
         process.env.JUDGE_NUM_CTX = '16384';
         const { JUDGE_CONFIG } = loadFresh();
         expect(JUDGE_CONFIG.num_ctx).toBe(16384);
+    });
+
+    it('leaves judge context unset when the operator did not configure one', () => {
+        delete process.env.JUDGE_NUM_CTX;
+        const { JUDGE_CONFIG } = loadFresh();
+        expect(JUDGE_CONFIG.num_ctx).toBeNull();
     });
 
     it('preserves non-overridden defaults when env vars are set', () => {

@@ -7,8 +7,7 @@ import { getSelectedHost } from './infrastructure.js';
 import { getSelectedJudge } from './judge-roster.js';
 
 const LEVEL_PROMPTS = { 1: 14, 2: 21, 3: 21, 4: 21, 5: 7 };
-const VRAM_GPU = { 24576: 'RTX 3090', 16384: 'RTX 5070 Ti', 12288: 'RTX 3080 Ti' };
-function _vramToGpu(mib) { return mib ? (VRAM_GPU[mib] || '') : ''; }
+function _vramLabel(mib) { return mib ? `${Math.round(mib / 1024)} GB VRAM` : ''; }
 const LEVEL_CATS    = { 1: 7,  2: 7,  3: 7,  4: 7,  5: 7 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -185,7 +184,7 @@ function _updateSummary(container, deps) {
     if (hostCol) {
         if (host) {
             const name = host.displayName || host.name || host.hostname || '?';
-            const gpu = host.gpu?.model || _vramToGpu(host.gpu?.vramTotalMiB) || '';
+            const gpu = host.gpu?.model || _vramLabel(host.gpu?.vramTotalMiB) || '';
             const tps = host.baseline?.tokensPerSec
                 ? `${Number(host.baseline.tokensPerSec).toFixed(1)} tok/s` : '';
             hostCol.innerHTML = `<strong>${esc(name)}</strong><br>`

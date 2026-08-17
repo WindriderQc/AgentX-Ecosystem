@@ -89,7 +89,7 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
   getPinStatus: jest.fn(async () => ({})),
   setPinnedModel: jest.fn(async () => ({})),
   clearPinnedModel: jest.fn(async () => ({})),
-  restorePin: jest.fn(async () => ({})),
+  restorePinnedModels: jest.fn(async () => ({})),
   swapModel: jest.fn(async () => ({})),
   claimBenchmark: jest.fn(async () => ({ claimed: true })),
   heartbeatBenchmarkClaim: jest.fn(async () => ({ heartbeat: true })),
@@ -315,7 +315,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
         .send({});
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
-      expect(hostPrefService.restorePin).not.toHaveBeenCalled();
+      expect(hostPrefService.restorePinnedModels).not.toHaveBeenCalled();
     });
 
     it('does not fetch live status for a stored non-allowlisted host', async () => {

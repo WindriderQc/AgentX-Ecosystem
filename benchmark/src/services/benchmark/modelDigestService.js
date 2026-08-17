@@ -8,14 +8,11 @@
 
 const logger = require('../../../config/logger');
 const { listModels } = require('../../clients/ollamaClient');
+const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
 const CACHE_TTL_MS = 60_000;
 const LOOKUP_TIMEOUT_MS = 3_000;
 const hostCache = new Map();
-
-function normalizeModelName(value) {
-    return String(value || '').trim();
-}
 
 function namesEquivalent(a, b) {
     const left = normalizeModelName(a);

@@ -204,7 +204,7 @@ async function readCodexSubscriptionValue(now = Date.now(), models = {}) {
     Watermark.distinct('hostId'),
     Watermark.findOne({}).sort({ lastSeenAtMs: -1 }).select('lastSeenAtMs').lean(),
   ]);
-  const monthlyCost = finite(process.env.CODEX_SUBSCRIPTION_MONTHLY_USD || 20);
+  const monthlyCost = nullable(process.env.CODEX_SUBSCRIPTION_MONTHLY_USD);
   const [signal, message] = valueSignal(last7d, latestAccount?.account?.primary?.usedPercent);
   return {
     available: allTime.sessions > 0,
@@ -213,10 +213,10 @@ async function readCodexSubscriptionValue(now = Date.now(), models = {}) {
     lastSyncedAtMs: Math.max(Number(latestAccount?.observedAtMs || 0), Number(latestWatermark?.lastSeenAtMs || 0)) || null,
     hosts: hosts.length,
     plan: {
-      name: process.env.CODEX_SUBSCRIPTION_PLAN_NAME || 'ChatGPT Plus',
+      name: process.env.CODEX_SUBSCRIPTION_PLAN_NAME || latestAccount?.account?.planType || null,
       internalType: latestAccount?.account?.planType || null,
       monthlyCostUsd: monthlyCost,
-      priceSourceUrl: 'https://help.openai.com/en/articles/6950777-what-is-chatgpt-plus',
+      priceSourceUrl: null,
     },
     quota: latestAccount?.account ? {
       primary: latestAccount.account.primary || null,
@@ -226,7 +226,9 @@ async function readCodexSubscriptionValue(now = Date.now(), models = {}) {
     currentMonth,
     last7d,
     allTime,
-    effectiveCostPer1MTokensUsd: currentMonth.totalTokens ? (monthlyCost / currentMonth.totalTokens) * 1_000_000 : null,
+    effectiveCostPer1MTokensUsd: monthlyCost !== null && currentMonth.totalTokens
+      ? (monthlyCost / currentMonth.totalTokens) * 1_000_000
+      : null,
     cachedInputPct: currentMonth.inputTokens ? Math.round((currentMonth.cachedInputTokens / currentMonth.inputTokens) * 1000) / 10 : 0,
     valueSignal: signal,
     valueMessage: message,

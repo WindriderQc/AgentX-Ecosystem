@@ -7,20 +7,19 @@
  * Priority:
  *   1. HostPreference pinned context — operator-selected resident runtime
  *   2. Modelfile `PARAMETER num_ctx <N>` — model build default
- *   3. ModelContextProfile.recommendedContext — current measured host/model profile
- *   4. model_info `<arch>.context_length` — the model's max capacity
+ *   3. ModelContextProfile.verifiedMaxContext — measured host/model window
+ *   4. model_info `<arch>.context_length` — the model's declared capacity
  *   5. ModelRegistry.contextTest.testedNumCtx — legacy profiler-verified
- *   6. ModelRegistry.executionDefaults.num_ctx — registry default
- *   7. Hard fallback (8192)
+ *   6. Unresolved (no context is invented)
  *
  * The returned `source` tells the chat UI where the number came from, so we
- * can show a badge ("Modelfile", "Profiled", "Default") and set user
+ * can show a badge ("Modelfile", "Profiled", "Unresolved") and set user
  * expectations. Cached 5 min per (host, model) — Modelfile rarely changes.
  */
 
 const logger = require('../../config/logger');
 const { resolveTarget } = require('../helpers/ollamaUtils');
-const { modelsMatch } = require('../helpers/modelNameNormalization');
+const { modelLookupNames, modelsMatch } = require('../helpers/modelNameNormalization');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const cache = new Map(); // key `${host}::${model}` → { value, expiresAt }
@@ -51,14 +50,6 @@ function pickContextLengthFromModelInfo(modelInfo) {
     }
   }
   return null;
-}
-
-function modelLookupNames(model) {
-  const raw = String(model || '').trim().replace(/:latest$/i, '');
-  if (!raw) return [];
-  const slashIdx = raw.indexOf('/');
-  const bare = slashIdx > 0 && slashIdx < raw.length - 1 ? raw.slice(slashIdx + 1) : null;
-  return Array.from(new Set([raw, bare].filter(Boolean)));
 }
 
 async function showModelOnHost(hostUrl, model, timeoutMs = 5000) {
@@ -114,15 +105,15 @@ async function fromContextProfile(model, hostUrl) {
       hostUrl,
       stale: { $ne: true }
     })
-      .select('modelName hostUrl recommendedContext verifiedMaxContext stressCeiling lastValidatedAt source')
+      .select('modelName hostUrl recommendedContext verifiedMaxContext verifiedInputTokens lastValidatedAt source')
       .lean();
-    const recommended = profile && Number(profile.recommendedContext);
-    if (!Number.isFinite(recommended) || recommended <= 0) return null;
+    const verified = Number(profile?.verifiedMaxContext || profile?.recommendedContext);
+    if (!Number.isFinite(verified) || verified <= 0) return null;
     return {
-      num_ctx: Math.round(recommended),
+      num_ctx: Math.round(verified),
       source: 'model_context_profile',
-      verifiedMaxContext: profile.verifiedMaxContext || null,
-      stressCeiling: profile.stressCeiling || null,
+      verifiedMaxContext: Math.round(verified),
+      verifiedInputTokens: profile.verifiedInputTokens || null,
       profiledAt: profile.lastValidatedAt || null,
       matchedName: profile.modelName || null
     };
@@ -136,15 +127,11 @@ async function fromRegistry(model) {
   try {
     const ModelRegistry = require('../../models/ModelRegistry');
     const entry = await ModelRegistry.findOne({ modelName: model.replace(/:latest$/, '') })
-      .select('contextTest executionDefaults capabilities sourceHost')
+      .select('contextTest sourceHost')
       .lean();
     if (!entry) return null;
     const tested = entry.contextTest && entry.contextTest.status === 'completed' && entry.contextTest.testedNumCtx;
     if (tested) return { num_ctx: tested, source: 'profiled' };
-    const def = entry.executionDefaults && entry.executionDefaults.num_ctx;
-    if (def) return { num_ctx: def, source: 'registry_default' };
-    const cap = entry.capabilities && entry.capabilities.maxContext;
-    if (cap) return { num_ctx: cap, source: 'registry_capability' };
     return null;
   } catch (err) {
     logger.debug('[modelContextInfo] registry lookup failed', { model, error: err.message });
@@ -168,7 +155,7 @@ async function getContextInfo(model, hostUrlRaw) {
   }
 
   let num_ctx = null;
-  let source = 'fallback';
+  let source = 'unresolved';
   let maxContextLength = null;
   let profileMeta = null;
   let pinMeta = null;
@@ -194,13 +181,20 @@ async function getContextInfo(model, hostUrlRaw) {
     }
   }
 
-  if (!num_ctx) {
-    const profile = await fromContextProfile(model, hostUrl);
-    if (profile) {
+  // A measured profile remains evidence even when an operator pin or the
+  // resident Modelfile determines the active window.
+  const profile = await fromContextProfile(model, hostUrl);
+  if (profile) {
+    profileMeta = profile;
+    if (!num_ctx) {
       num_ctx = profile.num_ctx;
       source = profile.source;
-      profileMeta = profile;
     }
+  }
+
+  if (!num_ctx && maxContextLength) {
+    num_ctx = maxContextLength;
+    source = 'model_capacity';
   }
 
   if (!num_ctx) {
@@ -211,16 +205,6 @@ async function getContextInfo(model, hostUrlRaw) {
     }
   }
 
-  if (!num_ctx && maxContextLength) {
-    num_ctx = maxContextLength;
-    source = 'model_capacity';
-  }
-
-  if (!num_ctx) {
-    num_ctx = 8192;
-    source = 'fallback';
-  }
-
   const value = {
     model,
     host: hostUrl,
@@ -229,7 +213,7 @@ async function getContextInfo(model, hostUrlRaw) {
     ...(pinMeta?.pinnedModel ? { pinnedModel: pinMeta.pinnedModel } : {}),
     ...(pinMeta?.hostDisplayName ? { hostDisplayName: pinMeta.hostDisplayName } : {}),
     ...(profileMeta?.verifiedMaxContext ? { verifiedMaxContext: profileMeta.verifiedMaxContext } : {}),
-    ...(profileMeta?.stressCeiling ? { stressCeiling: profileMeta.stressCeiling } : {}),
+    ...(profileMeta?.verifiedInputTokens ? { verifiedInputTokens: profileMeta.verifiedInputTokens } : {}),
     ...(profileMeta?.profiledAt ? { profiledAt: profileMeta.profiledAt } : {}),
     ...(profileMeta?.matchedName ? { matchedName: profileMeta.matchedName } : {}),
     ...(maxContextLength ? { maxContextLength } : {})

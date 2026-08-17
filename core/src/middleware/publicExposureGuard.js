@@ -2,7 +2,6 @@
 
 const { operatorTokenAllowed } = require('./operatorAccess');
 
-const DEFAULT_PUBLIC_HOSTS = Object.freeze([]);
 const PROTECTED_PATH_PREFIXES = ['/api/', '/mcp', '/api/mcp'];
 
 function splitList(value) {
@@ -39,7 +38,7 @@ function configuredPublicHosts() {
     hostnameFromUrl(process.env.AGENTX_PUBLIC_URL)
   ].filter(Boolean);
 
-  return new Set([...DEFAULT_PUBLIC_HOSTS, ...configuredHosts, ...explicitUrlHosts]
+  return new Set([...configuredHosts, ...explicitUrlHosts]
     .map((entry) => normalizeHost(hostnameFromUrl(entry) || entry))
     .filter(Boolean));
 }
@@ -75,7 +74,6 @@ function publicExposureGuard(req, res, next) {
 }
 
 module.exports = {
-  DEFAULT_PUBLIC_HOSTS,
   configuredPublicHosts,
   requestHost,
   isProtectedPath,

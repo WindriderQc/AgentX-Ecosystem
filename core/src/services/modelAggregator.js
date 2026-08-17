@@ -12,16 +12,6 @@
 const CustomModel = require('../../models/CustomModel');
 const ModelRegistry = require('../../models/ModelRegistry');
 const fetch = require('node-fetch');
-// BenchmarkResult collection is owned by agentx-benchmark — read-only access for enrichment
-let BenchmarkResult;
-try {
-  BenchmarkResult = require('../../models/BenchmarkResult');
-} catch {
-  // Schema removed — create minimal read-only schema for aggregation queries
-  const mongoose = require('mongoose');
-  BenchmarkResult = mongoose.models.BenchmarkResult || mongoose.model('BenchmarkResult',
-    new mongoose.Schema({}, { collection: 'benchmarkresults', strict: false }));
-}
 const logger = require('../../config/logger');
 const { getHostUrls, getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 const {
@@ -35,7 +25,7 @@ const {
   resolveCapabilityContract: resolveArtifactCapabilityContract
 } = require('./inferenceContractService');
 
-/** Resolve friendly hostname (e.g. "Host Delta") from an Ollama host URL */
+/** Resolve the configured display name for an Ollama host URL. */
 function resolveHostName(hostUrl) {
   if (!hostUrl) return null;
   const hosts = getConfiguredHosts();
@@ -71,6 +61,11 @@ function isActiveRegistryRecord(record) {
   if (!record) return false;
   if (record.isActive === false) return false;
   return String(record.status || 'active').toLowerCase() !== 'retired';
+}
+
+function positiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
 }
 
 function applyThinkingCapability(model, capabilityContract, fallbackSupported) {
@@ -123,21 +118,15 @@ async function getAllModels(options = {}) {
   const readinessHost = filters.host || null;
 
   // Fetch from all sources in parallel
-  const [ollamaModels, customModels, registryData, benchmarkData] = await Promise.all([
+  const [ollamaModels, customModels, registryData] = await Promise.all([
     includeOllama ? fetchOllamaModels() : Promise.resolve([]),
     includeCustom ? fetchCustomModels() : Promise.resolve([]),
-    includeRegistry ? fetchRegistryMetadata() : Promise.resolve([]),
-    fetchBenchmarkData()
+    includeRegistry ? fetchRegistryMetadata() : Promise.resolve([])
   ]);
   const registryByModelKey = new Map();
   for (const reg of registryData) {
     const key = modelNameIdentityKey(reg.modelName);
     if (key) registryByModelKey.set(key, selectRegistryRecord(registryByModelKey.get(key), reg));
-  }
-  const benchmarkByModelKey = new Map();
-  for (const benchmark of benchmarkData) {
-    const key = modelNameIdentityKey(benchmark.model);
-    if (key && !benchmarkByModelKey.has(key)) benchmarkByModelKey.set(key, benchmark);
   }
   const capabilityContracts = new Map();
   async function capabilityContractFor(model, host, registryEntry) {
@@ -180,7 +169,7 @@ async function getAllModels(options = {}) {
         }
       },
       capabilities: {
-        maxContext: ollamaModel.details?.context_length || 4096,
+        maxContext: positiveInteger(ollamaModel.details?.context_length),
         supportsStreaming: true,
         supportsThinking: false,
         avgLatencyMs: null // Will be enriched from benchmarks
@@ -208,7 +197,8 @@ async function getAllModels(options = {}) {
     if (registryMatch) {
       unified.categories = registryMatch.categories || [];
       unified.tags = registryMatch.tags || [];
-      unified.capabilities.maxContext = registryMatch.capabilities?.maxContext || unified.capabilities.maxContext;
+      unified.capabilities.maxContext = positiveInteger(registryMatch.capabilities?.maxContext)
+        || unified.capabilities.maxContext;
       unified.capabilities.supportsThinking = registryMatch.capabilities?.supportsThinking ?? unified.capabilities.supportsThinking;
       unified.benchmarkStats = registryMatch.benchmarkStats;
       unified.benchmarkEligibility = registryMatch.benchmarkEligibility || null;
@@ -231,18 +221,6 @@ async function getAllModels(options = {}) {
       await capabilityContractFor(ollamaModel.name, ollamaModel.host, registryMatch),
       registryMatch?.capabilities?.supportsThinking
     );
-
-    // Enrich with benchmark data
-    const benchmarkMatch = benchmarkByModelKey.get(modelKey);
-    if (benchmarkMatch) {
-      unified.capabilities.avgLatencyMs = benchmarkMatch.avgLatency;
-      if (!unified.benchmarkStats) {
-        unified.benchmarkStats = {
-          avgCompositeScore: benchmarkMatch.avgScore,
-          totalTests: benchmarkMatch.testCount
-        };
-      }
-    }
 
     models.push(unified);
   }
@@ -269,7 +247,7 @@ async function getAllModels(options = {}) {
         }
       },
       capabilities: {
-        maxContext: customModel.advancedConfig?.num_ctx || 4096,
+        maxContext: positiveInteger(customModel.advancedConfig?.num_ctx),
         supportsStreaming: true,
         supportsThinking: false,
         avgLatencyMs: null
@@ -313,7 +291,6 @@ async function getAllModels(options = {}) {
       if (seenOllamaModels.has(modelKey)) continue; // already merged above
       if (seenRegistryNames.has(modelKey)) continue; // dedup :latest/case variants
       seenRegistryNames.add(modelKey);
-      const benchmarkMatch = benchmarkByModelKey.get(modelKey);
       const hostName = resolveHostName(reg.host);
       const readinessData = await getModelReadiness(normalizedRegName, readinessHost || reg.host);
       const registryOnlyModel = {
@@ -329,11 +306,11 @@ async function getAllModels(options = {}) {
           hostName: hostName || undefined,
         },
         capabilities: {
-          maxContext: reg.capabilities?.maxContext || 4096,
+          maxContext: positiveInteger(reg.capabilities?.maxContext),
           supportsStreaming: true,
           supportsThinking: false,
           supportsVision: reg.capabilities?.supportsVision ?? false,
-          avgLatencyMs: benchmarkMatch?.avgLatency || reg.capabilities?.avgLatencyMs || null,
+          avgLatencyMs: reg.capabilities?.avgLatencyMs || null,
           avgTokensPerSec: reg.capabilities?.avgTokensPerSec || null,
           judgeTier: reg.capabilities?.judgeTier || null,
           curatedJudgeTier: reg.capabilities?.curatedJudgeTier || null,
@@ -345,10 +322,7 @@ async function getAllModels(options = {}) {
         readiness: readinessData.readiness,
         bestReadiness: readinessData.bestReadiness,
         chatAllowed: true,
-        benchmarkStats: reg.benchmarkStats || (benchmarkMatch ? {
-          avgCompositeScore: benchmarkMatch.avgScore,
-          totalTests: benchmarkMatch.testCount
-        } : null),
+        benchmarkStats: reg.benchmarkStats || null,
         benchmarkEligibility: reg.benchmarkEligibility || null,
         executionDefaults: reg.executionDefaults || null,
         executionOverrides: reg.executionOverrides || null,
@@ -469,31 +443,6 @@ async function fetchRegistryMetadata() {
 }
 
 /**
- * Fetch benchmark data for enrichment
- */
-async function fetchBenchmarkData() {
-  try {
-    const results = await BenchmarkResult.aggregate([
-      { $match: { status: 'completed' } },
-      {
-        $group: {
-          _id: '$model',
-          avgLatency: { $avg: '$result.latency' },
-          avgScore: { $avg: '$result.score' },
-          testCount: { $sum: 1 }
-        }
-      },
-      { $project: { _id: 0, model: '$_id', avgLatency: 1, avgScore: 1, testCount: 1 } }
-    ]);
-
-    return results;
-  } catch (error) {
-    logger.error('Failed to fetch benchmark data', { error: error.message });
-    return [];
-  }
-}
-
-/**
  * Apply filters to model list
  */
 function applyFilters(models, filters) {
@@ -586,7 +535,8 @@ async function getModelSources() {
   sources.ollama.hosts = getConfiguredHosts().map(host => ({
     id: host.id,
     url: host.url,
-    name: host.name || host.url
+    name: host.name || host.url,
+    vramMb: host.vramMb || 0
   }));
   sources.ollama.count = liveOllamaModels.length;
 

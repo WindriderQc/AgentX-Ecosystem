@@ -1,4 +1,8 @@
-const DEFAULT_PLANNING_TIME_ZONE = 'America/Toronto';
+const DEFAULT_PLANNING_TIME_ZONE = 'UTC';
+
+function defaultPlanningTimeZone(env = process.env) {
+  return String(env.PLANNING_TIME_ZONE || '').trim() || DEFAULT_PLANNING_TIME_ZONE;
+}
 
 function dateOnlyKey(value) {
   if (!value) return '';
@@ -10,7 +14,7 @@ function dateOnlyKey(value) {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 }
 
-function zonedDateOnly(now = new Date(), timeZone = process.env.PLANNING_TIME_ZONE || DEFAULT_PLANNING_TIME_ZONE) {
+function zonedDateOnly(now = new Date(), timeZone = defaultPlanningTimeZone()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric',
@@ -28,6 +32,7 @@ function isDateOnlyOverdue(value, now = new Date(), timeZone) {
 
 module.exports = {
   DEFAULT_PLANNING_TIME_ZONE,
+  defaultPlanningTimeZone,
   dateOnlyKey,
   zonedDateOnly,
   isDateOnlyOverdue

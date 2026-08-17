@@ -5,7 +5,6 @@
 
 const {
   GPU_BANDWIDTH_GBS,
-  HOST_BANDWIDTH_GBS_BY_IP,
   resolveHostBandwidthGBs,
   parseActiveParams,
   effectiveThroughputParams,
@@ -17,7 +16,6 @@ const {
 
 describe('resolveHostBandwidthGBs', () => {
   it('does not encode IP-to-hardware inventory', () => {
-    expect(HOST_BANDWIDTH_GBS_BY_IP).toEqual({});
     expect(resolveHostBandwidthGBs('192.0.2.10')).toBeNull();
     expect(resolveHostBandwidthGBs('http://192.0.2.20:11434')).toBeNull();
   });
@@ -160,7 +158,7 @@ describe('selectBestQuantForVram (B2 quant-walk)', () => {
     expect(r.estVramMiB).toBeLessThanOrEqual(Math.round(12288 * 0.9));
   });
   it('downgrades quant for a tighter fit before giving up', () => {
-    // 14B in 12GB should require a lower quant than 7B did (or half-context).
+    // 14B in 12GB should require a lower quant than 7B did.
     const r = selectBestQuantForVram({ paramBillions: 14, hostVramMiB: 12288, numCtx: 8192 });
     if (r.fits) {
       expect(['Q5_K_M', 'Q4_K_M', 'Q3_K_M', 'Q2_K']).toContain(r.quantization);

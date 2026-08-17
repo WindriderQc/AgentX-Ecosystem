@@ -5,6 +5,7 @@ process.env.OLLAMA_HOST = 'http://primary:11434';
 process.env.OLLAMA_HOST_SECONDARY = 'http://secondary:11434';
 process.env.OLLAMA_HOST_TERTIARY = 'http://tertiary:11434';
 process.env.MODEL_HEALTH_CACHE_TTL_MS = '0'; // Disable cache for tests
+process.env.AGENTX_CODING_SPECIALIST_MODEL = 'ax/qwen3-coder:30b';
 
 const fetch = require('node-fetch');
 const logger = require('../../config/logger');
@@ -26,9 +27,7 @@ jest.mock('../../src/helpers/schedulerClient', () => ({
 
 // Mock AlertService
 jest.mock('../../src/services/alertService', () => ({
-    getAlertService: jest.fn(() => ({
-        triggerAlert: jest.fn()
-    }))
+    evaluateEvent: jest.fn()
 }));
 
 describe('Model Router Service', () => {

@@ -22,8 +22,8 @@ describe('recommendHost — default model scoring', () => {
       pinnedModels: [{ model: 'qwen3-2507-30b-long-48k' }]
     });
 
-    const { getDefaultModelsMap } = require('../../src/services/hostPreferenceService');
-    const map = await getDefaultModelsMap();
+    const { getPinnedModelsMap } = require('../../src/services/hostPreferenceService');
+    const map = await getPinnedModelsMap();
     expect(map.get('http://192.0.2.66:11434')).toContain('qwen3-2507-30b-long-48k');
   });
 });

@@ -100,6 +100,11 @@ describe('modelContextInfoService', () => {
         { model: 'ax/qwen3.5:9b', contextSize: 131072 }
       ]
     });
+    mockProfile({
+      modelName: 'ax/qwen3.5:9b',
+      verifiedMaxContext: 120000,
+      verifiedInputTokens: 100000
+    });
 
     const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://192.0.2.12:11434');
 
@@ -108,6 +113,8 @@ describe('modelContextInfoService', () => {
       source: 'host_preference_pin',
       pinnedModel: 'ax/qwen3.5:9b',
       hostDisplayName: 'Host Beta',
+      verifiedMaxContext: 120000,
+      verifiedInputTokens: 100000,
       maxContextLength: 262144
     }));
   });
@@ -122,7 +129,7 @@ describe('modelContextInfoService', () => {
       modelName: 'ax/qwen3.5:9b',
       recommendedContext: 131072,
       verifiedMaxContext: 237568,
-      stressCeiling: 237568,
+      verifiedInputTokens: 190000,
       lastValidatedAt: profiledAt
     });
     mockRegistry({
@@ -133,10 +140,10 @@ describe('modelContextInfoService', () => {
     const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://host:11434');
 
     expect(info).toEqual(expect.objectContaining({
-      num_ctx: 131072,
+      num_ctx: 237568,
       source: 'model_context_profile',
       verifiedMaxContext: 237568,
-      stressCeiling: 237568,
+      verifiedInputTokens: 190000,
       profiledAt,
       matchedName: 'ax/qwen3.5:9b',
       maxContextLength: 262144
@@ -148,15 +155,15 @@ describe('modelContextInfoService', () => {
     }));
   });
 
-  it('falls back to executionDefaults when contextTest is not completed', async () => {
+  it('ignores generated registry defaults when no runtime context evidence exists', async () => {
     svc._setFetch(makeFetch({ parameters: '' }));
     mockRegistry({
       contextTest: { status: 'pending' },
       executionDefaults: { num_ctx: 16384 }
     });
     const info = await svc.getContextInfo('model-x', 'http://host:11434');
-    expect(info.num_ctx).toBe(16384);
-    expect(info.source).toBe('registry_default');
+    expect(info.num_ctx).toBeNull();
+    expect(info.source).toBe('unresolved');
   });
 
   it('uses model_capacity from /api/show model_info when nothing else', async () => {
@@ -170,12 +177,12 @@ describe('modelContextInfoService', () => {
     expect(info.source).toBe('model_capacity');
   });
 
-  it('returns fallback when everything fails', async () => {
+  it('returns unresolved when everything fails', async () => {
     svc._setFetch(makeFetch({}, false));
     mockRegistry(null);
     const info = await svc.getContextInfo('ghost:1b', 'http://host:11434');
-    expect(info.num_ctx).toBe(8192);
-    expect(info.source).toBe('fallback');
+    expect(info.num_ctx).toBeNull();
+    expect(info.source).toBe('unresolved');
   });
 
   it('still resolves when no host is provided (registry-only mode)', async () => {

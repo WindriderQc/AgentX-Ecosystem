@@ -3,14 +3,8 @@
 
 import { fetchHosts } from './api.js';
 
-const VRAM_LABELS = {
-    24576: 'RTX 3090 24GB',
-    16384: 'RTX 5070 Ti 16GB',
-    12288: 'RTX 3080 Ti 12GB'
-};
-
 function gpuLabel(host) {
-    if (host.vramMb && VRAM_LABELS[host.vramMb]) return VRAM_LABELS[host.vramMb];
+    if (host.gpu?.model) return host.gpu.model;
     if (host.vramMb) return `${Math.round(host.vramMb / 1024)}GB VRAM`;
     return '';
 }

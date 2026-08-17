@@ -21,9 +21,6 @@ function mockLean(value) {
 describe('modelContextProfileService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    delete process.env.MODEL_CONTEXT_RECOMMENDED_CAP;
-    delete process.env.MODEL_CONTEXT_OPERATIONAL_CAP;
-    delete process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP;
     getConfiguredHosts.mockReturnValue([
       { id: 'secondary', url: 'http://192.0.2.12:11434' }
     ]);
@@ -40,7 +37,7 @@ describe('modelContextProfileService', () => {
       hostUrl: 'http://192.0.2.12:11434/',
       status: 'completed',
       testedNumCtx: 237568,
-      promptFillPct: 10,
+      promptFillPct: 80,
       modelTheoreticalMax: 262144,
       testedAt,
       testDurationMs: 972000,
@@ -49,6 +46,7 @@ describe('modelContextProfileService', () => {
         numCtx: 237568,
         passed: true,
         tokensPerSec: 71.2,
+        promptTokens: 190000,
         vramUsedMiB: 12000,
         gpuPercent: 100,
         completionTokens: 64,
@@ -62,14 +60,15 @@ describe('modelContextProfileService', () => {
       hostUrl: 'http://192.0.2.12:11434',
       hostId: 'secondary',
       verifiedMaxContext: 237568,
-      recommendedContext: 131072,
-      stressCeiling: 237568,
+      verifiedInputTokens: 190000,
+      recommendedContext: 237568,
       source: 'context_probe',
       stale: false
     }));
     expect(profile.latestEvidence).toEqual(expect.objectContaining({
       snapshotId: 'snapshot-1',
       testedNumCtx: 237568,
+      promptTokens: 190000,
       tokensPerSec: 71.2,
       completionTokens: 64
     }));
@@ -92,8 +91,7 @@ describe('modelContextProfileService', () => {
 
     expect(profile).toEqual(expect.objectContaining({
       verifiedMaxContext: 237568,
-      recommendedContext: 131072,
-      stressCeiling: 237568
+      recommendedContext: 237568
     }));
     expect(profile.latestEvidence).toEqual(expect.objectContaining({
       snapshotId: 'snapshot-2',

@@ -26,7 +26,7 @@ jest.mock('../../src/services/modelReadinessService', () => ({
 jest.mock('../../src/services/hostPreferenceService', () => ({
   getByHost: (...args) => mockHostPrefGetByHost(...args),
   getPinnedEntries: (...args) => mockHostPrefGetPinnedEntries(...args),
-  getDefaultModelsMap: (...args) => mockHostPrefGetDefaultModelsMap(...args)
+  getPinnedModelsMap: (...args) => mockHostPrefGetDefaultModelsMap(...args)
 }));
 
 describe('modelRouterConfig readiness preference', () => {

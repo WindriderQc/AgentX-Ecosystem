@@ -72,10 +72,7 @@ async function refreshPinCache() {
     _pinCacheRefreshing = (async () => {
         try {
             const hostPrefService = require('./hostPreferenceService');
-            // getDefaultModelsMap returns Map<hostUrl, string[]> of pinned
-            // names — derives from pinnedModels with legacy fallback baked
-            // in for pre-migration docs.
-            const nameMap = await hostPrefService.getDefaultModelsMap();
+            const nameMap = await hostPrefService.getPinnedModelsMap();
             const next = new Map();
             for (const [hostUrl, names] of nameMap) {
                 for (const m of names) {

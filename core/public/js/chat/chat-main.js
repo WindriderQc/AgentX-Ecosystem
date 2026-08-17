@@ -228,16 +228,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const maxTokens = window.__chatContextLimit
           || readOptionalContextOverride()
           || state.config?.options?.num_ctx
-          || 4096;
-        const percentage = Math.min(100, Math.round((currentTokens / maxTokens) * 100));
+          || null;
+        const percentage = maxTokens
+          ? Math.min(100, Math.round((currentTokens / maxTokens) * 100))
+          : null;
         if (tokenCount) tokenCount.textContent = currentTokens.toLocaleString();
-        if (tokenLimit) tokenLimit.textContent = maxTokens.toLocaleString();
-        if (contextPercentage) contextPercentage.textContent = `${percentage}%`;
+        if (tokenLimit) tokenLimit.textContent = maxTokens ? maxTokens.toLocaleString() : '—';
+        if (contextPercentage) contextPercentage.textContent = percentage == null ? 'unresolved' : `${percentage}%`;
         if (contextProgressFill) {
-          contextProgressFill.style.width = `${percentage}%`;
+          contextProgressFill.style.width = percentage == null ? '0%' : `${percentage}%`;
           contextProgressFill.classList.remove('warning', 'danger');
-          if (percentage >= 90) contextProgressFill.classList.add('danger');
-          else if (percentage >= 70) contextProgressFill.classList.add('warning');
+          if (percentage != null && percentage >= 90) contextProgressFill.classList.add('danger');
+          else if (percentage != null && percentage >= 70) contextProgressFill.classList.add('warning');
         }
       }
       if (costEl) {

@@ -16,6 +16,7 @@ const MemoryReviewRun = require('../../../models/MemoryReviewRun');
 const policy = require('./policy');
 const contentGuard = require('./contentGuard');
 const dedupService = require('./dedupService');
+const { defaultPlanningTimeZone } = require('../planningDateService');
 
 const { MemoryReviewError, LIMITS } = policy;
 
@@ -58,7 +59,7 @@ async function openRun(input = {}) {
     window: {
       from: String(input.window?.from || '').slice(0, 40) || null,
       to: String(input.window?.to || '').slice(0, 40) || null,
-      timezone: String(input.window?.timezone || 'America/Toronto').slice(0, 64),
+      timezone: String(input.window?.timezone || defaultPlanningTimeZone()).slice(0, 64),
     },
     collectorVersion: String(input.collectorVersion || '').slice(0, 80),
     promptVersion: String(input.promptVersion || '').slice(0, 80),

@@ -22,13 +22,7 @@ const Conversation = require('../../models/Conversation');
 const Alert = require('../../models/Alert');
 const ActivityLog = require('../../models/ActivityLog');
 const InferenceLog = require('../../models/InferenceLog');
-const mongoose = require('mongoose');
 const { searchAgentx, statusForSource } = require('../../src/services/memoryAdapters');
-
-const BenchmarkResult = {
-  find: jest.fn(),
-};
-let originalBenchmarkResultModel;
 
 function chainable(rows) {
   return {
@@ -39,23 +33,11 @@ function chainable(rows) {
 }
 
 describe('searchAgentx (Phase 6g)', () => {
-  beforeAll(() => {
-    originalBenchmarkResultModel = mongoose.models.BenchmarkResult;
-    mongoose.models.BenchmarkResult = BenchmarkResult;
-  });
-
-  afterAll(() => {
-    if (originalBenchmarkResultModel) mongoose.models.BenchmarkResult = originalBenchmarkResultModel;
-    else delete mongoose.models.BenchmarkResult;
-  });
-
   beforeEach(() => {
     Conversation.find.mockReset();
     Alert.find.mockReset();
     ActivityLog.find.mockReset();
     InferenceLog.find.mockReset();
-    BenchmarkResult.find.mockReset();
-    BenchmarkResult.find.mockReturnValue(chainable([]));
   });
 
   it('returns empty when terms cannot be extracted', async () => {
@@ -88,7 +70,7 @@ describe('searchAgentx (Phase 6g)', () => {
     });
   });
 
-  it('ranks alert records before noisy benchmark chunks for alert queries', async () => {
+  it('ranks alert records for alert queries', async () => {
     const now = new Date();
     Conversation.find.mockReturnValue(chainable([]));
     Alert.find.mockReturnValue(chainable([
@@ -104,50 +86,13 @@ describe('searchAgentx (Phase 6g)', () => {
     ]));
     ActivityLog.find.mockReturnValue(chainable([]));
     InferenceLog.find.mockReturnValue(chainable([]));
-    BenchmarkResult.find.mockReturnValue(chainable([
-      {
-        _id: 'b1',
-        model: 'ax/noisy:latest',
-        prompt: 'Design a caching system',
-        response: 'alerts alert alert alert latency latency monitoring alert alert alert',
-        task: 'coding',
-        createdAt: now,
-      },
-    ]));
-
     const r = await searchAgentx('alert latency', 5);
     expect(r[0].ref).toBe('alert:a1');
     expect(r[0].collection).toBe('alert');
     expect(r[0].matchedFields).toEqual(expect.arrayContaining(['title', 'message', 'ruleName']));
-    const benchmark = r.find(x => x.ref === 'benchmark:b1');
-    expect(benchmark).toBeTruthy();
-    expect(r[0].score).toBeGreaterThan(benchmark.score);
   });
 
-  it('still returns benchmark results for benchmark-oriented queries', async () => {
-    const now = new Date();
-    Conversation.find.mockReturnValue(chainable([]));
-    Alert.find.mockReturnValue(chainable([]));
-    ActivityLog.find.mockReturnValue(chainable([]));
-    InferenceLog.find.mockReturnValue(chainable([]));
-    BenchmarkResult.find.mockReturnValue(chainable([
-      {
-        _id: 'b1',
-        model: 'ax/gemma4:31b-it-q8_0',
-        prompt: 'Benchmark throughput and judge score for coding level prompts',
-        response: 'Composite quality score and tokens per second were recorded.',
-        task: 'benchmark',
-        createdAt: now,
-      },
-    ]));
-
-    const r = await searchAgentx('benchmark throughput score', 5);
-    expect(r.length).toBeGreaterThan(0);
-    expect(r[0].ref).toBe('benchmark:b1');
-    expect(r[0].collection).toBe('benchmark');
-  });
-
-  it('ranks chat and Buddy records before benchmark chunks for Buddy queries', async () => {
+  it('ranks chat and Buddy records for Buddy queries', async () => {
     const now = new Date();
     Conversation.find.mockReturnValue(chainable([
       {
@@ -169,22 +114,8 @@ describe('searchAgentx (Phase 6g)', () => {
         createdAt: now,
       },
     ]));
-    BenchmarkResult.find.mockReturnValue(chainable([
-      {
-        _id: 'b1',
-        model: 'ax/noisy:latest',
-        prompt: 'A benchmark prompt that mentions buddy chat several times',
-        response: 'buddy buddy buddy chat chat chat',
-        task: 'benchmark',
-        createdAt: now,
-      },
-    ]));
-
     const r = await searchAgentx('buddy chat', 5);
     expect(['conversation:c1', 'inferencelog:i1']).toContain(r[0].ref);
-    const benchmark = r.find(x => x.ref === 'benchmark:b1');
-    expect(benchmark).toBeTruthy();
-    expect(r[0].score).toBeGreaterThan(benchmark.score);
   });
 
   it('errors in one collection do not break others', async () => {

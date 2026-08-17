@@ -21,7 +21,7 @@ class OllamaVramService {
   /**
    * Get VRAM usage for a host by calling Ollama's /api/ps endpoint.
    *
-   * @param {string} hostUrl - e.g. "http://192.0.2.66:11434"
+   * @param {string} hostUrl - full Ollama base URL
    * @returns {Promise<{ ok: boolean, memoryUsedMiBTotal: number|null, memoryTotalMiBTotal: number|null, error?: string }>}
    */
   async getHostVram(hostUrl) {

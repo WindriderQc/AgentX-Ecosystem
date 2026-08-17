@@ -36,13 +36,9 @@ const {
 const path = require('path');
 const fs = require('fs');
 
-// 0219 tiered judge: lighter judge used ONLY when the resolved default judge is
-// absent from the judge host. Lets a 7b-only deployment run; on a 14b-equipped
-// host 14b is always present so this never triggers. Override via
-// JUDGE_FALLBACK_MODEL; set empty to disable the fallback entirely.
-const JUDGE_FALLBACK_MODEL = process.env.JUDGE_FALLBACK_MODEL !== undefined
-    ? process.env.JUDGE_FALLBACK_MODEL
-    : 'qwen2.5:7b-instruct-q5_K_M';
+// An operator may explicitly configure a secondary judge artifact. There is no
+// product-wide fallback model because installed inventory is deployment state.
+const JUDGE_FALLBACK_MODEL = String(process.env.JUDGE_FALLBACK_MODEL || '').trim() || null;
 
 function readJudgeDefaults() {
     try {
@@ -334,8 +330,8 @@ router.post('/batch', async (req, res) => {
         if (jc.num_predict !== undefined && (typeof jc.num_predict !== 'number' || jc.num_predict < 100 || jc.num_predict > 4096)) {
             return res.status(400).json({ status: 'error', error: 'judge_config.num_predict must be a number between 100 and 4096' });
         }
-        if (jc.num_ctx !== undefined && (typeof jc.num_ctx !== 'number' || jc.num_ctx < 2048 || jc.num_ctx > 32768)) {
-            return res.status(400).json({ status: 'error', error: 'judge_config.num_ctx must be a number between 2048 and 32768' });
+        if (jc.num_ctx != null && (typeof jc.num_ctx !== 'number' || jc.num_ctx < 512)) {
+            return res.status(400).json({ status: 'error', error: 'judge_config.num_ctx must be a number of at least 512' });
         }
         if (jc.max_retries !== undefined && (typeof jc.max_retries !== 'number' || jc.max_retries < 0 || jc.max_retries > 5)) {
             return res.status(400).json({ status: 'error', error: 'judge_config.max_retries must be a number between 0 and 5' });
@@ -590,8 +586,8 @@ router.post('/batch/:id/resume', async (req, res) => {
 
 /**
  * POST /api/benchmark/batch/:id/rerun-invalid
- * Build or launch a corrected rerun for rows excluded from leaderboard.
- * Body: { launch?: boolean, allow_superset?: boolean }
+ * Build or launch an exact rerun for rows excluded from leaderboard.
+ * Body: { launch?: boolean, allow_superset?: boolean, execution_config?: object }
  */
 router.post('/batch/:id/rerun-invalid', async (req, res) => {
     try {
@@ -634,11 +630,17 @@ router.post('/batch/:id/rerun-invalid', async (req, res) => {
         const isExactRectangularRerun = rectangularCount === invalidRows.length;
         const allowSuperset = req.body?.allow_superset === true;
 
+        const executionOverrides = req.body?.execution_config;
+        if (executionOverrides != null
+            && (typeof executionOverrides !== 'object' || Array.isArray(executionOverrides))) {
+            return res.status(400).json({
+                status: 'error',
+                error: 'execution_config must be an object when provided'
+            });
+        }
         const executionConfig = {
             ...(batch.execution_config || {}),
-            response_max_tokens: Math.max(8192, Number(batch.execution_config?.response_max_tokens || 0) * 2 || 8192),
-            answer_contract_mode: 'auto',
-            include_length_hint: false
+            ...(executionOverrides || {})
         };
 
         const payload = {
@@ -652,7 +654,7 @@ router.post('/batch/:id/rerun-invalid', async (req, res) => {
             execution_mode: batch.execution_mode || 'latency',
             depth_config: null,
             tags: [...new Set([...(batch.tags || []), 'rerun-invalid', `source:${batch._id}`])],
-            description: `Corrected rerun for ${invalidRows.length} invalid/excluded row(s) from batch ${batch._id}. Answer contract forced to auto and response_max_tokens raised.`
+            description: `Exact rerun for ${invalidRows.length} invalid/excluded row(s) from batch ${batch._id}${executionOverrides ? ' with explicit execution overrides' : ''}.`
         };
 
         if (!req.body?.launch) {

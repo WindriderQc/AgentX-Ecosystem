@@ -185,7 +185,7 @@ router.put('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'Host preference not found. Configure the host first.' });
     }
     if (pref.status === 'restoring') {
-      hostPrefService.restorePin(hostUrl).catch(err => {
+      hostPrefService.restorePinnedModels(hostUrl).catch(err => {
         logger.warn(`[NerveCenter] Background pin warmup failed: ${err.message}`);
       });
     }
@@ -219,7 +219,7 @@ router.post('/host-preferences/:hostUrl(*)/restore', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
-    const result = await hostPrefService.restorePin(hostUrl);
+    const result = await hostPrefService.restorePinnedModels(hostUrl);
     if (result.status === 'error') {
       return res.status(400).json({ status: 'error', message: result.error });
     }
