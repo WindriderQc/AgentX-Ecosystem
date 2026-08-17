@@ -236,13 +236,9 @@ async function warmAllDefaults() {
 }
 
 /**
- * Backward-compat shim: returns Map<hostUrl, string[]> of pinned model names.
- * Consumers (clusterScheduleService.recommendHost, modelRouterConfig pin
- * cache) care about "which models are preferred on which host" — they don't
- * care whether those come from `defaultModels` or `pinnedModel`. After
- * task 0151 they all come from `pinnedModels[*].model`.
+ * Return Map<hostUrl, string[]> of explicitly pinned model names.
  */
-async function getDefaultModelsMap() {
+async function getPinnedModelsMap() {
   const prefs = await getAll();
   const map = new Map();
   for (const p of prefs) {
@@ -250,6 +246,10 @@ async function getDefaultModelsMap() {
   }
   return map;
 }
+
+// Compatibility alias for older callers. It projects pins; it does not invent
+// or select a separate default-model policy.
+const getDefaultModelsMap = getPinnedModelsMap;
 
 // ── Pinning ────────────────────────────────────────────────
 //
@@ -640,6 +640,7 @@ module.exports = {
   hasActiveBenchmarkClaim,
   getDefaultModelForHost,
   getDefaultModelsMap,
+  getPinnedModelsMap,
   getPinnedEntries,
   getPinnedModelNames,
   getPrimaryPinnedModel,

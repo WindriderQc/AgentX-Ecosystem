@@ -248,7 +248,7 @@ async function buildNestorFastlaneConfig(options = {}) {
         gatewayPort: openclawRuntime.gateway_port || 18789,
         provider: openclawRuntime.current_provider || 'agentx_openclaw_ollama_proxy',
         baseUrl: openclawRuntime.base_url || endpoint(env, '/api/openclaw-ollama'),
-        context: openclawRuntime.context || 65536,
+        context: openclawRuntime.context || null,
         localFallbackModel: openclawRuntime.local_fallback_model || '',
         providerAliases: asArray(openclawRuntime.provider_aliases || openclawRuntime.providerAliases),
         contextOverrides: asArray(openclawRuntime.context_overrides || openclawRuntime.contextOverrides),
@@ -259,7 +259,7 @@ async function buildNestorFastlaneConfig(options = {}) {
         provider: hermesRuntime.current_provider || 'agentx_hermes_openai_proxy',
         baseUrl: hermesRuntime.base_url || endpoint(env, '/api/hermes-openai/v1'),
         primaryModel: hermesRuntime.primary_model || '',
-        context: hermesRuntime.context || 65536,
+        context: hermesRuntime.context || null,
         authorityPolicy: hermesRuntime.authority_policy || null,
         cloudRouting: hermesRuntime.cloud_routing || null
       }

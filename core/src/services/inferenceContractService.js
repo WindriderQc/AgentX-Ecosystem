@@ -2,37 +2,28 @@
 
 const crypto = require('crypto');
 const mongoose = require('mongoose');
-const { resolveModelNumCtxDetails } = require('../helpers/ollamaUtils');
+const { getContextInfo } = require('./modelContextInfoService');
 const {
   getConfiguredHosts,
   hostUrlKey,
   normalizeHostUrl
 } = require('../helpers/ollamaHostConfig');
 const { getTokenCounter } = require('./tokenCounter');
+const { modelLookupNames } = require('../helpers/modelNameNormalization');
 
 const CONTRACT_VERSION = 'agentx.inference-contract.v1';
-const DEFAULT_CONTEXT_TOKENS = 8192;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 const PROFILED_STAGES = new Set(['profiled', 'adapted', 'benchmarked']);
 const VALIDATED_CONTEXT_SOURCES = new Set([
   'model_context_profile',
-  'context_test'
+  'context_test',
+  'profiled'
 ]);
 const ARTIFACT_LOOKUP_TIMEOUT_MS = 5000;
 
 function positiveInteger(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
-}
-
-function modelLookupNames(model) {
-  const raw = String(model || '').trim().replace(/:latest$/i, '');
-  if (!raw) return [];
-  const slashIndex = raw.indexOf('/');
-  const bare = slashIndex > 0 && slashIndex < raw.length - 1
-    ? raw.slice(slashIndex + 1)
-    : null;
-  return Array.from(new Set([raw, bare].filter(Boolean)));
 }
 
 function mapValue(mapLike, key) {
@@ -292,46 +283,67 @@ async function resolveContextBudget(input, deps = {}) {
   let resolved = null;
   try {
     const canUseDefaultResolver = mongoose.connection.readyState === 1;
-    if (deps.resolveContextDetails || canUseDefaultResolver) {
-      const resolver = deps.resolveContextDetails || resolveModelNumCtxDetails;
-      resolved = await resolver(input.model, {
+    if (deps.resolveContextDetails) {
+      resolved = await deps.resolveContextDetails(input.model, {
         targetHost: input.host,
-        fallback: DEFAULT_CONTEXT_TOKENS,
         deps: deps.contextDeps
       });
+    } else if (canUseDefaultResolver) {
+      resolved = await getContextInfo(input.model, input.host);
     }
   } catch {
     resolved = null;
   }
 
-  const resolvedTokens = positiveInteger(resolved?.num_ctx) || DEFAULT_CONTEXT_TOKENS;
+  const resolvedTokens = positiveInteger(resolved?.num_ctx);
   const windowTokens = requestedNumCtx || resolvedTokens;
   const explicitOutput = positiveInteger(input.requestedMaxOutputTokens);
-  const reservedOutputTokens = Math.min(
-    windowTokens,
-    explicitOutput || Math.min(DEFAULT_MAX_OUTPUT_TOKENS, Math.max(256, Math.floor(windowTokens / 4)))
-  );
-  const availableInputTokens = Math.max(0, windowTokens - reservedOutputTokens);
+  const defaultOutput = windowTokens
+    ? Math.min(DEFAULT_MAX_OUTPUT_TOKENS, Math.max(256, Math.floor(windowTokens / 4)))
+    : DEFAULT_MAX_OUTPUT_TOKENS;
+  const reservedOutputTokens = windowTokens
+    ? Math.min(windowTokens, explicitOutput || defaultOutput)
+    : (explicitOutput || defaultOutput);
+  const availableInputTokens = windowTokens
+    ? Math.max(0, windowTokens - reservedOutputTokens)
+    : null;
   const estimate = estimateInputTokens(input);
-  const overflowTokens = Math.max(0, estimate.tokens - availableInputTokens);
-  const validatedWindowTokens = VALIDATED_CONTEXT_SOURCES.has(resolved?.source)
-    ? resolvedTokens
+  const overflowTokens = availableInputTokens == null
+    ? null
+    : Math.max(0, estimate.tokens - availableInputTokens);
+  const profiledWindowTokens = positiveInteger(
+    resolved?.details?.verifiedMaxContext || resolved?.verifiedMaxContext
+  );
+  const validatedWindowTokens = profiledWindowTokens
+    || (VALIDATED_CONTEXT_SOURCES.has(resolved?.source) ? resolvedTokens : null);
+  const validatedInputTokens = positiveInteger(
+    resolved?.details?.verifiedInputTokens || resolved?.verifiedInputTokens
+  );
+  const validatedInputOverflowTokens = validatedInputTokens
+    ? Math.max(0, estimate.tokens - validatedInputTokens)
     : null;
   const warnings = [];
 
+  if (!windowTokens) {
+    warnings.push('runtime context is unresolved; no context window was inferred');
+  }
   if (overflowTokens > 0) {
     warnings.push('estimated input exceeds the available context budget; upstream truncation is possible');
   }
-  if (requestedNumCtx && validatedWindowTokens && requestedNumCtx > validatedWindowTokens) {
-    warnings.push('caller context exceeds the latest validated host/model context');
+  if (windowTokens && validatedWindowTokens && windowTokens > validatedWindowTokens) {
+    warnings.push('runtime context exceeds the latest validated host/model context');
+  }
+  if (validatedInputOverflowTokens > 0) {
+    warnings.push('estimated input exceeds the largest measured successful prompt; execution remains report-only');
   }
 
   return {
     windowTokens,
-    source: requestedNumCtx ? (input.numCtxSource || 'caller') : (resolved?.source || 'fallback'),
+    source: requestedNumCtx ? (input.numCtxSource || 'caller') : (resolved?.source || 'unresolved'),
     resolvedWindowTokens: resolvedTokens,
-    resolvedSource: resolved?.source || 'fallback',
+    resolvedSource: resolved?.source || 'unresolved',
     validatedWindowTokens,
+    validatedInputTokens,
     output: {
       reservedTokens: reservedOutputTokens,
       source: explicitOutput ? 'caller' : 'default_reserve'
@@ -340,9 +352,13 @@ async function resolveContextBudget(input, deps = {}) {
       estimatedTokens: estimate.tokens,
       characters: estimate.characters,
       availableTokens: availableInputTokens,
-      remainingTokens: Math.max(0, availableInputTokens - estimate.tokens),
+      remainingTokens: availableInputTokens == null
+        ? null
+        : Math.max(0, availableInputTokens - estimate.tokens),
       overflowTokens,
-      fits: overflowTokens === 0,
+      fits: overflowTokens == null ? null : overflowTokens === 0,
+      validatedOverflowTokens: validatedInputOverflowTokens,
+      validatedFits: validatedInputTokens ? validatedInputOverflowTokens === 0 : null,
       estimation: {
         method: estimate.method,
         exact: estimate.exact

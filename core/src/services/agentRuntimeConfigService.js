@@ -20,7 +20,6 @@ const {
 } = require('./inferenceContractService');
 
 const DEFAULT_CORE_BASE_URL = 'http://localhost:3080';
-const DEFAULT_OPERATIONAL_CONTEXT_CAP = 131072;
 const HERMES_AUTHORITY_DECISION_DATE = '2026-07-02';
 const DEFAULT_HERMES_AUTHORITY_MODEL = 'openrouter/z-ai/glm-5.2';
 const DEFAULT_HERMES_CLOUD_CONTEXT = 131072;
@@ -60,27 +59,6 @@ function positiveInteger(value) {
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
-}
-
-function operationalContextCap() {
-  return positiveInteger(
-    process.env.MODEL_CONTEXT_OPERATIONAL_CAP
-      || process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP
-      || DEFAULT_OPERATIONAL_CONTEXT_CAP
-  );
-}
-
-function applyOperationalContextCap(lane, warnings) {
-  const cap = operationalContextCap();
-  if (!cap || !lane.contextSize || lane.contextSize <= cap) return lane;
-  warnings.push(`Capping ${lane.role} runtime context from ${lane.contextSize} to ${cap}; verified/profiled context remains visible in contextInfo.`);
-  return {
-    ...lane,
-    verifiedContextSize: lane.contextSize,
-    operationalContextCap: cap,
-    contextSize: cap,
-    contextSource: `${lane.contextSource || 'context_info'}_operational_cap`
-  };
 }
 
 function applyContractContextBudget(lane, contract) {
@@ -238,9 +216,8 @@ async function resolveLane(taskType, role, routerConfig, prefsByUrl) {
   }
 
   if (!contextSize) {
-    contextSize = 8192;
-    contextSource = 'fallback';
-    warnings.push(`Falling back to ${contextSize} context for ${model || taskType}`);
+    contextSource = 'unresolved';
+    warnings.push(`Context is unresolved for ${model || taskType}; preserving the resident provider or Modelfile context.`);
   }
 
   const lane = {
@@ -270,20 +247,19 @@ async function resolveLane(taskType, role, routerConfig, prefsByUrl) {
     warnings
   };
 
-  return applyOperationalContextCap(lane, warnings);
+  return lane;
 }
 
 function toOpenClawModel(lane) {
   const thinking = getThinkingCapabilityStatus(lane.capabilityContract);
-  return {
+  const contextSize = positiveInteger(lane.contextSize);
+  const model = {
     id: lane.model,
     name: shortName(lane.model),
     reasoning: thinking.qualified,
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     maxTokens: positiveInteger(lane.executionPolicy?.recommendedOutputTokens) || 8192,
-    contextWindow: lane.contextSize,
-    params: { num_ctx: lane.contextSize },
     _source: {
       agentxRuntimeConfig: true,
       role: lane.role,
@@ -298,6 +274,11 @@ function toOpenClawModel(lane) {
       executionPolicy: lane.executionPolicy
     }
   };
+  if (contextSize) {
+    model.contextWindow = contextSize;
+    model.params = { num_ctx: contextSize };
+  }
+  return model;
 }
 
 function buildHermesExport(lanes, coreBaseUrl) {
@@ -314,11 +295,12 @@ function buildHermesExport(lanes, coreBaseUrl) {
     default: authorityModel || daily.model,
     provider: 'custom',
     base_url: baseUrl,
-    context_length: authorityContext,
     api_key: 'no-key-required'
   };
 
-  if (!authorityIsCloud) {
+  if (authorityContext) defaultModelConfig.context_length = authorityContext;
+
+  if (!authorityIsCloud && authorityContext) {
     defaultModelConfig.ollama_num_ctx = authorityContext;
   }
 
@@ -326,28 +308,34 @@ function buildHermesExport(lanes, coreBaseUrl) {
     default: daily.model,
     provider: 'custom',
     base_url: baseUrl,
-    context_length: daily.contextSize,
-    api_key: 'no-key-required',
-    ollama_num_ctx: daily.contextSize
+    api_key: 'no-key-required'
   };
+  if (daily.contextSize) {
+    localFallbackModelConfig.context_length = daily.contextSize;
+    localFallbackModelConfig.ollama_num_ctx = daily.contextSize;
+  }
 
   const masterBrainModelConfig = {
     default: masterBrain.model,
     provider: 'custom',
     base_url: baseUrl,
-    context_length: masterBrain.contextSize,
-    api_key: 'no-key-required',
-    ollama_num_ctx: masterBrain.contextSize
+    api_key: 'no-key-required'
   };
+  if (masterBrain.contextSize) {
+    masterBrainModelConfig.context_length = masterBrain.contextSize;
+    masterBrainModelConfig.ollama_num_ctx = masterBrain.contextSize;
+  }
 
   const codingSpecialistModelConfig = {
     default: codingSpecialist.model,
     provider: 'custom',
     base_url: baseUrl,
-    context_length: codingSpecialist.contextSize,
-    api_key: 'no-key-required',
-    ollama_num_ctx: codingSpecialist.contextSize
+    api_key: 'no-key-required'
   };
+  if (codingSpecialist.contextSize) {
+    codingSpecialistModelConfig.context_length = codingSpecialist.contextSize;
+    codingSpecialistModelConfig.ollama_num_ctx = codingSpecialist.contextSize;
+  }
 
   return {
     proxyBaseUrl: baseUrl,
@@ -535,14 +523,14 @@ function compareOpenClawConfig(currentConfig, expectedOpenClaw) {
     const contextOverride = findContextOverride(match.candidate.id, currentModel.id, currentContext, expectedOpenClaw);
     const numCtxOverride = findContextOverride(match.candidate.id, currentModel.id, currentNumCtx, expectedOpenClaw);
     const pathPrefix = `models.providers.${match.candidate.id}.models[${expectedModel.id}]`;
-    if (currentContext !== expectedModel.contextWindow && !contextOverride) {
+    if (expectedModel.contextWindow != null && currentContext !== expectedModel.contextWindow && !contextOverride) {
       drift.push(diffField(
         `${pathPrefix}.contextWindow`,
         currentContext,
         expectedModel.contextWindow
       ));
     }
-    if (currentNumCtx !== expectedModel.params.num_ctx && !numCtxOverride) {
+    if (expectedModel.params?.num_ctx != null && currentNumCtx !== expectedModel.params.num_ctx && !numCtxOverride) {
       drift.push(diffField(
         `${pathPrefix}.params.num_ctx`,
         currentNumCtx,

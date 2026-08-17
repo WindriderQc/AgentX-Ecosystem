@@ -13,7 +13,7 @@ const { TASK_CATEGORY_MAP } = require('../config/categories');
 const CapabilitiesSchema = new mongoose.Schema({
   maxContext: {
     type: Number,
-    default: 2048,
+    default: null,
     min: 512
   },
   supportsThinking: {
@@ -162,7 +162,7 @@ const RoutingRulesSchema = new mongoose.Schema({
 }, { _id: false });
 
 const ExecutionConfigSchema = new mongoose.Schema({
-  num_ctx: { type: Number, default: null, min: 512, max: 131072 },
+  num_ctx: { type: Number, default: null, min: 512 },
   temperature: { type: Number, default: null, min: 0, max: 2 },
   _source: { type: String, enum: ['auto', 'user', 'system'], default: 'system' },
   _reason: { type: String, default: null },
@@ -170,7 +170,7 @@ const ExecutionConfigSchema = new mongoose.Schema({
 }, { _id: false });
 
 const ExecutionOverridesSchema = new mongoose.Schema({
-  num_ctx: { type: Number, default: null, min: 512, max: 131072 },
+  num_ctx: { type: Number, default: null, min: 512 },
   temperature: { type: Number, default: null, min: 0, max: 2 },
   _overriddenAt: { type: Date, default: null }
 }, { _id: false });
@@ -311,7 +311,7 @@ const ModelRegistrySchema = new mongoose.Schema({
     default: () => ({})
   },
   // DEPRECATED: Legacy context test data. Superseded by ModelContextProbeSnapshot
-  // in benchmark service. Retained as lowest-priority fallback in getEffectiveConfig().
+  // in benchmark service. Retained as measured legacy evidence.
   // See benchmark/src/services/modelContextResolver.js for the current resolution chain.
   contextTest: {
     type: ContextTestSchema,
@@ -519,23 +519,22 @@ ModelRegistrySchema.methods.isSuitableFor = function(taskType, constraints = {})
  * Returns object with { value, source } for each config key
  */
 ModelRegistrySchema.methods.getEffectiveConfig = function() {
-  const SYSTEM_DEFAULTS = { num_ctx: 8192, temperature: 0.7 };
   const defaults = this.executionDefaults || {};
   const overrides = this.executionOverrides || {};
   const contextTest = this.contextTest || {};
 
-  const result = {};
-  for (const key of ['num_ctx', 'temperature']) {
-    if (overrides[key] != null) {
-      result[key] = { value: overrides[key], source: 'user' };
-    } else if (key === 'num_ctx' && contextTest.testedNumCtx != null && contextTest.status === 'completed') {
-      result[key] = { value: contextTest.testedNumCtx, source: 'tested' };
-    } else if (defaults[key] != null) {
-      result[key] = { value: defaults[key], source: defaults._source || 'auto' };
-    } else {
-      result[key] = { value: SYSTEM_DEFAULTS[key], source: 'system' };
-    }
-  }
+  const result = {
+    num_ctx: overrides.num_ctx != null
+      ? { value: overrides.num_ctx, source: 'user' }
+      : contextTest.testedNumCtx != null && contextTest.status === 'completed'
+        ? { value: contextTest.testedNumCtx, source: 'tested' }
+        : { value: null, source: 'unresolved' },
+    temperature: overrides.temperature != null
+      ? { value: overrides.temperature, source: 'user' }
+      : defaults.temperature != null
+        ? { value: defaults.temperature, source: defaults._source || 'system' }
+        : { value: 0.7, source: 'system' }
+  };
   result._reason = defaults._reason || null;
   return result;
 };

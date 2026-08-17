@@ -8,9 +8,12 @@ const fetch = require('node-fetch');
 const { getFetchOptions } = require('../helpers/httpAgent');
 const logger = require('../../config/logger');
 
-const SEARXNG_URL = process.env.SEARXNG_URL || 'http://192.0.2.199:8088';
 const SEARCH_TIMEOUT_MS = 10000;
 const MAX_RESULTS = 5;
+
+function configuredSearxngUrl() {
+  return String(process.env.SEARXNG_URL || '').trim().replace(/\/$/, '');
+}
 
 /**
  * Search the web via SearXNG JSON API
@@ -22,6 +25,11 @@ const MAX_RESULTS = 5;
  */
 async function searchWeb(query, options = {}) {
   const { maxResults = MAX_RESULTS, language = 'en' } = options;
+  const searxngUrl = configuredSearxngUrl();
+
+  if (!searxngUrl) {
+    return { results: [], formatted: '', error: 'SEARXNG_URL is not configured' };
+  }
 
   try {
     const params = new URLSearchParams({
@@ -31,7 +39,7 @@ async function searchWeb(query, options = {}) {
       safesearch: '0'
     });
 
-    const url = `${SEARXNG_URL}/search?${params}`;
+    const url = `${searxngUrl}/search?${params}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
 

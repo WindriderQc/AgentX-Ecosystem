@@ -18,7 +18,10 @@ const DEFAULTS = {
   showHardwareDiagnostics: true,
   warmup: true,
   testTimeoutSec: 60,
-  baselineModel: 'qwen2.5:3b',
+  baselineModel: process.env.HOST_BASELINE_MODEL
+    || process.env.AGENTX_DEFAULT_CHAT_MODEL
+    || process.env.OLLAMA_MODEL
+    || '',
 };
 
 /** Maps setting key -> env var name */

@@ -14,10 +14,6 @@ jest.mock('../../src/services/modelContextProfileService', () => ({
     findContextProfile: jest.fn()
 }));
 
-jest.mock('../../src/services/ollamaVramService', () => ({
-    getHostVram: jest.fn()
-}));
-
 jest.mock('../../src/helpers/ollamaHostConfig', () => ({
     getConfiguredHosts: jest.fn(),
     normalizeHostUrl: jest.fn((url) => {
@@ -30,7 +26,6 @@ const ModelProfile = require('../../models/ModelProfile');
 const ModelContextProbeSnapshot = require('../../models/ModelContextProbeSnapshot');
 const ModelAdaptation = require('../../models/ModelAdaptation');
 const modelContextProfileService = require('../../src/services/modelContextProfileService');
-const ollamaVramService = require('../../src/services/ollamaVramService');
 const { getConfiguredHosts } = require('../../src/helpers/ollamaHostConfig');
 const { resolveModelNumCtxDetails } = require('../../src/services/modelContextResolver');
 
@@ -49,13 +44,7 @@ function mockSortedLeanResult(value) {
 describe('modelContextResolver', () => {
     beforeEach(() => {
         jest.clearAllMocks();
-        delete process.env.MODEL_CONTEXT_OPERATIONAL_CAP;
-        delete process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP;
         getConfiguredHosts.mockReturnValue([]);
-        ollamaVramService.getHostVram.mockResolvedValue({
-            ok: false,
-            memoryTotalMiBTotal: null
-        });
         ModelContextProbeSnapshot.findOne.mockReturnValue(mockSortedLeanResult(null));
         ModelAdaptation.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
         modelContextProfileService.findContextProfile.mockResolvedValue(null);
@@ -74,7 +63,7 @@ describe('modelContextResolver', () => {
         expect(result.source).toBe('profiler_adaptation');
     });
 
-    it('caps profiler adaptation context to the operational runtime ceiling', async () => {
+    it('uses the profiler adaptation context without a second runtime cap', async () => {
         getConfiguredHosts.mockReturnValue([{ url: 'http://host:11434', id: 'host-gamma' }]);
         ModelAdaptation.findOne.mockReturnValue({
             lean: jest.fn().mockResolvedValue({
@@ -86,11 +75,8 @@ describe('modelContextResolver', () => {
         const result = await resolveModelNumCtxDetails('ax/qwen3.6:35b-a3b-q8_0', 'http://host:11434');
 
         expect(result).toEqual(expect.objectContaining({
-            num_ctx: 98304,
-            source: 'profiler_adaptation_operational_cap',
-            capped: true,
-            verified_num_ctx: 202752,
-            operational_cap: 98304
+            num_ctx: 202752,
+            source: 'profiler_adaptation'
         }));
     });
 
@@ -110,8 +96,9 @@ describe('modelContextResolver', () => {
             'staleness.stale': { $ne: true }
         }));
         expect(result).toEqual(expect.objectContaining({
-            num_ctx: 8192,
-            source: 'host_vram_estimate'
+            num_ctx: null,
+            source: 'unresolved',
+            authoritative: false
         }));
     });
 
@@ -165,7 +152,6 @@ describe('modelContextResolver', () => {
             hostUrl: 'http://localhost:11434',
             recommendedContext: 65536,
             verifiedMaxContext: 237568,
-            stressCeiling: 237568,
             lastValidatedAt: new Date('2026-06-16T00:00:00Z')
         });
         ModelContextProbeSnapshot.findOne.mockReturnValue(mockSortedLeanResult({
@@ -180,19 +166,18 @@ describe('modelContextResolver', () => {
         });
 
         expect(result).toEqual(expect.objectContaining({
-            num_ctx: 65536,
+            num_ctx: 237568,
             source: 'model_context_profile',
             targetHost: 'http://localhost:11434'
         }));
         expect(result.details).toEqual(expect.objectContaining({
             verifiedMaxContext: 237568,
-            stressCeiling: 237568,
             matchedName: 'ax/qwen3.5:9b'
         }));
         expect(ModelContextProbeSnapshot.findOne).not.toHaveBeenCalled();
     });
 
-    it('caps large benchmark context probe results for runtime use', async () => {
+    it('uses large measured context probe results directly', async () => {
         ModelProfile.findOne.mockReturnValue(mockLeanResult({
             parameterSize: '35B',
             quantization: 'Q8_0',
@@ -210,10 +195,8 @@ describe('modelContextResolver', () => {
         });
 
         expect(result).toEqual(expect.objectContaining({
-            num_ctx: 98304,
-            source: 'benchmark_context_probe_operational_cap',
-            capped: true,
-            verified_num_ctx: 202752
+            num_ctx: 202752,
+            source: 'benchmark_context_probe'
         }));
     });
 
@@ -235,12 +218,13 @@ describe('modelContextResolver', () => {
         });
 
         expect(result).toEqual(expect.objectContaining({
-            num_ctx: 8192,
-            source: 'host_vram_estimate'
+            num_ctx: null,
+            source: 'unresolved',
+            authoritative: false
         }));
     });
 
-    it('falls back to host-aware VRAM estimation when no probe exists', async () => {
+    it('does not turn host VRAM into a context recommendation when no probe exists', async () => {
         ModelProfile.findOne.mockReturnValue(mockLeanResult({
             parameterSize: '7B',
             quantization: 'Q4_K_M',
@@ -256,9 +240,25 @@ describe('modelContextResolver', () => {
         });
 
         expect(result).toEqual(expect.objectContaining({
-            num_ctx: 16384,
-            source: 'host_vram_estimate',
+            num_ctx: null,
+            source: 'unresolved',
+            authoritative: false,
             targetHost: 'http://localhost:11434'
+        }));
+    });
+
+    it('labels an explicit caller fallback without treating it as measured evidence', async () => {
+        ModelProfile.findOne.mockReturnValue(mockLeanResult(null));
+
+        const result = await resolveModelNumCtxDetails('unprofiled:7b', {
+            targetHost: 'http://localhost:11434',
+            fallback: 262144
+        });
+
+        expect(result).toEqual(expect.objectContaining({
+            num_ctx: 262144,
+            source: 'caller_fallback',
+            authoritative: false
         }));
     });
 });

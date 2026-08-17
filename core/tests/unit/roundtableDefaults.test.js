@@ -6,14 +6,9 @@ const {
 } = require('../../src/services/roundtable/defaults');
 
 describe('roundtable defaults', () => {
-  it('uses the registered Qwen Q5 model for the pragmatic panelists', () => {
-    const devil = DEFAULT_PANEL.find(panelist => panelist.agentId === 'devils-advocate');
-    const pragmatist = DEFAULT_PANEL.find(panelist => panelist.agentId === 'pragmatist');
-
-    expect(devil.model).toBe('ax/qwen2.5:7b-instruct-q5_K_M');
-    expect(pragmatist.model).toBe('ax/qwen2.5:7b-instruct-q5_K_M');
-    expect(DEFAULT_PANEL.map(panelist => panelist.model)).not.toContain(
-      'qwen2.5:7b-instruct-q4_0'
+  it('uses one deployment default model for every role', () => {
+    expect(new Set(DEFAULT_PANEL.map(panelist => panelist.model))).toEqual(
+      new Set([DEFAULT_SYNTHESIZER.model])
     );
   });
 

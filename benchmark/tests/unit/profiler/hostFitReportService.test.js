@@ -103,12 +103,12 @@ describe('hostFitReportService estimator', () => {
     it('marks a 14B-Q4 as not-fully-fitting on a 12GB GPU', () => {
       const r = estimateFit({ paramB: 14, quant: 'Q4_K_M', vramTotalMiB: 12288 });
       expect(['tight', 'too-large']).toContain(r.verdict);
-      expect(r.estMaxCtx).toBeLessThan(8192);
+      expect(r.estMaxCtx).toBeNull();
     });
     it('marks a 3B-Q4 as fitting comfortably on a 12GB GPU', () => {
       const r = estimateFit({ paramB: 3, quant: 'Q4_K_M', vramTotalMiB: 12288 });
       expect(r.verdict).toBe('fits');
-      expect(r.estMaxCtx).toBeGreaterThanOrEqual(8192);
+      expect(r.estMaxCtx).toBeNull();
     });
     it('returns unknown without params or VRAM', () => {
       expect(estimateFit({ paramB: null, quant: 'Q4_K_M', vramTotalMiB: 12288 }).verdict).toBe('unknown');
@@ -117,7 +117,7 @@ describe('hostFitReportService estimator', () => {
 
   describe('recommendQuant', () => {
     it('returns a ladder quant or null (never throws)', () => {
-      const q = recommendQuant(32, 16000);
+      const q = recommendQuant(32, 16000, 8192);
       expect(q === null || /^Q[2-8]/.test(q)).toBe(true);
     });
   });

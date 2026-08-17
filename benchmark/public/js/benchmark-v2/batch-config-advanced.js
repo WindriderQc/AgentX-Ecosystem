@@ -69,10 +69,10 @@ export function _buildAdvancedSettings() {
             <div class="bf-adv-field">
               <label class="bf-adv-label" for="bv2-adv-num_ctx">Context Window</label>
               <input type="number" id="bv2-adv-num_ctx" class="bf-adv-input"
-                min="2048" max="32768" step="1024" value="${s.num_ctx}"
+                min="512" step="1024" value="${s.num_ctx ?? ''}" placeholder="Resident model setting"
                 data-adv-key="num_ctx" data-adv-group="judge">
-              <span class="bf-adv-range">2048 – 32768</span>
-              <span class="bf-adv-help">Context window size for the judge model. Must fit the prompt + model response + judge instructions.</span>
+              <span class="bf-adv-range">Optional, 512+</span>
+              <span class="bf-adv-help">Leave blank to use the resident Ollama/Modelfile context. Set a value only for a controlled experiment.</span>
             </div>
 
             <div class="bf-adv-field">
@@ -203,12 +203,12 @@ export function _buildAdvancedSettings() {
             <div class="bf-adv-field">
               <label class="bf-adv-label" for="bv2-adv-force_num_ctx">Force num_ctx (override per-host profile)</label>
               <input type="number" id="bv2-adv-force_num_ctx" class="bf-adv-input"
-                min="0" max="131072" step="512"
+                min="0" step="512"
                 value="${s.force_num_ctx ?? ''}"
                 placeholder="blank = honor per-host profile"
                 data-adv-key="force_num_ctx" data-adv-group="fairness">
-              <span class="bf-adv-range">512 – 131072 (blank = legacy)</span>
-              <span class="bf-adv-help">Pins every host to the same context for fair host-vs-host comparison. Without this, a 24GB host runs at 32K while a 12GB host runs at 8K and their latency numbers are incomparable.</span>
+              <span class="bf-adv-range">512+ (blank = honor profile)</span>
+              <span class="bf-adv-help">Pins every host to the same context for a controlled host-vs-host comparison. Leave blank to exercise each host/model's explicit resident or profiled context.</span>
             </div>
 
             <div class="bf-adv-field">
@@ -322,6 +322,7 @@ export function _wireAdvancedSettings(container) {
         } else {
             const v = parseFloat(el.value);
             if (!Number.isNaN(v)) current[key] = v;
+            else if (key === 'num_ctx') current[key] = null;
         }
         save(SK_ADVANCED, JSON.stringify(current));
         _updateAdvancedSummary(container, current);
@@ -358,7 +359,7 @@ export function _wireAdvancedSettings(container) {
             } else if (el.tagName === 'SELECT') {
                 el.value = String(current[k]);
             } else {
-                el.value = current[k];
+                el.value = current[k] ?? '';
             }
         });
         _updateAdvancedSummary(container, current);

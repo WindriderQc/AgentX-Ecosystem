@@ -14,7 +14,6 @@
     "test:integration": "npx jest tests/integration --runInBand",
     "db:indexes": "node scripts/create-indexes.js",
     "docs-steward:audit": "node scripts/docs-steward/run-audit.js",
-    "seed:models": "node scripts/seed-model-registry.js",
     "seed:personas": "node scripts/seed-persona.js",
     "lexicon:build": "node scripts/build-kidx-lexicon.js",
     "overseer:check-flag": "node scripts/overseer/check-flag.js",

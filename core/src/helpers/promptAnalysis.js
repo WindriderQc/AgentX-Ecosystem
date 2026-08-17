@@ -202,12 +202,15 @@ Provide a detailed analysis and specific improvement suggestions in JSON format:
 
 Be specific and actionable. Focus on changes that directly address the identified failure patterns.`;
 
-    const fetch = (await import('node-fetch')).default;
-
     const analysisModel = process.env.PROMPT_ANALYSIS_MODEL
       || process.env.OLLAMA_ANALYSIS_MODEL
       || process.env.OLLAMA_MODEL
-      || 'qwen2.5:7b';
+      || process.env.AGENTX_DEFAULT_CHAT_MODEL;
+    if (!analysisModel) {
+      throw new Error('A configured analysis or default chat model is required for prompt analysis');
+    }
+
+    const fetch = (await import('node-fetch')).default;
 
     // Call Ollama with analysis model (configurable)
     const response = await fetch(`${ollamaHost}/api/generate`, {

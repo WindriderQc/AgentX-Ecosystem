@@ -2,7 +2,8 @@
  * Model Sync Orchestrator
  *
  * Discovers models from Ollama hosts and syncs them into the ModelRegistry.
- * Auto-detects per-model execution defaults (num_ctx) based on model size + host VRAM.
+ * Discovery records artifact metadata only. Runtime context is resolved from
+ * pins, deployed model metadata, or measured host/model profiles.
  *
  * Called on:
  * 1. Server startup (non-fatal if fails)
@@ -10,7 +11,6 @@
  */
 
 const ModelRegistry = require('../../../models/ModelRegistry');
-const ollamaVramService = require('../ollamaVramService');
 const logger = require('../../../config/logger');
 const { getFetchOptions } = require('../../helpers/httpAgent');
 const { getHostUrls } = require('../../helpers/ollamaHostConfig');
@@ -18,7 +18,6 @@ const { normalizeModelName } = require('../../helpers/modelNameNormalization');
 const {
   parseParameterCount,
   parseQuantization,
-  detectOptimalNumCtx,
   inferVendor,
   generateDisplayName
 } = require('./parameterDetection');
@@ -107,37 +106,12 @@ async function fetchHostModels(hostUrl) {
 }
 
 /**
- * Get total VRAM (MiB) for a host, or null if unavailable
- * @param {string} hostUrl
- * @returns {Promise<number|null>}
- */
-async function getHostVramMiB(hostUrl) {
-  try {
-    const result = await ollamaVramService.getHostVram(hostUrl);
-    const source = result._source || (result.ok ? 'ssh-nvidia-smi' : 'unknown');
-
-    if (result.ok && result.memoryTotalMiBTotal > 0) {
-      logger.info('VRAM detected for host', { hostUrl, vramMiB: result.memoryTotalMiBTotal, source });
-      return result.memoryTotalMiBTotal;
-    }
-
-    logger.warn('VRAM unknown for host — models will use conservative context defaults. Set OLLAMA_HOST_VRAM_MAP or configure in VRAM panel.', {
-      hostUrl, source, error: result.error || 'no VRAM data'
-    });
-  } catch (err) {
-    logger.warn('VRAM detection failed for host — models will use conservative context defaults', { hostUrl, error: err.message });
-  }
-  return null;
-}
-
-/**
  * Sync a single model into the registry
  * @param {object} ollamaModel - Model object from Ollama /api/tags
  * @param {string} hostUrl - Host URL where this model lives
- * @param {number|null} hostVramMiB - Host VRAM in MiB
  * @returns {Promise<'created'|'updated'|'unchanged'>}
  */
-async function syncModel(ollamaModel, hostUrl, hostVramMiB) {
+async function syncModel(ollamaModel, hostUrl) {
   // Normalize: strip ":latest" tag since Ollama reports it inconsistently
   const rawModelName = ollamaModel.name.replace(/:latest$/i, '');
   const modelName = normalizeModelName(rawModelName);
@@ -158,10 +132,7 @@ async function syncModel(ollamaModel, hostUrl, hostVramMiB) {
       changed = true;
     }
 
-    // Only update sourceHost if this host has more VRAM (better for num_ctx calc),
-    // or if the current sourceHost is no longer reachable (will be caught by retirement).
-    const existingVram = existing.executionDefaults?._hostVramMiB || 0;
-    if (existing.sourceHost !== hostUrl && (hostVramMiB || 0) >= existingVram) {
+    if (!existing.sourceHost) {
       updates.sourceHost = hostUrl;
       updates.host = hostUrl;
       changed = true;
@@ -183,32 +154,25 @@ async function syncModel(ollamaModel, hostUrl, hostVramMiB) {
       changed = true;
     }
 
-    // Re-detect execution defaults if not user-overridden.
-    // Use the best VRAM available (current host vs stored host VRAM).
-    const hasUserOverride = existing.executionOverrides?.num_ctx != null;
     const currentSource = existing.executionDefaults?._source;
-    const bestVram = Math.max(hostVramMiB || 0, existingVram) || null;
-    if (!hasUserOverride && currentSource !== 'user') {
-      const detection = detectOptimalNumCtx({
-        parameterSize,
-        quantization,
-        modelSizeBytes: ollamaModel.size,
-        hostVramMiB: bestVram
-      });
-      const currentCtx = existing.executionDefaults?.num_ctx;
-      if (currentCtx !== detection.num_ctx) {
-        updates['executionDefaults.num_ctx'] = detection.num_ctx;
-        updates['executionDefaults._source'] = 'auto';
-        updates['executionDefaults._reason'] = detection.reason;
-        updates['executionDefaults._detectedAt'] = new Date();
-        updates['executionDefaults._hostVramMiB'] = bestVram;
-        changed = true;
+    const unset = {};
+    if (currentSource === 'auto') {
+      unset['executionDefaults.num_ctx'] = '';
+      unset['executionDefaults._source'] = '';
+      unset['executionDefaults._reason'] = '';
+      unset['executionDefaults._detectedAt'] = '';
+      unset['executionDefaults._hostVramMiB'] = '';
+      if (existing.capabilities?.maxContext === existing.executionDefaults?.num_ctx) {
+        unset['capabilities.maxContext'] = '';
       }
+      changed = true;
     }
 
     if (changed) {
       updates.lastUpdated = new Date();
-      await ModelRegistry.updateOne(updateFilter, { $set: updates });
+      const update = { $set: updates };
+      if (Object.keys(unset).length) update.$unset = unset;
+      await ModelRegistry.updateOne(updateFilter, update);
       return 'updated';
     }
     // Still update lastSeenAt even if nothing else changed
@@ -217,13 +181,6 @@ async function syncModel(ollamaModel, hostUrl, hostVramMiB) {
   }
 
   // Create new entry
-  const detection = detectOptimalNumCtx({
-    parameterSize,
-    quantization,
-    modelSizeBytes: ollamaModel.size,
-    hostVramMiB
-  });
-
   const vendor = inferVendor(modelName, family);
   const displayName = generateDisplayName(modelName);
 
@@ -244,18 +201,10 @@ async function syncModel(ollamaModel, hostUrl, hostVramMiB) {
     categories: [],
     tags: [],
     capabilities: {
-      maxContext: detection.num_ctx,
       // Discovery cannot qualify thinking from a model-family name. The
       // benchmark-owned host/artifact profile is resolved at consumption
       // time; false preserves the legacy registry schema default meanwhile.
       supportsThinking: false
-    },
-    executionDefaults: {
-      num_ctx: detection.num_ctx,
-      _source: 'auto',
-      _reason: detection.reason,
-      _detectedAt: new Date(),
-      _hostVramMiB: hostVramMiB || null
     },
     status: 'active',
     isActive: true,
@@ -291,23 +240,19 @@ async function syncAllHosts() {
       try {
         logger.info('Syncing models from Ollama host', { hostUrl });
 
-        const [models, hostVramMiB] = await Promise.all([
-          fetchHostModels(hostUrl),
-          getHostVramMiB(hostUrl)
-        ]);
+        const models = await fetchHostModels(hostUrl);
 
         successfulHosts.add(hostUrl);
 
         logger.info('Discovered models on host', {
           hostUrl,
-          count: models.length,
-          hostVramMiB: hostVramMiB || 'unknown'
+          count: models.length
         });
 
         for (const model of models) {
           try {
             allSeenModels.add(normalizeModelName(model.name.replace(/:latest$/i, '')));
-            const result = await syncModel(model, hostUrl, hostVramMiB);
+            const result = await syncModel(model, hostUrl);
             stats[result]++;
           } catch (err) {
             logger.error('Failed to sync model', { model: model.name, hostUrl, error: err.message });
@@ -376,6 +321,5 @@ module.exports = {
   syncAllHosts,
   syncModel,
   fetchHostModels,
-  getHostVramMiB,
   retireUnconfiguredHostModels
 };

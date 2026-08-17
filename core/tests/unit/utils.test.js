@@ -1,35 +1,9 @@
 const {
   sanitizeOptions,
-  resolveTarget,
-  resolveModelNumCtxDetails
+  resolveTarget
 } = require('../../src/helpers/ollamaUtils');
 
-function mockRegistryEntry(entry) {
-  const chain = {
-    select: jest.fn(() => chain),
-    lean: jest.fn(async () => entry)
-  };
-  return {
-    findOne: jest.fn(() => chain)
-  };
-}
-
-function mockProfileEntry(entry) {
-  const chain = {
-    select: jest.fn(() => chain),
-    lean: jest.fn(async () => entry)
-  };
-  return {
-    findOne: jest.fn(() => chain)
-  };
-}
-
 describe('utils', () => {
-  beforeEach(() => {
-    delete process.env.MODEL_CONTEXT_OPERATIONAL_CAP;
-    delete process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP;
-  });
-
   describe('sanitizeOptions', () => {
     it('keeps supported native Ollama numeric options', () => {
       expect(sanitizeOptions({
@@ -89,76 +63,6 @@ describe('utils', () => {
 
     it('normalizes bare host:port targets to http urls', () => {
       expect(resolveTarget('192.0.2.66:11434/')).toBe('http://192.0.2.66:11434');
-    });
-  });
-
-  describe('resolveModelNumCtxDetails', () => {
-    it('caps registry-tested context to the operational runtime ceiling', async () => {
-      const result = await resolveModelNumCtxDetails('qwen3.6:35b-a3b-q8_0', {
-        deps: {
-          ModelRegistry: mockRegistryEntry({
-            modelName: 'qwen3.6:35b-a3b-q8_0',
-            contextTest: { status: 'completed', testedNumCtx: 202752 }
-          })
-        }
-      });
-
-      expect(result).toEqual(expect.objectContaining({
-        num_ctx: 131072,
-        source: 'context_test_operational_cap',
-        capped: true,
-        verified_num_ctx: 202752
-      }));
-    });
-
-    it('does not cap explicit user overrides', async () => {
-      const result = await resolveModelNumCtxDetails('qwen3.6:35b-a3b-q8_0', {
-        deps: {
-          ModelRegistry: mockRegistryEntry({
-            modelName: 'qwen3.6:35b-a3b-q8_0',
-            executionOverrides: { num_ctx: 202752 },
-            contextTest: { status: 'completed', testedNumCtx: 65536 }
-          })
-        }
-      });
-
-      expect(result).toEqual(expect.objectContaining({
-        num_ctx: 202752,
-        source: 'override'
-      }));
-    });
-
-    it('uses host/model context profiles before legacy registry context tests', async () => {
-      const result = await resolveModelNumCtxDetails('ax/qwen3.5:9b', {
-        targetHost: 'http://host:11434',
-        deps: {
-          ModelRegistry: mockRegistryEntry({
-            modelName: 'ax/qwen3.5:9b',
-            sourceHost: 'http://host:11434',
-            contextTest: { status: 'completed', testedNumCtx: 32768 },
-            executionDefaults: { num_ctx: 8192 }
-          }),
-          ModelContextProfile: mockProfileEntry({
-            modelName: 'ax/qwen3.5:9b',
-            hostUrl: 'http://host:11434',
-            recommendedContext: 131072,
-            verifiedMaxContext: 237568,
-            stressCeiling: 237568,
-            lastValidatedAt: new Date('2026-06-16T00:00:00Z')
-          })
-        }
-      });
-
-      expect(result).toEqual(expect.objectContaining({
-        num_ctx: 131072,
-        source: 'model_context_profile',
-        targetHost: 'http://host:11434'
-      }));
-      expect(result.details).toEqual(expect.objectContaining({
-        verifiedMaxContext: 237568,
-        stressCeiling: 237568,
-        matchedName: 'ax/qwen3.5:9b'
-      }));
     });
   });
 });

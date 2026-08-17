@@ -21,7 +21,8 @@ const { benchmarkFetch: fetch } = require('./http');
 const { normalizeModelName } = require('./modelMetadata');
 const { normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
 const { getDedicationStatuses } = require('../../clients/coreApiClient');
-const { resolveModelNumCtxDetails, modelNameCandidates } = require('../modelContextResolver');
+const { modelNameCandidates } = require('../modelContextResolver');
+const { normalizeJudgeNumCtx } = require('../scoring/judgeRuntimeConfig');
 const { normalizeExecutionConfig } = require('./config');
 const {
     MIN_THINKING_PROBE_COUNT,
@@ -474,30 +475,9 @@ async function checkJudgeConfiguration(judgeConfig = {}) {
     const warnings = [];
     const blockers = [];
 
-    // Resolve the judge num_ctx through the profiler-authoritative resolver
-    // so the preflight surfaces the same value warmup/callJudge will use.
-    // Explicit user config wins; otherwise we look up profile → probe → VRAM
-    // estimate → safety floor.
-    let requestedNumCtx;
-    let numCtxSource = 'explicit';
-    let numCtxAuthoritative = true;
-    if (Number.isFinite(Number(judgeConfig.num_ctx))) {
-        requestedNumCtx = Number(judgeConfig.num_ctx);
-    } else {
-        const details = await resolveModelNumCtxDetails(model, {
-            targetHost: host,
-            fallback: JUDGE_CONFIG.num_ctx || 8192
-        });
-        requestedNumCtx = details.num_ctx;
-        numCtxSource = details.source;
-        numCtxAuthoritative = details.authoritative !== false;
-    }
-    if (!numCtxAuthoritative) {
-        warnings.push(
-            `Judge model "${model}" has no profile on ${host} — using fallback num_ctx=${requestedNumCtx}. ` +
-            `Run the profiler for this model+host to avoid default-ctx load surprises.`
-        );
-    }
+    const requestedNumCtx = normalizeJudgeNumCtx(judgeConfig.num_ctx ?? JUDGE_CONFIG.num_ctx);
+    const numCtxSource = requestedNumCtx ? 'explicit' : 'modelfile';
+    const numCtxAuthoritative = requestedNumCtx != null;
 
     // Check host reachability and model availability
     const hostCheck = await checkHostModel(host, model);
@@ -511,7 +491,7 @@ async function checkJudgeConfiguration(judgeConfig = {}) {
     let modelContextLength = null;
     if (probe.ok && probe.context_length) {
         modelContextLength = probe.context_length;
-        if (requestedNumCtx > modelContextLength) {
+        if (requestedNumCtx && requestedNumCtx > modelContextLength) {
             warnings.push(
                 `Configured judge num_ctx (${requestedNumCtx}) exceeds model's native context window (${modelContextLength}). ` +
                 `Ollama will still run but quality may degrade beyond the native limit.`

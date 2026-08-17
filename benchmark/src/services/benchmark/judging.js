@@ -17,7 +17,7 @@
  *    - Populated from the execution plan's per-host judge assignment
  *
  * 3. JUDGE_CONFIG defaults (src/services/scoring/judgeCall.js)
- *    - Hardcoded defaults: model = 'qwen2.5:7b-instruct-q5_K_M', host = null
+ *    - Deployment defaults from JUDGE_MODEL / AGENTX_DEFAULT_CHAT_MODEL
  *    - host is overridden at module load from OLLAMA_HOST env var if set
  *    - Also provides: timeout, temperature, num_predict, num_ctx, max_retries
  *

@@ -209,6 +209,7 @@ describe('profile()', () => {
         profile: expect.objectContaining({
           tokensPerSec: 42.5,
           optimalNumCtx: 8192,
+          spill: expect.objectContaining({ lastSafeNumCtx: 8192 }),
           profileDepth: 'standard',
           thinking: expect.objectContaining({
             supported: true,

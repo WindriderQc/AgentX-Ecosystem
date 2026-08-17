@@ -821,11 +821,9 @@
             // Match each Ollama host to its metrics doc by IP first — the IP is
             // the host's true physical identity. Fall back to ollamaHostKey (a
             // config-slot label) only when no IP match exists. We deliberately do
-            // NOT index hostId into the join map: hostId values ('primary',
-            // 'tertiary') can equal another host's ollamaHostKey, and with
-            // last-write-wins a stale/retired doc would clobber a live host's
-            // match — that is exactly how Host Alpha (2× RTX 3090) ended up showing
-            // a decommissioned 3080 Ti box's GPU name.
+            // NOT index hostId into the join map: role-like host IDs can equal
+            // another host's ollamaHostKey, allowing a stale/retired document
+            // to clobber a live host's physical GPU identity.
             const hostDocByIp = {};
             const hostDocByOllamaKey = {};
             hostDocs.forEach(host => {

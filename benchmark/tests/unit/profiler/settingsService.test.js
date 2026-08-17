@@ -40,7 +40,7 @@ describe('settingsService', () => {
         thinkingProbeEnabled: true,
         warmup: true,
         testTimeoutSec: 60,
-        baselineModel: 'qwen2.5:3b',
+        baselineModel: '',
         collectHardwareTelemetry: true,
         showHardwareDiagnostics: true,
       });
@@ -72,7 +72,7 @@ describe('settingsService', () => {
       expect(result.numPredict).toBe(64);
       expect(result.throughputSamples).toBe(3);
       expect(result.testTimeoutSec).toBe(60);
-      expect(result.baselineModel).toBe('qwen2.5:3b');
+      expect(result.baselineModel).toBe('');
     });
 
     it('reads the legacy host baseline key only when the unified key is absent', async () => {

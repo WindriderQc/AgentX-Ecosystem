@@ -20,6 +20,12 @@ describe('benchmark execution config prompt hints', () => {
         expect(normalizeExecutionConfig(normalizeExecutionConfig({})).response_max_tokens_source).toBe('default');
     });
 
+    it('preserves measured and explicit contexts above the former 131K ceiling', () => {
+        expect(normalizeExecutionConfig({}).num_ctx).toBeNull();
+        expect(normalizeExecutionConfig({ num_ctx: 262144 }).num_ctx).toBe(262144);
+        expect(normalizeExecutionConfig({ force_num_ctx: 202752 }).force_num_ctx).toBe(202752);
+    });
+
     it('keeps controlled sampling by default and omits overrides for production qualification', () => {
         const controlled = normalizeExecutionConfig({});
         expect(controlled).toMatchObject({

@@ -268,14 +268,12 @@ router.post('/sync-hosts', async (req, res) => {
  *   'modelfile'           — Ollama's actual PARAMETER num_ctx (truth)
  *   'model_context_profile' — current measured host/model recommendation
  *   'profiled'            — legacy benchmark context probe testedNumCtx
- *   'registry_default'    — auto-detected fallback
- *   'registry_capability' — maxContext from capabilities
  *   'model_capacity'      — model's theoretical max from /api/show
- *   'fallback'            — hard default (8192)
+ *   'unresolved'          — no explicit, deployed, or measured evidence
  *
  * Query params:
  *   host  — optional Ollama host URL; if provided, Modelfile is queried
- *           directly. If omitted, registry fallback is used.
+ *           directly. If omitted, measured registry evidence may be used.
  */
 router.get('/:name/context-info', async (req, res) => {
   try {
@@ -298,9 +296,8 @@ router.get('/:name/context-info', async (req, res) => {
  * suggestion per sourceHost. Read-only; never writes to openclaw.json.
  *
  * contextWindow and params.num_ctx are kept aligned. Explicit
- * executionOverrides.num_ctx wins. Profiler/probe-derived values expose their
- * verified ceiling in _source.contextMaxVerified but are capped to the
- * operational runtime default unless overridden.
+ * executionOverrides.num_ctx wins. Profiler/probe-derived values expose the
+ * measured runtime contract without an additional operational cap.
  */
 router.get('/export/openclaw', async (_req, res) => {
   try {
@@ -704,8 +701,8 @@ router.post('/:name/execution-config', async (req, res) => {
     const overrides = { _overriddenAt: new Date() };
     if (num_ctx != null) {
       const parsed = Number(num_ctx);
-      if (!Number.isFinite(parsed) || parsed < 512 || parsed > 131072) {
-        return res.status(400).json({ status: 'error', message: 'num_ctx must be a number between 512 and 131072' });
+      if (!Number.isFinite(parsed) || parsed < 512) {
+        return res.status(400).json({ status: 'error', message: 'num_ctx must be a number of at least 512' });
       }
       overrides.num_ctx = Math.round(parsed);
     }

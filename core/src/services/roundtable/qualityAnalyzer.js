@@ -12,7 +12,8 @@ const logger = require('../../../config/logger');
 const Roundtable = require('../../../models/Roundtable');
 const { getTargetForModel } = require('../modelRouter');
 
-const JUDGE_MODEL = process.env.ROUNDTABLE_JUDGE_MODEL || 'ax/gemma4:26b-a4b-it-qat';
+const { PRODUCT_DEFAULT_MODEL } = require('../modelRouterDefaults');
+const JUDGE_MODEL = process.env.ROUNDTABLE_JUDGE_MODEL || PRODUCT_DEFAULT_MODEL;
 const JUDGE_TIMEOUT_MS = Number(process.env.ROUNDTABLE_JUDGE_TIMEOUT_MS || 120000);
 
 const AGENT_DIMENSIONS = [
@@ -82,7 +83,7 @@ async function callJudge(prompt) {
     const resp = await fetch(`${target}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: JUDGE_MODEL, prompt, stream: false, options: { num_ctx: 8192, temperature: 0.2 } }),
+      body: JSON.stringify({ model: JUDGE_MODEL, prompt, stream: false, options: { temperature: 0.2 } }),
       signal: controller.signal
     });
     clearTimeout(timer);

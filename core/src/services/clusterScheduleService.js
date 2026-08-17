@@ -397,22 +397,14 @@ async function _clearClaimsForTests() {
 }
 
 /**
- * Estimate VRAM required to load a model, in MiB.
- * Strategy: registry modelSizeBytes > parameter-count heuristic from name.
+ * Report measured VRAM required to load a model, in MiB.
+ * Artifact size and parameter names do not reveal runtime KV/context memory,
+ * so an unmeasured model remains unknown.
  * @param {string} modelName
  * @returns {Promise<{ estimatedMiB: number, confidence: string }>}
  */
 async function getModelVramEstimate(modelName) {
-  // 1) Try model registry (most accurate)
   const reg = await ModelRegistry.findOne({ modelName }).lean();
-  if (reg?.modelSizeBytes && reg.modelSizeBytes > 0) {
-    // Disk size ~= VRAM for quantized models; add ~10% overhead for KV cache
-    const baseMiB = Math.ceil(reg.modelSizeBytes / (1024 * 1024));
-    const withOverhead = Math.ceil(baseMiB * 1.1);
-    return { estimatedMiB: withOverhead, confidence: 'registry' };
-  }
-
-  // 2) Check hostPerformance snapshots for actual vramUsedMiB
   if (reg?.hostPerformance?.length > 0) {
     const passing = reg.hostPerformance.filter(s => s.status === 'pass' && s.vramUsedMiB > 0);
     if (passing.length > 0) {
@@ -421,18 +413,7 @@ async function getModelVramEstimate(modelName) {
     }
   }
 
-  // 3) Heuristic from model name parameter count (e.g. "7b", "14b")
-  const paramMatch = modelName.match(/(\d+(?:\.\d+)?)\s*[bB]/);
-  if (paramMatch) {
-    const billions = parseFloat(paramMatch[1]);
-    // q4 quantization: ~0.6 GB per billion params; add 15% KV overhead
-    const estimatedGiB = billions * 0.6 * 1.15;
-    const estimatedMiB = Math.ceil(estimatedGiB * 1024);
-    return { estimatedMiB, confidence: 'heuristic' };
-  }
-
-  // 4) Fallback: small model assumption (2 GiB)
-  return { estimatedMiB: 2048, confidence: 'fallback' };
+  return { estimatedMiB: null, confidence: 'unknown' };
 }
 
 /**
@@ -455,7 +436,7 @@ async function recommendHost(modelName, durationMs = 30000, priority = 'normal')
     clusterLiveService.getLiveState(),
     getModelVramEstimate(modelName),
     Promise.resolve(getConfiguredHosts()),
-    hostPrefService.getDefaultModelsMap(),
+    hostPrefService.getPinnedModelsMap(),
     hostPrefService.listBenchmarkClaims().catch(() => []),
     getActiveClaims().catch(() => [])
   ]);
@@ -484,7 +465,9 @@ async function recommendHost(modelName, durationMs = 30000, priority = 'normal')
 
     // If the model is already loaded, it doesn't need additional VRAM
     const additionalVramNeeded = modelLoaded ? 0 : vramEstimate.estimatedMiB;
-    const fits = freeVramMiB >= additionalVramNeeded;
+    const fits = modelLoaded
+      ? true
+      : (additionalVramNeeded == null ? null : freeVramMiB >= additionalVramNeeded);
 
     // Count active claims on this host
     const activeClaims = scheduleClaims.filter(claim => claim.host === cfg.id);
@@ -534,14 +517,16 @@ async function recommendHost(modelName, durationMs = 30000, priority = 'normal')
       }
 
       // Must fit in VRAM
-      if (c.fits) {
+      if (c.fits === true) {
         score += 50;
         // Prefer hosts with more headroom
         score += Math.min(c.freeVramMiB / 100, 30);
         reasons.push(`${c.freeVramMiB} MiB free`);
-      } else {
+      } else if (c.fits === false) {
         score -= 200;
         reasons.push(`insufficient VRAM (need ${c.additionalVramNeeded} MiB, have ${c.freeVramMiB} MiB free)`);
+      } else {
+        reasons.push('model VRAM requirement is unmeasured');
       }
 
       // Fewer active claims = less contention
@@ -563,20 +548,20 @@ async function recommendHost(modelName, durationMs = 30000, priority = 'normal')
     .sort((a, b) => b.score - a.score);
 
   if (scored.length === 0) {
-    // All hosts offline — fallback to first configured
-    const fallback = configuredHosts[0];
-    warnings.push('All hosts unreachable — returning first configured host as fallback');
+    warnings.push('All configured hosts are unreachable; no placement is available');
     return {
-      host: fallback.id, hostUrl: fallback.url,
-      reason: 'Fallback (all hosts unreachable)',
+      host: null, hostUrl: null,
+      reason: 'No reachable host',
       confidence: 'none', warnings
     };
   }
 
   const best = scored[0];
 
-  if (!best.fits && !best.modelLoaded) {
+  if (best.fits === false && !best.modelLoaded) {
     warnings.push(`Model may not fit on ${best.name} — ${best.additionalVramNeeded} MiB needed, ${best.freeVramMiB} MiB free`);
+  } else if (best.fits == null && !best.modelLoaded) {
+    warnings.push(`Model VRAM requirement is unmeasured; placement on ${best.name} is advisory only`);
   }
   const excludedBenchmarking = onlineCandidates
     .filter(c => c.benchmarking)

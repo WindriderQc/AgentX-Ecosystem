@@ -19,9 +19,10 @@ jest.mock('../../src/helpers/httpAgent', () => ({
 
 jest.mock('../../src/services/scoring/judgeRuntimeConfig', () => ({
     normalizeJudgeNumCtx: jest.fn((value) => {
+        if (value === null || value === undefined || value === '') return null;
         const parsed = Number(value);
-        if (!Number.isFinite(parsed)) return 8192;
-        return Math.max(512, Math.min(131072, Math.round(parsed)));
+        if (!Number.isFinite(parsed)) return null;
+        return Math.max(512, Math.round(parsed));
     })
 }));
 
@@ -234,14 +235,22 @@ describe('Prompt structure and context limits', () => {
 });
 
 describe('Model options', () => {
-    test('sends num_predict: 20, num_ctx: 8192 (default), temperature: 0.1', async () => {
+    test('sends output controls without inventing a context override', async () => {
         mockFetchSequence(['YES']);
         await askBinaryQuestion('response', 'q?', JUDGE_CONFIG);
 
         const body = JSON.parse(mockFetchFn.mock.calls[0][1].body);
         expect(body.options.num_predict).toBe(20);
-        expect(body.options.num_ctx).toBe(8192);
+        expect(body.options).not.toHaveProperty('num_ctx');
         expect(body.options.temperature).toBe(0.1);
+    });
+
+    test('preserves an explicit context above the former 131K ceiling', async () => {
+        mockFetchSequence(['YES']);
+        await askBinaryQuestion('response', 'q?', { ...JUDGE_CONFIG, num_ctx: 262144 });
+
+        const body = JSON.parse(mockFetchFn.mock.calls[0][1].body);
+        expect(body.options.num_ctx).toBe(262144);
     });
 
     test('sends correct model name', async () => {

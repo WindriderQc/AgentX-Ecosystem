@@ -146,7 +146,11 @@ Answer ONLY "YES" or "NO" for this specific question: ${question}`;
             responseMode: 'normalized',
             think,
             callerDetail: 'benchmark-decomposed-judge',
-            options: { temperature: 0.1, num_predict: 20, num_ctx: numCtx }
+            options: {
+                temperature: 0.1,
+                num_predict: 20,
+                ...(numCtx ? { num_ctx: numCtx } : {})
+            }
         };
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',

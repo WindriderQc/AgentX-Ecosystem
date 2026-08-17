@@ -289,7 +289,7 @@ describe('agentRuntimeConfigService', () => {
     });
   });
 
-  it('caps unpinned exported context to the validated inference-contract window', async () => {
+  it('uses the measured inference-contract window for an unpinned model', async () => {
     getContextInfo.mockImplementation(async (model) => ({
       model,
       host: 'http://192.0.2.105:11434',
@@ -320,7 +320,7 @@ describe('agentRuntimeConfigService', () => {
     });
   });
 
-  it('reports a validated-budget mismatch without silently changing a resident operator pin', async () => {
+  it('preserves a native resident context without inventing a smaller runtime cap', async () => {
     hostPrefService.getAll.mockResolvedValue([{
       hostUrl: 'http://192.0.2.105:11434',
       displayName: 'Host Alpha',
@@ -332,7 +332,7 @@ describe('agentRuntimeConfigService', () => {
       pinnedModels: [{
         model: 'ax/gemma4:26b-a4b-it-qat',
         keepAlive: -1,
-        contextSize: 83558,
+        contextSize: 262144,
         autoRestore: true
       }]
     }]);
@@ -343,14 +343,94 @@ describe('agentRuntimeConfigService', () => {
     });
 
     expect(data.lanes.daily).toMatchObject({
-      contextSize: 83558,
+      contextSize: 262144,
       contextSource: 'host_preference_pin',
       pinAligned: true,
       contextBudget: { validatedWindowTokens: 65536 }
     });
+    expect(data.lanes.daily).not.toHaveProperty('verifiedContextSize');
+    expect(data.lanes.daily).not.toHaveProperty('operationalContextCap');
     expect(data.lanes.daily.warnings).toEqual(expect.arrayContaining([
       expect.stringMatching(/preserving the operator pin/)
     ]));
+  });
+
+  it('exports one resident model and context across request-policy lanes', async () => {
+    const qwen = 'qwen3.8:27b-mtp-q8_0';
+    const taskModels = {
+      daily_operator: { model: qwen, host: 'primary' },
+      code_generation: { model: qwen, host: 'primary' },
+      master_brain: { model: qwen, host: 'primary' }
+    };
+    buildRouterConfigPayload.mockResolvedValue({
+      taskModels,
+      defaults: { taskModels },
+      hosts: {
+        primary: 'http://192.0.2.105:11434',
+        secondary: 'http://192.0.2.12:11434',
+        tertiary: 'http://192.0.2.99:11434'
+      }
+    });
+    hostPrefService.getAll.mockResolvedValue([{
+      hostUrl: 'http://192.0.2.105:11434',
+      displayName: 'Host Alpha',
+      status: 'ready',
+      loadedModel: qwen,
+      loadedModels: [qwen],
+      maxConcurrentModels: 1,
+      vramTotalMiB: 49152,
+      pinnedModels: [{ model: qwen, keepAlive: -1, contextSize: 262144, autoRestore: true }]
+    }]);
+    resolveInferenceContract.mockImplementation(async ({ model, host }) => ({
+      version: 'agentx.inference-contract.v1',
+      artifact: { model, host, hostId: 'host-alpha' },
+      qualification: { state: 'profiled', qualified: true },
+      contextBudget: {
+        windowTokens: 131072,
+        validatedWindowTokens: 131072,
+        resolvedSource: 'benchmark_model_profile',
+        warnings: []
+      },
+      capabilities: {
+        thinking: {
+          supported: true,
+          source: 'benchmark_model_profile',
+          visibleFinalAnswer: { qualified: true }
+        }
+      }
+    }));
+
+    const data = await buildAgentRuntimeConfigExport({
+      coreBaseUrl: 'http://192.0.2.99:3080',
+      includeCandidates: false
+    });
+
+    for (const lane of Object.values(data.lanes)) {
+      expect(lane).toMatchObject({
+        model: qwen,
+        contextSize: 262144,
+        contextSource: 'host_preference_pin',
+        pinAligned: true
+      });
+      expect(lane).not.toHaveProperty('operationalContextCap');
+    }
+    expect(data.warnings).not.toEqual(expect.arrayContaining([
+      expect.stringMatching(/Capping .* runtime context/)
+    ]));
+    expect(data.hermes.localFallbackModelConfig).toMatchObject({
+      default: qwen,
+      context_length: 262144,
+      ollama_num_ctx: 262144
+    });
+    expect(data.hermes.codingSpecialistModelConfig.context_length).toBe(262144);
+    expect(data.hermes.masterBrainModelConfig.context_length).toBe(262144);
+    expect(data.openclaw.provider.models).toEqual([
+      expect.objectContaining({
+        id: qwen,
+        contextWindow: 262144,
+        params: { num_ctx: 262144 }
+      })
+    ]);
   });
 
   it('surfaces installed master-brain candidates larger than the daily model', async () => {

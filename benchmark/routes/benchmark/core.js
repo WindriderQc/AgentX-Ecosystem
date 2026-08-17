@@ -36,13 +36,9 @@ const {
 const path = require('path');
 const fs = require('fs');
 
-// 0219 tiered judge: lighter judge used ONLY when the resolved default judge is
-// absent from the judge host. Lets a 7b-only deployment run; on a 14b-equipped
-// host 14b is always present so this never triggers. Override via
-// JUDGE_FALLBACK_MODEL; set empty to disable the fallback entirely.
-const JUDGE_FALLBACK_MODEL = process.env.JUDGE_FALLBACK_MODEL !== undefined
-    ? process.env.JUDGE_FALLBACK_MODEL
-    : 'qwen2.5:7b-instruct-q5_K_M';
+// An operator may explicitly configure a secondary judge artifact. There is no
+// product-wide fallback model because installed inventory is deployment state.
+const JUDGE_FALLBACK_MODEL = String(process.env.JUDGE_FALLBACK_MODEL || '').trim() || null;
 
 function readJudgeDefaults() {
     try {
@@ -334,8 +330,8 @@ router.post('/batch', async (req, res) => {
         if (jc.num_predict !== undefined && (typeof jc.num_predict !== 'number' || jc.num_predict < 100 || jc.num_predict > 4096)) {
             return res.status(400).json({ status: 'error', error: 'judge_config.num_predict must be a number between 100 and 4096' });
         }
-        if (jc.num_ctx !== undefined && (typeof jc.num_ctx !== 'number' || jc.num_ctx < 2048 || jc.num_ctx > 32768)) {
-            return res.status(400).json({ status: 'error', error: 'judge_config.num_ctx must be a number between 2048 and 32768' });
+        if (jc.num_ctx != null && (typeof jc.num_ctx !== 'number' || jc.num_ctx < 512)) {
+            return res.status(400).json({ status: 'error', error: 'judge_config.num_ctx must be a number of at least 512' });
         }
         if (jc.max_retries !== undefined && (typeof jc.max_retries !== 'number' || jc.max_retries < 0 || jc.max_retries > 5)) {
             return res.status(400).json({ status: 'error', error: 'judge_config.max_retries must be a number between 0 and 5' });

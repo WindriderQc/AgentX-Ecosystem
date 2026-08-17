@@ -3,26 +3,20 @@
 
     const shared = window.NerveCenterShared;
 
-    const HOST_META = {
-        'http://192.0.2.199:11434': { name: 'Host Alpha', ip: '192.0.2.199', gpu: '2x RTX 3090', vram: '48 GB' },
-        'http://192.0.2.12:11434': { name: 'Host Beta', ip: '192.0.2.12', gpu: 'RTX 5070 Ti', vram: '16 GB' },
-        'http://192.0.2.99:11434': { name: 'Host Gamma', ip: '192.0.2.99', gpu: 'RTX 3080 Ti', vram: '12 GB' },
-    };
-
     let _poller = null;
     let throughputChart = null;
     let latencyChart = null;
 
-    const HOST_LABELS = {
-        'http://192.0.2.199:11434': 'Host Alpha',
-        'http://192.0.2.12:11434': 'Host Beta',
-        'http://192.0.2.99:11434': 'Host Gamma',
-    };
-    const HOST_COLORS = {
-        'http://192.0.2.199:11434': '#7cf0ff',
-        'http://192.0.2.12:11434': '#4ade80',
-        'http://192.0.2.99:11434': '#f59e0b',
-    };
+    const HOST_COLORS = ['#7cf0ff', '#4ade80', '#f59e0b', '#a78bfa', '#f97316'];
+
+    function hostLabel(host) {
+        return String(host || '--').replace(/^https?:\/\//, '').replace(/:11434$/, '');
+    }
+
+    function hostColor(host) {
+        const index = Math.abs([...String(host || '')].reduce((sum, char) => sum + char.charCodeAt(0), 0)) % HOST_COLORS.length;
+        return HOST_COLORS[index];
+    }
 
     function formatTaskLabel(task, metadata = {}) {
         return metadata.title || task.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
@@ -252,8 +246,8 @@
             });
 
             const throughputDatasets = [...hostKeys].map(host => {
-                const color = HOST_COLORS[host] || '#93a0b5';
-                const label = HOST_LABELS[host] || host;
+                const color = hostColor(host);
+                const label = hostLabel(host);
                 return {
                     label,
                     data: buckets.map(b => {
@@ -392,7 +386,7 @@
         }
         return rows.map(r => {
             const host = r.host || r._id || '--';
-            const label = HOST_LABELS[host] || shared.escapeHtml(host);
+            const label = shared.escapeHtml(hostLabel(host));
             const calls = r.count ?? r.calls ?? '--';
             const avgLat = r.avgLatencyMs != null ? `${Math.round(r.avgLatencyMs)}ms` : '--';
             const errRate = r.errorRate != null ? `${r.errorRate.toFixed(1)}%` : '--';
@@ -416,7 +410,7 @@
             const calls = r.count ?? r.calls ?? '--';
             const avgLat = r.avgLatencyMs != null ? `${Math.round(r.avgLatencyMs)}ms` : '--';
             const errRate = r.errorRate != null ? `${r.errorRate.toFixed(1)}%` : '--';
-            const hosts = Array.isArray(r.hosts) ? r.hosts.map(h => HOST_LABELS[h] || h).join(', ') : (r.hosts || '--');
+            const hosts = Array.isArray(r.hosts) ? r.hosts.map(hostLabel).join(', ') : hostLabel(r.hosts);
             return `<tr>
                 <td class="nc-td-sm"><span class="nc-model-tag">${shared.escapeHtml(shared.shortModel(model))}</span></td>
                 <td class="nc-td-sm">${shared.escapeHtml(String(calls))}</td>

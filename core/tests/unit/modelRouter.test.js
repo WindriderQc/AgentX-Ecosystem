@@ -75,7 +75,7 @@ describe('Model Router Service', () => {
             const codeTask = modelRouter.getModelForTask('code_generation');
             expect(codeTask.host).toBe('primary');
             expect(codeTask.url).toBe('http://primary:11434');
-            expect(codeTask.model).toBe('ax/qwen3-coder:30b');
+            expect(codeTask.model).toBe('ax/gemma4:26b-a4b-it-qat');
 
             const chatTask = modelRouter.getModelForTask('quick_chat');
             expect(chatTask.host).toBe('secondary');

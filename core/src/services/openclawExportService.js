@@ -23,18 +23,10 @@ const {
 const OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH
   || path.join(os.homedir(), '.openclaw', 'openclaw.json');
 
-// Heuristic: which OpenClaw provider block should this sourceHost map to?
-// Uses the last octet of the IP to pick human-recognisable names.
+// Produce a stable provider id from the configured source host. Environment-
+// specific aliases belong in the consuming runtime, not in product code.
 function suggestProviderId(host) {
   if (!host) return 'agentx-unknown';
-  const m = host.match(/192\.168\.2\.(\d+)/);
-  if (m) {
-    const octet = m[1];
-    if (octet === '66') return 'agentx-host-delta';
-    if (octet === '12') return 'agentx-host-beta';
-    if (octet === '99') return 'agentx-host-gamma';
-    if (octet === '105') return 'agentx-host-alpha';
-  }
   return 'agentx-' + host.replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
 }
 
@@ -48,29 +40,6 @@ function positiveInteger(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n);
-}
-
-const DEFAULT_OPERATIONAL_NUM_CTX_CAP = 131072;
-
-function operationalNumCtxCap() {
-  const raw = process.env.MODEL_CONTEXT_OPERATIONAL_CAP
-    ?? process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP
-    ?? DEFAULT_OPERATIONAL_NUM_CTX_CAP;
-  return positiveInteger(raw);
-}
-
-function withOperationalContextCap(resolved) {
-  if (!resolved || resolved.source === 'user_override') return resolved;
-  const cap = operationalNumCtxCap();
-  const value = positiveInteger(resolved.value);
-  if (!cap || !value || value <= cap) return resolved;
-  return {
-    ...resolved,
-    value: cap,
-    source: `${resolved.source}_operational_cap`,
-    verifiedMaxContext: value,
-    operationalCap: cap
-  };
 }
 
 function getContextProbeModel() {
@@ -108,43 +77,39 @@ function modelLookupNames(modelName) {
   return Array.from(new Set([raw, normalized].filter(Boolean)));
 }
 
-function resolveContextWindow(entry, isEmbedding) {
+function resolveContextWindow(entry) {
   const overrideCtx = positiveInteger(entry.executionOverrides && entry.executionOverrides.num_ctx);
   if (overrideCtx) return { value: overrideCtx, source: 'user_override' };
 
-  const profileCtx = positiveInteger(entry._contextProfile && entry._contextProfile.recommendedContext);
+  const profileCtx = positiveInteger(entry._contextProfile && (
+    entry._contextProfile.verifiedMaxContext || entry._contextProfile.recommendedContext
+  ));
   if (profileCtx) {
-    return withOperationalContextCap({
+    return {
       value: profileCtx,
       source: 'model_context_profile',
       verifiedMaxContext: positiveInteger(entry._contextProfile.verifiedMaxContext) || profileCtx,
+      verifiedInputTokens: positiveInteger(entry._contextProfile.verifiedInputTokens) || null,
       profiledAt: entry._contextProfile.lastValidatedAt || null,
-      stressCeiling: positiveInteger(entry._contextProfile.stressCeiling) || null
-    });
+    };
   }
 
   const probeCtx = positiveInteger(entry._contextProbe && entry._contextProbe.testedNumCtx);
   if (probeCtx) {
-    return withOperationalContextCap({
+    return {
       value: probeCtx,
       source: 'benchmark_context_probe',
       verifiedMaxContext: probeCtx,
       profiledAt: entry._contextProbe.testedAt || null
-    });
+    };
   }
 
   const testedCtx = entry.contextTest
     && entry.contextTest.status === 'completed'
     && positiveInteger(entry.contextTest.testedNumCtx);
-  if (testedCtx) return withOperationalContextCap({ value: testedCtx, source: 'context_test', verifiedMaxContext: testedCtx });
+  if (testedCtx) return { value: testedCtx, source: 'context_test', verifiedMaxContext: testedCtx };
 
-  const defaultCtx = positiveInteger(entry.executionDefaults && entry.executionDefaults.num_ctx);
-  if (defaultCtx) return withOperationalContextCap({ value: defaultCtx, source: 'execution_default' });
-
-  const capCtx = positiveInteger(entry.capabilities && entry.capabilities.maxContext);
-  if (capCtx) return withOperationalContextCap({ value: capCtx, source: 'capability', verifiedMaxContext: capCtx });
-
-  return { value: isEmbedding ? 8192 : 32768, source: 'fallback' };
+  return { value: null, source: 'unresolved' };
 }
 
 async function loadLatestContextProfileMap(entries) {
@@ -166,7 +131,10 @@ async function loadLatestContextProfileMap(entries) {
       modelName: { $in: Array.from(modelSet) },
       hostUrl: { $in: Array.from(hostSet) },
       stale: { $ne: true },
-      recommendedContext: { $gt: 0 }
+      $or: [
+        { verifiedMaxContext: { $gt: 0 } },
+        { recommendedContext: { $gt: 0 } }
+      ]
     })
       .sort({ lastValidatedAt: -1 })
       .lean();
@@ -242,7 +210,7 @@ function toOpenClawModel(entry, capabilityContract = null) {
     entry.capabilities?.supportsThinking
   );
 
-  const resolvedContext = resolveContextWindow(entry, isEmbedding);
+  const resolvedContext = resolveContextWindow(entry);
   const contextWindow = resolvedContext.value;
 
   const model = {
@@ -253,15 +221,13 @@ function toOpenClawModel(entry, capabilityContract = null) {
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     maxTokens: isEmbedding ? 512 : 8192,
-    contextWindow,
     _source: {
       host: entry.sourceHost || null,
       profiledAt: resolvedContext.profiledAt || (entry.contextTest && entry.contextTest.completedAt) || entry.lastSeenAt || null,
       contextTestStatus: (entry.contextTest && entry.contextTest.status) || 'not-tested',
       contextWindowSource: resolvedContext.source,
       contextMaxVerified: resolvedContext.verifiedMaxContext || null,
-      contextOperationalCap: resolvedContext.operationalCap || null,
-      contextStressCeiling: resolvedContext.stressCeiling || null,
+      contextInputVerified: resolvedContext.verifiedInputTokens || null,
       contextProfileStatus: entry._contextProfile ? (entry._contextProfile.stale ? 'stale' : 'active') : null,
       contextProbeStatus: (entry._contextProbe && entry._contextProbe.status) || null,
       parameterSize: entry.parameterSize || null,
@@ -274,7 +240,9 @@ function toOpenClawModel(entry, capabilityContract = null) {
     }
   };
 
-  if (!isEmbedding) {
+  if (contextWindow) model.contextWindow = contextWindow;
+
+  if (!isEmbedding && contextWindow) {
     model.params = { num_ctx: contextWindow };
     model._source.runtimeNumCtx = contextWindow;
   }
@@ -288,7 +256,7 @@ function runtimeNumCtx(model) {
 
 function modelConfigDrift(current, exported) {
   const drift = {};
-  if (current.contextWindow !== exported.contextWindow) {
+  if (exported.contextWindow != null && current.contextWindow !== exported.contextWindow) {
     drift.contextWindow = true;
   }
   const exportedNumCtx = runtimeNumCtx(exported);

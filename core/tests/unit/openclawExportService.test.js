@@ -38,8 +38,6 @@ function mockFindReturning(docs) {
 describe('openclawExportService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    delete process.env.MODEL_CONTEXT_OPERATIONAL_CAP;
-    delete process.env.AGENTX_OPERATIONAL_NUM_CTX_CAP;
     resolveCapabilityContract.mockImplementation(async ({ model, host }, deps = {}) => ({
       version: 'agentx.inference-contract.v1',
       artifact: { model, host, hostId: null },
@@ -57,11 +55,11 @@ describe('openclawExportService', () => {
   });
 
   describe('suggestProviderId', () => {
-    it('maps known host IPs to named providers', () => {
-      expect(suggestProviderId('http://192.0.2.66:11434')).toBe('agentx-host-delta');
-      expect(suggestProviderId('http://192.0.2.12:11434')).toBe('agentx-host-beta');
-      expect(suggestProviderId('http://192.0.2.99:11434')).toBe('agentx-host-gamma');
-      expect(suggestProviderId('http://192.0.2.105:11434')).toBe('agentx-host-alpha');
+    it('derives stable provider ids without product-owned host aliases', () => {
+      expect(suggestProviderId('http://192.0.2.66:11434')).toBe('agentx-192-0-2-66-11434');
+      expect(suggestProviderId('http://192.0.2.12:11434')).toBe('agentx-192-0-2-12-11434');
+      expect(suggestProviderId('http://192.0.2.99:11434')).toBe('agentx-192-0-2-99-11434');
+      expect(suggestProviderId('http://192.0.2.105:11434')).toBe('agentx-192-0-2-105-11434');
     });
 
     it('handles unknown hosts with a sanitised id', () => {
@@ -121,11 +119,11 @@ describe('openclawExportService', () => {
         executionDefaults: { num_ctx: 4096 }
       };
       const m = toOpenClawModel(entry);
-      expect(m.contextWindow).toBe(131072);
-      expect(m.params.num_ctx).toBe(131072);
-      expect(m._source.contextWindowSource).toBe('benchmark_context_probe_operational_cap');
+      expect(m.contextWindow).toBe(202752);
+      expect(m.params.num_ctx).toBe(202752);
+      expect(m._source.contextWindowSource).toBe('benchmark_context_probe');
       expect(m._source.contextMaxVerified).toBe(202752);
-      expect(m._source.contextOperationalCap).toBe(131072);
+      expect(m._source).not.toHaveProperty('contextOperationalCap');
       expect(m._source.contextProbeStatus).toBe('completed');
       expect(m._source.profiledAt).toEqual(new Date('2026-05-31T16:36:43Z'));
     });
@@ -137,7 +135,7 @@ describe('openclawExportService', () => {
           stale: false,
           recommendedContext: 131072,
           verifiedMaxContext: 237568,
-          stressCeiling: 237568,
+          verifiedInputTokens: 190000,
           lastValidatedAt: new Date('2026-06-16T00:00:00Z')
         },
         _contextProbe: { status: 'completed', testedNumCtx: 65536, testedAt: new Date('2026-06-15T00:00:00Z') },
@@ -147,11 +145,11 @@ describe('openclawExportService', () => {
 
       const m = toOpenClawModel(entry);
 
-      expect(m.contextWindow).toBe(131072);
-      expect(m.params.num_ctx).toBe(131072);
+      expect(m.contextWindow).toBe(237568);
+      expect(m.params.num_ctx).toBe(237568);
       expect(m._source.contextWindowSource).toBe('model_context_profile');
       expect(m._source.contextMaxVerified).toBe(237568);
-      expect(m._source.contextStressCeiling).toBe(237568);
+      expect(m._source.contextInputVerified).toBe(190000);
       expect(m._source.contextProfileStatus).toBe('active');
       expect(m._source.contextProbeStatus).toBe('completed');
       expect(m._source.profiledAt).toEqual(new Date('2026-06-16T00:00:00Z'));
@@ -174,16 +172,16 @@ describe('openclawExportService', () => {
       expect(m._source.contextWindowSource).toBe('user_override');
     });
 
-    it('falls back to executionDefaults.num_ctx when no contextTest', () => {
+    it('leaves runtime context unresolved when only a generated registry default exists', () => {
       const entry = {
         modelName: 'gemma4:26b',
         executionDefaults: { num_ctx: 131072 },
         sourceHost: 'http://192.0.2.66:11434'
       };
       const m = toOpenClawModel(entry);
-      expect(m.contextWindow).toBe(131072);
-      expect(m.params.num_ctx).toBe(131072);
-      expect(m._source.contextWindowSource).toBe('execution_default');
+      expect(m).not.toHaveProperty('contextWindow');
+      expect(m).not.toHaveProperty('params');
+      expect(m._source.contextWindowSource).toBe('unresolved');
       expect(m._source.contextMaxVerified).toBeNull();
     });
 
@@ -195,7 +193,7 @@ describe('openclawExportService', () => {
       };
       const m = toOpenClawModel(entry);
       expect(m.maxTokens).toBe(512);
-      expect(m.contextWindow).toBe(2048);
+      expect(m).not.toHaveProperty('contextWindow');
       expect(m.params).toBeUndefined();
     });
 
@@ -269,13 +267,13 @@ describe('openclawExportService', () => {
       const data = await buildExport();
       expect(data.registryCount).toBe(3);
       expect(Object.keys(data.providers).sort()).toEqual([
-        'agentx-host-delta',
-        'agentx-host-gamma'
+        'agentx-192-0-2-66-11434',
+        'agentx-192-0-2-99-11434'
       ]);
-      expect(data.providers['agentx-host-delta'].models).toHaveLength(1);
-      expect(data.providers['agentx-host-gamma'].models).toHaveLength(2);
+      expect(data.providers['agentx-192-0-2-66-11434'].models).toHaveLength(1);
+      expect(data.providers['agentx-192-0-2-99-11434'].models).toHaveLength(2);
 
-      const qwen = data.providers['agentx-host-gamma'].models.find(m => m.id === 'qwen2.5:7b-instruct-q5_K_M');
+      const qwen = data.providers['agentx-192-0-2-99-11434'].models.find(m => m.id === 'qwen2.5:7b-instruct-q5_K_M');
       expect(qwen.contextWindow).toBe(32768);
       expect(qwen.params.num_ctx).toBe(32768);
       expect(qwen._source.host).toBe('http://192.0.2.99:11434');

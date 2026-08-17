@@ -138,4 +138,19 @@ describe('nestorFastlaneConfigService', () => {
     expect(answerLight.state).toBe('warn');
     expect(doLight.status).toBe('MCP token not set');
   });
+
+  test('leaves runtime context unresolved when the registry has no context evidence', async () => {
+    const registry = registryFixture();
+    delete registry.runtimes.openclaw.context;
+    delete registry.runtimes.hermes.context;
+
+    const data = await buildNestorFastlaneConfig({
+      registry,
+      repoRoot: 'C:/repo',
+      env: { CORE_PUBLIC_URL: 'http://agentx.test' }
+    });
+
+    expect(data.controls.openclawRuntime.context).toBeNull();
+    expect(data.controls.hermesRuntime.context).toBeNull();
+  });
 });

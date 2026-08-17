@@ -11,7 +11,6 @@ function escapeComparisonHtml(value) {
 
 function formatContext(model) {
     const rawContext = model.executionOverrides?.num_ctx
-        || model.executionDefaults?.num_ctx
         || model.capabilities?.maxContext
         || model.details?.context_length;
 
@@ -190,7 +189,7 @@ class ModelComparator {
             {
                 label: 'Context',
                 render: (model) => escapeComparisonHtml(formatContext(model)),
-                value: (model) => model.executionOverrides?.num_ctx || model.executionDefaults?.num_ctx || model.capabilities?.maxContext || model.details?.context_length || 0
+                value: (model) => model.executionOverrides?.num_ctx || model.capabilities?.maxContext || model.details?.context_length || 0
             },
             {
                 label: 'Benchmark Score',

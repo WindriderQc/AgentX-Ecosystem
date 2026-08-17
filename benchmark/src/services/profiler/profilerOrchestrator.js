@@ -343,7 +343,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     notify('thinking_behavior', { message: 'Checking think=true behavior and visible-answer safety…' });
     try {
       thinkingProfile = await profileThinkingBehavior(modelName, hostUrl, {
-        numCtx: Math.min(testResult.numCtx || 8192, 8192),
+        numCtx: testResult.numCtx || null,
         numPredict: 512,
         timeoutMs: Math.max(60000, (Number(settings.testTimeoutSec) || 60) * 1000)
       });
@@ -378,7 +378,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     comparisonPromptTargetTokens: testResult.requestedPromptTokens || null,
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
     comparisonWorkloadMode: testResult.promptWorkloadMode || 'fixed',
-    optimalNumCtx: testResult.numCtx || 8192,
+    optimalNumCtx: testResult.numCtx || null,
     vramUsedMiB: testResult.vramUsedMiB || null,
     throughputSamples,
     measurementQuality,
@@ -387,10 +387,10 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
       // The /api/ps check itself can't know the context — it observed the
       // model as loaded by the throughput test, so that test's numCtx is the
       // context at which the spill was (or wasn't) seen.
-      spillNumCtx: spill.spillDetected ? (testResult.numCtx || 8192) : null,
-      lastSafeNumCtx: spill.spillDetected
-        ? Math.round((testResult.numCtx || 8192) * 0.75)
-        : (testResult.numCtx || 8192)
+      spillNumCtx: spill.spillDetected ? (testResult.numCtx || null) : null,
+      // A quick profile has no basis for inventing a reduced "safe" window.
+      // Preserve the observed context only when it was fully GPU resident.
+      lastSafeNumCtx: spill.spillDetected ? null : (testResult.numCtx || null)
     },
     profiledAt: new Date(),
     profileDepth: depth,
@@ -444,7 +444,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
       }
     }
   });
-  profileData.optimalNumCtx = probeResult.testedNumCtx || 8192;
+  profileData.optimalNumCtx = probeResult.testedNumCtx || null;
   profileData.degradationPct = probeResult.degradationPct || null;
   profileData.probeSteps = (probeResult.steps || []).map(s => ({
     numCtx: s.numCtx, tokPerSec: s.tokensPerSec, vramMiB: s.vramMiB
@@ -454,16 +454,10 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     hardwareSnapshots.push(contextHardware);
     profileData.hardwareTelemetry = _buildHardwareTelemetry(hardwareSnapshots);
   }
-  // Update lastSafeNumCtx based on probe result. The probe verifies fit in
-  // isolation; real use adds memory pressure (other models, longer sessions),
-  // so bake a safety margin BELOW the verified edge rather than at it. This is
-  // the headroom that prevents "profiled fine, spills/hangs in real use".
-  // optimalNumCtx keeps the raw probed max for transparency; lastSafeNumCtx
-  // (what the adaptation actually bakes) carries the margin.
-  const bakeSafetyFactor = 1 - ((Number(process.env.CONTEXT_BAKE_SAFETY_MARGIN_PCT) || 15) / 100);
-  profileData.spill.lastSafeNumCtx = spill.spillDetected
-    ? Math.round((probeResult.testedNumCtx || 8192) * 0.75)
-    : Math.round((probeResult.testedNumCtx || 8192) * bakeSafetyFactor);
+  // The probe result is the measured runtime contract. Keep the legacy
+  // lastSafeNumCtx field aligned with that evidence instead of manufacturing
+  // an arbitrary 15%/25% smaller lane.
+  profileData.spill.lastSafeNumCtx = probeResult.testedNumCtx || null;
 
   // Context insight: compare what was configured vs what probe discovered
   if (previousCtx?.num_ctx) {

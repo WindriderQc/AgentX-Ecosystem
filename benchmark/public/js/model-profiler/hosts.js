@@ -8,7 +8,7 @@ import { runBaselineProbe } from './components/baseline-probe.js';
 
 const HOST_TEST_POLL_MS = 1500;
 const FLEET_POLL_MS = 2000;
-let _baselineModel = 'qwen2.5:3b'; // overridden from /api/profiler/hosts/test/config
+let _baselineModel = ''; // populated from /api/profiler/hosts/test/config
 
 function esc(s) {
   return String(s ?? '')

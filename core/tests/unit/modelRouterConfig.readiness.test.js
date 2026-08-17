@@ -78,6 +78,7 @@ describe('modelRouterConfig readiness preference', () => {
   });
 
   it('prefers a profiled host for the configured task model', async () => {
+    process.env.AGENTX_CODING_SPECIALIST_MODEL = 'ax/qwen3-coder:30b';
     mockGetModelReadiness.mockImplementation(async (_model, hostUrl) => ({
       readiness: {
         stage: hostUrl.includes('secondary') ? 'adapted' : 'available'
@@ -94,6 +95,7 @@ describe('modelRouterConfig readiness preference', () => {
   });
 
   it('keeps the configured host when no profiled alternative exists', async () => {
+    process.env.AGENTX_CODING_SPECIALIST_MODEL = 'ax/qwen3-coder:30b';
     mockGetModelReadiness.mockResolvedValue({
       readiness: { stage: 'available' }
     });
@@ -108,6 +110,7 @@ describe('modelRouterConfig readiness preference', () => {
   });
 
   it('keeps lightweight tasks on their configured host to avoid swaps', async () => {
+    process.env.AGENTX_LIGHTWEIGHT_MODEL = 'ax/qwen3.5:9b';
     mockGetModelReadiness.mockImplementation(async (_model, hostUrl) => ({
       readiness: {
         stage: hostUrl.includes('primary') ? 'adapted' : 'available'

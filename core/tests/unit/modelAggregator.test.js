@@ -135,6 +135,7 @@ describe('modelAggregator', () => {
       'http://secondary:11434'
     ]);
     expect(new Set(installs.map(model => model.id)).size).toBe(2);
+    expect(installs.every(model => model.capabilities.maxContext === null)).toBe(true);
   });
 
   it('does not infer thinking capability from an unprofiled catalog name', async () => {

@@ -28,7 +28,7 @@ export const TIER_CONFIG = {
 export const ADV_JUDGE_DEFAULTS = {
     temperature: 0.1,
     num_predict: 800,
-    num_ctx: 8192,
+    num_ctx: null,
     max_retries: 2,
     timeout: 30000,
     voting_count: 1,
@@ -52,8 +52,8 @@ export const ADV_PIPELINE_DEFAULTS = {
 // is unfair: each host runs at its own profiled num_ctx (different KV cache
 // pressure → different decode speed) and each Modelfile contributes its own
 // sampling defaults (different temperature/top_p → score variance is partly
-// RNG, not skill). force_num_ctx=null honors the per-host profile (legacy);
-// set to a number to make every host run at the same context.
+// RNG, not skill). force_num_ctx=null preserves the explicit resident/profiled
+// context; set it only when a controlled comparison requires one shared value.
 export const ADV_FAIRNESS_DEFAULTS = {
     force_num_ctx: null,
     exec_temperature: 0.2,

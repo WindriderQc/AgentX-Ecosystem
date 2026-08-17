@@ -73,6 +73,11 @@ function isActiveRegistryRecord(record) {
   return String(record.status || 'active').toLowerCase() !== 'retired';
 }
 
+function positiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
+}
+
 function applyThinkingCapability(model, capabilityContract, fallbackSupported) {
   const status = getThinkingCapabilityStatus(capabilityContract, fallbackSupported);
   model.capabilities.supportsThinking = status.supported;
@@ -180,7 +185,7 @@ async function getAllModels(options = {}) {
         }
       },
       capabilities: {
-        maxContext: ollamaModel.details?.context_length || 4096,
+        maxContext: positiveInteger(ollamaModel.details?.context_length),
         supportsStreaming: true,
         supportsThinking: false,
         avgLatencyMs: null // Will be enriched from benchmarks
@@ -208,7 +213,8 @@ async function getAllModels(options = {}) {
     if (registryMatch) {
       unified.categories = registryMatch.categories || [];
       unified.tags = registryMatch.tags || [];
-      unified.capabilities.maxContext = registryMatch.capabilities?.maxContext || unified.capabilities.maxContext;
+      unified.capabilities.maxContext = positiveInteger(registryMatch.capabilities?.maxContext)
+        || unified.capabilities.maxContext;
       unified.capabilities.supportsThinking = registryMatch.capabilities?.supportsThinking ?? unified.capabilities.supportsThinking;
       unified.benchmarkStats = registryMatch.benchmarkStats;
       unified.benchmarkEligibility = registryMatch.benchmarkEligibility || null;
@@ -269,7 +275,7 @@ async function getAllModels(options = {}) {
         }
       },
       capabilities: {
-        maxContext: customModel.advancedConfig?.num_ctx || 4096,
+        maxContext: positiveInteger(customModel.advancedConfig?.num_ctx),
         supportsStreaming: true,
         supportsThinking: false,
         avgLatencyMs: null
@@ -329,7 +335,7 @@ async function getAllModels(options = {}) {
           hostName: hostName || undefined,
         },
         capabilities: {
-          maxContext: reg.capabilities?.maxContext || 4096,
+          maxContext: positiveInteger(reg.capabilities?.maxContext),
           supportsStreaming: true,
           supportsThinking: false,
           supportsVision: reg.capabilities?.supportsVision ?? false,

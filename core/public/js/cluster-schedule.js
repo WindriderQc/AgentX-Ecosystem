@@ -19,12 +19,7 @@ const TASK_COLORS = {
   diagnostics: '#a78bfa'
 };
 
-const HOST_META = {
-  primary: { id: 'primary', label: 'Host Alpha', color: '#7cf0ff' },
-  secondary: { id: 'secondary', label: 'Host Beta', color: '#f97316' },
-  tertiary: { id: 'tertiary', label: 'Host Gamma', color: '#22c55e' },
-  unassigned: { id: 'unassigned', label: 'Infra / Shared', color: '#94a3b8' }
-};
+const HOST_COLORS = ['#7cf0ff', '#f97316', '#22c55e', '#a78bfa', '#f59e0b'];
 
 const SOURCE_META = {
   openclaw: { label: 'OpenClaw', color: '#7c3aed' },
@@ -37,16 +32,6 @@ const CATEGORY_LABELS = {
   monitoring: 'MON', maintenance: 'MAINT', sync: 'SYNC', benchmark: 'BENCH',
   inference: 'AI', diagnostics: 'DIAG', cleanup: 'CLEAN', ingestion: 'INGEST',
   backup: 'BAK', scanning: 'SCAN'
-};
-
-// Known host VRAM capacities (MB): primary=Host Alpha 2x RTX3090 48GB, secondary=Host Beta RTX5070Ti 16GB, tertiary=Host Gamma RTX3080Ti 12GB.
-const HOST_VRAM = { primary: 49152, secondary: 16384, tertiary: 12288 };
-
-const HOST_ROLES = {
-  primary:   '2x RTX 3090 · 48 GB VRAM',
-  secondary: 'RTX 5070 Ti · 16 GB VRAM',
-  tertiary:  'RTX 3080 Ti - 12 GB VRAM',
-  unassigned: 'Infra / Shared'
 };
 
 let livePollTimer = null;
@@ -131,7 +116,7 @@ function renderLiveBar(container, hosts, nextTasks) {
 
     // VRAM
     const totalUsed = models.reduce((s, m) => s + (m.sizeVram || 0), 0);
-    const capacityMb = h.vramMb || HOST_VRAM[h.id] || 0;
+    const capacityMb = h.vramMb || 0;
     const capacityGb = (capacityMb / 1024).toFixed(0);
     const usedGb = (totalUsed / 1073741824).toFixed(1);
     const freeBytes = Math.max(0, capacityMb * 1048576 - totalUsed);
@@ -147,10 +132,9 @@ function renderLiveBar(container, hosts, nextTasks) {
     else if (hasModels){ stateBadgeClass = 'ok';      stateBadgeLabel = 'ACTIVE'; }
     else               { stateBadgeClass = 'idle';    stateBadgeLabel = 'IDLE'; }
 
-    // GPU model (RTX type) from role
-    const gpuLine = HOST_ROLES[h.id] || '';
+    const gpuLine = h.gpu?.model || h.gpuModel || '';
 
-    // IP from URL e.g. http://192.0.2.66:11434
+    // Optional IP from the explicitly configured runtime URL.
     const ipMatch = (h.url || '').match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/);
     const hostIp = ipMatch ? ipMatch[0] : '';
 
@@ -522,8 +506,10 @@ function getSlotSegments(slots, hourStart, hourEnd, taskType, taskName, isInfra 
 }
 
 function getHostMeta(hostId) {
-  if (!hostId) return HOST_META.unassigned;
-  return HOST_META[hostId] || { id: 'unassigned', label: hostId, color: '#94a3b8' };
+  if (!hostId) return { id: 'unassigned', label: 'Infra / Shared', color: '#94a3b8' };
+  const index = Math.abs([...String(hostId)].reduce((sum, char) => sum + char.charCodeAt(0), 0)) % HOST_COLORS.length;
+  const live = liveHostsData.find(host => host.id === hostId);
+  return { id: hostId, label: live?.name || hostId, color: HOST_COLORS[index] };
 }
 
 function getSourceMeta(sourceId) {
