@@ -109,70 +109,38 @@ function populateLineage(modelName, createdVia = 'profiler') {
   };
 }
 
-/**
- * Returns the largest numPredict value where throughput stays >= 90% of
- * baseline (first entry) throughput.
- *
- * @param {Array<{numPredict: number, tokensPerSec: number}>|null} generationStability
- * @returns {number}
- */
-function _bestNumPredict(generationStability) {
-  if (!generationStability || generationStability.length === 0) return 512;
-  const baseline = generationStability[0]?.tokensPerSec || 0;
-  if (baseline <= 0) return 512;
-  const threshold = baseline * 0.9;
-  let best = 64;
-  for (const point of generationStability) {
-    if (point.tokensPerSec >= threshold) best = point.numPredict;
-  }
-  return best;
-}
-
-const DEFAULT_MAX_SANE_TOKENS_PER_SEC = 10000;
-
 function _positiveInteger(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n);
 }
 
-function _maxSaneTokensPerSec() {
-  const raw = process.env.PROFILER_MAX_SANE_TOKENS_PER_SEC
-    ?? process.env.CONTEXT_PROBE_MAX_SANE_TOKENS_PER_SEC
-    ?? DEFAULT_MAX_SANE_TOKENS_PER_SEC;
-  return _positiveInteger(raw) || DEFAULT_MAX_SANE_TOKENS_PER_SEC;
-}
-
-function _assertSaneTokensPerSec(value, path) {
+function _assertValidTokensPerSec(value, path) {
   if (value === null || value === undefined) return;
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) {
     throw new Error(`Invalid profiler throughput at ${path}: ${value}`);
   }
-  const cap = _maxSaneTokensPerSec();
-  if (n > cap) {
-    throw new Error(`Implausible profiler throughput at ${path}: ${n} tok/s exceeds sane cap ${cap} tok/s`);
-  }
 }
 
 function _validateProfileThroughput(profile) {
-  _assertSaneTokensPerSec(profile?.tokensPerSec, 'profile.tokensPerSec');
-  _assertSaneTokensPerSec(profile?.measurementQuality?.tokensPerSecMean, 'profile.measurementQuality.tokensPerSecMean');
-  _assertSaneTokensPerSec(profile?.measurementQuality?.tokensPerSecMedian, 'profile.measurementQuality.tokensPerSecMedian');
-  _assertSaneTokensPerSec(profile?.measurementQuality?.tokensPerSecMin, 'profile.measurementQuality.tokensPerSecMin');
-  _assertSaneTokensPerSec(profile?.measurementQuality?.tokensPerSecMax, 'profile.measurementQuality.tokensPerSecMax');
+  _assertValidTokensPerSec(profile?.tokensPerSec, 'profile.tokensPerSec');
+  _assertValidTokensPerSec(profile?.measurementQuality?.tokensPerSecMean, 'profile.measurementQuality.tokensPerSecMean');
+  _assertValidTokensPerSec(profile?.measurementQuality?.tokensPerSecMedian, 'profile.measurementQuality.tokensPerSecMedian');
+  _assertValidTokensPerSec(profile?.measurementQuality?.tokensPerSecMin, 'profile.measurementQuality.tokensPerSecMin');
+  _assertValidTokensPerSec(profile?.measurementQuality?.tokensPerSecMax, 'profile.measurementQuality.tokensPerSecMax');
 
   for (const [idx, sample] of (profile?.throughputSamples || []).entries()) {
-    _assertSaneTokensPerSec(sample?.tokensPerSec, `profile.throughputSamples[${idx}].tokensPerSec`);
+    _assertValidTokensPerSec(sample?.tokensPerSec, `profile.throughputSamples[${idx}].tokensPerSec`);
   }
   for (const [idx, step] of (profile?.probeSteps || []).entries()) {
-    _assertSaneTokensPerSec(step?.tokPerSec ?? step?.tokensPerSec, `profile.probeSteps[${idx}].tokPerSec`);
+    _assertValidTokensPerSec(step?.tokPerSec ?? step?.tokensPerSec, `profile.probeSteps[${idx}].tokPerSec`);
   }
   for (const [idx, point] of (profile?.throughputCurve || []).entries()) {
-    _assertSaneTokensPerSec(point?.tokensPerSec, `profile.throughputCurve[${idx}].tokensPerSec`);
+    _assertValidTokensPerSec(point?.tokensPerSec, `profile.throughputCurve[${idx}].tokensPerSec`);
   }
   for (const [idx, point] of (profile?.generationStability || []).entries()) {
-    _assertSaneTokensPerSec(point?.tokensPerSec, `profile.generationStability[${idx}].tokensPerSec`);
+    _assertValidTokensPerSec(point?.tokensPerSec, `profile.generationStability[${idx}].tokensPerSec`);
   }
 }
 
@@ -187,40 +155,26 @@ function _runtimeNumCtx(profile) {
 
 /**
  * Generates the runtime config object for a model+host pairing.
- * Uses profiling data (spill detection, generation stability, host CPU)
- * to derive all parameters instead of hardcoded values.
+ * Emits only evidence-backed runtime parameters. Performance observations stay
+ * in the profile; they do not become hidden batch, thread, keep, or output
+ * limits. An operator-supplied thread override remains explicit authority.
  *
  * @param {object} profile    - Model profile data (optimalNumCtx, vramUsedMiB, spill, generationStability, etc.)
  * @param {object|null} hostProfile - HostProfile doc (gpu.vramTotalMiB, cpu.cores, cpu.threadOverride)
  * @returns {object} config
  */
 function generateConfig(profile, hostProfile) {
-  const vramTotal = hostProfile?.gpu?.vramTotalMiB || 0;
-  const vramUsed = profile.vramUsedMiB || 0;
-  const headroom = vramTotal > 0 ? (vramTotal - vramUsed) / vramTotal : 1;
-
   const numCtx = _runtimeNumCtx(profile);
-
-  let numThread;
-  if (hostProfile?.cpu?.threadOverride) {
-    numThread = hostProfile.cpu.threadOverride;
-  } else {
-    const cpuCores = hostProfile?.cpu?.cores || 8;
-    numThread = cpuCores <= 4 ? cpuCores : cpuCores - 2;
-  }
+  const numThread = _positiveInteger(hostProfile?.cpu?.threadOverride);
 
   return {
     ...(numCtx ? { num_ctx: numCtx } : {}),
-    num_gpu: 99,
-    num_batch: Math.min(512, Math.max(128, Math.floor(headroom * 512))),
-    num_thread: numThread,
-    num_predict: _bestNumPredict(profile.generationStability),
-    num_keep: 4
+    ...(numThread ? { num_thread: numThread } : {})
   };
 }
 
 /**
- * Generates a Modelfile string with rich comments and all tuned parameters.
+ * Generates a Modelfile string with measured runtime parameters and provenance.
  *
  * @param {string} modelName
  * @param {object} profile
@@ -273,7 +227,7 @@ function generateModelfile(modelName, profile, hostProfile) {
   // Build content without the hash line first (we need to hash the final content)
   const paramLines = [
     '',
-    '# -- Performance Parameters ------------------------------------------'
+    '# -- Measured Runtime Parameters -------------------------------------'
   ];
   for (const [key, value] of Object.entries(config)) {
     if (value === null || value === undefined) continue;
@@ -394,7 +348,6 @@ function hashModelfile(content) {
 }
 
 module.exports = {
-  _bestNumPredict,
   generateConfig,
   generateModelfile,
   getAdaptation,
@@ -404,6 +357,5 @@ module.exports = {
   hashModelfile,
   validateModelfile,
   populateLineage,
-  _maxSaneTokensPerSec,
   _validateProfileThroughput
 };

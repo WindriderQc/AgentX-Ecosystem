@@ -1,29 +1,19 @@
 const ModelContextProfile = require('../../models/ModelContextProfile');
 const { getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 
-const DEFAULT_MAX_SANE_TOKENS_PER_SEC = 10000;
-
 function positiveInteger(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n);
 }
 
-function maxSaneTokensPerSec() {
-  return positiveInteger(
-    process.env.MODEL_CONTEXT_MAX_SANE_TOKENS_PER_SEC
-      ?? process.env.CONTEXT_PROBE_MAX_SANE_TOKENS_PER_SEC
-      ?? DEFAULT_MAX_SANE_TOKENS_PER_SEC
-  ) || DEFAULT_MAX_SANE_TOKENS_PER_SEC;
-}
-
-function isSaneTokensPerSec(tokensPerSec) {
+function isValidTokensPerSec(tokensPerSec) {
   if (tokensPerSec === null || tokensPerSec === undefined) return true;
   const value = Number(tokensPerSec);
-  return Number.isFinite(value) && value >= 0 && value <= maxSaneTokensPerSec();
+  return Number.isFinite(value) && value > 0;
 }
 
-function hasSaneThroughputEvidence(snapshot) {
+function hasValidThroughputEvidence(snapshot) {
   const values = [
     snapshot?.baselineTokensPerSec,
     snapshot?.atLimitTokensPerSec,
@@ -33,7 +23,7 @@ function hasSaneThroughputEvidence(snapshot) {
         : []
     )
   ];
-  return values.every(isSaneTokensPerSec);
+  return values.every(isValidTokensPerSec);
 }
 
 function modelNameCandidates(modelName) {
@@ -66,7 +56,7 @@ async function updateFromProbeSnapshot(snapshot) {
   if (!modelName || !hostUrl || !tested || snapshot?.status !== 'completed') {
     return null;
   }
-  if (!hasSaneThroughputEvidence(snapshot)) {
+  if (!hasValidThroughputEvidence(snapshot)) {
     return null;
   }
 
@@ -136,8 +126,8 @@ async function findContextProfile(modelName, hostUrl) {
 
 module.exports = {
   findContextProfile,
-  hasSaneThroughputEvidence,
-  isSaneTokensPerSec,
+  hasValidThroughputEvidence,
+  isValidTokensPerSec,
   modelNameCandidates,
   updateFromProbeSnapshot
 };

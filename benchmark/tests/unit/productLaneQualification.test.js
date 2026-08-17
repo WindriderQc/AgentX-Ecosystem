@@ -23,7 +23,14 @@ const TEST_LEXICON = {
 };
 
 function buildTestCorpus() {
-  return buildProductLaneCorpus({ lexiconEntries: TEST_LEXICON });
+  return buildProductLaneCorpus({
+    lexiconEntries: TEST_LEXICON,
+    roleSource: [
+      '<!-- agentx:nestor-identity:start -->',
+      '**Nestor is a careful household assistant and majordomo.**',
+      '<!-- agentx:nestor-identity:end -->'
+    ].join('\n')
+  });
 }
 
 describe('product lane qualification', () => {

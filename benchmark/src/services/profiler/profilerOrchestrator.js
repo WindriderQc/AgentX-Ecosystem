@@ -425,10 +425,6 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     hostUrl,
     acknowledgeMaintenance: true,
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
-    // Honor the configured degradation threshold (default 30%) instead of the
-    // probe's looser hard-coded 50% fallback — a context that halves throughput
-    // is "too big to be usable", so reject it during the probe.
-    degradationPct: Number(settings.degradationThreshold) || undefined,
     onProgress: (info) => {
       if (info.type === 'baseline') {
         const msg = info.tokensPerSec == null
@@ -440,10 +436,12 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
         const verdict = info.passed ? '✓' : '✗';
         notify('context_probe', { message: `Testing ${_formatCtx(info.numCtx)} ctx — ${info.tokensPerSec} tok/s${dropStr} ${verdict}` });
       } else if (info.type === 'result') {
-        notify('context_probe', { message: `Optimal context: ${_formatCtx(info.testedNumCtx)} (${info.degradationPct}% degradation)` });
+        notify('context_probe', { message: `Largest verified context: ${_formatCtx(info.testedNumCtx)} (${info.degradationPct}% throughput change)` });
       }
     }
   });
+  // `optimalNumCtx` is retained as a persisted compatibility field. Its value
+  // is the largest verified context, not a synthetic performance tier.
   profileData.optimalNumCtx = probeResult.testedNumCtx || null;
   profileData.degradationPct = probeResult.degradationPct || null;
   profileData.probeSteps = (probeResult.steps || []).map(s => ({

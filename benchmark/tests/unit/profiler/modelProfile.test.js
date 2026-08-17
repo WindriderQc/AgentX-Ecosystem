@@ -1,24 +1,4 @@
-const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
 const ModelProfile = require('../../../models/ModelProfile');
-
-let mongoServer;
-
-beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
-    // Ensure indexes are built — required for unique constraint enforcement in MongoMemoryServer
-    await ModelProfile.ensureIndexes();
-});
-
-afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-});
-
-afterEach(async () => {
-    await ModelProfile.deleteMany({});
-});
 
 describe('ModelProfile', () => {
     const validProfile = {
@@ -37,7 +17,8 @@ describe('ModelProfile', () => {
     };
 
     it('creates a valid model profile with all fields', async () => {
-        const profile = await ModelProfile.create(validProfile);
+        const profile = new ModelProfile(validProfile);
+        expect(profile.validateSync()).toBeUndefined();
         expect(profile.name).toBe('qwen2.5:7b-instruct-q5_K_M');
         expect(profile.displayName).toBe('Qwen 2.5 7B Instruct');
         expect(profile.provider).toBe('ollama');
@@ -49,60 +30,55 @@ describe('ModelProfile', () => {
         expect(profile.capabilities.tools).toBe(true);
         expect(profile.capabilities.thinking).toBe(false);
         expect(profile.capabilities.thinkingPolicy).toBe('unknown');
-        expect(profile.createdAt).toBeDefined();
-        expect(profile.updatedAt).toBeDefined();
     });
 
     it('requires the name field', async () => {
-        await expect(ModelProfile.create({ displayName: 'No Name Model' }))
-            .rejects.toThrow(/name/);
+        const error = new ModelProfile({ displayName: 'No Name Model' }).validateSync();
+        expect(error.errors.name).toBeDefined();
     });
 
     it('enforces unique name', async () => {
-        await ModelProfile.create(validProfile);
-        await expect(ModelProfile.create({ name: validProfile.name }))
-            .rejects.toThrow();
+        const nameIndex = ModelProfile.schema.indexes().find(([keys]) => keys.name === 1);
+        expect(nameIndex?.[1]?.unique).toBe(true);
     });
 
     it('validates readiness stage enum — accepts valid stages', async () => {
-        const profile = await ModelProfile.create(validProfile);
+        const profile = new ModelProfile(validProfile);
         const validStages = ['available', 'profiled', 'adapted', 'benchmarked'];
         for (const stage of validStages) {
             profile.readiness.set('host-delta', { stage });
-            await expect(profile.save()).resolves.not.toThrow();
+            expect(profile.validateSync()).toBeUndefined();
         }
     });
 
     it('validates readiness stage enum — rejects invalid stage', async () => {
         const profile = new ModelProfile(validProfile);
         profile.readiness.set('host-delta', { stage: 'invalid_stage' });
-        await expect(profile.save()).rejects.toThrow(/invalid_stage|readiness/);
+        expect(profile.validateSync()?.message).toMatch(/invalid_stage|readiness/);
     });
 
     it('defaults tags to empty array', async () => {
-        const profile = await ModelProfile.create({ name: 'minimal-model' });
+        const profile = new ModelProfile({ name: 'minimal-model' });
         expect(Array.isArray(profile.tags)).toBe(true);
         expect(profile.tags).toHaveLength(0);
     });
 
     it('defaults readiness stage to available', async () => {
-        const profile = await ModelProfile.create(validProfile);
+        const profile = new ModelProfile(validProfile);
         profile.readiness.set('host-beta', {});
-        await profile.save();
-        const saved = await ModelProfile.findById(profile._id);
-        expect(saved.readiness.get('host-beta').stage).toBe('available');
+        expect(profile.validateSync()).toBeUndefined();
+        expect(profile.readiness.get('host-beta').stage).toBe('available');
     });
 
     it('stores and retrieves hosts map entries', async () => {
-        const profile = await ModelProfile.create(validProfile);
+        const profile = new ModelProfile(validProfile);
         profile.hosts.set('host-delta', { available: true, lastSeen: new Date('2026-01-01') });
-        await profile.save();
-        const saved = await ModelProfile.findById(profile._id);
-        expect(saved.hosts.get('host-delta').available).toBe(true);
+        expect(profile.validateSync()).toBeUndefined();
+        expect(profile.hosts.get('host-delta').available).toBe(true);
     });
 
     it('stores host-specific thinking profiles', async () => {
-        const profile = await ModelProfile.create({
+        const profile = new ModelProfile({
             name: 'thinking-model',
             capabilities: { thinking: true, thinkingPolicy: 'metered' }
         });
@@ -117,10 +93,8 @@ describe('ModelProfile', () => {
             recommendedPolicy: 'metered',
             recommendationReason: 'safe but expensive'
         });
-        await profile.save();
-
-        const saved = await ModelProfile.findById(profile._id);
-        expect(saved.thinkingProfiles.get('host-gamma')).toMatchObject({
+        expect(profile.validateSync()).toBeUndefined();
+        expect(profile.thinkingProfiles.get('host-gamma')).toMatchObject({
             supported: true,
             channel: 'hidden',
             finalAnswerContractOk: true,

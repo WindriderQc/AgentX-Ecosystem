@@ -119,7 +119,8 @@ function loadLexicon(root, words) {
 
 function buildProductLaneCorpus(options = {}) {
   const root = options.root || repoRoot();
-  const role = fs.readFileSync(path.join(root, 'roles', 'Nestor.md'), 'utf8');
+  const role = options.roleSource
+    || fs.readFileSync(path.join(root, 'roles', 'Nestor.md'), 'utf8');
   const reader = JSON.parse(fs.readFileSync(path.join(root, 'core', 'personas', 'voice-packs', 'kidx_reader.json'), 'utf8'));
   const identity = extractIdentity(role);
   const answerSystem = `${identity}\n\n${ANSWER_LIGHT_CONTRACT}`;

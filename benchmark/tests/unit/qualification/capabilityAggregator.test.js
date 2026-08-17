@@ -35,8 +35,8 @@ describe('aggregateCapability', () => {
     const out = aggregateCapability(rows);
     expect(out).toHaveLength(2);
     const byHost = Object.fromEntries(out.map((u) => [u.unit.host, u.capability_tier]));
-    expect(byHost.host-gamma).toBe('C3');
-    expect(byHost.host-beta).toBe('C2');
+    expect(byHost['host-gamma']).toBe('C3');
+    expect(byHost['host-beta']).toBe('C2');
   });
 
   test('a failed higher-tier probe sets ceiling but not capability_tier', () => {

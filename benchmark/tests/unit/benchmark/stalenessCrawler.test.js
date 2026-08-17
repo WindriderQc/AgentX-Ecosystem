@@ -16,25 +16,22 @@ describe('analyzeStaleness', () => {
     ]);
   });
 
-  it('flags implausible throughput above the flat cap', () => {
+  it('does not flag positive measured throughput using an arbitrary ceiling', () => {
     const report = analyzeStaleness({
       contextProfiles: [
         { modelName: 'ax/qwopus:27b-q5_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', stale: false, latestEvidence: { tokensPerSec: 1000000 } }
       ]
     });
-    expect(report.totals.byReason.implausible_throughput).toBe(1);
-    expect(report.hosts.primary.stale[0].evidence.throughput).toMatch(/sane cap/);
+    expect(report.totals.staleModels).toBe(0);
   });
 
-  it('flags sub-cap throughput via the B1 physical ceiling (known host + quant)', () => {
-    // 30B Q4 on Host Gamma (.99): physical ceiling ≈55 tok/s, ×2 ≈110. 5000 is impossible.
+  it('does not reject a real sub-cap measurement using guessed hardware', () => {
     const report = analyzeStaleness({
       adaptations: [
         { modelName: 'ax/huge:30b-instruct-q4_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', profile: { tokensPerSec: 5000 } }
       ]
     });
-    expect(report.hosts.primary.stale[0].reasons).toContain('implausible_throughput');
-    expect(report.hosts.primary.stale[0].evidence.throughput).toMatch(/physical ceiling/);
+    expect(report.totals.staleModels).toBe(0);
   });
 
   it('does NOT flag a realistic sub-cap throughput', () => {
@@ -97,7 +94,7 @@ describe('analyzeStaleness', () => {
       ]
     });
     const reasons = report.hosts.primary.stale[0].reasons;
-    expect(reasons).toEqual(expect.arrayContaining(['context_profile_stale', 'implausible_throughput', 'adaptation_stale']));
+    expect(reasons).toEqual(expect.arrayContaining(['context_profile_stale', 'adaptation_stale']));
     expect(report.totals.staleModels).toBe(1); // same model, one entry
   });
 

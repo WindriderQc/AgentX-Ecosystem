@@ -107,7 +107,7 @@ router.post('/sweeps/recommend', async (req, res) => {
  *
  * Read-only crawl of benchmark model state for stale/invalid evidence before it
  * breaks a sweep: stale context profiles / readiness / adaptations, and
- * implausible recorded throughput (reuses the B1 physical ceiling). Returns a
+ * invalid recorded throughput. Returns a
  * per-host report + suggested re-profile payloads (NOT auto-run). The
  * missing-deployment check additionally accepts `routedModelsByHost` as a JSON
  * query/body input when callers can supply current routing.

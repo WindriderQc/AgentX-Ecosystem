@@ -200,7 +200,7 @@ describe('modelContextResolver', () => {
         }));
     });
 
-    it('ignores benchmark context probe results with implausible throughput', async () => {
+    it('accepts benchmark context evidence regardless of its positive measured throughput', async () => {
         ModelProfile.findOne.mockReturnValue(mockLeanResult({
             executionDefaults: { num_ctx: 8192 },
             sourceHost: 'http://localhost:11434'
@@ -218,9 +218,9 @@ describe('modelContextResolver', () => {
         });
 
         expect(result).toEqual(expect.objectContaining({
-            num_ctx: null,
-            source: 'unresolved',
-            authoritative: false
+            num_ctx: 229376,
+            source: 'benchmark_context_probe',
+            authoritative: true
         }));
     });
 

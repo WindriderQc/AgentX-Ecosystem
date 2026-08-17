@@ -12,11 +12,11 @@ const svc = require('../../../src/services/profiler/modelProfileService');
 const mockProfiles = [
   {
     name: 'llama3.1:8b',
-    readiness: { host-delta: { stage: 'profiled' }, host-gamma: { stage: 'available' } }
+    readiness: { 'host-delta': { stage: 'profiled' }, 'host-gamma': { stage: 'available' } }
   },
   {
     name: 'gemma3:12b',
-    readiness: { host-delta: { stage: 'benchmarked' } }
+    readiness: { 'host-delta': { stage: 'benchmarked' } }
   },
   {
     name: 'phi4:14b',

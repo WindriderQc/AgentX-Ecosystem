@@ -89,14 +89,17 @@ describe('contextProbeService', () => {
     ]);
   });
 
-  it('refines inside the 128k to 256k bracket and returns the highest passing context', async () => {
+  it('keeps slower long-context decode as performance evidence and verifies the full window', async () => {
     ollamaClient.generate.mockImplementation(async (_hostUrl, payload) => {
       const numCtx = payload.options.num_ctx;
-      const evalCount = numCtx <= 196608 ? 35 : 25;
       if (numCtx === 2048) {
         return { eval_count: 60, eval_duration: 1e9, prompt_eval_count: 1600 };
       }
-      return { eval_count: evalCount, eval_duration: 1e9, prompt_eval_count: 1600 };
+      return {
+        eval_count: 64,
+        eval_duration: numCtx <= 196608 ? 2e9 : 4e9,
+        prompt_eval_count: Math.floor(numCtx * 0.8)
+      };
     });
 
     const result = await contextProbeService.probeModelContext('gemma4:26b', {
@@ -104,25 +107,23 @@ describe('contextProbeService', () => {
       acknowledgeMaintenance: true
     });
 
-    expect(result.testedNumCtx).toBe(196608);
+    expect(result.testedNumCtx).toBe(262144);
     expect(modelContextProfileService.updateFromProbeSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         modelName: 'gemma4:26b',
         hostUrl: 'http://192.0.2.66:11434',
-        testedNumCtx: 196608,
+        testedNumCtx: 262144,
         status: 'completed'
       })
     );
     expect(result.modelTheoreticalMax).toBe(262144);
     expect(result.steps.map((step) => step.numCtx)).toEqual(expect.arrayContaining([
       131072,
-      163840,
-      196608,
       262144
     ]));
   });
 
-  it('refines within the 16k to 32k bracket to find values like 24k and 30k', async () => {
+  it('does not manufacture a smaller window from a throughput threshold', async () => {
     ollamaClient.showModel.mockResolvedValue({
       model_info: {
         'general.context_length': 32768
@@ -143,8 +144,11 @@ describe('contextProbeService', () => {
         return { eval_count: 60, eval_duration: 1e9, prompt_eval_count: 1600 };
       }
 
-      const evalCount = numCtx <= 30720 ? 35 : 25;
-      return { eval_count: evalCount, eval_duration: 1e9, prompt_eval_count: 1600 };
+      return {
+        eval_count: 64,
+        eval_duration: numCtx < 32768 ? 2e9 : 4e9,
+        prompt_eval_count: Math.floor(numCtx * 0.8)
+      };
     });
 
     const result = await contextProbeService.probeModelContext('gemma4:26b', {
@@ -152,13 +156,9 @@ describe('contextProbeService', () => {
       acknowledgeMaintenance: true
     });
 
-    expect(result.testedNumCtx).toBe(30720);
+    expect(result.testedNumCtx).toBe(32768);
     expect(result.steps.map((step) => step.numCtx)).toEqual(expect.arrayContaining([
       16384,
-      20480,
-      24576,
-      28672,
-      30720,
       32768
     ]));
   });
@@ -193,7 +193,7 @@ describe('contextProbeService', () => {
     expect(failedStep.reason).toMatch(/Short completion/);
   });
 
-  it('fails the probe when any candidate returns implausible throughput', async () => {
+  it('does not reject a positive measurement using an arbitrary throughput ceiling', async () => {
     ollamaClient.showModel.mockResolvedValue({
       model_info: {
         'general.context_length': 4096
@@ -207,42 +207,33 @@ describe('contextProbeService', () => {
       return { eval_count: 64, eval_duration: 64000, prompt_eval_count: 3200 };
     });
 
-    await expect(contextProbeService.probeModelContext('gemma4:26b', {
+    const result = await contextProbeService.probeModelContext('gemma4:26b', {
       hostUrl: 'http://192.0.2.66:11434',
       acknowledgeMaintenance: true,
       maxCtx: 4096
-    })).rejects.toThrow(/Implausible throughput at num_ctx=4096/);
+    });
 
-    expect(ModelContextProbeSnapshot.create).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'failed',
-      error: expect.stringMatching(/Implausible throughput at num_ctx=4096/),
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          numCtx: 4096,
-          tokensPerSec: 1000000,
-          passed: false,
-          reason: expect.stringMatching(/Implausible throughput/)
-        })
-      ])
+    expect(result).toEqual(expect.objectContaining({
+      status: 'completed',
+      testedNumCtx: 4096,
+      atLimitTokensPerSec: 1000000
     }));
   });
 });
 
-describe('assessThroughputPlausibility (B1 physical ceiling layered on flat cap)', () => {
-  const assess = contextProbeService._internal.assessThroughputPlausibility;
+describe('validateThroughput', () => {
+  const assess = contextProbeService._internal.validateThroughput;
 
-  it('flags readings above the flat sane cap regardless of model context', () => {
+  it('accepts any positive finite measurement', () => {
     const r = assess(1_000_000, { modelName: 'gemma4:26b', hostUrl: 'http://192.0.2.66:11434' });
-    expect(r.plausible).toBe(false);
-    expect(r.detail).toMatch(/exceeds sane cap/);
+    expect(r.plausible).toBe(true);
+    expect(r.detail).toBeNull();
   });
 
-  it('catches a sub-cap artifact via the physical ceiling (explicit-quant model, known host)', () => {
-    // 30B Q4 on Host Gamma (.99, 936 GB/s): ceiling ≈ 55 tok/s, ×2 margin ≈ 110.
-    // 5000 tok/s is well under the flat 10000 cap but physically impossible.
+  it('does not reject measured throughput using guessed hardware or quantization', () => {
     const r = assess(5000, { modelName: 'ax/qwen3-coder:30b-instruct-q4_K_M', hostUrl: 'http://192.0.2.99:11434' });
-    expect(r.plausible).toBe(false);
-    expect(r.detail).toMatch(/exceeds physical ceiling/);
+    expect(r.plausible).toBe(true);
+    expect(r.detail).toBeNull();
   });
 
   it('does NOT false-flag a *-qat MoE model (ambiguous quant → ceiling skipped)', () => {
@@ -269,10 +260,10 @@ describe('assessThroughputPlausibility (B1 physical ceiling layered on flat cap)
     expect(r.detail).toBeNull();
   });
 
-  it('still rejects a reading beyond the narrow boundary tolerance', () => {
+  it('accepts an ordinary measured reading without a synthetic boundary', () => {
     const r = assess(69.5, { modelName: 'ax/qwen3.6:27b-mtp-q8_0', hostUrl: 'http://192.0.2.199:11434' });
-    expect(r.plausible).toBe(false);
-    expect(r.detail).toMatch(/exceeds physical ceiling/);
+    expect(r.plausible).toBe(true);
+    expect(r.detail).toBeNull();
   });
 
   it('accepts Ornith/qwen35moe throughput even when the tag omits -a3b', () => {

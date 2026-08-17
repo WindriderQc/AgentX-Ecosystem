@@ -14,10 +14,33 @@ const {
   gradeBakeoffRun
 } = require('../../../src/services/qualification/hermesAgenticBakeoff');
 
-const manifest = JSON.parse(fs.readFileSync(
-  path.join(__dirname, '../../../config/hermes-agentic-bakeoff.json'),
-  'utf8'
-));
+const manifestPath = path.join(__dirname, '../../../config/hermes-agentic-bakeoff.json');
+const manifest = fs.existsSync(manifestPath)
+  ? JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  : {
+      schemaVersion: 1,
+      hermes: { ignoreUserConfig: true },
+      models: [
+        { id: 'ax/gemma4:26b-a4b-it-qat' },
+        { id: 'ax/qwen3.6:27b-mtp-q8_0' },
+        { id: 'ax/qwen3-coder:30b' }
+      ],
+      scenario: {
+        turns: Array.from({ length: 12 }, (_, index) => ({
+          id: index + 1,
+          prompt: `Qualification turn ${index + 1}`,
+          dimensions: [
+            'tool_selection',
+            'argument_accuracy',
+            'schema_reliability',
+            'instruction_retention',
+            'error_recovery',
+            'restraint',
+            'completion'
+          ]
+        }))
+      }
+    };
 
 function call(name, args) {
   return { function: { name, arguments: JSON.stringify(args) } };

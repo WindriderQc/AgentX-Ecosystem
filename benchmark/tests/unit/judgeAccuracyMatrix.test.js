@@ -1,23 +1,8 @@
-const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
-
-let mongoServer;
-
-beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
-});
-
-afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-});
-
-afterEach(async () => {
-    await mongoose.connection.db.dropDatabase();
-});
-
 const JudgeAccuracyMatrix = require('../../models/JudgeAccuracyMatrix');
+
+afterEach(() => {
+    jest.restoreAllMocks();
+});
 
 describe('JudgeAccuracyMatrix', () => {
     const validMatrix = {
@@ -36,37 +21,45 @@ describe('JudgeAccuracyMatrix', () => {
     };
 
     it('should create a valid accuracy matrix', async () => {
-        const matrix = await JudgeAccuracyMatrix.create(validMatrix);
+        const matrix = new JudgeAccuracyMatrix(validMatrix);
+        expect(matrix.validateSync()).toBeUndefined();
         expect(matrix.judge_model).toBe('qwen2.5:7b-instruct-q5_K_M');
         expect(matrix.cells).toHaveLength(2);
         expect(matrix.pass_rate).toBe(50);
     });
 
     it('should require judge_model and reference_model', async () => {
-        await expect(JudgeAccuracyMatrix.create({ cells: [] }))
-            .rejects.toThrow();
+        const error = new JudgeAccuracyMatrix({ cells: [] }).validateSync();
+        expect(error.errors).toEqual(expect.objectContaining({
+            judge_model: expect.anything(),
+            reference_model: expect.anything(),
+            overall_avg_deviation: expect.anything()
+        }));
     });
 
     it('should find latest matrix for a judge model', async () => {
-        await JudgeAccuracyMatrix.create(validMatrix);
-        await JudgeAccuracyMatrix.create({
-            ...validMatrix,
-            overall_avg_deviation: 1.0,
-            calibrated_at: new Date()
-        });
+        const expected = { ...validMatrix, overall_avg_deviation: 1.0 };
+        const sort = jest.fn().mockResolvedValue(expected);
+        jest.spyOn(JudgeAccuracyMatrix, 'findOne').mockReturnValue({ sort });
 
         const latest = await JudgeAccuracyMatrix.getLatest('qwen2.5:7b-instruct-q5_K_M');
-        expect(latest).not.toBeNull();
+        expect(JudgeAccuracyMatrix.findOne).toHaveBeenCalledWith({ judge_model: 'qwen2.5:7b-instruct-q5_K_M' });
+        expect(sort).toHaveBeenCalledWith({ calibrated_at: -1 });
         expect(latest.overall_avg_deviation).toBe(1.0);
     });
 
     it('should return null when no matrix exists', async () => {
+        jest.spyOn(JudgeAccuracyMatrix, 'findOne').mockReturnValue({
+            sort: jest.fn().mockResolvedValue(null)
+        });
         const latest = await JudgeAccuracyMatrix.getLatest('nonexistent-model');
         expect(latest).toBeNull();
     });
 
     it('should check if a judge is calibrated', async () => {
-        await JudgeAccuracyMatrix.create(validMatrix);
+        jest.spyOn(JudgeAccuracyMatrix, 'countDocuments')
+            .mockResolvedValueOnce(1)
+            .mockResolvedValueOnce(0);
         const calibrated = await JudgeAccuracyMatrix.isCalibrated('qwen2.5:7b-instruct-q5_K_M');
         expect(calibrated).toBe(true);
 
