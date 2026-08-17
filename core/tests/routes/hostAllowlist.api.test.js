@@ -155,7 +155,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('400 — rejects an arbitrary unknown host', async () => {
       const res = await request(app)
         .post('/api/models/ollama/pull')
-        .send({ name: 'gemma4:26b', host: 'http://10.0.0.99:11434' });
+        .send({ name: 'gemma4:26b', host: 'http://192.0.2.77:11434' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
     });
@@ -188,7 +188,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
       fetch.mockClear();
       const res = await request(app)
         .delete('/api/models/ollama/gemma4:26b')
-        .query({ host: 'http://10.0.0.99:11434' });
+        .query({ host: 'http://192.0.2.77:11434' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
       expect(fetch).not.toHaveBeenCalled();
@@ -207,7 +207,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('400 — rejects unknown ollamaHost override', async () => {
       const res = await request(app)
         .post('/api/inference/embed')
-        .send({ model: 'nomic-embed-text', prompt: 'hello', ollamaHost: 'http://10.0.0.99:11434' });
+        .send({ model: 'nomic-embed-text', prompt: 'hello', ollamaHost: 'http://192.0.2.77:11434' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
     });
@@ -218,7 +218,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('400 — rejects unknown host override', async () => {
       const res = await request(app)
         .post('/api/inference/generate')
-        .send({ model: 'gemma4:26b', prompt: 'hi', host: 'http://10.0.0.99:11434' });
+        .send({ model: 'gemma4:26b', prompt: 'hi', host: 'http://192.0.2.77:11434' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
     });
@@ -243,7 +243,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('400 — rejects unknown deployment host before service call', async () => {
       const res = await request(app)
         .post('/api/custom-models/demo-model/deploy')
-        .send({ ollamaHost: 'http://10.0.0.99:11434' });
+        .send({ ollamaHost: 'http://192.0.2.77:11434' });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/allowlist/i);
       expect(customModelService.deployToOllama).not.toHaveBeenCalled();
@@ -255,7 +255,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('400 — rejects unknown chat target before chat service call', async () => {
       const res = await request(app)
         .post('/api/chat')
-        .send({ model: 'gemma4:26b', message: 'hello', target: 'http://10.0.0.99:11434' });
+        .send({ model: 'gemma4:26b', message: 'hello', target: 'http://192.0.2.77:11434' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
       expect(chatService.handleChatRequest).not.toHaveBeenCalled();
@@ -266,7 +266,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('400 — rejects unknown stream target before SSE setup', async () => {
       const res = await request(app)
         .post('/api/chat/stream')
-        .send({ model: 'gemma4:26b', message: 'hello', target: 'http://10.0.0.99:11434' });
+        .send({ model: 'gemma4:26b', message: 'hello', target: 'http://192.0.2.77:11434' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
       expect(chatService.handleChatRequestStream).not.toHaveBeenCalled();
@@ -277,7 +277,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('400 — rejects unknown query target before stream service call', async () => {
       const res = await request(app)
         .get('/api/chat/stream')
-        .query({ model: 'gemma4:26b', message: 'hello', target: 'http://10.0.0.99:11434' });
+        .query({ model: 'gemma4:26b', message: 'hello', target: 'http://192.0.2.77:11434' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
       expect(chatService.handleChatRequestStream).not.toHaveBeenCalled();
@@ -289,7 +289,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('400 — rejects unknown health-check host before model router call', async () => {
       const res = await request(app)
         .get('/api/models/health')
-        .query({ host: 'http://10.0.0.99:11434', model: 'gemma4:26b' });
+        .query({ host: 'http://192.0.2.77:11434', model: 'gemma4:26b' });
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/allowlist/i);
       expect(getModelHealth).not.toHaveBeenCalled();
@@ -299,7 +299,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
   // ── /api/nerve-center/host-preferences ──────────────────────────────────
   describe('Nerve Center host preference allowlist', () => {
     it('400 — rejects unknown host path before updating preferences', async () => {
-      const hostUrl = encodeURIComponent('http://10.0.0.99:11434');
+      const hostUrl = encodeURIComponent('http://192.0.2.77:11434');
       const res = await request(app)
         .put(`/api/nerve-center/host-preferences/${hostUrl}`)
         .send({ displayName: 'Poisoned host' });
@@ -309,7 +309,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     });
 
     it('400 — rejects unknown restore host before warmup', async () => {
-      const hostUrl = encodeURIComponent('http://10.0.0.99:11434');
+      const hostUrl = encodeURIComponent('http://192.0.2.77:11434');
       const res = await request(app)
         .post(`/api/nerve-center/host-preferences/${hostUrl}/restore`)
         .send({});
@@ -322,7 +322,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
       fetch.mockClear();
       hostPrefService.getAll.mockResolvedValueOnce([
         {
-          hostUrl: 'http://10.0.0.99:11434',
+          hostUrl: 'http://192.0.2.77:11434',
           displayName: 'Poisoned host',
           pinnedModels: [{ model: 'gemma4:26b' }]
         }

@@ -134,7 +134,7 @@ describe('Inference control-plane API', () => {
   it('rejects an arbitrary Ollama catalog target before proxying', async () => {
     const response = await request(app)
       .get('/api/ollama/models')
-      .query({ target: 'http://10.0.0.99:11434' })
+      .query({ target: 'http://192.0.2.77:11434' })
       .expect(400);
 
     expect(response.body.message).toMatch(/allowlist/i);
