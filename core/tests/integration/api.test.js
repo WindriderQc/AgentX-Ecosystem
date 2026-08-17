@@ -89,7 +89,10 @@ describe('API Routes Integration', () => {
       expect(res.body.status).toBe('success');
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].id).toBe('conv1');
-      expect(mockFind).toHaveBeenCalledWith({ userId: 'default' });
+      expect(mockFind).toHaveBeenCalledWith({
+        userId: 'default',
+        'lifecycle.status': { $ne: 'archived' }
+      });
     });
 
     it('should handle errors gracefully', async () => {

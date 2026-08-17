@@ -26,6 +26,7 @@ const {
 const {
   loadAgentXExtensions
 } = require('./extensions/extensionLoader');
+const { conversationLifecycle } = require('./services/conversationLifecycleService');
 
 // Browser-reachable URLs for each service. Distinct from server-to-server
 // URLs (BENCHMARK_SERVICE_URL etc.) which use container-DNS names inside
@@ -295,7 +296,8 @@ const agentxExtensions = loadAgentXExtensions({
   mongoose,
   logger,
   profile: agentxProfile,
-  standardJsonParser
+  standardJsonParser,
+  conversationLifecycle
 });
 app.locals.agentxExtensions = agentxExtensions;
 

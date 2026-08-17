@@ -50,3 +50,12 @@ duplicate capability ownership fails startup and the demo never loads them.
 - Product documentation is permanent and current. Evolution logs, migration
   plans, incident notes, inventories, and audits do not belong in this
   repository.
+
+## Conversation lifecycle ownership
+
+Core owns transcript persistence and reversible conversation lifecycle. Its
+trusted-extension contract requires `userId` plus `promptName` on every read
+or mutation and provides scoped list/get, rename, archive, restore, permanent
+delete, and ownership checks. Archive is a Core state transition; extensions
+must not add competing transcript stores or write lifecycle fields directly.
+Legacy conversations without lifecycle metadata remain active.

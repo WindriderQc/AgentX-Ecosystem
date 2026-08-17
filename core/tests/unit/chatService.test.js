@@ -251,7 +251,8 @@ describe('chatService', () => {
             expect(result.conversationId).toBe('existing123');
             expect(Conversation.findOne).toHaveBeenCalledWith({
                 _id: 'existing123',
-                userId: 'user123'
+                userId: 'user123',
+                'lifecycle.status': { $ne: 'archived' }
             });
             expect(mockExistingConvInstance.messages.push).toHaveBeenCalled();
             expect(mockExistingConvInstance.save).toHaveBeenCalled();
@@ -270,7 +271,8 @@ describe('chatService', () => {
             expect(result.conversationId).toBe('conv123');
             expect(Conversation.findOne).toHaveBeenCalledWith({
                 _id: 'foreign123',
-                userId: 'user123'
+                userId: 'user123',
+                'lifecycle.status': { $ne: 'archived' }
             });
             expect(Conversation).toHaveBeenCalledWith(expect.objectContaining({
                 userId: 'user123'

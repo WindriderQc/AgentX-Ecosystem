@@ -26,13 +26,30 @@ module.exports = {
   id: 'example-operations-adapter',
   version: '1.0.0',
   capabilities: ['example-capability'],
-  register({ app, express, mongoose, logger, standardJsonParser }) {
+  register({ app, express, mongoose, logger, standardJsonParser, conversationLifecycle }) {
     const router = express.Router();
     router.get('/status', (_req, res) => res.json({ ok: true }));
     app.use('/api/example', standardJsonParser, router);
   }
 };
 ```
+
+Core injects `conversationLifecycle` as its supported contract for extensions
+that need prompt-scoped conversation management. Every operation requires both
+`userId` and `promptName`; extensions must never query Core's `conversations`
+collection directly. Contract version 1 provides:
+
+- `listConversations` and `getConversation` (including scoped transcript reads);
+- `isConversationOwnedByPrompt`, `latestConversationMatchesPrompt`, and
+  `listConversationIds` for ownership/privacy enforcement;
+- `renameConversation`, `archiveConversation`, `restoreConversation`, and
+  `permanentlyDeleteConversation`.
+
+Lists default to active conversations. Pass `status: 'archived'` for an
+archive view or `status: 'all'` for privacy/export bookkeeping. Archive is a
+reversible Core lifecycle transition; permanent deletion is intentionally a
+separate operation whose confirmation UX remains the extension's
+responsibility. Legacy conversations without lifecycle metadata are active.
 
 Paths must be absolute so a deployment cannot silently load a module from a
 different working directory. Duplicate IDs or capability owners fail startup.

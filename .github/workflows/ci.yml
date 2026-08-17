@@ -31,6 +31,7 @@ jobs:
           npm test -- --runInBand --runTestsByPath
           tests/unit/agentxRuntimeProfile.test.js
           tests/unit/extensionLoader.test.js
+          tests/services/conversationLifecycleService.test.js
           tests/integration/health.test.js
           tests/routes/public-exposure-app.api.test.js
         working-directory: core
