@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const EXTENSION_ENV = 'AGENTX_EXTENSION_MODULES';
-const TRUSTED_EXTENSION_CONTRACT_VERSION = 1;
+const TRUSTED_EXTENSION_CONTRACT_VERSION = 2;
 const IDENTIFIER = /^[a-z][a-z0-9-]{0,63}$/;
 const VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
@@ -87,6 +87,8 @@ function loadTrustedExtensions({
   profile,
   standardJsonParser,
   conversationLifecycle,
+  runtimeServices,
+  security,
   env = process.env,
   requireModule = require
 }) {
@@ -96,6 +98,19 @@ function loadTrustedExtensions({
   if (profile !== 'full') {
     logger?.warn?.('Trusted extensions are configured but disabled outside the full profile');
     return Object.freeze([]);
+  }
+
+  if (!runtimeServices
+    || runtimeServices.contractVersion !== 1
+    || typeof runtimeServices.inference?.execute !== 'function'
+    || typeof runtimeServices.routing?.getEffectiveSnapshot !== 'function') {
+    throw new Error('Trusted extension runtimeServices contract v1 is unavailable or invalid.');
+  }
+  if (!security
+    || security.contractVersion !== 1
+    || typeof security.requireOperatorAccess !== 'function'
+    || typeof security.requireOperatorUiAccess !== 'function') {
+    throw new Error('Trusted extension security contract v1 is unavailable or invalid.');
   }
 
   const seenPaths = new Set();
@@ -128,6 +143,8 @@ function loadTrustedExtensions({
       profile,
       standardJsonParser,
       conversationLifecycle,
+      runtimeServices,
+      security,
       extensionRoot
     });
     const result = manifest.register(api);
