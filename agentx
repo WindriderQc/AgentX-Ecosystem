@@ -28,6 +28,36 @@ require_docker() {
   fi
 }
 
+ensure_benchmark_token() {
+  if [[ -n "${AGENTX_BENCHMARK_TOKEN:-}" ]]; then
+    return
+  fi
+  local container line current=""
+  for container in agentx-ecosystem-core agentx-ecosystem-benchmark; do
+    while IFS= read -r line; do
+      if [[ "$line" == AGENTX_BENCHMARK_TOKEN=* ]]; then
+        current="${line#AGENTX_BENCHMARK_TOKEN=}"
+        break
+      fi
+    done < <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null || true)
+    if [[ -n "$current" ]]; then
+      AGENTX_BENCHMARK_TOKEN="$current"
+      export AGENTX_BENCHMARK_TOKEN
+      return
+    fi
+  done
+  if [[ ! -r /dev/urandom ]] || ! command -v od >/dev/null 2>&1 || ! command -v tr >/dev/null 2>&1; then
+    echo "Cannot generate the ephemeral Benchmark service credential. Set AGENTX_BENCHMARK_TOKEN explicitly." >&2
+    exit 3
+  fi
+  AGENTX_BENCHMARK_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')"
+  if [[ ${#AGENTX_BENCHMARK_TOKEN} -ne 64 ]]; then
+    echo "Failed to generate the ephemeral Benchmark service credential." >&2
+    exit 3
+  fi
+  export AGENTX_BENCHMARK_TOKEN
+}
+
 show_product_health() {
   local failed=0
   local spec label container needs_health state runtime health display
@@ -95,6 +125,7 @@ case "$cmd" in
     ;;
   up)
     require_docker
+    ensure_benchmark_token
     if ! docker compose "${COMPOSE[@]}" up -d --wait --wait-timeout 180 "$@" mongo qdrant core benchmark rag; then
       echo "Startup did not become healthy within 180 seconds. Run './agentx status' and './agentx logs core'." >&2
       exit 1
@@ -120,6 +151,7 @@ case "$cmd" in
     ;;
   rebuild)
     require_docker
+    ensure_benchmark_token
     docker compose "${COMPOSE[@]}" build --no-cache "$@"
     docker compose "${COMPOSE[@]}" up -d "$@"
     ;;
@@ -146,6 +178,7 @@ case "$cmd" in
     ;;
   ollama-up)
     require_docker
+    ensure_benchmark_token
     if ! docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama up -d --wait --wait-timeout 180 "$@" ollama mongo qdrant core benchmark rag; then
       echo "The Docker Ollama stack did not become healthy within 180 seconds. Run './agentx status' and inspect logs." >&2
       exit 1

@@ -93,6 +93,19 @@ describe('inferenceLanePolicy.resolveLane', () => {
   });
 });
 
+describe('inferenceLanePolicy.resolvePolicyLane', () => {
+  it('uses an authenticated policy supplied by the request boundary', () => {
+    const result = lanePolicy.resolvePolicyLane({ lane: 'direct' });
+    expect(result.name).toBe('direct');
+    expect(result.policy.admit).toBe(false);
+  });
+
+  it('fails closed to automated when the request policy is absent or invalid', () => {
+    expect(lanePolicy.resolvePolicyLane().name).toBe('automated');
+    expect(lanePolicy.resolvePolicyLane({ lane: 'invented' }).name).toBe('automated');
+  });
+});
+
 describe('inferenceLanePolicy probe cache', () => {
   beforeEach(() => {
     lanePolicy._resetProbeCacheForTests();

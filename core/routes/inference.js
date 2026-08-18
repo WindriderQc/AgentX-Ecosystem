@@ -1,8 +1,9 @@
 /**
  * Inference routes — caller-aware lane policy (task 0168).
  *
- * /api/inference/generate selects one of three lanes based on `callerDetail`
- * in the request body:
+ * /api/inference/generate selects one of three lanes from the effective caller
+ * policy authenticated by the request middleware. `callerDetail` remains
+ * telemetry metadata:
  *   - direct       (bench / profiler / warmup): skip route, admit;
  *                  recordInference async; alert error-only.
  *                  Probes ax/ once-per-(host,model) on cold cache (task 0178)
@@ -15,9 +16,9 @@
  *
  * Adapted-model resolution (task 0178)
  * ------------------------------------
- * Daily-usage callers (any callerDetail matching the interactive lane or the
- * non-profiler direct-lane patterns in `inferenceLanePolicy.js`) default to
- * `useAdapted: true`: when a base model is requested, the proxy probes
+ * Daily-usage callers (an authenticated interactive lane or a non-profiler
+ * direct lane) default to `useAdapted: true`: when a base model is requested,
+ * the proxy probes
  * `/api/show ax/<model>` on the target host and routes to the adapted variant
  * when it exists. Result is cached in the cross-lane probe cache so the
  * amortized cost is one probe per (host, model) per cache TTL (~5 min).
@@ -32,12 +33,10 @@
  *
  * Trust model — LOAD-BEARING ASSUMPTION
  * --------------------------------------
- * `callerDetail` is a free-form string set by the caller. The proxy trusts
- * it for **lane selection only**. Lane is a *performance* policy, not an
- * authorization mechanism. Today's network is internal-only; if this
- * endpoint is ever exposed externally, lane selection MUST be replaced
- * with auth-middleware-set headers or signed tokens before the exposure
- * ships. See `inferenceLanePolicy.js` and `docs/LLM_USAGE.md`.
+ * `callerDetail` is a free-form string set by the caller. Benchmark lanes
+ * require the scoped Benchmark token; interactive lanes require same-origin
+ * UI proof or the existing operator token. Untrusted claims degrade to the
+ * automated safe path and remain visible in telemetry.
  *
  * Safety invariant — the interactive lane keeps hostGate.acquire. Skipping
  * it would let chat/buddy cut in line on a cron mid-call and force model
@@ -80,6 +79,7 @@ const {
     resolveEmbeddingKeepAlive
 } = require('../src/services/inferenceRuntimePolicy');
 const lanePolicy = require('../src/services/inferenceLanePolicy');
+const { resolveInferenceRequestCaller } = require('../src/services/routing/inferenceCallerAccess');
 const { assertHostAvailableForConsumer } = require('../src/services/benchmarkClaimGuard');
 const { resolveThinkingPolicy } = require('../src/services/thinkingPolicy');
 const {
@@ -772,9 +772,12 @@ router.post('/inference/generate', async (req, res) => {
     }
     const allowlistedHostOverride = generateHostCheck.host || '';
 
-    // Resolve lane policy from callerDetail (task 0168). Unknown / missing
-    // callerDetail falls through to `automated` — the safe full-step path.
-    const { name: laneName, policy: lane } = lanePolicy.resolveLane(body.callerDetail);
+    // The rate-limiter middleware resolved the authenticated caller policy.
+    // Missing context fails closed to `automated` — the safe full-step path.
+    const callerContext = req.inferenceCallerContext || resolveInferenceRequestCaller(req);
+    const { name: laneName, policy: lane } = lanePolicy.resolvePolicyLane(
+        callerContext.effectivePolicy
+    );
     const routingTrace = {
         version: 1,
         request: {

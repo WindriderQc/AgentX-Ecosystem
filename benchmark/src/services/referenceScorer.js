@@ -7,6 +7,7 @@
 const { benchmarkFetch: fetch } = require('./benchmark/http');
 const logger = require('../../config/logger');
 const { getFetchOptions } = require('../helpers/httpAgent');
+const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
 const { DEFAULT_SCORING_CATEGORY, normalizeScoringCategory } = require('./scoring/scoringConfigs');
 
@@ -22,8 +23,8 @@ function resolveThink(judgeConfig) {
 /**
  * Build URL + payload for a reference-scorer generate call. Always routes
  * through the core inference proxy; lane policy (0168) classifies
- * `benchmark-reference-scorer` into the direct lane so admission + telemetry
- * stay live without per-call gate overhead.
+ * `benchmark-reference-scorer`, and the scoped Benchmark credential grants its
+ * Benchmark policy so admission + telemetry stay live without excess overhead.
  */
 function buildGenerateRequest(judgeConfig, prompt, numPredict, callerDetail) {
     const numCtx = normalizeJudgeNumCtx(judgeConfig.num_ctx);
@@ -102,7 +103,7 @@ Answer ONLY "YES" or "NO":`;
         const { url, body } = buildGenerateRequest(judgeConfig, prompt, 10, 'benchmark-ref-keypoint');
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
             signal: controller.signal
         });
@@ -159,7 +160,7 @@ Answer ONLY "YES" if there are contradictions, or "NO" if there are no contradic
         const { url, body } = buildGenerateRequest(judgeConfig, prompt, 10, 'benchmark-ref-contradictions');
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
             signal: controller.signal
         });
@@ -219,7 +220,7 @@ Answer with ONLY one word: EXCELLENT, GOOD, PARTIAL, or POOR:`;
         const { url, body } = buildGenerateRequest(judgeConfig, prompt, 15, 'benchmark-ref-overall');
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
             signal: controller.signal
         });

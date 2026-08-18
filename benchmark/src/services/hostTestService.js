@@ -18,14 +18,16 @@
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
 const ollamaVramService        = require('./ollamaVramService');
 const { getFetchOptions }      = require('../helpers/httpAgent');
+const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { isSameOllamaModel }    = require('../helpers/ollamaModelIdentity');
 const { generateFillPrompt }   = require('./contextProbePayload');
 const { getConfiguredHosts }   = require('../helpers/ollamaHostConfig');
 const { resolveModelNumCtxDetails, normalizeModelName } = require('./modelContextResolver');
 
 // Host test warm-up routes through core's /api/inference/generate. As of
-// task 0168, `callerDetail: 'benchmark-host-test-<model>'` selects the
-// **direct lane** (no probe, no gate, no Mongo, async telemetry) —
+// task 0168, the scoped Benchmark credential authenticates
+// `callerDetail: 'benchmark-host-test-<model>'` for the **direct lane**
+// (no probe, no gate, no Mongo, async telemetry) —
 // keeping warmup low-overhead while preserving telemetry.
 // The probe call itself (further down) stays direct — probing needs
 // clean timing measurements unaffected by queueing. /api/ps and /api/tags
@@ -281,7 +283,9 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx) {
   try {
     const response = await _fetch(request.url, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: request.phase === 'loaded_prime'
+        ? withBenchmarkServiceAuth({ 'Content-Type': 'application/json' })
+        : { 'Content-Type': 'application/json' },
       body: JSON.stringify(request.body),
       timeout: request.timeoutMs,
       ...getFetchOptions(request.url)

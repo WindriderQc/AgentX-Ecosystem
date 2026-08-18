@@ -56,6 +56,7 @@ services:
       GOOGLE_API_KEY: ""
       ANTHROPIC_API_KEY: ""
       AGENTX_OPERATOR_TOKEN: ""
+      AGENTX_BENCHMARK_TOKEN: ${AGENTX_BENCHMARK_TOKEN:-}
       AGENTX_MCP_TOKEN: ""
       AGENTX_CODEX_USAGE_TOKEN: ""
       AGENTX_ENABLE_LEGACY_BUDDY_API: "false"
@@ -103,6 +104,7 @@ services:
       OLLAMA_HOST_3_NAME: ""
       CORE_URL: http://core:3080
       CORE_PUBLIC_URL: http://localhost:${CORE_PORT:-3180}
+      AGENTX_BENCHMARK_TOKEN: ${AGENTX_BENCHMARK_TOKEN:-}
       BUDDY_EMIT_TOKEN: ""
       CORS_ORIGINS: http://localhost:${CORE_PORT:-3180},http://127.0.0.1:${CORE_PORT:-3180},http://localhost:${BENCHMARK_PORT:-3181},http://127.0.0.1:${BENCHMARK_PORT:-3181}
     depends_on:

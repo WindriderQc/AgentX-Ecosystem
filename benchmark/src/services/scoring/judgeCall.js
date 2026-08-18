@@ -5,13 +5,14 @@
 
 const logger = require('../../../config/logger');
 const { getFetchOptions } = require('../../helpers/httpAgent');
+const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const { benchmarkFetch: fetch } = require('../benchmark/http');
 const { resolveAdaptedModel } = require('../profiler/adaptedModelResolver');
 const { normalizeJudgeNumCtx } = require('./judgeRuntimeConfig');
 
 // Judge calls always route through the core inference proxy. Lane policy (0168)
-// classifies `callerDetail: 'benchmark-judge'` into the direct lane so admission
-// control + telemetry stay live without the per-call gate overhead.
+// classifies `callerDetail: 'benchmark-judge'`; the scoped Benchmark credential
+// authenticates the Benchmark policy while telemetry remains caller-supplied.
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 // Judge model configuration
 // Default: 7B model — fits on most hosts without stealing context from the
@@ -239,8 +240,8 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         if (Number.isFinite(judgeSeed)) judgeOptions.seed = judgeSeed;
 
         // Core proxy: host override preserves benchmark's explicit host choice,
-        // callerDetail lands in InferenceLog for observability and selects the
-        // direct lane via lane policy (0168 + 0173).
+        // callerDetail lands in InferenceLog for observability; the scoped
+        // service credential authenticates its lane policy (0168 + 0173).
         const requestBody = {
             model: effectiveJudgeModel,
             host: judgeConfig.host,
@@ -253,7 +254,7 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         };
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(requestBody),
             signal: controller.signal
         });

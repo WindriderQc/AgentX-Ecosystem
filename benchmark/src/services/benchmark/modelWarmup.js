@@ -12,11 +12,13 @@
 
 const logger = require('../../../config/logger');
 const { isSameOllamaModel } = require('../../helpers/ollamaModelIdentity');
+const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const { benchmarkFetch: fetch } = require('./http');
 
 // Warmup routes through core's /api/inference/generate. As of task 0168,
-// `callerDetail: 'benchmark-warmup'` selects the **direct lane** (no probe,
-// no gate, no Mongo, async telemetry) so warmup keeps its low overhead
+// the scoped Benchmark credential plus `callerDetail: 'benchmark-warmup'`
+// selects the **direct lane** (no probe, no gate, no Mongo, async telemetry)
+// so warmup keeps its low overhead
 // WITHOUT losing telemetry. /api/ps probe + keep_alive:0 unloads stay
 // direct — metadata + admin ops.
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
@@ -270,7 +272,7 @@ async function warmupModel(hostUrl, model, options = {}) {
 
             response = await _fetch(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify(requestBody),
                 signal: controller.signal
             });

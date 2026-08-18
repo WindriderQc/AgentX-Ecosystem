@@ -6,7 +6,7 @@
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
 const logger = require('../../config/logger');
-const { resolveCallerPolicy } = require('../services/routing/callerPolicy');
+const { resolveInferenceRequestCaller } = require('../services/routing/inferenceCallerAccess');
 
 function getClientKey(req) {
   // In tests, allow callers to isolate rate limit buckets deterministically.
@@ -49,42 +49,51 @@ function isAutomationControlPath(req) {
   ));
 }
 
+function createGeneralLimiterOptions(skip) {
+  return {
+    windowMs: 15 * 60 * 1000,
+    max: 500,
+    message: {
+      status: 'error',
+      message: 'Too many requests. Please try again after 15 minutes.'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: getGeneralApiKey,
+    validate: { ip: false },
+    ...(skip ? { skip } : {}),
+    handler: (req, res) => {
+      logger.warn('Rate limit exceeded', {
+        ip: req.ip,
+        path: req.path,
+        method: req.method
+      });
+      res.status(429).json({
+        status: 'error',
+        message: 'Too many requests. Please slow down and try again later.',
+        retryAfter: req.rateLimit.resetTime
+      });
+    }
+  };
+}
+
 /**
  * General API rate limiter
  * 500 requests per 15 minutes
  */
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 500,
-  message: {
-    status: 'error',
-    message: 'Too many requests. Please try again after 15 minutes.'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: getGeneralApiKey,
-  validate: { ip: false },
-  skip: (req) => (
-    req.originalUrl.startsWith('/api/benchmark')
-    || req.originalUrl.startsWith('/api/buddy')
-    || req.originalUrl.startsWith('/api/nerve-center')
-    || isNestorConsumerPath(req)
-    || req.originalUrl.startsWith('/api/inference/generate')  // Route via inferenceCallerRouter instead
-    || isAutomationControlPath(req)
-  ),
-  handler: (req, res) => {
-    logger.warn('Rate limit exceeded', {
-      ip: req.ip,
-      path: req.path,
-      method: req.method
-    });
-    res.status(429).json({
-      status: 'error',
-      message: 'Too many requests. Please slow down and try again later.',
-      retryAfter: req.rateLimit.resetTime
-    });
-  }
-});
+const apiLimiter = rateLimit(createGeneralLimiterOptions((req) => (
+  req.originalUrl.startsWith('/api/benchmark')
+  || req.originalUrl.startsWith('/api/buddy')
+  || req.originalUrl.startsWith('/api/nerve-center')
+  || isNestorConsumerPath(req)
+  || req.originalUrl.startsWith('/api/inference/generate')  // Route via inferenceCallerRouter instead
+  || isAutomationControlPath(req)
+)));
+
+// Separate store for untrusted inference callers. Reusing apiLimiter here
+// would trigger its intentional /api/inference/generate skip rule and silently
+// leave the general fallback unlimited.
+const inferenceGeneralLimiter = rateLimit(createGeneralLimiterOptions());
 
 /**
  * Automation control-plane limiter
@@ -138,9 +147,9 @@ const benchmarkLimiter = rateLimit({
  * Internal caller rate limiter (task 0141)
  * Same ceiling as benchmarkLimiter (5000/15min) but a separate bucket so
  * its stats are independently trackable from benchmark traffic.
- * Used by nestor/*, legacy buddy/*, chat-*, nerve-center-*, alerts-*, and other internal
- * callers under core/routes/ that shouldn't share the tight external
- * apiLimiter ceiling during active corpus runs.
+ * Used by authenticated nestor/*, legacy buddy/*, chat-*, nerve-center-*,
+ * alerts-*, and other internal callers that should not share the tight
+ * external apiLimiter ceiling during active corpus runs.
  */
 const internalCallerLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -296,8 +305,9 @@ const buddyReactLimiter = rateLimit({
  * Caller families are classified by the shared caller policy registry so
  * rate-limit and inference-lane behavior cannot drift independently.
  *
- * Callers are identified by `req.body.callerDetail`. This middleware must
- * run AFTER body parsing so `req.body` is available.
+ * callerDetail is telemetry metadata. Privileged buckets require the scoped
+ * principal resolved by inferenceCallerAccess. This middleware must run AFTER
+ * body parsing so `req.body` is available.
  *
  * Keeping benchmark and internal callers in separate buckets lets us
  * attribute drift / throttling independently (benchmark bucket is watched
@@ -306,8 +316,9 @@ const buddyReactLimiter = rateLimit({
  */
 function createInferenceCallerRouter() {
   return (req, res, next) => {
-    const caller = req.body?.callerDetail || '';
-    const { rateBucket } = resolveCallerPolicy(caller);
+    const callerContext = resolveInferenceRequestCaller(req);
+    req.inferenceCallerContext = callerContext;
+    const { rateBucket } = callerContext.effectivePolicy;
 
     if (rateBucket === 'benchmark') {
       return benchmarkLimiter(req, res, next);
@@ -318,7 +329,7 @@ function createInferenceCallerRouter() {
     }
 
     // External / unrecognized callers — tight general limit
-    return apiLimiter(req, res, next);
+    return inferenceGeneralLimiter(req, res, next);
   };
 }
 
@@ -329,6 +340,7 @@ module.exports = {
   automationControlLimiter,
   benchmarkLimiter,
   internalCallerLimiter,
+  inferenceGeneralLimiter,
   chatLimiter,
   strictLimiter,
   buddyLimiter,

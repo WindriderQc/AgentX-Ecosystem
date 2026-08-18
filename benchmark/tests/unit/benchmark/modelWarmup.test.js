@@ -16,6 +16,29 @@ function okJson(data) {
 }
 
 describe('modelWarmup', () => {
+    const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
+
+    afterEach(() => {
+        if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
+        else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
+    });
+
+    it('sends the scoped token to Core without leaking it to direct Ollama calls', async () => {
+        process.env.AGENTX_BENCHMARK_TOKEN = 'scoped-benchmark-token';
+        const _fetch = jest.fn()
+            .mockResolvedValueOnce(okJson({ models: [{ name: 'stale:7b' }] }))
+            .mockResolvedValueOnce(okJson({}))
+            .mockResolvedValueOnce(okJson({ message: { content: 'ready' } }));
+
+        const result = await warmupModel('http://localhost:11434', 'gemma4:e4b', { _fetch });
+
+        expect(result.success).toBe(true);
+        expect(_fetch.mock.calls[1][1].headers).not.toHaveProperty('X-AgentX-Benchmark-Token');
+        expect(_fetch.mock.calls[2][1].headers).toMatchObject({
+            'X-AgentX-Benchmark-Token': 'scoped-benchmark-token'
+        });
+    });
+
     it('does not treat a same-family variant as already loaded', async () => {
         const _fetch = jest.fn()
             .mockResolvedValueOnce(okJson({ models: [{ name: 'gemma4:e4b' }] }))

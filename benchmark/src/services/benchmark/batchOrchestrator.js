@@ -4,10 +4,12 @@
 
 const logger = require('../../../config/logger');
 const { getFetchOptions } = require('../../helpers/httpAgent');
+const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 
 // Benchmark test runs route through core's /api/inference/generate. As of
 // task 0168, the proxy applies a caller-aware lane policy:
-// `callerDetail: 'benchmark-batch-<id>'` selects the **direct lane** —
+// the scoped Benchmark credential plus `callerDetail: 'benchmark-batch-<id>'`
+// selects the **direct lane** —
 // no probe, no admission gate, no Mongo lookups, async telemetry write.
 // This delivers full direct-bypass throughput WITHOUT losing inference
 // telemetry; verified end-to-end on 2026-04-30 (p50 68.63 tok/s on
@@ -240,7 +242,7 @@ async function runBatchOrchestrator({
             };
             const fetchOptions = getFetchOptions(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify(requestBody),
                 signal: testController.signal
             });
