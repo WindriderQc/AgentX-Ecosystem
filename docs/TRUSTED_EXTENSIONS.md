@@ -75,12 +75,13 @@ Every conversation lifecycle operation is scoped by both `userId` and
   collections.
 
 The executor accepts only the bounded generic request surface documented by its
-mode and rejects local runtime-placement options. A matching resident pin owns
-context and keep-alive even when the translated protocol supplied a different
-keep-alive. Extensions translate their external protocol into that surface; they do
-not choose an inference host, call a model server directly, copy HostPreference
-logic, or forward caller credentials to an upstream provider. Provider secrets
-remain inside Core.
+mode, including an allowlisted OpenAI `reasoning_effort` for configured cloud
+providers, and rejects local runtime-placement options. A matching resident pin
+owns context and keep-alive even when the translated protocol supplied a
+different keep-alive. Extensions translate their external protocol into that
+surface; they do not choose an inference host, call a model server directly,
+copy HostPreference logic, or forward caller credentials to an upstream
+provider. Provider secrets remain inside Core.
 
 `security` contract version 1 exposes Core's operator-access checks and
 middleware. Use these helpers for extension control paths instead of copying

@@ -137,15 +137,36 @@ describe('trusted runtime services', () => {
     const result = await executeRoutedInference(deps, {
       mode: 'chat',
       model: 'cloud-test/vendor/model',
-      messages: [{ role: 'user', content: 'hello' }]
+      messages: [{ role: 'user', content: 'hello' }],
+      reasoning_effort: 'none'
     });
 
     expect(deps.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer server-secret');
+    expect(JSON.parse(deps.fetch.mock.calls[0][1].body).reasoning_effort).toBe('none');
     expect(JSON.stringify(result)).not.toContain('server-secret');
     expect(result.metadata).toMatchObject({
       upstreamProtocol: 'openai',
       hostKey: 'cloud-test'
     });
+  });
+
+  test('rejects unbounded cloud reasoning effort controls', async () => {
+    const deps = inferenceDeps({
+      resolveCloudProvider: jest.fn(() => ({
+        provider: 'cloud-test',
+        baseUrl: 'https://cloud.example/v1',
+        apiKey: 'server-secret',
+        upstreamModel: 'vendor/model'
+      }))
+    });
+
+    await expect(executeRoutedInference(deps, {
+      mode: 'chat',
+      model: 'cloud-test/vendor/model',
+      messages: [{ role: 'user', content: 'hello' }],
+      reasoning_effort: 'arbitrary-provider-value'
+    })).rejects.toMatchObject({ code: 'INFERENCE_POLICY_INVALID', statusCode: 400 });
+    expect(deps.fetch).not.toHaveBeenCalled();
   });
 
   test('builds an immutable effective routing snapshot without mutable database documents', async () => {
