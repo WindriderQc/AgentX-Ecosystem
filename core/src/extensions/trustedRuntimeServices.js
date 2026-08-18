@@ -7,6 +7,7 @@ const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 900_000;
 const CONTRACT_VERSION = 1;
 const MODES = new Set(['chat', 'generate', 'embed']);
+const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 const LOCAL_OPTION_KEYS = new Set([
   'num_ctx', 'num_predict', 'temperature', 'top_p', 'top_k', 'min_p', 'typical_p',
   'seed', 'stop', 'repeat_last_n', 'repeat_penalty', 'presence_penalty',
@@ -256,7 +257,8 @@ function buildCloudPayload(request, upstreamModel) {
   };
   const allowed = [
     'tools', 'tool_choice', 'temperature', 'top_p', 'max_tokens', 'max_completion_tokens',
-    'response_format', 'stop', 'seed', 'presence_penalty', 'frequency_penalty', 'n', 'user'
+    'response_format', 'reasoning_effort', 'stop', 'seed', 'presence_penalty',
+    'frequency_penalty', 'n', 'user'
   ];
   for (const key of allowed) {
     if (request[key] !== undefined) payload[key] = request[key];
@@ -373,6 +375,12 @@ function validateRequest(request) {
   if (request.n !== undefined
     && (!Number.isInteger(Number(request.n)) || Number(request.n) < 1 || Number(request.n) > 8)) {
     throw new TrustedRuntimeServiceError('n must be an integer from 1 through 8 when supplied.', {
+      code: 'INFERENCE_POLICY_INVALID', statusCode: 400
+    });
+  }
+  if (request.reasoning_effort !== undefined
+    && !REASONING_EFFORTS.has(String(request.reasoning_effort).toLowerCase())) {
+    throw new TrustedRuntimeServiceError('reasoning_effort is not supported.', {
       code: 'INFERENCE_POLICY_INVALID', statusCode: 400
     });
   }
