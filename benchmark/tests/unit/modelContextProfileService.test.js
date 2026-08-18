@@ -110,7 +110,7 @@ describe('modelContextProfileService', () => {
     expect(ModelContextProfile.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
-  it('ignores completed snapshots with implausible throughput evidence', async () => {
+  it('accepts positive measured throughput without an arbitrary ceiling', async () => {
     await expect(service.updateFromProbeSnapshot({
       _id: 'snapshot-bad',
       modelName: 'ax/qwopus:27b',
@@ -118,12 +118,12 @@ describe('modelContextProfileService', () => {
       status: 'completed',
       testedNumCtx: 131072,
       steps: [{ numCtx: 131072, passed: true, tokensPerSec: 1000000 }]
-    })).resolves.toBeNull();
+    })).resolves.toBeTruthy();
 
-    expect(ModelContextProfile.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(ModelContextProfile.findOneAndUpdate).toHaveBeenCalled();
   });
 
-  it('ignores completed snapshots with implausible non-winning steps', async () => {
+  it('does not invalidate a profile because another measured step was faster', async () => {
     await expect(service.updateFromProbeSnapshot({
       _id: 'snapshot-bad-step',
       modelName: 'ax/qwopus:27b',
@@ -137,8 +137,8 @@ describe('modelContextProfileService', () => {
         { numCtx: 16384, passed: false, tokensPerSec: 1000000 },
         { numCtx: 14336, passed: true, tokensPerSec: 34.57 }
       ]
-    })).resolves.toBeNull();
+    })).resolves.toBeTruthy();
 
-    expect(ModelContextProfile.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(ModelContextProfile.findOneAndUpdate).toHaveBeenCalled();
   });
 });

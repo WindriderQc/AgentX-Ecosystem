@@ -516,7 +516,6 @@ router.post('/test/context-probe/run', async (req, res) => {
     const {
       modelName,
       hostUrl,
-      degradationPct,
       timeoutMs,
       minCtx,
       maxCtx,
@@ -534,7 +533,6 @@ router.post('/test/context-probe/run', async (req, res) => {
     }
     res.json({ status: 'success', data: await probeModelContext(modelName, {
       hostUrl,
-      degradationPct,
       timeoutMs,
       minCtx,
       maxCtx,
