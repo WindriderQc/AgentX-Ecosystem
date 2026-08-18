@@ -32,6 +32,7 @@ jobs:
           tests/unit/agentxRuntimeProfile.test.js
           tests/unit/browserPublicUrls.test.js
           tests/unit/trustedExtensionLoader.test.js
+          tests/unit/trustedRuntimeServices.test.js
           tests/services/conversationLifecycleService.test.js
           tests/integration/health.test.js
           tests/routes/public-exposure-app.api.test.js

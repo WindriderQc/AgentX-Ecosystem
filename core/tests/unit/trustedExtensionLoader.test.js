@@ -20,6 +20,16 @@ describe('trusted extension loader', () => {
       profile: 'full',
       standardJsonParser: jest.fn(),
       conversationLifecycle: { capabilities: { provider: 'agentx-core', contractVersion: 1 } },
+      runtimeServices: {
+        contractVersion: 1,
+        inference: { execute: jest.fn() },
+        routing: { getEffectiveSnapshot: jest.fn() }
+      },
+      security: {
+        contractVersion: 1,
+        requireOperatorAccess: jest.fn(),
+        requireOperatorUiAccess: jest.fn()
+      },
       env: { [EXTENSION_ENV]: extensionA },
       requireModule: jest.fn(() => ({
         id: 'example-extension',
@@ -95,6 +105,8 @@ describe('trusted extension loader', () => {
       'logger',
       'mongoose',
       'profile',
+      'runtimeServices',
+      'security',
       'standardJsonParser'
     ]);
     expect(loaded).toEqual([{
@@ -163,5 +175,12 @@ describe('trusted extension loader', () => {
         register: () => Promise.resolve()
       }))
     })).toThrow('must be synchronous');
+  });
+
+  test('fails startup when a configured extension cannot receive the generic runtime contracts', () => {
+    expect(() => load({ runtimeServices: null }))
+      .toThrow('runtimeServices contract v1');
+    expect(() => load({ security: null }))
+      .toThrow('security contract v1');
   });
 });

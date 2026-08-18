@@ -35,6 +35,8 @@ module.exports = {
     logger,
     standardJsonParser,
     conversationLifecycle,
+    runtimeServices,
+    security,
     extensionRoot
   }) {
     const router = express.Router();
@@ -44,12 +46,14 @@ module.exports = {
 };
 ```
 
-Contract version 1 provides the Express application, Express and Mongoose
+Contract version 2 provides the Express application, Express and Mongoose
 instances already used by Core, the Core logger and standard JSON parser, the
 active runtime profile, the extension's resolved root, and the versioned
-`conversationLifecycle` service. Extensions may create their own collections;
-Core-owned transcript lifecycle must go through `conversationLifecycle`, never
-direct collection access.
+`conversationLifecycle`, `runtimeServices`, and `security` services. Additive
+Core services carry their own contract version so extension startup can fail
+closed when a required bounded interface is unavailable. Extensions may create
+their own collections; Core-owned transcript lifecycle must go through
+`conversationLifecycle`, never direct collection access.
 
 Every conversation lifecycle operation is scoped by both `userId` and
 `promptName`. Its current capabilities are:
@@ -57,6 +61,32 @@ Every conversation lifecycle operation is scoped by both `userId` and
 - list and get conversations, including explicitly requested transcripts;
 - verify prompt ownership and list scoped IDs;
 - rename, archive, restore, and permanently delete conversations.
+
+`runtimeServices` contract version 1 exposes two frozen capabilities:
+
+- `inference.execute(request, { signal })` executes chat, generate, or embedding
+  work through Core-owned routing, benchmark-claim admission, resident-model
+  context policy, telemetry, and configured cloud-provider egress. It returns
+  actual routed model/host metadata. Streaming returns the upstream readable
+  stream, and the caller's `AbortSignal` cancels the upstream request.
+- `routing.getEffectiveSnapshot(options)` returns an immutable, read-only view
+  of effective task routing, host preferences, resolved context/capability
+  evidence, and an optional active-model catalog. It does not expose mutable
+  collections.
+
+The executor accepts only the bounded generic request surface documented by its
+mode and rejects local runtime-placement options. A matching resident pin owns
+context and keep-alive even when the translated protocol supplied a different
+keep-alive. Extensions translate their external protocol into that surface; they do
+not choose an inference host, call a model server directly, copy HostPreference
+logic, or forward caller credentials to an upstream provider. Provider secrets
+remain inside Core.
+
+`security` contract version 1 exposes Core's operator-access checks and
+middleware. Use these helpers for extension control paths instead of copying
+token, loopback, or same-origin policy. All extension routes also remain behind
+the Core profile guard, public-exposure guard, JSON bounds, sanitization, and
+general API limiter.
 
 Paths must be absolute and are resolved before loading. Invalid manifests,
 duplicate real paths, duplicate IDs, duplicate capability ownership, or

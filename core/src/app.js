@@ -20,6 +20,7 @@ const {
   createAgentXProfileGuard,
 } = require('../../shared/agentxRuntimeProfile');
 const { loadTrustedExtensions } = require('./extensions/trustedExtensionLoader');
+const { createTrustedRuntimeServices } = require('./extensions/trustedRuntimeServices');
 const { conversationLifecycle } = require('./services/conversationLifecycleService');
 
 // Browser-reachable URLs for each service. Distinct from server-to-server
@@ -300,7 +301,12 @@ const trustedExtensions = loadTrustedExtensions({
   logger,
   profile: agentxProfile,
   standardJsonParser,
-  conversationLifecycle
+  conversationLifecycle,
+  runtimeServices: createTrustedRuntimeServices(),
+  security: Object.freeze({
+    contractVersion: 1,
+    ...require('./middleware/operatorAccess')
+  })
 });
 app.locals.trustedExtensions = trustedExtensions;
 
