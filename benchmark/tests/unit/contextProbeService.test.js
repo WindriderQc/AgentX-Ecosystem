@@ -18,6 +18,12 @@ jest.mock('../../src/services/contextProbePayload', () => ({
 jest.mock('../../src/services/modelContextProfileService', () => ({
   updateFromProbeSnapshot: jest.fn().mockResolvedValue(null)
 }));
+jest.mock('../../src/services/profiler/artifactIdentityService', () => ({
+  identitiesMatch: jest.fn((left, right) => (
+    left?.digest === right?.digest && left?.runtimeFingerprint === right?.runtimeFingerprint
+  )),
+  resolveArtifactIdentity: jest.fn()
+}));
 jest.mock('../../src/helpers/ollamaModelIdentity', () => ({
   isSameOllamaModel: jest.fn((left, right) => left === right)
 }));
@@ -37,13 +43,24 @@ jest.mock('../../models/ModelContextProbeSnapshot', () => ({
 jest.mock('../../config/logger', () => ({
   info: jest.fn(),
   warn: jest.fn(),
-  error: jest.fn()
+  error: jest.fn(),
+  debug: jest.fn()
 }));
 
 const ModelContextProbeSnapshot = require('../../models/ModelContextProbeSnapshot');
 const ollamaClient = require('../../src/clients/ollamaClient');
 const modelContextProfileService = require('../../src/services/modelContextProfileService');
+const artifactIdentityService = require('../../src/services/profiler/artifactIdentityService');
 const contextProbeService = require('../../src/services/contextProbeService');
+
+const ARTIFACT = {
+  model: 'gemma4:26b',
+  hostId: 'host-gamma',
+  hostUrl: 'http://192.0.2.66:11434',
+  digest: 'sha256:exact',
+  runtimeFingerprint: 'runtime-a',
+  registryQualified: true
+};
 
 function buildSnapshotDoc(data) {
   return {
@@ -57,6 +74,7 @@ function buildSnapshotDoc(data) {
 describe('contextProbeService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    artifactIdentityService.resolveArtifactIdentity.mockResolvedValue(ARTIFACT);
     ModelContextProbeSnapshot.create.mockImplementation(async (data) => buildSnapshotDoc(data));
     ollamaClient.showModel.mockResolvedValue({
       model_info: {
@@ -104,6 +122,7 @@ describe('contextProbeService', () => {
 
     const result = await contextProbeService.probeModelContext('gemma4:26b', {
       hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true
     });
 
@@ -153,6 +172,7 @@ describe('contextProbeService', () => {
 
     const result = await contextProbeService.probeModelContext('gemma4:26b', {
       hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true
     });
 
@@ -179,6 +199,7 @@ describe('contextProbeService', () => {
 
     const result = await contextProbeService.probeModelContext('gemma4:26b', {
       hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true,
       maxCtx: 4096
     });
@@ -209,6 +230,7 @@ describe('contextProbeService', () => {
 
     const result = await contextProbeService.probeModelContext('gemma4:26b', {
       hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true,
       maxCtx: 4096
     });

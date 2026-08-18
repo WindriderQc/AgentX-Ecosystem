@@ -169,29 +169,6 @@ export function renderMetrics(model, api) {
   </div>`;
 }
 
-export function renderDeploymentBranch(model) {
-  const adaptation = model._adaptation;
-  if (!adaptation?.adaptedName) return '';
-
-  const status = String(adaptation.deployment?.status || 'pending').toLowerCase();
-  const isDeployed = status === 'deployed';
-  const tone = isDeployed ? 'ok' : status === 'failed' ? 'err' : 'pending';
-  const label = isDeployed ? 'deployed' : status === 'failed' ? 'failed' : 'pending';
-
-  // Happy path: just the adapted name (the orange frame + "Adapted" badge
-  // already convey "deployed"). Only show the status pill when something
-  // needs attention (pending / failed).
-  const statusPill = isDeployed
-    ? ''
-    : `<span class="mp-deploy-row__status">${label}</span>`;
-
-  return `<div class="mp-deploy-row mp-deploy-row--${tone}" title="Adapted variant: ${escAttr(adaptation.adaptedName)} (${label})">
-    <span class="mp-deploy-row__label">variant</span>
-    <span class="mp-deploy-row__name">${escAttr(adaptation.adaptedName)}</span>
-    ${statusPill}
-  </div>`;
-}
-
 // ─── Card renderer ────────────────────────────────────────────────────────────
 
 export function renderModelCard(model, api) {
@@ -235,18 +212,12 @@ export function renderModelCard(model, api) {
 
     <div class="mp-card-body">
       ${renderMetrics(model, api)}
-      ${renderDeploymentBranch(model)}
     </div>
     <div class="mp-card-actions">
       ${!isEmbedding ? `
         <button class="mp-action mp-action--teal mp-btn-profile mp-card-cta" data-model="${escAttr(model.name)}">
           ${highestStage === 'available' ? 'Profile' : 'Reprofile'}
         </button>` : ''}
-      ${highestStage === 'profiled' ? `
-        <button class="mp-action mp-action--orange mp-btn-adapt mp-card-cta" data-model="${escAttr(model.name)}">
-          Adapt
-        </button>` : ''}
-
       ${highestStage === 'benchmarked' ? `
         <a href="/" class="mp-bench-link">View Benchmarks →</a>` : ''}
     </div>
@@ -260,14 +231,13 @@ export function renderTopBar(models, activeFilter) {
   const counts = {
     all:          models.length,
     profiled:     models.filter(m => STAGE_ORDER.indexOf(getHighestStage(m)) <= STAGE_ORDER.indexOf('profiled') && getHighestStage(m) !== 'available').length,
-    adapted:      models.filter(m => getHighestStage(m) === 'adapted' || getHighestStage(m) === 'benchmarked').length,
     benchmarked:  models.filter(m => getHighestStage(m) === 'benchmarked').length
   };
 
   // "Profiled" count = profiled OR above
   counts.profiled = models.filter(m => {
     const stage = getHighestStage(m);
-    return stage === 'profiled' || stage === 'adapted' || stage === 'benchmarked';
+    return stage === 'profiled' || stage === 'benchmarked';
   }).length;
 
   const pills = FILTER_DEFS.map(f => {
@@ -382,7 +352,6 @@ export function renderGrid(models, api, view = 'list') {
         <span class="mp-list-col mp-list-col--ctx">Context</span>
         <span class="mp-list-col mp-list-col--vram">VRAM</span>
         <span class="mp-list-col mp-list-col--spill">Spill</span>
-        <span class="mp-list-col mp-list-col--variant">Variant</span>
         <span class="mp-list-col mp-list-col--meta">Profiled</span>
         <span class="mp-list-col mp-list-col--actions"></span>
       </div>
@@ -405,7 +374,6 @@ export function renderModelRow(model, api) {
   const meta         = escAttr(buildMeta(model));
   const isEmbedding  = /embed|nomic|bert|bge|diagnostic/i.test(model.name);
   const p            = model.profile || model.metrics;
-  const adaptation   = model._adaptation;
   const stalenessInfo = _getStalenessInfo(model);
 
   // Stage badge (compact)
@@ -457,19 +425,6 @@ export function renderModelRow(model, api) {
     spillCell = `<span class="mp-list-pill mp-list-pill--ok" title="No GPU spill during profiling">✓ ${safe}</span>`;
   }
 
-  // Variant
-  let variantCell = dash;
-  if (adaptation?.adaptedName) {
-    const status = String(adaptation.deployment?.status || 'pending').toLowerCase();
-    const isDeployed = status === 'deployed';
-    const variantTone = isDeployed ? 'ok' : status === 'failed' ? 'err' : 'pending';
-    const statusLabel = isDeployed ? '' : `<span class="mp-list-variant__status mp-list-variant__status--${variantTone}">${status}</span>`;
-    variantCell = `<span class="mp-list-variant" title="Adapted variant: ${escAttr(adaptation.adaptedName)} (${status})">
-      <span class="mp-list-variant__name">${escAttr(adaptation.adaptedName)}</span>
-      ${statusLabel}
-    </span>`;
-  }
-
   // Meta cell — depth + when + insight + stale all crammed but readable
   const metaBits = [];
   if (p?.profileDepth) metaBits.push(`<span class="mp-list-depth">${escAttr(p.profileDepth)}</span>`);
@@ -490,8 +445,6 @@ export function renderModelRow(model, api) {
     : `${highestStage === 'available'
         ? `<button class="mp-action mp-action--teal mp-btn-profile mp-card-cta" data-model="${escAttr(model.name)}">Profile</button>`
         : `<button class="mp-action mp-action--teal mp-btn-profile mp-card-cta" data-model="${escAttr(model.name)}">Reprofile</button>`}
-      ${highestStage === 'profiled'
-        ? `<button class="mp-action mp-action--orange mp-btn-adapt mp-card-cta" data-model="${escAttr(model.name)}">Adapt</button>` : ''}
       ${highestStage === 'benchmarked'
         ? `<a href="/" class="mp-bench-link">Bench →</a>` : ''}`;
 
@@ -512,7 +465,6 @@ export function renderModelRow(model, api) {
     <span class="mp-list-col mp-list-col--ctx">${ctxCell}</span>
     <span class="mp-list-col mp-list-col--vram">${vramCell}</span>
     <span class="mp-list-col mp-list-col--spill">${spillCell}</span>
-    <span class="mp-list-col mp-list-col--variant">${variantCell}</span>
     <span class="mp-list-col mp-list-col--meta">${metaCell}</span>
     <span class="mp-list-col mp-list-col--actions">${actions}</span>
     <span class="mp-model-feedback" data-model="${escAttr(model.name)}"></span>

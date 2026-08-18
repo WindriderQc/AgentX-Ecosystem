@@ -46,9 +46,9 @@ function err(message, code = 400) {
   return e;
 }
 
-// Normalize a model id for comparison (drop ax/ prefix + :latest, lowercase).
+// Normalize only Ollama's implicit :latest alias; namespaces are identity.
 function normModel(name) {
-  return String(name || '').trim().toLowerCase().replace(/^ax\//, '').replace(/:latest$/, '');
+  return String(name || '').trim().toLowerCase().replace(/:latest$/, '');
 }
 function sameModel(a, b) {
   return normModel(a) === normModel(b);

@@ -297,6 +297,7 @@ router.get('/:name/context-info', async (req, res) => {
 router.get('/:name', async (req, res) => {
   try {
     const { name } = req.params;
+    const requestedHost = String(req.query.host || '').trim().replace(/\/+$/, '').toLowerCase();
 
     const model = await ModelRegistry.findOne({ modelName: name }).lean();
 
@@ -309,9 +310,20 @@ router.get('/:name', async (req, res) => {
 
     logger.info(`Retrieved model details: ${name}`);
 
+    const installation = requestedHost
+      ? (model.installations || []).find((entry) =>
+        String(entry?.hostUrl || '').replace(/\/+$/, '').toLowerCase() === requestedHost
+      ) || (String(model.sourceHost || model.host || '').replace(/\/+$/, '').toLowerCase() === requestedHost
+        ? { hostUrl: model.sourceHost || model.host, digest: model.ollamaDigest, status: model.status, isActive: model.isActive }
+        : null)
+      : null;
+    if (requestedHost && !installation) {
+      return res.status(404).json({ status: 'error', message: `Model not registered on host: ${name}@${req.query.host}` });
+    }
+
     res.json({
       status: 'success',
-      data: model
+      data: { model: { ...model, ...(installation ? { installation } : {}) } }
     });
   } catch (err) {
     logger.error(`Failed to retrieve model: ${req.params.name}`, { error: err.message });

@@ -3,22 +3,19 @@
 const hostTestService = require('../hostTestService');
 const contextProbeService = require('../contextProbeService');
 const modelProfileService = require('./modelProfileService');
-const adaptationService = require('./adaptationService');
+const modelPerformanceProfileService = require('./modelPerformanceProfileService');
+const { identitiesMatch, resolveArtifactIdentity } = require('./artifactIdentityService');
 const hostProfileService = require('./hostProfileService');
 const settingsService = require('./settingsService');
 const liveProbeService = require('./liveProbeService');
 const { runPrefillDecodeMatrix } = require('./prefillDecodeMatrix');
 const { profileThinkingBehavior } = require('./thinkingProfileService');
-const { buildAdaptedName } = require('./namingConvention');
-const { resolveModelNumCtxDetails, modelNameCandidates } = require('../modelContextResolver');
+const { resolveModelNumCtxDetails } = require('../modelContextResolver');
 const { listRunning, generate, showModel } = require('../../clients/ollamaClient');
 const { isSameOllamaModel } = require('../../helpers/ollamaModelIdentity');
-const ModelAdaptation = require('../../../models/ModelAdaptation');
 const ModelProfile = require('../../../models/ModelProfile');
 const logger = require('../../../config/logger');
 const buddySurface = require('../benchmark/buddySurfaceEvents');
-
-const READY_STAGES = new Set(['profiled', 'adapted', 'benchmarked']);
 
 function _formatCtx(n) {
   if (n >= 1024) return `${Math.round(n / 1024)}k`;
@@ -218,9 +215,35 @@ async function scout(modelName, hosts) {
   return results;
 }
 
+async function persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData }) {
+  const currentArtifact = await resolveArtifactIdentity(modelName, hostId, hostUrl, { refresh: true });
+  if (!identitiesMatch(artifact, currentArtifact)) {
+    throw new Error(`Artifact or runtime changed while profiling ${modelName} on ${hostUrl}; discard this run and retry`);
+  }
+  const evidence = await modelPerformanceProfileService.saveProfile({
+    modelName,
+    hostId,
+    artifact: currentArtifact,
+    profile: { ...profileData, artifact: currentArtifact }
+  });
+  await modelProfileService.updateReadiness(modelName, hostId, 'profiled', {
+    [`readiness.${hostId}.artifact`]: currentArtifact,
+    [`readiness.${hostId}.evidenceId`]: evidence?._id || null,
+    [`readiness.${hostId}.profileDepth`]: profileData.profileDepth,
+    [`readiness.${hostId}.benchmarkQualified`]: profileData.profileDepth !== 'quick' && Number(profileData.optimalNumCtx) > 0,
+    [`readiness.${hostId}.stale`]: false,
+    [`readiness.${hostId}.staleReason`]: null
+  });
+  if (profileData.thinking) {
+    await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking);
+  }
+  return evidence;
+}
+
 async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgress } = {}) {
   const notify = typeof onProgress === 'function' ? onProgress : () => {};
   logger.info(`Profiling ${modelName} on ${hostId} (${depth})`);
+  const artifact = await resolveArtifactIdentity(modelName, hostId, hostUrl, { refresh: true });
   const settings = await settingsService.getAll();
   const hardwareSnapshots = [];
   const initialHardware = await _captureHardwareSnapshot(hostId, 'before_profile', settings);
@@ -259,7 +282,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
   }
 
   // --- warmup + single throughput test ---
-  // skipPriorProfileArtifacts: the deployed adaptation and latest probe
+  // skipPriorProfileArtifacts: the materialized context profile and latest probe
   // snapshot are exactly what this re-profile is about to replace. Letting
   // them dictate warm-up ctx makes re-profiling impossible whenever the
   // previous run picked an ambitious ctx the host can no longer warm up
@@ -403,24 +426,15 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
       profileData.contextInsight = buildContextInsight(previousCtx.num_ctx, previousCtx.source, discovered);
     }
     notify('saving', { message: 'Saving profile to database…' });
-    const lineage = adaptationService.populateLineage(modelName);
-    await adaptationService.saveAdaptation({
-      modelName, hostId,
-      adaptedName: buildAdaptedName(modelName),
-      profile: profileData,
-      lineage
-    });
-    await modelProfileService.updateReadiness(modelName, hostId, 'profiled');
-    if (profileData.thinking) {
-      await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking);
-    }
-    return { modelName, hostId, profile: profileData };
+    const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
+    return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
   }
 
   // --- standard: add context probe ---
   notify('context_probe', { message: 'Probing context window — resolving model limits…' });
   const probeResult = await contextProbeService.probeModelContext(modelName, {
     hostUrl,
+    artifactIdentity: artifact,
     acknowledgeMaintenance: true,
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
     onProgress: (info) => {
@@ -466,22 +480,9 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
 
   if (depth === 'standard') {
     notify('saving', { message: 'Saving profile to database…' });
-    const lineage = adaptationService.populateLineage(modelName);
-    await adaptationService.saveAdaptation({
-      modelName, hostId,
-      adaptedName: buildAdaptedName(modelName),
-      profile: profileData,
-      lineage
-    });
-    await modelProfileService.updateReadiness(modelName, hostId, 'profiled');
-    if (profileData.thinking) {
-      await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking);
-    }
-    // Adapt and deploy — failures block so invalid models are never left available
-    notify('adapting', { message: 'Generating adapted Modelfile with optimal parameters…' });
-    await adapt(modelName, hostId, hostUrl, { deploy: true });
-    notify('deployed', { message: `Deployed ${buildAdaptedName(modelName)} — profile complete` });
-    return { modelName, hostId, profile: profileData };
+    const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
+    notify('saved', { message: `Profile saved for exact artifact ${modelName}` });
+    return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
   }
 
   // --- full: add throughputCurve + generationStability + loadTiming ---
@@ -511,47 +512,15 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
   }
 
   notify('saving', { message: 'Saving profile to database…' });
-  const lineage = adaptationService.populateLineage(modelName);
-  await adaptationService.saveAdaptation({
-    modelName, hostId,
-    adaptedName: buildAdaptedName(modelName),
-    profile: profileData,
-    lineage
-  });
-  await modelProfileService.updateReadiness(modelName, hostId, 'profiled');
-  if (profileData.thinking) {
-    await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking);
-  }
-  // Adapt and deploy — failures block so invalid models are never left available
-  notify('adapting', { message: 'Generating adapted Modelfile with optimal parameters…' });
-  await adapt(modelName, hostId, hostUrl, { deploy: true });
-  notify('deployed', { message: `Deployed ${buildAdaptedName(modelName)} — profile complete` });
-  return { modelName, hostId, profile: profileData };
+  const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
+  notify('saved', { message: `Profile saved for exact artifact ${modelName}` });
+  return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
 }
 
-async function adapt(modelName, hostId, hostUrl, { deploy = false } = {}) {
-  const adaptation = await adaptationService.getAdaptation(modelName, hostId);
-  if (!adaptation?.profile) throw new Error(`No profile data for ${modelName} on ${hostId}`);
-  const hostProfile = await hostProfileService.getById(hostId);
-  const config = adaptationService.generateConfig(adaptation.profile, hostProfile);
-  const modelfile = adaptationService.generateModelfile(modelName, adaptation.profile, hostProfile);
-  const lineage = adaptationService.populateLineage(modelName);
-  await adaptationService.saveAdaptation({
-    modelName, hostId,
-    adaptedName: buildAdaptedName(modelName),
-    config,
-    modelfile,
-    lineage
-  });
-  await modelProfileService.updateReadiness(modelName, hostId, 'adapted');
-  if (deploy && hostUrl) {
-    const deployment = await adaptationService.deployToHost(modelName, hostId, hostUrl);
-    if (!deployment?.success) {
-      throw new Error(`Deploy failed for ${buildAdaptedName(modelName)} on ${hostId}: ${deployment?.error || 'unknown error'}`);
-    }
-    return deployment;
-  }
-  return { success: true, adaptedName: buildAdaptedName(modelName), config, deployed: false };
+async function adapt() {
+  const error = new Error('Model adaptation was retired: profiling records evidence for the exact installed artifact and never creates a replacement tag');
+  error.statusCode = 410;
+  throw error;
 }
 
 async function fullPipeline(modelName, hosts) {
@@ -568,14 +537,14 @@ async function fullPipeline(modelName, hosts) {
 }
 
 async function preflight(batchConfig) {
-  const ready = [], profilesNeeded = [], adaptsNeeded = [], warnings = [];
+  const ready = [], profilesNeeded = [], warnings = [];
   // batchOrchestrator passes the SAME hostUrl for every model in the batch —
   // resolve each distinct URL to its hostId once instead of once per model.
   const hostIdByUrl = new Map();
   for (const model of batchConfig.models) {
     // model.host may be a hostId slug or a hostUrl depending on the caller.
     // batchOrchestrator passes hostUrl. Resolve to the hostId used by storage
-    // (ModelProfile.readiness Map and ModelAdaptation both key by slug).
+    // (ModelProfile.readiness is keyed by the HostProfile slug).
     let hostId = model.host;
     let hostUrl = model.hostUrl || null;
     if (typeof hostId === 'string' && /^https?:\/\//i.test(hostId)) {
@@ -586,8 +555,15 @@ async function preflight(batchConfig) {
       }
       hostId = hostIdByUrl.get(hostUrl);
       if (!hostId) {
-        warnings.push({ modelName: model.name, hostId: model.host, reason: 'host not found in HostProfile registry' });
-        ready.push(model);
+        profilesNeeded.push({ ...model, profileReason: 'host_not_registered' });
+        continue;
+      }
+    }
+    if (!hostUrl && hostId) {
+      const hostDoc = await hostProfileService.getById(hostId);
+      hostUrl = hostDoc?.hostUrl || null;
+      if (!hostUrl) {
+        profilesNeeded.push({ ...model, profileReason: 'host_not_registered' });
         continue;
       }
     }
@@ -596,70 +572,55 @@ async function preflight(batchConfig) {
     // re-resolve.
     const resolved = { ...model, host: hostId, hostUrl };
 
-    // Source of truth for "is this model ready to benchmark on this host" is
-    // ModelProfile.readiness.<hostId>.stage ∈ {profiled, adapted, benchmarked}.
-    // ModelAdaptation is a separate concern (tuned config deployment) and
-    // should NOT trigger a re-profile when the profile itself is fresh.
-    //
-    // Exact model names win, with namespace-stripped names as a compatibility
-    // fallback. Current profiler writes records for ax/* models under the ax
-    // name; older/base records may exist under the stripped parent name.
-    const lookupNames = modelNameCandidates(model.name);
-    const profile = await ModelProfile.findOne({ name: { $in: lookupNames } }).select('readiness').lean();
-    const readinessForHost = profile?.readiness?.[hostId] || null;
-    const stage = readinessForHost?.stage || null;
-    const hasProfile = stage && READY_STAGES.has(stage);
+    const artifact = await resolveArtifactIdentity(model.name, hostId, hostUrl, { refresh: true });
+    const profile = await ModelProfile.findOne({ name: artifact.model }).select('readiness').lean();
+    const readinessForHost = profile?.readiness instanceof Map
+      ? profile.readiness.get(hostId)
+      : profile?.readiness?.[hostId] || null;
+    const hasProfile = ['standard', 'full'].includes(readinessForHost?.profileDepth)
+      && readinessForHost?.benchmarkQualified === true;
 
-    if (!hasProfile) {
-      profilesNeeded.push(resolved);
+    if (!hasProfile || !identitiesMatch(readinessForHost?.artifact, artifact)) {
+      profilesNeeded.push({
+        ...resolved,
+        artifact,
+        profileReason: !hasProfile ? 'missing_or_quick_profile' : 'artifact_or_runtime_drift'
+      });
       continue;
     }
 
     if (readinessForHost?.stale) {
-      warnings.push({ modelName: model.name, hostId, reason: 'profile marked stale — consider re-profiling' });
+      profilesNeeded.push({ ...resolved, artifact, profileReason: 'profile_marked_stale' });
+      continue;
     }
 
-    const adaptation = await ModelAdaptation.findOne({ modelName: { $in: lookupNames }, hostId }).lean();
-    if (!adaptation || !adaptation.config || adaptation.deployment?.status !== 'deployed') {
-      adaptsNeeded.push(resolved);
-    } else {
-      ready.push(resolved);
-      if (adaptation.staleness?.stale) {
-        warnings.push({ modelName: model.name, hostId, reason: adaptation.staleness.reason });
-      }
-    }
+    ready.push({ ...resolved, artifact });
   }
-  return { ready, profilesNeeded, adaptsNeeded, warnings };
+  return { ready, profilesNeeded, warnings };
 }
 
 async function runPreflight(preflightResult, hostMap, { onEvent } = {}) {
   const emit = typeof onEvent === 'function' ? onEvent : () => {};
   const profileCount = preflightResult.profilesNeeded.length;
-  const adaptCount = preflightResult.adaptsNeeded.length;
-  // Rate-limited: one Buddy preflight_start for the whole reprofile/adapt pass
+  // Rate-limited: one Buddy preflight_start for the whole reprofile pass
   // (runs before execution → not the judge/scoring critical window). The
   // per-model timeline `emit('preflight_reprofile_start', …)` is preserved
   // below; this only adds the Buddy surface signal alongside it.
-  if (profileCount || adaptCount) {
+  if (profileCount) {
     buddySurface.emitLifecycle(
       'preflight_start',
-      `Preflight: profiling ${profileCount} and adapting ${adaptCount} model(s) before the run…`
+      `Preflight: profiling ${profileCount} exact artifact(s) before the run…`
     );
   }
   for (const model of preflightResult.profilesNeeded) {
     const hostUrl = hostMap?.[model.host] || model.hostUrl;
-    await emit('preflight_reprofile_start', { model: model.name, host: hostUrl, details: { hostId: model.host, reason: 'no_profile' } });
+    await emit('preflight_reprofile_start', { model: model.name, host: hostUrl, details: { hostId: model.host, reason: model.profileReason || 'missing_profile' } });
     await profile(model.name, model.host, hostUrl, 'standard');
   }
-  for (const model of preflightResult.adaptsNeeded) {
-    const hostUrl = hostMap?.[model.host] || model.hostUrl;
-    await emit('preflight_reprofile_start', { model: model.name, host: hostUrl, details: { hostId: model.host, reason: 'missing_adaptation' } });
-    await adapt(model.name, model.host, hostUrl, { deploy: true });
-  }
-  // Pre-run only: reprofile/adapt finished, batch about to execute. suggesting
+  // Pre-run only: profiling finished, batch about to execute. Suggesting
   // is allowed here (no judge/scoring active yet).
-  if (profileCount || adaptCount) {
-    buddySurface.emitLifecycle('preflight_ok', 'Preflight profiling complete — starting the run.');
+  if (profileCount) {
+    buddySurface.emitLifecycle('preflight_ok', 'Exact-artifact profiling complete — starting the run.');
   }
 }
 

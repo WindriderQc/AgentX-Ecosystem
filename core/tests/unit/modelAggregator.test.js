@@ -32,8 +32,8 @@ jest.mock('../../src/services/modelReadinessService', () => {
   const { normalizeModelName } = jest.requireActual('../../src/helpers/modelNameNormalization');
   return {
     getModelReadiness: jest.fn(async () => ({
-      readiness: { stage: 'adapted' },
-      bestReadiness: { stage: 'adapted' }
+      readiness: { stage: 'benchmarked', benchmarkQualified: true, stale: false, isReady: true },
+      bestReadiness: { stage: 'benchmarked', benchmarkQualified: true, stale: false, isReady: true }
     })),
     compareReadiness: jest.fn(() => 0),
     normalizeModelName
@@ -79,7 +79,7 @@ describe('modelAggregator', () => {
     ]));
   });
 
-  it('deduplicates Ollama catalog entries that differ only by model-name case', async () => {
+  it('deduplicates case variants without collapsing distinct namespaces', async () => {
     mockFetch.mockImplementation(async (url) => ({
       ok: true,
       json: async () => ({
@@ -90,19 +90,27 @@ describe('modelAggregator', () => {
     }));
 
     const models = await modelAggregator.getAllModels({ useCache: false });
-    const qwenModels = models.filter((model) => model.name.toLowerCase() === 'qwen3.5:9b');
+    const bareModels = models.filter((model) => model.name.toLowerCase() === 'qwen3.5:9b');
+    const namespacedModels = models.filter((model) => model.name.toLowerCase() === 'ax/qwen3.5:9b');
 
-    expect(qwenModels).toHaveLength(1);
-    expect(qwenModels[0]).toMatchObject({
+    expect(bareModels).toHaveLength(1);
+    expect(namespacedModels).toHaveLength(1);
+    expect(bareModels[0]).toMatchObject({
       name: 'Qwen3.5:9b',
       displayName: 'Qwen3.5 9B',
       deployment: {
-        status: 'available',
-        resolvedName: 'ax/Qwen3.5:9b'
+        status: 'gone'
       },
       registryStatus: 'active'
     });
-    expect(qwenModels[0].capabilities).toMatchObject({
+    expect(namespacedModels[0]).toMatchObject({
+      name: 'ax/Qwen3.5:9b',
+      deployment: {
+        status: 'available',
+        resolvedName: 'ax/Qwen3.5:9b'
+      }
+    });
+    expect(bareModels[0].capabilities).toMatchObject({
       supportsThinking: true,
       thinkingQualified: false,
       thinkingSource: 'model_registry_fallback',
@@ -230,7 +238,7 @@ describe('modelAggregator', () => {
       count: 1,
       identityCount: 1,
       catalogBackedCount: 1,
-      unregisteredAvailableCount: 1,
+      unregisteredAvailableCount: 2,
       missingFromCatalogCount: 0
     });
   });

@@ -9,7 +9,6 @@ const BenchmarkPrompt = require('../../../models/BenchmarkPrompt');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const { classifyBenchmarkError } = require('./errorClassifier');
 const { benchmarkFetch: fetch } = require('./http');
-const { resolveAdaptedModel } = require('../profiler/adaptedModelResolver');
 const { getModelDigest } = require('./modelDigestService');
 
 /**
@@ -20,7 +19,6 @@ async function runTest({ model, host, prompt }) {
         throw new Error('model, host, and prompt are required');
     }
 
-    const effectiveModel = await resolveAdaptedModel(model, host);
     const start = Date.now();
 
     try {
@@ -30,7 +28,7 @@ async function runTest({ model, host, prompt }) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: effectiveModel,
+                model,
                 messages: [{ role: 'user', content: prompt }],
                 stream: false,
                 options: {}

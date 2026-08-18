@@ -66,10 +66,13 @@ async function getModelRegistries(query = {}) {
  * @param {string} name - Model name
  * @returns {Promise<Object|null>} Model registry entry or null
  */
-async function getModelRegistryByName(name) {
+async function getModelRegistryByName(name, options = {}) {
   try {
-    const data = await coreRequest(`/api/models/registry/${encodeURIComponent(name)}`);
-    return data.data?.model || null;
+    const params = new URLSearchParams();
+    if (options.host) params.set('host', options.host);
+    const qs = params.toString();
+    const data = await coreRequest(`/api/models/registry/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`);
+    return data.data?.model || data.data || null;
   } catch (err) {
     if (err.status === 404) return null;
     throw err;

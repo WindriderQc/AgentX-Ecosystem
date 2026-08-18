@@ -1,15 +1,30 @@
 const mongoose = require('mongoose');
 
+const ArtifactIdentitySchema = new mongoose.Schema({
+  model: { type: String, required: true },
+  hostId: { type: String, required: true },
+  hostUrl: { type: String, required: true },
+  digest: { type: String, required: true },
+  runtimeFingerprint: { type: String, required: true },
+  registryId: { type: String, default: null },
+  registryDigest: { type: String, default: null },
+  registryQualified: { type: Boolean, default: false }
+}, { _id: false });
+
 const ReadinessSchema = new mongoose.Schema({
   stage: {
     type: String,
-    enum: ['available', 'profiled', 'adapted', 'benchmarked'],
+    enum: ['available', 'profiled', 'benchmarked'],
     default: 'available'
   },
   profiledAt: Date,
-  adaptedAt: Date,
+  profileDepth: { type: String, enum: ['quick', 'standard', 'full', null], default: null },
+  benchmarkQualified: { type: Boolean, default: false },
   benchmarkedAt: Date,
-  stale: { type: Boolean, default: false }
+  stale: { type: Boolean, default: false },
+  staleReason: { type: String, default: null },
+  evidenceId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  artifact: { type: ArtifactIdentitySchema, default: null }
 }, { _id: false });
 
 const HostAvailabilitySchema = new mongoose.Schema({

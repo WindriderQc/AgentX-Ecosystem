@@ -105,7 +105,7 @@ describe('Inference control-plane API', () => {
     app = buildApp();
   });
 
-  it('lists Ollama models and hides a base model when its ax/ variant exists', async () => {
+  it('lists every exact Ollama artifact even when names share a suffix', async () => {
     fetch.mockResolvedValueOnce({
       json: async () => ({
         models: [
@@ -125,6 +125,7 @@ describe('Inference control-plane API', () => {
     expect(response.body).toEqual({
       status: 'success',
       data: [
+        { name: 'qwen3.5:9b', size: 9, modified_at: '2026-07-01T00:00:00Z' },
         { name: 'ax/qwen3.5:9b', size: 10, modified_at: '2026-07-02T00:00:00Z' },
         { name: 'nomic-embed-text:v1.5', size: 1, modified_at: '2026-07-03T00:00:00Z' }
       ]

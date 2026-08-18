@@ -2,7 +2,7 @@
  * Per-(model, host) performance baseline capture for a benchmark batch.
  *
  * Source priority:
- *   1. Profiler adaptation (ModelAdaptation collection)  — preferred
+ *   1. Exact-artifact profiler evidence                 — preferred
  *   2. Live host test (testModelOnHost)                  — fallback
  *   3. Synthesized error baseline                        — never crashes the batch
  *
@@ -15,55 +15,50 @@
 
 const logger = require('../../../config/logger');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
-const ModelAdaptation = require('../../../models/ModelAdaptation');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const { testModelOnHost } = require('../hostTestService');
 const { getConfiguredHosts, normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
-const { modelNameCandidates } = require('../modelContextResolver');
+const { resolveArtifactIdentity } = require('../profiler/artifactIdentityService');
 const { toPerformanceBaseline } = require('./batchHelpers');
 
-const ADAPTATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const PROFILE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 function resolveHostIdForUrl(hostUrl) {
     const normalizedHost = normalizeHostUrl(hostUrl);
-    return getConfiguredHosts().find((host) => host.url === normalizedHost)?.id || null;
+    return getConfiguredHosts().find((host) => normalizeHostUrl(host.url) === normalizedHost)?.id || null;
 }
 
 async function getProfilePerformanceBaseline(model, hostUrl) {
     const hostId = resolveHostIdForUrl(hostUrl);
     if (!hostId) return null;
 
-    // Exact model names win, with namespace-stripped names as a compatibility
-    // fallback. Current profiler writes ax/* records under the ax name; older
-    // adaptation records may exist under the stripped parent name.
-    const lookupNames = modelNameCandidates(model);
-    const adaptation = await ModelAdaptation.findOne({ modelName: { $in: lookupNames }, hostId })
-        .select('profile config staleness updatedAt')
+    const artifact = await resolveArtifactIdentity(model, hostId, hostUrl);
+    const evidence = await ModelPerformanceProfile.findOne({
+        modelName: artifact.model,
+        hostId,
+        'artifact.digest': artifact.digest,
+        'artifact.runtimeFingerprint': artifact.runtimeFingerprint,
+        active: true,
+        stale: { $ne: true }
+    })
+        .select('profile artifact updatedAt')
         .lean()
         .catch(() => null);
 
-    if (!adaptation?.profile) {
+    if (!evidence?.profile || evidence.artifact?.registryQualified !== true) {
         return null;
     }
 
-    if (adaptation.staleness?.stale) {
-        logger.warn('ModelAdaptation profile is marked stale, falling through to live host test', {
-            model,
-            hostId,
-            reason: adaptation.staleness.reason || null
-        });
-        return null;
-    }
-
-    const profiledAt = adaptation.profile.profiledAt || adaptation.updatedAt;
+    const profiledAt = evidence.profile.profiledAt || evidence.updatedAt;
     if (profiledAt) {
         const ageMs = Date.now() - new Date(profiledAt).getTime();
-        if (ageMs > ADAPTATION_TTL_MS) {
-            logger.warn('ModelAdaptation profile is stale, falling through to live host test', {
+        if (ageMs > PROFILE_TTL_MS) {
+            logger.warn('Exact-artifact profile evidence is stale, falling through to live host test', {
                 model,
                 hostId,
                 profiledAt,
                 ageDays: Math.floor(ageMs / (24 * 60 * 60 * 1000)),
-                ttlDays: ADAPTATION_TTL_MS / (24 * 60 * 60 * 1000)
+                ttlDays: PROFILE_TTL_MS / (24 * 60 * 60 * 1000)
             });
             return null;
         }
@@ -72,16 +67,16 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
     return {
         hostId,
         status: 'profiled',
-        source: 'profiler_adaptation',
-        tokensPerSec: adaptation.profile.tokensPerSec ?? null,
-        promptEvalTokensPerSec: adaptation.profile.promptEvalTokensPerSec ?? null,
-        latencyMs: adaptation.profile.loadTiming?.hotLoadMs ?? null,
-        timeToFirstTokenMs: adaptation.profile.ttftMs ?? null,
-        vramUsedMiB: adaptation.profile.vramUsedMiB ?? null,
+        source: 'exact_artifact_profile',
+        tokensPerSec: evidence.profile.tokensPerSec ?? null,
+        promptEvalTokensPerSec: evidence.profile.promptEvalTokensPerSec ?? null,
+        latencyMs: evidence.profile.loadTiming?.hotLoadMs ?? null,
+        timeToFirstTokenMs: evidence.profile.ttftMs ?? null,
+        vramUsedMiB: evidence.profile.vramUsedMiB ?? null,
         vramTotalMiB: null,
-        numCtx: adaptation.config?.num_ctx ?? adaptation.profile.optimalNumCtx ?? null,
-        numCtxSource: 'profiler_adaptation',
-        testedAt: adaptation.profile.profiledAt || adaptation.updatedAt || null,
+        numCtx: evidence.profile.recommendedConfig?.num_ctx ?? evidence.profile.optimalNumCtx ?? null,
+        numCtxSource: 'exact_artifact_profile',
+        testedAt: evidence.profile.profiledAt || evidence.updatedAt || null,
         error: null
     };
 }

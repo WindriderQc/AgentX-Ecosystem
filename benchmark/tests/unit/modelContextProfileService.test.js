@@ -35,6 +35,8 @@ describe('modelContextProfileService', () => {
       _id: 'snapshot-1',
       modelName: 'ax/qwen3.5:9b',
       hostUrl: 'http://192.0.2.12:11434/',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a',
       status: 'completed',
       testedNumCtx: 237568,
       promptFillPct: 80,
@@ -58,6 +60,8 @@ describe('modelContextProfileService', () => {
     expect(profile).toEqual(expect.objectContaining({
       modelName: 'ax/qwen3.5:9b',
       hostUrl: 'http://192.0.2.12:11434',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a',
       hostId: 'secondary',
       verifiedMaxContext: 237568,
       verifiedInputTokens: 190000,
@@ -83,6 +87,8 @@ describe('modelContextProfileService', () => {
       _id: 'snapshot-2',
       modelName: 'ax/qwen3.5:9b',
       hostUrl: 'http://192.0.2.12:11434',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a',
       status: 'completed',
       testedNumCtx: 131072,
       testedAt: new Date('2026-06-16T01:00:00Z'),
@@ -104,6 +110,8 @@ describe('modelContextProfileService', () => {
     await expect(service.updateFromProbeSnapshot({
       modelName: 'ax/qwen3.5:9b',
       hostUrl: 'http://192.0.2.12:11434',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a',
       status: 'failed',
       testedNumCtx: 131072
     })).resolves.toBeNull();
@@ -115,6 +123,8 @@ describe('modelContextProfileService', () => {
       _id: 'snapshot-bad',
       modelName: 'ax/qwopus:27b',
       hostUrl: 'http://192.0.2.12:11434',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a',
       status: 'completed',
       testedNumCtx: 131072,
       steps: [{ numCtx: 131072, passed: true, tokensPerSec: 1000000 }]
@@ -128,6 +138,8 @@ describe('modelContextProfileService', () => {
       _id: 'snapshot-bad-step',
       modelName: 'ax/qwopus:27b',
       hostUrl: 'http://192.0.2.12:11434',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a',
       status: 'completed',
       testedNumCtx: 14336,
       baselineTokensPerSec: 35.18,

@@ -9,10 +9,6 @@ jest.mock('../../src/services/modelAggregator', () => ({
   getModelSources: (...args) => mockGetModelSources(...args)
 }));
 
-jest.mock('../../src/services/modelReadinessService', () => ({
-  isReadyStage: jest.fn((stage) => ['profiled', 'adapted', 'benchmarked'].includes(stage))
-}));
-
 describe('Unified models routes', () => {
   let app;
 
@@ -24,13 +20,13 @@ describe('Unified models routes', () => {
       {
         name: 'gemma4:26b',
         displayName: 'Gemma 4 26B',
-        readiness: { stage: 'adapted' },
+        readiness: { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false, isReady: true },
         deployment: { status: 'available' }
       },
       {
         name: 'mystery-model',
         displayName: 'Mystery Model',
-        readiness: { stage: 'available' },
+        readiness: { stage: 'available', benchmarkQualified: false, stale: false, isReady: false },
         deployment: { status: 'available' }
       }
     ]);
@@ -51,7 +47,9 @@ describe('Unified models routes', () => {
       .expect(200);
 
     expect(Array.isArray(response.body)).toBe(true);
-    expect(response.body[0].readiness).toEqual({ stage: 'adapted' });
+    expect(response.body[0].readiness).toEqual({
+      stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false, isReady: true
+    });
     expect(response.headers['x-require-profiled-models']).toBe('false');
     expect(mockGetAllModels).toHaveBeenCalledWith(expect.objectContaining({
       filters: expect.objectContaining({

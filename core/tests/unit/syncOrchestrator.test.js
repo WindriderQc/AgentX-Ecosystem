@@ -26,6 +26,7 @@ jest.mock('../../src/helpers/httpAgent', () => ({
 
 // We'll test syncModel metadata behavior, but not fetchHostModels (requires network)
 const {
+    retireMissingInstallations,
     retireUnconfiguredHostModels,
     syncModel
 } = require('../../src/services/modelSync/syncOrchestrator');
@@ -63,6 +64,14 @@ describe('syncModel', () => {
         expect(createArg.vendor).toBe('alibaba');
         expect(createArg.executionDefaults).toBeUndefined();
         expect(createArg.capabilities.supportsThinking).toBe(false);
+        expect(createArg.installations).toEqual([
+            expect.objectContaining({
+                hostUrl: 'http://192.0.2.99:11434',
+                digest: 'abc123',
+                status: 'active',
+                isActive: true
+            })
+        ]);
     });
 
     it('should update existing model metadata', async () => {
@@ -139,9 +148,8 @@ describe('syncModel', () => {
         expect(updateSet.isActive).toBe(true);
     });
 
-    it('normalizes legacy ax-prefixed registry rows instead of creating duplicates', async () => {
+    it('preserves namespaced registry rows as exact model identities', async () => {
         mockModelRegistry.findOne
-            .mockResolvedValueOnce(null)
             .mockResolvedValueOnce({
                 _id: 'legacy-id',
                 modelName: 'ax/igorls/gemma-4-E4B-it-heretic-GGUF',
@@ -175,10 +183,83 @@ describe('syncModel', () => {
             { _id: 'legacy-id' },
             expect.objectContaining({
                 $set: expect.objectContaining({
-                    modelName: 'igorls/gemma-4-E4B-it-heretic-GGUF',
                     ollamaDigest: 'new_digest'
                 })
             })
+        );
+    });
+
+    it('records a distinct digest for the same exact tag on another host', async () => {
+        mockModelRegistry.findOne.mockResolvedValue({
+            _id: 'registry-id',
+            modelName: sampleOllamaModel.name,
+            sourceType: 'ollama',
+            sourceHost: 'http://primary:11434',
+            ollamaDigest: 'primary-digest',
+            modelSizeBytes: sampleOllamaModel.size,
+            parameterSize: '7B',
+            quantization: 'Q4_K_M',
+            family: 'qwen2',
+            status: 'active',
+            isActive: true,
+            executionDefaults: {},
+            executionOverrides: {},
+            installations: [{
+                hostUrl: 'http://primary:11434',
+                digest: 'primary-digest',
+                status: 'active',
+                isActive: true
+            }]
+        });
+        mockModelRegistry.updateOne.mockResolvedValue({});
+
+        await expect(syncModel(
+            { ...sampleOllamaModel, digest: 'secondary-digest' },
+            'http://secondary:11434'
+        )).resolves.toBe('updated');
+
+        const update = mockModelRegistry.updateOne.mock.calls[0][1].$set;
+        expect(update.ollamaDigest).toBeUndefined();
+        expect(update.installations).toEqual([
+            expect.objectContaining({ hostUrl: 'http://primary:11434', digest: 'primary-digest' }),
+            expect.objectContaining({ hostUrl: 'http://secondary:11434', digest: 'secondary-digest' })
+        ]);
+    });
+});
+
+describe('retireMissingInstallations', () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it('retires only the missing host artifact while keeping another installation active', async () => {
+        mockModelRegistry.find.mockResolvedValue([{
+            _id: 'registry-id',
+            modelName: 'qwen3.5:9b',
+            installations: [
+                { hostUrl: 'http://primary:11434', digest: 'digest-primary', status: 'active', isActive: true },
+                { hostUrl: 'http://secondary:11434', digest: 'digest-secondary', status: 'active', isActive: true }
+            ]
+        }]);
+        mockModelRegistry.updateOne.mockResolvedValue({});
+
+        const retired = await retireMissingInstallations(
+            new Set(['http://secondary:11434']),
+            new Map([['http://secondary:11434', new Set()]]),
+            new Date('2026-08-17T00:00:00Z')
+        );
+
+        expect(retired).toBe(1);
+        expect(mockModelRegistry.updateOne).toHaveBeenCalledWith(
+            { _id: 'registry-id' },
+            { $set: expect.objectContaining({
+                status: 'active',
+                isActive: true,
+                sourceHost: 'http://primary:11434',
+                ollamaDigest: 'digest-primary',
+                installations: [
+                    expect.objectContaining({ hostUrl: 'http://primary:11434', isActive: true }),
+                    expect.objectContaining({ hostUrl: 'http://secondary:11434', status: 'retired', isActive: false })
+                ]
+            }) }
         );
     });
 });
@@ -239,7 +320,14 @@ describe('retireUnconfiguredHostModels', () => {
                 _id: 'stale-id',
                 modelName: 'ax/gemma4:26b',
                 sourceHost: 'http://192.0.2.66:11434',
-                notes: 'existing note'
+                notes: 'existing note',
+                installations: [{
+                    hostUrl: 'http://192.0.2.66:11434',
+                    digest: 'old',
+                    lastSeenAt: new Date('2026-06-01T00:00:00Z'),
+                    status: 'active',
+                    isActive: true
+                }]
             }
         ]);
         mockModelRegistry.updateOne.mockResolvedValue({});
@@ -250,23 +338,21 @@ describe('retireUnconfiguredHostModels', () => {
         );
 
         expect(retired).toBe(1);
-        expect(mockModelRegistry.find).toHaveBeenCalledWith(expect.objectContaining({
+        expect(mockModelRegistry.find).toHaveBeenCalledWith({
             sourceType: 'ollama',
-            status: { $ne: 'retired' },
-            sourceHost: expect.objectContaining({
-                $exists: true,
-                $ne: null,
-                $nin: ['http://192.0.2.12:11434', 'http://192.0.2.99:11434']
-            }),
-            lastSeenAt: { $lte: new Date('2026-06-26T00:00:00Z') }
-        }));
+            'installations.isActive': true
+        });
         expect(mockModelRegistry.updateOne).toHaveBeenCalledWith(
             { _id: 'stale-id' },
             expect.objectContaining({
                 $set: expect.objectContaining({
                     status: 'retired',
                     isActive: false,
-                    notes: expect.stringContaining('source host http://192.0.2.66:11434 is no longer configured')
+                    installations: [expect.objectContaining({
+                        hostUrl: 'http://192.0.2.66:11434',
+                        status: 'retired',
+                        isActive: false
+                    })]
                 })
             })
         );

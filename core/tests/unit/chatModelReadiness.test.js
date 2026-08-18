@@ -4,7 +4,7 @@ describe('chat model readiness helper', () => {
   it('builds labels that distinguish profiled and unprofiled models', () => {
     expect(readinessUi.buildOptionLabel({
       name: 'fast-model',
-      readiness: { stage: 'profiled' }
+      readiness: { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false }
     }, false)).toBe('fast-model - Profiled');
 
     expect(readinessUi.buildOptionLabel({
@@ -16,7 +16,7 @@ describe('chat model readiness helper', () => {
   it('sorts ready models ahead of unprofiled models', () => {
     const models = [
       { name: 'zeta', readiness: { stage: 'available' } },
-      { name: 'alpha', readiness: { stage: 'adapted' } },
+      { name: 'alpha', readiness: { stage: 'benchmarked' } },
       { name: 'beta', readiness: { stage: 'profiled' } }
     ];
 
@@ -38,5 +38,15 @@ describe('chat model readiness helper', () => {
 
     expect(optionEl.disabled).toBe(true);
     expect(optionEl.textContent).toContain('Not profiled - blocked');
+  });
+
+  it('does not treat quick or stale evidence as chat-ready', () => {
+    expect(readinessUi.getReadinessMeta({
+      readiness: { stage: 'profiled', profileDepth: 'quick', benchmarkQualified: false, stale: false }
+    }, true)).toMatchObject({ ready: false, blocked: true, label: 'Quick profile only' });
+
+    expect(readinessUi.getReadinessMeta({
+      readiness: { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: true }
+    }, true)).toMatchObject({ ready: false, blocked: true, label: 'Profile stale' });
   });
 });

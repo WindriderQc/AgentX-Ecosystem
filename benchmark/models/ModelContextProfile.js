@@ -21,6 +21,8 @@ const ModelContextProfileSchema = new mongoose.Schema({
   modelName: { type: String, required: true, index: true },
   hostUrl: { type: String, required: true, index: true },
   hostId: { type: String, default: null, index: true },
+  artifactDigest: { type: String, required: true, index: true },
+  runtimeFingerprint: { type: String, required: true },
 
   verifiedMaxContext: { type: Number, default: null },
   verifiedInputTokens: { type: Number, default: null },
@@ -39,8 +41,8 @@ const ModelContextProfileSchema = new mongoose.Schema({
 });
 
 ModelContextProfileSchema.index(
-  { modelName: 1, hostUrl: 1 },
-  { unique: true, name: 'model_context_profile_model_host_unique' }
+  { modelName: 1, hostUrl: 1, artifactDigest: 1, runtimeFingerprint: 1 },
+  { unique: true, name: 'exact_model_context_profile_unique' }
 );
 
 module.exports = mongoose.model('ModelContextProfile', ModelContextProfileSchema);

@@ -172,7 +172,7 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs) {
  * @param {number[]} [options.prefillTokens]
  * @param {number[]} [options.decodeTokens]
  * @param {function} [options.onProgress]  - ({ index, total, cell }) per completed cell
- * @returns {Promise<object>} matrix result for ModelAdaptation.profile.prefillDecodeMatrix
+ * @returns {Promise<object>} matrix result stored in exact-artifact performance evidence
  */
 async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
   const { prefillTokens, decodeTokens } = getMatrixConfig(options);

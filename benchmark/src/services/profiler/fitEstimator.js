@@ -315,7 +315,7 @@ function pickRecommended(measured) {
   if (top.vramPct != null) bits.push(`${top.vramPct}% VRAM`);
   if (top.tokensPerSec != null) bits.push(`${top.tokensPerSec} tok/s`);
   if (top.optimalNumCtx) bits.push(`up to ${top.optimalNumCtx} ctx`);
-  return { modelName: top.modelName, adaptedName: top.adaptedName || null, reason: bits.join(' · ') };
+  return { modelName: top.modelName, reason: bits.join(' · ') };
 }
 
 /** Highest benchmark-scored model that also fits cleanly. */

@@ -38,8 +38,7 @@ if (!Number.isFinite(pinRestoreVerifyTimeoutMs) || pinRestoreVerifyTimeoutMs < 1
 
 // Local aliases onto the ecosystem-wide normalizer (src/helpers/
 // modelNameNormalization.js). Kept so the health check and pin-equivalence
-// call sites read the same as before; semantics are unchanged (a pin on
-// "gemma4:26b" is satisfied by a loaded "ax/gemma4:26b").
+// call sites read the same as before; namespaces remain part of identity.
 const normalizePinName = canonicalNormalize;
 const pinNamesMatch = modelsMatch;
 

@@ -179,7 +179,7 @@ async function getAllModels(options = {}) {
         deployedAt: ollamaModel.modified_at,
         ollamaHost: ollamaModel.host,
         // Preserve the raw Ollama tag so chat/routing can address the exact
-        // variant (e.g. "ax/gemma4:26b") while the catalog key stays bare.
+        // exact installed tag while the catalog key remains stable.
         resolvedName: ollamaModel.name
       },
       categories: [],
@@ -368,13 +368,7 @@ async function getAllModels(options = {}) {
   return applyFilters(models, filters);
 }
 
-const AX_PREFIX = 'ax/';
-
-/**
- * Fetch models from Ollama hosts.
- * Hides base models that have a deployed ax/ counterpart on the same host
- * so services only see adapted (profiled) models when available.
- */
+/** Fetch every exact artifact reported by each Ollama host. */
 async function fetchOllamaModels() {
   const models = [];
 
@@ -394,18 +388,7 @@ async function fetchOllamaModels() {
       const data = await response.json();
 
       if (data.models && Array.isArray(data.models)) {
-        // Collect the set of adapted model base names on this host
-        const adaptedBaseNames = new Set();
         for (const model of data.models) {
-          if (model.name.startsWith(AX_PREFIX)) {
-            adaptedBaseNames.add(modelNameIdentityKey(model.name.slice(AX_PREFIX.length)));
-          }
-        }
-        for (const model of data.models) {
-          // Hide base model when its adapted version exists on this host
-          if (!model.name.startsWith(AX_PREFIX) && adaptedBaseNames.has(modelNameIdentityKey(model.name))) {
-            continue;
-          }
           models.push({
             ...model,
             host

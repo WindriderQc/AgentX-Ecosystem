@@ -12,7 +12,7 @@ const { randomUUID } = require('crypto');
 const { defaultPlanningTimeZone } = require('./planningDateService');
 
 function normalizeRoutedModelName(modelName) {
-  return String(modelName || '').trim().toLowerCase().replace(/^ax\//, '');
+  return String(modelName || '').trim().toLowerCase().replace(/:latest$/i, '');
 }
 
 function sameRoutedModel(left, right) {

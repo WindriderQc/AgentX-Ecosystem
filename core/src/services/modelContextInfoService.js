@@ -7,10 +7,9 @@
  * Priority:
  *   1. HostPreference pinned context — operator-selected resident runtime
  *   2. Modelfile `PARAMETER num_ctx <N>` — model build default
- *   3. ModelContextProfile.verifiedMaxContext — measured host/model window
+ *   3. ModelContextProfile.verifiedMaxContext — measured exact-artifact window
  *   4. model_info `<arch>.context_length` — the model's declared capacity
- *   5. ModelRegistry.contextTest.testedNumCtx — legacy profiler-verified
- *   6. Unresolved (no context is invented)
+ *   5. Unresolved (no context is invented)
  *
  * The returned `source` tells the chat UI where the number came from, so we
  * can show a badge ("Modelfile", "Profiled", "Unresolved") and set user
@@ -20,6 +19,7 @@
 const logger = require('../../config/logger');
 const { resolveTarget } = require('../helpers/ollamaUtils');
 const { modelLookupNames, modelsMatch } = require('../helpers/modelNameNormalization');
+const { resolveArtifactIdentity } = require('./artifactIdentityService');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const cache = new Map(); // key `${host}::${model}` → { value, expiresAt }
@@ -32,8 +32,8 @@ async function getFetch() {
 
 function _setFetch(fn) { _fetch = fn; }
 
-function cacheKey(host, model) {
-  return `${host || ''}::${model || ''}`;
+function cacheKey(host, model, artifact = {}) {
+  return `${host || ''}::${model || ''}::${artifact.digest || ''}::${artifact.runtimeFingerprint || ''}`;
 }
 
 function parseNumCtxFromParameters(parametersStr) {
@@ -96,16 +96,20 @@ async function fromHostPreferencePin(model, hostUrl) {
   }
 }
 
-async function fromContextProfile(model, hostUrl) {
-  if (!hostUrl) return null;
+async function fromContextProfile(model, hostUrl, artifact) {
+  if (!hostUrl || artifact?.identityQualified !== true || !artifact.digest || !artifact.runtimeFingerprint) {
+    return null;
+  }
   try {
     const ModelContextProfile = require('../../models/ModelContextProfile');
     const profile = await ModelContextProfile.findOne({
       modelName: { $in: modelLookupNames(model) },
       hostUrl,
+      artifactDigest: artifact.digest,
+      runtimeFingerprint: artifact.runtimeFingerprint,
       stale: { $ne: true }
     })
-      .select('modelName hostUrl recommendedContext verifiedMaxContext verifiedInputTokens lastValidatedAt source')
+      .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext verifiedMaxContext verifiedInputTokens lastValidatedAt source')
       .lean();
     const verified = Number(profile?.verifiedMaxContext || profile?.recommendedContext);
     if (!Number.isFinite(verified) || verified <= 0) return null;
@@ -123,32 +127,19 @@ async function fromContextProfile(model, hostUrl) {
   }
 }
 
-async function fromRegistry(model) {
-  try {
-    const ModelRegistry = require('../../models/ModelRegistry');
-    const entry = await ModelRegistry.findOne({ modelName: model.replace(/:latest$/, '') })
-      .select('contextTest sourceHost')
-      .lean();
-    if (!entry) return null;
-    const tested = entry.contextTest && entry.contextTest.status === 'completed' && entry.contextTest.testedNumCtx;
-    if (tested) return { num_ctx: tested, source: 'profiled' };
-    return null;
-  } catch (err) {
-    logger.debug('[modelContextInfo] registry lookup failed', { model, error: err.message });
-    return null;
-  }
-}
-
 /**
- * Resolve context info for a (model, host) pair. Host optional — if omitted,
- * we fall back to registry-only info.
+ * Resolve context info for a (model, host) pair. Without a host there is no
+ * exact runtime artifact to inspect, so no profiled fallback is accepted.
  *
  * @returns {Promise<{ model, host, num_ctx, source, maxContextLength? }>}
  */
-async function getContextInfo(model, hostUrlRaw) {
+async function getContextInfo(model, hostUrlRaw, options = {}) {
   if (!model) throw new Error('model is required');
   const hostUrl = hostUrlRaw ? resolveTarget(hostUrlRaw) : null;
-  const key = cacheKey(hostUrl, model);
+  const artifact = options.artifactIdentity || (hostUrl
+    ? await resolveArtifactIdentity(model, hostUrl, options.deps || {})
+    : null);
+  const key = cacheKey(hostUrl, model, artifact || {});
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.value;
@@ -183,7 +174,7 @@ async function getContextInfo(model, hostUrlRaw) {
 
   // A measured profile remains evidence even when an operator pin or the
   // resident Modelfile determines the active window.
-  const profile = await fromContextProfile(model, hostUrl);
+  const profile = await fromContextProfile(model, hostUrl, artifact);
   if (profile) {
     profileMeta = profile;
     if (!num_ctx) {
@@ -197,19 +188,13 @@ async function getContextInfo(model, hostUrlRaw) {
     source = 'model_capacity';
   }
 
-  if (!num_ctx) {
-    const reg = await fromRegistry(model);
-    if (reg) {
-      num_ctx = reg.num_ctx;
-      source = reg.source;
-    }
-  }
-
   const value = {
     model,
     host: hostUrl,
     num_ctx,
     source,
+    artifactDigest: artifact?.digest || null,
+    runtimeFingerprint: artifact?.runtimeFingerprint || null,
     ...(pinMeta?.pinnedModel ? { pinnedModel: pinMeta.pinnedModel } : {}),
     ...(pinMeta?.hostDisplayName ? { hostDisplayName: pinMeta.hostDisplayName } : {}),
     ...(profileMeta?.verifiedMaxContext ? { verifiedMaxContext: profileMeta.verifiedMaxContext } : {}),

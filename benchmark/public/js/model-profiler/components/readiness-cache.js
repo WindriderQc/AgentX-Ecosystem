@@ -20,7 +20,7 @@ export async function getReadinessMap() {
           readiness instanceof Map ? Object.fromEntries(readiness) : readiness
         );
         const stages = entries.map(([, r]) => r.stage);
-        const highest = ['benchmarked', 'adapted', 'profiled', 'available']
+        const highest = ['benchmarked', 'profiled', 'available']
           .find(s => stages.includes(s)) || 'available';
         const hostCount = entries.filter(([, r]) => r.stage === highest).length;
         map[m.name] = { stage: highest, hostCount, totalHosts: entries.length };
@@ -42,7 +42,6 @@ export function getBadgeHtml(modelName, readinessMap) {
 
   const BADGE_CONFIG = {
     profiled:    { label: '✓ Profiled',    bg: '#1a3a5c', color: '#4ecdc4' },
-    adapted:     { label: '⚡ Adapted',    bg: '#3a2a1a', color: '#f39c12' },
     benchmarked: { label: '★ Benchmarked', bg: '#1a3a2a', color: '#2ecc71' }
   };
 

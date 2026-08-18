@@ -110,6 +110,11 @@ The small secret-free input file is [`config/agentx.env`](config/agentx.env).
 Keep secrets and machine-specific endpoints outside the repository. See
 [First installation](docs/GETTING_STARTED.md) for error paths.
 
+Profiling and benchmark admission follow the
+[exact-artifact profiling contract](docs/EXACT_ARTIFACT_PROFILING.md): profiling
+records host-bound evidence and never creates or silently selects another model
+tag.
+
 ## Install and update
 
 Normal users should follow the latest stable GitHub release. Controlled

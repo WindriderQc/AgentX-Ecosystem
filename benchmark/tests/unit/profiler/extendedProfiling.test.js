@@ -3,11 +3,8 @@
 jest.mock('../../../src/services/hostTestService');
 jest.mock('../../../src/services/contextProbeService');
 jest.mock('../../../src/services/profiler/modelProfileService');
-jest.mock('../../../src/services/profiler/adaptationService');
 jest.mock('../../../src/services/profiler/hostProfileService');
 jest.mock('../../../src/services/profiler/settingsService');
-jest.mock('../../../src/services/profiler/namingConvention');
-jest.mock('../../../models/ModelAdaptation');
 jest.mock('../../../config/logger', () => ({ info: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn() }));
 
 const hostTestService = require('../../../src/services/hostTestService');

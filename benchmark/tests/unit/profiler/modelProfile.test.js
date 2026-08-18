@@ -44,7 +44,7 @@ describe('ModelProfile', () => {
 
     it('validates readiness stage enum — accepts valid stages', async () => {
         const profile = new ModelProfile(validProfile);
-        const validStages = ['available', 'profiled', 'adapted', 'benchmarked'];
+        const validStages = ['available', 'profiled', 'benchmarked'];
         for (const stage of validStages) {
             profile.readiness.set('host-delta', { stage });
             expect(profile.validateSync()).toBeUndefined();
@@ -55,6 +55,12 @@ describe('ModelProfile', () => {
         const profile = new ModelProfile(validProfile);
         profile.readiness.set('host-delta', { stage: 'invalid_stage' });
         expect(profile.validateSync()?.message).toMatch(/invalid_stage|readiness/);
+    });
+
+    it('rejects the retired adapted readiness stage', () => {
+        const profile = new ModelProfile(validProfile);
+        profile.readiness.set('host-delta', { stage: 'adapted' });
+        expect(profile.validateSync()?.message).toMatch(/adapted|readiness/);
     });
 
     it('defaults tags to empty array', async () => {

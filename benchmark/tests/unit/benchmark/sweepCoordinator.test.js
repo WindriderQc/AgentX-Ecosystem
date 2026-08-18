@@ -2,300 +2,226 @@
 
 const { buildSweepPlan, _internal } = require('../../../src/services/benchmark/sweepCoordinator');
 
-function queryResult(doc) {
+const HOST = {
+    hostId: 'secondary',
+    hostUrl: 'http://ollama-host:11434',
+    displayName: 'Host Beta',
+    vramMb: 16000
+};
+
+function artifact(model, overrides = {}) {
     return {
-        select: jest.fn().mockReturnValue({
-            lean: jest.fn().mockResolvedValue(doc)
-        })
+        model,
+        hostId: HOST.hostId,
+        hostUrl: HOST.hostUrl,
+        digest: `sha256:${model}`,
+        runtimeFingerprint: 'runtime-a',
+        registryQualified: true,
+        ...overrides
     };
 }
 
-function makeDeps({ inventory, profileByName = {}, adaptationByName = {}, contextByName = {}, host = {} } = {}) {
-    const resolvedHost = {
-        hostId: 'secondary',
-        hostUrl: 'http://ollama-host:11434',
-        displayName: 'Host Beta',
-        vramMb: 16000,
-        ...host
-    };
+function queryResult(doc, withSelect = false) {
+    const query = { lean: jest.fn().mockResolvedValue(doc) };
+    if (withSelect) query.select = jest.fn().mockReturnValue(query);
+    return query;
+}
 
+function makeDeps({
+    inventory = [],
+    profileByName = {},
+    performanceByName = {},
+    contextByName = {},
+    identityErrorByName = {},
+    host = {}
+} = {}) {
+    const resolvedHost = { ...HOST, ...host };
     return {
-        checkHost: jest.fn().mockResolvedValue({
-            available: true,
-            models: inventory || []
-        }),
+        checkHost: jest.fn().mockResolvedValue({ available: true, models: inventory }),
         hostProfileService: {
             getById: jest.fn().mockResolvedValue(resolvedHost),
             getByUrl: jest.fn().mockResolvedValue(resolvedHost)
         },
+        resolveArtifactIdentity: jest.fn(async (model) => {
+            if (identityErrorByName[model]) throw new Error(identityErrorByName[model]);
+            return artifact(model, { hostId: resolvedHost.hostId, hostUrl: resolvedHost.hostUrl });
+        }),
         ModelProfile: {
-            findOne: jest.fn((query) => {
-                const names = query?.name?.$in || [];
-                const foundName = names.find(name => profileByName[name]);
-                return queryResult(foundName ? profileByName[foundName] : null);
-            })
+            findOne: jest.fn(({ name }) => queryResult(profileByName[name] || null, true))
         },
-        ModelAdaptation: {
-            findOne: jest.fn((query) => {
-                const names = query?.modelName?.$in || [];
-                const foundName = names.find(name => adaptationByName[name]);
-                return {
-                    lean: jest.fn().mockResolvedValue(foundName ? adaptationByName[foundName] : null)
-                };
-            })
+        ModelPerformanceProfile: {
+            findOne: jest.fn(({ modelName }) => queryResult(performanceByName[modelName] || null))
         },
         ModelContextProfile: {
-            findOne: jest.fn((query) => {
-                const names = query?.modelName?.$in || [];
-                const foundName = names.find(name => contextByName[name]);
-                return {
-                    lean: jest.fn().mockResolvedValue(foundName ? contextByName[foundName] : null)
-                };
-            })
+            findOne: jest.fn(({ modelName }) => queryResult(contextByName[modelName] || null))
         }
     };
 }
 
-describe('benchmark sweep coordinator', () => {
-    it('returns a benchmark payload for deployed ready adapted models', async () => {
-        const deps = makeDeps({
-            inventory: ['gemma4:e4b', 'ax/gemma4:e4b'],
-            profileByName: {
-                'gemma4:e4b': { readiness: { secondary: { stage: 'adapted', stale: false } } }
-            },
-            adaptationByName: {
-                'gemma4:e4b': {
-                    deployment: { status: 'deployed' },
-                    profile: { vramUsedMiB: 3139 }
-                }
-            },
-            contextByName: {
-                'gemma4:e4b': {
-                    recommendedContext: 16384,
-                    verifiedMaxContext: 32768,
-                    stale: false
+function readyEvidence(model, { vramUsedMiB = 3139 } = {}) {
+    const id = artifact(model);
+    return {
+        profile: {
+            readiness: {
+                [HOST.hostId]: {
+                    stage: 'profiled',
+                    profileDepth: 'standard',
+                    benchmarkQualified: true,
+                    stale: false,
+                    artifact: id
                 }
             }
+        },
+        performance: {
+            modelName: model,
+            hostId: HOST.hostId,
+            active: true,
+            stale: false,
+            artifact: id,
+            profile: { vramUsedMiB }
+        },
+        context: {
+            modelName: model,
+            hostId: HOST.hostId,
+            hostUrl: HOST.hostUrl,
+            artifactDigest: id.digest,
+            runtimeFingerprint: id.runtimeFingerprint,
+            recommendedContext: 16384,
+            verifiedMaxContext: 32768,
+            stale: false
+        }
+    };
+}
+
+describe('benchmark sweep coordinator exact-artifact planning', () => {
+    it('returns a benchmark payload for an exact qualified artifact without rewriting its tag', async () => {
+        const model = 'ax/gemma4:e4b';
+        const evidence = readyEvidence(model);
+        const deps = makeDeps({
+            inventory: [model],
+            profileByName: { [model]: evidence.profile },
+            performanceByName: { [model]: evidence.performance },
+            contextByName: { [model]: evidence.context }
         });
 
         const plan = await buildSweepPlan({
-            hostId: 'secondary',
-            lane: 'lightweight',
-            candidates: ['gemma4:e4b'],
+            hostId: HOST.hostId,
+            candidates: [model],
             levels: [1, 2, 3],
-            judge_config: { host: 'http://judge:11434', model: 'judge-model' },
             run_name: 'sweep-run'
         }, deps);
 
-        expect(plan.summary).toMatchObject({
-            total: 1,
-            ready: 1,
-            benchmarkReadyModels: 1,
-            droppedVram: 0
-        });
+        expect(plan.summary).toMatchObject({ ready: 1, benchmarkReadyModels: 1 });
         expect(plan.payloads.profileQueue).toBeNull();
         expect(plan.payloads.benchmark).toMatchObject({
-            host: 'http://ollama-host:11434',
-            models: ['ax/gemma4:e4b'],
+            host: HOST.hostUrl,
+            models: [model],
             levels: [1, 2, 3],
             run_name: 'sweep-run'
         });
+        expect(plan.candidates[0]).not.toHaveProperty('adaptedModel');
     });
 
-    it('profiles a deployed adapted model when its validated context window is missing', async () => {
+    it('queues a standard profile when exact context evidence is missing', async () => {
+        const model = 'gemma4:e4b';
+        const evidence = readyEvidence(model);
         const deps = makeDeps({
-            inventory: ['ax/gemma4:e4b'],
-            profileByName: {
-                'gemma4:e4b': { readiness: { secondary: { stage: 'adapted', stale: false } } }
-            },
-            adaptationByName: {
-                'gemma4:e4b': {
-                    deployment: { status: 'deployed' },
-                    profile: { vramUsedMiB: 3139 }
-                }
-            }
+            inventory: [model],
+            profileByName: { [model]: evidence.profile },
+            performanceByName: { [model]: evidence.performance }
         });
 
-        const plan = await buildSweepPlan({
-            hostId: 'secondary',
-            candidates: ['gemma4:e4b']
-        }, deps);
+        const plan = await buildSweepPlan({ hostId: HOST.hostId, candidates: [model] }, deps);
 
-        expect(plan.profileDepth).toBe('standard');
         expect(plan.candidates[0]).toMatchObject({
+            model,
             readiness: 'needs_profile',
             contextValidated: false,
-            reason: 'validated host/artifact context profile is missing'
+            reason: 'exact digest/runtime context evidence is missing or stale'
         });
         expect(plan.candidates[0].actions).toEqual([
-            { type: 'profile', model: 'ax/gemma4:e4b', reason: 'context_validation' }
+            { type: 'profile', model, reason: 'context_validation' }
         ]);
         expect(plan.payloads.profileQueue).toMatchObject({
-            hostId: 'secondary',
+            hostId: HOST.hostId,
             depth: 'standard',
-            modelNames: ['ax/gemma4:e4b']
+            modelNames: [model]
         });
         expect(plan.payloads.benchmark).toBeNull();
     });
 
-    it('drops candidates whose profiled VRAM exceeds the host limit', async () => {
+    it('does not treat a namespaced installation as the requested bare tag', async () => {
+        const model = 'gemma4:e4b';
+        const deps = makeDeps({ inventory: ['ax/gemma4:e4b'] });
+        const plan = await buildSweepPlan({ hostId: HOST.hostId, candidates: [model] }, deps);
+
+        expect(plan.candidates[0]).toMatchObject({
+            model,
+            readiness: 'not_on_host',
+            onHost: { exact: false }
+        });
+        expect(plan.payloads.benchmark).toBeNull();
+    });
+
+    it('does not benchmark quick evidence that is not benchmark-qualified', async () => {
+        const model = 'qwen2.5:7b-instruct-q5_K_M';
+        const evidence = readyEvidence(model);
+        evidence.profile.readiness[HOST.hostId].profileDepth = 'quick';
+        evidence.profile.readiness[HOST.hostId].benchmarkQualified = false;
         const deps = makeDeps({
-            inventory: ['huge:30b', 'ax/huge:30b'],
-            host: { vramMb: null, gpu: { vramTotalMiB: 12000 } },
-            profileByName: {
-                'huge:30b': { readiness: { secondary: { stage: 'adapted', stale: false } } }
-            },
-            adaptationByName: {
-                'huge:30b': {
-                    deployment: { status: 'deployed' },
-                    profile: { vramUsedMiB: 18000 }
-                }
-            }
+            inventory: [model],
+            profileByName: { [model]: evidence.profile },
+            performanceByName: { [model]: evidence.performance },
+            contextByName: { [model]: evidence.context }
         });
 
-        const plan = await buildSweepPlan({
-            hostId: 'secondary',
-            candidates: ['huge:30b'],
-            maxVramFraction: 1
-        }, deps);
+        const plan = await buildSweepPlan({ hostId: HOST.hostId, candidates: [model] }, deps);
+        expect(plan.summary.needsProfile).toBe(1);
+        expect(plan.payloads.benchmark).toBeNull();
+    });
 
-        expect(plan.summary.droppedVram).toBe(1);
+    it('blocks an installed artifact when registry identity cannot be resolved', async () => {
+        const model = 'owner/model:8b-q4';
+        const deps = makeDeps({
+            inventory: [model],
+            identityErrorByName: { [model]: 'registry digest mismatch' }
+        });
+
+        const plan = await buildSweepPlan({ hostId: HOST.hostId, candidates: [model] }, deps);
+        expect(plan.candidates[0]).toMatchObject({
+            readiness: 'identity_unqualified',
+            reason: 'registry digest mismatch'
+        });
+        expect(plan.summary.identityUnqualified).toBe(1);
+    });
+
+    it('drops candidates whose measured VRAM exceeds the host limit', async () => {
+        const model = 'huge:30b';
+        const evidence = readyEvidence(model, { vramUsedMiB: 18000 });
+        const deps = makeDeps({
+            inventory: [model],
+            host: { vramMb: null, gpu: { vramTotalMiB: 12000 } },
+            profileByName: { [model]: evidence.profile },
+            performanceByName: { [model]: evidence.performance },
+            contextByName: { [model]: evidence.context }
+        });
+
+        const plan = await buildSweepPlan({ hostId: HOST.hostId, candidates: [model] }, deps);
         expect(plan.candidates[0]).toMatchObject({
             filterStatus: 'dropped',
             readiness: 'filtered_vram',
             vramUsedMiB: 18000,
             vramLimitMiB: 12000
         });
-        expect(plan.payloads.benchmark).toBeNull();
     });
 
-    it('plans profiling for raw models present on host without readiness evidence', async () => {
-        const deps = makeDeps({
-            inventory: ['qwen2.5:7b-instruct-q5_K_M']
-        });
+    it('estimates active-parameter and named-quant fit from the exact model tag', () => {
+        const active = _internal.estimateCandidateFit({ model: 'gemma4:e4b' }, 12288);
+        expect(active).toMatchObject({ paramBillions: 4 });
+        expect(active.bestFittingQuant).toBeTruthy();
 
-        const plan = await buildSweepPlan({
-            hostId: 'secondary',
-            candidates: ['qwen2.5:7b-instruct-q5_K_M'],
-            profileDepth: 'quick'
-        }, deps);
-
-        expect(plan.summary).toMatchObject({
-            needsProfile: 1,
-            benchmarkReadyModels: 0
-        });
-        expect(plan.candidates[0].actions).toEqual([
-            { type: 'profile', model: 'qwen2.5:7b-instruct-q5_K_M' }
-        ]);
-        expect(plan.payloads.profileQueue).toMatchObject({
-            hostId: 'secondary',
-            depth: 'quick',
-            skipRecentDays: 0,
-            includeAdapted: true,
-            modelNames: ['qwen2.5:7b-instruct-q5_K_M']
-        });
-        expect(plan.payloads.benchmark).toBeNull();
-    });
-
-    it('blocks benchmark payloads when a profiled model still needs adaptation', async () => {
-        const deps = makeDeps({
-            inventory: ['qwen2.5:7b-instruct-q5_K_M'],
-            profileByName: {
-                'qwen2.5:7b-instruct-q5_K_M': {
-                    readiness: { secondary: { stage: 'profiled', stale: false } }
-                }
-            },
-            adaptationByName: {
-                'qwen2.5:7b-instruct-q5_K_M': {
-                    deployment: { status: 'pending' },
-                    profile: { vramUsedMiB: 6689 }
-                }
-            }
-        });
-
-        const plan = await buildSweepPlan({
-            hostId: 'secondary',
-            candidates: ['qwen2.5:7b-instruct-q5_K_M']
-        }, deps);
-
-        expect(plan.summary.needsAdaptation).toBe(1);
-        expect(plan.candidates[0]).toMatchObject({
-            readiness: 'needs_adaptation',
-            deployed: false
-        });
-        expect(plan.candidates[0].actions).toEqual([
-            {
-                type: 'adapt',
-                model: 'qwen2.5:7b-instruct-q5_K_M',
-                target: 'ax/qwen2.5:7b-instruct-q5_K_M'
-            }
-        ]);
-        expect(plan.payloads.profileQueue).toBeNull();
-        expect(plan.payloads.benchmark).toBeNull();
-    });
-
-    it('attaches an advisory analytical fit estimate to candidates (B2)', async () => {
-        const deps = makeDeps({
-            inventory: ['qwen2.5:7b-instruct-q5_K_M'],
-            host: { vramMb: null, gpu: { vramTotalMiB: 12288 } } // .120-like 12GB
-        });
-
-        const plan = await buildSweepPlan({
-            hostId: 'tertiary',
-            candidates: ['qwen2.5:7b-instruct-q5_K_M'],
-            execution_config: { num_ctx: 8192 },
-            maxVramFraction: 1
-        }, deps);
-
-        const est = plan.candidates[0].estimate;
-        expect(est).toMatchObject({ paramBillions: 7, namedQuant: 'Q5_K_M', fitsAsNamed: true });
-        expect(est.bestFittingQuant).toBeTruthy();
-        expect(plan.summary.analyticalUnlikelyFit).toBe(0);
-    });
-
-    it('flags a candidate that analytically cannot fit the host VRAM (B2 advisory, not a hard drop)', async () => {
-        const deps = makeDeps({
-            inventory: ['huge:70b-instruct-q8_0'],
-            host: { vramMb: null, gpu: { vramTotalMiB: 12288 } } // 70B Q8 cannot fit 12GB
-        });
-
-        const plan = await buildSweepPlan({
-            hostId: 'tertiary',
-            candidates: ['huge:70b-instruct-q8_0'],
-            execution_config: { num_ctx: 8192 },
-            maxVramFraction: 1
-        }, deps);
-
-        const c = plan.candidates[0];
-        expect(c.estimate.bestFittingQuant).toBeNull();
-        expect(c.estimate.note).toMatch(/unlikely to fit/);
-        expect(plan.summary.analyticalUnlikelyFit).toBe(1);
-        // Advisory only: with no empirical profile it is NOT hard-dropped.
-        expect(c.filterStatus).not.toBe('dropped');
-    });
-
-    it('estimates fit for an effective-param (eNb) model with no total-param tag', () => {
-        // gemma4:e4b has no parseable total-param count; the e4b tag → 4B.
-        const est = _internal.estimateCandidateFit(
-            { adaptedModel: 'ax/gemma4:e4b', rawModel: 'gemma4:e4b', inputModel: 'gemma4:e4b' },
-            12288,
-            8192
-        );
-        expect(est).not.toBeNull();
-        expect(est.paramBillions).toBe(4);
-        expect(est.bestFittingQuant).toBeTruthy();
-    });
-
-    it('estimateCandidateFit recommends a smaller quant when the named one overflows', () => {
-        // 12B Q8 (~13.5 GiB weights) won't fit 12GB, but a lower quant will.
-        const est = _internal.estimateCandidateFit(
-            { adaptedModel: 'ax/gemma4:12b-it-q8_0', rawModel: 'gemma4:12b-it-q8_0', inputModel: 'gemma4:12b-it-q8_0' },
-            12288,
-            8192
-        );
-        expect(est.namedQuant).toBe('Q8_0');
-        expect(est.fitsAsNamed).toBe(false);
-        expect(est.bestFittingQuant).toBeTruthy();
-        expect(est.note).toMatch(/won't fit|would/);
+        const quantized = _internal.estimateCandidateFit({ model: 'gemma4:12b-it-q8_0' }, 12288);
+        expect(quantized).toMatchObject({ namedQuant: 'Q8_0', fitsAsNamed: false });
+        expect(quantized.bestFittingQuant).toBeTruthy();
     });
 });

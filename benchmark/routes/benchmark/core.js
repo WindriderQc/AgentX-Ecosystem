@@ -292,14 +292,6 @@ router.post('/batch', async (req, res) => {
     if (models.length > 50) {
         return res.status(400).json({ status: 'error', error: 'Maximum 50 models allowed per batch' });
     }
-    const rawModels = models.filter(m => !String(m).startsWith('ax/'));
-    if (rawModels.length > 0) {
-        return res.status(400).json({
-            status: 'error',
-            error: `Benchmark only accepts adapted (ax/) models — production runtime uses adapted artifacts, so raw models produce non-actionable scores. Rejected: ${rawModels.join(', ')}. Profile + adapt these first, then benchmark the ax/ output.`,
-            rejected_models: rawModels
-        });
-    }
     if (levels.length > 5) {
         return res.status(400).json({ status: 'error', error: 'Maximum 5 levels allowed' });
     }

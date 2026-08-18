@@ -10,20 +10,10 @@
 const logger = require('../../../config/logger');
 const { getDedicationStatuses, resolveHostKey, restoreDedication } = require('../../clients/coreApiClient');
 const { benchmarkFetch: fetch } = require('./http');
-const { buildAdaptedName, parseAdaptedName } = require('../profiler/namingConvention');
 const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
-function baseModelName(modelName) {
-    const normalized = normalizeModelName(modelName);
-    return parseAdaptedName(normalized)?.baseName || normalized;
-}
-
 function modelsMatch(left, right) {
-    return baseModelName(left) === baseModelName(right);
-}
-
-function isEmbeddingModel(modelName) {
-    return /embed|embedding|nomic/i.test(String(modelName || ''));
+    return normalizeModelName(left) === normalizeModelName(right);
 }
 
 function getPinnedModelName(entry) {
@@ -127,14 +117,6 @@ async function releaseAllDedication(dedicationState, {
             const matchingRunningModels = runningModels.filter((runningModel) =>
                 modelsMatch(runningModel, pinnedModel)
             );
-            // Prefer the exact live artifact name. Synthesizing ax/<model> for
-            // every pin turns embedding models such as nomic-embed-text into a
-            // non-existent artifact and records a false unload failure.
-            if (matchingRunningModels.length === 0
-                && !normalizeModelName(pinnedModel).startsWith('ax/')
-                && !isEmbeddingModel(pinnedModel)) {
-                candidates.add(buildAdaptedName(baseModelName(pinnedModel)));
-            }
             for (const runningModel of matchingRunningModels) {
                 candidates.add(runningModel);
             }

@@ -5,22 +5,23 @@
  *
  * Scans benchmark-owned model state for stale or invalid evidence BEFORE it
  * breaks a sweep, and reports per host with suggested re-profile payloads.
- * Read-only / advisory: it never profiles, adapts, or mutates routing — it just
+ * Read-only / advisory: it never profiles or mutates routing — it just
  * surfaces what needs attention (matching the plan's "do not auto-run without
  * an execution flag").
  *
  * Reasons:
  *   context_profile_stale   ModelContextProfile.stale
  *   profile_readiness_stale ModelProfile.readiness[hostId].stale
- *   adaptation_stale        ModelAdaptation.staleness.stale
+ *   performance_profile_stale ModelPerformanceProfile.stale
  *   invalid_throughput      recorded tok/s is negative or non-finite
- *   missing_deployment      a routed model has no `deployed` adaptation on its host
+ *   missing_profile_evidence a routed model has no active exact-artifact profile on its host
  *
  * Pure: takes already-fetched record arrays (DI). The route adapter fetches.
  */
 
 const REPROFILE_REASONS = new Set([
-  'context_profile_stale', 'profile_readiness_stale', 'adaptation_stale', 'invalid_throughput'
+  'context_profile_stale', 'profile_readiness_stale', 'performance_profile_stale',
+  'invalid_throughput', 'missing_profile_evidence'
 ]);
 
 function num(v) {
@@ -28,7 +29,7 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 function normModel(name) {
-  return String(name || '').trim().toLowerCase().replace(/^ax\//, '').replace(/:latest$/, '');
+  return String(name || '').trim().toLowerCase().replace(/:latest$/, '');
 }
 
 /**
@@ -47,8 +48,8 @@ function throughputReason(tokensPerSec) {
  * @param {object} input
  * @param {Array}  [input.contextProfiles] - ModelContextProfile docs (lean)
  * @param {Array}  [input.profiles]        - ModelProfile docs (lean; readiness map/object)
- * @param {Array}  [input.adaptations]     - ModelAdaptation docs (lean)
- * @param {object} [input.routedModelsByHost] - { hostId: [model,...] } for missing-deployment checks
+ * @param {Array}  [input.performanceProfiles] - ModelPerformanceProfile docs (lean)
+ * @param {object} [input.routedModelsByHost] - { hostId: [model,...] } for missing-profile checks
  * @param {string} [input.hostFilter]      - restrict to one hostId or hostUrl
  * @returns {{ hosts: object, totals: object, suggestedProfileQueues: Array }}
  */
@@ -92,28 +93,29 @@ function analyzeStaleness(input = {}) {
     }
   }
 
-  // ── Adaptations: stale flag + throughput sanity ──
-  const deployed = new Set();
-  for (const a of input.adaptations || []) {
-    if (a.deployment?.status === 'deployed') deployed.add(`${a.hostId}::${normModel(a.modelName)}`);
-    if (!included(a.hostId, a.hostUrl)) continue;
-    const hostKey = a.hostId || a.hostUrl;
-    if (a.staleness?.stale) entryFor(hostKey, a.modelName).reasons.add('adaptation_stale');
-    const tps = a.profile?.tokensPerSec ?? a.latestEvidence?.tokensPerSec;
-    const tr = throughputReason(tps, a.modelName, a.hostUrl || a.hostId);
+  // ── Exact-artifact performance evidence: stale flag + throughput sanity ──
+  const activeProfiles = new Set();
+  for (const profile of input.performanceProfiles || []) {
+    if (profile.active && !profile.stale && profile.artifact?.registryQualified === true) {
+      activeProfiles.add(`${profile.hostId}::${normModel(profile.modelName)}`);
+    }
+    if (!included(profile.hostId, profile.artifact?.hostUrl)) continue;
+    const hostKey = profile.hostId || profile.artifact?.hostUrl;
+    if (profile.stale) entryFor(hostKey, profile.modelName).reasons.add('performance_profile_stale');
+    const tr = throughputReason(profile.profile?.tokensPerSec);
     if (tr) {
-      const e = entryFor(hostKey, a.modelName);
+      const e = entryFor(hostKey, profile.modelName);
       e.reasons.add('invalid_throughput');
       e.evidence.throughput = tr;
     }
   }
 
-  // ── Routed models with no deployed adaptation ──
+  // ── Routed models with no active exact-artifact performance evidence ──
   for (const [hostId, models] of Object.entries(input.routedModelsByHost || {})) {
     if (!included(hostId, null)) continue;
     for (const model of models) {
-      if (!deployed.has(`${hostId}::${normModel(model)}`)) {
-        entryFor(hostId, model).reasons.add('missing_deployment');
+      if (!activeProfiles.has(`${hostId}::${normModel(model)}`)) {
+        entryFor(hostId, model).reasons.add('missing_profile_evidence');
       }
     }
   }

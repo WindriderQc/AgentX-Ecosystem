@@ -11,8 +11,7 @@
   var STAGE_RANK = {
     available: 0,
     profiled: 1,
-    adapted: 2,
-    benchmarked: 3
+    benchmarked: 2
   };
 
   function normalizeStage(stage) {
@@ -28,23 +27,31 @@
   }
 
   function isProfiledReady(modelOrStage) {
-    return getStageRank(modelOrStage) >= STAGE_RANK.profiled;
+    if (modelOrStage && typeof modelOrStage === 'object') {
+      var readiness = modelOrStage.readiness || modelOrStage;
+      return ['standard', 'full'].indexOf(readiness.profileDepth) !== -1
+        && readiness.benchmarkQualified === true
+        && readiness.stale !== true;
+    }
+    return false;
   }
 
   function getReadinessMeta(model, requireProfiledModels) {
     var readiness = model && model.readiness ? model.readiness : {};
     var stage = normalizeStage(readiness.stage);
-    var ready = isProfiledReady(stage);
+    var ready = isProfiledReady(readiness);
     var blocked = !!requireProfiledModels && !ready;
     var label = '';
     var tip = '';
 
-    if (stage === 'benchmarked' || stage === 'adapted') {
-      label = stage === 'benchmarked' ? 'Benchmarked' : 'Adapted';
-      tip = 'Ready for chat and routing.';
+    if (stage === 'benchmarked') {
+      label = ready ? 'Benchmarked' : 'Benchmark evidence stale';
+      tip = ready ? 'Ready for chat and routing.' : 'Re-profile the exact installed artifact before use.';
     } else if (stage === 'profiled') {
-      label = 'Profiled';
-      tip = 'Usable, but adaptation is still pending.';
+      label = ready ? 'Profiled' : (readiness.stale ? 'Profile stale' : 'Quick profile only');
+      tip = ready
+        ? 'Current standard/full profile is bound to this installed artifact.'
+        : 'A current standard or full exact-artifact profile is required.';
     } else {
       label = blocked ? 'Not profiled - blocked' : 'Not profiled';
       tip = blocked
@@ -65,7 +72,7 @@
     var meta = getReadinessMeta(model, requireProfiledModels);
     var base = model.displayName || model.name || '';
     if (!base) return meta.label;
-    if (meta.stage === 'benchmarked' || meta.stage === 'adapted') return base;
+    if (meta.stage === 'benchmarked') return base;
     return base + ' - ' + meta.label;
   }
 

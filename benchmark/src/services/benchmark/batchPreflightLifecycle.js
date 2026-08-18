@@ -5,7 +5,6 @@ const profilerOrchestrator = require('../profiler/profilerOrchestrator');
 const { activeProfiles } = require('../profiler/activeProfileState');
 
 const PROFILE_ALLOWANCE_MS = 20 * 60 * 1000;
-const ADAPT_ALLOWANCE_MS = 2 * 60 * 1000;
 
 function executionModelsFromHostGroups(hostGroups) {
     return hostGroups.flatMap(([host, models]) => models.map(model => ({
@@ -20,36 +19,22 @@ async function checkBatchPreflight({ batchId, executionModels, setBatchPhase }) 
         logger.info('Profiler preflight skipped: checkpoint has no pending model blocks', { batchId });
         return null;
     }
-    if (process.env.BENCHMARK_ALLOW_UNPROFILED === 'true') {
-        logger.info('Profiler preflight skipped (BENCHMARK_ALLOW_UNPROFILED=true)');
-        return null;
-    }
-
     await setBatchPhase(
         'profiling',
         `Profiler preflight: validating profiles for ${executionModels.length} model(s)…`
     );
-    try {
-        const result = await profilerOrchestrator.preflight({ models: executionModels });
-        if (result.warnings.length) {
-            logger.warn('Profiler preflight warnings', { warnings: result.warnings });
-        }
-        return result;
-    } catch (error) {
-        logger.warn('Profiler preflight check failed — continuing with existing config', {
-            error: error.message
-        });
-        return null;
+    const result = await profilerOrchestrator.preflight({ models: executionModels });
+    if (result.warnings.length) {
+        logger.warn('Profiler preflight warnings', { warnings: result.warnings });
     }
+    return result;
 }
 
 function preflightCounts(preflightResult) {
     const profileCount = preflightResult?.profilesNeeded?.length || 0;
-    const adaptCount = preflightResult?.adaptsNeeded?.length || 0;
     return {
         profileCount,
-        adaptCount,
-        allowanceMs: profileCount * PROFILE_ALLOWANCE_MS + adaptCount * ADAPT_ALLOWANCE_MS
+        allowanceMs: profileCount * PROFILE_ALLOWANCE_MS
     };
 }
 
@@ -60,21 +45,19 @@ async function runBatchPreflight({
     setBatchPhase,
     recordBatchTimelineEvent
 }) {
-    const { profileCount, adaptCount } = preflightCounts(preflightResult);
-    if (!profileCount && !adaptCount) return;
+    const { profileCount } = preflightCounts(preflightResult);
+    if (!profileCount) return;
 
     await setBatchPhase(
         'profiling',
-        `Preflight: profiling ${profileCount} and adapting ${adaptCount} model(s)…`
+        `Preflight: profiling ${profileCount} exact artifact(s)…`
     );
-    logger.info('Profiler preflight: running auto-profile/adapt under batch claim', {
+    logger.info('Profiler preflight: recording exact-artifact evidence under batch claim', {
         batchId,
-        profilesNeeded: profileCount,
-        adaptsNeeded: adaptCount
+        profilesNeeded: profileCount
     });
     const preflightWork = [
-        ...preflightResult.profilesNeeded,
-        ...preflightResult.adaptsNeeded
+        ...preflightResult.profilesNeeded
     ];
     const trackerId = `preflight-${batchId}`;
     const tracker = {
@@ -108,10 +91,11 @@ async function runBatchPreflight({
     } catch (error) {
         tracker.status = 'failed';
         tracker.error = error.message;
-        logger.warn('Profiler preflight run failed — continuing with existing config', {
+        logger.error('Profiler preflight run failed; benchmark is blocked', {
             batchId,
             error: error.message
         });
+        throw error;
     } finally {
         activeProfiles.delete(trackerId);
     }

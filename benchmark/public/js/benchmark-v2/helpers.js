@@ -2,7 +2,7 @@
 // localStorage wrappers, HTML escaping, model name normalization
 
 // Bump BV2_SCHEMA_VERSION when changing the shape of any bv2_* stored value.
-export const BV2_SCHEMA_VERSION = '1';
+export const BV2_SCHEMA_VERSION = '2';
 const BV2_SCHEMA_KEY = 'bv2_schema_version';
 
 /**
@@ -32,16 +32,9 @@ export function loadObj(key)      { try { const r = localStorage.getItem(key); r
 export function loadSet(key)      { try { const r = localStorage.getItem(key); return r ? new Set(JSON.parse(r)) : null; } catch (_) { return null; } }
 export function loadArr(key)      { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : []; } catch (_) { return []; } }
 
-// Normalize a model name for COMPARISON / lookup keys — strips `:latest`,
-// then strips a leading single-segment namespace like `ax/` or `library/`.
-// Matches the semantics of core/src/helpers/modelNameNormalization.js so UI
-// lookups collide with stored records (which are keyed bare).
-// NEVER use this output for writes to Ollama or the DB.
+// Normalize only Ollama's implicit `:latest` alias. Namespaces are identity.
 export function normModel(n) {
     const trimmed = String(n || '').trim().replace(/:latest$/i, '');
-    if (!trimmed) return '';
-    const slash = trimmed.indexOf('/');
-    if (slash > 0 && slash < trimmed.length - 1) return trimmed.slice(slash + 1);
     return trimmed;
 }
 export function esc(s)            { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }

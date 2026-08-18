@@ -84,12 +84,19 @@ jest.mock('../../../src/services/modelContextResolver', () => ({
     normalizeModelName: jest.fn((name) => String(name || '').trim().replace(/:latest$/i, '')),
     modelNameCandidates: jest.fn((name) => {
         const normalized = String(name || '').trim().replace(/:latest$/i, '');
-        if (!normalized) return [];
-        const slashIdx = normalized.indexOf('/');
-        if (slashIdx <= 0 || slashIdx === normalized.length - 1) return [normalized];
-        const bare = normalized.slice(slashIdx + 1);
-        return bare === normalized ? [normalized] : [normalized, bare];
+        return normalized ? [normalized] : [];
     })
+}));
+
+jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
+    resolveArtifactIdentity: jest.fn(async (model, hostId, hostUrl) => ({
+        model,
+        hostId,
+        hostUrl,
+        digest: 'sha256:exact',
+        runtimeFingerprint: 'runtime-a',
+        registryQualified: true
+    }))
 }));
 
 const mockTestModelOnHost = jest.fn();
@@ -134,9 +141,9 @@ jest.mock('../../../models/BenchmarkResult', () => ({
     countDocuments: (...args) => mockCountDocuments(...args)
 }));
 
-const mockFindOneAdaptation = jest.fn();
-jest.mock('../../../models/ModelAdaptation', () => ({
-    findOne: (...args) => mockFindOneAdaptation(...args)
+const mockFindOnePerformanceProfile = jest.fn();
+jest.mock('../../../models/ModelPerformanceProfile', () => ({
+    findOne: (...args) => mockFindOnePerformanceProfile(...args)
 }));
 
 const mockFindById = jest.fn();
@@ -230,7 +237,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             judgeHost: hostUrl,
             resolution: 'default'
         }));
-        mockFindOneAdaptation.mockReturnValue({
+        mockFindOnePerformanceProfile.mockReturnValue({
             select: jest.fn().mockReturnValue({
                 lean: jest.fn().mockResolvedValue(null)
             })
@@ -450,19 +457,20 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         );
     });
 
-    it('reuses profiler adaptation baseline instead of running host test again', async () => {
+    it('reuses exact-artifact profile baseline instead of running host test again', async () => {
         mockDrain.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
-        mockFindOneAdaptation.mockReturnValue({
+        mockFindOnePerformanceProfile.mockReturnValue({
             select: jest.fn().mockReturnValue({
                 lean: jest.fn().mockResolvedValue({
+                    artifact: { registryQualified: true },
                     profile: {
                         tokensPerSec: 123.4,
                         promptEvalTokensPerSec: 456.7,
                         ttftMs: 321,
                         vramUsedMiB: 8192,
-                        profiledAt: new Date()
-                    },
-                    config: { num_ctx: 4096 }
+                        profiledAt: new Date(),
+                        recommendedConfig: { num_ctx: 4096 }
+                    }
                 })
             })
         });
@@ -497,7 +505,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             'model-a',
             'http://exec:11434',
             expect.objectContaining({
-                source: 'profiler_adaptation',
+                source: 'exact_artifact_profile',
                 tokensPerSec: 123.4,
                 numCtx: 4096
             })

@@ -9,6 +9,8 @@ const ModelProfile = require('../../models/ModelProfile');
 const ModelContextProbeSnapshot = require('../../models/ModelContextProbeSnapshot');
 const ollamaVramService = require('./ollamaVramService');
 const modelContextProfileService = require('./modelContextProfileService');
+const hostProfileService = require('./profiler/hostProfileService');
+const { identitiesMatch, resolveArtifactIdentity } = require('./profiler/artifactIdentityService');
 const { showModel, generate, listRunning } = require('../clients/ollamaClient');
 const { generateFillPrompt } = require('./contextProbePayload');
 const { isSameOllamaModel } = require('../helpers/ollamaModelIdentity');
@@ -329,11 +331,21 @@ async function probeModelContext(modelName, options = {}) {
   const probeNotify = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   const normalizedModel = normalizeModelName(modelName);
   const hostUrl = await resolveHostUrl(normalizedModel, options.hostUrl);
+  const hostProfile = options.artifactIdentity ? null : await hostProfileService.getByUrl(hostUrl);
+  const artifactIdentity = options.artifactIdentity || await resolveArtifactIdentity(
+    normalizedModel,
+    hostProfile?.hostId,
+    hostUrl,
+    { refresh: true }
+  );
   const probeStart = Date.now();
   const steps = [];
 
   try {
-    const seedResolution = await resolveModelNumCtxDetails(normalizedModel, { targetHost: hostUrl });
+    const seedResolution = await resolveModelNumCtxDetails(normalizedModel, {
+      targetHost: hostUrl,
+      artifactIdentity
+    });
     const metadata = await fetchModelMetadata(hostUrl, normalizedModel);
     const theoreticalMax = metadata.theoreticalMax;
     const modelContext = { modelName: normalizedModel, hostUrl, ...metadata };
@@ -417,9 +429,22 @@ async function probeModelContext(modelName, options = {}) {
       throw new Error(`Invalid throughput at num_ctx=${invalidStep.numCtx}: ${detail || `${invalidStep.tokensPerSec} tok/s invalid`}`);
     }
 
+    const currentArtifact = await resolveArtifactIdentity(
+      normalizedModel,
+      hostProfile?.hostId || artifactIdentity.hostId,
+      hostUrl,
+      { refresh: true }
+    );
+    if (!identitiesMatch(artifactIdentity, currentArtifact)) {
+      throw new Error(`Artifact or runtime changed during context probe for ${normalizedModel} on ${hostUrl}`);
+    }
+
     const snapshot = await ModelContextProbeSnapshot.create({
       modelName: normalizedModel,
       hostUrl,
+      hostId: currentArtifact.hostId,
+      artifactDigest: currentArtifact.digest,
+      runtimeFingerprint: currentArtifact.runtimeFingerprint,
       testedNumCtx,
       baselineTokensPerSec: baselineSpeed,
       atLimitTokensPerSec: bestStep.tokensPerSec,
@@ -461,6 +486,9 @@ async function probeModelContext(modelName, options = {}) {
     const snapshot = await ModelContextProbeSnapshot.create({
       modelName: normalizedModel,
       hostUrl,
+      hostId: artifactIdentity.hostId,
+      artifactDigest: artifactIdentity?.digest || null,
+      runtimeFingerprint: artifactIdentity?.runtimeFingerprint || null,
       testedNumCtx: null,
       testedAt: new Date(),
       testDurationMs: Date.now() - probeStart,

@@ -49,9 +49,8 @@ jest.mock('../../src/services/modelRouterConfig', () => ({
 
 jest.mock('../../src/services/modelReadinessService', () => ({
   getModelReadiness: jest.fn(async () => ({
-    readiness: { stage: 'available' }
-  })),
-  isReadyStage: jest.fn((stage) => ['profiled', 'adapted', 'benchmarked'].includes(stage))
+    readiness: { stage: 'available', benchmarkQualified: false, stale: false, isReady: false }
+  }))
 }));
 
 jest.mock('../../src/services/hostPreferenceService', () => ({
@@ -408,7 +407,7 @@ describe('POST /api/inference/generate', () => {
 
     expect(response.body.status).toBe('error');
     expect(response.body.message).toContain('not profiled');
-    // Only the /api/show adapted-model check should have fired; no /api/generate call
+    // The readiness gate must stop before any inference call.
     expect(fetch).not.toHaveBeenCalledWith(
       expect.stringContaining('/api/generate'),
       expect.any(Object)

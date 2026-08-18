@@ -65,22 +65,20 @@ export const getModel = (name) => fetchJson(`${BASE}/models/${encodeURIComponent
 export const getModelConfig = (name, hostId) => fetchJson(`${BASE}/models/${encodeURIComponent(name)}/config?host=${hostId}`);
 export const upsertModel = (name, data) => fetchJson(`${BASE}/models/${encodeURIComponent(name)}`, { method: 'PUT', body: data });
 
-// Adaptations
-export const getAdaptedRoster = (filter = {}) => {
+// Exact-artifact performance evidence
+export const getProfileEvidenceRoster = (filter = {}) => {
   const params = new URLSearchParams(filter);
-  return fetchJson(`${BASE}/adapt/roster?${params}`);
+  return fetchJson(`${BASE}/evidence/roster?${params}`);
 };
-export const getAdaptation = (modelName, hostId) => fetchJson(`${BASE}/adapt/${encodeURIComponent(modelName)}/${hostId}`);
-export const deployAdaptation = (modelName, hostId) => fetchJson(`${BASE}/adapt/${encodeURIComponent(modelName)}/${hostId}/deploy`, { method: 'POST' });
+export const getProfileEvidence = (modelName, hostId) => fetchJson(`${BASE}/evidence/${encodeURIComponent(modelName)}/${hostId}`);
 
 // Pipeline
 export const profileModel = (modelName, hostId, depth) => fetchJson(`${BASE}/pipeline/profile`, { method: 'POST', body: { modelName, hostId, depth } });
 export const getProfileProgress = (profileId) => fetchJson(`${BASE}/pipeline/profile/${encodeURIComponent(profileId)}/progress`);
 export const getActiveProfiles = () => fetchJson(`${BASE}/pipeline/profile/active`);
-export const adaptModel = (modelName, hostId, deploy) => fetchJson(`${BASE}/pipeline/adapt`, { method: 'POST', body: { modelName, hostId, deploy } });
 export const runFullPipeline = (modelName) => fetchJson(`${BASE}/pipeline/full`, { method: 'POST', body: { modelName } });
-export const startHostProfileQueue = ({ hostId, depth, skipRecentDays, modelNames, includeAdapted } = {}) =>
-  fetchJson(`${BASE}/pipeline/profile-host`, { method: 'POST', body: { hostId, depth, skipRecentDays, modelNames, includeAdapted } });
+export const startHostProfileQueue = ({ hostId, depth, skipRecentDays, modelNames } = {}) =>
+  fetchJson(`${BASE}/pipeline/profile-host`, { method: 'POST', body: { hostId, depth, skipRecentDays, modelNames } });
 export const getHostProfileQueueProgress = (queueId) =>
   fetchJson(`${BASE}/pipeline/profile-host/${encodeURIComponent(queueId)}/progress`);
 export const cancelHostProfileQueue = (queueId) =>
@@ -92,19 +90,3 @@ export const runPreflight = (config) => fetchJson(`${BASE}/pipeline/preflight`, 
 // Settings
 export const getSettings = () => fetchJson(`${BASE}/settings`);
 export const saveSettings = (data) => fetchJson(`${BASE}/settings`, { method: 'PUT', body: data });
-
-// Enhanced adapt endpoints
-export const validateModelfile = (modelName, hostId, content) =>
-  fetchJson(`${BASE}/adapt/${encodeURIComponent(modelName)}/${hostId}/validate`, {
-    method: 'POST', body: { content }
-  });
-export const removeDeployment = (modelName, hostId) =>
-  fetchJson(`${BASE}/adapt/${encodeURIComponent(modelName)}/${hostId}/deploy`, { method: 'DELETE' });
-export const getDeploymentHistory = (modelName, hostId) =>
-  fetchJson(`${BASE}/adapt/${encodeURIComponent(modelName)}/${hostId}/history`);
-export const exportModelfileUrl = (modelName, hostId) =>
-  `${BASE}/adapt/${encodeURIComponent(modelName)}/${hostId}/export`;
-
-// Lineage
-export const getModelLineage = (name) => fetchJson(`${BASE}/models/${encodeURIComponent(name)}/lineage`);
-export const getModelRoots = () => fetchJson(`${BASE}/models/roots`);

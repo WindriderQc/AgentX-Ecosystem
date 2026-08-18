@@ -13,7 +13,7 @@ const DEFAULT_EXECUTION_CONFIG = {
     // explicit value for a controlled context experiment.
     num_ctx: null,
     // Fairness override: when set, every host runs at this num_ctx regardless of
-    // the per-host model adaptation. Null = honor per-host profile (legacy).
+    // the frozen per-host execution contract. Null = use measured profile evidence.
     // Set this to make host-vs-host comparisons apples-to-apples.
     force_num_ctx: null,
     // Controlled benchmarks pin sampling for repeatability. Production-lane

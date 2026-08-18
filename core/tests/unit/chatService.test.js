@@ -98,7 +98,7 @@ describe('chatService', () => {
     beforeEach(async () => {
         jest.clearAllMocks();
 
-        // Setup successful fetch mock — return 404 for /api/show (adapted model check), ok for everything else
+        // Setup a successful exact-model inference response.
         mockFetch.mockImplementation((url) => {
             if (typeof url === 'string' && url.includes('/api/show')) {
                 return Promise.resolve({ ok: false, status: 404 });

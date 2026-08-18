@@ -615,10 +615,11 @@ describe('AlertService', () => {
         latencyMs: 250
       });
 
-      expect(count).toBe(3);
+      expect(count).toBe(2);
       const resolved = await Alert.find({ status: 'resolved' });
-      expect(resolved).toHaveLength(3);
+      expect(resolved).toHaveLength(2);
       expect(resolved.every(alert => alert.resolution.resolutionMethod === 'auto-recovery')).toBe(true);
+      expect(await Alert.countDocuments({ fingerprint: 'recover-host', status: 'active' })).toBe(1);
       expect(await Alert.countDocuments({ fingerprint: 'other-host', status: 'active' })).toBe(1);
     });
 

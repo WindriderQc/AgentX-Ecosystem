@@ -11,9 +11,7 @@
 import { openProfileHostDialog } from './components/profile-host-dialog.js';
 import { showToast } from '../components/toast.js';
 import {
-  isAdaptedModelName,
   getReadinessForHost,
-  escAttr,
   applyFilters,
 } from './models-helpers.js';
 import {
@@ -270,73 +268,6 @@ function wireCardActions(container, api, state) {
     });
   });
 
-  // Adapt — with config summary on success
-  container.querySelectorAll('.mp-btn-adapt').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const modelName = btn.dataset.model;
-      const hostId = getHostId();
-      if (!modelName) return;
-      if (!hostId) {
-        _showFeedback(container, modelName, '<span class="mp-fb mp-fb--err">Select a host first</span>');
-        return;
-      }
-      btn.disabled = true;
-      btn.textContent = 'Adapting…';
-      _showFeedback(container, modelName,
-        `<span class="mp-fb mp-fb--active">Adapting for ${hostId}… generating optimized config.</span>`);
-      try {
-        const result = await api.adaptModel(modelName, hostId, false);
-        const adapt = result || {};
-        const cfg = adapt.config || {};
-        const configItems = [
-          cfg.num_ctx ? `num_ctx: ${cfg.num_ctx}` : null,
-          cfg.num_gpu != null ? `num_gpu: ${cfg.num_gpu}` : null,
-          cfg.num_batch ? `num_batch: ${cfg.num_batch}` : null,
-          cfg.num_thread ? `num_thread: ${cfg.num_thread}` : null,
-          cfg.num_predict ? `num_predict: ${cfg.num_predict}` : null,
-          adapt.adaptedName ? `name: ${adapt.adaptedName}` : null,
-        ].filter(Boolean);
-
-        const summaryHtml = `<div class="mp-adapt-summary">
-          <div class="mp-adapt-summary-title">✓ Adapted — optimized config ready</div>
-          ${configItems.length ? `<div class="mp-adapt-summary-config">
-            ${configItems.map(c => `<span>${escAttr(c)}</span>`).join('')}
-          </div>` : ''}
-          <div class="mp-adapt-summary-actions">
-            <button class="mp-action mp-action--teal mp-adapt-view-deploy" data-model="${escAttr(modelName)}" data-host="${escAttr(hostId)}">View in Deploy</button>
-            <button class="mp-action mp-action--orange mp-adapt-deploy-now" data-model="${escAttr(modelName)}" data-host="${escAttr(hostId)}">Deploy Now</button>
-          </div>
-        </div>`;
-        _showFeedback(container, modelName, summaryHtml);
-        btn.textContent = 'Adapted ✓';
-
-        // Wire the summary action buttons
-        container.querySelector('.mp-adapt-view-deploy')?.addEventListener('click', () => {
-          state._deploySelected = { modelName, hostId };
-          window.dispatchEvent(new CustomEvent('mp:open-deploy', { detail: { modelName, hostId } }));
-        });
-        container.querySelector('.mp-adapt-deploy-now')?.addEventListener('click', async (e) => {
-          const deployBtn = e.target;
-          deployBtn.disabled = true;
-          deployBtn.textContent = 'Deploying…';
-          try {
-            await api.deployAdaptation(modelName, hostId);
-            deployBtn.textContent = 'Deployed ✓';
-            window.dispatchEvent(new CustomEvent('mp:models-updated'));
-          } catch (dErr) {
-            deployBtn.textContent = 'Deploy Failed';
-            setTimeout(() => { deployBtn.textContent = 'Deploy Now'; deployBtn.disabled = false; }, 3000);
-          }
-        });
-
-        window.dispatchEvent(new CustomEvent('mp:models-updated'));
-      } catch (err) {
-        _showFeedback(container, modelName, `<span class="mp-fb mp-fb--err">✗ Adapt failed: ${err.message}</span>`);
-        btn.textContent = 'Adapt';
-        btn.disabled = false;
-      }
-    });
-  });
 }
 
 function wireSettings(container, api) {
@@ -425,14 +356,13 @@ export async function renderModels(container, state, api) {
     if (selectedHostId) {
       const statusRes = await api.getHostStatus(selectedHostId).catch(() => null);
       hostModels = (statusRes?.models || [])
-        .map(n => n.replace(/:latest$/i, ''))
-        .filter(n => !isAdaptedModelName(n));
+        .map(n => n.replace(/:latest$/i, ''));
     }
 
-    // Get profiler model profiles for readiness + adaptation roster for perf data
+    // Get readiness plus exact-artifact performance evidence.
     const [profileRes, rosterRes] = await Promise.all([
       api.getModels(),
-      api.getAdaptedRoster({}).catch(() => []),
+      api.getProfileEvidenceRoster({ hostId: selectedHostId }).catch(() => []),
     ]);
     const allProfiles = Array.isArray(profileRes) ? profileRes : (profileRes?.models || profileRes?.data?.models || profileRes?.data || []);
     const profileMap = new Map((allProfiles || []).map(m => [m.name, m]));
@@ -440,9 +370,9 @@ export async function renderModels(container, state, api) {
     const hostRoster = selectedHostId
       ? roster.filter(a => a.hostId === selectedHostId)
       : roster;
-    const adaptMap = new Map(hostRoster.map(a => [a.modelName, a]));
+    const evidenceMap = new Map(hostRoster.map(a => [a.modelName, a]));
 
-    // Build model list: host models enriched with profile + adaptation data
+    // Build model list: host models enriched with exact-artifact profile evidence.
     if (hostModels.length) {
       models = hostModels.map(name => {
         const storedProfile = profileMap.get(name) || {};
@@ -450,21 +380,21 @@ export async function renderModels(container, state, api) {
           ...storedProfile,
           readiness: getReadinessForHost(storedProfile.readiness, selectedHostId)
         };
-        const adapt = adaptMap.get(name);
-        if (adapt?.profile) profile.profile = { ...adapt.profile, _showHardwareDiagnostics: settings.showHardwareDiagnostics !== false };
-        if (adapt) profile._adaptation = adapt;
+        const evidence = evidenceMap.get(name);
+        if (evidence?.profile) profile.profile = { ...evidence.profile, _showHardwareDiagnostics: settings.showHardwareDiagnostics !== false };
+        if (evidence) profile._evidence = evidence;
         return { name, ...profile };
       });
     } else {
       // Fallback: show all registered models if no host selected
       models = (allProfiles || []).map(profile => {
-        const adapt = adaptMap.get(profile.name);
+        const evidence = evidenceMap.get(profile.name);
         const next = {
           ...profile,
           readiness: getReadinessForHost(profile.readiness, selectedHostId)
         };
-        if (adapt?.profile) next.profile = { ...adapt.profile, _showHardwareDiagnostics: settings.showHardwareDiagnostics !== false };
-        if (adapt) next._adaptation = adapt;
+        if (evidence?.profile) next.profile = { ...evidence.profile, _showHardwareDiagnostics: settings.showHardwareDiagnostics !== false };
+        if (evidence) next._evidence = evidence;
         return next;
       });
     }

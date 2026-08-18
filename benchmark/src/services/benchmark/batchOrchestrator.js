@@ -824,7 +824,7 @@ async function runBatchOrchestrator({
     // in flight. Core still caps the stored estimate at 2h.
     // Preflight auto-profiling now runs under this claim (see stage 2 below),
     // so its duration must be part of the estimate: a standard profile is
-    // ~20 min, an adapt/deploy ~2 min. Core still caps the stored estimate.
+    // ~20 min, plus short orchestration overhead. Core still caps the stored estimate.
     const claimEstimateMs = estimateBenchmarkClaimDurationMs({
         hostCount: hostUrls.length,
         modelCount: executionModels.length,

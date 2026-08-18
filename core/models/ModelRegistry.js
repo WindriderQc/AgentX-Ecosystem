@@ -294,6 +294,20 @@ const ModelRegistrySchema = new mongoose.Schema({
   },
   sourceHost: { type: String, default: null },
   ollamaDigest: { type: String, default: null },
+  installations: {
+    type: [{
+      hostUrl: { type: String, required: true },
+      digest: { type: String, required: true },
+      lastSeenAt: { type: Date, default: Date.now },
+      modelSizeBytes: { type: Number, default: null },
+      parameterSize: { type: String, default: null },
+      quantization: { type: String, default: null },
+      family: { type: String, default: null },
+      status: { type: String, enum: ['active', 'retired'], default: 'active' },
+      isActive: { type: Boolean, default: true }
+    }],
+    default: []
+  },
   lastSeenAt: { type: Date, default: null },
   modelSizeBytes: { type: Number, default: null },
   parameterSize: { type: String, default: null },
@@ -379,6 +393,7 @@ ModelRegistrySchema.index({ vendor: 1, categories: 1 });
 ModelRegistrySchema.index({ 'capabilities.maxContext': 1 });
 ModelRegistrySchema.index({ 'benchmarkStats.avgCompositeScore': -1 });
 ModelRegistrySchema.index({ sourceType: 1, isActive: 1 });
+ModelRegistrySchema.index({ modelName: 1, 'installations.hostUrl': 1 });
 
 // Virtual for full capability description
 ModelRegistrySchema.virtual('fullDescription').get(function() {

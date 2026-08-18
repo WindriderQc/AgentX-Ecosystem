@@ -548,7 +548,6 @@ function renderTableRow(result) {
             ? (() => {
                 const BADGE_CFG = {
                     profiled:    { label: '✓ Profiled',    bg: '#1a3a5c', color: '#4ecdc4' },
-                    adapted:     { label: '⚡ Adapted',    bg: '#3a2a1a', color: '#f39c12' },
                     benchmarked: { label: '★ Benchmarked', bg: '#1a3a2a', color: '#2ecc71' }
                 };
                 const info = _readinessMap[result.model];

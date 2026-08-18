@@ -3,8 +3,8 @@
  *
  * 0524 extracts this handler into a reusable executor "without contract change"
  * and then migrates callers one canary at a time. That requirement is only
- * checkable against an oracle, and the existing suites pin adaptation
- * (inferenceUseAdapted), timeouts (inferenceTimeout) and the host allowlist —
+ * checkable against an oracle, and the existing suites pin exact-artifact
+ * routing, timeouts (inferenceTimeout), and the host allowlist —
  * not the invariants the card actually names: claims, host gate, cancellation,
  * and exactly-once telemetry.
  *
@@ -50,8 +50,9 @@ jest.mock('../../src/services/modelRouterConfig', () => ({
 }));
 
 jest.mock('../../src/services/modelReadinessService', () => ({
-  getModelReadiness: jest.fn(async () => ({ readiness: { stage: 'available' } })),
-  isReadyStage: jest.fn((stage) => ['profiled', 'adapted', 'benchmarked'].includes(stage)),
+  getModelReadiness: jest.fn(async () => ({
+    readiness: { stage: 'available', benchmarkQualified: false, stale: false, isReady: false }
+  })),
 }));
 
 jest.mock('../../src/services/hostPreferenceService', () => ({
@@ -72,7 +73,7 @@ const hostGate = require('../../src/services/hostGate');
 const { recordInference } = require('../../src/services/modelRouter');
 const apiRoutes = require('../../routes/api');
 
-/** Ollama answers normally; /api/show 404s so no adapted variant is used. */
+/** Ollama answers normally for the exact requested model. */
 function mockOllamaOk(capture = {}) {
   fetch.mockImplementation((url, opts) => {
     if (typeof url === 'string' && url.includes('/api/show')) {

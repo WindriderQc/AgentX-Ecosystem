@@ -11,11 +11,11 @@
  *   - recommendations (best fit + best benchmarked) and overall capacity
  *
  * This file is the IO/orchestration layer: it pulls HostProfile, live telemetry,
- * the installed model list, ModelAdaptation profiles, and ModelProfile metadata,
+ * the installed model list, exact-artifact profiles, and ModelProfile metadata,
  * then composes the pure functions in ./fitEstimator into a report.
  */
 
-const ModelAdaptation = require('../../../models/ModelAdaptation');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const ModelProfile = require('../../../models/ModelProfile');
 const hostProfileService = require('./hostProfileService');
 const liveProbeService = require('./liveProbeService');
@@ -54,17 +54,17 @@ async function buildHostFitReport(hostId) {
   const { vramTotalMiB, source: vramSource } = est.resolveHostVram(host, telemetry);
 
   // Measured profiles for this host, keyed by normalized model name.
-  const adaptations = await ModelAdaptation.find({ hostId }).lean();
+  const evidenceRecords = await ModelPerformanceProfile.find({ hostId, active: true, stale: { $ne: true } }).lean();
   const profileByModel = new Map();
-  for (const a of adaptations) {
-    if (a?.profile) profileByModel.set(normalizeModelName(a.modelName), a);
+  for (const evidence of evidenceRecords) {
+    if (evidence?.profile) profileByModel.set(normalizeModelName(evidence.modelName), evidence);
   }
 
   // Registry metadata (params/quant/family/benchmark scores) for installed models.
   const installedNorm = [...new Set(installedModels.map(normalizeModelName))];
   const registry = installedNorm.length
     ? await ModelProfile.find({ name: { $in: installedNorm } })
-      .select('name parameters quantization family benchmarkStats categories').lean()
+      .select('name parameters quantization family benchmarkStats categories readiness').lean()
     : [];
   const metaByModel = new Map(registry.map(r => [normalizeModelName(r.name), r]));
 
@@ -76,8 +76,19 @@ async function buildHostFitReport(hostId) {
     const meta = metaByModel.get(norm) || {};
     const paramB = parseParameterCount(meta.parameters) || parseParameterCount(name);
     const quant = parseQuantization(meta.quantization) || parseQuantization(name);
-    const adapt = profileByModel.get(norm);
-    const p = adapt?.profile;
+    const evidence = profileByModel.get(norm);
+    const readiness = meta?.readiness instanceof Map
+      ? meta.readiness.get(hostId)
+      : meta?.readiness?.[hostId];
+    const artifactMatches = Boolean(
+      evidence?.artifact
+      && readiness?.artifact
+      && evidence.artifact.digest === readiness.artifact.digest
+      && evidence.artifact.runtimeFingerprint === readiness.artifact.runtimeFingerprint
+      && evidence.artifact.registryQualified === true
+      && readiness.stale !== true
+    );
+    const p = artifactMatches ? evidence.profile : null;
     const bench = meta.benchmarkStats || {};
 
     if (p) {
@@ -108,8 +119,7 @@ async function buildHostFitReport(hostId) {
         vramPct,
         coldLoadMs: est.round(p.loadTiming?.coldLoadMs),
         hotLoadMs: est.round(p.loadTiming?.hotLoadMs),
-        deploymentStatus: adapt.deployment?.status || null,
-        adaptedName: adapt.adaptedName || null,
+        artifact: evidence.artifact,
         profiledAt: p.profiledAt || null,
         score: benchScore,
         bestCategory: bench.bestCategory || null,

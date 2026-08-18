@@ -1,11 +1,11 @@
 jest.mock('../../../models/ModelProfile');
-jest.mock('../../../models/ModelAdaptation');
+jest.mock('../../../models/ModelPerformanceProfile');
 jest.mock('../../../models/BenchmarkResult', () => ({
   distinct: jest.fn()
 }));
 
 const ModelProfile = require('../../../models/ModelProfile');
-const ModelAdaptation = require('../../../models/ModelAdaptation');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const svc = require('../../../src/services/profiler/modelProfileService');
 
@@ -110,12 +110,10 @@ describe('updateReadiness()', () => {
     expect(update.$set['readiness.host-a.profiledAt']).toBeInstanceOf(Date);
   });
 
-  it('sets stage + adaptedAt when stage is "adapted"', async () => {
-    ModelProfile.findOneAndUpdate.mockResolvedValue({});
-    await svc.updateReadiness('llama3.1:8b', 'host-b', 'adapted');
-    const [, update] = ModelProfile.findOneAndUpdate.mock.calls[0];
-    expect(update.$set['readiness.host-b.stage']).toBe('adapted');
-    expect(update.$set['readiness.host-b.adaptedAt']).toBeInstanceOf(Date);
+  it('rejects the retired "adapted" stage', async () => {
+    await expect(svc.updateReadiness('llama3.1:8b', 'host-gamma', 'adapted'))
+      .rejects.toThrow('Unsupported readiness stage');
+    expect(ModelProfile.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('sets stage + benchmarkedAt when stage is "benchmarked"', async () => {
@@ -186,24 +184,24 @@ describe('updateThinkingCapability()', () => {
 });
 
 describe('getStalenessReport()', () => {
-  it('queries ModelAdaptation for stale records', async () => {
-    const staleRecords = [{ modelName: 'old:model', staleness: { stale: true, reason: 'age' } }];
-    ModelAdaptation.find.mockReturnValue({ lean: jest.fn().mockResolvedValue(staleRecords) });
+  it('queries exact-artifact performance evidence for stale records', async () => {
+    const staleRecords = [{ modelName: 'old:model', stale: true, staleReason: 'age' }];
+    ModelPerformanceProfile.find.mockReturnValue({ lean: jest.fn().mockResolvedValue(staleRecords) });
 
     const result = await svc.getStalenessReport();
-    expect(ModelAdaptation.find).toHaveBeenCalledWith({ 'staleness.stale': true });
+    expect(ModelPerformanceProfile.find).toHaveBeenCalledWith({ stale: true });
     expect(result).toEqual(staleRecords);
   });
 
   it('returns empty array when nothing is stale', async () => {
-    ModelAdaptation.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
+    ModelPerformanceProfile.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
     const result = await svc.getStalenessReport();
     expect(result).toHaveLength(0);
   });
 });
 
 describe('getBenchmarkedModelNames()', () => {
-  it('returns distinct successful benchmark model names normalized to base names', async () => {
+  it('returns distinct successful benchmark model names without collapsing namespaces', async () => {
     BenchmarkResult.distinct.mockResolvedValue([
       'gemma3:12b',
       'gemma3:12b:latest',
@@ -215,6 +213,6 @@ describe('getBenchmarkedModelNames()', () => {
     const result = await svc.getBenchmarkedModelNames();
 
     expect(BenchmarkResult.distinct).toHaveBeenCalledWith('model', { success: true });
-    expect(result).toEqual(['gemma3:12b', 'phi4:14b']);
+    expect(result).toEqual(['ax/phi4:14b', 'gemma3:12b']);
   });
 });

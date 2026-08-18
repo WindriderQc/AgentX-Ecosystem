@@ -25,8 +25,9 @@ jest.mock('../../src/services/modelRouter', () => ({
 }));
 
 jest.mock('../../src/services/modelReadinessService', () => ({
-  getModelReadiness: jest.fn(async () => ({ readiness: { stage: 'available' } })),
-  isReadyStage: jest.fn((stage) => ['profiled', 'adapted', 'benchmarked'].includes(stage))
+  getModelReadiness: jest.fn(async () => ({
+    readiness: { stage: 'available', benchmarkQualified: false, stale: false, isReady: false }
+  }))
 }));
 
 jest.mock('../../src/services/buddyEvents', () => ({ emit: jest.fn() }));

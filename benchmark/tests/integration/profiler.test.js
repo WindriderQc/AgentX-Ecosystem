@@ -27,7 +27,6 @@ describe('Profiler Routes', () => {
             modelProfileService.getReadinessFunnel.mockResolvedValue({
                 available: 3,
                 profiled: 2,
-                adapted: 1,
                 benchmarked: 1
             });
             modelProfileService.getStalenessReport.mockResolvedValue([
@@ -45,7 +44,6 @@ describe('Profiler Routes', () => {
                 funnel: {
                     available: 3,
                     profiled: 2,
-                    adapted: 1,
                     benchmarked: 1
                 },
                 staleProfiles: [{ modelName: 'llama3.1:8b', hostId: 'host-a' }],
@@ -58,7 +56,6 @@ describe('Profiler Routes', () => {
             modelProfileService.getReadinessFunnel.mockResolvedValue({
                 available: 3,
                 profiled: 0,
-                adapted: 4,
                 benchmarked: 0
             });
             modelProfileService.getStalenessReport.mockResolvedValue([]);

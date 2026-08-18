@@ -1,7 +1,6 @@
 'use strict';
 
 const ModelProfile = require('../../../models/ModelProfile');
-const { isAdaptedModel } = require('./namingConvention');
 const logger = require('../../../config/logger');
 const { listModels } = require('../../clients/ollamaClient');
 
@@ -10,9 +9,7 @@ const SCAN_TIMEOUT_MS = 8000;
 async function scanHost(hostUrl) {
   try {
     const data = await listModels(hostUrl, { timeoutMs: SCAN_TIMEOUT_MS });
-    return (data.models || [])
-      .filter(m => !isAdaptedModel(m.name))
-      .map(m => ({
+    return (data.models || []).map(m => ({
         name: m.name,
         size: m.size || 0,
         parameters: m.details?.parameter_size || '',
