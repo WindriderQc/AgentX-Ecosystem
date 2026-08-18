@@ -60,6 +60,15 @@ describe('publicExposureGuard', () => {
     }));
   });
 
+  it('does not let X-Forwarded-Host hide a configured public host', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
+    await request(app)
+      .get('/api/nerve-center/status')
+      .set('Host', 'agentx.example.test')
+      .set('X-Forwarded-Host', '127.0.0.1:3080')
+      .expect(403);
+  });
+
   it('allows public-host API requests with a valid operator token', async () => {
     process.env.AGENTX_OPERATOR_TOKEN = 'operator-token';
     process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';

@@ -45,6 +45,41 @@ describe('operator UI access', () => {
     expect(operatorUiAccessAllowed(request({ host: '192.0.2.99:3080' }))).toBe(false);
   });
 
+  it('rejects a cross-site browser request even when the connection is loopback', () => {
+    delete process.env.AGENTX_OPERATOR_TOKEN;
+    const req = request({
+      origin: 'https://evil.example',
+      host: '127.0.0.1:3080',
+      'sec-fetch-site': 'cross-site',
+    }, { ip: '127.0.0.1' });
+
+    expect(operatorAccessAllowed(req)).toBe(false);
+    expect(operatorUiAccessAllowed(req)).toBe(false);
+  });
+
+  it('keeps headerless CLI and same-origin browser access on loopback', () => {
+    delete process.env.AGENTX_OPERATOR_TOKEN;
+    expect(operatorAccessAllowed(request({}, { ip: '127.0.0.1' }))).toBe(true);
+
+    const browserReq = request({
+      origin: 'http://127.0.0.1:3080',
+      host: '127.0.0.1:3080',
+      'sec-fetch-site': 'same-origin',
+    }, { ip: '127.0.0.1' });
+    expect(operatorAccessAllowed(browserReq)).toBe(true);
+  });
+
+  it('does not let forwarded host metadata forge same-origin access', () => {
+    const req = request({
+      origin: 'https://evil.example',
+      host: '127.0.0.1:3080',
+      'x-forwarded-host': 'evil.example',
+      'x-forwarded-proto': 'https',
+      'sec-fetch-site': 'same-origin',
+    });
+    expect(sameOriginUiAllowed(req)).toBe(false);
+  });
+
   it('retains the operator-token path for non-browser callers', () => {
     process.env.AGENTX_OPERATOR_TOKEN = 'test-operator-token';
     const req = request({

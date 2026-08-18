@@ -5,7 +5,6 @@
 
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
-const crypto = require('crypto');
 const logger = require('../../config/logger');
 const { resolveCallerPolicy } = require('../services/routing/callerPolicy');
 
@@ -26,14 +25,8 @@ function getGeneralApiKey(req) {
     return getClientKey(req);
   }
 
-  // API-key clients may share egress IPs; isolate by key prefix.
-  const apiKey = req.get('x-api-key');
-  if (apiKey) {
-    const digest = crypto.createHash('sha256').update(String(apiKey)).digest('hex').slice(0, 16);
-    return `api:${digest}`;
-  }
-
-  // Fallback for unauthenticated requests.
+  // x-api-key is forwarded for compatibility but is not authenticated by this
+  // middleware. Letting it select a bucket would allow unlimited key rotation.
   return ipKeyGenerator(req.ip);
 }
 
@@ -345,4 +338,5 @@ module.exports = {
   AUTOMATION_CONTROL_PREFIXES,
   isAutomationControlPath,
   isNestorConsumerPath,
+  getGeneralApiKey,
 };

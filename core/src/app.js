@@ -191,7 +191,7 @@ function requireNestorJsonEntity(req, res, next) {
 const chatJsonParser = express.json({ limit: '1mb' });
 app.use('/api/consumers/nestor/v1', requireNestorJsonEntity, chatJsonParser);
 
-// Parse memory-review bodies before the broad 50 MiB compatibility parser.
+// Parse memory-review bodies before the default product parser.
 // Mounting a tighter parser later does not help because Express would already
 // have consumed the body. This keeps the advertised 1 MiB boundary real for
 // content-length and chunked requests alike.
@@ -205,12 +205,27 @@ app.use(
   memoryReviewJsonParser
 );
 
-// Route-specific tighter limits are applied below via parsers.
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
 // Tighter JSON parsers for routes that should never receive large payloads.
 const standardJsonParser = express.json({ limit: '5mb' });
+
+// Enforce route-owned limits before the product default consumes the body.
+// Keeping all parsers above mongoSanitize preserves the existing parse-then-
+// sanitize ordering. The matching parsers inside route modules become harmless
+// no-ops because body-parser records that the body has already been consumed.
+const routeDefaultJsonParser = express.json();
+app.use('/api/chat', chatJsonParser);
+app.use('/api/buddy', chatJsonParser);
+app.use('/api/roundtable/telegram/webhook', express.json({ limit: '64kb' }));
+app.use('/api/roundtable/:id/interjections', express.json({ limit: '16kb' }));
+app.use('/api/roundtable/:id/decision', express.json({ limit: '16kb' }));
+app.use('/api/roundtable', routeDefaultJsonParser);
+app.use('/api/operations/backup/config', routeDefaultJsonParser);
+app.use('/api/voix/settings', routeDefaultJsonParser);
+
+// Every remaining JSON route uses the bounded product default. Multipart voice
+// uploads remain owned by Multer.
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 // Sanitize MongoDB queries (prevent NoSQL injection)
 app.use(mongoSanitize({
@@ -371,7 +386,7 @@ const reportsRoutes = require('../routes/reports');
 app.use('/api/reports', reportsRoutes);
 
 // Ecosystem Memory Review: approval-first cross-runtime memory candidates.
-// The 1 MiB parser is installed above the broad compatibility parser;
+// The 1 MiB parser is installed above the default product parser;
 // observation batches are additionally capped by policy and raw transcript
 // payloads are refused by the bounded review contract.
 const memoryReviewRoutes = require('../routes/memory-review');
@@ -957,7 +972,7 @@ app.use((err, req, res, _next) => {
   if (err.type === 'entity.too.large') {
     const message = isNestorContract
       ? 'Payload too large. The Nestor v1 request exceeds the 1 MiB transport limit.'
-      : 'Payload too large. The document exceeds the maximum allowed size (50MB).';
+      : 'Payload too large. The request exceeds the configured route limit.';
     return res.status(413).json({
       ok: false,
       status: 'error',

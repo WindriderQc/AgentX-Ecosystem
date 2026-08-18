@@ -30,14 +30,6 @@ function operatorTokenAllowed(req) {
   return tokensMatch(expectedOperatorToken(), presentedOperatorToken(req));
 }
 
-function operatorAccessAllowed(req, options = {}) {
-  const allowLoopback = options.allowLoopback !== false;
-  const ip = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '';
-  if (allowLoopback && isLoopbackAddress(ip)) return true;
-
-  return operatorTokenAllowed(req);
-}
-
 function sameOriginUiAllowed(req) {
   let origin = String(req.get?.('origin') || '').trim();
   const fetchSite = String(req.get?.('sec-fetch-site') || '').trim().toLowerCase();
@@ -50,10 +42,34 @@ function sameOriginUiAllowed(req) {
   // still has to pass the exact Origin/Referer-to-host comparison below.
   if (!origin || (fetchSite && fetchSite !== 'same-origin')) return false;
 
-  const forwardedProto = String(req.get?.('x-forwarded-proto') || '').split(',')[0].trim();
-  const protocol = forwardedProto || req.protocol || 'http';
-  const host = String(req.get?.('x-forwarded-host') || req.get?.('host') || '').split(',')[0].trim();
+  // Forwarded headers are meaningful only behind an explicitly trusted proxy.
+  // AgentX does not enable Express trust-proxy by default, so compare against
+  // the connection-derived protocol and the actual Host header here.
+  const protocol = req.protocol || 'http';
+  const host = String(req.get?.('host') || '').split(',')[0].trim();
   return !!host && origin === `${protocol}://${host}`;
+}
+
+function hasBrowserRequestSignals(req) {
+  return Boolean(
+    req.get?.('origin')
+    || req.get?.('referer')
+    || req.get?.('sec-fetch-site')
+    || req.get?.('sec-fetch-mode')
+  );
+}
+
+function operatorAccessAllowed(req, options = {}) {
+  if (operatorTokenAllowed(req)) return true;
+
+  const allowLoopback = options.allowLoopback !== false;
+  const ip = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '';
+  if (!allowLoopback || !isLoopbackAddress(ip)) return false;
+
+  // Headerless loopback clients (CLI, health tooling) retain the local product
+  // contract. Browser-shaped requests must also prove same-origin so a remote
+  // page cannot use the visitor's browser as a loopback operator.
+  return !hasBrowserRequestSignals(req) || sameOriginUiAllowed(req);
 }
 
 function operatorUiAccessAllowed(req) {
@@ -91,6 +107,7 @@ module.exports = {
   operatorTokenAllowed,
   operatorAccessAllowed,
   sameOriginUiAllowed,
+  hasBrowserRequestSignals,
   operatorUiAccessAllowed,
   operatorRequestIdentity,
   requireOperatorAccess,
