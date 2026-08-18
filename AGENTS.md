@@ -20,8 +20,11 @@ cached index. Historical and operational documents do not belong here.
 - Ollama is optional and user-selected; no model download is implicit.
 - OpenClaw, Hermès Agent, OctoPrint, and other environment-specific adapters
   live outside this repository and may consume bounded product APIs.
-- Do not add an embedded adapter implementation, adapter loader, operations
-  extension framework, or private runtime fallback to this product.
+- Do not embed private adapter implementations or environment-specific
+  behavior. Core may expose one minimal, disabled-by-default trusted-extension
+  loader for separately pinned absolute-path modules. The loader and injected
+  contracts are product-owned; extension source, secrets, mounts, and
+  deployment remain outside this repository.
 - Data/AIOps operations, personal mounts, secrets, and production addresses do
   not belong in the default runtime.
 - A private Data service may be called only through a separately operated,

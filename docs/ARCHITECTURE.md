@@ -30,9 +30,11 @@ prewarming. Empty integration variables are deliberate and must not fall back
 to a private or production address.
 
 Environment-specific automation and private adapters live outside this
-repository. They may consume bounded product APIs, but Agent X neither embeds
-their implementations nor loads external adapter modules. The repository does
-not define an operations extension framework.
+repository. They may consume bounded product APIs. In an explicit full-profile
+deployment, Core may also load a separately pinned absolute-path trusted
+extension through its disabled-by-default versioned seam. Agent X never embeds
+the private implementation, secret, mount, or deployment, and the seam is not
+an operations extension framework. See [Trusted extensions](TRUSTED_EXTENSIONS.md).
 
 A private Data service may independently expose a bounded, read-only API to
 agents. Data remains outside the product boundary: it is neither a product
@@ -54,6 +56,9 @@ service nor a skill owned or loaded by Agent X.
 - A service does not recreate another service's Mongoose schema to query its
   collections. Cross-service evidence moves through the owning service's API;
   unavailable evidence stays unavailable.
+- Trusted extensions use injected Core contracts for Core-owned data. In
+  particular, transcript reads and lifecycle mutations go through the scoped
+  conversation lifecycle service rather than direct collection access.
 - Filesystem scanning is disabled by topology: the image has a bounded
   `/data/imports` policy but no host mount. Public demo ingestion uses HTTP.
 - Product documentation is permanent and current. Evolution logs, migration

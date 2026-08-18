@@ -8,7 +8,7 @@ const {
 describe('conversationLifecycleService', () => {
   const userId = 'conversation-lifecycle-test';
   const otherUserId = 'conversation-lifecycle-other';
-  const promptName = 'psyx';
+  const promptName = 'reflection-extension';
   const service = createConversationLifecycleService({
     now: () => new Date('2026-08-16T02:30:00.000Z')
   });
@@ -30,7 +30,7 @@ describe('conversationLifecycleService', () => {
       model: 'test-model',
       messages: [
         { role: 'user', content: 'Sensitive user statement' },
-        { role: 'assistant', content: 'Bounded response', metadata: { provenance: 'psyx_response' } }
+        { role: 'assistant', content: 'Bounded response', metadata: { provenance: 'extension_response' } }
       ],
       ...overrides
     });
@@ -60,7 +60,7 @@ describe('conversationLifecycleService', () => {
     });
     expect(conversation.messages).toHaveLength(2);
     expect(conversation.messages[1].metadata).toEqual(expect.objectContaining({
-      provenance: 'psyx_response'
+      provenance: 'extension_response'
     }));
     expect(await service.isConversationOwnedByPrompt({
       userId,
@@ -81,9 +81,9 @@ describe('conversationLifecycleService', () => {
       userId,
       promptName,
       conversationId: target._id,
-      title: 'Renamed PsyX session'
+      title: 'Renamed private session'
     });
-    expect(renamed.title).toBe('Renamed PsyX session');
+    expect(renamed.title).toBe('Renamed private session');
 
     const archived = await service.archiveConversation({ userId, promptName, conversationId: target._id });
     expect(archived.lifecycle).toEqual({

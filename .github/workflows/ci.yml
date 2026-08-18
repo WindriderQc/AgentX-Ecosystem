@@ -31,6 +31,7 @@ jobs:
           npm test -- --runInBand --runTestsByPath
           tests/unit/agentxRuntimeProfile.test.js
           tests/unit/browserPublicUrls.test.js
+          tests/unit/trustedExtensionLoader.test.js
           tests/services/conversationLifecycleService.test.js
           tests/integration/health.test.js
           tests/routes/public-exposure-app.api.test.js
@@ -114,6 +115,9 @@ jobs:
             if (!base.services[name].healthcheck.test.at(-1).includes('statusCode===200')) {
               throw new Error(`${name} health check does not require HTTP 200`);
             }
+          }
+          if (Object.hasOwn(base.services.core.environment, 'AGENTX_EXTENSION_MODULES')) {
+            throw new Error('Default Core Compose must not configure trusted extensions');
           }
           for (const service of Object.values(base.services)) {
             if ((service.volumes || []).some(volume => volume.type === 'bind')) throw new Error('Default Compose contains a bind mount');

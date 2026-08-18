@@ -17,9 +17,10 @@ evidence.
 - **Demo and onboarding** — a secret-free Windows/Linux first-run path.
 
 The default `demo` profile does not load private data, environment-specific
-operations, or external adapters. Core contains no private adapter loader or
-implementation, and the product supplies no private endpoint, credential, or
-host mount.
+operations, or external extensions. Core contains no private implementation,
+and the product supplies no private endpoint, credential, or host mount. A
+minimal trusted-extension loader exists only for explicit full-profile
+deployments and is disabled by default.
 
 ## First run
 
@@ -118,8 +119,10 @@ expectations are in [Install and update modes](docs/RELEASES.md).
 
 Agent X does not require an operations repository. Host-specific automation
 and private integrations stay outside this repository and may call the bounded
-product APIs. Agent X does not load private adapter modules or provide an
-operations extension framework.
+product APIs. Advanced operators may also install an absolute-path trusted
+extension in the full profile; Core owns only the generic loader and versioned
+contracts, never the extension source, secret, mount, or deployment. See
+[Trusted extensions](docs/TRUSTED_EXTENSIONS.md).
 
 A separately operated private Data service may expose a bounded, read-only
 API to agents. It is not an Agent X service, an Agent X skill, or an adapter
