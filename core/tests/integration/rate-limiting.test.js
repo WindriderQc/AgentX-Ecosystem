@@ -2,7 +2,8 @@ const {
   apiLimiter,
   automationControlLimiter,
   chatLimiter,
-  isAutomationControlPath
+  isAutomationControlPath,
+  getGeneralApiKey,
 } = require('../../src/middleware/rateLimiter');
 const { handleChatRequest } = require('../../src/services/chatService');
 const { runMiddlewareChain } = require('../helpers/runMiddleware');
@@ -61,6 +62,24 @@ function getAutomationPath(path, headers) {
 }
 
 describe('Rate Limiting Middleware', () => {
+  it('does not let an unauthenticated x-api-key rotate general rate-limit buckets', () => {
+    const savedNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const req = {
+      ip: '192.0.2.44',
+      get: (name) => String(name).toLowerCase() === 'x-api-key' ? 'caller-controlled' : undefined,
+    };
+    const first = getGeneralApiKey(req);
+    req.get = (name) => String(name).toLowerCase() === 'x-api-key' ? 'rotated-value' : undefined;
+    const second = getGeneralApiKey(req);
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
+
+    expect(first).toBe(second);
+    expect(first).not.toContain('caller-controlled');
+    expect(first).not.toContain('rotated-value');
+  });
+
   it('includes rate limit headers in response', async () => {
     const res = await getConversations({ 'x-test-client': 'rl-headers' });
 

@@ -20,7 +20,7 @@ describe('Nestor v1 transport boundary', () => {
     });
   });
 
-  it('rejects oversized JSON before the global 50 MiB parser', async () => {
+  it('rejects oversized JSON before the default product parser', async () => {
     const response = await request(app)
       .post('/api/consumers/nestor/v1/inference')
       .set('Content-Type', 'application/json')

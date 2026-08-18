@@ -44,8 +44,10 @@ function configuredPublicHosts() {
 }
 
 function requestHost(req) {
-  const forwardedHost = String(req.get?.('x-forwarded-host') || '').split(',')[0];
-  return normalizeHost(forwardedHost || req.get?.('host') || req.hostname || '');
+  // Do not trust caller-supplied forwarding metadata. Deployments that use a
+  // reverse proxy must preserve the external Host value (or enforce auth at
+  // the proxy) rather than allowing X-Forwarded-Host to disable this guard.
+  return normalizeHost(req.get?.('host') || req.hostname || '');
 }
 
 function isProtectedPath(pathname) {
