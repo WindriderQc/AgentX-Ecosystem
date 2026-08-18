@@ -3,6 +3,16 @@
 const AlertRule = require('../../models/AlertRule');
 const alertService = require('./alertService');
 
+// The product-boundary cleanup removed the host-capacity route and producer.
+// Retain only the IDs needed to disable records seeded by older installations;
+// the builtIn filter below deliberately leaves operator-created rules alone.
+const RETIRED_BUILT_IN_RULE_IDS = Object.freeze([
+  'capacity-vram-pressure',
+  'capacity-gpu-imbalance',
+  'capacity-underused',
+  'capacity-host-critical',
+]);
+
 /** Sync all enabled MongoDB rules into the in-memory alert engine */
 async function syncRulesToEngine() {
   const dbRules = await AlertRule.find({ enabled: true }).lean();
@@ -24,6 +34,15 @@ async function syncRulesToEngine() {
 /** Create built-in defaults if they don't exist yet */
 async function seedDefaultRules() {
   const defaults = require('../../config/default-alert-rules.json');
+  const retirement = await AlertRule.updateMany(
+    {
+      ruleId: { $in: RETIRED_BUILT_IN_RULE_IDS },
+      builtIn: true,
+      enabled: true,
+    },
+    { $set: { enabled: false } }
+  );
+  const retired = Number(retirement?.modifiedCount) || 0;
   let created = 0;
   let backfilled = 0;
   for (const rule of defaults) {
@@ -66,8 +85,12 @@ async function seedDefaultRules() {
       backfilled++;
     }
   }
-  if (created > 0 || backfilled > 0) await syncRulesToEngine();
+  if (created > 0 || backfilled > 0 || retired > 0) await syncRulesToEngine();
   return created;
 }
 
-module.exports = { seedDefaultRules, syncRulesToEngine };
+module.exports = {
+  seedDefaultRules,
+  syncRulesToEngine,
+  RETIRED_BUILT_IN_RULE_IDS,
+};

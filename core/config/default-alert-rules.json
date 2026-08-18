@@ -50,56 +50,6 @@
         "channels": ["local_log"]
     },
     {
-        "id": "capacity-vram-pressure",
-        "name": "GPU VRAM pressure (>90% sustained 15m)",
-        "enabled": true,
-        "severity": "warning",
-        "title": "VRAM pressure on {{component}}",
-        "message": "p95 VRAM at {{value}}% sustained",
-        "conditions": { "all": [
-            { "fact": "metric", "operator": "equal", "value": "capacity_vram_pressure" },
-            { "fact": "value", "operator": "greaterThan", "value": 90 }
-        ]},
-        "channels": ["local_log"]
-    },
-    {
-        "id": "capacity-gpu-imbalance",
-        "name": "GPU load imbalance (one card hot, other idle)",
-        "enabled": true,
-        "severity": "warning",
-        "title": "GPU load imbalance on {{component}}",
-        "message": "Load spread {{value}}% between GPUs",
-        "conditions": { "all": [
-            { "fact": "metric", "operator": "equal", "value": "capacity_gpu_imbalance" },
-            { "fact": "value", "operator": "greaterThan", "value": 60 }
-        ]},
-        "channels": ["local_log"]
-    },
-    {
-        "id": "capacity-underused",
-        "name": "Host underused while a busier peer exists",
-        "enabled": true,
-        "severity": "info",
-        "title": "Host underused — {{component}}",
-        "message": "Only {{value}}% of cluster calls while a peer is busy",
-        "conditions": { "all": [
-            { "fact": "metric", "operator": "equal", "value": "capacity_underused" }
-        ]},
-        "channels": ["local_log"]
-    },
-    {
-        "id": "capacity-host-critical",
-        "name": "Host offline or Ollama service down",
-        "enabled": true,
-        "severity": "critical",
-        "title": "Host down — {{component}}",
-        "message": "{{detail}}",
-        "conditions": { "all": [
-            { "fact": "metric", "operator": "equal", "value": "capacity_host_critical" }
-        ]},
-        "channels": ["local_log"]
-    },
-    {
         "id": "lane-context-mismatch",
         "name": "Inference contract context mismatch",
         "enabled": true,
