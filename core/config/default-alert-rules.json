@@ -64,11 +64,11 @@
     },
     {
         "id": "capacity-gpu-imbalance",
-        "name": "GPU load imbalance (one card hot, other idle)",
+        "name": "Sustained GPU load imbalance (one card hot, other idle)",
         "enabled": true,
         "severity": "warning",
         "title": "GPU load imbalance on {{component}}",
-        "message": "Load spread {{value}}% between GPUs",
+        "message": "{{sampleCount}}-sample mean load spread {{value}}% between GPUs (threshold {{threshold}}%)",
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "capacity_gpu_imbalance" },
             { "fact": "value", "operator": "greaterThan", "value": 60 }

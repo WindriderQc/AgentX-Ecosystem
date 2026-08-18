@@ -38,7 +38,9 @@ const DEFAULT_THRESHOLDS = {
   utilSaturatedP95: 85,      // GPU-util p95 at/above → compute saturated
   errorRateHighPct: 10,      // inference error rate at/above → load failures
   latencySpikeMs: 30000,     // latency p95 at/above → contributes to constrained signal
-  gpuImbalancePct: 60,       // |maxUtil - minUtil| above (multi-GPU) → imbalance
+  gpuImbalancePct: 60,       // sustained per-card mean-util spread above → imbalance
+  gpuImbalanceMinSamples: 3, // do not page on an instantaneous layer-split sample
+  gpuImbalanceWindowMinutes: 15,
   callShareUnderusedPct: 25, // util-absent fallback: call share below → idle-leaning
   utilCoverageMin: 0.6,      // min util-sample coverage of the window to trust util (legacy-bug guard)
 };
@@ -63,8 +65,10 @@ function round0(v) {
 const GENERIC_CONFIG_NAME_IDS = new Set(['localollama', 'ollama2', 'ollama3']);
 
 function machineIdFromConfiguredName(name) {
-  const id = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-  if (!id || GENERIC_CONFIG_NAME_IDS.has(id)) return null;
+  const raw = String(name || '').trim().toLowerCase();
+  const compactId = raw.replace(/[^a-z0-9]+/g, '');
+  if (!compactId || GENERIC_CONFIG_NAME_IDS.has(compactId)) return null;
+  const id = raw.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return id;
 }
 
@@ -100,6 +104,57 @@ function mean(values) {
   const arr = (values || []).filter((v) => typeof v === 'number' && Number.isFinite(v));
   if (!arr.length) return null;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function summarizeGpuImbalance(snapshots = [], liveGpus = [], thresholds = DEFAULT_THRESHOLDS) {
+  const threshold = Number(thresholds.gpuImbalancePct) || DEFAULT_THRESHOLDS.gpuImbalancePct;
+  const minSamples = Math.max(1, Number(thresholds.gpuImbalanceMinSamples) || DEFAULT_THRESHOLDS.gpuImbalanceMinSamples);
+  const utilizationByGpu = new Map();
+  let sampleCount = 0;
+
+  for (const snapshot of snapshots || []) {
+    const readings = (snapshot?.gpus || [])
+      .map((gpu) => ({ index: gpu.index ?? 0, utilization: num(gpu.utilization) }))
+      .filter((gpu) => gpu.utilization != null);
+    if (readings.length < 2) continue;
+    sampleCount += 1;
+    for (const reading of readings) {
+      if (!utilizationByGpu.has(reading.index)) utilizationByGpu.set(reading.index, []);
+      utilizationByGpu.get(reading.index).push(reading.utilization);
+    }
+  }
+
+  const perGpuMeanUtilization = Array.from(utilizationByGpu.entries())
+    .map(([index, values]) => ({ index, utilization: round1(mean(values)), sampleCount: values.length }))
+    .sort((a, b) => a.index - b.index);
+  const evidenceReady = sampleCount >= minSamples && perGpuMeanUtilization.length > 1;
+  const sustainedValues = perGpuMeanUtilization.map((gpu) => gpu.utilization);
+  const sustainedMax = evidenceReady ? Math.max(...sustainedValues) : null;
+  const sustainedMin = evidenceReady ? Math.min(...sustainedValues) : null;
+  const sustainedSpread = sustainedMax != null && sustainedMin != null
+    ? round1(sustainedMax - sustainedMin)
+    : null;
+
+  const liveValues = (liveGpus || [])
+    .map((gpu) => num(gpu.utilization))
+    .filter((value) => value != null);
+  const maxGpuUtil = liveValues.length ? Math.max(...liveValues) : null;
+  const minGpuUtil = liveValues.length ? Math.min(...liveValues) : null;
+  const liveSpread = maxGpuUtil != null && minGpuUtil != null ? maxGpuUtil - minGpuUtil : null;
+
+  return {
+    multiGpu: liveGpus.length > 1 || perGpuMeanUtilization.length > 1,
+    maxGpuUtil,
+    minGpuUtil,
+    liveSpread,
+    spread: sustainedSpread,
+    perGpuMeanUtilization,
+    sampleCount,
+    minSamples,
+    threshold,
+    evidenceReady,
+    imbalanced: evidenceReady && sustainedSpread > threshold,
+  };
 }
 function freqTop(items, n) {
   const freq = {};
@@ -319,6 +374,34 @@ async function resolveStaleCapacityHostCriticalAlerts(report, input, now = new D
   );
 }
 
+async function resolveRecoveredCapacityGpuImbalanceAlerts(report, input, now = new Date()) {
+  const identities = collectCapacityAlertIdentities(report, input);
+  if (!identities.length) return { matchedCount: 0, modifiedCount: 0 };
+
+  return Alert.updateMany(
+    {
+      ruleId: 'capacity-gpu-imbalance',
+      source: 'host-capacity',
+      status: 'active',
+      $or: [
+        { 'context.component': { $in: identities } },
+        { 'context.additionalData.component': { $in: identities } },
+        { 'context.additionalData.host': { $in: identities } },
+      ],
+    },
+    {
+      $set: {
+        status: 'resolved',
+        'resolution.resolved': true,
+        'resolution.resolvedAt': now,
+        'resolution.resolvedBy': 'host-capacity',
+        'resolution.resolutionMethod': 'auto-recovery',
+        'resolution.comment': 'Resolved automatically because the sustained per-GPU utilization spread recovered.',
+      },
+    }
+  );
+}
+
 /**
  * Compute the full capacity report + verdict for a host.
  * @param {string} input host key/name/IP/URL (e.g. 'secondary', 'local-gpu', '192.0.2.10')
@@ -357,6 +440,7 @@ async function computeHostCapacity(input, hours = 24, opts = {}) {
   let utilSeries = [];
   let vramPctSeries = [];
   let vramPct15m = [];
+  let gpuImbalanceSnapshots = [];
   let snapshotCount = 0;
   if (host) {
     const snaps = await HostMetricsSnapshot.find({ hostId: host.hostId, timestamp: { $gte: since } })
@@ -365,8 +449,10 @@ async function computeHostCapacity(input, hours = 24, opts = {}) {
       .lean();
     snapshotCount = snaps.length;
     const cutoff15 = Date.now() - 15 * 60 * 1000;
+    const imbalanceCutoff = Date.now() - thresholds.gpuImbalanceWindowMinutes * 60 * 1000;
     for (const s of snaps) {
       const cards = s.gpus || [];
+      if (new Date(s.timestamp).getTime() >= imbalanceCutoff) gpuImbalanceSnapshots.push(s);
       const utils = cards.map((c) => c.utilization).filter((u) => typeof u === 'number');
       if (utils.length) utilSeries.push(utils.reduce((a, b) => a + b, 0) / utils.length);
       if (totalVramMiB > 0) {
@@ -426,18 +512,11 @@ async function computeHostCapacity(input, hours = 24, opts = {}) {
   const ollamaReachable = isOllamaReachableProbe(ollamaUrl, loaded);
   const telemetryStale = Boolean(ollamaReachable && host && host.status === 'offline');
 
-  // ── Imbalance (live instantaneous per-card util) ──
-  const liveUtils = liveGpus.map((g) => g.utilization).filter((u) => typeof u === 'number');
-  const maxGpuUtil = liveUtils.length ? Math.max(...liveUtils) : null;
-  const minGpuUtil = liveUtils.length ? Math.min(...liveUtils) : null;
-  const spread = maxGpuUtil != null && minGpuUtil != null ? maxGpuUtil - minGpuUtil : null;
-  const imbalance = {
-    multiGpu: liveGpus.length > 1,
-    maxGpuUtil,
-    minGpuUtil,
-    spread,
-    imbalanced: spread != null && liveGpus.length > 1 && spread >= thresholds.gpuImbalancePct,
-  };
+  // ── Imbalance (sustained recent per-card means, plus live detail) ──
+  // llama.cpp layer-split inference legitimately alternates which GPU is busy.
+  // A single nvidia-smi sample can therefore show a 100-point spread even when
+  // both cards do equal work over the request. Page only on enough history.
+  const imbalance = summarizeGpuImbalance(gpuImbalanceSnapshots, liveGpus, thresholds);
 
   // ── Verdict ──
   const metrics = {
@@ -583,11 +662,18 @@ async function checkCapacityAlerts(opts = {}) {
         });
       }
 
-      // Warning — dual-GPU imbalance (rule thresholds the spread at >60)
-      if (rep.imbalance.multiGpu && rep.imbalance.spread != null) {
+      // Warning — sustained dual-GPU imbalance. Alternating layer-split samples
+      // are normal and must not page from one instantaneous utilization read.
+      if (rep.imbalance.evidenceReady && !rep.imbalance.imbalanced) {
+        await resolveRecoveredCapacityGpuImbalanceAlerts(rep, tgt);
+      }
+      if (rep.imbalance.imbalanced) {
         await alertService.evaluateEvent({
           source: 'host-capacity', component: comp, host: comp,
           metric: 'capacity_gpu_imbalance', value: rep.imbalance.spread,
+          threshold: rep.imbalance.threshold,
+          sampleCount: rep.imbalance.sampleCount,
+          perGpuMeanUtilization: rep.imbalance.perGpuMeanUtilization,
         });
       }
 
@@ -618,7 +704,9 @@ module.exports = {
   isCapacityHostCritical,
   collectCapacityAlertIdentities,
   resolveStaleCapacityHostCriticalAlerts,
+  resolveRecoveredCapacityGpuImbalanceAlerts,
   recordCapacityCriticalProbe,
+  summarizeGpuImbalance,
   DEFAULT_THRESHOLDS,
   VERDICTS,
 };

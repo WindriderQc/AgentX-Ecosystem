@@ -12,8 +12,62 @@ const {
   isCapacityHostCritical,
   collectCapacityAlertIdentities,
   recordCapacityCriticalProbe,
+  resolveRecoveredCapacityGpuImbalanceAlerts,
+  summarizeGpuImbalance,
   VERDICTS,
 } = require('../../src/services/hostCapacityService');
+const Alert = require('../../models/Alert');
+
+describe('hostCapacityService.summarizeGpuImbalance', () => {
+  const live = [
+    { index: 0, utilization: 100 },
+    { index: 1, utilization: 0 },
+  ];
+
+  test('does not call alternating layer-split work an imbalance', () => {
+    const result = summarizeGpuImbalance([
+      { gpus: [{ index: 0, utilization: 100 }, { index: 1, utilization: 0 }] },
+      { gpus: [{ index: 0, utilization: 0 }, { index: 1, utilization: 100 }] },
+      { gpus: [{ index: 0, utilization: 100 }, { index: 1, utilization: 0 }] },
+      { gpus: [{ index: 0, utilization: 0 }, { index: 1, utilization: 100 }] },
+    ], live);
+
+    expect(result).toEqual(expect.objectContaining({
+      evidenceReady: true,
+      liveSpread: 100,
+      spread: 0,
+      imbalanced: false,
+    }));
+  });
+
+  test('detects a sustained hot-card and idle-card split', () => {
+    const result = summarizeGpuImbalance([
+      { gpus: [{ index: 0, utilization: 95 }, { index: 1, utilization: 5 }] },
+      { gpus: [{ index: 0, utilization: 90 }, { index: 1, utilization: 0 }] },
+      { gpus: [{ index: 0, utilization: 100 }, { index: 1, utilization: 10 }] },
+    ], live);
+
+    expect(result).toEqual(expect.objectContaining({
+      evidenceReady: true,
+      spread: 90,
+      threshold: 60,
+      imbalanced: true,
+    }));
+  });
+
+  test('requires multiple historical samples before classifying', () => {
+    const result = summarizeGpuImbalance([
+      { gpus: [{ index: 0, utilization: 100 }, { index: 1, utilization: 0 }] },
+    ], live);
+
+    expect(result).toEqual(expect.objectContaining({
+      sampleCount: 1,
+      evidenceReady: false,
+      spread: null,
+      imbalanced: false,
+    }));
+  });
+});
 
 describe('hostCapacityService.classifyCapacity', () => {
   test('VRAM p95 ≥ 90% → VRAM_CONSTRAINED', () => {
@@ -165,5 +219,40 @@ describe('hostCapacityService critical reachability guard', () => {
     expect(recordCapacityCriticalProbe(key, true, 2)).toEqual({ count: 2, shouldEmit: true });
     expect(recordCapacityCriticalProbe(key, false, 2)).toEqual({ count: 0, shouldEmit: false });
     expect(recordCapacityCriticalProbe(key, true, 2)).toEqual({ count: 1, shouldEmit: false });
+  });
+
+  test('recovered sustained GPU balance resolves the matching active incident', async () => {
+    const updateMany = jest.spyOn(Alert, 'updateMany').mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const now = new Date('2026-08-18T00:20:00Z');
+    const report = {
+      input: 'primary',
+      host: {
+        configId: 'primary',
+        hostId: 'ugalien',
+        hostname: 'UGAlien',
+        ollamaUrl: 'http://192.0.2.199:11434',
+      },
+    };
+
+    try {
+      await expect(resolveRecoveredCapacityGpuImbalanceAlerts(report, 'primary', now))
+        .resolves.toEqual({ matchedCount: 1, modifiedCount: 1 });
+      expect(updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ruleId: 'capacity-gpu-imbalance',
+          source: 'host-capacity',
+          status: 'active',
+        }),
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            status: 'resolved',
+            'resolution.resolvedAt': now,
+            'resolution.resolutionMethod': 'auto-recovery',
+          }),
+        })
+      );
+    } finally {
+      updateMany.mockRestore();
+    }
   });
 });
