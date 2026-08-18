@@ -153,6 +153,13 @@ const apiRoutes = require('../../routes/api');
 function buildApp() {
   const app = express();
   app.use(express.json());
+  app.use((req, _res, next) => {
+    req.headers.host = 'localhost:3180';
+    req.headers.origin = 'http://localhost:3180';
+    req.headers['sec-fetch-site'] = 'same-origin';
+    req.headers['x-agentx-benchmark-token'] = 'test-benchmark-token';
+    next();
+  });
   app.use('/api', apiRoutes);
   return app;
 }
@@ -187,6 +194,16 @@ function mockOllama({ adaptedExists = true, generateData = null } = {}) {
 
 describe('POST /api/inference/generate — useAdapted (task 0178)', () => {
   const app = buildApp();
+  const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
+
+  beforeAll(() => {
+    process.env.AGENTX_BENCHMARK_TOKEN = 'test-benchmark-token';
+  });
+
+  afterAll(() => {
+    if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
+    else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
+  });
 
   beforeEach(() => {
     jest.clearAllMocks();

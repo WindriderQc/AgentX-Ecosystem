@@ -27,10 +27,15 @@ const {
   inferenceCallerRouter
 } = require('../../src/middleware/rateLimiter');
 
-function postInference(clientKey, body) {
-  // Use a non-`/api/inference/generate` path so the apiLimiter's production
-  // skip-list does not mask throttling decisions under test. The router
-  // function is path-agnostic; it makes its decision from req.body.
+const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
+process.env.AGENTX_BENCHMARK_TOKEN = 'test-benchmark-token';
+
+afterAll(() => {
+  if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
+  else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
+});
+
+function postInference(clientKey, body, principal = 'anonymous') {
   return runMiddlewareChain([
     inferenceCallerRouter,
     (req, res) => {
@@ -41,18 +46,28 @@ function postInference(clientKey, body) {
     }
   ], {
     method: 'POST',
-    path: '/_test/inference',
-    headers: { 'x-test-client': clientKey },
+    path: '/api/inference/generate',
+    headers: {
+      'x-test-client': clientKey,
+      ...(principal === 'benchmark' ? {
+        'x-agentx-benchmark-token': 'test-benchmark-token'
+      } : {}),
+      ...(principal === 'ui' ? {
+        host: 'localhost:3180',
+        origin: 'http://localhost:3180',
+        'sec-fetch-site': 'same-origin'
+      } : {})
+    },
     body
   });
 }
 
-async function fire(clientKey, body, count) {
+async function fire(clientKey, body, count, principal = 'anonymous') {
   let ok = 0;
   let throttled = 0;
   for (let i = 0; i < count; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const res = await postInference(clientKey, body);
+    const res = await postInference(clientKey, body, principal);
     if (res.status === 200) ok += 1;
     else if (res.status === 429) throttled += 1;
   }
@@ -66,7 +81,8 @@ describe('internalCallerLimiter — routing for Nestor and other interactive cal
     const { ok, throttled } = await fire(
       '0141-buddy-pass',
       { callerDetail: 'buddy/react' },
-      600
+      600,
+      'ui'
     );
     expect(throttled).toBe(0);
     expect(ok).toBe(600);
@@ -87,10 +103,21 @@ describe('internalCallerLimiter — routing for Nestor and other interactive cal
     const { ok, throttled } = await fire(
       '0141-benchmark-pass',
       { callerDetail: 'benchmark-judge' },
-      600
+      600,
+      'benchmark'
     );
     expect(throttled).toBe(0);
     expect(ok).toBe(600);
+  });
+
+  it('throttles a spoofed benchmark claim in the general 500-request bucket', async () => {
+    const { ok, throttled } = await fire(
+      '0141-benchmark-spoof',
+      { callerDetail: 'benchmark-batch-spoofed' },
+      600
+    );
+    expect(ok).toBe(500);
+    expect(throttled).toBe(100);
   });
 
   it('recognizes each documented internal prefix', async () => {
@@ -108,7 +135,7 @@ describe('internalCallerLimiter — routing for Nestor and other interactive cal
     ];
     for (const tag of samples) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await postInference(`0141-prefix-${tag}`, { callerDetail: tag });
+      const res = await postInference(`0141-prefix-${tag}`, { callerDetail: tag }, 'ui');
       expect(res.status).toBe(200);
       expect(res.body.callerDetail).toBe(tag);
     }

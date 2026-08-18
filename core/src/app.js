@@ -278,8 +278,8 @@ const {
 } = require('./middleware/rateLimiter');
 
 // Apply caller-aware rate limiter to /api/inference/generate
-// Routes benchmark callers (callerDetail: benchmark-*) to 5000/15min bucket
-// Routes others to general 500/15min bucket
+// Authenticated Benchmark callers get their scoped 5000/15min bucket.
+// Untrusted callerDetail claims degrade to the general 500/15min bucket.
 app.use('/api/inference/generate', inferenceCallerRouter);
 
 // Keep agent lifecycle and inference proxies out of the external/browser API

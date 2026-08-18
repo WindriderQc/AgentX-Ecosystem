@@ -14,20 +14,17 @@ const { resolveCallerPolicy } = require('./routing/callerPolicy');
  * This module exports:
  *   - LANE_POLICY: policy map keyed by lane name. Each policy has booleans
  *     `route`, `probe`, `admit`, `recordInferenceSync`, `alert`.
- *   - resolveLane(callerDetail): returns { name, policy } from the shared
- *     caller classifier also used by rate limiting.
+ *   - resolveLane(callerDetail): resolves the declared policy catalog.
+ *   - resolvePolicyLane(callerPolicy): resolves an already authenticated
+ *     request policy without re-trusting callerDetail.
  *   - probeCache: small in-memory TTL cache for the ax/-prefix probe.
  *
  * Trust model — LOAD-BEARING ASSUMPTION
  * --------------------------------------
- * `callerDetail` is a free-form string set by the caller. The proxy trusts
- * it for **lane selection only**. Lane is a *performance* policy, not an
- * authorization mechanism. Today's network is internal-only (no external
- * exposure of /api/inference/generate), so this is acceptable.
- *
- * If /api/inference/generate ever moves to an externally reachable surface,
- * lane selection MUST be replaced with auth-middleware-set headers or signed
- * tokens BEFORE the exposure ships. See docs/LLM_USAGE.md "Lane Policy".
+ * `callerDetail` is a free-form telemetry string. The HTTP request boundary
+ * authenticates any privileged performance policy and passes that effective
+ * policy to `resolvePolicyLane`. An untrusted claim remains observable but
+ * runs through the automated safe path.
  *
  * Safety invariant — the interactive lane keeps `hostGate.acquire`
  * --------------------------------------------------------------
@@ -83,6 +80,13 @@ function resolveLane(callerDetail) {
   return { name: lane, policy: LANE_POLICY[lane] };
 }
 
+function resolvePolicyLane(callerPolicy) {
+  const lane = callerPolicy && LANE_POLICY[callerPolicy.lane]
+    ? callerPolicy.lane
+    : 'automated';
+  return { name: lane, policy: LANE_POLICY[lane] };
+}
+
 // ── Probe cache ───────────────────────────────────────────────────────────
 //
 // Caches the result of the ax/-prefix existence check per (host, model).
@@ -130,6 +134,7 @@ module.exports = {
   LANE_POLICY,
   PROBE_CACHE_TTL_MS,
   resolveLane,
+  resolvePolicyLane,
   getProbe,
   setProbe,
   _resetProbeCacheForTests,

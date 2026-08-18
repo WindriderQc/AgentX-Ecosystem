@@ -12,8 +12,10 @@ const { inferenceCallerRouter } = require('../../src/middleware/rateLimiter');
 describe('inferenceCallerRouter - Caller-aware rate limiting', () => {
   let app;
   let server;
+  const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
 
   beforeAll((done) => {
+    process.env.AGENTX_BENCHMARK_TOKEN = 'test-benchmark-token';
     // Create a minimal express app with the middleware setup
     app = express();
     app.use(express.json());
@@ -22,13 +24,18 @@ describe('inferenceCallerRouter - Caller-aware rate limiting', () => {
     app.post('/api/inference/generate', inferenceCallerRouter, (req, res) => {
       res.json({
         status: 'success',
-        callerDetail: req.body?.callerDetail || 'none'
+        callerDetail: req.body?.callerDetail || 'none',
+        principal: req.inferenceCallerContext.principal,
+        lane: req.inferenceCallerContext.effectivePolicy.lane,
+        rateBucket: req.inferenceCallerContext.effectivePolicy.rateBucket
       });
     });
     server = app.listen(0, '127.0.0.1', done);
   });
 
   afterAll((done) => {
+    if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
+    else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
     server.close(done);
   });
 
@@ -38,6 +45,7 @@ describe('inferenceCallerRouter - Caller-aware rate limiting', () => {
     const res = await request(server)
       .post('/api/inference/generate')
       .set('x-test-client', 'benchmark-test')
+      .set('x-agentx-benchmark-token', 'test-benchmark-token')
       .send({
         model: 'test-model',
         prompt: 'test',
@@ -46,6 +54,27 @@ describe('inferenceCallerRouter - Caller-aware rate limiting', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.callerDetail).toBe('benchmark-orchestrator');
+    expect(res.body).toMatchObject({
+      principal: 'benchmark-service',
+      lane: 'automated',
+      rateBucket: 'benchmark'
+    });
+  });
+
+  it('degrades a spoofed benchmark caller to the safe general policy', async () => {
+    const res = await request(server)
+      .post('/api/inference/generate')
+      .set('x-test-client', 'spoofed-benchmark-test')
+      .set('x-agentx-benchmark-token', 'wrong-token')
+      .send({ callerDetail: 'benchmark-batch-spoofed' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      callerDetail: 'benchmark-batch-spoofed',
+      principal: 'anonymous',
+      lane: 'automated',
+      rateBucket: 'general'
+    });
   });
 
   it('should route non-benchmark callers to apiLimiter', async () => {
@@ -79,6 +108,7 @@ describe('inferenceCallerRouter - Caller-aware rate limiting', () => {
       const res = await request(server)
         .post('/api/inference/generate')
         .set('x-test-client', `test-${prefix}`)
+        .set('x-agentx-benchmark-token', 'test-benchmark-token')
         .send({
           model: 'test-model',
           prompt: 'test',

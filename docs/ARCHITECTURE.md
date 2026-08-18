@@ -64,10 +64,13 @@ service nor a skill owned or loaded by Agent X.
 - Product documentation is permanent and current. Evolution logs, migration
   plans, incident notes, inventories, and audits do not belong in this
   repository.
-- `callerDetail` performance classification has one authority in Core. Both
-  inference execution and rate limiting consume that classification; neither
-  owns a parallel caller-prefix list. Unknown callers retain full admission and
-  the general rate bucket.
+- `callerDetail` performance classification has one authority in Core. It is
+  telemetry metadata, not identity. Both inference execution and rate limiting
+  consume the same authenticated effective policy; neither owns a parallel
+  caller-prefix list. The scoped `AGENTX_BENCHMARK_TOKEN` can promote only
+  Benchmark/profiler families. Same-origin UI proof or the operator token can
+  promote internal interactive families. Missing or invalid proof degrades to
+  the automated lane and general rate bucket without rejecting inference.
 
 ## Conversation lifecycle ownership
 

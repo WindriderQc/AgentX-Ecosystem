@@ -14,6 +14,7 @@
 const fetch = require('node-fetch');
 const logger = require('../../config/logger');
 const { getFetchOptions } = require('../helpers/httpAgent');
+const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { DECOMPOSED_QUESTIONS } = require('./decomposedJudgeQuestions');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
 const {
@@ -23,9 +24,9 @@ const {
 } = require('./scoring/scoringConfigs');
 
 // Decomposed judge always routes through the core inference proxy. Lane policy
-// (0168) classifies `callerDetail: 'benchmark-decomposed-judge'` into the direct
-// lane so admission control + telemetry stay live without per-call gate
-// overhead.
+// (0168) classifies `callerDetail: 'benchmark-decomposed-judge'`; the scoped
+// Benchmark credential authenticates its direct lane so admission control +
+// telemetry stay live without per-call gate overhead.
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 
 const DEFAULT_DECOMPOSED_CATEGORY = DEFAULT_SCORING_CATEGORY;
@@ -154,7 +155,7 @@ Answer ONLY "YES" or "NO" for this specific question: ${question}`;
         };
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
             signal: controller.signal
         });

@@ -106,6 +106,14 @@ user-owned override.
 a display label. Chat models are selected in the UI. Keep secondary hosts empty
 for first installation.
 
+`AGENTX_BENCHMARK_TOKEN` is an optional, user-supplied service credential. The
+`agentx` and `agentx.ps1` launchers generate an ephemeral 256-bit value in memory
+when one is not supplied. The default Compose file wires that one value to Core
+and Benchmark but never contains a secret. Direct `docker compose` users may set
+the variable explicitly; if it is absent or invalid, Benchmark requests remain
+functional through Core's automated lane and general rate bucket. Never commit
+the value.
+
 ## Common error paths
 
 - `doctor` says Docker is missing: install Docker separately, reopen the
