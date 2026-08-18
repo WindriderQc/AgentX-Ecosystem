@@ -19,6 +19,8 @@ const {
   isDemoProfile,
   createAgentXProfileGuard,
 } = require('../../shared/agentxRuntimeProfile');
+const { loadTrustedExtensions } = require('./extensions/trustedExtensionLoader');
+const { conversationLifecycle } = require('./services/conversationLifecycleService');
 
 // Browser-reachable URLs for each service. Distinct from server-to-server
 // URLs (BENCHMARK_SERVICE_URL etc.) which use container-DNS names inside
@@ -271,6 +273,21 @@ app.use('/api/pipeline', automationControlLimiter);
 
 // Apply general API rate limiter to all /api routes (except specific ones)
 app.use('/api/', apiLimiter);
+
+// Trusted extensions are separately installed absolute-path modules. They are
+// disabled by default and outside the demo profile. Registration happens after
+// the shared API limiter but before built-in routes so an extension can protect
+// Core-owned paths without bypassing the product's admission controls.
+const trustedExtensions = loadTrustedExtensions({
+  app,
+  express,
+  mongoose,
+  logger,
+  profile: agentxProfile,
+  standardJsonParser,
+  conversationLifecycle
+});
+app.locals.trustedExtensions = trustedExtensions;
 
 // Alert routes (Track 1: Alerts & Notifications)
 const alertRoutes = require('../routes/alerts');
