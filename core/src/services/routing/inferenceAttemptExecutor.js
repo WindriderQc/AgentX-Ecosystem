@@ -70,12 +70,9 @@ async function modelExistsOnHost(hostUrl, model, timeoutMs = 3000) {
 async function resolveVerifiedFallbackModel({
   hostUrl,
   baseModel,
-  resolvedPrimaryModel,
-  useAdapted,
-  axPrefix = 'ax/',
+  resolvedPrimaryModel
 }) {
   const names = [];
-  if (useAdapted && baseModel && !baseModel.startsWith(axPrefix)) names.push(`${axPrefix}${baseModel}`);
   if (resolvedPrimaryModel && !names.includes(resolvedPrimaryModel)) names.push(resolvedPrimaryModel);
   if (baseModel && !names.includes(baseModel)) names.push(baseModel);
 

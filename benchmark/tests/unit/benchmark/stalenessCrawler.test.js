@@ -27,8 +27,8 @@ describe('analyzeStaleness', () => {
 
   it('does not reject a real sub-cap measurement using guessed hardware', () => {
     const report = analyzeStaleness({
-      adaptations: [
-        { modelName: 'ax/huge:30b-instruct-q4_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', profile: { tokensPerSec: 5000 } }
+      performanceProfiles: [
+        { modelName: 'ax/huge:30b-instruct-q4_K_M', hostId: 'primary', active: true, stale: false, artifact: { registryQualified: true }, profile: { tokensPerSec: 5000 } }
       ]
     });
     expect(report.totals.staleModels).toBe(0);
@@ -36,8 +36,8 @@ describe('analyzeStaleness', () => {
 
   it('does NOT flag a realistic sub-cap throughput', () => {
     const report = analyzeStaleness({
-      adaptations: [
-        { modelName: 'ax/huge:30b-instruct-q4_K_M', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', profile: { tokensPerSec: 45 } }
+      performanceProfiles: [
+        { modelName: 'ax/huge:30b-instruct-q4_K_M', hostId: 'primary', active: true, stale: false, artifact: { registryQualified: true }, profile: { tokensPerSec: 45 } }
       ]
     });
     expect(report.totals.staleModels).toBe(0);
@@ -46,42 +46,46 @@ describe('analyzeStaleness', () => {
   it('flags profile readiness staleness per host (map or object)', () => {
     const report = analyzeStaleness({
       profiles: [
-        { name: 'gemma4:e4b', readiness: { secondary: { stale: true, stage: 'adapted' }, primary: { stale: false } } }
+        { name: 'gemma4:e4b', readiness: { secondary: { stale: true, stage: 'profiled' }, primary: { stale: false } } }
       ]
     });
     expect(report.hosts.secondary.stale[0].reasons).toContain('profile_readiness_stale');
     expect(report.hosts.primary).toBeUndefined();
   });
 
-  it('flags adaptation staleness', () => {
+  it('flags exact-artifact performance evidence staleness', () => {
     const report = analyzeStaleness({
-      adaptations: [
-        { modelName: 'ax/m', hostId: 'tertiary', staleness: { stale: true }, deployment: { status: 'deployed' } }
+      performanceProfiles: [
+        { modelName: 'ax/m', hostId: 'tertiary', active: false, stale: true, artifact: { registryQualified: true }, profile: {} }
       ]
     });
-    expect(report.hosts.tertiary.stale[0].reasons).toContain('adaptation_stale');
+    expect(report.hosts.tertiary.stale[0].reasons).toContain('performance_profile_stale');
   });
 
-  it('flags a routed model with no deployed adaptation (missing_deployment) and does NOT suggest re-profile for it', () => {
+  it('flags and queues a routed model with no exact performance evidence', () => {
     const report = analyzeStaleness({
-      adaptations: [
-        { modelName: 'other', hostId: 'secondary', deployment: { status: 'deployed' } }
+      performanceProfiles: [
+        { modelName: 'other', hostId: 'secondary', active: true, stale: false, artifact: { registryQualified: true }, profile: {} }
       ],
       routedModelsByHost: { secondary: ['ax/gemma4:e4b'] }
     });
-    expect(report.hosts.secondary.stale[0].reasons).toEqual(['missing_deployment']);
-    // missing_deployment needs adapt/deploy, not a profile run:
-    expect(report.suggestedProfileQueues).toEqual([]);
+    expect(report.hosts.secondary.stale[0].reasons).toEqual(['missing_profile_evidence']);
+    expect(report.suggestedProfileQueues).toEqual([
+      { hostId: 'secondary', skipRecentDays: 0, modelNames: ['ax/gemma4:e4b'] }
+    ]);
   });
 
-  it('does not flag a routed model that has a deployed adaptation', () => {
+  it('does not collapse a namespaced evidence record into a bare routed tag', () => {
     const report = analyzeStaleness({
-      adaptations: [
-        { modelName: 'ax/gemma4:e4b', hostId: 'secondary', deployment: { status: 'deployed' } }
+      performanceProfiles: [
+        { modelName: 'ax/gemma4:e4b', hostId: 'secondary', active: true, stale: false, artifact: { registryQualified: true }, profile: {} }
       ],
-      routedModelsByHost: { secondary: ['gemma4:e4b'] } // ax/ + bare normalize equal
+      routedModelsByHost: { secondary: ['gemma4:e4b'] }
     });
-    expect(report.totals.staleModels).toBe(0);
+    expect(report.hosts.secondary.stale[0]).toMatchObject({
+      model: 'gemma4:e4b',
+      reasons: ['missing_profile_evidence']
+    });
   });
 
   it('merges multiple reasons for the same model', () => {
@@ -89,12 +93,12 @@ describe('analyzeStaleness', () => {
       contextProfiles: [
         { modelName: 'ax/m', hostId: 'primary', hostUrl: 'http://192.0.2.99:11434', stale: true, latestEvidence: { tokensPerSec: 1000000 } }
       ],
-      adaptations: [
-        { modelName: 'ax/m', hostId: 'primary', staleness: { stale: true } }
+      performanceProfiles: [
+        { modelName: 'ax/m', hostId: 'primary', active: false, stale: true, artifact: { registryQualified: true }, profile: {} }
       ]
     });
     const reasons = report.hosts.primary.stale[0].reasons;
-    expect(reasons).toEqual(expect.arrayContaining(['context_profile_stale', 'adaptation_stale']));
+    expect(reasons).toEqual(expect.arrayContaining(['context_profile_stale', 'performance_profile_stale']));
     expect(report.totals.staleModels).toBe(1); // same model, one entry
   });
 

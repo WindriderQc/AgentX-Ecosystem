@@ -121,7 +121,7 @@ async function runSweep(input = {}, deps = {}) {
       return {
         phase: 'needs_profile',
         executed: false,
-        reason: 'candidates need profiling/adaptation before benchmarking; profiling is deferred in this driver version',
+        reason: 'candidates need exact-artifact profiling before benchmarking; profiling is deferred in this driver version',
         profilePayload: plan.payloads.profileQueue,
         plan
       };
@@ -139,7 +139,7 @@ async function runSweep(input = {}, deps = {}) {
       return { phase: 'profile_failed', executed: true, queueId, status: waited.status, plan };
     }
 
-    // Re-plan after profiling/adaptation so readiness reflects new artifacts.
+    // Re-plan after profiling so readiness reflects the new exact-artifact evidence.
     plan = await buildSweepPlan(input);
   }
 

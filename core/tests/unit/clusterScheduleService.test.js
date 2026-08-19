@@ -497,7 +497,7 @@ describe('recommendHost', () => {
     expect(rec.reason).toContain('model already loaded');
   });
 
-  it('treats adapted ax models as already loaded for base-model requests', async () => {
+  it('does not treat a namespaced artifact as satisfying a different exact tag', async () => {
     await ModelRegistry.create({
       modelName: 'gemma4:e4b',
       displayName: 'Gemma 4 E4B',
@@ -513,7 +513,7 @@ describe('recommendHost', () => {
         return Promise.resolve({ ok: true, json: async () => ({ models: [] }) });
       }
       if (callIdx === 2) {
-        // secondary — adapted model is already resident
+        // secondary — a distinct namespaced artifact is resident
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -525,8 +525,7 @@ describe('recommendHost', () => {
     });
 
     const rec = await clusterScheduleService.recommendHost('gemma4:e4b', 30000, 'normal');
-    expect(rec.host).toBe('secondary');
-    expect(rec.reason).toContain('model already loaded');
+    expect(rec.host).not.toBe('secondary');
   });
 
   it('avoids hosts with insufficient VRAM', async () => {

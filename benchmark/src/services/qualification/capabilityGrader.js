@@ -20,7 +20,7 @@
  * Evidence shape (every field optional; missing => that gate's inputs are absent):
  *   {
  *     reachable:      Boolean,
- *     readinessStage: 'available'|'profiled'|'adapted'|'benchmarked',
+ *     readinessStage: 'available'|'profiled'|'benchmarked',
  *     tools:    { read, write, edit, exec }            // booleans
  *     contract: { assignmentOk, artifactOk, feedbackOk, donePresent }  // booleans
  *     response: { text } | responseText: String,        // visible assistant text
@@ -30,7 +30,7 @@
  *   }
  */
 
-const READINESS_RANK = Object.freeze({ available: 0, profiled: 1, adapted: 2, benchmarked: 3 });
+const READINESS_RANK = Object.freeze({ available: 0, profiled: 1, benchmarked: 2 });
 const TIER_ORDER = Object.freeze(['C0', 'C1', 'C2', 'C3', 'C4']);
 
 function rankReadiness(stage) {

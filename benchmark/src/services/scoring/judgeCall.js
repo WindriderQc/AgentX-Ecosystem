@@ -7,7 +7,6 @@ const logger = require('../../../config/logger');
 const { getFetchOptions } = require('../../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const { benchmarkFetch: fetch } = require('../benchmark/http');
-const { resolveAdaptedModel } = require('../profiler/adaptedModelResolver');
 const { normalizeJudgeNumCtx } = require('./judgeRuntimeConfig');
 
 // Judge calls always route through the core inference proxy. Lane policy (0168)
@@ -214,18 +213,8 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         if (!judgeConfig.host) {
             throw new Error('Judge host is not configured');
         }
-        // Silently upgrade to ax/<model> if the pre-profiled variant exists on
-        // the host — ax/ variants have Modelfiles tuned to the host's VRAM
-        // envelope, and the ModelAdaptation row carries a matching num_ctx.
-        const effectiveJudgeModel = await resolveAdaptedModel(judgeConfig.model, judgeConfig.host);
+        const effectiveJudgeModel = judgeConfig.model;
         const numCtx = normalizeJudgeNumCtx(judgeConfig.num_ctx);
-        if (effectiveJudgeModel !== judgeConfig.model) {
-            logger.info('Judge model resolved to adapted variant', {
-                requested: judgeConfig.model,
-                effective: effectiveJudgeModel,
-                judge_host: judgeConfig.host
-            });
-        }
         // think: false prevents thinking models (Qwen3.x, DeepSeek-R1) from
         // burning tokens on internal reasoning. Safe to send for all models —
         // non-thinking models simply ignore it.

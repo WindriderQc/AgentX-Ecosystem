@@ -10,8 +10,7 @@ const { gatherCandidates, formatIntakeTable } = require('../../src/services/benc
 const hfClient = require('../../src/clients/hfClient');
 const ModelContextProfile = require('../../models/ModelContextProfile');
 const ModelProfile = require('../../models/ModelProfile');
-const ModelAdaptation = require('../../models/ModelAdaptation');
-const HostProfile = require('../../models/HostProfile');
+const ModelPerformanceProfile = require('../../models/ModelPerformanceProfile');
 const { startBatch } = require('../../src/services/benchmark/execution');
 const { runPreflight } = require('../../src/services/benchmark/preflight');
 const { findActiveProfilingForHost, activeProfileQueues } = require('../../src/services/profiler/activeProfileState');
@@ -107,10 +106,10 @@ router.post('/sweeps/recommend', async (req, res) => {
  * GET /api/benchmark/sweeps/staleness?hostId=<optional>
  *
  * Read-only crawl of benchmark model state for stale/invalid evidence before it
- * breaks a sweep: stale context profiles / readiness / adaptations, and
+ * breaks a sweep: stale context profiles / readiness / performance evidence, and
  * invalid recorded throughput. Returns a
  * per-host report + suggested re-profile payloads (NOT auto-run). The
- * missing-deployment check additionally accepts `routedModelsByHost` as a JSON
+ * missing-profile check additionally accepts `routedModelsByHost` as a JSON
  * query/body input when callers can supply current routing.
  */
 router.get('/sweeps/staleness', async (req, res) => {
@@ -120,26 +119,12 @@ router.get('/sweeps/staleness', async (req, res) => {
         if (req.query.routedModelsByHost) {
             try { routedModelsByHost = JSON.parse(req.query.routedModelsByHost); } catch (_) { /* ignore */ }
         }
-        const [contextProfiles, profiles, adaptations, hostProfiles] = await Promise.all([
+        const [contextProfiles, profiles, performanceProfiles] = await Promise.all([
             ModelContextProfile.find({}).lean(),
             ModelProfile.find({}).select('name readiness').lean(),
-            ModelAdaptation.find({}).lean(),
-            HostProfile.find({}).select('hostId hostUrl gpu.model').lean()
+            ModelPerformanceProfile.find({}).lean()
         ]);
-        const hostHardwareById = {};
-        for (const host of hostProfiles) {
-            const hardware = { gpuModel: host.gpu?.model || null };
-            if (host.hostId) hostHardwareById[host.hostId] = hardware;
-            if (host.hostUrl) hostHardwareById[host.hostUrl] = hardware;
-        }
-        const report = analyzeStaleness({
-            contextProfiles,
-            profiles,
-            adaptations,
-            routedModelsByHost,
-            hostHardwareById,
-            hostFilter
-        });
+        const report = analyzeStaleness({ contextProfiles, profiles, performanceProfiles, routedModelsByHost, hostFilter });
         const ledgerDraft = formatStalenessLedgerEntry(report, { date: new Date().toISOString().slice(0, 10) });
         res.json({ status: 'success', data: { ...report, ledgerDraft } });
     } catch (err) {

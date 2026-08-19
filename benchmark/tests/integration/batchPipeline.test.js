@@ -25,6 +25,18 @@ jest.mock('../../src/clients/coreApiClient', () => ({
     releaseBenchmarkClaim: jest.fn(async () => ({ released: true }))
 }));
 
+// Exact-artifact admission and profiling are covered by their focused suites.
+// This integration suite starts after that boundary so it can exercise the
+// batch execution lifecycle without a live Core registry or Ollama inventory.
+jest.mock('../../src/services/profiler/profilerOrchestrator', () => ({
+    preflight: jest.fn(async ({ models }) => ({
+        ready: models,
+        profilesNeeded: [],
+        warnings: []
+    })),
+    runPreflight: jest.fn(async () => undefined)
+}));
+
 // Mock Ollama HTTP: returns a canned model response for every call
 const mockBenchmarkFetch = jest.fn();
 jest.mock('../../src/services/benchmark/http', () => ({

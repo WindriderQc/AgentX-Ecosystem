@@ -165,7 +165,6 @@ function _injectReadinessBadges(container, hostId) {
 function _readinessBadge(stage, extraClass = '') {
     const cfg = {
         profiled:    { text: 'Profiled',     cls: 'ax-good' },
-        adapted:     { text: 'Adapted',      cls: 'ax-good' },
         benchmarked: { text: 'Benchmarked',  cls: 'ax-good' },
         stale:       { text: 'Stale',        cls: 'ax-warn' },
         available:   { text: 'Not Profiled', cls: 'ax-warn' },

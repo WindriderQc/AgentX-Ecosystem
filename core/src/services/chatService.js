@@ -100,23 +100,6 @@ const handleChatRequest = async ({
         path: '/api/chat'
     });
 
-    // 0c. Resolve adapted model: prefer ax/<model> when deployed on the target host
-    const AX_PREFIX = 'ax/';
-    if (effectiveModel && !effectiveModel.startsWith(AX_PREFIX)) {
-        try {
-            const adaptedName = `${AX_PREFIX}${effectiveModel}`;
-            const checkResp = await fetch(`${resolvedHost}/api/show`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: adaptedName }),
-                timeout: 3000
-            });
-            if (checkResp.ok) {
-                effectiveModel = adaptedName;
-            }
-        } catch { /* base model stands */ }
-    }
-
     // 2. Standard Chat Flow
     const activePrompt = await getActivePrompt(system, personaName);
     const userProfile = await getOrCreateProfile(userId);

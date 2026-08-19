@@ -25,44 +25,16 @@ export function _buildModelChecklist(host) {
     const details = Array.isArray(host.modelDetails) ? host.modelDetails : [];
     const detailByRawName = new Map(details.map(d => [String(d?.name || ''), d]));
 
-    // Collapse ax/ variants into their base model. The ax/-prefixed form is a
-    // deployment artifact produced by the profiler from the base model; they
-    // refer to the same logical model. The benchmark executor resolves the
-    // ax/ variant at run time via resolveAdaptedModel(), so the card value
-    // stays bare. Prevents duplicate rows and the "Not Profiled" label on the
-    // ax/ copy of an already-adapted model.
-    const AX_PREFIX = 'ax/';
-    const seenBase = new Set();
-    const models = [];
-    // First pass: bare names take precedence so the displayed form stays bare.
-    for (const raw of rawModels) {
-        if (raw.startsWith(AX_PREFIX)) continue;
-        if (_hasLocalSameSizeAlias(raw, rawModels, detailByRawName)) continue;
+    const seen = new Set();
+    const models = rawModels.filter((raw) => {
+        if (_hasLocalSameSizeAlias(raw, rawModels, detailByRawName)) return false;
         const key = normModel(raw);
-        if (seenBase.has(key)) continue;
-        seenBase.add(key);
-        models.push(raw);
-    }
-    // Second pass: include ax/ variants only when the bare form is absent.
-    for (const raw of rawModels) {
-        if (!raw.startsWith(AX_PREFIX)) continue;
-        const base = raw.slice(AX_PREFIX.length);
-        const key = normModel(base);
-        if (seenBase.has(key)) continue;
-        seenBase.add(key);
-        models.push(base);
-    }
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 
     const detailMap = new Map(details.map(d => [normModel(d.name), d]));
-    // Also index ax/-prefixed details under the base key so metadata (size,
-    // quantization) falls back to the ax/ variant when only it has details.
-    details.forEach(d => {
-        const name = String(d?.name || '');
-        if (name.startsWith(AX_PREFIX)) {
-            const baseKey = normModel(name.slice(AX_PREFIX.length));
-            if (!detailMap.has(baseKey)) detailMap.set(baseKey, d);
-        }
-    });
     const saved = loadSet(SK_MODELS);
     const hostName = host.displayName || host.name || host.hostname || host.url || '';
 

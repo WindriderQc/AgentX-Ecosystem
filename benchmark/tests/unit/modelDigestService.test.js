@@ -30,12 +30,12 @@ describe('modelDigestService', () => {
         await expect(getModelDigest('http://host:11434', 'qwen3:30b')).resolves.toBe('sha256:abc');
     });
 
-    test('matches ax-prefixed adapted model names', async () => {
+    test('does not borrow a digest from a different namespaced artifact', async () => {
         listModels.mockResolvedValue({
             models: [{ name: 'ax/qwen3:30b', digest: 'sha256:def' }]
         });
 
-        await expect(getModelDigest('http://host:11434', 'qwen3:30b')).resolves.toBe('sha256:def');
+        await expect(getModelDigest('http://host:11434', 'qwen3:30b')).resolves.toBeNull();
     });
 
     test('returns null and negative-caches host failures', async () => {
@@ -46,8 +46,9 @@ describe('modelDigestService', () => {
         expect(listModels).toHaveBeenCalledTimes(1);
     });
 
-    test('namesEquivalent handles ax prefix both directions', () => {
-        expect(_internal.namesEquivalent('ax/qwen3:30b', 'qwen3:30b')).toBe(true);
-        expect(_internal.namesEquivalent('qwen3:30b', 'ax/qwen3:30b')).toBe(true);
+    test('namesEquivalent preserves namespaces and accepts only the latest alias', () => {
+        expect(_internal.namesEquivalent('ax/qwen3:30b', 'qwen3:30b')).toBe(false);
+        expect(_internal.namesEquivalent('qwen3:30b', 'ax/qwen3:30b')).toBe(false);
+        expect(_internal.namesEquivalent('qwen3:latest', 'qwen3')).toBe(true);
     });
 });

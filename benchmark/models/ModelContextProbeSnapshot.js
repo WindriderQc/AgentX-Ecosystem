@@ -30,6 +30,9 @@ const ProbeStepSchema = new mongoose.Schema({
 const ModelContextProbeSnapshotSchema = new mongoose.Schema({
   modelName:              { type: String, required: true, index: true },
   hostUrl:                { type: String, required: true, index: true },
+  hostId:                 { type: String, required: true, index: true },
+  artifactDigest:         { type: String, required: true, index: true },
+  runtimeFingerprint:     { type: String, required: true },
   testedNumCtx:           Number,
   baselineTokensPerSec:   Number,
   atLimitTokensPerSec:    Number,
@@ -62,7 +65,7 @@ const ModelContextProbeSnapshotSchema = new mongoose.Schema({
 });
 
 ModelContextProbeSnapshotSchema.index(
-  { modelName: 1, hostUrl: 1, testedAt: -1 },
+  { modelName: 1, hostUrl: 1, artifactDigest: 1, testedAt: -1 },
   { name: 'model_context_probe_latest' }
 );
 

@@ -11,7 +11,7 @@ describe('voice persona router config', () => {
     expect(isDirectInvokeTask('nestor_answer_light')).toBe(true);
     expect(isClassifiableTask('nestor_answer_light')).toBe(false);
     expect(DIRECT_INVOKE_TASKS.nestor_answer_light).toEqual({
-      model: 'ax/gemma4:26b-a4b-it-qat',
+      model: 'gemma4:26b-a4b-it-qat',
       host: 'primary'
     });
     expect(TASK_TYPE_METADATA.nestor_answer_light.title).toBe('Nestor Answer Light');

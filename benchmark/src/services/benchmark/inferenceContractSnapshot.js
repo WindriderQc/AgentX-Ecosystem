@@ -5,6 +5,7 @@ const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const { getFetchOptions } = require('../../helpers/httpAgent');
 const { benchmarkFetch } = require('./http');
 const { getModelDigest } = require('./modelDigestService');
+const { normalizeModelTag } = require('../../../../shared/modelNames');
 
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const CAMPAIGN_SCHEMA_VERSION = 1;
@@ -104,12 +105,18 @@ function validateSnapshot(snapshot, requested) {
     if (!/^[a-f0-9]{64}$/.test(String(snapshot.snapshot?.fingerprint || ''))) {
         throw new Error(`Core returned an invalid inference contract fingerprint for ${requested.model} on ${requested.host}`);
     }
-    if (!snapshot.artifact?.digest || snapshot.artifact?.identityQualified !== true) {
+    if (!snapshot.artifact?.digest
+        || !snapshot.artifact?.runtimeFingerprint
+        || snapshot.artifact?.identityQualified !== true
+        || snapshot.artifact?.registryQualified !== true
+        || snapshot.qualification?.qualified !== true
+        || snapshot.qualification?.exactArtifact !== true) {
         throw new Error(`Cannot freeze ${requested.model} on ${requested.host}: deployed artifact digest is unresolved`);
     }
     const requestedHost = String(requested.host || '').replace(/\/+$/, '').toLowerCase();
     const returnedHost = String(snapshot.artifact?.host || '').replace(/\/+$/, '').toLowerCase();
-    if (snapshot.artifact?.model !== requested.model || returnedHost !== requestedHost) {
+    if (normalizeModelTag(snapshot.artifact?.model).toLowerCase() !== normalizeModelTag(requested.model).toLowerCase()
+        || returnedHost !== requestedHost) {
         throw new Error(`Core returned a contract for a different artifact or host than ${requested.model} on ${requested.host}`);
     }
     const windowTokens = Number(snapshot.contextBudget?.windowTokens);

@@ -17,9 +17,11 @@ function snapshot(overrides = {}) {
             model: 'model-a',
             host: 'http://exec:11434',
             digest: 'sha256:artifact-a',
+            runtimeFingerprint: 'runtime-a',
+            registryQualified: true,
             identityQualified: true
         },
-        qualification: { qualified: true, state: 'benchmarked' },
+        qualification: { qualified: true, exactArtifact: true, state: 'benchmarked' },
         capabilities: {
             thinking: {
                 supported: true,

@@ -1,13 +1,7 @@
 const ModelProfile = require('../../../models/ModelProfile');
-const ModelAdaptation = require('../../../models/ModelAdaptation');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
-const { parseAdaptedName } = require('./namingConvention');
 const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
-
-function normalizeBenchmarkModelName(name) {
-  const normalized = normalizeModelName(name);
-  return parseAdaptedName(normalized)?.baseName || normalized;
-}
 
 async function getAll(filter = {}) {
   if (filter.stage) {
@@ -36,9 +30,11 @@ async function upsert(data) {
 }
 
 async function updateReadiness(modelName, hostId, stage, extraFields = {}) {
+  if (!['available', 'profiled', 'benchmarked'].includes(stage)) {
+    throw new RangeError(`Unsupported readiness stage: ${stage}`);
+  }
   const setFields = { [`readiness.${hostId}.stage`]: stage };
   if (stage === 'profiled') setFields[`readiness.${hostId}.profiledAt`] = new Date();
-  if (stage === 'adapted') setFields[`readiness.${hostId}.adaptedAt`] = new Date();
   if (stage === 'benchmarked') setFields[`readiness.${hostId}.benchmarkedAt`] = new Date();
   Object.assign(setFields, extraFields);
   return ModelProfile.findOneAndUpdate(
@@ -104,18 +100,18 @@ async function updateHostAvailability(modelName, hostId, available) {
 }
 
 async function getStalenessReport() {
-  return ModelAdaptation.find({ 'staleness.stale': true }).lean();
+  return ModelPerformanceProfile.find({ stale: true }).lean();
 }
 
 async function getReadinessFunnel() {
   const profiles = await ModelProfile.find().lean();
-  const counts = { available: 0, profiled: 0, adapted: 0, benchmarked: 0 };
+  const counts = { available: 0, profiled: 0, benchmarked: 0 };
   for (const profile of profiles) {
     const readinessMap = profile.readiness instanceof Map
       ? Object.fromEntries(profile.readiness)
       : (profile.readiness || {});
     const stages = Object.values(readinessMap).map(r => r.stage);
-    const highest = ['benchmarked', 'adapted', 'profiled', 'available']
+    const highest = ['benchmarked', 'profiled', 'available']
       .find(s => stages.includes(s)) || 'available';
     counts[highest]++;
   }
@@ -124,7 +120,7 @@ async function getReadinessFunnel() {
 
 async function getBenchmarkedModelNames() {
   const names = await BenchmarkResult.distinct('model', { success: true });
-  return [...new Set(names.map(normalizeBenchmarkModelName).filter(Boolean))].sort();
+  return [...new Set(names.map(normalizeModelName).filter(Boolean))].sort();
 }
 
 module.exports = {

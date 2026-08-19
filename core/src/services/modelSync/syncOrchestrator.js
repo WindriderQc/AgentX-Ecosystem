@@ -46,45 +46,117 @@ function registryUpdateFilter(existing, fallbackModelName) {
     : { modelName: existing?.modelName || fallbackModelName };
 }
 
+function buildInstallations(existing, hostUrl, ollamaModel, details) {
+  const installations = Array.isArray(existing?.installations)
+    ? existing.installations.map((entry) => entry?.toObject ? entry.toObject() : { ...entry })
+    : [];
+  const normalizedHost = String(hostUrl || '').replace(/\/+$/, '').toLowerCase();
+  const next = {
+    hostUrl,
+    digest: ollamaModel.digest,
+    lastSeenAt: new Date(),
+    modelSizeBytes: ollamaModel.size || null,
+    parameterSize: details.parameter_size || null,
+    quantization: details.quantization_level || null,
+    family: details.family || null,
+    status: 'active',
+    isActive: true
+  };
+  const index = installations.findIndex((entry) =>
+    String(entry?.hostUrl || '').replace(/\/+$/, '').toLowerCase() === normalizedHost
+  );
+  if (index >= 0) installations[index] = { ...installations[index], ...next };
+  else installations.push(next);
+  return installations;
+}
+
 function getUnconfiguredHostRetireGraceMs() {
   const raw = Number.parseInt(process.env.MODEL_SYNC_UNCONFIGURED_HOST_RETIRE_GRACE_MS || '', 10);
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_UNCONFIGURED_HOST_RETIRE_GRACE_MS;
 }
 
 async function retireUnconfiguredHostModels(configuredHosts, options = {}) {
-  const activeHosts = uniqueModelNames(configuredHosts);
+  const activeHosts = uniqueModelNames(configuredHosts).map((host) => String(host).replace(/\/+$/, '').toLowerCase());
   if (activeHosts.length === 0) return 0;
 
   const graceMs = options.graceMs ?? getUnconfiguredHostRetireGraceMs();
   const now = options.now || new Date();
   const cutoff = new Date(now.getTime() - graceMs);
-  const retireQuery = {
-    sourceType: 'ollama',
-    status: { $ne: 'retired' },
-    sourceHost: { $exists: true, $ne: null, $nin: activeHosts },
-    lastSeenAt: { $lte: cutoff }
-  };
-
-  const toRetire = await ModelRegistry.find(retireQuery);
-  for (const model of toRetire) {
-    await ModelRegistry.updateOne(
-      { _id: model._id },
-      {
-        $set: {
-          status: 'retired',
-          isActive: false,
-          lastUpdated: new Date(),
-          notes: (model.notes || '') + `\nRetired by auto-sync: ${new Date().toISOString()} — source host ${model.sourceHost} is no longer configured`
-        }
+  const models = await ModelRegistry.find({ sourceType: 'ollama', 'installations.isActive': true });
+  let retired = 0;
+  for (const model of models) {
+    let changed = false;
+    const installations = (model.installations || []).map((raw) => {
+      const entry = raw?.toObject ? raw.toObject() : { ...raw };
+      const host = String(entry.hostUrl || '').replace(/\/+$/, '').toLowerCase();
+      if (entry.isActive !== false && !activeHosts.includes(host) && new Date(entry.lastSeenAt || 0) <= cutoff) {
+        changed = true;
+        retired++;
+        return { ...entry, status: 'retired', isActive: false };
       }
-    );
-    logger.info('Retired model from unconfigured source host', {
-      modelName: model.modelName,
-      sourceHost: model.sourceHost
+      return entry;
     });
+    if (!changed) continue;
+    const active = installations.filter((entry) => entry.isActive !== false && entry.status !== 'retired');
+    const primary = active[0] || null;
+    await ModelRegistry.updateOne({ _id: model._id }, { $set: {
+      installations,
+      status: primary ? 'active' : 'retired',
+      isActive: Boolean(primary),
+      ...(primary ? {
+        sourceHost: primary.hostUrl,
+        host: primary.hostUrl,
+        ollamaDigest: primary.digest,
+        modelSizeBytes: primary.modelSizeBytes,
+        parameterSize: primary.parameterSize,
+        quantization: primary.quantization,
+        family: primary.family
+      } : {}),
+      lastUpdated: now
+    } });
   }
+  return retired;
+}
 
-  return toRetire.length;
+async function retireMissingInstallations(successfulHosts, seenByHost, now = new Date()) {
+  const normalizedHosts = [...successfulHosts].map((host) => String(host).replace(/\/+$/, '').toLowerCase());
+  if (!normalizedHosts.length) return 0;
+  const models = await ModelRegistry.find({ sourceType: 'ollama', 'installations.hostUrl': { $exists: true } });
+  let retired = 0;
+  for (const model of models) {
+    let changed = false;
+    const installations = (model.installations || []).map((raw) => {
+      const entry = raw?.toObject ? raw.toObject() : { ...raw };
+      const host = String(entry.hostUrl || '').replace(/\/+$/, '').toLowerCase();
+      const seen = seenByHost.get(host);
+      if (normalizedHosts.includes(host) && seen && !seen.has(model.modelName) && entry.isActive !== false) {
+        changed = true;
+        retired++;
+        return { ...entry, status: 'retired', isActive: false };
+      }
+      return entry;
+    });
+    if (!changed) continue;
+    const active = installations.filter((entry) => entry.isActive !== false && entry.status !== 'retired');
+    const primary = active[0] || null;
+    await ModelRegistry.updateOne({ _id: model._id }, { $set: {
+      installations,
+      status: primary ? 'active' : 'retired',
+      isActive: Boolean(primary),
+      ...(primary ? {
+        sourceHost: primary.hostUrl,
+        host: primary.hostUrl,
+        ollamaDigest: primary.digest,
+        modelSizeBytes: primary.modelSizeBytes,
+        parameterSize: primary.parameterSize,
+        quantization: primary.quantization,
+        family: primary.family
+      } : {}),
+      lastUpdated: now
+    } });
+    logger.info('Retired missing model installation', { modelName: model.modelName });
+  }
+  return retired;
 }
 
 /**
@@ -126,6 +198,11 @@ async function syncModel(ollamaModel, hostUrl) {
     let changed = false;
     const updates = {};
     const updateFilter = registryUpdateFilter(existing, modelName);
+    const existingInstallation = (existing.installations || []).find((entry) =>
+      String(entry?.hostUrl || '').replace(/\/+$/, '').toLowerCase()
+        === String(hostUrl || '').replace(/\/+$/, '').toLowerCase()
+    );
+    const nextInstallations = buildInstallations(existing, hostUrl, ollamaModel, details);
 
     if (existing.modelName !== modelName) {
       updates.modelName = modelName;
@@ -137,11 +214,21 @@ async function syncModel(ollamaModel, hostUrl) {
       updates.host = hostUrl;
       changed = true;
     }
-    if (existing.ollamaDigest !== ollamaModel.digest) { updates.ollamaDigest = ollamaModel.digest; changed = true; }
-    if (existing.modelSizeBytes !== ollamaModel.size) { updates.modelSizeBytes = ollamaModel.size; changed = true; }
-    if (existing.parameterSize !== parameterSize) { updates.parameterSize = parameterSize; changed = true; }
-    if (existing.quantization !== quantization) { updates.quantization = quantization; changed = true; }
-    if (existing.family !== family) { updates.family = family; changed = true; }
+    const ownsTopLevelIdentity = !existing.sourceHost
+      || String(existing.sourceHost).replace(/\/+$/, '').toLowerCase()
+        === String(hostUrl).replace(/\/+$/, '').toLowerCase();
+    if (ownsTopLevelIdentity && existing.ollamaDigest !== ollamaModel.digest) { updates.ollamaDigest = ollamaModel.digest; changed = true; }
+    if (ownsTopLevelIdentity && existing.modelSizeBytes !== ollamaModel.size) { updates.modelSizeBytes = ollamaModel.size; changed = true; }
+    if (ownsTopLevelIdentity && existing.parameterSize !== parameterSize) { updates.parameterSize = parameterSize; changed = true; }
+    if (ownsTopLevelIdentity && existing.quantization !== quantization) { updates.quantization = quantization; changed = true; }
+    if (ownsTopLevelIdentity && existing.family !== family) { updates.family = family; changed = true; }
+    if (!existingInstallation
+      || existingInstallation.digest !== ollamaModel.digest
+      || existingInstallation.isActive === false
+      || existingInstallation.status === 'retired') {
+      updates.installations = nextInstallations;
+      changed = true;
+    }
 
     // Always update lastSeenAt
     updates.lastSeenAt = new Date();
@@ -169,6 +256,10 @@ async function syncModel(ollamaModel, hostUrl) {
     }
 
     if (changed) {
+      // Persist the per-host identity snapshot with every metadata update; the
+      // logical model's top-level mirror must never advance while its owning
+      // installation entry remains stale.
+      updates.installations = nextInstallations;
       updates.lastUpdated = new Date();
       const update = { $set: updates };
       if (Object.keys(unset).length) update.$unset = unset;
@@ -176,7 +267,7 @@ async function syncModel(ollamaModel, hostUrl) {
       return 'updated';
     }
     // Still update lastSeenAt even if nothing else changed
-    await ModelRegistry.updateOne(updateFilter, { $set: { lastSeenAt: new Date() } });
+    await ModelRegistry.updateOne(updateFilter, { $set: { lastSeenAt: new Date(), installations: nextInstallations } });
     return 'unchanged';
   }
 
@@ -193,6 +284,7 @@ async function syncModel(ollamaModel, hostUrl) {
     sourceHost: hostUrl,
     host: hostUrl,
     ollamaDigest: ollamaModel.digest,
+    installations: buildInstallations(null, hostUrl, ollamaModel, details),
     lastSeenAt: new Date(),
     modelSizeBytes: ollamaModel.size,
     parameterSize,
@@ -232,8 +324,8 @@ async function syncAllHosts() {
 
   _syncing = true;
   const stats = { created: 0, updated: 0, retired: 0, unchanged: 0, errors: [] };
-  const allSeenModels = new Set();
   const successfulHosts = new Set();
+  const seenByHost = new Map();
 
   try {
     for (const hostUrl of hosts) {
@@ -243,6 +335,8 @@ async function syncAllHosts() {
         const models = await fetchHostModels(hostUrl);
 
         successfulHosts.add(hostUrl);
+        const normalizedHost = String(hostUrl).replace(/\/+$/, '').toLowerCase();
+        if (!seenByHost.has(normalizedHost)) seenByHost.set(normalizedHost, new Set());
 
         logger.info('Discovered models on host', {
           hostUrl,
@@ -251,7 +345,7 @@ async function syncAllHosts() {
 
         for (const model of models) {
           try {
-            allSeenModels.add(normalizeModelName(model.name.replace(/:latest$/i, '')));
+            seenByHost.get(normalizedHost).add(normalizeModelName(model.name.replace(/:latest$/i, '')));
             const result = await syncModel(model, hostUrl);
             stats[result]++;
           } catch (err) {
@@ -265,37 +359,13 @@ async function syncAllHosts() {
       }
     }
 
-    // Retire Ollama-sourced models not seen on any reachable host.
-    // Only retire models whose sourceHost was successfully queried —
-    // if a host is unreachable, its models are left untouched.
+    // Retire only the missing host installation. A tag that still exists on a
+    // different host remains active with that host's own digest.
     try {
       if (successfulHosts.size === 0) {
         logger.warn('No hosts responded — skipping retirement to avoid false retirements');
       } else {
-        const retireQuery = {
-          sourceType: 'ollama',
-          status: { $ne: 'retired' },
-          modelName: { $nin: Array.from(allSeenModels) },
-          sourceHost: { $in: Array.from(successfulHosts) }
-        };
-
-        const toRetire = await ModelRegistry.find(retireQuery);
-
-        for (const model of toRetire) {
-          await ModelRegistry.updateOne(
-            { _id: model._id },
-            {
-              $set: {
-                status: 'retired',
-                isActive: false,
-                lastUpdated: new Date(),
-                notes: (model.notes || '') + `\nRetired by auto-sync: ${new Date().toISOString()} — not found on host ${model.sourceHost}`
-              }
-            }
-          );
-          stats.retired++;
-          logger.info('Retired model not found on its source host', { modelName: model.modelName, sourceHost: model.sourceHost });
-        }
+        stats.retired += await retireMissingInstallations(successfulHosts, seenByHost);
       }
     } catch (err) {
       logger.error('Failed to retire missing models', { error: err.message });
@@ -321,5 +391,7 @@ module.exports = {
   syncAllHosts,
   syncModel,
   fetchHostModels,
-  retireUnconfiguredHostModels
+  retireUnconfiguredHostModels,
+  retireMissingInstallations,
+  buildInstallations
 };

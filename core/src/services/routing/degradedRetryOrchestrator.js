@@ -26,7 +26,6 @@ async function prepareCandidates({
   baseModel,
   model,
   ollamaPayload,
-  useAdapted,
   requestContext,
 }) {
   const prepared = [];
@@ -35,7 +34,6 @@ async function prepareCandidates({
       hostUrl: candidate.hostUrl,
       baseModel,
       resolvedPrimaryModel: model,
-      useAdapted,
     });
     if (!resolvedModel) continue;
 
@@ -104,7 +102,7 @@ async function prepareCandidates({
 
 async function tryDegradedRetry(options) {
   const {
-    attemptState, model, failedHostUrl, ollamaPayload, useChat, useAdapted,
+    attemptState, model, failedHostUrl, ollamaPayload, useChat,
     requestContext, beforeAttempt,
   } = options;
   const baseModel = options.baseModel || model;
@@ -134,7 +132,6 @@ async function tryDegradedRetry(options) {
       baseModel,
       model,
       ollamaPayload,
-      useAdapted,
       requestContext: { ...requestContext, numCtxSource: attemptState.numCtxSource, taskType: attemptState.lane },
     });
     if (!prepared.length) return { retried: false, reason: REFUSAL_REASONS.ARTIFACT_NOT_VERIFIED };

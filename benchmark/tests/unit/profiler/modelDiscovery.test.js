@@ -1,10 +1,8 @@
 'use strict';
 
 jest.mock('../../../models/ModelProfile');
-jest.mock('../../../src/services/profiler/namingConvention');
 
 const ModelProfile = require('../../../models/ModelProfile');
-const { isAdaptedModel } = require('../../../src/services/profiler/namingConvention');
 
 let originalFetch;
 
@@ -12,7 +10,6 @@ beforeEach(() => {
   jest.clearAllMocks();
   originalFetch = global.fetch;
   global.fetch = jest.fn();
-  isAdaptedModel.mockImplementation(name => typeof name === 'string' && name.startsWith('ax/'));
 });
 
 afterEach(() => {
@@ -23,7 +20,7 @@ const service = require('../../../src/services/profiler/modelDiscoveryService');
 
 describe('modelDiscoveryService', () => {
   describe('scanHost()', () => {
-    it('fetches /api/tags and returns parsed model list, filtering out ax- models', async () => {
+    it('fetches /api/tags and returns every exact artifact', async () => {
       const mockResponse = {
         models: [
           {
@@ -56,7 +53,7 @@ describe('modelDiscoveryService', () => {
         expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
 
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(3);
       expect(result[0]).toEqual({
         name: 'llama3.2:3b',
         size: 2000000000,
@@ -72,8 +69,13 @@ describe('modelDiscoveryService', () => {
         quantization: 'Q4_K_M'
       });
 
-      const names = result.map(m => m.name);
-      expect(names).not.toContain('ax/llama3.2:3b');
+      expect(result[2]).toEqual({
+        name: 'ax/llama3.2:3b',
+        size: 2000000000,
+        parameters: '3B',
+        family: 'llama',
+        quantization: 'Q4_0'
+      });
     });
 
     it('returns empty array on connection failure', async () => {

@@ -295,11 +295,10 @@ async function _queueRunSingleProfile(modelName, hostId, hostUrl, depth) {
 
 /**
  * POST /pipeline/profile-host
- * Body: { hostId, depth?, skipRecentDays?, modelNames?, includeAdapted? }
+ * Body: { hostId, depth?, skipRecentDays?, modelNames? }
  *   - depth: quick | standard | full (default standard)
  *   - skipRecentDays: skip models whose readiness[hostId].profiledAt is within N days (default 7; 0 = profile all)
  *   - modelNames: optional explicit list; if omitted, uses live host inventory
- *   - includeAdapted: include `ax/`-prefixed adapted models (default false)
  */
 /**
  * Start a per-host profile queue. Extracted verbatim from the POST
@@ -309,7 +308,7 @@ async function _queueRunSingleProfile(modelName, hostId, hostUrl, depth) {
  * validation/conflict failures, which the route maps to an HTTP response.
  */
 async function startProfileHostQueue(body = {}) {
-  const { hostId, depth, skipRecentDays, modelNames, includeAdapted } = body;
+  const { hostId, depth, skipRecentDays, modelNames } = body;
   if (!hostId) throw Object.assign(new Error('hostId is required'), { statusCode: 400 });
 
   const host = await hostProfileService.getById(hostId);
@@ -371,7 +370,6 @@ async function startProfileHostQueue(body = {}) {
     } else {
       candidates = [...inventory];
     }
-    if (!includeAdapted) candidates = candidates.filter(n => !n.startsWith('ax/'));
     if (!candidates.length) {
       throw Object.assign(new Error(notOnHost.length
         ? `None of the requested models are on this host (${notOnHost.length} not found)`
@@ -499,15 +497,10 @@ router.post('/profile-host/:queueId/cancel', (req, res) => {
 });
 
 router.post('/adapt', async (req, res) => {
-  try {
-    const { modelName, hostId, deploy } = req.body;
-    if (!modelName || !hostId) return res.status(400).json({ status: 'error', error: 'modelName and hostId required' });
-    const host = await hostProfileService.getById(hostId);
-    if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
-    const result = await orchestrator.adapt(modelName, hostId, host.hostUrl, { deploy: deploy !== false });
-    _restoreDedicationForHost(host.hostUrl);
-    res.json({ status: 'success', data: result });
-  } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
+  res.status(410).json({
+    status: 'error',
+    error: 'Model adaptation is retired. Profile and benchmark the exact registered model artifact.'
+  });
 });
 
 router.post('/full', async (req, res) => {

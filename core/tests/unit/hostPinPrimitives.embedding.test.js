@@ -79,8 +79,8 @@ describe('resolvePinnedRuntimeOptions (0512)', () => {
     });
   });
 
-  it('matches adapted and bare model names without weakening tag identity', () => {
-    expect(resolvePinnedRuntimeOptions(pref, 'gemma4:31b-it-qat', {}).options.num_ctx).toBe(49152);
+  it('keeps namespace and tag identity exact when applying pin options', () => {
+    expect(resolvePinnedRuntimeOptions(pref, 'gemma4:31b-it-qat', {}).pinnedEntry).toBeNull();
     expect(resolvePinnedRuntimeOptions(pref, 'gemma4:26b-a4b-it-qat', {}).pinnedEntry).toBeNull();
   });
 

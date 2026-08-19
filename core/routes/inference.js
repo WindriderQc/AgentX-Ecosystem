@@ -1,35 +1,11 @@
 /**
  * Inference routes — caller-aware lane policy (task 0168).
  *
- * /api/inference/generate selects one of three lanes from the effective caller
- * policy authenticated by the request middleware. `callerDetail` remains
- * telemetry metadata:
- *   - direct       (bench / profiler / warmup): skip route, admit;
- *                  recordInference async; alert error-only.
- *                  Probes ax/ once-per-(host,model) on cold cache (task 0178)
- *                  and reuses the lane-policy probe cache for subsequent calls.
- *   - interactive  (chat / buddy / nerve-center / alerts): admit kept;
- *                  probe cached 5min; recordInference async; full alerts
- *   - automated    (default — cron, agents, unknown): full safe path
- *                  (admit + sync recordInference + full alerts). Probes only
- *                  when caller explicitly sets `useAdapted: true` (task 0178).
- *
- * Adapted-model resolution (task 0178)
- * ------------------------------------
- * Daily-usage callers (an authenticated interactive lane or a non-profiler
- * direct lane) default to `useAdapted: true`: when a base model is requested,
- * the proxy probes
- * `/api/show ax/<model>` on the target host and routes to the adapted variant
- * when it exists. Result is cached in the cross-lane probe cache so the
- * amortized cost is one probe per (host, model) per cache TTL (~5 min).
- *
- * Test / profile / debug callers (`profiler-*`, unknown / no callerDetail,
- * automated lane) default to `useAdapted: false`: the bare model name is sent
- * through unchanged, no probe, no cache write. Callers can flip this with the
- * optional boolean `useAdapted` in the request body — `useAdapted: true` to
- * force adapted resolution, `useAdapted: false` to force the bare name.
- *
- * Storage layer (registry, profiles, pins) uses bare model names only.
+ * /api/inference/generate selects one of three performance lanes from the
+ * authenticated caller policy. `callerDetail` remains telemetry metadata.
+ * Every lane preserves the exact requested model tag. The
+ * retired `useAdapted: true` property is rejected instead of silently changing
+ * artifact identity.
  *
  * Trust model — LOAD-BEARING ASSUMPTION
  * --------------------------------------
@@ -63,7 +39,7 @@ const {
 const { getRoutingStatus, classifyQuery, getModelHealth, getAllModelsHealth, getTargetForModel, recordInference, resolveHostKey } = require('../src/services/modelRouter');
 const { getRagServiceClient } = require('../src/services/ragServiceClient');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
-const { getModelReadiness, isReadyStage } = require('../src/services/modelReadinessService');
+const { getModelReadiness } = require('../src/services/modelReadinessService');
 const hostGate = require('../src/services/hostGate');
 const { scheduleShadowEvaluation } = require('../src/services/routing/shadowEvaluation');
 const { buildRouteDecision, DECISION_MODES, REJECTION_REASONS } = require('../src/services/routing/routeDecision');
@@ -97,20 +73,6 @@ const INFERENCE_FETCH_TIMEOUT_MS =
 
 function requireProfiledModels() {
   return process.env.REQUIRE_PROFILED_MODELS === 'true';
-}
-
-const AX_PREFIX = 'ax/';
-
-// Task 0178 — default `useAdapted` per caller class.
-// Daily-usage callers (interactive lane + non-profiler direct lane) default
-// to ax/-resolution. Profiler / unknown / automated callers default to the
-// bare-name path so test/profile/debug code paths stay deterministic.
-// Callers can override either way via `body.useAdapted` (boolean).
-const PROFILER_CALLER_PATTERN = /^profiler-/;
-function defaultUseAdaptedForCaller(callerDetail, laneName) {
-    if (typeof callerDetail !== 'string' || callerDetail.length === 0) return false;
-    if (PROFILER_CALLER_PATTERN.test(callerDetail)) return false;
-    return laneName === 'interactive' || laneName === 'direct';
 }
 
 const ROUTING_PREVIEW_CHARS = 420;
@@ -181,7 +143,6 @@ function buildRoutingDifference(trace) {
     const recommendation = trace.recommendation;
     const selected = trace.selected || {};
     const requested = trace.request || {};
-    const adaptation = trace.adaptation || {};
 
     if (requested.hostOverride) {
         reasons.push(`Caller supplied host override "${requested.hostOverride}".`);
@@ -193,18 +154,6 @@ function buildRoutingDifference(trace) {
 
     if (recommendation?.hostUrl && selected.hostUrl && normalizeHostUrl(recommendation.hostUrl) !== normalizeHostUrl(selected.hostUrl)) {
         reasons.push(`Selected host URL differs from recommendation.`);
-    }
-
-    if (adaptation.applied) {
-        reasons.push(`Adapted model resolution changed ${adaptation.before || 'base model'} to ${adaptation.after || selected.model}.`);
-    }
-
-    if (adaptation.probe === 'negative') {
-        reasons.push(`No adapted variant was found on the selected host, so the base model was used.`);
-    }
-
-    if (adaptation.probe === 'error') {
-        reasons.push(`Adapted-model probe failed; request continued with the current model.`);
     }
 
     if (recommendation?.scheduler?.reason) {
@@ -220,7 +169,6 @@ function buildRoutingDifference(trace) {
     return {
         differsFromRecommendation: !!(
             requested.hostOverride
-            || adaptation.applied
             || (recommendation?.host && selected.hostKey && recommendation.host !== selected.hostKey)
             || (recommendation?.hostUrl && selected.hostUrl && normalizeHostUrl(recommendation.hostUrl) !== normalizeHostUrl(selected.hostUrl))
         ),
@@ -253,12 +201,7 @@ router.get('/ollama/models', async (req, res) => {
         const response = await fetch(url);
         const data = await response.json();
         const allModels = Array.isArray(data?.models) ? data.models : [];
-        // Hide base models that have a deployed ax/ counterpart
-        const adaptedBaseNames = new Set(
-            allModels.filter(m => m.name.startsWith(AX_PREFIX)).map(m => m.name.slice(AX_PREFIX.length))
-        );
         const models = allModels
-            .filter(m => !((!m.name.startsWith(AX_PREFIX)) && adaptedBaseNames.has(m.name)))
             .map((model) => ({
                 name: model.name,
                 size: model.size,
@@ -351,7 +294,7 @@ router.post('/inference/embed', async (req, res) => {
 
     if (requireProfiledModels()) {
         const readinessState = await getModelReadiness(model, target);
-        if (!isReadyStage(readinessState.readiness?.stage)) {
+        if (readinessState.readiness?.isReady !== true) {
             return res.status(409).json({
                 status: 'error',
                 message: `Model "${model}" is not profiled on the selected host. Enable profiling first or disable REQUIRE_PROFILED_MODELS.`,
@@ -799,7 +742,7 @@ router.post('/inference/generate', async (req, res) => {
         configured: null,
         recommendation: null,
         selected: null,
-        adaptation: null,
+        artifactResolution: null,
         ollama: null,
         difference: null
     };
@@ -885,96 +828,25 @@ router.post('/inference/generate', async (req, res) => {
         });
     }
 
-    // ── Adapted-model resolution (task 0178) ─────────────────────────────
-    // Daily-usage callers (chat/buddy/nerve-center/alerts/benchmark/judge)
-    // default to ax/<model>; profiler/test/debug/unknown default to the
-    // bare name. `body.useAdapted` overrides either way.
-    //
-    // Cache (task 0174 cross-lane convergence): all lanes share the
-    // `lanePolicy` probe cache so direct + interactive + automated callers
-    // agree on the resolved name for a given (host, model). The 5-min TTL
-    // means the amortized probe cost is at most one /api/show per (host,
-    // model) per ~5 min — even for the direct lane (task 0178 step 2).
-    const explicitUseAdapted = (typeof body.useAdapted === 'boolean')
-        ? body.useAdapted
-        : null;
-    const useAdapted = (explicitUseAdapted !== null)
-        ? explicitUseAdapted
-        : defaultUseAdaptedForCaller(body.callerDetail, laneName);
-    const useAdaptedSource = (explicitUseAdapted !== null) ? 'explicit' : 'default';
-    const adaptationTrace = {
-        useAdapted,
-        source: useAdaptedSource,
-        before: model,
-        after: model,
-        applied: false,
-        candidate: model && !model.startsWith(AX_PREFIX) ? `${AX_PREFIX}${model}` : null,
-        probe: 'skipped',
-        cached: false,
-        status: null,
-        error: null
-    };
-
-    if (useAdapted && model && !model.startsWith(AX_PREFIX)) {
-        const adaptedName = `${AX_PREFIX}${model}`;
-        const cached = lanePolicy.getProbe(target, model);
-        if (cached) {
-            adaptationTrace.probe = 'cache';
-            adaptationTrace.cached = true;
-            if (cached === adaptedName) {
-                model = adaptedName;
-                routingSource = `${routingSource}+adapted+cached`;
-            } else {
-                routingSource = `${routingSource}+base+cached`;
-            }
-        } else {
-            try {
-                const checkUrl = `${target}/api/show`;
-                const checkResp = await fetch(checkUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: adaptedName }),
-                    timeout: 3000
-                });
-                if (checkResp.ok) {
-                    lanePolicy.setProbe(target, model, adaptedName);
-                    model = adaptedName;
-                    routingSource = `${routingSource}+adapted${laneName === 'direct' ? '+probe-direct' : ''}`;
-                    adaptationTrace.probe = 'positive';
-                    adaptationTrace.status = checkResp.status;
-                } else {
-                    // Cache the negative result so subsequent callers in the
-                    // TTL window also avoid the probe. Operator-actionable
-                    // signal: an adaptation may have drifted off this host.
-                    lanePolicy.setProbe(target, model, model);
-                    logger.info('[inference] no adapted variant for model on host; using base', {
-                        model, host: target, lane: laneName, status: checkResp.status
-                    });
-                    routingSource = `${routingSource}+base-no-adapted`;
-                    adaptationTrace.probe = 'negative';
-                    adaptationTrace.status = checkResp.status;
-                }
-            } catch (err) {
-                // Probe failure (timeout / unreachable) — fall through with
-                // the base name; do NOT poison the cache so the next call
-                // can retry the probe cleanly.
-                adaptationTrace.probe = 'error';
-                adaptationTrace.error = err.message;
-            }
-        }
-    } else if (!useAdapted && useAdaptedSource === 'explicit') {
-        // Explicit `useAdapted: false` — operator/profiler bypass. Send the
-        // model exactly as supplied; do not touch the probe cache.
-        routingSource = `${routingSource}+useAdapted-false`;
-        adaptationTrace.probe = 'explicit_false';
+    // Exact-artifact invariant: never rewrite the caller-selected model tag.
+    if (body.useAdapted === true) {
+        return res.status(400).json({
+            status: 'error',
+            code: 'ADAPTED_MODEL_RESOLUTION_RETIRED',
+            message: 'useAdapted is retired; request the exact installed model tag explicitly'
+        });
     }
-    adaptationTrace.after = model;
-    adaptationTrace.applied = adaptationTrace.before !== adaptationTrace.after;
-    routingTrace.adaptation = adaptationTrace;
+    const artifactResolution = {
+        source: 'exact_artifact',
+        requested: model,
+        resolved: model,
+        rewritten: false
+    };
+    routingTrace.artifactResolution = artifactResolution;
 
     if (lane.route && requireProfiledModels()) {
         const readinessState = await getModelReadiness(model, target);
-        if (!isReadyStage(readinessState.readiness?.stage)) {
+        if (readinessState.readiness?.isReady !== true) {
             return res.status(409).json({
                 status: 'error',
                 message: `Model "${model}" is not profiled on the selected host. Enable profiling first or disable REQUIRE_PROFILED_MODELS.`,
@@ -1017,7 +889,15 @@ router.post('/inference/generate', async (req, res) => {
         requestedNumCtx: options.num_ctx,
         numCtxSource,
         requestedMaxOutputTokens: options.num_predict
-    });
+    }, { includeArtifactIdentity: requireProfiledModels() });
+    if (requireProfiledModels() && inferenceContract.qualification?.qualified !== true) {
+        return res.status(409).json({
+            status: 'error',
+            code: 'EXACT_ARTIFACT_PROFILE_REQUIRED',
+            message: `Model "${model}" is not qualified for this exact host digest/runtime. Re-profile it before inference.`,
+            data: { model, host: target, qualification: inferenceContract.qualification, artifact: inferenceContract.artifact }
+        });
+    }
     applyContractOutputLimit({ routed: lane.route, options, inferenceContract });
     const thinkingPolicy = resolveThinkingPolicy({
         requestedThink: think,
@@ -1205,10 +1085,9 @@ router.post('/inference/generate', async (req, res) => {
         target,
         options,
         numCtxSource,
-        adaptationTrace,
+        artifactResolution,
         ollamaPayload,
         useChat,
-        useAdapted,
         gateRelease,
         prompt,
         messages,

@@ -21,7 +21,7 @@ const { benchmarkFetch: fetch } = require('./http');
 const { normalizeModelName } = require('./modelMetadata');
 const { normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
 const { getDedicationStatuses } = require('../../clients/coreApiClient');
-const { modelNameCandidates } = require('../modelContextResolver');
+const { identitiesMatch, resolveArtifactIdentity } = require('../profiler/artifactIdentityService');
 const { normalizeJudgeNumCtx } = require('../scoring/judgeRuntimeConfig');
 const { normalizeExecutionConfig } = require('./config');
 const {
@@ -179,8 +179,8 @@ async function checkBenchmarkTargetEligibility(model, hostUrl, executionConfig =
     // ModelProfile schema (readiness.<hostId>.stage), because the same model
     // can be profiled on some hosts and not others.
     //
-    // Default: BLOCK unprofiled models. Operators can opt into running an
-    // unprofiled model via BENCHMARK_ALLOW_UNPROFILED=true (treated as warning).
+    // Exact artifact qualification is mandatory. Infrastructure or registry
+    // failures block instead of silently downgrading the benchmark contract.
     try {
         const ModelProfile = require('../../../models/ModelProfile');
         const HostProfile = require('../../../models/HostProfile');
@@ -195,11 +195,18 @@ async function checkBenchmarkTargetEligibility(model, hostUrl, executionConfig =
             hostId = hostDoc?.hostId || null;
         }
 
-        // Exact model names win, with namespace-stripped names as a
-        // compatibility fallback. Current profiler writes ax/* records under
-        // the ax name; older/base records may exist under the stripped parent.
-        const profileLookupNames = modelNameCandidates(normalizedModel);
-        const profile = await ModelProfile.findOne({ name: { $in: profileLookupNames } })
+        if (!hostId) {
+            return {
+                ok: false,
+                model: normalizedModel,
+                source: 'profile-gate',
+                reason: `Host '${hostUrl}' is not registered in Benchmark HostProfile; exact artifact qualification is impossible.`,
+                warnings
+            };
+        }
+
+        const artifact = await resolveArtifactIdentity(normalizedModel, hostId, hostUrl, { refresh: true });
+        const profile = await ModelProfile.findOne({ name: artifact.model })
             .select('readiness benchmarkStats capabilities thinkingProfiles')
             .lean();
 
@@ -207,39 +214,40 @@ async function checkBenchmarkTargetEligibility(model, hostUrl, executionConfig =
         // but guard against both shapes for safety.
         const readinessForHost = readMapLikeEntry(profile?.readiness, hostId);
         const stage = readinessForHost?.stage;
-        const hasProfile = !!readinessForHost && ['profiled', 'adapted', 'benchmarked'].includes(stage);
-        const allowUnprofiled = process.env.BENCHMARK_ALLOW_UNPROFILED === 'true';
+        const hasQualifiedDepth = ['standard', 'full'].includes(readinessForHost?.profileDepth);
+        const exactProfile = !!readinessForHost
+            && hasQualifiedDepth
+            && readinessForHost.benchmarkQualified === true
+            && readinessForHost.stale !== true
+            && identitiesMatch(readinessForHost.artifact, artifact);
 
-        if (!hostId) {
-            // Unknown host — can't evaluate profile-gate. Don't block on infra gap, just warn.
-            warnings.push(`Profile-gate skipped: host '${hostUrl}' not found in HostProfile registry.`);
-        } else if (!hasProfile) {
-            const msg = `Model "${normalizedModel}" has no profile on host '${hostId}' (stage: ${stage || 'missing'}). `
-                     + `Profile it first so benchmark knows it works and with what config. `
-                     + `Set BENCHMARK_ALLOW_UNPROFILED=true to run anyway.`;
-            if (allowUnprofiled) {
-                warnings.push(msg);
-            } else {
-                return {
-                    ok: false,
-                    model: normalizedModel,
-                    source: 'profile-gate',
-                    reason: msg,
-                    warnings
-                };
-            }
-        } else if (readinessForHost?.stale) {
-            warnings.push(`Model "${normalizedModel}" profile on '${hostId}' is marked stale — consider re-profiling.`);
+        if (!exactProfile) {
+            const msg = `Model "${normalizedModel}" has no current benchmark-qualified profile on host '${hostId}' `
+                     + `(stage: ${stage || 'missing'}, depth: ${readinessForHost?.profileDepth || 'missing'}, `
+                     + `stale: ${readinessForHost?.stale === true}). `
+                     + 'Run a standard or full profile for the exact installed tag/digest/runtime before benchmarking.';
+            return {
+                ok: false,
+                model: normalizedModel,
+                source: 'profile-gate',
+                reason: msg,
+                warnings
+            };
         }
 
-        if (hostId && hasProfile) {
+        if (hostId && hasQualifiedDepth) {
             const thinkingSummary = summarizeThinkingPreflight(profile, hostId, normalizedModel, executionConfig);
             if (thinkingSummary.warning) warnings.push(thinkingSummary.warning);
             thinkingProfile = thinkingSummary.profile;
         }
     } catch (err) {
-        // DB error — don't block on infra issues, just warn.
-        warnings.push(`Profile-gate check failed: ${err.message}`);
+        return {
+            ok: false,
+            model: normalizedModel,
+            source: 'profile-gate',
+            reason: `Exact artifact profile check failed: ${err.message}`,
+            warnings
+        };
     }
 
     return {

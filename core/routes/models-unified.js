@@ -9,7 +9,6 @@ const router = express.Router();
 const modelAggregator = require('../src/services/modelAggregator');
 const ollamaModelOperations = require('../src/services/ollamaModelOperations');
 const logger = require('../config/logger');
-const { isReadyStage } = require('../src/services/modelReadinessService');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
 const { getConfiguredHosts, hostUrlKey, validateHostUrl } = require('../src/helpers/ollamaHostConfig');
 const { requireOperatorUiAccess } = require('../src/middleware/operatorAccess');
@@ -27,7 +26,7 @@ function applyChatEligibility(models) {
   const hardGateEnabled = requireProfiledModels();
   return models.map((model) => {
     const readiness = model?.readiness || {};
-    const ready = isReadyStage(readiness.stage);
+    const ready = readiness.isReady === true;
     return {
       ...model,
       chatAllowed: hardGateEnabled ? ready : true

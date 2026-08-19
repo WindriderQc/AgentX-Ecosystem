@@ -10,7 +10,8 @@
     "dev": "node --watch server.js",
     "test": "jest --forceExit --detectOpenHandles --testPathIgnorePatterns=tests/e2e",
     "test:unit": "jest --config jest.unit.config.js --forceExit",
-    "test:e2e": "npx playwright test tests/e2e"
+    "test:e2e": "npx playwright test tests/e2e",
+    "migrate:exact-artifacts": "node scripts/migrate-exact-artifact-profile-indexes.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

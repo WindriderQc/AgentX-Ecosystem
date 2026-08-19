@@ -59,6 +59,10 @@ service nor a skill owned or loaded by Agent X.
 - Trusted extensions use injected Core contracts for Core-owned data. In
   particular, transcript reads and lifecycle mutations go through the scoped
   conversation lifecycle service rather than direct collection access.
+- Model identity is the exact installed tag, host, manifest digest, and runtime
+  fingerprint. Profiling records evidence for that identity and never creates
+  or silently selects a replacement tag; see
+  [Exact-artifact profiling](EXACT_ARTIFACT_PROFILING.md).
 - Filesystem scanning is disabled by topology: the image has a bounded
   `/data/imports` policy but no host mount. Public demo ingestion uses HTTP.
 - Product documentation is permanent and current. Evolution logs, migration

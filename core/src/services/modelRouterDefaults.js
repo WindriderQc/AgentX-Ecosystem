@@ -47,7 +47,7 @@ const ANALYSIS_HOST = envHost('AGENTX_ANALYSIS_HOST', DEFAULT_CHAT_HOST);
 // explicit caller choices and matching runtime pins remain authoritative.
 const DEFAULT_CHAT_MODEL = envModel(
     ['AGENTX_DEFAULT_CHAT_MODEL', 'AGENTX_CHAT_MODEL', 'OLLAMA_MODEL'],
-    'ax/gemma4:26b-a4b-it-qat'
+    'gemma4:26b-a4b-it-qat'
 );
 const DEEP_REASONING_MODEL = envModel('AGENTX_DEEP_REASONING_MODEL', DEFAULT_CHAT_MODEL);
 const MASTER_BRAIN_MODEL = envModel('AGENTX_MASTER_BRAIN_MODEL', DEEP_REASONING_MODEL);

@@ -265,12 +265,7 @@ describe('callJudge think parameter', () => {
         jest.mock('../../src/helpers/httpAgent', () => ({
             getFetchOptions: jest.fn((url, opts) => opts)
         }));
-        // First call is the ax/ probe to /api/show — return 404 so we fall
-        // back to the base model name. Subsequent calls are the real judge
-        // request which returns a valid scored response.
-        mockFetch = jest.fn()
-            .mockResolvedValueOnce({ ok: false, status: 404, json: () => Promise.resolve({}) })
-            .mockResolvedValue({
+        mockFetch = jest.fn().mockResolvedValue({
                 ok: true,
                 json: () => Promise.resolve({
                     message: { content: '{"overall": 8}' },
@@ -278,21 +273,20 @@ describe('callJudge think parameter', () => {
                     done_reason: 'stop',
                     eval_count: 10
                 })
-            });
+        });
         jest.mock('../../src/services/benchmark/http', () => ({
             benchmarkFetch: mockFetch
         }));
         return require('../../src/services/scoring/judgeCall').callJudge;
     };
 
-    // Index of the judge-call among the fetch calls (0 = probe, 1 = judge).
-    const JUDGE_CALL_IDX = 1;
+    const JUDGE_CALL_IDX = 0;
 
     test('should send think:false by default', async () => {
         const callJudge = getCallJudge();
         await callJudge('test prompt', { host: 'http://localhost:11434', model: 'test' });
 
-        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
         const body = JSON.parse(mockFetch.mock.calls[JUDGE_CALL_IDX][1].body);
         expect(body.think).toBe(false);
     });
@@ -301,7 +295,7 @@ describe('callJudge think parameter', () => {
         const callJudge = getCallJudge();
         await callJudge('test prompt', { host: 'http://localhost:11434', model: 'test', think: true });
 
-        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
         const body = JSON.parse(mockFetch.mock.calls[JUDGE_CALL_IDX][1].body);
         expect(body.think).toBe(true);
     });

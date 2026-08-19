@@ -6,11 +6,9 @@ const { normalizeModelName: canonicalNormalizeModelName } = require('../helpers/
 const READINESS_STAGE_ORDER = Object.freeze({
   available: 0,
   profiled: 1,
-  adapted: 2,
-  benchmarked: 3
+  benchmarked: 2
 });
 
-const READY_STAGE = 'profiled';
 const CACHE_TTL_MS = 60 * 1000;
 
 let ModelProfile;
@@ -26,9 +24,8 @@ try {
 let readinessCache = null;
 let readinessCacheTimestamp = 0;
 
-// Canonical form for registry/profile/routing lookups. Delegates to the
-// ecosystem-wide helper so ax/-prefixed Ollama variants resolve to the same
-// key as bare-named stored records.
+// Canonical form for registry/profile/routing lookups. Namespaces are part of
+// artifact identity; only Ollama's implicit :latest alias is normalized.
 const normalizeModelName = canonicalNormalizeModelName;
 
 function normalizeStage(stage) {
@@ -42,38 +39,52 @@ function stageRank(stage) {
   return READINESS_STAGE_ORDER[normalizeStage(stage)] || 0;
 }
 
-function isReadyStage(stage, minimumStage = READY_STAGE) {
-  return stageRank(stage) >= stageRank(minimumStage);
-}
-
 function resolveTimestamp(entry) {
   return entry?.benchmarkedAt
-    || entry?.adaptedAt
     || entry?.profiledAt
     || null;
 }
 
 function normalizeReadinessEntry(entry, hostId = null, scope = 'missing') {
   const normalized = entry && typeof entry === 'object' ? entry : {};
+  const profileDepth = normalized.profileDepth || null;
   return {
     stage: normalizeStage(normalized.stage),
     profiledAt: normalized.profiledAt || null,
-    adaptedAt: normalized.adaptedAt || null,
+    profileDepth,
+    benchmarkQualified: normalized.benchmarkQualified === true,
     benchmarkedAt: normalized.benchmarkedAt || null,
     stale: normalized.stale === true,
     hostId: hostId || null,
     scope,
-    isReady: isReadyStage(normalized.stage)
+    isReady: ['standard', 'full'].includes(profileDepth)
+      && normalized.benchmarkQualified === true
+      && normalized.stale !== true
   };
 }
 
 function compareReadiness(left, right) {
-  const rankDiff = stageRank(right?.stage) - stageRank(left?.stage);
-  if (rankDiff !== 0) return rankDiff;
+  const ready = (entry) => Boolean(
+    ['standard', 'full'].includes(entry?.profileDepth)
+    && entry?.benchmarkQualified === true
+    && entry?.stale !== true
+  );
+  if (ready(left) !== ready(right)) return ready(left) ? -1 : 1;
 
   if ((left?.stale === true) !== (right?.stale === true)) {
     return left?.stale === true ? 1 : -1;
   }
+
+  if ((left?.benchmarkQualified === true) !== (right?.benchmarkQualified === true)) {
+    return left?.benchmarkQualified === true ? -1 : 1;
+  }
+
+  const depthRank = { full: 3, standard: 2, quick: 1 };
+  const depthDiff = (depthRank[right?.profileDepth] || 0) - (depthRank[left?.profileDepth] || 0);
+  if (depthDiff !== 0) return depthDiff;
+
+  const rankDiff = stageRank(right?.stage) - stageRank(left?.stage);
+  if (rankDiff !== 0) return rankDiff;
 
   const leftTs = resolveTimestamp(left);
   const rightTs = resolveTimestamp(right);
@@ -206,11 +217,9 @@ function clearReadinessCache() {
 }
 
 module.exports = {
-  READY_STAGE,
   normalizeModelName,
   normalizeStage,
   stageRank,
-  isReadyStage,
   compareReadiness,
   resolveHostId,
   loadReadinessIndex,

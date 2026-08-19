@@ -28,7 +28,21 @@ jest.mock('../../../models/ModelProfile', () => ({
     findOne: jest.fn(() => ({
         select: jest.fn().mockReturnValue({
             lean: jest.fn().mockResolvedValue({
-                readiness: { 'exec-host': { stage: 'profiled', stale: false } }
+                readiness: {
+                    'exec-host': {
+                        stage: 'profiled',
+                        profileDepth: 'standard',
+                        benchmarkQualified: true,
+                        stale: false,
+                        artifact: {
+                            model: 'model-a',
+                            hostId: 'exec-host',
+                            hostUrl: 'http://exec-host:11434',
+                            digest: 'sha256:model-a',
+                            runtimeFingerprint: 'runtime-a'
+                        }
+                    }
+                }
             })
         })
     }))
@@ -40,6 +54,18 @@ jest.mock('../../../models/HostProfile', () => ({
             lean: jest.fn().mockResolvedValue({ hostId: 'exec-host' })
         })
     }))
+}));
+
+jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
+    resolveArtifactIdentity: jest.fn(async (model, hostId, hostUrl) => ({
+        model: String(model || '').trim().replace(/:latest$/i, ''),
+        hostId,
+        hostUrl,
+        digest: `sha256:${String(model || '').trim().replace(/:latest$/i, '')}`,
+        runtimeFingerprint: 'runtime-a',
+        registryQualified: true
+    })),
+    identitiesMatch: jest.fn(() => true)
 }));
 
 
@@ -59,8 +85,8 @@ jest.mock('../../../src/services/benchmark/judgeModelValidator', () => ({
     probeJudgeCapability: jest.fn()
 }));
 
-// resolveModelNumCtxDetails reaches into Mongo (ModelProfile, ModelAdaptation,
-// ModelContextProbeSnapshot) which isn't connected in unit tests. Stub it to
+// resolveModelNumCtxDetails reaches into exact context evidence which isn't
+// connected in unit tests. Stub it to
 // return an authoritative fallback so the implicit-num_ctx code path inside
 // checkJudgeConfiguration still exercises but doesn't hit the DB.
 jest.mock('../../../src/services/modelContextResolver', () => ({
@@ -74,7 +100,7 @@ jest.mock('../../../src/services/modelContextResolver', () => ({
     normalizeModelName: jest.fn((name) => String(name || '').trim().replace(/:latest$/i, '')),
     modelNameCandidates: jest.fn((name) => {
         const normalized = String(name || '').trim().replace(/:latest$/i, '');
-        return normalized.startsWith('ax/') ? [normalized, normalized.slice(3)] : [normalized];
+        return [normalized];
     })
 }));
 
@@ -236,7 +262,7 @@ describe('benchmark preflight', () => {
         });
     });
 
-    it('profile-gates ax benchmark targets with exact-name lookup before stripped fallback', async () => {
+    it('profile-gates a namespaced benchmark target with an exact-name lookup', async () => {
         benchmarkFetch.mockResolvedValue(okJson({
             models: [{ name: 'ax/qwen3.5:9b' }, { name: 'judge-model:latest' }]
         }));
@@ -256,9 +282,7 @@ describe('benchmark preflight', () => {
             host_ok: true,
             benchmark_eligible: true
         });
-        expect(ModelProfile.findOne).toHaveBeenCalledWith({
-            name: { $in: ['ax/qwen3.5:9b', 'qwen3.5:9b'] }
-        });
+        expect(ModelProfile.findOne).toHaveBeenCalledWith({ name: 'ax/qwen3.5:9b' });
     });
 
     it('aggregates host, judge, and orphaned-batch issues in runPreflight', async () => {
@@ -404,7 +428,7 @@ describe('benchmark preflight', () => {
             models: [{ name: 'ax/qwen3:8b' }, { name: 'judge-model:latest' }]
         }));
         ModelProfile.findOne.mockReturnValue(chainResolved({
-            readiness: { 'exec-host': { stage: 'profiled', stale: false } },
+            readiness: { 'exec-host': { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false, artifact: {} } },
             thinkingProfiles: {
                 'exec-host': {
                     profileVersion: 2,
@@ -446,7 +470,7 @@ describe('benchmark preflight', () => {
             models: [{ name: 'ax/qwen3:8b' }, { name: 'judge-model:latest' }]
         }));
         ModelProfile.findOne.mockReturnValue(chainResolved({
-            readiness: { 'exec-host': { stage: 'profiled', stale: false } },
+            readiness: { 'exec-host': { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false, artifact: {} } },
             thinkingProfiles: {
                 'exec-host': {
                     supported: true,

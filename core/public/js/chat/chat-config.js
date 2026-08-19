@@ -60,7 +60,6 @@ export function sessionTaskType(elements, state) {
 function normalizeModelName(name) {
   return String(name || '')
     .trim()
-    .replace(/^ax\//, '')
     .replace(/:latest$/, '');
 }
 
@@ -68,7 +67,7 @@ export function modelsEquivalent(left, right) {
   const a = normalizeModelName(left);
   const b = normalizeModelName(right);
   if (!a || !b) return false;
-  return a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
+  return a === b;
 }
 
 function normalizeHostUrl(raw) {

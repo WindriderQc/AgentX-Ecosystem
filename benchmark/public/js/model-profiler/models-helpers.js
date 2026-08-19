@@ -7,18 +7,13 @@
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const STAGE_ORDER = ['benchmarked', 'adapted', 'profiled', 'available'];
+export const STAGE_ORDER = ['benchmarked', 'profiled', 'available'];
 
 export const FILTER_DEFS = [
   { key: 'all',          label: 'All' },
   { key: 'profiled',     label: 'Profiled' },
-  { key: 'adapted',      label: 'Adapted' },
   { key: 'benchmarked',  label: 'Benchmarked' }
 ];
-
-export function isAdaptedModelName(name) {
-  return typeof name === 'string' && name.startsWith('ax/');
-}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -179,8 +174,7 @@ export function escAttr(str) {
 export function matchesFilter(model, filter) {
   if (filter === 'all') return true;
   const stage = getHighestStage(model);
-  if (filter === 'profiled')    return stage === 'profiled' || stage === 'adapted' || stage === 'benchmarked';
-  if (filter === 'adapted')     return stage === 'adapted'  || stage === 'benchmarked';
+  if (filter === 'profiled')    return stage === 'profiled' || stage === 'benchmarked';
   if (filter === 'benchmarked') return stage === 'benchmarked';
   return true;
 }

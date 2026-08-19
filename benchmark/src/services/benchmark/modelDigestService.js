@@ -18,16 +18,14 @@ function namesEquivalent(a, b) {
     const left = normalizeModelName(a);
     const right = normalizeModelName(b);
     if (!left || !right) return false;
-    if (left === right) return true;
-    if (left.startsWith('ax/') && left.slice(3) === right) return true;
-    if (right.startsWith('ax/') && right.slice(3) === left) return true;
-    return false;
+    return left.replace(/:latest$/i, '').toLowerCase()
+        === right.replace(/:latest$/i, '').toLowerCase();
 }
 
-async function loadHostTags(host) {
+async function loadHostTags(host, { refresh = false } = {}) {
     const cached = hostCache.get(host);
     const now = Date.now();
-    if (cached && cached.expiresAt > now) {
+    if (!refresh && cached && cached.expiresAt > now) {
         return cached.models;
     }
 
@@ -43,9 +41,9 @@ async function loadHostTags(host) {
     }
 }
 
-async function getModelDigest(host, model) {
+async function getModelDigest(host, model, options = {}) {
     if (!host || !model) return null;
-    const models = await loadHostTags(host);
+    const models = await loadHostTags(host, options);
     if (!Array.isArray(models)) return null;
     const found = models.find((entry) =>
         namesEquivalent(entry.name, model) || namesEquivalent(entry.model, model)

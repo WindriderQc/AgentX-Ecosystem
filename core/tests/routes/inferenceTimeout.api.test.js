@@ -37,9 +37,8 @@ jest.mock('../../src/services/modelRouterConfig', () => ({
 
 jest.mock('../../src/services/modelReadinessService', () => ({
   getModelReadiness: jest.fn(async () => ({
-    readiness: { stage: 'available' }
-  })),
-  isReadyStage: jest.fn((stage) => ['profiled', 'adapted', 'benchmarked'].includes(stage))
+    readiness: { stage: 'available', benchmarkQualified: false, stale: false, isReady: false }
+  }))
 }));
 
 jest.mock('../../src/services/hostPreferenceService', () => ({
@@ -77,7 +76,7 @@ describe('POST /api/inference/generate — fetch timeout', () => {
   });
 
   it('returns 504 and releases gate slot when fetch times out', async () => {
-    // Mock /api/show to reject adapted-model check
+    // Mock the exact-model request.
     // Mock /api/generate to never resolve (simulates Ollama hang)
     fetch.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url.includes('/api/show')) {

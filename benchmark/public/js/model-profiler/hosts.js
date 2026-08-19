@@ -193,7 +193,6 @@ function renderFitReport(report, useCase) {
   }
 
   const measuredRows = measuredM.map(m => {
-    const deployed = m.deploymentStatus === 'deployed' ? '<span class="mp-fit-dot" title="adapted variant deployed">●</span>' : '';
     const rel = m.reliability ? `<span class="mp-fit-sub">${esc(m.reliability)}</span>` : '';
     const loadTip = [
       m.spillDetected ? `spills at ${m.spillNumCtx || '?'} (safe ${m.safeCtx || '?'})` : 'no spill',
@@ -208,7 +207,7 @@ function renderFitReport(report, useCase) {
       vramCell = `<div class="mp-fit-bar" title="${m.vramPct}% of ${vramStr} VRAM"><div class="mp-fit-bar__fill ${barTone}" style="width:${pct}%"></div></div><span class="mp-fit-bar__label">${m.vramPct}%</span>`;
     }
     return `<tr>
-      <td class="mp-fit-name">${fitCompChip(m._comp)}${esc(m.modelName)} ${deployed}${fitMoeChip(m)}</td>
+      <td class="mp-fit-name">${fitCompChip(m._comp)}${esc(m.modelName)} ${fitMoeChip(m)}</td>
       <td>${m.tokensPerSec != null ? m.tokensPerSec : '—'} ${rel}</td>
       <td class="mp-fit-vramcell">${vramCell}</td>
       <td title="safe to ${fmtCtx(m.safeCtx)}">${fmtCtx(m.optimalNumCtx)}</td>

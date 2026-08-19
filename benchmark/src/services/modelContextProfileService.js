@@ -28,10 +28,7 @@ function hasValidThroughputEvidence(snapshot) {
 
 function modelNameCandidates(modelName) {
   const normalized = String(modelName || '').trim().replace(/:latest$/i, '');
-  if (!normalized) return [];
-  const slashIdx = normalized.indexOf('/');
-  const bare = slashIdx > 0 ? normalized.slice(slashIdx + 1) : null;
-  return Array.from(new Set([normalized, bare].filter(Boolean)));
+  return normalized ? [normalized] : [];
 }
 
 function bestStepForSnapshot(snapshot) {
@@ -46,21 +43,24 @@ function bestStepForSnapshot(snapshot) {
 
 function hostIdForUrl(hostUrl) {
   const normalized = normalizeHostUrl(hostUrl);
-  return getConfiguredHosts().find((host) => host.url === normalized)?.id || null;
+  return getConfiguredHosts().find((host) => normalizeHostUrl(host.url) === normalized)?.id || null;
 }
 
 async function updateFromProbeSnapshot(snapshot) {
   const tested = positiveInteger(snapshot?.testedNumCtx);
   const modelName = String(snapshot?.modelName || '').trim().replace(/:latest$/i, '');
   const hostUrl = normalizeHostUrl(snapshot?.hostUrl);
-  if (!modelName || !hostUrl || !tested || snapshot?.status !== 'completed') {
+  const artifactDigest = String(snapshot?.artifactDigest || '').trim();
+  const runtimeFingerprint = String(snapshot?.runtimeFingerprint || '').trim();
+  if (!modelName || !hostUrl || !artifactDigest || !runtimeFingerprint || !tested || snapshot?.status !== 'completed') {
     return null;
   }
   if (!hasValidThroughputEvidence(snapshot)) {
     return null;
   }
 
-  const existing = await ModelContextProfile.findOne({ modelName, hostUrl }).lean();
+  const identityFilter = { modelName, hostUrl, artifactDigest, runtimeFingerprint };
+  const existing = await ModelContextProfile.findOne(identityFilter).lean();
   const verifiedMaxContext = Math.max(
     positiveInteger(existing?.verifiedMaxContext) || 0,
     tested
@@ -77,12 +77,14 @@ async function updateFromProbeSnapshot(snapshot) {
   const evidenceTokensPerSec = Number(step?.tokensPerSec ?? snapshot.atLimitTokensPerSec ?? 0) || null;
 
   return ModelContextProfile.findOneAndUpdate(
-    { modelName, hostUrl },
+    identityFilter,
     {
       $set: {
         modelName,
         hostUrl,
-        hostId: hostIdForUrl(hostUrl),
+        hostId: snapshot.hostId || hostIdForUrl(hostUrl),
+        artifactDigest,
+        runtimeFingerprint,
         verifiedMaxContext,
         verifiedInputTokens,
         recommendedContext,
@@ -113,15 +115,18 @@ async function updateFromProbeSnapshot(snapshot) {
   ).lean();
 }
 
-async function findContextProfile(modelName, hostUrl) {
+async function findContextProfile(modelName, hostUrl, artifact = {}) {
   const host = normalizeHostUrl(hostUrl);
   const candidates = modelNameCandidates(modelName);
-  if (!host || candidates.length === 0) return null;
-  return ModelContextProfile.findOne({
+  if (!host || candidates.length === 0 || !artifact.digest || !artifact.runtimeFingerprint) return null;
+  const filter = {
     modelName: { $in: candidates },
     hostUrl: host,
     stale: { $ne: true }
-  }).lean();
+  };
+  filter.artifactDigest = artifact.digest;
+  filter.runtimeFingerprint = artifact.runtimeFingerprint;
+  return ModelContextProfile.findOne(filter).sort({ lastValidatedAt: -1 }).lean();
 }
 
 module.exports = {

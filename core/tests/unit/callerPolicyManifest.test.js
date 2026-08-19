@@ -3,9 +3,10 @@
 const {
   LANES,
   RATE_BUCKETS,
+  ROUTING_MODES,
   CALLER_POLICIES,
   DEFAULT_POLICY,
-  resolveCallerPolicy
+  resolveCallerPolicy,
 } = require('../../src/services/routing/callerPolicy');
 const { resolveLane } = require('../../src/services/inferenceLanePolicy');
 
@@ -23,33 +24,43 @@ const SAMPLES = {
   nestor: 'nestor/panel/ask',
   'nerve-center': 'nerve-center-intelligence',
   alerts: 'alerts-evaluate',
-  openclaw: 'openclaw-ollama'
+  openclaw: 'openclaw-ollama',
 };
 
 describe('caller policy', () => {
-  test('every declared family has a matching sample and valid live policy', () => {
+  test('every declared family has exact-artifact metadata and a matching live lane', () => {
     for (const policy of CALLER_POLICIES) {
       const sample = SAMPLES[policy.id];
       expect(sample).toBeDefined();
       expect(resolveCallerPolicy(sample)).toBe(policy);
       expect(LANES).toContain(policy.lane);
       expect(RATE_BUCKETS).toContain(policy.rateBucket);
+      expect(ROUTING_MODES).toContain(policy.routingMode);
+      expect(typeof policy.admission).toBe('boolean');
+      expect(policy.artifactPolicy).toBe('exact');
+      expect(typeof policy.cloudEligible).toBe('boolean');
+      expect(typeof policy.telemetryCaller).toBe('string');
       expect(resolveLane(sample).name).toBe(policy.lane);
     }
     expect(Object.keys(SAMPLES).sort()).toEqual(CALLER_POLICIES.map((policy) => policy.id).sort());
   });
 
-  test('known internal families no longer fall into the anonymous rate bucket', () => {
+  test('known internal families do not fall into the anonymous rate bucket', () => {
     for (const id of ['profiler', 'chat-exact', 'buddy-reaction', 'openclaw']) {
       expect(resolveCallerPolicy(SAMPLES[id]).rateBucket).not.toBe('general');
     }
   });
 
-  test('unknown callers retain the safe execution and rate defaults', () => {
+  test('unknown callers retain safe exact-artifact defaults', () => {
     const stranger = 'some-new-tool-nobody-registered';
     expect(resolveCallerPolicy(stranger)).toBe(DEFAULT_POLICY);
     expect(resolveLane(stranger).name).toBe('automated');
-    expect(DEFAULT_POLICY.rateBucket).toBe('general');
+    expect(DEFAULT_POLICY).toMatchObject({
+      rateBucket: 'general',
+      admission: true,
+      artifactPolicy: 'exact',
+      cloudEligible: false,
+    });
   });
 
   test.each([null, undefined, '', 123, {}])('resolves defensively for %p', (input) => {

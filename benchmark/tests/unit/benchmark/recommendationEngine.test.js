@@ -159,8 +159,8 @@ describe('formatLedgerEntry', () => {
 });
 
 describe('recommendationEngine internals', () => {
-  it('sameModel normalizes ax/ prefix and :latest', () => {
-    expect(_internal.sameModel('ax/gemma4:e4b', 'gemma4:e4b')).toBe(true);
+  it('sameModel preserves namespaces and normalizes only :latest', () => {
+    expect(_internal.sameModel('ax/gemma4:e4b', 'gemma4:e4b')).toBe(false);
     expect(_internal.sameModel('qwen:7b:latest', 'qwen:7b')).toBe(true);
     expect(_internal.sameModel('a', 'b')).toBe(false);
   });

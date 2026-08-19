@@ -25,6 +25,16 @@ const ModelContextProfile = require('../../models/ModelContextProfile');
 const HostPreference = require('../../models/HostPreference');
 const svc = require('../../src/services/modelContextInfoService');
 
+const exactArtifact = {
+  model: 'ax/qwen3.5:9b',
+  hostId: 'host-alpha',
+  hostUrl: 'http://host:11434',
+  digest: 'sha256:artifact-one',
+  runtimeFingerprint: 'runtime-one',
+  registryQualified: true,
+  identityQualified: true
+};
+
 function mockRegistry(entry) {
   const chain = {
     select: jest.fn(() => chain),
@@ -75,7 +85,7 @@ describe('modelContextInfoService', () => {
     expect(info.maxContextLength).toBe(131072);
   });
 
-  it('falls back to registry profiled value when Modelfile lacks num_ctx', async () => {
+  it('does not reuse a legacy registry context value without exact artifact evidence', async () => {
     svc._setFetch(makeFetch({
       parameters: 'stop <|im_end|>',
       model_info: {}
@@ -85,8 +95,8 @@ describe('modelContextInfoService', () => {
       executionDefaults: { num_ctx: 8192 }
     });
     const info = await svc.getContextInfo('qwen2.5:7b', 'http://host:11434');
-    expect(info.num_ctx).toBe(32768);
-    expect(info.source).toBe('profiled');
+    expect(info.num_ctx).toBeNull();
+    expect(info.source).toBe('unresolved');
   });
 
   it('uses a matching HostPreference pin before Modelfile context', async () => {
@@ -106,7 +116,12 @@ describe('modelContextInfoService', () => {
       verifiedInputTokens: 100000
     });
 
-    const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://192.0.2.12:11434');
+    const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://192.0.2.12:11434', {
+      artifactIdentity: {
+        ...exactArtifact,
+        hostUrl: 'http://192.0.2.12:11434'
+      }
+    });
 
     expect(info).toEqual(expect.objectContaining({
       num_ctx: 131072,
@@ -119,7 +134,7 @@ describe('modelContextInfoService', () => {
     }));
   });
 
-  it('uses host/model context profiles before legacy registry values', async () => {
+  it('uses a context profile only for the qualified exact artifact', async () => {
     const profiledAt = new Date('2026-06-16T00:00:00Z');
     svc._setFetch(makeFetch({
       parameters: 'stop <|im_end|>',
@@ -137,7 +152,9 @@ describe('modelContextInfoService', () => {
       executionDefaults: { num_ctx: 8192 }
     });
 
-    const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://host:11434');
+    const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://host:11434', {
+      artifactIdentity: exactArtifact
+    });
 
     expect(info).toEqual(expect.objectContaining({
       num_ctx: 237568,
@@ -149,8 +166,10 @@ describe('modelContextInfoService', () => {
       maxContextLength: 262144
     }));
     expect(ModelContextProfile.findOne).toHaveBeenCalledWith(expect.objectContaining({
-      modelName: { $in: ['ax/qwen3.5:9b', 'qwen3.5:9b'] },
+      modelName: { $in: ['ax/qwen3.5:9b'] },
       hostUrl: 'http://host:11434',
+      artifactDigest: 'sha256:artifact-one',
+      runtimeFingerprint: 'runtime-one',
       stale: { $ne: true }
     }));
   });
@@ -185,14 +204,14 @@ describe('modelContextInfoService', () => {
     expect(info.source).toBe('unresolved');
   });
 
-  it('still resolves when no host is provided (registry-only mode)', async () => {
+  it('does not resolve profiled context without a host-bound artifact identity', async () => {
     svc._setFetch(jest.fn()); // should not be called
     mockRegistry({
       contextTest: { status: 'completed', testedNumCtx: 24576 }
     });
     const info = await svc.getContextInfo('model-y');
-    expect(info.num_ctx).toBe(24576);
-    expect(info.source).toBe('profiled');
+    expect(info.num_ctx).toBeNull();
+    expect(info.source).toBe('unresolved');
   });
 
   it('caches results per (host, model) for the TTL', async () => {

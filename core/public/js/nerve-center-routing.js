@@ -310,7 +310,8 @@
 
         const rec = trace.recommendation || {};
         const scheduler = rec.scheduler || {};
-        const adaptation = trace.adaptation || {};
+        const artifactResolution = trace.artifactResolution || {};
+        const artifact = trace.inferenceContract?.artifact || {};
         const reasons = Array.isArray(trace.difference?.reasons) ? trace.difference.reasons : [];
 
         return `
@@ -340,8 +341,10 @@
                     { label: 'Configured Task Model', value: trace.configured?.model || '--' },
                     { label: 'Scheduler Source', value: rec.source || '--' },
                     { label: 'Scheduler Reason', value: scheduler.reason || rec.reason || '--', weight: 500 },
-                    { label: 'Adapted Probe', value: adaptation.probe || '--' },
-                    { label: 'Adapted Change', value: adaptation.applied ? `${adaptation.before} -> ${adaptation.after}` : 'No model-name change' },
+                    { label: 'Artifact Resolution', value: artifactResolution.source || '--' },
+                    { label: 'Exact Tag', value: artifactResolution.resolved || used.model || '--' },
+                    { label: 'Artifact Digest', value: artifact.digest || '--' },
+                    { label: 'Registry Qualified', value: artifact.registryQualified === true ? 'Yes' : (artifact.registryQualified === false ? 'No' : '--') },
                     { label: 'Ollama Endpoint', value: trace.ollama?.endpoint || '--' },
                     { label: 'keep_alive', value: trace.ollama?.keepAlive == null ? '--' : trace.ollama.keepAlive }
                 ])}

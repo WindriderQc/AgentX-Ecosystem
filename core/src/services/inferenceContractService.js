@@ -10,16 +10,20 @@ const {
 } = require('../helpers/ollamaHostConfig');
 const { getTokenCounter } = require('./tokenCounter');
 const { modelLookupNames } = require('../helpers/modelNameNormalization');
+const {
+  profileMatchesArtifact,
+  readLiveDigest,
+  resolveArtifactIdentity
+} = require('./artifactIdentityService');
 
 const CONTRACT_VERSION = 'agentx.inference-contract.v1';
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
-const PROFILED_STAGES = new Set(['profiled', 'adapted', 'benchmarked']);
+const PROFILED_STAGES = new Set(['profiled', 'benchmarked']);
 const VALIDATED_CONTEXT_SOURCES = new Set([
   'model_context_profile',
   'context_test',
   'profiled'
 ]);
-const ARTIFACT_LOOKUP_TIMEOUT_MS = 5000;
 
 function positiveInteger(value) {
   const parsed = Number(value);
@@ -32,42 +36,8 @@ function mapValue(mapLike, key) {
   return mapLike[key] || null;
 }
 
-function artifactNamesEquivalent(left, right) {
-  const normalize = (value) => String(value || '').trim().replace(/:latest$/i, '').toLowerCase();
-  const a = normalize(left);
-  const b = normalize(right);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.startsWith('ax/') && a.slice(3) === b) return true;
-  if (b.startsWith('ax/') && b.slice(3) === a) return true;
-  return false;
-}
-
 async function readArtifactDigest(model, host, deps = {}) {
-  if (!model || !host) return null;
-  if (typeof deps.resolveArtifactDigest === 'function') {
-    return deps.resolveArtifactDigest(model, host);
-  }
-  if (process.env.NODE_ENV === 'test' && !deps.fetchImpl) return null;
-
-  const fetchImpl = deps.fetchImpl || require('node-fetch');
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ARTIFACT_LOOKUP_TIMEOUT_MS);
-  try {
-    const response = await fetchImpl(`${host}/api/tags`, { signal: controller.signal });
-    if (!response.ok) return null;
-    const payload = await response.json();
-    const match = (Array.isArray(payload?.models) ? payload.models : []).find((entry) =>
-      artifactNamesEquivalent(entry?.name || entry?.model, model)
-    );
-    return typeof match?.digest === 'string' && match.digest.trim()
-      ? match.digest.trim()
-      : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  return readLiveDigest(model, host, deps);
 }
 
 function resolveHostIdentity(host, configuredHosts = getConfiguredHosts()) {
@@ -111,7 +81,7 @@ async function readHostProfile(host, deps = {}) {
     if (!collection) return null;
     return await collection.findOne(
       { hostUrl: normalizedHost },
-      { projection: { hostId: 1, hostUrl: 1, displayName: 1 } }
+      { projection: { hostId: 1, hostUrl: 1, displayName: 1, gpu: 1, ollama: 1, cpu: 1 } }
     );
   } catch {
     return null;
@@ -179,16 +149,25 @@ async function resolveCapabilities(model, host, deps = {}) {
     hostId: hostProfile?.hostId || configuredIdentity.hostId,
     hostName: hostProfile?.displayName || configuredIdentity.hostName
   };
-  const [profile, digest] = await Promise.all([
+  const [profile, exactArtifact] = await Promise.all([
     readModelProfile(model, deps),
     deps.includeArtifactIdentity === true
-      ? readArtifactDigest(model, identity.host, deps)
+      ? resolveArtifactIdentity(model, identity.host, {
+        ...deps,
+        hostProfile: hostProfile || undefined
+      })
       : null
   ]);
+  if (exactArtifact?.hostId) identity.hostId = exactArtifact.hostId;
   const thinkingProfile = mapValue(profile?.thinkingProfiles, identity.hostId);
   const readiness = mapValue(profile?.readiness, identity.hostId);
   const stage = readiness?.stage || (thinkingProfile ? 'profiled' : 'unknown');
-  const qualified = PROFILED_STAGES.has(stage) && !!identity.hostId;
+  const exactProfile = profileMatchesArtifact(readiness?.artifact, exactArtifact);
+  const qualified = PROFILED_STAGES.has(stage)
+    && !!identity.hostId
+    && readiness?.benchmarkQualified === true
+    && readiness?.stale !== true
+    && exactProfile;
 
   let thinking = unknownThinkingCapability();
   if (thinkingProfile) {
@@ -228,19 +207,24 @@ async function resolveCapabilities(model, host, deps = {}) {
 
   return {
     artifact: {
-      model,
-      digest,
-      identityQualified: !!digest,
-      identitySource: digest ? 'ollama_tags' : 'unresolved',
+      model: exactArtifact?.model || model,
+      hostId: exactArtifact?.hostId || identity.hostId,
+      host: exactArtifact?.hostUrl || identity.host,
+      digest: exactArtifact?.digest || null,
+      runtimeFingerprint: exactArtifact?.runtimeFingerprint || null,
+      registryId: exactArtifact?.registryId || null,
+      registryDigest: exactArtifact?.registryDigest || null,
+      registryQualified: exactArtifact?.registryQualified === true,
+      identityQualified: exactArtifact?.identityQualified === true,
+      identitySource: exactArtifact?.identityQualified ? 'core_registry+ollama_tags' : 'unresolved',
       matchedProfile: profile?.name || null,
-      host: identity.host,
-      hostId: identity.hostId,
       hostName: identity.hostName
     },
     qualification: {
       state: stage,
       qualified,
       stale: readiness?.stale === true,
+      exactArtifact: exactProfile,
       source: profile ? 'benchmark_model_profile' : 'fallback'
     },
     thinking,
@@ -289,7 +273,9 @@ async function resolveContextBudget(input, deps = {}) {
         deps: deps.contextDeps
       });
     } else if (canUseDefaultResolver) {
-      resolved = await getContextInfo(input.model, input.host);
+      resolved = await getContextInfo(input.model, input.host, {
+        artifactIdentity: deps.artifactIdentity || null
+      });
     }
   } catch {
     resolved = null;
@@ -375,10 +361,11 @@ async function resolveContextBudget(input, deps = {}) {
 }
 
 async function resolveInferenceContract(input = {}, deps = {}) {
-  const [capabilityContract, contextBudget] = await Promise.all([
-    resolveCapabilityContract(input, deps),
-    resolveContextBudget(input, deps)
-  ]);
+  const capabilityContract = await resolveCapabilityContract(input, deps);
+  const contextBudget = await resolveContextBudget(input, {
+    ...deps,
+    artifactIdentity: capabilityContract.artifact
+  });
 
   return {
     ...capabilityContract,

@@ -196,7 +196,7 @@ describe('hostPreferenceService', () => {
       }
     });
 
-    it('warmHost treats an adapted ax variant as satisfying the base pin', async () => {
+    it('warmHost does not treat a namespaced artifact as satisfying a bare pin', async () => {
       const originalFetch = global.fetch;
       const hostUrl = 'http://adapted-host:11434';
       await HostPreference.create({
@@ -223,11 +223,14 @@ describe('hostPreferenceService', () => {
 
       try {
         const result = await service.warmHost(hostUrl);
-        expect(result[0].status).toBe('already_loaded');
+        expect(result[0].status).toBe('ok');
         const generateCalls = global.fetch.mock.calls.filter(
           c => typeof c[0] === 'string' && c[0].endsWith('/api/generate')
         );
-        expect(generateCalls).toHaveLength(0);
+        expect(generateCalls).toHaveLength(1);
+        expect(JSON.parse(generateCalls[0][1].body)).toMatchObject({
+          model: 'gemma4:26b'
+        });
       } finally {
         global.fetch = originalFetch;
       }

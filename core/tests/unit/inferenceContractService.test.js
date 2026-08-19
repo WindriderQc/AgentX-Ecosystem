@@ -10,6 +10,7 @@ const {
   resolveInferenceContract,
   resolveInferenceContractSnapshot
 } = require('../../src/services/inferenceContractService');
+const { buildRuntimeFingerprint } = require('../../../shared/artifactIdentity');
 
 const HOSTS = [
   {
@@ -32,21 +33,42 @@ function profileCollection(profile) {
 
 describe('inferenceContractService', () => {
   it('resolves thinking from the deployed host/artifact profile rather than its name', async () => {
+    const hostProfile = {
+      hostId: 'host-alpha',
+      hostUrl: 'http://192.0.2.199:11434',
+      displayName: 'Host Alpha'
+    };
+    const runtimeFingerprint = buildRuntimeFingerprint(hostProfile, hostProfile.hostUrl);
     const capabilities = await resolveCapabilities(
       'ax/plain-custom-model:latest',
       'http://192.0.2.199:11434',
       {
         configuredHosts: HOSTS,
-        hostProfilesCollection: profileCollection({
-          hostId: 'host-alpha',
-          hostUrl: 'http://192.0.2.199:11434',
-          displayName: 'Host Alpha'
-        }),
+        includeArtifactIdentity: true,
+        hostProfilesCollection: profileCollection(hostProfile),
+        resolveArtifactDigest: jest.fn(async () => 'sha256:profiled'),
+        registryEntry: {
+          _id: 'registry-a',
+          modelName: 'ax/plain-custom-model',
+          installations: [{ hostUrl: hostProfile.hostUrl, digest: 'sha256:profiled', status: 'active', isActive: true }]
+        },
         modelProfilesCollection: profileCollection({
-          name: 'plain-custom-model',
+          name: 'ax/plain-custom-model',
           capabilities: { tools: true },
           readiness: {
-            'host-alpha': { stage: 'adapted', stale: false }
+            'host-alpha': {
+              stage: 'profiled',
+              stale: false,
+              benchmarkQualified: true,
+              artifact: {
+                model: 'ax/plain-custom-model',
+                hostId: 'host-alpha',
+                hostUrl: hostProfile.hostUrl,
+                digest: 'sha256:profiled',
+                runtimeFingerprint,
+                registryQualified: true
+              }
+            }
           },
           thinkingProfiles: {
             'host-alpha': {
@@ -69,12 +91,12 @@ describe('inferenceContractService', () => {
     );
 
     expect(capabilities.artifact).toMatchObject({
-      model: 'ax/plain-custom-model:latest',
-      matchedProfile: 'plain-custom-model',
+      model: 'ax/plain-custom-model',
+      matchedProfile: 'ax/plain-custom-model',
       hostId: 'host-alpha'
     });
     expect(capabilities.qualification).toMatchObject({
-      state: 'adapted',
+      state: 'profiled',
       qualified: true
     });
     expect(capabilities.thinking).toMatchObject({
@@ -379,6 +401,7 @@ describe('inferenceContractService', () => {
     const baseDeps = {
       now: new Date('2026-07-25T04:00:00Z'),
       configuredHosts: HOSTS,
+      hostProfilesCollection: profileCollection({ hostId: 'primary', hostUrl: HOSTS[0].url }),
       modelProfilesCollection: profileCollection(null),
       resolveContextDetails: jest.fn(async () => ({
         num_ctx: 32768,
@@ -390,21 +413,31 @@ describe('inferenceContractService', () => {
       host: HOSTS[0].url
     }, {
       ...baseDeps,
-      resolveArtifactDigest: jest.fn(async () => 'sha256:first')
+      resolveArtifactDigest: jest.fn(async () => 'sha256:first'),
+      registryEntry: {
+        _id: 'registry-a',
+        modelName: 'ax/model-a',
+        installations: [{ hostUrl: HOSTS[0].url, digest: 'sha256:first', status: 'active', isActive: true }]
+      }
     });
     const repulled = await resolveInferenceContractSnapshot({
       model: 'ax/model-a:latest',
       host: HOSTS[0].url
     }, {
       ...baseDeps,
-      resolveArtifactDigest: jest.fn(async () => 'sha256:second')
+      resolveArtifactDigest: jest.fn(async () => 'sha256:second'),
+      registryEntry: {
+        _id: 'registry-a',
+        modelName: 'ax/model-a',
+        installations: [{ hostUrl: HOSTS[0].url, digest: 'sha256:second', status: 'active', isActive: true }]
+      }
     });
 
     expect(first.artifact).toMatchObject({
-      model: 'ax/model-a:latest',
+      model: 'ax/model-a',
       digest: 'sha256:first',
       identityQualified: true,
-      identitySource: 'ollama_tags'
+      identitySource: 'core_registry+ollama_tags'
     });
     expect(first.snapshot.fingerprint).not.toBe(repulled.snapshot.fingerprint);
   });

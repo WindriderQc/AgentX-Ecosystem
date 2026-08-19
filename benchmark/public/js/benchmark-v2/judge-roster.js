@@ -33,10 +33,6 @@ export function buildJudgeRoster(judgeRoster, config, onlineHosts) {
       </div>
       ${warningBanner}
       <div class="jrc-help">Pick a judge host first. If Courthouse has a default judge for that host, it is selected automatically. If not, the host stays selected and you pick one of that host's available judges below.</div>
-      <div class="jrc-ax-note" title="Any pick is silently upgraded to the ax/-tuned variant if one is deployed on the selected host. Models tagged &quot;ax-tuned&quot; have been profiled for that host's VRAM envelope.">
-        <span class="jrc-ax-note-icon">&#x2728;</span>
-        <span>Picks tagged <strong>ax-tuned</strong> run the host-profiled variant automatically.</span>
-      </div>
       <div class="jhc-grid">
         ${panels.map((panel) => _buildHostCard(panel, selection)).join('')}
       </div>
@@ -112,16 +108,7 @@ function _normalizeHostPanels(judgeRoster) {
     const hostPanels = Array.isArray(judgeRoster?.hostPanels) ? judgeRoster.hostPanels : [];
     return hostPanels
         .map((panel) => {
-            const defaultJudgeModel = stripAxPrefix(normalizeModelName(panel.defaultJudgeModel || ''));
-
-            // Collect ax/ variants available on this host, so base pills can be
-            // tagged "ax-tuned". Standalone ax/ pills are then hidden — the
-            // inference layer auto-upgrades base picks to the ax/ variant.
-            const axBaseSet = new Set();
-            (panel.judges || []).forEach((j) => {
-                const raw = normalizeModelName(j.modelName || j.model || '');
-                if (raw.startsWith('ax/')) axBaseSet.add(raw.slice(3));
-            });
+            const defaultJudgeModel = normalizeModelName(panel.defaultJudgeModel || '');
 
             const judges = (panel.judges || [])
                 .map((judge) => ({
@@ -130,13 +117,11 @@ function _normalizeHostPanels(judgeRoster) {
                     successRate: judge.successRate == null ? null : Number(judge.successRate),
                     avgScore: judge.avgScore == null ? null : Number(judge.avgScore),
                 }))
-                .filter((judge) => judge.model && !judge.model.startsWith('ax/'))
-                .map((judge) => ({ ...judge, axTuned: axBaseSet.has(judge.model) }))
+                .filter((judge) => judge.model)
                 .sort((left, right) => {
                     const leftDefault = left.model === defaultJudgeModel;
                     const rightDefault = right.model === defaultJudgeModel;
                     if (leftDefault !== rightDefault) return leftDefault ? -1 : 1;
-                    if (left.axTuned !== right.axTuned) return left.axTuned ? -1 : 1;
                     if (left.evalCount !== right.evalCount) return right.evalCount - left.evalCount;
                     return (right.successRate || 0) - (left.successRate || 0);
                 });
@@ -151,14 +136,10 @@ function _normalizeHostPanels(judgeRoster) {
         .filter((panel) => panel.hostUrl);
 }
 
-function stripAxPrefix(name) {
-    return String(name || '').replace(/^ax\//, '');
-}
-
 function _resolveInitialSelection(panels, saved = {}, config = {}) {
     const candidates = [
-        { host: saved.host || '', model: stripAxPrefix(saved.model || '') },
-        { host: config.judge_host || '', model: stripAxPrefix(config.judge_model || '') },
+        { host: saved.host || '', model: normalizeModelName(saved.model || '') },
+        { host: config.judge_host || '', model: normalizeModelName(config.judge_model || '') },
     ];
 
     for (const candidate of candidates) {
@@ -264,7 +245,6 @@ function _buildPanelSelection(panel, selectedJudge) {
     return `<div class="jrc-selected-card">
         <div class="jrc-sc-top">
           <span class="jrc-sc-name">${esc(selectedJudge.model)}</span>
-          ${selectedJudge.axTuned ? '<span class="jrc-ax-badge" title="Runs the host-profiled ax/ variant">ax-tuned</span>' : ''}
           ${isDefault ? '<span class="jrc-default-badge">COURTHOUSE DEFAULT</span>' : '<span class="jhc-manual-badge">MANUAL OVERRIDE</span>'}
         </div>
         <div class="jrc-sc-meta">
@@ -283,21 +263,17 @@ function _buildJudgePill(panel, judge, selectedModel) {
     const stats = [`${fmtNum(judge.evalCount || 0)} evals`];
     if (judge.successRate != null) stats.push(`${judge.successRate}% agreement`);
     if (judge.avgScore != null) stats.push(`avg ${judge.avgScore}/10`);
-    const titleText = judge.axTuned
-        ? `${stats.join(' · ')} — runs as ax/${judge.model} on this host`
-        : stats.join(' · ');
+    const titleText = stats.join(' · ');
 
-    return `<button type="button" class="jhc-judge-pill${isSelected ? ' jhc-selected' : ''}${judge.axTuned ? ' jhc-ax-tuned' : ''}"
+    return `<button type="button" class="jhc-judge-pill${isSelected ? ' jhc-selected' : ''}"
         data-host="${esc(panel.hostUrl)}"
         data-model="${esc(judge.model)}"
         data-eval-count="${esc(judge.evalCount ?? 0)}"
         data-success-rate="${esc(judge.successRate ?? '')}"
         data-avg-score="${esc(judge.avgScore ?? '')}"
-        data-ax-tuned="${judge.axTuned ? '1' : '0'}"
         data-host-name="${esc(panel.hostName)}"
         title="${esc(titleText)}">
         <span class="jhc-judge-name">${esc(judge.model)}</span>
-        ${judge.axTuned ? '<span class="jrc-ax-badge" aria-label="ax-tuned variant available">ax-tuned</span>' : ''}
         ${isDefault ? '<span class="jrc-default-badge">DEFAULT</span>' : ''}
         <span class="jhc-judge-meta">${esc(stats.join(' · '))}</span>
       </button>`;

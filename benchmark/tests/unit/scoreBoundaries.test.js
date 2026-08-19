@@ -41,17 +41,10 @@ const {
  * Build a mock fetch response that the judge HTTP call will receive.
  * scores: plain object of dimension keys and numeric/string values
  *
- * Also primes a probe response: callJudge first probes {host}/api/show to
- * check for an ax/-prefixed variant. We return 404 so the probe falls through
- * to the base model, then serve the real judge response on the next call.
+ * The exact judge tag is sent directly through Core with no variant probe.
  */
 function mockJudgeHttpResponse(scores) {
     const responseText = JSON.stringify(scores);
-    mockBenchmarkFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-        json: async () => ({})
-    });
     mockBenchmarkFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({

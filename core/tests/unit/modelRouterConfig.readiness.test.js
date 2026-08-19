@@ -8,10 +8,9 @@ const mockHostPrefGetByHost = jest.fn();
 const mockHostPrefGetPinnedEntries = jest.fn((pref) => pref?.pinnedModels || []);
 const mockHostPrefGetDefaultModelsMap = jest.fn(async () => new Map());
 const mockCompareReadiness = jest.fn((left, right) => {
-  const rank = { available: 0, profiled: 1, adapted: 2, benchmarked: 3 };
+  const rank = { available: 0, profiled: 1, benchmarked: 2 };
   return (rank[right?.stage] || 0) - (rank[left?.stage] || 0);
 });
-const mockIsReadyStage = jest.fn((stage) => ['profiled', 'adapted', 'benchmarked'].includes(stage));
 
 jest.mock('../../src/helpers/schedulerClient', () => ({
   resolveAdvisoryHost: (...args) => mockResolveAdvisoryHost(...args)
@@ -19,8 +18,7 @@ jest.mock('../../src/helpers/schedulerClient', () => ({
 
 jest.mock('../../src/services/modelReadinessService', () => ({
   getModelReadiness: (...args) => mockGetModelReadiness(...args),
-  compareReadiness: (...args) => mockCompareReadiness(...args),
-  isReadyStage: (...args) => mockIsReadyStage(...args)
+  compareReadiness: (...args) => mockCompareReadiness(...args)
 }));
 
 jest.mock('../../src/services/hostPreferenceService', () => ({
@@ -64,7 +62,6 @@ describe('modelRouterConfig readiness preference', () => {
     mockHostPrefGetPinnedEntries.mockImplementation((pref) => pref?.pinnedModels || []);
     mockHostPrefGetDefaultModelsMap.mockResolvedValue(new Map());
     mockCompareReadiness.mockClear();
-    mockIsReadyStage.mockClear();
 
     mockResolveAdvisoryHost.mockImplementation(async ({ fallbackHostId, fallbackHostUrl }) => ({
       source: 'fallback',
@@ -81,7 +78,8 @@ describe('modelRouterConfig readiness preference', () => {
     process.env.AGENTX_CODING_SPECIALIST_MODEL = 'ax/qwen3-coder:30b';
     mockGetModelReadiness.mockImplementation(async (_model, hostUrl) => ({
       readiness: {
-        stage: hostUrl.includes('secondary') ? 'adapted' : 'available'
+        stage: hostUrl.includes('secondary') ? 'profiled' : 'available',
+        isReady: hostUrl.includes('secondary')
       }
     }));
 
@@ -91,7 +89,7 @@ describe('modelRouterConfig readiness preference', () => {
     expect(result.model).toBe('ax/qwen3-coder:30b');
     expect(result.host).toBe('secondary');
     expect(result.url).toBe('http://secondary:11434');
-    expect(result.readiness.stage).toBe('adapted');
+    expect(result.readiness.stage).toBe('profiled');
   });
 
   it('keeps the configured host when no profiled alternative exists', async () => {
@@ -113,7 +111,8 @@ describe('modelRouterConfig readiness preference', () => {
     process.env.AGENTX_LIGHTWEIGHT_MODEL = 'ax/qwen3.5:9b';
     mockGetModelReadiness.mockImplementation(async (_model, hostUrl) => ({
       readiness: {
-        stage: hostUrl.includes('primary') ? 'adapted' : 'available'
+        stage: hostUrl.includes('primary') ? 'profiled' : 'available',
+        isReady: hostUrl.includes('primary')
       }
     }));
 

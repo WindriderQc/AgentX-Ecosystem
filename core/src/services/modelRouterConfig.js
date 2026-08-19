@@ -36,8 +36,7 @@ const logger = require('../../config/logger');
 const { resolveAdvisoryHost } = require('../helpers/schedulerClient');
 const {
     getModelReadiness,
-    compareReadiness,
-    isReadyStage
+    compareReadiness
 } = require('./modelReadinessService');
 const {
     TASK_TYPE_METADATA,
@@ -520,7 +519,7 @@ async function resolvePreferredTaskEntry(taskType, options = {}) {
     }));
 
     const readyCandidates = evaluated
-        .filter((candidate) => isReadyStage(candidate.readiness?.stage))
+        .filter((candidate) => candidate.readiness?.isReady === true)
         .sort((left, right) => {
             const readinessOrder = compareReadiness(left.readiness, right.readiness);
             if (readinessOrder !== 0) return readinessOrder;
