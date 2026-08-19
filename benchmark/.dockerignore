@@ -6,7 +6,8 @@ logs
 test-results
 coverage
 tests
-scripts
+scripts/*
+!scripts/migrate-exact-artifact-profile-indexes.js
 gift
 *.md
 !README.md
