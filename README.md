@@ -124,7 +124,11 @@ expectations are in [Install and update modes](docs/RELEASES.md).
 
 Agent X does not require an operations repository. Host-specific automation
 and private integrations stay outside this repository and may call the bounded
-product APIs. Advanced operators may also install an absolute-path trusted
+product APIs. Independently deployed applications can use the generic,
+stateless [external consumer API](docs/EXTERNAL_CONSUMERS.md) for authenticated
+routed inference, effective capability discovery, streaming, and cancellation
+without loading application code or storing application transcripts in Core.
+Advanced operators may also install an absolute-path trusted
 extension in the full profile; Core owns only the generic loader and versioned
 contracts, never the extension source, secret, mount, or deployment. See
 [Trusted extensions](docs/TRUSTED_EXTENSIONS.md).

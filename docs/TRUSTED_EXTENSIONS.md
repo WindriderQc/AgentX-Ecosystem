@@ -5,6 +5,14 @@ owned trusted extensions. The seam lets an operator add a private application
 without forking Core or duplicating inference, routing, streaming, telemetry,
 PromptConfig, or conversation persistence.
 
+Use this seam only when the component must share Core's process and injected
+conversation/security contracts. An application that owns its UI,
+authentication, private state, conversations, privacy policy, or release
+lifecycle should normally run independently and use the versioned
+[external consumer API](EXTERNAL_CONSUMERS.md) for stateless routed inference.
+That boundary also lets the application support an explicit direct-provider
+mode without making Agent X part of its availability or storage boundary.
+
 No extension is bundled or enabled by the product. The default `demo` profile
 never loads extensions. Loading requires all of the following:
 

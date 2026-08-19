@@ -36,6 +36,15 @@ extension through its disabled-by-default versioned seam. Agent X never embeds
 the private implementation, secret, mount, or deployment, and the seam is not
 an operations extension framework. See [Trusted extensions](TRUSTED_EXTENSIONS.md).
 
+Independent applications should prefer the versioned
+[external consumer API](EXTERNAL_CONSUMERS.md). It exposes authenticated,
+stateless routed inference and a sanitized effective-routing snapshot over
+HTTP. Core never persists consumer transcripts, returns host URLs, accepts a
+consumer-selected host, or treats caller identity metadata as lane authority.
+Streaming is SSE and client disconnect cancels the Core-owned upstream request.
+The API uses a route-scoped external-consumer token so applications do not need
+the broader operator credential.
+
 A private Data service may independently expose a bounded, read-only API to
 agents. Data remains outside the product boundary: it is neither a product
 service nor a skill owned or loaded by Agent X.
@@ -59,6 +68,9 @@ service nor a skill owned or loaded by Agent X.
 - Trusted extensions use injected Core contracts for Core-owned data. In
   particular, transcript reads and lifecycle mutations go through the scoped
   conversation lifecycle service rather than direct collection access.
+- External consumers use the HTTP consumer contract for routed inference. They
+  own application state and conversation persistence, cannot select an
+  inference host, and cannot derive private topology from the routing snapshot.
 - Model identity is the exact installed tag, host, manifest digest, and runtime
   fingerprint. Profiling records evidence for that identity and never creates
   or silently selects a replacement tag; see
