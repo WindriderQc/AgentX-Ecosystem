@@ -20,6 +20,10 @@ to host loopback only; MongoDB, Qdrant, and opt-in Docker Ollama have no host
 port. All persisted data uses named volumes owned by this project. There are no
 host bind mounts.
 
+Compose, image CI, and release publishing use `docker/core.Dockerfile`,
+`docker/benchmark.Dockerfile`, and `docker/rag.Dockerfile` as the only product
+image build definitions. Service-local duplicate Dockerfiles are unsupported.
+
 ## Runtime boundary
 
 `AGENTX_PROFILE=demo` is the product-safe default, including when the variable
