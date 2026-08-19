@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 
 const ProbeStepSchema = new mongoose.Schema({
   numCtx: Number,
+  requestSucceeded: Boolean,
   tokensPerSec: Number,
   promptTokens: Number,
   completionTokens: Number,
