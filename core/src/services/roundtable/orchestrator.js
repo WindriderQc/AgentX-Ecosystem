@@ -31,7 +31,6 @@ const {
   getPendingInterjections,
   markInterjectionsApplied
 } = require('./controls');
-const { normalizeTelegramConfig, publishRoundtableEvent } = require('./telegramPublisher');
 
 // Optional web-search integration. If the module isn't present at runtime,
 // agents with enableWebSearch=true will just run without web context.
@@ -281,10 +280,6 @@ async function recordAppliedInterjections(roundtableDoc, interjections, round, e
       count: interjections.length
     });
   }
-  await publishRoundtableEvent(roundtableDoc, {
-    type: 'interjections-applied',
-    count: interjections.length
-  });
   return interjections;
 }
 
@@ -345,8 +340,6 @@ async function executeRound(roundtableDoc, roundNum, agents, buildMessages, time
       { $set: { 'panelConfig.$.resolvedTarget': result.target, 'panelConfig.$.resolvedHostName': result.hostName } }
     );
 
-    await publishRoundtableEvent(roundtableDoc, { type: 'turn', turn: persistedTurn });
-
     results[agent.agentId] = result;
   }
 
@@ -366,7 +359,6 @@ async function runRoundtable(roundtableId, emitter) {
     doc.status = 'running';
     await doc.save();
     if (emitter) emitter.emit('chunk', { type: 'started', roundtableId, rounds: doc.rounds });
-    await publishRoundtableEvent(doc, { type: 'started' });
 
     const agents = doc.panelConfig.map((a) => a.toObject());
     const totalTimer = setTimeout(async () => {
@@ -467,7 +459,6 @@ async function runRoundtable(roundtableId, emitter) {
     );
 
     doc = await Roundtable.findById(roundtableId);
-    await publishRoundtableEvent(doc, { type: 'synthesis', response: synthResult.response });
     logger.info('Roundtable completed', { roundtableId, totalDurationMs, turns: allTurns.length });
     if (emitter) emitter.emit('chunk', {
       type: 'done', status: 'completed', totalDurationMs, decisionStatus
@@ -478,8 +469,6 @@ async function runRoundtable(roundtableId, emitter) {
       { _id: roundtableId },
       { $set: { status: 'failed', error: err.message, totalDurationMs: Date.now() - startTime, completedAt: new Date() } }
     ).catch(() => {});
-    const failedDoc = await Roundtable.findById(roundtableId).catch(() => doc);
-    await publishRoundtableEvent(failedDoc || doc, { type: 'failed', error: err.message });
     if (emitter) emitter.emit('chunk', { type: 'done', status: 'failed', error: err.message });
   } finally {
     emitterRegistry.delete(roundtableId);
@@ -494,7 +483,6 @@ async function createRoundtable(options) {
     synthesizer = DEFAULT_SYNTHESIZER,
     source = 'api',
     tags = [],
-    telegram = null,
     governance = {}
   } = options;
 
@@ -553,20 +541,11 @@ async function createRoundtable(options) {
     systemPrompt: synthesizer.systemPrompt || DEFAULT_SYNTHESIZER.systemPrompt
   };
 
-  let normalizedTelegram = null;
-  try {
-    normalizedTelegram = normalizeTelegramConfig(telegram);
-  } catch (err) {
-    err.status = 400;
-    throw err;
-  }
-
   return Roundtable.create({
     question,
     rounds: Math.min(Math.max(rounds, 1), 3),
     panelConfig: mergedPanel,
     synthesizerConfig: mergedSynthesizer,
-    telegram: normalizedTelegram,
     governance: {
       requireApproval: Boolean(governance.requireApproval),
       decisionStatus: 'deliberating'

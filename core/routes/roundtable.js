@@ -12,7 +12,7 @@
  * POST   /:id/score             — (re-)run quality analysis
  * POST   /:id/interjections     — add a chair interjection for the next phase
  * POST   /:id/decision          — approve/reject an approval-gated verdict
- * POST   /telegram/webhook      — authenticated Telegram chair commands
+ * POST   /telegram/webhook      — retired adapter compatibility response
  */
 
 const crypto = require('crypto');
@@ -43,19 +43,11 @@ function requireChairToken(req, res) {
   return true;
 }
 
-function isTelegramChair(userId) {
-  const allowed = new Set(String(process.env.ROUNDTABLE_TELEGRAM_CHAIR_IDS || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean));
-  return allowed.has(String(userId ?? ''));
-}
-
 router.post('/', express.json(), async (req, res) => {
   try {
     const {
-      question, rounds, panel, synthesizer, tags, source, notify, enableScoring,
-      telegram, governance
+      question, rounds, panel, synthesizer, tags, source, enableScoring,
+      governance
     } = req.body || {};
 
     if (!question || typeof question !== 'string' || question.trim().length === 0) {
@@ -66,7 +58,14 @@ router.post('/', express.json(), async (req, res) => {
     }
     const usesRealRuntime = Array.isArray(panel)
       && panel.some((agent) => String(agent?.runtime || 'model').toLowerCase() !== 'model');
-    if ((usesRealRuntime || telegram || governance?.requireApproval) && !requireChairToken(req, res)) return;
+    if (req.body?.telegram || req.body?.notify) {
+      return res.status(410).json({
+        status: 'error',
+        message: 'Roundtable publication and notification adapters are separately deployed.',
+        code: 'ADAPTER_REQUIRED'
+      });
+    }
+    if ((usesRealRuntime || governance?.requireApproval) && !requireChairToken(req, res)) return;
 
     const doc = await roundtableService.startRoundtable({
       question: question.trim(),
@@ -75,8 +74,6 @@ router.post('/', express.json(), async (req, res) => {
       synthesizer,
       source: source || 'api',
       tags: tags || [],
-      notify: notify || null,
-      telegram: telegram || null,
       governance: governance || {},
       enableScoring: enableScoring === true
     });
@@ -96,87 +93,11 @@ router.post('/', express.json(), async (req, res) => {
   }
 });
 
-router.post('/telegram/webhook', express.json({ limit: '64kb' }), async (req, res) => {
-  const expected = process.env.ROUNDTABLE_TELEGRAM_WEBHOOK_SECRET;
-  const supplied = req.get('x-telegram-bot-api-secret-token') || '';
-  if (!expected) {
-    return res.status(503).json({ ok: false, error: 'Roundtable Telegram webhook is not configured' });
-  }
-  if (!secretMatches(supplied, expected)) {
-    return res.status(401).json({ ok: false, error: 'Invalid Telegram webhook secret' });
-  }
-
-  try {
-    const message = req.body?.message || req.body?.edited_message;
-    if (!message || message.from?.is_bot) return res.json({ ok: true, ignored: true });
-    const command = roundtableService.parseTelegramCommand(message.text);
-    if (!command) return res.json({ ok: true, ignored: true });
-
-    const chatId = message.chat?.id;
-    const threadId = message.message_thread_id ?? null;
-    const doc = await roundtableService.findTelegramRoundtable(chatId, threadId);
-    if (!doc) return res.json({ ok: true, ignored: true, reason: 'no-matching-roundtable' });
-
-    const actor = message.from?.username
-      ? `@${message.from.username}`
-      : [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') || 'telegram-chair';
-
-    if (command.command !== 'status' && !isTelegramChair(message.from?.id)) {
-      logger.warn('Ignored unauthorized Roundtable Telegram chair command', {
-        command: command.command,
-        telegramUserId: String(message.from?.id || ''),
-        roundtableId: String(doc._id)
-      });
-      return res.json({ ok: true, ignored: true, reason: 'unauthorized-chair' });
-    }
-
-    if (command.command === 'interject') {
-      if (!command.argument) {
-        await roundtableService.sendTelegramText(doc.telegram, 'Usage: /interject <chair guidance>')
-          .catch(() => {});
-        return res.json({ ok: true, ignored: true, reason: 'missing-interjection' });
-      }
-      const { interjection } = await roundtableService.addInterjection(doc._id, {
-        text: command.argument,
-        author: actor,
-        source: 'telegram'
-      });
-      roundtableService.getEmitter(String(doc._id))?.emit('chunk', {
-        type: 'interjection-added',
-        interjectionId: interjection.interjectionId,
-        author: interjection.author
-      });
-      await roundtableService.sendTelegramText(
-        doc.telegram,
-        `💬 Interjection queued for the next phase.\nFrom: ${actor}`
-      ).catch(() => {});
-      return res.json({ ok: true, action: 'interjection-queued' });
-    }
-
-    if (command.command === 'approve' || command.command === 'reject') {
-      const decision = command.command === 'approve' ? 'approved' : 'rejected';
-      const updated = await roundtableService.setDecision(doc._id, {
-        decision,
-        actor,
-        note: command.argument,
-        source: 'telegram'
-      });
-      await roundtableService.publishRoundtableEvent(updated, {
-        type: 'decision', status: decision, actor, note: command.argument
-      });
-      return res.json({ ok: true, action: decision });
-    }
-
-    await roundtableService.sendTelegramText(
-      doc.telegram,
-      `Roundtable #${String(doc._id).slice(-8)} · ${doc.status}\nDecision: ${doc.governance?.decisionStatus || 'deliberating'}\nPending interjections: ${(doc.interjections || []).filter((item) => item.status === 'pending').length}`
-    ).catch(() => {});
-    return res.json({ ok: true, action: 'status' });
-  } catch (err) {
-    logger.warn('Roundtable Telegram webhook command failed', { error: err.message });
-    return res.status(err.status || 500).json({ ok: false, error: err.message });
-  }
-});
+router.post('/telegram/webhook', express.json({ limit: '64kb' }), (_req, res) => res.status(410).json({
+  ok: false,
+  error: 'The embedded Telegram adapter was removed. Consume the Roundtable API from a separate adapter.',
+  code: 'ADAPTER_REQUIRED'
+}));
 
 router.get('/', async (req, res) => {
   try {
@@ -348,12 +269,6 @@ router.post('/:id/decision', express.json({ limit: '16kb' }), async (req, res) =
       actor: req.body?.actor || 'web-chair',
       note: req.body?.note || '',
       source: 'web-ui'
-    });
-    await roundtableService.publishRoundtableEvent(doc, {
-      type: 'decision',
-      status: doc.governance.decisionStatus,
-      actor: doc.governance.decidedBy,
-      note: doc.governance.decisionNote
     });
     res.json({ status: 'ok', data: doc.governance });
   } catch (err) {

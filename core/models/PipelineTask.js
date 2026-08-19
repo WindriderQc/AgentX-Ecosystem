@@ -1,8 +1,6 @@
 const mongoose = require('mongoose');
 
-// The agent task pipeline — Mongo is now the SOURCE OF TRUTH (superseding the
-// git TODO/ROADMAP.md membrane). Leantime is a bidirectional VIEW; git keeps
-// the code. Canonical status lives here; Leantime numeric status is mirrored.
+// Product-owned task queue. External boards consume the bounded HTTP API.
 const FeedbackSchema = new mongoose.Schema({
   at: { type: Date, default: Date.now },
   by: String,
@@ -39,12 +37,7 @@ const PipelineTaskSchema = new mongoose.Schema({
   }],
   scheduleEntryIds: { type: [String], default: [] },   // ClusterScheduleEntry.sourceId
   feedback: { type: [FeedbackSchema], default: [] },
-  // Bidirectional Leantime reconciliation: the last status both sides agreed on
-  // (Leantime numeric). Lets the sync tell which side changed since last run.
-  leantimeStatusWatermark: { type: Number, default: null },
-  // The Leantime Idea-board item this task was intaken from (dedupe key).
-  leantimeIdeaId: { type: Number, default: null, index: true },
-  source: { type: String, default: 'roadmap-import' },  // roadmap-import | leantime | leantime-idea | api
+  source: { type: String, default: 'api' },
   // Optional caller-owned idempotency key. The compound partial index lets a
   // reviewed memory candidate safely retry task creation after a lost reply.
   sourceKey: { type: String, default: null, maxlength: 200 },

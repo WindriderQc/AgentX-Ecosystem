@@ -225,9 +225,7 @@
               <option value="List available tools.">Tools</option>
               <option value="Brainstorm next steps for my project.">Brainstorm</option>
             </select>
-            <button class="icon-btn" id="micBtn" title="Voice Input" aria-label="Voice Input" aria-pressed="false">&#x1f3a4;</button>
             <button class="icon-btn" id="roundtableBtn" title="Ask Council (multi-model deliberation)" aria-label="Ask Council"><i class="fas fa-users"></i></button>
-            <span id="voiceStatus" class="voice-status" style="display: none; font-size: 0.75rem; color: var(--accent); margin-left: 4px;"></span>
             <span class="char-count" id="charCount"></span>
             <div class="flex-spacer"></div>
             <button class="ghost small" id="clearBtn">Clear</button>
@@ -421,56 +419,6 @@
               <input type="range" id="ragTopK" min="1" max="20" value="5">
             </label>
             <p class="rag-option-help">Number of document chunks (1-20)</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="collapsible-section demo-optional-integration">
-        <div class="section-header" id="voiceHeader">
-          <h3>Voice I/O <span class="voice-health-dot" id="sttHealthDot"></span> <span class="panel-toggle-icon">&#x25bc;</span></h3>
-        </div>
-        <div class="section-content hidden" id="voiceContent">
-          <select id="sttProviderSelect" style="display:none;">
-            <option value="browser">Browser</option>
-            <option value="voix">VoiX</option>
-          </select>
-          <select id="sttLanguageSelect" style="display:none;"><option value="en">English</option></select>
-          <select id="whisperModelSelect" style="display:none;"><option value="">Server default</option></select>
-          <div id="whisperModelField" style="display:none;"></div>
-          <input type="checkbox" id="voiceAutoSend" style="display:none;">
-          <input type="checkbox" id="ttsToggle" style="display:none;">
-          <select id="ttsProviderSelect" style="display:none;">
-            <option value="browser">Browser</option>
-            <option value="voix">VoiX</option>
-          </select>
-          <select id="ttsVoiceSelect" style="display:none;"><option value=""></option></select>
-          <div id="ttsProviderField" style="display:none;"></div>
-          <div id="ttsVoiceField" style="display:none;"></div>
-          <button id="testVoiceBtn" type="button" style="display:none;"></button>
-
-          <div class="field">
-            <label>Voice Defaults <span class="voice-health-dot" id="sttHealthDotInner"></span> <span class="voice-health-dot" id="ttsHealthDot"></span></label>
-            <div class="hint" id="voiceDefaultsSummary">Loading voice defaults...</div>
-            <div class="hint"><a href="/voice" target="_blank" rel="noopener" style="color: var(--accent);">Open Voice config</a></div>
-          </div>
-          <div class="field" id="voixStatusField">
-            <label>VoiX Integration</label>
-            <div class="hint" id="voixHealthSummary">VoiX optional. Not checked yet.</div>
-            <div class="hint" id="voixDevicesSummary">Devices: not checked</div>
-            <div class="hint" id="voixSessionSummary">Session: none</div>
-            <div class="hint" id="convoModeSummary">ConvoMode: inactive</div>
-          </div>
-          <div class="action-row" id="voixActionRow" style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <button class="btn small" id="voixRefreshBtn" type="button">Refresh VoiX</button>
-            <button class="btn small" id="convoModeBtn" type="button">Start ConvoMode</button>
-            <button class="btn small" id="voixSessionBtn" type="button">New Session</button>
-            <button class="btn small" id="voixTextTurnBtn" type="button">Send Text Turn</button>
-            <button class="btn small" id="voixSmokeBtn" type="button">TTS Smoke</button>
-            <button class="btn small" id="voixFullSmokeBtn" type="button">Full Smoke</button>
-          </div>
-          <div class="field" id="voixResultField">
-            <label>VoiX Result</label>
-            <pre id="voixResultOutput" style="margin: 0; white-space: pre-wrap; max-height: 220px; overflow: auto; background: rgba(0, 0, 0, 0.18); border: 1px solid rgba(124, 240, 255, 0.14); border-radius: 8px; padding: 12px; font-size: 0.8rem;">No VoiX activity yet.</pre>
           </div>
         </div>
       </div>

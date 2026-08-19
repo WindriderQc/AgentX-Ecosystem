@@ -23,7 +23,6 @@ describe('inferenceLanePolicy', () => {
     ['nestor/desktop/chat', 'interactive'],
     ['nerve-center-rag', 'interactive'],
     ['alerts-evaluator', 'interactive'],
-    ['openclaw-ollama', 'automated'],
     ['some-future-cron', 'automated'],
   ])('classifies %s as %s', (caller, expectedLane) => {
     expect(lanePolicy.resolveLane(caller).name).toBe(expectedLane);

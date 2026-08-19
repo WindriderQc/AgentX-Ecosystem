@@ -16,6 +16,62 @@ describe('BenchmarkServiceClient', () => {
     mockFetch.mockReset();
   });
 
+  describe('Benchmark-owned evidence', () => {
+    it('reads host and model evidence through the profiler contract', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        text: async () => JSON.stringify({
+          status: 'success',
+          data: {
+            hostProfile: { hostId: 'host-a' },
+            modelProfile: { name: 'owner/model:8b', readiness: {} }
+          }
+        })
+      });
+
+      await expect(client.getInferenceEvidence('owner/model:8b', 'http://host-a:11434'))
+        .resolves.toMatchObject({
+          hostProfile: { hostId: 'host-a' },
+          modelProfile: { name: 'owner/model:8b' }
+        });
+      const url = new URL(mockFetch.mock.calls[0][0]);
+      expect(url.pathname).toBe('/api/profiler/evidence/inference/owner%2Fmodel%3A8b');
+      expect(url.searchParams.get('hostUrl')).toBe('http://host-a:11434');
+    });
+
+    it('reads the compact readiness roster and exact context evidence', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            status: 'success',
+            data: { profiles: [{ name: 'model-a', readiness: { primary: { stage: 'profiled' } } }] }
+          })
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify({
+            status: 'success',
+            data: { contextProfile: { verifiedMaxContext: 32768 } }
+          })
+        });
+
+      await expect(client.getReadinessProfiles()).resolves.toHaveLength(1);
+      await expect(client.getContextProfile('model-a', {
+        hostUrl: 'http://host-a:11434',
+        artifactDigest: 'sha256:a',
+        runtimeFingerprint: 'runtime-a'
+      })).resolves.toMatchObject({ verifiedMaxContext: 32768 });
+    });
+
+    it('degrades evidence reads to null or an empty roster when Benchmark is offline', async () => {
+      mockFetch.mockRejectedValue(new Error('offline'));
+
+      await expect(client.getHostProfile('http://host-a:11434')).resolves.toBeNull();
+      await expect(client.getReadinessProfiles()).resolves.toEqual([]);
+    });
+  });
+
   describe('getRecommendations', () => {
     it('should return recommendations for a valid category', async () => {
       const mockRecs = [

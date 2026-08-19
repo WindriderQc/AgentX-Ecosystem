@@ -254,8 +254,8 @@ Store a folder scan snapshot. Used by ingest-scan.
 ```bash
 curl -X POST http://localhost:3082/api/rag/manifests \
   -H 'Content-Type: application/json' \
-  -d '{ "source": "nas", "root": "/mnt/nas/docs", "files": [{ "path": "/mnt/nas/docs/f.txt", "size": 1024 }] }'
-# => { "ok": true, "data": { "manifestId": "...", "source": "nas", "stats": { "fileCount": 1, "totalBytes": 1024 } } }
+  -d '{ "source": "local-import", "root": "/data/imports", "files": [{ "path": "/data/imports/f.txt", "size": 1024 }] }'
+# => { "ok": true, "data": { "manifestId": "...", "source": "local-import", "stats": { "fileCount": 1, "totalBytes": 1024 } } }
 ```
 
 ### GET /api/rag/manifests/latest
@@ -263,7 +263,7 @@ curl -X POST http://localhost:3082/api/rag/manifests \
 Most recent manifest. Optional `?source=X` filter. Returns `data: null` if none exists.
 
 ```bash
-curl "http://localhost:3082/api/rag/manifests/latest?source=nas"
+curl "http://localhost:3082/api/rag/manifests/latest?source=local-import"
 ```
 
 ### GET /api/rag/deletion-preview
@@ -271,8 +271,8 @@ curl "http://localhost:3082/api/rag/manifests/latest?source=nas"
 Compare manifest vs indexed docs. Omit `source` for multi-source aggregate.
 
 ```bash
-curl "http://localhost:3082/api/rag/deletion-preview?source=nas"
-# => { "ok": true, "data": { "source": "nas", "manifestFiles": 50, "indexedDocs": 55, "stale": [...], "fresh": 50 } }
+curl "http://localhost:3082/api/rag/deletion-preview?source=local-import"
+# => { "ok": true, "data": { "source": "local-import", "manifestFiles": 50, "indexedDocs": 55, "stale": [...], "fresh": 50 } }
 ```
 
 ### POST /api/rag/cleanup
@@ -289,7 +289,7 @@ Delete stale documents. Dry-run by default.
 ```bash
 curl -X POST http://localhost:3082/api/rag/cleanup \
   -H 'Content-Type: application/json' \
-  -d '{ "source": "nas", "dryRun": false, "maxDeletes": 100 }'
+  -d '{ "source": "local-import", "dryRun": false, "maxDeletes": 100 }'
 # => { "ok": true, "data": { "dryRun": false, "deleted": ["doc1"], "errors": [], "stats": { "attempted": 1, "succeeded": 1, "failed": 0, "elapsedMs": 150 } } }
 ```
 

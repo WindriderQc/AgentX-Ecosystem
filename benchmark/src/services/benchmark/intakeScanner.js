@@ -7,8 +7,8 @@
  * candidate models stop being discovered ad hoc (Backlog D). Reuses the
  * existing fit math (modelFitEstimator / parameterDetection) — NO duplicated
  * VRAM/quant logic — and is pure + DI-tested: the network fetch is injected, so
- * this module needs no HTTP. The thin CLI (`scripts/hf-intake.js`) wires the
- * real HF fetch + cache.
+ * this module needs no HTTP. Callers provide intake data explicitly; network
+ * discovery and caching remain outside this product service.
  *
  * Output record (Backlog D shape): model, source, params, activeParams, moe,
  * quants, ggufSources, vramFitByHost, suggestedHost, expectedLane, priority,

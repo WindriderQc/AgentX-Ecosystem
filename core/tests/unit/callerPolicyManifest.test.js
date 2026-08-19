@@ -24,7 +24,6 @@ const SAMPLES = {
   nestor: 'nestor/panel/ask',
   'nerve-center': 'nerve-center-intelligence',
   alerts: 'alerts-evaluate',
-  openclaw: 'openclaw-ollama',
 };
 
 describe('caller policy', () => {
@@ -46,7 +45,7 @@ describe('caller policy', () => {
   });
 
   test('known internal families do not fall into the anonymous rate bucket', () => {
-    for (const id of ['profiler', 'chat-exact', 'buddy-reaction', 'openclaw']) {
+    for (const id of ['profiler', 'chat-exact', 'buddy-reaction']) {
       expect(resolveCallerPolicy(SAMPLES[id]).rateBucket).not.toBe('general');
     }
   });

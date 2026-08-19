@@ -57,18 +57,11 @@ const InterjectionSchema = new mongoose.Schema({
   interjectionId: { type: String, required: true },
   text: { type: String, required: true, maxlength: 2000 },
   author: { type: String, required: true, maxlength: 120 },
-  source: { type: String, enum: ['api', 'web-ui', 'telegram'], default: 'api' },
+  source: { type: String, enum: ['api', 'web-ui'], default: 'api' },
   status: { type: String, enum: ['pending', 'applied'], default: 'pending' },
   createdAt: { type: Date, default: Date.now },
   appliedAt: { type: Date, default: null },
   appliedRound: { type: Number, default: null }
-}, { _id: false });
-
-const TelegramConfigSchema = new mongoose.Schema({
-  chatId: { type: String, required: true },
-  threadId: { type: Number, default: null },
-  publishTurns: { type: Boolean, default: true },
-  publishLifecycle: { type: Boolean, default: true }
 }, { _id: false });
 
 const GovernanceSchema = new mongoose.Schema({
@@ -81,7 +74,7 @@ const GovernanceSchema = new mongoose.Schema({
   requestedAt: { type: Date, default: null },
   decidedAt: { type: Date, default: null },
   decidedBy: { type: String, default: null },
-  decisionSource: { type: String, enum: ['api', 'web-ui', 'telegram', null], default: null },
+  decisionSource: { type: String, enum: ['api', 'web-ui', null], default: null },
   decisionNote: { type: String, default: '', maxlength: 1000 }
 }, { _id: false });
 
@@ -105,7 +98,6 @@ const RoundtableSchema = new mongoose.Schema({
   synthesizerConfig: SynthesizerConfigSchema,
   turns: [AgentTurnSchema],
   interjections: { type: [InterjectionSchema], default: [] },
-  telegram: { type: TelegramConfigSchema, default: null },
   governance: { type: GovernanceSchema, default: () => ({}) },
   synthesis: {
     model: { type: String, default: null },

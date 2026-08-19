@@ -13,7 +13,7 @@ function cleanText(value, max, label) {
 }
 
 function normalizeInterjectionInput(input = {}) {
-  const source = ['api', 'web-ui', 'telegram'].includes(input.source) ? input.source : 'api';
+  const source = ['api', 'web-ui'].includes(input.source) ? input.source : 'api';
   return {
     interjectionId: crypto.randomUUID(),
     text: cleanText(input.text, 2000, 'interjection text'),
@@ -22,13 +22,6 @@ function normalizeInterjectionInput(input = {}) {
     status: 'pending',
     createdAt: new Date()
   };
-}
-
-function parseTelegramCommand(text) {
-  const value = String(text || '').trim();
-  const match = value.match(/^\/(interject|approve|reject|status)(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/i);
-  if (!match) return null;
-  return { command: match[1].toLowerCase(), argument: String(match[2] || '').trim() };
 }
 
 function formatInterjectionContext(interjections) {
@@ -83,7 +76,7 @@ async function setDecision(roundtableId, input = {}) {
   if (!DECISIONS.has(decisionStatus)) throw new Error('decision must be approved or rejected');
   const decidedBy = cleanText(input.actor || 'chair', 120, 'decision actor');
   const note = input.note ? cleanText(input.note, 1000, 'decision note') : '';
-  const decisionSource = ['api', 'web-ui', 'telegram'].includes(input.source) ? input.source : 'api';
+  const decisionSource = ['api', 'web-ui'].includes(input.source) ? input.source : 'api';
   const doc = await Roundtable.findOneAndUpdate(
     {
       _id: roundtableId,
@@ -110,25 +103,11 @@ async function setDecision(roundtableId, input = {}) {
   return doc;
 }
 
-async function findTelegramRoundtable(chatId, threadId) {
-  const query = {
-    'telegram.chatId': String(chatId),
-    $or: [
-      { status: { $in: ['pending', 'running'] } },
-      { 'governance.decisionStatus': 'awaiting_approval' }
-    ]
-  };
-  query['telegram.threadId'] = threadId == null ? null : Number(threadId);
-  return Roundtable.findOne(query).sort({ updatedAt: -1 });
-}
-
 module.exports = {
   addInterjection,
-  findTelegramRoundtable,
   formatInterjectionContext,
   getPendingInterjections,
   markInterjectionsApplied,
   normalizeInterjectionInput,
-  parseTelegramCommand,
   setDecision
 };

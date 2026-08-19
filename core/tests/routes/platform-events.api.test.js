@@ -33,18 +33,18 @@ const VALID_EVENT = {
 };
 
 describe('POST /api/platform-events', () => {
-  const savedToken = process.env.BUDDY_EMIT_TOKEN;
+  const savedToken = process.env.AGENTX_PLATFORM_EVENT_TOKEN;
   let app;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    delete process.env.BUDDY_EMIT_TOKEN;
+    delete process.env.AGENTX_PLATFORM_EVENT_TOKEN;
     app = buildApp();
   });
 
   afterAll(() => {
-    if (savedToken === undefined) delete process.env.BUDDY_EMIT_TOKEN;
-    else process.env.BUDDY_EMIT_TOKEN = savedToken;
+    if (savedToken === undefined) delete process.env.AGENTX_PLATFORM_EVENT_TOKEN;
+    else process.env.AGENTX_PLATFORM_EVENT_TOKEN = savedToken;
   });
 
   it('accepts a bounded loopback event and returns its stable id', async () => {
@@ -64,7 +64,7 @@ describe('POST /api/platform-events', () => {
   });
 
   it('accepts the generic token header for a non-loopback producer', async () => {
-    process.env.BUDDY_EMIT_TOKEN = 'shared-token';
+    process.env.AGENTX_PLATFORM_EVENT_TOKEN = 'shared-token';
     app.locals.forcedIp = '172.18.0.5';
     await request(app)
       .post('/api/platform-events')
@@ -72,16 +72,6 @@ describe('POST /api/platform-events', () => {
       .send(VALID_EVENT)
       .expect(200);
     expect(emitPlatformEvent).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps the legacy token header valid during rolling deployment', async () => {
-    process.env.BUDDY_EMIT_TOKEN = 'shared-token';
-    app.locals.forcedIp = '172.18.0.5';
-    await request(app)
-      .post('/api/platform-events')
-      .set('X-Buddy-Emit-Token', 'shared-token')
-      .send(VALID_EVENT)
-      .expect(200);
   });
 
   it('rejects unauthenticated remote callers and invalid payloads', async () => {

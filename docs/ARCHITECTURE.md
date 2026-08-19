@@ -26,8 +26,8 @@ is absent. It exposes inference, model,
 RAG, Benchmark, and evidence surfaces while rejecting private storage,
 environment-specific integrations, household devices, and other operator
 routes. It also skips full-profile monitors, backups, host polling, and model
-prewarming. Empty integration variables are deliberate and must not fall back
-to a private or production address.
+prewarming. Default Compose defines no private-integration credentials or
+deployment addresses.
 
 Environment-specific automation and private adapters live outside this
 repository. They may consume bounded product APIs. In an explicit full-profile

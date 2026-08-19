@@ -131,10 +131,7 @@
     $('liveInterjection').disabled = !active;
     $('liveInterjectBtn').disabled = !active;
     const pending = (doc?.interjections || []).filter((item) => item.status === 'pending').length;
-    const telegram = doc?.telegram?.chatId
-      ? ` Telegram ${doc.telegram.chatId}${doc.telegram.threadId ? ` / topic ${doc.telegram.threadId}` : ''}.`
-      : '';
-    $('liveChairHint').textContent = `${pending} pending interjection${pending === 1 ? '' : 's'}.${telegram} No verdict executes actions.`;
+    $('liveChairHint').textContent = `${pending} pending interjection${pending === 1 ? '' : 's'}. No verdict executes actions.`;
   }
 
   async function refreshLiveGovernance() {
@@ -531,21 +528,6 @@
       governance: { requireApproval: $('formApproval').value === 'true' },
       source: 'web-ui'
     };
-
-    const telegramChatId = $('formTelegram').value.trim();
-    if (telegramChatId) {
-      const rawThreadId = $('formTelegramThread').value.trim();
-      body.telegram = {
-        chatId: telegramChatId,
-        threadId: rawThreadId ? Number(rawThreadId) : null,
-        publishTurns: $('formTelegramTurns').value === 'true',
-        publishLifecycle: true
-      };
-    }
-
-    const notify = {};
-    if ($('formWebhook').value.trim()) notify.webhook = $('formWebhook').value.trim();
-    if (Object.keys(notify).length) body.notify = notify;
 
     const btn = $('formStartBtn');
     btn.disabled = true;

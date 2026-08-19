@@ -13,10 +13,6 @@ jest.mock('../../src/services/roundtable', () => ({
   formatTranscript: jest.fn(),
   analyzeQuality: jest.fn(),
   addInterjection: jest.fn(),
-  findTelegramRoundtable: jest.fn(),
-  parseTelegramCommand: jest.fn(),
-  publishRoundtableEvent: jest.fn(),
-  sendTelegramText: jest.fn(),
   setDecision: jest.fn()
 }));
 
@@ -41,11 +37,9 @@ describe('Roundtable v2 API', () => {
     app = buildApp();
     jest.clearAllMocks();
     delete process.env.ROUNDTABLE_CHAIR_TOKEN;
-    delete process.env.ROUNDTABLE_TELEGRAM_WEBHOOK_SECRET;
-    delete process.env.ROUNDTABLE_TELEGRAM_CHAIR_IDS;
   });
 
-  test('passes runtime, Telegram topic, and governance configuration to the service', async () => {
+  test('passes runtime and governance configuration to the service', async () => {
     process.env.ROUNDTABLE_CHAIR_TOKEN = 'chair-secret';
     roundtableService.startRoundtable.mockResolvedValue({
       _id: 'rt-1', status: 'pending', question: 'Discuss?', rounds: 2
@@ -56,13 +50,11 @@ describe('Roundtable v2 API', () => {
       .send({
         question: 'Discuss?',
         panel: [{ agentId: 'codex-reviewer', role: 'Codex reviewer', runtime: 'codex' }],
-        telegram: { chatId: '-100123', threadId: 42, publishTurns: true },
         governance: { requireApproval: true }
       });
 
     expect(response.status).toBe(201);
     expect(roundtableService.startRoundtable).toHaveBeenCalledWith(expect.objectContaining({
-      telegram: { chatId: '-100123', threadId: 42, publishTurns: true },
       governance: { requireApproval: true }
     }));
   });
@@ -79,8 +71,6 @@ describe('Roundtable v2 API', () => {
     expect(response.status).toBe(201);
     expect(roundtableService.startRoundtable).toHaveBeenCalledWith(expect.objectContaining({
       governance: {},
-      telegram: null,
-      notify: null,
       enableScoring: false
     }));
   });
@@ -174,66 +164,18 @@ describe('Roundtable v2 API', () => {
     expect(accepted.status).toBe(201);
   });
 
-  test('authenticates Telegram webhook commands and queues interjections', async () => {
-    process.env.ROUNDTABLE_TELEGRAM_WEBHOOK_SECRET = 'telegram-secret';
-    process.env.ROUNDTABLE_TELEGRAM_CHAIR_IDS = '95100785879';
-    const unauthorized = await request(app)
+  test('keeps removed publication paths as explicit adapter shims', async () => {
+    const webhook = await request(app)
       .post('/api/roundtable/telegram/webhook')
-      .send({ message: { text: '/status' } });
-    expect(unauthorized.status).toBe(401);
+      .send({ message: { text: '/status' } })
+      .expect(410);
+    const create = await request(app)
+      .post('/api/roundtable')
+      .send({ question: 'Discuss?', notify: { webhook: 'https://example.invalid' } })
+      .expect(410);
 
-    roundtableService.parseTelegramCommand.mockReturnValue({
-      command: 'interject', argument: 'Check the rollback path.'
-    });
-    roundtableService.findTelegramRoundtable.mockResolvedValue({
-      _id: 'rt-1', telegram: { chatId: '-100123', threadId: 42 }
-    });
-    roundtableService.addInterjection.mockResolvedValue({
-      doc: {},
-      interjection: { interjectionId: 'i-1', author: '@operator' }
-    });
-    roundtableService.sendTelegramText.mockResolvedValue({});
-    const accepted = await request(app)
-      .post('/api/roundtable/telegram/webhook')
-      .set('x-telegram-bot-api-secret-token', 'telegram-secret')
-      .send({
-        message: {
-          text: '/interject Check the rollback path.',
-          chat: { id: -100123 },
-          message_thread_id: 42,
-          from: { id: 95100785879, username: 'operator', is_bot: false }
-        }
-      });
-
-    expect(accepted.status).toBe(200);
-    expect(accepted.body.action).toBe('interjection-queued');
-    expect(roundtableService.addInterjection).toHaveBeenCalledWith('rt-1', {
-      text: 'Check the rollback path.', author: '@operator', source: 'telegram'
-    });
-  });
-
-  test('ignores mutating Telegram commands from group members who are not chairs', async () => {
-    process.env.ROUNDTABLE_TELEGRAM_WEBHOOK_SECRET = 'telegram-secret';
-    process.env.ROUNDTABLE_TELEGRAM_CHAIR_IDS = '42';
-    roundtableService.parseTelegramCommand.mockReturnValue({
-      command: 'approve', argument: 'Ship it.'
-    });
-    roundtableService.findTelegramRoundtable.mockResolvedValue({
-      _id: 'rt-1', telegram: { chatId: '-100123', threadId: 42 }
-    });
-
-    const response = await request(app)
-      .post('/api/roundtable/telegram/webhook')
-      .set('x-telegram-bot-api-secret-token', 'telegram-secret')
-      .send({
-        message: {
-          text: '/approve Ship it.', chat: { id: -100123 }, message_thread_id: 42,
-          from: { id: 99, username: 'guest', is_bot: false }
-        }
-      });
-
-    expect(response.status).toBe(200);
-    expect(response.body.reason).toBe('unauthorized-chair');
-    expect(roundtableService.setDecision).not.toHaveBeenCalled();
+    expect(webhook.body.code).toBe('ADAPTER_REQUIRED');
+    expect(create.body.code).toBe('ADAPTER_REQUIRED');
+    expect(roundtableService.startRoundtable).not.toHaveBeenCalled();
   });
 });

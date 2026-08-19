@@ -59,7 +59,7 @@ describe('clusterScheduleService', () => {
 
     it('filters by source', async () => {
       await ClusterScheduleEntry.create([
-        { source: 'openclaw', sourceId: 'a', name: 'OC', taskType: 'benchmark', schedule: { type: 'cron', cron: '0 2 * * *' } },
+        { source: 'agentx-system', sourceId: 'a', name: 'System', taskType: 'benchmark', schedule: { type: 'cron', cron: '0 2 * * *' } },
         { source: 'agentx', sourceId: 'b', name: 'AX', taskType: 'sync', schedule: { type: 'interval', intervalMs: 5000 } }
       ]);
       const entries = await clusterScheduleService.getAllEntries({ source: 'agentx' });
@@ -299,14 +299,14 @@ describe('clusterScheduleService', () => {
 
     it('updates mirrored runtime state when schedule configuration is unchanged', async () => {
       await ClusterScheduleEntry.create({
-        source: 'openclaw', sourceId: 'runtime1', name: 'Runtime State', taskType: 'monitoring',
+        source: 'agentx-system', sourceId: 'runtime1', name: 'Runtime State', taskType: 'monitoring',
         schedule: { type: 'cron', cron: '0 * * * *', timezone: 'America/Toronto' },
         lastRun: new Date('2026-07-18T10:00:00.000Z'),
         metadata: { lastStatus: 'error', consecutiveErrors: 1 }
       });
 
       const stats = await clusterScheduleService.syncEntries([{
-        source: 'openclaw', sourceId: 'runtime1', name: 'Runtime State', taskType: 'monitoring',
+        source: 'agentx-system', sourceId: 'runtime1', name: 'Runtime State', taskType: 'monitoring',
         schedule: { type: 'cron', cron: '0 * * * *', timezone: 'America/Toronto' },
         lastRun: new Date('2026-07-18T11:00:00.000Z'),
         metadata: { lastStatus: 'ok', consecutiveErrors: 0 }
@@ -320,12 +320,12 @@ describe('clusterScheduleService', () => {
 
     it('updates schedule timezone changes', async () => {
       await ClusterScheduleEntry.create({
-        source: 'openclaw', sourceId: 'timezone1', name: 'Timezone State', taskType: 'monitoring',
+        source: 'agentx-system', sourceId: 'timezone1', name: 'Timezone State', taskType: 'monitoring',
         schedule: { type: 'cron', cron: '0 * * * *', timezone: 'UTC' }
       });
 
       const stats = await clusterScheduleService.syncEntries([{
-        source: 'openclaw', sourceId: 'timezone1', name: 'Timezone State', taskType: 'monitoring',
+        source: 'agentx-system', sourceId: 'timezone1', name: 'Timezone State', taskType: 'monitoring',
         schedule: { type: 'cron', cron: '0 * * * *', timezone: 'America/Toronto' }
       }]);
 

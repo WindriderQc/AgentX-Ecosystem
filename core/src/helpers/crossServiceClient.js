@@ -3,7 +3,7 @@
  *
  * Consolidates the fetch + URL building + timeout + error wrapping plumbing that
  * used to live separately in ragServiceClient, reportsServiceClient,
- * benchmarkServiceClient, and voixClientService.
+ * benchmarkServiceClient and other bounded product clients.
  *
  * Design:
  *   - One `requestJson({ baseUrl, path, method, body, query, timeoutMs, ...})`

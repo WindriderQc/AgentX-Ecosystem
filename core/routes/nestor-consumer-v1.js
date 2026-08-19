@@ -4,14 +4,9 @@ const express = require('express');
 const envelope = require('../src/helpers/responseEnvelope');
 const logger = require('../config/logger');
 const buddyEvents = require('../src/services/buddyEvents');
-const panelService = require('../src/services/panelService');
 const { getCapabilities } = require('../src/services/nestorConsumerCapabilitiesService');
 const { executeInference, getRouterSnapshot } = require('../src/services/nestorConsumerRuntimeService');
 const { getMemoryStatus, searchMemory } = require('../src/services/nestorConsumerMemoryService');
-const {
-  getPersonalitySources,
-  resolvePersonalityCandidate,
-} = require('../src/services/nestorConsumerPersonalityService');
 const { getNestorMetrics } = require('../src/services/nestorConsumerMetricsService');
 
 function sendError(res, error) {
@@ -70,13 +65,12 @@ function createNestorConsumerV1Routes({ systemHealth } = {}) {
     envelope.success(res, await searchMemory(req.body));
   }));
 
-  router.get('/personality/sources', asyncRoute(async (_req, res) => {
-    envelope.success(res, await getPersonalitySources());
-  }));
-
-  router.post('/personality/resolve', asyncRoute(async (req, res) => {
-    envelope.success(res, await resolvePersonalityCandidate(req.body));
-  }));
+  router.use('/personality', (_req, res) => envelope.error(
+    res,
+    410,
+    'Personality behavior belongs to the external consumer application.',
+    'ADAPTER_REQUIRED'
+  ));
 
   router.get('/metrics', asyncRoute(async (req, res) => {
     res.set('Cache-Control', 'no-store');
@@ -117,10 +111,12 @@ function createNestorConsumerV1Routes({ systemHealth } = {}) {
     });
   });
 
-  router.get('/panel-summary', asyncRoute(async (_req, res) => {
-    res.set('Cache-Control', 'no-store');
-    envelope.success(res, await panelService.getPanelStatus(systemHealth));
-  }));
+  router.get('/panel-summary', (_req, res) => envelope.error(
+    res,
+    410,
+    'Panel summaries moved to a separately installed trusted extension.',
+    'ADAPTER_REQUIRED'
+  ));
 
   return router;
 }

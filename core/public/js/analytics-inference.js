@@ -57,16 +57,6 @@ async function fetchSummary(windowKey) {
   return body.data;
 }
 
-async function fetchVoiceSummary(windowKey) {
-  const res = await fetch(`/api/analytics/voice/summary?window=${encodeURIComponent(windowKey)}`, {
-    headers: { Accept: 'application/json' }
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const body = await res.json();
-  if (!body || body.ok === false || !body.data) throw new Error(body?.message || 'Malformed response');
-  return body.data;
-}
-
 function renderTiles(d) {
   const t = d.totals || {};
   setText('infScope', d.scope || '');
@@ -125,83 +115,6 @@ function renderModelTable(d) {
       <td style="${cell}text-align:right;">${cost}</td>
     </tr>`;
   }).join('');
-}
-
-function voiceMetricValue(metric, field) {
-  if (!metric || !metric.sampleSize || !Number.isFinite(metric[field])) return '—';
-  if (metric.unit === 'ratio') return metric[field].toFixed(2);
-  return ms(metric[field]);
-}
-
-function renderVoiceUnavailable(message) {
-  setText('voiceStatus', 'unavailable');
-  setText('voiceSamples', '—');
-  setText('voiceFirstAudio', '—');
-  setText('voiceFirstAudioSample', 'source unavailable');
-  setText('voiceTotalTurn', '—');
-  setText('voiceTotalTurnSample', 'source unavailable');
-  setText('voiceReliability', '—');
-  setText('voiceRateSample', message || 'source unavailable');
-}
-
-function renderVoice(d) {
-  const metrics = d.metrics || {};
-  const errors = d.rates?.errors || {};
-  const fallbacks = d.rates?.fallbacks || {};
-  const status = d.status || 'unavailable';
-  setText('voiceStatus', status);
-  setText('voiceSamples', compact(d.sampleSize));
-  setText('voiceScope', `${d.privacy || 'No audio or message content retained.'} · ${d.confidence || 'unknown'} confidence`);
-  setText('voiceFirstAudio', voiceMetricValue(metrics.firstAudioMs, 'p95'));
-  setText('voiceFirstAudioSample', metrics.firstAudioMs?.sampleSize
-    ? `n=${metrics.firstAudioMs.sampleSize} · target ${ms(metrics.firstAudioMs.target)}`
-    : 'no samples');
-  setText('voiceTotalTurn', voiceMetricValue(metrics.totalTurnMs, 'p95'));
-  setText('voiceTotalTurnSample', metrics.totalTurnMs?.sampleSize
-    ? `n=${metrics.totalTurnMs.sampleSize} · target ${ms(metrics.totalTurnMs.target)}`
-    : 'no samples');
-  setText('voiceReliability', errors.sampleSize
-    ? `${errors.ratePct.toFixed(1)}% / ${fallbacks.ratePct.toFixed(1)}%`
-    : '—');
-  setText('voiceRateSample', errors.sampleSize ? `n=${errors.sampleSize}` : 'no samples');
-
-  const statusEl = $('voiceStatus');
-  if (statusEl) statusEl.style.color = status === 'healthy'
-    ? '#34d399'
-    : status === 'degraded' || status === 'idle'
-      ? '#f59e0b'
-      : status === 'failed'
-        ? '#f87171'
-        : 'var(--muted)';
-
-  const metricBody = $('voiceSloTableBody');
-  if (metricBody) {
-    const rows = Object.values(metrics);
-    metricBody.innerHTML = rows.length ? rows.map((metric) => {
-      const tone = metric.status === 'healthy' ? '#34d399' : metric.status === 'degraded' ? '#f59e0b' : 'var(--muted)';
-      const target = metric.unit === 'ratio' ? metric.target.toFixed(2) : ms(metric.target);
-      return `<tr>
-        <td style="padding:8px;border-bottom:1px solid var(--panel-border);">${escapeHtml(metric.label)}</td>
-        <td style="padding:8px;text-align:right;border-bottom:1px solid var(--panel-border);">${voiceMetricValue(metric, 'p50')}</td>
-        <td style="padding:8px;text-align:right;border-bottom:1px solid var(--panel-border);color:${tone};">${voiceMetricValue(metric, 'p95')} / ${target}</td>
-        <td style="padding:8px;text-align:right;border-bottom:1px solid var(--panel-border);">${metric.sampleSize || '—'}</td>
-      </tr>`;
-    }).join('') : '<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--muted);">No voice metrics available.</td></tr>';
-  }
-
-  const segmentBody = $('voiceSegmentsBody');
-  if (segmentBody) {
-    const segments = d.segments || [];
-    segmentBody.innerHTML = segments.length ? segments.slice(0, 12).map((segment) => {
-      const route = `${escapeHtml(segment.surface)} · ${escapeHtml(segment.lane)}<br><span style="color:var(--muted);">${escapeHtml(segment.model)} · ${escapeHtml(segment.ttsProvider)}</span>`;
-      return `<tr>
-        <td style="padding:8px;border-bottom:1px solid var(--panel-border);">${route}</td>
-        <td style="padding:8px;text-align:right;border-bottom:1px solid var(--panel-border);">${segment.successRatePct.toFixed(1)}%</td>
-        <td style="padding:8px;text-align:right;border-bottom:1px solid var(--panel-border);">${Number.isFinite(segment.firstAudioP95Ms) ? ms(segment.firstAudioP95Ms) : '—'}</td>
-        <td style="padding:8px;text-align:right;border-bottom:1px solid var(--panel-border);">${segment.samples}</td>
-      </tr>`;
-    }).join('') : '<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--muted);">Idle — no voice turns in this window.</td></tr>';
-  }
 }
 
 function renderDailyChart(d) {
@@ -401,12 +314,6 @@ async function load() {
   } catch (err) {
     console.error('Inference analytics failed:', err);
     setText('infScope', `Could not load inference analytics: ${err.message}`);
-  }
-  try {
-    renderVoice(await fetchVoiceSummary(windowKey));
-  } catch (err) {
-    console.error('Voice observability failed:', err);
-    renderVoiceUnavailable(err.message);
   }
   renderCodex(windowKey);
   applyChatLaneCollapse(windowKey);

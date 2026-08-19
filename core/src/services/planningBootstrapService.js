@@ -36,13 +36,6 @@ const RULES = [
       /routing|dispatch|qualification|swap-on-demand|context-headroom|model lane|re-qualify/.test(text)
   },
   {
-    key: 'voice-nestor',
-    title: 'Nestor Voice & Experiences',
-    summary: 'Develop the voice-first Nestor, KidX, and ambient interaction experiences.',
-    priority: 'normal',
-    test: ({ text }) => /nestor|wake word|voice|voix|lecture|kidx|speech/.test(text)
-  },
-  {
     key: 'platform-reliability',
     title: 'Platform Reliability & Governance',
     summary: 'Harden AgentX services, governance, security, scheduling, and documentation.',

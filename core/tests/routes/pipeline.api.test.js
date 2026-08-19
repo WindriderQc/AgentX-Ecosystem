@@ -8,7 +8,6 @@ jest.mock('../../models/PipelineTask', () => ({
 }));
 
 jest.mock('../../src/services/pipelineTaskService', () => ({
-  syncWithLeantime: jest.fn(),
   createTaskInMongo: jest.fn(),
   findNextEligibleTask: jest.fn(),
   claimEligibleTask: jest.fn(),
@@ -35,6 +34,15 @@ function createFindQuery(tasks) {
   return query;
 }
 
+test('keeps the retired board-sync path as an explicit adapter shim', async () => {
+  const response = await request(createApp())
+    .post('/api/pipeline/leantime-sync')
+    .send({ dryRun: true })
+    .expect(410);
+
+  expect(response.body).toMatchObject({ code: 'ADAPTER_REQUIRED' });
+});
+
 describe('GET /api/pipeline/tasks', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -44,7 +52,7 @@ describe('GET /api/pipeline/tasks', () => {
     const query = createFindQuery([
       {
         pipelineId: '0326',
-        title: 'Make Leantime pipeline discoverable from AgentX UI',
+        title: 'Expose the local task pipeline in AgentX UI',
         status: 'in_progress',
         assignee: 'codex',
       },
@@ -64,8 +72,7 @@ describe('GET /api/pipeline/tasks', () => {
       [
         'pipelineId', 'title', 'service', 'status', 'assignee', 'heartbeatAt',
         'epic', 'source', 'priority', 'dependsOn', 'notBefore', 'dueAt', 'risk',
-        'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt',
-        'leantimeStatusWatermark'
+        'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt'
       ].join(' ')
     );
     expect(res.body.status).toBe('success');

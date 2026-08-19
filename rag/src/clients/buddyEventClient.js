@@ -26,8 +26,8 @@ function emitBuddyEvent(type, eventClass, summary, significance, opts) {
   // Task 0277: cross-container emits (rag -> core over the Docker bridge)
   // are non-loopback, so core rejects them unless a shared secret is
   // presented. Send it only when configured; otherwise stay loopback-only.
-  if (process.env.BUDDY_EMIT_TOKEN) {
-    headers['X-Platform-Event-Token'] = process.env.BUDDY_EMIT_TOKEN;
+  if (process.env.AGENTX_PLATFORM_EVENT_TOKEN) {
+    headers['X-Platform-Event-Token'] = process.env.AGENTX_PLATFORM_EVENT_TOKEN;
   }
 
   fetch(`${CORE_URL}/api/platform-events`, {

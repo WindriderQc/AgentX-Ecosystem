@@ -5,5 +5,5 @@
 module.exports = {
   testEnvironment: 'node',
   testMatch: ['<rootDir>/tests/unit/qualification/**/*.test.js'],
-  testPathIgnorePatterns: ['/node_modules/', '/tests/e2e/']
+  testPathIgnorePatterns: ['/node_modules/']
 };

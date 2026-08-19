@@ -59,7 +59,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "lane_context_mismatch" }
         ]},
-        "channels": ["local_log", "telegram"],
+        "channels": ["local_log"],
         "renotifyMs": 3600000,
         "description": "Observe-only warning when runtime num_ctx exceeds the validated artifact-host context."
     },
@@ -73,7 +73,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "lane_output_contract_failure" }
         ]},
-        "channels": ["local_log", "telegram"],
+        "channels": ["local_log"],
         "renotifyMs": 3600000,
         "description": "Evidence-backed truncation, incomplete response, or no-visible-final outcome."
     },
@@ -87,7 +87,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "benchmark_claim_release_failure" }
         ]},
-        "channels": ["local_log", "telegram"],
+        "channels": ["local_log"],
         "renotifyMs": 900000,
         "description": "Observe-only signal for a rejected or failed benchmark-claim release."
     },
@@ -101,7 +101,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "pin_restore_failure" }
         ]},
-        "channels": ["local_log", "telegram"],
+        "channels": ["local_log"],
         "renotifyMs": 900000,
         "description": "Observe-only signal when the existing restore path cannot verify pinned artifact/context residency."
     },
@@ -115,7 +115,7 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "lane_latency_drift" }
         ]},
-        "channels": ["local_log", "telegram"],
+        "channels": ["local_log"],
         "renotifyMs": 3600000,
         "description": "Recent one-hour median versus the preceding 24-hour baseline, sample-gated and observe-only."
     }

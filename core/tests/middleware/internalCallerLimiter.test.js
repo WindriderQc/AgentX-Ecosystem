@@ -130,8 +130,7 @@ describe('internalCallerLimiter — routing for Nestor and other interactive cal
       'chat',
       'buddy-reaction',
       'nerve-center-inference-health',
-      'alerts-evaluator',
-      'openclaw-ollama'
+      'alerts-evaluator'
     ];
     for (const tag of samples) {
       // eslint-disable-next-line no-await-in-loop

@@ -8,9 +8,8 @@
     "qualify:toolcalls": "node scripts/toolcall-qualification.js",
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "jest --forceExit --detectOpenHandles --testPathIgnorePatterns=tests/e2e",
+    "test": "jest --forceExit --detectOpenHandles",
     "test:unit": "jest --config jest.unit.config.js --forceExit",
-    "test:e2e": "npx playwright test tests/e2e",
     "migrate:exact-artifacts": "node scripts/migrate-exact-artifact-profile-indexes.js"
   },
   "dependencies": {
@@ -23,10 +22,8 @@
     "winston": "^3.11.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
     "jest": "^30.4.2",
     "mongodb-memory-server": "^11.0.1",
-    "playwright": "^1.58.2",
     "sharp": "^0.35.3",
     "supertest": "^7.2.2"
   },

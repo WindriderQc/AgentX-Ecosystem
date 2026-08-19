@@ -4,37 +4,26 @@ const envelope = require('../src/helpers/responseEnvelope');
 const PipelineTask = require('../models/PipelineTask');
 const { operatorAccessAllowed } = require('../src/middleware/operatorAccess');
 const {
-  syncWithLeantime,
   createTaskInMongo,
   findNextEligibleTask,
   claimEligibleTask,
 } = require('../src/services/pipelineTaskService');
 const STATUSES = ['queued', 'in_progress', 'review', 'blocked', 'done'];
 
-// leantime-sync drives the server-side LEANTIME_API_KEY, so the project it
-// reconciles must be the configured one — never a caller-supplied id (SSRF into
-// arbitrary Leantime projects). Task CRUD below stays open: the live agents
-// (Worker/Overseer/cron) call it with plain curl and no token by design.
-const ALLOWED_PROJECT_ID = Number(process.env.AGENTX_PIPELINE_PROJECT_ID) || null;
 // A worker's feedback verdict maps to a task status. "done" goes to REVIEW (the
 // overseer confirms it to `done` via /status) — workers don't self-certify done.
 const FEEDBACK_STATUS = { done: 'review', blocked: 'blocked', partial: 'in_progress' };
 const ACTIVE_STATUSES = ['queued', 'in_progress', 'review', 'blocked'];
 
-// Bidirectional reconcile between Mongo (source of truth) and the Leantime board.
-// Body (optional): { dryRun, syncDone, projectId }
-router.post('/leantime-sync', async (req, res) => {
-  const b = req.body || {};
-  if (!ALLOWED_PROJECT_ID) {
-    return envelope.error(res, 503, 'AGENTX_PIPELINE_PROJECT_ID is not configured', 'PIPELINE_NOT_CONFIGURED');
-  }
-  if (b.projectId != null && Number(b.projectId) !== ALLOWED_PROJECT_ID) {
-    return envelope.error(res, 400, `projectId must be ${ALLOWED_PROJECT_ID}`, 'PROJECT_NOT_ALLOWED');
-  }
-  try {
-    const result = await syncWithLeantime({ dryRun: !!b.dryRun, syncDone: !!b.syncDone, projectId: b.projectId });
-    return envelope.success(res, result);
-  } catch (err) { return envelope.error(res, 500, err.message, 'PIPELINE_SYNC_ERROR'); }
+// One-release compatibility shim. Board integrations are separately deployed
+// adapters and consume the product-owned task API instead of running in Core.
+router.post('/leantime-sync', (_req, res) => {
+  return envelope.error(
+    res,
+    410,
+    'The embedded Leantime adapter was removed. Install a separately operated adapter that consumes /api/pipeline/tasks.',
+    'ADAPTER_REQUIRED'
+  );
 });
 
 // Create a task directly in Mongo (the membrane). POST .../tasks { title|objective, ... }
@@ -48,8 +37,7 @@ router.post('/tasks', async (req, res) => {
 const SUMMARY_FIELDS = [
   'pipelineId', 'title', 'service', 'status', 'assignee', 'heartbeatAt',
   'epic', 'source', 'priority', 'dependsOn', 'notBefore', 'dueAt', 'risk',
-  'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt',
-  'leantimeStatusWatermark'
+  'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt'
 ].join(' ');
 
 function truthy(value) {

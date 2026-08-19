@@ -12,7 +12,6 @@ const { requestLogger, errorLogger } = require('./middleware/logging');
 const systemHealth = require('./systemHealth');
 const { normalizeHostUrl } = require('./helpers/ollamaHostConfig');
 const { refreshOllamaHealth } = require('./services/ollamaHealthProbe');
-const voiceSettings = require('./services/voixSettingsService');
 const { normalizePublicUrls } = require('../../shared/browserPublicUrls');
 const {
   currentAgentXProfile,
@@ -35,19 +34,6 @@ function getPublicUrls() {
     benchmark: process.env.BENCHMARK_PUBLIC_URL,
     rag: process.env.RAG_PUBLIC_URL,
   });
-}
-
-function getLeantimePipelineConfig() {
-  const baseUrl = String(process.env.LEANTIME_BASE_URL || '').replace(/\/+$/, '');
-  const projectId = Number(process.env.AGENTX_PIPELINE_PROJECT_ID);
-  const safeProjectId = Number.isInteger(projectId) && projectId > 0 ? projectId : null;
-  return {
-    baseUrl,
-    projectId: safeProjectId,
-    boardUrl: baseUrl && safeProjectId
-      ? `${baseUrl}/tickets/showKanban?projectId=${encodeURIComponent(safeProjectId)}`
-      : ''
-  };
 }
 
 // Initialize app
@@ -223,10 +209,8 @@ app.use('/api/roundtable/:id/interjections', express.json({ limit: '16kb' }));
 app.use('/api/roundtable/:id/decision', express.json({ limit: '16kb' }));
 app.use('/api/roundtable', routeDefaultJsonParser);
 app.use('/api/operations/backup/config', routeDefaultJsonParser);
-app.use('/api/voix/settings', routeDefaultJsonParser);
 
-// Every remaining JSON route uses the bounded product default. Multipart voice
-// uploads remain owned by Multer.
+// Every remaining JSON route uses the bounded product default.
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
@@ -366,13 +350,14 @@ app.use('/api/operations', operationsRoutes);
 const operationsBackupRoutes = require('../routes/operations-backup');
 app.use('/api/operations', operationsBackupRoutes);
 
-// VoiX engine proxy routes
-const voixRoutes = require('../routes/voix');
-app.use('/api/voix', voixRoutes);
-
-// Voice persona packs, safety, scoped memory, and audit primitives
-const voicePersonaRoutes = require('../routes/voice-personas');
-app.use('/api/voice-personas', standardJsonParser, voicePersonaRoutes);
+const externalExperienceShim = (label) => (_req, res) => res.status(410).json({
+  ok: false,
+  status: 'error',
+  error: `${label} is provided by a separately installed trusted extension.`,
+  code: 'ADAPTER_REQUIRED'
+});
+app.use('/api/voix', externalExperienceShim('Voice transport'));
+app.use('/api/voice-personas', externalExperienceShim('Voice personas'));
 
 // Council: bounded, user-invoked multi-model deliberation. The API keeps its
 // historical /api/roundtable contract so saved clients and transcripts remain
@@ -419,15 +404,9 @@ app.use('/api/memory-review', memoryReviewRoutes);
 const todosRoutes = require('../routes/todos');
 app.use('/api/todos', standardJsonParser, todosRoutes);
 
-// Secretary lane: Nestor's personal-task list (add/list/complete). Separate
-// from the dev pipeline — `service: personal` tasks are already excluded from
-// worker dispatch by buildNextTaskQuery (task 0457).
-const secretaryRoutes = require('../routes/secretary');
-app.use('/api/secretary', standardJsonParser, secretaryRoutes);
+app.use('/api/secretary', externalExperienceShim('Personal task management'));
 
-// Pipeline spine: Mongo is the source of truth; Leantime is a bidirectional
-// view (agent pushes status, human drags cards / drops ideas back). Reads open,
-// mutators token-gated inside the router. Cutover 2026-06-26 (git TODO/ retired).
+// Product-owned local task queue. External boards consume its bounded API.
 const pipelineRoutes = require('../routes/pipeline');
 app.use('/api/pipeline', standardJsonParser, pipelineRoutes);
 
@@ -441,32 +420,30 @@ const mcpRoutes = require('../routes/mcp');
 app.use('/mcp', standardJsonParser, mcpRoutes);
 app.use('/api/mcp', standardJsonParser, mcpRoutes);
 
-// Nestor durable memory writes (explicit facts/summaries into RAG)
-const nestorMemoryRoutes = require('../routes/nestor-memory');
-app.use('/api/nestor/memory', standardJsonParser, nestorMemoryRoutes);
+app.use('/api/nestor/memory', externalExperienceShim('Nestor memory writes'));
+app.use('/api/nestor/prewarm', externalExperienceShim('Nestor prewarming'));
 
-// Nestor fallback prewarm: functionally checks the effective local Ollama
-// quick-chat route without fighting host pins (task 0454). The endpoint is
-// safe to invoke from the platform maintenance scheduler.
-const nestorPrewarmRoutes = require('../routes/nestor-prewarm');
-app.use('/api/nestor/prewarm', standardJsonParser, nestorPrewarmRoutes);
+// Compatibility path for the retired household-panel implementation. A
+// trusted extension registered above may own these paths; otherwise fail with
+// an explicit deprecation response and never attempt private network access.
+const panelCompatibilityRouter = express.Router();
+panelCompatibilityRouter.use((_req, res) => res.status(410).json({
+  ok: false,
+  status: 'error',
+  error: 'The household panel is not part of Agent X. Install a separately owned trusted extension.',
+  code: 'ADAPTER_REQUIRED'
+}));
+app.use('/api/panel', standardJsonParser, panelCompatibilityRouter);
 
-// Physical house panel API (Surface Pro 3 kiosk)
-const createPanelRoutes = require('../routes/panel');
-app.use('/api/panel', standardJsonParser, createPanelRoutes({ systemHealth }));
-
-// Generic cross-service event ingress. The deployed BUDDY_EMIT_TOKEN remains
-// the shared-secret source during the legacy alias window.
+// Generic product-owned cross-service event ingress.
 const {
   buddyLimiter,
-  buddyReactLimiter,
   nestorConsumerLimiter,
 } = require('./middleware/rateLimiter');
 const platformEventRoutes = require('../routes/platform-events');
 app.use('/api/platform-events', standardJsonParser, buddyLimiter, platformEventRoutes);
 
-// Versioned standalone Nestor consumer contract. The legacy /api/buddy API
-// remains mounted below for Nestor v0.2.7 compatibility only.
+// Versioned bounded inference/memory contract for separately deployed consumers.
 const createNestorConsumerV1Routes = require('../routes/nestor-consumer-v1');
 app.use(
   '/api/consumers/nestor/v1',
@@ -486,18 +463,7 @@ app.use('/api/telemetry', inferenceTelemetryRoutes);
 const budgetRoutes = require('../routes/budget');
 app.use('/api/budget', budgetRoutes);
 
-// Legacy Nestor v0.2.7 compatibility API. Default-on for rolling upgrades,
-// but explicitly disableable so the supported v1 contract can be exercised
-// without accidentally depending on /api/buddy/*.
-const { isLegacyBuddyApiEnabled } = require('./services/legacyBuddyCompatibility');
-if (isLegacyBuddyApiEnabled()) {
-  const buddyRoutes = require('../routes/buddy');
-  app.use('/api/buddy', chatJsonParser, buddyLimiter);
-  app.use('/api/buddy/react', buddyReactLimiter);
-  app.use('/api/buddy', buddyRoutes);
-} else {
-  logger.info('Legacy Buddy compatibility API disabled');
-}
+app.use('/api/buddy', chatJsonParser, buddyLimiter, externalExperienceShim('The legacy Buddy API'));
 
 // Legacy/Compatibility routes
 // Map /conversations -> history
@@ -565,7 +531,6 @@ app.get('/api/config', (_req, res) => {
   const host = match ? match[1] : 'localhost';
   const port = match && match[2] ? match[2] : '11434';
 
-  const demo = isDemoProfile(agentxProfile);
   res.json({
     profile: agentxProfile,
     ollama: {
@@ -573,7 +538,7 @@ app.get('/api/config', (_req, res) => {
       port,
       fullUrl: ollamaHost
     },
-    features: demo ? {} : { voice: voiceSettings.getSettings() },
+    features: {},
     // Browser-reachable URLs for cross-service navigation. Public JS
     // and EJS pages use these instead of hardcoded localhost:<port>
     // so remote browsers reach the right host. (0208)
@@ -677,56 +642,11 @@ app.get('/playground', (req, res) => {
   });
 });
 
-app.get('/panel', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/panel',
-    title: 'Nestor - Maison',
-    service: 'core',
-    activePage: 'panel',
-    bodyClass: 'panel-kiosk-page',
-    showNav: false,
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/panel.css">'
-    ].join('\n'),
-    footerJs: [
-      '<script src="/js/nestor-voice-stream.js"></script>',
-      '<script src="/js/panel.js"></script>'
-    ].join('')
-  });
-});
+app.get('/panel', (_req, res) => res.status(410).type('text/plain').send(
+  'The household panel moved to a separately installed trusted extension.'
+));
 
-app.get('/lecture', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/lecture',
-    title: 'Nestor Lecteur',
-    service: 'core',
-    activePage: 'lecture',
-    bodyClass: 'lecture-kiosk-page',
-    showNav: false,
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/lecture.css">'
-    ].join('\n'),
-    footerJs: '<script src="/js/lecture.js"></script>'
-  });
-});
-
-app.get('/lecture/parents', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/lecture-parents',
-    title: 'KidX Reader Parent Log',
-    service: 'core',
-    activePage: 'voice-personas',
-    bodyClass: 'lecture-parent-page',
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/lecture-parents.css">'
-    ].join('\n'),
-    footerJs: '<script src="/js/lecture-parents.js"></script>'
-  });
-});
-app.get('/lecture/parents.html', (req, res) => res.redirect(301, '/lecture/parents'));
+app.get(['/lecture', '/lecture/parents', '/lecture/parents.html'], externalExperienceShim('Reader experiences'));
 
 app.get('/nerve-center', (req, res) => {
   res.render('layouts/main', {
@@ -809,13 +729,11 @@ app.get('/memory-review', (req, res) => {
 });
 
 app.get('/pipeline', (req, res) => {
-  const leantimePipeline = getLeantimePipelineConfig();
   res.render('layouts/main', {
     pageView: '../pages/pipeline',
     title: 'AgentX - Pipeline',
     service: 'core',
     activePage: 'pipeline',
-    leantimePipeline,
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
       '<link rel="stylesheet" href="/css/pipeline.css">'
@@ -925,33 +843,8 @@ app.get('/backup', (req, res) => {
 });
 app.get('/backup.html', (req, res) => res.redirect(301, '/backup'));
 
-app.get('/voice', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/voice',
-    title: 'AgentX \u2022 Voice',
-    service: 'core',
-    activePage: 'voice',
-    headCss: '<link rel="stylesheet" href="/styles.css">',
-    footerJs: '<script src="/js/voice.js"></script>'
-  });
-});
-app.get('/voice.html', (req, res) => res.redirect(301, '/voice'));
-app.get('/voix', (req, res) => res.redirect(301, '/voice'));
-
-app.get('/voice-personas', (req, res) => {
-  res.render('layouts/main', {
-    pageView: '../pages/voice-personas',
-    title: 'AgentX \u2022 Voice Personas',
-    service: 'core',
-    activePage: 'voice-personas',
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/voice-personas.css">'
-    ].join('\n'),
-    footerJs: '<script src="/js/voice-personas.js"></script>'
-  });
-});
-app.get('/voice-personas.html', (req, res) => res.redirect(301, '/voice-personas'));
+app.get(['/voice', '/voice.html', '/voix'], externalExperienceShim('Voice experiences'));
+app.get(['/voice-personas', '/voice-personas.html'], externalExperienceShim('Voice personas'));
 
 app.get('/council', (req, res) => {
   res.render('layouts/main', {

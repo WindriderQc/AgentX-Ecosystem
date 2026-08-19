@@ -11,10 +11,11 @@ const publicUrls = {
   data: 'http://data.example:4183',
 };
 
-async function renderNav(service) {
+async function renderNav(service, agentxProfile = 'full') {
   return ejs.renderFile(navPath, {
     service,
     activePage: 'nerve-center',
+    agentxProfile,
     publicUrls,
     reqHost: 'wrong-host.example',
   });
@@ -48,6 +49,12 @@ describe('shared navigation public URL contract', () => {
     expect(hrefFor(html, 'RAG Dashboard')).toBe('/');
     expect(hrefFor(html, 'Nerve Center')).toBe('https://core.example/nerve-center');
     expect(hrefFor(html, 'Engine Room')).toBe('http://bench.example:4181/');
+  });
+
+  test('demo navigation never links its brand to the blocked full-profile portal', async () => {
+    expect(hrefFor(await renderNav('core', 'demo'), 'AgentX')).toBe('/demo');
+    expect(hrefFor(await renderNav('benchmark', 'demo'), 'AgentX')).toBe('https://core.example/demo');
+    expect(hrefFor(await renderNav('core', 'full'), 'AgentX')).toBe('/portal/');
   });
 
   test('nav source does not synthesize URLs from request hosts or service ports', () => {

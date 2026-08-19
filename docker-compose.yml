@@ -47,27 +47,12 @@ services:
       CORE_PUBLIC_URL: http://localhost:${CORE_PORT:-3180}
       BENCHMARK_PUBLIC_URL: http://localhost:${BENCHMARK_PORT:-3181}
       RAG_PUBLIC_URL: http://localhost:${RAG_PORT:-3182}
-      OPENROUTER_API_KEY: ""
-      OPENROUTER_MANAGEMENT_KEY: ""
-      PERPLEXITY_API_KEY: ""
-      BRAVE_API_KEY: ""
-      OPENAI_API_KEY: ""
-      GEMINI_API_KEY: ""
-      GOOGLE_API_KEY: ""
-      ANTHROPIC_API_KEY: ""
       AGENTX_OPERATOR_TOKEN: ""
       AGENTX_BENCHMARK_TOKEN: ${AGENTX_BENCHMARK_TOKEN:-}
       AGENTX_MCP_TOKEN: ""
       AGENTX_CODEX_USAGE_TOKEN: ""
-      AGENTX_ENABLE_LEGACY_BUDDY_API: "false"
-      ALERT_TELEGRAM_ENABLED: "false"
-      ALERT_TELEGRAM_BOT_TOKEN: ""
-      ALERT_TELEGRAM_CHAT_ID: ""
       BACKUP_SCHEDULE_ENABLED: "false"
       MEMORY_REVIEW_MODE: shadow
-      LEANTIME_API_KEY: ""
-      LEANTIME_BASE_URL: ""
-      VOIX_BASE_URL: ""
       CORS_ORIGINS: http://localhost:${CORE_PORT:-3180},http://127.0.0.1:${CORE_PORT:-3180},http://localhost:${BENCHMARK_PORT:-3181},http://127.0.0.1:${BENCHMARK_PORT:-3181},http://localhost:${RAG_PORT:-3182},http://127.0.0.1:${RAG_PORT:-3182}
     depends_on:
       mongo:
@@ -105,7 +90,7 @@ services:
       CORE_URL: http://core:3080
       CORE_PUBLIC_URL: http://localhost:${CORE_PORT:-3180}
       AGENTX_BENCHMARK_TOKEN: ${AGENTX_BENCHMARK_TOKEN:-}
-      BUDDY_EMIT_TOKEN: ""
+      AGENTX_PLATFORM_EVENT_TOKEN: ""
       CORS_ORIGINS: http://localhost:${CORE_PORT:-3180},http://127.0.0.1:${CORE_PORT:-3180},http://localhost:${BENCHMARK_PORT:-3181},http://127.0.0.1:${BENCHMARK_PORT:-3181}
     depends_on:
       mongo:
@@ -146,7 +131,7 @@ services:
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
       CORE_PROXY_URL: http://core:3080
       CORE_URL: http://core:3080
-      BUDDY_EMIT_TOKEN: ""
+      AGENTX_PLATFORM_EVENT_TOKEN: ""
       RAG_INGESTION_POLICY_PATH: /config/rag-ingestion-policy.json
       CORS_ORIGINS: http://localhost:${CORE_PORT:-3180},http://127.0.0.1:${CORE_PORT:-3180},http://localhost:${RAG_PORT:-3182},http://127.0.0.1:${RAG_PORT:-3182}
     depends_on:

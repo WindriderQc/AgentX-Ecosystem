@@ -1,23 +1,12 @@
 const PipelineTask = require('../../models/PipelineTask');
 const Counter = require('../../models/Counter');
 const {
-  reconcile,
   normalizeTaskRoutingMetadata,
   createTaskInMongo,
   findNextEligibleTask,
   claimEligibleTask,
   assertNoDependencyCycle,
 } = require('../../src/services/pipelineTaskService');
-
-describe('pipelineTaskService.reconcile (bidirectional decision)', () => {
-  // statuses are Leantime numeric: 3 New, 4 In Progress, 2 Review/Waiting, 1 Blocked, 0 Done
-  it('creates when there is no card', () => expect(reconcile(3, null, null)).toBe('create'));
-  it('is aligned when card matches want', () => expect(reconcile(4, 4, 4)).toBe('aligned'));
-  it('pulls when only Leantime changed (human dragged the card)', () => expect(reconcile(3, 4, 3)).toBe('pull'));
-  it('pushes when only Mongo changed (agent updated status)', () => expect(reconcile(4, 3, 3)).toBe('pushStatus'));
-  it('conflicts — human wins — when both sides changed', () => expect(reconcile(4, 1, 3)).toBe('conflict'));
-  it('conflicts on mismatch with no watermark', () => expect(reconcile(4, 3, null)).toBe('conflict'));
-});
 
 describe('pipeline task eligibility and metadata', () => {
   beforeEach(async () => {

@@ -8,10 +8,6 @@ jest.mock('../../models/ModelRegistry', () => ({
   findOne: jest.fn()
 }));
 
-jest.mock('../../models/ModelContextProfile', () => ({
-  findOne: jest.fn()
-}));
-
 jest.mock('../../models/HostPreference', () => ({
   findOne: jest.fn()
 }));
@@ -21,7 +17,7 @@ jest.mock('../../src/helpers/ollamaUtils', () => ({
 }));
 
 const ModelRegistry = require('../../models/ModelRegistry');
-const ModelContextProfile = require('../../models/ModelContextProfile');
+const ModelContextProfile = { findOne: jest.fn() };
 const HostPreference = require('../../models/HostPreference');
 const svc = require('../../src/services/modelContextInfoService');
 
@@ -120,7 +116,8 @@ describe('modelContextInfoService', () => {
       artifactIdentity: {
         ...exactArtifact,
         hostUrl: 'http://192.0.2.12:11434'
-      }
+      },
+      deps: { ModelContextProfile }
     });
 
     expect(info).toEqual(expect.objectContaining({
@@ -153,7 +150,8 @@ describe('modelContextInfoService', () => {
     });
 
     const info = await svc.getContextInfo('ax/qwen3.5:9b', 'http://host:11434', {
-      artifactIdentity: exactArtifact
+      artifactIdentity: exactArtifact,
+      deps: { ModelContextProfile }
     });
 
     expect(info).toEqual(expect.objectContaining({

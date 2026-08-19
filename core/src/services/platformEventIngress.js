@@ -11,11 +11,8 @@ function callerAddress(req) {
 function callerAuthorized(req) {
   if (LOOPBACK_ADDRESSES.has(callerAddress(req))) return true;
 
-  // BUDDY_EMIT_TOKEN remains the deployed secret name during compatibility.
-  // New producers use the generic header; the old header remains accepted for
-  // the pinned /api/buddy/emit consumer and rolling deployments.
-  const expectedToken = process.env.BUDDY_EMIT_TOKEN;
-  const presentedToken = req.get('x-platform-event-token') || req.get('x-buddy-emit-token');
+  const expectedToken = process.env.AGENTX_PLATFORM_EVENT_TOKEN;
+  const presentedToken = req.get('x-platform-event-token');
   return Boolean(expectedToken) && presentedToken === expectedToken;
 }
 

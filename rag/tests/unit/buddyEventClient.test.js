@@ -2,20 +2,20 @@
 
 describe('RAG platform event client', () => {
   const savedFetch = global.fetch;
-  const savedToken = process.env.BUDDY_EMIT_TOKEN;
+  const savedToken = process.env.AGENTX_PLATFORM_EVENT_TOKEN;
   const savedCoreUrl = process.env.CORE_URL;
 
   beforeEach(() => {
     jest.resetModules();
     global.fetch = jest.fn(() => Promise.resolve({ ok: true }));
     process.env.CORE_URL = 'http://core.test:3080';
-    process.env.BUDDY_EMIT_TOKEN = 'shared-token';
+    process.env.AGENTX_PLATFORM_EVENT_TOKEN = 'shared-token';
   });
 
   afterEach(() => {
     global.fetch = savedFetch;
-    if (savedToken === undefined) delete process.env.BUDDY_EMIT_TOKEN;
-    else process.env.BUDDY_EMIT_TOKEN = savedToken;
+    if (savedToken === undefined) delete process.env.AGENTX_PLATFORM_EVENT_TOKEN;
+    else process.env.AGENTX_PLATFORM_EVENT_TOKEN = savedToken;
     if (savedCoreUrl === undefined) delete process.env.CORE_URL;
     else process.env.CORE_URL = savedCoreUrl;
   });

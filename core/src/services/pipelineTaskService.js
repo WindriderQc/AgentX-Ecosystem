@@ -1,32 +1,13 @@
 /**
- * Pipeline task service — Mongo is the SOURCE OF TRUTH for the agent task
- * pipeline. Leantime is a BIDIRECTIONAL view; git keeps the code.
- *
- *   Mongo  --push-->  Leantime   (agent created/changed a task)
- *   Mongo  <--pull--  Leantime   (human dragged a card / created one)
- *
- * Deterministic (no LLM) so any agent can trigger it via /api/pipeline/*.
- * Reconciliation uses a per-task watermark (the last status both sides agreed
- * on) to tell which side changed since the previous run. Cards are matched to
- * tasks by their "[NNNN]" pipelineId prefix — no dependence on Leantime ids.
+ * Product-owned Mongo task queue. Environment-specific boards may consume the
+ * bounded /api/pipeline contract from a separately deployed adapter.
  */
 const PipelineTask = require('../../models/PipelineTask');
 const Counter = require('../../models/Counter');
 const { validateRequest, renderTodo } = require('./todoAuthoringService');
 
-// canonical status <-> Leantime numeric column:
-// 3 New(queued) · 4 In Progress · 2 Waiting-for-approval(review) · 1 Blocked · 0 Done
-const STATUS_TO_LT = { queued: 3, in_progress: 4, review: 2, blocked: 1, done: 0 };
-const LT_TO_STATUS = { 3: 'queued', 4: 'in_progress', 2: 'review', 1: 'blocked', 0: 'done' };
-const ACTIVE = new Set([3, 4, 2, 1]); // anything not Done gets a card
 const VALID_RISKS = new Set(['', 'low', 'medium', 'high', 'critical']);
 const PIPELINE_ID_RE = /^\d{3,4}$/;
-
-const leantimeBaseUrl = () => String(process.env.LEANTIME_BASE_URL || '').replace(/\/+$/, '');
-const leantimeUrl = () => `${leantimeBaseUrl()}/api/jsonrpc`;
-const projectId = () => Number(process.env.AGENTX_PIPELINE_PROJECT_ID) || null;
-const apiKey = () => process.env.LEANTIME_API_KEY || '';
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function pipelineInputError(message, code = 'INVALID_TASK_METADATA') {
   const err = new Error(message);
@@ -257,141 +238,6 @@ async function claimEligibleTask(pipelineId, assignee, now = new Date()) {
 }
 
 /**
- * Pure reconciliation decision for one task. All statuses are Leantime numeric
- * (or null for "no card"). want = Mongo task status mapped to LT; card = the
- * Leantime card status; watermark = last agreed LT status.
- */
-function reconcile(want, card, watermark) {
-  if (card === null || card === undefined) return 'create';
-  if (card === want) return 'aligned';
-  const mongoChanged = watermark !== null && watermark !== undefined && want !== watermark;
-  const leantimeChanged = watermark !== null && watermark !== undefined && card !== watermark;
-  if (leantimeChanged && !mongoChanged) return 'pull';        // human dragged the card
-  if (mongoChanged && !leantimeChanged) return 'pushStatus';  // agent changed Mongo
-  return 'conflict';                                          // both, or no watermark -> human wins
-}
-
-async function rpc(method, params, _try = 0) {
-  const res = await fetch(leantimeUrl(), {
-    method: 'POST',
-    headers: { 'x-api-key': apiKey(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method, id: 1, params }),
-  });
-  if (res.status === 429 && _try < 7) { await sleep(2000 + 2000 * _try); return rpc(method, params, _try + 1); }
-  if (!res.ok) throw new Error(`Leantime RPC ${method} -> HTTP ${res.status}`);
-  const body = await res.json();
-  // Leantime returns HTTP 200 even on JSON-RPC errors — treat them as failures
-  // so sync stats and cron reports never claim success on a rejected op.
-  if (body && body.error) {
-    const msg = body.error.message || JSON.stringify(body.error);
-    throw new Error(`Leantime RPC ${method} -> ${msg}`);
-  }
-  return body;
-}
-
-/** Bidirectional reconcile between Mongo (truth) and the Leantime board. */
-async function syncWithLeantime(opts = {}) {
-  if (!apiKey()) throw new Error('LEANTIME_API_KEY is not configured');
-  if (!leantimeBaseUrl()) throw new Error('LEANTIME_BASE_URL is not configured');
-  const proj = Number(opts.projectId || projectId());
-  if (!Number.isInteger(proj) || proj <= 0) {
-    throw new Error('AGENTX_PIPELINE_PROJECT_ID is not configured');
-  }
-  const dryRun = !!opts.dryRun;
-  const syncDone = !!opts.syncDone;
-
-  // index Leantime cards by their [NNNN] prefix; collect human-created orphans
-  const resp = await rpc('leantime.rpc.Tickets.getAll', { searchCriteria: { currentProject: proj, status: '' } });
-  const cards = new Map();
-  const orphans = [];
-  for (const t of resp.result || []) {
-    if (!t || typeof t !== 'object' || Number(t.projectId) !== proj) continue;
-    const mm = /^\[(\d{3,4})\]/.exec(String(t.headline || ''));
-    if (mm) cards.set(mm[1], { id: t.id, status: Number(t.status) });
-    else if (String(t.headline || '').trim()) orphans.push(t);
-  }
-
-  const tasks = await PipelineTask.find({});
-  const stats = { tasks: tasks.length, cards: cards.size, orphans: orphans.length,
-    created: 0, pushedStatus: 0, pulled: 0, conflicts: 0, intake: 0, ideaIntake: 0, aligned: 0 };
-
-  for (const task of tasks) {
-    const want = STATUS_TO_LT[task.status];
-    const card = cards.get(task.pipelineId);
-    const decision = reconcile(want, card ? card.status : null, task.leantimeStatusWatermark);
-
-    if (decision === 'create') {
-      if (task.status === 'done' && !syncDone) { stats.aligned += 1; continue; }
-      stats.created += 1;
-      if (!dryRun) {
-        await rpc('leantime.rpc.Tickets.quickAddTicket', { params: {
-          projectId: proj, type: 'task', status: want, tags: 'agentx,pipeline',
-          headline: `[${task.pipelineId}] ${task.title}`,
-          description: `Mongo-backed pipeline task ${task.pipelineId}. Status edits on this board sync back to Mongo (the source of truth).`,
-        } });
-        task.leantimeStatusWatermark = want; await task.save();
-      }
-    } else if (decision === 'aligned') {
-      if (task.leantimeStatusWatermark !== want && !dryRun) { task.leantimeStatusWatermark = want; await task.save(); }
-      stats.aligned += 1;
-    } else if (decision === 'pull' || decision === 'conflict') {
-      const newStatus = LT_TO_STATUS[card.status] || task.status;
-      task.status = newStatus; task.leantimeStatusWatermark = card.status; task.source = 'leantime';
-      // A human dragging a card back to "New" un-claims it — don't leave a
-      // zombie queued-but-still-assigned task the worker thinks it owns.
-      if (newStatus === 'queued') { task.assignee = null; task.heartbeatAt = null; }
-      if (!dryRun) await task.save();
-      stats[decision === 'pull' ? 'pulled' : 'conflicts'] += 1;
-    } else if (decision === 'pushStatus') {
-      if (!dryRun) await rpc('leantime.rpc.Tickets.patch', { id: card.id, params: { status: want } });
-      task.leantimeStatusWatermark = want;
-      if (!dryRun) await task.save();
-      stats.pushedStatus += 1;
-    }
-  }
-
-  // intake: human-created cards with no pipelineId -> new Mongo tasks (then tag the card)
-  for (const oc of orphans) {
-    stats.intake += 1;
-    if (dryRun) continue;
-    const seq = await Counter.next('pipelineTask');
-    const pid = String(seq).padStart(4, '0');
-    const status = LT_TO_STATUS[Number(oc.status)] || 'queued';
-    await PipelineTask.create({
-      pipelineId: pid, title: String(oc.headline).slice(0, 200), status,
-      leantimeStatusWatermark: Number(oc.status), source: 'leantime', epic: 'Leantime intake',
-    });
-    await rpc('leantime.rpc.Tickets.patch', { id: oc.id, params: { headline: `[${pid}] ${oc.headline}` } });
-  }
-
-  // intake: Leantime Idea-board items -> new Mongo tasks (idempotent by leantimeIdeaId).
-  // Closes the funnel: drop an Idea on the board -> it becomes a pipeline task.
-  let ideas = [];
-  try {
-    const ir = await rpc('leantime.rpc.Ideas.pollForNewIdeas', { projectId: proj });
-    if (Array.isArray(ir.result)) ideas = ir.result;
-  } catch (err) { /* no idea board / API off — skip */ }
-  const seenIdeas = new Set(tasks.filter((t) => t.leantimeIdeaId != null).map((t) => Number(t.leantimeIdeaId)));
-  for (const idea of ideas) {
-    const ideaId = Number(idea && idea.id);
-    if (!Number.isFinite(ideaId) || seenIdeas.has(ideaId)) continue;
-    const title = String((idea && (idea.title || idea.description)) || '').trim();
-    if (!title) continue;
-    seenIdeas.add(ideaId);
-    stats.ideaIntake += 1;
-    if (dryRun) continue;
-    const seq = await Counter.next('pipelineTask');
-    const pid = String(seq).padStart(4, '0');
-    await PipelineTask.create({
-      pipelineId: pid, title: title.slice(0, 200), status: 'queued',
-      source: 'leantime-idea', leantimeIdeaId: ideaId, epic: 'Idea intake',
-    });
-  }
-
-  return { projectId: proj, dryRun, ...stats };
-}
-
-/**
  * Create a task directly in Mongo (the membrane). Atomic id via Counter — no
  * git file, no ROADMAP append, no id race. If the full template fields are
  * present (the create_todo contract) the structured spec is rendered and
@@ -461,8 +307,6 @@ async function createTaskInMongo(input = {}) {
 }
 
 module.exports = {
-  reconcile,
-  syncWithLeantime,
   createTaskInMongo,
   normalizeTaskRoutingMetadata,
   assertNoDependencyCycle,
@@ -470,6 +314,4 @@ module.exports = {
   compareEligibleTasks,
   findNextEligibleTask,
   claimEligibleTask,
-  STATUS_TO_LT,
-  LT_TO_STATUS,
 };

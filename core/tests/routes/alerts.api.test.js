@@ -84,7 +84,7 @@ describe('Alert API Routes', () => {
       expect(response.body.status).toBe('error');
     });
 
-    it('should create alert with channel configuration', async () => {
+    it('should reject embedded external channel configuration with an adapter response', async () => {
       const alertData = {
         title: 'Webhook alert',
         message: 'Delivery test',
@@ -108,18 +108,10 @@ describe('Alert API Routes', () => {
       const response = await request(app)
         .post('/api/alerts')
         .send(alertData)
-        .expect(201);
+        .expect(410);
 
-      const createdAlert = await Alert.findById(response.body.data.alert._id).lean();
-
-      expect(createdAlert.channelConfig.email.recipients).toEqual(['ops@example.com', 'oncall@example.com']);
-      expect(createdAlert.channelConfig.webhook.url).toBe('https://hooks.example.com/alerts');
-      expect(createdAlert.delivery.email.sent).toBe(true);
-      expect(createdAlert.delivery.webhook.sent).toBe(true);
-
-      // Verify webhook delivery metadata
-      expect(createdAlert.delivery.webhook.url).toBe('https://hooks.example.com/alerts');
-      expect(createdAlert.delivery.webhook.statusCode).toBeDefined();
+      expect(response.body.code).toBe('ADAPTER_REQUIRED');
+      expect(await Alert.countDocuments({})).toBe(0);
     });
   });
 

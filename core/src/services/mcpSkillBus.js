@@ -2,17 +2,9 @@ const systemHealth = require('../systemHealth');
 const fetch = require('node-fetch');
 const { getRagServiceClient } = require('./ragServiceClient');
 const { createTaskInMongo } = require('./pipelineTaskService');
-const { saveMemory } = require('./nestorMemoryService');
-const { lookupExact: lookupFrenchWord } = require('./kidxLexiconService');
-const {
-  addPersonalTask,
-  listPersonalTasks,
-  completePersonalTask,
-} = require('./secretaryService');
 
 const PROTOCOL_VERSION = '2025-06-18';
 const SERVER_INFO = { name: 'agentx-core-skill-bus', title: 'AgentX Core Skill Bus', version: '0.1.0' };
-const PERSONAL_TASK_NOTE_MAX_CHARS = 240;
 const BUDGET_GATE_TIMEOUT_MS = 5000;
 
 class McpToolError extends Error {
@@ -64,15 +56,6 @@ const TOOLS = [
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   {
-    name: 'lookup_french_word',
-    title: 'Look Up French Word',
-    description: 'Look up one exact French word in the compact, local, attributed KidX lexicon. Returns sourced glosses without model inference or Internet access.',
-    inputSchema: objectSchema({
-      word: { type: 'string', minLength: 1, maxLength: 80 },
-    }, ['word']),
-    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-  },
-  {
     name: 'create_todo',
     title: 'Create TODO',
     description: 'Create a deterministic task in the Mongo pipeline (the source of truth). Does not dispatch or execute the task.',
@@ -88,54 +71,6 @@ const TOOLS = [
       related_tasks: { type: 'array', items: { type: 'string' } },
       why_now: { type: 'string', maxLength: 1000 },
     }, ['objective', 'service', 'short_name', 'source_files', 'steps', 'constraints', 'acceptance_criteria']),
-    annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
-  },
-  {
-    name: 'save_memory',
-    title: 'Save Nestor Memory',
-    description: 'Save an explicit durable fact or summary into RAG under source nestor-memory. Secret-like text is refused.',
-    inputSchema: objectSchema({
-      text: { type: 'string', minLength: 1, maxLength: 4000 },
-      type: { type: 'string', enum: ['fact', 'summary'], default: 'fact' },
-      agent: { type: 'string', default: 'nestor' },
-      topic: { type: 'string', default: 'general' },
-      tags: { type: 'array', items: { type: 'string' } },
-      id: { type: 'string' },
-    }, ['text']),
-    annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false },
-  },
-  {
-    name: 'add_personal_task',
-    title: 'Add Personal Task',
-    description: "Add an errand/reminder to Example User's personal lane (the secretary list). Use for real-life tasks, not code work — code work uses create_todo. Only a title is required. Resolve relative dates like \"Friday\" to an ISO date yourself before calling.",
-    inputSchema: objectSchema({
-      title: { type: 'string', minLength: 1, maxLength: 200 },
-      note: { type: 'string', maxLength: 2000 },
-      dueAt: { type: 'string', maxLength: 40 },
-      priority: { type: 'integer', minimum: 1, maximum: 5, default: 3 },
-    }, ['title']),
-    annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
-  },
-  {
-    name: 'list_personal_tasks',
-    title: 'List Personal Tasks',
-    description: "List Example User's open personal tasks, most urgent first, with overdue/dueToday counts. Use this before answering any question about what is on his list, what is due, or what he should do next. Notes are omitted by default; request includeNotes only when their text is needed, and expect long notes to be summarized.",
-    inputSchema: objectSchema({
-      includeDone: { type: 'boolean', default: false },
-      includeNotes: { type: 'boolean', default: false },
-      limit: { type: 'integer', minimum: 1, maximum: 100, default: 25 },
-    }),
-    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-  },
-  {
-    name: 'complete_personal_task',
-    title: 'Complete Personal Task',
-    description: "Mark a personal task done. `ref` accepts the 4-digit id or a distinctive phrase from the title (e.g. \"Spotify\"). If the phrase matches several tasks the call fails with the candidates listed — ask which one rather than guessing.",
-    inputSchema: objectSchema({
-      ref: { type: 'string', minLength: 1, maxLength: 200 },
-      note: { type: 'string', maxLength: 2000 },
-      by: { type: 'string', maxLength: 120 },
-    }, ['ref']),
     annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
   },
 ];
@@ -289,69 +224,16 @@ async function getEscalationRecommendation(args, deps) {
   };
 }
 
-async function lookupFrenchWordTool(args, deps) {
-  const input = ensurePlainObject(args);
-  const word = typeof input.word === 'string' ? input.word.trim() : '';
-  if (!word || word.length > 80) {
-    throw new McpToolError('word is required and must not exceed 80 characters', {
-      code: 'INVALID_ARGUMENTS'
-    });
-  }
-  const lookup = deps.lexiconLookup || lookupFrenchWord;
-  return lookup(word);
-}
-
 async function createTodoTool(args, deps) {
   const writer = deps.todoWriter || createTaskInMongo;
   return writer(ensurePlainObject(args));
-}
-
-async function saveMemoryTool(args, deps) {
-  const writer = deps.memoryWriter || saveMemory;
-  return writer(ensurePlainObject(args));
-}
-
-async function addPersonalTaskTool(args, deps) {
-  const writer = deps.secretaryAdd || addPersonalTask;
-  return writer(ensurePlainObject(args));
-}
-
-async function listPersonalTasksTool(args, deps) {
-  const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
-  const reader = deps.secretaryList || listPersonalTasks;
-  const result = await reader({
-    includeDone: input.includeDone === true,
-    limit: clampInteger(input.limit, { min: 1, max: 100, fallback: 25 }),
-  });
-  const includeNotes = input.includeNotes === true;
-  const tasks = Array.isArray(result?.tasks) ? result.tasks.map((task) => {
-    const { note, ...summary } = task;
-    if (!includeNotes) return summary;
-    const rawNote = typeof note === 'string' ? note : '';
-    return {
-      ...summary,
-      note: rawNote.slice(0, PERSONAL_TASK_NOTE_MAX_CHARS),
-      noteTruncated: rawNote.length > PERSONAL_TASK_NOTE_MAX_CHARS,
-    };
-  }) : [];
-  return { ...result, tasks };
-}
-
-async function completePersonalTaskTool(args, deps) {
-  const closer = deps.secretaryComplete || completePersonalTask;
-  return closer(ensurePlainObject(args));
 }
 
 const TOOL_HANDLERS = {
   rag_search: ragSearch,
   check_health: checkHealth,
   get_escalation_recommendation: getEscalationRecommendation,
-  lookup_french_word: lookupFrenchWordTool,
   create_todo: createTodoTool,
-  save_memory: saveMemoryTool,
-  add_personal_task: addPersonalTaskTool,
-  list_personal_tasks: listPersonalTasksTool,
-  complete_personal_task: completePersonalTaskTool,
 };
 
 async function callTool(params, deps = {}) {
@@ -382,7 +264,7 @@ async function handleMcpMessage(message, deps = {}) {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
       serverInfo: SERVER_INFO,
-      instructions: 'AgentX exposes a narrow skill bus for product health, RAG, model-routing recommendations, vocabulary lookup, tasks, and memory.',
+      instructions: 'Agent X exposes a narrow product bus for health, RAG, routing recommendations, and local task creation.',
     });
   }
   if (method === 'tools/list') {
