@@ -56,7 +56,10 @@ function validateThroughput(tokensPerSec) {
 }
 
 function findInvalidThroughputStep(steps = []) {
-  return steps.find((step) => !validateThroughput(step?.tokensPerSec).plausible);
+  return steps.find((step) => (
+    step?.requestSucceeded !== false
+    && !validateThroughput(step?.tokensPerSec).plausible
+  ));
 }
 
 function getConfig() {
@@ -296,6 +299,7 @@ async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80
 
   return {
     numCtx,
+    requestSucceeded: probeResult.ok,
     tokensPerSec: probeResult.tokensPerSec,
     promptTokens: probeResult.promptTokens,
     completionTokens: probeResult.completionTokens,
