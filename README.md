@@ -14,6 +14,8 @@ evidence.
   contracts;
 - **Shared contracts** — runtime-profile and browser URL boundaries used by
   those services;
+- **Portable skills** — optional, versioned agent instructions for open
+  formats; skills do not load into services or grant access to private data;
 - **Demo and onboarding** — a secret-free Windows/Linux first-run path.
 
 The default `demo` profile does not load private data, environment-specific
@@ -132,6 +134,12 @@ Advanced operators may also install an absolute-path trusted
 extension in the full profile; Core owns only the generic loader and versioned
 contracts, never the extension source, secret, mount, or deployment. See
 [Trusted extensions](docs/TRUSTED_EXTENSIONS.md).
+
+Portable Agent Skills under [`skills/`](skills/) are optional source
+artifacts. Installing one into Codex, Hermès Agent, OpenClaw, or another
+compatible runtime is an explicit action controlled by that runtime. A skill
+does not receive filesystem, vault, network, or RAG authority merely by being
+present in this repository.
 
 A separately operated private Data service may expose a bounded, read-only
 API to agents. It is not an Agent X service, an Agent X skill, or an adapter

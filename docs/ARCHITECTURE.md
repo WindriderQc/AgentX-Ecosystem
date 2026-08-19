@@ -1,6 +1,6 @@
 # Agent X architecture
 
-Status: canonical product architecture, verified 2026-08-17.
+Status: canonical product architecture, verified 2026-08-19.
 
 ## Product topology
 
@@ -10,6 +10,7 @@ Status: canonical product architecture, verified 2026-08-17.
 | Benchmark (`benchmark`, internal 3081) | Runs evaluations, profiles models, scores evidence, renders comparisons | MongoDB; Core; optional Ollama |
 | RAG (`rag`, internal 3082) | Ingests bounded documents, embeds chunks, retrieves knowledge, exposes the RAG API | MongoDB; Qdrant; Core embedding proxy |
 | `shared/` | Small cross-service contracts with identical semantics | No runtime service |
+| `skills/` | Optional portable Agent Skills for open-format authoring and other reviewed procedures | No runtime service |
 | MongoDB | Product metadata and evaluation state | Internal only |
 | Qdrant | Vector storage | Internal only |
 | Ollama | User-selected inference runtime | Optional; native, isolated Docker, or explicit remote endpoint |
@@ -49,6 +50,11 @@ A private Data service may independently expose a bounded, read-only API to
 agents. Data remains outside the product boundary: it is neither a product
 service nor a skill owned or loaded by Agent X.
 
+Portable skills are static distribution artifacts. No Agent X service loads or
+executes them automatically. Installation, filesystem access, mutation
+approval, and runtime-specific configuration remain owned by the consuming
+agent runtime.
+
 ## Contract rules
 
 - Cross-service calls use Docker DNS (`core`, `benchmark`, `rag`, `mongo`,
@@ -77,6 +83,8 @@ service nor a skill owned or loaded by Agent X.
   [Exact-artifact profiling](EXACT_ARTIFACT_PROFILING.md).
 - Filesystem scanning is disabled by topology: the image has a bounded
   `/data/imports` policy but no host mount. Public demo ingestion uses HTTP.
+- A portable skill grants no filesystem, vault, network, or RAG authority. The
+  consuming runtime must provide and govern every capability separately.
 - Product documentation is permanent and current. Evolution logs, migration
   plans, incident notes, inventories, and audits do not belong in this
   repository.

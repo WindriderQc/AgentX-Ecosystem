@@ -80,6 +80,15 @@ jobs:
           node --check core/server.js
           node --check benchmark/server.js
           node --check rag/server.js
+          node --check skills/obsidian-open-formats/scripts/validate.js
+      - name: Validate portable Obsidian skill
+        run: |
+          node --test skills/obsidian-open-formats/scripts/validate.test.js
+          node skills/obsidian-open-formats/scripts/validate.js \
+            skills/obsidian-open-formats/SKILL.md \
+            skills/obsidian-open-formats/references/markdown.md \
+            skills/obsidian-open-formats/references/json-canvas.md \
+            skills/obsidian-open-formats/references/sources.md
       - name: Render default and Ollama Compose profiles
         run: |
           docker compose --env-file config/agentx.env -f docker-compose.yml config --format json > /tmp/agentx-base.json
