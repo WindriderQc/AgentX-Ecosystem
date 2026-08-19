@@ -15,6 +15,7 @@ function buildApp() {
   app.use(publicExposureGuard);
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));
   app.get('/api/nerve-center/status', (_req, res) => res.json({ status: 'success' }));
+  app.get('/api/consumers/v1/capabilities', (_req, res) => res.json({ ok: true }));
   app.post('/api/chat', (_req, res) => res.json({ status: 'success' }));
   app.post('/mcp', (_req, res) => res.json({ jsonrpc: '2.0', result: {} }));
   return app;
@@ -23,6 +24,7 @@ function buildApp() {
 describe('publicExposureGuard', () => {
   const savedOperatorToken = process.env.AGENTX_OPERATOR_TOKEN;
   const savedAdminToken = process.env.AGENTX_ADMIN_TOKEN;
+  const savedConsumerToken = process.env.AGENTX_EXTERNAL_CONSUMER_TOKEN;
   const savedPublicHosts = process.env.AGENTX_PUBLIC_HOSTS;
   const savedAgentxPublicUrl = process.env.AGENTX_PUBLIC_URL;
 
@@ -31,6 +33,7 @@ describe('publicExposureGuard', () => {
   beforeEach(() => {
     delete process.env.AGENTX_OPERATOR_TOKEN;
     delete process.env.AGENTX_ADMIN_TOKEN;
+    delete process.env.AGENTX_EXTERNAL_CONSUMER_TOKEN;
     delete process.env.AGENTX_PUBLIC_HOSTS;
     delete process.env.AGENTX_PUBLIC_URL;
     app = buildApp();
@@ -41,6 +44,8 @@ describe('publicExposureGuard', () => {
     else process.env.AGENTX_OPERATOR_TOKEN = savedOperatorToken;
     if (savedAdminToken === undefined) delete process.env.AGENTX_ADMIN_TOKEN;
     else process.env.AGENTX_ADMIN_TOKEN = savedAdminToken;
+    if (savedConsumerToken === undefined) delete process.env.AGENTX_EXTERNAL_CONSUMER_TOKEN;
+    else process.env.AGENTX_EXTERNAL_CONSUMER_TOKEN = savedConsumerToken;
     if (savedPublicHosts === undefined) delete process.env.AGENTX_PUBLIC_HOSTS;
     else process.env.AGENTX_PUBLIC_HOSTS = savedPublicHosts;
     if (savedAgentxPublicUrl === undefined) delete process.env.AGENTX_PUBLIC_URL;
@@ -79,6 +84,22 @@ describe('publicExposureGuard', () => {
       .set('Authorization', 'Bearer operator-token')
       .send({ message: 'hello' })
       .expect(200);
+  });
+
+  it('allows the scoped token only on the external consumer path', async () => {
+    process.env.AGENTX_EXTERNAL_CONSUMER_TOKEN = 'consumer-token';
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
+
+    await request(app)
+      .get('/api/consumers/v1/capabilities')
+      .set('Host', 'agentx.example.test')
+      .set('Authorization', 'Bearer consumer-token')
+      .expect(200);
+    await request(app)
+      .get('/api/nerve-center/status')
+      .set('Host', 'agentx.example.test')
+      .set('Authorization', 'Bearer consumer-token')
+      .expect(403);
   });
 
   it('does not block private-host API requests', async () => {

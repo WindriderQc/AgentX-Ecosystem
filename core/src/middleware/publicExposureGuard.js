@@ -1,6 +1,10 @@
 'use strict';
 
 const { operatorTokenAllowed } = require('./operatorAccess');
+const {
+  externalConsumerTokenAllowed,
+  isExternalConsumerPath,
+} = require('./externalConsumerAccess');
 
 const PROTECTED_PATH_PREFIXES = ['/api/', '/mcp', '/api/mcp'];
 
@@ -66,6 +70,8 @@ function publicExposureGuard(req, res, next) {
   }
 
   if (operatorTokenAllowed(req)) return next();
+  if (isExternalConsumerPath(req.path || req.originalUrl)
+    && externalConsumerTokenAllowed(req)) return next();
 
   return res.status(403).json({
     ok: false,

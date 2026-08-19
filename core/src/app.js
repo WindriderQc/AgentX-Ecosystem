@@ -180,6 +180,22 @@ function requireNestorJsonEntity(req, res, next) {
 const chatJsonParser = express.json({ limit: '1mb' });
 app.use('/api/consumers/nestor/v1', requireNestorJsonEntity, chatJsonParser);
 
+function requireExternalConsumerJsonEntity(req, res, next) {
+  const hasEntity = Number(req.get('content-length') || 0) > 0 || Boolean(req.get('transfer-encoding'));
+  if (hasEntity && !req.is('application/json')) {
+    const message = 'External consumer v1 request bodies must use application/json.';
+    return res.status(415).json({
+      ok: false,
+      status: 'error',
+      error: message,
+      message,
+      code: 'EXTERNAL_CONSUMER_UNSUPPORTED_MEDIA_TYPE'
+    });
+  }
+  return next();
+}
+app.use('/api/consumers/v1', requireExternalConsumerJsonEntity, chatJsonParser);
+
 // Parse memory-review bodies before the default product parser.
 // Mounting a tighter parser later does not help because Express would already
 // have consumed the body. This keeps the advertised 1 MiB boundary real for
@@ -278,6 +294,7 @@ app.use('/api/', apiLimiter);
 // disabled by default and outside the demo profile. Registration happens after
 // the shared API limiter but before built-in routes so an extension can protect
 // Core-owned paths without bypassing the product's admission controls.
+const runtimeServices = createTrustedRuntimeServices();
 const trustedExtensions = loadTrustedExtensions({
   app,
   express,
@@ -286,13 +303,24 @@ const trustedExtensions = loadTrustedExtensions({
   profile: agentxProfile,
   standardJsonParser,
   conversationLifecycle,
-  runtimeServices: createTrustedRuntimeServices(),
+  runtimeServices,
   security: Object.freeze({
     contractVersion: 1,
     ...require('./middleware/operatorAccess')
   })
 });
 app.locals.trustedExtensions = trustedExtensions;
+
+// Generic, stateless API for separately deployed applications. It reuses the
+// same Core routing authority injected into trusted extensions, but owns no
+// application transcript or private topology.
+const createExternalConsumerV1Routes = require('../routes/external-consumer-v1');
+const { requireExternalConsumerAccess } = require('./middleware/externalConsumerAccess');
+app.use(
+  '/api/consumers/v1',
+  requireExternalConsumerAccess,
+  createExternalConsumerV1Routes({ runtimeServices, systemHealth })
+);
 
 // Alert routes (Track 1: Alerts & Notifications)
 const alertRoutes = require('../routes/alerts');
@@ -872,15 +900,19 @@ app.use((err, req, res, _next) => {
   const requestPath = String(req.originalUrl || '').split('?', 1)[0];
   const isNestorContract = requestPath === '/api/consumers/nestor/v1'
     || requestPath.startsWith('/api/consumers/nestor/v1/');
+  const isExternalConsumerContract = requestPath === '/api/consumers/v1'
+    || requestPath.startsWith('/api/consumers/v1/');
 
-  if (err.type === 'entity.parse.failed' && isNestorContract) {
-    const message = 'Nestor v1 request body contains invalid JSON.';
+  if (err.type === 'entity.parse.failed' && (isNestorContract || isExternalConsumerContract)) {
+    const message = isNestorContract
+      ? 'Nestor v1 request body contains invalid JSON.'
+      : 'External consumer v1 request body contains invalid JSON.';
     return res.status(400).json({
       ok: false,
       status: 'error',
       error: message,
       message,
-      code: 'NESTOR_INVALID_JSON'
+      code: isNestorContract ? 'NESTOR_INVALID_JSON' : 'EXTERNAL_CONSUMER_INVALID_JSON'
     });
   }
 
@@ -888,7 +920,9 @@ app.use((err, req, res, _next) => {
   if (err.type === 'entity.too.large') {
     const message = isNestorContract
       ? 'Payload too large. The Nestor v1 request exceeds the 1 MiB transport limit.'
-      : 'Payload too large. The request exceeds the configured route limit.';
+      : isExternalConsumerContract
+        ? 'Payload too large. The external consumer v1 request exceeds the 1 MiB transport limit.'
+        : 'Payload too large. The request exceeds the configured route limit.';
     return res.status(413).json({
       ok: false,
       status: 'error',
