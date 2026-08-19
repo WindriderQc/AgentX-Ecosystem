@@ -75,8 +75,7 @@
       heartbeatAt: task.heartbeatAt || null,
       epic: task.epic || '',
       source: task.source || '',
-      updatedAt: task.updatedAt || task.createdAt || null,
-      leantimeStatusWatermark: task.leantimeStatusWatermark
+      updatedAt: task.updatedAt || task.createdAt || null
     }));
   }
 
@@ -245,10 +244,6 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
-    const cfg = window.__AGENTX_PIPELINE__ || {};
-    const link = $('pipelineLeantimeLink');
-    if (link && cfg.boardUrl) link.href = cfg.boardUrl;
-
     const refresh = $('pipelineRefreshBtn');
     if (refresh) refresh.addEventListener('click', loadTasks);
     loadTasks();

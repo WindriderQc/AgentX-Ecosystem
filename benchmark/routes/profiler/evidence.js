@@ -2,7 +2,109 @@
 
 const express = require('express');
 const router = express.Router();
+const HostProfile = require('../../models/HostProfile');
+const ModelProfile = require('../../models/ModelProfile');
 const performanceProfiles = require('../../src/services/profiler/modelPerformanceProfileService');
+const contextProfiles = require('../../src/services/modelContextProfileService');
+const { normalizeHostUrl } = require('../../../shared/artifactIdentity');
+const { normalizeModelTag } = require('../../../shared/modelNames');
+
+function mapToObject(value) {
+  return value instanceof Map ? Object.fromEntries(value) : (value || {});
+}
+
+function serializeModelProfile(profile) {
+  if (!profile) return null;
+  return {
+    name: profile.name,
+    capabilities: profile.capabilities || {},
+    thinkingProfiles: mapToObject(profile.thinkingProfiles),
+    readiness: mapToObject(profile.readiness),
+    updatedAt: profile.updatedAt || null
+  };
+}
+
+router.get('/readiness', async (_req, res) => {
+  try {
+    const profiles = await ModelProfile.find({})
+      .select({ name: 1, readiness: 1, _id: 0 })
+      .lean();
+    res.json({
+      status: 'success',
+      data: {
+        profiles: profiles.map((profile) => ({
+          name: profile.name,
+          readiness: mapToObject(profile.readiness)
+        }))
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message });
+  }
+});
+
+router.get('/host', async (req, res) => {
+  try {
+    const hostUrl = normalizeHostUrl(req.query.hostUrl);
+    if (!hostUrl) {
+      return res.status(400).json({ status: 'error', error: 'hostUrl is required' });
+    }
+    const hostProfile = await HostProfile.findOne({ hostUrl })
+      .select('hostId hostUrl displayName gpu ollama cpu')
+      .lean();
+    return res.json({ status: 'success', data: { hostProfile: hostProfile || null } });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', error: err.message });
+  }
+});
+
+router.get('/inference/:modelName', async (req, res) => {
+  try {
+    const modelName = normalizeModelTag(req.params.modelName);
+    const hostUrl = normalizeHostUrl(req.query.hostUrl);
+    if (!modelName || !hostUrl) {
+      return res.status(400).json({ status: 'error', error: 'modelName and hostUrl are required' });
+    }
+    const [hostProfile, modelProfile] = await Promise.all([
+      HostProfile.findOne({ hostUrl })
+        .select('hostId hostUrl displayName gpu ollama cpu')
+        .lean(),
+      ModelProfile.findOne({ name: modelName })
+        .select('name capabilities thinkingProfiles readiness updatedAt')
+        .lean()
+    ]);
+    return res.json({
+      status: 'success',
+      data: {
+        hostProfile: hostProfile || null,
+        modelProfile: serializeModelProfile(modelProfile)
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', error: err.message });
+  }
+});
+
+router.get('/context/:modelName', async (req, res) => {
+  try {
+    const modelName = normalizeModelTag(req.params.modelName);
+    const hostUrl = normalizeHostUrl(req.query.hostUrl);
+    const artifact = {
+      digest: String(req.query.artifactDigest || '').trim(),
+      runtimeFingerprint: String(req.query.runtimeFingerprint || '').trim()
+    };
+    if (!modelName || !hostUrl || !artifact.digest || !artifact.runtimeFingerprint) {
+      return res.status(400).json({
+        status: 'error',
+        error: 'modelName, hostUrl, artifactDigest, and runtimeFingerprint are required'
+      });
+    }
+    const contextProfile = await contextProfiles.findContextProfile(modelName, hostUrl, artifact);
+    return res.json({ status: 'success', data: { contextProfile: contextProfile || null } });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', error: err.message });
+  }
+});
 
 router.get('/roster', async (req, res) => {
   try {

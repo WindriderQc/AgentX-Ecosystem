@@ -369,40 +369,11 @@ router.post('/notifications/test', async (req, res) => {
       });
     }
 
-    const notificationService = getNotificationService();
-
-    // Create test alert
-    const testAlert = {
-      _id: 'test-alert-id',
-      title: 'Test Alert - AgentX Notification System',
-      message: 'This is a test alert to verify notification channel configuration.',
-      severity: 'info',
-      ruleName: 'Test Rule',
-      ruleId: 'test-rule',
-      source: 'agentx-test',
-      context: {
-        component: 'notification-test',
-        metric: 'test',
-        currentValue: 100,
-        threshold: 80
-      },
-      createdAt: new Date(),
-      status: 'active'
-    };
-
-    // Send test notification
-    const result = await notificationService.send(channel, testAlert);
-
-    res.json({
-      status: 'success',
-      data: {
-        channel,
-        sent: result.sent,
-        error: result.error,
-        message: result.sent
-          ? `Test notification sent successfully to ${channel}`
-          : `Failed to send test notification: ${result.error}`
-      }
+    return res.status(410).json({
+      status: 'error',
+      message: 'External notification delivery moved to separately deployed adapters.',
+      code: 'ADAPTER_REQUIRED',
+      data: { channel }
     });
   } catch (error) {
     logger.error('Failed to test notification', { error: error.message });
@@ -438,15 +409,11 @@ router.post('/notifications/verify', async (req, res) => {
       });
     }
 
-    const notificationService = getNotificationService();
-    const verificationResult = await notificationService.verifyChannel(channel);
-
-    res.json({
-      status: 'success',
-      data: {
-        channel,
-        ...verificationResult
-      }
+    return res.status(410).json({
+      status: 'error',
+      message: 'External notification delivery moved to separately deployed adapters.',
+      code: 'ADAPTER_REQUIRED',
+      data: { channel }
     });
   } catch (error) {
     logger.error('Failed to verify notification channel', { error: error.message });

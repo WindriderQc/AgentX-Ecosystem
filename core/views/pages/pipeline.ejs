@@ -1,18 +1,11 @@
-<%
-  const pipelineCfg = locals.leantimePipeline || {};
-  const leantimeUrl = pipelineCfg.boardUrl || pipelineCfg.baseUrl || '';
-  const projectId = pipelineCfg.projectId || 3;
-%>
-
 <main class="pipeline-page">
   <header class="pipeline-header">
     <div>
       <div class="pipeline-eyebrow">AgentX Pipeline</div>
       <h1><i class="fas fa-list-check"></i> Pipeline</h1>
       <div class="pipeline-ownership">
-        <span><i class="fas fa-database"></i> Mongo task truth</span>
-        <span><i class="fas fa-table-columns"></i> Leantime board</span>
-        <span><i class="fas fa-rotate"></i> 2h sync loop</span>
+        <span><i class="fas fa-database"></i> Product-owned task queue</span>
+        <span><i class="fas fa-code-branch"></i> Bounded HTTP contract</span>
       </div>
     </div>
     <div class="pipeline-actions">
@@ -20,19 +13,15 @@
         <i class="fas fa-rotate"></i>
         <span>Refresh</span>
       </button>
-      <a id="pipelineLeantimeLink" class="pipeline-btn pipeline-btn-primary" href="<%= leantimeUrl %>" target="_blank" rel="noopener">
-        <i class="fas fa-arrow-up-right-from-square"></i>
-        <span>Open Leantime</span>
-      </a>
     </div>
   </header>
 
   <section class="pipeline-banner" aria-label="Pipeline ownership">
     <div>
-      <strong>Leantime is the working board.</strong>
-      <span>AgentX shows the Mongo-backed status snapshot so operators can find the board and spot blocked or stale work quickly.</span>
+      <strong>Agent X owns the task contract.</strong>
+      <span>Separately deployed boards can read and update tasks through the bounded pipeline API.</span>
     </div>
-    <code>project <%= projectId %></code>
+    <code>/api/pipeline/tasks</code>
   </section>
 
   <section class="pipeline-status-grid" aria-label="Pipeline status counts">
@@ -95,25 +84,25 @@
         <div class="pipeline-panel-header">
           <div>
             <h2><i class="fas fa-route"></i> Source Split</h2>
-            <p>One queue, two surfaces</p>
+            <p>One queue, one product contract</p>
           </div>
         </div>
         <dl class="pipeline-contract-list">
           <div>
             <dt>Truth</dt>
-            <dd>Core Mongo <code>pipelinetasks</code></dd>
+            <dd>Core task service</dd>
           </div>
           <div>
             <dt>Human UI</dt>
-            <dd>Leantime AgentX Pipeline kanban</dd>
+            <dd>Agent X Pipeline</dd>
           </div>
           <div>
             <dt>Agent API</dt>
             <dd><code>/api/pipeline/tasks</code></dd>
           </div>
           <div>
-            <dt>AgentX UI</dt>
-            <dd>Status snapshot and board entry point</dd>
+            <dt>External adapters</dt>
+            <dd>Separately deployed API consumers</dd>
           </div>
         </dl>
       </section>
@@ -132,7 +121,3 @@
     </aside>
   </section>
 </main>
-
-<script>
-  window.__AGENTX_PIPELINE__ = <%- JSON.stringify(pipelineCfg) %>;
-</script>

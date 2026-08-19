@@ -1,17 +1,13 @@
 'use strict';
 
-const voixClient = require('./voixClientService');
 const { getMemoryStatus } = require('./nestorConsumerMemoryService');
-const { getPersonalitySources } = require('./nestorConsumerPersonalityService');
 const { getRouterSnapshot } = require('./nestorConsumerRuntimeService');
-const { isLegacyBuddyApiEnabled } = require('./legacyBuddyCompatibility');
 const {
   CONTRACT_NAME,
   CONTRACT_VERSION,
   CONTRACT_BASE_PATH,
   OPERATION_TASK_TYPES,
   MEMORY_SOURCES,
-  PERSONALITY_SOURCES,
   LIMITS,
 } = require('./nestorConsumerContract');
 
@@ -38,19 +34,12 @@ async function settle(label, action, fallback, timeoutMs = DEFAULT_PROBE_TIMEOUT
 
 async function getCapabilities({ systemHealth, probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS } = {}) {
   const boundedProbeTimeoutMs = Math.max(1, Math.min(Number(probeTimeoutMs) || DEFAULT_PROBE_TIMEOUT_MS, 30000));
-  const [router, memory, personality, voix] = await Promise.all([
+  const [router, memory] = await Promise.all([
     settle('router', getRouterSnapshot, { routes: {} }, boundedProbeTimeoutMs),
     settle('memory', () => getMemoryStatus(MEMORY_SOURCES), { sources: {}, warnings: [] }, boundedProbeTimeoutMs),
-    settle('personality', getPersonalitySources, { sources: {} }, boundedProbeTimeoutMs),
-    settle(
-      'voix',
-      async () => ({ available: true, health: await voixClient.health({ query: {} }) }),
-      {},
-      boundedProbeTimeoutMs
-    ),
   ]);
 
-  const warnings = [router.warning, memory.warning, personality.warning, voix.warning].filter(Boolean);
+  const warnings = [router.warning, memory.warning].filter(Boolean);
 
   return {
     contract: {
@@ -81,25 +70,6 @@ async function getCapabilities({ systemHealth, probeTimeoutMs = DEFAULT_PROBE_TI
       providers: memory.sources || {},
       warnings: memory.warnings || [],
     },
-    personality: {
-      sources: PERSONALITY_SOURCES,
-      discoveryEndpoint: `${CONTRACT_BASE_PATH}/personality/sources`,
-      resolveEndpoint: `${CONTRACT_BASE_PATH}/personality/resolve`,
-      providers: personality.sources || {},
-      readOnly: true,
-    },
-    voix: {
-      available: voix.available !== false,
-      proxy: {
-        settings: '/api/voix/settings',
-        config: '/api/voix/config',
-        transcribe: '/api/voix/transcribe',
-        synthesize: '/api/voix/synthesize',
-      },
-      operatorConsole: '/voice',
-      health: voix.health || null,
-      warning: voix.warning || null,
-    },
     events: {
       ingressEndpoint: '/api/platform-events',
       streamEndpoint: `${CONTRACT_BASE_PATH}/events/stream`,
@@ -110,9 +80,10 @@ async function getCapabilities({ systemHealth, probeTimeoutMs = DEFAULT_PROBE_TI
       cursorInputs: ['Last-Event-ID', 'cursor query parameter'],
     },
     panelSummary: {
-      available: true,
+      available: false,
       endpoint: `${CONTRACT_BASE_PATH}/panel-summary`,
-      sourceEndpoint: '/api/panel/status',
+      sourceEndpoint: null,
+      code: 'ADAPTER_REQUIRED',
     },
     metrics: {
       endpoint: `${CONTRACT_BASE_PATH}/metrics`,
@@ -120,12 +91,9 @@ async function getCapabilities({ systemHealth, probeTimeoutMs = DEFAULT_PROBE_TI
       maxHours: LIMITS.metricsHours,
     },
     limits: { ...LIMITS },
-    legacyBuddy: {
-      apiSupported: isLegacyBuddyApiEnabled(),
-      uiSupported: false,
-      compatibilityBaseline: 'Nestor v0.2.7',
-      removalVersion: null,
-      removalCondition: 'Nestor main no longer references /api/buddy/* and an explicit deprecation gate is approved.',
+    externalExperiences: {
+      supported: false,
+      code: 'ADAPTER_REQUIRED'
     },
   };
 }

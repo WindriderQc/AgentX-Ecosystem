@@ -671,7 +671,5 @@ router.use('/', require('./analytics-prompt'));
 router.use('/', require('./analytics-effectiveness'));
 // Inference-log analytics: the lane that actually carries platform traffic.
 router.use('/inference', require('./analytics-inference'));
-// End-to-end voice timing traces. No audio or message content is retained.
-router.use('/voice', require('./analytics-voice'));
 
 module.exports = router;

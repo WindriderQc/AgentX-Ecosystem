@@ -1,8 +1,5 @@
-/**
- * Core service logger — delegates to shared factory.
- * Factory: ./createLogger.js (standardized across all AgentX services)
- */
 const path = require('path');
-const { createLogger } = require('./createLogger');
+const winston = require('winston');
+const { createLogger } = require('../../shared/loggerFactory');
 
-module.exports = createLogger(path.join(__dirname, '../logs'));
+module.exports = createLogger({ winston, logDir: path.join(__dirname, '../logs') });

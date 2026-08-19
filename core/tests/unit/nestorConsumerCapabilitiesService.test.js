@@ -9,20 +9,11 @@ jest.mock('../../src/services/nestorConsumerMemoryService', () => ({
     warnings: [],
   }),
 }));
-jest.mock('../../src/services/nestorConsumerPersonalityService', () => ({
-  getPersonalitySources: jest.fn().mockResolvedValue({
-    sources: { agentx: { available: true } },
-  }),
-}));
-jest.mock('../../src/services/voixClientService', () => ({
-  health: jest.fn().mockResolvedValue({ status: 'ok' }),
-}));
-
 const runtimeService = require('../../src/services/nestorConsumerRuntimeService');
 const { getCapabilities } = require('../../src/services/nestorConsumerCapabilitiesService');
 
 describe('Nestor consumer capability discovery', () => {
-  it('reports the version, providers, replay limits, VoiX proxies, and legacy compatibility gate', async () => {
+  it('reports the bounded routing, memory, event, and external-experience contract', async () => {
     const result = await getCapabilities({ systemHealth: { status: 'ok' } });
     expect(result.contract).toEqual({
       name: 'agentx.nestor.consumer',
@@ -36,7 +27,6 @@ describe('Nestor consumer capability discovery', () => {
       operations: ['chat', 'react', 'analyze'],
     }));
     expect(result.memory.sources).toEqual(['agentx', 'rag']);
-    expect(result.voix.proxy.synthesize).toBe('/api/voix/synthesize');
     expect(result.events).toEqual(expect.objectContaining({
       ingressEndpoint: '/api/platform-events',
       stableIds: true,
@@ -50,11 +40,9 @@ describe('Nestor consumer capability discovery', () => {
       memoryResultsPerSource: 20,
     }));
     expect(result).not.toHaveProperty('migration');
-    expect(result.legacyBuddy).toEqual(expect.objectContaining({
-      apiSupported: true,
-      uiSupported: false,
-      compatibilityBaseline: 'Nestor v0.2.7',
-    }));
+    expect(result.externalExperiences).toEqual({ supported: false, code: 'ADAPTER_REQUIRED' });
+    expect(result).not.toHaveProperty('voix');
+    expect(result).not.toHaveProperty('personality');
   });
 
   it('bounds an unavailable provider probe and returns a warning', async () => {

@@ -20,6 +20,7 @@ const logger = require('../../config/logger');
 const { resolveTarget } = require('../helpers/ollamaUtils');
 const { modelLookupNames, modelsMatch } = require('../helpers/modelNameNormalization');
 const { resolveArtifactIdentity } = require('./artifactIdentityService');
+const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const cache = new Map(); // key `${host}::${model}` → { value, expiresAt }
@@ -96,21 +97,30 @@ async function fromHostPreferencePin(model, hostUrl) {
   }
 }
 
-async function fromContextProfile(model, hostUrl, artifact) {
+async function fromContextProfile(model, hostUrl, artifact, deps = {}) {
   if (!hostUrl || artifact?.identityQualified !== true || !artifact.digest || !artifact.runtimeFingerprint) {
     return null;
   }
   try {
-    const ModelContextProfile = require('../../models/ModelContextProfile');
-    const profile = await ModelContextProfile.findOne({
-      modelName: { $in: modelLookupNames(model) },
-      hostUrl,
-      artifactDigest: artifact.digest,
-      runtimeFingerprint: artifact.runtimeFingerprint,
-      stale: { $ne: true }
-    })
-      .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext verifiedMaxContext verifiedInputTokens lastValidatedAt source')
-      .lean();
+    let profile;
+    if (deps.ModelContextProfile) {
+      profile = await deps.ModelContextProfile.findOne({
+        modelName: { $in: modelLookupNames(model) },
+        hostUrl,
+        artifactDigest: artifact.digest,
+        runtimeFingerprint: artifact.runtimeFingerprint,
+        stale: { $ne: true }
+      })
+        .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext verifiedMaxContext verifiedInputTokens lastValidatedAt source')
+        .lean();
+    } else {
+      const client = deps.benchmarkClient || getBenchmarkServiceClient();
+      profile = await client.getContextProfile(model, {
+        hostUrl,
+        artifactDigest: artifact.digest,
+        runtimeFingerprint: artifact.runtimeFingerprint
+      });
+    }
     const verified = Number(profile?.verifiedMaxContext || profile?.recommendedContext);
     if (!Number.isFinite(verified) || verified <= 0) return null;
     return {
@@ -174,7 +184,7 @@ async function getContextInfo(model, hostUrlRaw, options = {}) {
 
   // A measured profile remains evidence even when an operator pin or the
   // resident Modelfile determines the active window.
-  const profile = await fromContextProfile(model, hostUrl, artifact);
+  const profile = await fromContextProfile(model, hostUrl, artifact, options.deps || {});
   if (profile) {
     profileMeta = profile;
     if (!num_ctx) {

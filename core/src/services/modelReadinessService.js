@@ -1,7 +1,7 @@
-const mongoose = require('mongoose');
 const logger = require('../../config/logger');
 const { getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 const { normalizeModelName: canonicalNormalizeModelName } = require('../helpers/modelNameNormalization');
+const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
 
 const READINESS_STAGE_ORDER = Object.freeze({
   available: 0,
@@ -10,16 +10,6 @@ const READINESS_STAGE_ORDER = Object.freeze({
 });
 
 const CACHE_TTL_MS = 60 * 1000;
-
-let ModelProfile;
-try {
-  ModelProfile = require('../../models/ModelProfile');
-} catch {
-  ModelProfile = mongoose.models.ModelProfile || mongoose.model(
-    'ModelProfile',
-    new mongoose.Schema({}, { collection: 'modelprofiles', strict: false })
-  );
-}
 
 let readinessCache = null;
 let readinessCacheTimestamp = 0;
@@ -158,9 +148,10 @@ async function loadReadinessIndex(options = {}) {
   }
 
   try {
-    const docs = await ModelProfile.find({})
-      .select({ name: 1, readiness: 1, _id: 0 })
-      .lean();
+    const client = options.benchmarkClient || getBenchmarkServiceClient();
+    const docs = Array.isArray(options.profiles)
+      ? options.profiles
+      : await client.getReadinessProfiles();
 
     const index = new Map();
     docs.forEach((doc) => {

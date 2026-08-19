@@ -8,7 +8,9 @@ const {
 } = require('../../../shared/artifactIdentity');
 const {
   _normalizeReadinessEntry,
-  getBestReadiness
+  clearReadinessCache,
+  getBestReadiness,
+  loadReadinessIndex
 } = require('../../src/services/modelReadinessService');
 
 describe('exact artifact identity', () => {
@@ -63,5 +65,30 @@ describe('exact artifact identity', () => {
         stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false
       }
     })).toMatchObject({ hostId: 'host-current', isReady: true });
+  });
+
+  it('loads readiness through the Benchmark evidence client', async () => {
+    clearReadinessCache();
+    const benchmarkClient = {
+      getReadinessProfiles: jest.fn(async () => [{
+        name: 'owner/model:8b',
+        readiness: {
+          'host-a': {
+            stage: 'profiled',
+            profileDepth: 'standard',
+            benchmarkQualified: true,
+            stale: false
+          }
+        }
+      }])
+    };
+
+    const index = await loadReadinessIndex({ useCache: false, benchmarkClient });
+
+    expect(benchmarkClient.getReadinessProfiles).toHaveBeenCalledTimes(1);
+    expect(index.get('owner/model:8b').bestReadiness).toMatchObject({
+      hostId: 'host-a',
+      isReady: true
+    });
   });
 });

@@ -7,7 +7,6 @@ const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 900_000;
 const CONTRACT_VERSION = 1;
 const MODES = new Set(['chat', 'generate', 'embed']);
-const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 const LOCAL_OPTION_KEYS = new Set([
   'num_ctx', 'num_predict', 'temperature', 'top_p', 'top_k', 'min_p', 'typical_p',
   'seed', 'stop', 'repeat_last_n', 'repeat_penalty', 'presence_penalty',
@@ -249,23 +248,6 @@ function buildLocalPayload(request, model, options, keepAlive) {
   };
 }
 
-function buildCloudPayload(request, upstreamModel) {
-  const payload = {
-    model: upstreamModel,
-    messages: request.messages,
-    stream: request.stream === true
-  };
-  const allowed = [
-    'tools', 'tool_choice', 'temperature', 'top_p', 'max_tokens', 'max_completion_tokens',
-    'response_format', 'reasoning_effort', 'stop', 'seed', 'presence_penalty',
-    'frequency_penalty', 'n', 'user'
-  ];
-  for (const key of allowed) {
-    if (request[key] !== undefined) payload[key] = request[key];
-  }
-  return payload;
-}
-
 function validatedLocalOptions(options = {}) {
   const result = {};
   for (const [key, value] of Object.entries(options)) {
@@ -378,12 +360,6 @@ function validateRequest(request) {
       code: 'INFERENCE_POLICY_INVALID', statusCode: 400
     });
   }
-  if (request.reasoning_effort !== undefined
-    && !REASONING_EFFORTS.has(String(request.reasoning_effort).toLowerCase())) {
-    throw new TrustedRuntimeServiceError('reasoning_effort is not supported.', {
-      code: 'INFERENCE_POLICY_INVALID', statusCode: 400
-    });
-  }
 }
 
 function telemetryEntry(request, metadata, startedAt, status, data = null, error = null) {
@@ -434,15 +410,8 @@ async function executeRoutedInference(deps, request, options = {}) {
     });
   }
 
-  const cloud = deps.resolveCloudProvider(model);
-  if (cloud && request.mode !== 'chat') {
-    throw new TrustedRuntimeServiceError('Configured cloud providers support chat inference only.', {
-      code: 'CLOUD_MODE_UNSUPPORTED', statusCode: 400
-    });
-  }
-
   let upstreamUrl;
-  let headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json' };
   let payload;
   let release = () => {};
   let inferenceContract = null;
@@ -464,59 +433,44 @@ async function executeRoutedInference(deps, request, options = {}) {
   }
   let numCtxSource = runtimeOptions.num_ctx != null ? 'caller' : 'unresolved';
   let keepAlive = request.keepAlive;
-  let upstreamProtocol = 'ollama';
+  const upstreamProtocol = 'ollama';
 
-  if (cloud) {
-    if (!cloud.apiKey) {
-      throw new TrustedRuntimeServiceError(`The ${cloud.provider} provider is not configured.`, {
-        code: 'CLOUD_PROVIDER_NOT_CONFIGURED', statusCode: 503
-      });
-    }
-    upstreamProtocol = 'openai';
-    hostUrl = cloud.baseUrl;
-    hostKey = cloud.provider;
-    routingSource = `cloud_provider:${cloud.provider}`;
-    upstreamUrl = `${cloud.baseUrl}/chat/completions`;
-    headers.Authorization = `Bearer ${cloud.apiKey}`;
-    payload = buildCloudPayload(request, cloud.upstreamModel);
-  } else {
-    hostUrl = hostUrl || deps.getTargetForModel(model);
-    hostKey = hostKey || deps.resolveHostKey(hostUrl);
-    if (!hostUrl) {
-      throw new TrustedRuntimeServiceError('No routed inference host is available.', {
-        code: 'INFERENCE_HOST_UNAVAILABLE', statusCode: 503
-      });
-    }
-    await deps.assertHostAvailableForConsumer(hostUrl, {
-      callerDetail: request.callerDetail || 'trusted-extension',
-      model,
-      path: 'trusted-extension-contract'
+  hostUrl = hostUrl || deps.getTargetForModel(model);
+  hostKey = hostKey || deps.resolveHostKey(hostUrl);
+  if (!hostUrl) {
+    throw new TrustedRuntimeServiceError('No routed inference host is available.', {
+      code: 'INFERENCE_HOST_UNAVAILABLE', statusCode: 503
     });
-    const pref = await deps.hostPreferenceService.getByHost(hostUrl);
-    const pinned = resolvePinnedRuntimeOptions(pref, model, deps.modelsMatch);
-    if (pinned) {
-      keepAlive = pinned.keepAlive;
-      if (runtimeOptions.num_ctx == null && pinned.contextSize) {
-        runtimeOptions.num_ctx = pinned.contextSize;
-        numCtxSource = 'host_preference_pin';
-      }
-    }
-    inferenceContract = await deps.resolveInferenceContract({
-      model,
-      host: hostUrl,
-      prompt: request.prompt,
-      messages: request.messages,
-      requestedNumCtx: runtimeOptions.num_ctx,
-      numCtxSource,
-      requestedMaxOutputTokens: runtimeOptions.num_predict
-    });
-    if (request.mode !== 'embed') {
-      deps.applyContractOutputLimit({ routed: true, options: runtimeOptions, inferenceContract });
-    }
-    upstreamUrl = `${hostUrl}/api/${request.mode === 'embed' ? 'embed' : request.mode}`;
-    payload = buildLocalPayload(request, model, runtimeOptions, keepAlive);
-    release = await deps.hostGate.acquire(hostUrl, model);
   }
+  await deps.assertHostAvailableForConsumer(hostUrl, {
+    callerDetail: request.callerDetail || 'trusted-extension',
+    model,
+    path: 'trusted-extension-contract'
+  });
+  const pref = await deps.hostPreferenceService.getByHost(hostUrl);
+  const pinned = resolvePinnedRuntimeOptions(pref, model, deps.modelsMatch);
+  if (pinned) {
+    keepAlive = pinned.keepAlive;
+    if (runtimeOptions.num_ctx == null && pinned.contextSize) {
+      runtimeOptions.num_ctx = pinned.contextSize;
+      numCtxSource = 'host_preference_pin';
+    }
+  }
+  inferenceContract = await deps.resolveInferenceContract({
+    model,
+    host: hostUrl,
+    prompt: request.prompt,
+    messages: request.messages,
+    requestedNumCtx: runtimeOptions.num_ctx,
+    numCtxSource,
+    requestedMaxOutputTokens: runtimeOptions.num_predict
+  });
+  if (request.mode !== 'embed') {
+    deps.applyContractOutputLimit({ routed: true, options: runtimeOptions, inferenceContract });
+  }
+  upstreamUrl = `${hostUrl}/api/${request.mode === 'embed' ? 'embed' : request.mode}`;
+  payload = buildLocalPayload(request, model, runtimeOptions, keepAlive);
+  release = await deps.hostGate.acquire(hostUrl, model);
 
   const metadata = frozenCopy({
     requestedModel: requestedModel || null,
@@ -606,7 +560,6 @@ function defaultDependencies() {
   const { resolveInferenceContract } = require('../services/inferenceContractService');
   const { applyContractOutputLimit } = require('../services/inferenceRuntimePolicy');
   const { assertHostAvailableForConsumer } = require('../services/benchmarkClaimGuard');
-  const { resolveCloudProvider } = require('../services/cloudProviderRouter');
   const { modelsMatch } = require('../helpers/modelNameNormalization');
   const hostGate = require('../services/hostGate');
   return {
@@ -621,7 +574,6 @@ function defaultDependencies() {
     resolveInferenceContract,
     applyContractOutputLimit,
     assertHostAvailableForConsumer,
-    resolveCloudProvider,
     modelsMatch,
     hostGate,
     fetch

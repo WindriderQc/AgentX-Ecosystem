@@ -11,7 +11,6 @@ const OPERATION_TASK_TYPES = Object.freeze({
 });
 
 const MEMORY_SOURCES = Object.freeze(['agentx', 'rag']);
-const PERSONALITY_SOURCES = Object.freeze(['agentx']);
 
 const LIMITS = Object.freeze({
   messageCount: 50,
@@ -19,7 +18,6 @@ const LIMITS = Object.freeze({
   totalMessageCharacters: 32000,
   memoryQueryCharacters: 2000,
   memoryResultsPerSource: 20,
-  personalityCharacters: 32768,
   metricsHours: 720,
   metricsRows: 10000,
 });
@@ -40,7 +38,6 @@ module.exports = {
   CONTRACT_BASE_PATH,
   OPERATION_TASK_TYPES,
   MEMORY_SOURCES,
-  PERSONALITY_SOURCES,
   LIMITS,
   NestorConsumerError,
 };

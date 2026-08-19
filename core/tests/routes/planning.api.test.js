@@ -121,11 +121,11 @@ describe('AgentX Planning API', () => {
       .expect(200);
 
     expect(response.body.data).toMatchObject({
-      workstreamsCreated: 6,
+      workstreamsCreated: 5,
       tasksLinked: 0
     });
-    expect(await PlanningItem.countDocuments({ type: 'workstream' })).toBe(6);
-    expect(await PlanningItem.countDocuments({ type: 'workstream', status: 'draft' })).toBe(6);
+    expect(await PlanningItem.countDocuments({ type: 'workstream' })).toBe(5);
+    expect(await PlanningItem.countDocuments({ type: 'workstream', status: 'draft' })).toBe(5);
   });
 
   test('previews and idempotently imports the Nerve Center reference plan', async () => {

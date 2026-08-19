@@ -92,65 +92,6 @@
             </div>
         </div>
 
-        <!-- End-to-end voice turns — privacy-bounded stage timings only -->
-        <div class="analytics-grid full">
-            <div class="section-card" id="voiceObservabilitySection">
-                <div class="section-header">
-                    <h2><i class="fas fa-wave-square"></i> Voice Experience</h2>
-                    <span style="font-size: 12px; color: var(--muted);" id="voiceScope">No audio or message content retained.</span>
-                </div>
-                <div class="section-body">
-                    <div class="stats-row">
-                        <div class="stat-card" data-tooltip="End-to-end status derived from sampled voice turns. Idle and unavailable are never rendered as zero.">
-                            <div class="label">Voice State</div>
-                            <div class="value" id="voiceStatus">—</div>
-                            <div class="sub"><span id="voiceSamples">—</span> sampled turns</div>
-                        </div>
-                        <div class="stat-card" data-tooltip="95th percentile from end of capture through STT, brain, synthesis and first playback.">
-                            <div class="label">First Audio p95</div>
-                            <div class="value" id="voiceFirstAudio">—</div>
-                            <div class="sub" id="voiceFirstAudioSample">no samples</div>
-                        </div>
-                        <div class="stat-card" data-tooltip="95th percentile until the final queued sentence finishes playing.">
-                            <div class="label">Total Turn p95</div>
-                            <div class="value" id="voiceTotalTurn">—</div>
-                            <div class="sub" id="voiceTotalTurnSample">no samples</div>
-                        </div>
-                        <div class="stat-card" data-tooltip="Observed errors and fallbacks. Zero is shown only when at least one turn was measured.">
-                            <div class="label">Errors / Fallbacks</div>
-                            <div class="value" id="voiceReliability">—</div>
-                            <div class="sub" id="voiceRateSample">no samples</div>
-                        </div>
-                    </div>
-
-                    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px;">
-                        <div style="overflow-x:auto;">
-                            <table style="width:100%;border-collapse:collapse;font-size:12px;">
-                                <thead><tr>
-                                    <th style="text-align:left;padding:8px;border-bottom:1px solid var(--panel-border);">Stage SLO</th>
-                                    <th style="text-align:right;padding:8px;border-bottom:1px solid var(--panel-border);">p50</th>
-                                    <th style="text-align:right;padding:8px;border-bottom:1px solid var(--panel-border);">p95 / target</th>
-                                    <th style="text-align:right;padding:8px;border-bottom:1px solid var(--panel-border);">n</th>
-                                </tr></thead>
-                                <tbody id="voiceSloTableBody"><tr><td colspan="4" style="padding:16px;text-align:center;color:var(--muted);">Loading voice evidence…</td></tr></tbody>
-                            </table>
-                        </div>
-                        <div style="overflow-x:auto;">
-                            <table style="width:100%;border-collapse:collapse;font-size:12px;">
-                                <thead><tr>
-                                    <th style="text-align:left;padding:8px;border-bottom:1px solid var(--panel-border);">Route segment</th>
-                                    <th style="text-align:right;padding:8px;border-bottom:1px solid var(--panel-border);">Success</th>
-                                    <th style="text-align:right;padding:8px;border-bottom:1px solid var(--panel-border);">First audio</th>
-                                    <th style="text-align:right;padding:8px;border-bottom:1px solid var(--panel-border);">n</th>
-                                </tr></thead>
-                                <tbody id="voiceSegmentsBody"><tr><td colspan="4" style="padding:16px;text-align:center;color:var(--muted);">Loading route segments…</td></tr></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- Daily volume, split by caller -->
         <div class="analytics-grid full">
             <div class="section-card">

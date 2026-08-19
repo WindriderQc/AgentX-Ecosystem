@@ -56,13 +56,11 @@ describe('Roundtable v2 model', () => {
     });
   });
 
-  test('persists Telegram topic and approval-gated governance state', () => {
+  test('persists approval-gated governance state', () => {
     const doc = baseDocument({
-      telegram: { chatId: '-100123', threadId: 42, publishTurns: true },
       governance: { requireApproval: true }
     });
     expect(doc.validateSync()).toBeUndefined();
-    expect(doc.telegram.threadId).toBe(42);
     expect(doc.governance.decisionStatus).toBe('deliberating');
   });
 

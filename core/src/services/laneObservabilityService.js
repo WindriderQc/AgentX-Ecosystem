@@ -454,7 +454,7 @@ async function getStatusProjection() {
       .sort({ ruleId: 1 })
       .lean(),
     Alert.find({ ruleId: { $in: RULE_IDS }, lastOccurrence: { $gte: since } })
-      .select('ruleId severity status title message context fingerprint occurrenceCount notificationCount lastOccurrence delivery.telegram.sent delivery.telegram.sentAt delivery.local_log.sent delivery.local_log.sentAt')
+      .select('ruleId severity status title message context fingerprint occurrenceCount notificationCount lastOccurrence delivery.local_log.sent delivery.local_log.sentAt')
       .sort({ lastOccurrence: -1 })
       .limit(50)
       .lean(),

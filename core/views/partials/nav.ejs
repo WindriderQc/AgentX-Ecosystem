@@ -74,8 +74,6 @@
         { label: 'Playground',       href: coreBase + '/playground',       icon: 'fa-comments',        id: 'playground' },
         { label: 'Council',          href: coreBase + '/council',          icon: 'fa-users',           id: 'council' },
         { label: 'Prompts',          href: coreBase + '/prompts',          icon: 'fa-pen-fancy',       id: 'prompts' },
-        { label: 'Voice',            href: coreBase + '/voice',            icon: 'fa-microphone',      id: 'voice' },
-        { label: 'Voice Personas',   href: coreBase + '/voice-personas',   icon: 'fa-headset',         id: 'voice-personas' },
         { label: 'Planning · frozen', href: coreBase + '/planning',        icon: 'fa-snowflake',       id: 'planning' }
       ]
     }
@@ -109,7 +107,10 @@
       ]
     }
   ];
-  const navItems = locals.agentxProfile === 'demo' ? demoNavItems : fullNavItems;
+  const demoProfile = locals.agentxProfile === 'demo';
+  const navItems = demoProfile ? demoNavItems : fullNavItems;
+  const brandHref = coreBase + (demoProfile ? '/demo' : '/portal/');
+  const brandTitle = demoProfile ? 'Open Agent X demo home' : 'Open Agent X portal';
 
   function isActive(id) { return id === effectiveActive; }
   function isChildActive(children) {
@@ -121,7 +122,7 @@
 <div id="nav-container">
   <nav class="top-nav">
     <div class="nav-left">
-      <a href="<%= coreBase %>/portal/" class="nav-brand" title="Open AgentX portal">
+      <a href="<%= brandHref %>" class="nav-brand" title="<%= brandTitle %>">
         <i class="fas fa-bolt"></i> AgentX
       </a>
       <% if (typeof service === 'string' && service !== 'core') { %>

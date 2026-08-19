@@ -91,12 +91,12 @@ describe('laneObservabilityService', () => {
 
   afterAll(() => laneObservability.stop());
 
-  test('all detector rules use the existing Telegram path and opt into reminders', () => {
+  test('all detector rules use the product-owned local log and opt into reminders', () => {
     const defaults = require('../../config/default-alert-rules.json');
     const rules = defaults.filter((rule) => laneObservability.RULE_IDS.includes(rule.id));
     expect(rules).toHaveLength(laneObservability.RULE_IDS.length);
     for (const rule of rules) {
-      expect(rule.channels).toEqual(expect.arrayContaining(['local_log', 'telegram']));
+      expect(rule.channels).toEqual(['local_log']);
       expect(rule.renotifyMs).toBeGreaterThan(0);
       expect(rule.message).toContain('{{remediation}}');
     }

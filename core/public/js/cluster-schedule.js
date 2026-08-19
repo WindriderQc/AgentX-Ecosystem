@@ -22,9 +22,6 @@ const TASK_COLORS = {
 const HOST_COLORS = ['#7cf0ff', '#f97316', '#22c55e', '#a78bfa', '#f59e0b'];
 
 const SOURCE_META = {
-  // Read-only rendering compatibility for records created before extraction.
-  // Agent X has no OpenClaw route, writer, client, or runtime adapter.
-  openclaw: { label: 'External (legacy)', color: '#7c3aed' },
   agentx: { label: 'AgentX', color: '#38bdf8' },
   'agentx-system': { label: 'System Cron', color: '#f59e0b' },
   'ollama-persistent': { label: 'Persistent GPU', color: '#22c55e' }
@@ -372,14 +369,6 @@ function renderGroupedHeatmap(container, timeline) {
         <span class="cs-label-name">${esc(entry.name)}</span>
         ${cadence ? `<span class="cs-cadence-pill">${cadence}</span>` : ''}
         ${hostLabel ? `<span class="cs-host-tag ${hostMeta.id}">${esc(hostLabel)}</span>` : ''}
-        ${entry.source === 'openclaw' && entry.metadata ? `
-          <div class="schedule-external-meta" style="margin-top: 8px; font-size: 0.75rem; color: var(--muted, #888); line-height: 1.6;">
-            ${entry.metadata.payloadPreview ? `<div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px;" title="${esc(entry.metadata.payloadPreview)}"><i class="fas fa-quote-left" style="margin-right: 4px; opacity: 0.5;"></i>${esc(entry.metadata.payloadPreview)}</div>` : ''}
-            ${entry.metadata.lastStatus ? `<div><i class="fas ${entry.metadata.lastStatus === 'ok' ? 'fa-check-circle' : 'fa-exclamation-triangle'}" style="margin-right: 4px; color: ${entry.metadata.lastStatus === 'ok' ? '#22c55e' : '#ef4444'};"></i>Last: ${esc(entry.metadata.lastStatus)}</div>` : ''}
-            ${entry.metadata.consecutiveErrors > 0 ? `<div style="color: #ef4444;"><i class="fas fa-exclamation-circle" style="margin-right: 4px;"></i>${entry.metadata.consecutiveErrors} consecutive errors</div>` : ''}
-            ${entry.metadata.nextRunAtMs ? `<div><i class="fas fa-clock" style="margin-right: 4px; opacity: 0.5;"></i>Next: ${new Date(entry.metadata.nextRunAtMs).toLocaleString()}</div>` : ''}
-          </div>
-        ` : ''}
       </div>`;
 
       for (let h = 0; h < 24; h++) {
@@ -732,7 +721,7 @@ function renderNextTasks(container) {
 
 function renderNextItem(task, i) {
   const sourceMeta = getSourceMeta(task.source);
-  const sourceClass = task.source === 'openclaw' ? 'external' : (task.source || 'agentx');
+  const sourceClass = task.source || 'agentx';
   const hostLabel = task.host ? getHostMeta(task.host).label : '';
   const cadenceLabel = isServiceTick(task) ? `every ${formatInterval(task.intervalMs)}` : '';
   return `

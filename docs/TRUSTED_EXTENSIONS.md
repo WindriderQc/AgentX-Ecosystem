@@ -66,22 +66,20 @@ Every conversation lifecycle operation is scoped by both `userId` and
 
 - `inference.execute(request, { signal })` executes chat, generate, or embedding
   work through Core-owned routing, benchmark-claim admission, resident-model
-  context policy, telemetry, and configured cloud-provider egress. It returns
-  actual routed model/host metadata. Streaming returns the upstream readable
-  stream, and the caller's `AbortSignal` cancels the upstream request.
+  context policy, telemetry, and the operator-selected Ollama runtime. It
+  returns actual routed model/host metadata. Streaming returns the upstream
+  readable stream, and the caller's `AbortSignal` cancels the upstream request.
 - `routing.getEffectiveSnapshot(options)` returns an immutable, read-only view
   of effective task routing, host preferences, resolved context/capability
   evidence, and an optional active-model catalog. It does not expose mutable
   collections.
 
-The executor accepts only the bounded generic request surface documented by its
-mode, including an allowlisted OpenAI `reasoning_effort` for configured cloud
-providers, and rejects local runtime-placement options. A matching resident pin
-owns context and keep-alive even when the translated protocol supplied a
-different keep-alive. Extensions translate their external protocol into that
-surface; they do not choose an inference host, call a model server directly,
-copy HostPreference logic, or forward caller credentials to an upstream
-provider. Provider secrets remain inside Core.
+The executor accepts only the bounded local request surface documented by its
+mode and rejects runtime-placement options. A matching resident pin owns
+context and keep-alive. Extensions translate their external protocol into that
+surface; they do not choose an inference host, call an Ollama server directly,
+or copy HostPreference logic. External-provider implementations and their
+credentials remain outside the product repository and this runtime contract.
 
 `security` contract version 1 exposes Core's operator-access checks and
 middleware. Use these helpers for extension control paths instead of copying

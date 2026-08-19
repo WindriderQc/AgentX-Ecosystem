@@ -13,15 +13,9 @@ jest.mock('../../src/services/roundtable/runtimeParticipantAdapter', () => ({
   callRuntimeParticipant: jest.fn()
 }));
 
-jest.mock('../../src/services/roundtable/telegramPublisher', () => ({
-  normalizeTelegramConfig: jest.fn((value) => value),
-  publishRoundtableEvent: jest.fn(async () => ({ published: true }))
-}));
-
 const Roundtable = require('../../models/Roundtable');
 const hostPreferenceService = require('../../src/services/hostPreferenceService');
 const { callRuntimeParticipant } = require('../../src/services/roundtable/runtimeParticipantAdapter');
-const { publishRoundtableEvent } = require('../../src/services/roundtable/telegramPublisher');
 const {
   createRoundtable,
   buildSynthesisRequest,
@@ -72,7 +66,6 @@ describe('Roundtable v2 orchestrator', () => {
         },
         systemPrompt: 'Assess operations.'
       }],
-      telegram: { chatId: '-100123', threadId: 42 },
       governance: { requireApproval: true }
     });
 
@@ -85,7 +78,6 @@ describe('Roundtable v2 orchestrator', () => {
           sessionId: null
         }
       })],
-      telegram: { chatId: '-100123', threadId: 42 },
       governance: { requireApproval: true, decisionStatus: 'deliberating' }
     }));
   });
@@ -113,7 +105,7 @@ describe('Roundtable v2 orchestrator', () => {
     expect(prompt.endsWith('no preamble, headings, appendix, or open-questions section.')).toBe(true);
   });
 
-  test('persists and publishes a real-runtime turn as final text only', async () => {
+  test('persists a real-runtime turn as final text only', async () => {
     callRuntimeParticipant.mockResolvedValue({
       response: 'Bounded operational position.',
       thinking: null,
@@ -126,10 +118,7 @@ describe('Roundtable v2 orchestrator', () => {
       startedAt: new Date(),
       completedAt: new Date()
     });
-    const doc = {
-      _id: 'rt-1',
-      telegram: { chatId: '-100123', threadId: 42 }
-    };
+    const doc = { _id: 'rt-1' };
     const agent = {
       agentId: 'codex-reviewer', role: 'Codex reviewer', runtime: 'codex',
       model: 'runtime-managed', systemPrompt: 'Assess operations.', enableWebSearch: false
@@ -149,10 +138,6 @@ describe('Roundtable v2 orchestrator', () => {
         thinking: null,
         runtimeRef: 'roundtable-rt-1'
       }) } }
-    );
-    expect(publishRoundtableEvent).toHaveBeenCalledWith(
-      doc,
-      { type: 'turn', turn: expect.objectContaining({ response: 'Bounded operational position.' }) }
     );
   });
 });

@@ -8,10 +8,7 @@ const mockExecuteInference = jest.fn();
 const mockGetRouterSnapshot = jest.fn();
 const mockGetMemoryStatus = jest.fn();
 const mockSearchMemory = jest.fn();
-const mockGetPersonalitySources = jest.fn();
-const mockResolvePersonalityCandidate = jest.fn();
 const mockGetNestorMetrics = jest.fn();
-const mockGetPanelStatus = jest.fn();
 
 jest.mock('../../src/services/nestorConsumerCapabilitiesService', () => ({
   getCapabilities: (...args) => mockGetCapabilities(...args),
@@ -24,15 +21,8 @@ jest.mock('../../src/services/nestorConsumerMemoryService', () => ({
   getMemoryStatus: (...args) => mockGetMemoryStatus(...args),
   searchMemory: (...args) => mockSearchMemory(...args),
 }));
-jest.mock('../../src/services/nestorConsumerPersonalityService', () => ({
-  getPersonalitySources: (...args) => mockGetPersonalitySources(...args),
-  resolvePersonalityCandidate: (...args) => mockResolvePersonalityCandidate(...args),
-}));
 jest.mock('../../src/services/nestorConsumerMetricsService', () => ({
   getNestorMetrics: (...args) => mockGetNestorMetrics(...args),
-}));
-jest.mock('../../src/services/panelService', () => ({
-  getPanelStatus: (...args) => mockGetPanelStatus(...args),
 }));
 jest.mock('../../config/logger', () => ({ error: jest.fn(), warn: jest.fn(), info: jest.fn() }));
 
@@ -63,10 +53,7 @@ describe('Nestor v1 consumer contract routes', () => {
     mockExecuteInference.mockResolvedValue({ reply: 'hello', callerDetail: 'nestor/desktop/chat' });
     mockGetMemoryStatus.mockResolvedValue({ sources: {} });
     mockSearchMemory.mockResolvedValue({ results: [], warnings: [] });
-    mockGetPersonalitySources.mockResolvedValue({ sources: {} });
-    mockResolvePersonalityCandidate.mockResolvedValue({ source: 'agentx', ref: 'agentx:roles/Nestor.md' });
     mockGetNestorMetrics.mockResolvedValue({ calls: 0 });
-    mockGetPanelStatus.mockResolvedValue({ portal: { summary: { healthy: 4 } } });
   });
 
   it('discovers the versioned contract', async () => {
@@ -77,7 +64,7 @@ describe('Nestor v1 consumer contract routes', () => {
     expect(capabilities.body.data.contract.version).toBe('1.1.0');
   });
 
-  it('delegates inference, memory, personality, metrics, router, and panel summaries', async () => {
+  it('delegates inference, memory, metrics, and router reads', async () => {
     const inference = await request(app)
       .post('/api/consumers/nestor/v1/inference')
       .send({ operation: 'chat', messages: [{ role: 'user', content: 'Hi' }] })
@@ -85,15 +72,15 @@ describe('Nestor v1 consumer contract routes', () => {
     await request(app).get('/api/consumers/nestor/v1/router').expect(200);
     await request(app).get('/api/consumers/nestor/v1/memory/status?source=agentx').expect(200);
     await request(app).post('/api/consumers/nestor/v1/memory/search').send({ source: 'agentx', query: 'x' }).expect(200);
-    await request(app).get('/api/consumers/nestor/v1/personality/sources').expect(200);
-    await request(app).post('/api/consumers/nestor/v1/personality/resolve').send({ source: 'agentx' }).expect(200);
+    const personality = await request(app).get('/api/consumers/nestor/v1/personality/sources').expect(410);
     await request(app).get('/api/consumers/nestor/v1/metrics?hours=12&taskType=buddy_chat').expect(200);
-    await request(app).get('/api/consumers/nestor/v1/panel-summary').expect(200);
+    const panel = await request(app).get('/api/consumers/nestor/v1/panel-summary').expect(410);
 
     expect(inference.body.data.callerDetail).toBe('nestor/desktop/chat');
     expect(mockGetMemoryStatus).toHaveBeenCalledWith('agentx');
     expect(mockGetNestorMetrics).toHaveBeenCalledWith({ hours: '12', taskType: 'buddy_chat' });
-    expect(mockGetPanelStatus).toHaveBeenCalledWith({ status: 'ok' });
+    expect(personality.body.code).toBe('ADAPTER_REQUIRED');
+    expect(panel.body.code).toBe('ADAPTER_REQUIRED');
   });
 
   it('returns a stable error envelope from bounded contract validation', async () => {

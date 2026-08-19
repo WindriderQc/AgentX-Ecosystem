@@ -7,6 +7,7 @@ const {
   exactModelNamesMatch,
   normalizeHostUrl
 } = require('../../../shared/artifactIdentity');
+const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
 
 const LOOKUP_TIMEOUT_MS = 5000;
 
@@ -48,10 +49,12 @@ async function readLiveDigest(model, host, deps = {}) {
 async function readHostProfile(hostUrl, deps = {}) {
   if (deps.hostProfile) return deps.hostProfile;
   try {
-    const collection = deps.hostProfilesCollection
-      || (mongoose.connection.readyState === 1 ? mongoose.connection.collection('hostprofiles') : null);
-    if (!collection) return null;
-    return collection.findOne({ hostUrl: normalizeHostUrl(hostUrl) });
+    if (deps.hostProfilesCollection) {
+      return deps.hostProfilesCollection.findOne({ hostUrl: normalizeHostUrl(hostUrl) });
+    }
+    if (process.env.NODE_ENV === 'test' && !deps.benchmarkClient) return null;
+    const client = deps.benchmarkClient || getBenchmarkServiceClient();
+    return client.getHostProfile(normalizeHostUrl(hostUrl));
   } catch {
     return null;
   }

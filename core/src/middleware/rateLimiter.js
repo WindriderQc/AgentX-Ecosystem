@@ -278,28 +278,6 @@ const nestorConsumerLimiter = rateLimit({
 });
 
 /**
- * Buddy react rate limiter (LLM calls are expensive)
- * 10 requests per minute
- */
-const buddyReactLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 6,
-  keyGenerator: getClientKey,
-  validate: { ip: false },
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: (req, res) => {
-    const retryAfterMs = Math.max(0, req.rateLimit.resetTime - Date.now());
-    res.status(429).json({
-      reaction: null,
-      error: 'rate_limited',
-      retryAfterMs,
-      message: 'Too many LLM reaction requests. Please wait.'
-    });
-  }
-});
-
-/**
  * Caller-aware router for /api/inference/generate
  *
  * Caller families are classified by the shared caller policy registry so
@@ -344,7 +322,6 @@ module.exports = {
   chatLimiter,
   strictLimiter,
   buddyLimiter,
-  buddyReactLimiter,
   nestorConsumerLimiter,
   inferenceCallerRouter,
   AUTOMATION_CONTROL_PREFIXES,

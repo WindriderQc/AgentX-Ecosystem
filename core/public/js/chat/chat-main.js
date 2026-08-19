@@ -7,7 +7,7 @@ import {
   loadSettings, hydrateForm, persistSettings as _persistSettings,
   updateRangeDisplays, updateConfigSummary, toggleRagOptions,
   checkRagAvailability, loadServerConfig, loadOllamaHosts, targetHost,
-  initDevModeToggle, applyVoiceDefaults, isRouterMode, updateRoutingModeUi,
+  initDevModeToggle, isRouterMode, updateRoutingModeUi,
   loadHostPreferences, getHostChatState, describePendingRuntimeChange,
   routingMode, routingModeLabel, sessionTaskType
 } from './chat-config.js';
@@ -20,12 +20,6 @@ import {
 import {
   loadHistoryList as _loadHistoryList, loadConversation as _loadConversation
 } from './chat-history.js';
-import {
-  toggleVoiceInput, speakText as _speakText, checkVoiceHealth,
-  updateVoiceFieldVisibility, refreshVoixPanel, resetVoixPanelState,
-  createVoixSessionFlow, runVoixSmokeFlow, runVoixFullSmokeFlow, sendVoixTextTurnFlow,
-  refreshVoiceDefaults, toggleConvoModeFlow
-} from './chat-voice.js';
 import { initAgentSystem, reapplyAgentModel, updateHeaderBar } from './chat-agents.js';
 import {
   loadProfile as _loadProfile, saveProfile as _saveProfile,
@@ -86,34 +80,6 @@ document.addEventListener('DOMContentLoaded', () => {
     toggleHistoryBtn: document.getElementById('toggleHistoryBtn'),
     closeHistoryBtn: document.getElementById('closeHistoryBtn'),
     page: document.querySelector('.page'),
-    micBtn: document.getElementById('micBtn'),
-    ttsToggle: document.getElementById('ttsToggle'),
-    sttProviderSelect: document.getElementById('sttProviderSelect'),
-    sttLanguageSelect: document.getElementById('sttLanguageSelect'),
-    whisperModelSelect: document.getElementById('whisperModelSelect'),
-    whisperModelField: document.getElementById('whisperModelField'),
-    voiceAutoSend: document.getElementById('voiceAutoSend'),
-    ttsVoiceSelect: document.getElementById('ttsVoiceSelect'),
-    ttsVoiceField: document.getElementById('ttsVoiceField'),
-    testVoiceBtn: document.getElementById('testVoiceBtn'),
-    sttHealthDot: document.getElementById('sttHealthDot'),
-    sttHealthDotInner: document.getElementById('sttHealthDotInner'),
-    ttsHealthDot: document.getElementById('ttsHealthDot'),
-    voixHealthSummary: document.getElementById('voixHealthSummary'),
-    voixDevicesSummary: document.getElementById('voixDevicesSummary'),
-    voixSessionSummary: document.getElementById('voixSessionSummary'),
-    voiceDefaultsSummary: document.getElementById('voiceDefaultsSummary'),
-    convoModeSummary: document.getElementById('convoModeSummary'),
-    voixResultOutput: document.getElementById('voixResultOutput'),
-    voixStatusField: document.getElementById('voixStatusField'),
-    voixActionRow: document.getElementById('voixActionRow'),
-    voixResultField: document.getElementById('voixResultField'),
-    voixRefreshBtn: document.getElementById('voixRefreshBtn'),
-    voixSmokeBtn: document.getElementById('voixSmokeBtn'),
-    voixFullSmokeBtn: document.getElementById('voixFullSmokeBtn'),
-    voixSessionBtn: document.getElementById('voixSessionBtn'),
-    voixTextTurnBtn: document.getElementById('voixTextTurnBtn'),
-    convoModeBtn: document.getElementById('convoModeBtn'),
     historyList: document.getElementById('historyList'),
     resetProfileBtn: document.getElementById('resetProfileBtn'),
     newChatBtn: document.getElementById('newChatBtn'),
@@ -150,10 +116,6 @@ document.addEventListener('DOMContentLoaded', () => {
     ollamaHosts: [],
     hostPreferences: [],
     hostPreferencesByUrl: new Map(),
-    voiceProvider: 'browser',
-    voixSessionId: null,
-    convoModeActive: false,
-    currentVoiceMode: null,
     pendingRuntimeNoticeKey: null,
     _helpers: null,
   };
@@ -168,7 +130,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sendMessage: () => _sendMessage({ elements, state, defaults, helpers }),
     loadHistoryList: () => _loadHistoryList(elements, state),
     loadConversation: (id, preserve) => _loadConversation(id, state, elements, helpers, preserve),
-    speakText: (text) => _speakText(state, text),
+    speakText: () => {},
     refreshStats: (id) => refreshStats(id),
     updateConversationStats: (conv) => updateConversationStats(conv),
     clearChat: (options) => clearChat(options),
@@ -198,7 +160,6 @@ document.addEventListener('DOMContentLoaded', () => {
     state.stats = { messages: 0, replies: 0 };
     // New conversation → the previous reply's routed model no longer applies.
     state.lastRoutedModel = null;
-    state.voixSessionId = null;
     elements.chatWindow.innerHTML = '';
     state.threadId = `t-${Date.now().toString(36)}`;
     elements.threadId.textContent = state.threadId;
@@ -207,8 +168,6 @@ document.addEventListener('DOMContentLoaded', () => {
       { persist: false, count: false }
     );
     if (showToast && typeof Toast !== 'undefined') Toast.success('New conversation started');
-    if (elements.voixSessionSummary) elements.voixSessionSummary.textContent = 'Session: none';
-    if (elements.voixResultOutput) elements.voixResultOutput.textContent = 'No VoiX activity yet.';
   }
 
   // Stats
@@ -384,7 +343,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Event wiring
   function attachEvents() {
-    if (elements.micBtn) elements.micBtn.addEventListener('click', () => toggleVoiceInput(elements, state, helpers));
     const roundtableBtn = document.getElementById('roundtableBtn');
     if (roundtableBtn) {
       roundtableBtn.addEventListener('click', () => {
@@ -398,57 +356,6 @@ document.addEventListener('DOMContentLoaded', () => {
         window.open('/council?question=' + encodeURIComponent(text), '_blank');
       });
     }
-    elements.ttsToggle.addEventListener('change', () => { updateVoiceFieldVisibility(elements); helpers.persistSettings(); });
-    const ttsProviderSelect = document.getElementById('ttsProviderSelect');
-    if (ttsProviderSelect) ttsProviderSelect.addEventListener('change', () => { updateVoiceFieldVisibility(elements); helpers.persistSettings(); });
-
-    const voiceHeader = document.getElementById('voiceHeader');
-    const voiceContent = document.getElementById('voiceContent');
-    if (voiceHeader && voiceContent) {
-      voiceHeader.addEventListener('click', () => { voiceContent.classList.toggle('hidden'); voiceHeader.classList.toggle('expanded'); });
-    }
-
-    if (elements.sttProviderSelect) {
-      elements.sttProviderSelect.addEventListener('change', () => {
-        updateVoiceFieldVisibility(elements);
-        helpers.persistSettings();
-        const provider = elements.sttProviderSelect.value || 'browser';
-        if (provider === 'voix') {
-          resetVoixPanelState(elements, state, {
-            healthText: 'VoiX selected. Click "Refresh VoiX" to check service status.',
-            devicesText: 'Devices: not checked',
-            disableActions: false,
-            preserveSession: true
-          });
-        } else {
-          resetVoixPanelState(elements, state, {
-            healthText: 'VoiX optional. Browser voice input active.',
-            devicesText: provider === 'auto'
-              ? 'Devices: legacy auto-detect mode'
-              : 'Devices: not needed for browser mode',
-            disableActions: true,
-            preserveSession: true
-          });
-        }
-      });
-    }
-    if (elements.sttLanguageSelect) elements.sttLanguageSelect.addEventListener('change', () => helpers.persistSettings());
-    if (elements.whisperModelSelect) elements.whisperModelSelect.addEventListener('change', () => helpers.persistSettings());
-    if (elements.voiceAutoSend) elements.voiceAutoSend.addEventListener('change', () => helpers.persistSettings());
-    if (elements.ttsVoiceSelect) elements.ttsVoiceSelect.addEventListener('change', () => helpers.persistSettings());
-    if (elements.testVoiceBtn) elements.testVoiceBtn.addEventListener('click', () => _speakText(state, 'Hello, this is your voice assistant.'));
-    if (elements.voixRefreshBtn) {
-      elements.voixRefreshBtn.addEventListener('click', async () => {
-        await refreshVoiceDefaults(elements, state, helpers);
-        await refreshVoixPanel(elements, state, helpers, { announce: true });
-      });
-    }
-    if (elements.convoModeBtn) elements.convoModeBtn.addEventListener('click', () => toggleConvoModeFlow(elements, state, helpers));
-    if (elements.voixSmokeBtn) elements.voixSmokeBtn.addEventListener('click', () => runVoixSmokeFlow(elements, state, helpers));
-    if (elements.voixFullSmokeBtn) elements.voixFullSmokeBtn.addEventListener('click', () => runVoixFullSmokeFlow(elements, state, helpers));
-    if (elements.voixSessionBtn) elements.voixSessionBtn.addEventListener('click', () => createVoixSessionFlow(elements, state, helpers));
-    if (elements.voixTextTurnBtn) elements.voixTextTurnBtn.addEventListener('click', () => sendVoixTextTurnFlow(elements, state, helpers));
-
     elements.sendBtn.addEventListener('click', () => helpers.sendMessage());
     elements.clearBtn.addEventListener('click', clearChat);
     elements.refreshModels.addEventListener('click', async () => {
@@ -630,7 +537,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Init
   async function init() {
-    applyVoiceDefaults(defaults, state.config?.features?.voice);
     state.settings = loadSettings(defaults);
 
     const urlParams = new URLSearchParams(window.location.search);
@@ -648,11 +554,9 @@ document.addEventListener('DOMContentLoaded', () => {
     elements.threadId.textContent = state.threadId;
     hydrateForm(elements, state, defaults);
     updateRoutingModeUi(elements, state, defaults);
-    await refreshVoiceDefaults(elements, state, helpers);
     syncHeaderToggleBtn(elements.headerThinkingBtn, state.settings.think || false);
     syncHeaderToggleBtn(elements.headerWebSearchBtn, state.settings.webSearch || false);
     initDevModeToggle();
-    updateVoiceFieldVisibility(elements);
     attachEvents();
 
     // Configure shortcuts modal with chat-specific shortcuts
@@ -697,24 +601,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     checkRagAvailability(elements);
-
-    const sttProvider = elements.sttProviderSelect?.value || state.settings?.sttProvider || 'browser';
-    const ttsProvider = document.getElementById('ttsProviderSelect')?.value || state.settings?.ttsProvider || 'browser';
-    if (sttProvider === 'voix' || ttsProvider === 'voix' || state.settings?.convoModeEnabled) {
-      resetVoixPanelState(elements, state, {
-        healthText: 'VoiX available. Click "Refresh VoiX" to check service status.',
-        devicesText: 'Devices: not checked',
-        disableActions: false,
-        preserveSession: true
-      });
-    } else {
-      resetVoixPanelState(elements, state, {
-        healthText: 'VoiX optional. Browser voice input active.',
-        devicesText: 'Devices: not needed for browser mode',
-        disableActions: true,
-        preserveSession: true
-      });
-    }
 
     reapplyAgentModel(elements, state);
 

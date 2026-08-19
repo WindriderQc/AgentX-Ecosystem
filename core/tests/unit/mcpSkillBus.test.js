@@ -23,14 +23,9 @@ describe('mcpSkillBus product tools', () => {
       'rag_search',
       'check_health',
       'get_escalation_recommendation',
-      'lookup_french_word',
       'create_todo',
-      'save_memory',
-      'add_personal_task',
-      'list_personal_tasks',
-      'complete_personal_task',
     ]);
-    expect(TOOLS).toHaveLength(9);
+    expect(TOOLS).toHaveLength(4);
   });
 
   test('rag_search uses an injected RAG client and returns structured content', async () => {

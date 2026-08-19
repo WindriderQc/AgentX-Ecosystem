@@ -15,7 +15,7 @@
  *     can never bubble into the ingest/search/delete code path.
  *
  * In Docker, RAG publishes through Core's generic `/api/platform-events`
- * ingress with the deployed `BUDDY_EMIT_TOKEN` shared secret.
+ * ingress with the product-owned `AGENTX_PLATFORM_EVENT_TOKEN` shared secret.
  */
 
 const { emitBuddyEvent } = require('../clients/buddyEventClient');
@@ -101,7 +101,7 @@ function ingestFailed(summary = 'RAG ingest failed') {
 
 // ── Ingest progress (throttled) ──────────────────────────
 
-const PROGRESS_THROTTLE_MS = Number(process.env.BUDDY_INGEST_PROGRESS_THROTTLE_MS) || 3000;
+const PROGRESS_THROTTLE_MS = Number(process.env.AGENTX_RAG_EVENT_THROTTLE_MS) || 3000;
 
 /** Per-job last-emit timestamps so a 5000-file scan does not spam the bus. */
 const lastProgressEmitAt = new Map();

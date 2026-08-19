@@ -26,16 +26,8 @@ jobs:
         working-directory: core
       - run: npm run build
         working-directory: core
-      - name: Validate Core product boundaries
-        run: >-
-          npm test -- --runInBand --runTestsByPath
-          tests/unit/agentxRuntimeProfile.test.js
-          tests/unit/browserPublicUrls.test.js
-          tests/unit/trustedExtensionLoader.test.js
-          tests/unit/trustedRuntimeServices.test.js
-          tests/services/conversationLifecycleService.test.js
-          tests/integration/health.test.js
-          tests/routes/public-exposure-app.api.test.js
+      - name: Validate all Core contracts
+        run: npm test -- --runInBand
         working-directory: core
 
   benchmark-contracts:
@@ -52,12 +44,8 @@ jobs:
         working-directory: benchmark
       - run: npm audit --audit-level=high
         working-directory: benchmark
-      - name: Validate Benchmark product contracts
-        run: >-
-          npm test -- --runInBand --runTestsByPath
-          tests/unit/sharedCoreAssets.test.js
-          tests/unit/modelFitEstimator.test.js
-          tests/unit/contextProbeService.test.js
+      - name: Validate all Benchmark contracts
+        run: npm test -- --runInBand
         working-directory: benchmark
 
   rag-contracts:
@@ -74,13 +62,8 @@ jobs:
         working-directory: rag
       - run: npm audit --audit-level=high
         working-directory: rag
-      - name: Validate RAG readiness and ingestion contracts
-        run: >-
-          npm test -- --runInBand --runTestsByPath
-          tests/unit/health.test.js
-          tests/unit/ingestionPolicyRoute.test.js
-          tests/unit/ingestWorker.test.js
-          tests/unit/statusAndMetrics.test.js
+      - name: Validate all RAG contracts
+        run: npm test -- --runInBand
         working-directory: rag
 
   compose-contracts:

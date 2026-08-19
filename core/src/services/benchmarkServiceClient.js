@@ -39,6 +39,55 @@ class BenchmarkServiceClient {
     this._cache = new Map();
   }
 
+  async _getEvidence(path, query = {}) {
+    return coreRequestJson({
+      baseUrl: getBaseUrl(),
+      path,
+      method: 'GET',
+      query,
+      timeoutMs: FETCH_TIMEOUT_MS,
+      serviceName: 'benchmark',
+      errorCode: 'BENCHMARK_EVIDENCE_ERROR',
+      onFailure: ({ status, message, url }) => {
+        logger.warn('Benchmark evidence unavailable', { status, url, error: message });
+        return null;
+      }
+    });
+  }
+
+  /** Read Benchmark-owned host and model evidence without sharing Mongo schemas. */
+  async getInferenceEvidence(modelName, hostUrl) {
+    if (!modelName || !hostUrl) return null;
+    const json = await this._getEvidence(
+      `/api/profiler/evidence/inference/${encodeURIComponent(modelName)}`,
+      { hostUrl }
+    );
+    return json?.data || null;
+  }
+
+  /** Resolve a Benchmark-owned host identity for exact-artifact qualification. */
+  async getHostProfile(hostUrl) {
+    if (!hostUrl) return null;
+    const json = await this._getEvidence('/api/profiler/evidence/host', { hostUrl });
+    return json?.data?.hostProfile || null;
+  }
+
+  /** Fetch the compact readiness roster used by Core's model catalog cache. */
+  async getReadinessProfiles() {
+    const json = await this._getEvidence('/api/profiler/evidence/readiness');
+    return Array.isArray(json?.data?.profiles) ? json.data.profiles : [];
+  }
+
+  /** Fetch one exact-artifact context profile owned by Benchmark. */
+  async getContextProfile(modelName, { hostUrl, artifactDigest, runtimeFingerprint } = {}) {
+    if (!modelName || !hostUrl || !artifactDigest || !runtimeFingerprint) return null;
+    const json = await this._getEvidence(
+      `/api/profiler/evidence/context/${encodeURIComponent(modelName)}`,
+      { hostUrl, artifactDigest, runtimeFingerprint }
+    );
+    return json?.data?.contextProfile || null;
+  }
+
   /**
    * Fetch recommendations for a prompt category.
    *

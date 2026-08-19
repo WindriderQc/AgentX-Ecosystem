@@ -37,7 +37,6 @@ const CALIBRATION_MODEL = {
  * expected distribution for the category instead of absolute.
  *
  * Regenerate with:
- *   node scripts/fit-judge-confidence.js
  */
 const CATEGORY_CALIBRATION_PROFILES = Object.freeze({
     coding: {

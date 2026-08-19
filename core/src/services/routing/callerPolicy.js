@@ -53,9 +53,6 @@ const CALLER_POLICIES = Object.freeze([
   definePolicy({ id: 'nestor', pattern: /^nestor\//, lane: 'interactive', rateBucket: 'internal', cloudEligible: true, telemetryCaller: 'chat' }),
   definePolicy({ id: 'nerve-center', pattern: /^nerve-center-/, lane: 'interactive', rateBucket: 'internal', telemetryCaller: 'chat' }),
   definePolicy({ id: 'alerts', pattern: /^alerts-/, lane: 'interactive', rateBucket: 'internal', telemetryCaller: 'chat' }),
-
-  // Known agent-runtime traffic keeps full ceremony and the internal bucket.
-  definePolicy({ id: 'openclaw', pattern: /^openclaw-/, lane: 'automated', rateBucket: 'internal', cloudEligible: true, routingMode: 'passthrough', telemetryCaller: 'proxy' }),
 ]);
 
 const DEFAULT_POLICY = definePolicy({

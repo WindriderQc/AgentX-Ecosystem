@@ -22,7 +22,7 @@
  * Non-goals: this layer does NOT open a second inference path, write to any
  * Mongo collection, or duplicate the widget. Events only — inference + state
  * live in Core. Cross-container delivery uses Core's generic
- * `/api/platform-events` ingress with the deployed `BUDDY_EMIT_TOKEN` secret.
+ * `/api/platform-events` ingress with `AGENTX_PLATFORM_EVENT_TOKEN`.
  */
 
 const { emitBuddyEvent } = require('../../clients/buddyEventClient');

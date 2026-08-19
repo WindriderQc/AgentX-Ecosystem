@@ -105,21 +105,6 @@
                     </select>
                 </div>
                 <div>
-                    <label class="rt-label">Telegram table chat ID</label>
-                    <input id="formTelegram" type="text" class="rt-input" placeholder="optional — e.g. -1001234567890">
-                </div>
-                <div>
-                    <label class="rt-label">Telegram topic/thread ID</label>
-                    <input id="formTelegramThread" type="number" min="1" class="rt-input" placeholder="optional forum topic ID">
-                </div>
-                <div>
-                    <label class="rt-label">Telegram publishing</label>
-                    <select id="formTelegramTurns" class="rt-input">
-                        <option value="true" selected>Opening, every turn, synthesis</option>
-                        <option value="false">Opening and synthesis only</option>
-                    </select>
-                </div>
-                <div>
                     <label class="rt-label">Verdict policy</label>
                     <select id="formApproval" class="rt-input">
                         <option value="false" selected>Advisory only (recommended)</option>
@@ -128,11 +113,7 @@
                 </div>
                 <div>
                     <label class="rt-label">Chair token</label>
-                    <input id="formChairToken" type="password" class="rt-input" autocomplete="off" placeholder="required for approval, real runtimes, or Telegram">
-                </div>
-                <div>
-                    <label class="rt-label">Webhook notify (URL)</label>
-                    <input id="formWebhook" type="text" class="rt-input" placeholder="optional — e.g. Slack incoming webhook">
+                    <input id="formChairToken" type="password" class="rt-input" autocomplete="off" placeholder="required for approval or real runtimes">
                 </div>
             </div>
 

@@ -18,15 +18,11 @@ const {
 } = require('./orchestrator');
 const { formatTranscript, formatCompactSummary } = require('./formatters');
 const { DEFAULT_PANEL, DEFAULT_SYNTHESIZER, COUNCIL_OPTIONS } = require('./defaults');
-const { notifyCompletion } = require('./notifier');
 const { analyzeQuality } = require('./qualityAnalyzer');
 const {
   addInterjection,
-  findTelegramRoundtable,
-  parseTelegramCommand,
   setDecision
 } = require('./controls');
-const { publishRoundtableEvent, sendTelegramText } = require('./telegramPublisher');
 const { validateRuntimeConfiguration } = require('./runtimeParticipantAdapter');
 
 let activeRoundtableId = null;
@@ -40,14 +36,8 @@ function getActiveRoundtableId() { return activeRoundtableId; }
  */
 async function startRoundtable(options) {
   validateRuntimeConfiguration(options.panel || DEFAULT_PANEL);
-  if (options.telegram && !(process.env.ROUNDTABLE_TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN)) {
-    const err = new Error('Roundtable Telegram publishing is not configured');
-    err.status = 503;
-    throw err;
-  }
   const doc = await createRoundtable(options);
   const id = doc._id.toString();
-  const notifyConfig = options.notify || null;
   const enableScoring = options.enableScoring === true;
 
   const emitter = new EventEmitter();
@@ -65,15 +55,6 @@ async function startRoundtable(options) {
           await analyzeQuality(id);
         } catch (err) {
           logger.error('Roundtable quality analysis failed', { id, error: err.message });
-        }
-      }
-
-      if (notifyConfig) {
-        try {
-          const finalDoc = enableScoring ? await getRoundtable(id) : completedDoc;
-          await notifyCompletion(finalDoc, notifyConfig);
-        } catch (err) {
-          logger.error('Roundtable notification failed', { id, error: err.message });
         }
       }
     })
@@ -118,9 +99,5 @@ module.exports = {
   getEmitter,
   analyzeQuality,
   addInterjection,
-  findTelegramRoundtable,
-  parseTelegramCommand,
-  publishRoundtableEvent,
-  sendTelegramText,
   setDecision
 };

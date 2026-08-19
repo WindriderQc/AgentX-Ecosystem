@@ -10,6 +10,7 @@ const {
 } = require('../helpers/ollamaHostConfig');
 const { getTokenCounter } = require('./tokenCounter');
 const { modelLookupNames } = require('../helpers/modelNameNormalization');
+const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
 const {
   profileMatchesArtifact,
   readLiveDigest,
@@ -69,49 +70,45 @@ function unknownThinkingCapability(source = 'unqualified') {
   };
 }
 
-async function readHostProfile(host, deps = {}) {
+async function readBenchmarkEvidence(model, host, deps = {}) {
   const normalizedHost = normalizeHostUrl(host);
-  if (!normalizedHost) return null;
-
-  try {
-    const collection = deps.hostProfilesCollection
-      || (mongoose.connection.readyState === 1
-        ? mongoose.connection.collection('hostprofiles')
-        : null);
-    if (!collection) return null;
-    return await collection.findOne(
-      { hostUrl: normalizedHost },
-      { projection: { hostId: 1, hostUrl: 1, displayName: 1, gpu: 1, ollama: 1, cpu: 1 } }
-    );
-  } catch {
-    return null;
-  }
-}
-
-async function readModelProfile(model, deps = {}) {
   const names = modelLookupNames(model);
-  if (names.length === 0) return null;
+  if (!normalizedHost || names.length === 0) {
+    return { hostProfile: null, modelProfile: null };
+  }
 
   try {
-    const collection = deps.modelProfilesCollection
-      || (mongoose.connection.readyState === 1
-        ? mongoose.connection.collection('modelprofiles')
-        : null);
-    if (!collection) return null;
-    return await collection.findOne(
-      { name: { $in: names } },
-      {
-        projection: {
-          name: 1,
-          capabilities: 1,
-          thinkingProfiles: 1,
-          readiness: 1,
-          updatedAt: 1
-        }
-      }
-    );
+    if (deps.hostProfilesCollection || deps.modelProfilesCollection) {
+      const [hostProfile, modelProfile] = await Promise.all([
+        deps.hostProfilesCollection
+          ? deps.hostProfilesCollection.findOne(
+            { hostUrl: normalizedHost },
+            { projection: { hostId: 1, hostUrl: 1, displayName: 1, gpu: 1, ollama: 1, cpu: 1 } }
+          )
+          : null,
+        deps.modelProfilesCollection
+          ? deps.modelProfilesCollection.findOne(
+            { name: { $in: names } },
+            {
+              projection: {
+                name: 1,
+                capabilities: 1,
+                thinkingProfiles: 1,
+                readiness: 1,
+                updatedAt: 1
+              }
+            }
+          )
+          : null
+      ]);
+      return { hostProfile, modelProfile };
+    }
+
+    const client = deps.benchmarkClient || getBenchmarkServiceClient();
+    return await client.getInferenceEvidence(names[0], normalizedHost)
+      || { hostProfile: null, modelProfile: null };
   } catch {
-    return null;
+    return { hostProfile: null, modelProfile: null };
   }
 }
 
@@ -143,21 +140,20 @@ async function readRegistryThinking(model, deps = {}) {
 
 async function resolveCapabilities(model, host, deps = {}) {
   const configuredIdentity = resolveHostIdentity(host, deps.configuredHosts);
-  const hostProfile = await readHostProfile(configuredIdentity.host, deps);
+  const evidence = await readBenchmarkEvidence(model, configuredIdentity.host, deps);
+  const hostProfile = evidence.hostProfile;
+  const profile = evidence.modelProfile;
   const identity = {
     host: hostProfile?.hostUrl || configuredIdentity.host,
     hostId: hostProfile?.hostId || configuredIdentity.hostId,
     hostName: hostProfile?.displayName || configuredIdentity.hostName
   };
-  const [profile, exactArtifact] = await Promise.all([
-    readModelProfile(model, deps),
-    deps.includeArtifactIdentity === true
-      ? resolveArtifactIdentity(model, identity.host, {
-        ...deps,
-        hostProfile: hostProfile || undefined
-      })
-      : null
-  ]);
+  const exactArtifact = deps.includeArtifactIdentity === true
+    ? await resolveArtifactIdentity(model, identity.host, {
+      ...deps,
+      hostProfile: hostProfile || undefined
+    })
+    : null;
   if (exactArtifact?.hostId) identity.hostId = exactArtifact.hostId;
   const thinkingProfile = mapValue(profile?.thinkingProfiles, identity.hostId);
   const readiness = mapValue(profile?.readiness, identity.hostId);

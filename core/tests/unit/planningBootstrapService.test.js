@@ -42,7 +42,6 @@ describe('planningBootstrapService deterministic grouping', () => {
       'benchmark-capability',
       'knowledge-memory',
       'routing-qualification',
-      'voice-nestor',
       'platform-reliability'
     ]);
     expect(groups.every((group) => group.tasks.length === 0)).toBe(true);
