@@ -385,8 +385,10 @@ export function hydrateForm(elements, state, defaults) {
   elements.modelSelect.value = cfg.model;
   elements.systemPrompt.value = cfg.system;
   elements.streamToggle.checked = cfg.stream;
-  elements.ttsToggle.checked = cfg.tts !== undefined ? cfg.tts : Boolean(defaults.tts);
-  elements.ttsToggle.disabled = false;
+  if (elements.ttsToggle) {
+    elements.ttsToggle.checked = cfg.tts !== undefined ? cfg.tts : Boolean(defaults.tts);
+    elements.ttsToggle.disabled = false;
+  }
 
   const ttsProviderSelect = document.getElementById('ttsProviderSelect');
   const ttsProviderField = document.getElementById('ttsProviderField');
