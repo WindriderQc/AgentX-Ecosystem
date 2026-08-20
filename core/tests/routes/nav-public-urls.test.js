@@ -30,6 +30,7 @@ describe('shared navigation public URL contract', () => {
   test('Core stays relative while cross-service links use configured authority', async () => {
     const html = await renderNav('core');
     expect(hrefFor(html, 'Nerve Center')).toBe('/nerve-center');
+    expect(hrefFor(html, 'Agent Ops')).toBe('/agent-ops');
     expect(hrefFor(html, 'Engine Room')).toBe('http://bench.example:4181/');
     expect(hrefFor(html, 'RAG Dashboard')).toBe('http://rag.example:4182/');
     expect(new URL(hrefFor(html, 'Nerve Center'), 'https://192.0.2.99').href)
@@ -70,6 +71,7 @@ describe('shared navigation public URL contract', () => {
     expect(source).toContain('data-public-service="core" data-public-path="/playground">Open Chat</a>');
     expect(source).toContain('data-public-service="benchmark" data-public-path="/leaderboard"');
     expect(source).toContain('data-public-service="rag" data-public-path="/documents"');
+    expect(source).toContain('data-public-service="core" data-public-path="/agent-ops"');
     expect(source).not.toContain('PORT_TO_SERVICE');
     expect(source).not.toMatch(/href="https?:\/\/(?:localhost|127\.0\.0\.1)/);
   });

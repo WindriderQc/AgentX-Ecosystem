@@ -270,6 +270,53 @@ describe('Nerve Center API Routes', () => {
     });
   });
 
+  describe('GET /ecosystem', () => {
+    it('returns the strict product-owned machine, model, and routing snapshot', async () => {
+      hostPrefService.getAll.mockResolvedValue([
+        { hostUrl: 'http://primary:11434', preferredModel: 'qwen3-2507-30b-long-48k:latest' }
+      ]);
+      alertService.getRecentAlerts.mockResolvedValue([{ title: 'test alert' }]);
+      mockLean.mockResolvedValue([{ model: 'qwen3:14b', host: 'primary' }]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/ecosystem')
+        .expect(200);
+
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toEqual(expect.objectContaining({
+        schemaVersion: 1,
+        authority: 'agentx-product',
+        readOnly: true
+      }));
+      expect(res.body.data.health).toEqual(expect.objectContaining({
+        status: 'ok',
+        configuredHosts: 3,
+        onlineHosts: 3
+      }));
+      expect(res.body.data.cluster).toHaveLength(3);
+      expect(res.body.data.routing).toHaveProperty('authority', 'inference_log');
+      expect(res.body.data.routingConfig).toHaveProperty('taskModels');
+      expect(res.body.data.hostPreferences).toHaveLength(1);
+      expect(res.body.data.alerts).toEqual([{ title: 'test alert' }]);
+      expect(res.body.data.recentRouting).toEqual([{ model: 'qwen3:14b', host: 'primary' }]);
+    });
+
+    it('fails closed instead of returning fabricated partial data', async () => {
+      mockLean.mockRejectedValue(new Error('routing telemetry unavailable'));
+
+      const res = await request(app)
+        .get('/api/nerve-center/ecosystem')
+        .expect(503);
+
+      expect(res.body).toEqual({
+        status: 'error',
+        code: 'ECOSYSTEM_SNAPSHOT_UNAVAILABLE',
+        message: 'Ecosystem snapshot is unavailable.'
+      });
+      expect(res.body).not.toHaveProperty('data');
+    });
+  });
+
   // ════════════════════════════════════════════════════════════════════════
   // 2. GET /api/nerve-center/routing/config
   // ════════════════════════════════════════════════════════════════════════

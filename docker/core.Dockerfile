@@ -5,7 +5,7 @@ FROM node:20-slim
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates libcurl4 libgssapi-krb5-2 tar \
+  && apt-get install -y --no-install-recommends openssh-client ca-certificates libcurl4 libgssapi-krb5-2 tar \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=mongo-tools /usr/bin/mongodump /usr/local/bin/mongodump

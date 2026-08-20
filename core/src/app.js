@@ -592,6 +592,7 @@ app.get('/api/portal/health', async (_req, res) => {
 // 301 REDIRECTS (formerly meta-refresh HTML pages)
 // ============================================
 app.get('/nerve-center.html', (req, res) => res.redirect(301, '/nerve-center'));
+app.get('/agent-ops.html', (req, res) => res.redirect(301, '/agent-ops'));
 app.get('/models.html', (req, res) => res.redirect(301, '/models'));
 app.get('/cluster-schedule.html', (req, res) => res.redirect(301, '/cluster-schedule'));
 app.get('/analytics.html', (req, res) => res.redirect(301, '/analytics'));
@@ -699,6 +700,27 @@ app.get('/nerve-center', (req, res) => {
       '<script src="/js/nerve-center-inference-health.js"></script>',
       '<script src="/js/nerve-center-alerts.js"></script>',
       '<script src="/js/nerve-center-rag.js"></script>'
+    ].join('\n')
+  });
+});
+
+// Agent Ops is a product-owned read-only shell. Environment-specific trusted
+// extensions provide the same-origin projection at GET /api/agent-ops.
+app.get('/agent-ops', (_req, res) => {
+  res.render('layouts/main', {
+    pageView: '../pages/agent-ops',
+    title: 'AgentX • Agent Ops',
+    service: 'core',
+    activePage: 'agent-ops',
+    bodyClass: 'agent-ops-surface',
+    headCss: [
+      '<link rel="stylesheet" href="/styles.css">',
+      '<link rel="stylesheet" href="/css/agent-ops.css">',
+      '<link rel="stylesheet" href="/css/agent-ops-advanced.css">'
+    ].join('\n'),
+    footerJs: [
+      '<script src="/js/agent-ops-advanced.js"></script>',
+      '<script src="/js/agent-ops.js"></script>'
     ].join('\n')
   });
 });
