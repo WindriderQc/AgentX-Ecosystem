@@ -101,6 +101,95 @@
     </aside>
 
     <div class="main-content chat-page-content" style="padding: 0;">
+      <% const fullPlayground = locals.agentxProfile !== 'demo'; %>
+      <section class="playground-cockpit" id="playgroundCockpit" data-state="loading" aria-labelledby="playgroundCockpitTitle">
+        <div class="pg-cockpit-ambient" aria-hidden="true"></div>
+        <header class="pg-cockpit-hero">
+          <div class="pg-cockpit-copy">
+            <div class="pg-cockpit-eyebrow">
+              <span class="pg-live-dot" id="pgLiveDot"></span>
+              Conversational control plane
+            </div>
+            <div class="pg-cockpit-title-row">
+              <div>
+                <h1 id="playgroundCockpitTitle">Talk with your models</h1>
+                <p>Choose the intent, see the route, inspect the fleet, then keep the conversation in one place.</p>
+              </div>
+              <button class="pg-icon-button" id="pgToggleCockpit" type="button" aria-expanded="true" title="Collapse cockpit">
+                <i class="fas fa-chevron-up"></i><span class="sr-only">Collapse cockpit</span>
+              </button>
+            </div>
+            <div class="pg-cockpit-actions">
+              <button class="pg-action primary" id="pgFocusComposer" type="button"><i class="fas fa-message"></i> Start talking</button>
+              <button class="pg-action" id="pgOpenConfiguration" type="button"><i class="fas fa-sliders"></i> Route controls</button>
+              <button class="pg-action subtle" id="pgRefreshCockpit" type="button"><i class="fas fa-rotate"></i> Refresh evidence</button>
+            </div>
+          </div>
+          <aside class="pg-cockpit-posture" aria-label="Product posture">
+            <div class="pg-posture-label"><i class="fas fa-satellite-dish"></i> Product posture</div>
+            <strong id="pgServiceSummary">Checking the ecosystem…</strong>
+            <span id="pgFleetSummary">Core · Benchmark · RAG</span>
+            <time id="pgCockpitUpdated"></time>
+          </aside>
+        </header>
+
+        <div class="pg-cockpit-body" id="pgCockpitBody">
+          <section class="pg-cockpit-panel pg-route-panel" aria-labelledby="pgRouteTitle">
+            <div class="pg-panel-head">
+              <div><span class="pg-kicker">Live workflow</span><h2 id="pgRouteTitle">How this answer will run</h2></div>
+              <span class="pg-state-pill" id="pgRouteState" data-tone="loading">Resolving</span>
+            </div>
+            <div class="pg-mode-switch" aria-label="Conversation routing mode">
+              <button type="button" data-playground-mode="quick"><i class="fas fa-bolt"></i><span>Quick</span></button>
+              <button type="button" data-playground-mode="standard"><i class="fas fa-route"></i><span>Standard</span></button>
+              <button type="button" data-playground-mode="deep"><i class="fas fa-brain"></i><span>Deep</span></button>
+              <button type="button" data-playground-mode="manual"><i class="fas fa-crosshairs"></i><span>Manual</span></button>
+            </div>
+            <div class="pg-route-flow" aria-label="Current inference workflow">
+              <div class="pg-route-node"><i class="fas fa-message"></i><span>Request</span><strong id="pgRouteIntent">Standard chat</strong></div>
+              <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
+              <div class="pg-route-node router"><i class="fas fa-code-branch"></i><span>Decision</span><strong id="pgRouteDecision">Core router</strong></div>
+              <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
+              <div class="pg-route-node"><i class="fas fa-server"></i><span>Host</span><strong id="pgRouteHost">Server-routed</strong></div>
+              <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
+              <div class="pg-route-node model"><i class="fas fa-microchip"></i><span>Model</span><strong id="pgRouteModel">On first reply</strong></div>
+            </div>
+          </section>
+
+          <section class="pg-cockpit-panel pg-fleet-panel" aria-labelledby="pgFleetTitle">
+            <div class="pg-panel-head">
+              <div><span class="pg-kicker">Ollama fleet</span><h2 id="pgFleetTitle">Pick a host when Manual is active</h2></div>
+              <a href="/nerve-center">Full topology <i class="fas fa-arrow-right"></i></a>
+            </div>
+            <div class="pg-host-deck" id="pgHostDeck" aria-live="polite">
+              <div class="pg-loading"><i class="fas fa-spinner fa-spin"></i> Reading configured hosts…</div>
+            </div>
+          </section>
+
+          <section class="pg-cockpit-panel pg-services-panel" aria-labelledby="pgServicesTitle">
+            <div class="pg-panel-head">
+              <div><span class="pg-kicker">Product pulse</span><h2 id="pgServicesTitle">Core services</h2></div>
+              <span id="pgEcosystemAuthority">Product evidence</span>
+            </div>
+            <div class="pg-service-deck" id="pgServiceDeck" aria-live="polite">
+              <div class="pg-loading"><i class="fas fa-spinner fa-spin"></i> Checking services…</div>
+            </div>
+          </section>
+
+          <nav class="pg-quick-doors" aria-label="Ecosystem quick doors">
+            <button type="button" id="pgDoorChat"><i class="fas fa-message"></i><span><strong>Chat</strong><small>Conversation</small></span></button>
+            <a href="/nerve-center"><i class="fas fa-brain"></i><span><strong>Nerve Center</strong><small>Hosts &amp; routing</small></span></a>
+            <% if (fullPlayground) { %>
+              <a href="/agent-ops"><i class="fas fa-users-gear"></i><span><strong>Agent Ops</strong><small>People &amp; work</small></span></a>
+              <a href="/pipeline"><i class="fas fa-list-check"></i><span><strong>Pipeline</strong><small>Delivery</small></span></a>
+            <% } %>
+            <a href="/models"><i class="fas fa-cubes"></i><span><strong>Models</strong><small>Registry &amp; pins</small></span></a>
+            <a href="#" data-public-service="benchmark" data-public-path="/"><i class="fas fa-flask"></i><span><strong>Benchmark</strong><small>Evidence</small></span></a>
+            <a href="#" data-public-service="rag" data-public-path="/"><i class="fas fa-book-open"></i><span><strong>RAG</strong><small>Knowledge</small></span></a>
+          </nav>
+        </div>
+      </section>
+
       <!-- Unified Info Bar -->
       <div class="chat-header-bar">
         <div class="chat-header-left">

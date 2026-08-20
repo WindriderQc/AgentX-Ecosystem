@@ -72,6 +72,10 @@ agent runtime.
 - Live qualification and maintenance scripts require their target host, model,
   context, and external service endpoints explicitly. Fixed benchmark matrices
   remain valid when the fixed values are the experiment being measured.
+- Playground renders a conversational cockpit over the same routing and host
+  controls used by chat. It may display bounded health, fleet, and route
+  evidence, but it does not own a second router, host registry, service-health
+  store, or model-selection policy.
 - A service does not recreate another service's Mongoose schema to query its
   collections. Cross-service evidence moves through the owning service's API;
   unavailable evidence stays unavailable.

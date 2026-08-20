@@ -30,6 +30,7 @@
   /* Product-oriented information architecture. The portal remains the full
      service map; this navigation optimizes common operator journeys. */
   const fullNavItems = [
+    { label: 'Playground', href: coreBase + '/playground', icon: 'fa-comments', id: 'playground', primary: true },
     {
       label: 'Work', icon: 'fa-list-check', id: 'work-group',
       children: [
@@ -72,7 +73,6 @@
         { label: 'Results Explorer', href: benchBase + '/results-explorer', icon: 'fa-table-list', id: 'results-explorer' },
         { label: 'Efficiency Map',   href: benchBase + '/efficiency-map',  icon: 'fa-bolt',       id: 'efficiency-map' },
         { section: 'Experimental & frozen' },
-        { label: 'Playground',       href: coreBase + '/playground',       icon: 'fa-comments',        id: 'playground' },
         { label: 'Council',          href: coreBase + '/council',          icon: 'fa-users',           id: 'council' },
         { label: 'Prompts',          href: coreBase + '/prompts',          icon: 'fa-pen-fancy',       id: 'prompts' },
         { label: 'Planning · frozen', href: coreBase + '/planning',        icon: 'fa-snowflake',       id: 'planning' }
@@ -81,11 +81,11 @@
   ];
 
   const demoNavItems = [
+    { label: 'Playground', href: coreBase + '/playground', icon: 'fa-comments', id: 'playground', primary: true },
     {
       label: 'Product', icon: 'fa-bolt', id: 'product-group',
       children: [
         { label: 'Demo home', href: coreBase + '/demo', icon: 'fa-house', id: 'demo' },
-        { label: 'Playground', href: coreBase + '/playground', icon: 'fa-comments', id: 'playground' },
         { label: 'Models', href: coreBase + '/models', icon: 'fa-cubes', id: 'models' },
         { label: 'Analytics', href: coreBase + '/analytics', icon: 'fa-chart-line', id: 'analytics' }
       ]

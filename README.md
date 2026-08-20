@@ -79,9 +79,11 @@ remote endpoint.
 
 ## Two guided demos
 
-1. **Route a local answer:** open Playground, select a model you explicitly
-   installed, ask a short question, then inspect Models or Analytics to show
-   the visible inference boundary.
+1. **Route a local answer:** open Playground and use its conversational cockpit
+   to compare Quick, Standard, Deep, and Manual routing. Manual exposes the
+   configured Ollama hosts and exact model picker; routed modes keep the
+   server-owned decision visible in the Request → Router → Host → Model flow.
+   Ask a short question, then inspect Nerve Center or Analytics for evidence.
 2. **Ground and compare:** ingest a small non-sensitive document through RAG,
    retrieve a fact unique to it, then open Benchmark to compare candidate
    models on reproducible evidence.
