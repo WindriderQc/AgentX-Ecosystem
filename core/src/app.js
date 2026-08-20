@@ -657,6 +657,7 @@ app.get('/playground', (req, res) => {
       '<link rel="stylesheet" href="/css/agentx.css">',
       '<link rel="stylesheet" href="/css/chat-inline.css">',
       '<link rel="stylesheet" href="/css/chat-intelligence.css">',
+      '<link rel="stylesheet" href="/css/playground-cockpit.css">',
       demo ? '<link rel="stylesheet" href="/css/demo-profile.css">' : ''
     ].join('\n'),
     footerJs: [
@@ -666,6 +667,7 @@ app.get('/playground', (req, res) => {
       demo ? '' : '<script src="/js/components/chat-intelligence.js"></script>',
       '<script src="/js/chat/chat-context-indicator.js"></script>',
       '<script src="/js/chat/chat-model-readiness.js"></script>',
+      '<script src="/js/playground-cockpit.js"></script>',
       '<script type="module" src="/js/chat/chat-main.js"></script>'
     ].join('\n')
   });

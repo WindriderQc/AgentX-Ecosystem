@@ -11,10 +11,10 @@ const publicUrls = {
   data: 'http://data.example:4183',
 };
 
-async function renderNav(service, agentxProfile = 'full') {
+async function renderNav(service, agentxProfile = 'full', activePage = 'nerve-center') {
   return ejs.renderFile(navPath, {
     service,
-    activePage: 'nerve-center',
+    activePage,
     agentxProfile,
     publicUrls,
     reqHost: 'wrong-host.example',
@@ -29,6 +29,7 @@ function hrefFor(html, label) {
 describe('shared navigation public URL contract', () => {
   test('Core stays relative while cross-service links use configured authority', async () => {
     const html = await renderNav('core');
+    expect(hrefFor(html, 'Playground')).toBe('/playground');
     expect(hrefFor(html, 'Nerve Center')).toBe('/nerve-center');
     expect(hrefFor(html, 'Agent Ops')).toBe('/agent-ops');
     expect(hrefFor(html, 'Engine Room')).toBe('http://bench.example:4181/');
@@ -40,6 +41,7 @@ describe('shared navigation public URL contract', () => {
 
   test('Benchmark stays relative and its Nerve Center hop uses configured Core', async () => {
     const html = await renderNav('benchmark');
+    expect(hrefFor(html, 'Playground')).toBe('https://core.example/playground');
     expect(hrefFor(html, 'Engine Room')).toBe('/');
     expect(hrefFor(html, 'Nerve Center')).toBe('https://core.example/nerve-center');
     expect(hrefFor(html, 'RAG Dashboard')).toBe('http://rag.example:4182/');
@@ -56,6 +58,15 @@ describe('shared navigation public URL contract', () => {
     expect(hrefFor(await renderNav('core', 'demo'), 'AgentX')).toBe('/demo');
     expect(hrefFor(await renderNav('benchmark', 'demo'), 'AgentX')).toBe('https://core.example/demo');
     expect(hrefFor(await renderNav('core', 'full'), 'AgentX')).toBe('/portal/');
+  });
+
+  test('Playground is a first-class direct destination in full and demo navigation', async () => {
+    for (const profile of ['full', 'demo']) {
+      const html = await renderNav('core', profile, 'playground');
+      const directPlayground = html.match(/<a href="\/playground" class="nav-link primary active">[\s\S]*?<\/a>/g) || [];
+      expect(directPlayground).toHaveLength(1);
+      expect(directPlayground[0]).toContain('Playground');
+    }
   });
 
   test('nav source does not synthesize URLs from request hosts or service ports', () => {
