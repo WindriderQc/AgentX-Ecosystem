@@ -67,6 +67,7 @@ describe('shared navigation public URL contract', () => {
     const source = fs.readFileSync(portalPath, 'utf8');
     expect(source).toContain("publicUrls = cfg?.publicUrls || {}");
     expect(source).toContain("document.querySelectorAll('[data-public-service]')");
+    expect(source).toContain('data-public-service="core" data-public-path="/playground">Open Chat</a>');
     expect(source).toContain('data-public-service="benchmark" data-public-path="/leaderboard"');
     expect(source).toContain('data-public-service="rag" data-public-path="/documents"');
     expect(source).not.toContain('PORT_TO_SERVICE');

@@ -181,6 +181,15 @@
     background: color-mix(in oklab, var(--tile-color, var(--accent)) 10%, rgba(0,0,0,0.25));
     transform: translateY(-1px);
   }
+  .tile li a.primary-link {
+    border-color: color-mix(in oklab, var(--tile-color, var(--accent)) 65%, var(--border));
+    background: color-mix(in oklab, var(--tile-color, var(--accent)) 22%, rgba(0,0,0,0.25));
+    font-weight: 700;
+  }
+  .tile li a.primary-link:hover {
+    color: var(--text);
+    background: color-mix(in oklab, var(--tile-color, var(--accent)) 34%, rgba(0,0,0,0.25));
+  }
   .tile .note {
     margin-top: auto; padding-top: 10px;
     color: var(--muted); font-size: 11.5px; line-height: 1.5;
@@ -244,23 +253,24 @@
       <div class="head">
         <div class="head-left">
           <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="6" rx="1"/><rect x="2" y="15" width="20" height="6" rx="1"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span>
-          <span class="domain">Infrastructure</span>
+          <span class="domain">Chat &amp; routing</span>
         </div>
         <div class="head-right">
           <span class="tile-status" data-status="loading"><i class="sdot"></i><span class="stext">checking…</span></span>
           <span class="port">:3080</span>
         </div>
       </div>
-      <h2><a href="/nerve-center" data-public-service="core" data-public-path="/nerve-center">AgentX Core</a></h2>
-      <div class="owner">Ollama cluster &amp; routing control plane</div>
+      <h2><a href="/playground" data-public-service="core" data-public-path="/playground">AgentX Core</a></h2>
+      <div class="owner">Chat with your configured Ollama models through AgentX routing</div>
       <ul>
+        <li><a class="primary-link" href="/playground" data-public-service="core" data-public-path="/playground">Open Chat</a></li>
         <li><a href="/nerve-center" data-public-service="core" data-public-path="/nerve-center">Nerve Center</a></li>
         <li><a href="/pipeline" data-public-service="core" data-public-path="/pipeline">Pipeline</a></li>
         <li><a href="/models" data-public-service="core" data-public-path="/models">Models</a></li>
         <li><a href="/analytics" data-public-service="core" data-public-path="/analytics">Analytics</a></li>
         <li><a href="/cluster-schedule" data-public-service="core" data-public-path="/cluster-schedule">Schedule</a></li>
       </ul>
-      <div class="note">Agent ownership, recurring work, GPU pinning, host health, model registry, and routing telemetry.</div>
+      <div class="note">Primary Ollama chat interface, plus model registry, host health, scheduling, and routing telemetry.</div>
     </div>
 
     <!-- EVALUATION -->
