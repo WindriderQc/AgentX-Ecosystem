@@ -29,6 +29,7 @@ const hostPrefService = require('../src/services/hostPreferenceService');
 const { modelsMatch } = require('../src/helpers/modelNameNormalization');
 const alertService = require('../src/services/alertService');
 const { getObservedFailoverStatus } = require('../src/services/failoverStatusService');
+const { buildEcosystemSnapshot: buildProductEcosystemSnapshot } = require('../src/services/ecosystemSnapshotService');
 const { calculateMessageCost } = require('../src/services/costCalculator');
 const InferenceLog = require('../models/InferenceLog');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
@@ -69,6 +70,14 @@ async function buildIntelligenceSummary() {
  */
 async function getRoutingConfig() {
   return buildRouterConfigPayload();
+}
+
+async function buildEcosystemSnapshot(options = {}) {
+  return buildProductEcosystemSnapshot({
+    buildIntelligence: buildIntelligenceSummary,
+    buildRoutingConfig: getRoutingConfig,
+    now: options.now
+  });
 }
 
 function resolveHostUrl(hostKey) {
@@ -229,6 +238,22 @@ router.get('/intelligence', async (_req, res) => {
   } catch (err) {
     logger.error('[NerveCenter] intelligence fetch failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Product-owned, fail-closed snapshot for operator surfaces. Personal runtime
+// evidence is composed by trusted extensions and does not cross this boundary.
+router.get('/ecosystem', async (_req, res) => {
+  try {
+    const data = await buildEcosystemSnapshot();
+    res.json({ status: 'success', data });
+  } catch (err) {
+    logger.error('[NerveCenter] ecosystem snapshot failed', { error: err.message });
+    res.status(503).json({
+      status: 'error',
+      code: 'ECOSYSTEM_SNAPSHOT_UNAVAILABLE',
+      message: 'Ecosystem snapshot is unavailable.'
+    });
   }
 });
 
@@ -674,6 +699,7 @@ router.use('/', require('./nerve-center-host-preferences'));
 
 module.exports = router;
 module.exports.buildIntelligenceSummary = buildIntelligenceSummary;
+module.exports.buildEcosystemSnapshot = buildEcosystemSnapshot;
 module.exports.getRoutingConfig = getRoutingConfig;
 module.exports.buildInferenceStats = buildInferenceStats;
 module.exports.buildRoutingAnalytics = buildRoutingAnalytics;
