@@ -65,9 +65,9 @@ describe('API Routes Integration', () => {
       // Mock data
       const mockConversations = [
         {
-          _id: 'conv1',
+          _id: { toHexString: () => '507f1f77bcf86cd799439011' },
           title: 'Test Conv 1',
-          updatedAt: new Date(),
+          updatedAt: new Date('2026-08-20T02:00:00.000Z'),
           model: 'llama2',
           messages: [{ content: 'Hello' }]
         }
@@ -88,7 +88,8 @@ describe('API Routes Integration', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.data).toHaveLength(1);
-      expect(res.body.data[0].id).toBe('conv1');
+      expect(res.body.data[0].id).toBe('507f1f77bcf86cd799439011');
+      expect(res.body.data[0].date).toBe('2026-08-20T02:00:00.000Z');
       expect(mockFind).toHaveBeenCalledWith({
         userId: 'default',
         'lifecycle.status': { $ne: 'archived' }
@@ -112,8 +113,11 @@ describe('API Routes Integration', () => {
   describe('GET /api/history/:id', () => {
     it('should return a single conversation', async () => {
       const mockConversation = {
-        _id: '507f1f77bcf86cd799439011',
-        title: 'Test Conv 1'
+        _id: { toHexString: () => '507f1f77bcf86cd799439011' },
+        title: 'Test Conv 1',
+        createdAt: new Date('2026-08-20T01:00:00.000Z'),
+        updatedAt: new Date('2026-08-20T02:00:00.000Z'),
+        messages: [{ _id: { toHexString: () => '507f1f77bcf86cd799439012' }, role: 'user', content: 'Hello', timestamp: new Date('2026-08-20T01:30:00.000Z') }]
       };
       const mockFindById = Conversation.__mocks.findOne;
       mockFindById.mockResolvedValue(mockConversation);
@@ -123,6 +127,9 @@ describe('API Routes Integration', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.body.data._id).toBe('507f1f77bcf86cd799439011');
+      expect(res.body.data.updatedAt).toBe('2026-08-20T02:00:00.000Z');
+      expect(res.body.data.messages[0]._id).toBe('507f1f77bcf86cd799439012');
+      expect(res.body.data.messages[0].timestamp).toBe('2026-08-20T01:30:00.000Z');
     });
 
     it('should return 404 if not found', async () => {

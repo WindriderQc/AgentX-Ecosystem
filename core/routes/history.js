@@ -6,6 +6,38 @@ const { getUserId } = require('../src/helpers/userHelpers');
 const conversationSearchService = require('../src/services/conversationSearchService');
 const logger = require('../config/logger');
 
+function publicId(value) {
+    if (value === null || value === undefined) return null;
+    if (typeof value.toHexString === 'function') return value.toHexString();
+    return String(value);
+}
+
+function publicDate(value) {
+    if (value === null || value === undefined) return null;
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function publicMessage(message) {
+    const raw = typeof message?.toObject === 'function' ? message.toObject() : { ...message };
+    return {
+        ...raw,
+        _id: publicId(raw._id),
+        timestamp: publicDate(raw.timestamp || raw.createdAt),
+    };
+}
+
+function publicConversation(conversation) {
+    const raw = typeof conversation?.toObject === 'function' ? conversation.toObject() : { ...conversation };
+    return {
+        ...raw,
+        _id: publicId(raw._id),
+        createdAt: publicDate(raw.createdAt),
+        updatedAt: publicDate(raw.updatedAt),
+        messages: Array.isArray(raw.messages) ? raw.messages.map(publicMessage) : [],
+    };
+}
+
 // ============================================================================
 // IMPORTANT: Named GET routes MUST come BEFORE /:id to avoid route shadowing.
 // Express matches top-to-bottom; /:id would catch /search, /tags, etc.
@@ -57,7 +89,7 @@ router.post('/', async (req, res) => {
             });
         }
 
-        res.json({ status: 'success', data: { conversationId: conv._id } });
+        res.json({ status: 'success', data: { conversationId: publicId(conv._id) } });
     } catch (err) {
         logger.error('Failed to save conversation:', err);
         res.status(500).json({ status: 'error', message: err.message });
@@ -84,9 +116,9 @@ router.get('/', async (req, res) => {
                 : '';
 
             return {
-                id: c._id,
+                id: publicId(c._id),
                 title: c.title,
-                date: c.updatedAt,
+                date: publicDate(c.updatedAt),
                 model: c.model,
                 preview: previewText,
                 qualityScore: c.quality_assessment?.overall_score ?? null
@@ -112,7 +144,7 @@ router.get('/logs', async (req, res) => {
             return res.json({ status: 'success', data: { messages: [] } });
         }
 
-        res.json({ status: 'success', data: { messages: conversation.messages } });
+        res.json({ status: 'success', data: { messages: conversation.messages.map(publicMessage) } });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
     }
@@ -227,9 +259,9 @@ router.get('/conversations', async (req, res) => {
             .select('title updatedAt model messages');
 
         const previews = conversations.map(c => ({
-            id: c._id,
+            id: publicId(c._id),
             title: c.title,
-            date: c.updatedAt,
+            date: publicDate(c.updatedAt),
             model: c.model,
             messageCount: c.messages?.length || 0
         }));
@@ -255,7 +287,7 @@ router.get('/conversations/:id', async (req, res) => {
             return res.status(404).json({ status: 'error', message: 'Conversation not found' });
         }
 
-        res.json({ status: 'success', data: conversation });
+        res.json({ status: 'success', data: publicConversation(conversation) });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
     }
@@ -281,7 +313,7 @@ router.get('/:id', async (req, res) => {
             return res.status(404).json({ status: 'error', message: 'Conversation not found' });
         }
 
-        res.json({ status: 'success', data: conversation });
+        res.json({ status: 'success', data: publicConversation(conversation) });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
     }
