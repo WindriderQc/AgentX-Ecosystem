@@ -214,6 +214,41 @@ describe('contextProbeService', () => {
     expect(failedStep.reason).toMatch(/Short completion/);
   });
 
+  it('keeps a timed-out candidate as the measured context boundary', async () => {
+    ollamaClient.showModel.mockResolvedValue({
+      model_info: {
+        'general.context_length': 4096
+      }
+    });
+    ollamaClient.generate.mockImplementation(async (_hostUrl, payload) => {
+      if (payload.options.num_ctx === 2048) {
+        return { eval_count: 64, eval_duration: 1e9, prompt_eval_count: 1600 };
+      }
+      throw new Error('Ollama POST /api/generate timed out after 120000ms');
+    });
+
+    const result = await contextProbeService.probeModelContext('gemma4:26b', {
+      hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
+      acknowledgeMaintenance: true,
+      maxCtx: 4096
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'completed',
+      testedNumCtx: 2048
+    }));
+    expect(result.steps.find((step) => step.numCtx === 4096)).toMatchObject({
+      requestSucceeded: false,
+      tokensPerSec: 0,
+      passed: false,
+      reason: 'Ollama POST /api/generate timed out after 120000ms'
+    });
+    expect(modelContextProfileService.updateFromProbeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ testedNumCtx: 2048, status: 'completed' })
+    );
+  });
+
   it('does not reject a positive measurement using an arbitrary throughput ceiling', async () => {
     ollamaClient.showModel.mockResolvedValue({
       model_info: {
@@ -300,5 +335,20 @@ describe('validateThroughput', () => {
     });
     expect(r.plausible).toBe(true);
     expect(r.detail).toBeNull();
+  });
+});
+
+describe('findInvalidThroughputStep', () => {
+  const findInvalid = contextProbeService._internal.findInvalidThroughputStep;
+
+  it('ignores the zero placeholder from a failed request', () => {
+    expect(findInvalid([
+      { numCtx: 65536, requestSucceeded: false, tokensPerSec: 0 }
+    ])).toBeUndefined();
+  });
+
+  it('still rejects an invalid measurement returned by a successful request', () => {
+    const step = { numCtx: 65536, requestSucceeded: true, tokensPerSec: 0 };
+    expect(findInvalid([step])).toBe(step);
   });
 });
