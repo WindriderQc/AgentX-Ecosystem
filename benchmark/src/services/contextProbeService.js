@@ -19,10 +19,11 @@ const { normalizeModelName, resolveModelNumCtxDetails } = require('./modelContex
 const logger = require('../../config/logger');
 
 // Full-window probes can legitimately spend several minutes reloading a large
-// resident model and prefilling the requested context. Keep this above the
-// measured 233.6s Qwen 3.8 262K probe so a slow-but-valid load is not persisted
-// as a smaller verified context window.
-const DEFAULT_TIMEOUT_MS = 300000;
+// resident model and prefilling the requested context. A production 262K Qwen
+// probe hit the former 300s cap only because the measured 233.6s prefill was
+// preceded by a context-changing reload. Keep enough bounded headroom for both
+// phases so a slow-but-valid load is not persisted as a smaller window.
+const DEFAULT_TIMEOUT_MS = 420000;
 const DEFAULT_MIN_CTX = 2048;
 const DEFAULT_MAX_CTX = 262144;
 // Decode length per probe step. The old value (16) only exercised prefill, so a

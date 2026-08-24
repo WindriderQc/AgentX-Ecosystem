@@ -96,7 +96,7 @@ describe('contextProbeService', () => {
     const previousTimeout = process.env.CONTEXT_PROBE_TIMEOUT_MS;
     delete process.env.CONTEXT_PROBE_TIMEOUT_MS;
     try {
-      expect(contextProbeService.getConfig().timeoutMs).toBe(300000);
+      expect(contextProbeService.getConfig().timeoutMs).toBe(420000);
     } finally {
       if (previousTimeout === undefined) {
         delete process.env.CONTEXT_PROBE_TIMEOUT_MS;
