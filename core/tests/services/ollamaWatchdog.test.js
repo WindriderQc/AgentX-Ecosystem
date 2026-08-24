@@ -36,14 +36,41 @@ beforeEach(() => {
 afterAll(() => watchdog.stop());
 
 describe('probeHost', () => {
-  it('returns ok:true when Ollama responds (even with error)', async () => {
+  it('probes the loaded model so a false-ready worker cannot pass on a sentinel 404', async () => {
+    let requestBody;
     watchdog._setFetch(makeMockFetch({
-      '/api/generate': () => ({ ok: false, status: 404, json: async () => ({ error: 'model not found' }) })
+      '/api/generate': (_url, opts) => {
+        requestBody = JSON.parse(opts.body);
+        return { ok: true, status: 200, json: async () => ({ response: 'ok' }) };
+      }
+    }));
+
+    const result = await watchdog.probeHost(MOCK_HOST, 'gemma4:26b');
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(200);
+    expect(result.mode).toBe('loaded-model');
+    expect(requestBody).toMatchObject({
+      model: 'gemma4:26b',
+      think: false,
+      keep_alive: -1,
+      options: { num_predict: 1 }
+    });
+  });
+
+  it('uses the cheap sentinel probe when no model is loaded', async () => {
+    let requestBody;
+    watchdog._setFetch(makeMockFetch({
+      '/api/generate': (_url, opts) => {
+        requestBody = JSON.parse(opts.body);
+        return { ok: false, status: 404, json: async () => ({ error: 'model not found' }) };
+      }
     }));
 
     const result = await watchdog.probeHost(MOCK_HOST);
     expect(result.ok).toBe(true);
     expect(result.status).toBe(404);
+    expect(result.mode).toBe('control-plane');
+    expect(requestBody.model).toBe('_');
   });
 
   it('returns ok:false with reason timeout when request hangs', async () => {
@@ -60,7 +87,7 @@ describe('probeHost', () => {
       });
     }));
 
-    const result = await watchdog.probeHost(MOCK_HOST);
+    const result = await watchdog.probeHost(MOCK_HOST, 'gemma4:26b');
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('timeout');
   }, 20000);
@@ -70,7 +97,7 @@ describe('probeHost', () => {
       throw new Error('ECONNREFUSED');
     }));
 
-    const result = await watchdog.probeHost(MOCK_HOST);
+    const result = await watchdog.probeHost(MOCK_HOST, 'gemma4:26b');
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('ECONNREFUSED');
   });
@@ -101,9 +128,13 @@ describe('checkMeta', () => {
 
 describe('probeCycle (integration)', () => {
   it('does not trigger unjam on healthy host', async () => {
+    let requestBody;
     const mockFetch = makeMockFetch({
-      '/api/generate': () => ({ ok: false, status: 404 }),
-      '/api/ps': () => ({ ok: true, json: async () => ({ models: [] }) })
+      '/api/generate': (_url, opts) => {
+        requestBody = JSON.parse(opts.body);
+        return { ok: true, status: 200 };
+      },
+      '/api/ps': () => ({ ok: true, json: async () => ({ models: [{ name: 'gemma4:26b' }] }) })
     });
     watchdog._setFetch(mockFetch);
 
@@ -112,6 +143,24 @@ describe('probeCycle (integration)', () => {
     const stats = watchdog.getStats();
     expect(stats.jamsDetected).toBe(0);
     expect(stats.probesOk).toBeGreaterThan(0);
+    expect(requestBody.model).toBe('gemma4:26b');
+  });
+
+  it('does not queue a synthetic probe behind active AgentX inference', async () => {
+    hostGate._resetForTests();
+    const release = await hostGate.acquire(MOCK_HOST.url, 'gemma4:26b');
+    const generate = jest.fn(() => ({ ok: true, status: 200 }));
+    watchdog._setFetch(makeMockFetch({
+      '/api/generate': generate,
+      '/api/ps': () => ({ ok: true, json: async () => ({ models: [{ name: 'gemma4:26b' }] }) })
+    }));
+
+    try {
+      await watchdog.runNow();
+      expect(generate).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
   });
 
   it('does not trigger on first timeout (requires consecutive fails)', async () => {
