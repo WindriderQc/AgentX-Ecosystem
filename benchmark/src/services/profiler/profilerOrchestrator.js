@@ -243,34 +243,50 @@ async function persistProfileEvidence({ modelName, hostId, hostUrl, artifact, pr
 async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgress } = {}) {
   const notify = typeof onProgress === 'function' ? onProgress : () => {};
   logger.info(`Profiling ${modelName} on ${hostId} (${depth})`);
+  let residentCtx = null;
+  try {
+    const running = await listRunning(hostUrl, { timeoutMs: 8000 });
+    const resident = (running.models || []).find(model =>
+      isSameOllamaModel(model.name, modelName) || isSameOllamaModel(model.model, modelName)
+    );
+    const value = Number(resident?.context_length);
+    if (Number.isFinite(value) && value > 0) {
+      residentCtx = { num_ctx: Math.floor(value), source: 'ollama_ps_resident' };
+    }
+  } catch (err) {
+    logger.debug(`Could not snapshot resident context for ${modelName}: ${err.message}`);
+  }
   const artifact = await resolveArtifactIdentity(modelName, hostId, hostUrl, { refresh: true });
   const settings = await settingsService.getAll();
   const hardwareSnapshots = [];
   const initialHardware = await _captureHardwareSnapshot(hostId, 'before_profile', settings);
   if (initialHardware) hardwareSnapshots.push(initialHardware);
 
-  // Snapshot current context from the Ollama Modelfile (source of truth)
-  let previousCtx = null;
-  try {
-    const showData = await showModel(hostUrl, modelName);
-    const paramLines = (showData.parameters || '').split('\n');
-    const ctxLine = paramLines.find(l => /^\s*num_ctx\b/i.test(l));
-    if (ctxLine) {
-      const val = parseInt(ctxLine.replace(/^\s*num_ctx\s+/i, ''), 10);
-      if (Number.isFinite(val) && val > 0) {
-        previousCtx = { num_ctx: val, source: 'modelfile' };
+  // Preserve the context of an already-loaded model. Falling back to model
+  // metadata is appropriate only when there is no resident runtime to retain.
+  let previousCtx = residentCtx;
+  if (!previousCtx) {
+    try {
+      const showData = await showModel(hostUrl, modelName);
+      const paramLines = (showData.parameters || '').split('\n');
+      const ctxLine = paramLines.find(l => /^\s*num_ctx\b/i.test(l));
+      if (ctxLine) {
+        const val = parseInt(ctxLine.replace(/^\s*num_ctx\s+/i, ''), 10);
+        if (Number.isFinite(val) && val > 0) {
+          previousCtx = { num_ctx: val, source: 'modelfile' };
+        }
       }
-    }
-    // Fall back to model_info context_length (native architecture max)
-    if (!previousCtx) {
-      const mi = showData.model_info || {};
-      const ctxKey = Object.keys(mi).find(k => k.endsWith('.context_length'));
-      if (ctxKey && Number.isFinite(mi[ctxKey]) && mi[ctxKey] > 0) {
-        previousCtx = { num_ctx: mi[ctxKey], source: 'model_architecture' };
+      // Fall back to model_info context_length (native architecture max)
+      if (!previousCtx) {
+        const mi = showData.model_info || {};
+        const ctxKey = Object.keys(mi).find(k => k.endsWith('.context_length'));
+        if (ctxKey && Number.isFinite(mi[ctxKey]) && mi[ctxKey] > 0) {
+          previousCtx = { num_ctx: mi[ctxKey], source: 'model_architecture' };
+        }
       }
+    } catch (err) {
+      logger.debug(`Could not read Modelfile context for ${modelName}: ${err.message}`);
     }
-  } catch (err) {
-    logger.debug(`Could not read Modelfile context for ${modelName}: ${err.message}`);
   }
   // Last resort: resolution chain
   if (!previousCtx) {
@@ -293,7 +309,8 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     numPredict: settings.numPredict,
     promptWorkloadMode: 'fixed',
     timeoutMs: settings.testTimeoutSec * 1000,
-    skipPriorProfileArtifacts: true
+    skipPriorProfileArtifacts: true,
+    ...(residentCtx ? { numCtx: residentCtx.num_ctx } : {})
   };
   const testResult = await hostTestService.testModelOnHost(modelName, hostUrl, baseTestOptions);
   if (testResult.status !== 'pass') {
