@@ -42,6 +42,9 @@ describe('read-only Agent Ops shell', () => {
     expect(source).not.toMatch(/method:\s*['"]POST['"]/);
     expect(source).not.toMatch(/Inspect & act/);
     expect(source).toContain('Recent history');
+    expect(source).toContain('Delivery topic is closed');
+    expect(source).toContain('grant it the platform permission for managing topics');
+    expect(source).toContain('/TOPIC[_\\s-]*CLOSED/i');
     expect(source).not.toMatch(/renderRuntimeHandoff|renderCapabilities/);
   });
 });
