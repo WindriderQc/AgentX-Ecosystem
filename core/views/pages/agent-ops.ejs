@@ -15,15 +15,8 @@
       <h1>Who does what — and is it running?</h1>
       <p>
         One evidence-first view of responsibilities, runtime agents, recurring work,
-        delivery history, and the evidence behind each signal. This first
-        restored slice is deliberately read-only.
+        delivery history, and the authority behind each signal. Deliberately read-only by design.
       </p>
-      <div class="agent-ops-truth-strip" aria-label="Sources of truth">
-        <span><i class="fas fa-address-book"></i> Agent registry</span>
-        <span><i class="fas fa-satellite-dish"></i> Runtime evidence</span>
-        <span><i class="fas fa-clock-rotate-left"></i> Scheduled receipt</span>
-        <span><i class="fas fa-list-check"></i> Mongo pipeline</span>
-      </div>
       <div class="agent-ops-actions">
         <button class="agent-ops-button primary" id="agentOpsRefresh" type="button">
           <i class="fas fa-rotate"></i><span>Refresh</span>
@@ -34,6 +27,7 @@
         <a class="agent-ops-button" href="/api/openclaw/control-launch/overview" data-openclaw-native="/overview" target="_blank" rel="noopener">
           <i class="fas fa-arrow-up-right-from-square"></i><span>OpenClaw Control</span>
         </a>
+        <button class="cockpit-help-button" type="button" data-cockpit-guide-open="agentOpsGuide"><i class="fas fa-circle-question"></i><span>Page guide</span></button>
       </div>
     </div>
     <aside class="agent-ops-orbit" aria-label="Agent Ops control-plane constellation">
@@ -44,10 +38,10 @@
         <strong>AgentX</strong>
         <span>Ops graph</span>
       </div>
-      <div class="agent-ops-orbit-node registry"><i class="fas fa-address-book"></i><span>Registry</span></div>
-      <div class="agent-ops-orbit-node runtime"><i class="fas fa-satellite-dish"></i><span>Runtime</span></div>
-      <div class="agent-ops-orbit-node cadence"><i class="fas fa-clock"></i><span>Cadence</span></div>
-      <div class="agent-ops-orbit-node delivery"><i class="fas fa-list-check"></i><span>Delivery</span></div>
+      <div class="agent-ops-orbit-node registry" tabindex="0" data-cockpit-tip-title="Registry" data-cockpit-tip="Configured identity, role, and responsibility authority."><i class="fas fa-address-book"></i><span>Registry</span></div>
+      <div class="agent-ops-orbit-node runtime" tabindex="0" data-cockpit-tip-title="Runtime" data-cockpit-tip="Observed OpenClaw, Hermes, and product evidence; observation does not imply active execution."><i class="fas fa-satellite-dish"></i><span>Runtime</span></div>
+      <div class="agent-ops-orbit-node cadence" tabindex="0" data-cockpit-tip-title="Cadence" data-cockpit-tip="Live automation receipts reconciled with documented recurring obligations."><i class="fas fa-clock"></i><span>Cadence</span></div>
+      <div class="agent-ops-orbit-node delivery" tabindex="0" data-cockpit-tip-title="Delivery" data-cockpit-tip="Open coding work and ownership projected from the Mongo pipeline."><i class="fas fa-list-check"></i><span>Delivery</span></div>
       <div class="agent-ops-orbit-live"><span></span> Live projection</div>
     </aside>
   </header>
@@ -60,15 +54,6 @@
     </div>
     <time id="agentOpsUpdated"></time>
   </section>
-
-  <nav class="agent-ops-launchpad" aria-label="Connected operator surfaces">
-    <a href="/planning"><i class="fas fa-compass-drafting"></i><span><strong>Planning</strong><small>Goals &amp; proof</small></span><i class="fas fa-arrow-right"></i></a>
-    <a href="/pipeline"><i class="fas fa-list-check"></i><span><strong>Pipeline</strong><small>Delivery queue</small></span><i class="fas fa-arrow-right"></i></a>
-    <a href="/cluster-schedule"><i class="fas fa-calendar-days"></i><span><strong>Schedule</strong><small>Cluster cadence</small></span><i class="fas fa-arrow-right"></i></a>
-    <a href="/api/openclaw/control-launch/agents" data-openclaw-native="/agents" target="_blank" rel="noopener"><i class="fas fa-users-gear"></i><span><strong>OpenClaw Agents</strong><small>Native authority</small></span><i class="fas fa-arrow-up-right"></i></a>
-    <a href="/api/openclaw/control-launch/cron" data-openclaw-native="/cron" target="_blank" rel="noopener"><i class="fas fa-rotate"></i><span><strong>OpenClaw Cron</strong><small>Native authority</small></span><i class="fas fa-arrow-up-right"></i></a>
-    <a href="/analytics"><i class="fas fa-chart-line"></i><span><strong>Provider budget</strong><small>AgentX telemetry</small></span><i class="fas fa-arrow-right"></i></a>
-  </nav>
 
   <section class="agent-ops-metrics" aria-label="Agent Ops summary">
     <button class="agent-ops-metric cyan" type="button" data-metric-tab="agents" data-metric-preset="all-agents">
@@ -147,37 +132,11 @@
 
   <section class="agent-ops-pane active" data-agent-ops-pane="overview" role="tabpanel">
     <div class="agent-ops-overview-grid">
-      <article class="agent-ops-panel span-three agent-ops-handoff-panel">
-        <header class="agent-ops-panel-head">
-          <div>
-            <span class="agent-ops-kicker">Runtime handoff</span>
-            <h2>Official OpenClaw control, explicit AgentX complements</h2>
-          </div>
-          <span class="agent-ops-handoff-state" id="agentOpsHandoffState"><i class="fas fa-spinner fa-spin"></i> Resolving authority</span>
-        </header>
-        <div class="agent-ops-handoff-layout">
-          <section>
-            <div class="agent-ops-handoff-copy">
-              <strong>OpenClaw 7.1 owns native runtime operations</strong>
-              <p>Chat, agents, sessions, tasks, cron, channels, skills, configuration, usage and diagnostics open in the official Control UI.</p>
-            </div>
-            <div class="agent-ops-handoff-actions" id="agentOpsNativeCapabilities"></div>
-          </section>
-          <aside>
-            <div class="agent-ops-handoff-copy">
-              <strong>AgentX owns cross-platform evidence</strong>
-              <p>Integration events, RAG, provider telemetry and fleet health stay in their AgentX toolboxes.</p>
-            </div>
-            <div class="agent-ops-handoff-exceptions" id="agentOpsComplements"></div>
-          </aside>
-        </div>
-      </article>
-
       <article class="agent-ops-panel span-two">
         <header class="agent-ops-panel-head">
           <div>
             <span class="agent-ops-kicker">Runtime layers</span>
-            <h2>Control-plane topology</h2>
+            <h2>Control-plane topology <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Runtime layers" data-cockpit-tip="Select a layer for its bounded dossier. AgentX Core is the product plane; OpenClaw and Hermes remain separately operated runtimes." aria-label="Explain runtime layers"><i class="fas fa-question"></i></button></h2>
           </div>
           <a href="/nerve-center">Full topology <i class="fas fa-arrow-right"></i></a>
         </header>
@@ -190,7 +149,7 @@
         <header class="agent-ops-panel-head">
           <div>
             <span class="agent-ops-kicker">Attention</span>
-            <h2>What needs a look</h2>
+            <h2>What needs a look <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Attention queue" data-cockpit-tip="Failures, blocked delivery, and visibility gaps ranked from the same read-only projection used by the Inbox tab." aria-label="Explain the attention queue"><i class="fas fa-question"></i></button></h2>
           </div>
         </header>
         <div class="agent-ops-stack" id="agentOpsWarnings">
@@ -202,7 +161,7 @@
         <header class="agent-ops-panel-head">
           <div>
             <span class="agent-ops-kicker">Cadence</span>
-            <h2>Next and recurring</h2>
+            <h2>Next and recurring <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Recurring work" data-cockpit-tip="The next projected runs combine native automation receipts with documented recurring obligations; evidence confidence remains visible." aria-label="Explain recurring work"><i class="fas fa-question"></i></button></h2>
           </div>
           <button type="button" class="agent-ops-link-button" data-open-agent-ops-tab="automations">View all</button>
         </header>
@@ -213,7 +172,7 @@
         <header class="agent-ops-panel-head">
           <div>
             <span class="agent-ops-kicker">Coverage</span>
-            <h2>What this view can prove</h2>
+            <h2>What this view can prove <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Coverage" data-cockpit-tip="Coverage compares configured facts with observable receipts. A gap stays explicit instead of becoming an invented fallback value." aria-label="Explain evidence coverage"><i class="fas fa-question"></i></button></h2>
           </div>
         </header>
         <div class="agent-ops-coverage" id="agentOpsCoverage"></div>
@@ -223,7 +182,7 @@
         <header class="agent-ops-panel-head">
           <div>
             <span class="agent-ops-kicker">Signal map</span>
-            <h2>Every source feeding this projection</h2>
+            <h2>Every source feeding this projection <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Source telemetry" data-cockpit-tip="Each source reports its own latency, health, and issues. Select one to continue in the narrowest authoritative surface." aria-label="Explain source telemetry"><i class="fas fa-question"></i></button></h2>
           </div>
           <a href="/nerve-center">Diagnose sources <i class="fas fa-arrow-right"></i></a>
         </header>
@@ -234,22 +193,13 @@
         <header class="agent-ops-panel-head">
           <div>
             <span class="agent-ops-kicker">Operating roster</span>
-            <h2>People, personas, and machines with the clearest signal</h2>
+            <h2>People, personas, and machines with the clearest signal <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Operating roster" data-cockpit-tip="The overview ranks identities by observed status and owned signals. The Agents tab retains the complete registry, including unobserved roles." aria-label="Explain the operating roster"><i class="fas fa-question"></i></button></h2>
           </div>
           <button type="button" class="agent-ops-link-button" data-open-agent-ops-tab="agents">Explore all agents</button>
         </header>
         <div class="agent-ops-roster" id="agentOpsRoster"></div>
       </article>
 
-      <article class="agent-ops-panel span-three">
-        <header class="agent-ops-panel-head">
-          <div>
-            <span class="agent-ops-kicker">Capabilities</span>
-            <h2>AgentX-owned, not autonomous agents</h2>
-          </div>
-        </header>
-        <div class="agent-ops-capabilities" id="agentOpsCapabilities"></div>
-      </article>
     </div>
   </section>
 
@@ -313,6 +263,29 @@
     <div class="agent-ops-work-counts" id="agentOpsWorkCounts"></div>
     <div class="agent-ops-work-list" id="agentOpsWork"></div>
   </section>
+
+  <%- include('../partials/cockpit-guide', {
+    cockpitGuide: {
+      id: 'agentOpsGuide',
+      title: 'Read the ecosystem, then continue in the authority that owns the action',
+      summary: 'Agent Ops is the cross-platform directory and evidence cockpit. It reconciles identities, receipts, schedules, and delivery without becoming a second control plane.',
+      sections: [
+        { title: 'Start with attention', body: 'Needs Attention and Inbox surface failures, blocked work, and visibility gaps. Every item keeps its owner, impact, source, and narrow next move.' },
+        { title: 'Drill through the counts', body: 'Summary cards and tabs are filters, not separate datasets. They all project the same schema-versioned response.' },
+        { title: 'Inspect the dossier', body: 'Select a runtime, automation, or agent for recent evidence and linked responsibilities. Dossiers remain read-only.' },
+        { title: 'Continue at the authority', body: 'OpenClaw owns native agents, sessions, and cron; Pipeline owns coding delivery; Nerve Center owns hosts, models, and routing health.' },
+        { title: 'Interpret confidence', body: 'Observed means a runtime exposed evidence. Documentation-only means an obligation exists without a live receipt. Neither implies active execution.' },
+        { title: 'Trace the source', body: 'Coverage and Signal Map expose latency, health, and gaps source by source instead of replacing missing data with a fallback.' }
+      ],
+      note: { title: 'Read-only aggregation', body: 'Agent Ops does not assign work, restart automations, mutate runtime state, or query another service’s collections. Actions continue through the owning UI.' },
+      links: [
+        { href: '/playground', icon: 'fa-comments', label: 'Playground', detail: 'Talk with the models' },
+        { href: '/pipeline', icon: 'fa-list-check', label: 'Pipeline', detail: 'Coding delivery queue' },
+        { href: '/nerve-center', icon: 'fa-brain', label: 'Nerve Center', detail: 'Fleet and routing health' },
+        { href: '/api/openclaw/control-launch/overview', icon: 'fa-satellite-dish', label: 'OpenClaw Control', detail: 'Native runtime authority', external: true }
+      ]
+    }
+  }) %>
 
   <div class="agent-ops-drawer-shell" id="agentOpsDrawerShell" hidden>
     <button class="agent-ops-drawer-scrim" type="button" data-close-agent-drawer aria-label="Close agent details"></button>

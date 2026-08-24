@@ -284,38 +284,6 @@
     }).join('') : empty('No runtime layers registered.', 'fa-circle-nodes');
   }
 
-  function renderRuntimeHandoff(data) {
-    const handoffs = asObject(data.handoffs);
-    const openclaw = asObject(handoffs.openclaw);
-    const agentx = asObject(handoffs.agentx);
-    const capabilities = asArray(openclaw.capabilities);
-    const complements = asArray(agentx.complements);
-    const stateElement = byId('agentOpsHandoffState');
-    const needsTunnel = openclaw.requiresTunnel === true || openclawControlMode === 'ssh-tunnel';
-
-    stateElement.className = `agent-ops-handoff-state ${needsTunnel ? 'tunnel' : 'ready'}`;
-    stateElement.innerHTML = needsTunnel
-      ? '<i class="fas fa-shield-halved"></i> Secure tunnel handoff'
-      : '<i class="fas fa-circle-check"></i> Native UI ready';
-
-    byId('agentOpsNativeCapabilities').innerHTML = capabilities.length ? capabilities.map((capability) => `
-      <a ${nativeControlAttributes(capability.path)} title="Open ${esc(capability.label)} in the official OpenClaw Control UI">
-        <i class="fas ${esc(capability.icon || 'fa-arrow-up-right-from-square')}"></i>
-        <span>${esc(capability.label)}</span>
-      </a>
-    `).join('') : empty('Official OpenClaw capability routes are unavailable.', 'fa-satellite-dish');
-
-    byId('agentOpsComplements').innerHTML = complements.length ? complements.map((capability) => {
-      const href = capability.href || '/nerve-center';
-      return `
-        <a href="${esc(href)}" title="${esc(capability.reason || 'AgentX cross-platform complement')}">
-          <i class="fas ${esc(capability.icon || 'fa-circle-nodes')}"></i>
-          <span><strong>${esc(capability.label)}</strong><small>${esc(clipText(capability.reason, 90))}</small></span>
-          <i class="fas fa-arrow-right"></i>
-        </a>`;
-    }).join('') : '<div class="agent-ops-drawer-empty">No AgentX complements are registered.</div>';
-  }
-
   function renderWarnings(data) {
     const warnings = asArray(data.warnings);
     byId('agentOpsWarnings').innerHTML = warnings.length ? warnings.slice(0, 4).map((warning) => {
@@ -404,24 +372,6 @@
           <span class="agent-ops-source-state"><i class="fas ${iconForStatus(status)}"></i>${esc(humanize(status))}</span>
         </a>`;
     }).join('') : empty('No source telemetry available.', 'fa-tower-broadcast');
-  }
-
-  function renderCapabilities(data) {
-    const capabilities = asArray(data.capabilities);
-    byId('agentOpsCapabilities').innerHTML = capabilities.length ? capabilities.map((capability) => `
-      <article class="agent-ops-capability">
-        <div class="agent-ops-capability-head">
-          <strong>${esc(capability.name)}</strong>
-          ${badge('Not an agent', 'configured', 'fa-shapes')}
-        </div>
-        <p>${esc(capability.responsibility)}</p>
-        <div class="agent-ops-meta-row">
-          ${capability.service ? `<span class="agent-ops-chip"><i class="fas fa-server"></i>${esc(capability.service)}</span>` : ''}
-          ${capability.activation ? `<span class="agent-ops-chip"><i class="fas fa-toggle-on"></i>${esc(humanize(capability.activation))}</span>` : ''}
-          ${capability.ui ? `<a class="agent-ops-chip" href="${esc(capability.ui)}"><i class="fas fa-arrow-up-right"></i>Open UI</a>` : ''}
-        </div>
-      </article>
-    `).join('') : empty('No AgentX capabilities registered.', 'fa-shapes');
   }
 
   function renderRoster(data) {
@@ -889,14 +839,12 @@
 
   function renderAll(data) {
     renderMetrics(data);
-    renderRuntimeHandoff(data);
     renderRuntimeLayers(data);
     renderWarnings(data);
     renderNextRuns(data);
     renderCoverage(data);
     renderSources(data);
     renderRoster(data);
-    renderCapabilities(data);
     renderAgents(data);
     renderAutomations(data);
     renderWork(data);
@@ -960,7 +908,7 @@
     } catch (error) {
       setStatus('error', 'Agent Ops could not refresh', error.message || 'Unknown error');
       if (!state.data) {
-        ['agentOpsNativeCapabilities', 'agentOpsComplements', 'agentOpsRuntimeLayers', 'agentOpsWarnings', 'agentOpsNextRuns', 'agentOpsCoverage', 'agentOpsSources', 'agentOpsRoster', 'agentOpsCapabilities', 'agentOpsInbox', 'agentOpsResponsibilityLanes', 'agentOpsActivity', 'agentOpsAgents', 'agentOpsAutomations', 'agentOpsWork']
+        ['agentOpsRuntimeLayers', 'agentOpsWarnings', 'agentOpsNextRuns', 'agentOpsCoverage', 'agentOpsSources', 'agentOpsRoster', 'agentOpsInbox', 'agentOpsResponsibilityLanes', 'agentOpsActivity', 'agentOpsAgents', 'agentOpsAutomations', 'agentOpsWork']
           .forEach((id) => { const element = byId(id); if (element) element.innerHTML = empty('Data unavailable.', 'fa-triangle-exclamation'); });
       }
     } finally {

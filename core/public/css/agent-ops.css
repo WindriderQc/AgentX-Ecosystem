@@ -17,7 +17,7 @@
   --ops-bright: #f8fafc;
   width: min(1500px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 30px 0 56px;
+  padding: 22px 0 56px;
   color: #dbe4f0;
 }
 
@@ -27,8 +27,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 28px;
-  margin-bottom: 18px;
-  padding: clamp(24px, 4vw, 46px);
+  margin-bottom: 13px;
+  padding: clamp(22px, 3.2vw, 38px);
   overflow: hidden;
   border: 1px solid rgba(103, 232, 249, 0.14);
   border-radius: 20px;
@@ -75,7 +75,7 @@
 .agent-ops-hero h1 {
   margin: 8px 0 10px;
   color: var(--ops-bright);
-  font-size: clamp(2.15rem, 4.4vw, 4.4rem);
+  font-size: clamp(2.15rem, 4vw, 3.75rem);
   line-height: 0.98;
   letter-spacing: -0.045em;
 }
@@ -85,41 +85,19 @@
   margin: 0;
   color: #aebbd0;
   font-size: 1.02rem;
-  line-height: 1.65;
+  line-height: 1.55;
 }
 
-.agent-ops-truth-strip,
 .agent-ops-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.agent-ops-truth-strip {
-  margin-top: 16px;
-}
-
-.agent-ops-truth-strip span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 5px 9px;
-  border: 1px solid var(--ops-border);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.035);
-  color: #aebbd0;
-  font-size: 0.78rem;
-}
-
-.agent-ops-truth-strip i {
-  color: #fbbf24;
-}
-
 .agent-ops-actions {
   justify-content: flex-start;
   max-width: none;
-  margin-top: 20px;
+  margin-top: 16px;
 }
 
 .agent-ops-button {
@@ -166,9 +144,9 @@
 .agent-ops-orbit {
   position: relative;
   z-index: 1;
-  flex: 0 0 330px;
-  width: 330px;
-  height: 270px;
+  flex: 0 0 300px;
+  width: 300px;
+  height: 230px;
 }
 
 .agent-ops-orbit-ring {
@@ -181,14 +159,14 @@
 }
 
 .agent-ops-orbit-ring.outer {
-  width: 300px;
-  height: 210px;
+  width: 270px;
+  height: 185px;
   box-shadow: 0 0 55px rgba(34, 211, 238, 0.06);
 }
 
 .agent-ops-orbit-ring.inner {
-  width: 190px;
-  height: 135px;
+  width: 172px;
+  height: 120px;
   border-color: rgba(167, 139, 250, 0.17);
   transform: translate(-50%, -50%) rotate(18deg);
 }
@@ -229,10 +207,10 @@
 }
 
 .agent-ops-orbit-node i { color: #a5f3fc; }
-.agent-ops-orbit-node.registry { top: 13px; left: 105px; }
+.agent-ops-orbit-node.registry { top: 4px; left: 92px; }
 .agent-ops-orbit-node.runtime { top: 66px; right: 0; }
-.agent-ops-orbit-node.cadence { right: 18px; bottom: 45px; }
-.agent-ops-orbit-node.delivery { bottom: 27px; left: 2px; }
+.agent-ops-orbit-node.cadence { right: 12px; bottom: 35px; }
+.agent-ops-orbit-node.delivery { bottom: 20px; left: 2px; }
 
 .agent-ops-orbit-live {
   position: absolute;
@@ -261,7 +239,7 @@
   justify-content: space-between;
   gap: 16px;
   min-height: 50px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   padding: 10px 14px;
   border: 1px solid rgba(96, 165, 250, 0.22);
   border-radius: 9px;
@@ -300,56 +278,11 @@
   background: rgba(67, 20, 25, 0.62);
 }
 
-.agent-ops-launchpad {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.agent-ops-launchpad a {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-  min-height: 62px;
-  padding: 10px;
-  border: 1px solid var(--ops-border);
-  border-radius: 10px;
-  background: linear-gradient(145deg, rgba(20, 28, 47, 0.86), rgba(13, 18, 31, 0.82));
-  color: #dbe4f0;
-  text-decoration: none;
-  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
-}
-
-.agent-ops-launchpad a:hover {
-  transform: translateY(-2px);
-  border-color: rgba(103, 232, 249, 0.28);
-  background: linear-gradient(145deg, rgba(25, 43, 65, 0.95), rgba(18, 24, 41, 0.9));
-}
-
-.agent-ops-launchpad > a > i:first-child {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: rgba(103, 232, 249, 0.08);
-  color: #67e8f9;
-}
-
-.agent-ops-launchpad > a > i:last-child { color: #53647b; font-size: 0.68rem; }
-.agent-ops-launchpad strong,
-.agent-ops-launchpad small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-ops-launchpad strong { color: #edf5ff; font-size: 0.75rem; }
-.agent-ops-launchpad small { margin-top: 3px; color: #78879c; font-size: 0.63rem; }
-
 .agent-ops-metrics {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 11px;
-  margin-bottom: 14px;
+  gap: 9px;
+  margin-bottom: 12px;
 }
 
 .agent-ops-metric,
@@ -364,8 +297,8 @@
 
 .agent-ops-metric {
   position: relative;
-  min-height: 116px;
-  padding: 15px;
+  min-height: 104px;
+  padding: 13px;
   overflow: hidden;
   border-radius: 9px;
   border-top-width: 3px;
@@ -596,8 +529,7 @@
   cursor: pointer;
 }
 
-.agent-ops-runtime-grid,
-.agent-ops-capabilities {
+.agent-ops-runtime-grid {
   display: grid;
   gap: 10px;
   padding: 14px;
@@ -608,7 +540,6 @@
 }
 
 .agent-ops-runtime,
-.agent-ops-capability,
 .agent-ops-coverage-card,
 .agent-ops-stack-item {
   border: 1px solid rgba(255, 255, 255, 0.075);
@@ -873,25 +804,6 @@ button.agent-ops-stack-item:hover .agent-ops-stack-arrow { color: #67e8f9 !impor
 .agent-ops-roster-signal strong { color: #dbeafe; font-size: 1rem; }
 .agent-ops-roster-signal small { font-size: 0.56rem; white-space: nowrap; }
 .agent-ops-roster-signal i { margin-top: 8px; color: #67e8f9; font-size: 0.65rem; }
-
-.agent-ops-capabilities {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.agent-ops-capability {
-  padding: 13px;
-}
-
-.agent-ops-capability-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.agent-ops-capability p {
-  margin: 7px 0 0;
-}
 
 .agent-ops-section-intro {
   margin: 4px 0 13px;
@@ -1500,7 +1412,6 @@ body.agent-ops-drawer-open { overflow: hidden; }
 
 @media (max-width: 1120px) {
   .agent-ops-orbit { display: none; }
-  .agent-ops-launchpad { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .agent-ops-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .agent-ops-source-map { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .agent-ops-roster { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1513,13 +1424,11 @@ body.agent-ops-drawer-open { overflow: hidden; }
   .agent-ops-page { width: min(100% - 20px, 1500px); padding-top: 20px; }
   .agent-ops-hero { align-items: flex-start; flex-direction: column; padding: 24px; }
   .agent-ops-actions { justify-content: flex-start; max-width: none; }
-  .agent-ops-launchpad { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-ops-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-ops-overview-grid { grid-template-columns: 1fr; }
   .agent-ops-panel.span-two,
   .agent-ops-panel.span-three { grid-column: span 1; }
   .agent-ops-runtime-grid,
-  .agent-ops-capabilities,
   .agent-ops-coverage { grid-template-columns: 1fr; }
   .agent-ops-coverage { height: auto; }
   .agent-ops-source-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1540,17 +1449,17 @@ body.agent-ops-drawer-open { overflow: hidden; }
 }
 
 @media (max-width: 520px) {
-  .agent-ops-hero h1 { font-size: 2.25rem; }
+  .agent-ops-page { width: min(100% - 16px, 1500px); padding-top: 12px; }
+  .agent-ops-hero { padding: 20px; }
+  .agent-ops-hero h1 { font-size: 2rem; }
+  .agent-ops-hero p { font-size: 0.9rem; line-height: 1.5; }
   .agent-ops-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
-  .agent-ops-button { width: 100%; }
-  .agent-ops-actions .primary { grid-column: span 2; }
+  .agent-ops-button,
+  .agent-ops-actions .cockpit-help-button { width: 100%; }
+  .agent-ops-actions .cockpit-help-button span { display: inline; }
   .agent-ops-state { align-items: flex-start; flex-direction: column; }
   .agent-ops-state > div { align-items: flex-start; flex-wrap: wrap; }
-  .agent-ops-launchpad { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .agent-ops-launchpad a { grid-template-columns: 28px minmax(0, 1fr); }
-  .agent-ops-launchpad > a > i:first-child { width: 28px; height: 28px; }
-  .agent-ops-launchpad > a > i:last-child { display: none; }
-  .agent-ops-metrics { grid-template-columns: 1fr; }
+  .agent-ops-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-ops-metric { min-height: 96px; }
   .agent-ops-toolbar { align-items: stretch; flex-direction: column; }
   .agent-ops-runtime { grid-template-columns: 38px minmax(0, 1fr); }
@@ -1567,5 +1476,5 @@ body.agent-ops-drawer-open { overflow: hidden; }
 }
 
 @media (max-width: 360px) {
-  .agent-ops-launchpad { grid-template-columns: 1fr; }
+  .agent-ops-metrics { grid-template-columns: 1fr; }
 }

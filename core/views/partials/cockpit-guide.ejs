@@ -1,0 +1,52 @@
+<%
+  const guide = cockpitGuide || {};
+  const guideId = guide.id || 'cockpitGuide';
+  const guideTitleId = `${guideId}Title`;
+  const guideSections = Array.isArray(guide.sections) ? guide.sections : [];
+  const guideLinks = Array.isArray(guide.links) ? guide.links : [];
+%>
+<dialog class="cockpit-guide" id="<%= guideId %>" aria-labelledby="<%= guideTitleId %>">
+  <div class="cockpit-guide-shell">
+    <header class="cockpit-guide-head">
+      <div>
+        <span class="cockpit-guide-eyebrow"><i class="fas fa-compass"></i> Page guide</span>
+        <h2 id="<%= guideTitleId %>"><%= guide.title || 'How to use this cockpit' %></h2>
+        <% if (guide.summary) { %><p><%= guide.summary %></p><% } %>
+      </div>
+      <button class="cockpit-guide-close" type="button" data-cockpit-guide-close aria-label="Close page guide">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </header>
+
+    <ol class="cockpit-guide-steps">
+      <% guideSections.forEach((section, index) => { %>
+        <li>
+          <span class="cockpit-guide-step-number"><%= index + 1 %></span>
+          <div>
+            <strong><%= section.title %></strong>
+            <p><%= section.body %></p>
+          </div>
+        </li>
+      <% }) %>
+    </ol>
+
+    <% if (guide.note) { %>
+      <aside class="cockpit-guide-note">
+        <i class="fas fa-shield-halved"></i>
+        <div><strong><%= guide.note.title %></strong><p><%= guide.note.body %></p></div>
+      </aside>
+    <% } %>
+
+    <% if (guideLinks.length) { %>
+      <nav class="cockpit-guide-links" aria-label="Related operator surfaces">
+        <% guideLinks.forEach((link) => { %>
+          <a href="<%= link.href %>"<% if (link.external) { %> target="_blank" rel="noopener"<% } %>>
+            <i class="fas <%= link.icon || 'fa-arrow-right' %>"></i>
+            <span><strong><%= link.label %></strong><small><%= link.detail %></small></span>
+            <i class="fas <%= link.external ? 'fa-arrow-up-right-from-square' : 'fa-arrow-right' %>"></i>
+          </a>
+        <% }) %>
+      </nav>
+    <% } %>
+  </div>
+</dialog>

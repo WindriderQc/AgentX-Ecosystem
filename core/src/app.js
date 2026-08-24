@@ -658,6 +658,7 @@ app.get('/playground', (req, res) => {
       '<link rel="stylesheet" href="/css/chat-inline.css">',
       '<link rel="stylesheet" href="/css/chat-intelligence.css">',
       '<link rel="stylesheet" href="/css/playground-cockpit.css">',
+      '<link rel="stylesheet" href="/css/cockpit-help.css">',
       demo ? '<link rel="stylesheet" href="/css/demo-profile.css">' : ''
     ].join('\n'),
     footerJs: [
@@ -667,6 +668,7 @@ app.get('/playground', (req, res) => {
       demo ? '' : '<script src="/js/components/chat-intelligence.js"></script>',
       '<script src="/js/chat/chat-context-indicator.js"></script>',
       '<script src="/js/chat/chat-model-readiness.js"></script>',
+      '<script src="/js/cockpit-help.js"></script>',
       '<script src="/js/playground-cockpit.js"></script>',
       '<script type="module" src="/js/chat/chat-main.js"></script>'
     ].join('\n')
@@ -718,10 +720,12 @@ app.get('/agent-ops', (_req, res) => {
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
       '<link rel="stylesheet" href="/css/agent-ops.css">',
-      '<link rel="stylesheet" href="/css/agent-ops-advanced.css">'
+      '<link rel="stylesheet" href="/css/agent-ops-advanced.css">',
+      '<link rel="stylesheet" href="/css/cockpit-help.css">'
     ].join('\n'),
     footerJs: [
       '<script src="/js/agent-ops-advanced.js"></script>',
+      '<script src="/js/cockpit-help.js"></script>',
       '<script src="/js/agent-ops.js"></script>'
     ].join('\n')
   });
