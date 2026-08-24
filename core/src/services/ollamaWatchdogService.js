@@ -6,8 +6,11 @@
  * aborts a timed-out request on its side, but Ollama keeps processing the
  * inference. New requests queue behind the stuck one, creating a permanent jam.
  *
- * Detection: Send a tiny generation probe with a tight timeout.
- * If the probe times out but /api/ps still responds → inference queue is jammed.
+ * Detection: Ask /api/ps which models are loaded, then send one idle loaded
+ * model a one-token generation probe with a tight timeout. If the host has no
+ * loaded model, use a cheap invalid-model control-plane probe instead.
+ * If a loaded-model probe times out while /api/ps responds → inference queue
+ * is jammed or the resident worker is false-ready.
  * Recovery: Unload the model (keep_alive:0) to clear the queue, then optionally
  * reload it so it's warm for the next real request.
  *
@@ -56,10 +59,12 @@ const _stats = {
 // ── Core Logic ──────────────────────────────────────────────
 
 /**
- * Probe a single host by sending a minimal generate request.
+ * Probe a single host by sending a minimal generate request. When `model` is
+ * supplied this exercises the resident worker; the invalid sentinel is only a
+ * control-plane check for hosts with nothing loaded.
  * Returns { ok: true } or { ok: false, reason: string }.
  */
-async function probeHost(host) {
+async function probeHost(host, model = null) {
   const fetchFn = await getFetch();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -69,17 +74,25 @@ async function probeHost(host) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: '_',   // intentionally invalid — we just need to know if Ollama can accept requests
+        model: model || '_',
         prompt: 'ok',
         stream: false,
+        think: false,
+        keep_alive: -1,
         options: { num_predict: 1 }
       }),
       signal: controller.signal
     });
 
-    // Any response (even 404 "model not found") means the inference queue is NOT jammed
-    // A jammed Ollama will hang and never respond
-    return { ok: true, status: res.status };
+    // Any completed response means the request reached the worker/control
+    // plane. Model-capability errors are still useful responses; a jammed or
+    // false-ready worker hangs until the bounded timeout.
+    return {
+      ok: true,
+      status: res.status,
+      mode: model ? 'loaded-model' : 'control-plane',
+      model
+    };
   } catch (err) {
     if (err.name === 'AbortError' || err.type === 'aborted') {
       return { ok: false, reason: 'timeout' };
@@ -215,8 +228,27 @@ async function probeCycle() {
   _stats.lastProbeAt = new Date().toISOString();
 
   for (const host of hosts) {
-    _stats.probesSent++;
-    const result = await probeHost(host);
+    // Metadata is both the cheap reachability check and the source of truth for
+    // selecting a resident worker. Do it first so the watchdog never mistakes
+    // an offline host for a jam.
+    const meta = await checkMeta(host);
+    let result;
+
+    if (!meta.ok) {
+      result = { ok: false, reason: 'metadata_unreachable' };
+    } else {
+      const probeModel = meta.models.find(model => hostGate.inFlightFor(host.url, model) === 0) || null;
+
+      // A real AgentX call already exercises every loaded model. Do not queue a
+      // synthetic probe behind it; the next idle cycle will verify the worker.
+      if (meta.models.length > 0 && !probeModel) {
+        logger.debug(`[Watchdog] ${host.name} probe skipped — all loaded models have active inference`);
+        continue;
+      }
+
+      _stats.probesSent++;
+      result = await probeHost(host, probeModel);
+    }
 
     // Track fail→ok transitions to arm the recovery grace window. A recovering
     // host may queue cold model loads that exceed the probe timeout; without
@@ -247,17 +279,8 @@ async function probeCycle() {
       continue;
     }
 
-    // Probe timed out — verify metadata endpoint works
-    const meta = await checkMeta(host);
-    if (!meta.ok) {
-      // Both failed — host is down/overloaded, not a queue jam
-      _stats.probesFailed++;
-      _consecutiveFails.set(host.url, 0);
-      logger.debug(`[Watchdog] ${host.name} unreachable (metadata also failed)`);
-      continue;
-    }
-
-    // INFERENCE TIMED OUT but METADATA WORKS → likely a queue jam
+    // LOADED-MODEL INFERENCE TIMED OUT but METADATA WORKS → queue jam or a
+    // resident worker that is loaded according to /api/ps but emits no tokens.
     const fails = (_consecutiveFails.get(host.url) || 0) + 1;
     _consecutiveFails.set(host.url, fails);
     _stats.probesFailed++;
@@ -344,9 +367,6 @@ async function probeCycle() {
         }
       }
     } else if (unjamResult.skipped.length > 0 && unjamResult.errors.length === 0) {
-      // Every model the probe found had active in-flight inference. The jam
-      // probe uses an invalid model name so a true stuck model wouldn't show
-      // inFlight>0 in hostGate unless the caller is still actively awaiting.
       // Defer unjam to the next cycle rather than killing healthy callers.
       logger.info(`[Watchdog] ${host.name} jam deferred — all loaded models have active inference`, {
         hostUrl: host.url,
