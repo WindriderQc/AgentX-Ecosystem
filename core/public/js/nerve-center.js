@@ -209,11 +209,47 @@ const NerveCenter = (() => {
             chip.append(document.createTextNode(` Agent Ops · ${[source, agent].filter(Boolean).join(' · ') || focus}`));
             actions.prepend(chip);
         }
-        const alignSection = (behavior) => section.scrollIntoView({ behavior, block: 'start' });
+        const container = section.closest('.nc-container') || document.body;
+        const cancelEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+        let active = true;
+        let alignTimer = 0;
+        let stopTimer = 0;
+        let hasResizeBaseline = false;
+        const alignSection = (behavior) => {
+            if (active) section.scrollIntoView({ behavior, block: 'start' });
+        };
+        const observer = typeof window.ResizeObserver === 'function'
+            ? new window.ResizeObserver(() => {
+                if (!hasResizeBaseline) {
+                    hasResizeBaseline = true;
+                    return;
+                }
+                window.clearTimeout(alignTimer);
+                alignTimer = window.setTimeout(() => alignSection('auto'), 80);
+            })
+            : null;
+        const stopAlignment = () => {
+            if (!active) return;
+            active = false;
+            observer?.disconnect();
+            window.clearTimeout(alignTimer);
+            window.clearTimeout(stopTimer);
+            cancelEvents.forEach(eventName => window.removeEventListener(eventName, stopAlignment, true));
+        };
+
+        observer?.observe(container);
+        cancelEvents.forEach(eventName => window.addEventListener(eventName, stopAlignment, {
+            capture: true,
+            once: true,
+            passive: true
+        }));
         window.setTimeout(() => alignSection('smooth'), 120);
-        // Loaders above this section can change page height after the first jump.
-        // Re-align once so the sticky navigation never hides the handoff target.
-        window.setTimeout(() => alignSection('auto'), 900);
+        // Dynamic collectors can resize the sections above the target for a few
+        // seconds. Follow those reflows only while the operator stays idle.
+        stopTimer = window.setTimeout(() => {
+            alignSection('auto');
+            stopAlignment();
+        }, 8000);
     }
 
     function toggleSection(sectionId) {
