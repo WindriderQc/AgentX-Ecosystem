@@ -35,6 +35,9 @@ describe('cockpit contextual handoffs', () => {
     expect(source).toContain("section.classList.add('nc-context-focus')");
     expect(source).toContain("chip.className = 'nc-context-chip'");
     expect(source).toContain("params.get('from') !== 'agent-ops'");
+    expect(source).toContain("new window.ResizeObserver");
+    expect(source).toContain("['wheel', 'touchstart', 'pointerdown', 'keydown']");
+    expect(source).toContain("window.removeEventListener(eventName, stopAlignment, true)");
     expect(mode).toContain('queryTargetsDetail()');
   });
 });
