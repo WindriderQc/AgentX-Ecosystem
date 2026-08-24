@@ -1,6 +1,29 @@
 'use strict';
 
 const ECOSYSTEM_SNAPSHOT_SCHEMA_VERSION = 1;
+const DEFAULT_ECOSYSTEM_SNAPSHOT_TIMEOUT_MS = 7000;
+
+function positiveTimeout(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function collectWithinDeadline(collectors, timeoutMs) {
+  let timeoutId;
+  const deadline = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error(`Ecosystem snapshot collection timed out after ${timeoutMs}ms`);
+      error.code = 'ECOSYSTEM_SNAPSHOT_TIMEOUT';
+      reject(error);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([Promise.all(collectors), deadline]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 function assertBuilder(value, name) {
   if (typeof value !== 'function') {
@@ -57,10 +80,14 @@ async function buildEcosystemSnapshot(options = {}) {
   assertBuilder(buildIntelligence, 'buildIntelligence');
   assertBuilder(buildRoutingConfig, 'buildRoutingConfig');
 
-  const [intelligence, routingConfig] = await Promise.all([
-    buildIntelligence(),
-    buildRoutingConfig()
-  ]);
+  const timeoutMs = positiveTimeout(
+    options.timeoutMs ?? process.env.ECOSYSTEM_SNAPSHOT_TIMEOUT_MS,
+    DEFAULT_ECOSYSTEM_SNAPSHOT_TIMEOUT_MS
+  );
+  const [intelligence, routingConfig] = await collectWithinDeadline([
+    Promise.resolve().then(() => buildIntelligence()),
+    Promise.resolve().then(() => buildRoutingConfig())
+  ], timeoutMs);
   assertIntelligenceContract(intelligence);
   assertRoutingConfigContract(routingConfig);
 
@@ -87,6 +114,7 @@ async function buildEcosystemSnapshot(options = {}) {
 }
 
 module.exports = {
+  DEFAULT_ECOSYSTEM_SNAPSHOT_TIMEOUT_MS,
   ECOSYSTEM_SNAPSHOT_SCHEMA_VERSION,
   assertIntelligenceContract,
   assertRoutingConfigContract,
