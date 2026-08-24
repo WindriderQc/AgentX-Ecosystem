@@ -119,6 +119,40 @@
     return text.length > max ? `${text.slice(0, max - 1)}…` : text;
   }
 
+  function automationIncidentGuide(item) {
+    const evidence = [
+      item?.lastError,
+      item?.diagnostic,
+      ...asArray(item?.history).map((run) => run?.error)
+    ].filter(Boolean).join(' ');
+
+    if (/TOPIC[_\s-]*CLOSED/i.test(evidence)) {
+      return {
+        title: 'Delivery topic is closed',
+        owner: 'Channel administrator + runtime operator',
+        summary: 'The automation reached its delivery step, but the configured forum topic no longer accepts messages. The schedule and destination can remain unchanged.',
+        steps: [
+          'Reopen the configured topic in the owning chat platform.',
+          'If the bot should manage topic state itself, grant it the platform permission for managing topics.',
+          'Rerun the automation from the native cron history and confirm the newest receipt is successful.'
+        ]
+      };
+    }
+
+    return null;
+  }
+
+  function renderAutomationIncidentGuide(item) {
+    const guide = automationIncidentGuide(item);
+    if (!guide) return '';
+    return `
+      <section class="agent-ops-drawer-section warning agent-ops-remediation">
+        <div class="agent-ops-drawer-label"><span>${esc(guide.title)}</span><small>${esc(guide.owner)}</small></div>
+        <p>${esc(guide.summary)}</p>
+        <ol>${guide.steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>
+      </section>`;
+  }
+
   function normalizedNativePath(value) {
     const path = String(value || '/overview').trim();
     return /^\/[a-z0-9/_?=&.%-]*$/i.test(path) ? path : '/overview';
@@ -821,6 +855,7 @@
         </div>
         ${item.diagnostic ? `<p class="agent-ops-drawer-note">${esc(item.diagnostic)}</p>` : ''}
       </section>
+      ${renderAutomationIncidentGuide(item)}
       <section class="agent-ops-drawer-section">
         <div class="agent-ops-drawer-label"><span>Recent history</span><small>${recentHistory.length ? `${recentHistory.length} bounded receipts` : 'Latest receipt only'}</small></div>
         <div class="agent-ops-drawer-list">
