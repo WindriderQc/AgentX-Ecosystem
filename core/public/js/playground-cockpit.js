@@ -13,20 +13,15 @@
     deep: { label: 'Deep reasoning', task: 'Deep router', tone: 'router' },
     manual: { label: 'Manual route', task: 'Explicit choice', tone: 'manual' },
   };
-  const SERVICE_ICONS = { core: 'fa-bolt', benchmark: 'fa-flask', rag: 'fa-book-open', data: 'fa-database' };
-
   const elements = {
     toggle: document.getElementById('pgToggleCockpit'),
     focus: document.getElementById('pgFocusComposer'),
-    doorChat: document.getElementById('pgDoorChat'),
     config: document.getElementById('pgOpenConfiguration'),
     refresh: document.getElementById('pgRefreshCockpit'),
-    services: document.getElementById('pgServiceDeck'),
     hosts: document.getElementById('pgHostDeck'),
     serviceSummary: document.getElementById('pgServiceSummary'),
     fleetSummary: document.getElementById('pgFleetSummary'),
     updated: document.getElementById('pgCockpitUpdated'),
-    authority: document.getElementById('pgEcosystemAuthority'),
     routeState: document.getElementById('pgRouteState'),
     routeIntent: document.getElementById('pgRouteIntent'),
     routeDecision: document.getElementById('pgRouteDecision'),
@@ -84,7 +79,8 @@
     const meta = MODE_META[mode];
     const manual = mode === 'manual';
     const headerHost = statusField('host');
-    const selectedHost = selectedText(elements.hostInput, 'Choose a host');
+    const selectedHostEvidence = hostInventory.find((host) => normalize(host.url) === normalize(elements.hostInput?.value));
+    const selectedHost = selectedHostEvidence ? hostLabel(selectedHostEvidence) : selectedText(elements.hostInput, 'Choose a host');
     const routeReason = statusField('route');
 
     root.querySelectorAll('[data-playground-mode]').forEach((button) => {
@@ -133,38 +129,6 @@
     } finally {
       window.clearTimeout(timer);
     }
-  }
-
-  function makeServiceCard(service) {
-    const card = document.createElement('article');
-    const status = ['ok', 'degraded', 'down'].includes(service.status) ? service.status : 'unknown';
-    card.className = 'pg-service-card';
-    card.dataset.status = status;
-
-    const icon = document.createElement('i');
-    icon.className = `fas ${SERVICE_ICONS[service.id] || 'fa-circle-nodes'}`;
-    icon.setAttribute('aria-hidden', 'true');
-    const name = document.createElement('strong');
-    name.textContent = service.label || service.id || 'Service';
-    const detail = document.createElement('small');
-    const latency = Number.isFinite(service.latency_ms) ? ` · ${service.latency_ms} ms` : '';
-    detail.textContent = `${status}${latency}`;
-    card.title = Array.isArray(service.issues) && service.issues.length ? service.issues.join(' · ') : detail.textContent;
-    card.append(icon, name, detail);
-    return card;
-  }
-
-  function renderServices(services) {
-    if (!elements.services) return;
-    elements.services.replaceChildren();
-    if (!services.length) {
-      const empty = document.createElement('div');
-      empty.className = 'pg-empty';
-      empty.textContent = 'Product health is unavailable.';
-      elements.services.appendChild(empty);
-      return;
-    }
-    services.forEach((service) => elements.services.appendChild(makeServiceCard(service)));
   }
 
   function hostLabel(host) {
@@ -232,23 +196,14 @@
     syncHostCards();
   }
 
-  function resolvePublicLinks(config) {
-    const urls = config?.publicUrls || {};
-    root.querySelectorAll('[data-public-service]').forEach((link) => {
-      const base = String(urls[link.dataset.publicService] || '').replace(/\/+$/, '');
-      if (base) link.href = base + (link.dataset.publicPath || '/');
-    });
-  }
-
   async function refreshEvidence() {
     root.dataset.state = 'loading';
     if (elements.refresh) elements.refresh.disabled = true;
 
-    const [portalResult, ecosystemResult, hostsResult, configResult] = await Promise.allSettled([
+    const [portalResult, ecosystemResult, hostsResult] = await Promise.allSettled([
       getJson('/api/portal/health'),
       getJson('/api/nerve-center/ecosystem'),
       getJson('/api/ollama-hosts', 12_000),
-      getJson('/api/config'),
     ]);
 
     const portal = portalResult.status === 'fulfilled' ? portalResult.value : null;
@@ -258,9 +213,7 @@
     const hosts = Array.isArray(hostEnvelope?.data?.hosts) ? hostEnvelope.data.hosts : [];
     const services = Array.isArray(portal?.services) ? portal.services : [];
 
-    renderServices(services);
     renderHosts(hosts);
-    if (configResult.status === 'fulfilled') resolvePublicLinks(configResult.value);
 
     const total = Number(portal?.summary?.total || services.length || 0);
     const healthy = Number(portal?.summary?.healthy || services.filter((service) => service.status === 'ok').length || 0);
@@ -271,7 +224,6 @@
 
     setText(elements.serviceSummary, total ? `${healthy}/${total} product services ready` : 'Product health unavailable');
     setText(elements.fleetSummary, `${onlineHosts}/${configuredHosts} hosts online · ${observedModels} observed models`);
-    setText(elements.authority, ecosystem ? 'Schema 1 · Product evidence' : 'Ecosystem evidence unavailable');
     setText(elements.updated, `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
 
     if (!portal && !ecosystem && !hosts.length) root.dataset.state = 'error';
@@ -317,7 +269,6 @@
 
     elements.toggle?.addEventListener('click', () => setCollapsed(!root.classList.contains('is-collapsed')));
     elements.focus?.addEventListener('click', focusComposer);
-    elements.doorChat?.addEventListener('click', focusComposer);
     elements.config?.addEventListener('click', () => elements.toggleConfig?.click());
     elements.refresh?.addEventListener('click', refreshEvidence);
     root.querySelectorAll('[data-playground-mode]').forEach((button) => {

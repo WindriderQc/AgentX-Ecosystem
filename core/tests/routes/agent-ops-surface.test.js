@@ -18,6 +18,12 @@ describe('read-only Agent Ops shell', () => {
       expect(html).toContain(`data-agent-ops-tab="${tab}"`);
     }
     expect(html).toContain('read-only');
+    expect(html).toContain('data-cockpit-guide-open="agentOpsGuide"');
+    expect(html).toContain('id="agentOpsGuide"');
+    expect(html).toContain('data-cockpit-tip-title="Coverage"');
+    expect(html).not.toContain('agent-ops-launchpad');
+    expect(html).not.toContain('agent-ops-handoff-panel');
+    expect(html).not.toContain('id="agentOpsCapabilities"');
     expect(html).not.toMatch(/Confirm action|data-work-claim|agentOpsConfirm/);
   });
 
@@ -36,5 +42,6 @@ describe('read-only Agent Ops shell', () => {
     expect(source).not.toMatch(/method:\s*['"]POST['"]/);
     expect(source).not.toMatch(/Inspect & act/);
     expect(source).toContain('Recent history');
+    expect(source).not.toMatch(/renderRuntimeHandoff|renderCapabilities/);
   });
 });
