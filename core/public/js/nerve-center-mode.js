@@ -32,6 +32,13 @@
     }
   }
 
+  function queryTargetsDetail() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('from') !== 'agent-ops') return false;
+    var focus = String(params.get('focus') || '');
+    return ['routing', 'inference', 'inference-health', 'alerts', 'rag', 'performance'].indexOf(focus) !== -1;
+  }
+
   toggle.addEventListener('click', function () {
     setExpanded(!root.classList.contains('nc-show-details'), true);
   });
@@ -46,5 +53,5 @@
     if (target && target.classList.contains('nc-detail-only')) setExpanded(true, true);
   }, true);
 
-  setExpanded(storedPreference() || hashTargetsDetail(), false);
+  setExpanded(storedPreference() || hashTargetsDetail() || queryTargetsDetail(), false);
 }());
