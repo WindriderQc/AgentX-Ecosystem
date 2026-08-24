@@ -74,4 +74,15 @@ describe('ecosystemSnapshotService', () => {
       now: () => 'not-a-date'
     })).rejects.toThrow('Ecosystem snapshot timestamp is invalid');
   });
+
+  it('fails closed within the configured deadline when a collector hangs', async () => {
+    await expect(buildEcosystemSnapshot({
+      buildIntelligence: () => new Promise(() => {}),
+      buildRoutingConfig: async () => routingConfig,
+      timeoutMs: 5
+    })).rejects.toMatchObject({
+      code: 'ECOSYSTEM_SNAPSHOT_TIMEOUT',
+      message: 'Ecosystem snapshot collection timed out after 5ms'
+    });
+  });
 });
