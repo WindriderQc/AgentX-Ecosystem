@@ -5,6 +5,7 @@ process.env.OLLAMA_HOST = 'http://primary:11434';
 process.env.OLLAMA_HOST_SECONDARY = 'http://secondary:11434';
 process.env.OLLAMA_HOST_TERTIARY = 'http://tertiary:11434';
 process.env.MODEL_HEALTH_CACHE_TTL_MS = '0'; // Disable cache for tests
+process.env.MODEL_HEALTH_TIMEOUT_MS = '25';
 process.env.AGENTX_CODING_SPECIALIST_MODEL = 'ax/qwen3-coder:30b';
 
 const fetch = require('node-fetch');
@@ -184,6 +185,24 @@ describe('Model Router Service', () => {
                 expect(entry.status).toBe('online');
                 expect(Array.isArray(entry.models)).toBe(true);
             });
+        });
+
+        it('bounds unreachable hosts and reports them offline', async () => {
+            fetch.mockImplementation((_url, options) => new Promise((_resolve, reject) => {
+                options.signal.addEventListener('abort', () => {
+                    const error = new Error('The operation was aborted');
+                    error.name = 'AbortError';
+                    reject(error);
+                }, { once: true });
+            }));
+
+            const startedAt = Date.now();
+            const result = await modelRouter.getAllModelsHealth();
+
+            expect(Date.now() - startedAt).toBeLessThan(500);
+            expect(result).toHaveLength(3);
+            expect(result.every((entry) => entry.status === 'offline')).toBe(true);
+            expect(result.every((entry) => entry.error === 'The operation was aborted')).toBe(true);
         });
     });
 });

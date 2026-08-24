@@ -67,6 +67,10 @@ async function resolveClassificationRuntime(classificationHost, classificationMo
 
 const HEALTH_CACHE_TTL_MS = parseInt(process.env.MODEL_HEALTH_CACHE_TTL_MS || '1000', 10);
 const HEALTH_SLOW_THRESHOLD_MS = parseInt(process.env.MODEL_HEALTH_SLOW_THRESHOLD_MS || '6000', 10);
+const configuredHealthTimeoutMs = parseInt(process.env.MODEL_HEALTH_TIMEOUT_MS || '3000', 10);
+const MODEL_HEALTH_TIMEOUT_MS = Number.isFinite(configuredHealthTimeoutMs) && configuredHealthTimeoutMs > 0
+    ? configuredHealthTimeoutMs
+    : 3000;
 const _healthCache = new Map();
 
 async function getModelHealth(hostUrl, _model = null) {
@@ -417,10 +421,12 @@ async function checkHostHealth(hostKey) {
     }
 
     const start = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MODEL_HEALTH_TIMEOUT_MS);
 
     try {
         const url = `${host}/api/tags`;
-        const fetchOptions = getFetchOptions(url, { method: 'GET' });
+        const fetchOptions = getFetchOptions(url, { method: 'GET', signal: controller.signal });
         const response = await fetch(url, fetchOptions);
 
         const latency = Date.now() - start;
@@ -450,6 +456,8 @@ async function checkHostHealth(hostKey) {
             latency: Date.now() - start,
             error: err.message
         };
+    } finally {
+        clearTimeout(timeout);
     }
 }
 
