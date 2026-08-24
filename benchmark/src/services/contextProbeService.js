@@ -362,6 +362,44 @@ async function probeModelContext(modelName, options = {}) {
       throw new Error(`No valid context candidates for ${normalizedModel}`);
     }
 
+    // Test an already-loaded candidate before the ascending sweep changes
+    // num_ctx. Large resident models can otherwise spend most of Ollama's
+    // fixed request window reloading back to their original context. Cache the
+    // raw result here and assess it against the baseline when the sweep reaches
+    // that candidate, preserving the existing evidence and pass semantics.
+    let residentCandidate = null;
+    try {
+      const running = await listRunning(hostUrl, { timeoutMs: 8000 });
+      const resident = (running.models || []).find(item =>
+        isSameOllamaModel(item.name, normalizedModel) || isSameOllamaModel(item.model, normalizedModel)
+      );
+      const residentNumCtx = Number(resident?.context_length);
+      if (
+        Number.isFinite(residentNumCtx)
+        && residentNumCtx > coarseCandidates[0]
+        && coarseCandidates.includes(residentNumCtx)
+      ) {
+        probeNotify({ type: 'resident', numCtx: residentNumCtx, tokensPerSec: null });
+        residentCandidate = await runStep(
+          hostUrl,
+          normalizedModel,
+          residentNumCtx,
+          timeoutMs,
+          promptFillPct,
+          modelContext
+        );
+        probeNotify({
+          type: 'resident',
+          numCtx: residentNumCtx,
+          tokensPerSec: residentCandidate.tokensPerSec,
+          passed: residentCandidate.passed
+            && (residentCandidate.gpuPercent == null || residentCandidate.gpuPercent === 100)
+        });
+      }
+    } catch (err) {
+      logger.debug(`Could not pretest resident context for ${normalizedModel}: ${err.message}`);
+    }
+
     probeNotify({ type: 'baseline', numCtx: coarseCandidates[0], tokensPerSec: null });
     const baseline = await runStep(hostUrl, normalizedModel, coarseCandidates[0], timeoutMs, promptFillPct, modelContext);
     steps.push(baseline);
@@ -389,10 +427,10 @@ async function probeModelContext(modelName, options = {}) {
 
       // The fill percentage is fixed for a whole probe run so throughput
       // remains comparable across verified windows.
-      const evaluatedStep = assessProbeStep(
-        await runStep(hostUrl, normalizedModel, numCtx, timeoutMs, promptFillPct, modelContext),
-        baselineSpeed
-      );
+      const rawStep = residentCandidate?.numCtx === numCtx
+        ? residentCandidate
+        : await runStep(hostUrl, normalizedModel, numCtx, timeoutMs, promptFillPct, modelContext);
+      const evaluatedStep = assessProbeStep(rawStep, baselineSpeed);
 
       stepCache.set(numCtx, evaluatedStep);
       steps.push(evaluatedStep);

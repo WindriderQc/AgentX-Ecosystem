@@ -92,7 +92,7 @@ describe('contextProbeService', () => {
     }));
   });
 
-  it('allows a five-minute default for cold full-window context probes', () => {
+  it('allows a seven-minute client budget for full-window context probes', () => {
     const previousTimeout = process.env.CONTEXT_PROBE_TIMEOUT_MS;
     delete process.env.CONTEXT_PROBE_TIMEOUT_MS;
     try {
@@ -122,8 +122,10 @@ describe('contextProbeService', () => {
   });
 
   it('keeps slower long-context decode as performance evidence and verifies the full window', async () => {
+    const callOrder = [];
     ollamaClient.generate.mockImplementation(async (_hostUrl, payload) => {
       const numCtx = payload.options.num_ctx;
+      callOrder.push(numCtx);
       if (numCtx === 2048) {
         return { eval_count: 60, eval_duration: 1e9, prompt_eval_count: 1600 };
       }
@@ -154,6 +156,9 @@ describe('contextProbeService', () => {
       131072,
       262144
     ]));
+    expect(callOrder[0]).toBe(262144);
+    expect(callOrder[1]).toBe(2048);
+    expect(callOrder.filter(numCtx => numCtx === 262144)).toHaveLength(1);
   });
 
   it('does not manufacture a smaller window from a throughput threshold', async () => {

@@ -456,7 +456,12 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     acknowledgeMaintenance: true,
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
     onProgress: (info) => {
-      if (info.type === 'baseline') {
+      if (info.type === 'resident') {
+        const msg = info.tokensPerSec == null
+          ? `Validating resident ${_formatCtx(info.numCtx)} context before reload…`
+          : `Resident ${_formatCtx(info.numCtx)} context: ${info.tokensPerSec} tok/s ${info.passed ? '✓' : '✗'}`;
+        notify('context_probe', { message: msg });
+      } else if (info.type === 'baseline') {
         const msg = info.tokensPerSec == null
           ? `Measuring baseline at ${_formatCtx(info.numCtx)} ctx…`
           : `Baseline: ${info.tokensPerSec} tok/s at ${_formatCtx(info.numCtx)} ctx`;
