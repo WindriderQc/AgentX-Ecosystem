@@ -367,6 +367,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     try {
       thinkingProfile = await profileThinkingBehavior(modelName, hostUrl, {
         numCtx: testResult.numCtx || null,
+        maxNumCtx: testResult.numCtx || undefined,
         numPredict: 512,
         timeoutMs: Math.max(60000, (Number(settings.testTimeoutSec) || 60) * 1000)
       });

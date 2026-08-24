@@ -31,6 +31,7 @@ const artifactIdentityService = require('../../../src/services/profiler/artifact
 const hostProfileService = require('../../../src/services/profiler/hostProfileService');
 const settingsService = require('../../../src/services/profiler/settingsService');
 const liveProbeService = require('../../../src/services/profiler/liveProbeService');
+const thinkingProfileService = require('../../../src/services/profiler/thinkingProfileService');
 const ollamaClient = require('../../../src/clients/ollamaClient');
 const ModelProfile = require('../../../models/ModelProfile');
 const orchestrator = require('../../../src/services/profiler/profilerOrchestrator');
@@ -113,6 +114,27 @@ describe('profile', () => {
 
   it('retires adaptation explicitly', async () => {
     await expect(orchestrator.adapt()).rejects.toMatchObject({ statusCode: 410 });
+  });
+
+  it('probes thinking at the already-loaded throughput context', async () => {
+    settingsService.getAll.mockResolvedValue({
+      maxPromptTokens: 512,
+      numPredict: 32,
+      testTimeoutSec: 30,
+      throughputSamples: 1,
+      thinkingProbeEnabled: true,
+      collectHardwareTelemetry: false,
+      contextProbeFillPct: 80
+    });
+    thinkingProfileService.profileThinkingBehavior.mockResolvedValue({ recommendedPolicy: 'on' });
+
+    await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
+
+    expect(thinkingProfileService.profileThinkingBehavior).toHaveBeenCalledWith(
+      MODEL,
+      HOST_URL,
+      expect.objectContaining({ numCtx: 8192, maxNumCtx: 8192 })
+    );
   });
 });
 
