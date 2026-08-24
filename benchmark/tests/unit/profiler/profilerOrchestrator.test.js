@@ -95,6 +95,7 @@ describe('profile', () => {
   it('records evidence for the exact requested tag without creating another model', async () => {
     const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
     expect(hostTestService.testModelOnHost).toHaveBeenCalledWith(MODEL, HOST_URL, expect.any(Object));
+    expect(hostTestService.testModelOnHost.mock.calls[0][2]).not.toHaveProperty('numCtx');
     expect(performanceProfiles.saveProfile).toHaveBeenCalledWith(expect.objectContaining({
       modelName: MODEL,
       hostId: HOST_ID,
@@ -126,14 +127,33 @@ describe('profile', () => {
       collectHardwareTelemetry: false,
       contextProbeFillPct: 80
     });
+    ollamaClient.listRunning.mockResolvedValue({
+      models: [{ name: MODEL, context_length: 262144, size: 100, size_vram: 100 }]
+    });
+    hostTestService.testModelOnHost.mockImplementation(async (_model, _host, options) => ({
+      status: 'pass',
+      tokensPerSec: 42,
+      promptEvalTokensPerSec: 100,
+      timeToFirstTokenMs: 50,
+      promptTokens: 100,
+      requestedPromptTokens: 100,
+      promptWorkloadMode: 'fixed',
+      numCtx: options.numCtx || 4096,
+      vramUsedMiB: 4096
+    }));
     thinkingProfileService.profileThinkingBehavior.mockResolvedValue({ recommendedPolicy: 'on' });
 
     await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
 
+    expect(hostTestService.testModelOnHost).toHaveBeenCalledWith(
+      MODEL,
+      HOST_URL,
+      expect.objectContaining({ numCtx: 262144 })
+    );
     expect(thinkingProfileService.profileThinkingBehavior).toHaveBeenCalledWith(
       MODEL,
       HOST_URL,
-      expect.objectContaining({ numCtx: 8192, maxNumCtx: 8192 })
+      expect.objectContaining({ numCtx: 262144, maxNumCtx: 262144 })
     );
   });
 });
