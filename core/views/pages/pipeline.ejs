@@ -16,6 +16,15 @@
     </div>
   </header>
 
+  <section id="pipelineHandoffContext" class="pipeline-context" aria-live="polite" hidden>
+    <span class="pipeline-context-icon"><i class="fas fa-crosshairs"></i></span>
+    <div>
+      <strong id="pipelineContextTitle">Context from Agent Ops</strong>
+      <span id="pipelineContextDetail">The task list is focused without changing pipeline truth.</span>
+    </div>
+    <a href="/pipeline" title="Remove the Agent Ops context and show the full pipeline"><i class="fas fa-xmark"></i> Clear context</a>
+  </section>
+
   <section class="pipeline-banner" aria-label="Pipeline ownership">
     <div>
       <strong>Agent X owns the task contract.</strong>

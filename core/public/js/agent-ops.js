@@ -134,6 +134,30 @@
     return `href="${esc(openclawControlUrl(safePath))}" data-openclaw-native="${esc(safePath)}" target="_blank" rel="noopener"`;
   }
 
+  function contextualHref(path, params = {}) {
+    const query = new URLSearchParams({ from: 'agent-ops' });
+    Object.entries(params).forEach(([key, value]) => {
+      const text = String(value == null ? '' : value).trim();
+      if (text) query.set(key, text.slice(0, 160));
+    });
+    return `${path}?${query.toString()}`;
+  }
+
+  function nativeAgentPath(agent) {
+    const id = String(agent?.id || agent?.registryId || '').trim();
+    return /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(id)
+      ? `/agents?agent=${encodeURIComponent(id)}`
+      : '/agents';
+  }
+
+  function pipelineContextHref(params) {
+    return contextualHref('/pipeline', params);
+  }
+
+  function nerveContextHref(params) {
+    return contextualHref('/nerve-center', params);
+  }
+
   function surfaceLink(sourceId) {
     const links = {
       runtime: '/nerve-center',
@@ -453,7 +477,7 @@
           </div>
           <div class="agent-ops-agent-actions">
             <button type="button" data-agent-inspect="${esc(agent.registryId)}"><i class="fas fa-id-card"></i>Inspect dossier</button>
-            ${agentRuntimeLink(agent) ? `<a ${nativeControlAttributes('/agents')}><i class="fas fa-arrow-up-right"></i>Open native agent UI</a>` : ''}
+            ${agentRuntimeLink(agent) ? `<a ${nativeControlAttributes(nativeAgentPath(agent))} title="Open OpenClaw already focused on ${esc(agent.id)}"><i class="fas fa-arrow-up-right"></i>Open native agent UI</a>` : ''}
           </div>
         </div>
       </article>
@@ -531,13 +555,17 @@
         </div>
         <div>${badge(humanize(task.status), task.status)}</div>
         <div class="agent-ops-automation-cell"><span>Owner</span><strong>${esc(task.assignee || 'Unassigned')}</strong></div>
-        <div class="agent-ops-automation-cell agent-ops-work-action"><span>Updated</span><strong>${esc(task.updatedAt ? timeAgo(task.updatedAt) : '—')}</strong><a href="/pipeline"><i class="fas fa-arrow-up-right"></i>Open Pipeline</a></div>
+        <div class="agent-ops-automation-cell agent-ops-work-action"><span>Updated</span><strong>${esc(task.updatedAt ? timeAgo(task.updatedAt) : '—')}</strong><a href="${esc(pipelineContextHref({ task: task.pipelineId }))}" title="Open Pipeline focused on task ${esc(task.pipelineId)}"><i class="fas fa-arrow-up-right"></i>Open Pipeline</a></div>
       </article>
     `).join('') : empty('No active work matches this filter.', 'fa-clipboard-check');
   }
 
   function agentKey(value) {
     return String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-').replace(/[^a-z0-9-]/g, '');
+  }
+
+  function agentIdentityKeys(agent) {
+    return new Set([agent?.id, agent?.registryId, agent?.name].map(agentKey).filter(Boolean));
   }
 
   function compactSignalList(items, emptyLabel, renderItem) {
@@ -631,9 +659,9 @@
     const agent = asArray(state.data.agents).find((item) => item.registryId === registryId || item.id === registryId);
     if (!agent) return;
 
-    const key = agentKey(agent.registryId || agent.id);
-    const automations = asArray(state.data.automations).filter((item) => agentKey(item.ownerId) === key);
-    const work = asArray(state.data.work?.active).filter((item) => agentKey(item.assignee) === key);
+    const identityKeys = agentIdentityKeys(agent);
+    const automations = asArray(state.data.automations).filter((item) => identityKeys.has(agentKey(item.ownerId)));
+    const work = asArray(state.data.work?.active).filter((item) => identityKeys.has(agentKey(item.assignee)));
     const runtimeLink = agentRuntimeLink(agent);
     const fallbacks = asArray(agent.model?.fallbacks);
     const owns = asArray(agent.owns);
@@ -680,10 +708,10 @@
         </div>
       </section>
       <footer class="agent-ops-drawer-actions">
-        ${runtimeLink ? `<a class="agent-ops-button primary" ${nativeControlAttributes('/agents')}><i class="fas fa-arrow-up-right"></i>Open native agent UI</a>` : ''}
+        ${runtimeLink ? `<a class="agent-ops-button primary" ${nativeControlAttributes(nativeAgentPath(agent))} title="Open OpenClaw already focused on ${esc(agent.id)}"><i class="fas fa-arrow-up-right"></i>Open native agent UI</a>` : ''}
         <a class="agent-ops-button" href="/cluster-schedule"><i class="fas fa-calendar-days"></i>Open schedule</a>
-        <a class="agent-ops-button" href="/pipeline"><i class="fas fa-list-check"></i>Open pipeline</a>
-        <a class="agent-ops-button" href="/nerve-center"><i class="fas fa-brain"></i>Trace evidence</a>
+        <a class="agent-ops-button" href="${esc(pipelineContextHref({ assignee: agent.id, alias: agent.registryId }))}" title="Filter Pipeline to work assigned to ${esc(agent.name)} across registry and runtime identities"><i class="fas fa-list-check"></i>Open owned work</a>
+        <a class="agent-ops-button" href="${esc(nerveContextHref({ focus: 'health', source: agent.runtime, agent: agent.id }))}" title="Carry this agent context into Nerve Center"><i class="fas fa-brain"></i>Trace evidence</a>
       </footer>`;
 
     showDrawer({
@@ -741,7 +769,7 @@
         </section>` : ''}
       <footer class="agent-ops-drawer-actions">
         <a class="agent-ops-button primary" ${runtime.id === 'openclaw' ? nativeControlAttributes('/overview') : `href="${esc(runtimeLink)}"`}><i class="fas fa-arrow-up-right"></i>${runtime.id === 'openclaw' ? 'Open official Control UI' : 'Open runtime'}</a>
-        <a class="agent-ops-button" href="/nerve-center"><i class="fas fa-brain"></i>Trace topology</a>
+        <a class="agent-ops-button" href="${esc(nerveContextHref({ focus: 'cluster', source: runtime.id }))}" title="Carry this runtime context into Nerve Center"><i class="fas fa-brain"></i>Trace topology</a>
         <a class="agent-ops-button" href="/cluster-schedule"><i class="fas fa-calendar-days"></i>Open schedule</a>
       </footer>`;
 
@@ -817,7 +845,7 @@
         </section>` : ''}
       <footer class="agent-ops-drawer-actions">
         <a class="agent-ops-button primary" ${item.confidence === 'live' ? nativeControlAttributes('/cron') : `href="${esc(liveLink)}"`}><i class="fas fa-arrow-up-right"></i>${item.confidence === 'live' ? 'Open native cron history' : 'Open schedule'}</a>
-        <a class="agent-ops-button" href="/nerve-center"><i class="fas fa-brain"></i>Trace evidence</a>
+        <a class="agent-ops-button" href="${esc(nerveContextHref({ focus: 'health', source: item.source, agent: item.ownerId, automation: item.id }))}" title="Carry this automation context into Nerve Center"><i class="fas fa-brain"></i>Trace evidence</a>
       </footer>`;
 
     showDrawer({

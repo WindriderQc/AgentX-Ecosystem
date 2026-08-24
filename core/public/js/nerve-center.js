@@ -9,6 +9,16 @@ const NerveCenter = (() => {
     const STORAGE_KEY = 'nc_section_states';
     const HOT_STATES = new Set(['READY']);
     const HOST_ORDER = ['primary', 'secondary', 'tertiary'];
+    const CONTEXT_SECTIONS = {
+        cluster: 'sectionCluster',
+        routing: 'sectionRouting',
+        health: 'sectionHealth',
+        performance: 'sectionPerformance',
+        inference: 'sectionInference',
+        'inference-health': 'sectionInferenceHealth',
+        alerts: 'sectionAlerts',
+        rag: 'sectionRag'
+    };
 
     let _poller = null;
 
@@ -145,6 +155,7 @@ const NerveCenter = (() => {
     function init() {
         restoreSectionStates();
         expandHashSection();
+        setupHandoffContext();
         setupWidgetClicks();
         setupControls();
 
@@ -161,6 +172,48 @@ const NerveCenter = (() => {
         _poller = new window.PollingController();
         _poller.addTask('summary', loadSummary, POLL_INTERVAL);
         _poller.start();
+    }
+
+    function boundedContextParam(params, key, pattern, maxLength) {
+        const value = String(params.get(key) || '').trim();
+        if (!value || value.length > maxLength || (pattern && !pattern.test(value))) return '';
+        return value;
+    }
+
+    function setupHandoffContext() {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('from') !== 'agent-ops') return;
+
+        const focus = boundedContextParam(params, 'focus', /^(cluster|routing|health|performance|inference|inference-health|alerts|rag)$/, 24) || 'health';
+        const source = boundedContextParam(params, 'source', /^[a-z0-9][a-z0-9 ._:/-]*$/i, 80);
+        const agent = boundedContextParam(params, 'agent', /^[a-z0-9][a-z0-9 ._@-]*$/i, 80);
+        const automation = boundedContextParam(params, 'automation', /^[a-z0-9][a-z0-9._:-]*$/i, 120);
+        if (!source && !agent && !automation) return;
+
+        const banner = document.getElementById('ncHandoffContext');
+        const section = document.getElementById(CONTEXT_SECTIONS[focus]);
+        const labels = [source && `source ${source}`, agent && `agent ${agent}`, automation && `automation ${automation}`].filter(Boolean);
+        if (banner) {
+            banner.hidden = false;
+            document.getElementById('ncContextTitle').textContent = `Focused from Agent Ops · ${labels.join(' · ')}`;
+            document.getElementById('ncContextDetail').textContent = `Showing the ${focus.replace(/-/g, ' ')} evidence surface; live Nerve Center data remains authoritative.`;
+        }
+        if (!section) return;
+        section.classList.remove('collapsed');
+        section.classList.add('nc-context-focus');
+        const actions = section.querySelector('.nc-section-actions');
+        if (actions) {
+            const chip = document.createElement('span');
+            chip.className = 'nc-context-chip';
+            chip.innerHTML = '<i class="fas fa-crosshairs"></i>';
+            chip.append(document.createTextNode(` Agent Ops · ${[source, agent].filter(Boolean).join(' · ') || focus}`));
+            actions.prepend(chip);
+        }
+        const alignSection = (behavior) => section.scrollIntoView({ behavior, block: 'start' });
+        window.setTimeout(() => alignSection('smooth'), 120);
+        // Loaders above this section can change page height after the first jump.
+        // Re-align once so the sticky navigation never hides the handoff target.
+        window.setTimeout(() => alignSection('auto'), 900);
     }
 
     function toggleSection(sectionId) {

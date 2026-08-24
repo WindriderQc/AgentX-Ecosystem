@@ -59,6 +59,44 @@
     font-size: 0.95rem;
 }
 
+.nc-context {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    margin: 0 0 16px;
+    padding: 13px 15px;
+    border: 1px solid rgba(124, 240, 255, 0.34);
+    border-radius: 10px;
+    background: linear-gradient(90deg, rgba(14, 116, 144, 0.2), rgba(15, 23, 42, 0.76));
+}
+
+.nc-context[hidden] { display: none; }
+
+.nc-context-icon {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border-radius: 9px;
+    background: rgba(124, 240, 255, 0.12);
+    color: var(--accent);
+}
+
+.nc-context div { display: grid; gap: 3px; min-width: 0; }
+.nc-context strong { color: var(--text-bright); }
+.nc-context div span { color: var(--muted); font-size: 0.82rem; }
+.nc-context a {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--accent);
+    font-size: 0.8rem;
+    font-weight: 800;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
 /* ── Summary Strip ────────────────────────────────────────────── */
 
 .nc-summary-strip {
@@ -153,10 +191,33 @@
     margin-bottom: 14px;
     overflow: hidden;
     transition: border-color 0.3s ease;
+    scroll-margin-top: 76px;
 }
 
 .nc-section:hover {
     border-color: rgba(255, 255, 255, 0.1);
+}
+
+.nc-section.nc-context-focus {
+    border-color: rgba(124, 240, 255, 0.64);
+    box-shadow: 0 0 0 1px rgba(124, 240, 255, 0.12), 0 16px 34px rgba(0, 0, 0, 0.22);
+}
+
+.nc-context-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 320px;
+    padding: 4px 8px;
+    overflow: hidden;
+    border: 1px solid rgba(124, 240, 255, 0.3);
+    border-radius: 999px;
+    background: rgba(124, 240, 255, 0.08);
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Section accent colors */
@@ -1460,6 +1521,14 @@
 }
 
 @media (max-width: 640px) {
+    .nc-context {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .nc-context a {
+        grid-column: 1 / -1;
+    }
+
     .nc-view-controls {
         align-items: stretch;
         flex-direction: column;

@@ -7,7 +7,8 @@
 
   const state = {
     tasks: [],
-    loading: false
+    loading: false,
+    context: readContext()
   };
 
   const $ = (id) => document.getElementById(id);
@@ -20,6 +21,56 @@
       '"': '&quot;',
       "'": '&#39;'
     }[char]));
+  }
+
+  function boundedParam(params, key, pattern, maxLength = 160) {
+    const value = String(params.get(key) || '').trim();
+    if (!value || value.length > maxLength || (pattern && !pattern.test(value))) return '';
+    return value;
+  }
+
+  function readContext() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('from') !== 'agent-ops') return null;
+    const status = boundedParam(params, 'status', /^(queued|in_progress|review|blocked|done)$/);
+    const task = boundedParam(params, 'task', /^[a-z0-9._-]+$/i, 64);
+    const assignee = boundedParam(params, 'assignee', /^[a-z0-9][a-z0-9 ._@-]*$/i, 80);
+    const alias = boundedParam(params, 'alias', /^[a-z0-9][a-z0-9 ._@-]*$/i, 80);
+    return task || assignee || status ? { task, assignee, alias, status } : null;
+  }
+
+  function normalizedIdentity(value) {
+    return String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-').replace(/[^a-z0-9-]/g, '');
+  }
+
+  function matchesContext(task) {
+    const context = state.context;
+    if (!context) return true;
+    if (context.task && String(task.pipelineId) !== context.task) return false;
+    if (context.assignee) {
+      const acceptedOwners = new Set([context.assignee, context.alias].map(normalizedIdentity).filter(Boolean));
+      if (!acceptedOwners.has(normalizedIdentity(task.assignee))) return false;
+    }
+    if (context.status && task.status !== context.status) return false;
+    return true;
+  }
+
+  function contextDescription() {
+    const context = state.context;
+    if (!context) return '';
+    const parts = [];
+    if (context.task) parts.push(`task ${context.task}`);
+    if (context.assignee) parts.push(`owner ${context.assignee}${context.alias && normalizedIdentity(context.alias) !== normalizedIdentity(context.assignee) ? ` / ${context.alias}` : ''}`);
+    if (context.status) parts.push(`status ${formatStatus(context.status)}`);
+    return parts.join(' · ');
+  }
+
+  function renderContext() {
+    const banner = $('pipelineHandoffContext');
+    if (!banner || !state.context) return;
+    banner.hidden = false;
+    $('pipelineContextTitle').textContent = `Focused from Agent Ops · ${contextDescription()}`;
+    $('pipelineContextDetail').textContent = 'Counts remain global; the work table and attention list show only this bounded context.';
   }
 
   function formatStatus(value) {
@@ -117,8 +168,9 @@
     const meta = $('pipelineOpenMeta');
     if (!rows) return;
 
-    const openTasks = state.tasks
-      .filter((task) => task.status !== 'done')
+    const allOpenTasks = state.tasks.filter((task) => task.status !== 'done');
+    const openTasks = allOpenTasks
+      .filter(matchesContext)
       .sort((a, b) => {
         const statusDiff = (OPEN_ORDER[a.status] ?? 99) - (OPEN_ORDER[b.status] ?? 99);
         if (statusDiff) return statusDiff;
@@ -126,11 +178,13 @@
       });
 
     if (meta) {
-      meta.textContent = `${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} across ${state.tasks.length} loaded records`;
+      meta.textContent = state.context
+        ? `${openTasks.length} matching open task${openTasks.length === 1 ? '' : 's'} · ${allOpenTasks.length} open overall`
+        : `${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} across ${state.tasks.length} loaded records`;
     }
 
     if (!openTasks.length) {
-      rows.innerHTML = '<tr><td colspan="6" class="pipeline-empty">No open pipeline work in the loaded task window.</td></tr>';
+      rows.innerHTML = `<tr><td colspan="6" class="pipeline-empty">${state.context ? `No open work matches ${escapeHtml(contextDescription())}.` : 'No open pipeline work in the loaded task window.'}</td></tr>`;
       return;
     }
 
@@ -138,7 +192,7 @@
       const heartbeat = heartbeatText(task);
       const heartbeatClass = isStale(task) ? 'pipeline-error' : 'pipeline-subtle';
       return `
-        <tr>
+        <tr class="${state.context ? 'pipeline-row-context' : ''}" data-pipeline-task="${escapeHtml(task.pipelineId)}">
           <td class="pipeline-id">${escapeHtml(task.pipelineId)}</td>
           <td>
             <div class="pipeline-title">${escapeHtml(task.title || 'Untitled task')}</div>
@@ -155,7 +209,7 @@
 
   function attentionItems() {
     const items = [];
-    state.tasks.forEach((task) => {
+    state.tasks.filter(matchesContext).forEach((task) => {
       if (task.status === 'blocked') {
         items.push({
           rank: 0,
@@ -225,6 +279,7 @@
   }
 
   function renderAll() {
+    renderContext();
     renderCounts();
     renderOpenWork();
     renderAttention();
