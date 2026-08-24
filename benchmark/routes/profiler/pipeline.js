@@ -32,7 +32,7 @@ const STEPS_BY_DEPTH = {
 // host-preference claim so core's scheduler doesn't reap our claim mid-run.
 const ESTIMATED_DURATION_MS_BY_DEPTH = {
   quick:    5  * 60 * 1000,
-  standard: 20 * 60 * 1000,
+  standard: 30 * 60 * 1000,
   full:     45 * 60 * 1000
 };
 
