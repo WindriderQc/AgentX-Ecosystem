@@ -106,6 +106,39 @@ describe('trusted runtime services', () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  test('relays streaming bytes unchanged and records split final usage metadata', async () => {
+    const upstream = new PassThrough();
+    const deps = inferenceDeps({
+      fetch: jest.fn(async () => response({ stream: upstream }))
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat',
+      model: 'model-a',
+      messages: [{ role: 'user', content: 'hello' }],
+      stream: true
+    });
+    const expected = [
+      `${JSON.stringify({ message: { content: 'hé' }, done: false })}\n`,
+      '{"message":{"content":"llo"},"done":true,"prompt_eval_',
+      'count":10,"eval_count":4}\n'
+    ];
+
+    const received = [];
+    result.stream.on('data', (chunk) => received.push(chunk));
+    const ended = new Promise((resolve, reject) => {
+      result.stream.once('end', resolve);
+      result.stream.once('error', reject);
+    });
+    for (const chunk of expected) upstream.write(chunk);
+    upstream.end();
+    await ended;
+
+    expect(Buffer.concat(received).toString('utf8')).toBe(expected.join(''));
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'success', tokensIn: 10, tokensOut: 4
+    }));
+  });
+
   test('returns a bounded timeout error and releases admission', async () => {
     const release = jest.fn();
     const deps = inferenceDeps({

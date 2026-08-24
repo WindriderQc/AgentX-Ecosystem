@@ -1,11 +1,14 @@
 'use strict';
 
 const fetch = require('node-fetch');
+const { StringDecoder } = require('string_decoder');
+const { Transform } = require('stream');
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 900_000;
 const CONTRACT_VERSION = 1;
+const MAX_STREAM_TELEMETRY_LINE_CHARS = 65_536;
 const MODES = new Set(['chat', 'generate', 'embed']);
 const LOCAL_OPTION_KEYS = new Set([
   'num_ctx', 'num_predict', 'temperature', 'top_p', 'top_k', 'min_p', 'typical_p',
@@ -198,20 +201,104 @@ function releaseOnce(release) {
   };
 }
 
+function createStreamingTelemetryObserver() {
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  let discardingOversizedLine = false;
+  let tokensIn = 0;
+  let tokensOut = 0;
+
+  const observeLine = (rawLine) => {
+    let line = rawLine.trim();
+    if (!line) return;
+    if (line.startsWith('data:')) line = line.slice(5).trim();
+    if (!line || line === '[DONE]') return;
+
+    const data = safeJson(line);
+    const observedTokensIn = Number(data?.prompt_eval_count ?? data?.usage?.prompt_tokens);
+    const observedTokensOut = Number(data?.eval_count ?? data?.usage?.completion_tokens);
+    if (Number.isFinite(observedTokensIn) && observedTokensIn >= 0) tokensIn = observedTokensIn;
+    if (Number.isFinite(observedTokensOut) && observedTokensOut >= 0) tokensOut = observedTokensOut;
+  };
+
+  const consume = (text, final = false) => {
+    let cursor = 0;
+    while (cursor < text.length) {
+      const newline = text.indexOf('\n', cursor);
+      const end = newline === -1 ? text.length : newline;
+      const segment = text.slice(cursor, end);
+
+      if (!discardingOversizedLine) {
+        if (pending.length + segment.length <= MAX_STREAM_TELEMETRY_LINE_CHARS) {
+          pending += segment;
+        } else {
+          pending = '';
+          discardingOversizedLine = true;
+        }
+      }
+
+      if (newline === -1) break;
+      if (!discardingOversizedLine) observeLine(pending);
+      pending = '';
+      discardingOversizedLine = false;
+      cursor = newline + 1;
+    }
+
+    if (final) {
+      if (!discardingOversizedLine) observeLine(pending);
+      pending = '';
+      discardingOversizedLine = false;
+    }
+  };
+
+  return {
+    write(chunk, encoding) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+      consume(decoder.write(buffer));
+    },
+    end() {
+      consume(decoder.end(), true);
+    },
+    snapshot() {
+      return { prompt_eval_count: tokensIn, eval_count: tokensOut };
+    }
+  };
+}
+
 function attachStreamLifecycle(stream, { abortBridge, release, onComplete }) {
+  const observer = createStreamingTelemetryObserver();
+  const relay = new Transform({
+    transform(chunk, encoding, callback) {
+      observer.write(chunk, encoding);
+      callback(null, chunk);
+    },
+    flush(callback) {
+      observer.end();
+      callback();
+    }
+  });
   const finish = releaseOnce(() => {
     abortBridge.cleanup();
     release();
-    onComplete();
+    onComplete(observer.snapshot());
   });
-  stream.once('end', finish);
-  stream.once('close', finish);
-  stream.once('error', finish);
+  stream.once('error', (error) => relay.destroy(error));
+  stream.once('close', () => {
+    if (!stream.readableEnded && !relay.destroyed) relay.destroy();
+  });
+  relay.once('finish', finish);
+  relay.once('close', () => {
+    if (!stream.destroyed && !stream.readableEnded) stream.destroy();
+    finish();
+  });
+  relay.once('error', finish);
   abortBridge.signal.addEventListener('abort', () => {
     if (!stream.destroyed) stream.destroy(abortBridge.signal.reason || new Error('Inference request cancelled'));
+    if (!relay.destroyed) relay.destroy(abortBridge.signal.reason || new Error('Inference request cancelled'));
     finish();
   }, { once: true });
-  return stream;
+  stream.pipe(relay);
+  return relay;
 }
 
 function buildLocalPayload(request, model, options, keepAlive) {
@@ -500,9 +587,9 @@ async function executeRoutedInference(deps, request, options = {}) {
       const stream = attachStreamLifecycle(response.body, {
         abortBridge,
         release: releaseGate,
-        onComplete: () => {
+        onComplete: (data) => {
           void deps.recordInference(telemetryEntry(request, metadata, startedAt,
-            abortBridge.signal.aborted ? 'error' : 'success', null,
+            abortBridge.signal.aborted ? 'error' : 'success', data,
             abortBridge.signal.aborted ? 'cancelled' : null));
         }
       });
