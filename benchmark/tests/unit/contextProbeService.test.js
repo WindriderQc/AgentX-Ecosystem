@@ -92,6 +92,20 @@ describe('contextProbeService', () => {
     }));
   });
 
+  it('allows a five-minute default for cold full-window context probes', () => {
+    const previousTimeout = process.env.CONTEXT_PROBE_TIMEOUT_MS;
+    delete process.env.CONTEXT_PROBE_TIMEOUT_MS;
+    try {
+      expect(contextProbeService.getConfig().timeoutMs).toBe(300000);
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.CONTEXT_PROBE_TIMEOUT_MS;
+      } else {
+        process.env.CONTEXT_PROBE_TIMEOUT_MS = previousTimeout;
+      }
+    }
+  });
+
   it('builds coarse candidates up to 256k and preserves a non-power upper bound', () => {
     expect(contextProbeService._internal.buildCoarseCandidates(2048, 262144)).toEqual([
       2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144

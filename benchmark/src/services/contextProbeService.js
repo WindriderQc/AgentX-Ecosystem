@@ -18,7 +18,11 @@ const { normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 const { normalizeModelName, resolveModelNumCtxDetails } = require('./modelContextResolver');
 const logger = require('../../config/logger');
 
-const DEFAULT_TIMEOUT_MS = 120000;
+// Full-window probes can legitimately spend several minutes reloading a large
+// resident model and prefilling the requested context. Keep this above the
+// measured 233.6s Qwen 3.8 262K probe so a slow-but-valid load is not persisted
+// as a smaller verified context window.
+const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_MIN_CTX = 2048;
 const DEFAULT_MAX_CTX = 262144;
 // Decode length per probe step. The old value (16) only exercised prefill, so a
