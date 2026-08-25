@@ -94,6 +94,10 @@ async function validateJudgeModel(host, model, options = {}) {
                     model,
                     messages: [{ role: 'user', content: testPrompt }],
                     stream: false,
+                    // Keep the smoke-test aligned with the real judge path.
+                    // Thinking models can spend the whole 100-token allowance
+                    // in message.thinking and return an empty visible answer.
+                    think: false,
                     options: { num_predict: 100, temperature: 0.1 }
                 }),
                 signal: controller.signal
@@ -117,7 +121,7 @@ async function validateJudgeModel(host, model, options = {}) {
         }
 
         const data = await res.json();
-        const text = (data.message?.content || '').trim();
+        const text = String(data.message?.content ?? data.response ?? '').trim();
 
         // Try to parse JSON from response
         const firstBrace = text.indexOf('{');
@@ -126,7 +130,11 @@ async function validateJudgeModel(host, model, options = {}) {
             // Non-JSON response — model exists and responds, but didn't follow format.
             // Treat as valid with warning; actual judging quality is assessed at warmup.
             logger.warn('Judge model validation: response contains no JSON (model may need instruction tuning check)', {
-                model, host, text: text.substring(0, 200)
+                model,
+                host,
+                text: text.substring(0, 200),
+                visibleResponseEmpty: text.length === 0,
+                thinkingCharacters: String(data.message?.thinking || data.thinking || '').length
             });
             return {
                 valid: true,
