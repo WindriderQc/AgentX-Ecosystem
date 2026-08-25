@@ -58,6 +58,7 @@ const DECISION_MODES = Object.freeze({
   EXPLICIT_MODEL: 'explicit_model',
   EXPLICIT_TASK: 'explicit_task',
   CLASSIFIED: 'classified',
+  SHORT_CIRCUIT: 'classifier_short_circuit',
   DEFAULT: 'default',
   CHARACTERIZED: 'characterized',
 });
@@ -116,10 +117,11 @@ function normalizeRejections(rejections) {
  * an equality token, not a secret and not a reversible record.
  */
 function fingerprintRuntimeOptions(options) {
-  if (!options || typeof options !== 'object' || Array.isArray(options)) return null;
-  const keys = Object.keys(options).filter((key) => options[key] !== undefined).sort();
-  if (!keys.length) return null;
-  const canonical = keys.map((key) => `${key}=${JSON.stringify(options[key])}`).join('\u0000');
+  const normalized = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
+  const keys = Object.keys(normalized).filter((key) => normalized[key] !== undefined).sort();
+  const canonical = keys.length
+    ? keys.map((key) => `${key}=${JSON.stringify(normalized[key])}`).join('\u0000')
+    : '__agentx_runtime_defaults__';
   return crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 16);
 }
 
@@ -232,6 +234,7 @@ function buildRouteDecision(input = {}) {
 function characterizeRouteRequest(result = {}, context = {}) {
   let mode = DECISION_MODES.DEFAULT;
   if (result.taskType === 'user_specified') mode = DECISION_MODES.EXPLICIT_MODEL;
+  else if (result.shortCircuited) mode = DECISION_MODES.SHORT_CIRCUIT;
   else if (result.autoRouted) mode = DECISION_MODES.CLASSIFIED;
   else if (result.routed) mode = DECISION_MODES.EXPLICIT_TASK;
 
@@ -249,7 +252,8 @@ function characterizeRouteRequest(result = {}, context = {}) {
     requestedModel: mode === DECISION_MODES.EXPLICIT_MODEL ? result.model : context.requestedModel,
     classificationMs: result.classificationMs,
     degraded,
-    degradedReason: degraded ? `host_${trimmedOrNull(result.hostStatus, 32) || 'busy'}` : null,
+    degradedReason: result.shortCircuitReason
+      || (degraded ? `host_${trimmedOrNull(result.hostStatus, 32) || 'busy'}` : null),
     rejections: degraded
       ? [{ model: result.model, host: result.host, reason: REJECTION_REASONS.HOST_BUSY }]
       : context.rejections,

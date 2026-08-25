@@ -5,6 +5,11 @@ const conditionSchema = new mongoose.Schema({
   fact: { type: String, required: true },
   operator: { type: String, required: true, enum: ['equal', 'greaterThan', 'lessThan', 'greaterThanOrEqual', 'lessThanOrEqual', 'notEqual', 'contains', 'matches'] },
   value: { type: mongoose.Schema.Types.Mixed, required: true },
+  // Optional server-owned window materialization. The engine computes the
+  // named fact from the owning collection before evaluating the operator.
+  // Mixed keeps the condition contract extensible without accepting raw
+  // MongoDB queries; alertService allowlists every supported field.
+  window: { type: mongoose.Schema.Types.Mixed, default: undefined },
 }, { _id: false });
 
 const alertRuleSchema = new mongoose.Schema({

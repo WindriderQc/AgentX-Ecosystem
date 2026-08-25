@@ -1,5 +1,6 @@
 const alertService = require('../../src/services/alertService');
 const Alert = require('../../models/Alert');
+const InferenceLog = require('../../models/InferenceLog');
 const mongoose = require('mongoose');
 
 /**
@@ -22,12 +23,107 @@ describe('AlertService', () => {
   });
 
   afterAll(async () => {
-    await Alert.deleteMany({});
+    await Promise.all([Alert.deleteMany({}), InferenceLog.deleteMany({ callerDetail: 'alert-rate-test' })]);
     await mongoose.connection.close();
   });
 
   afterEach(async () => {
-    await Alert.deleteMany({});
+    await Promise.all([Alert.deleteMany({}), InferenceLog.deleteMany({ callerDetail: 'alert-rate-test' })]);
+  });
+
+  describe('Alert correctness regressions', () => {
+    test('missing template values render an explicit diagnostic instead of a truncated message', async () => {
+      alertService.loadRules([{
+        id: 'template-diagnostic',
+        name: 'Template diagnostic',
+        enabled: true,
+        severity: 'critical',
+        conditions: { all: [{ fact: 'metric', operator: 'equal', value: 'host_unreachable' }] },
+        title: 'Host down — {{host}}',
+        message: 'Ollama service {{detail}}',
+        channels: ['local_log']
+      }]);
+
+      const [alert] = await alertService.evaluateEvent({
+        component: 'ugbrutal',
+        metric: 'host_unreachable',
+        value: 1,
+        additionalData: { host: 'ugbrutal' }
+      });
+
+      expect(alert.message).toContain('Ollama service [missing:detail]');
+      expect(alert.message).toContain('template_error missing=detail');
+      expect(alert.message).toContain('host_unreachable');
+      expect(alert.message).not.toBe('Ollama service ');
+    });
+
+    test('an automatic resolve followed by refire is a flapping incident and escalates', async () => {
+      alertService.loadRules([{
+        id: 'flapping-host',
+        name: 'Flapping host',
+        enabled: true,
+        severity: 'error',
+        conditions: { all: [{ fact: 'metric', operator: 'equal', value: 'host_unreachable' }] },
+        title: 'Host unreachable — {{host}}',
+        message: '{{error}}',
+        channels: ['local_log']
+      }]);
+      const event = {
+        component: 'ugbrutal',
+        metric: 'host_unreachable',
+        additionalData: { host: 'ugbrutal', error: 'connection refused' }
+      };
+
+      const [first] = await alertService.evaluateEvent(event);
+      await first.resolve('system', 'auto-recovery', 'Reachability restored');
+      const [refired] = await alertService.evaluateEvent(event);
+      const [ongoing] = await alertService.evaluateEvent(event);
+
+      expect(refired.severity).toBe('critical');
+      expect(refired.title).toContain('FLAPPING');
+      expect(refired.title).toContain('2× in 6h');
+      expect(refired.metadata.flapping).toEqual(expect.objectContaining({ detected: true, count: 2 }));
+      expect(ongoing.title).toContain('FLAPPING');
+      expect(ongoing.metadata.flapping.count).toBe(2);
+    });
+
+    test('materializes a one-hour inference error-rate fact with a minimum sample gate', async () => {
+      const defaults = require('../../config/default-alert-rules.json');
+      const rateRule = defaults.find(rule => rule.id === 'inference-error-rate');
+      expect(rateRule).toBeTruthy();
+      const rows = Array.from({ length: 20 }, (_, index) => ({
+        host: 'http://test-ollama:11434',
+        model: 'test-model:latest',
+        caller: 'proxy',
+        callerDetail: 'alert-rate-test',
+        status: index < 2 ? 'error' : 'success',
+        timestamp: new Date()
+      }));
+      await InferenceLog.create(rows);
+      alertService.loadRules([rateRule]);
+
+      const [alert] = await alertService.evaluateEvent({
+        component: 'platform-inference',
+        metric: 'inference_completed',
+        source: 'test'
+      });
+
+      expect(alert.ruleId).toBe('inference-error-rate');
+      expect(alert.message).toContain('2 of 20 calls failed (10%) over 1h');
+      expect(alert.context.additionalData).toEqual(expect.objectContaining({
+        errorRate: 10,
+        errorRateNumerator: 2,
+        errorRateTotal: 20,
+        windowLabel: '1h'
+      }));
+    });
+
+    test('ships re-notification for both per-event and sustained inference failures', () => {
+      const defaults = require('../../config/default-alert-rules.json');
+      for (const id of ['inference-error', 'inference-error-rate']) {
+        expect(defaults.find(rule => rule.id === id)?.renotifyMs).toBeGreaterThan(0);
+      }
+    });
   });
 
   describe('Rule Loading', () => {

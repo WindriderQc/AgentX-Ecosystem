@@ -2,11 +2,13 @@
 const express = require('express');
 const router = express.Router();
 const InferenceLog = require('../models/InferenceLog');
+const { describeHost } = require('../src/services/hostIdentityService');
 
 const DEFAULT_HOURS = 24;
 const MAX_HOURS = 720;
 const DEFAULT_BUCKET_MINUTES = 60;
 const MAX_BUCKET_MINUTES = 1440;
+const COLD_START_SUSPECT_MS = 60000;
 
 function boundedPositiveInteger(value, fallback, maximum) {
     const parsed = parseInt(value, 10);
@@ -67,6 +69,8 @@ router.get('/host-summary', async (req, res) => {
 
         // Compute topModels from the pushed models array
         for (const r of results) {
+            r.count = r.callCount;
+            r.hostIdentity = describeHost(r.host);
             const freq = {};
             for (const m of r.models) freq[m] = (freq[m] || 0) + 1;
             r.topModels = Object.entries(freq)
@@ -106,6 +110,7 @@ router.get('/model-summary', async (req, res) => {
             }},
             { $sort: { callCount: -1 } },
         ]);
+        for (const result of results) result.count = result.callCount;
         res.json({ status: 'success', data: results });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
@@ -132,6 +137,7 @@ router.get('/caller-summary', async (req, res) => {
             }},
             { $sort: { callCount: -1 } },
         ]);
+        for (const result of results) result.count = result.callCount;
         res.json({ status: 'success', data: results });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
@@ -179,18 +185,24 @@ router.get('/timeline', async (req, res) => {
             b._latencies.push(...(r.latencies || []));
         }
 
-        const timeline = Object.values(bucketMap).map(b => {
+        const sparseTimeline = Object.values(bucketMap).map(b => {
             const sorted = b._latencies.filter(n => typeof n === 'number').sort((a, c) => a - c);
-            const p95Idx = Math.floor(sorted.length * 0.95);
+            const serving = sorted.filter(value => value < COLD_START_SUSPECT_MS);
+            const coldStarts = sorted.filter(value => value >= COLD_START_SUSPECT_MS);
+            const p95Idx = Math.floor(serving.length * 0.95);
             return {
                 bucket: b.bucket,
                 calls: b.calls,
-                avgLatencyMs: sorted.length ? Math.round(sorted.reduce((s, v) => s + v, 0) / sorted.length) : 0,
-                p95LatencyMs: sorted.length ? sorted[Math.min(p95Idx, sorted.length - 1)] : 0,
+                avgLatencyMs: serving.length ? Math.round(serving.reduce((s, v) => s + v, 0) / serving.length) : null,
+                p95LatencyMs: serving.length ? serving[Math.min(p95Idx, serving.length - 1)] : null,
                 errors: b.errors,
                 byHost: b.byHost,
+                coldStartSuspectedCount: coldStarts.length,
+                coldStartSuspectedMaxMs: coldStarts.length ? coldStarts[coldStarts.length - 1] : null,
             };
         });
+
+        const timeline = densifyTimeline(sparseTimeline, bucketMinutes);
 
         res.json({ status: 'success', data: timeline });
     } catch (err) {
@@ -198,5 +210,30 @@ router.get('/timeline', async (req, res) => {
     }
 });
 
+function densifyTimeline(timeline, bucketMinutes) {
+    if (!Array.isArray(timeline) || timeline.length < 2) return timeline || [];
+    const sorted = [...timeline].sort((left, right) => new Date(left.bucket) - new Date(right.bucket));
+    const stepMs = bucketMinutes * 60000;
+    const byTimestamp = new Map(sorted.map(bucket => [new Date(bucket.bucket).getTime(), bucket]));
+    const dense = [];
+    const start = new Date(sorted[0].bucket).getTime();
+    const end = new Date(sorted[sorted.length - 1].bucket).getTime();
+    for (let timestamp = start; timestamp <= end; timestamp += stepMs) {
+        dense.push(byTimestamp.get(timestamp) || {
+            bucket: new Date(timestamp).toISOString(),
+            calls: 0,
+            avgLatencyMs: null,
+            p95LatencyMs: null,
+            errors: 0,
+            byHost: {},
+            coldStartSuspectedCount: 0,
+            coldStartSuspectedMaxMs: null,
+        });
+    }
+    return dense;
+}
+
 module.exports = router;
 module.exports.buildFilter = buildFilter;
+module.exports.densifyTimeline = densifyTimeline;
+module.exports.COLD_START_SUSPECT_MS = COLD_START_SUSPECT_MS;

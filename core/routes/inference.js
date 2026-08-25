@@ -32,6 +32,7 @@ const {
   getAdvisoryModelForTask,
   getModelForTask,
   resolvePreferredTaskEntry,
+  getRoutingConfigVersion,
   resetAllTaskModelOverrides,
   resetTaskModelOverride,
   saveTaskModelOverride
@@ -67,6 +68,12 @@ const { trustedNestorConsumer } = require('../src/services/nestorConsumerAttribu
 const alertService = require('../src/services/alertService');
 const { summarizeOllamaOutcome } = require('../src/services/laneObservabilityService');
 const ragStore = getRagServiceClient();
+
+function safeRoutingConfigVersion() {
+    return typeof getRoutingConfigVersion === 'function'
+        ? getRoutingConfigVersion()
+        : 'router-unversioned-v1';
+}
 
 const INFERENCE_FETCH_TIMEOUT_MS =
   parseInt(process.env.INFERENCE_FETCH_TIMEOUT_MS, 10) || 600000;
@@ -330,6 +337,7 @@ router.post('/inference/embed', async (req, res) => {
     const buildEmbedDecision = ({ candidate, attempt, fallbackUsed, fallbackReason }) => {
         try {
             return buildRouteDecision({
+                configVersion: safeRoutingConfigVersion(),
                 mode: DECISION_MODES.EXPLICIT_MODEL,
                 caller: 'embedding',
                 callerDetail: body.callerDetail || null,
@@ -980,6 +988,7 @@ router.post('/inference/generate', async (req, res) => {
             else if (taskType) mode = DECISION_MODES.EXPLICIT_TASK;
 
             return buildRouteDecision({
+                configVersion: safeRoutingConfigVersion(),
                 mode,
                 taskType: taskType || null,
                 caller: 'proxy',

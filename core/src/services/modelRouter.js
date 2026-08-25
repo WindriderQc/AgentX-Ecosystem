@@ -26,7 +26,9 @@ const {
     getTargetForModel,
     getAdvisoryTargetForModel,
     getModelForTask,
-    getAdvisoryModelForTask
+    getAdvisoryModelForTask,
+    getRoutingConfigVersion,
+    getEquivalentClassifiableTarget
 } = require('./modelRouterConfig');
 
 async function getHostPinStatus(hostUrl) {
@@ -329,6 +331,27 @@ async function resolveRouteTarget(message, options = {}) {
 
     // If auto-routing enabled, classify the query
     if (autoRoute && message) {
+        const equivalent = getEquivalentClassifiableTarget();
+        if (equivalent) {
+            const recommendation = await getAdvisoryModelForTask(equivalent.representativeTaskType, {
+                caller,
+                durationMs,
+                createSoftClaim: true
+            });
+            return {
+                model: recommendation.model,
+                target: recommendation.url,
+                taskType: 'equivalent_route',
+                routed: true,
+                autoRouted: true,
+                classificationMs: 0,
+                host: recommendation.host,
+                source: recommendation.source,
+                claimId: recommendation.claimId,
+                shortCircuited: true,
+                shortCircuitReason: 'classifier_skipped_equivalent_model_and_host'
+            };
+        }
         const classificationStartedAt = Date.now();
         const classification = await classifyQuery(message);
         const classificationMs = Date.now() - classificationStartedAt;
@@ -390,6 +413,7 @@ async function routeRequest(message, options = {}) {
             attempt: options.attempt,
             requestedModel: options.preferredModel || null,
             runtimeOptions: options.runtimeOptions,
+            configVersion: getRoutingConfigVersion(),
             decisionMs: Date.now() - startedAt,
         });
     } catch (err) {

@@ -11,6 +11,7 @@ process.env.AGENTX_CODING_SPECIALIST_MODEL = 'ax/qwen3-coder:30b';
 const fetch = require('node-fetch');
 const logger = require('../../config/logger');
 const modelRouter = require('../../src/services/modelRouter');
+const modelRouterConfig = require('../../src/services/modelRouterConfig');
 const { resolveAdvisoryHost } = require('../../src/helpers/schedulerClient');
 
 // Mock dependencies
@@ -118,6 +119,60 @@ describe('Model Router Service', () => {
              fetch.mockRejectedValueOnce(new Error('Timeout'));
              const classification = await modelRouter.classifyQuery('fail');
              expect(classification).toBe('general_chat');
+        });
+
+        it('short-circuits classification when every classifiable lane has the same model and host', async () => {
+            await modelRouterConfig.ensureTaskModelOverridesLoaded();
+            const taskTypes = Object.keys(modelRouterConfig.CLASSIFIABLE_TASKS);
+            const originals = Object.fromEntries(taskTypes.map(taskType => [
+                taskType,
+                { ...modelRouterConfig.TASK_MODELS[taskType] }
+            ]));
+            try {
+                for (const taskType of taskTypes) {
+                    modelRouterConfig.TASK_MODELS[taskType] = {
+                        ...modelRouterConfig.TASK_MODELS[taskType],
+                        model: 'equivalent-model:latest',
+                        host: 'primary'
+                    };
+                }
+                fetch.mockClear();
+
+                const result = await modelRouter.routeRequest('classification cannot affect this route', {
+                    autoRoute: true,
+                    caller: 'unit-test'
+                });
+
+                expect(result).toEqual(expect.objectContaining({
+                    model: 'equivalent-model:latest',
+                    taskType: 'equivalent_route',
+                    shortCircuited: true,
+                    classificationMs: 0
+                }));
+                expect(result.decision.intent.mode).toBe('classifier_short_circuit');
+                expect(result.decision.degradedReason).toBe('classifier_skipped_equivalent_model_and_host');
+                expect(result.decision.configVersion).toMatch(/^router-[a-f0-9]{16}$/);
+                expect(result.decision.optionsFingerprint).toMatch(/^[a-f0-9]{16}$/);
+                expect(fetch.mock.calls.filter(([url]) => String(url).includes('/api/generate'))).toHaveLength(0);
+            } finally {
+                for (const [taskType, entry] of Object.entries(originals)) {
+                    modelRouterConfig.TASK_MODELS[taskType] = entry;
+                }
+            }
+        });
+
+        it('changes configVersion when effective routing configuration changes', () => {
+            const original = { ...modelRouterConfig.TASK_MODELS.analysis };
+            const before = modelRouterConfig.getRoutingConfigVersion();
+            try {
+                modelRouterConfig.TASK_MODELS.analysis = {
+                    ...original,
+                    model: `${original.model}-changed`
+                };
+                expect(modelRouterConfig.getRoutingConfigVersion()).not.toBe(before);
+            } finally {
+                modelRouterConfig.TASK_MODELS.analysis = original;
+            }
         });
     });
 

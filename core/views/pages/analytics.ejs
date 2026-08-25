@@ -54,11 +54,11 @@
                             <div class="value" id="infTokensOut">—</div>
                             <div class="sub"><span id="infTokensIn">—</span> prompt tokens in</div>
                         </div>
-                        <div class="stat-card" data-tooltip="Share of calls that returned error or timeout status.">
+                        <a class="stat-card" id="infErrorLink" href="/api/analytics/inference/logs?status=error%2Ctimeout" target="_blank" rel="noopener" data-tooltip="Share of calls that returned error or timeout status. Open the filtered inference log rows.">
                             <div class="label">Error Rate</div>
                             <div class="value" id="infErrorRate">—</div>
-                            <div class="sub"><span id="infErrors">—</span> failed calls</div>
-                        </div>
+                            <div class="sub"><span id="infErrors">—</span> failed calls · inspect</div>
+                        </a>
                         <div class="stat-card" data-tooltip="Total wall-clock time the fleet spent generating. This is the real cost of local inference — GPU hours, not dollars.">
                             <div class="label">Inference Time</div>
                             <div class="value" id="infHours">—</div>
@@ -88,6 +88,30 @@
                             <div class="sub" id="infCloudNote">—</div>
                         </div>
                     </div>
+                    <div class="stats-row">
+                        <div class="stat-card" data-tooltip="Mean classifier round-trip only among calls that actually invoked classification; zero-duration direct routes are excluded.">
+                            <div class="label">Avg Classifier Time</div>
+                            <div class="value" id="infAvgClassification">—</div>
+                            <div class="sub"><span id="infClassifiedCalls">—</span> classified calls</div>
+                        </div>
+                        <div class="stat-card" data-tooltip="Classifier time divided by end-to-end time for classified calls.">
+                            <div class="label">Classifier Overhead</div>
+                            <div class="value" id="infClassificationPct">—</div>
+                            <div class="sub"><span id="infClassifiedTotal">—</span> avg total for same calls</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="analytics-grid full">
+            <div class="section-card">
+                <div class="section-header">
+                    <h2><i class="fas fa-layer-group"></i> Routing Dimensions</h2>
+                    <span style="font-size:12px;color:var(--muted);">caller · task type · fallback · degraded</span>
+                </div>
+                <div class="section-body" id="infDimensionBreakdowns">
+                    <div style="color:var(--muted);">Loading…</div>
                 </div>
             </div>
         </div>

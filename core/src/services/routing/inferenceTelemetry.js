@@ -12,7 +12,7 @@
  */
 
 const logger = require('../../../config/logger');
-const { assertNoPayload } = require('./routeDecision');
+const { assertNoPayload, fingerprintRuntimeOptions } = require('./routeDecision');
 
 /**
  * Last line of defence before a decision is persisted for 30 days.
@@ -26,7 +26,21 @@ function sanitizedRouteDecision(decision) {
     if (!decision) return null;
     try {
         assertNoPayload(decision);
-        return decision;
+        let configVersion = decision.configVersion;
+        if (!configVersion) {
+            try {
+                configVersion = require('../modelRouterConfig').getRoutingConfigVersion();
+            } catch {
+                configVersion = 'router-unversioned-v1';
+            }
+        }
+        const enriched = {
+            ...decision,
+            configVersion,
+            optionsFingerprint: decision.optionsFingerprint || fingerprintRuntimeOptions(null)
+        };
+        assertNoPayload(enriched);
+        return enriched;
     } catch (err) {
         logger.warn('RouteDecision dropped before persistence', { error: err.message, code: err.code });
         return null;
@@ -104,6 +118,23 @@ async function recordInference(data) {
             timestamp: new Date()
         });
         telemetryId = row?._id?.toString?.() || null;
+
+        // Every persisted row advances windowed inference-rate detectors. The
+        // rule engine owns the query and threshold; telemetry emits only the
+        // fact that a row completed, so corrected built-ins take effect without
+        // duplicating rate policy in every inference route.
+        try {
+            const alertService = require('../alertService');
+            Promise.resolve(alertService.evaluateEvent({
+                component: 'platform-inference',
+                metric: 'inference_completed',
+                source: 'inference-telemetry'
+            })).catch(alertError => {
+                logger.warn('Inference rate alert dispatch failed (non-fatal)', { error: alertError.message });
+            });
+        } catch (alertError) {
+            logger.warn('Inference rate alert dispatch failed (non-fatal)', { error: alertError.message });
+        }
     } catch (_e) {
         // Never break inference because of telemetry failure. Kept at warn
         // (not debug) so silent schema drifts surface promptly — previously

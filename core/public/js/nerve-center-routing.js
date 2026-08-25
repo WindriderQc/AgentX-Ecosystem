@@ -458,7 +458,7 @@
                 <div class="nc-host-card nc-td-lg">
                     <div class="nc-label">Avg Classification</div>
                     <div class="nc-value">${formatMetricMs(summary.avgClassificationMs)}</div>
-                    <div class="nc-value-sub">LLM classification time when auto-routing</div>
+                    <div class="nc-value-sub">${formatMetricMs(summary.avgTotalForClassifiedMs)} total · ${summary.classificationOverheadPct || 0}% overhead · ${summary.classificationSamples || 0} calls</div>
                 </div>
             </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:20px;">

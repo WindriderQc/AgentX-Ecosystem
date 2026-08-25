@@ -32,6 +32,7 @@ const { getObservedFailoverStatus } = require('../src/services/failoverStatusSer
 const { buildEcosystemSnapshot: buildProductEcosystemSnapshot } = require('../src/services/ecosystemSnapshotService');
 const { calculateMessageCost } = require('../src/services/costCalculator');
 const InferenceLog = require('../models/InferenceLog');
+const { describeHost } = require('../src/services/hostIdentityService');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 
 // ========================================
@@ -134,7 +135,9 @@ function buildDistribution(items, keyField, valueField = 'count') {
       [keyField]: key,
       [valueField]: stats.count,
       avgDurationMs: roundMetric(stats.durationTotal / stats.count),
-      avgClassificationMs: roundMetric(stats.classificationTotal / stats.count),
+      avgClassificationMs: stats.classificationCount > 0
+        ? roundMetric(stats.classificationTotal / stats.classificationCount)
+        : 0,
       autoRouted: stats.autoRouted,
       percentage: 0
     }))
@@ -158,7 +161,10 @@ async function buildRoutingAnalytics(windowHours = 24, now = new Date()) {
     totalRequests: logs.length,
     autoRoutedCount: 0,
     avgDurationMs: 0,
-    avgClassificationMs: 0
+    avgClassificationMs: 0,
+    avgTotalForClassifiedMs: 0,
+    classificationOverheadPct: 0,
+    classificationSamples: 0
   };
 
   if (logs.length === 0) {
@@ -175,6 +181,7 @@ async function buildRoutingAnalytics(windowHours = 24, now = new Date()) {
   const hostBuckets = new Map();
   let durationTotal = 0;
   let classificationTotal = 0;
+  let classifiedDurationTotal = 0;
 
   for (const log of logs) {
     const taskType = log.taskType || 'unclassified';
@@ -186,28 +193,41 @@ async function buildRoutingAnalytics(windowHours = 24, now = new Date()) {
 
     durationTotal += durationMs;
     classificationTotal += classificationMs;
+    if (classificationMs > 0) {
+      summary.classificationSamples += 1;
+      classifiedDurationTotal += durationMs;
+    }
     if (autoRouted) summary.autoRoutedCount += 1;
 
     if (!taskBuckets.has(taskType)) {
-      taskBuckets.set(taskType, { count: 0, durationTotal: 0, classificationTotal: 0, autoRouted: 0 });
+      taskBuckets.set(taskType, { count: 0, durationTotal: 0, classificationTotal: 0, classificationCount: 0, autoRouted: 0 });
     }
     if (!modelBuckets.has(model)) {
-      modelBuckets.set(model, { count: 0, durationTotal: 0, classificationTotal: 0, autoRouted: 0 });
+      modelBuckets.set(model, { count: 0, durationTotal: 0, classificationTotal: 0, classificationCount: 0, autoRouted: 0 });
     }
     if (!hostBuckets.has(host)) {
-      hostBuckets.set(host, { count: 0, durationTotal: 0, classificationTotal: 0, autoRouted: 0 });
+      hostBuckets.set(host, { count: 0, durationTotal: 0, classificationTotal: 0, classificationCount: 0, autoRouted: 0 });
     }
 
     for (const bucket of [taskBuckets.get(taskType), modelBuckets.get(model), hostBuckets.get(host)]) {
       bucket.count += 1;
       bucket.durationTotal += durationMs;
       bucket.classificationTotal += classificationMs;
+      bucket.classificationCount += classificationMs > 0 ? 1 : 0;
       bucket.autoRouted += autoRouted ? 1 : 0;
     }
   }
 
   summary.avgDurationMs = roundMetric(durationTotal / logs.length);
-  summary.avgClassificationMs = roundMetric(classificationTotal / logs.length);
+  summary.avgClassificationMs = summary.classificationSamples > 0
+    ? roundMetric(classificationTotal / summary.classificationSamples)
+    : 0;
+  summary.avgTotalForClassifiedMs = summary.classificationSamples > 0
+    ? roundMetric(classifiedDurationTotal / summary.classificationSamples)
+    : 0;
+  summary.classificationOverheadPct = classifiedDurationTotal > 0
+    ? roundMetric((classificationTotal / classifiedDurationTotal) * 100)
+    : 0;
 
   const taskDistribution = buildDistribution(taskBuckets, 'taskType');
   const modelDistribution = buildDistribution(modelBuckets, 'model');
@@ -524,6 +544,9 @@ router.get('/inference/routing-config', async (_req, res) => {
       const pinnedNames = hostPrefService.getPinnedModelNames(pref);
       hosts[key] = {
         url,
+        name: describeHost(url, key).displayName,
+        role: key,
+        ip: describeHost(url, key).ip,
         pinnedModels: pinnedNames,
         maxConcurrentModels: pref.maxConcurrentModels || 1,
       };
@@ -627,6 +650,10 @@ router.get('/inference/activity', async (req, res) => {
       .sort({ timestamp: -1 })
       .limit(limit)
       .lean();
+    const presentedLogs = logs.map(log => ({
+      ...log,
+      hostIdentity: describeHost(log.host, log.hostKey)
+    }));
 
     // Aggregate stats for last hour
     const oneHourAgo = new Date(Date.now() - 3600000);
@@ -637,7 +664,7 @@ router.get('/inference/activity', async (req, res) => {
         _id: null,
         totalCalls: { $sum: 1 },
         avgLatencyMs: { $avg: '$durationMs' },
-        errorCount: { $sum: { $cond: [{ $eq: ['$status', 'error'] }, 1, 0] } },
+        errorCount: { $sum: { $cond: [{ $ne: ['$status', 'success'] }, 1, 0] } },
         byHost: { $push: '$host' },
         byModel: { $push: '$model' },
       }}
@@ -648,7 +675,7 @@ router.get('/inference/activity', async (req, res) => {
     res.json({
       status: 'success',
       data: {
-        logs,
+        logs: presentedLogs,
         stats: {
           lastHour: {
             totalCalls: hourStats.totalCalls,

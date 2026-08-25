@@ -33,6 +33,7 @@
  */
 
 const logger = require('../../config/logger');
+const crypto = require('crypto');
 const { resolveAdvisoryHost } = require('../helpers/schedulerClient');
 const {
     getModelReadiness,
@@ -138,6 +139,47 @@ const TASK_MODELS = cloneTaskModels(DEFAULT_TASK_MODELS);
 let taskModelOverrides = {};
 let taskOverridesLoaded = false;
 let taskOverridesLoadPromise = null;
+
+function canonicalRoutingConfig() {
+    refreshHosts();
+    const taskModels = Object.fromEntries(
+        Object.entries(TASK_MODELS)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([taskType, entry]) => [taskType, {
+                model: entry?.model || null,
+                host: entry?.host || null
+            }])
+    );
+    return {
+        hosts: Object.fromEntries(Object.entries(HOSTS).sort(([left], [right]) => left.localeCompare(right))),
+        taskModels,
+        classifier: { model: CLASSIFICATION_MODEL, host: CLASSIFICATION_HOST }
+    };
+}
+
+function getRoutingConfigVersion() {
+    const digest = crypto
+        .createHash('sha256')
+        .update(JSON.stringify(canonicalRoutingConfig()))
+        .digest('hex')
+        .slice(0, 16);
+    return `router-${digest}`;
+}
+
+function getEquivalentClassifiableTarget() {
+    const taskTypes = Object.keys(CLASSIFIABLE_TASKS);
+    const entries = taskTypes.map(taskType => ({ taskType, ...TASK_MODELS[taskType] }));
+    if (entries.length === 0 || entries.some(entry => !entry.model || !entry.host)) return null;
+    const targets = new Set(entries.map(entry => `${entry.model}\u0000${entry.host}`));
+    if (targets.size !== 1) return null;
+    const representative = entries.find(entry => entry.taskType === 'general_chat') || entries[0];
+    return {
+        model: representative.model,
+        host: representative.host,
+        representativeTaskType: representative.taskType,
+        equivalentTaskTypes: taskTypes
+    };
+}
 
 function classifierRespectsHostPin() {
     return String(process.env.AGENTX_CLASSIFIER_RESPECT_PRIMARY_PIN || 'true').toLowerCase() !== 'false';
@@ -627,6 +669,8 @@ module.exports = {
     getDefaultTaskModels,
     getTaskModelOverrides,
     getEffectiveTaskModels,
+    getRoutingConfigVersion,
+    getEquivalentClassifiableTarget,
     getTaskModelConfigState,
     ensureTaskModelOverridesLoaded,
     saveTaskModelOverride,

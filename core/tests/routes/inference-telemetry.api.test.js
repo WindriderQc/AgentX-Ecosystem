@@ -28,6 +28,7 @@ describe('Inference telemetry API', () => {
       {
         host: 'http://primary:11434',
         callCount: 4,
+        count: 4,
         avgLatencyMs: 250,
         errorCount: 1,
         errorRate: 25,
@@ -71,6 +72,7 @@ describe('Inference telemetry API', () => {
       data: [{
         host: 'http://primary:11434',
         callCount: 4,
+        count: 4,
         avgLatencyMs: 250,
         errorCount: 1,
         errorRate: 25,
@@ -79,7 +81,14 @@ describe('Inference telemetry API', () => {
         topModels: [
           { model: 'qwen3.5:9b', count: 3 },
           { model: 'nomic-embed-text:v1.5', count: 1 }
-        ]
+        ],
+        hostIdentity: {
+          key: 'http://primary:11434',
+          displayName: 'primary',
+          role: null,
+          ip: 'primary',
+          url: 'http://primary:11434'
+        }
       }]
     });
   });
@@ -122,7 +131,7 @@ describe('Inference telemetry API', () => {
     }));
   });
 
-  it('combines host rows into time buckets with weighted average and p95 latency', async () => {
+  it('combines host rows while keeping suspected cold starts off the serving-latency axis', async () => {
     const firstBucket = new Date('2026-07-17T01:00:00.000Z');
     const secondBucket = new Date('2026-07-17T01:15:00.000Z');
     mockAggregate.mockResolvedValueOnce([
@@ -131,7 +140,7 @@ describe('Inference telemetry API', () => {
         calls: 2,
         avgLatencyMs: 200,
         errors: 1,
-        latencies: [100, 300]
+        latencies: [100, 300, 80000]
       },
       {
         _id: { bucket: firstBucket, host: 'http://secondary:11434' },
@@ -166,7 +175,9 @@ describe('Inference telemetry API', () => {
         byHost: {
           'http://primary:11434': 2,
           'http://secondary:11434': 1
-        }
+        },
+        coldStartSuspectedCount: 1,
+        coldStartSuspectedMaxMs: 80000
       },
       {
         bucket: secondBucket.toISOString(),
@@ -174,9 +185,26 @@ describe('Inference telemetry API', () => {
         avgLatencyMs: 400,
         p95LatencyMs: 400,
         errors: 0,
-        byHost: { 'http://primary:11434': 1 }
+        byHost: { 'http://primary:11434': 1 },
+        coldStartSuspectedCount: 0,
+        coldStartSuspectedMaxMs: null
       }
     ]);
+  });
+
+  it('zero-fills empty timeline buckets between observed timestamps', () => {
+    const dense = telemetryRoutes.densifyTimeline([
+      { bucket: '2026-07-17T01:00:00.000Z', calls: 2 },
+      { bucket: '2026-07-17T03:00:00.000Z', calls: 1 },
+    ], 60);
+
+    expect(dense).toHaveLength(3);
+    expect(dense[1]).toEqual(expect.objectContaining({
+      bucket: '2026-07-17T02:00:00.000Z',
+      calls: 0,
+      avgLatencyMs: null,
+      byHost: {},
+    }));
   });
 
   it('bounds telemetry windows and timeline buckets to safe positive ranges', async () => {

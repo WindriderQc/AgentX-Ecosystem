@@ -6,11 +6,23 @@
     let _poller = null;
     let throughputChart = null;
     let latencyChart = null;
+    let _hostIdentityByUrl = new Map();
 
     const HOST_COLORS = ['#7cf0ff', '#4ade80', '#f59e0b', '#a78bfa', '#f97316'];
 
     function hostLabel(host) {
         return String(host || '--').replace(/^https?:\/\//, '').replace(/:11434$/, '');
+    }
+
+    function identityLabel(identity, fallback) {
+        return identity?.displayName || hostLabel(fallback);
+    }
+
+    function identitySecondary(identity) {
+        if (!identity) return '';
+        return [identity.role ? String(identity.role).toUpperCase() : '', identity.ip || '']
+            .filter(Boolean)
+            .join(' · ');
     }
 
     function hostColor(host) {
@@ -46,6 +58,11 @@
         const rows = entries.map(([task, entry]) => {
             const model = entry.model || '--';
             const host = entry.host || '--';
+            const hostConfig = hosts?.[host];
+            const hostName = typeof hostConfig === 'object' ? (hostConfig.name || host) : host;
+            const hostSecondary = typeof hostConfig === 'object'
+                ? [String(hostConfig.role || host).toUpperCase(), hostConfig.ip].filter(Boolean).join(' · ')
+                : '';
             const metadata = config.taskMetadata?.[task] || {};
             const isDefaultModel = isDefault(model, host, hosts);
             const statusHtml = isDefaultModel
@@ -59,7 +76,8 @@
                         <span class="nc-model-tag">${shared.escapeHtml(shared.shortModel(model))}</span>
                     </td>
                     <td class="nc-td-md nc-inf-task-host">
-                        <span style="font-weight:600;text-transform:uppercase;">${shared.escapeHtml(host)}</span>
+                        <span style="font-weight:600;">${shared.escapeHtml(hostName)}</span>
+                        ${hostSecondary ? `<div class="nc-muted" style="font-size:0.68rem;">${shared.escapeHtml(hostSecondary)}</div>` : ''}
                     </td>
                     <td class="nc-td-md">${statusHtml}</td>
                     <td style="padding:8px 10px;text-align:center;">
@@ -112,7 +130,13 @@
                 modelCell.innerHTML = `<select class="nc-inline-select" data-field="model">${modelOptions}</select>`;
                 hostCell.innerHTML = `
                     <select class="nc-inline-select" data-field="host">
-                        ${hostKeys.map(k => `<option value="${k}" ${k === current.host ? 'selected' : ''}>${k.toUpperCase()}</option>`).join('')}
+                        ${hostKeys.map(k => {
+                            const meta = hosts[k];
+                            const label = typeof meta === 'object'
+                                ? `${meta.name || k} · ${String(meta.role || k).toUpperCase()}${meta.ip ? ` · ${meta.ip}` : ''}`
+                                : k.toUpperCase();
+                            return `<option value="${k}" ${k === current.host ? 'selected' : ''}>${shared.escapeHtml(label)}</option>`;
+                        }).join('')}
                     </select>`;
                 actionCell.innerHTML = `
                     <button class="nc-btn nc-inf-task-save" data-task="${shared.escapeHtml(task)}" style="font-size:10px;padding:3px 8px;margin-right:4px;">
@@ -175,19 +199,20 @@
     function buildActivityTable(logs) {
         const rows = (logs || []).length > 0
             ? logs.map(log => {
-                const statusColor = log.error ? '#f87171'
-                    : log.timeout ? '#f59e0b'
+                const statusColor = log.status === 'error' ? '#f87171'
+                    : log.status === 'timeout' ? '#f59e0b'
                     : '#4ade80';
                 const latencyStr = log.durationMs != null ? `${Number(log.durationMs).toLocaleString('en-US')}ms` : '--';
                 const caller = log.taskType || log.caller || '--';
-                const hostLabel = log.hostName || shared.escapeHtml(log.hostKey || log.host || '--');
+                const primaryHostLabel = identityLabel(log.hostIdentity, log.hostKey || log.host || '--');
+                const secondaryHostLabel = identitySecondary(log.hostIdentity);
 
                 return `
                     <tr>
                         <td style="padding:6px 10px;font-size:0.8rem;color:var(--muted);" title="${log.timestamp ? new Date(log.timestamp).toLocaleString() : ''}">${shared.timeAgo(log.timestamp)}</td>
                         <td class="nc-td-sm"><span class="nc-model-tag">${shared.escapeHtml(caller.replace(/_/g, ' '))}</span></td>
                         <td class="nc-td-sm"><span class="nc-model-tag">${shared.escapeHtml(shared.shortModel(log.model))}</span></td>
-                        <td style="padding:6px 10px;font-weight:600;text-transform:uppercase;">${shared.escapeHtml(hostLabel)}</td>
+                        <td style="padding:6px 10px;font-weight:600;">${shared.escapeHtml(primaryHostLabel)}${secondaryHostLabel ? `<div class="nc-muted" style="font-size:0.68rem;font-weight:400;">${shared.escapeHtml(secondaryHostLabel)}</div>` : ''}</td>
                         <td style="padding:6px 10px;text-align:right;font-variant-numeric:tabular-nums;">${latencyStr}</td>
                         <td style="padding:6px 10px;text-align:center;"><span style="color:${statusColor}">●</span></td>
                     </tr>`;
@@ -226,6 +251,7 @@
             const buckets = timeline.data || timeline.buckets || timeline || [];
             const hostRows = hostSummary.data || hostSummary.hosts || hostSummary || [];
             const modelRows = modelSummary.data || modelSummary.models || modelSummary || [];
+            _hostIdentityByUrl = new Map(hostRows.map(row => [row.host, row.hostIdentity]));
 
             if (!Array.isArray(buckets) || buckets.length === 0) {
                 container.innerHTML = '<div class="nc-muted nc-td-p12">No telemetry data available yet.</div>';
@@ -247,7 +273,7 @@
 
             const throughputDatasets = [...hostKeys].map(host => {
                 const color = hostColor(host);
-                const label = hostLabel(host);
+                const label = identityLabel(_hostIdentityByUrl.get(host), host);
                 return {
                     label,
                     data: buckets.map(b => {
@@ -263,6 +289,8 @@
             // ── Latency: avg + p95 lines ──
             const avgLatencies = buckets.map(b => b.avgLatencyMs ?? b.avgLatency ?? null);
             const p95Latencies = buckets.map(b => b.p95LatencyMs ?? b.p95Latency ?? null);
+            const coldStartCount = buckets.reduce((sum, bucket) => sum + (bucket.coldStartSuspectedCount || 0), 0);
+            const coldStartMaxMs = Math.max(0, ...buckets.map(bucket => bucket.coldStartSuspectedMaxMs || 0));
 
             // ── Render HTML ──
             container.innerHTML = `
@@ -277,6 +305,11 @@
                         <h5 class="nc-section-heading">Latency (Avg / P95)</h5>
                         <div style="position:relative;height:200px;">
                             <canvas id="nc-latency-chart" height="200"></canvas>
+                        </div>
+                        <div class="nc-muted" style="font-size:0.72rem;margin-top:5px;">
+                            ${coldStartCount > 0
+                                ? `${coldStartCount} suspected cold start${coldStartCount === 1 ? '' : 's'} excluded from the serving-latency axis (max ${Number(coldStartMaxMs).toLocaleString('en-US')}ms).`
+                                : 'No ≥60s cold-start candidates in this window.'}
                         </div>
                     </div>
                 </div>
@@ -386,13 +419,15 @@
         }
         return rows.map(r => {
             const host = r.host || r._id || '--';
-            const label = shared.escapeHtml(hostLabel(host));
-            const calls = r.count ?? r.calls ?? '--';
+            const identity = r.hostIdentity;
+            const label = shared.escapeHtml(identityLabel(identity, host));
+            const secondary = identitySecondary(identity);
+            const calls = r.count ?? r.callCount ?? r.calls ?? '--';
             const avgLat = r.avgLatencyMs != null ? `${Math.round(r.avgLatencyMs)}ms` : '--';
             const errRate = r.errorRate != null ? `${r.errorRate.toFixed(1)}%` : '--';
             const tokens = r.tokensOut ?? r.totalTokensOut ?? '--';
             return `<tr>
-                <td class="nc-td-sm">${label}</td>
+                <td class="nc-td-sm">${label}${secondary ? `<div class="nc-muted" style="font-size:0.68rem;">${shared.escapeHtml(secondary)}</div>` : ''}</td>
                 <td class="nc-td-sm">${shared.escapeHtml(String(calls))}</td>
                 <td class="nc-td-sm">${shared.escapeHtml(avgLat)}</td>
                 <td class="nc-td-sm">${shared.escapeHtml(String(errRate))}</td>
@@ -407,10 +442,12 @@
         }
         return rows.map(r => {
             const model = r.model || r._id || '--';
-            const calls = r.count ?? r.calls ?? '--';
+            const calls = r.count ?? r.callCount ?? r.calls ?? '--';
             const avgLat = r.avgLatencyMs != null ? `${Math.round(r.avgLatencyMs)}ms` : '--';
             const errRate = r.errorRate != null ? `${r.errorRate.toFixed(1)}%` : '--';
-            const hosts = Array.isArray(r.hosts) ? r.hosts.map(hostLabel).join(', ') : hostLabel(r.hosts);
+            const hosts = Array.isArray(r.hosts)
+                ? r.hosts.map(host => identityLabel(_hostIdentityByUrl.get(host), host)).join(', ')
+                : identityLabel(_hostIdentityByUrl.get(r.hosts), r.hosts);
             return `<tr>
                 <td class="nc-td-sm"><span class="nc-model-tag">${shared.escapeHtml(shared.shortModel(model))}</span></td>
                 <td class="nc-td-sm">${shared.escapeHtml(String(calls))}</td>
@@ -432,11 +469,12 @@
 
     // ── Panel 5: Utilization Heatmap ───────────────────────────────
 
-    function heatmapColor(pct) {
-        if (pct <= 25) return 'rgba(74,222,128,0.2)';
-        if (pct <= 50) return 'rgba(74,222,128,0.5)';
-        if (pct <= 75) return 'rgba(245,158,11,0.5)';
-        return 'rgba(248,113,113,0.5)';
+    function heatmapColor(pct, observedMax) {
+        const ratio = observedMax > 0 ? pct / observedMax : 0;
+        if (ratio <= 0.25) return 'rgba(56,189,248,0.16)';
+        if (ratio <= 0.5) return 'rgba(56,189,248,0.32)';
+        if (ratio <= 0.75) return 'rgba(34,211,238,0.5)';
+        return 'rgba(14,165,233,0.75)';
     }
 
     async function renderHeatmap() {
@@ -446,7 +484,9 @@
         try {
             const json = await shared.fetchJson('/api/nerve-center/inference/heatmap?days=7');
             const data = json.data || {};
-            const hosts = data.hosts || [];
+            const hosts = (data.hosts || []).map(host => typeof host === 'string'
+                ? { key: host, displayName: host, role: null, ip: null }
+                : host);
             const days = data.days || [];
             const grid = data.grid || {};
 
@@ -458,33 +498,43 @@
             // Average across days for each host × hour
             const avgGrid = {};
             for (const host of hosts) {
-                avgGrid[host] = new Array(24).fill(0);
-                const matrix = grid[host] || [];
+                avgGrid[host.key] = new Array(24).fill(null);
+                const matrix = grid[host.key] || [];
                 if (matrix.length === 0) continue;
                 for (let h = 0; h < 24; h++) {
-                    let sum = 0;
+                    const observations = [];
                     for (let d = 0; d < matrix.length; d++) {
-                        sum += (matrix[d] && matrix[d][h]) || 0;
+                        const value = matrix[d] && matrix[d][h];
+                        if (value !== null && value !== undefined) observations.push(Number(value) || 0);
                     }
-                    avgGrid[host][h] = Math.round(sum / matrix.length);
+                    avgGrid[host.key][h] = observations.length
+                        ? Math.round(observations.reduce((sum, value) => sum + value, 0) / observations.length)
+                        : null;
                 }
             }
+            const observed = Object.values(avgGrid).flat().filter(value => value !== null);
+            const observedMax = observed.length ? Math.max(...observed) : 0;
 
             const hourHeaders = Array.from({ length: 24 }, (_, i) => `<th style="padding:4px 2px;font-size:0.7rem;text-align:center;min-width:28px;">${i}</th>`).join('');
 
             const rows = hosts.map(host => {
-                const cells = avgGrid[host].map(pct => {
-                    const bg = heatmapColor(pct);
-                    return `<td style="background:${bg};text-align:center;padding:4px 2px;font-size:0.7rem;">${pct}%</td>`;
+                const cells = avgGrid[host.key].map(pct => {
+                    if (pct === null) {
+                        return '<td title="No telemetry" style="background:repeating-linear-gradient(135deg,rgba(148,163,184,0.05),rgba(148,163,184,0.05) 4px,rgba(148,163,184,0.14) 4px,rgba(148,163,184,0.14) 8px);text-align:center;padding:4px 2px;font-size:0.7rem;color:var(--muted);">—</td>';
+                    }
+                    const bg = heatmapColor(pct, observedMax);
+                    return `<td title="${pct}% absolute utilization · relative color scale max ${observedMax}%" style="background:${bg};text-align:center;padding:4px 2px;font-size:0.7rem;">${pct}%</td>`;
                 }).join('');
-                return `<tr><td style="padding:4px 8px;font-weight:600;white-space:nowrap;">${shared.escapeHtml(host)}</td>${cells}</tr>`;
+                const secondary = identitySecondary(host);
+                return `<tr><td style="padding:4px 8px;font-weight:600;white-space:nowrap;">${shared.escapeHtml(host.displayName || host.key)}${secondary ? `<div class="nc-muted" style="font-size:0.64rem;font-weight:400;">${shared.escapeHtml(secondary)}</div>` : ''}</td>${cells}</tr>`;
             }).join('');
 
             container.innerHTML = `
                 <table class="nc-table" id="nc-heatmap-table" style="font-variant-numeric:tabular-nums;">
                     <thead><tr><th style="padding:4px 8px;">Host</th>${hourHeaders}</tr></thead>
                     <tbody>${rows}</tbody>
-                </table>`;
+                </table>
+                <div class="nc-muted" style="font-size:0.7rem;margin-top:5px;">Color is normalized to the observed maximum (${observedMax}%); hatched cells mean no telemetry, while 0% is a measured zero.</div>`;
         } catch (err) {
             console.warn('[NerveCenter] Heatmap data unavailable', err);
             container.innerHTML = '<div class="nc-muted nc-td-p12">Heatmap data unavailable.</div>';

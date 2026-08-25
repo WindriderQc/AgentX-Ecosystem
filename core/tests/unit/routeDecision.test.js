@@ -9,6 +9,7 @@ const {
   fingerprintRuntimeOptions,
   assertNoPayload,
 } = require('../../src/services/routing/routeDecision');
+const { sanitizedRouteDecision } = require('../../src/services/routing/inferenceTelemetry');
 
 describe('RouteDecision v1 contract (0519)', () => {
   test('carries every contract field with stable names', () => {
@@ -102,8 +103,14 @@ describe('RouteDecision v1 contract (0519)', () => {
 
     expect(a).toBe(b);          // key order is not a behaviour change
     expect(a).not.toBe(c);      // a num_ctx change is (it rebuilds the runner)
-    expect(fingerprintRuntimeOptions({})).toBeNull();
-    expect(fingerprintRuntimeOptions(null)).toBeNull();
+    expect(fingerprintRuntimeOptions({})).toMatch(/^[a-f0-9]{16}$/);
+    expect(fingerprintRuntimeOptions(null)).toBe(fingerprintRuntimeOptions({}));
+  });
+
+  test('the telemetry writer backfills routing and options provenance instead of persisting nulls', () => {
+    const decision = sanitizedRouteDecision(buildRouteDecision({ selectedModel: 'model:1' }));
+    expect(decision.configVersion).toMatch(/^router-(?:[a-f0-9]{16}|unversioned-v1)$/);
+    expect(decision.optionsFingerprint).toMatch(/^[a-f0-9]{16}$/);
   });
 
   describe('privacy guarantee', () => {
