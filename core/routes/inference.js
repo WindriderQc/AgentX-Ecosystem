@@ -1074,6 +1074,12 @@ router.post('/inference/generate', async (req, res) => {
         routingTrace: attemptTrace,
         num_ctx: attemptOptions?.num_ctx ?? null,
         num_ctx_source: attemptNumCtxSource,
+        // Captured before dispatch from Core's context-budget estimator, so a
+        // timeout with tokensIn=0 still records how large the request was.
+        estimatedInputTokensAtDispatch:
+            attemptContract?.contextBudget?.input?.estimatedTokens
+            ?? attemptContract?.input?.estimatedTokens
+            ?? null,
         tokensIn: attemptData?.prompt_eval_count || 0,
         tokensOut: attemptData?.eval_count || 0,
         fallbackUsed,

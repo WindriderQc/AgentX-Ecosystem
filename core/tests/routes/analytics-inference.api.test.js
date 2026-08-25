@@ -192,6 +192,7 @@ describe('inference analytics summary', () => {
         classificationMs: 400, classifiedCalls: 2, classifiedDurationMs: 4000
       }],
       byTaskType: [{ _id: 'analysis', calls: 4, errors: 1, durationMs: 4000 }],
+      byCallerDetail: [{ _id: 'hermes-runtime-bridge', calls: 24, errors: 7, durationMs: 24000 }],
       byFallbackUsed: [{ _id: true, calls: 2, errors: 1, durationMs: 2000 }],
       byDegraded: [{ _id: true, calls: 1, errors: 1, durationMs: 1000 }],
     }));
@@ -204,6 +205,9 @@ describe('inference analytics summary', () => {
       classificationOverheadPct: 10,
     }));
     expect(res.body.data.byTaskType[0].taskType).toBe('analysis');
+    expect(res.body.data.byCallerDetail[0]).toMatchObject({
+      callerDetail: 'hermes-runtime-bridge', calls: 24, errorRate: 29.17
+    });
     expect(res.body.data.byFallbackUsed[0].fallbackUsed).toBe(true);
     expect(res.body.data.byDegraded[0].degraded).toBe(true);
   });
@@ -219,7 +223,7 @@ describe('inference analytics summary', () => {
     const res = await request(server)
       .get('/api/analytics/inference/logs')
       .query({
-        status: 'error,timeout', caller: 'proxy', taskType: 'analysis',
+        status: 'error,timeout', caller: 'proxy', callerDetail: 'hermes-runtime-bridge', taskType: 'analysis',
         model: 'model:1', host: 'http://primary:11434',
         from: '2026-08-20T00:00:00.000Z', to: '2026-08-21T00:00:00.000Z',
         page: 2, pageSize: 500,
@@ -230,6 +234,7 @@ describe('inference analytics summary', () => {
     expect(filter).toEqual(expect.objectContaining({
       status: { $in: ['error', 'timeout'] },
       caller: 'proxy',
+      callerDetail: 'hermes-runtime-bridge',
       taskType: 'analysis',
       model: 'model:1',
       host: 'http://primary:11434',

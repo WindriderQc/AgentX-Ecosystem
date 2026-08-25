@@ -59,6 +59,9 @@ const InferenceLogSchema = new mongoose.Schema({
   num_ctx_source: { type: String, default: null },
 
   // Performance
+  // Estimate captured before dispatch. Unlike tokensIn, this remains available
+  // when the upstream request times out before returning usage metadata.
+  estimatedInputTokensAtDispatch: { type: Number, min: 0, default: null },
   tokensIn: { type: Number, default: 0 },
   tokensOut: { type: Number, default: 0 },
   durationMs: { type: Number, default: 0 },

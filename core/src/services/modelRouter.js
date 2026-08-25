@@ -524,25 +524,6 @@ function getActiveHost() {
 }
 
 /**
- * Get backup host URL
- * @returns {string} Backup host URL
- */
-function getBackupHost() {
-    refreshHosts();
-    const current = getActiveHost();
-    if (current === HOSTS.primary) {
-        return HOSTS.secondary || HOSTS.tertiary || HOSTS.primary;
-    }
-    if (current === HOSTS.secondary) {
-        return HOSTS.primary || HOSTS.tertiary || HOSTS.secondary;
-    }
-    if (current === HOSTS.tertiary) {
-        return HOSTS.secondary || HOSTS.primary || HOSTS.tertiary;
-    }
-    return HOSTS.primary || HOSTS.secondary || HOSTS.tertiary;
-}
-
-/**
  * Get health and model inventory across all configured hosts.
  * @returns {Promise<Array<{hostKey: string, hostUrl: string, status: string, latency: number, models: string[], error?: string, checkedAt: string}>>}
  */
@@ -665,7 +646,6 @@ module.exports = {
     getRoutingStatus,
     getAllModelsHealth,
     getActiveHost,
-    getBackupHost,
     switchHost,
     getFailoverStatus,
     resetToPrimary,

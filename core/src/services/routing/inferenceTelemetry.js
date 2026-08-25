@@ -12,7 +12,11 @@
  */
 
 const logger = require('../../../config/logger');
-const { assertNoPayload, fingerprintRuntimeOptions } = require('./routeDecision');
+const {
+    assertNoPayload,
+    buildRouteDecision,
+    fingerprintRuntimeOptions
+} = require('./routeDecision');
 
 /**
  * Last line of defence before a decision is persisted for 30 days.
@@ -47,6 +51,39 @@ function sanitizedRouteDecision(decision) {
     }
 }
 
+function decisionForTelemetry(data = {}) {
+    if (data.routeDecision) return sanitizedRouteDecision(data.routeDecision);
+    try {
+        return sanitizedRouteDecision(buildRouteDecision({
+            configVersion: data.configVersion,
+            caller: data.caller,
+            callerDetail: data.callerDetail,
+            consumerContract: data.consumerContract,
+            correlationId: data.correlationId,
+            workItemId: data.workItemId,
+            runtime: data.runtime,
+            taskType: data.taskType,
+            selectedModel: data.routedModel || data.model,
+            selectedHost: data.routedHost,
+            selectedHostUrl: data.routedHostUrl || data.host,
+            actualModel: data.model,
+            actualHost: data.hostKey || data.routedHost,
+            actualHostUrl: data.host || data.routedHostUrl,
+            attempt: data.attempt,
+            fallbackUsed: data.fallbackUsed,
+            fallbackReason: data.fallbackReason,
+            degraded: data.degraded,
+            degradedReason: data.degradedReason,
+            runtimeOptions: data.runtimeOptions,
+            classificationMs: data.classificationMs,
+            totalMs: data.durationMs
+        }));
+    } catch (err) {
+        logger.warn('RouteDecision could not be synthesized for telemetry', { error: err.message });
+        return null;
+    }
+}
+
 /**
  * Record an inference call to InferenceLog. Fire-and-forget — never throws.
  *
@@ -68,6 +105,7 @@ function sanitizedRouteDecision(decision) {
  * @param {string}  [data.fallbackReason]
  * @param {Object}  [data.routeDecision] - RouteDecision v1 (task 0519)
  * @param {Object}  [data.observability] - Safe contract/outcome summary; never payload
+ * @param {number}  [data.estimatedInputTokensAtDispatch] - Pre-dispatch input estimate; survives upstream failures
  * @param {number}  [data.tokensIn]
  * @param {number}  [data.tokensOut]
  * @param {number}  [data.durationMs]
@@ -76,7 +114,7 @@ function sanitizedRouteDecision(decision) {
  */
 async function recordInference(data) {
     if (process.env.NODE_ENV === 'test') return; // skip in tests
-    const decision = sanitizedRouteDecision(data.routeDecision);
+    const decision = decisionForTelemetry(data);
     let telemetryId = null;
     try {
         const InferenceLog = require('../../../models/InferenceLog');
@@ -110,6 +148,9 @@ async function recordInference(data) {
             routeDecision: decision,
             num_ctx: data.num_ctx != null ? data.num_ctx : null,
             num_ctx_source: data.num_ctx_source || null,
+            estimatedInputTokensAtDispatch: Number.isFinite(Number(data.estimatedInputTokensAtDispatch))
+                ? Math.max(0, Number(data.estimatedInputTokensAtDispatch))
+                : null,
             tokensIn: data.tokensIn || 0,
             tokensOut: data.tokensOut || 0,
             durationMs: data.durationMs || 0,
@@ -172,5 +213,6 @@ async function recordInference(data) {
 
 module.exports = {
     recordInference,
+    decisionForTelemetry,
     sanitizedRouteDecision,
 };

@@ -296,24 +296,73 @@ class AlertService extends EventEmitter {
     return ({ info: 'warning', warning: 'error', error: 'critical', critical: 'critical' })[severity] || 'warning';
   }
 
-  async _getFlapState(fingerprint, now) {
+  async _reopenFlappingAlert(rule, data, fingerprint, now) {
     const windowMs = 6 * 60 * 60 * 1000;
     const since = new Date(now.getTime() - windowMs);
-    const previousAutoResolved = await Alert.countDocuments({
+    const previous = await Alert.findOne({
       fingerprint,
       status: 'resolved',
       'resolution.resolutionMethod': {
         $in: ['auto-recovery', 'auto-reachable', 'auto-stale']
       },
       'resolution.resolvedAt': { $gte: since }
-    });
-    if (previousAutoResolved <= 0) return null;
-    return {
+    }).sort({ 'resolution.resolvedAt': -1 });
+    if (!previous) return null;
+
+    const flap = {
       detected: true,
-      count: previousAutoResolved + 1,
+      count: Math.max(1, Number(previous.metadata?.flapping?.count) || 1) + 1,
       windowMs,
       windowStartedAt: since
     };
+    const baseSeverity = this._severityFromRule(rule);
+    const presentation = this._flapPresentation(
+      this._titleFromRule(rule, data),
+      this._messageFromRule(rule, data),
+      flap
+    );
+    const extra = data.additionalData && typeof data.additionalData === 'object'
+      ? data.additionalData
+      : null;
+
+    // Re-open the same incident document. A host that alternates between
+    // reachable and unreachable is one flapping condition, not a stream of
+    // unrelated resolved alerts. The status predicate makes this an atomic
+    // claim if two producers observe the same refire concurrently.
+    const reopened = await Alert.findOneAndUpdate(
+      { _id: previous._id, status: 'resolved' },
+      {
+        $set: {
+          status: 'active',
+          severity: this._flapSeverity(baseSeverity),
+          title: presentation.title,
+          message: presentation.message,
+          lastOccurrence: now,
+          'context.component': data.component,
+          'context.metric': data.metric,
+          'context.currentValue': data.value,
+          'context.threshold': data.threshold,
+          'context.additionalData': extra || data,
+          'metadata.flapping': flap,
+          'resolution.resolved': false,
+          'resolution.resolvedAt': null,
+          'resolution.resolvedBy': null,
+          'resolution.resolutionMethod': null,
+          'resolution.comment': null,
+          lastNotifiedAt: now
+        },
+        $inc: { occurrenceCount: 1, notificationCount: 1 }
+      },
+      { new: true }
+    );
+    if (!reopened) return null;
+
+    try {
+      await this._sendNotifications(reopened, reopened.channels);
+    } catch {
+      // Notifications are best-effort; the incident state is authoritative.
+    }
+    return reopened;
   }
 
   _flapPresentation(title, message, flap) {
@@ -402,20 +451,22 @@ class AlertService extends EventEmitter {
       return updated;
     }
 
+    const reopened = await this._reopenFlappingAlert(rule, data, fingerprint, now);
+    if (reopened) return reopened;
+
     // Create new alert - use unique index to handle race conditions
     let alertDoc;
     try {
-      const flap = await this._getFlapState(fingerprint, now);
       const baseSeverity = this._severityFromRule(rule);
       const presentation = this._flapPresentation(
         this._titleFromRule(rule, data),
         this._messageFromRule(rule, data),
-        flap
+        null
       );
       alertDoc = await Alert.create({
         ruleId: rule?.id || 'rule',
         ruleName: rule?.name || 'Alert Rule',
-        severity: flap ? this._flapSeverity(baseSeverity) : baseSeverity,
+        severity: baseSeverity,
         title: presentation.title,
         message: presentation.message,
         context: {
@@ -431,7 +482,6 @@ class AlertService extends EventEmitter {
         channels: rule?.channels || rule?.event?.params?.channels || ['local_log'],
         channelConfig: rule?.channelConfig || rule?.event?.params?.channelConfig,
         source: event.source || data.source || 'agentx',
-        metadata: flap ? { flapping: flap } : undefined,
         lastOccurrence: now,
         // Creation notifies below; stamping it here is what gives the
         // re-notification backoff its first anchor (task 0541).

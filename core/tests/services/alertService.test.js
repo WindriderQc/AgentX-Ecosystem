@@ -79,12 +79,20 @@ describe('AlertService', () => {
       const [refired] = await alertService.evaluateEvent(event);
       const [ongoing] = await alertService.evaluateEvent(event);
 
+      expect(String(refired._id)).toBe(String(first._id));
       expect(refired.severity).toBe('critical');
       expect(refired.title).toContain('FLAPPING');
       expect(refired.title).toContain('2× in 6h');
       expect(refired.metadata.flapping).toEqual(expect.objectContaining({ detected: true, count: 2 }));
       expect(ongoing.title).toContain('FLAPPING');
       expect(ongoing.metadata.flapping.count).toBe(2);
+      await expect(Alert.countDocuments({ fingerprint: first.fingerprint })).resolves.toBe(1);
+
+      await ongoing.resolve('system', 'auto-reachable', 'Reachability restored again');
+      const [thirdCycle] = await alertService.evaluateEvent(event);
+      expect(String(thirdCycle._id)).toBe(String(first._id));
+      expect(thirdCycle.metadata.flapping.count).toBe(3);
+      await expect(Alert.countDocuments({ fingerprint: first.fingerprint })).resolves.toBe(1);
     });
 
     test('materializes a one-hour inference error-rate fact with a minimum sample gate', async () => {

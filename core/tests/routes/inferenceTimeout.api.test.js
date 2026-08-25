@@ -68,6 +68,15 @@ describe('POST /api/inference/generate — fetch timeout', () => {
   const app = express();
   app.use(express.json());
   app.use('/api', apiRoutes);
+  let server;
+
+  beforeAll(() => {
+    server = app.listen(0);
+  });
+
+  afterAll((done) => {
+    server.close(done);
+  });
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -97,7 +106,7 @@ describe('POST /api/inference/generate — fetch timeout', () => {
       });
     });
 
-    const response = await request(app)
+    const response = await request(server)
       .post('/api/inference/generate')
       .send({ model: 'test-model', prompt: 'hello' })
       .expect(504);
@@ -114,9 +123,11 @@ describe('POST /api/inference/generate — fetch timeout', () => {
     expect(recordInference).toHaveBeenCalledWith(
       expect.objectContaining({
         status: 'error',
-        error: expect.stringContaining('timeout')
+        error: expect.stringContaining('timeout'),
+        estimatedInputTokensAtDispatch: expect.any(Number)
       })
     );
+    expect(recordInference.mock.calls.at(-1)[0].estimatedInputTokensAtDispatch).toBeGreaterThan(0);
   }, 10000);
 
   it('returns 200 and releases gate slot on happy path', async () => {
@@ -130,7 +141,7 @@ describe('POST /api/inference/generate — fetch timeout', () => {
       });
     });
 
-    const response = await request(app)
+    const response = await request(server)
       .post('/api/inference/generate')
       .send({ model: 'test-model', prompt: 'hello' })
       .expect(200);

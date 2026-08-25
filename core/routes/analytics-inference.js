@@ -52,7 +52,7 @@ const round = (n, d = 2) => {
 
 const rate = (part, total) => (total > 0 ? round((part / total) * 100) : 0);
 
-const LOG_FILTER_FIELDS = ['caller', 'taskType', 'model', 'host'];
+const LOG_FILTER_FIELDS = ['caller', 'callerDetail', 'taskType', 'model', 'host'];
 const LOG_STATUSES = new Set(['success', 'error', 'timeout']);
 
 function boundedText(value, max = 200) {
@@ -133,6 +133,7 @@ router.get('/logs', async (req, res) => {
       filters: {
         status: req.query.status || null,
         caller: req.query.caller || null,
+        callerDetail: req.query.callerDetail || null,
         taskType: req.query.taskType || null,
         model: req.query.model || null,
         host: req.query.host || null,
@@ -213,6 +214,7 @@ router.get('/summary', async (req, res) => {
             { $limit: 40 }
           ],
           byCaller: [{ $group: { _id: '$caller', ...groupMetrics } }, { $sort: { calls: -1 } }],
+          byCallerDetail: [{ $group: { _id: { $ifNull: ['$callerDetail', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
           byTaskType: [{ $group: { _id: { $ifNull: ['$taskType', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
           byFallbackUsed: [{ $group: { _id: '$fallbackUsed', ...groupMetrics } }, { $sort: { calls: -1 } }],
           byDegraded: [{ $group: { _id: { $ifNull: ['$routeDecision.degraded', false] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
@@ -348,6 +350,7 @@ router.get('/summary', async (req, res) => {
       },
       byModel,
       byCaller: (facet?.byCaller || []).map((r) => shape(r, 'caller')),
+      byCallerDetail: (facet?.byCallerDetail || []).map((r) => shape(r, 'callerDetail')),
       byTaskType: (facet?.byTaskType || []).map((r) => shape(r, 'taskType')),
       byFallbackUsed: (facet?.byFallbackUsed || []).map((r) => shape(r, 'fallbackUsed')),
       byDegraded: (facet?.byDegraded || []).map((r) => shape(r, 'degraded')),

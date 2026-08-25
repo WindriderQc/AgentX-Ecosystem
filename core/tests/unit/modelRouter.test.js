@@ -33,6 +33,10 @@ jest.mock('../../src/services/alertService', () => ({
 }));
 
 describe('Model Router Service', () => {
+    it('does not advertise the unused backup-host API as implemented failover', () => {
+        expect(modelRouter).not.toHaveProperty('getBackupHost');
+    });
+
     beforeEach(() => {
         jest.clearAllMocks();
         // Default healthy fetch
