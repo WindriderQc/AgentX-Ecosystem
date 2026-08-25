@@ -23,12 +23,12 @@ describe('AlertService', () => {
   });
 
   afterAll(async () => {
-    await Promise.all([Alert.deleteMany({}), InferenceLog.deleteMany({ callerDetail: 'alert-rate-test' })]);
+    await Promise.all([Alert.deleteMany({}), InferenceLog.deleteMany({})]);
     await mongoose.connection.close();
   });
 
   afterEach(async () => {
-    await Promise.all([Alert.deleteMany({}), InferenceLog.deleteMany({ callerDetail: 'alert-rate-test' })]);
+    await Promise.all([Alert.deleteMany({}), InferenceLog.deleteMany({})]);
   });
 
   describe('Alert correctness regressions', () => {
