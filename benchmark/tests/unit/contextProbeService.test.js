@@ -268,6 +268,41 @@ describe('contextProbeService', () => {
     );
   });
 
+  it('persists the last good rung when a higher candidate reports zero throughput', async () => {
+    ollamaClient.showModel.mockResolvedValue({
+      model_info: {
+        'general.context_length': 4096
+      }
+    });
+    ollamaClient.generate.mockImplementation(async (_hostUrl, payload) => {
+      if (payload.options.num_ctx === 2048) {
+        return { eval_count: 64, eval_duration: 1e9, prompt_eval_count: 1600 };
+      }
+      return { eval_count: 0, eval_duration: 0, prompt_eval_count: 0 };
+    });
+
+    const result = await contextProbeService.probeModelContext('gemma4:26b', {
+      hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
+      acknowledgeMaintenance: true,
+      maxCtx: 4096
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'completed',
+      testedNumCtx: 2048
+    }));
+    expect(result.steps.find((step) => step.numCtx === 4096)).toMatchObject({
+      requestSucceeded: true,
+      tokensPerSec: 0,
+      passed: false,
+      reason: 'Context ceiling: 0 tok/s'
+    });
+    expect(modelContextProfileService.updateFromProbeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ testedNumCtx: 2048, status: 'completed' })
+    );
+  });
+
   it('does not reject a positive measurement using an arbitrary throughput ceiling', async () => {
     ollamaClient.showModel.mockResolvedValue({
       model_info: {
@@ -304,6 +339,13 @@ describe('validateThroughput', () => {
     const r = assess(1_000_000, { modelName: 'gemma4:26b', hostUrl: 'http://192.0.2.66:11434' });
     expect(r.plausible).toBe(true);
     expect(r.detail).toBeNull();
+  });
+
+  it('treats zero as a measured context boundary but rejects corrupt values', () => {
+    expect(assess(0)).toEqual({ plausible: true, detail: null });
+    expect(assess(-1).plausible).toBe(false);
+    expect(assess(Number.NaN).plausible).toBe(false);
+    expect(assess(Number.POSITIVE_INFINITY).plausible).toBe(false);
   });
 
   it('does not reject measured throughput using guessed hardware or quantization', () => {
@@ -366,8 +408,14 @@ describe('findInvalidThroughputStep', () => {
     ])).toBeUndefined();
   });
 
-  it('still rejects an invalid measurement returned by a successful request', () => {
-    const step = { numCtx: 65536, requestSucceeded: true, tokensPerSec: 0 };
+  it('accepts zero from a successful request as a boundary', () => {
+    expect(findInvalid([
+      { numCtx: 65536, requestSucceeded: true, tokensPerSec: 0 }
+    ])).toBeUndefined();
+  });
+
+  it('still rejects a corrupt measurement', () => {
+    const step = { numCtx: 65536, requestSucceeded: true, tokensPerSec: -1 };
     expect(findInvalid([step])).toBe(step);
   });
 });

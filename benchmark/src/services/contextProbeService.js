@@ -49,17 +49,15 @@ function isValidTokensPerSec(tokensPerSec) {
  * @returns {{ plausible: boolean, detail: string|null }}
  */
 function validateThroughput(tokensPerSec) {
-  if (!isValidTokensPerSec(tokensPerSec)) {
-    return { plausible: false, detail: `${tokensPerSec} tok/s is not a positive finite measurement` };
+  const value = Number(tokensPerSec);
+  if (tokensPerSec === null || tokensPerSec === undefined || !Number.isFinite(value) || value < 0) {
+    return { plausible: false, detail: `${tokensPerSec} tok/s is not a non-negative finite measurement` };
   }
   return { plausible: true, detail: null };
 }
 
 function findInvalidThroughputStep(steps = []) {
-  return steps.find((step) => (
-    step?.requestSucceeded !== false
-    && !validateThroughput(step?.tokensPerSec).plausible
-  ));
+  return steps.find((step) => !validateThroughput(step?.tokensPerSec).plausible);
 }
 
 function getConfig() {
@@ -292,6 +290,7 @@ async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80
     ? validateThroughput(probeResult.tokensPerSec)
     : { plausible: true, detail: null };
   const invalidThroughput = probeResult.ok && !plausibility.plausible;
+  const zeroThroughputBoundary = probeResult.ok && probeResult.tokensPerSec === 0;
   const [vram, offload] = await Promise.all([
     snapshotVram(hostUrl),
     snapshotGpuOffload(hostUrl, modelName)
@@ -313,9 +312,11 @@ async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80
     promptFillPct: Math.round(fillRatio * 100),
     requestedCompletionTokens: PROBE_NUM_PREDICT,
     minCompletionTokens: MIN_PROBE_COMPLETION_TOKENS,
-    passed: probeResult.ok && !shortCompletion && !invalidThroughput,
+    passed: probeResult.ok && !shortCompletion && !invalidThroughput && !zeroThroughputBoundary,
     reason: invalidThroughput
       ? `Invalid throughput: ${plausibility.detail}`
+      : zeroThroughputBoundary
+      ? 'Context ceiling: 0 tok/s'
       : shortCompletion
       ? `Short completion: ${probeResult.completionTokens}/${PROBE_NUM_PREDICT} tokens generated; probe decode sample is invalid`
       : (probeResult.ok ? null : probeResult.error)

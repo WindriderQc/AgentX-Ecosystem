@@ -14,16 +14,18 @@ function isValidTokensPerSec(tokensPerSec) {
 }
 
 function hasValidThroughputEvidence(snapshot) {
-  const values = [
+  const summaryValues = [
     snapshot?.baselineTokensPerSec,
-    snapshot?.atLimitTokensPerSec,
-    ...(
-      Array.isArray(snapshot?.steps)
-        ? snapshot.steps.map((step) => step?.tokensPerSec)
-        : []
-    )
+    snapshot?.atLimitTokensPerSec
   ];
-  return values.every(isValidTokensPerSec);
+  if (!summaryValues.every(isValidTokensPerSec)) return false;
+
+  return (Array.isArray(snapshot?.steps) ? snapshot.steps : []).every((step) => {
+    if (step?.tokensPerSec === null || step?.tokensPerSec === undefined) return true;
+    const value = Number(step.tokensPerSec);
+    if (!Number.isFinite(value) || value < 0) return false;
+    return step.passed ? value > 0 : true;
+  });
 }
 
 function modelNameCandidates(modelName) {

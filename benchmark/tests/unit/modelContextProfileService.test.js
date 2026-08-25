@@ -153,4 +153,55 @@ describe('modelContextProfileService', () => {
 
     expect(ModelContextProfile.findOneAndUpdate).toHaveBeenCalled();
   });
+
+  it('persists the last good rung when a failed boundary step reports zero throughput', async () => {
+    const profile = await service.updateFromProbeSnapshot({
+      _id: 'snapshot-zero-boundary',
+      modelName: 'gemma4:12b-it-qat',
+      hostId: 'secondary',
+      hostUrl: 'http://192.0.2.12:11434',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a',
+      status: 'completed',
+      testedNumCtx: 32768,
+      baselineTokensPerSec: 50,
+      atLimitTokensPerSec: 30,
+      steps: [
+        { numCtx: 2048, passed: true, tokensPerSec: 50 },
+        { numCtx: 32768, passed: true, tokensPerSec: 30, promptTokens: 26000 },
+        { numCtx: 65536, requestSucceeded: true, passed: false, tokensPerSec: 0 }
+      ]
+    });
+
+    expect(profile).toEqual(expect.objectContaining({
+      modelName: 'gemma4:12b-it-qat',
+      hostId: 'secondary',
+      verifiedMaxContext: 32768,
+      recommendedContext: 32768
+    }));
+    expect(ModelContextProfile.findOneAndUpdate).toHaveBeenCalled();
+  });
+
+  it('rejects negative or non-finite throughput evidence', async () => {
+    const base = {
+      modelName: 'gemma4:12b-it-qat',
+      hostUrl: 'http://192.0.2.12:11434',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a',
+      status: 'completed',
+      testedNumCtx: 32768,
+      baselineTokensPerSec: 50,
+      atLimitTokensPerSec: 30
+    };
+
+    await expect(service.updateFromProbeSnapshot({
+      ...base,
+      steps: [{ numCtx: 65536, passed: false, tokensPerSec: -1 }]
+    })).resolves.toBeNull();
+    await expect(service.updateFromProbeSnapshot({
+      ...base,
+      steps: [{ numCtx: 65536, passed: false, tokensPerSec: Number.POSITIVE_INFINITY }]
+    })).resolves.toBeNull();
+    expect(ModelContextProfile.findOneAndUpdate).not.toHaveBeenCalled();
+  });
 });
