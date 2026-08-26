@@ -27,7 +27,7 @@ describe('AlertService', () => {
     await mongoose.connection.close();
   });
 
-  afterEach(async () => {
+  beforeEach(async () => {
     await Promise.all([Alert.deleteMany({}), InferenceLog.deleteMany({})]);
   });
 
