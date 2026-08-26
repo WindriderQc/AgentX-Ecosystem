@@ -34,3 +34,6 @@ Thumbs.db
 *.swp
 *.swo
 *.bak
+
+# jest mongodb-memory-server runtime data
+core/tests/.jest-mongo/

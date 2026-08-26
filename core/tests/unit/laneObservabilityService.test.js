@@ -89,7 +89,14 @@ describe('laneObservabilityService', () => {
     ]);
   });
 
-  afterAll(() => laneObservability.stop());
+  afterAll(async () => {
+    laneObservability.stop();
+    await Promise.all([
+      Alert.deleteMany({ ruleId: { $in: laneObservability.RULE_IDS } }),
+      AlertRule.deleteMany({ ruleId: { $in: laneObservability.RULE_IDS } }),
+      InferenceLog.deleteMany({ callerDetail: /^0465-test/ }),
+    ]);
+  });
 
   test('all detector rules use the product-owned local log and opt into reminders', () => {
     const defaults = require('../../config/default-alert-rules.json');
