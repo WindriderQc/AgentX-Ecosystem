@@ -705,6 +705,7 @@ router.post('/inference/generate', async (req, res) => {
     const thinkingMode = body.thinkingMode ?? body.thinking_mode;
     let keepAlive = body.keep_alive ?? body.keepAlive;
     const hostOverride = typeof body.host === 'string' ? body.host.trim() : '';
+    const crossModelFallbackOptIn = body.allowCrossModelFallback === true;
 
     if (!requestedModel && !taskType) {
         return res.status(400).json({ status: 'error', message: 'model or taskType is required' });
@@ -729,6 +730,7 @@ router.post('/inference/generate', async (req, res) => {
     const { name: laneName, policy: lane } = lanePolicy.resolvePolicyLane(
         callerContext.effectivePolicy
     );
+    const routeManaged = lane.route === true && !hostOverride;
     const routingTrace = {
         version: 1,
         request: {
@@ -738,6 +740,8 @@ router.post('/inference/generate', async (req, res) => {
             callerDetail: body.callerDetail || null,
             lane: laneName,
             laneRoutesTasks: lane.route === true,
+            crossModelFallbackOptIn,
+            routeManaged,
             preview: null
         },
         lane: {
@@ -1120,6 +1124,7 @@ router.post('/inference/generate', async (req, res) => {
         dispatchAttemptRecord,
         buildRoutingDifference,
         timeoutMs: INFERENCE_FETCH_TIMEOUT_MS,
+        routeManaged,
     });
 
     try {

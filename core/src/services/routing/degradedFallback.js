@@ -1,6 +1,7 @@
 'use strict';
 
 const { resolveRoute, RESOLVER_MODES } = require('./routeResolver');
+const { modelsMatch } = require('../../helpers/modelNameNormalization');
 
 /**
  * Bounded degraded fallback — task 0523. Supersedes blocked task 0513.
@@ -26,9 +27,11 @@ const { resolveRoute, RESOLVER_MODES } = require('./routeResolver');
  *    is otherwise eligible.
  * 3. ONCE. One retry, then the error surfaces. Retry chains turn one slow host
  *    into a multiplied stall, and the user is waiting.
- * 4. THREE LANES ONLY. quick_chat, buddy_reaction, nestor_answer_light — short,
- *    interactive, cheap to repeat. A long generation or a batch job must not
- *    silently double its cost.
+ * 4. THREE LANES BY DEFAULT. quick_chat, buddy_reaction,
+ *    nestor_answer_light — short, interactive, cheap to repeat. A route-managed
+ *    caller may widen that boundary only by explicitly opting into a qualified
+ *    cross-model fallback. Direct benchmark/profiler traffic and host overrides
+ *    are never route-managed and cannot use that escape hatch.
  *
  * Everything here is pure and flag-gated: `isEnabled()` is false unless
  * DEGRADED_FALLBACK is the literal "true".
@@ -73,12 +76,25 @@ const REFUSAL_REASONS = Object.freeze({
   FAILURE_NOT_RETRYABLE: 'failure_not_retryable',
   STATUS_NOT_APPROVED: 'status_not_approved',
   ARTIFACT_NOT_VERIFIED: 'artifact_not_verified',
+  CROSS_MODEL_ROUTE_NOT_MANAGED: 'cross_model_route_not_managed',
+  CROSS_MODEL_NOT_QUALIFIED: 'cross_model_not_qualified',
   NO_LOCAL_CANDIDATE: 'no_local_candidate',
   CLOUD_NOT_AUTOMATIC: 'cloud_not_automatic',
 });
 
 function isEnabled() {
   return String(process.env.DEGRADED_FALLBACK || '').toLowerCase() === 'true';
+}
+
+/**
+ * Cross-model substitution is a separate, explicit contract. The global flag
+ * is necessary but not sufficient: the caller must opt in and the request must
+ * still be owned by Core routing. This keeps direct exact-artifact callers,
+ * benchmark/profiler work, and explicit host overrides exact by construction.
+ */
+function isCrossModelFallbackAllowed(attemptState = {}) {
+  return attemptState.crossModelOptIn === true
+    && attemptState.routeManaged === true;
 }
 
 /**
@@ -118,7 +134,14 @@ function isRetryEligible(attemptState = {}) {
   if (attemptState.streamStarted === true) return deny(REFUSAL_REASONS.STREAM_ALREADY_STARTED);
 
   if (!isEnabled()) return deny(REFUSAL_REASONS.DISABLED);
-  if (!SCOPED_LANES.includes(attemptState.lane)) return deny(REFUSAL_REASONS.LANE_OUT_OF_SCOPE);
+  if (!SCOPED_LANES.includes(attemptState.lane)) {
+    if (attemptState.crossModelOptIn === true && attemptState.routeManaged !== true) {
+      return deny(REFUSAL_REASONS.CROSS_MODEL_ROUTE_NOT_MANAGED);
+    }
+    if (!isCrossModelFallbackAllowed(attemptState)) {
+      return deny(REFUSAL_REASONS.LANE_OUT_OF_SCOPE);
+    }
+  }
 
   // 3. Once. `attempt` is 1-based, so anything past the first has had its retry.
   if (Number(attemptState.attempt) > 1) return deny(REFUSAL_REASONS.ALREADY_RETRIED);
@@ -207,13 +230,28 @@ function resolveRetryCandidates(candidates = [], options = {}) {
  * context window the new host never loaded.
  */
 function buildDegradedState(failureClass, retryCandidate, options = {}) {
+  const failedCandidate = options.failedCandidate || null;
+  const modelChanged = Boolean(
+    retryCandidate?.model
+    && failedCandidate?.model
+    && !modelsMatch(retryCandidate.model, failedCandidate.model)
+  );
+  const actual = retryCandidate
+    ? { model: retryCandidate.model, hostUrl: retryCandidate.hostUrl, host: retryCandidate.host?.key || null }
+    : null;
   return {
     degraded: true,
     degradedReason: failureClass,
     userCue: options.userCue || 'mode dégradé',
-    retriedTo: retryCandidate
-      ? { model: retryCandidate.model, hostUrl: retryCandidate.hostUrl, host: retryCandidate.host?.key || null }
+    fallbackType: modelChanged ? 'cross_model' : 'same_model',
+    selectionPolicy: modelChanged ? 'operator_pinned_exact_artifact' : 'same_model_other_host',
+    modelChanged,
+    requested: { model: options.requestedModel || failedCandidate?.model || null },
+    primary: failedCandidate
+      ? { model: failedCandidate.model || null, hostUrl: failedCandidate.hostUrl || null }
       : null,
+    actual,
+    retriedTo: actual,
     pinOptions: retryCandidate?.artifact?.pinOptions || null,
     cloudEscalated: false, // invariant 2: never true on an automatic path
   };
@@ -245,7 +283,10 @@ async function runDegradedRetry({ attemptState, candidates, failedCandidate, exe
     reason: null,
     candidate,
     result,
-    degraded: buildDegradedState(eligibility.failureClass, candidate),
+    degraded: buildDegradedState(eligibility.failureClass, candidate, {
+      failedCandidate,
+      requestedModel: attemptState.requestedModel,
+    }),
   };
 }
 
@@ -257,6 +298,7 @@ module.exports = {
   APPROVED_5XX,
   REFUSAL_REASONS,
   isEnabled,
+  isCrossModelFallbackAllowed,
   classifyFailure,
   isRetryEligible,
   selectRetryCandidate,

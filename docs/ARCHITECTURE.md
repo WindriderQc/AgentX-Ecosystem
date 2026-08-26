@@ -89,6 +89,14 @@ agent runtime.
   fingerprint. Profiling records evidence for that identity and never creates
   or silently selects a replacement tag; see
   [Exact-artifact profiling](EXACT_ARTIFACT_PROFILING.md).
+- Degraded cross-model retry is never implicit. It requires the existing
+  server-side degraded-fallback policy, a Core-managed non-stream route, and
+  the request field `allowCrossModelFallback: true`. The alternate must be an
+  operator-pinned local model on an approved host whose current exact artifact
+  matches non-stale Benchmark qualification and whose context fits the input.
+  Responses expose the primary and actual model/host through degraded metadata
+  and `X-AgentX-Degraded-*` headers. Direct benchmark/profiler calls and
+  explicit host overrides cannot change models.
 - Filesystem scanning is disabled by topology: the image has a bounded
   `/data/imports` policy but no host mount. Public demo ingestion uses HTTP.
 - A portable skill grants no filesystem, vault, network, or RAG authority. The
