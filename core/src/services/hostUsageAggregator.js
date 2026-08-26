@@ -16,6 +16,8 @@ const yaml = require('js-yaml');
 const logger = require('../../config/logger');
 const InferenceLog = require('../../models/InferenceLog');
 const HostUsageLedger = require('../../models/HostUsageLedger');
+const { getConfiguredHosts, hostUrlKey } = require('../helpers/ollamaHostConfig');
+const { describeHost } = require('./hostIdentityService');
 
 const WALL_CLOCK_HOUR_MS = 3600 * 1000;
 const DEFAULT_PLATFORM_MAP_PATH = path.resolve(__dirname, '..', '..', '..', 'config', 'platform-map.yml');
@@ -214,11 +216,26 @@ async function getUtilizationHeatmap(days = 7) {
   const records = await HostUsageLedger.find({ hour: { $gte: since } })
     .sort({ hour: 1 }).lean();
 
-  const hosts = [...new Set(records.map(r => r.hostLabel || r.hostKey || r.host))];
+  return buildUtilizationHeatmap(records, days, new Date(), getConfiguredHosts());
+}
+
+function buildUtilizationHeatmap(records, days = 7, now = new Date(), configuredHosts = []) {
+  const since = new Date(now.getTime() - days * 86400 * 1000);
+  const identities = new Map();
+  for (const host of configuredHosts) {
+    const identity = describeHost(host.url, host.id, configuredHosts);
+    identities.set(identity.key, identity);
+  }
+  for (const record of records || []) {
+    const identity = describeHost(record.host, record.hostKey, configuredHosts);
+    const key = identity.key || hostUrlKey(record.host) || record.hostLabel || record.host;
+    if (!identities.has(key)) identities.set(key, { ...identity, key });
+  }
+
   const dayKeys = [];
   const cursor = truncateToHour(since);
   cursor.setUTCHours(0);
-  const end = truncateToHour(new Date());
+  const end = truncateToHour(now);
   end.setUTCHours(0);
   let d = new Date(cursor);
   while (d <= end) {
@@ -227,26 +244,28 @@ async function getUtilizationHeatmap(days = 7) {
   }
 
   const grid = {};
-  for (const host of hosts) {
-    grid[host] = dayKeys.map(() => new Array(24).fill(0));
+  for (const identity of identities.values()) {
+    grid[identity.key] = dayKeys.map(() => new Array(24).fill(null));
   }
 
-  for (const r of records) {
-    const label = r.hostLabel || r.hostKey || r.host;
+  for (const r of records || []) {
+    const identity = describeHost(r.host, r.hostKey, configuredHosts);
+    const key = identity.key || hostUrlKey(r.host) || r.hostLabel || r.host;
     const dayKey = r.hour.toISOString().slice(0, 10);
     const hourIdx = r.hour.getUTCHours();
     const dayIdx = dayKeys.indexOf(dayKey);
-    if (dayIdx >= 0 && grid[label]) {
-      grid[label][dayIdx][hourIdx] = r.utilizationPct;
+    if (dayIdx >= 0 && grid[key]) {
+      grid[key][dayIdx][hourIdx] = r.utilizationPct;
     }
   }
 
-  return { hosts, days: dayKeys, grid };
+  return { hosts: [...identities.values()], days: dayKeys, grid };
 }
 
 module.exports = {
   aggregateHour,
   getUtilizationHeatmap,
+  buildUtilizationHeatmap,
   truncateToHour,
   hostLabel,
   buildHostLabelLookup

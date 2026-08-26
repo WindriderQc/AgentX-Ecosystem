@@ -32,6 +32,7 @@ const {
   getAdvisoryModelForTask,
   getModelForTask,
   resolvePreferredTaskEntry,
+  getRoutingConfigVersion,
   resetAllTaskModelOverrides,
   resetTaskModelOverride,
   saveTaskModelOverride
@@ -67,6 +68,12 @@ const { trustedNestorConsumer } = require('../src/services/nestorConsumerAttribu
 const alertService = require('../src/services/alertService');
 const { summarizeOllamaOutcome } = require('../src/services/laneObservabilityService');
 const ragStore = getRagServiceClient();
+
+function safeRoutingConfigVersion() {
+    return typeof getRoutingConfigVersion === 'function'
+        ? getRoutingConfigVersion()
+        : 'router-unversioned-v1';
+}
 
 const INFERENCE_FETCH_TIMEOUT_MS =
   parseInt(process.env.INFERENCE_FETCH_TIMEOUT_MS, 10) || 600000;
@@ -330,6 +337,7 @@ router.post('/inference/embed', async (req, res) => {
     const buildEmbedDecision = ({ candidate, attempt, fallbackUsed, fallbackReason }) => {
         try {
             return buildRouteDecision({
+                configVersion: safeRoutingConfigVersion(),
                 mode: DECISION_MODES.EXPLICIT_MODEL,
                 caller: 'embedding',
                 callerDetail: body.callerDetail || null,
@@ -697,6 +705,7 @@ router.post('/inference/generate', async (req, res) => {
     const thinkingMode = body.thinkingMode ?? body.thinking_mode;
     let keepAlive = body.keep_alive ?? body.keepAlive;
     const hostOverride = typeof body.host === 'string' ? body.host.trim() : '';
+    const crossModelFallbackOptIn = body.allowCrossModelFallback === true;
 
     if (!requestedModel && !taskType) {
         return res.status(400).json({ status: 'error', message: 'model or taskType is required' });
@@ -721,6 +730,7 @@ router.post('/inference/generate', async (req, res) => {
     const { name: laneName, policy: lane } = lanePolicy.resolvePolicyLane(
         callerContext.effectivePolicy
     );
+    const routeManaged = lane.route === true && !hostOverride;
     const routingTrace = {
         version: 1,
         request: {
@@ -730,6 +740,8 @@ router.post('/inference/generate', async (req, res) => {
             callerDetail: body.callerDetail || null,
             lane: laneName,
             laneRoutesTasks: lane.route === true,
+            crossModelFallbackOptIn,
+            routeManaged,
             preview: null
         },
         lane: {
@@ -980,6 +992,7 @@ router.post('/inference/generate', async (req, res) => {
             else if (taskType) mode = DECISION_MODES.EXPLICIT_TASK;
 
             return buildRouteDecision({
+                configVersion: safeRoutingConfigVersion(),
                 mode,
                 taskType: taskType || null,
                 caller: 'proxy',
@@ -1065,6 +1078,12 @@ router.post('/inference/generate', async (req, res) => {
         routingTrace: attemptTrace,
         num_ctx: attemptOptions?.num_ctx ?? null,
         num_ctx_source: attemptNumCtxSource,
+        // Captured before dispatch from Core's context-budget estimator, so a
+        // timeout with tokensIn=0 still records how large the request was.
+        estimatedInputTokensAtDispatch:
+            attemptContract?.contextBudget?.input?.estimatedTokens
+            ?? attemptContract?.input?.estimatedTokens
+            ?? null,
         tokensIn: attemptData?.prompt_eval_count || 0,
         tokensOut: attemptData?.eval_count || 0,
         fallbackUsed,
@@ -1105,6 +1124,7 @@ router.post('/inference/generate', async (req, res) => {
         dispatchAttemptRecord,
         buildRoutingDifference,
         timeoutMs: INFERENCE_FETCH_TIMEOUT_MS,
+        routeManaged,
     });
 
     try {

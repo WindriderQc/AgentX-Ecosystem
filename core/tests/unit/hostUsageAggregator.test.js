@@ -43,4 +43,28 @@ describe('hostUsageAggregator host labels', () => {
     expect(hostUsageAggregator.hostLabel('not a url')).toBe('not a url');
     expect(hostUsageAggregator.hostLabel(null)).toBe('unknown');
   });
+
+  it('renders every configured host and keeps no-data distinct from measured zero', () => {
+    const now = new Date('2026-08-23T12:30:00.000Z');
+    const records = [{
+      host: 'http://primary:11434',
+      hostKey: 'primary',
+      hour: new Date('2026-08-23T11:00:00.000Z'),
+      utilizationPct: 0,
+    }];
+    const configured = [
+      { id: 'primary', name: 'GPU One', url: 'http://primary:11434' },
+      { id: 'secondary', name: 'GPU Two', url: 'http://secondary:11434' },
+    ];
+
+    const heatmap = hostUsageAggregator.buildUtilizationHeatmap(records, 1, now, configured);
+
+    expect(heatmap.hosts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'primary', displayName: 'GPU One', role: 'primary', ip: 'primary' }),
+      expect.objectContaining({ key: 'secondary', displayName: 'GPU Two', role: 'secondary', ip: 'secondary' }),
+    ]));
+    const today = heatmap.days.indexOf('2026-08-23');
+    expect(heatmap.grid.primary[today][11]).toBe(0);
+    expect(heatmap.grid.secondary[today][11]).toBeNull();
+  });
 });

@@ -72,6 +72,18 @@ function renderTiles(d) {
   setText('infFallbackRate', `${(t.fallbackRate ?? 0).toFixed(2)}%`);
   setText('infFallbacks', compact(t.fallbackCalls));
   setText('infAvgLatency', ms(t.avgLatencyMs));
+  setText('infAvgClassification', ms(t.avgClassificationMs));
+  setText('infClassifiedCalls', compact(t.classifiedCalls));
+  setText('infClassificationPct', `${(t.classificationOverheadPct ?? 0).toFixed(1)}%`);
+  setText('infClassifiedTotal', ms(t.avgTotalForClassifiedMs));
+
+  const errorLink = $('infErrorLink');
+  if (errorLink) {
+    const params = new URLSearchParams({ status: 'error,timeout' });
+    if (d.window?.from) params.set('from', new Date(d.window.from).toISOString());
+    if (d.window?.to) params.set('to', new Date(d.window.to).toISOString());
+    errorLink.href = `/api/analytics/inference/logs?${params.toString()}`;
+  }
 
   const errEl = $('infErrorRate');
   if (errEl) errEl.style.color = t.errorRate > 5 ? '#f87171' : t.errorRate > 1 ? '#f59e0b' : 'inherit';
@@ -88,6 +100,31 @@ function renderTiles(d) {
   setText('infCloudNote', cloud.calls
     ? `${compact(cloud.calls)} cloud calls${cloud.unpricedModels?.length ? ` · ${cloud.unpricedModels.length} unpriced` : ''}`
     : 'no cloud-routed calls');
+}
+
+function renderDimensionBreakdowns(d) {
+  const container = $('infDimensionBreakdowns');
+  if (!container) return;
+  const dimensions = [
+    ['Caller', d.byCaller || [], 'caller'],
+    ['Caller Detail', d.byCallerDetail || [], 'callerDetail'],
+    ['Task Type', d.byTaskType || [], 'taskType'],
+    ['Fallback Used', d.byFallbackUsed || [], 'fallbackUsed'],
+    ['Degraded', d.byDegraded || [], 'degraded'],
+  ];
+  const cell = 'padding:6px 8px;border-bottom:1px solid var(--panel-border);';
+  container.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;">
+    ${dimensions.map(([title, rows, key]) => `<div>
+      <h3 style="font-size:13px;margin:0 0 6px;">${title}</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;"><tbody>
+        ${(rows.length ? rows.slice(0, 12) : [{ [key]: 'no data', calls: 0, errorRate: 0 }]).map(row => `<tr>
+          <td style="${cell}">${escapeHtml(String(row[key] ?? 'unknown').replace(/_/g, ' '))}</td>
+          <td style="${cell}text-align:right;">${compact(row.calls)}</td>
+          <td style="${cell}text-align:right;color:var(--muted);">${(row.errorRate || 0).toFixed(1)}% err</td>
+        </tr>`).join('')}
+      </tbody></table>
+    </div>`).join('')}
+  </div>`;
 }
 
 function renderModelTable(d) {
@@ -310,6 +347,7 @@ async function load() {
     const data = await fetchSummary(windowKey);
     renderTiles(data);
     renderModelTable(data);
+    renderDimensionBreakdowns(data);
     renderDailyChart(data);
   } catch (err) {
     console.error('Inference analytics failed:', err);

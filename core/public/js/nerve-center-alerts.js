@@ -26,6 +26,11 @@
             const alerts = alertsRes.data || alertsRes || [];
             const summary = summaryRes.data?.statistics || summaryRes.data || summaryRes || {};
             const rules = (rulesRes.data && rulesRes.data.rules) || [];
+            const detectorCoverage = rulesRes.data?.detectorCoverage || {
+                active: rules.filter(r => r.detectorState === 'active' || (!r.detectorState && r.enabled)).length,
+                disabled: rules.filter(r => r.detectorState === 'disabled' || (!r.detectorState && !r.enabled)).length,
+                retired_by_design: rules.filter(r => r.detectorState === 'retired_by_design').length,
+            };
 
             const severityCounts = summary.bySeverity || {};
             const critical = severityCounts.critical || 0;
@@ -33,7 +38,19 @@
             const warning = severityCounts.warning || 0;
             const info = severityCounts.info || 0;
 
+            const coverageDegraded = detectorCoverage.disabled > 0;
             let html = `
+                <div class="nc-host-card" style="margin-bottom:16px;padding:12px;border-left:3px solid ${coverageDegraded ? '#f59e0b' : '#4ade80'}">
+                    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+                        <strong style="color:${coverageDegraded ? '#f59e0b' : '#4ade80'}">
+                            ${coverageDegraded ? 'MONITORING COVERAGE DEGRADED' : 'DETECTOR COVERAGE'}
+                        </strong>
+                        <span>${detectorCoverage.active || 0} active</span>
+                        <a href="#nc-rules-table" style="color:${coverageDegraded ? '#f59e0b' : 'var(--muted)'}">${detectorCoverage.disabled || 0} disabled</a>
+                        <span class="nc-muted">${detectorCoverage.retired_by_design || 0} retired by design</span>
+                    </div>
+                    ${coverageDegraded ? '<div class="nc-muted nc-fs-sm" style="margin-top:5px">No active alerts does not mean all clear while configured detectors are disabled.</div>' : ''}
+                </div>
                 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
                     <div class="nc-host-card" style="border-left:3px solid #f87171;padding:12px">
                         <div class="nc-muted nc-fs-sm">Critical</div>
@@ -87,7 +104,7 @@
                 }
                 html += `</tbody></table>`;
             } else {
-                html += `<p class="nc-muted" style="text-align:center;padding:16px">No active alerts</p>`;
+                html += `<p class="nc-muted" style="text-align:center;padding:16px">No active alerts${coverageDegraded ? ' — monitoring coverage is degraded' : ''}</p>`;
             }
 
             // ── Rules table (dynamic from API) ──
@@ -122,6 +139,8 @@
         let rows = '';
         for (const r of rules) {
             const sevColor = SEV_COLORS[r.severity] || '#93a0b5';
+            const detectorState = r.detectorState || (r.enabled ? 'active' : 'disabled');
+            const retired = detectorState === 'retired_by_design';
             const condText = (r.conditions?.all || []).map(c =>
                 `${shared.escapeHtml(c.fact)} ${OPERATOR_LABELS[c.operator] || c.operator} ${shared.escapeHtml(String(c.value))}`
             ).join(' AND ') || '<span class="nc-muted">no conditions</span>';
@@ -131,8 +150,12 @@
                 <td class="nc-td-md"><span style="color:${sevColor}">&bull; ${shared.escapeHtml(r.severity)}</span></td>
                 <td style="padding:8px 10px;font-size:0.85em;font-family:monospace">${condText}</td>
                 <td class="nc-td-md">
-                    <button class="nc-btn nc-rule-toggle" data-rule="${shared.escapeHtml(r.ruleId)}" data-enabled="${r.enabled}" style="font-size:10px;padding:3px 8px">
-                        ${r.enabled ? '<span style="color:#4ade80">&bull; ON</span>' : '<span class="nc-muted">&bull; OFF</span>'}
+                    <button class="nc-btn nc-rule-toggle" data-rule="${shared.escapeHtml(r.ruleId)}" data-enabled="${r.enabled}" ${retired ? 'disabled' : ''} title="${shared.escapeHtml(r.stateReason || '')}" style="font-size:10px;padding:3px 8px">
+                        ${detectorState === 'active'
+                            ? '<span style="color:#4ade80">&bull; ACTIVE</span>'
+                            : detectorState === 'retired_by_design'
+                                ? '<span class="nc-muted">&bull; RETIRED</span>'
+                                : '<span style="color:#f59e0b">&bull; DISABLED</span>'}
                     </button>
                 </td>
                 <td style="padding:8px 10px;text-align:center">

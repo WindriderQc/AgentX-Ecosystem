@@ -302,7 +302,10 @@ describe('Nerve Center Routes — Unit Tests', () => {
         autoRoutedCount: 2,
         autoRoutedPct: 66.7,
         avgDurationMs: 1666.7,
-        avgClassificationMs: 20
+        avgClassificationMs: 30,
+        avgTotalForClassifiedMs: 2000,
+        classificationOverheadPct: 1.5,
+        classificationSamples: 2
       }));
       expect(analytics.taskDistribution[0]).toEqual(expect.objectContaining({
         taskType: 'analysis',

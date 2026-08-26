@@ -26,7 +26,9 @@ const {
     getTargetForModel,
     getAdvisoryTargetForModel,
     getModelForTask,
-    getAdvisoryModelForTask
+    getAdvisoryModelForTask,
+    getRoutingConfigVersion,
+    getEquivalentClassifiableTarget
 } = require('./modelRouterConfig');
 
 async function getHostPinStatus(hostUrl) {
@@ -329,6 +331,27 @@ async function resolveRouteTarget(message, options = {}) {
 
     // If auto-routing enabled, classify the query
     if (autoRoute && message) {
+        const equivalent = getEquivalentClassifiableTarget();
+        if (equivalent) {
+            const recommendation = await getAdvisoryModelForTask(equivalent.representativeTaskType, {
+                caller,
+                durationMs,
+                createSoftClaim: true
+            });
+            return {
+                model: recommendation.model,
+                target: recommendation.url,
+                taskType: 'equivalent_route',
+                routed: true,
+                autoRouted: true,
+                classificationMs: 0,
+                host: recommendation.host,
+                source: recommendation.source,
+                claimId: recommendation.claimId,
+                shortCircuited: true,
+                shortCircuitReason: 'classifier_skipped_equivalent_model_and_host'
+            };
+        }
         const classificationStartedAt = Date.now();
         const classification = await classifyQuery(message);
         const classificationMs = Date.now() - classificationStartedAt;
@@ -390,6 +413,7 @@ async function routeRequest(message, options = {}) {
             attempt: options.attempt,
             requestedModel: options.preferredModel || null,
             runtimeOptions: options.runtimeOptions,
+            configVersion: getRoutingConfigVersion(),
             decisionMs: Date.now() - startedAt,
         });
     } catch (err) {
@@ -497,25 +521,6 @@ async function getRoutingStatus() {
 function getActiveHost() {
     refreshHosts();
     return ACTIVE_HOST_STATE.current || HOSTS.primary;
-}
-
-/**
- * Get backup host URL
- * @returns {string} Backup host URL
- */
-function getBackupHost() {
-    refreshHosts();
-    const current = getActiveHost();
-    if (current === HOSTS.primary) {
-        return HOSTS.secondary || HOSTS.tertiary || HOSTS.primary;
-    }
-    if (current === HOSTS.secondary) {
-        return HOSTS.primary || HOSTS.tertiary || HOSTS.secondary;
-    }
-    if (current === HOSTS.tertiary) {
-        return HOSTS.secondary || HOSTS.primary || HOSTS.tertiary;
-    }
-    return HOSTS.primary || HOSTS.secondary || HOSTS.tertiary;
 }
 
 /**
@@ -641,7 +646,6 @@ module.exports = {
     getRoutingStatus,
     getAllModelsHealth,
     getActiveHost,
-    getBackupHost,
     switchHost,
     getFailoverStatus,
     resetToPrimary,

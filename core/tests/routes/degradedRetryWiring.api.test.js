@@ -17,6 +17,12 @@ const fetch = require('node-fetch');
 
 jest.mock('node-fetch');
 
+jest.mock('../../src/services/inferenceContractService', () => ({
+  hasQualifiedThinkingCapability: jest.fn(() => false),
+  resolveInferenceContract: jest.fn(),
+  resolveInferenceContractSnapshot: jest.fn(),
+}));
+
 jest.mock('../../src/services/modelRouter', () => ({
   getRoutingStatus: jest.fn(),
   classifyQuery: jest.fn(),
@@ -70,7 +76,7 @@ const HOST_PREFS = [
 jest.mock('../../src/services/hostPreferenceService', () => ({
   getAll: jest.fn(async () => HOST_PREFS),
   getByHost: jest.fn(async () => null),
-  getPinnedEntries: jest.fn(() => []),
+  getPinnedEntries: jest.fn((pref) => pref?.pinnedModels || []),
   resolvePinnedRuntimeOptions: jest.fn((pref, model, options, callerKeepAlive) => {
     const runtimeOptions = { ...(options || {}) };
     const pinnedEntry = (pref?.pinnedModels || []).find((entry) => entry.model === model) || null;
@@ -98,6 +104,7 @@ jest.mock('../../src/services/alertService', () => ({ getAlertService: jest.fn((
 
 const hostGate = require('../../src/services/hostGate');
 const { recordInference } = require('../../src/services/modelRouter');
+const { resolveInferenceContract } = require('../../src/services/inferenceContractService');
 const hostPreferenceService = require('../../src/services/hostPreferenceService');
 const apiRoutes = require('../../routes/api');
 
@@ -154,20 +161,92 @@ function mockPrimaryHttpSecondaryUp(status, error, capture = {}) {
   });
 }
 
+function qualifiedContract(input, overrides = {}) {
+  return {
+    version: 'agentx.inference-contract.v1',
+    artifact: {
+      model: input.model,
+      host: input.host,
+      hostId: input.host?.includes('secondary') ? 'secondary' : 'primary',
+      digest: `sha256:${input.model}`,
+      runtimeFingerprint: 'ollama:test',
+      identityQualified: true,
+    },
+    qualification: {
+      state: 'profiled',
+      qualified: true,
+      exactArtifact: true,
+      stale: false,
+      ...overrides.qualification,
+    },
+    capabilities: {
+      thinking: {
+        supported: false,
+        recommendedPolicy: 'off',
+        visibleFinalAnswer: { qualified: true },
+      },
+      tools: { supported: null, qualified: false },
+      streaming: { supported: null, qualified: false },
+    },
+    contextBudget: {
+      windowTokens: Number(input.requestedNumCtx) || 8192,
+      source: input.numCtxSource || 'profiled',
+      output: { reservedTokens: Number(input.requestedMaxOutputTokens) || 2048 },
+      input: { estimatedTokens: 4, overflowTokens: 0, fits: true, validatedFits: true },
+      transformations: {
+        truncation: { applied: false },
+        condensation: { applied: false },
+        upstreamTruncationRisk: false,
+      },
+      ...overrides.contextBudget,
+    },
+  };
+}
+
+function mockPrimaryDownQualifiedCrossModelUp(capture = {}) {
+  fetch.mockImplementation((url, opts = {}) => {
+    const target = String(url);
+    if (target.includes('/api/show')) {
+      const requested = JSON.parse(opts.body || '{}').name;
+      const exists = target.includes('secondary') && requested === 'small-model:latest';
+      return Promise.resolve({ ok: exists, status: exists ? 200 : 404 });
+    }
+    if (target.includes('secondary')) {
+      capture.secondaryPayload = JSON.parse(opts.body || '{}');
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          model: 'small-model:latest',
+          response: 'qualified fallback answer',
+          done: true,
+          prompt_eval_count: 9,
+          eval_count: 4,
+        }),
+      });
+    }
+    return Promise.reject(new Error('primary connection refused'));
+  });
+}
+
 describe('degraded retry wiring (0523)', () => {
   const app = express();
   app.use(express.json());
   app.use('/api', apiRoutes);
 
   const ORIGINAL = process.env.DEGRADED_FALLBACK;
+  const ORIGINAL_BENCHMARK_TOKEN = process.env.AGENTX_BENCHMARK_TOKEN;
   beforeEach(() => {
     jest.clearAllMocks();
     hostGate._resetForTests();
     delete process.env.DEGRADED_FALLBACK;
+    resolveInferenceContract.mockImplementation(async (input) => qualifiedContract(input));
   });
   afterEach(() => {
     if (ORIGINAL === undefined) delete process.env.DEGRADED_FALLBACK;
     else process.env.DEGRADED_FALLBACK = ORIGINAL;
+    if (ORIGINAL_BENCHMARK_TOKEN === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
+    else process.env.AGENTX_BENCHMARK_TOKEN = ORIGINAL_BENCHMARK_TOKEN;
   });
 
   test('flag OFF: the original error surfaces unchanged, with one telemetry row', async () => {
@@ -365,6 +444,212 @@ describe('degraded retry wiring (0523)', () => {
     const contacted = fetch.mock.calls.map((c) => String(c[0]));
     expect(contacted.some((u) => u.includes('secondary'))).toBe(false);
     expect(recordInference).toHaveBeenCalledTimes(1);
+  });
+
+  test('cross-model fallback stays inert for proxy traffic without explicit opt-in', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    mockPrimaryDownQualifiedCrossModelUp();
+
+    await request(app)
+      .post('/api/inference/generate')
+      .send({ model: 'large-model:latest', prompt: 'hi', callerDetail: 'openclaw-runtime-bridge' })
+      .expect(502);
+
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('secondary'))).toBe(false);
+    expect(recordInference).toHaveBeenCalledTimes(1);
+  });
+
+  test('a direct profiler caller cannot opt out of exact-model execution', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    process.env.AGENTX_BENCHMARK_TOKEN = 'direct-lane-test-token';
+    mockPrimaryDownQualifiedCrossModelUp();
+
+    await request(app)
+      .post('/api/inference/generate')
+      .set('x-agentx-benchmark-token', 'direct-lane-test-token')
+      .send({
+        model: 'large-model:latest',
+        prompt: 'hi',
+        callerDetail: 'profiler-host-secondary',
+        allowCrossModelFallback: true,
+      })
+      .expect(502);
+
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('secondary'))).toBe(false);
+    expect(recordInference).toHaveBeenCalledTimes(1);
+  });
+
+  test('opted-in proxy uses only an operator-pinned, exact-qualified alternate and labels it', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    hostPreferenceService.getAll.mockResolvedValueOnce([
+      HOST_PREFS[0],
+      {
+        ...HOST_PREFS[1],
+        loadedModels: ['small-model:latest'],
+        pinnedModels: [{ model: 'small-model:latest', contextSize: 8192, keepAlive: -1 }],
+      },
+    ]);
+    const capture = {};
+    mockPrimaryDownQualifiedCrossModelUp(capture);
+
+    const res = await request(app)
+      .post('/api/inference/generate')
+      .send({
+        model: 'large-model:latest',
+        prompt: 'hi',
+        callerDetail: 'openclaw-runtime-bridge',
+        allowCrossModelFallback: true,
+      })
+      .expect(200);
+
+    expect(capture.secondaryPayload).toMatchObject({
+      model: 'small-model:latest',
+      keep_alive: -1,
+      options: { num_ctx: 8192 },
+    });
+    expect(resolveInferenceContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'small-model:latest',
+        host: 'http://secondary:11434',
+      }),
+      { includeArtifactIdentity: true }
+    );
+    expect(res.headers).toMatchObject({
+      'x-agentx-degraded': 'true',
+      'x-agentx-degraded-fallback-type': 'cross_model',
+      'x-agentx-degraded-model-changed': 'true',
+      'x-agentx-degraded-primary-model': 'large-model:latest',
+      'x-agentx-degraded-actual-model': 'small-model:latest',
+      'x-resolved-model': 'small-model:latest',
+      'x-routed-host-key': 'secondary',
+    });
+    expect(res.body.agentx_degraded).toMatchObject({
+      degraded: true,
+      fallbackType: 'cross_model',
+      selectionPolicy: 'operator_pinned_exact_artifact',
+      modelChanged: true,
+      requested: { model: 'large-model:latest' },
+      primary: { model: 'large-model:latest', hostUrl: 'http://primary:11434' },
+      actual: {
+        model: 'small-model:latest',
+        hostUrl: 'http://secondary:11434',
+        host: 'secondary',
+      },
+    });
+    expect(recordInference).toHaveBeenCalledTimes(2);
+    expect(recordInference).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      model: 'small-model:latest',
+      routedModel: 'small-model:latest',
+      routedHostUrl: 'http://secondary:11434',
+      fallbackUsed: true,
+      routeDecision: expect.objectContaining({
+        requested: expect.objectContaining({ model: 'large-model:latest' }),
+        primary: expect.objectContaining({ model: 'large-model:latest', host: 'primary' }),
+        actual: expect.objectContaining({ model: 'small-model:latest', host: 'secondary' }),
+        degraded: true,
+      }),
+    }));
+  });
+
+  test('an installed but unqualified alternate is never dispatched', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    hostPreferenceService.getAll.mockResolvedValueOnce([
+      HOST_PREFS[0],
+      {
+        ...HOST_PREFS[1],
+        loadedModels: ['small-model:latest'],
+        pinnedModels: [{ model: 'small-model:latest', contextSize: 8192, keepAlive: -1 }],
+      },
+    ]);
+    resolveInferenceContract.mockImplementation(async (input) => qualifiedContract(
+      input,
+      input.model === 'small-model:latest'
+        ? { qualification: { qualified: false, exactArtifact: false } }
+        : {}
+    ));
+    mockPrimaryDownQualifiedCrossModelUp();
+
+    await request(app)
+      .post('/api/inference/generate')
+      .send({
+        model: 'large-model:latest',
+        prompt: 'hi',
+        callerDetail: 'openclaw-runtime-bridge',
+        allowCrossModelFallback: true,
+      })
+      .expect(502);
+
+    expect(fetch.mock.calls.some(([url]) => (
+      String(url).includes('secondary') && String(url).includes('/api/generate')
+    ))).toBe(false);
+    expect(recordInference).toHaveBeenCalledTimes(1);
+  });
+
+  test('an unpinned alternate is not part of the server-approved policy', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    hostPreferenceService.getAll.mockResolvedValueOnce([
+      HOST_PREFS[0],
+      {
+        ...HOST_PREFS[1],
+        loadedModels: ['small-model:latest'],
+        pinnedModels: [],
+      },
+    ]);
+    mockPrimaryDownQualifiedCrossModelUp();
+
+    await request(app)
+      .post('/api/inference/generate')
+      .send({
+        model: 'large-model:latest',
+        prompt: 'hi',
+        allowCrossModelFallback: true,
+      })
+      .expect(502);
+
+    expect(fetch.mock.calls.some(([url]) => (
+      String(url).includes('secondary') && String(url).includes('/api/generate')
+    ))).toBe(false);
+  });
+
+  test('a qualified alternate is refused when its own context cannot fit the input', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    hostPreferenceService.getAll.mockResolvedValueOnce([
+      HOST_PREFS[0],
+      {
+        ...HOST_PREFS[1],
+        loadedModels: ['small-model:latest'],
+        pinnedModels: [{ model: 'small-model:latest', contextSize: 8192, keepAlive: -1 }],
+      },
+    ]);
+    resolveInferenceContract.mockImplementation(async (input) => qualifiedContract(
+      input,
+      input.model === 'small-model:latest'
+        ? {
+          contextBudget: {
+            input: { estimatedTokens: 9000, overflowTokens: 2856, fits: false, validatedFits: false },
+            transformations: {
+              truncation: { applied: false },
+              condensation: { applied: false },
+              upstreamTruncationRisk: true,
+            },
+          },
+        }
+        : {}
+    ));
+    mockPrimaryDownQualifiedCrossModelUp();
+
+    await request(app)
+      .post('/api/inference/generate')
+      .send({
+        model: 'large-model:latest',
+        prompt: 'large input',
+        allowCrossModelFallback: true,
+      })
+      .expect(502);
+
+    expect(fetch.mock.calls.some(([url]) => (
+      String(url).includes('secondary') && String(url).includes('/api/generate')
+    ))).toBe(false);
   });
 
   test('flag ON: a retry that also fails surfaces the ORIGINAL error', async () => {

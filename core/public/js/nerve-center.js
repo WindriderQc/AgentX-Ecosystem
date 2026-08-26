@@ -356,10 +356,14 @@ const NerveCenter = (() => {
     }
 
     async function loadSummary() {
-        const [intelligenceResult, inferenceResult] = await Promise.allSettled([
+        const [intelligenceResult, inferenceResult, rulesResult] = await Promise.allSettled([
             fetchJson('/api/nerve-center/intelligence'),
-            fetchJson('/api/nerve-center/inference-stats')
+            fetchJson('/api/nerve-center/inference-stats'),
+            fetchJson('/api/alerts/rules')
         ]);
+        const detectorCoverage = rulesResult.status === 'fulfilled'
+            ? rulesResult.value?.data?.detectorCoverage
+            : null;
 
         if (intelligenceResult.status === 'fulfilled' && intelligenceResult.value.status === 'success' && intelligenceResult.value.data) {
             const { cluster, routing, hostPreferences, alerts } = intelligenceResult.value.data;
@@ -376,9 +380,13 @@ const NerveCenter = (() => {
 
             updateWidget('widgetActiveHost', () => {
                 if (!routing) return { value: '--', state: 'nominal' };
-                const hostKey = deriveHostKey(routing.currentHost, routing);
-                const state = routing.isFailedOver ? 'attention' : 'nominal';
-                return { value: hostKey.toUpperCase(), state };
+                const actualHost = routing.observedRequest?.actualHost || routing.currentHost;
+                const intentHost = routing.requestedIntent?.currentHost || routing.primaryHost;
+                const actualKey = deriveHostKey(actualHost, routing).toUpperCase();
+                const intentKey = deriveHostKey(intentHost, routing).toUpperCase();
+                const diverged = normalizeHostUrl(actualHost) !== normalizeHostUrl(intentHost);
+                const state = routing.isFailedOver || diverged ? 'attention' : 'nominal';
+                return { value: `${intentKey}→${actualKey}`, state };
             });
 
             updateWidget('widgetHostPrefs', () => {
@@ -393,10 +401,15 @@ const NerveCenter = (() => {
 
             updateWidget('widgetAlerts', () => {
                 const count = Array.isArray(alerts) ? alerts.length : 0;
+                const disabled = Number(detectorCoverage?.disabled) || 0;
                 let state = 'nominal';
                 if (count >= 3) state = 'critical';
-                else if (count > 0) state = 'attention';
-                return { value: String(count), state };
+                else if (count > 0 || disabled > 0) state = 'attention';
+                const widget = document.getElementById('widgetAlerts');
+                if (widget && detectorCoverage) {
+                    widget.title = `${detectorCoverage.active || 0} active detectors · ${disabled} disabled · ${detectorCoverage.retired_by_design || 0} retired by design`;
+                }
+                return { value: disabled > 0 ? `${count} · ${disabled} OFF` : String(count), state };
             });
 
             updateWidget('widgetRoutingMode', () => {

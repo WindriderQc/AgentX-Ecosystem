@@ -12,7 +12,11 @@
  */
 
 const logger = require('../../../config/logger');
-const { assertNoPayload } = require('./routeDecision');
+const {
+    assertNoPayload,
+    buildRouteDecision,
+    fingerprintRuntimeOptions
+} = require('./routeDecision');
 
 /**
  * Last line of defence before a decision is persisted for 30 days.
@@ -26,9 +30,56 @@ function sanitizedRouteDecision(decision) {
     if (!decision) return null;
     try {
         assertNoPayload(decision);
-        return decision;
+        let configVersion = decision.configVersion;
+        if (!configVersion) {
+            try {
+                configVersion = require('../modelRouterConfig').getRoutingConfigVersion();
+            } catch {
+                configVersion = 'router-unversioned-v1';
+            }
+        }
+        const enriched = {
+            ...decision,
+            configVersion,
+            optionsFingerprint: decision.optionsFingerprint || fingerprintRuntimeOptions(null)
+        };
+        assertNoPayload(enriched);
+        return enriched;
     } catch (err) {
         logger.warn('RouteDecision dropped before persistence', { error: err.message, code: err.code });
+        return null;
+    }
+}
+
+function decisionForTelemetry(data = {}) {
+    if (data.routeDecision) return sanitizedRouteDecision(data.routeDecision);
+    try {
+        return sanitizedRouteDecision(buildRouteDecision({
+            configVersion: data.configVersion,
+            caller: data.caller,
+            callerDetail: data.callerDetail,
+            consumerContract: data.consumerContract,
+            correlationId: data.correlationId,
+            workItemId: data.workItemId,
+            runtime: data.runtime,
+            taskType: data.taskType,
+            selectedModel: data.routedModel || data.model,
+            selectedHost: data.routedHost,
+            selectedHostUrl: data.routedHostUrl || data.host,
+            actualModel: data.model,
+            actualHost: data.hostKey || data.routedHost,
+            actualHostUrl: data.host || data.routedHostUrl,
+            attempt: data.attempt,
+            fallbackUsed: data.fallbackUsed,
+            fallbackReason: data.fallbackReason,
+            degraded: data.degraded,
+            degradedReason: data.degradedReason,
+            runtimeOptions: data.runtimeOptions,
+            classificationMs: data.classificationMs,
+            totalMs: data.durationMs
+        }));
+    } catch (err) {
+        logger.warn('RouteDecision could not be synthesized for telemetry', { error: err.message });
         return null;
     }
 }
@@ -54,6 +105,7 @@ function sanitizedRouteDecision(decision) {
  * @param {string}  [data.fallbackReason]
  * @param {Object}  [data.routeDecision] - RouteDecision v1 (task 0519)
  * @param {Object}  [data.observability] - Safe contract/outcome summary; never payload
+ * @param {number}  [data.estimatedInputTokensAtDispatch] - Pre-dispatch input estimate; survives upstream failures
  * @param {number}  [data.tokensIn]
  * @param {number}  [data.tokensOut]
  * @param {number}  [data.durationMs]
@@ -62,7 +114,7 @@ function sanitizedRouteDecision(decision) {
  */
 async function recordInference(data) {
     if (process.env.NODE_ENV === 'test') return; // skip in tests
-    const decision = sanitizedRouteDecision(data.routeDecision);
+    const decision = decisionForTelemetry(data);
     let telemetryId = null;
     try {
         const InferenceLog = require('../../../models/InferenceLog');
@@ -96,6 +148,9 @@ async function recordInference(data) {
             routeDecision: decision,
             num_ctx: data.num_ctx != null ? data.num_ctx : null,
             num_ctx_source: data.num_ctx_source || null,
+            estimatedInputTokensAtDispatch: Number.isFinite(Number(data.estimatedInputTokensAtDispatch))
+                ? Math.max(0, Number(data.estimatedInputTokensAtDispatch))
+                : null,
             tokensIn: data.tokensIn || 0,
             tokensOut: data.tokensOut || 0,
             durationMs: data.durationMs || 0,
@@ -104,6 +159,23 @@ async function recordInference(data) {
             timestamp: new Date()
         });
         telemetryId = row?._id?.toString?.() || null;
+
+        // Every persisted row advances windowed inference-rate detectors. The
+        // rule engine owns the query and threshold; telemetry emits only the
+        // fact that a row completed, so corrected built-ins take effect without
+        // duplicating rate policy in every inference route.
+        try {
+            const alertService = require('../alertService');
+            Promise.resolve(alertService.evaluateEvent({
+                component: 'platform-inference',
+                metric: 'inference_completed',
+                source: 'inference-telemetry'
+            })).catch(alertError => {
+                logger.warn('Inference rate alert dispatch failed (non-fatal)', { error: alertError.message });
+            });
+        } catch (alertError) {
+            logger.warn('Inference rate alert dispatch failed (non-fatal)', { error: alertError.message });
+        }
     } catch (_e) {
         // Never break inference because of telemetry failure. Kept at warn
         // (not debug) so silent schema drifts surface promptly — previously
@@ -141,5 +213,6 @@ async function recordInference(data) {
 
 module.exports = {
     recordInference,
+    decisionForTelemetry,
     sanitizedRouteDecision,
 };

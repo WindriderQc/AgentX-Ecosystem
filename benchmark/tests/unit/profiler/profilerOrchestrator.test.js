@@ -25,6 +25,7 @@ jest.mock('../../../models/ModelProfile', () => ({ findOne: jest.fn() }));
 jest.mock('../../../src/services/benchmark/buddySurfaceEvents', () => ({ emitLifecycle: jest.fn() }));
 
 const hostTestService = require('../../../src/services/hostTestService');
+const contextProbeService = require('../../../src/services/contextProbeService');
 const modelProfileService = require('../../../src/services/profiler/modelProfileService');
 const performanceProfiles = require('../../../src/services/profiler/modelPerformanceProfileService');
 const artifactIdentityService = require('../../../src/services/profiler/artifactIdentityService');
@@ -111,6 +112,37 @@ describe('profile', () => {
       })
     );
     expect(result).toMatchObject({ modelName: MODEL, artifact: ARTIFACT, evidenceId: 'evidence-1' });
+  });
+
+  it('persists benchmark-qualified readiness after a zero-throughput context boundary', async () => {
+    contextProbeService.probeModelContext.mockResolvedValue({
+      status: 'completed',
+      testedNumCtx: 32768,
+      degradationPct: 10,
+      steps: [
+        { numCtx: 2048, passed: true, tokensPerSec: 50 },
+        { numCtx: 32768, passed: true, tokensPerSec: 45 },
+        { numCtx: 65536, requestSucceeded: true, passed: false, tokensPerSec: 0 }
+      ]
+    });
+
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'standard');
+
+    expect(result.profile).toEqual(expect.objectContaining({
+      profileDepth: 'standard',
+      optimalNumCtx: 32768
+    }));
+    expect(modelProfileService.updateReadiness).toHaveBeenCalledWith(
+      MODEL,
+      HOST_ID,
+      'profiled',
+      expect.objectContaining({
+        [`readiness.${HOST_ID}.profileDepth`]: 'standard',
+        [`readiness.${HOST_ID}.benchmarkQualified`]: true,
+        [`readiness.${HOST_ID}.stale`]: false,
+        [`readiness.${HOST_ID}.artifact`]: ARTIFACT
+      })
+    );
   });
 
   it('retires adaptation explicitly', async () => {

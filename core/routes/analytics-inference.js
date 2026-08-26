@@ -52,6 +52,109 @@ const round = (n, d = 2) => {
 
 const rate = (part, total) => (total > 0 ? round((part / total) * 100) : 0);
 
+const LOG_FILTER_FIELDS = ['caller', 'callerDetail', 'taskType', 'model', 'host'];
+const LOG_STATUSES = new Set(['success', 'error', 'timeout']);
+
+function boundedText(value, max = 200) {
+  const text = String(value == null ? '' : value).trim();
+  return text ? text.slice(0, max) : '';
+}
+
+function parseDateFilter(value, name) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    const error = new Error(`${name} must be a valid ISO-8601 timestamp`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed;
+}
+
+function buildLogQuery(query = {}) {
+  const filter = {};
+  for (const field of LOG_FILTER_FIELDS) {
+    const value = boundedText(query[field]);
+    if (value) filter[field] = value;
+  }
+
+  const statuses = boundedText(query.status, 100)
+    .split(',')
+    .map(status => status.trim())
+    .filter(Boolean);
+  if (statuses.some(status => !LOG_STATUSES.has(status))) {
+    const error = new Error('status must contain only success, error, or timeout');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (statuses.length === 1) filter.status = statuses[0];
+  else if (statuses.length > 1) filter.status = { $in: [...new Set(statuses)] };
+
+  const from = parseDateFilter(query.from, 'from');
+  const to = parseDateFilter(query.to, 'to');
+  if (from || to) {
+    filter.timestamp = {};
+    if (from) filter.timestamp.$gte = from;
+    if (to) filter.timestamp.$lte = to;
+  }
+  if (from && to && from > to) {
+    const error = new Error('from must be earlier than or equal to to');
+    error.statusCode = 400;
+    throw error;
+  }
+  return filter;
+}
+
+/**
+ * GET /api/analytics/inference/logs
+ *
+ * Canonical, filterable and paged read API over inferencelogs. The collection
+ * timestamps on `timestamp`; `createdAt` is intentionally not consulted.
+ */
+router.get('/logs', async (req, res) => {
+  try {
+    const filter = buildLogQuery(req.query);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 50));
+    const skip = (page - 1) * pageSize;
+
+    const [items, total] = await Promise.all([
+      InferenceLog.find(filter)
+        .sort({ timestamp: -1, _id: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .lean(),
+      InferenceLog.countDocuments(filter)
+    ]);
+
+    envelope.success(res, {
+      source: 'inferencelogs',
+      timestampField: 'timestamp',
+      filters: {
+        status: req.query.status || null,
+        caller: req.query.caller || null,
+        callerDetail: req.query.callerDetail || null,
+        taskType: req.query.taskType || null,
+        model: req.query.model || null,
+        host: req.query.host || null,
+        from: req.query.from || null,
+        to: req.query.to || null,
+      },
+      items,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        pages: total > 0 ? Math.ceil(total / pageSize) : 0,
+        hasNext: skip + items.length < total,
+      }
+    });
+  } catch (err) {
+    logger.error('Inference log query failed', { error: err.message });
+    envelope.error(res, err.statusCode || 500, err.message);
+  }
+});
+
 /**
  * Estimated USD for a cloud model's token counts.
  * Returns null — never 0 — when no pricing can be resolved, so the UI can
@@ -92,7 +195,12 @@ router.get('/summary', async (req, res) => {
       tokensIn: { $sum: { $ifNull: ['$tokensIn', 0] } },
       tokensOut: { $sum: { $ifNull: ['$tokensOut', 0] } },
       durationMs: { $sum: { $ifNull: ['$durationMs', 0] } },
-      fallbacks: { $sum: { $cond: ['$fallbackUsed', 1, 0] } }
+      fallbacks: { $sum: { $cond: ['$fallbackUsed', 1, 0] } },
+      classificationMs: { $sum: { $ifNull: ['$classificationMs', 0] } },
+      classifiedCalls: { $sum: { $cond: [{ $gt: ['$classificationMs', 0] }, 1, 0] } },
+      classifiedDurationMs: {
+        $sum: { $cond: [{ $gt: ['$classificationMs', 0] }, { $ifNull: ['$durationMs', 0] }, 0] }
+      }
     };
 
     const [facet] = await InferenceLog.aggregate([
@@ -106,6 +214,10 @@ router.get('/summary', async (req, res) => {
             { $limit: 40 }
           ],
           byCaller: [{ $group: { _id: '$caller', ...groupMetrics } }, { $sort: { calls: -1 } }],
+          byCallerDetail: [{ $group: { _id: { $ifNull: ['$callerDetail', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
+          byTaskType: [{ $group: { _id: { $ifNull: ['$taskType', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
+          byFallbackUsed: [{ $group: { _id: '$fallbackUsed', ...groupMetrics } }, { $sort: { calls: -1 } }],
+          byDegraded: [{ $group: { _id: { $ifNull: ['$routeDecision.degraded', false] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
           byRuntime: [{ $group: { _id: '$runtime', ...groupMetrics } }, { $sort: { calls: -1 } }],
           byHost: [{ $group: { _id: '$host', ...groupMetrics } }, { $sort: { calls: -1 } }],
           byDay: [
@@ -157,6 +269,9 @@ router.get('/summary', async (req, res) => {
         totalTokens: (row.tokensIn || 0) + tokensOut,
         inferenceSeconds: round(seconds),
         avgLatencyMs: calls > 0 ? Math.round((row.durationMs || 0) / calls) : 0,
+        avgClassificationMs: row.classifiedCalls > 0
+          ? Math.round((row.classificationMs || 0) / row.classifiedCalls)
+          : 0,
         // Real generation throughput, the number that actually tells you
         // whether a model is worth its VRAM.
         tokensOutPerSecond: seconds > 0 ? round(tokensOut / seconds) : 0
@@ -205,6 +320,14 @@ router.get('/summary', async (req, res) => {
         inferenceSeconds: round(totalSeconds),
         inferenceHours: round(totalSeconds / 3600),
         avgLatencyMs: t.calls > 0 ? Math.round((t.durationMs || 0) / t.calls) : 0,
+        classifiedCalls: t.classifiedCalls || 0,
+        avgClassificationMs: t.classifiedCalls > 0
+          ? Math.round((t.classificationMs || 0) / t.classifiedCalls)
+          : 0,
+        avgTotalForClassifiedMs: t.classifiedCalls > 0
+          ? Math.round((t.classifiedDurationMs || 0) / t.classifiedCalls)
+          : 0,
+        classificationOverheadPct: rate(t.classificationMs || 0, t.classifiedDurationMs || 0),
         tokensOutPerSecond: totalSeconds > 0 ? round(t.tokensOut / totalSeconds) : 0,
         callsPerDay: round(t.calls / (WINDOWS[key] / 24), 1)
       },
@@ -227,6 +350,10 @@ router.get('/summary', async (req, res) => {
       },
       byModel,
       byCaller: (facet?.byCaller || []).map((r) => shape(r, 'caller')),
+      byCallerDetail: (facet?.byCallerDetail || []).map((r) => shape(r, 'callerDetail')),
+      byTaskType: (facet?.byTaskType || []).map((r) => shape(r, 'taskType')),
+      byFallbackUsed: (facet?.byFallbackUsed || []).map((r) => shape(r, 'fallbackUsed')),
+      byDegraded: (facet?.byDegraded || []).map((r) => shape(r, 'degraded')),
       byRuntime: (facet?.byRuntime || []).map((r) => shape(r, 'runtime')),
       byHost: (facet?.byHost || []).map((r) => shape(r, 'host')),
       byDay: (facet?.byDay || []).map((r) => shape(r, 'date')),
@@ -250,3 +377,4 @@ router.get('/summary', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.buildLogQuery = buildLogQuery;

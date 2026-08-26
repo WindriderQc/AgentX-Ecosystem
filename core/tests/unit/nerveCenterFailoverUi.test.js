@@ -8,7 +8,8 @@ const routing = fs.readFileSync(path.join(root, 'public/js/nerve-center-routing.
 
 describe('Nerve Center failover UI', () => {
   it('shows persisted actual routing and does not expose process-local intent controls', () => {
-    expect(view).toContain('Last Actual Host');
+    expect(view).toContain('Intent → Last Served');
+    expect(view).toContain('embeddings are excluded');
     expect(view).toContain('Persisted actual-route state');
     expect(view).not.toContain('id="btnFailover"');
     expect(view).not.toContain('id="btnResetPrimary"');

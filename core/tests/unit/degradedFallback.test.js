@@ -6,6 +6,7 @@ const {
   APPROVED_5XX,
   REFUSAL_REASONS,
   isEnabled,
+  isCrossModelFallbackAllowed,
   classifyFailure,
   isRetryEligible,
   selectRetryCandidate,
@@ -176,6 +177,48 @@ describe('invariant 4 — three lanes only (0523)', () => {
   );
 });
 
+describe('explicit cross-model policy', () => {
+  test('an unscoped proxy remains ineligible without explicit opt-in', () => {
+    enable();
+    expect(isRetryEligible(eligibleAttempt({
+      lane: null,
+      routeManaged: true,
+      crossModelOptIn: false,
+    }))).toMatchObject({
+      eligible: false,
+      reason: REFUSAL_REASONS.LANE_OUT_OF_SCOPE,
+    });
+  });
+
+  test('an opted-in route-managed request may enter qualified candidate selection', () => {
+    enable();
+    const attempt = eligibleAttempt({
+      lane: null,
+      routeManaged: true,
+      crossModelOptIn: true,
+    });
+    expect(isCrossModelFallbackAllowed(attempt)).toBe(true);
+    expect(isRetryEligible(attempt)).toMatchObject({
+      eligible: true,
+      failureClass: RETRYABLE_FAILURES.CONNECTION_FAILURE,
+    });
+  });
+
+  test('opt-in cannot override direct or explicit-host routing ownership', () => {
+    enable();
+    const attempt = eligibleAttempt({
+      lane: null,
+      routeManaged: false,
+      crossModelOptIn: true,
+    });
+    expect(isCrossModelFallbackAllowed(attempt)).toBe(false);
+    expect(isRetryEligible(attempt)).toMatchObject({
+      eligible: false,
+      reason: REFUSAL_REASONS.CROSS_MODEL_ROUTE_NOT_MANAGED,
+    });
+  });
+});
+
 describe('fault injection — failure classification (0523)', () => {
   test.each([
     ['connection refused', { kind: 'connection' }, RETRYABLE_FAILURES.CONNECTION_FAILURE],
@@ -268,6 +311,34 @@ describe('degraded state (0523)', () => {
     // Recalculated from the retry target — carrying the dead host's pin context
     // over is how a request asks for a window the new host never loaded.
     expect(state.pinOptions).toEqual({ num_ctx: 8192 });
+  });
+
+  test('labels a model substitution with requested, primary, and actual targets', () => {
+    const state = buildDegradedState(RETRYABLE_FAILURES.CONNECTION_FAILURE, {
+      model: 'small-model:latest',
+      hostUrl: 'http://secondary:11434',
+      host: { key: 'secondary' },
+      artifact: { pinOptions: { num_ctx: 8192 } },
+    }, {
+      requestedModel: 'large-model:latest',
+      failedCandidate: {
+        model: 'large-model:latest',
+        hostUrl: 'http://primary:11434',
+      },
+    });
+
+    expect(state).toMatchObject({
+      fallbackType: 'cross_model',
+      selectionPolicy: 'operator_pinned_exact_artifact',
+      modelChanged: true,
+      requested: { model: 'large-model:latest' },
+      primary: { model: 'large-model:latest', hostUrl: 'http://primary:11434' },
+      actual: {
+        model: 'small-model:latest',
+        hostUrl: 'http://secondary:11434',
+        host: 'secondary',
+      },
+    });
   });
 
   test('a refused retry still produces a reportable degraded state', () => {

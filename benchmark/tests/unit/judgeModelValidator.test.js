@@ -120,7 +120,9 @@ describe('Judge Model Validator', () => {
 
             const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
             expect(result.valid).toBe(true);
+            expect(result.warning).toBeUndefined();
             expect(result.latency_ms).toBeDefined();
+            expect(JSON.parse(_fetch.mock.calls[1][1].body)).toMatchObject({ think: false });
         });
 
         it('should return invalid when model produces no JSON', async () => {

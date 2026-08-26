@@ -16,7 +16,7 @@ async function tryAndRespondDegraded(context) {
     useChat, gateRelease, prompt, messages, system,
     requestedThink, thinkingMode, lane, laneName, rawResponseRequested,
     stream, skipGate, routingSource, routingTrace, requestedModel,
-    dispatchAttemptRecord, buildRoutingDifference, timeoutMs,
+    dispatchAttemptRecord, buildRoutingDifference, timeoutMs, routeManaged,
   } = context;
   const degradedOutcome = await tryDegradedRetry({
     attemptState: {
@@ -26,6 +26,9 @@ async function tryAndRespondDegraded(context) {
       failure,
       requiredContextTokens: options.num_ctx,
       numCtxSource,
+      crossModelOptIn: body.allowCrossModelFallback === true,
+      routeManaged: routeManaged === true,
+      requestedModel: artifactResolution.requested || model,
     },
     baseModel: artifactResolution.requested || model,
     model,
@@ -50,7 +53,10 @@ async function tryAndRespondDegraded(context) {
   });
 
   if (degradedOutcome?.retried) {
-    const fallbackRoutingSource = `${routingSource}+degraded-fallback`;
+    const fallbackType = degradedOutcome.degraded.fallbackType || 'same_model';
+    const fallbackRoutingSource = fallbackType === 'cross_model'
+      ? `${routingSource}+degraded-cross-model`
+      : `${routingSource}+degraded-fallback`;
     const fallbackTrace = {
       ...routingTrace,
       selected: {
@@ -64,7 +70,9 @@ async function tryAndRespondDegraded(context) {
         requested: artifactResolution.requested || model,
         resolved: degradedOutcome.model,
         rewritten: (artifactResolution.requested || model) !== degradedOutcome.model,
-        source: 'verified_degraded_fallback',
+        source: fallbackType === 'cross_model'
+          ? 'verified_cross_model_fallback'
+          : 'verified_degraded_fallback',
       },
       thinking: degradedOutcome.thinkingPolicy,
       inferenceContract: degradedOutcome.contract,
@@ -115,6 +123,10 @@ async function tryAndRespondDegraded(context) {
       });
       res.set('X-AgentX-Degraded', 'true');
       res.set('X-AgentX-Degraded-Reason', degradedOutcome.degraded.degradedReason);
+      res.set('X-AgentX-Degraded-Fallback-Type', fallbackType);
+      res.set('X-AgentX-Degraded-Model-Changed', String(degradedOutcome.degraded.modelChanged === true));
+      res.set('X-AgentX-Degraded-Primary-Model', degradedOutcome.degraded.primary?.model || model);
+      res.set('X-AgentX-Degraded-Actual-Model', degradedOutcome.model);
       const clientData = buildInferenceClientData(
         degradedOutcome.data,
         degradedOutcome.model,

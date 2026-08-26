@@ -40,9 +40,10 @@ class AlertService extends EventEmitter {
     const alerts = [];
     for (const rule of this.rules) {
       try {
-        if (!this._ruleMatchesEvent(rule, event)) continue;
+        const materializedEvent = await this._materializeWindowFacts(rule, event);
+        if (!materializedEvent || !this._ruleMatchesEvent(rule, materializedEvent)) continue;
 
-        const alert = await this._createOrUpdateAlert(rule, event);
+        const alert = await this._createOrUpdateAlert(rule, materializedEvent);
         if (alert) alerts.push(alert);
       } catch (err) {
         logger.error('[AlertService] Failed to evaluate rule', {
@@ -101,9 +102,108 @@ class AlertService extends EventEmitter {
       case 'equal':
       case 'equals':
         return actual === expected;
+      case 'notEqual':
+        return actual !== expected;
+      case 'greaterThanOrEqual':
+        return typeof actual === 'number' && actual >= expected;
+      case 'lessThanOrEqual':
+        return typeof actual === 'number' && actual <= expected;
+      case 'contains':
+        return Array.isArray(actual)
+          ? actual.includes(expected)
+          : typeof actual === 'string' && actual.includes(String(expected));
+      case 'matches':
+        try {
+          return new RegExp(String(expected)).test(String(actual ?? ''));
+        } catch {
+          return false;
+        }
       default:
         return false;
     }
+  }
+
+  /**
+   * Materialize allowlisted window facts before matching a rule.
+   *
+   * A window condition is deliberately declarative rather than a raw MongoDB
+   * fragment. This makes "error rate > 5% over 1h" expressible without giving
+   * persisted rules an arbitrary-query escape hatch.
+   */
+  async _materializeWindowFacts(rule, event) {
+    const conditions = Array.isArray(rule?.conditions?.all) ? rule.conditions.all : [];
+    const windowed = conditions.filter(condition => condition?.window);
+    if (windowed.length === 0) return event;
+
+    const sourceData = event?.data && typeof event.data === 'object'
+      ? { ...event.data }
+      : { ...(event || {}) };
+    const sourceExtra = sourceData.additionalData && typeof sourceData.additionalData === 'object'
+      ? sourceData.additionalData
+      : {};
+    const data = { ...sourceData, ...sourceExtra };
+
+    // Cheap event-local predicates gate database work. Rate facts are only
+    // queried for the event type that can make the rule relevant.
+    const localConditions = conditions.filter(condition => !condition?.window);
+    if (!localConditions.every(condition => this._evaluateCondition(condition, data))) return null;
+
+    const computed = {};
+    for (const condition of windowed) {
+      const spec = condition.window || {};
+      if (spec.source !== 'inferencelogs') {
+        throw new Error(`Unsupported alert window source: ${spec.source || 'missing'}`);
+      }
+
+      const durationMs = Math.min(
+        Math.max(Number(spec.durationMs) || 3600000, 60000),
+        30 * 24 * 60 * 60 * 1000
+      );
+      const numeratorField = spec.numerator?.field;
+      const allowedNumeratorFields = new Set(['status', 'caller', 'taskType', 'model', 'host', 'fallbackUsed']);
+      if (!allowedNumeratorFields.has(numeratorField)) {
+        throw new Error(`Unsupported inference rate numerator: ${numeratorField || 'missing'}`);
+      }
+      const values = Array.isArray(spec.numerator?.values)
+        ? spec.numerator.values.slice(0, 20)
+        : [spec.numerator?.value].filter(value => value !== undefined);
+      if (values.length === 0) throw new Error('Inference rate numerator requires at least one value');
+
+      const InferenceLog = require('../../models/InferenceLog');
+      const match = { timestamp: { $gte: new Date(Date.now() - durationMs) } };
+      const [total, numerator] = await Promise.all([
+        InferenceLog.countDocuments(match),
+        InferenceLog.countDocuments({
+          ...match,
+          [numeratorField]: values.length === 1 ? values[0] : { $in: values }
+        })
+      ]);
+      const factName = String(condition.fact || 'rate').slice(0, 80);
+      const rate = total > 0 ? Math.round((numerator / total) * 1000) / 10 : 0;
+      computed[factName] = rate;
+      computed[`${factName}Numerator`] = numerator;
+      computed[`${factName}Total`] = total;
+      computed.windowMs = durationMs;
+      computed.windowLabel = this._formatWindow(durationMs);
+
+      const minimumSamples = Math.max(0, Number(spec.minimumSamples) || 0);
+      if (total < minimumSamples) return null;
+    }
+
+    const materialized = {
+      ...sourceData,
+      ...computed,
+      additionalData: { ...sourceExtra, ...computed }
+    };
+    return event?.data && typeof event.data === 'object'
+      ? { ...event, data: materialized }
+      : materialized;
+  }
+
+  _formatWindow(durationMs) {
+    if (durationMs % 3600000 === 0) return `${durationMs / 3600000}h`;
+    if (durationMs % 60000 === 0) return `${durationMs / 60000}m`;
+    return `${Math.round(durationMs / 1000)}s`;
   }
 
   _compare(value, threshold, comparison) {
@@ -134,12 +234,34 @@ class AlertService extends EventEmitter {
     return re.test(String(value));
   }
 
+  _templateValue(data, key) {
+    return String(key).split('.').reduce((value, part) => value?.[part], data);
+  }
+
+  _templateContext(data) {
+    const payloadKeys = /^(prompt|prompts|message|messages|transcript|completion|response|content|text|input|output|system)$/i;
+    const safe = {};
+    for (const [key, value] of Object.entries(data || {})) {
+      if (payloadKeys.test(key) || key === 'additionalData') continue;
+      if (value == null || ['string', 'number', 'boolean'].includes(typeof value)) safe[key] = value;
+    }
+    const serialized = JSON.stringify(safe);
+    return serialized.length > 800 ? `${serialized.slice(0, 797)}...` : serialized;
+  }
+
   _renderTemplate(template, data) {
     if (!template) return '';
-    return String(template).replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
-      const v = data?.[key];
-      return v === undefined || v === null ? '' : String(v);
+    const missing = new Set();
+    const rendered = String(template).replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
+      const v = this._templateValue(data, key);
+      if (v === undefined || v === null || String(v).trim() === '') {
+        missing.add(key);
+        return `[missing:${key}]`;
+      }
+      return String(v);
     });
+    if (missing.size === 0) return rendered;
+    return `${rendered} [template_error missing=${[...missing].join(',')} context=${this._templateContext(data)}]`;
   }
 
   _severityFromRule(rule) {
@@ -168,6 +290,88 @@ class AlertService extends EventEmitter {
     if (data.metric) parts.push(data.value !== undefined && data.value !== null ? `${data.metric} = ${data.value}` : data.metric);
     if (data.threshold !== undefined && data.threshold !== null) parts.push(`threshold ${data.threshold}`);
     return parts.length ? parts.join(' · ') : 'Alert conditions matched';
+  }
+
+  _flapSeverity(severity) {
+    return ({ info: 'warning', warning: 'error', error: 'critical', critical: 'critical' })[severity] || 'warning';
+  }
+
+  async _reopenFlappingAlert(rule, data, fingerprint, now) {
+    const windowMs = 6 * 60 * 60 * 1000;
+    const since = new Date(now.getTime() - windowMs);
+    const previous = await Alert.findOne({
+      fingerprint,
+      status: 'resolved',
+      'resolution.resolutionMethod': {
+        $in: ['auto-recovery', 'auto-reachable', 'auto-stale']
+      },
+      'resolution.resolvedAt': { $gte: since }
+    }).sort({ 'resolution.resolvedAt': -1 });
+    if (!previous) return null;
+
+    const flap = {
+      detected: true,
+      count: Math.max(1, Number(previous.metadata?.flapping?.count) || 1) + 1,
+      windowMs,
+      windowStartedAt: since
+    };
+    const baseSeverity = this._severityFromRule(rule);
+    const presentation = this._flapPresentation(
+      this._titleFromRule(rule, data),
+      this._messageFromRule(rule, data),
+      flap
+    );
+    const extra = data.additionalData && typeof data.additionalData === 'object'
+      ? data.additionalData
+      : null;
+
+    // Re-open the same incident document. A host that alternates between
+    // reachable and unreachable is one flapping condition, not a stream of
+    // unrelated resolved alerts. The status predicate makes this an atomic
+    // claim if two producers observe the same refire concurrently.
+    const reopened = await Alert.findOneAndUpdate(
+      { _id: previous._id, status: 'resolved' },
+      {
+        $set: {
+          status: 'active',
+          severity: this._flapSeverity(baseSeverity),
+          title: presentation.title,
+          message: presentation.message,
+          lastOccurrence: now,
+          'context.component': data.component,
+          'context.metric': data.metric,
+          'context.currentValue': data.value,
+          'context.threshold': data.threshold,
+          'context.additionalData': extra || data,
+          'metadata.flapping': flap,
+          'resolution.resolved': false,
+          'resolution.resolvedAt': null,
+          'resolution.resolvedBy': null,
+          'resolution.resolutionMethod': null,
+          'resolution.comment': null,
+          lastNotifiedAt: now
+        },
+        $inc: { occurrenceCount: 1, notificationCount: 1 }
+      },
+      { new: true }
+    );
+    if (!reopened) return null;
+
+    try {
+      await this._sendNotifications(reopened, reopened.channels);
+    } catch {
+      // Notifications are best-effort; the incident state is authoritative.
+    }
+    return reopened;
+  }
+
+  _flapPresentation(title, message, flap) {
+    if (!flap) return { title, message };
+    const window = this._formatWindow(flap.windowMs);
+    return {
+      title: `FLAPPING — ${title} (${flap.count}× in ${window})`,
+      message: `${message} · Repeated after automatic recovery; ${flap.count} fire cycles in ${window}.`
+    };
   }
 
   _fingerprintFor(rule, data) {
@@ -222,6 +426,21 @@ class AlertService extends EventEmitter {
     );
 
     if (updated) {
+      // A recurrence inside an already-open flap is another observation of
+      // the same fire cycle, not a reason to erase the flapping presentation.
+      const flap = updated.metadata?.flapping;
+      if (flap?.detected) {
+        const presentation = this._flapPresentation(
+          this._titleFromRule(rule, data),
+          this._messageFromRule(rule, data),
+          flap
+        );
+        await Alert.findByIdAndUpdate(updated._id, {
+          $set: { title: presentation.title, message: presentation.message }
+        });
+        updated.title = presentation.title;
+        updated.message = presentation.message;
+      }
       // Deduplicated. Historically this returned immediately, which meant a
       // condition that keeps failing is never re-announced: it stays active,
       // so the stale sweep never resolves it, so no new alert is ever created,
@@ -232,15 +451,24 @@ class AlertService extends EventEmitter {
       return updated;
     }
 
+    const reopened = await this._reopenFlappingAlert(rule, data, fingerprint, now);
+    if (reopened) return reopened;
+
     // Create new alert - use unique index to handle race conditions
     let alertDoc;
     try {
+      const baseSeverity = this._severityFromRule(rule);
+      const presentation = this._flapPresentation(
+        this._titleFromRule(rule, data),
+        this._messageFromRule(rule, data),
+        null
+      );
       alertDoc = await Alert.create({
         ruleId: rule?.id || 'rule',
         ruleName: rule?.name || 'Alert Rule',
-        severity: this._severityFromRule(rule),
-        title: this._titleFromRule(rule, data),
-        message: this._messageFromRule(rule, data),
+        severity: baseSeverity,
+        title: presentation.title,
+        message: presentation.message,
         context: {
           component: data.component,
           metric: data.metric,

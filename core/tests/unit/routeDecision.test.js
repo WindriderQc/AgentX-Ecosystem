@@ -9,6 +9,7 @@ const {
   fingerprintRuntimeOptions,
   assertNoPayload,
 } = require('../../src/services/routing/routeDecision');
+const { decisionForTelemetry, sanitizedRouteDecision } = require('../../src/services/routing/inferenceTelemetry');
 
 describe('RouteDecision v1 contract (0519)', () => {
   test('carries every contract field with stable names', () => {
@@ -102,8 +103,33 @@ describe('RouteDecision v1 contract (0519)', () => {
 
     expect(a).toBe(b);          // key order is not a behaviour change
     expect(a).not.toBe(c);      // a num_ctx change is (it rebuilds the runner)
-    expect(fingerprintRuntimeOptions({})).toBeNull();
-    expect(fingerprintRuntimeOptions(null)).toBeNull();
+    expect(fingerprintRuntimeOptions({})).toMatch(/^[a-f0-9]{16}$/);
+    expect(fingerprintRuntimeOptions(null)).toBe(fingerprintRuntimeOptions({}));
+  });
+
+  test('the telemetry writer backfills routing and options provenance instead of persisting nulls', () => {
+    const decision = sanitizedRouteDecision(buildRouteDecision({ selectedModel: 'model:1' }));
+    expect(decision.configVersion).toMatch(/^router-(?:[a-f0-9]{16}|unversioned-v1)$/);
+    expect(decision.optionsFingerprint).toMatch(/^[a-f0-9]{16}$/);
+  });
+
+  test('the telemetry writer synthesizes provenance when a caller supplies no route decision', () => {
+    const decision = decisionForTelemetry({
+      caller: 'proxy',
+      callerDetail: 'openclaw-runtime-bridge',
+      model: 'model:1',
+      host: 'http://primary:11434',
+      runtimeOptions: { num_ctx: 262144 },
+      durationMs: 180000
+    });
+
+    expect(decision).toMatchObject({
+      attribution: { caller: 'proxy', callerDetail: 'openclaw-runtime-bridge' },
+      actual: { model: 'model:1', hostUrl: 'http://primary:11434' },
+      latency: { totalMs: 180000 }
+    });
+    expect(decision.configVersion).toMatch(/^router-(?:[a-f0-9]{16}|unversioned-v1)$/);
+    expect(decision.optionsFingerprint).toMatch(/^[a-f0-9]{16}$/);
   });
 
   describe('privacy guarantee', () => {

@@ -1,6 +1,9 @@
 const InferenceLog = require('../../models/InferenceLog');
 
-const TRUSTED_ROUTING_CALLERS = ['embedding', 'proxy'];
+// The top-line routing signal is scoped to interactive/generative traffic.
+// Embeddings are high-frequency and intentionally favor their own host, so
+// including them makes "latest actual host" structurally constant.
+const TRUSTED_ROUTING_CALLERS = ['chat', 'proxy'];
 
 function observedState(intentState, latest, failoverCount) {
   const intent = intentState || {};
@@ -40,6 +43,7 @@ function observedState(intentState, latest, failoverCount) {
 async function getObservedFailoverStatus(intentState) {
   const filter = {
     caller: { $in: TRUSTED_ROUTING_CALLERS },
+    taskType: { $ne: 'embeddings' },
     status: 'success'
   };
   const [latest, failoverCount] = await Promise.all([

@@ -22,7 +22,33 @@
         "conditions": { "all": [
             { "fact": "metric", "operator": "equal", "value": "error" }
         ]},
-        "channels": ["local_log"]
+        "channels": ["local_log"],
+        "renotifyMs": 900000
+    },
+    {
+        "id": "inference-error-rate",
+        "name": "Inference error rate (>5% over 1h)",
+        "enabled": true,
+        "severity": "error",
+        "title": "Inference error rate sustained above 5%",
+        "message": "{{errorRateNumerator}} of {{errorRateTotal}} calls failed ({{errorRate}}%) over {{windowLabel}}",
+        "conditions": { "all": [
+            { "fact": "metric", "operator": "equal", "value": "inference_completed" },
+            {
+                "fact": "errorRate",
+                "operator": "greaterThan",
+                "value": 5,
+                "window": {
+                    "source": "inferencelogs",
+                    "durationMs": 3600000,
+                    "minimumSamples": 20,
+                    "numerator": { "field": "status", "values": ["error", "timeout"] }
+                }
+            }
+        ]},
+        "channels": ["local_log"],
+        "renotifyMs": 900000,
+        "description": "Windowed platform-inference error rate. Requires at least 20 inference rows in the preceding hour."
     },
     {
         "id": "host-unreachable",

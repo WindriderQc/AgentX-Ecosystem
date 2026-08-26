@@ -16,6 +16,11 @@ const AlertRule = require('../models/AlertRule');
 const logger = require('../config/logger');
 const { getNotificationService } = require('../src/services/notificationService');
 const { seedDefaultRules, syncRulesToEngine } = require('../src/services/alertRuleSeeder');
+const {
+  presentRule,
+  summarizeRuleStates,
+  isRetiredBuiltIn,
+} = require('../src/services/alertRuleLifecycle');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
 const { getStatusProjection } = require('../src/services/laneObservabilityService');
 
@@ -466,7 +471,11 @@ router.post('/bulk-resolve', async (req, res) => {
 router.get('/rules', async (req, res) => {
   try {
     const dbRules = await AlertRule.find().sort({ builtIn: -1, createdAt: 1 }).lean();
-    res.json({ status: 'success', data: { rules: dbRules } });
+    const rules = dbRules.map(presentRule);
+    res.json({
+      status: 'success',
+      data: { rules, detectorCoverage: summarizeRuleStates(rules) }
+    });
   } catch (error) {
     logger.error('Failed to list alert rules', { error: error.message });
     res.status(500).json({ status: 'error', message: error.message });
@@ -520,6 +529,16 @@ router.post('/rules', async (req, res) => {
 router.put('/rules/:ruleId', async (req, res) => {
   try {
     const { ruleId } = req.params;
+    if (req.body?.enabled === true && isRetiredBuiltIn(ruleId)) {
+      const existing = await AlertRule.findOne({ ruleId }).select({ builtIn: 1 }).lean();
+      if (existing?.builtIn) {
+        return res.status(409).json({
+          status: 'error',
+          code: 'DETECTOR_RETIRED',
+          message: 'This built-in detector is retired because its product producer no longer exists.'
+        });
+      }
+    }
     const updates = {};
     const allowed = ['name', 'severity', 'conditions', 'channels', 'cooldownMs', 'renotifyMs', 'description', 'enabled'];
     for (const key of allowed) {

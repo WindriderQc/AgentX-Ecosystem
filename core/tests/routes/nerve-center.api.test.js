@@ -604,7 +604,10 @@ describe('Nerve Center API Routes', () => {
         autoRoutedCount: 2,
         autoRoutedPct: 66.7,
         avgDurationMs: 1300,
-        avgClassificationMs: 20
+        avgClassificationMs: 30,
+        avgTotalForClassifiedMs: 1500,
+        classificationOverheadPct: 2,
+        classificationSamples: 2
       }));
       expect(res.body.data.taskDistribution[0]).toEqual(expect.objectContaining({
         taskType: 'analysis',
