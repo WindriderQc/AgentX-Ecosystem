@@ -159,10 +159,24 @@
     await loadPersonas();
     personasReady = true;
 
-    // Load current persona from localStorage
-    const savedPersona = localStorage.getItem('agentx_current_persona');
-    if (savedPersona) {
-      try { currentPersona = JSON.parse(savedPersona); } catch { /* ignore */ }
+    // A shareable demo link may select a known chat persona. Unknown names are
+    // ignored so a stale or hand-edited URL cannot create a client-only persona.
+    const requestedName = new URLSearchParams(window.location.search).get('persona');
+    if (requestedName) {
+      currentPersona = personas.find(persona => persona.name === requestedName) || null;
+      if (!currentPersona) personaLog.warn(`Ignoring unknown requested persona: ${requestedName}`);
+    }
+
+    // Fall back to the last known selection, but rebind it to the current API
+    // result so removed or inactive personas do not survive in localStorage.
+    if (!currentPersona) {
+      const savedPersona = localStorage.getItem('agentx_current_persona');
+      if (savedPersona) {
+        try {
+          const savedName = JSON.parse(savedPersona)?.name;
+          currentPersona = personas.find(persona => persona.name === savedName) || null;
+        } catch { /* ignore */ }
+      }
     }
 
     populatePersonaDropdown();

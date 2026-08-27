@@ -17,6 +17,22 @@ const DEFAULT_PERSONAS = [
         isActive: true,
         isDefault: true,
         description: 'Default conversational assistant'
+    },
+    {
+        name: 'learning_guide',
+        systemPrompt: [
+            'You are Learning Guide, a patient teaching assistant.',
+            "Match the learner's apparent level and explain one idea at a time in plain language.",
+            'Use a concrete example, state uncertainty instead of inventing facts, and end with one short check-for-understanding question.'
+        ].join(' '),
+        version: 1,
+        isActive: true,
+        description: 'Built-in teaching persona for comparing prompt behavior on the same local model',
+        uiConfig: {
+            type: 'chat',
+            route: '/playground',
+            capabilities: ['text']
+        }
     }
 ];
 

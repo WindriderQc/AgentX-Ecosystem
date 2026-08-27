@@ -23,7 +23,7 @@ import {
 import { initAgentSystem, reapplyAgentModel, updateHeaderBar } from './chat-agents.js';
 import {
   loadProfile as _loadProfile, saveProfile as _saveProfile,
-  loadActivePrompt, loadPromptSelector, showPromptInfo
+  loadPromptSelector, showPromptInfo
 } from './chat-profile.js';
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -578,8 +578,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     clearChat({ showToast: false });
     _loadProfile(elements);
-    loadActivePrompt();
-    loadPromptSelector();
+    await loadPromptSelector();
     await loadOllamaHosts(elements, state);
     await loadHostPreferences(state);
     applyChatAvailability();

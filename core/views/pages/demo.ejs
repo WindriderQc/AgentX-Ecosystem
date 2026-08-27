@@ -1,13 +1,14 @@
 <main class="agentx-demo">
   <section class="agentx-demo__hero">
     <p class="agentx-demo__eyebrow">Agent X · local-first AI workbench</p>
-    <h1>Route, ground, and evaluate local AI with evidence.</h1>
+    <h1>Route, shape, ground, and evaluate local AI with evidence.</h1>
     <p class="agentx-demo__lede">
-      This demo profile combines Ollama inference, a RAG knowledge workspace,
+      This demo profile combines Ollama inference, reusable prompt personas, a RAG knowledge workspace,
       and reproducible model evaluation without loading personal operations or external runtimes.
     </p>
     <div class="agentx-demo__actions">
       <a class="agentx-demo__primary" href="/playground">Open the playground</a>
+      <a href="/playground?persona=learning_guide">Try Learning Guide</a>
       <a href="<%= publicUrls.rag %>/upload">Ingest a document</a>
       <a href="<%= publicUrls.benchmark %>/">Compare models</a>
     </div>
@@ -22,12 +23,18 @@
     </article>
     <article>
       <span>02</span>
+      <h2>Personas</h2>
+      <p>Keep the model fixed, switch to Learning Guide, and see how a reusable system prompt changes the answer.</p>
+      <a href="/playground?persona=learning_guide">Compare a persona →</a>
+    </article>
+    <article>
+      <span>03</span>
       <h2>Knowledge</h2>
       <p>Ingest a bounded document, retrieve relevant passages, and inspect the grounded result.</p>
       <a href="<%= publicUrls.rag %>/search">Search the knowledge base →</a>
     </article>
     <article>
-      <span>03</span>
+      <span>04</span>
       <h2>Evaluation</h2>
       <p>Benchmark models on the same tasks and compare quality, speed, and efficiency.</p>
       <a href="<%= publicUrls.benchmark %>/leaderboard">Open the leaderboard →</a>

@@ -199,10 +199,11 @@
   async function refreshEvidence() {
     root.dataset.state = 'loading';
     if (elements.refresh) elements.refresh.disabled = true;
+    const demoProfile = document.body.dataset.agentxProfile === 'demo';
 
     const [portalResult, ecosystemResult, hostsResult] = await Promise.allSettled([
       getJson('/api/portal/health'),
-      getJson('/api/nerve-center/ecosystem'),
+      demoProfile ? Promise.resolve(null) : getJson('/api/nerve-center/ecosystem'),
       getJson('/api/ollama-hosts', 12_000),
     ]);
 

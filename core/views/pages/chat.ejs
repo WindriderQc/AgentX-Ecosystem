@@ -160,7 +160,11 @@
           <section class="pg-cockpit-panel pg-fleet-panel" aria-labelledby="pgFleetTitle">
             <div class="pg-panel-head">
               <div><span class="pg-kicker">Ollama fleet</span><h2 id="pgFleetTitle">Pick a host when Manual is active <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Fleet cards" data-cockpit-tip="Cards are live inventory evidence. They become selectable only in Manual mode; routed modes remain server-owned." aria-label="Explain fleet cards"><i class="fas fa-question"></i></button></h2></div>
-              <a href="/nerve-center">Full topology <i class="fas fa-arrow-right"></i></a>
+              <% if (fullPlayground) { %>
+                <a href="/nerve-center">Full topology <i class="fas fa-arrow-right"></i></a>
+              <% } else { %>
+                <a href="/models">Model details <i class="fas fa-arrow-right"></i></a>
+              <% } %>
             </div>
             <div class="pg-host-deck" id="pgHostDeck" aria-live="polite">
               <div class="pg-loading"><i class="fas fa-spinner fa-spin"></i> Reading configured hosts…</div>
@@ -182,13 +186,14 @@
             { title: 'Verify the receipt', body: 'After the answer, the compact bar and message badge record the model, host, route, timing, tokens, and feedback evidence.' }
           ],
           note: { title: 'One routing authority', body: 'Playground reads bounded product APIs and drives the canonical chat controls. It never invents a fallback host, model, health store, or parallel router.' },
-          links: ([
+          links: (fullPlayground ? [
             { href: '/nerve-center', icon: 'fa-brain', label: 'Nerve Center', detail: 'Hosts, models, and routing' },
-            { href: '/models', icon: 'fa-cubes', label: 'Models', detail: 'Registry and exact pins' }
-          ]).concat(fullPlayground ? [
+            { href: '/models', icon: 'fa-cubes', label: 'Models', detail: 'Registry and exact pins' },
             { href: '/agent-ops', icon: 'fa-users-gear', label: 'Agent Ops', detail: 'People, cadence, and work' },
             { href: '/pipeline', icon: 'fa-list-check', label: 'Pipeline', detail: 'Coding delivery queue' }
-          ] : [])
+          ] : [
+            { href: '/models', icon: 'fa-cubes', label: 'Models', detail: 'Registry and exact pins' }
+          ])
         }
       }) %>
 
