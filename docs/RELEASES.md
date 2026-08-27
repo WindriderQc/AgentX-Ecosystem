@@ -5,6 +5,25 @@ Agent X supports three deliberately simple release modes.
 Core, Benchmark, and RAG use the same product version. A release tag, the three
 package versions, and published image tags must agree before publication.
 
+The contract is executable. Pull requests and `main` verify service/package-lock
+parity with:
+
+```bash
+node --test scripts/verify-release-contract.test.js
+node scripts/verify-release-contract.js
+```
+
+Before creating a GitHub release, add `docs/releases/<tag>.md` and verify the
+exact proposed tag:
+
+```bash
+node scripts/verify-release-contract.js --tag v0.1.1
+```
+
+The release workflow checks out that tag and runs the same tagged verification
+before any image build can publish. A malformed tag, missing release notes, or
+package/lock drift stops all three images.
+
 ## Stable release
 
 This is the normal path for a friend, colleague, or customer. Start from the
@@ -18,6 +37,12 @@ git checkout <release-tag>
 Read the release notes before moving to a newer stable tag. Run the normal
 Windows or Linux start command after updating. Stable container images use the
 same release tag and `latest`; `latest` changes only for a stable release.
+
+Publication is complete only after Product CI is green and the GitHub release
+records the release tag, exact commit, release notes, and immutable digests for
+Core, Benchmark, and RAG together. The release workflow attaches this receipt
+as `agentx-<tag>-images.json` after all three image publications succeed. Do not
+infer success from `latest` alone.
 
 ## Pinned deployment
 
