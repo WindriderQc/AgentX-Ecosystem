@@ -1,0 +1,219 @@
+/* Action-first entry point for the model registry. The existing catalog remains
+   intact inside the contextual expert library. */
+.models-experience {
+  --models-cyan: #5ee7f2;
+  --models-panel: rgba(12, 20, 34, 0.86);
+  display: grid;
+  gap: 18px;
+  padding-top: 68px;
+}
+
+.models-experience-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(290px, 0.65fr);
+  gap: clamp(28px, 5vw, 76px);
+  align-items: end;
+  padding: clamp(30px, 5vw, 62px);
+  border: 1px solid rgba(94, 231, 242, 0.22);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 7% 5%, rgba(49, 180, 209, 0.16), transparent 38%),
+    radial-gradient(circle at 88% 110%, rgba(140, 91, 255, 0.12), transparent 38%),
+    linear-gradient(135deg, rgba(16, 34, 50, 0.96), rgba(8, 15, 28, 0.98));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.26);
+}
+
+.models-experience-eyebrow {
+  display: block;
+  margin-bottom: 15px;
+  color: var(--models-cyan);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+.models-experience-copy h1 {
+  max-width: 850px;
+  margin: 0;
+  color: #f2f7ff;
+  font-size: clamp(2.35rem, 5.4vw, 5.4rem);
+  font-weight: 760;
+  letter-spacing: -0.06em;
+  line-height: 0.98;
+}
+
+.models-experience-copy p {
+  max-width: 850px;
+  margin: 24px 0 0;
+  color: #b9c7da;
+  font-size: clamp(1rem, 1.45vw, 1.18rem);
+  line-height: 1.7;
+}
+
+.models-experience-readiness {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 15px;
+  background: rgba(5, 11, 22, 0.58);
+}
+
+.models-experience-status-icon,
+.models-experience-action-icon {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(94, 231, 242, 0.1);
+  color: var(--models-cyan);
+}
+
+.models-experience-readiness strong,
+.models-experience-readiness small,
+.models-experience-action strong,
+.models-experience-action small,
+.models-cockpit summary strong,
+.models-cockpit summary small {
+  display: block;
+}
+
+.models-experience-readiness strong { color: #f2f7ff; font-size: 0.9rem; }
+.models-experience-readiness small { margin-top: 3px; color: #a9b6c9; font-size: 0.76rem; line-height: 1.35; }
+.models-experience-readiness.is-ready { border-color: rgba(70, 211, 126, 0.42); }
+.models-experience-readiness.is-ready .models-experience-status-icon { color: #57d681; background: rgba(70, 211, 126, 0.12); }
+.models-experience-readiness.is-attention { border-color: rgba(255, 176, 58, 0.45); }
+.models-experience-readiness.is-attention .models-experience-status-icon { color: #ffb03a; background: rgba(255, 176, 58, 0.12); }
+.models-experience-readiness.is-blocked { border-color: rgba(244, 92, 95, 0.42); }
+.models-experience-readiness.is-blocked .models-experience-status-icon { color: #f45c5f; background: rgba(244, 92, 95, 0.12); }
+
+.models-experience-readiness button {
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #c1cadd;
+  cursor: pointer;
+}
+
+.models-experience-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.models-experience-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  min-width: 0;
+  padding: 19px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 15px;
+  background: var(--models-panel);
+  color: #eaf1fb;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.models-experience-action:hover {
+  transform: translateY(-2px);
+  border-color: rgba(94, 231, 242, 0.42);
+  background: rgba(17, 30, 47, 0.94);
+  color: #fff;
+  text-decoration: none;
+}
+
+.models-experience-action.is-primary { border-color: rgba(94, 231, 242, 0.45); }
+.models-experience-action strong { font-size: 0.95rem; }
+.models-experience-action small { margin-top: 4px; color: #a9b6c9; font-size: 0.77rem; line-height: 1.35; }
+
+.models-cockpit {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 17px;
+  background: rgba(7, 13, 24, 0.82);
+  overflow: clip;
+}
+
+.models-cockpit > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  padding: 17px 19px;
+  color: #edf4ff;
+  cursor: pointer;
+  list-style: none;
+}
+
+.models-cockpit > summary::-webkit-details-marker { display: none; }
+.models-cockpit > summary small { margin-top: 3px; color: #9eabc0; font-size: 0.76rem; }
+.models-expert-badge {
+  padding: 6px 9px;
+  border: 1px solid rgba(153, 102, 255, 0.38);
+  border-radius: 999px;
+  color: #bda4ff;
+  font-size: 0.63rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.models-cockpit-surface {
+  padding: 20px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(4, 9, 18, 0.62);
+}
+
+.models-cockpit:not([open]) .models-cockpit-surface { display: none; }
+
+.models-cockpit-surface[aria-hidden="true"],
+.detail-drawer[aria-hidden="true"],
+.modal-overlay[aria-hidden="true"] {
+  visibility: hidden;
+}
+
+.models-experience :focus-visible {
+  outline: 3px solid #9aa8bb;
+  outline-offset: 3px;
+}
+
+@media (max-width: 920px) {
+  .models-experience-hero { grid-template-columns: 1fr; align-items: start; }
+  .models-experience-actions { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 600px) {
+  .models-experience { padding: 22px 12px 34px; gap: 13px; }
+  .models-experience-hero { padding: 24px 18px; border-radius: 17px; }
+  .models-experience-copy h1 { font-size: clamp(2.35rem, 13vw, 3.35rem); }
+  .models-experience-copy p { margin-top: 18px; font-size: 0.96rem; }
+  .models-experience-readiness { grid-template-columns: auto minmax(0, 1fr); }
+  .models-experience-readiness button { grid-column: 1 / -1; width: 100%; }
+  .models-experience-action { padding: 15px; }
+  .models-cockpit > summary { grid-template-columns: auto minmax(0, 1fr); padding: 15px; }
+  .models-expert-badge { grid-column: 2; justify-self: start; }
+  .models-cockpit-surface { padding: 14px 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .models-experience *,
+  .models-experience *::before,
+  .models-experience *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

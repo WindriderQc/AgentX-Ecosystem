@@ -15,6 +15,7 @@
   // State
   var fileText = null;
   var activeTab = 'paste';
+  var isIngesting = false;
 
   // ── DOM refs ───────────────────────────────────────────
 
@@ -34,8 +35,6 @@
   var metaDocId = document.getElementById('meta-docid');
   var chunkSizeEl = document.getElementById('chunk-size');
   var chunkOverlapEl = document.getElementById('chunk-overlap');
-  var advToggle = document.getElementById('advanced-toggle');
-  var advBody = document.getElementById('advanced-body');
   var btnIngest = document.getElementById('btn-ingest');
   var spinner = document.getElementById('spinner');
   var resultArea = document.getElementById('result-area');
@@ -48,26 +47,52 @@
 
   function setIngestStatus(state, title, detail) {
     if (!ingestStatus) return;
+    var icons = { ok: 'fa-circle-check', warn: 'fa-circle-info', error: 'fa-circle-exclamation', loading: 'fa-circle-notch fa-spin' };
     ingestStatus.className = 'flow-status is-' + state;
     ingestStatus.innerHTML =
-      '<strong>' + escHtml(title) + '</strong>' +
-      '<span class="flow-status-detail">' + escHtml(detail) + '</span>';
+      '<i class="fa-solid ' + icons[state] + '" aria-hidden="true"></i>' +
+      '<span><strong>' + escHtml(title) + '</strong>' +
+      '<span class="flow-status-detail">' + escHtml(detail) + '</span></span>';
+  }
+
+  function hasDocumentText() {
+    var text = activeTab === 'paste' ? pasteArea.value : fileText;
+    return !!(text && text.trim());
+  }
+
+  function updateIngestAvailability() {
+    btnIngest.disabled = isIngesting || !hasDocumentText();
   }
 
   tabBtns.forEach(function (btn) {
     btn.addEventListener('click', function () {
       activeTab = btn.getAttribute('data-tab');
-      tabBtns.forEach(function (b) { b.classList.remove('active'); });
+      tabBtns.forEach(function (b) {
+        var selected = b === btn;
+        b.classList.toggle('active', selected);
+        b.setAttribute('aria-selected', selected ? 'true' : 'false');
+        b.setAttribute('tabindex', selected ? '0' : '-1');
+      });
       btn.classList.add('active');
-      tabPaste.style.display = activeTab === 'paste' ? '' : 'none';
-      tabFile.style.display = activeTab === 'file' ? '' : 'none';
+      tabPaste.hidden = activeTab !== 'paste';
+      tabFile.hidden = activeTab !== 'file';
+      updateIngestAvailability();
       setIngestStatus(
-        'loading',
-        activeTab === 'paste' ? 'Waiting for pasted text' : 'Waiting for file',
+        hasDocumentText() ? 'ok' : 'loading',
+        hasDocumentText() ? 'Source ready' : (activeTab === 'paste' ? 'Waiting for pasted text' : 'Waiting for a file'),
         activeTab === 'paste'
-          ? 'Paste a document, set source/tags if needed, then ingest.'
-          : 'Choose a text-like file; RAG will read it in the browser before indexing.'
+          ? 'Paste a document, then add it to Agent X.'
+          : 'Choose a supported text file; it is read locally before indexing.'
       );
+    });
+    btn.addEventListener('keydown', function (event) {
+      if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+      event.preventDefault();
+      var buttons = Array.prototype.slice.call(tabBtns);
+      var direction = event.key === 'ArrowRight' ? 1 : -1;
+      var next = buttons[(buttons.indexOf(btn) + direction + buttons.length) % buttons.length];
+      next.click();
+      next.focus();
     });
   });
 
@@ -75,21 +100,14 @@
 
   pasteArea.addEventListener('input', function () {
     charCount.textContent = pasteArea.value.length;
+    updateIngestAvailability();
     setIngestStatus(
       pasteArea.value.trim() ? 'ok' : 'loading',
       pasteArea.value.trim() ? 'Document text ready' : 'Waiting for pasted text',
       pasteArea.value.trim()
-        ? pasteArea.value.length.toLocaleString() + ' characters ready for chunking and embedding.'
-        : 'Paste a document, set source/tags if needed, then ingest.'
+        ? pasteArea.value.length.toLocaleString() + ' characters ready to add.'
+        : 'Paste a document to continue.'
     );
-  });
-
-  // ── Collapsible advanced ───────────────────────────────
-
-  advToggle.addEventListener('click', function () {
-    var open = advBody.style.display !== 'none';
-    advBody.style.display = open ? 'none' : '';
-    advToggle.classList.toggle('open', !open);
   });
 
   // ── File handling ──────────────────────────────────────
@@ -106,14 +124,15 @@
   }
 
   function handleFile(file) {
-    fileWarning.style.display = 'none';
+    fileWarning.hidden = true;
     fileWarning.textContent = '';
 
     if (file.size > FILE_MAX_SIZE) {
       fileWarning.textContent = 'File too large (max 50 MB). Please choose a smaller file.';
-      fileWarning.style.display = '';
+      fileWarning.hidden = false;
       fileText = null;
-      fileInfo.style.display = 'none';
+      fileInfo.hidden = true;
+      updateIngestAvailability();
       setIngestStatus('error', 'File rejected', 'The selected file is larger than the 50 MB browser upload limit.');
       return;
     }
@@ -128,27 +147,30 @@
     }
     if (warnings.length) {
       fileWarning.textContent = warnings.join('. ');
-      fileWarning.style.display = '';
+      fileWarning.hidden = false;
     }
 
     fileName.textContent = file.name;
     fileSize.textContent = formatBytes(file.size);
-    fileInfo.style.display = '';
+    fileInfo.hidden = false;
+    if (!metaSource.value.trim()) metaSource.value = file.name;
 
     var reader = new FileReader();
     setIngestStatus('loading', 'Reading file', file.name + ' is being read locally before ingestion.');
     reader.onload = function (e) {
       fileText = e.target.result;
+      updateIngestAvailability();
       setIngestStatus(
         'ok',
         'File ready',
-        file.name + ' is loaded; ingestion will chunk, embed, and index it.'
+        file.name + ' is loaded and ready to add.'
       );
     };
     reader.onerror = function () {
       fileWarning.textContent = 'Failed to read file.';
-      fileWarning.style.display = '';
+      fileWarning.hidden = false;
       fileText = null;
+      updateIngestAvailability();
       setIngestStatus('error', 'File read failed', 'Choose another file or paste the document text instead.');
     };
     reader.readAsText(file);
@@ -215,10 +237,11 @@
     }
 
     // Show spinner, disable button
-    btnIngest.disabled = true;
-    spinner.style.display = '';
-    resultArea.style.display = 'none';
-    setIngestStatus('loading', 'Embedding and indexing', 'RAG is chunking the document, generating embeddings, and writing vectors.');
+    isIngesting = true;
+    updateIngestAvailability();
+    spinner.hidden = false;
+    resultArea.hidden = true;
+    setIngestStatus('loading', 'Adding knowledge', 'Agent X is preparing passages and making them searchable.');
 
     try {
       var params = { text: text };
@@ -232,8 +255,8 @@
       var d = res.data;
       setIngestStatus(
         'ok',
-        'Document indexed',
-        'Document ' + d.documentId + ' produced ' + d.chunkCount + ' chunk' + (d.chunkCount === 1 ? '' : 's') + '.'
+        'Knowledge added',
+        'Your source is searchable in ' + d.chunkCount + ' passage' + (d.chunkCount === 1 ? '' : 's') + '.'
       );
       showResult(true, null, d);
       addToHistory({
@@ -255,8 +278,9 @@
         status: 'failed'
       });
     } finally {
-      btnIngest.disabled = false;
-      spinner.style.display = 'none';
+      isIngesting = false;
+      updateIngestAvailability();
+      spinner.hidden = true;
     }
   }
 
@@ -265,14 +289,14 @@
   // ── Result display ─────────────────────────────────────
 
   function showResult(success, message, data) {
-    resultArea.style.display = '';
+    resultArea.hidden = false;
     if (success && data) {
       resultArea.className = 'result-success';
       resultArea.innerHTML =
-        '<strong>Ingestion successful</strong><br>' +
-        'Document ID: <span class="mono">' + escHtml(data.documentId) + '</span><br>' +
-        'Chunks created: <strong>' + data.chunkCount + '</strong><br>' +
-        'Status: ' + escHtml(data.status || 'ingested');
+        '<div class="result-callout"><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span><strong>Knowledge added</strong>' +
+        '<small><span class="mono">' + escHtml(data.documentId) + '</span> · ' + data.chunkCount + ' searchable passage' + (data.chunkCount === 1 ? '' : 's') + '</small></span></div>' +
+        '<div class="result-actions"><a class="btn btn-primary" href="/search">Ask about it</a>' +
+        '<a class="btn btn-secondary" href="/documents?docId=' + encodeURIComponent(data.documentId) + '">View source</a></div>';
     } else {
       resultArea.className = 'result-error';
       resultArea.innerHTML = '<strong>Ingestion failed</strong><br>' + escHtml(message);
@@ -310,10 +334,12 @@
     var history = getHistory();
     if (history.length === 0) {
       historyTbody.innerHTML = '';
-      historyEmpty.style.display = '';
+      historyEmpty.hidden = false;
+      document.getElementById('history-table').hidden = true;
       return;
     }
-    historyEmpty.style.display = 'none';
+    historyEmpty.hidden = true;
+    document.getElementById('history-table').hidden = false;
     historyTbody.innerHTML = history.map(function (h) {
       var ts = h.timestamp ? new Date(h.timestamp).toLocaleString() : '--';
       var statusClass = h.status === 'failed' ? 'status-error' : 'status-ok';
@@ -334,5 +360,6 @@
 
   // ── Init ───────────────────────────────────────────────
 
+  updateIngestAvailability();
   renderHistory();
 })();

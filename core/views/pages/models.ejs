@@ -1,4 +1,43 @@
-    <main class="container-fluid">
+    <main class="container-fluid models-experience">
+        <section class="models-experience-hero" aria-labelledby="models-experience-title">
+            <div class="models-experience-copy">
+                <span class="models-experience-eyebrow">Agent X models</span>
+                <h1 id="models-experience-title">Choose a model—or let Agent X choose.</h1>
+                <p>Start a conversation with automatic routing, or open the model library when you need an exact runtime, context window or execution override.</p>
+            </div>
+            <div id="models-experience-readiness" class="models-experience-readiness is-loading" role="status" aria-live="polite">
+                <span class="models-experience-status-icon" aria-hidden="true"><i class="fas fa-circle-notch fa-spin"></i></span>
+                <span><strong id="models-experience-status-label">Checking models…</strong><small id="models-experience-status-detail">Reading the live model registry</small></span>
+                <button id="models-experience-refresh" type="button" aria-label="Refresh model status"><i class="fas fa-rotate" aria-hidden="true"></i></button>
+            </div>
+        </section>
+
+        <section class="models-experience-actions" aria-label="Model actions">
+            <a class="models-experience-action is-primary" href="/playground">
+                <span class="models-experience-action-icon" aria-hidden="true"><i class="fas fa-comments"></i></span>
+                <span><strong>Chat automatically</strong><small>Agent X selects a suitable available model</small></span>
+                <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </a>
+            <button id="models-browse-action" class="models-experience-action" type="button">
+                <span class="models-experience-action-icon" aria-hidden="true"><i class="fas fa-cubes"></i></span>
+                <span><strong>Browse installed models</strong><small id="models-browse-detail">Search, inspect or choose an exact model</small></span>
+                <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </button>
+            <a class="models-experience-action" href="<%= publicUrls.benchmark %>/">
+                <span class="models-experience-action-icon" aria-hidden="true"><i class="fas fa-scale-balanced"></i></span>
+                <span><strong>Compare with evidence</strong><small>Test quality, speed and reliability</small></span>
+                <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </a>
+        </section>
+
+        <details id="models-cockpit" class="models-cockpit">
+            <summary id="models-open-controls">
+                <span class="models-experience-action-icon" aria-hidden="true"><i class="fas fa-sliders"></i></span>
+                <span><strong>Take the controls</strong><small>Registry, hosts, storage, filters, comparisons and execution overrides</small></span>
+                <span class="models-expert-badge">Expert library</span>
+            </summary>
+
+          <div class="models-cockpit-surface">
         <!-- Stats Strip -->
         <div class="stats-row">
             <div class="stat-card clickable" id="statTotalCard">
@@ -125,6 +164,8 @@
             </table>
             <div id="loadingIndicator" class="loading-spinner">Loading models...</div>
         </div>
+          </div>
+        </details>
     </main>
 
     <!-- Detail Drawer Backdrop -->

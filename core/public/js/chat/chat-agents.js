@@ -163,6 +163,7 @@ function markQuickChatSelected() {
 
 function updateLauncherCount(agentElements) {
   const totalCards = document.querySelectorAll('.agent-selector-panel .agentx-card').length;
+  agentElements.selector?.classList.toggle('single-option', totalCards <= 1);
   if (agentElements.selectorCount) {
     agentElements.selectorCount.textContent = totalCards ? `${totalCards} available` : '';
   }

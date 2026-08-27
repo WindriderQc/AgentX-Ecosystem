@@ -156,7 +156,7 @@ class ModelComparator {
         `;
 
         target.querySelector('.compare-action-chat')?.addEventListener('click', () => {
-            window.location.href = `/chat?model=${encodeURIComponent(model.name)}`;
+            window.location.href = `/playground?model=${encodeURIComponent(model.name)}`;
         });
         target.querySelector('.compare-action-details')?.addEventListener('click', () => {
             this.unifiedModels.openDetailDrawer(model);

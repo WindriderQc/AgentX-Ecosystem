@@ -1,0 +1,197 @@
+/* Guided entry point for the exact-artifact profiler. */
+.profiler-experience {
+  --profiler-cyan: #59e0ef;
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  max-width: 1900px;
+  margin: 0 auto;
+  padding: 68px 20px 44px;
+}
+
+.profiler-experience-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(290px, 0.65fr);
+  gap: clamp(28px, 5vw, 76px);
+  align-items: end;
+  padding: clamp(30px, 5vw, 62px);
+  border: 1px solid rgba(89, 224, 239, 0.22);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 7% 0%, rgba(31, 176, 205, 0.17), transparent 40%),
+    radial-gradient(circle at 90% 105%, rgba(139, 92, 246, 0.12), transparent 38%),
+    linear-gradient(135deg, rgba(14, 34, 50, 0.97), rgba(8, 15, 28, 0.98));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.26);
+}
+
+.profiler-experience-eyebrow {
+  display: block;
+  margin-bottom: 15px;
+  color: var(--profiler-cyan);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+.profiler-experience-hero h1 {
+  max-width: 900px;
+  margin: 0;
+  color: #f2f7ff;
+  font-size: clamp(2.35rem, 5.2vw, 5.2rem);
+  font-weight: 760;
+  letter-spacing: -0.06em;
+  line-height: 0.99;
+}
+
+.profiler-experience-hero p {
+  max-width: 900px;
+  margin: 24px 0 0;
+  color: #b8c6d9;
+  font-size: clamp(1rem, 1.4vw, 1.16rem);
+  line-height: 1.7;
+}
+
+.profiler-experience-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 15px;
+  background: rgba(5, 11, 22, 0.58);
+}
+
+.profiler-experience-icon {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(89, 224, 239, 0.1);
+  color: var(--profiler-cyan);
+}
+
+.profiler-experience-status strong,
+.profiler-experience-status small,
+.profiler-experience-action strong,
+.profiler-experience-action small,
+.profiler-cockpit summary strong,
+.profiler-cockpit summary small { display: block; }
+.profiler-experience-status strong { color: #f2f7ff; font-size: 0.9rem; }
+.profiler-experience-status small { margin-top: 3px; color: #a9b6c9; font-size: 0.76rem; line-height: 1.35; }
+.profiler-experience-status.is-ready { border-color: rgba(70, 211, 126, 0.42); }
+.profiler-experience-status.is-ready .profiler-experience-icon { color: #57d681; background: rgba(70, 211, 126, 0.12); }
+.profiler-experience-status.is-attention { border-color: rgba(255, 176, 58, 0.45); }
+.profiler-experience-status.is-attention .profiler-experience-icon { color: #ffb03a; background: rgba(255, 176, 58, 0.12); }
+.profiler-experience-status.is-blocked { border-color: rgba(244, 92, 95, 0.42); }
+.profiler-experience-status.is-blocked .profiler-experience-icon { color: #f45c5f; background: rgba(244, 92, 95, 0.12); }
+.profiler-experience-status.is-unknown { border-color: rgba(148, 163, 184, 0.34); }
+.profiler-experience-status.is-unknown .profiler-experience-icon { color: #a8b2c1; background: rgba(148, 163, 184, 0.12); }
+.profiler-experience-status button {
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #c1cadd;
+  cursor: pointer;
+}
+
+.profiler-experience-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.profiler-experience-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  min-width: 0;
+  padding: 19px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 15px;
+  background: rgba(12, 20, 34, 0.86);
+  color: #eaf1fb;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+.profiler-experience-action:hover {
+  transform: translateY(-2px);
+  border-color: rgba(89, 224, 239, 0.42);
+  background: rgba(17, 30, 47, 0.94);
+  color: #fff;
+  text-decoration: none;
+}
+.profiler-experience-action.is-primary { border-color: rgba(89, 224, 239, 0.45); }
+.profiler-experience-action strong { font-size: 0.95rem; }
+.profiler-experience-action small { margin-top: 4px; color: #a9b6c9; font-size: 0.77rem; line-height: 1.35; }
+
+.profiler-cockpit {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 17px;
+  background: rgba(7, 13, 24, 0.82);
+  overflow: clip;
+}
+.profiler-cockpit > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  padding: 17px 19px;
+  color: #edf4ff;
+  cursor: pointer;
+  list-style: none;
+}
+.profiler-cockpit > summary::-webkit-details-marker { display: none; }
+.profiler-cockpit > summary small { margin-top: 3px; color: #9eabc0; font-size: 0.76rem; }
+.profiler-expert-badge {
+  padding: 6px 9px;
+  border: 1px solid rgba(153, 102, 255, 0.38);
+  border-radius: 999px;
+  color: #bda4ff;
+  font-size: 0.63rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.profiler-cockpit-surface {
+  padding: 20px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(4, 9, 18, 0.62);
+}
+.profiler-cockpit:not([open]) .profiler-cockpit-surface,
+.profiler-cockpit-surface[aria-hidden="true"] { display: none; visibility: hidden; }
+.profiler-experience :focus-visible { outline: 3px solid #9aa8bb; outline-offset: 3px; }
+
+@media (max-width: 920px) {
+  .profiler-experience-hero { grid-template-columns: 1fr; align-items: start; }
+  .profiler-experience-actions { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .profiler-experience { padding: 22px 12px 34px; gap: 13px; }
+  .profiler-experience-hero { padding: 24px 18px; border-radius: 17px; }
+  .profiler-experience-hero h1 { font-size: clamp(2.25rem, 12.5vw, 3.25rem); }
+  .profiler-experience-hero p { margin-top: 18px; font-size: 0.96rem; }
+  .profiler-experience-status { grid-template-columns: auto minmax(0, 1fr); }
+  .profiler-experience-status button { grid-column: 1 / -1; width: 100%; }
+  .profiler-experience-action { padding: 15px; }
+  .profiler-cockpit > summary { grid-template-columns: auto minmax(0, 1fr); padding: 15px; }
+  .profiler-expert-badge { grid-column: 2; justify-self: start; }
+  .profiler-cockpit-surface { padding: 12px 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .profiler-experience *, .profiler-experience *::before, .profiler-experience *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

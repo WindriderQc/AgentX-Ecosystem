@@ -121,7 +121,7 @@ const maintenancePageView = path.resolve(__dirname, 'views/pages/maintenance');
 app.get('/', (req, res) => {
   res.render('layouts/main', {
     pageView: dashboardPageView,
-    title: 'AgentX RAG — Dashboard',
+    title: 'Agent X Knowledge — Home',
     service: 'rag',
     activePage: 'rag',
     ragWorkflowStep: 'dashboard',
@@ -134,7 +134,7 @@ app.get('/', (req, res) => {
 app.get('/documents', (req, res) => {
   res.render('layouts/main', {
     pageView: documentsPageView,
-    title: 'AgentX RAG — Documents',
+    title: 'Agent X Knowledge — Your Sources',
     service: 'rag',
     activePage: 'rag',
     ragWorkflowStep: 'documents',
@@ -146,7 +146,7 @@ app.get('/documents', (req, res) => {
 app.get('/search', (req, res) => {
   res.render('layouts/main', {
     pageView: searchPageView,
-    title: 'AgentX RAG — Search Playground',
+    title: 'Agent X Knowledge — Ask Your Knowledge',
     service: 'rag',
     activePage: 'rag',
     ragWorkflowStep: 'search',
@@ -158,7 +158,7 @@ app.get('/search', (req, res) => {
 app.get('/upload', (req, res) => {
   res.render('layouts/main', {
     pageView: uploadPageView,
-    title: 'AgentX RAG — Upload',
+    title: 'Agent X Knowledge — Add Knowledge',
     service: 'rag',
     activePage: 'rag',
     ragWorkflowStep: 'upload',
@@ -170,7 +170,7 @@ app.get('/upload', (req, res) => {
 app.get('/maintenance', (req, res) => {
   res.render('layouts/main', {
     pageView: maintenancePageView,
-    title: 'AgentX RAG — Maintenance',
+    title: 'Agent X Knowledge — Maintenance',
     service: 'rag',
     activePage: 'rag',
     ragWorkflowStep: 'maintenance',

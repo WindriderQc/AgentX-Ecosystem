@@ -1,106 +1,79 @@
-<div class="container dashboard-container">
-  <section class="dashboard-hero">
-    <div class="dashboard-eyebrow">AgentX Retrieval Operations</div>
+<main class="container dashboard-container knowledge-shell">
+  <section class="dashboard-hero knowledge-hero">
+    <div class="dashboard-eyebrow">Agent X Knowledge</div>
     <div class="dashboard-hero-row">
       <div>
-        <h1 class="page-title dashboard-title">RAG Control Surface</h1>
-        <p class="dashboard-subtitle">Live dependency health, active embedding route, and vector inventory for the retrieval stack now serving production queries.</p>
+        <h1 class="page-title dashboard-title">Ground Agent X in what matters to you.</h1>
+        <p class="dashboard-subtitle">Add your material, find the evidence behind an answer, and open the instruments only when you need deeper control.</p>
       </div>
-      <div class="dashboard-sidecar">
-        <div class="sidecar-label">Refresh Cadence</div>
-        <div class="sidecar-value">30s live poll</div>
+      <div id="knowledge-home-readiness" class="knowledge-readiness is-loading" role="status" aria-live="polite">
+        <span class="knowledge-readiness-icon" aria-hidden="true"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+        <span><strong id="knowledge-home-readiness-label">Checking knowledge…</strong><small id="knowledge-home-readiness-detail">Confirming storage and search readiness</small></span>
+        <button id="knowledge-refresh" class="icon-button" type="button" aria-label="Refresh knowledge status" title="Refresh status"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></button>
       </div>
     </div>
   </section>
 
   <%- include('../partials/workflow-map') %>
-
   <%- include('../partials/empty-index-banner') %>
 
-  <section id="rag-ops-strip" class="rag-ops-strip" aria-label="RAG operating state" aria-live="polite">
-    <div class="rag-ops-item is-loading" id="ops-service">
-      <span class="rag-ops-label">Service</span>
-      <strong id="ops-service-value">Checking...</strong>
-      <span id="ops-service-detail">Waiting for health response</span>
-    </div>
-    <div class="rag-ops-item is-loading" id="ops-corpus">
-      <span class="rag-ops-label">Corpus</span>
-      <strong id="ops-corpus-value">Checking...</strong>
-      <span id="ops-corpus-detail">Counting indexed documents and chunks</span>
-    </div>
-    <div class="rag-ops-item is-loading" id="ops-embedding">
-      <span class="rag-ops-label">Embeddings</span>
-      <strong id="ops-embedding-value">Checking...</strong>
-      <span id="ops-embedding-detail">Resolving provider and model</span>
-    </div>
-    <div class="rag-ops-item is-loading" id="ops-query">
-      <span class="rag-ops-label">Query Readiness</span>
-      <strong id="ops-query-value">Checking...</strong>
-      <span id="ops-query-detail">Search readiness depends on service, vector store, embeddings, and corpus</span>
-    </div>
+  <section class="knowledge-actions" aria-labelledby="knowledge-actions-title">
+    <h2 id="knowledge-actions-title" class="visually-hidden">Knowledge actions</h2>
+    <a class="knowledge-action-card is-primary" href="/upload">
+      <span class="knowledge-action-icon" aria-hidden="true"><i class="fa-solid fa-file-circle-plus"></i></span>
+      <span><strong>Add knowledge</strong><small>Paste a note or choose a text file</small></span>
+      <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+    </a>
+    <a class="knowledge-action-card" href="/search">
+      <span class="knowledge-action-icon" aria-hidden="true"><i class="fa-solid fa-magnifying-glass"></i></span>
+      <span><strong>Ask your knowledge</strong><small>Retrieve the strongest supporting passages</small></span>
+      <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+    </a>
+    <a class="knowledge-action-card" href="/documents">
+      <span class="knowledge-action-icon" aria-hidden="true"><i class="fa-solid fa-layer-group"></i></span>
+      <span><strong>Browse sources</strong><small>See documents, tags and indexed passages</small></span>
+      <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+    </a>
   </section>
 
-  <div class="dashboard-grid">
+  <details class="expert-cockpit" id="knowledge-cockpit">
+    <summary>
+      <span class="cockpit-summary-icon" aria-hidden="true"><i class="fa-solid fa-sliders"></i></span>
+      <span><strong>Take the controls</strong><small>Inspect live dependencies, embeddings and vector inventory</small></span>
+      <span class="cockpit-summary-state">Expert</span>
+    </summary>
+    <div class="cockpit-surface">
+      <section id="rag-ops-strip" class="rag-ops-strip" aria-label="RAG operating state" aria-live="polite">
+        <div class="rag-ops-item is-loading" id="ops-service"><span class="rag-ops-label">Service</span><strong id="ops-service-value">Checking…</strong><span id="ops-service-detail">Waiting for health response</span></div>
+        <div class="rag-ops-item is-loading" id="ops-corpus"><span class="rag-ops-label">Corpus</span><strong id="ops-corpus-value">Checking…</strong><span id="ops-corpus-detail">Counting indexed documents and chunks</span></div>
+        <div class="rag-ops-item is-loading" id="ops-embedding"><span class="rag-ops-label">Embeddings</span><strong id="ops-embedding-value">Checking…</strong><span id="ops-embedding-detail">Resolving provider and model</span></div>
+        <div class="rag-ops-item is-loading" id="ops-query"><span class="rag-ops-label">Query readiness</span><strong id="ops-query-value">Checking…</strong><span id="ops-query-detail">Verifying the full retrieval path</span></div>
+      </section>
 
-    <!-- Service Health -->
-    <section class="card health-card">
-      <div class="card-title">Service Health</div>
-      <div class="health-readout">
-        <span id="service-dot" class="status-dot status-dot-lg"></span>
-        <div>
-          <div class="health-label">Runtime State</div>
-          <div id="service-status" class="health-status loading">loading...</div>
-        </div>
+      <div class="dashboard-grid">
+        <section class="card health-card">
+          <div class="card-title">Service health</div>
+          <div class="health-readout"><span id="service-dot" class="status-dot status-dot-lg"></span><div><div class="health-label">Runtime state</div><div id="service-status" class="health-status loading">loading…</div></div></div>
+          <p class="card-copy">MongoDB and vector-store readiness. Embedding availability remains independent because local models are optional.</p>
+        </section>
+        <section class="card dependency-card">
+          <div class="card-title">Dependencies</div>
+          <table class="dep-table"><tbody>
+            <tr id="dep-mongo"><td class="dep-name">MongoDB</td><td class="dep-status"><span class="loading">loading…</span></td></tr>
+            <tr id="dep-qdrant"><td class="dep-name">Qdrant</td><td class="dep-status"><span class="loading">loading…</span></td></tr>
+            <tr id="dep-embedding"><td class="dep-name">Embedding provider</td><td class="dep-status"><span class="loading">loading…</span></td></tr>
+          </tbody></table>
+        </section>
+        <section class="card stats-card">
+          <div class="card-title">Collection inventory</div>
+          <div class="stat-grid">
+            <div class="stat-item"><div class="stat-value mono" id="stat-docs">--</div><div class="stat-label">Documents</div></div>
+            <div class="stat-item"><div class="stat-value mono" id="stat-chunks">--</div><div class="stat-label">Chunks</div></div>
+            <div class="stat-item"><div class="stat-value mono" id="stat-dimension">--</div><div class="stat-label">Vector dimension</div></div>
+          </div>
+        </section>
       </div>
-      <p class="card-copy">This reflects MongoDB and vector-store readiness. Embedding availability is shown separately because models remain optional.</p>
-    </section>
-
-    <!-- Dependency Health Matrix -->
-    <section class="card dependency-card">
-      <div class="card-title">Dependencies</div>
-      <p class="card-copy dependency-copy">The embedding row now shows the actual configured model and proxy endpoint, so operators can confirm which retrieval path is active without opening the shell.</p>
-      <table class="dep-table">
-        <tbody>
-          <tr id="dep-mongo">
-            <td class="dep-name">MongoDB</td>
-            <td class="dep-status"><span class="loading">loading...</span></td>
-          </tr>
-          <tr id="dep-qdrant">
-            <td class="dep-name">Qdrant</td>
-            <td class="dep-status"><span class="loading">loading...</span></td>
-          </tr>
-          <tr id="dep-embedding">
-            <td class="dep-name">Embedding Provider</td>
-            <td class="dep-status"><span class="loading">loading...</span></td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
-
-    <!-- Stats -->
-    <section class="card stats-card">
-      <div class="card-title">Collection Stats</div>
-      <div class="stat-grid">
-        <div class="stat-item">
-          <div class="stat-value mono" id="stat-docs">--</div>
-          <div class="stat-label">Documents</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value mono" id="stat-chunks">--</div>
-          <div class="stat-label">Chunks</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value mono" id="stat-dimension">--</div>
-          <div class="stat-label">Vector Dimension</div>
-        </div>
-      </div>
-      <p class="card-copy stats-copy">A zero-document state is healthy right after a collection switch. The first ingest seeds the fresh Qdrant collection with the active vector dimension.</p>
-    </section>
-
-  </div>
-
-  <!-- Footer -->
-  <div class="footer dashboard-footer">
-    Auto-refreshes every 30s &middot; Last updated: <span id="last-updated">--</span>
-  </div>
-</div>
+      <div class="footer dashboard-footer">Automatic refresh every 30s · Last updated: <span id="last-updated">--</span></div>
+    </div>
+  </details>
+</main>

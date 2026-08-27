@@ -159,7 +159,7 @@ app.get('/', (req, res) => {
   if (!isConfigured()) return res.redirect('/setup');
   res.render('layouts/main', {
     pageView: benchmarkPageView,
-    title: 'Benchmark — The Engine Room',
+    title: 'Agent X Evaluation — Compare Models',
     service: 'benchmark',
     activePage: 'benchmark',
     bodyClass: 'page-benchmark',
@@ -168,23 +168,25 @@ app.get('/', (req, res) => {
       '<link rel="stylesheet" href="/css/redesign-components.css">',
       '<link rel="stylesheet" href="/css/benchmark-v2-layout.css?v=unbenchmarked-models-20260501">',
       '<link rel="stylesheet" href="/css/benchmark-v2-config.css">',
-      '<link rel="stylesheet" href="/css/benchmark-v2-live.css">'
+      '<link rel="stylesheet" href="/css/benchmark-v2-live.css">',
+      '<link rel="stylesheet" href="/css/model-evidence-experience.css">'
     ].join('\n'),
-    footerJs: '<script type="module" src="/js/benchmark-v2/index.js?v=unbenchmarked-models-20260501"></script>'
+    footerJs: '<script type="module" src="/js/benchmark-v2/index.js?v=unbenchmarked-models-20260501"></script>\n<script src="/js/benchmark-v2/experience.js"></script>'
   });
 });
 
 app.get('/leaderboard', (req, res) => {
   res.render('layouts/main', {
     pageView: leaderboardPageView,
-    title: 'Leaderboard — The Trophy Case',
+    title: 'Agent X Evaluation — Ranked Models',
     service: 'benchmark',
     activePage: 'leaderboard',
     headCss: [
       '<link rel="stylesheet" href="/css/redesign-tokens.css">',
       '<link rel="stylesheet" href="/css/redesign-components.css">',
       '<link rel="stylesheet" href="/css/leaderboard-v2.css">',
-      '<link rel="stylesheet" href="/css/scoring-profile.css">'
+      '<link rel="stylesheet" href="/css/scoring-profile.css">',
+      '<link rel="stylesheet" href="/css/model-evidence-experience.css">'
     ].join('\n'),
     footerJs: '<script type="module" src="/js/leaderboard-v2/index.js?v=trust-scope-20260613"></script>'
   });
@@ -209,15 +211,16 @@ app.get('/courthouse', (req, res) => {
 app.get('/profiler', (req, res) => {
   res.render('layouts/main', {
     pageView: profilerPageView,
-    title: 'Profiler — AgentX Benchmark',
+    title: 'Agent X Evaluation — Prepare Models',
     service: 'benchmark',
     activePage: 'profiler',
     headCss: [
       '<link rel="stylesheet" href="/css/redesign-tokens.css">',
       '<link rel="stylesheet" href="/css/redesign-components.css">',
-      '<link rel="stylesheet" href="/css/model-profiler.css?v=host-telemetry-20260622b">'
+      '<link rel="stylesheet" href="/css/model-profiler.css?v=host-telemetry-20260622b">',
+      '<link rel="stylesheet" href="/css/profiler-experience.css">'
     ].join('\n'),
-    footerJs: '<script type="module" src="/js/model-profiler/index.js?v=host-telemetry-20260622b"></script>'
+    footerJs: '<script type="module" src="/js/model-profiler/index.js?v=host-telemetry-20260622b"></script>\n<script src="/js/model-profiler/experience.js"></script>'
   });
 });
 
@@ -239,7 +242,7 @@ app.get('/efficiency-map', (req, res) => {
 app.get('/results-explorer', (req, res) => {
   res.render('layouts/main', {
     pageView: resultsExplorerPageView,
-    title: 'AgentX — Results Explorer',
+    title: 'Agent X Evaluation — Evidence',
     service: 'benchmark',
     activePage: 'results-explorer',
     bodyClass: 'benchmark-shell',
@@ -249,6 +252,7 @@ app.get('/results-explorer', (req, res) => {
       '<link rel="stylesheet" href="/css/results-explorer-layout.css">',
       '<link rel="stylesheet" href="/css/results-explorer-components.css">',
       '<link rel="stylesheet" href="/css/benchmark-shell.css">',
+      '<link rel="stylesheet" href="/css/model-evidence-experience.css">',
       '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>'
     ].join('\n'),
     footerJs: [

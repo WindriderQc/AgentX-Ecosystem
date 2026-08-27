@@ -634,7 +634,7 @@ app.get('/demo', (_req, res) => {
       '<link rel="stylesheet" href="/styles.css">',
       '<link rel="stylesheet" href="/css/demo.css">'
     ].join('\n'),
-    footerJs: ''
+    footerJs: '<script src="/js/demo.js" defer></script>'
   });
 });
 
@@ -647,7 +647,7 @@ app.get('/playground', (req, res) => {
   const demo = isDemoProfile(agentxProfile);
   res.render('layouts/main', {
     pageView: '../pages/chat',
-    title: 'AgentX \u2022 Playground',
+    title: 'Agent X \u00b7 Chat',
     service: 'core',
     activePage: 'playground',
     showNav: !demo,
@@ -659,7 +659,8 @@ app.get('/playground', (req, res) => {
       '<link rel="stylesheet" href="/css/chat-intelligence.css">',
       '<link rel="stylesheet" href="/css/playground-cockpit.css">',
       '<link rel="stylesheet" href="/css/cockpit-help.css">',
-      demo ? '<link rel="stylesheet" href="/css/demo-profile.css">' : ''
+      demo ? '<link rel="stylesheet" href="/css/demo-profile.css">' : '',
+      '<link rel="stylesheet" href="/css/chat-experience.css">'
     ].join('\n'),
     footerJs: [
       '<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>',
@@ -734,12 +735,13 @@ app.get('/agent-ops', (_req, res) => {
 app.get('/models', (req, res) => {
   res.render('layouts/main', {
     pageView: '../pages/models',
-    title: 'AgentX \u2022 Models',
+    title: 'Agent X · Models',
     service: 'core',
     activePage: 'models',
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/models.css">'
+      '<link rel="stylesheet" href="/css/models.css">',
+      '<link rel="stylesheet" href="/css/models-experience.css">'
     ].join('\n'),
     footerJs: [
       '<script src="/js/models-unified.js"></script>',
@@ -747,7 +749,8 @@ app.get('/models', (req, res) => {
       '<script src="/js/models-management.js"></script>',
       '<script src="/js/models-comparison.js"></script>',
       '<script src="/js/models-execution-config.js"></script>',
-      '<script src="/js/models-recommendations.js"></script>'
+      '<script src="/js/models-recommendations.js"></script>',
+      '<script src="/js/models-experience.js"></script>'
     ].join('\n')
   });
 });
@@ -819,16 +822,18 @@ app.get('/planning', (req, res) => {
 app.get('/analytics', (req, res) => {
   res.render('layouts/main', {
     pageView: '../pages/analytics',
-    title: 'AgentX \u2022 Analytics',
+    title: 'Agent X · Activity',
     service: 'core',
     activePage: 'analytics',
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
+      '<link rel="stylesheet" href="/css/analytics-experience.css">',
       '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>'
     ].join('\n'),
     footerJs: [
       '<script type="module" src="/js/analytics-cost.js"></script>',
-      '<script type="module" src="/js/analytics-inference.js"></script>'
+      '<script type="module" src="/js/analytics-inference.js"></script>',
+      '<script src="/js/analytics-experience.js"></script>'
     ].join('\n')
   });
 });

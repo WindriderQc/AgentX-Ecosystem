@@ -237,6 +237,12 @@ function renderDailyChart(d) {
 async function renderCodex(windowKey) {
   const section = $('infCodexSection');
   if (!section) return;
+  // Federated provider/Codex telemetry is intentionally outside the
+  // product-safe demo profile; do not probe a route the profile rejects.
+  if (document.body.dataset.agentxProfile === 'demo') {
+    section.style.display = 'none';
+    return;
+  }
   try {
     const res = await fetch(`/api/analytics/federated?window=${encodeURIComponent(windowKey)}`, {
       headers: { Accept: 'application/json' }

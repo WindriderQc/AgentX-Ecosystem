@@ -97,10 +97,53 @@ export function getHostPinnedModels(pref) {
 
 export function getHostChatState(elements, state, defaults) {
   if (isRouterMode(elements, state)) {
+    if (!state.ollamaHostsLoaded) {
+      return {
+        available: false,
+        recoverable: true,
+        mode: 'router',
+        unavailableKind: 'checking',
+        reason: 'Checking for an available model runtime.'
+      };
+    }
+
+    const availableHosts = (state.ollamaHosts || []).filter((host) => host.available);
+    if (!availableHosts.length) {
+      return {
+        available: false,
+        recoverable: true,
+        mode: 'router',
+        unavailableKind: 'runtime setup',
+        reason: 'Connect an Ollama runtime to start a conversation. Agent X itself is still running normally.'
+      };
+    }
+
+    const hasInstalledModel = availableHosts.some((host) => Array.isArray(host.models) && host.models.length > 0);
+    const routeTask = sessionTaskType(elements, state);
+    const configuredRoute = state.routingStatus?.taskModels?.[routeTask];
+    const configuredHost = configuredRoute ? state.routingStatus?.hosts?.[configuredRoute.host] : null;
+    const routeModelAvailable = !configuredRoute || (configuredHost?.models || [])
+      .some((model) => modelsEquivalent(model, configuredRoute.model));
+    if (state.routingStatusLoaded && configuredRoute && !routeModelAvailable) {
+      return {
+        available: false,
+        recoverable: true,
+        mode: 'router',
+        unavailableKind: 'route setup',
+        routeModel: configuredRoute.model,
+        reason: `${routingModeLabel(routingMode(elements, state))} is set to ${configuredRoute.model}, but that model is not installed. Take the controls to choose an available model.`
+      };
+    }
+
     return {
       available: true,
+      requiresModel: !hasInstalledModel,
+      recoverable: !hasInstalledModel,
       mode: 'router',
-      reason: `${routingModeLabel(routingMode(elements, state))} mode uses one server-selected model for the whole session.`
+      unavailableKind: hasInstalledModel ? null : 'model setup',
+      reason: hasInstalledModel
+        ? `${routingModeLabel(routingMode(elements, state))} mode uses one server-selected model for the whole session.`
+        : 'Install at least one model in the connected Ollama runtime to start a conversation.'
     };
   }
 
@@ -144,14 +187,25 @@ export function getHostChatState(elements, state, defaults) {
     };
   }
 
-  const runningModels = getHostRunningModels(pref);
+  const sessionLoadedModel = normalizeHostUrl(state.sessionLoadedModel?.host) === normalizeHostUrl(host)
+    ? state.sessionLoadedModel?.model
+    : null;
+  const observedRunningModels = getHostRunningModels(pref);
+  const runningModels = observedRunningModels.length
+    ? observedRunningModels
+    : sessionLoadedModel
+      ? [sessionLoadedModel]
+      : [];
   const pinnedModels = getHostPinnedModels(pref);
+  const selectedModel = elements?.modelSelect?.value || '';
   const primaryPin = pinnedModels[0] || null;
   const runningLabel = runningModels[0] || null;
   const pinLoaded = primaryPin && runningModels.some((model) => modelsEquivalent(model, primaryPin));
+  const requiresModel = !runningLabel && !primaryPin && !selectedModel;
 
   return {
     available: true,
+    requiresModel,
     mode: 'manual',
     status,
     host,
@@ -159,12 +213,14 @@ export function getHostChatState(elements, state, defaults) {
     runningModels,
     pinnedModels,
     primaryPin,
-    selectedBasis: runningLabel ? 'loaded' : primaryPin ? 'pinned' : 'manual',
+    selectedBasis: runningLabel ? 'loaded' : primaryPin ? 'pinned' : selectedModel ? 'selected' : 'manual',
     reason: runningLabel
       ? `${pref?.displayName || host} is using loaded model ${runningLabel}${primaryPin && !pinLoaded ? `; pinned model ${primaryPin} is displaced.` : ''}`
       : primaryPin
         ? `${pref?.displayName || host} will use pinned model ${primaryPin}.`
-        : `${pref?.displayName || host} has no pinned or loaded model; choose one manually.`
+        : selectedModel
+          ? `${pref?.displayName || host} will use selected model ${selectedModel}.`
+          : `${pref?.displayName || host} has no pinned or loaded model; choose one manually.`
   };
 }
 
@@ -577,6 +633,7 @@ export async function loadOllamaHosts(elements, state) {
 
     // Store hosts in state for reference
     state.ollamaHosts = hosts;
+    state.ollamaHostsLoaded = true;
 
     hostSelect.innerHTML = '';
     if (hosts.length === 0) {
@@ -608,6 +665,8 @@ export async function loadOllamaHosts(elements, state) {
     }
   } catch (err) {
     console.warn('Failed to load Ollama hosts:', err);
+    state.ollamaHosts = [];
+    state.ollamaHostsLoaded = true;
     hostSelect.innerHTML = '';
     const opt = document.createElement('option');
     opt.value = '';
@@ -649,17 +708,26 @@ export async function loadHostPreferences(state) {
 export function updateRoutingModeUi(elements, state, defaults) {
   const routerMode = isRouterMode(elements, state);
   const hostState = getHostChatState(elements, state, defaults);
-  const blocked = !routerMode && !hostState.available;
+  const hostUnavailable = !routerMode && !hostState.available;
+  const routeNeedsAttention = !hostState.available || hostState.requiresModel;
   if (elements.hostInput) elements.hostInput.disabled = routerMode;
-  if (elements.modelSelect) elements.modelSelect.disabled = routerMode || blocked;
-  if (elements.refreshModels) elements.refreshModels.disabled = routerMode || blocked;
+  if (elements.modelSelect) elements.modelSelect.disabled = routerMode || hostUnavailable;
+  if (elements.refreshModels) elements.refreshModels.disabled = routerMode || hostUnavailable;
+
+  const precisionEnabled = localStorage.getItem('agentx_dev_mode') === 'true';
+  const hostField = elements.hostInput?.closest('.field');
+  const modelField = elements.modelSelect?.closest('.field');
+  if (hostField) hostField.style.display = (!routerMode || precisionEnabled) ? '' : 'none';
+  if (modelField) modelField.style.display = (!routerMode || precisionEnabled) ? '' : 'none';
 
   const modeLabel = routingModeLabel(routingMode(elements, state));
 
   const routingHint = document.getElementById('routingModeHint');
   if (routingHint) {
     routingHint.textContent = routerMode
-      ? `${modeLabel} mode uses one server-selected model for the whole session — no per-message switching.`
+      ? routeNeedsAttention
+        ? hostState.reason
+        : `${modeLabel} mode uses one server-selected model for the whole session — no per-message switching.`
       : hostState.reason || 'Use the configured host and its pinned or loaded model.';
   }
 
@@ -667,19 +735,19 @@ export function updateRoutingModeUi(elements, state, defaults) {
   if (hostHint) {
     hostHint.textContent = routerMode
       ? `Ignored in ${modeLabel} mode. Switch to Manual to pin a host.`
-      : blocked
+      : hostUnavailable || hostState.requiresModel
         ? hostState.reason
         : 'This host is sent with each chat request.';
   }
 
   const modelHint = document.getElementById('modelSelectHint');
-  if (modelHint) {
-    modelHint.textContent = routerMode
-      ? `Ignored in ${modeLabel} mode. The server picks the model for this mode's task.`
-      : blocked
-        ? hostState.reason || 'Model selection is disabled until the host is available for chat.'
-        : 'Model selection prefers the currently loaded model, then the primary pinned model.';
-  }
+      if (modelHint) {
+        modelHint.textContent = routerMode
+          ? `Ignored in ${modeLabel} mode. The server picks the model for this mode's task.`
+          : hostUnavailable || hostState.requiresModel
+            ? hostState.reason || 'Model selection is disabled until the host is available for chat.'
+            : 'Model selection prefers the currently loaded model, then the primary pinned model.';
+      }
 }
 
 export function readProfileInputs(elements) {
@@ -712,14 +780,29 @@ export function initDevModeToggle() {
 }
 
 function applyDevMode(enabled) {
-  const devOnlyFields = [
-    document.getElementById('hostInput')?.closest('.field'),
-    document.getElementById('modelSelect')?.closest('.field'),
+  const manual = document.getElementById('routingModeSelect')?.value === 'manual';
+  const hostField = document.getElementById('hostInput')?.closest('.field');
+  const modelField = document.getElementById('modelSelect')?.closest('.field');
+  const precisionFields = [
     document.getElementById('systemPrompt')?.closest('.field'),
     document.getElementById('tuningHeader')?.closest('.collapsible-section'),
   ].filter(Boolean);
 
-  devOnlyFields.forEach(el => {
-    el.style.display = enabled ? '' : 'none';
-  });
+  if (hostField) hostField.style.display = (manual || enabled) ? '' : 'none';
+  if (modelField) modelField.style.display = (manual || enabled) ? '' : 'none';
+  precisionFields.forEach((element) => { element.style.display = enabled ? '' : 'none'; });
+}
+
+export async function loadRoutingStatus(state) {
+  try {
+    const res = await fetch('/api/models/routing', { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    state.routingStatus = json.data || json;
+  } catch (err) {
+    console.warn('Failed to load model routing status:', err);
+    state.routingStatus = null;
+  } finally {
+    state.routingStatusLoaded = true;
+  }
 }
