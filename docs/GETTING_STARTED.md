@@ -66,6 +66,21 @@ ollama pull llama3.2:3b
 ollama pull nomic-embed-text:v1.5
 ```
 
+### Automated clean-machine proof
+
+Every Product pull request and `main` build repeats the documented Linux path
+on a disposable hosted runner: `doctor`, `up`, then `health`. The gate verifies
+the three service health identities, MongoDB and Qdrant readiness, the `demo`
+profile, the public Learning Guide doorway, and the absence of private-runtime
+identity on the landing page. It also proves that the launcher supplies one
+ephemeral Benchmark credential and that no Ollama container, model download,
+or trusted extension appears during the default start.
+
+The runner removes the exact Compose containers, network, and named volumes at
+the end, including after a failed check. This acceptance gate complements the
+unit, Compose-render, and independent image-build jobs; it does not publish an
+image or change the stable release channel.
+
 ## Optional isolated Docker Ollama — Windows or Linux
 
 This path is CPU-first, has no host port, secret, personal mount, or automatic
