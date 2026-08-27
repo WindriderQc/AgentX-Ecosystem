@@ -74,6 +74,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+      - name: Validate release version contract
+        run: |
+          node --test scripts/verify-release-contract.test.js scripts/assemble-release-image-manifest.test.js
+          node scripts/verify-release-contract.js
       - name: Validate command scripts
         run: |
           bash -n agentx
