@@ -23,6 +23,9 @@ function contract(overrides = {}) {
         graderVersion: 'hybrid-grader-v1',
         responseMode: 'final_only',
         maxOutputTokens: 1200,
+        temperature: 0,
+        seed: 42,
+        thinking: false,
         toolProtocol: 'openai-tools-v1',
         ...overrides
     };
@@ -139,6 +142,22 @@ function observation(candidate, metrics, overrides = {}) {
 }
 
 describe('cloud/local lane campaign policy', () => {
+    test('freezes generation settings into the exact contract fingerprint', () => {
+        const base = plan({ candidates: [localCandidate(), freeCandidate()], estimatedCalls: 2 });
+        const changed = plan({
+            candidates: [localCandidate(), freeCandidate()],
+            estimatedCalls: 2,
+            contract: contract({ seed: 43 })
+        });
+        expect(base.contract).toMatchObject({ temperature: 0, seed: 42, thinking: false });
+        expect(changed.contract.fingerprint).not.toBe(base.contract.fingerprint);
+    });
+
+    test('rejects ambiguous non-boolean thinking settings', () => {
+        expect(() => plan({ contract: contract({ thinking: 'false' }) }))
+            .toThrow(expect.objectContaining({ code: 'INVALID_BOOLEAN' }));
+    });
+
     test('keeps local, free-cloud, and paid-cloud candidates in separate cohorts', () => {
         const result = plan();
         expect(result.cohorts).toEqual({

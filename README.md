@@ -123,8 +123,11 @@ Benchmark also provides a stateless
 [cloud/local lane accounting contract](docs/CLOUD_LOCAL_LANE_ACCOUNTING.md).
 It keeps local, free-cloud, and paid-cloud evidence in separate exact-contract
 cohorts, enforces local-only family/kid lanes, and attributes already-observed
-paid calls with immutable integer-nanodollar receipts. It never contacts a
-provider, authorizes spend, or mutates routing.
+paid calls with immutable integer-nanodollar receipts. Its HTTP routes never
+contact a provider, authorize spend, or mutate routing. A separate fail-closed
+operator CLI can run exact local/free campaigns with current identity and price
+preflight, per-call receipts, and retained raw evidence; paid execution requires
+a deployment-owned authenticated integration.
 
 ## Install and update
 
