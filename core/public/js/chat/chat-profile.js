@@ -45,9 +45,13 @@ export async function saveProfile(elements, setFeedback) {
   }
 }
 
-export async function loadActivePrompt() {
+export async function loadActivePrompt(personaName = null) {
+  const selectedName = personaName
+    || document.getElementById('promptSelect')?.value
+    || new URLSearchParams(window.location.search).get('persona')
+    || 'default_chat';
   try {
-    const res = await fetch('/api/prompts/default_chat', { credentials: 'include' });
+    const res = await fetch(`/api/prompts/${encodeURIComponent(selectedName)}`, { credentials: 'include' });
     if (res.ok) {
       const result = await res.json();
       const activePromptNameEl = document.getElementById('activePromptName');
@@ -57,17 +61,17 @@ export async function loadActivePrompt() {
           const promptName = `${activePrompts[0].name} v${activePrompts[0].version}`;
           if (activePromptNameEl) {
             activePromptNameEl.textContent = promptName;
-            activePromptNameEl.setAttribute('data-tooltip', `Active prompt: ${promptName}`);
+            activePromptNameEl.setAttribute('data-tooltip', `Selected prompt: ${promptName}`);
           }
           return;
         }
       }
-      if (activePromptNameEl) activePromptNameEl.textContent = 'default_chat';
+      if (activePromptNameEl) activePromptNameEl.textContent = selectedName;
     }
   } catch (err) {
     console.error('Failed to load active prompt:', err);
     const el = document.getElementById('activePromptName');
-    if (el) el.textContent = 'default_chat';
+    if (el) el.textContent = selectedName;
   }
 }
 
@@ -108,6 +112,22 @@ export async function loadPromptSelector() {
       fallback.selected = true;
       promptSelect.insertBefore(fallback, promptSelect.firstChild);
     }
+
+    const requestedName = new URLSearchParams(window.location.search).get('persona');
+    let savedName = null;
+    try {
+      savedName = JSON.parse(localStorage.getItem('agentx_current_persona'))?.name || null;
+    } catch { /* ignore stale browser state */ }
+
+    const preferredName = [requestedName, savedName, 'default_chat']
+      .find(name => name && Array.from(promptSelect.options).some(option => option.value === name));
+    if (preferredName) promptSelect.value = preferredName;
+
+    if (promptSelect.dataset.promptBadgeBound !== 'true') {
+      promptSelect.addEventListener('change', () => loadActivePrompt(promptSelect.value));
+      promptSelect.dataset.promptBadgeBound = 'true';
+    }
+    await loadActivePrompt(promptSelect.value);
   } catch (err) {
     console.error('Failed to load prompt selector:', err);
   }

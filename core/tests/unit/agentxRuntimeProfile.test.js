@@ -32,6 +32,8 @@ describe('Agent X runtime profile', () => {
     '/playground',
     '/models',
     '/analytics',
+    '/prompts',
+    '/api/prompts',
     '/api/inference/generate',
     '/api/rag/search',
     '/api/benchmark-proxy/results'

@@ -16,7 +16,21 @@ Ollama; inference workflows require models chosen by the tester.
 Without Ollama or a model, the UI still loads and honestly reports that
 inference is unavailable.
 
-## Demo 2 — ground and compare
+## Demo 2 — compare a persona on the same model
+
+1. Open <http://localhost:3180/playground?persona=learning_guide>.
+2. Open the configuration drawer and confirm **System Prompt** is
+   `learning_guide v1`. The adjacent details button shows the active prompt.
+3. Keep the host, model, routing mode, and question fixed. Ask one explanation
+   with **Learning Guide**, then select `default_chat` and ask it again.
+4. Compare the structure and check-for-understanding behavior while inspecting
+   the same model and host receipt after each answer.
+
+`learning_guide` is an idempotently seeded, generic chat persona. It downloads
+no model, grants no tools, and contains no private identity or environment
+details. The exercise isolates prompt behavior from model and routing changes.
+
+## Demo 3 — ground and compare
 
 1. Open **Ingest a document** and upload a small, non-sensitive text document.
 2. Search for a fact that occurs only in that document and inspect the
@@ -27,4 +41,4 @@ inference is unavailable.
 
 This workflow also needs the configured embedding model. Environment-specific
 operations, private data, and external adapters are intentionally absent from
-both demos.
+all three demos.

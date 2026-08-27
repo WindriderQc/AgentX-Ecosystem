@@ -38,6 +38,8 @@ describe('Playground conversational cockpit', () => {
   test('keeps environment-dependent work doors out of the demo profile', async () => {
     const html = await render('demo');
     expect(html).toContain('Talk with your models');
+    expect(html).toContain('Model details');
+    expect(html).not.toContain('href="/nerve-center"');
     expect(html).not.toContain('href="/agent-ops"');
     expect(html).not.toContain('href="/pipeline"');
   });
@@ -51,6 +53,8 @@ describe('Playground conversational cockpit', () => {
     for (const route of ['/api/portal/health', '/api/nerve-center/ecosystem', '/api/ollama-hosts']) {
       expect(source).toContain(route);
     }
+    expect(source).toContain("document.body.dataset.agentxProfile === 'demo'");
+    expect(source).toContain('demoProfile ? Promise.resolve(null)');
     expect(source).not.toContain('/api/config');
     expect(source).toContain("new Event('change', { bubbles: true })");
     expect(source).not.toMatch(/method:\s*['"](?:POST|PUT|PATCH|DELETE)/i);

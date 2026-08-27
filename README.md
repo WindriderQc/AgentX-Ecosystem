@@ -77,14 +77,17 @@ The equivalent Linux commands use `./agentx`. Read
 [First installation](docs/GETTING_STARTED.md) before choosing a local or
 remote endpoint.
 
-## Two guided demos
+## Three guided demos
 
 1. **Route a local answer:** open Playground and use its conversational cockpit
    to compare Quick, Standard, Deep, and Manual routing. Manual exposes the
    configured Ollama hosts and exact model picker; routed modes keep the
    server-owned decision visible in the Request → Router → Host → Model flow.
-   Ask a short question, then inspect Nerve Center or Analytics for evidence.
-2. **Ground and compare:** ingest a small non-sensitive document through RAG,
+   Ask a short question, then inspect Models or Analytics for evidence.
+2. **Compare a persona:** keep one model and question fixed, switch between the
+   built-in `learning_guide` and `default_chat` personas, and compare how the
+   reusable system prompt changes the answer without changing routing authority.
+3. **Ground and compare:** ingest a small non-sensitive document through RAG,
    retrieve a fact unique to it, then open Benchmark to compare candidate
    models on reproducible evidence.
 
