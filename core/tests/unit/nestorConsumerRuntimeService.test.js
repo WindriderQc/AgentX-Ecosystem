@@ -1,5 +1,7 @@
 'use strict';
 
+const { PassThrough } = require('stream');
+
 const mockValidateHostUrl = jest.fn((host) => ({ valid: true, host }));
 const mockGetAdvisoryModelForTask = jest.fn();
 
@@ -39,15 +41,19 @@ const {
   getRouterSnapshot,
 } = require('../../src/services/nestorConsumerRuntimeService');
 
-function response(body, headers = {}, status = 200) {
-  const normalizedHeaders = Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value])
-  );
+function runtimeResult(body = {}, metadata = {}) {
   return {
-    ok: status >= 200 && status < 300,
-    status,
-    text: async () => JSON.stringify(body),
-    headers: { get: (name) => normalizedHeaders[String(name).toLowerCase()] || null },
+    ok: true,
+    status: 200,
+    body,
+    metadata: {
+      model: 'ax/chat-model',
+      hostUrl: 'http://host:11434',
+      hostKey: 'local',
+      routingSource: 'task_router',
+      taskType: 'buddy_chat',
+      ...metadata,
+    },
   };
 }
 
@@ -58,36 +64,30 @@ describe('Nestor consumer inference runtime', () => {
   });
 
   it('maps operations to fixed task types and emits a nestor/* callerDetail', async () => {
-    const fetchImpl = jest.fn().mockResolvedValue(response(
-      { message: { content: 'hello' }, prompt_eval_count: 10, eval_count: 4 },
-      {
-        'x-resolved-model': 'ax/chat-model',
-        'x-routed-host': 'http://host:11434',
-        'x-routed-host-key': 'local',
-        'x-routing-source': 'task_router',
-        'x-inference-lane': 'interactive',
-        'x-routing-task-type': 'buddy_chat',
-      }
-    ));
+    const execute = jest.fn().mockResolvedValue(runtimeResult({
+      message: { content: 'hello' }, prompt_eval_count: 10, eval_count: 4,
+    }));
+    const runtimeServices = { inference: { execute } };
 
     const result = await executeInference({
       operation: 'chat',
       messages: [{ role: 'system', content: 'Nestor owns this prompt.' }, { role: 'user', content: 'Hi' }],
       requested: { host: 'local', model: '' },
       context: { surface: 'desktop', sessionId: 'opaque' },
-    }, { fetchImpl, port: 3080 });
+    }, { runtimeServices });
 
-    const forwarded = JSON.parse(fetchImpl.mock.calls[0][1].body);
-    expect(fetchImpl.mock.calls[0][1].headers).toEqual(expect.objectContaining({
-      'Content-Type': 'application/json',
-      'x-agentx-internal-nestor-consumer': expect.any(String),
-    }));
+    const [forwarded, runtimeOptions] = execute.mock.calls[0];
     expect(forwarded).toEqual(expect.objectContaining({
+      mode: 'chat',
       taskType: 'buddy_chat',
       callerDetail: 'nestor/desktop/chat',
-      host: 'http://local:11434',
-      responseMode: 'normalized',
       stream: false,
+      think: false,
+      timeoutMs: 125000,
+    }));
+    expect(runtimeOptions).toEqual(expect.objectContaining({
+      consumerContract: 'nestor-v1',
+      hostUrl: 'http://local:11434',
     }));
     expect(result).toEqual(expect.objectContaining({
       operation: 'chat',
@@ -113,17 +113,51 @@ describe('Nestor consumer inference runtime', () => {
       messages: [{ role: 'user', content: 'x' }],
       context: { surface: '../benchmark' },
     })).toThrow(/surface/);
+    expect(() => normalizeRequest({
+      operation: 'chat', stream: 'yes', messages: [{ role: 'user', content: 'x' }],
+    })).toThrow(/stream must be boolean/);
   });
 
-  it('rejects a requested host before the internal inference call when allowlisting fails', async () => {
+  it('rejects a requested host before the trusted inference call when allowlisting fails', async () => {
     mockValidateHostUrl.mockReturnValue({ valid: false, message: 'host is not configured' });
-    const fetchImpl = jest.fn();
+    const execute = jest.fn();
     await expect(executeInference({
       operation: 'react',
       messages: [{ role: 'user', content: 'React' }],
       requested: { host: 'http://attacker.invalid' },
-    }, { fetchImpl })).rejects.toEqual(expect.objectContaining({ code: 'INVALID_HOST' }));
-    expect(fetchImpl).not.toHaveBeenCalled();
+    }, { runtimeServices: { inference: { execute } } })).rejects.toEqual(expect.objectContaining({ code: 'INVALID_HOST' }));
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('returns the trusted byte stream with bounded Nestor route identity', async () => {
+    const stream = new PassThrough();
+    const execute = jest.fn().mockResolvedValue({
+      ...runtimeResult({}, { routingSource: 'configured_host' }),
+      stream,
+    });
+    const controller = new AbortController();
+
+    const result = await executeInference({
+      operation: 'chat',
+      stream: true,
+      messages: [{ role: 'user', content: 'Hi' }],
+      context: { surface: 'voix-native', sessionId: 'session-1' },
+    }, {
+      runtimeServices: { inference: { execute } },
+      signal: controller.signal,
+    });
+
+    expect(result.stream).toBe(stream);
+    expect(result).toEqual(expect.objectContaining({
+      operation: 'chat',
+      callerDetail: 'nestor/voix-native/chat',
+      sessionId: 'session-1',
+    }));
+    expect(result.provenance.responseMode).toBe('raw-stream');
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ stream: true }), expect.objectContaining({
+      signal: controller.signal,
+      consumerContract: 'nestor-v1',
+    }));
   });
 
   it('reports default/override provenance without mutating router state', async () => {

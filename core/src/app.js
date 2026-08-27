@@ -476,7 +476,7 @@ const createNestorConsumerV1Routes = require('../routes/nestor-consumer-v1');
 app.use(
   '/api/consumers/nestor/v1',
   nestorConsumerLimiter,
-  createNestorConsumerV1Routes({ systemHealth })
+  createNestorConsumerV1Routes({ runtimeServices, systemHealth })
 );
 
 // System metrics (process, OS, database stats)

@@ -10,6 +10,7 @@ const MAX_TIMEOUT_MS = 900_000;
 const CONTRACT_VERSION = 1;
 const MAX_STREAM_TELEMETRY_LINE_CHARS = 65_536;
 const MODES = new Set(['chat', 'generate', 'embed']);
+const CONSUMER_CONTRACT_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const LOCAL_OPTION_KEYS = new Set([
   'num_ctx', 'num_predict', 'temperature', 'top_p', 'top_k', 'min_p', 'typical_p',
   'seed', 'stop', 'repeat_last_n', 'repeat_penalty', 'presence_penalty',
@@ -455,11 +456,15 @@ function telemetryEntry(request, metadata, startedAt, status, data = null, error
     model: metadata.model,
     caller: request.mode === 'embed' ? 'embedding' : 'proxy',
     callerDetail: request.callerDetail || 'trusted-extension',
+    consumerContract: metadata.consumerContract || null,
     taskType: request.taskType || null,
     routed: true,
     routedModel: metadata.model,
     routedHost: metadata.hostKey,
     routedHostUrl: metadata.hostUrl,
+    routingTrace: {
+      selected: { routingSource: metadata.routingSource || null }
+    },
     num_ctx: metadata.options?.num_ctx ?? null,
     num_ctx_source: metadata.numCtxSource || null,
     tokensIn: data?.prompt_eval_count || data?.usage?.prompt_tokens || 0,
@@ -497,6 +502,15 @@ async function executeRoutedInference(deps, request, options = {}) {
     });
   }
 
+  const consumerContract = options.consumerContract == null
+    ? null
+    : String(options.consumerContract).trim();
+  if (consumerContract && !CONSUMER_CONTRACT_PATTERN.test(consumerContract)) {
+    throw new TrustedRuntimeServiceError('consumerContract must be a bounded lowercase identifier.', {
+      code: 'INFERENCE_CONSUMER_CONTRACT_INVALID', statusCode: 400
+    });
+  }
+
   let upstreamUrl;
   const headers = { 'Content-Type': 'application/json' };
   let payload;
@@ -522,6 +536,17 @@ async function executeRoutedInference(deps, request, options = {}) {
   let keepAlive = request.keepAlive;
   const upstreamProtocol = 'ollama';
 
+  if (options.hostUrl) {
+    const hostCheck = deps.validateHostUrl(options.hostUrl);
+    if (!hostCheck.valid) {
+      throw new TrustedRuntimeServiceError(hostCheck.message || 'Inference host is not configured.', {
+        code: 'INFERENCE_HOST_INVALID', statusCode: 400
+      });
+    }
+    hostUrl = hostCheck.host;
+    hostKey = deps.resolveHostKey(hostUrl);
+    routingSource = 'trusted_host_override';
+  }
   hostUrl = hostUrl || deps.getTargetForModel(model);
   hostKey = hostKey || deps.resolveHostKey(hostUrl);
   if (!hostUrl) {
@@ -566,6 +591,7 @@ async function executeRoutedInference(deps, request, options = {}) {
     hostUrl,
     hostKey,
     routingSource,
+    consumerContract,
     upstreamProtocol,
     options: runtimeOptions,
     numCtxSource,
@@ -649,6 +675,7 @@ function defaultDependencies() {
   const { assertHostAvailableForConsumer } = require('../services/benchmarkClaimGuard');
   const { modelsMatch } = require('../helpers/modelNameNormalization');
   const hostGate = require('../services/hostGate');
+  const { validateHostUrl } = require('../helpers/ollamaHostConfig');
   return {
     ModelRegistry,
     hostPreferenceService,
@@ -663,6 +690,7 @@ function defaultDependencies() {
     assertHostAvailableForConsumer,
     modelsMatch,
     hostGate,
+    validateHostUrl,
     fetch
   };
 }

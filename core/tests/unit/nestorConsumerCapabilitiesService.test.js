@@ -17,7 +17,7 @@ describe('Nestor consumer capability discovery', () => {
     const result = await getCapabilities({ systemHealth: { status: 'ok' } });
     expect(result.contract).toEqual({
       name: 'agentx.nestor.consumer',
-      version: '1.1.0',
+      version: '1.2.0',
       basePath: '/api/consumers/nestor/v1',
     });
     expect(result.router).toEqual(expect.objectContaining({
@@ -26,6 +26,12 @@ describe('Nestor consumer capability discovery', () => {
       modelCatalogEndpoint: '/api/models/all',
       operations: ['chat', 'react', 'analyze'],
     }));
+    expect(result.router.streaming).toEqual({
+      supported: true,
+      contentType: 'text/event-stream',
+      events: ['route', 'delta', 'done', 'error'],
+      cancellation: 'client-disconnect',
+    });
     expect(result.memory.sources).toEqual(['agentx', 'rag']);
     expect(result.events).toEqual(expect.objectContaining({
       ingressEndpoint: '/api/platform-events',
@@ -37,6 +43,7 @@ describe('Nestor consumer capability discovery', () => {
     expect(result.limits).toEqual(expect.objectContaining({
       messageCount: 50,
       totalMessageCharacters: 32000,
+      inferenceTimeoutMs: 125000,
       memoryResultsPerSource: 20,
     }));
     expect(result).not.toHaveProperty('migration');

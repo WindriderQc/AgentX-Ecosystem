@@ -22,6 +22,7 @@ function inferenceDeps(overrides = {}) {
     getTargetForModel: jest.fn(() => 'http://ollama.test:11434'),
     resolveHostKey: jest.fn(() => 'primary'),
     assertHostAvailableForConsumer: jest.fn(async () => null),
+    validateHostUrl: jest.fn((host) => ({ valid: true, host })),
     hostPreferenceService: {
       getByHost: jest.fn(async () => ({
         pinnedModels: [{ model: 'model-a', contextSize: 32768, keepAlive: -1 }]
@@ -104,6 +105,32 @@ describe('trusted runtime services', () => {
       status: 'error', error: 'cancelled'
     }));
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  test('attests a trusted consumer contract and validates its internal host override', async () => {
+    const deps = inferenceDeps();
+
+    await executeRoutedInference(deps, {
+      mode: 'chat',
+      model: 'model-a',
+      taskType: 'buddy_chat',
+      messages: [{ role: 'user', content: 'hello' }],
+      callerDetail: 'nestor/voix-native/chat',
+    }, {
+      consumerContract: 'nestor-v1',
+      hostUrl: 'http://allowed.test:11434',
+    });
+
+    expect(deps.validateHostUrl).toHaveBeenCalledWith('http://allowed.test:11434');
+    expect(deps.fetch).toHaveBeenCalledWith(
+      'http://allowed.test:11434/api/chat',
+      expect.any(Object)
+    );
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      consumerContract: 'nestor-v1',
+      callerDetail: 'nestor/voix-native/chat',
+      routingTrace: { selected: { routingSource: 'trusted_host_override' } },
+    }));
   });
 
   test('relays streaming bytes unchanged and records split final usage metadata', async () => {
@@ -201,5 +228,10 @@ describe('trusted runtime services', () => {
     await expect(executeRoutedInference(inferenceDeps(), {
       mode: 'generate', model: 'model-a', prompt: 'hello', options: { num_gpu: 99 }
     })).rejects.toMatchObject({ code: 'INFERENCE_OPTION_UNSUPPORTED', statusCode: 400 });
+    await expect(executeRoutedInference(inferenceDeps(), {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    }, { consumerContract: 'NOT VALID' })).rejects.toMatchObject({
+      code: 'INFERENCE_CONSUMER_CONTRACT_INVALID', statusCode: 400
+    });
   });
 });

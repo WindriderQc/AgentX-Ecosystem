@@ -3,7 +3,7 @@
 const { validateHostUrl } = require('../helpers/ollamaHostConfig');
 const lanePolicy = require('./inferenceLanePolicy');
 const routerConfig = require('./modelRouterConfig');
-const { internalNestorInferenceHeaders } = require('./nestorConsumerAttribution');
+const { CONSUMER_CONTRACT } = require('./nestorConsumerAttribution');
 const {
   OPERATION_TASK_TYPES,
   LIMITS,
@@ -78,6 +78,9 @@ function normalizeOptions(options = {}) {
 }
 
 function normalizeRequest(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new NestorConsumerError('request body must be an object', 400, 'INVALID_INFERENCE_REQUEST');
+  }
   const operation = String(input.operation || '').trim().toLowerCase();
   const taskType = OPERATION_TASK_TYPES[operation];
   if (!taskType) {
@@ -108,6 +111,10 @@ function normalizeRequest(input = {}) {
     allowlistedHost = hostCheck.host;
   }
 
+  if (input.stream !== undefined && typeof input.stream !== 'boolean') {
+    throw new NestorConsumerError('stream must be boolean when supplied', 400, 'INFERENCE_STREAM_INVALID');
+  }
+
   return {
     operation,
     taskType,
@@ -118,93 +125,108 @@ function normalizeRequest(input = {}) {
       surface,
       sessionId: String(input.context?.sessionId || '').trim().slice(0, 200) || null,
     },
+    stream: input.stream === true,
     callerDetail: `nestor/${surface}/${operation}`,
   };
 }
 
-function responseHeader(response, name) {
-  return response?.headers?.get?.(name) || response?.headers?.get?.(name.toLowerCase()) || '';
+function provenanceFromResult(request, result) {
+  const metadata = result?.metadata || {};
+  return {
+    requested: request.requested,
+    resolved: {
+      model: metadata.model || '',
+      host: metadata.hostUrl || '',
+      hostKey: metadata.hostKey || '',
+    },
+    lane: lanePolicy.resolveLane(request.callerDetail).name,
+    routingSource: metadata.routingSource || '',
+    taskType: metadata.taskType || request.taskType,
+    responseMode: request.stream ? 'raw-stream' : 'normalized',
+  };
 }
 
-async function parseResponse(response) {
-  const raw = await response.text();
-  try { return raw ? JSON.parse(raw) : {}; } catch (_) { return { response: raw }; }
-}
-
-async function executeInference(input, { fetchImpl = global.fetch, port = process.env.PORT || 3080 } = {}) {
-  const request = normalizeRequest(input);
-  if (typeof fetchImpl !== 'function') {
-    throw new NestorConsumerError('AgentX inference transport is unavailable', 503, 'INFERENCE_UNAVAILABLE');
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 125000);
-  let response;
-  let data;
-  try {
-    response = await fetchImpl(`http://127.0.0.1:${port}/api/inference/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...internalNestorInferenceHeaders(),
-      },
-      body: JSON.stringify({
-        taskType: request.taskType,
-        ...(request.requested.host ? { host: request.requested.host } : {}),
-        ...(request.requested.model ? { model: request.requested.model } : {}),
-        messages: request.messages,
-        options: request.options,
-        stream: false,
-        responseMode: 'normalized',
-        suppressThinking: true,
-        callerDetail: request.callerDetail,
-      }),
-      signal: controller.signal,
-    });
-    data = await parseResponse(response);
-  } catch (error) {
-    const timedOut = error.name === 'AbortError';
-    throw new NestorConsumerError(
-      timedOut ? 'AgentX inference timed out' : error.message,
-      timedOut ? 504 : 502,
-      timedOut ? 'INFERENCE_TIMEOUT' : 'INFERENCE_UPSTREAM_ERROR'
-    );
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (!response.ok || data.status === 'error') {
-    throw new NestorConsumerError(
-      data.message || data.error || `AgentX inference failed with HTTP ${response.status}`,
-      response.status || 502,
-      data.code || 'INFERENCE_FAILED',
-      data.data || null
-    );
-  }
-
-  const reply = String(data.message?.content || data.response || '').trim();
+function inferenceIdentity(request, result) {
   return {
     operation: request.operation,
     taskType: request.taskType,
     callerDetail: request.callerDetail,
     sessionId: request.context.sessionId,
+    provenance: provenanceFromResult(request, result),
+  };
+}
+
+function toNestorRuntimeError(error) {
+  if (error instanceof NestorConsumerError) return error;
+  return new NestorConsumerError(
+    error?.message || 'AgentX inference failed',
+    Number(error?.statusCode) || 502,
+    error?.code || 'INFERENCE_UPSTREAM_ERROR',
+    error?.details || null
+  );
+}
+
+async function executeInference(input, { runtimeServices, signal } = {}) {
+  const request = normalizeRequest(input);
+  if (!runtimeServices?.inference?.execute) {
+    throw new NestorConsumerError('AgentX inference runtime is unavailable', 503, 'INFERENCE_UNAVAILABLE');
+  }
+
+  let result;
+  try {
+    result = await runtimeServices.inference.execute({
+      mode: 'chat',
+      taskType: request.taskType,
+      ...(request.requested.model ? { model: request.requested.model } : {}),
+      messages: request.messages,
+      options: request.options,
+      stream: request.stream,
+      think: false,
+      timeoutMs: LIMITS.inferenceTimeoutMs,
+      callerDetail: request.callerDetail,
+    }, {
+      signal,
+      consumerContract: CONSUMER_CONTRACT,
+      ...(request.requested.host ? { hostUrl: request.requested.host } : {}),
+    });
+  } catch (error) {
+    throw toNestorRuntimeError(error);
+  }
+
+  if (!result?.ok) {
+    const data = result?.body || {};
+    throw new NestorConsumerError(
+      data.message || data.error || `AgentX inference failed with HTTP ${result?.status || 502}`,
+      Number(result?.status) || 502,
+      data.code || 'INFERENCE_FAILED',
+      data.data || null
+    );
+  }
+
+  const identity = inferenceIdentity(request, result);
+  if (request.stream) {
+    if (!result.stream) {
+      throw new NestorConsumerError(
+        'AgentX inference did not return a stream',
+        502,
+        'INFERENCE_STREAM_UNAVAILABLE'
+      );
+    }
+    return {
+      ...identity,
+      stream: result.stream,
+    };
+  }
+
+  const data = result.body || {};
+  const reply = String(data.message?.content || data.response || '').trim();
+  return {
+    ...identity,
     reply,
     message: { role: 'assistant', content: reply },
     usage: {
-      promptTokens: Number(data.prompt_eval_count) || 0,
-      completionTokens: Number(data.eval_count) || 0,
-    },
-    provenance: {
-      requested: request.requested,
-      resolved: {
-        model: responseHeader(response, 'x-resolved-model') || data.model || '',
-        host: responseHeader(response, 'x-routed-host'),
-        hostKey: responseHeader(response, 'x-routed-host-key'),
-      },
-      lane: responseHeader(response, 'x-inference-lane'),
-      routingSource: responseHeader(response, 'x-routing-source'),
-      taskType: responseHeader(response, 'x-routing-task-type') || request.taskType,
-      responseMode: responseHeader(response, 'x-agentx-response-mode') || 'normalized',
+      promptTokens: Number(data.prompt_eval_count ?? data.usage?.prompt_tokens) || 0,
+      completionTokens: Number(data.eval_count ?? data.usage?.completion_tokens) || 0,
     },
     warning: data.warning || null,
   };
