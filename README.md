@@ -146,6 +146,10 @@ product APIs. Independently deployed applications can use the generic,
 stateless [external consumer API](docs/EXTERNAL_CONSUMERS.md) for authenticated
 routed inference, effective capability discovery, streaming, and cancellation
 without loading application code or storing application transcripts in Core.
+Nestor-style assistants can instead use the fixed-operation
+[Nestor consumer API](docs/NESTOR_CONSUMER.md), including bounded SSE inference
+for live speech overlap while keeping persona and transcript ownership outside
+the product.
 Advanced operators may also install an absolute-path trusted
 extension in the full profile; Core owns only the generic loader and versioned
 contracts, never the extension source, secret, mount, or deployment. See

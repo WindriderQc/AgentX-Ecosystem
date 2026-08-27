@@ -62,6 +62,12 @@ async function getCapabilities({ systemHealth, probeTimeoutMs = DEFAULT_PROBE_TI
       modelCatalogEndpoint: '/api/models/all',
       operations: Object.keys(OPERATION_TASK_TYPES),
       taskTypes: OPERATION_TASK_TYPES,
+      streaming: {
+        supported: true,
+        contentType: 'text/event-stream',
+        events: ['route', 'delta', 'done', 'error'],
+        cancellation: 'client-disconnect',
+      },
     },
     memory: {
       sources: MEMORY_SOURCES,

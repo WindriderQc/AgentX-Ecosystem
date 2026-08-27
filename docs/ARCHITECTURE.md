@@ -50,6 +50,11 @@ Streaming is SSE and client disconnect cancels the Core-owned upstream request.
 The API uses a route-scoped external-consumer token so applications do not need
 the broader operator credential.
 
+Nestor-style assistants may use the narrower fixed-operation
+[Nestor consumer API](NESTOR_CONSUMER.md). It provides the same Core-owned
+routing and real SSE cancellation while keeping persona, transcript, and speech
+behavior in the separately deployed consumer.
+
 A private Data service may independently expose a bounded, read-only API to
 agents. Data remains outside the product boundary: it is neither a product
 service nor a skill owned or loaded by Agent X.

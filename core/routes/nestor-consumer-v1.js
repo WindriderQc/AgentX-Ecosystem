@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const { StringDecoder } = require('string_decoder');
 const envelope = require('../src/helpers/responseEnvelope');
 const logger = require('../config/logger');
 const buddyEvents = require('../src/services/buddyEvents');
@@ -8,6 +9,7 @@ const { getCapabilities } = require('../src/services/nestorConsumerCapabilitiesS
 const { executeInference, getRouterSnapshot } = require('../src/services/nestorConsumerRuntimeService');
 const { getMemoryStatus, searchMemory } = require('../src/services/nestorConsumerMemoryService');
 const { getNestorMetrics } = require('../src/services/nestorConsumerMetricsService');
+const { CONTRACT_VERSION, LIMITS } = require('../src/services/nestorConsumerContract');
 
 function sendError(res, error) {
   const statusCode = Number(error.statusCode) || 500;
@@ -39,7 +41,158 @@ function writePlatformEvent(res, event) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-function createNestorConsumerV1Routes({ systemHealth } = {}) {
+function writeSse(res, event, data) {
+  return res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function waitForDrain(res) {
+  if (!res.writableNeedDrain || res.destroyed) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      res.off('drain', finish);
+      res.off('close', finish);
+      resolve();
+    };
+    res.once('drain', finish);
+    res.once('close', finish);
+  });
+}
+
+function createDisconnectSignal(req, res) {
+  const controller = new AbortController();
+  let complete = false;
+  const cancel = () => {
+    if (!complete && !controller.signal.aborted) {
+      controller.abort(new Error('Nestor consumer disconnected'));
+    }
+  };
+  req.once('aborted', cancel);
+  res.once('close', cancel);
+  return {
+    signal: controller.signal,
+    complete() {
+      complete = true;
+      req.off('aborted', cancel);
+      res.off('close', cancel);
+    },
+  };
+}
+
+async function relayInferenceStream(stream, res, identity) {
+  const decoder = new StringDecoder('utf8');
+  let buffer = '';
+  let terminal = false;
+  let reply = '';
+  let usage = { promptTokens: 0, completionTokens: 0 };
+
+  const emit = async (event, data) => {
+    if (res.destroyed || res.writableEnded) return;
+    writeSse(res, event, data);
+    await waitForDrain(res);
+  };
+
+  const fail = async (code, message) => {
+    if (terminal) return;
+    terminal = true;
+    await emit('error', { code, message });
+  };
+
+  const processLine = async (line) => {
+    if (!line.trim() || terminal || res.destroyed) return !terminal;
+    if (line.length > LIMITS.streamLineCharacters) {
+      await fail('INFERENCE_STREAM_INVALID', 'The upstream stream exceeded its line limit.');
+      return false;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(line);
+    } catch (_error) {
+      await fail('INFERENCE_STREAM_INVALID', 'The upstream stream was invalid.');
+      return false;
+    }
+
+    if (data?.error) {
+      await fail('INFERENCE_UPSTREAM_ERROR', String(data.error));
+      return false;
+    }
+
+    usage = {
+      promptTokens: Number(data.prompt_eval_count ?? data.usage?.prompt_tokens) || usage.promptTokens,
+      completionTokens: Number(data.eval_count ?? data.usage?.completion_tokens) || usage.completionTokens,
+    };
+    const text = typeof data.message?.content === 'string'
+      ? data.message.content
+      : (typeof data.response === 'string' ? data.response : '');
+    if (text) {
+      reply += text;
+      await emit('delta', {
+        text,
+        ...(data.message?.role && { role: data.message.role }),
+      });
+    }
+
+    if (data.done === true) {
+      terminal = true;
+      await emit('done', {
+        ...identity,
+        reply,
+        message: { role: 'assistant', content: reply },
+        usage,
+        persistence: { persisted: false },
+      });
+      return false;
+    }
+    return true;
+  };
+
+  try {
+    streamLoop: for await (const chunk of stream) {
+      buffer += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      if (buffer.length > LIMITS.streamLineCharacters) {
+        await fail('INFERENCE_STREAM_INVALID', 'The upstream stream exceeded its line limit.');
+        break;
+      }
+      for (const line of lines) {
+        if (!await processLine(line)) break streamLoop;
+      }
+    }
+    if (!terminal && !res.destroyed) {
+      buffer += decoder.end();
+      if (buffer) await processLine(buffer);
+    }
+    if (!terminal && !res.destroyed) {
+      await fail('INFERENCE_STREAM_INCOMPLETE', 'The inference stream ended before completion.');
+    }
+  } catch (error) {
+    if (!res.destroyed && !terminal) {
+      await fail(
+        'INFERENCE_STREAM_ERROR',
+        error?.message === 'Nestor consumer disconnected'
+          ? 'Inference request cancelled.'
+          : 'The inference stream ended unexpectedly.'
+      );
+    }
+  } finally {
+    if (!res.destroyed && !res.writableEnded) res.end();
+  }
+}
+
+function setInferenceHeaders(res, provenance = {}) {
+  const resolved = provenance.resolved || {};
+  res.set('X-AgentX-Consumer-Contract', CONTRACT_VERSION);
+  res.set('X-Resolved-Model', resolved.model || '');
+  res.set('X-Routed-Host-Key', resolved.hostKey || '');
+  res.set('X-Routing-Source', provenance.routingSource || '');
+  res.set('X-Routing-Task-Type', provenance.taskType || '');
+}
+
+function createNestorConsumerV1Routes({ runtimeServices, systemHealth } = {}) {
+  if (!runtimeServices?.inference?.execute) {
+    throw new Error('Nestor consumer routes require Core runtime services.');
+  }
   const router = express.Router();
 
   router.get('/capabilities', asyncRoute(async (_req, res) => {
@@ -51,10 +204,49 @@ function createNestorConsumerV1Routes({ systemHealth } = {}) {
     envelope.success(res, await getRouterSnapshot());
   }));
 
-  router.post('/inference', asyncRoute(async (req, res) => {
-    res.set('Cache-Control', 'no-store');
-    envelope.success(res, await executeInference(req.body));
-  }));
+  router.post('/inference', async (req, res) => {
+    const disconnect = createDisconnectSignal(req, res);
+    try {
+      res.set('Cache-Control', 'no-store');
+      const result = await executeInference(req.body, {
+        runtimeServices,
+        signal: disconnect.signal,
+      });
+      setInferenceHeaders(res, result.provenance);
+
+      if (!result.stream) return envelope.success(res, result);
+
+      const { stream, ...identity } = result;
+      res.status(200);
+      res.set({
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-store',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        'Content-Encoding': 'identity',
+      });
+      res.flushHeaders?.();
+      writeSse(res, 'route', identity);
+      await waitForDrain(res);
+      await relayInferenceStream(stream, res, identity);
+      return undefined;
+    } catch (error) {
+      if (disconnect.signal.aborted) return undefined;
+      if (res.headersSent) {
+        if (!res.destroyed && !res.writableEnded) {
+          writeSse(res, 'error', {
+            code: error.code || 'INFERENCE_STREAM_ERROR',
+            message: 'The inference stream ended unexpectedly.',
+          });
+          res.end();
+        }
+        return undefined;
+      }
+      return sendError(res, error);
+    } finally {
+      disconnect.complete();
+    }
+  });
 
   router.get('/memory/status', asyncRoute(async (req, res) => {
     const sources = req.query.source || req.query.sources;
@@ -122,4 +314,6 @@ function createNestorConsumerV1Routes({ systemHealth } = {}) {
 }
 
 module.exports = createNestorConsumerV1Routes;
+module.exports.createDisconnectSignal = createDisconnectSignal;
+module.exports.relayInferenceStream = relayInferenceStream;
 module.exports.sendError = sendError;
