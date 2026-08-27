@@ -89,6 +89,12 @@ agent runtime.
   fingerprint. Profiling records evidence for that identity and never creates
   or silently selects a replacement tag; see
   [Exact-artifact profiling](EXACT_ARTIFACT_PROFILING.md).
+- Cloud/local comparisons use Benchmark's stateless
+  [lane accounting contract](CLOUD_LOCAL_LANE_ACCOUNTING.md). Local,
+  free-cloud, and paid-cloud observations remain separate, family/kid lanes
+  fail closed to local candidates, paid receipts use immutable integer
+  nanodollars plus effective price provenance, and comparison has no network or
+  routing authority.
 - Degraded cross-model retry is never implicit. It requires the existing
   server-side degraded-fallback policy, a Core-managed non-stream route, and
   the request field `allowCrossModelFallback: true`. The alternate must be an

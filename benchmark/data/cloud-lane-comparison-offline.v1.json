@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "campaignId": "offline-contract-proof-v1",
+  "lane": "coding",
+  "generatedAt": "2026-08-27T12:00:00.000Z",
+  "estimatedCalls": 3,
+  "spendCeilingNanodollars": 10000000,
+  "contract": {
+    "version": "agentx.lane-comparison.v1",
+    "lane": "coding",
+    "suite": "portable-coding-contracts",
+    "suiteVersion": "1.0.0",
+    "fixtureFingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "graderVersion": "hybrid-grader-v1",
+    "responseMode": "final_only",
+    "maxOutputTokens": 1200,
+    "toolProtocol": "openai-tools-v1"
+  },
+  "candidates": [
+    {
+      "id": "fixture-local",
+      "tier": "local",
+      "provider": "ollama",
+      "model": "fixture/local-model",
+      "modelVersion": "fixture-digest-v1",
+      "apiVersion": "ollama-fixture-v1",
+      "provenanceSource": "offline exact-artifact fixture",
+      "contextWindow": 131072,
+      "artifactDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "fixture-free-cloud",
+      "tier": "free_cloud",
+      "provider": "openrouter",
+      "model": "fixture/free-model",
+      "modelVersion": "fixture-provider-v1",
+      "apiVersion": "openrouter-fixture-v1",
+      "provenanceSource": "offline provider-catalog fixture",
+      "contextWindow": 131072,
+      "priceSnapshot": {
+        "provider": "openrouter",
+        "model": "fixture/free-model",
+        "modelVersion": "fixture-provider-v1",
+        "currency": "USD",
+        "effectiveAt": "2026-08-01T00:00:00.000Z",
+        "source": "offline zero-price fixture",
+        "rates": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+      }
+    },
+    {
+      "id": "fixture-paid-cloud",
+      "tier": "paid_cloud",
+      "provider": "openrouter",
+      "model": "fixture/paid-model",
+      "modelVersion": "fixture-provider-v1",
+      "apiVersion": "openrouter-fixture-v1",
+      "provenanceSource": "offline provider-catalog fixture",
+      "contextWindow": 200000,
+      "priceSnapshot": {
+        "provider": "openrouter",
+        "model": "fixture/paid-model",
+        "modelVersion": "fixture-provider-v1",
+        "currency": "USD",
+        "effectiveAt": "2026-08-01T00:00:00.000Z",
+        "source": "offline paid-price fixture",
+        "rates": { "input": 1500000000, "output": 7500000000, "cacheRead": 0, "cacheWrite": 0 }
+      }
+    }
+  ],
+  "paidCall": {
+    "callId": "offline-paid-call-1",
+    "observedAt": "2026-08-27T12:00:00.000Z",
+    "usage": { "input": 1000, "output": 500, "cacheRead": 0, "cacheWrite": 0 }
+  },
+  "observations": [
+    {
+      "candidateId": "fixture-local",
+      "attempts": 4,
+      "successes": 4,
+      "metrics": { "qualityScore": 0.84, "latencyMs": 1200, "contextTokens": 120000 }
+    },
+    {
+      "candidateId": "fixture-free-cloud",
+      "attempts": 4,
+      "successes": 3,
+      "metrics": { "qualityScore": 0.88, "latencyMs": 2400, "contextTokens": 120000 }
+    },
+    {
+      "candidateId": "fixture-paid-cloud",
+      "attempts": 4,
+      "successes": 4,
+      "metrics": { "qualityScore": 0.94, "latencyMs": 1500, "contextTokens": 120000 }
+    }
+  ]
+}

@@ -119,6 +119,13 @@ Profiling and benchmark admission follow the
 records host-bound evidence and never creates or silently selects another model
 tag.
 
+Benchmark also provides a stateless
+[cloud/local lane accounting contract](docs/CLOUD_LOCAL_LANE_ACCOUNTING.md).
+It keeps local, free-cloud, and paid-cloud evidence in separate exact-contract
+cohorts, enforces local-only family/kid lanes, and attributes already-observed
+paid calls with immutable integer-nanodollar receipts. It never contacts a
+provider, authorizes spend, or mutates routing.
+
 ## Install and update
 
 Normal users should follow the latest stable GitHub release. Controlled
