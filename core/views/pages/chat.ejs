@@ -102,6 +102,12 @@
 
     <div class="main-content chat-page-content" style="padding: 0;">
       <% const fullPlayground = locals.agentxProfile !== 'demo'; %>
+      <details class="chat-routing-lab" <%= fullPlayground ? 'open' : '' %>>
+        <summary>
+          <span><i class="fas fa-route" aria-hidden="true"></i> Open routing cockpit</span>
+          <small>Intent, host fleet, route evidence, and manual controls</small>
+        </summary>
+        <div class="chat-routing-lab__surface">
       <section class="playground-cockpit" id="playgroundCockpit" data-state="loading" aria-labelledby="playgroundCockpitTitle">
         <div class="pg-cockpit-ambient" aria-hidden="true"></div>
         <header class="pg-cockpit-hero">
@@ -112,7 +118,7 @@
             </div>
             <div class="pg-cockpit-title-row">
               <div>
-                <h1 id="playgroundCockpitTitle">Talk with your models</h1>
+                <h2 id="playgroundCockpitTitle">Talk with your models</h2>
                 <p>Choose the intent, see the route, inspect the fleet, then keep the conversation in one place.</p>
               </div>
               <button class="pg-icon-button" id="pgToggleCockpit" type="button" aria-expanded="true" title="Collapse cockpit">
@@ -173,6 +179,8 @@
 
         </div>
       </section>
+        </div>
+      </details>
 
       <%- include('../partials/cockpit-guide', {
         cockpitGuide: {
@@ -197,58 +205,61 @@
         }
       }) %>
 
-      <!-- Unified Info Bar -->
-      <div class="chat-header-bar">
-        <div class="chat-header-left">
+      <header class="chat-command-bar" aria-label="Conversation status and controls">
+        <div class="chat-command-status">
+          <span class="chat-command-status__icon" aria-hidden="true"><i class="fas fa-circle-notch"></i></span>
+          <span class="chat-command-status__copy">
+            <strong class="status-chip" id="statusChip" data-tone="muted" aria-live="polite">Getting ready</strong>
+            <small id="chatStatusHelp">Agent X will handle the setup when you send.</small>
+          </span>
+        </div>
+
+        <div class="chat-command-mode" aria-label="Current response strategy">
+          <span>Response</span>
+          <strong id="simpleModeLabel">Balanced</strong>
+          <small id="simpleModeAutomation">Automatic</small>
+        </div>
+
+        <div class="chat-command-actions">
+          <button id="toggleHistoryBtn" class="chat-command-secondary" type="button" title="Show conversation history" aria-label="Show conversation history">
+            <i class="fas fa-clock-rotate-left" aria-hidden="true"></i><span>Conversations</span>
+          </button>
+          <button id="toggleConfigBtn" class="take-controls-button" type="button" aria-expanded="false" aria-controls="configDrawer">
+            <i class="fas fa-sliders" aria-hidden="true"></i><span>Take the controls</span>
+          </button>
+        </div>
+
+        <div class="chat-expert-strip" id="chatExpertStrip" aria-hidden="true" inert>
+          <span class="chat-expert-strip__label"><i class="fas fa-compass" aria-hidden="true"></i> Instruments</span>
           <span class="header-model-badge" id="headerModelBadge"></span>
           <span class="header-agent-name" id="headerAgentName" style="display:none;"></span>
-          <div class="header-agent-avatar" id="headerAgentAvatar" style="display:none;"></div>
-          <span class="ci-status-sep">|</span>
-          <span class="ci-inline-field"><span class="ci-health-dot"></span> <span class="ci-status-label">host:</span> <span class="ci-status-value" data-ci-field="host">---</span></span>
-          <span class="ci-status-sep">|</span>
-          <span class="ci-inline-field"><span class="ci-status-label">route:</span> <span class="ci-status-value" data-ci-field="route">---</span></span>
-          <span class="ci-status-sep">|</span>
-          <span class="ci-inline-field"><span class="ci-status-label">VRAM:</span> <span class="ci-status-value" data-ci-field="vram">---</span></span>
+          <span class="header-agent-avatar" id="headerAgentAvatar" style="display:none;"></span>
+          <span class="ci-inline-field"><span class="ci-health-dot"></span><span class="ci-status-label">Host</span><strong class="ci-status-value" data-ci-field="host">Not observed</strong></span>
+          <span class="ci-inline-field"><span class="ci-status-label">Route</span><strong class="ci-status-value" data-ci-field="route">Not observed</strong></span>
+          <span class="ci-inline-field"><span class="ci-status-label">VRAM</span><strong class="ci-status-value" data-ci-field="vram">Not observed</strong></span>
           <select id="headerPersonaSelect" class="header-persona-dropdown" style="display: none;">
             <option value="default_chat">Default</option>
           </select>
-          <button class="icon-btn" id="headerDevToggle" title="Dev mode — show full config" style="font-size: 0.75rem; opacity: 0.5;">
-            <i class="fas fa-flask"></i>
-          </button>
+          <button class="icon-btn" id="headerDevToggle" title="Show precision controls" aria-label="Show precision controls"><i class="fas fa-flask" aria-hidden="true"></i></button>
           <button class="ghost small" id="headerChangeBtn" title="Change agent" style="display:none;">Change</button>
-        </div>
-        <div class="chat-header-center">
-          <span class="status-chip" id="statusChip">Idle</span>
-        </div>
-        <div class="chat-header-right">
+          <span class="chat-expert-strip__spacer"></span>
           <div class="header-pill" id="conversationTokens" style="display: none;">
-            <span class="label">Ctx</span>
-            <strong id="tokenCount">0</strong>
-            <span style="font-size:9px;opacity:0.5"> / </span>
-            <span id="tokenLimit" style="font-size:9px;opacity:0.6;" title="Context window set by the session model on the server.">Auto</span>
+            <span class="label">Context</span><strong id="tokenCount">0</strong><span aria-hidden="true">/</span><span id="tokenLimit" title="Context window set by the session model on the server.">Auto</span>
           </div>
           <div class="header-pill" id="conversationCost" style="display: none;">
-            <span class="label">Cost</span>
-            <strong id="costAmount">$0.00</strong>
+            <span class="label">Cost</span><strong id="costAmount">$0.00</strong>
           </div>
-          <button id="headerThinkingBtn" class="icon-btn header-toggle-btn" title="Force thinking mode; unchecked uses automatic lane policy" aria-pressed="false">
-            <i class="fas fa-lightbulb"></i>
-            <span class="header-toggle-label">Think</span>
+          <button id="headerThinkingBtn" class="icon-btn header-toggle-btn" title="Force thinking mode; unchecked uses automatic policy" aria-pressed="false">
+            <i class="fas fa-lightbulb" aria-hidden="true"></i><span class="header-toggle-label">Thinking</span>
           </button>
           <button id="headerWebSearchBtn" class="icon-btn header-toggle-btn" title="Enable web search before responding" aria-pressed="false">
-            <i class="fas fa-globe"></i>
-            <span class="header-toggle-label">Web</span>
+            <i class="fas fa-globe" aria-hidden="true"></i><span class="header-toggle-label">Web</span>
           </button>
-          <div class="header-pill">
-            <span class="label">Msgs</span>
-            <strong id="statMessages">0</strong>
-          </div>
-          <button id="toggleHistoryBtn" class="icon-btn" title="Toggle history"><i class="fas fa-history"></i></button>
-          <button id="toggleConfigBtn" class="icon-btn" title="Configuration"><i class="fas fa-cog"></i></button>
-          <button id="ciToggleBtn" class="icon-btn" title="Intelligence Panel"><i class="fas fa-brain"></i></button>
-          <button id="showChatTutorialBtn" class="icon-btn" title="Tutorial"><i class="fas fa-graduation-cap"></i></button>
+          <span class="header-pill"><span class="label">Messages</span><strong id="statMessages">0</strong></span>
+          <button id="ciToggleBtn" class="icon-btn" title="Open routing intelligence" aria-label="Open routing intelligence"><i class="fas fa-brain" aria-hidden="true"></i></button>
+          <button id="showChatTutorialBtn" class="icon-btn" title="Open page guide" aria-label="Open page guide"><i class="fas fa-circle-question" aria-hidden="true"></i></button>
         </div>
-      </div>
+      </header>
 
       <section class="chat-layout">
 
@@ -283,7 +294,7 @@
                     <div class="agentx-card-header">
                       <h4 class="agentx-card-name">Quick Chat</h4>
                     </div>
-                    <p class="agentx-card-description">Default persona with model router — just start typing</p>
+                    <p class="agentx-card-description">Start typing; Agent X handles the setup.</p>
                   </div>
                   <div class="agentx-card-actions">
                     <button class="agentx-select-btn selected"><i class="fas fa-check"></i></button>
@@ -304,18 +315,26 @@
 
         <!-- Chat Window (fills remaining height) -->
         <div class="chat-window" id="chatWindow">
-          <div class="bubble assistant">
-            <div class="meta">AgentX</div>
-            <p>Hello! I'm online. Pick a model, then ask away.</p>
-          </div>
+          <section class="chat-welcome" aria-labelledby="chat-welcome-title">
+            <span class="chat-welcome__icon" aria-hidden="true"><i class="fas fa-message"></i></span>
+            <p class="chat-welcome__eyebrow">Quick chat</p>
+            <h1 id="chat-welcome-title">Ask Agent X anything.</h1>
+            <p>Just start typing. Agent X will handle the setup and keep every decision inspectable.</p>
+            <div class="chat-welcome__starters" aria-label="Conversation starters">
+              <button type="button" data-chat-starter="Summarize this topic for me: ">Summarize a topic</button>
+              <button type="button" data-chat-starter="Help me brainstorm: ">Brainstorm</button>
+              <button type="button" data-chat-starter="Explain this clearly: ">Explain something</button>
+            </div>
+            <small><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> A balanced response is automatic. You can take control at any time.</small>
+          </section>
         </div>
 
         <!-- Composer -->
         <div class="composer">
-          <textarea id="messageInput" rows="1" placeholder="Message AgentX... (Enter to send, Shift+Enter for newline)"></textarea>
+          <textarea id="messageInput" rows="1" placeholder="Ask Agent X anything…"></textarea>
           <div class="composer-actions">
             <select class="quick-select" id="quickActionSelect" title="Quick prompts">
-              <option value="" disabled selected>Quick...</option>
+              <option value="" disabled selected>Try a prompt...</option>
               <option value="What can you help me with?">Help</option>
               <option value="Summarize recent events.">Summary</option>
               <option value="List available tools.">Tools</option>
@@ -336,11 +355,15 @@
   </div>
 
   <!-- Config Drawer (slides from right) -->
-  <div class="config-drawer-backdrop" id="configDrawerBackdrop"></div>
-  <div class="config-drawer" id="configDrawer">
+  <div class="config-drawer-backdrop" id="configDrawerBackdrop" aria-hidden="true"></div>
+  <div class="config-drawer" id="configDrawer" role="dialog" aria-hidden="true" aria-labelledby="configDrawerTitle" tabindex="-1" inert>
     <div class="config-drawer-header">
-      <h2><i class="fas fa-cog" style="margin-right:8px;color:var(--accent);"></i>Configuration</h2>
-      <button class="icon-btn" id="configDrawerClose" title="Close">&times;</button>
+      <div>
+        <span class="config-drawer-eyebrow"><i class="fas fa-sliders" aria-hidden="true"></i> Expert depth</span>
+        <h2 id="configDrawerTitle">Take the controls</h2>
+        <p>Shape this conversation without leaving it.</p>
+      </div>
+      <button class="icon-btn" id="configDrawerClose" type="button" title="Close controls" aria-label="Close controls">&times;</button>
     </div>
     <div class="config-drawer-body">
 
@@ -394,12 +417,12 @@
       </div>
 
       <div class="field">
-        <label>Chat Mode</label>
+        <label>Response strategy</label>
         <select id="routingModeSelect">
-          <option value="quick">Quick — fast, lightweight model</option>
-          <option value="standard">Standard — default chat model</option>
-          <option value="deep">Deep — maximum reasoning</option>
-          <option value="manual">Manual — pick host &amp; model</option>
+          <option value="quick">Fast — prioritize speed</option>
+          <option value="standard">Balanced — recommended</option>
+          <option value="deep">Deep reasoning — prioritize depth</option>
+          <option value="manual">Manual control — choose host and model</option>
         </select>
         <div class="hint" id="routingModeHint">One model for the whole session — no per-message switching.</div>
       </div>

@@ -45,14 +45,18 @@ export async function renderHostSelection(container, hosts) {
             h._activeProfiling = findProfilingForHost(h, activeProfilingState);
         });
 
-        // Enrich hosts with model list from profiler status endpoint (backend → Ollama)
+        // Reconcile stored profiler state with live runtime state. A newly
+        // discovered host legitimately starts as "unknown" until this probe;
+        // treating that as offline contradicts the live Ollama status shown in
+        // the simple surface and hides the actual next step (run a baseline).
         await Promise.all(data.map(async (h) => {
-            if (!_isOnline(h)) return;
             try {
                 const statusRes = await fetch(`/api/profiler/hosts/${encodeURIComponent(h.hostId)}/status`);
                 if (!statusRes.ok) return;
                 const status = await statusRes.json();
                 const d = status.data || status;
+                h.status = d.status || h.status;
+                h.error = d.error || null;
                 h.models = (d.models || []).map(m => m.replace(/:latest$/i, ''));
                 h.modelDetails = d.modelDetails || [];
                 h._modelCount = h.models.length;

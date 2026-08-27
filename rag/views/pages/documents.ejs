@@ -1,85 +1,56 @@
-<div class="container">
-  <h1 class="page-title">Documents</h1>
+<main class="container knowledge-shell">
+  <header class="page-heading">
+    <div>
+      <div class="dashboard-eyebrow">Agent X Knowledge</div>
+      <h1 class="page-title">Your sources</h1>
+      <p>See what Agent X can retrieve, then open a source to inspect its indexed passages.</p>
+    </div>
+    <a class="btn btn-primary" href="/upload"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add knowledge</a>
+  </header>
 
   <%- include('../partials/workflow-map') %>
-
   <%- include('../partials/empty-index-banner') %>
 
-  <!-- Summary counts -->
-  <div class="doc-summary">
-    <span><strong id="doc-count">--</strong> documents</span>
-    <span class="sep">&middot;</span>
-    <span><strong id="chunk-count">--</strong> total chunks</span>
-  </div>
-  <div id="documents-status" class="flow-status is-loading" role="status" aria-live="polite">
-    <strong>Loading corpus</strong>
-    <span class="flow-status-detail">Fetching document metadata and chunk counts from the active vector store.</span>
-  </div>
+  <div class="doc-summary" aria-live="polite"><span><strong id="doc-count">--</strong> sources</span><span class="sep">·</span><span><strong id="chunk-count">--</strong> indexed passages</span></div>
+  <div id="documents-status" class="flow-status is-loading" role="status" aria-live="polite"><i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i><span><strong>Loading sources</strong><span class="flow-status-detail">Reading source metadata and passage counts.</span></span></div>
 
-  <!-- Filter bar -->
-  <div class="filter-bar">
-    <label for="filter-source">Source</label>
-    <select id="filter-source" class="input-field">
-      <option value="">All sources</option>
-    </select>
-    <label for="filter-tags">Tags</label>
-    <input id="filter-tags" class="input-field" type="text" placeholder="tag1, tag2">
-    <button id="btn-apply" class="btn btn-primary">Apply</button>
-    <button id="btn-clear" class="btn btn-secondary">Clear</button>
-  </div>
+  <details class="filter-panel">
+    <summary><i class="fa-solid fa-filter" aria-hidden="true"></i> Filter sources</summary>
+    <div class="filter-bar">
+      <div class="control-group"><label for="filter-source">Source</label><select id="filter-source" class="input-field"><option value="">All sources</option></select></div>
+      <div class="control-group"><label for="filter-tags">Tags</label><input id="filter-tags" class="input-field" type="text" placeholder="tag1, tag2"></div>
+      <button id="btn-apply" class="btn btn-primary" type="button">Apply filters</button>
+      <button id="btn-clear" class="btn btn-secondary" type="button">Clear</button>
+    </div>
+  </details>
 
-  <!-- Document table -->
-  <div id="doc-table-wrap">
-    <table class="data-table" id="doc-table">
-      <thead>
-        <tr>
-          <th>Document ID</th>
-          <th>Source</th>
-          <th>Chunks</th>
-          <th>Tags</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="doc-tbody"></tbody>
-    </table>
-    <div id="empty-state" class="empty-state" style="display:none;">No documents found.</div>
-    <div id="loading-state" class="loading">Loading documents...</div>
-    <div id="error-state" class="error-state" style="display:none;"></div>
+  <div id="doc-table-wrap" class="table-scroll">
+    <table class="data-table" id="doc-table"><thead><tr><th>Document ID</th><th>Source</th><th>Passages</th><th>Tags</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="doc-tbody"></tbody></table>
+    <div id="empty-state" class="empty-state actionable-empty" hidden><i class="fa-solid fa-book-open" aria-hidden="true"></i><strong>No sources found</strong><span>Add knowledge or clear the active filters.</span><a class="btn btn-primary" href="/upload">Add knowledge</a></div>
+    <div id="loading-state" class="loading">Loading sources…</div>
+    <div id="error-state" class="error-state" role="alert" hidden></div>
   </div>
-</div>
+</main>
 
 <script>
-  /*
-   * Drill-down support for the Search Playground "View source document" link.
-   * Reads ?source= (and optional &docId=) from the URL and applies the source
-   * filter via the existing documents.js Apply handler. No-op without params,
-   * so the default (unfiltered) view is unchanged.
-   */
   (function () {
     var params = new URLSearchParams(window.location.search);
     var source = params.get('source');
     if (!source) return;
-
     function applyDrilldown() {
       var sel = document.getElementById('filter-source');
       var btn = document.getElementById('btn-apply');
       if (!sel || !btn) return;
-      // Ensure the value is selectable even before the corpus populates options.
-      if (!Array.prototype.some.call(sel.options, function (o) { return o.value === source; })) {
+      if (!Array.prototype.some.call(sel.options, function (option) { return option.value === source; })) {
         var opt = document.createElement('option');
         opt.value = source;
         opt.textContent = source;
         sel.appendChild(opt);
       }
       sel.value = source;
-      btn.click(); // documents.js wires this to loadDocuments(getFilters())
+      btn.click();
     }
-
-    // Run after documents.js has wired its handlers and done its initial load.
-    if (document.readyState === 'complete') {
-      applyDrilldown();
-    } else {
-      window.addEventListener('load', applyDrilldown);
-    }
+    if (document.readyState === 'complete') applyDrilldown();
+    else window.addEventListener('load', applyDrilldown);
   })();
 </script>

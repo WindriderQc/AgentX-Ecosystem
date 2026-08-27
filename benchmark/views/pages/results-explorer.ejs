@@ -5,29 +5,36 @@
     <div class="explorer-header">
         <div class="page-hero-layout">
             <div class="page-hero-copy">
-                <div class="eyebrow">AgentX &bull; Power User Tools</div>
-                <h1><i class="fas fa-magnifying-glass-chart"></i> Results Explorer</h1>
-                <p>Browse, filter, export, and compare every benchmark result. The raw-data workbench &mdash; to review or override a judge's score, head to the <a href="/courthouse" style="color:var(--accent-secondary,#d29922);text-decoration:none;">Courthouse <i class="fas fa-gavel" style="font-size:0.85em;"></i></a>.</p>
+                <div class="eyebrow">Agent X &bull; Evaluation evidence</div>
+                <h1><i class="fas fa-magnifying-glass-chart"></i> Inspect the evidence</h1>
+                <p>Trace a ranking back to its prompts, responses, scores and runtime performance.</p>
             </div>
             <div class="page-hero-actions">
-                <a href="/courthouse" class="btn-secondary" style="height:42px;text-decoration:none;display:inline-flex;align-items:center;gap:0.4rem;" title="Review and calibrate judge scores in the Courthouse">
-                    <i class="fas fa-gavel"></i> Courthouse
-                </a>
+                <a href="/" class="btn-secondary" style="height:42px;text-decoration:none;display:inline-flex;align-items:center;gap:0.4rem;"><i class="fas fa-scale-balanced"></i> Run a comparison</a>
                 <a href="/leaderboard" class="btn-secondary" style="height:42px;text-decoration:none;display:inline-flex;align-items:center;gap:0.4rem;">
-                    <i class="fas fa-trophy"></i> Leaderboard
+                    <i class="fas fa-trophy"></i> Rankings
                 </a>
-                <a href="/efficiency-map" class="btn-secondary" style="height:42px;text-decoration:none;display:inline-flex;align-items:center;gap:0.4rem;">
-                    <i class="fas fa-chart-line"></i> Efficiency
-                </a>
-                <button id="refreshBtn" class="btn-secondary" style="height: 42px;">
-                    <i class="fas fa-sync"></i> Refresh
-                </button>
-                <button id="clearFiltersBtn" class="btn-secondary" style="height: 42px;">
-                    <i class="fas fa-filter-circle-xmark"></i> Clear Filters
-                </button>
             </div>
         </div>
     </div>
+
+    <section id="results-empty-experience" class="results-empty-experience" role="status" aria-live="polite" hidden inert aria-hidden="true">
+        <span class="results-empty-icon" aria-hidden="true"><i class="fas fa-flask"></i></span>
+        <h2>No evaluation evidence yet</h2>
+        <p>Run a focused comparison first. Agent X will keep every prompt, response, score and performance signal here for inspection.</p>
+        <div class="results-empty-actions">
+            <a href="/"><i class="fas fa-play" aria-hidden="true"></i> Run a comparison</a>
+            <a href="/profiler"><i class="fas fa-microchip" aria-hidden="true"></i> Prepare a host</a>
+        </div>
+    </section>
+
+    <div id="results-data-workbench" class="results-data-workbench" hidden inert aria-hidden="true">
+      <div class="page-hero-actions evidence-tools">
+        <a href="/courthouse" class="btn-secondary" title="Review and calibrate judge scores"><i class="fas fa-gavel"></i> Review scores</a>
+        <a href="/efficiency-map" class="btn-secondary"><i class="fas fa-chart-line"></i> Efficiency</a>
+        <button id="refreshBtn" class="btn-secondary"><i class="fas fa-sync"></i> Refresh</button>
+        <button id="clearFiltersBtn" class="btn-secondary"><i class="fas fa-filter-circle-xmark"></i> Clear filters</button>
+      </div>
 
     <!-- Summary Stats Bar -->
     <div class="summary-stats-bar" id="summaryStatsBar">
@@ -206,6 +213,7 @@
             <i class="fas fa-spinner fa-spin"></i>
             <p>Loading benchmark results...</p>
         </div>
+    </div>
     </div>
 
     <!-- Column Visibility Modal -->

@@ -1,11 +1,50 @@
     <div class="bg-grid"></div>
-    <div class="analytics-page">
+    <div class="analytics-page analytics-experience">
+
+        <section class="analytics-experience-hero" aria-labelledby="analytics-experience-title">
+            <div>
+                <span class="analytics-experience-eyebrow">Agent X activity</span>
+                <h1 id="analytics-experience-title">Understand what Agent&nbsp;X has been doing.</h1>
+                <p>See the useful signals first—activity, reliability and knowledge use—then open the full observability workbench when you need attribution, costs or trends.</p>
+            </div>
+            <div id="analytics-experience-status" class="analytics-experience-status is-loading" role="status" aria-live="polite">
+                <span class="analytics-experience-icon" aria-hidden="true"><i class="fas fa-circle-notch fa-spin"></i></span>
+                <span><strong id="analytics-experience-status-label">Checking activity…</strong><small id="analytics-experience-status-detail">Reading recent inference signals</small></span>
+                <button id="analytics-experience-refresh" type="button" aria-label="Refresh activity summary"><i class="fas fa-rotate" aria-hidden="true"></i></button>
+            </div>
+        </section>
+
+        <section class="analytics-experience-actions" aria-label="Activity highlights">
+            <button id="analytics-inference-action" class="analytics-experience-action is-primary" type="button" data-analytics-target="analytics-platform-inference">
+                <span class="analytics-experience-icon" aria-hidden="true"><i class="fas fa-wave-square"></i></span>
+                <span><strong>Inference activity</strong><small id="analytics-inference-detail">Loading calls and reliability…</small></span>
+                <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </button>
+            <button id="analytics-chat-action" class="analytics-experience-action" type="button" data-analytics-target="chatLaneHeading">
+                <span class="analytics-experience-icon" aria-hidden="true"><i class="fas fa-comments"></i></span>
+                <span><strong>Conversation activity</strong><small id="analytics-chat-detail">Loading conversations…</small></span>
+                <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </button>
+            <a class="analytics-experience-action" href="<%= publicUrls.rag %>/">
+                <span class="analytics-experience-icon" aria-hidden="true"><i class="fas fa-book-open"></i></span>
+                <span><strong>Knowledge activity</strong><small id="analytics-knowledge-detail">Loading source usage…</small></span>
+                <i class="fas fa-arrow-right" aria-hidden="true"></i>
+            </a>
+        </section>
+
+        <details id="analytics-cockpit" class="analytics-cockpit">
+          <summary>
+            <span class="analytics-experience-icon" aria-hidden="true"><i class="fas fa-sliders"></i></span>
+            <span><strong>Take the controls</strong><small>Models, callers, latency, outcomes, cost, knowledge and detailed trends</small></span>
+            <span class="analytics-expert-badge">Expert analytics</span>
+          </summary>
+          <div class="analytics-cockpit-surface">
 
         <!-- Header -->
         <header class="analytics-header">
             <div>
                 <div class="eyebrow">AgentX • Intelligence</div>
-                <h1><i class="fas fa-chart-line"></i><span class="title-separator"></span>Analytics</h1>
+                <h2><i class="fas fa-chart-line"></i><span class="title-separator"></span>Activity workbench</h2>
                 <p class="lede">Monitor product metrics, usage trends, and system health in one view.</p>
             </div>
             <div class="header-controls">
@@ -24,7 +63,7 @@
              classification, benchmark. The legacy sections further down
              read `conversations`, which only the chat UI writes.
              ============================================================ -->
-        <div class="analytics-grid full">
+        <div class="analytics-grid full" id="analytics-platform-inference">
             <div class="section-card">
                 <div class="section-header">
                     <h2><i class="fas fa-microchip"></i> Platform Inference</h2>
@@ -644,7 +683,7 @@
         </div>
 
         <!-- RAG Ingestion Metrics -->
-        <div class="analytics-grid full">
+        <div class="analytics-grid full" id="analytics-rag-metrics">
             <div class="section-card">
                 <div class="section-header">
                     <h2><i class="fas fa-cubes"></i> RAG Vector Store Metrics</h2>
@@ -876,6 +915,15 @@
         // Inline to avoid touching the esbuild pipeline; the rest of the
         // page loads a module bundle, but this section is self-contained.
         (function(){
+            if (document.body.dataset.agentxProfile === 'demo') {
+                const section = document.getElementById('federatedSection');
+                if (section) {
+                    section.hidden = true;
+                    section.inert = true;
+                    section.setAttribute('aria-hidden', 'true');
+                }
+                return;
+            }
             function fmtNum(n){ if(n==null) return '—'; return Number(n).toLocaleString(); }
             function fmtUsdOrUnpriced(v){ return Number.isFinite(v) ? fmtUsd(v) : 'unpriced'; }
                 function fmtUsd(n){ if(n==null) return '—'; return '$' + Number(n).toFixed(4); }
@@ -956,4 +1004,6 @@
         </script>
 
         <!-- System Metrics Section moved to top -->
+          </div>
+        </details>
     </div>

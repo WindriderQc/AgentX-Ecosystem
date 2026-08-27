@@ -27,6 +27,10 @@
     els.lastUpdated     = document.getElementById('last-updated');
     els.emptyBanner     = document.getElementById('empty-index-banner');
     els.emptyDetail     = document.getElementById('empty-banner-detail');
+    els.knowledgeReadiness = document.getElementById('knowledge-home-readiness');
+    els.knowledgeReadinessLabel = document.getElementById('knowledge-home-readiness-label');
+    els.knowledgeReadinessDetail = document.getElementById('knowledge-home-readiness-detail');
+    els.knowledgeRefresh = document.getElementById('knowledge-refresh');
     els.opsService      = document.getElementById('ops-service');
     els.opsServiceValue = document.getElementById('ops-service-value');
     els.opsServiceDetail = document.getElementById('ops-service-detail');
@@ -113,40 +117,13 @@
     if (!els.emptyBanner) return;
     var docs = Number(data && data.documentCount);
     if (!isFinite(docs) || docs > 0) {
-      els.emptyBanner.style.display = 'none';
+      els.emptyBanner.hidden = true;
       return;
     }
-    els.emptyBanner.style.display = 'flex';
-    // Fill in what we already know synchronously, then refine with metrics fetch.
-    var embModel = (data && data.embeddingModel) || 'unknown';
-    var dim = (data && data.vectorDimension) || '?';
-    var baseline = 'Embedding: ' + embModel + ' · dim ' + dim + ' · last ingest: checking…';
-    if (els.emptyDetail) els.emptyDetail.textContent = baseline;
-
-    // Metrics endpoint exposes lastIngest {timestamp, source}. Fire-and-forget.
-    fetch('/api/rag/metrics', { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (payload) {
-        if (!els.emptyDetail) return;
-        var li = payload && payload.data && payload.data.lastIngest;
-        var ingestStr;
-        if (!li || !li.timestamp) {
-          ingestStr = 'last ingest: never';
-        } else {
-          var age = ageSince(new Date(li.timestamp));
-          ingestStr = 'last ingest: ' + age + ' ago' + (li.source ? ' (' + li.source + ')' : '');
-        }
-        els.emptyDetail.textContent = 'Embedding: ' + embModel + ' · dim ' + dim + ' · ' + ingestStr;
-      })
-      .catch(function () { /* baseline already rendered */ });
-  }
-
-  function ageSince(date) {
-    var s = Math.floor((Date.now() - date.getTime()) / 1000);
-    if (s < 60) return s + 's';
-    if (s < 3600) return Math.floor(s / 60) + 'm';
-    if (s < 86400) return Math.floor(s / 3600) + 'h';
-    return Math.floor(s / 86400) + 'd';
+    els.emptyBanner.hidden = false;
+    if (els.emptyDetail) {
+      els.emptyDetail.textContent = 'Add one useful source, then ask Agent X to find evidence in it.';
+    }
   }
 
   function renderStatusFailure() {
@@ -156,8 +133,17 @@
     if (els.statDocs) els.statDocs.textContent = '--';
     if (els.statChunks) els.statChunks.textContent = '--';
     if (els.statDimension) els.statDimension.textContent = '--';
-    if (els.emptyBanner) els.emptyBanner.style.display = 'none';
+    if (els.emptyBanner) els.emptyBanner.hidden = true;
     renderOpsStrip();
+  }
+
+  function setKnowledgeReadiness(state, label, detail, iconClass) {
+    if (!els.knowledgeReadiness) return;
+    els.knowledgeReadiness.className = 'knowledge-readiness is-' + state;
+    var icon = els.knowledgeReadiness.querySelector('.knowledge-readiness-icon i');
+    if (icon) icon.className = 'fa-solid ' + iconClass;
+    if (els.knowledgeReadinessLabel) els.knowledgeReadinessLabel.textContent = label;
+    if (els.knowledgeReadinessDetail) els.knowledgeReadinessDetail.textContent = detail;
   }
 
   function setOpsItem(root, valueEl, detailEl, state, value, detail) {
@@ -232,6 +218,16 @@
       }
     }
     setOpsItem(els.opsQuery, els.opsQueryValue, els.opsQueryDetail, queryState, queryValue, queryDetail);
+
+    if (queryState === 'ok') {
+      setKnowledgeReadiness('ok', 'Ready to answer', formatNumber(docs) + ' source' + (docs === 1 ? '' : 's') + ' available', 'fa-circle-check');
+    } else if (queryState === 'warn' && docs === 0) {
+      setKnowledgeReadiness('warn', 'Ready for your first source', 'Everything works — add knowledge to begin', 'fa-circle-info');
+    } else if (queryState === 'loading') {
+      setKnowledgeReadiness('loading', 'Checking knowledge…', 'Confirming storage and search readiness', 'fa-circle-notch fa-spin');
+    } else {
+      setKnowledgeReadiness('error', 'Knowledge needs attention', queryDetail, 'fa-circle-exclamation');
+    }
   }
 
   function renderDepRow(el, label, state, detail) {
@@ -327,6 +323,7 @@
 
   document.addEventListener('DOMContentLoaded', function () {
     cacheElements();
+    if (els.knowledgeRefresh) els.knowledgeRefresh.addEventListener('click', refreshDashboard);
     refreshDashboard();
     setInterval(refreshDashboard, REFRESH_INTERVAL);
   });

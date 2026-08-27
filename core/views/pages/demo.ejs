@@ -1,48 +1,104 @@
 <main class="agentx-demo">
-  <section class="agentx-demo__hero">
-    <p class="agentx-demo__eyebrow">Agent X · local-first AI workbench</p>
-    <h1>Route, shape, ground, and evaluate local AI with evidence.</h1>
-    <p class="agentx-demo__lede">
-      This demo profile combines Ollama inference, reusable prompt personas, a RAG knowledge workspace,
-      and reproducible model evaluation without loading personal operations or external runtimes.
-    </p>
-    <div class="agentx-demo__actions">
-      <a class="agentx-demo__primary" href="/playground">Open the playground</a>
-      <a href="/playground?persona=learning_guide">Try Learning Guide</a>
-      <a href="<%= publicUrls.rag %>/upload">Ingest a document</a>
-      <a href="<%= publicUrls.benchmark %>/">Compare models</a>
+  <header class="agentx-demo__masthead">
+    <a class="agentx-demo__brand" href="/demo" aria-label="Agent X demo home">
+      <span class="agentx-demo__brand-mark" aria-hidden="true"><i class="fas fa-bolt"></i></span>
+      <span>Agent X</span>
+      <small>Demo</small>
+    </a>
+
+    <div class="agentx-demo__readiness" id="demoReadiness" data-state="loading" role="status" aria-live="polite">
+      <span class="agentx-demo__readiness-icon" aria-hidden="true"><i class="fas fa-circle-notch"></i></span>
+      <span class="agentx-demo__readiness-copy">
+        <strong id="demoReadinessLabel">Checking readiness</strong>
+        <small id="demoReadinessDetail">Looking at chat, documents, and evaluation</small>
+      </span>
+      <button id="demoStatusRefresh" type="button" aria-label="Refresh Agent X readiness">
+        <i class="fas fa-rotate" aria-hidden="true"></i><span>Refresh</span>
+      </button>
     </div>
+  </header>
+
+  <section class="agentx-demo__hero" aria-labelledby="demo-title">
+    <p class="agentx-demo__eyebrow">Local-first AI workspace</p>
+    <h1 id="demo-title">What do you want to do?</h1>
+    <p class="agentx-demo__lede">
+      Start with a conversation. Agent X handles the setup for you, while the
+      details stay close when you want to inspect them.
+    </p>
   </section>
 
-  <section class="agentx-demo__grid" aria-label="Agent X demo capabilities">
-    <article>
-      <span>01</span>
-      <h2>Inference</h2>
-      <p>Use one or more Ollama hosts through a measured routing and telemetry boundary.</p>
-      <a href="/models">Inspect models →</a>
-    </article>
-    <article>
-      <span>02</span>
-      <h2>Personas</h2>
-      <p>Keep the model fixed, switch to Learning Guide, and see how a reusable system prompt changes the answer.</p>
-      <a href="/playground?persona=learning_guide">Compare a persona →</a>
-    </article>
-    <article>
-      <span>03</span>
-      <h2>Knowledge</h2>
-      <p>Ingest a bounded document, retrieve relevant passages, and inspect the grounded result.</p>
-      <a href="<%= publicUrls.rag %>/search">Search the knowledge base →</a>
-    </article>
-    <article>
-      <span>04</span>
-      <h2>Evaluation</h2>
-      <p>Benchmark models on the same tasks and compare quality, speed, and efficiency.</p>
-      <a href="<%= publicUrls.benchmark %>/leaderboard">Open the leaderboard →</a>
-    </article>
+  <section class="agentx-demo__tasks" aria-label="Start with Agent X">
+    <a class="agentx-task-card agentx-task-card--primary" href="/playground">
+      <span class="agentx-task-card__icon" aria-hidden="true"><i class="fas fa-message"></i></span>
+      <span class="agentx-task-card__content">
+        <span class="agentx-task-card__kicker">Chat</span>
+        <strong>Start a conversation</strong>
+        <small>Ask, write, analyze, or brainstorm. No setup choices required.</small>
+      </span>
+      <span class="agentx-task-card__action">Start <i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+    </a>
+
+    <a class="agentx-task-card" href="/playground?persona=learning_guide">
+      <span class="agentx-task-card__icon" aria-hidden="true"><i class="fas fa-graduation-cap"></i></span>
+      <span class="agentx-task-card__content">
+        <span class="agentx-task-card__kicker">Persona</span>
+        <strong>Try a guided conversation</strong>
+        <small>Keep routing visible while Learning Guide adapts the way Agent X explains.</small>
+      </span>
+      <span class="agentx-task-card__action">Try Learning Guide <i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+    </a>
+
+    <a class="agentx-task-card" href="<%= publicUrls.rag %>/upload">
+      <span class="agentx-task-card__icon" aria-hidden="true"><i class="fas fa-file-lines"></i></span>
+      <span class="agentx-task-card__content">
+        <span class="agentx-task-card__kicker">Your documents</span>
+        <strong>Use your own knowledge</strong>
+        <small>Add a document, then ask questions grounded in its contents.</small>
+      </span>
+      <span class="agentx-task-card__action">Add a document <i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+    </a>
+
+    <a class="agentx-task-card" href="<%= publicUrls.benchmark %>/">
+      <span class="agentx-task-card__icon" aria-hidden="true"><i class="fas fa-scale-balanced"></i></span>
+      <span class="agentx-task-card__content">
+        <span class="agentx-task-card__kicker">Model evidence</span>
+        <strong>Compare models</strong>
+        <small>See which models are faster, stronger, or more efficient on the same work.</small>
+      </span>
+      <span class="agentx-task-card__action">Open comparison <i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+    </a>
   </section>
 
-  <aside class="agentx-demo__boundary">
-    <strong>Demo boundary</strong>
-    <p>Private data, household devices, and environment-specific operations are not loaded by this profile.</p>
-  </aside>
+  <details class="agentx-demo__mechanics">
+    <summary>
+      <span><i class="fas fa-sliders" aria-hidden="true"></i> See how Agent X works</span>
+      <span class="agentx-demo__mechanics-action">Open the instruments <i class="fas fa-chevron-down" aria-hidden="true"></i></span>
+    </summary>
+    <div class="agentx-demo__flow" aria-label="Agent X request flow">
+      <div>
+        <span aria-hidden="true"><i class="fas fa-message"></i></span>
+        <small>1 · Your task</small>
+        <strong>Say what you need</strong>
+      </div>
+      <i class="fas fa-arrow-right" aria-hidden="true"></i>
+      <div>
+        <span aria-hidden="true"><i class="fas fa-route"></i></span>
+        <small>2 · Agent X</small>
+        <strong>Chooses a route</strong>
+      </div>
+      <i class="fas fa-arrow-right" aria-hidden="true"></i>
+      <div>
+        <span aria-hidden="true"><i class="fas fa-shield-halved"></i></span>
+        <small>3 · Evidence</small>
+        <strong>Keeps the result inspectable</strong>
+      </div>
+    </div>
+    <div class="agentx-demo__mechanics-footer">
+      <p><strong>Demo boundary.</strong> Private data, household devices, and environment-specific operations are not loaded.</p>
+      <div class="agentx-demo__mechanics-links">
+        <a href="/analytics">Review activity <i class="fas fa-arrow-right" aria-hidden="true"></i></a>
+        <a href="/models">Inspect models and runtime <i class="fas fa-arrow-right" aria-hidden="true"></i></a>
+      </div>
+    </div>
+  </details>
 </main>

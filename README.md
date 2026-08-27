@@ -79,11 +79,10 @@ remote endpoint.
 
 ## Three guided demos
 
-1. **Route a local answer:** open Playground and use its conversational cockpit
-   to compare Quick, Standard, Deep, and Manual routing. Manual exposes the
-   configured Ollama hosts and exact model picker; routed modes keep the
-   server-owned decision visible in the Request → Router → Host → Model flow.
-   Ask a short question, then inspect Models or Analytics for evidence.
+1. **Route a local answer:** open Chat and ask a short question. Agent X routes
+   automatically across models you explicitly installed; use **Take the
+   controls** only to pin an exact model. Then inspect **Models** or **Activity**
+   to see the visible inference boundary.
 2. **Compare a persona:** keep one model and question fixed, switch between the
    built-in `learning_guide` and `default_chat` personas, and compare how the
    reusable system prompt changes the answer without changing routing authority.
@@ -93,6 +92,8 @@ remote endpoint.
 
 Detailed steps live in [Demo guide](docs/DEMO.md). The current architecture is
 defined by [Architecture](docs/ARCHITECTURE.md) and the rendered Compose model.
+The permanent simple-to-expert interaction and visual rules are defined by the
+[UX doctrine](docs/UX_DOCTRINE.md).
 
 ## Stop, clean up, and troubleshoot
 

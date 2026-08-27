@@ -33,34 +33,11 @@
     if (!els.emptyBanner) return;
     var docs = Number(statusData && statusData.documentCount);
     if (!isFinite(docs) || docs > 0) {
-      els.emptyBanner.style.display = 'none';
+      els.emptyBanner.hidden = true;
       return;
     }
-    els.emptyBanner.style.display = 'flex';
-    var embModel = (statusData && statusData.embeddingModel) || 'unknown';
-    var dim = (statusData && statusData.vectorDimension) || '?';
-    if (els.emptyDetail) {
-      els.emptyDetail.textContent = 'Embedding: ' + embModel + ' · dim ' + dim + ' · last ingest: checking…';
-    }
-    fetch('/api/rag/metrics', { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (payload) {
-        if (!els.emptyDetail) return;
-        var li = payload && payload.data && payload.data.lastIngest;
-        var ingestStr;
-        if (!li || !li.timestamp) {
-          ingestStr = 'last ingest: never';
-        } else {
-          var s = Math.floor((Date.now() - new Date(li.timestamp).getTime()) / 1000);
-          var age = s < 60 ? s + 's'
-                  : s < 3600 ? Math.floor(s / 60) + 'm'
-                  : s < 86400 ? Math.floor(s / 3600) + 'h'
-                  : Math.floor(s / 86400) + 'd';
-          ingestStr = 'last ingest: ' + age + ' ago' + (li.source ? ' (' + li.source + ')' : '');
-        }
-        els.emptyDetail.textContent = 'Embedding: ' + embModel + ' · dim ' + dim + ' · ' + ingestStr;
-      })
-      .catch(function () {});
+    els.emptyBanner.hidden = false;
+    if (els.emptyDetail) els.emptyDetail.textContent = 'Add one useful source, then ask Agent X to find evidence in it.';
   }
 
   function checkEmptyIndex() {
@@ -68,7 +45,7 @@
     window.RAG.getStatus()
       .then(function (resp) { renderEmptyBanner(resp && resp.data); })
       .catch(function () {
-        if (els.emptyBanner) els.emptyBanner.style.display = 'none';
+        if (els.emptyBanner) els.emptyBanner.hidden = true;
       });
   }
 
@@ -103,10 +80,12 @@
 
   function setDocumentsStatus(state, title, detail) {
     if (!els.status) return;
+    var icons = { ok: 'fa-circle-check', warn: 'fa-circle-info', error: 'fa-circle-exclamation', loading: 'fa-circle-notch fa-spin' };
     els.status.className = 'flow-status is-' + state;
     els.status.innerHTML =
-      '<strong>' + escapeHtml(title) + '</strong>' +
-      '<span class="flow-status-detail">' + escapeHtml(detail) + '</span>';
+      '<i class="fa-solid ' + icons[state] + '" aria-hidden="true"></i>' +
+      '<span><strong>' + escapeHtml(title) + '</strong>' +
+      '<span class="flow-status-detail">' + escapeHtml(detail) + '</span></span>';
   }
 
   // ── Populate source dropdown ──────────────────────────────
@@ -133,14 +112,14 @@
   // ── Load documents ────────────────────────────────────────
 
   async function loadDocuments(filters) {
-    els.loadingState.style.display = '';
-    els.emptyState.style.display = 'none';
-    els.errorState.style.display = 'none';
-    els.table.style.display = 'none';
+    els.loadingState.hidden = false;
+    els.emptyState.hidden = true;
+    els.errorState.hidden = true;
+    els.table.hidden = true;
     setDocumentsStatus(
       'loading',
       filters && (filters.source || filters.tags) ? 'Filtering corpus' : 'Loading corpus',
-      'Fetching document metadata and chunk counts from the active vector store.'
+      'Reading source metadata and indexed passage counts.'
     );
 
     try {
@@ -153,30 +132,30 @@
       allDocuments = data.documents || [];
       expandedIds = {};
 
-      els.loadingState.style.display = 'none';
+      els.loadingState.hidden = true;
 
       if (allDocuments.length === 0) {
-        els.emptyState.style.display = '';
+        els.emptyState.hidden = false;
         els.docCount.textContent = '0';
         els.chunkCount.textContent = '0';
-        setDocumentsStatus('warn', 'No documents found', 'The active filters returned no documents.');
+        setDocumentsStatus('warn', 'No sources found', filters ? 'Clear the filters or add another source.' : 'Add knowledge to make it searchable.');
         return;
       }
 
-      els.table.style.display = '';
+      els.table.hidden = false;
       populateSourceFilter(allDocuments);
       updateCounts(allDocuments);
       renderTable(allDocuments);
       setDocumentsStatus(
         'ok',
-        'Corpus loaded',
-        allDocuments.length.toLocaleString() + ' document' + (allDocuments.length === 1 ? '' : 's') + ' visible in this view.'
+        'Sources ready',
+        allDocuments.length.toLocaleString() + ' source' + (allDocuments.length === 1 ? '' : 's') + ' visible in this view.'
       );
     } catch (err) {
-      els.loadingState.style.display = 'none';
-      els.errorState.style.display = '';
-      els.errorState.textContent = 'Failed to load documents: ' + (err.message || 'unknown error');
-      setDocumentsStatus('error', 'Failed to load corpus', err.message || 'Unknown document browser error.');
+      els.loadingState.hidden = true;
+      els.errorState.hidden = false;
+      els.errorState.textContent = 'Failed to load sources: ' + (err.message || 'unknown error');
+      setDocumentsStatus('error', 'Could not load sources', err.message || 'Unknown source browser error.');
     }
   }
 
@@ -205,12 +184,12 @@
     var tagsStr = Array.isArray(doc.tags) ? doc.tags.join(', ') : '';
 
     tr.innerHTML =
-      '<td class="mono">' + truncateId(doc.documentId, 24) + '</td>' +
+      '<td class="mono"><button type="button" class="source-expand" aria-expanded="false" title="Show indexed passages"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i> ' + truncateId(doc.documentId, 24) + '</button></td>' +
       '<td>' + escapeHtml(doc.source) + '</td>' +
       '<td class="center">' + (doc.chunkCount || 0) + '</td>' +
       '<td>' + escapeHtml(tagsStr) + '</td>' +
       '<td class="actions">' +
-        '<button class="btn btn-danger btn-sm btn-delete" title="Delete document">Delete</button>' +
+        '<button class="btn btn-danger btn-sm btn-delete" type="button" title="Delete this source"><i class="fa-regular fa-trash-can" aria-hidden="true"></i> Delete</button>' +
       '</td>';
 
     // Click row to expand (but not on delete button)
@@ -237,11 +216,13 @@
       if (existing) existing.remove();
       delete expandedIds[docId];
       rowEl.classList.remove('expanded');
+      rowEl.querySelector('.source-expand').setAttribute('aria-expanded', 'false');
       return;
     }
 
     expandedIds[docId] = true;
     rowEl.classList.add('expanded');
+    rowEl.querySelector('.source-expand').setAttribute('aria-expanded', 'true');
     setDocumentsStatus('loading', 'Loading chunks', 'Fetching chunk preview rows for ' + docId + '.');
 
     // Insert loading row
@@ -317,8 +298,9 @@
       populateSourceFilter(allDocuments);
 
       if (allDocuments.length === 0) {
-        els.table.style.display = 'none';
-        els.emptyState.style.display = '';
+        els.table.hidden = true;
+        els.emptyState.hidden = false;
+        checkEmptyIndex();
       }
       setDocumentsStatus('ok', 'Document deleted', 'Removed ' + docId + ' from the active index.');
     } catch (err) {

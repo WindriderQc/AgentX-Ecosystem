@@ -1,56 +1,40 @@
 <%
   const currentStep = typeof ragWorkflowStep === 'string' ? ragWorkflowStep : 'dashboard';
-  const workflowSteps = [
-    {
-      key: 'dashboard',
-      href: '/',
-      index: '1',
-      title: 'Readiness',
-      detail: 'Service, corpus, embeddings, query health'
-    },
-    {
-      key: 'upload',
-      href: '/upload',
-      index: '2',
-      title: 'Ingest',
-      detail: 'Validate text, chunk, embed, index'
-    },
-    {
-      key: 'search',
-      href: '/search',
-      index: '3',
-      title: 'Retrieve',
-      detail: 'Embed query, search chunks, inspect matches'
-    },
-    {
-      key: 'documents',
-      href: '/documents',
-      index: '4',
-      title: 'Corpus',
-      detail: 'Filter documents and expand indexed chunks'
-    },
-    {
-      key: 'maintenance',
-      href: '/maintenance',
-      index: '5',
-      title: 'Maintain',
-      detail: 'Reindex, snapshots, cleanup, migrations'
-    }
+  const journeySteps = [
+    { key: 'upload', href: '/upload', icon: 'fa-file-circle-plus', title: 'Add knowledge', detail: 'Paste text or choose a file' },
+    { key: 'search', href: '/search', icon: 'fa-magnifying-glass', title: 'Ask your knowledge', detail: 'Find grounded evidence' },
+    { key: 'documents', href: '/documents', icon: 'fa-layer-group', title: 'Browse sources', detail: 'Inspect what Agent X knows' }
   ];
 %>
-<section class="rag-workflow-map" aria-label="RAG workflow map" data-rag-workflow-map>
-  <% workflowSteps.forEach((step) => { %>
-    <a
-      class="rag-flow-step <%= currentStep === step.key ? 'is-current' : '' %>"
-      href="<%= step.href %>"
-      aria-current="<%= currentStep === step.key ? 'page' : 'false' %>"
-      data-rag-flow-step="<%= step.key %>"
-    >
-      <span class="rag-flow-index"><%= step.index %></span>
-      <span class="rag-flow-copy">
-        <strong><%= step.title %></strong>
-        <span><%= step.detail %></span>
-      </span>
-    </a>
-  <% }) %>
-</section>
+<nav class="rag-workflow-map" aria-label="Knowledge journey" data-rag-workflow-map>
+  <div class="rag-journey-steps">
+    <% journeySteps.forEach((step, index) => { %>
+      <a
+        class="rag-flow-step <%= currentStep === step.key ? 'is-current' : '' %>"
+        href="<%= step.href %>"
+        <%= currentStep === step.key ? 'aria-current="page"' : '' %>
+        data-rag-flow-step="<%= step.key %>"
+      >
+        <span class="rag-flow-index" aria-hidden="true"><i class="fa-solid <%= step.icon %>"></i></span>
+        <span class="rag-flow-copy">
+          <span class="rag-flow-kicker">Step <%= index + 1 %></span>
+          <strong><%= step.title %></strong>
+          <span><%= step.detail %></span>
+        </span>
+      </a>
+    <% }) %>
+  </div>
+  <details class="rag-instruments-door" <%= currentStep === 'maintenance' ? 'open' : '' %>>
+    <summary><i class="fa-solid fa-sliders" aria-hidden="true"></i> Open instruments</summary>
+    <div class="rag-instruments-links">
+      <a href="/" class="<%= currentStep === 'dashboard' ? 'is-current' : '' %>" <%= currentStep === 'dashboard' ? 'aria-current="page"' : '' %>>
+        <i class="fa-solid fa-gauge-high" aria-hidden="true"></i>
+        <span><strong>Knowledge readiness</strong><small>Health, corpus and embedding route</small></span>
+      </a>
+      <a href="/maintenance" class="<%= currentStep === 'maintenance' ? 'is-current' : '' %>" <%= currentStep === 'maintenance' ? 'aria-current="page"' : '' %>>
+        <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>
+        <span><strong>Maintenance</strong><small>Reindex, snapshots and migrations</small></span>
+      </a>
+    </div>
+  </details>
+</nav>

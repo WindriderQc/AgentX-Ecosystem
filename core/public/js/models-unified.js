@@ -484,6 +484,9 @@ class UnifiedModels {
 
     /* ── Live state (loaded models) ────────────────────── */
     async fetchLiveState() {
+        // This endpoint is intentionally outside the product-safe demo
+        // profile. Model availability already comes from the bounded catalog.
+        if (document.body.dataset.agentxProfile === 'demo') return;
         try {
             const res = await fetch('/api/cluster/schedule/live', { credentials: 'include' });
             if (!res.ok) return;
@@ -977,7 +980,7 @@ class UnifiedModels {
 }
 
 function startChat(modelName) {
-    window.location.href = `/chat?model=${encodeURIComponent(modelName)}`;
+    window.location.href = `/playground?model=${encodeURIComponent(modelName)}`;
 }
 
 document.addEventListener('DOMContentLoaded', () => {

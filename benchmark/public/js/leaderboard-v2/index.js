@@ -85,6 +85,13 @@ function showErrorState(main, err) {
     if (retryBtn) retryBtn.addEventListener('click', () => init());
 }
 
+function hideInactiveSurface(element) {
+    if (!element) return;
+    element.hidden = true;
+    element.inert = true;
+    element.setAttribute('aria-hidden', 'true');
+}
+
 /** Short host label from a URL (strip scheme + :11434) — fallback display name. */
 function shortHostName(url) {
     return String(url || '').replace(/^https?:\/\//, '').replace(/:11434$/, '');
@@ -640,6 +647,32 @@ async function init() {
             console.warn('[hero] render failed:', err);
             showSectionError(heroEl, 'Could not render hero section.');
         }
+    }
+
+    const historicalCount = Number(dashboardRes?.data?.overview?.total_tests || 0);
+    const hasHistoricalEvidence = historicalCount > 0
+        || (Array.isArray(dashboardRes?.data?.model_stats) && dashboardRes.data.model_stats.length > 0);
+    if (!hasHistoricalEvidence) {
+        const filterBar = main.querySelector('#filter-bar');
+        hideInactiveSurface(filterBar);
+        const podiumEl = main.querySelector('#podium');
+        if (podiumEl) {
+            podiumEl.innerHTML = `
+                <section class="results-empty-experience" role="status">
+                    <span class="results-empty-icon" aria-hidden="true"><i class="fas fa-trophy"></i></span>
+                    <h1>No ranked models yet</h1>
+                    <p>Run one focused comparison to create the first evidence-backed ranking.</p>
+                    <div class="results-empty-actions">
+                        <a href="/"><i class="fas fa-play" aria-hidden="true"></i> Run a comparison</a>
+                        <a href="/profiler"><i class="fas fa-microchip" aria-hidden="true"></i> Prepare a host</a>
+                    </div>
+                </section>`;
+        }
+        ['scoring-system', 'leaderboard', 'category-map'].forEach(id => {
+            const section = main.querySelector('#' + id);
+            hideInactiveSurface(section);
+        });
+        return;
     }
 
     // --- Step 3: podium (enrich top-3 with perf data, pass category weights) ---

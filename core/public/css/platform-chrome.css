@@ -236,6 +236,46 @@
   border-radius: 7px;
 }
 
+/* Shared escape hatch back to the action-first demo home. This link is
+   rendered by the shared layout, so every service must style it here. */
+.demo-profile-home {
+  position: fixed;
+  z-index: 9100;
+  top: 14px;
+  left: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border: 1px solid rgba(103, 232, 249, 0.28);
+  border-radius: 999px;
+  background: rgba(8, 18, 30, 0.92);
+  color: #67e8f9;
+  font: 700 0.72rem/1 system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.demo-profile-home:hover,
+.demo-profile-home:focus-visible {
+  border-color: #67e8f9;
+  color: #fff;
+  text-decoration: none;
+}
+
+body[data-agentx-profile="demo"] #nav-container .nav-brand {
+  visibility: hidden;
+}
+
+/* The demo return pill already carries the product identity on wide screens.
+   Removing the service badge prevents long labels from colliding with it. */
+@media (min-width: 861px) {
+  body[data-agentx-profile="demo"] #nav-container .nav-service-tag {
+    display: none;
+  }
+}
+
 @media (max-width: 860px) {
   #nav-container {
     max-width: 100vw;
@@ -306,6 +346,19 @@
     max-height: min(70vh, 520px);
     overflow-y: auto;
   }
+
+  .demo-profile-home {
+    top: 14px;
+    left: 10px;
+    width: 40px;
+    height: 40px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .demo-profile-home i { margin: 0; }
+  .demo-profile-home span { display: none; }
+
 }
 
 @media (max-width: 480px) {

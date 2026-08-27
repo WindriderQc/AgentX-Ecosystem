@@ -1,103 +1,77 @@
-<div class="container">
-  <h1 class="page-title">Ingest Document</h1>
+<main class="container knowledge-shell">
+  <header class="page-heading">
+    <div>
+      <div class="dashboard-eyebrow">Agent X Knowledge</div>
+      <h1 class="page-title">Add knowledge</h1>
+      <p>Give Agent X something useful to retrieve. One document is enough to get started.</p>
+    </div>
+    <span class="page-step-badge"><i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i> Step 1</span>
+  </header>
 
   <%- include('../partials/workflow-map') %>
 
-  <div class="card">
-    <!-- Tab toggle -->
-    <div class="tab-toggle">
-      <button class="tab-btn active" data-tab="paste">Paste Text</button>
-      <button class="tab-btn" data-tab="file">Upload File</button>
+  <section class="card knowledge-primary-card" aria-labelledby="add-source-title">
+    <div class="card-title" id="add-source-title">Choose your source</div>
+    <div class="tab-toggle" role="tablist" aria-label="Document input method">
+      <button id="tab-paste-btn" class="tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="tab-paste" data-tab="paste"><i class="fa-solid fa-paste" aria-hidden="true"></i> Paste text</button>
+      <button id="tab-file-btn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="tab-file" data-tab="file"><i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i> Choose a file</button>
     </div>
 
-    <!-- Mode 1: Paste Text -->
-    <div id="tab-paste" class="tab-panel active">
-      <textarea id="paste-text" class="input-field upload-textarea" aria-label="Document text to ingest"
-        placeholder="Paste document text here..." rows="10"></textarea>
+    <div id="tab-paste" class="tab-panel active" role="tabpanel" aria-labelledby="tab-paste-btn">
+      <label class="field-label" for="paste-text">Document text</label>
+      <textarea id="paste-text" class="input-field upload-textarea" placeholder="Paste a note, guide, policy or reference here…" rows="10"></textarea>
       <div class="char-count"><span id="char-count">0</span> characters</div>
     </div>
 
-    <!-- Mode 2: Upload File -->
-    <div id="tab-file" class="tab-panel" style="display:none;">
-      <div id="drop-zone" class="drop-zone">
-        <p>Drag & drop a file here, or click to select</p>
-        <input type="file" id="file-input" accept=".txt,.md,.json,.csv" style="display:none;">
-      </div>
-      <div id="file-info" class="file-info" style="display:none;">
-        <span id="file-name"></span>
-        <span class="sep">&middot;</span>
-        <span id="file-size"></span>
-      </div>
-      <div id="file-warning" class="file-warning" style="display:none;"></div>
+    <div id="tab-file" class="tab-panel" role="tabpanel" aria-labelledby="tab-file-btn" hidden>
+      <button id="drop-zone" class="drop-zone" type="button">
+        <i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i>
+        <strong>Choose a text file</strong>
+        <span>or drop it here · TXT, Markdown, JSON or CSV</span>
+      </button>
+      <input type="file" id="file-input" accept=".txt,.md,.json,.csv" hidden>
+      <div id="file-info" class="file-info" hidden><span id="file-name"></span><span class="sep">·</span><span id="file-size"></span></div>
+      <div id="file-warning" class="file-warning" role="alert" hidden></div>
     </div>
 
-    <!-- Metadata fields -->
-    <div class="form-section">
-      <div class="form-row">
-        <div class="control-group">
-          <label for="meta-source">Source</label>
-          <input id="meta-source" class="input-field" type="text" placeholder="e.g., docs, manual, api">
-        </div>
-        <div class="control-group">
-          <label for="meta-tags">Tags</label>
-          <input id="meta-tags" class="input-field" type="text" placeholder="comma-separated, e.g., docs, v2, internal">
-        </div>
-        <div class="control-group">
-          <label for="meta-docid">Document ID <span class="hint">(optional)</span></label>
-          <input id="meta-docid" class="input-field" type="text" placeholder="auto-generated if empty">
-        </div>
-      </div>
-    </div>
-
-    <!-- Advanced options (collapsible) -->
-    <div class="collapsible">
-      <button class="collapsible-toggle" id="advanced-toggle">Advanced Options</button>
-      <div class="collapsible-body" id="advanced-body" style="display:none;">
+    <details class="expert-cockpit compact-cockpit" id="ingest-controls">
+      <summary>
+        <span class="cockpit-summary-icon" aria-hidden="true"><i class="fa-solid fa-sliders"></i></span>
+        <span><strong>Take the controls</strong><small>Source labels, tags, document ID and chunking</small></span>
+        <span class="cockpit-summary-state">Expert</span>
+      </summary>
+      <div class="cockpit-surface">
         <div class="form-row">
-          <div class="control-group">
-            <label for="chunk-size">Chunk Size</label>
-            <input id="chunk-size" class="input-field input-sm" type="number" value="500" min="100" max="5000">
-          </div>
-          <div class="control-group">
-            <label for="chunk-overlap">Chunk Overlap</label>
-            <input id="chunk-overlap" class="input-field input-sm" type="number" value="50" min="0" max="500">
-          </div>
+          <div class="control-group"><label for="meta-source">Source label</label><input id="meta-source" class="input-field" type="text" placeholder="e.g. product-guide"></div>
+          <div class="control-group"><label for="meta-tags">Tags</label><input id="meta-tags" class="input-field" type="text" placeholder="docs, onboarding"></div>
+          <div class="control-group"><label for="meta-docid">Document ID <span class="hint">optional</span></label><input id="meta-docid" class="input-field" type="text" placeholder="Generated automatically"></div>
+        </div>
+        <div class="form-row compact-fields">
+          <div class="control-group"><label for="chunk-size">Chunk size</label><input id="chunk-size" class="input-field input-sm" type="number" value="500" min="100" max="5000"></div>
+          <div class="control-group"><label for="chunk-overlap">Chunk overlap</label><input id="chunk-overlap" class="input-field input-sm" type="number" value="50" min="0" max="500"></div>
         </div>
       </div>
-    </div>
+    </details>
 
-    <!-- Ingest button -->
-    <div class="ingest-actions">
-      <button id="btn-ingest" class="btn btn-primary btn-lg">Ingest</button>
-      <span id="spinner" class="spinner" style="display:none;"></span>
+    <div class="primary-action-row">
+      <button id="btn-ingest" class="btn btn-primary btn-lg" type="button" disabled><i class="fa-solid fa-plus" aria-hidden="true"></i> Add to Agent X</button>
+      <span id="spinner" class="spinner" hidden></span>
     </div>
     <div id="ingest-status" class="flow-status is-loading" role="status" aria-live="polite">
-      <strong>Waiting for document</strong>
-      <span class="flow-status-detail">Paste text or choose a file, then RAG will chunk, embed, and index it.</span>
+      <i class="fa-regular fa-circle" aria-hidden="true"></i>
+      <span><strong>Waiting for a source</strong><span class="flow-status-detail">Paste text or choose a file to continue.</span></span>
     </div>
+    <div id="result-area" hidden></div>
+  </section>
 
-    <!-- Result area -->
-    <div id="result-area" style="display:none;"></div>
-  </div>
-
-  <!-- Recent ingestion history -->
-  <div class="card" style="margin-top:24px;">
-    <div class="card-title">
-      Recent Ingestions
-      <button id="btn-clear-history" class="btn btn-secondary btn-sm" style="margin-left:auto;">Clear History</button>
+  <details class="history-panel">
+    <summary><span><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> Recent additions</span><small>Stored in this browser</small></summary>
+    <div class="history-panel-body">
+      <div class="history-actions"><button id="btn-clear-history" class="btn btn-secondary btn-sm" type="button">Clear history</button></div>
+      <div class="table-scroll">
+        <table class="data-table" id="history-table"><thead><tr><th>Time</th><th>Source</th><th>Document ID</th><th class="center">Chunks</th><th>Status</th></tr></thead><tbody id="history-tbody"></tbody></table>
+      </div>
+      <div id="history-empty" class="empty-state" hidden>No additions from this browser yet.</div>
     </div>
-    <table class="data-table" id="history-table">
-      <thead>
-        <tr>
-          <th>Timestamp</th>
-          <th>Source</th>
-          <th>Document ID</th>
-          <th class="center">Chunks</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody id="history-tbody"></tbody>
-    </table>
-    <div id="history-empty" class="empty-state" style="display:none;">No ingestion history yet.</div>
-  </div>
-</div>
+  </details>
+</main>

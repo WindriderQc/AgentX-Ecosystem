@@ -18,6 +18,22 @@ let currentSort = { field: 'timestamp', direction: 'desc' };
 // Pagination state
 let paginationState = { page: 1, limit: 50, total: 0, totalPages: 0 };
 
+function renderExperienceState() {
+    const empty = document.getElementById('results-empty-experience');
+    const workbench = document.getElementById('results-data-workbench');
+    const hasEvidence = paginationState.total > 0;
+    setExperienceSurfaceHidden(empty, hasEvidence);
+    setExperienceSurfaceHidden(workbench, !hasEvidence);
+}
+
+function setExperienceSurfaceHidden(element, hidden) {
+    if (!element) return;
+    element.hidden = hidden;
+    element.inert = hidden;
+    if (hidden) element.setAttribute('aria-hidden', 'true');
+    else element.removeAttribute('aria-hidden');
+}
+
 // Available columns configuration
 const AVAILABLE_COLUMNS = {
     select: { label: 'Select', sortable: false, width: '40px' },
@@ -153,6 +169,7 @@ async function loadResults(page) {
         paginationState.limit = data.data.limit || 50;
         paginationState.total = data.data.total || 0;
         paginationState.totalPages = data.data.totalPages || 0;
+        renderExperienceState();
 
         // Build host name map from profiler for friendly display
         _profilerHostMap = {};

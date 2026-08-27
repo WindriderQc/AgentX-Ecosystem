@@ -1,10 +1,48 @@
-<main>
-  <!-- Compact summary bar (funnel + alerts) -->
-  <div id="mp-summary" class="mp-summary-bar"></div>
-  <div id="mp-guide" class="mp-guide-wrap"></div>
+<main class="profiler-experience">
+  <section class="profiler-experience-hero" aria-labelledby="profiler-experience-title">
+    <div>
+      <span class="profiler-experience-eyebrow">Agent X host preparation</span>
+      <h1 id="profiler-experience-title">Prepare trustworthy model comparisons.</h1>
+      <p>Measure the host once, profile only the exact models you care about, then compare them with evidence. Agent X keeps runtime identity and hardware facts attached to every result.</p>
+    </div>
+    <div id="profiler-experience-status" class="profiler-experience-status is-loading" role="status" aria-live="polite">
+      <span class="profiler-experience-icon" aria-hidden="true"><i class="fas fa-circle-notch fa-spin"></i></span>
+      <span><strong id="profiler-experience-status-label">Checking preparation…</strong><small id="profiler-experience-status-detail">Reading hosts, baselines and exact model profiles</small></span>
+      <button id="profiler-experience-refresh" type="button" aria-label="Refresh preparation status"><i class="fas fa-rotate" aria-hidden="true"></i></button>
+    </div>
+  </section>
 
-  <!-- Section: Hosts -->
-  <div class="r-section" id="mp-hosts-section">
+  <section class="profiler-experience-actions" aria-label="Preparation steps">
+    <button id="profiler-primary-action" class="profiler-experience-action is-primary" type="button" data-profiler-target="mp-hosts-section">
+      <span class="profiler-experience-icon" aria-hidden="true"><i class="fas fa-microchip"></i></span>
+      <span><strong id="profiler-primary-label">Prepare a host</strong><small id="profiler-primary-detail">Review the target and run one measured baseline</small></span>
+      <i class="fas fa-arrow-right" aria-hidden="true"></i>
+    </button>
+    <button class="profiler-experience-action" type="button" data-profiler-target="mp-models-section">
+      <span class="profiler-experience-icon" aria-hidden="true"><i class="fas fa-cubes"></i></span>
+      <span><strong>Profile exact models</strong><small id="profiler-models-detail">Measure speed, context, memory and spill behavior</small></span>
+      <i class="fas fa-arrow-right" aria-hidden="true"></i>
+    </button>
+    <a class="profiler-experience-action" href="/">
+      <span class="profiler-experience-icon" aria-hidden="true"><i class="fas fa-scale-balanced"></i></span>
+      <span><strong>Compare prepared models</strong><small>Return to the guided evaluation flow</small></span>
+      <i class="fas fa-arrow-right" aria-hidden="true"></i>
+    </a>
+  </section>
+
+  <details id="profiler-cockpit" class="profiler-cockpit">
+    <summary>
+      <span class="profiler-experience-icon" aria-hidden="true"><i class="fas fa-sliders"></i></span>
+      <span><strong>Take the controls</strong><small>Host probes, telemetry, queues, exact artifacts, profile depth and fit reports</small></span>
+      <span class="profiler-expert-badge">Expert profiler</span>
+    </summary>
+    <div class="profiler-cockpit-surface">
+      <!-- Compact summary bar (funnel + alerts) -->
+      <div id="mp-summary" class="mp-summary-bar"></div>
+      <div id="mp-guide" class="mp-guide-wrap"></div>
+
+      <!-- Section: Hosts -->
+      <div class="r-section" id="mp-hosts-section" tabindex="-1">
     <div class="r-sec-head">
       <span class="r-sec-icon bf-section-num">&#x2460;</span>
       <span class="r-sec-title r-t-green">Hosts</span>
@@ -13,14 +51,15 @@
     <div id="mp-hosts"></div>
   </div>
 
-  <!-- Section: Models -->
-  <div class="r-section" id="mp-models-section">
+      <!-- Section: Models -->
+      <div class="r-section" id="mp-models-section" tabindex="-1">
     <div class="r-sec-head">
       <span class="r-sec-icon bf-section-num">&#x2461;</span>
       <span class="r-sec-title r-t-cyan">Models</span>
       <span class="r-sec-context">Profile exact installed artifacts for reproducible benchmarking</span>
     </div>
     <div id="mp-models"></div>
-  </div>
-
+      </div>
+    </div>
+  </details>
 </main>

@@ -1,66 +1,58 @@
-<div class="container">
-  <h1 class="page-title">Search Playground</h1>
+<main class="container knowledge-shell">
+  <header class="page-heading">
+    <div>
+      <div class="dashboard-eyebrow">Agent X Knowledge</div>
+      <h1 class="page-title">Ask your knowledge</h1>
+      <p>Find the passages that support an answer before you rely on it.</p>
+    </div>
+    <span class="page-step-badge"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Step 2</span>
+  </header>
 
   <%- include('../partials/workflow-map') %>
 
-  <!-- Query input -->
-  <div class="card search-card">
-    <textarea id="search-query" class="input-field search-textarea" aria-label="Search query"
-      placeholder="Enter your search query..." rows="3"></textarea>
-
-    <!-- Controls row -->
-    <div class="search-controls">
-      <div class="control-group">
-        <label for="topk-slider">topK: <span id="topk-value" class="mono">5</span></label>
-        <input id="topk-slider" type="range" min="1" max="20" value="5" class="slider">
-      </div>
-      <div class="control-group">
-        <label for="minscore-slider">minScore: <span id="minscore-value" class="mono">0.00</span></label>
-        <input id="minscore-slider" type="range" min="0" max="100" value="0" class="slider">
-      </div>
-      <div class="control-group">
-        <label for="search-source">Source</label>
-        <input id="search-source" class="input-field input-sm" type="text" placeholder="optional">
-      </div>
-      <div class="control-group">
-        <label for="search-tags">Tags</label>
-        <input id="search-tags" class="input-field input-sm" type="text" placeholder="tag1, tag2">
-      </div>
+  <section class="card search-card knowledge-primary-card">
+    <div id="knowledge-search-readiness" class="knowledge-readiness is-loading" role="status" aria-live="polite">
+      <span class="knowledge-readiness-icon" aria-hidden="true"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+      <span><strong id="knowledge-search-readiness-label">Checking your knowledge…</strong><small id="knowledge-search-readiness-detail">Confirming that a source is ready to search</small></span>
+      <a id="search-prerequisite-action" class="btn btn-secondary btn-sm" href="/upload" hidden>Add knowledge</a>
     </div>
 
-    <!-- Advanced retrieval (collapsed; all OFF by default to preserve baseline behaviour) -->
-    <details id="advanced-retrieval" class="advanced-retrieval" style="margin-top:8px;">
-      <summary style="cursor:pointer;font-size:0.85rem;color:#a0a0b8;">Advanced retrieval</summary>
-      <div class="adv-options" style="display:flex;flex-direction:column;gap:10px;padding-top:12px;">
-        <label class="adv-toggle" style="display:flex;gap:8px;align-items:flex-start;">
-          <input id="opt-expand" type="checkbox">
-          <span><strong>Query expansion</strong> — rewrites your query into variants to widen recall before retrieval.</span>
-        </label>
-        <label class="adv-toggle" style="display:flex;gap:8px;align-items:flex-start;">
-          <input id="opt-hybrid" type="checkbox">
-          <span><strong>Hybrid (BM25) search</strong> — blends keyword matching with vector similarity to catch exact terms.</span>
-        </label>
-        <label class="adv-toggle" style="display:flex;gap:8px;align-items:flex-start;">
-          <input id="opt-rerank" type="checkbox">
-          <span><strong>LLM re-ranking</strong> — fetches extra candidates and re-orders them by an LLM relevance judge (slower).</span>
-        </label>
-        <label class="adv-toggle" style="display:flex;gap:8px;align-items:flex-start;">
-          <input id="opt-compress" type="checkbox">
-          <span><strong>Contextual compression</strong> — trims each result to only the sentences relevant to your query (slower).</span>
-        </label>
+    <label class="field-label" for="search-query">What do you want to find?</label>
+    <textarea id="search-query" class="input-field search-textarea" placeholder="Ask a question about your sources…" rows="3" disabled></textarea>
+    <div class="starter-prompts" aria-label="Starter questions">
+      <button type="button" class="starter-prompt" data-query="What are the key decisions in these sources?" disabled>Key decisions</button>
+      <button type="button" class="starter-prompt" data-query="What risks or limitations are mentioned?" disabled>Risks and limits</button>
+      <button type="button" class="starter-prompt" data-query="Summarize the strongest evidence." disabled>Strongest evidence</button>
+    </div>
+
+    <details class="expert-cockpit compact-cockpit" id="retrieval-controls">
+      <summary>
+        <span class="cockpit-summary-icon" aria-hidden="true"><i class="fa-solid fa-sliders"></i></span>
+        <span><strong>Take the controls</strong><small>Ranking, filters and retrieval enhancements</small></span>
+        <span class="cockpit-summary-state">Expert</span>
+      </summary>
+      <div class="cockpit-surface">
+        <div class="search-controls">
+          <div class="control-group"><label for="topk-slider">Results: <span id="topk-value" class="mono">5</span></label><input id="topk-slider" type="range" min="1" max="20" value="5" class="slider"></div>
+          <div class="control-group"><label for="minscore-slider">Minimum score: <span id="minscore-value" class="mono">0.00</span></label><input id="minscore-slider" type="range" min="0" max="100" value="0" class="slider"></div>
+          <div class="control-group"><label for="search-source">Source</label><input id="search-source" class="input-field input-sm" type="text" placeholder="Any source"></div>
+          <div class="control-group"><label for="search-tags">Tags</label><input id="search-tags" class="input-field input-sm" type="text" placeholder="tag1, tag2"></div>
+        </div>
+        <div class="adv-options">
+          <label class="adv-toggle"><input id="opt-expand" type="checkbox"><span><strong>Query expansion</strong><small>Rewrite the query into variants to widen recall.</small></span></label>
+          <label class="adv-toggle"><input id="opt-hybrid" type="checkbox"><span><strong>Hybrid search</strong><small>Blend keywords with vector similarity.</small></span></label>
+          <label class="adv-toggle"><input id="opt-rerank" type="checkbox"><span><strong>LLM re-ranking</strong><small>Judge and reorder extra candidates; slower.</small></span></label>
+          <label class="adv-toggle"><input id="opt-compress" type="checkbox"><span><strong>Contextual compression</strong><small>Keep only query-relevant sentences; slower.</small></span></label>
+        </div>
       </div>
     </details>
 
-    <button id="btn-search" class="btn btn-primary btn-lg">Search</button>
-    <div id="search-status" class="flow-status is-loading" role="status" aria-live="polite">
-      <strong>Waiting for query</strong>
-      <span class="flow-status-detail">Enter a query to embed it and retrieve the nearest indexed chunks.</span>
-    </div>
-  </div>
+    <div class="primary-action-row"><button id="btn-search" class="btn btn-primary btn-lg" type="button" disabled><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Find evidence</button></div>
+    <div id="search-status" class="flow-status is-loading" role="status" aria-live="polite"><i class="fa-regular fa-circle" aria-hidden="true"></i><span><strong>Waiting for a question</strong><span class="flow-status-detail">Ask in plain language; Agent X will return matching passages.</span></span></div>
+  </section>
 
-  <!-- Results area -->
-  <div id="search-meta" class="search-meta" style="display:none;"></div>
-  <div id="search-results" class="search-results"></div>
-  <div id="search-empty" class="empty-state" style="display:none;">No results found.</div>
-  <div id="search-error" class="error-state" style="display:none;"></div>
-</div>
+  <div id="search-meta" class="search-meta" hidden></div>
+  <section id="search-results" class="search-results" aria-label="Evidence results"></section>
+  <div id="search-empty" class="empty-state actionable-empty" hidden><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><strong>No evidence matched</strong><span>Try simpler wording, or loosen expert filters.</span></div>
+  <div id="search-error" class="error-state" role="alert" hidden></div>
+</main>

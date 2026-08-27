@@ -13,7 +13,9 @@
   <% } %>
   <% if (locals.agentxProfile === 'demo' && activePage !== 'demo') { %>
     <% const demoCoreBase = String(locals.publicUrls && locals.publicUrls.core || '').replace(/\/+$/, ''); %>
-    <a class="demo-profile-home" href="<%= demoCoreBase %>/demo" aria-label="Back to Agent X demo">Agent X · Demo</a>
+    <a class="demo-profile-home" href="<%= demoCoreBase %>/demo" aria-label="Back to Agent X demo">
+      <i class="fas fa-arrow-left" aria-hidden="true"></i><span>Agent X · Demo</span>
+    </a>
   <% } %>
 
   <%- include(pageView) %>

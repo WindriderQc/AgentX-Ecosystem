@@ -19,8 +19,8 @@ describe('guided persona demo', () => {
       }
     });
 
-    expect(html).toContain('Route, shape, ground, and evaluate');
-    expect(html).toContain('<h2>Personas</h2>');
+    expect(html).toContain('What do you want to do?');
+    expect(html).toContain('Try a guided conversation');
     expect(html).toContain('href="/playground?persona=learning_guide"');
     expect(html).not.toMatch(/openclaw|herm[eè]s|nestor|192\.168\.|credential|token/i);
   });

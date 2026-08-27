@@ -8,7 +8,7 @@ import {
   updateRangeDisplays, updateConfigSummary, toggleRagOptions,
   checkRagAvailability, loadServerConfig, loadOllamaHosts, targetHost,
   initDevModeToggle, isRouterMode, updateRoutingModeUi,
-  loadHostPreferences, getHostChatState, describePendingRuntimeChange,
+  loadHostPreferences, loadRoutingStatus, getHostChatState, describePendingRuntimeChange,
   routingMode, routingModeLabel, sessionTaskType
 } from './chat-config.js';
 import {
@@ -27,7 +27,7 @@ import {
 } from './chat-profile.js';
 
 document.addEventListener('DOMContentLoaded', () => {
-  const defaultMessagePlaceholder = 'Message AgentX... (Enter to send, Shift+Enter for newline)';
+  const defaultMessagePlaceholder = 'Ask Agent X anything…';
 
   const elements = {
     chatWindow: document.getElementById('chatWindow'),
@@ -97,6 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
     configDrawerClose: document.getElementById('configDrawerClose'),
     toggleConfigBtn: document.getElementById('toggleConfigBtn'),
   };
+  const welcomeMarkup = elements.chatWindow?.innerHTML || '';
+  let configDrawerOpener = null;
 
   // Copy defaults so server config can mutate them
   const defaults = { ...DEFAULTS, options: { ...DEFAULTS.options } };
@@ -114,6 +116,10 @@ document.addEventListener('DOMContentLoaded', () => {
     streamAbortController: null,
     config: null,
     ollamaHosts: [],
+    ollamaHostsLoaded: false,
+    routingStatus: null,
+    routingStatusLoaded: false,
+    sessionLoadedModel: null,
     hostPreferences: [],
     hostPreferencesByUrl: new Map(),
     pendingRuntimeNoticeKey: null,
@@ -142,7 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
   state._helpers = helpers;
 
   function refreshMessages() {
-    elements.chatWindow.innerHTML = '';
+    elements.chatWindow.innerHTML = state.history.length === 0 ? welcomeMarkup : '';
     state.stats = { messages: 0, replies: 0 };
     state.history.forEach((msg) => helpers.appendMessage(msg, { persist: false }));
   }
@@ -160,13 +166,9 @@ document.addEventListener('DOMContentLoaded', () => {
     state.stats = { messages: 0, replies: 0 };
     // New conversation → the previous reply's routed model no longer applies.
     state.lastRoutedModel = null;
-    elements.chatWindow.innerHTML = '';
+    elements.chatWindow.innerHTML = welcomeMarkup;
     state.threadId = `t-${Date.now().toString(36)}`;
     elements.threadId.textContent = state.threadId;
-    helpers.appendMessage(
-      { role: 'assistant', id: 'a-welcome', content: 'Chat cleared. Choose a model and say hi!', createdAt: new Date().toISOString() },
-      { persist: false, count: false }
-    );
     if (showToast && typeof Toast !== 'undefined') Toast.success('New conversation started');
   }
 
@@ -239,21 +241,40 @@ document.addEventListener('DOMContentLoaded', () => {
     const isHidden = elements.page.classList.contains('history-hidden');
     if (elements.toggleHistoryBtn) {
       elements.toggleHistoryBtn.title = isHidden ? 'Show history' : 'Hide history';
+      elements.toggleHistoryBtn.setAttribute('aria-label', isHidden ? 'Show conversation history' : 'Hide conversation history');
+      elements.toggleHistoryBtn.setAttribute('aria-pressed', isHidden ? 'false' : 'true');
     }
   }
 
-  // Config drawer toggle
+  function setConfigDrawerState(isOpen, { restoreFocus = false } = {}) {
+    if (!elements.configDrawer) return;
+    elements.configDrawer.classList.toggle('open', isOpen);
+    elements.configDrawer.inert = !isOpen;
+    elements.configDrawer.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    elements.toggleConfigBtn?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    elements.configDrawerBackdrop?.classList.toggle('visible', isOpen);
+    elements.configDrawerBackdrop?.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    document.body.classList.toggle('chat-controls-open', isOpen);
+    const expertStrip = document.getElementById('chatExpertStrip');
+    expertStrip?.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    if (expertStrip) expertStrip.inert = !isOpen;
+
+    if (isOpen) {
+      configDrawerOpener = document.activeElement;
+      elements.configDrawer.focus({ preventScroll: true });
+    } else if (restoreFocus && configDrawerOpener instanceof HTMLElement) {
+      configDrawerOpener.focus({ preventScroll: true });
+    }
+  }
+
+  // Context-preserving expert controls
   function toggleConfigDrawer() {
     if (!elements.configDrawer) return;
-    const isOpen = elements.configDrawer.classList.toggle('open');
-    if (elements.configDrawerBackdrop) {
-      elements.configDrawerBackdrop.classList.toggle('visible', isOpen);
-    }
+    setConfigDrawerState(!elements.configDrawer.classList.contains('open'), { restoreFocus: true });
   }
 
   function closeConfigDrawer() {
-    if (elements.configDrawer) elements.configDrawer.classList.remove('open');
-    if (elements.configDrawerBackdrop) elements.configDrawerBackdrop.classList.remove('visible');
+    setConfigDrawerState(false, { restoreFocus: true });
   }
 
   // Auto-resize textarea
@@ -269,13 +290,54 @@ document.addEventListener('DOMContentLoaded', () => {
     return selected || targetHost(elements, defaults) || '---';
   }
 
+  function updateExperienceSummary(hostState) {
+    const mode = routingMode(elements, state);
+    const labels = {
+      quick: 'Fast',
+      standard: 'Balanced',
+      deep: 'Deep reasoning',
+      manual: 'Manual control',
+    };
+    const modeLabel = labels[mode] || 'Balanced';
+    const modeEl = document.getElementById('simpleModeLabel');
+    const automationEl = document.getElementById('simpleModeAutomation');
+    const helpEl = document.getElementById('chatStatusHelp');
+    const modelBadge = document.getElementById('headerModelBadge');
+    const healthDot = document.querySelector('.chat-expert-strip .ci-health-dot');
+    const hostField = document.querySelector('.chat-expert-strip [data-ci-field="host"]');
+    const routeField = document.querySelector('.chat-expert-strip [data-ci-field="route"]');
+
+    if (modeEl) modeEl.textContent = modeLabel;
+    if (automationEl) automationEl.textContent = hostState.mode === 'router' ? 'Automatic' : 'Pinned';
+    const ready = hostState.available && !hostState.requiresModel;
+    if (helpEl) {
+      helpEl.textContent = ready
+        ? hostState.mode === 'router'
+          ? 'Agent X will handle the setup when you send.'
+          : 'Your selected host and model will be used for this conversation.'
+        : hostState.reason || 'This chat route needs attention.';
+    }
+    if (modelBadge) {
+      modelBadge.textContent = hostState.mode === 'router'
+        ? `${modeLabel} · automatic`
+        : (elements.modelSelect?.value || hostState.primaryPin || 'Model not selected');
+    }
+    if (hostField) hostField.textContent = hostState.mode === 'router' ? 'Server-routed' : currentHostLabel();
+    if (routeField) routeField.textContent = hostState.mode === 'router' ? modeLabel : 'Manual';
+    if (healthDot) {
+      healthDot.classList.toggle('healthy', ready);
+      healthDot.classList.toggle('offline', !ready);
+    }
+  }
+
   function applyChatAvailability({ announce = false } = {}) {
     updateRoutingModeUi(elements, state, defaults);
     const hostState = getHostChatState(elements, state, defaults);
-    const blocked = !hostState.available;
+    const blocked = !hostState.available || hostState.requiresModel;
     if (blocked || hostState.mode === 'router') {
       cancelModelWarmup({ elements, state });
     }
+    updateExperienceSummary(hostState);
 
     if (elements.messageInput && !state.warming) {
       elements.messageInput.disabled = blocked;
@@ -289,6 +351,10 @@ document.addEventListener('DOMContentLoaded', () => {
         ? (hostState.reason || 'Chat unavailable for the selected host/config.')
         : '';
     }
+    document.querySelectorAll('[data-chat-starter]').forEach((button) => {
+      button.disabled = blocked;
+      button.title = blocked ? (hostState.reason || 'Chat setup is required first.') : '';
+    });
 
     if (typeof ChatIntelligence !== 'undefined') {
       const routerActive = hostState.mode === 'router';
@@ -302,10 +368,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (blocked) {
-      helpers.setStatus(`Unavailable: ${hostState.unavailableKind || hostState.status || 'host'}`, 'error');
-      helpers.setFeedback(hostState.reason || 'Selected chat route is unavailable.', 'error');
+      const recoverable = hostState.recoverable || hostState.requiresModel;
+      const recoverableLabel = hostState.unavailableKind === 'route setup'
+        ? 'Chat route needs attention'
+        : 'Model setup needed';
+      helpers.setStatus(
+        recoverable ? recoverableLabel : `Unavailable: ${hostState.unavailableKind || hostState.status || 'host'}`,
+        recoverable ? 'warning' : 'error'
+      );
+      helpers.setFeedback(
+        hostState.reason || 'Selected chat route is unavailable.',
+        recoverable ? 'warning' : 'error'
+      );
     } else if (announce && !state.sending && !state.warming) {
-      helpers.setStatus('Ready', 'success');
+      helpers.setStatus('Ready to chat', 'success');
       helpers.setFeedback(hostState.reason || 'Chat route ready.', 'success');
     }
 
@@ -383,6 +459,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (elements.configDrawerClose) elements.configDrawerClose.addEventListener('click', closeConfigDrawer);
     if (elements.configDrawerBackdrop) elements.configDrawerBackdrop.addEventListener('click', closeConfigDrawer);
 
+    elements.chatWindow?.addEventListener('click', (event) => {
+      const starter = event.target.closest('[data-chat-starter]');
+      if (!starter) return;
+      elements.messageInput.value = starter.dataset.chatStarter || '';
+      autoResizeTextarea();
+      updateCharCount();
+      elements.messageInput.focus();
+    });
+
     // Info bar quick toggles
     if (elements.headerThinkingBtn) {
       elements.headerThinkingBtn.addEventListener('click', () => {
@@ -411,6 +496,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Global keyboard shortcuts (chat page)
     document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && elements.configDrawer?.classList.contains('open')) {
+        e.preventDefault();
+        closeConfigDrawer();
+        return;
+      }
       if (!(e.ctrlKey || e.metaKey)) return;
       const tag = (e.target.tagName || '').toLowerCase();
       const isInput = tag === 'input' || tag === 'textarea' || tag === 'select';
@@ -463,7 +553,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // the header reflects the new mode until the next reply lands.
         state.lastRoutedModel = null;
         await loadHostPreferences(state);
-        const hostState = applyChatAvailability({ announce: true });
+        let hostState = applyChatAvailability({ announce: true });
+        if (hostState.mode !== 'router') {
+          await _fetchModels({ elements, state, defaults, helpers }, false);
+          hostState = applyChatAvailability({ announce: true });
+        }
         updateConfigSummary(elements);
         updateHeaderBar(null, state);
         if (typeof ChatContextIndicator !== 'undefined') {
@@ -580,6 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
     _loadProfile(elements);
     await loadPromptSelector();
     await loadOllamaHosts(elements, state);
+    await loadRoutingStatus(state);
     await loadHostPreferences(state);
     applyChatAvailability();
     await _fetchModels({ elements, state, defaults, helpers });
@@ -594,7 +689,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ChatIntelligence.updateStatusBar({
         model: routerActive ? (state.lastRoutedModel || `${modeLabel} mode`) : (elements.modelSelect.value || hostState.primaryPin || '---'),
         host: routerActive ? 'server-routed' : currentHostLabel(),
-        hostHealth: hostState.available ? 'healthy' : 'unavailable',
+        hostHealth: hostState.available && !hostState.requiresModel ? 'healthy' : 'unavailable',
         routeReason: routerActive ? (sessionTaskType(elements, state) || 'session') : (hostState.selectedBasis || 'direct'),
       });
     }
@@ -653,12 +748,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (loaded) break;
       }
       if (!loaded) {
-        helpers.setStatus('Ready');
-        helpers.setFeedback('Set host/model, then start chatting.');
+        applyChatAvailability({ announce: true });
       }
     } else {
-      helpers.setStatus('Ready');
-      helpers.setFeedback('Set host/model, then start chatting.');
+      applyChatAvailability({ announce: true });
     }
   }
 

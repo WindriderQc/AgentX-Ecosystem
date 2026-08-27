@@ -60,8 +60,22 @@ function buildMessageRuntimeInfo(message) {
 
 export function setStatus(elements, text, tone = 'muted') {
   elements.statusChip.textContent = text;
-  const color = tone === 'success' ? '#7cf0ff' : tone === 'error' ? '#ff9ca0' : tone === 'warning' ? '#ffd166' : '#93a0b5';
-  elements.statusChip.style.color = color;
+  elements.statusChip.dataset.tone = tone;
+  const container = elements.statusChip.closest('.chat-command-status');
+  if (container) container.dataset.tone = tone;
+  const icon = container?.querySelector('.chat-command-status__icon i');
+  if (icon) {
+    const working = /loading|sending|thinking|routing|waiting/i.test(text);
+    icon.className = tone === 'success'
+      ? 'fas fa-circle-check'
+      : tone === 'error'
+        ? 'fas fa-circle-xmark'
+        : tone === 'warning'
+          ? 'fas fa-triangle-exclamation'
+          : working
+            ? 'fas fa-circle-notch fa-spin'
+            : 'fas fa-circle-info';
+  }
 }
 
 export function setFeedback(elements, text, tone = 'muted') {
@@ -643,6 +657,10 @@ function buildPayload(elements, state, defaults, message) {
 
 function markSelectedManualModelLoaded(elements, state, defaults, model) {
   if (!model || isRouterMode(elements, state)) return;
+  state.sessionLoadedModel = {
+    host: targetHost(elements, defaults, { includeRouter: true }),
+    model
+  };
   const pref = selectedHostPreference(elements, state, defaults);
   if (!pref) return;
   pref.loadedModel = model;
@@ -765,6 +783,7 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
       markSelectedManualModelLoaded(elements, state, defaults, routingInfo?.model || payload.model);
       state.pendingRuntimeNoticeKey = null;
       helpers.applyChatAvailability?.();
+      helpers.setStatus('Ready to chat', 'success');
       return;
     }
     if (eventName === 'error') {
@@ -842,6 +861,14 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
       { role: 'assistant', content: `\u26a0\ufe0f ${err.message || 'Streaming failed.'}`, createdAt: new Date().toISOString() },
       { persist: false }
     );
+    const routeSetupError = /model unavailable|model .*not found/i.test(err.message || '');
+    helpers.setStatus(routeSetupError ? 'Model route needs attention' : 'Response blocked', routeSetupError ? 'warning' : 'error');
+    const statusHelp = document.getElementById('chatStatusHelp');
+    if (statusHelp) {
+      statusHelp.textContent = routeSetupError
+        ? 'Take the controls to choose one of the installed models.'
+        : 'Review the error below, then try again.';
+    }
     helpers.setFeedback(err.message, 'error');
   } finally {
     state.streamAbortController = null;
@@ -936,6 +963,7 @@ export async function sendMessage(ctx) {
     markSelectedManualModelLoaded(elements, state, defaults, routingInfo?.model || payload.model);
     state.pendingRuntimeNoticeKey = null;
     helpers.applyChatAvailability?.();
+    helpers.setStatus('Ready to chat', 'success');
 
     if (data.warning) {
       helpers.setFeedback(`\u26a0\ufe0f ${data.warning}`, 'warning');

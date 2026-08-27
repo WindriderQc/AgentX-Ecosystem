@@ -2540,7 +2540,7 @@ button:active {
   border-bottom: 1px solid var(--panel-border);
 }
 
-.analytics-header h1 {
+.analytics-header h2 {
   font-size: 28px;
   margin: 0;
   color: var(--text);
@@ -2548,7 +2548,7 @@ button:active {
   align-items: center;
 }
 
-.analytics-header h1 i {
+.analytics-header h2 i {
   color: var(--accent);
   margin-right: 16px;
 }

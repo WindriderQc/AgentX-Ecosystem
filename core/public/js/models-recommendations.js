@@ -130,7 +130,7 @@
           <i class="fas fa-trophy" style="color:#f59e0b;"></i>
           Benchmark Recommends
         </div>
-        <a href="${benchmarkUrl}/leaderboard-v2.html" target="_blank" class="rec-link">
+        <a href="${benchmarkUrl}/leaderboard" class="rec-link">
           Full Leaderboard <i class="fas fa-external-link-alt"></i>
         </a>
       </div>

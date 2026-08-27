@@ -103,8 +103,9 @@ user-owned override.
 | User-selected remote | `http://<approved-host>:11434` | Explicit choice; secure and authorize the network separately |
 
 `EMBEDDING_MODEL` selects the RAG embedding model and `OLLAMA_HOST_NAME` is only
-a display label. Chat models are selected in the UI. Keep secondary hosts empty
-for first installation.
+a display label. Agent X routes chat automatically across available models;
+an exact model can be selected through **Take the controls**. Keep secondary
+hosts empty for first installation.
 
 `AGENTX_BENCHMARK_TOKEN` is an optional, user-supplied service credential. The
 `agentx` and `agentx.ps1` launchers generate an ephemeral 256-bit value in memory
