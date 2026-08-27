@@ -27,7 +27,10 @@ COPY core/public/js/utils/toast.js /core/public/js/utils/toast.js
 
 RUN mkdir -p /app/config-data \
   && ln -sf /app/config-data/benchmark.config.json /app/benchmark.config.json \
-  && find scripts -type f ! -name 'migrate-exact-artifact-profile-indexes.js' -delete \
+  && find scripts -type f \
+    ! -name 'migrate-exact-artifact-profile-indexes.js' \
+    ! -name 'cloud-lane-campaign.js' \
+    -delete \
   && rm -rf tests coverage test-results .env .env.* .git
 
 EXPOSE 3081
