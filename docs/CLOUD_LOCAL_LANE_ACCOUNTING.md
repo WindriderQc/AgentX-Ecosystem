@@ -8,6 +8,9 @@ calls.
 
 This is a portable product capability. It contains no provider credential,
 private endpoint, household identity, or environment-specific model choice.
+Benchmark also ships a separate operator CLI and injected-transport library
+for measured campaigns. The HTTP accounting routes remain pure and cannot
+invoke that runner.
 
 ## Policy boundary
 
@@ -17,8 +20,8 @@ private endpoint, household identity, or environment-specific model choice.
   operator declaration binding the campaign, candidates, call count, and
   nanodollar ceiling.
 - The stateless approval check validates declaration scope; it is not an
-  authenticated execution token. A future network runner must authenticate the
-  operator again at its own boundary.
+  authenticated execution token. The execution library authenticates the
+  operator again through a host-injected callback before transport preflight.
 - Comparison never emits a universal winner, changes routing, contacts a
   provider, persists a result, or authorizes network access.
 - Synthetic fixtures prove contract behavior only. They are never model
@@ -30,7 +33,8 @@ Every observation binds:
 
 - lane, suite and suite version;
 - exact fixture SHA-256 and grader version;
-- response mode, output budget, and optional tool protocol;
+- response mode, output budget, temperature, seed, thinking mode, and optional
+  tool protocol;
 - provider, model, model/provider version, API version, and provenance source;
 - local artifact digest or cloud price snapshot as applicable;
 - quality, latency, availability, usable context, attempts, and timestamp.
@@ -68,24 +72,115 @@ All routes are under `/api/benchmark`:
 These routes are pure calculations. A caller cannot use them to send prompts,
 load models, mutate route configuration, or spend money.
 
+## Measured campaign runner
+
+`benchmark/src/services/benchmark/cloudLaneCampaignRunner.js` is an
+operator-invoked execution boundary. It is deliberately not mounted as an HTTP
+route. A measured run:
+
+1. normalizes and fingerprints every fixture, message, tool definition,
+   grader expectation, and input/cache token ceiling;
+2. recomputes the plan fingerprint and requires
+   `estimatedCalls = candidates × fixtures × attempts`;
+3. calls a host-supplied `authorizeExecution` authenticator before any
+   transport preflight or provider call;
+4. preflights every candidate and aborts the whole campaign on provider,
+   model, version, API, context, artifact-digest, or price drift;
+5. sends the same frozen generation contract to every candidate;
+6. checks token ceilings, grades the response, and emits one fingerprinted
+   execution receipt per call; and
+7. returns the raw provider response, normalized usage, attribution receipt,
+   measured observations, and cohort-separated comparison in one fingerprinted
+   evidence artifact.
+
+Transport failures that do not produce provider evidence abort the campaign.
+An HTTP provider rejection can be recorded as `ok: false` availability
+evidence when the transport can still bind its identity and usage. Execution
+receipts bind the response fingerprint, attribution fingerprint, and execution
+authorization fingerprint. They do not authorize a later route change.
+
+Built-in deterministic graders use version `agentx-builtins-v1` and support
+exact text, contains-all, exact/subset JSON, and tool-call checks. A custom
+grader must be injected as a callback carrying the exact `graderVersion` from
+the contract.
+
+### Provider transports
+
+The supplied adapters cover exact Ollama chat and OpenRouter chat-completions:
+
+- Ollama preflight checks `/api/tags`, `/api/version`, and `/api/show` for the
+  exact model artifact, runtime API version, and context window.
+- OpenRouter preflight reads the current official model catalog and checks the
+  canonical model version, context window, token prices, and advertised
+  generation parameters. Provider credentials exist only in runtime memory.
+- Other OpenAI-compatible services can use the generic adapter only with an
+  injected current-model metadata resolver. An unverified `/models` response
+  is not enough to establish version, context, and price provenance.
+
+Every real cloud candidate, including a free candidate, requires a current
+immutable price snapshot. Free calls are accepted only when all four rates and
+the resulting attributed cost are exactly zero.
+
+### Paid boundary
+
+The library supports paid accounting but fail-closes unless all of these are
+present:
+
+- the existing short-lived approval bound to the exact plan, candidates, call
+  count, and nanodollar ceiling;
+- a separate authenticated runner authorization bound to that approval
+  fingerprint and the same ceilings;
+- current non-zero price provenance; and
+- enough remaining approved spend for the worst-case frozen token ceilings
+  before each call.
+
+Actual spend and call counts are checked again after every call. The portable
+CLI intentionally has no paid-execution flag; a deployment must supply a
+reviewed authenticated host integration. Planning a paid campaign remains
+safe and performs no network activity.
+
 ## Offline proof
 
 Run from `benchmark/`:
 
 ```text
 npm run compare:cloud-lanes:offline
+npm run campaign:cloud-lanes -- --campaign data/cloud-lane-campaign.example.json --fixtures data/cloud-lane-campaign-fixtures.example.json
 npx jest --config jest.unit.config.js --runInBand tests/unit/benchmark/cloudLaneAccounting.test.js tests/unit/benchmark/cloudLaneRoutes.test.js
 ```
 
-The fixture command reports zero network calls and zero real spend. Its paid
-receipt is synthetic arithmetic used only to prove attribution and tamper
-detection.
+Both commands report zero network calls and zero real spend. The first command's
+paid receipt is synthetic arithmetic used only to prove attribution and tamper
+detection. The second validates a full campaign plan without constructing a
+transport.
 
-## Executing a real comparison
+## Executing a local/free comparison
 
-A separate, reviewed runner may eventually execute an exact campaign. It must
-freeze the same contract before call one, retain raw response evidence under
-the benchmark retention policy, authenticate any paid approval, enforce its
-call and spend ceilings, persist one receipt per paid call, and stop on pricing
-or identity drift. Promotion remains a distinct operator decision after the
-lane-specific report is reviewed.
+Copy and replace every placeholder in:
+
+- `benchmark/data/cloud-lane-campaign.example.json`;
+- `benchmark/data/cloud-lane-campaign-fixtures.example.json`; and
+- `benchmark/data/cloud-lane-transports.example.json`.
+
+Run the plan-only command after editing fixtures. A mismatch fails closed and
+reports the newly computed fixture fingerprint to place in the campaign. Capture current artifact/API/context evidence for local
+models and current canonical version/context/zero-price evidence for cloud
+models. Keep API keys out of JSON and expose only the named environment
+variable at runtime.
+
+Then run:
+
+```text
+npm run campaign:cloud-lanes -- \
+  --campaign path/to/campaign.json \
+  --fixtures path/to/fixtures.json \
+  --transports path/to/transports.json \
+  --output path/to/new-evidence.json \
+  --execute-free
+```
+
+The output path must be new; the CLI refuses to overwrite earlier evidence.
+The explicit flag plus the authenticated local OS session authorize only local
+and free-cloud execution. The complete raw evidence is written to the output
+file while stdout contains a secret-free summary. Promotion remains a distinct
+operator decision after the lane-specific report is reviewed.

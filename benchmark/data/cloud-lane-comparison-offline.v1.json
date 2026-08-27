@@ -14,6 +14,9 @@
     "graderVersion": "hybrid-grader-v1",
     "responseMode": "final_only",
     "maxOutputTokens": 1200,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
     "toolProtocol": "openai-tools-v1"
   },
   "candidates": [

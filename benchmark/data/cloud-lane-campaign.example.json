@@ -1,0 +1,57 @@
+{
+  "campaignId": "replace-before-execution",
+  "lane": "worker",
+  "contract": {
+    "version": "1.0.0",
+    "suite": "portable-exact-smoke",
+    "suiteVersion": "1.0.0",
+    "fixtureFingerprint": "4ee0d7de45926ef2376fc0ac73d647d14039cb0ad7d87762f79515d6bce668b4",
+    "graderVersion": "agentx-builtins-v1",
+    "responseMode": "final_only",
+    "maxOutputTokens": 32,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "toolProtocol": null
+  },
+  "candidates": [
+    {
+      "id": "local-example",
+      "tier": "local",
+      "provider": "ollama",
+      "model": "replace-me:latest",
+      "modelVersion": "replace-me-build",
+      "apiVersion": "ollama-REPLACE_ME",
+      "provenanceSource": "operator-captured Ollama manifest",
+      "contextWindow": 4096,
+      "artifactDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "id": "free-cloud-example",
+      "tier": "free_cloud",
+      "provider": "openrouter",
+      "model": "replace/me:free",
+      "modelVersion": "replace/me-version",
+      "apiVersion": "openrouter-chat-completions-v1",
+      "provenanceSource": "https://openrouter.ai/api/v1/models",
+      "contextWindow": 4096,
+      "priceSnapshot": {
+        "provider": "openrouter",
+        "model": "replace/me:free",
+        "modelVersion": "replace/me-version",
+        "currency": "USD",
+        "effectiveAt": "2026-08-27T00:00:00.000Z",
+        "source": "https://openrouter.ai/api/v1/models",
+        "rates": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      }
+    }
+  ],
+  "attempts": 1,
+  "estimatedCalls": 2,
+  "spendCeilingNanodollars": 0
+}

@@ -94,7 +94,10 @@ agent runtime.
   free-cloud, and paid-cloud observations remain separate, family/kid lanes
   fail closed to local candidates, paid receipts use immutable integer
   nanodollars plus effective price provenance, and comparison has no network or
-  routing authority.
+  routing authority. Measured execution is a separate operator CLI/library,
+  never an HTTP route; it requires authenticated authorization before
+  transport preflight, exact live identity/price checks, per-call receipts, and
+  retained raw evidence. Its report still has no routing authority.
 - Degraded cross-model retry is never implicit. It requires the existing
   server-side degraded-fallback policy, a Core-managed non-stream route, and
   the request field `allowCrossModelFallback: true`. The alternate must be an

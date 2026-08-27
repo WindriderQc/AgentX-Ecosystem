@@ -106,6 +106,15 @@ function normalizeHexFingerprint(value, name) {
 
 function normalizeContract(raw = {}, laneInput) {
     const lane = normalizeLane(laneInput || raw.lane);
+    const temperature = raw.temperature == null
+        ? 0
+        : positiveNumber(raw.temperature, 'contract.temperature');
+    if (temperature > 2) {
+        throw contractError('INVALID_TEMPERATURE', 'contract.temperature must be between 0 and 2');
+    }
+    if (raw.thinking != null && typeof raw.thinking !== 'boolean') {
+        throw contractError('INVALID_BOOLEAN', 'contract.thinking must be a boolean');
+    }
     const contract = {
         version: requiredText(raw.version, 'contract.version', 80),
         lane,
@@ -115,6 +124,9 @@ function normalizeContract(raw = {}, laneInput) {
         graderVersion: requiredText(raw.graderVersion, 'contract.graderVersion', 80),
         responseMode: requiredText(raw.responseMode, 'contract.responseMode', 80),
         maxOutputTokens: integer(raw.maxOutputTokens, 'contract.maxOutputTokens', { min: 1, max: 1_000_000 }),
+        temperature,
+        seed: integer(raw.seed == null ? 0 : raw.seed, 'contract.seed', { min: 0, max: 2_147_483_647 }),
+        thinking: raw.thinking === true,
         toolProtocol: optionalText(raw.toolProtocol, 80)
     };
     return { ...contract, fingerprint: fingerprint(contract) };
