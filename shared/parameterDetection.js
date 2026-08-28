@@ -43,6 +43,12 @@ function bytesPerParam(quant) {
 /**
  * Estimate KV cache and compute-buffer bytes at a caller-selected context.
  * This is a fit estimate, not a context recommendation.
+ *
+ * The <30B base factor is deliberately 55 MiB/B/1K, not the roughly 78
+ * MiB/B/1K slope observed in total allocation: estimateTotalVram separately
+ * applies tiered overhead to weights plus this estimate. Using 78 here would
+ * count that overhead twice. The paired factors and measurements are locked by
+ * parameterDetectionVramBacktest.test.js.
  */
 function estimateKvCacheBytes(paramBillions, numCtx) {
   if (!Number.isFinite(paramBillions) || paramBillions <= 0) return 0;

@@ -425,9 +425,10 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     measurementQuality,
     spill: {
       ...spill,
-      // The /api/ps check itself can't know the context — it observed the
-      // model as loaded by the throughput test, so that test's numCtx is the
-      // context at which the spill was (or wasn't) seen.
+      // /api/ps reports offload, not the context that caused it. Attribute a
+      // spill only to the throughput call's reported numCtx; if that evidence
+      // is absent, keep it null rather than inventing a fallback. A spill also
+      // proves no safe context; a later context probe may provide one.
       spillNumCtx: spill.spillDetected ? (testResult.numCtx || null) : null,
       lastSafeNumCtx: spill.spillDetected ? null : (testResult.numCtx || null)
     },
