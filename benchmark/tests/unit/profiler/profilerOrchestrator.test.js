@@ -114,6 +114,34 @@ describe('profile', () => {
     expect(result).toMatchObject({ modelName: MODEL, artifact: ARTIFACT, evidenceId: 'evidence-1' });
   });
 
+  it.each([
+    ['the measured throughput context', 16384, 16384],
+    ['no context when throughput omitted it', undefined, null]
+  ])('records spill at %s without inventing a safe context', async (_case, numCtx, expectedSpillNumCtx) => {
+    ollamaClient.listRunning.mockResolvedValue({
+      models: [{ name: MODEL, size: 100, size_vram: 75 }]
+    });
+    hostTestService.testModelOnHost.mockResolvedValue({
+      status: 'pass',
+      tokensPerSec: 42,
+      promptEvalTokensPerSec: 100,
+      timeToFirstTokenMs: 50,
+      promptTokens: 100,
+      requestedPromptTokens: 100,
+      promptWorkloadMode: 'fixed',
+      numCtx,
+      vramUsedMiB: 4096
+    });
+
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
+
+    expect(result.profile.spill).toEqual(expect.objectContaining({
+      spillDetected: true,
+      spillNumCtx: expectedSpillNumCtx,
+      lastSafeNumCtx: null
+    }));
+  });
+
   it('persists benchmark-qualified readiness after a zero-throughput context boundary', async () => {
     contextProbeService.probeModelContext.mockResolvedValue({
       status: 'completed',
