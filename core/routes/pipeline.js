@@ -87,6 +87,17 @@ router.get('/tasks/next', async (req, res) => {
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
 
+// Full task detail (spec + feedback audit trail) for the human Pipeline UI.
+// Registered after /tasks/next so the literal segment keeps priority.
+// GET /api/pipeline/tasks/:id
+router.get('/tasks/:id', async (req, res) => {
+  try {
+    const task = await PipelineTask.findOne({ pipelineId: req.params.id }).lean();
+    if (!task) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
+    return envelope.success(res, { task });
+  } catch (err) { return envelope.error(res, 500, err.message); }
+});
+
 // Atomically claim a task — kills the multi-agent race. POST .../tasks/:id/claim { assignee }
 router.post('/tasks/:id/claim', async (req, res) => {
   const assignee = (req.body && req.body.assignee) || 'unknown-agent';
