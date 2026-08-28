@@ -1,13 +1,12 @@
 'use strict';
 
 /**
- * Staleness crawler (Backlog C of the per-host optimization plan).
+ * Staleness crawler for benchmark-owned evidence.
  *
  * Scans benchmark-owned model state for stale or invalid evidence BEFORE it
  * breaks a sweep, and reports per host with suggested re-profile payloads.
  * Read-only / advisory: it never profiles or mutates routing — it just
- * surfaces what needs attention (matching the plan's "do not auto-run without
- * an execution flag").
+ * surfaces what needs attention.
  *
  * Reasons:
  *   context_profile_stale   ModelContextProfile.stale

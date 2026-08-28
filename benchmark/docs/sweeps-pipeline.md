@@ -23,16 +23,20 @@ The routes have different side effects:
 | Route | Effect |
 |---|---|
 | `GET /intake` | Reads public Hugging Face metadata; does not pull or run a model. |
-| `POST /plan` | Probes one configured inference host and reads stored profile evidence; starts no work. |
+| `POST /plan` | Reads the live inference host, artifact digest/Core registry identity, and stored profile evidence; starts no work. |
 | `POST /run` without `execute: true` | Returns a dry-run plan; starts no work. |
-| `POST /run` with `execute: true` | May start an exact-artifact profile queue and a benchmark batch, consuming inference resources and writing their normal evidence. |
+| `POST /run` with `execute: true` | May start an exact-artifact profile queue and a benchmark batch, consuming inference resources and writing their normal evidence. Profiling can unload/load models temporarily. |
 | `POST /recommend` | Pure scoring over caller-supplied measured metrics; returns a recommendation and ledger draft. |
 | `GET /staleness` | Reads stored profile evidence and returns advisory re-profile payloads. |
 
 Even in execute mode, the pipeline never pulls models, edits routing, applies a
 recommendation, or deletes evidence. The executor rejects an active benchmark
 batch or an active profile queue for the target host, rechecks the batch lock
-before launch, and runs preflight before starting a batch.
+before launch, and runs preflight before starting a batch. During profiling,
+the profiler attempts to claim the host around its unload/load sequence. A
+rejected claim aborts; if the Core claim call itself fails, standalone profiling
+may proceed without that claim. A successful claim is released, and pinned host
+dedication is restored on a best-effort basis, on both success and failure.
 
 Treat `execute: true` as an explicit operational action. Inspect the dry-run
 response first and confirm that the target host, exact model tags, levels,
@@ -41,14 +45,16 @@ context, judge, and expected workload are correct.
 ## Discover candidates
 
 `GET /intake` searches model metadata and returns a prioritized intake queue.
-The optional Markdown form is convenient for review:
+The HTTP route parses parameter counts and MoE hints and ranks popularity from
+Hugging Face downloads/likes. It does not supply host VRAM, context, or lane
+inputs to the intake library, so current route records have an empty
+`vramFitByHost`, a null `suggestedHost`, and a null `expectedLane`. Fit belongs
+to the host-specific `/plan` step. The optional Markdown form is convenient for
+review:
 
 ```bash
 curl -fsS "$BENCHMARK_BASE_URL/api/benchmark/sweeps/intake?families=qwen,gemma&limit=10&markdown=1"
 ```
-
-The fit estimate is an analytical pre-filter. Installed inventory and measured,
-exact-artifact profile evidence remain authoritative.
 
 ## Plan one host
 
@@ -69,14 +75,24 @@ curl -fsS -X POST "$BENCHMARK_BASE_URL/api/benchmark/sweeps/plan" \
 ```
 
 `host` may replace `hostId` with the URL of a host already known to the
-Benchmark host-profile registry. Useful optional fields include `prompt_ids`,
-`judge_config`, `execution_config`, `vramLimitMiB`, `maxVramFraction`,
-`description`, and `tags`.
+Benchmark host-profile registry. Accepted controls are `hostId`/`host`,
+`candidates`, `levels`, `prompt_ids`, `profileDepth`, `judge_config`,
+`execution_config`, `run_name`, `tags`, `description`, `vramLimitMiB`, and
+`maxVramFraction`. `lane` is echoed for caller correlation but does not change
+the plan.
 
-The response classifies each candidate as ready, needing a profile, absent from
-the host, identity-unqualified, or outside the measured VRAM limit. It also
-returns ready-to-use `payloads.profileQueue` and `payloads.benchmark` values.
-Analytical fit notes never override measured evidence.
+Sweep inputs intentionally are not direct `/batch` parity. The coordinator
+always creates a latency-mode batch; caller-supplied `execution_mode` and
+`depth_config` are not sweep controls and are not forwarded. Use `levels` or
+`prompt_ids` to select sweep coverage.
+
+Each candidate has exactly one readiness value: `ready`, `needs_profile`,
+`stale_profile`, `not_on_host`, `identity_unqualified`, or `filtered_vram`.
+The response also returns ready-to-use `payloads.profileQueue` and
+`payloads.benchmark` values. Its `estimate` is one analytical target-host
+planning hint, never a prefilter or admission gate; live inventory, registry-
+qualified exact-artifact identity, and measured profile VRAM remain
+authoritative.
 
 ## Run the guarded plan
 
@@ -93,16 +109,21 @@ curl -fsS -X POST "$BENCHMARK_BASE_URL/api/benchmark/sweeps/run" \
   }'
 ```
 
-Only add `"execute": true` after reviewing that response. The `phase` field is
-the stable discriminator:
+Only add the JSON boolean `"execute": true` after reviewing that response;
+other truthy values stay dry-run. Execute mode also accepts `pollIntervalMs`
+and `maxWaitMs` for the in-request profiling wait. The HTTP route always wires
+the profile starter, so its `phase` field has these values:
 
 - `dry_run`: no work was started.
-- `needs_profile`: profiling is required but was not started by the driver.
 - `profiling`: a profile queue is still running; retry after it completes.
 - `profile_failed`: profiling ended unsuccessfully.
 - `preflight_failed`: the candidate did not clear benchmark admission.
 - `benchmarking`: a batch was started; use the returned batch ID for status.
 - `noop`: no benchmark-ready candidate remained after planning.
+
+The underlying `runSweep` library can also return `needs_profile` when embedded
+without a profile-start dependency, but that phase is unreachable through this
+HTTP adapter.
 
 Conflict responses use HTTP 409 when another batch or target-host profile queue
 holds the execution boundary.
@@ -130,16 +151,48 @@ curl -fsS -X POST "$BENCHMARK_BASE_URL/api/benchmark/sweeps/recommend" \
 Built-in lanes are `daily`, `lightweight`, `utility`, `generalist`, `deep`,
 `master_brain`, and `deep_reflection`. The result is `promote`, `keep`, or
 `inconclusive`, with the ranked candidates, guard evidence, and a ledger draft.
-Applying it remains a separate deployment-owned decision with its own backup,
-validation, health, smoke, and rollback evidence.
+Every candidate requires a nonempty `model`. A `promote` result additionally
+requires an explicit incumbent present in the candidate set and complete,
+numeric `composite`, `latencyMs`, and `failures` evidence for both the winner
+and incumbent. A missing incumbent or missing head-to-head evidence is
+`inconclusive`, never a promotion. Applying a recommendation remains a separate
+deployment-owned decision with its own backup, validation, health, smoke, and
+rollback evidence.
+
+Candidate identities must be unique after case and implicit `:latest`
+normalization. Supplied metrics must be JSON numbers in their contract domains:
+`quality` 0–10, `composite` 0–100, positive `latencyMs`, non-negative
+`tokensPerSec`/`vramMiB`, and integer non-negative `failures`. Each weighted
+dimension uses one metric basis across the whole cohort (`quality` otherwise
+`composite`; `tokensPerSec` otherwise inverse `latencyMs`), never mixed units
+row by row. Missing evidence for a positive-weight dimension or an exact
+top-score tie cannot promote.
+
+Custom `weights` may use only `quality`, `speed`, `reliability`, and `fit`; each
+value is a JSON number from 0 through 1 and the vector must sum to 1. Custom
+`guards` may use only `minCompositeMargin` (0–100), `maxLatencyRatio` (>0 and
+finite), and boolean `requireZeroFailures`. The optional `ledger` must be an
+object; `evidenceRefs` and `extraChanges` are arrays of strings. Weight, guard,
+and ledger option objects reject unknown keys. Invalid documented shapes,
+types, ranges, or duplicate identities return HTTP 400; additional candidate
+metadata is preserved.
 
 ## Check stale evidence
 
-`GET /staleness` reports stale or invalid exact-artifact evidence. Restrict it to
-one configured host when needed:
+`GET /staleness` reports stored stale flags and structurally invalid throughput
+(negative or non-finite values). It does not impose a guessed physical
+throughput ceiling. Restrict it to one configured host when needed:
 
 ```bash
 curl -fsS "$BENCHMARK_BASE_URL/api/benchmark/sweeps/staleness?hostId=example-host"
+```
+
+Missing routed-model evidence is checked only when the caller supplies current
+routing as URL-encoded `routedModelsByHost` JSON:
+
+```bash
+curl -fsS --get "$BENCHMARK_BASE_URL/api/benchmark/sweeps/staleness" \
+  --data-urlencode 'routedModelsByHost={"example-host":["namespace/example-model:q4_K_M"]}'
 ```
 
 The response may include suggested profile payloads. Suggestions are advisory;

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Model-intake scanner (B5 — llmfit's HF scraper idea, adapted to this stack).
+ * Model-intake scanner.
  *
  * Turns raw HuggingFace model metadata into prioritized intake-queue records so
  * candidate models stop being discovered ad hoc. Reuses the

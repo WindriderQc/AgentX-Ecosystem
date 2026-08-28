@@ -60,7 +60,7 @@ function getProfileVramMiB(evidence) {
 }
 
 /**
- * B2 (llmfit-derived) — advisory analytical VRAM/quant fit for a candidate.
+ * Advisory analytical VRAM/quant fit for a candidate.
  * This is a PLANNING HINT, not a gate: the empirical profiled-VRAM drop above
  * stays authoritative. Most useful for unprofiled candidates (e.g. new
  * challengers) — predicts whether the model fits as-named and, if not, which
