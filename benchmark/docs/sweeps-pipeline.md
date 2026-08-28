@@ -79,7 +79,7 @@ Benchmark host-profile registry. Accepted controls are `hostId`/`host`,
 `candidates`, `levels`, `prompt_ids`, `profileDepth`, `judge_config`,
 `execution_config`, `run_name`, `tags`, `description`, `vramLimitMiB`, and
 `maxVramFraction`. `lane` is echoed for caller correlation but does not change
-the plan.
+the plan. Omitting `profileDepth` uses `standard`.
 
 Sweep inputs intentionally are not direct `/batch` parity. The coordinator
 always creates a latency-mode batch; caller-supplied `execution_mode` and
@@ -195,8 +195,9 @@ curl -fsS --get "$BENCHMARK_BASE_URL/api/benchmark/sweeps/staleness" \
   --data-urlencode 'routedModelsByHost={"example-host":["namespace/example-model:q4_K_M"]}'
 ```
 
-The response may include suggested profile payloads. Suggestions are advisory;
-the route does not launch them.
+The response includes a Maintenance-class `ledgerDraft` and may include
+suggested profile payloads. Both are advisory; the route does not apply the
+ledger draft or launch the suggestions.
 
 ## Maintainer map
 
