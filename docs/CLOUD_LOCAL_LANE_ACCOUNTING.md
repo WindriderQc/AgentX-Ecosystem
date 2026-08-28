@@ -184,3 +184,17 @@ The explicit flag plus the authenticated local OS session authorize only local
 and free-cloud execution. The complete raw evidence is written to the output
 file while stdout contains a secret-free summary. Promotion remains a distinct
 operator decision after the lane-specific report is reviewed.
+
+## External worker evidence is separate
+
+Existing model campaigns continue to use their exact generation and lane
+contracts. Imported harness evidence uses the additive
+[worker envelope and receipt contract](WORKER_HARNESS_CONTRACTS.md) and
+`POST /api/benchmark/worker-evidence/compare`.
+
+The worker endpoint validates envelope-bound receipts without changing a
+campaign, candidate schema, runner, stored model result, lane leader, or route.
+Portable comparisons freeze the envelope, model, API, prompt, tools, and
+policies while requiring distinct harness identities. Native-ceiling evidence
+preserves separate exact model+harness tuples and does not declare a universal
+winner across unlike tuples.

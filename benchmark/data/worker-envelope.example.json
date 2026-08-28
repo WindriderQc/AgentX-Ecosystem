@@ -1,0 +1,88 @@
+{
+  "schema": "agentx.worker-envelope/v1",
+  "schemaVersion": 1,
+  "task": {
+    "id": "task-001",
+    "correlationId": "campaign-001"
+  },
+  "work": {
+    "description": "Apply the bounded fixture change.",
+    "reference": "fixture.coding-001"
+  },
+  "workspace": {
+    "id": "workspace-001",
+    "kind": "repository"
+  },
+  "dataClassification": "internal",
+  "executionProfile": "portable",
+  "selection": {
+    "harness": {
+      "id": null,
+      "version": null,
+      "digest": null,
+      "constraints": [
+        "supports.patch",
+        "supports.tests"
+      ]
+    },
+    "model": {
+      "provider": "provider-a",
+      "id": "model-a",
+      "version": "2026-08",
+      "digest": null,
+      "constraints": [
+        "tools"
+      ]
+    }
+  },
+  "prompt": {
+    "reference": "prompt.portable-v1",
+    "fingerprint": "2ba26a82ead7cd13af67f69632f0eb92f186dc57b25978ec4acecc9d85992904"
+  },
+  "tools": {
+    "allowed": [
+      {
+        "name": "workspace.patch",
+        "version": "1.0.0",
+        "schemaFingerprint": "c5f22652c3d6c3c81917fb038bea5665540fe2bdd7c944fa09f3114ddc5370ff"
+      }
+    ],
+    "schemaFingerprint": "11a3285e3c70807cf21ed0aad4746ec34e5f6edc859af9d66f9baa469bb54b21"
+  },
+  "budgets": {
+    "maxDurationMs": 300000,
+    "maxTokens": 20000,
+    "maxCostNanodollars": 500000000,
+    "maxTurns": 20,
+    "maxToolCalls": 50
+  },
+  "policies": {
+    "filesystem": {
+      "mode": "workspace_write",
+      "workspaceOnly": true,
+      "allowedOperations": [
+        "read",
+        "update"
+      ]
+    },
+    "network": {
+      "mode": "none",
+      "allowedDestinations": []
+    },
+    "output": {
+      "mode": "patch_and_artifacts",
+      "maxBytes": 1000000,
+      "publicProjection": "allowlist_only"
+    },
+    "fingerprint": "43242be3c09090bb2a10d84392b4738eab924b5ea0ec7c898233ecb32848ff1f"
+  },
+  "resultContract": {
+    "format": "patch",
+    "schemaFingerprint": null,
+    "requiredEvidence": [
+      "patch",
+      "tests"
+    ]
+  },
+  "fingerprint": "23e244394b9505f5443a54667f128d50f7b6f8bf6e6e77749e1bc448c922b4cc"
+}

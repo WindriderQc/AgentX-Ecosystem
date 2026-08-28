@@ -8,6 +8,9 @@ const {
     checkPaidApproval,
     compareLaneObservations
 } = require('../../src/services/benchmark/cloudLaneAccounting');
+const {
+    compareWorkerEvidence
+} = require('../../src/services/benchmark/workerEvidenceComparison');
 
 const router = express.Router();
 
@@ -50,5 +53,12 @@ router.post('/cloud-lanes/attribute', (req, res) => respond(res, () => attribute
  * Cohorts stay separate and the result can never mutate routing.
  */
 router.post('/cloud-lanes/compare', (req, res) => respond(res, () => compareLaneObservations(req.body || {})));
+
+/**
+ * Validate and compare envelope-bound receipts produced by separately operated
+ * workers. This route performs no execution, persistence, promotion, or routing
+ * mutation.
+ */
+router.post('/worker-evidence/compare', (req, res) => respond(res, () => compareWorkerEvidence(req.body || {})));
 
 module.exports = router;

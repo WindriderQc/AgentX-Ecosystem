@@ -1,0 +1,84 @@
+{
+  "schema": "agentx.worker-receipt/v1",
+  "schemaVersion": 1,
+  "executionProfile": "portable",
+  "identity": {
+    "harness": {
+      "name": "harness-a",
+      "version": "1.2.3"
+    },
+    "adapter": {
+      "name": "adapter-a",
+      "version": "2.0.0"
+    },
+    "provider": {
+      "name": "provider-a",
+      "version": "2026-08"
+    },
+    "model": {
+      "name": "model-a",
+      "version": "2026-08",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtimeFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "api": {
+      "name": "messages",
+      "version": "2026-01"
+    },
+    "environment": {
+      "id": "sandbox-a",
+      "version": "image-1",
+      "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  },
+  "fingerprints": {
+    "prompt": "2ba26a82ead7cd13af67f69632f0eb92f186dc57b25978ec4acecc9d85992904",
+    "tools": "11a3285e3c70807cf21ed0aad4746ec34e5f6edc859af9d66f9baa469bb54b21",
+    "policies": "43242be3c09090bb2a10d84392b4738eab924b5ea0ec7c898233ecb32848ff1f",
+    "envelope": "23e244394b9505f5443a54667f128d50f7b6f8bf6e6e77749e1bc448c922b4cc"
+  },
+  "executionTupleFingerprint": "fc786475df8278fa450a1b8ecc33d9cd658a7c07c1bfd01eecc311c0d98347d3",
+  "finalState": "succeeded",
+  "failure": {
+    "classification": null,
+    "code": null
+  },
+  "usage": {
+    "durationMs": 1200,
+    "inputTokens": 100,
+    "outputTokens": 50,
+    "totalTokens": 150,
+    "costNanodollars": 1000,
+    "turns": 2,
+    "toolCalls": 3
+  },
+  "toolErrors": [],
+  "humanInterventions": [],
+  "evidence": {
+    "patches": [
+      {
+        "id": "patch-001",
+        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ],
+    "artifacts": [
+      {
+        "id": "artifact-001",
+        "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    ],
+    "tests": [
+      {
+        "id": "tests.unit",
+        "status": "passed",
+        "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    ]
+  },
+  "violations": [],
+  "result": {
+    "contractSatisfied": true,
+    "fingerprint": "1aad36b0fb02621b951649811957ba7ad67d4838c2932d02088f7d6e8db74313"
+  },
+  "fingerprint": "acc74b17ee44425460fa659f568c3ab5c783a735d8d0a5833945bbac5b690174"
+}

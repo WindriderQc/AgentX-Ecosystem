@@ -64,6 +64,12 @@ executes them automatically. Installation, filesystem access, mutation
 approval, and runtime-specific configuration remain owned by the consuming
 agent runtime.
 
+External harnesses may exchange versioned
+[worker envelopes and receipts](WORKER_HARNESS_CONTRACTS.md) through a
+separately operated adapter. Agent X owns the neutral task/tool/policy contract
+and Benchmark comparison; it does not own harness identity, private
+conversations, memory, credentials, workspace realization, or execution loop.
+
 ## Contract rules
 
 - Cross-service calls use Docker DNS (`core`, `benchmark`, `rag`, `mongo`,
@@ -90,6 +96,10 @@ agent runtime.
 - External consumers use the HTTP consumer contract for routed inference. They
   own application state and conversation persistence, cannot select an
   inference host, and cannot derive private topology from the routing snapshot.
+- External worker evidence uses shared `WorkerEnvelope v1` and
+  `WorkerReceipt v1` normalization. Benchmark accepts only receipts bound to
+  their supplied normalized envelopes and cannot execute a harness, contact a
+  provider, retain a transcript, mutate routing, or promote a candidate.
 - Model identity is the exact installed tag, host, manifest digest, and runtime
   fingerprint. Profiling records evidence for that identity and never creates
   or silently selects a replacement tag; see
