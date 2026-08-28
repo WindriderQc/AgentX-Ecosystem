@@ -795,9 +795,13 @@ app.get('/pipeline', (req, res) => {
     activePage: 'pipeline',
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/pipeline.css">'
+      '<link rel="stylesheet" href="/css/pipeline.css">',
+      '<link rel="stylesheet" href="/css/cockpit-help.css">'
     ].join('\n'),
-    footerJs: '<script src="/js/pipeline.js"></script>'
+    footerJs: [
+      '<script src="/js/cockpit-help.js"></script>',
+      '<script src="/js/pipeline.js"></script>'
+    ].join('\n')
   });
 });
 
