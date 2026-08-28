@@ -1,8 +1,12 @@
 # Agent X Ecosystem
 
-Agent X is a local-first AI workbench that routes Ollama inference, grounds
-answers in a bounded knowledge base, and compares models with reproducible
-evidence.
+Agent X is a local-first capability platform that routes inference, grounds
+answers in a bounded knowledge base, and compares models or imported worker
+evidence with reproducible contracts.
+
+Agent X supplies inference, evaluation, RAG, task/tool contracts, and evidence.
+External harnesses retain ownership of identity, private conversations, memory,
+credentials, tools, and their execution loops.
 
 ## What belongs here
 
@@ -137,6 +141,11 @@ contact a provider, authorize spend, or mutate routing. A separate fail-closed
 operator CLI can run exact local/free campaigns with current identity and price
 preflight, per-call receipts, and retained raw evidence; paid execution requires
 a deployment-owned authenticated integration.
+
+Separately operated execution harnesses can exchange provider-neutral,
+fingerprinted [worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md).
+Benchmark compares envelope-bound portable or native-ceiling evidence, but it
+does not run a harness or own its conversation and orchestration state.
 
 ## Install and update
 
