@@ -123,6 +123,11 @@ Profiling and benchmark admission follow the
 records host-bound evidence and never creates or silently selects another model
 tag.
 
+Operators can use the [Benchmark sweeps pipeline](benchmark/docs/sweeps-pipeline.md)
+to discover candidates, review a dry-run plan, explicitly launch guarded
+profiling/benchmark work, inspect staleness, and produce a routing recommendation.
+The pipeline never applies routing changes.
+
 Benchmark also provides a stateless
 [cloud/local lane accounting contract](docs/CLOUD_LOCAL_LANE_ACCOUNTING.md).
 It keeps local, free-cloud, and paid-cloud evidence in separate exact-contract
