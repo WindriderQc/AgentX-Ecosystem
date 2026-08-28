@@ -4,13 +4,13 @@
  * Model-intake scanner (B5 — llmfit's HF scraper idea, adapted to this stack).
  *
  * Turns raw HuggingFace model metadata into prioritized intake-queue records so
- * candidate models stop being discovered ad hoc (Backlog D). Reuses the
+ * candidate models stop being discovered ad hoc. Reuses the
  * existing fit math (modelFitEstimator / parameterDetection) — NO duplicated
  * VRAM/quant logic — and is pure + DI-tested: the network fetch is injected, so
  * this module needs no HTTP. Callers provide intake data explicitly; network
  * discovery and caching remain outside this product service.
  *
- * Output record (Backlog D shape): model, source, params, activeParams, moe,
+ * Output candidate-intake record: model, source, params, activeParams, moe,
  * quants, ggufSources, vramFitByHost, suggestedHost, expectedLane, priority,
  * intakeDate, profileStatus, benchmarkStatus, decision.
  */
@@ -122,7 +122,7 @@ async function gatherCandidates({ families = [], limit = 15, fetchFamily, hostsV
   return scanIntake({ models: deduped, hostsVram, numCtx, date });
 }
 
-/** Render intake records as a markdown table (Backlog D queue view). */
+/** Render candidate-intake records as a markdown queue view. */
 function formatIntakeTable(records) {
   const header = '| Priority | Model | Lane | Host | Params | MoE | Fit (host quant) | Decision |\n'
     + '|---|---|---|---|---|---|---|---|';

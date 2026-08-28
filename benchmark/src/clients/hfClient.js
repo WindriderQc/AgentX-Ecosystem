@@ -2,7 +2,7 @@
 
 /**
  * Minimal HuggingFace API client (Node stdlib only, no deps).
- * Used by the model-intake scanner (CLI + route) to discover GGUF candidates.
+ * Used by the model-intake route to discover GGUF candidates.
  */
 
 const https = require('https');

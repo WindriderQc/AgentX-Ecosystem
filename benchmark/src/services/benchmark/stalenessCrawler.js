@@ -147,7 +147,7 @@ function analyzeStaleness(input = {}) {
 }
 
 /**
- * Render a staleness report as a Self-Tuning Ledger entry (Maintenance
+ * Render a staleness report as an operator ledger entry (Maintenance
  * category). Advisory: records what was found and the re-profile it PROPOSES —
  * nothing is applied (the crawl and the suggested payloads never auto-run).
  * @param {object} report - analyzeStaleness output
@@ -156,7 +156,7 @@ function analyzeStaleness(input = {}) {
  */
 function formatStalenessLedgerEntry(report, opts = {}) {
   const date = opts.date || 'YYYY-MM-DD';
-  const actor = opts.actor || 'Self-Tuning Lane (Claude Code)';
+  const actor = opts.actor || 'Operator';
   const lines = [];
   lines.push(`## ${date} — Staleness crawl: ${report.totals.staleModels} model(s) flagged`);
   lines.push('');

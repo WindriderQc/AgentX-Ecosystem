@@ -137,7 +137,7 @@ router.get('/sweeps/staleness', async (req, res) => {
  * GET /api/benchmark/sweeps/intake?families=qwen,gemma&limit=10[&markdown=1]
  *
  * Discovers GGUF candidate models from HuggingFace and returns a prioritized
- * Backlog-D intake queue (fit/lane/host/priority — reuses the benchmark fit
+ * candidate-intake queue (fit/lane/host/priority — reuses the benchmark fit
  * math). Read-only: discovery only, deploys/benchmarks nothing.
  */
 router.get('/sweeps/intake', async (req, res) => {

@@ -133,6 +133,8 @@ describe('formatLedgerEntry', () => {
     expect(entry).toMatch(/\(\+4\.26\)/);                       // margin
     expect(entry).toMatch(/- \*\*Changes:\*\*/);
     expect(entry).toMatch(/Refs: batch 6a341b5a/);
+    expect(entry).toMatch(/- \*\*Actor:\*\* Operator, human-directed/);
+    expect(entry).not.toMatch(/Self-Tuning Lane|Claude Code/);
     expect(entry).toMatch(/Validation:.*_pending/);            // apply side left for the lane
     expect(entry).toMatch(/Guards:.*margin pass, latency pass, reliability pass/);
   });

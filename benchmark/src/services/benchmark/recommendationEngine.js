@@ -223,10 +223,10 @@ function metricsFor(rec, model) {
 }
 
 /**
- * Render a recommendation as a Self-Tuning Ledger entry (report-every-change).
+ * Render a recommendation as an operator ledger entry (report-every-change).
  * The engine fills the EVIDENCE side (verdict, diff, guards) automatically; the
  * apply side (Validation/Health/Smoke/Rollback/Target) is left as `_pending_`
- * placeholders for the actuator (the Self-Tuning Lane) to fill after applying,
+ * placeholders for the operator to fill after applying,
  * or can be supplied via `opts`. Never applies anything — pure string.
  *
  * @param {object} rec - buildLaneRecommendation output
@@ -236,7 +236,7 @@ function metricsFor(rec, model) {
  */
 function formatLedgerEntry(rec, opts = {}) {
   const date = opts.date || 'YYYY-MM-DD';
-  const actor = opts.actor || 'Self-Tuning Lane, human-directed';
+  const actor = opts.actor || 'Operator, human-directed';
   const host = rec.host || opts.host || null;
   const hostStr = host ? ` on ${host}` : '';
   const pend = (v, hint) => v || `_pending — ${hint}_`;

@@ -10,7 +10,7 @@ const {
 const TEST_HOSTS_VRAM = { small: 12288, medium: 16303, large: 49152 };
 
 describe('buildIntakeRecord', () => {
-  it('builds a full Backlog-D record reusing the fit math', () => {
+  it('builds a full candidate-intake record reusing the fit math', () => {
     const rec = buildIntakeRecord(
       { id: 'qwen2.5:7b-instruct-q5_K_M', downloads: 250000 },
       { hostsVram: TEST_HOSTS_VRAM, numCtx: 8192 }
