@@ -1,13 +1,12 @@
 'use strict';
 
 /**
- * Staleness crawler (Backlog C of the per-host optimization plan).
+ * Staleness crawler for benchmark-owned evidence.
  *
  * Scans benchmark-owned model state for stale or invalid evidence BEFORE it
  * breaks a sweep, and reports per host with suggested re-profile payloads.
  * Read-only / advisory: it never profiles or mutates routing — it just
- * surfaces what needs attention (matching the plan's "do not auto-run without
- * an execution flag").
+ * surfaces what needs attention.
  *
  * Reasons:
  *   context_profile_stale   ModelContextProfile.stale
@@ -147,7 +146,7 @@ function analyzeStaleness(input = {}) {
 }
 
 /**
- * Render a staleness report as a Self-Tuning Ledger entry (Maintenance
+ * Render a staleness report as an operator ledger entry (Maintenance
  * category). Advisory: records what was found and the re-profile it PROPOSES —
  * nothing is applied (the crawl and the suggested payloads never auto-run).
  * @param {object} report - analyzeStaleness output
@@ -156,7 +155,7 @@ function analyzeStaleness(input = {}) {
  */
 function formatStalenessLedgerEntry(report, opts = {}) {
   const date = opts.date || 'YYYY-MM-DD';
-  const actor = opts.actor || 'Self-Tuning Lane (Claude Code)';
+  const actor = opts.actor || 'Operator';
   const lines = [];
   lines.push(`## ${date} — Staleness crawl: ${report.totals.staleModels} model(s) flagged`);
   lines.push('');

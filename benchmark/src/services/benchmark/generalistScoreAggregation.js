@@ -278,8 +278,8 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
         }
 
         if (stat.avg_quality !== null) {
-            // Blend: rows with null judge_confidence fall back to 0.5, others
-            // use their mean. This mirrors the 0128 extractor convention.
+            // Blend: rows with null judge_confidence use the maintained
+            // NULL_CONFIDENCE_FALLBACK; rows with evidence use their mean.
             const confCount = stat.confidence_count || 0;
             const nullCount = Math.max(0, (stat.count || 0) - confCount);
             let avgConfidence = null;

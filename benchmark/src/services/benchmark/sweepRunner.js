@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * Sweep run driver (Phase 2 of the per-host optimization plan).
+ * Guarded sweep run driver.
  *
  * Turns the read-only `/sweeps/plan` planner into a GUARDED executor:
  *   build plan → lock checks → (optionally profile + poll) → preflight → start batch.
  *
- * Hard guarantees (master-optimization-plan Track A item 2):
+ * Hard guarantees:
  *  - Requires explicit `execute: true`; otherwise returns a dry-run plan.
  *  - Rejects if any benchmark batch is active (global single-batch enforcement).
  *  - Rejects if the target host already has an active profile queue.

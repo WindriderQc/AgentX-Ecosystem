@@ -127,8 +127,8 @@ const CATEGORY_BIAS_CORRECTIONS = {
  * When enabled via scoring profile, each category's avg quality is multiplied
  * by its avg judge_confidence before contributing to the weighted composite.
  * Null/missing judge_confidence is treated as NULL_CONFIDENCE_FALLBACK to stay
- * conservative — matches the 0128 sample extractor convention documented in
- * docs/benchmark/rankings-with-confidence-2026-04-21.md.
+ * conservative. The maintained regression contract lives in
+ * tests/unit/benchmark/generalistScore*.test.js.
  */
 const NULL_CONFIDENCE_FALLBACK = 0.5;
 
