@@ -251,6 +251,75 @@ describe('inference analytics summary', () => {
     }));
   });
 
+  test('summary never groups or returns legacy upstream error bodies', async () => {
+    const secret = 'LEGACY_SUMMARY_SECRET secret@example.test /private/path sk-token';
+    InferenceLog.aggregate.mockResolvedValue(facet({
+      topErrors: [{
+        _id: { model: 'model:1', status: 'error', error: secret },
+        calls: 3,
+      }]
+    }));
+
+    const res = await request(server).get('/api/analytics/inference/summary').expect(200);
+    expect(JSON.stringify(res.body)).not.toContain(secret);
+    expect(res.body.data.topErrors).toEqual([{
+      model: 'model:1', error: 'error', calls: 3
+    }]);
+
+    const pipeline = InferenceLog.aggregate.mock.calls[0][0];
+    const topErrors = pipeline.find((stage) => stage.$facet)?.$facet?.topErrors;
+    const group = topErrors.find((stage) => stage.$group).$group;
+    expect(group._id).toEqual({ model: '$model', status: '$status' });
+    expect(JSON.stringify(topErrors)).not.toContain('$error');
+  });
+
+  test('never returns private fields from legacy inference log rows', async () => {
+    const secret = 'LEGACY_ANALYTICS_SECRET_f803';
+    const lean = jest.fn().mockResolvedValue([{
+      _id: 'legacy-row',
+      host: `http://primary:11434/${secret}`,
+      callerDetail: secret,
+      model: 'model:1',
+      status: 'error',
+      error: `upstream echoed ${secret}`,
+      payload: secret,
+      routingTrace: {
+        request: {
+          requestedModel: 'model:1',
+          hostOverride: `http://primary:11434/${secret}`,
+          preview: { prompt: { preview: secret } },
+        },
+        selected: {
+          routingSource: 'model_router',
+          hostUrl: `http://primary:11434/${secret}`,
+        },
+        ollama: {
+          endpoint: '/api/generate',
+          url: `http://primary:11434/api/generate/${secret}`,
+          runtimeOptions: { stop: [secret] },
+        },
+      },
+    }]);
+    const limit = jest.fn(() => ({ lean }));
+    const skip = jest.fn(() => ({ limit }));
+    const sort = jest.fn(() => ({ skip }));
+    InferenceLog.find.mockReturnValue({ sort });
+    InferenceLog.countDocuments.mockResolvedValue(1);
+
+    const res = await request(server).get('/api/analytics/inference/logs').expect(200);
+    const row = res.body.data.items[0];
+    expect(JSON.stringify(row)).not.toContain(secret);
+    expect(row).not.toHaveProperty('payload');
+    expect(row.host).toBeNull();
+    expect(row.callerDetail).toBeNull();
+    expect(row.error).toBeNull();
+    expect(row.routingTrace.request).not.toHaveProperty('preview');
+    expect(row.routingTrace.request.hostOverride).toBeNull();
+    expect(row.routingTrace.selected.hostUrl).toBeNull();
+    expect(row.routingTrace.ollama.url).toBeNull();
+    expect(row.routingTrace.ollama.optionsFingerprint).toBeNull();
+  });
+
   test('rejects invalid log timestamps without querying storage', async () => {
     await request(server)
       .get('/api/analytics/inference/logs?from=not-a-date')

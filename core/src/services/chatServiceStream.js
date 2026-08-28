@@ -24,6 +24,7 @@ const {
 } = require('./inferenceContractService');
 const { persistConversation } = require('./chat/conversationPersistence');
 const { prepareChatOrchestration } = require('./chat/chatOrchestrationPrelude');
+const { finalizeRouteDecision } = require('./routing/routeDecision');
 const {
     readOllamaErrorDetail,
     buildOllamaStatusError,
@@ -88,6 +89,10 @@ const handleChatRequestStream = async ({
         || (userId ? 'chat-' + String(userId) : 'chat');
     let resolvedHost = null;
     let streamAbortHandler = null;
+    let inferenceDispatched = false;
+    let inferenceStartedAt = 0;
+    let telemetryRecorded = false;
+    let streamTelemetry = null;
 
     logger.info('DEBUG_STREAM: handleChatRequestStream called', {
         userId, conversationId
@@ -133,6 +138,7 @@ const handleChatRequestStream = async ({
             onWebSearchStart,
             onWebSearchDone
         });
+        streamTelemetry = { routingInfo, effectiveModel, effectiveTarget };
 
         if (!effectiveTarget || routingInfo?.source === 'scheduler-blocked') {
             const err = new Error(routingInfo?.reason || 'No Ollama host is available for streaming chat routing');
@@ -184,6 +190,11 @@ const handleChatRequestStream = async ({
             numCtxSource: streamNumCtxSource,
             requestedMaxOutputTokens: streamSanitized.num_predict
         });
+        Object.assign(streamTelemetry, {
+            inferenceContract,
+            streamSanitized,
+            streamNumCtxSource
+        });
         const thinkingPolicy = resolveThinkingPolicy({
             requestedThink: think,
             thinkingMode,
@@ -210,6 +221,8 @@ const handleChatRequestStream = async ({
 
         let response;
         try {
+            inferenceDispatched = true;
+            inferenceStartedAt = Date.now();
             response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -290,6 +303,10 @@ const handleChatRequestStream = async ({
             throw streamErr;
         }
 
+        const successDurationMs = stats?.performance?.totalDuration
+            ? Math.round(stats.performance.totalDuration / 1e6)
+            : Date.now() - inferenceStartedAt;
+
         // Record streaming inference (fire-and-forget)
         recordInference({
             host: resolveTarget(effectiveTarget),
@@ -304,7 +321,10 @@ const handleChatRequestStream = async ({
             routedHost: routingInfo?.host || null,
             routedHostUrl: routingInfo?.target || effectiveTarget || null,
             // RouteDecision v1 (task 0519): built by routeRequest, durable here.
-            routeDecision: routingInfo?.decision || null,
+            routeDecision: finalizeRouteDecision(routingInfo?.decision, {
+                status: 'success',
+                durationMs: successDurationMs
+            }),
             observability: {
                 contract: inferenceContract,
                 lane: 'interactive',
@@ -320,10 +340,10 @@ const handleChatRequestStream = async ({
             num_ctx_source: streamNumCtxSource,
             tokensIn: stats?.usage?.promptTokens || 0,
             tokensOut: stats?.usage?.completionTokens || 0,
-            durationMs: stats?.performance?.totalDuration
-                ? Math.round(stats.performance.totalDuration / 1e6) : 0,
+            durationMs: successDurationMs,
             status: 'success'
         });
+        telemetryRecorded = true;
 
         // Persist conversation
         const routingPayload = buildRoutingPayload(routingInfo, effectiveModel, effectiveTarget, autoRoute);
@@ -368,6 +388,40 @@ const handleChatRequestStream = async ({
         }
 
     } catch (err) {
+        if (inferenceDispatched && !telemetryRecorded && !abortSignal?.aborted && streamTelemetry) {
+            const terminalStatus = err.code === 'OLLAMA_TIMEOUT' || err.name === 'AbortError'
+                ? 'timeout'
+                : 'error';
+            recordInference({
+                host: resolvedHost || resolveTarget(streamTelemetry.effectiveTarget),
+                model: streamTelemetry.effectiveModel,
+                caller: 'chat',
+                callerDetail: effectiveCallerDetail,
+                taskType: streamTelemetry.routingInfo?.taskType || null,
+                routed: streamTelemetry.routingInfo?.routed || false,
+                autoRouted: streamTelemetry.routingInfo?.autoRouted || false,
+                classificationMs: streamTelemetry.routingInfo?.classificationMs || 0,
+                routedModel: streamTelemetry.routingInfo?.model || streamTelemetry.effectiveModel || null,
+                routedHost: streamTelemetry.routingInfo?.host || null,
+                routedHostUrl: streamTelemetry.routingInfo?.target || streamTelemetry.effectiveTarget || null,
+                routeDecision: finalizeRouteDecision(streamTelemetry.routingInfo?.decision, {
+                    status: terminalStatus,
+                    durationMs: Date.now() - inferenceStartedAt,
+                    reasonCode: err.code || (terminalStatus === 'timeout' ? 'OLLAMA_TIMEOUT' : 'OLLAMA_UPSTREAM_ERROR')
+                }),
+                observability: {
+                    contract: streamTelemetry.inferenceContract,
+                    lane: 'interactive',
+                    outcome: null
+                },
+                num_ctx: streamTelemetry.streamSanitized?.num_ctx || null,
+                num_ctx_source: streamTelemetry.streamNumCtxSource,
+                durationMs: Date.now() - inferenceStartedAt,
+                status: terminalStatus,
+                error: err.message
+            });
+            telemetryRecorded = true;
+        }
         if (!abortSignal?.aborted) {
             logger.error('Streaming chat error', { error: err.message, stack: err.stack });
             onError(err);

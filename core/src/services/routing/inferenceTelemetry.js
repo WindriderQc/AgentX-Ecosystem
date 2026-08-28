@@ -13,9 +13,13 @@
 
 const logger = require('../../../config/logger');
 const {
-    assertNoPayload,
     buildRouteDecision,
-    fingerprintRuntimeOptions
+    fingerprintRuntimeOptions,
+    normalizeHostKey,
+    normalizeHostOriginUrl,
+    normalizeOptionsFingerprint,
+    normalizeSelectionSource,
+    projectRouteDecision,
 } = require('./routeDecision');
 
 /**
@@ -29,7 +33,6 @@ const {
 function sanitizedRouteDecision(decision) {
     if (!decision) return null;
     try {
-        assertNoPayload(decision);
         let configVersion = decision.configVersion;
         if (!configVersion) {
             try {
@@ -38,17 +41,270 @@ function sanitizedRouteDecision(decision) {
                 configVersion = 'router-unversioned-v1';
             }
         }
-        const enriched = {
-            ...decision,
+        return projectRouteDecision(decision, {
             configVersion,
             optionsFingerprint: decision.optionsFingerprint || fingerprintRuntimeOptions(null)
-        };
-        assertNoPayload(enriched);
-        return enriched;
+        });
     } catch (err) {
         logger.warn('RouteDecision dropped before persistence', { error: err.message, code: err.code });
         return null;
     }
+}
+
+function operationalIdentifier(value, max = 200) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length <= max && /^[a-zA-Z0-9][a-zA-Z0-9._:/+-]*$/.test(trimmed)
+        ? trimmed
+        : null;
+}
+
+function parseSafeHttpUrl(value, max = 300) {
+    if (typeof value !== 'string' || value.length > max) return null;
+    try {
+        const parsed = new URL(value);
+        if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+        if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
+function safeOriginUrl(value, max = 300) {
+    return typeof value === 'string' && value.length <= max
+        ? normalizeHostOriginUrl(value)
+        : null;
+}
+
+function safeOllamaEndpointUrl(value, max = 300) {
+    const parsed = parseSafeHttpUrl(value, max);
+    return parsed && ['/api/chat', '/api/generate', '/api/embeddings'].includes(parsed.pathname)
+        ? `${parsed.origin}${parsed.pathname}`
+        : null;
+}
+
+function enumValue(value, allowed) {
+    return typeof value === 'string' && allowed.has(value) ? value : null;
+}
+
+function safeIsoTimestamp(value) {
+    if (typeof value !== 'string') return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function finiteNumber(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function booleanOrNull(value) {
+    return typeof value === 'boolean' ? value : null;
+}
+
+function sanitizeFingerprint(value, rawOptions, fingerprintRawOptions = true) {
+    const normalized = normalizeOptionsFingerprint(value);
+    if (normalized) return normalized;
+    if (fingerprintRawOptions && rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions)) {
+        return fingerprintRuntimeOptions(rawOptions);
+    }
+    return null;
+}
+
+function sanitizeTarget(value, hostField = 'host') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return {
+        model: operationalIdentifier(value.model),
+        [hostField]: normalizeHostKey(value[hostField]),
+        hostUrl: safeOriginUrl(value.hostUrl),
+    };
+}
+
+function sanitizeMessageShape(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 6).map((entry) => ({
+        index: Math.max(0, Math.round(finiteNumber(entry?.index) ?? 0)),
+        role: ['system', 'user', 'assistant', 'tool'].includes(entry?.role)
+            ? entry.role
+            : 'other',
+        chars: Math.max(0, Math.round(finiteNumber(entry?.chars) ?? 0)),
+    }));
+}
+
+function sanitizeRequestSummary(value, fingerprintRawOptions) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return {
+        mode: ['chat', 'generate'].includes(value.mode) ? value.mode : null,
+        promptChars: Math.max(0, Math.round(finiteNumber(value.promptChars) ?? 0)),
+        systemChars: Math.max(0, Math.round(finiteNumber(value.systemChars) ?? 0)),
+        messageCount: Math.max(0, Math.round(finiteNumber(value.messageCount) ?? 0)),
+        messageShape: sanitizeMessageShape(value.messageShape),
+        optionsFingerprint: sanitizeFingerprint(value.optionsFingerprint, value.options, fingerprintRawOptions),
+        stream: booleanOrNull(value.stream),
+        thinkConfigured: booleanOrNull(value.thinkConfigured),
+        keepAliveConfigured: booleanOrNull(value.keepAliveConfigured),
+    };
+}
+
+function sanitizeScoredCandidates(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 20).map((entry) => ({
+        host: normalizeHostKey(entry?.host),
+        name: operationalIdentifier(entry?.name, 100),
+        score: finiteNumber(entry?.score),
+        reasons: [],
+    }));
+}
+
+function sanitizeRecommendation(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const scheduler = value.scheduler && typeof value.scheduler === 'object'
+        ? {
+            host: normalizeHostKey(value.scheduler.host),
+            hostUrl: safeOriginUrl(value.scheduler.hostUrl),
+            reason: null,
+            confidence: enumValue(value.scheduler.confidence, new Set(['none', 'unknown', 'measured', 'low', 'medium', 'high'])),
+            warnings: [],
+            scored: sanitizeScoredCandidates(value.scheduler.scored || value.scheduler._scored),
+            blockedByBenchmarkClaim: booleanOrNull(value.scheduler.blockedByBenchmarkClaim),
+        }
+        : null;
+    return {
+        model: operationalIdentifier(value.model),
+        host: normalizeHostKey(value.host),
+        hostUrl: safeOriginUrl(value.hostUrl),
+        source: normalizeSelectionSource(value.source),
+        reason: null,
+        claimId: operationalIdentifier(value.claimId, 100),
+        claimExpiresAt: safeIsoTimestamp(value.claimExpiresAt),
+        scheduler,
+    };
+}
+
+function sanitizeInferenceContract(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const artifact = value.artifact && typeof value.artifact === 'object'
+        ? {
+            model: operationalIdentifier(value.artifact.model),
+            hostId: operationalIdentifier(value.artifact.hostId, 64),
+            host: safeOriginUrl(value.artifact.host),
+            digest: operationalIdentifier(value.artifact.digest, 128),
+            runtimeFingerprint: operationalIdentifier(value.artifact.runtimeFingerprint, 128),
+            registryId: operationalIdentifier(value.artifact.registryId, 100),
+            registryDigest: operationalIdentifier(value.artifact.registryDigest, 128),
+            registryQualified: booleanOrNull(value.artifact.registryQualified),
+            identityQualified: booleanOrNull(value.artifact.identityQualified),
+            identitySource: enumValue(value.artifact.identitySource, new Set(['core_registry+ollama_tags', 'unresolved'])),
+            matchedProfile: operationalIdentifier(value.artifact.matchedProfile, 200),
+            hostName: operationalIdentifier(value.artifact.hostName, 100),
+        }
+        : null;
+    const qualification = value.qualification && typeof value.qualification === 'object'
+        ? {
+            state: enumValue(value.qualification.state, new Set(['available', 'profiled', 'benchmarked', 'qualified', 'unknown'])),
+            qualified: booleanOrNull(value.qualification.qualified),
+            stale: booleanOrNull(value.qualification.stale),
+            exactArtifact: booleanOrNull(value.qualification.exactArtifact),
+            source: enumValue(value.qualification.source, new Set(['benchmark_model_profile', 'fallback'])),
+        }
+        : null;
+    return {
+        version: value.version === 'agentx.inference-contract.v1' ? value.version : null,
+        artifact,
+        qualification,
+    };
+}
+
+/**
+ * Preserve the documented routing evidence while refusing every unrecognized
+ * field. `routingTrace` predates RouteDecision and was historically free-form;
+ * a recursive denylist therefore cannot provide a payload-free contract.
+ * Runtime option objects are never retained, only equality fingerprints.
+ */
+function sanitizeRoutingTrace(trace, { fingerprintRawOptions = true } = {}) {
+    if (!trace || typeof trace !== 'object' || Array.isArray(trace)) return null;
+    const request = trace.request && typeof trace.request === 'object'
+        ? {
+            requestedModel: operationalIdentifier(trace.request.requestedModel),
+            taskType: operationalIdentifier(trace.request.taskType, 64),
+            hostOverride: safeOriginUrl(trace.request.hostOverride),
+            callerDetail: null,
+            lane: enumValue(trace.request.lane, new Set(['direct', 'interactive', 'automated'])),
+            laneRoutesTasks: booleanOrNull(trace.request.laneRoutesTasks),
+            crossModelFallbackOptIn: booleanOrNull(trace.request.crossModelFallbackOptIn),
+            routeManaged: booleanOrNull(trace.request.routeManaged),
+            summary: sanitizeRequestSummary(trace.request.summary, fingerprintRawOptions),
+        }
+        : null;
+    const lane = trace.lane && typeof trace.lane === 'object'
+        ? {
+            name: enumValue(trace.lane.name, new Set(['direct', 'interactive', 'automated'])),
+            route: booleanOrNull(trace.lane.route),
+            admit: booleanOrNull(trace.lane.admit),
+            recordInferenceSync: booleanOrNull(trace.lane.recordInferenceSync),
+            alert: trace.lane.alert === true || trace.lane.alert === false || trace.lane.alert === 'error-only'
+                ? trace.lane.alert
+                : null,
+        }
+        : null;
+    const selected = trace.selected && typeof trace.selected === 'object'
+        ? {
+            model: operationalIdentifier(trace.selected.model),
+            hostKey: normalizeHostKey(trace.selected.hostKey),
+            hostUrl: safeOriginUrl(trace.selected.hostUrl),
+            routingSource: normalizeSelectionSource(trace.selected.routingSource),
+        }
+        : null;
+    const artifactResolution = trace.artifactResolution && typeof trace.artifactResolution === 'object'
+        ? {
+            source: enumValue(trace.artifactResolution.source, new Set([
+                'exact_artifact', 'verified_cross_model_fallback', 'verified_degraded_fallback'
+            ])),
+            requested: operationalIdentifier(trace.artifactResolution.requested),
+            resolved: operationalIdentifier(trace.artifactResolution.resolved),
+            rewritten: booleanOrNull(trace.artifactResolution.rewritten),
+        }
+        : null;
+    const ollama = trace.ollama && typeof trace.ollama === 'object'
+        ? {
+            api: ['chat', 'generate'].includes(trace.ollama.api) ? trace.ollama.api : null,
+            endpoint: enumValue(trace.ollama.endpoint, new Set(['/api/chat', '/api/generate', '/api/embeddings'])),
+            url: safeOllamaEndpointUrl(trace.ollama.url),
+            stream: booleanOrNull(trace.ollama.stream),
+            thinkConfigured: booleanOrNull(trace.ollama.thinkConfigured),
+            keepAliveConfigured: booleanOrNull(trace.ollama.keepAliveConfigured),
+            optionsFingerprint: sanitizeFingerprint(
+                trace.ollama.optionsFingerprint,
+                trace.ollama.options || trace.ollama.runtimeOptions,
+                fingerprintRawOptions
+            ),
+        }
+        : null;
+    const difference = trace.difference && typeof trace.difference === 'object'
+        ? {
+            differsFromRecommendation: booleanOrNull(trace.difference.differsFromRecommendation),
+            reasons: [],
+        }
+        : null;
+
+    return {
+        version: finiteNumber(trace.version),
+        request,
+        lane,
+        configured: sanitizeTarget(trace.configured),
+        recommendation: sanitizeRecommendation(trace.recommendation),
+        selected,
+        artifactResolution,
+        inferenceContract: sanitizeInferenceContract(trace.inferenceContract),
+        ollama,
+        difference,
+        optionsFingerprint: sanitizeFingerprint(
+            trace.optionsFingerprint,
+            trace.options || trace.runtimeOptions,
+            fingerprintRawOptions
+        ),
+    };
 }
 
 function decisionForTelemetry(data = {}) {
@@ -63,6 +319,14 @@ function decisionForTelemetry(data = {}) {
             workItemId: data.workItemId,
             runtime: data.runtime,
             taskType: data.taskType,
+            selectionSource: data.selectionSource || data.routingTrace?.selected?.routingSource,
+            requestedPolicy: data.requestedPolicy,
+            effectivePolicy: data.effectivePolicy,
+            effectiveLane: data.effectiveLane,
+            policyDowngraded: data.policyDowngraded,
+            outcomeStage: data.outcomeStage,
+            outcomeCode: data.outcomeCode,
+            outcomeReasonCode: data.outcomeReasonCode,
             selectedModel: data.routedModel || data.model,
             selectedHost: data.routedHost,
             selectedHostUrl: data.routedHostUrl || data.host,
@@ -144,7 +408,7 @@ async function recordInference(data) {
             fallbackUsed: data.fallbackUsed || false,
             fallbackReason: data.fallbackReason || null,
             swapped: data.swapped || false,
-            routingTrace: data.routingTrace || null,
+            routingTrace: sanitizeRoutingTrace(data.routingTrace),
             routeDecision: decision,
             num_ctx: data.num_ctx != null ? data.num_ctx : null,
             num_ctx_source: data.num_ctx_source || null,
@@ -215,4 +479,5 @@ module.exports = {
     recordInference,
     decisionForTelemetry,
     sanitizedRouteDecision,
+    sanitizeRoutingTrace,
 };

@@ -84,10 +84,19 @@ describe('POST /api/inference/embed — dead-host failover', () => {
     expect(response.headers['x-routed-host']).toBe('http://primary:11434');
     expect(response.headers['x-agentx-fallback-used']).toBe('true');
 
-    // The dead host is recorded as an error, the healthy one as the success,
+    // The failed liveness probe is recorded as an error, the healthy one as the success,
     // so telemetry names the host that actually answered.
     expect(recordInference).toHaveBeenCalledWith(
-      expect.objectContaining({ host: 'http://secondary:11434', status: 'error' })
+      expect.objectContaining({
+        host: 'http://secondary:11434',
+        status: 'error',
+        routeDecision: expect.objectContaining({
+          outcome: expect.objectContaining({
+            code: 'upstream_error',
+            reasonCode: 'host_offline'
+          })
+        })
+      })
     );
     expect(recordInference).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -119,8 +128,33 @@ describe('POST /api/inference/embed — dead-host failover', () => {
     expect(response.body.message).toMatch(/unreachable|timed out/i);
   }, 10000);
 
+  it('keeps exhausted fallback timeout rows coherent with their decisions', async () => {
+    fetch.mockImplementation((url, opts) => {
+      if (url.includes('/api/tags')) return Promise.resolve({ ok: true, status: 200 });
+      return hangingFetch(url, opts);
+    });
+
+    await request(app)
+      .post('/api/inference/embed')
+      .send({ model: 'nomic-embed-text:v1.5', prompt: 'probe' })
+      .expect(502);
+
+    const rows = recordInference.mock.calls.map(([entry]) => entry);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.status === 'timeout')).toBe(true);
+    expect(rows[0].routeDecision.outcome).toEqual(expect.objectContaining({
+      code: 'upstream_timeout', reasonCode: 'pre_response_timeout'
+    }));
+    expect(rows.at(-1).routeDecision.outcome).toEqual(expect.objectContaining({
+      code: 'fallback_failed', reasonCode: 'pre_response_timeout'
+    }));
+  }, 10000);
+
   it('honours an explicit host override instead of failing over past it', async () => {
-    fetch.mockImplementation(hangingFetch);
+    fetch.mockImplementation((url, opts) => {
+      if (url.includes('/api/tags')) return Promise.resolve({ ok: true, status: 200 });
+      return hangingFetch(url, opts);
+    });
 
     await request(app)
       .post('/api/inference/embed')
@@ -134,6 +168,10 @@ describe('POST /api/inference/embed — dead-host failover', () => {
     // Only the pinned host should have been contacted — never primary.
     const hosts = [...new Set(fetch.mock.calls.map(([url]) => new URL(url).host))];
     expect(hosts).toEqual(['secondary:11434']);
+    const rows = recordInference.mock.calls.map(([entry]) => entry);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.status === 'timeout')).toBe(true);
+    expect(rows.every((row) => row.routeDecision.outcome.code === 'upstream_timeout')).toBe(true);
   }, 10000);
 
   it('lets a slow cold model load finish instead of aborting it', async () => {

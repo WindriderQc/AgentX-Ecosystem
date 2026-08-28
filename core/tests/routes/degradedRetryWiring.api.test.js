@@ -17,6 +17,13 @@ const fetch = require('node-fetch');
 
 jest.mock('node-fetch');
 
+jest.mock('../../config/logger', () => ({
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+  debug: jest.fn(),
+}));
+
 jest.mock('../../src/services/inferenceContractService', () => ({
   hasQualifiedThinkingCapability: jest.fn(() => false),
   resolveInferenceContract: jest.fn(),
@@ -103,6 +110,7 @@ jest.mock('../../src/services/buddyEvents', () => ({ emit: jest.fn() }));
 jest.mock('../../src/services/alertService', () => ({ getAlertService: jest.fn(() => null) }));
 
 const hostGate = require('../../src/services/hostGate');
+const logger = require('../../config/logger');
 const { recordInference } = require('../../src/services/modelRouter');
 const { resolveInferenceContract } = require('../../src/services/inferenceContractService');
 const hostPreferenceService = require('../../src/services/hostPreferenceService');
@@ -252,12 +260,13 @@ describe('degraded retry wiring (0523)', () => {
   test('flag OFF: the original error surfaces unchanged, with one telemetry row', async () => {
     mockPrimaryDownSecondaryUp();
 
-    await request(app)
+    const res = await request(app)
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(502);
 
     // Inert by default. Nothing retried, and no second host was contacted.
+    expect(res.headers['x-agentx-route-outcome']).toBe('fallback_refused');
     expect(recordInference).toHaveBeenCalledTimes(1);
     const contacted = fetch.mock.calls.map((c) => String(c[0]));
     expect(contacted.some((u) => u.includes('secondary'))).toBe(false);
@@ -279,6 +288,7 @@ describe('degraded retry wiring (0523)', () => {
 
     expect(res.headers['x-agentx-degraded']).toBe('true');
     expect(res.headers['x-agentx-degraded-reason']).toBe('connection_failure');
+    expect(res.headers['x-agentx-route-outcome']).toBe('fallback_succeeded');
     expect(res.headers['x-routed-host-key']).toBe('secondary');
     expect(res.headers['x-agentx-response-mode']).toBe('normalized');
     expect(res.body.agentx_normalized).toBe(true);
@@ -314,7 +324,24 @@ describe('degraded retry wiring (0523)', () => {
       routedHostUrl: 'http://secondary:11434',
       tokensIn: 7,
       tokensOut: 3,
+      routeDecision: expect.objectContaining({
+        selectionSource: 'model_router+degraded-fallback',
+        outcome: {
+          stage: 'fallback',
+          code: 'fallback_succeeded',
+          reasonCode: 'connection_failure',
+        },
+      }),
     }));
+    expect(logger.info).toHaveBeenCalledWith(
+      '[InferenceProxy] route outcome',
+      expect.objectContaining({
+        outcomeCode: 'fallback_succeeded',
+        routeDecision: expect.objectContaining({
+          actual: expect.objectContaining({ host: 'secondary', hostUrl: 'http://secondary:11434' })
+        })
+      })
+    );
   });
 
   test.each([
@@ -342,13 +369,17 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryHttpSecondaryUp(500, 'generation failed');
 
-    await request(app)
+    const res = await request(app)
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(500);
 
+    expect(res.headers['x-agentx-route-outcome']).toBe('fallback_refused');
     expect(fetch.mock.calls.some(([url]) => String(url).includes('secondary'))).toBe(false);
     expect(recordInference).toHaveBeenCalledTimes(1);
+    expect(recordInference.mock.calls[0][0].routeDecision.outcome).toEqual(expect.objectContaining({
+      code: 'upstream_error', reasonCode: 'upstream_http_500'
+    }));
   });
 
   test.each([
@@ -676,6 +707,7 @@ describe('degraded retry wiring (0523)', () => {
     // Replacing it with whatever the fallback hit would send an operator
     // chasing the wrong host.
     expect(res.body.message).toContain('primary connection refused');
+    expect(res.headers['x-agentx-route-outcome']).toBe('fallback_failed');
     expect(recordInference).toHaveBeenCalledTimes(2);
     expect(recordInference).toHaveBeenNthCalledWith(2, expect.objectContaining({
       status: 'error',
@@ -683,6 +715,96 @@ describe('degraded retry wiring (0523)', () => {
       fallbackUsed: true,
       routedHostUrl: 'http://secondary:11434',
       error: 'secondary connection refused',
+      routeDecision: expect.objectContaining({
+        outcome: {
+          stage: 'fallback',
+          code: 'fallback_failed',
+          reasonCode: 'connection_failure',
+        },
+      }),
+    }));
+    const fallbackFailureLog = logger.info.mock.calls.find(([message, details]) => (
+      message === '[InferenceProxy] route outcome'
+      && details?.outcomeCode === 'fallback_failed'
+    ));
+    expect(fallbackFailureLog?.[1]?.routeDecision).toMatchObject({
+      actual: { model: 'test-model', host: 'secondary', hostUrl: 'http://secondary:11434' },
+      outcome: { stage: 'fallback', code: 'fallback_failed' },
+    });
+  });
+
+  test('flag ON: a fallback timeout keeps the original response but records timeout truthfully', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    fetch.mockImplementation((url, opts = {}) => {
+      if (typeof url === 'string' && url.includes('/api/show')) {
+        const requested = JSON.parse(opts.body || '{}').name;
+        return Promise.resolve({
+          ok: url.includes('secondary') && requested === 'test-model',
+          status: url.includes('secondary') && requested === 'test-model' ? 200 : 404,
+        });
+      }
+      if (String(url).includes('secondary')) {
+        return Promise.reject(Object.assign(new Error('secondary timed out'), { name: 'AbortError' }));
+      }
+      return Promise.reject(new Error('primary connection refused'));
+    });
+
+    const res = await request(app)
+      .post('/api/inference/generate')
+      .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
+      .expect(502);
+
+    expect(res.body).toEqual({ status: 'error', message: 'primary connection refused' });
+    expect(res.headers['x-agentx-route-outcome']).toBe('fallback_failed');
+    expect(recordInference).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      status: 'timeout',
+      fallbackReason: 'connection_failure',
+      error: 'secondary timed out',
+      routeDecision: expect.objectContaining({
+        fallbackReason: 'connection_failure',
+        degradedReason: 'connection_failure',
+        outcome: {
+          stage: 'fallback',
+          code: 'fallback_failed',
+          reasonCode: 'pre_response_timeout',
+        },
+      }),
+    }));
+  });
+
+  test('flag ON: a fallback HTTP failure records its own safe status reason', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    fetch.mockImplementation((url, opts = {}) => {
+      if (typeof url === 'string' && url.includes('/api/show')) {
+        const requested = JSON.parse(opts.body || '{}').name;
+        return Promise.resolve({
+          ok: url.includes('secondary') && requested === 'test-model',
+          status: url.includes('secondary') && requested === 'test-model' ? 200 : 404,
+        });
+      }
+      if (String(url).includes('secondary')) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          text: () => Promise.resolve(JSON.stringify({ error: 'secondary unavailable' })),
+        });
+      }
+      return Promise.reject(new Error('primary connection refused'));
+    });
+
+    const res = await request(app)
+      .post('/api/inference/generate')
+      .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
+      .expect(502);
+
+    expect(res.body.message).toBe('primary connection refused');
+    expect(res.headers['x-agentx-route-outcome']).toBe('fallback_failed');
+    expect(recordInference).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      status: 'error',
+      fallbackReason: 'connection_failure',
+      routeDecision: expect.objectContaining({
+        outcome: expect.objectContaining({ reasonCode: 'upstream_http_503' }),
+      }),
     }));
   });
 });

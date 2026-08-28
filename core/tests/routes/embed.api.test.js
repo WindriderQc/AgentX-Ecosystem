@@ -213,6 +213,10 @@ describe('RouteDecision attribution on the embed path (0540)', () => {
       callerDetail: 'rag/ingest/chunk'
     });
     expect(decision.intent.mode).toBe('explicit_model');
+    expect(decision.selectionSource).toBe('model_target');
+    expect(decision.outcome).toEqual(expect.objectContaining({
+      stage: 'execution', code: 'execution_succeeded'
+    }));
     expect(decision.selected.model).toBe('nomic-embed-text:v1.5');
     expect(decision.primary.hostUrl).toBe('http://primary:11434');
     expect(decision.selected.hostUrl).toBe('http://primary:11434');
@@ -253,13 +257,20 @@ describe('RouteDecision attribution on the embed path (0540)', () => {
     expect(errorRow.routeDecision).toBeTruthy();
     expect(errorRow.routeDecision.selected.hostUrl).toBe('http://primary:11434');
     expect(errorRow.routeDecision.fallbackUsed).toBe(false);
+    expect(errorRow.routeDecision.selectionSource).toBe('model_target');
+    expect(errorRow.routeDecision.outcome).toEqual(expect.objectContaining({
+      stage: 'execution', code: 'upstream_error', reasonCode: 'connection_failure'
+    }));
 
     const successRow = rows.find(entry => entry.status === 'success');
     expect(successRow).toBeTruthy();
     const decision = successRow.routeDecision;
     expect(decision).toBeTruthy();
     expect(decision.fallbackUsed).toBe(true);
-    expect(decision.fallbackReason).toContain('ECONNREFUSED');
+    expect(decision.fallbackReason).toBe('connection_failure');
+    expect(decision.outcome).toEqual(expect.objectContaining({
+      stage: 'fallback', code: 'fallback_succeeded', reasonCode: 'connection_failure'
+    }));
     expect(decision.primary.hostUrl).toBe('http://primary:11434');
     expect(decision.selected.hostUrl).toBe('http://127.0.0.1:11434');
     expect(decision.attempt).toBe(2);
@@ -291,6 +302,8 @@ describe('RouteDecision attribution on the embed path (0540)', () => {
     // Three candidates configured under jest (primary + 2 setup-env hosts),
     // all rejected before the terminal row is written.
     expect(terminalRow.routeDecision.rejections).toHaveLength(3);
+    expect(terminalRow.routeDecision.outcome.code).toBe('fallback_failed');
+    expect(terminalRow.routeDecision.outcome.reasonCode).toBe('host_offline');
     expect(JSON.stringify(terminalRow.routeDecision)).not.toContain('dead fleet probe');
   });
 });

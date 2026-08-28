@@ -1,4 +1,5 @@
 const InferenceLog = require('../../models/InferenceLog');
+const { projectInferenceLog } = require('./routing/inferenceLogReadProjection');
 
 // The top-line routing signal is scoped to interactive/generative traffic.
 // Embeddings are high-frequency and intentionally favor their own host, so
@@ -7,29 +8,30 @@ const TRUSTED_ROUTING_CALLERS = ['chat', 'proxy'];
 
 function observedState(intentState, latest, failoverCount) {
   const intent = intentState || {};
-  const fallbackUsed = latest?.fallbackUsed === true;
-  const currentHost = latest?.host || intent.currentHost || intent.primaryHost || null;
+  const projectedLatest = projectInferenceLog(latest);
+  const fallbackUsed = projectedLatest?.fallbackUsed === true;
+  const currentHost = projectedLatest?.host || intent.currentHost || intent.primaryHost || null;
 
   return {
     currentHost,
     isFailedOver: fallbackUsed,
-    failoverTimestamp: fallbackUsed ? latest.timestamp : null,
-    reason: fallbackUsed ? latest.fallbackReason || 'actual_route_fallback' : null,
+    failoverTimestamp: fallbackUsed ? projectedLatest.timestamp : null,
+    reason: fallbackUsed ? projectedLatest.fallbackReason || 'actual_route_fallback' : null,
     failoverCount: Number(failoverCount) || 0,
     primaryHost: intent.primaryHost || null,
     secondaryHost: intent.secondaryHost || null,
     tertiaryHost: intent.tertiaryHost || null,
     authority: 'inference_log',
     statePersisted: true,
-    observedRequest: latest ? {
-      id: latest._id ? String(latest._id) : null,
-      caller: latest.caller || null,
-      model: latest.model || null,
-      actualHost: latest.host || null,
-      requestedHost: latest.routedHostUrl || null,
+    observedRequest: projectedLatest ? {
+      id: projectedLatest._id || null,
+      caller: projectedLatest.caller || null,
+      model: projectedLatest.model || null,
+      actualHost: projectedLatest.host || null,
+      requestedHost: projectedLatest.routedHostUrl || null,
       fallbackUsed,
-      fallbackReason: latest.fallbackReason || null,
-      timestamp: latest.timestamp || null
+      fallbackReason: projectedLatest.fallbackReason || null,
+      timestamp: projectedLatest.timestamp || null
     } : null,
     requestedIntent: {
       currentHost: intent.currentHost || null,

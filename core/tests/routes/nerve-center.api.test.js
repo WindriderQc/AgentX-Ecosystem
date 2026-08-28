@@ -21,11 +21,13 @@ const mockSort = jest.fn(() => ({ limit: mockLimit }));
 const mockFind = jest.fn(() => ({ sort: mockSort }));
 const mockLatestLean = jest.fn();
 const mockLatestSort = jest.fn(() => ({ lean: mockLatestLean }));
+const mockAggregate = jest.fn();
 
 jest.mock('../../models/InferenceLog', () => ({
   find: (...args) => mockFind(...args),
   findOne: jest.fn(() => ({ sort: mockLatestSort })),
-  countDocuments: jest.fn(() => Promise.resolve(0))
+  countDocuments: jest.fn(() => Promise.resolve(0)),
+  aggregate: (...args) => mockAggregate(...args)
 }));
 
 jest.mock('../../models/RouterTaskConfig', () => ({
@@ -167,6 +169,7 @@ describe('Nerve Center API Routes', () => {
     // Default mock returns
     mockLean.mockResolvedValue([]);
     mockLatestLean.mockResolvedValue(null);
+    mockAggregate.mockResolvedValue([]);
     alertService.getRecentAlerts.mockResolvedValue([]);
     hostPrefService.getAll.mockResolvedValue([]);
     hostPrefService.get.mockResolvedValue(null);
@@ -247,6 +250,29 @@ describe('Nerve Center API Routes', () => {
       ]);
     });
 
+    it('uses the shared payload-free projection for legacy recent routing rows', async () => {
+      const secret = 'LEGACY_NERVE_SECRET_d16b';
+      mockLean.mockResolvedValue([{
+        _id: 'legacy-row',
+        model: 'model:1',
+        status: 'error',
+        error: `upstream echoed ${secret}`,
+        payload: secret,
+        routingTrace: {
+          request: { requestedModel: 'model:1', preview: { prompt: { preview: secret } }, query: secret },
+          selected: { routingSource: 'model_router', hostile: secret },
+        },
+      }]);
+
+      const res = await request(app).get('/api/nerve-center/intelligence').expect(200);
+      const row = res.body.data.recentRouting[0];
+      expect(JSON.stringify(row)).not.toContain(secret);
+      expect(row).not.toHaveProperty('payload');
+      expect(row.error).toBeNull();
+      expect(row.routingTrace.request).not.toHaveProperty('preview');
+      expect(row.routingTrace.selected).toEqual(expect.objectContaining({ routingSource: 'model_router' }));
+    });
+
     it('returns routing with failover status properties', async () => {
       const res = await request(app)
         .get('/api/nerve-center/intelligence')
@@ -269,7 +295,7 @@ describe('Nerve Center API Routes', () => {
         host: 'http://secondary:11434',
         routedHostUrl: 'http://primary:11434',
         fallbackUsed: true,
-        fallbackReason: 'primary unreachable',
+        fallbackReason: 'connection_failure',
         status: 'success',
         timestamp: new Date('2026-07-23T12:00:00.000Z')
       });
@@ -281,7 +307,7 @@ describe('Nerve Center API Routes', () => {
       expect(res.body.data.routing).toEqual(expect.objectContaining({
         currentHost: 'http://secondary:11434',
         isFailedOver: true,
-        reason: 'primary unreachable',
+        reason: 'connection_failure',
         authority: 'inference_log'
       }));
       expect(res.body.data.routing.observedRequest).toEqual(expect.objectContaining({
@@ -554,6 +580,42 @@ describe('Nerve Center API Routes', () => {
       expect(mockSort).toHaveBeenCalledWith({ timestamp: -1 });
     });
 
+    it('sanitizes legacy Mixed fields before returning routing rows', async () => {
+      const secret = 'LEGACY_ROUTING_LOG_SECRET_90f2';
+      mockLean.mockResolvedValue([{
+        host: `http://primary:11434/${secret}`,
+        callerDetail: secret,
+        model: 'model:1',
+        routingTrace: {
+          request: {
+            requestedModel: 'model:1',
+            hostOverride: `http://primary:11434/${secret}`,
+            requestBody: { instruction: secret },
+          },
+          selected: {
+            routingSource: 'model_router',
+            hostUrl: `http://primary:11434/${secret}`,
+          },
+          ollama: {
+            endpoint: '/api/generate',
+            url: `http://primary:11434/api/generate/${secret}`,
+            options: { stop: [secret] },
+          },
+        },
+        transcript: secret,
+      }]);
+
+      const res = await request(app).get('/api/nerve-center/routing/log').expect(200);
+      expect(JSON.stringify(res.body.data)).not.toContain(secret);
+      expect(res.body.data[0]).not.toHaveProperty('transcript');
+      expect(res.body.data[0].host).toBeNull();
+      expect(res.body.data[0].callerDetail).toBeNull();
+      expect(res.body.data[0].routingTrace.request.hostOverride).toBeNull();
+      expect(res.body.data[0].routingTrace.selected.hostUrl).toBeNull();
+      expect(res.body.data[0].routingTrace.ollama.url).toBeNull();
+      expect(res.body.data[0].routingTrace.ollama.optionsFingerprint).toBeNull();
+    });
+
     it('respects ?limit=5', async () => {
       mockLean.mockResolvedValue([]);
 
@@ -633,6 +695,24 @@ describe('Nerve Center API Routes', () => {
 
       expect(res.body.status).toBe('error');
       expect(res.body.message).toBe('query failed');
+    });
+  });
+
+  describe('GET /inference/activity privacy boundary', () => {
+    it('sanitizes legacy rows before adding host identity', async () => {
+      const secret = 'LEGACY_ACTIVITY_SECRET_3a71';
+      mockLean.mockResolvedValue([{
+        host: 'http://primary:11434',
+        hostKey: 'primary',
+        model: 'model:1',
+        routingTrace: { payload: secret, selected: { routingSource: 'model_router' } },
+      }]);
+
+      const res = await request(app).get('/api/nerve-center/inference/activity').expect(200);
+      const row = res.body.data.logs[0];
+      expect(JSON.stringify(row)).not.toContain(secret);
+      expect(row.hostIdentity).toBeDefined();
+      expect(row.routingTrace).not.toHaveProperty('payload');
     });
   });
 
@@ -909,7 +989,7 @@ describe('Nerve Center API Routes', () => {
           model: 'qwen3:14b',
           hostKey: 'primary',
           fallbackUsed: true,
-          fallbackReason: 'primary down',
+          fallbackReason: 'connection_failure',
           timestamp: new Date().toISOString()
         }
       ]);
@@ -921,7 +1001,27 @@ describe('Nerve Center API Routes', () => {
       const event = res.body.data[0];
       expect(event.type).toBe('failover');
       expect(event.title).toContain('Failover');
-      expect(event.description).toBe('primary down');
+      expect(event.description).toBe('connection_failure');
+    });
+
+    it('removes hostile legacy error and fallback prose from inference events', async () => {
+      const secret = 'legacy health payload secret@example.test /private/path sk-token';
+      alertService.getRecentAlerts.mockResolvedValue([]);
+      mockLean.mockResolvedValue([{
+        _id: 'log-private',
+        status: 'error',
+        model: 'model:1',
+        host: 'primary',
+        fallbackUsed: true,
+        fallbackReason: secret,
+        error: secret,
+        timestamp: new Date().toISOString()
+      }]);
+
+      const res = await request(app).get('/api/nerve-center/health/feed').expect(200);
+      expect(JSON.stringify(res.body)).not.toContain(secret);
+      expect(res.body.data[0].description).toBe('');
+      expect(res.body.data[0].expandable).toBe(false);
     });
 
     it('timeout inference events have warning severity', async () => {

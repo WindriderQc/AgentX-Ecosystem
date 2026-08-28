@@ -8,6 +8,7 @@ const { extractResponse, buildOllamaPayload } = require('../../src/helpers/ollam
 const { sanitizeOptions, resolveTarget } = require('../../src/helpers/ollamaUtils');
 const { routeRequest, recordInference } = require('../../src/services/modelRouter');
 const hostPreferenceService = require('../../src/services/hostPreferenceService');
+const { resolveInferenceContract } = require('../../src/services/inferenceContractService');
 const { calculateMessageCost, calculateConversationCost } = require('../../src/services/costCalculator');
 const logger = require('../../config/logger');
 
@@ -52,6 +53,10 @@ jest.mock('../../src/services/hostPreferenceService', () => {
         resolvePinnedRuntimeOptions: primitives.resolvePinnedRuntimeOptions
     };
 });
+jest.mock('../../src/services/inferenceContractService', () => ({
+    hasQualifiedThinkingCapability: jest.fn(() => false),
+    resolveInferenceContract: jest.fn()
+}));
 jest.mock('../../src/services/costCalculator');
 jest.mock('../../config/logger');
 
@@ -134,6 +139,7 @@ describe('chatService', () => {
         // Routing defaults
         routeRequest.mockResolvedValue({ routed: false, model: 'llama2', target: 'local' });
         hostPreferenceService.getByHost.mockResolvedValue(null);
+        resolveInferenceContract.mockResolvedValue({ version: 'agentx.inference-contract.v1' });
         // Cost calculation defaults
         calculateMessageCost.mockResolvedValue(mockCost);
         calculateConversationCost.mockReturnValue({ sum: 0.0002 });
@@ -384,7 +390,12 @@ describe('chatService', () => {
             }));
             expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
                 status: 'success',
-                routeDecision: decision
+                routeDecision: expect.objectContaining({
+                    outcome: expect.objectContaining({
+                        stage: 'execution',
+                        code: 'execution_succeeded'
+                    })
+                })
             }));
         });
 
@@ -401,7 +412,66 @@ describe('chatService', () => {
 
             expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
                 status: 'error',
-                routeDecision: decision
+                routeDecision: expect.objectContaining({
+                    outcome: expect.objectContaining({
+                        stage: 'execution',
+                        code: 'upstream_error'
+                    })
+                })
+            }));
+        });
+
+        it('records a wrapped abort as a timeout with a terminal decision', async () => {
+            routeRequest.mockResolvedValue({
+                routed: false,
+                model: 'llama2',
+                target: 'local',
+                decision: { decisionVersion: 1, selected: { model: 'llama2' } }
+            });
+            mockFetch.mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+
+            await expect(handleChatRequest({
+                userId: 'user123',
+                model: 'llama2',
+                message: 'hi'
+            })).rejects.toMatchObject({ code: 'OLLAMA_TIMEOUT' });
+
+            expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
+                status: 'timeout',
+                routeDecision: expect.objectContaining({
+                    outcome: expect.objectContaining({ code: 'upstream_timeout' })
+                })
+            }));
+        });
+
+        it('classifies contract resolution failures as pre-dispatch telemetry', async () => {
+            routeRequest.mockResolvedValue({
+                routed: false,
+                model: 'llama2',
+                target: 'local',
+                decision: { decisionVersion: 1, selected: { model: 'llama2' } }
+            });
+            resolveInferenceContract.mockRejectedValueOnce(new Error('contract store unavailable'));
+
+            await expect(handleChatRequest({
+                userId: 'user123',
+                model: 'llama2',
+                message: 'hi'
+            })).rejects.toThrow('contract store unavailable');
+
+            expect(mockFetch).not.toHaveBeenCalledWith(
+                expect.stringContaining('/api/chat'),
+                expect.anything()
+            );
+            expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
+                status: 'error',
+                routeDecision: expect.objectContaining({
+                    outcome: {
+                        stage: 'selection',
+                        code: 'pre_dispatch_error',
+                        reasonCode: 'inference_pre_dispatch_error'
+                    }
+                })
             }));
         });
     });

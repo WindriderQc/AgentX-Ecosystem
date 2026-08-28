@@ -34,6 +34,10 @@ const portalStatusService = require('../src/services/portalStatusService');
 const systemHealth = require('../src/systemHealth');
 const { calculateMessageCost } = require('../src/services/costCalculator');
 const InferenceLog = require('../models/InferenceLog');
+const {
+  projectInferenceLog,
+  projectInferenceLogs
+} = require('../src/services/routing/inferenceLogReadProjection');
 const { describeHost } = require('../src/services/hostIdentityService');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { projectHealthFeed } = require('../src/services/alertFeedProjection');
@@ -69,7 +73,7 @@ async function buildIntelligenceSummary() {
     hostPreferences,
     alerts: activeAlertSnapshot.alerts,
     alertSummary: activeAlertSnapshot.summary,
-    recentRouting: routingLog
+    recentRouting: projectInferenceLogs(routingLog)
   };
 }
 
@@ -359,7 +363,7 @@ router.get('/routing/log', async (req, res) => {
       .limit(limit)
       .lean();
 
-    res.json({ status: 'success', data: logs });
+    res.json({ status: 'success', data: projectInferenceLogs(logs) });
   } catch (err) {
     logger.error('[NerveCenter] routing log fetch failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });
@@ -501,7 +505,7 @@ router.get('/health/feed', async (req, res) => {
 
     const projection = projectHealthFeed({
       alerts: [...activeAlertSnapshot.alerts, ...recentAlertSnapshot.alerts],
-      inferenceLogs: errorLogs || [],
+      inferenceLogs: projectInferenceLogs(errorLogs || []),
       limit
     });
 
@@ -643,10 +647,13 @@ router.get('/inference/activity', async (req, res) => {
       .sort({ timestamp: -1 })
       .limit(limit)
       .lean();
-    const presentedLogs = logs.map(log => ({
-      ...log,
-      hostIdentity: describeHost(log.host, log.hostKey)
-    }));
+    const presentedLogs = logs.map(log => {
+      const projected = projectInferenceLog(log);
+      return {
+        ...projected,
+        hostIdentity: describeHost(projected?.host, projected?.hostKey)
+      };
+    });
 
     // Aggregate stats for last hour
     const oneHourAgo = new Date(Date.now() - 3600000);

@@ -169,12 +169,18 @@ describe('POST /api/inference/generate — fetch timeout', () => {
     expect(entry.inFlight).toBe(0);
     expect(entry.totalReleased).toBe(1);
 
-    // recordInference should have been called with error status
+    // Timeout is a first-class terminal telemetry status and outcome.
     expect(recordInference).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'error',
+        status: 'timeout',
         error: expect.stringContaining('timeout'),
-        estimatedInputTokensAtDispatch: expect.any(Number)
+        estimatedInputTokensAtDispatch: expect.any(Number),
+        routeDecision: expect.objectContaining({
+          outcome: expect.objectContaining({
+            code: 'upstream_timeout',
+            reasonCode: 'fetch_timeout_500ms'
+          })
+        })
       })
     );
     expect(recordInference.mock.calls.at(-1)[0].estimatedInputTokensAtDispatch).toBeGreaterThan(0);
@@ -272,6 +278,9 @@ describe('POST /api/inference/generate — fetch timeout', () => {
     expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
       status: 'error',
       error: 'Inference request cancelled: caller disconnected',
+      routeDecision: expect.objectContaining({
+        outcome: expect.objectContaining({ code: 'caller_disconnected' }),
+      }),
     }));
   });
 
@@ -324,6 +333,9 @@ describe('POST /api/inference/generate — fetch timeout', () => {
       expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
         status: 'error',
         error: 'Inference request cancelled: caller disconnected',
+        routeDecision: expect.objectContaining({
+          outcome: expect.objectContaining({ code: 'caller_disconnected' }),
+        }),
       }));
     } finally {
       release1();
