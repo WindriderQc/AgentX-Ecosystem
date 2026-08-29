@@ -3,6 +3,7 @@
 const {
   EXECUTION_PROFILES,
   fingerprint,
+  normalizeWorkerEnvelope,
   normalizeWorkerReceipt,
   projectWorkerReceiptPublic,
 } = require('../../../../shared/workerContract');
@@ -128,16 +129,30 @@ function summarizeTuple(rows) {
 
 function compareWorkerEvidence(raw = {}) {
   const profile = requiredProfile(raw.profile);
-  const receipts = (Array.isArray(raw.receipts) ? raw.receipts : []).map((receipt) => normalizeWorkerReceipt(receipt));
-  if (receipts.length < 2) {
-    throw comparisonError('WORKER_RECEIPTS_REQUIRED', 'a worker evidence comparison requires at least two receipts');
+  const evidence = Array.isArray(raw.evidence) ? raw.evidence : [];
+  if (evidence.length < 2) {
+    throw comparisonError('WORKER_EVIDENCE_REQUIRED', 'a worker evidence comparison requires at least two envelope-bound receipts');
   }
+  const receipts = evidence.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw comparisonError('WORKER_EVIDENCE_ENTRY_REQUIRED', `evidence[${index}] must be an object`);
+    }
+    const envelope = normalizeWorkerEnvelope(entry.envelope);
+    return normalizeWorkerReceipt(entry.receipt, { envelope });
+  });
   if (receipts.some((receipt) => receipt.executionProfile !== profile)) {
     throw comparisonError('PROFILE_MISMATCH', 'every receipt executionProfile must match the comparison profile');
   }
 
   let portableBaselineFingerprint = null;
   if (profile === 'portable') {
+    const harnesses = new Set(receipts.map((receipt) => fingerprint(receipt.identity.harness)));
+    if (harnesses.size < 2) {
+      throw comparisonError(
+        'PORTABLE_HARNESSES_REQUIRED',
+        'portable comparisons require at least two distinct exact harness identities'
+      );
+    }
     const baselines = new Set(receipts.map((receipt) => fingerprint(portableBaseline(receipt))));
     if (baselines.size !== 1) {
       throw comparisonError(

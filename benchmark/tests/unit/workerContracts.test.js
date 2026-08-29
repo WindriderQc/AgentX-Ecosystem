@@ -79,6 +79,41 @@ describe('WorkerReceipt v1', () => {
     }, { envelope })).toThrow(expect.objectContaining({ code: 'RECEIPT_FINGERPRINT_MISMATCH' }));
   });
 
+  test('rejects a success that does not satisfy its result contract', () => {
+    const envelope = normalizeWorkerEnvelope(envelopeInput());
+    const raw = receiptInput(envelope);
+    raw.result.contractSatisfied = false;
+    expect(() => normalizeWorkerReceipt(raw, { envelope }))
+      .toThrow(expect.objectContaining({ code: 'SUCCESS_RESULT_UNSATISFIED' }));
+  });
+
+  test('rejects a success that exceeds an envelope budget', () => {
+    const envelope = normalizeWorkerEnvelope(envelopeInput());
+    const raw = receiptInput(envelope);
+    raw.usage.durationMs = envelope.budgets.maxDurationMs + 1;
+    expect(() => normalizeWorkerReceipt(raw, { envelope }))
+      .toThrow(expect.objectContaining({ code: 'SUCCESS_EXCEEDS_BUDGET' }));
+  });
+
+  test('rejects a receipt that violates an exact envelope selection', () => {
+    const envelope = normalizeWorkerEnvelope(envelopeInput({
+      selection: {
+        harness: { id: 'harness-required', version: '1.0.0', constraints: [] },
+        model: { provider: 'provider-a', id: 'model-a', version: '2026-08', constraints: [] },
+      },
+    }));
+    expect(() => normalizeWorkerReceipt(receiptInput(envelope), { envelope }))
+      .toThrow(expect.objectContaining({ code: 'RECEIPT_SELECTION_MISMATCH' }));
+  });
+
+  test('rejects a success missing evidence required by the envelope', () => {
+    const envelope = normalizeWorkerEnvelope(envelopeInput());
+    const raw = receiptInput(envelope);
+    raw.evidence.tests = [];
+    expect(() => normalizeWorkerReceipt(raw, { envelope }))
+      .toThrow(expect.objectContaining({ code: 'SUCCESS_MISSING_EVIDENCE' }));
+  });
+
   test.each([
     ['harness', (raw) => { raw.identity.harness.version = '9.0.0'; }],
     ['adapter', (raw) => { raw.identity.adapter.version = '9.0.0'; }],
@@ -104,11 +139,14 @@ describe('WorkerReceipt v1', () => {
     raw.secret = 'bearer-secret';
     raw.transcript = [{ role: 'user', content: 'private conversation' }];
     raw.prompt = 'private prompt content';
-    raw.evidence.artifacts[0].path = 'C:\\Users\\private\\artifact.json';
+    raw.evidence.artifacts[0].path = 'X:\\fixture-private\\artifact.json';
+    raw.identity.environment.id = 'deployment-node-private';
+    raw.identity.environment.version = 'runtime-private';
     const projected = projectWorkerReceiptPublic(raw, { envelope });
     const serialized = JSON.stringify(projected);
-    expect(serialized).not.toMatch(/bearer-secret|private conversation|private prompt|Users|artifact\.json|transcript|secret/);
+    expect(serialized).not.toMatch(/bearer-secret|private conversation|private prompt|fixture-private|artifact\.json|transcript|secret|deployment-node-private|runtime-private/);
     expect(projected.identity.harness).toEqual({ name: 'harness-a', version: '1.2.3' });
+    expect(projected.identity.environment).toEqual({ fingerprint: 'c'.repeat(64) });
     expect(projected.evidence.artifacts[0]).toEqual({ id: 'artifact-001', digest: `sha256:${'e'.repeat(64)}` });
   });
 });

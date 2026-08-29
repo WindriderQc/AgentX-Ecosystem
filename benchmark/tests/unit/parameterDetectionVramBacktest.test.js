@@ -3,11 +3,13 @@
 const { estimateTotalVram } = require('../../src/services/parameterDetection');
 
 /**
- * Locks the VRAM estimator to the real `ollama ps` measurements documented in
- * estimateKvCacheBytes. The KV base factor (55 MiB/B/1K for <30B) and
- * estimateTotalVram's tiered overhead multiplier COMPOSE to match the measured
- * totals — if either half changes without the other, these back-tests break
- * before the drift ships as bad fit estimates.
+ * Calibration provenance: `ollama ps` reported 25 GB total allocation at 32K
+ * context and 45 GB at 65K for deepseek-r1:8b Q4_K_M. That change implies a
+ * raw total-allocation slope of roughly 78 MiB/B/1K, but 78 is not the KV base:
+ * estimateTotalVram also applies 30% overhead to weights plus KV at both points.
+ * The 55 MiB/B/1K base composes with that multiplier to estimate 23.9 GiB and
+ * 42.2 GiB. Using 78 as the base would count overhead twice and estimate about
+ * 57.6 GiB at 65K. These tests lock both halves of that calibration together.
  */
 describe('estimateTotalVram back-test against documented measurements', () => {
   const GB = 1024 ** 3;

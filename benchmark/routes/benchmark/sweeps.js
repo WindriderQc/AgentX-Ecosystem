@@ -109,13 +109,24 @@ router.post('/sweeps/run', async (req, res) => {
  *
  * Body: { lane, candidates:[{model,quality?,composite?,latencyMs?,tokensPerSec?,failures?,vramMiB?}],
  *         incumbent?, host?, weights?, guards? }
+ * `model` is required for every candidate. Promotion additionally requires an
+ * explicit incumbent and numeric composite/latencyMs/failures evidence for
+ * both the winner and incumbent; incomplete comparisons and score ties cannot
+ * promote. Candidate metrics, custom weights, and custom guards are
+ * type/range validated by the recommendation engine.
  */
 router.post('/sweeps/recommend', async (req, res) => {
     try {
         const rec = buildLaneRecommendation(req.body || {});
+        const ledgerInput = req.body?.ledger;
+        if (ledgerInput != null && (!ledgerInput || typeof ledgerInput !== 'object' || Array.isArray(ledgerInput))) {
+            const ledgerError = new Error('ledger must be an object');
+            ledgerError.statusCode = 400;
+            throw ledgerError;
+        }
         const ledgerDraft = formatLedgerEntry(rec, {
             date: new Date().toISOString().slice(0, 10),
-            ...(req.body?.ledger || {})
+            ...(ledgerInput || {})
         });
         res.json({ status: 'success', data: { ...rec, ledgerDraft } });
     } catch (err) {
@@ -133,7 +144,7 @@ router.post('/sweeps/recommend', async (req, res) => {
  * invalid recorded throughput. Returns a
  * per-host report + suggested re-profile payloads (NOT auto-run). The
  * missing-profile check additionally accepts `routedModelsByHost` as a JSON
- * query/body input when callers can supply current routing.
+ * query input when callers can supply current routing.
  */
 router.get('/sweeps/staleness', async (req, res) => {
     try {
@@ -160,8 +171,9 @@ router.get('/sweeps/staleness', async (req, res) => {
  * GET /api/benchmark/sweeps/intake?families=qwen,gemma&limit=10[&markdown=1]
  *
  * Discovers GGUF candidate models from HuggingFace and returns a prioritized
- * Backlog-D intake queue (fit/lane/host/priority — reuses the benchmark fit
- * math). Read-only: discovery only, deploys/benchmarks nothing.
+ * metadata-intake queue with parsed parameter/MoE fields. This HTTP adapter
+ * does not supply host VRAM/context, so fit, suggested host, and lane remain
+ * unassigned. Read-only: discovery only, deploys/benchmarks nothing.
  */
 router.get('/sweeps/intake', async (req, res) => {
     try {

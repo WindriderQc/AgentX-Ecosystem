@@ -132,6 +132,53 @@ describe('GET /api/pipeline/tasks', () => {
   });
 });
 
+describe('GET /api/pipeline/tasks/:id', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('returns the full task document for the detail drawer', async () => {
+    PipelineTask.findOne.mockReturnValue({
+      lean: async () => ({
+        pipelineId: '0326',
+        title: 'Expose the local task pipeline in AgentX UI',
+        status: 'review',
+        spec: '# full markdown body',
+        feedback: [{ by: 'codex', text: 'implemented' }],
+      }),
+    });
+
+    const res = await request(createApp())
+      .get('/api/pipeline/tasks/0326')
+      .expect(200);
+
+    expect(PipelineTask.findOne).toHaveBeenCalledWith({ pipelineId: '0326' });
+    expect(res.body.data.task.spec).toBe('# full markdown body');
+    expect(res.body.data.task.feedback).toHaveLength(1);
+  });
+
+  test('returns 404 for an unknown pipelineId', async () => {
+    PipelineTask.findOne.mockReturnValue({ lean: async () => null });
+
+    const res = await request(createApp())
+      .get('/api/pipeline/tasks/9999')
+      .expect(404);
+
+    expect(res.body.code).toBe('NOT_FOUND');
+  });
+
+  test('does not shadow the literal /tasks/next route', async () => {
+    pipelineTaskService.findNextEligibleTask.mockResolvedValue(null);
+
+    await request(createApp())
+      .get('/api/pipeline/tasks/next')
+      .expect(200);
+
+    expect(pipelineTaskService.findNextEligibleTask).toHaveBeenCalled();
+    expect(PipelineTask.findOne).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/pipeline/tasks/next', () => {
   beforeEach(() => {
     jest.clearAllMocks();

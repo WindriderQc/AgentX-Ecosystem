@@ -339,6 +339,24 @@ function normalizeReceiptIdentity(rawValue) {
   };
 }
 
+function verifyReceiptSelection(identity, envelope) {
+  const harness = envelope.selection.harness;
+  const model = envelope.selection.model;
+  const mismatches = [];
+  if (harness.id && harness.id !== identity.harness.name) mismatches.push('harness.id');
+  if (harness.version && harness.version !== identity.harness.version) mismatches.push('harness.version');
+  if (model.provider && model.provider !== identity.provider.name) mismatches.push('model.provider');
+  if (model.id && model.id !== identity.model.name) mismatches.push('model.id');
+  if (model.version && model.version !== identity.model.version) mismatches.push('model.version');
+  if (model.digest && model.digest !== identity.model.digest) mismatches.push('model.digest');
+  if (mismatches.length > 0) {
+    throw contractError(
+      'RECEIPT_SELECTION_MISMATCH',
+      `receipt identity does not match exact envelope selection: ${mismatches.join(', ')}`
+    );
+  }
+}
+
 function normalizeCountedEntries(values, name, fields) {
   const entries = (Array.isArray(values) ? values : []).map((value, index) => {
     const raw = object(value, `${name}[${index}]`);
@@ -391,8 +409,8 @@ function normalizeWorkerReceipt(rawValue = {}, options = {}) {
     policies: hexFingerprint(fingerprintsRaw.policies, 'fingerprints.policies'),
     envelope: hexFingerprint(fingerprintsRaw.envelope, 'fingerprints.envelope'),
   };
-  if (options.envelope) {
-    const envelope = normalizeWorkerEnvelope(options.envelope);
+  const envelope = options.envelope ? normalizeWorkerEnvelope(options.envelope) : null;
+  if (envelope) {
     const expected = {
       prompt: envelope.prompt.fingerprint,
       tools: envelope.tools.schemaFingerprint,
@@ -402,6 +420,7 @@ function normalizeWorkerReceipt(rawValue = {}, options = {}) {
     if (profile !== envelope.executionProfile || stableSerialize(fingerprints) !== stableSerialize(expected)) {
       throw contractError('RECEIPT_ENVELOPE_MISMATCH', 'receipt profile and fingerprints must match the normalized envelope');
     }
+    verifyReceiptSelection(identity, envelope);
   }
   const finalState = enumValue(raw.finalState, 'finalState', FINAL_STATES);
   const failureRaw = raw.failure == null ? {} : object(raw.failure, 'failure');
@@ -423,6 +442,54 @@ function normalizeWorkerReceipt(rawValue = {}, options = {}) {
   if (totalTokens !== inputTokens + outputTokens) {
     throw contractError('TOKEN_TOTAL_MISMATCH', 'usage.totalTokens must equal inputTokens plus outputTokens');
   }
+  const usage = {
+    durationMs: metricInteger(usageRaw.durationMs, 'usage.durationMs'),
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    costNanodollars: metricInteger(usageRaw.costNanodollars, 'usage.costNanodollars'),
+    turns: metricInteger(usageRaw.turns, 'usage.turns'),
+    toolCalls: metricInteger(usageRaw.toolCalls, 'usage.toolCalls'),
+  };
+  const result = {
+    contractSatisfied: boolean(resultRaw.contractSatisfied, 'result.contractSatisfied'),
+    fingerprint: resultRaw.fingerprint == null ? null : hexFingerprint(resultRaw.fingerprint, 'result.fingerprint'),
+  };
+  const evidence = normalizeEvidenceReferences(raw.evidence);
+  if (finalState === 'succeeded' && !result.contractSatisfied) {
+    throw contractError('SUCCESS_RESULT_UNSATISFIED', 'a succeeded receipt must satisfy its result contract');
+  }
+  if (finalState !== 'succeeded' && result.contractSatisfied) {
+    throw contractError('FAILURE_RESULT_SATISFIED', 'a non-success receipt cannot claim that its result contract was satisfied');
+  }
+  if (envelope && finalState === 'succeeded') {
+    const exceeded = [
+      ['durationMs', 'maxDurationMs'],
+      ['totalTokens', 'maxTokens'],
+      ['costNanodollars', 'maxCostNanodollars'],
+      ['turns', 'maxTurns'],
+      ['toolCalls', 'maxToolCalls'],
+    ].filter(([usageField, budgetField]) => usage[usageField] > envelope.budgets[budgetField]);
+    if (exceeded.length > 0) {
+      throw contractError(
+        'SUCCESS_EXCEEDS_BUDGET',
+        `a succeeded receipt exceeds envelope budget: ${exceeded.map(([, budgetField]) => budgetField).join(', ')}`
+      );
+    }
+    const evidenceCounts = {
+      patch: evidence.patches.length,
+      artifact: evidence.artifacts.length,
+      tests: evidence.tests.length,
+    };
+    const missingEvidence = envelope.resultContract.requiredEvidence
+      .filter((kind) => evidenceCounts[kind] === 0);
+    if (missingEvidence.length > 0) {
+      throw contractError(
+        'SUCCESS_MISSING_EVIDENCE',
+        `a succeeded receipt is missing required evidence: ${missingEvidence.join(', ')}`
+      );
+    }
+  }
   const executionTupleFingerprint = fingerprint({ identity, fingerprints: {
     prompt: fingerprints.prompt,
     tools: fingerprints.tools,
@@ -442,23 +509,12 @@ function normalizeWorkerReceipt(rawValue = {}, options = {}) {
     ),
     finalState,
     failure,
-    usage: {
-      durationMs: metricInteger(usageRaw.durationMs, 'usage.durationMs'),
-      inputTokens,
-      outputTokens,
-      totalTokens,
-      costNanodollars: metricInteger(usageRaw.costNanodollars, 'usage.costNanodollars'),
-      turns: metricInteger(usageRaw.turns, 'usage.turns'),
-      toolCalls: metricInteger(usageRaw.toolCalls, 'usage.toolCalls'),
-    },
+    usage,
     toolErrors: normalizeCountedEntries(raw.toolErrors, 'toolErrors', ['tool', 'code']),
     humanInterventions: normalizeCountedEntries(raw.humanInterventions, 'humanInterventions', ['kind']),
-    evidence: normalizeEvidenceReferences(raw.evidence),
+    evidence,
     violations: normalizeCountedEntries(raw.violations, 'violations', ['category', 'code']),
-    result: {
-      contractSatisfied: boolean(resultRaw.contractSatisfied, 'result.contractSatisfied'),
-      fingerprint: resultRaw.fingerprint == null ? null : hexFingerprint(resultRaw.fingerprint, 'result.fingerprint'),
-    },
+    result,
   };
   return {
     ...normalized,
@@ -472,7 +528,14 @@ function projectWorkerReceiptPublic(rawValue, options = {}) {
     schema: receipt.schema,
     schemaVersion: receipt.schemaVersion,
     executionProfile: receipt.executionProfile,
-    identity: receipt.identity,
+    identity: {
+      harness: receipt.identity.harness,
+      adapter: receipt.identity.adapter,
+      provider: receipt.identity.provider,
+      model: receipt.identity.model,
+      api: receipt.identity.api,
+      environment: { fingerprint: receipt.identity.environment.fingerprint },
+    },
     fingerprints: receipt.fingerprints,
     executionTupleFingerprint: receipt.executionTupleFingerprint,
     finalState: receipt.finalState,

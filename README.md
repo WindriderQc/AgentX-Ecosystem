@@ -1,12 +1,12 @@
 # Agent X Ecosystem
 
-Agent X is a local-first agent-capability platform that routes inference,
-grounds answers in a bounded knowledge base, and compares models or external
-worker evidence with reproducible contracts.
+Agent X is a local-first capability platform that routes inference, grounds
+answers in a bounded knowledge base, and compares models or imported worker
+evidence with reproducible contracts.
 
-AgentX supplies inference, evaluation, RAG, task/tool contracts, and evidence.
-An external harness keeps ownership of its identity, private conversations,
-internal memory, tools, credentials, and execution loop.
+Agent X supplies inference, evaluation, RAG, task/tool contracts, and evidence.
+External harnesses retain ownership of identity, private conversations, memory,
+credentials, tools, and their execution loops.
 
 ## What belongs here
 
@@ -214,6 +214,11 @@ Profiling and benchmark admission follow the
 records host-bound evidence and never creates or silently selects another model
 tag.
 
+Operators can use the [Benchmark sweeps pipeline](benchmark/docs/sweeps-pipeline.md)
+to discover candidates, review a dry-run plan, explicitly launch guarded
+profiling/benchmark work, inspect staleness, and produce a routing recommendation.
+The pipeline never applies routing changes.
+
 Benchmark also provides a stateless
 [cloud/local lane accounting contract](docs/CLOUD_LOCAL_LANE_ACCOUNTING.md).
 It keeps local, free-cloud, and paid-cloud evidence in separate exact-contract
@@ -223,6 +228,11 @@ contact a provider, authorize spend, or mutate routing. A separate fail-closed
 operator CLI can run exact local/free campaigns with current identity and price
 preflight, per-call receipts, and retained raw evidence; paid execution requires
 a deployment-owned authenticated integration.
+
+Separately operated execution harnesses can exchange provider-neutral,
+fingerprinted [worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md).
+Benchmark compares envelope-bound portable or native-ceiling evidence, but it
+does not run a harness or own its conversation and orchestration state.
 
 ## Install and update
 

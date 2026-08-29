@@ -16,13 +16,18 @@ describe('Benchmark worker evidence API', () => {
     const right = receiptInput(envelope);
     right.identity.harness = { name: 'harness-b', version: '1.0.0' };
     right.identity.adapter = { name: 'adapter-b', version: '1.0.0' };
+    right.identity.environment.id = 'deployment-node-private';
+    right.identity.environment.version = 'runtime-private';
 
     const response = await request(app)
       .post('/api/benchmark/worker-evidence/compare')
       .send({
         profile: 'portable',
         generatedAt: '2026-08-28T12:00:00.000Z',
-        receipts: [left, right],
+        evidence: [
+          { envelope, receipt: left },
+          { envelope, receipt: right },
+        ],
       });
 
     expect(response.status).toBe(200);
@@ -30,5 +35,6 @@ describe('Benchmark worker evidence API', () => {
       status: 'success',
       data: { profile: 'portable', receiptCount: 2, tupleCount: 2 },
     });
+    expect(JSON.stringify(response.body)).not.toMatch(/deployment-node-private|runtime-private/);
   });
 });

@@ -44,8 +44,8 @@ function buildDefaultProfile() {
             emptyResponseFilterThreshold: 0.5,
             // When true, each category's avg quality is multiplied by its
             // avg judge_confidence before being weighted into the composite.
-            // Results with null judge_confidence are treated as 0.5 (matches
-            // the 0128 sample extractor convention, docs/benchmark/rankings-with-confidence-2026-04-21.md).
+            // Results with null judge_confidence use the maintained
+            // NULL_CONFIDENCE_FALLBACK = 0.5 aggregation contract.
             confidenceWeighting: false
         }
     };

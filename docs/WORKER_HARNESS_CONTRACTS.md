@@ -42,9 +42,11 @@ The normalized object contains:
   evidence kinds.
 
 Filesystem policy is `none`, `read_only`, or `workspace_write`. Network policy
-is `none` or an allowlist of logical destination identifiers. Neither contract
-accepts a credential, endpoint, hostname, socket, or physical workspace path.
-The consuming deployment resolves logical capabilities under its own policy.
+is `none` or an allowlist of logical destination identifiers. Structural
+validation rejects URLs, sockets, and filesystem paths. Names and IDs are
+publication-safe logical identifiers: adapters must never place credentials,
+hostnames, physical paths, or other deployment topology in them. The consuming
+deployment resolves those logical capabilities under its own private policy.
 
 The complete neutral example is
 [`benchmark/data/worker-envelope.example.json`](../benchmark/data/worker-envelope.example.json).
@@ -77,7 +79,11 @@ The receipt includes:
 Success cannot carry failure metadata. Non-success cannot omit its failure
 classification. Token totals must equal input plus output. When validation is
 given the source envelope, profile and envelope/prompt/tool/policy fingerprints
-must match exactly.
+must match exactly. A succeeded receipt must satisfy its result contract and
+stay within every envelope budget; a non-success receipt cannot claim that the
+result contract was satisfied. Exact requested harness/model/provider/version/
+digest fields must match the receipt identity, and every required evidence kind
+must be present on success.
 
 The complete neutral example is
 [`benchmark/data/worker-receipt.example.json`](../benchmark/data/worker-receipt.example.json).
@@ -95,23 +101,31 @@ it and fails with a stable mismatch code if any normalized material field has
 changed. Derived fingerprints are never accepted as authority for credentials,
 network access, routing, or candidate promotion.
 
+These hashes provide deterministic integrity and comparison identity, not
+authenticity. A deployment that needs producer authentication or
+non-repudiation must add transport authentication or signatures outside this
+neutral contract.
+
 ## Benchmark comparison profiles
 
 Benchmark adds the pure calculation endpoint:
 
 `POST /api/benchmark/worker-evidence/compare`
 
-The body contains `profile`, at least two `receipts`, and optionally
-`generatedAt`. The endpoint validates and normalizes every receipt, stores
-nothing, makes no provider/harness call, and returns a fingerprinted
-`agentx.worker-evidence-comparison/v1` report.
+The body contains `profile`, at least two `evidence` entries, and optionally
+`generatedAt`. Every evidence entry contains its source `envelope` and one
+`receipt`. The endpoint normalizes the envelope and validates the receipt
+against it before comparison. It stores nothing, makes no provider/harness
+call, and returns a fingerprinted `agentx.worker-evidence-comparison/v1`
+report.
 
 ### Portable
 
 `portable` isolates harness behavior. All receipts must bind the same exact
-model/provider/API, envelope, prompt, tools, and policies. Harness, adapter,
-and logical environment identities may differ. Any frozen-input drift rejects
-the comparison with `PORTABLE_CONTRACT_MISMATCH`.
+model/provider/API, envelope, prompt, tools, and policies, and the comparison
+must include at least two distinct exact harness identities. Adapter and logical
+environment identities may differ. Any frozen-input drift rejects the
+comparison with `PORTABLE_CONTRACT_MISMATCH`.
 
 ### Native ceiling
 
@@ -130,9 +144,11 @@ contract remain unchanged.
 
 The public receipt projection is an explicit allowlist. It never includes the
 work description, prompt text, response, transcript, tool arguments/results,
-error messages, credentials, URLs, hostnames, or filesystem paths. Unknown
-input fields are discarded before projection and fingerprinting. Logical
-evidence references are not dereferenced by AgentX.
+error messages, credentials, URLs, hostnames, or filesystem paths. The private receipt
+retains the logical environment identity, version, and fingerprint; the public
+projection emits only its fingerprint. Unknown input fields are discarded
+before projection and fingerprinting. Logical evidence references are not
+dereferenced by AgentX.
 
 The external harness owns its users, identity boundary, private conversation,
 memory, orchestration loop, tool execution, workspace realization, provider

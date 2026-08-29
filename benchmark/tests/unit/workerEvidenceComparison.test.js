@@ -21,13 +21,17 @@ function receiptFor(envelope, harness, overrides = {}) {
   return normalizeWorkerReceipt(raw, { envelope });
 }
 
+function evidenceFor(envelope, harness, overrides = {}) {
+  return { envelope, receipt: receiptFor(envelope, harness, overrides) };
+}
+
 describe('Benchmark worker/harness evidence comparison', () => {
   test('portable profile compares different harnesses only under frozen model, prompt, tools, policies, and envelope', () => {
     const envelope = normalizeWorkerEnvelope(envelopeInput());
     const report = compareWorkerEvidence({
       profile: 'portable',
       generatedAt: '2026-08-28T12:00:00.000Z',
-      receipts: [receiptFor(envelope, 'harness-a'), receiptFor(envelope, 'harness-b')],
+      evidence: [evidenceFor(envelope, 'harness-a'), evidenceFor(envelope, 'harness-b')],
     });
     expect(report).toMatchObject({
       schema: 'agentx.worker-evidence-comparison/v1',
@@ -43,6 +47,9 @@ describe('Benchmark worker/harness evidence comparison', () => {
     });
     expect(report.portableBaselineFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(report.tuples.map((tuple) => tuple.identity.harness.name).sort()).toEqual(['harness-a', 'harness-b']);
+    expect(report.tuples.every((tuple) => (
+      Object.keys(tuple.identity.environment).join(',') === 'fingerprint'
+    ))).toBe(true);
     expect(validateWorkerEvidenceReport(report)).toBe(report);
   });
 
@@ -53,8 +60,26 @@ describe('Benchmark worker/harness evidence comparison', () => {
     }));
     expect(() => compareWorkerEvidence({
       profile: 'portable',
-      receipts: [receiptFor(envelope, 'harness-a'), receiptFor(changedEnvelope, 'harness-b')],
+      evidence: [evidenceFor(envelope, 'harness-a'), evidenceFor(changedEnvelope, 'harness-b')],
     })).toThrow(expect.objectContaining({ code: 'PORTABLE_CONTRACT_MISMATCH' }));
+  });
+
+  test('portable profile requires distinct exact harness identities', () => {
+    const envelope = normalizeWorkerEnvelope(envelopeInput());
+    expect(() => compareWorkerEvidence({
+      profile: 'portable',
+      evidence: [evidenceFor(envelope, 'harness-a'), evidenceFor(envelope, 'harness-a')],
+    })).toThrow(expect.objectContaining({ code: 'PORTABLE_HARNESSES_REQUIRED' }));
+  });
+
+  test('rejects a receipt that is not bound to its supplied envelope', () => {
+    const envelope = normalizeWorkerEnvelope(envelopeInput());
+    const raw = receiptInput(envelope);
+    raw.fingerprints.envelope = '9'.repeat(64);
+    expect(() => compareWorkerEvidence({
+      profile: 'portable',
+      evidence: [evidenceFor(envelope, 'harness-a'), { envelope, receipt: raw }],
+    })).toThrow(expect.objectContaining({ code: 'RECEIPT_ENVELOPE_MISMATCH' }));
   });
 
   test('native-ceiling profile preserves exact model+harness pairs with their native tuple inputs', () => {
@@ -62,6 +87,16 @@ describe('Benchmark worker/harness evidence comparison', () => {
     const secondEnvelope = normalizeWorkerEnvelope(envelopeInput({
       executionProfile: 'native-ceiling',
       prompt: { reference: 'prompt.native-b', fingerprint: '8'.repeat(64) },
+      selection: {
+        harness: { constraints: ['supports.patch', 'supports.tests'] },
+        model: {
+          provider: 'provider-a',
+          id: 'model-b',
+          version: 'native-2',
+          digest: `sha256:${'7'.repeat(64)}`,
+          constraints: ['tools'],
+        },
+      },
     }));
     const secondRaw = receiptInput(secondEnvelope);
     secondRaw.identity.harness = { name: 'harness-b', version: '2.0.0' };
@@ -75,7 +110,10 @@ describe('Benchmark worker/harness evidence comparison', () => {
     const report = compareWorkerEvidence({
       profile: 'native-ceiling',
       generatedAt: '2026-08-28T12:00:00.000Z',
-      receipts: [receiptFor(firstEnvelope, 'harness-a'), normalizeWorkerReceipt(secondRaw, { envelope: secondEnvelope })],
+      evidence: [
+        evidenceFor(firstEnvelope, 'harness-a'),
+        { envelope: secondEnvelope, receipt: normalizeWorkerReceipt(secondRaw, { envelope: secondEnvelope }) },
+      ],
     });
     expect(report.portableBaselineFingerprint).toBeNull();
     expect(new Set(report.tuples.map((tuple) => tuple.nativePairFingerprint)).size).toBe(2);

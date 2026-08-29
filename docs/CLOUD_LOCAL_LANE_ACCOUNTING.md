@@ -185,16 +185,16 @@ and free-cloud execution. The complete raw evidence is written to the output
 file while stdout contains a secret-free summary. Promotion remains a distinct
 operator decision after the lane-specific report is reviewed.
 
-## External worker evidence is a separate additive contract
+## External worker evidence is separate
 
-Model campaigns above continue to compare provider/model observations under
-their existing exact generation contract. Imported harness evidence uses the
-separate [worker envelope and receipt contract](WORKER_HARNESS_CONTRACTS.md)
-and `POST /api/benchmark/worker-evidence/compare`.
+Existing model campaigns continue to use their exact generation and lane
+contracts. Imported harness evidence uses the additive
+[worker envelope and receipt contract](WORKER_HARNESS_CONTRACTS.md) and
+`POST /api/benchmark/worker-evidence/compare`.
 
-The worker endpoint reuses Benchmark's stateless, fingerprinted comparison
-boundary but does not change a cloud/local plan, candidate schema, campaign
-runner, persisted model result, lane leader, or routing decision. Portable
-worker evidence freezes model, API, envelope, prompt, tools, and policies while
-varying the harness. Native-ceiling evidence preserves every exact
-model+harness tuple and never ranks unlike tuples as one universal cohort.
+The worker endpoint validates envelope-bound receipts without changing a
+campaign, candidate schema, runner, stored model result, lane leader, or route.
+Portable comparisons freeze the envelope, model, API, prompt, tools, and
+policies while requiring distinct harness identities. Native-ceiling evidence
+preserves separate exact model+harness tuples and does not declare a universal
+winner across unlike tuples.

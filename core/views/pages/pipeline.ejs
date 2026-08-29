@@ -1,19 +1,42 @@
 <main class="pipeline-page">
-  <header class="pipeline-header">
-    <div>
-      <div class="pipeline-eyebrow">AgentX Pipeline</div>
-      <h1><i class="fas fa-list-check"></i> Pipeline</h1>
-      <div class="pipeline-ownership">
-        <span><i class="fas fa-database"></i> Product-owned task queue</span>
-        <span><i class="fas fa-code-branch"></i> Bounded HTTP contract</span>
+  <header class="pipeline-hero">
+    <div class="pipeline-hero-copy">
+      <div class="pipeline-eyebrow"><i class="fas fa-list-check"></i> Delivery cockpit</div>
+      <h1>Work in progress</h1>
+      <p>
+        The product-owned task queue behind Agent X delivery. See what is queued, who is
+        working, what waits for review, and where work is stuck &mdash; then act with the
+        same audited contract the agents use.
+      </p>
+      <div class="pipeline-hero-actions">
+        <button id="pipelineRefreshBtn" class="pipeline-btn primary" type="button">
+          <i class="fas fa-rotate"></i><span>Refresh</span>
+        </button>
+        <button id="pipelineAutoBtn" class="pipeline-btn" type="button" aria-pressed="false"
+          title="Automatically refresh the queue every 60 seconds">
+          <i class="fas fa-clock-rotate-left"></i><span>Auto-refresh</span>
+        </button>
+        <a class="pipeline-btn" href="/agent-ops">
+          <i class="fas fa-circle-nodes"></i><span>Agent Ops</span>
+        </a>
+        <button class="cockpit-help-button" type="button" data-cockpit-guide-open="pipelineGuide">
+          <i class="fas fa-circle-question"></i><span>Page guide</span>
+        </button>
       </div>
     </div>
-    <div class="pipeline-actions">
-      <button id="pipelineRefreshBtn" class="pipeline-btn pipeline-btn-secondary" type="button" title="Refresh status">
-        <i class="fas fa-rotate"></i>
-        <span>Refresh</span>
-      </button>
-    </div>
+    <aside class="pipeline-lifecycle" aria-label="Task lifecycle">
+      <div class="pipeline-lifecycle-title"><i class="fas fa-route"></i> One task contract</div>
+      <ol class="pipeline-lifecycle-flow">
+        <li class="stage-queued" data-cockpit-tip-title="Queued" data-cockpit-tip="Ready for any worker to claim atomically. Re-queueing a task releases its worker and heartbeat." tabindex="0"><i class="fas fa-inbox"></i><span>Queued</span></li>
+        <li class="stage-progress" data-cockpit-tip-title="In progress" data-cockpit-tip="Claimed by a worker. Healthy work heartbeats regularly; a silent hour marks it stale." tabindex="0"><i class="fas fa-bolt"></i><span>In progress</span></li>
+        <li class="stage-review" data-cockpit-tip-title="Review" data-cockpit-tip="The worker reported done. A different overseer must confirm it — workers never self-certify." tabindex="0"><i class="fas fa-magnifying-glass"></i><span>Review</span></li>
+        <li class="stage-done" data-cockpit-tip-title="Done" data-cockpit-tip="Confirmed by an overseer distinct from the worker. Every confirmation lands in the audit trail." tabindex="0"><i class="fas fa-check"></i><span>Done</span></li>
+      </ol>
+      <div class="pipeline-lifecycle-branch" data-cockpit-tip-title="Blocked" data-cockpit-tip="Any stage can report blocked. Blocked work needs an operator or upstream action before it can move." tabindex="0">
+        <i class="fas fa-hand"></i><span>Blocked &mdash; needs intervention</span>
+      </div>
+      <code class="pipeline-lifecycle-api" title="Bounded HTTP contract consumed by external boards and agents">/api/pipeline/tasks</code>
+    </aside>
   </header>
 
   <section id="pipelineHandoffContext" class="pipeline-context" aria-live="polite" hidden>
@@ -25,129 +48,163 @@
     <a href="/pipeline" title="Remove the Agent Ops context and show the full pipeline"><i class="fas fa-xmark"></i> Clear context</a>
   </section>
 
-  <section class="pipeline-banner" aria-label="Pipeline ownership">
+  <section class="pipeline-state" id="pipelineState" data-tone="loading" aria-live="polite">
     <div>
-      <strong>Agent X owns the task contract.</strong>
-      <span>Separately deployed boards can read and update tasks through the bounded pipeline API.</span>
+      <i class="fas fa-spinner fa-spin" id="pipelineStateIcon" aria-hidden="true"></i>
+      <strong id="pipelineStateTitle">Loading the pipeline&hellip;</strong>
+      <span id="pipelineStateDetail">Reading the product-owned task queue.</span>
     </div>
-    <code>/api/pipeline/tasks</code>
+    <time id="pipelineStateUpdated"></time>
   </section>
 
-  <section class="pipeline-status-grid" aria-label="Pipeline status counts">
-    <div class="pipeline-metric pipeline-metric-queued">
-      <span>Queued</span>
+  <section class="pipeline-metrics" aria-label="Task counts by status — select one to filter the work table">
+    <button class="pipeline-metric metric-queued" type="button" data-status-filter="queued" aria-pressed="false">
+      <span><i class="fas fa-inbox" aria-hidden="true"></i> Queued</span>
       <strong id="pipelineCountQueued">--</strong>
-      <small>Ready for worker claim</small>
-    </div>
-    <div class="pipeline-metric pipeline-metric-progress">
-      <span>In Progress</span>
+      <small>Ready for a worker to claim</small>
+    </button>
+    <button class="pipeline-metric metric-progress" type="button" data-status-filter="in_progress" aria-pressed="false">
+      <span><i class="fas fa-bolt" aria-hidden="true"></i> In progress</span>
       <strong id="pipelineCountProgress">--</strong>
-      <small>Claimed or actively moving</small>
-    </div>
-    <div class="pipeline-metric pipeline-metric-review">
-      <span>Review</span>
+      <small>Claimed and actively moving</small>
+    </button>
+    <button class="pipeline-metric metric-review" type="button" data-status-filter="review" aria-pressed="false">
+      <span><i class="fas fa-magnifying-glass" aria-hidden="true"></i> Review</span>
       <strong id="pipelineCountReview">--</strong>
-      <small>Waiting for overseer acceptance</small>
-    </div>
-    <div class="pipeline-metric pipeline-metric-blocked">
-      <span>Blocked</span>
+      <small>Waiting for overseer confirmation</small>
+    </button>
+    <button class="pipeline-metric metric-blocked" type="button" data-status-filter="blocked" aria-pressed="false">
+      <span><i class="fas fa-hand" aria-hidden="true"></i> Blocked</span>
       <strong id="pipelineCountBlocked">--</strong>
       <small>Needs operator or upstream action</small>
-    </div>
-    <div class="pipeline-metric pipeline-metric-done">
-      <span>Done</span>
+    </button>
+    <button class="pipeline-metric metric-done" type="button" data-status-filter="done" aria-pressed="false">
+      <span><i class="fas fa-check" aria-hidden="true"></i> Done</span>
       <strong id="pipelineCountDone">--</strong>
-      <small>Closed task records</small>
-    </div>
+      <small>Confirmed and closed</small>
+    </button>
   </section>
 
   <p id="pipelineCountEvidence" class="pipeline-count-evidence" aria-live="polite">
-    Loading count scope and observation evidence...
+    Loading count scope and observation evidence&hellip;
   </p>
 
-  <section class="pipeline-main-grid">
+  <section class="pipeline-panel pipeline-workbench" aria-label="Pipeline work table">
+    <div class="pipeline-toolbar">
+      <div class="pipeline-search">
+        <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+        <input id="pipelineSearch" type="search" placeholder="Search id, title, owner, epic, source&hellip;"
+          aria-label="Search tasks by id, title, owner, epic, or source" autocomplete="off">
+      </div>
+      <label class="pipeline-select">
+        <span>Service</span>
+        <select id="pipelineServiceFilter" aria-label="Filter by service">
+          <option value="">All services</option>
+        </select>
+      </label>
+      <label class="pipeline-select">
+        <span>Lane / source</span>
+        <select id="pipelineLaneFilter" aria-label="Filter by lane or source">
+          <option value="">All lanes / sources</option>
+        </select>
+      </label>
+      <label class="pipeline-select">
+        <span>Sort</span>
+        <select id="pipelineSort" aria-label="Sort the work table">
+          <option value="urgency">Urgency</option>
+          <option value="priority">Priority</option>
+          <option value="recent">Recently updated</option>
+          <option value="id">Task id</option>
+        </select>
+      </label>
+      <button id="pipelineClearFilters" class="pipeline-btn compact" type="button" hidden>
+        <i class="fas fa-filter-circle-xmark"></i><span>Clear filters</span>
+      </button>
+      <p class="pipeline-toolbar-meta" id="pipelineOpenMeta" aria-live="polite">Loading task status&hellip;</p>
+    </div>
+    <div class="pipeline-table-wrap">
+      <table class="pipeline-table">
+        <thead>
+          <tr>
+            <th scope="col">ID</th>
+            <th scope="col">Task</th>
+            <th scope="col">Priority</th>
+            <th scope="col">Status</th>
+            <th scope="col">Owner</th>
+            <th scope="col">Service</th>
+            <th scope="col">Due</th>
+            <th scope="col">Activity</th>
+          </tr>
+        </thead>
+        <tbody id="pipelineOpenRows">
+          <tr><td colspan="8" class="pipeline-empty">Loading tasks&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="pipeline-lower-grid">
     <section class="pipeline-panel">
       <div class="pipeline-panel-header">
         <div>
-          <h2><i class="fas fa-wave-square"></i> Open Work</h2>
-          <p id="pipelineOpenMeta">Loading task status...</p>
-        </div>
-        <div class="pipeline-filters" aria-label="Open work filters">
-          <label>Service
-            <select id="pipelineServiceFilter"><option value="all">All services</option></select>
-          </label>
-          <label>Lane
-            <select id="pipelineLaneFilter"><option value="all">All lanes</option></select>
-          </label>
-          <label>Status
-            <select id="pipelineStatusFilter">
-              <option value="all">All open states</option>
-              <option value="blocked">Blocked</option>
-              <option value="review">Review</option>
-              <option value="in_progress">In progress</option>
-              <option value="queued">Queued</option>
-            </select>
-          </label>
+          <h2><i class="fas fa-triangle-exclamation"></i> Needs attention</h2>
+          <p id="pipelineAttentionMeta">--</p>
         </div>
       </div>
-      <div class="pipeline-table-wrap">
-        <table class="pipeline-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Task</th>
-              <th>Status</th>
-              <th>Owner</th>
-              <th>Service</th>
-              <th title="Only in-progress tasks own a worker heartbeat">Heartbeat <small>(active only)</small></th>
-            </tr>
-          </thead>
-          <tbody id="pipelineOpenRows">
-            <tr><td colspan="6" class="pipeline-empty">Loading tasks...</td></tr>
-          </tbody>
-        </table>
+      <div id="pipelineAttentionList" class="pipeline-attention-list">
+        <div class="pipeline-empty">Loading attention items&hellip;</div>
       </div>
     </section>
 
-    <aside class="pipeline-side">
-      <section class="pipeline-panel">
-        <div class="pipeline-panel-header">
-          <div>
-            <h2><i class="fas fa-route"></i> Source Split</h2>
-            <p>One queue, one product contract</p>
-          </div>
+    <section class="pipeline-panel">
+      <div class="pipeline-panel-header">
+        <div>
+          <h2><i class="fas fa-flag-checkered"></i> Recently done</h2>
+          <p id="pipelineDoneMeta">--</p>
         </div>
-        <dl class="pipeline-contract-list">
-          <div>
-            <dt>Truth</dt>
-            <dd>Core task service</dd>
-          </div>
-          <div>
-            <dt>Human UI</dt>
-            <dd>Agent X Pipeline</dd>
-          </div>
-          <div>
-            <dt>Agent API</dt>
-            <dd><code>/api/pipeline/tasks</code></dd>
-          </div>
-          <div>
-            <dt>External adapters</dt>
-            <dd>Separately deployed API consumers</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="pipeline-panel">
-        <div class="pipeline-panel-header">
-          <div>
-            <h2><i class="fas fa-triangle-exclamation"></i> Attention</h2>
-            <p id="pipelineAttentionMeta">--</p>
-          </div>
-        </div>
-        <div id="pipelineAttentionList" class="pipeline-attention-list">
-          <div class="pipeline-empty">Loading attention items...</div>
-        </div>
-      </section>
-    </aside>
+      </div>
+      <div id="pipelineDoneList" class="pipeline-done-list">
+        <div class="pipeline-empty">Loading closed tasks&hellip;</div>
+      </div>
+    </section>
   </section>
+
+  <%- include('../partials/cockpit-guide', {
+    cockpitGuide: {
+      id: 'pipelineGuide',
+      title: 'Read the queue, then act with the audited contract',
+      summary: 'Pipeline is the human view of the product-owned task queue. Agents and external boards consume the same bounded HTTP API — nothing here bypasses it.',
+      sections: [
+        { title: 'Read the counts', body: 'The five status cards are global truth. Select one to focus the work table on that stage; select it again to release the filter.' },
+        { title: 'Find the work', body: 'Search matches id, title, owner, epic, and source. Service and lane/source filters narrow the loaded rows; urgency sort surfaces blocked and overdue work first.' },
+        { title: 'Open the dossier', body: 'Select any row for the full task: specification, priority, risk, dependencies, and the complete feedback audit trail.' },
+        { title: 'Confirm like an overseer', body: 'A task in review can be confirmed done from its dossier — but only by an identity different from the worker. The gate is enforced server-side and every confirmation is audited.' },
+        { title: 'Unstick what is stuck', body: 'Re-queue releases a task back to the queue (clearing its worker and heartbeat), and notes land in the same audit trail agents read.' },
+        { title: 'Trust the heartbeat', body: 'In-progress work should heartbeat regularly. A silent hour marks it stale in Activity and raises it under Needs attention.' }
+      ],
+      note: { title: 'One bounded contract', body: 'This page reads and writes only /api/pipeline/tasks — the same audited API used by workers, overseers, and separately deployed boards. There is no privileged side channel.' },
+      links: [
+        { href: '/agent-ops', icon: 'fa-circle-nodes', label: 'Agent Ops', detail: 'Who does what, and is it running' },
+        { href: '/planning', icon: 'fa-diagram-project', label: 'Planning', detail: 'Workstreams and outcomes' },
+        { href: '/nerve-center', icon: 'fa-brain', label: 'Nerve Center', detail: 'Fleet and routing health' }
+      ]
+    }
+  }) %>
+
+  <div class="pipeline-drawer-shell" id="pipelineDrawerShell" hidden>
+    <button class="pipeline-drawer-scrim" type="button" data-close-pipeline-drawer aria-label="Close task details"></button>
+    <aside class="pipeline-drawer" role="dialog" aria-modal="true" aria-labelledby="pipelineDrawerTitle">
+      <header class="pipeline-drawer-head">
+        <div>
+          <span class="pipeline-drawer-eyebrow">Task dossier</span>
+          <h2 id="pipelineDrawerTitle">Task</h2>
+          <code id="pipelineDrawerId"></code>
+        </div>
+        <button class="pipeline-drawer-close" type="button" data-close-pipeline-drawer aria-label="Close task details">
+          <i class="fas fa-xmark"></i>
+        </button>
+      </header>
+      <div class="pipeline-drawer-body" id="pipelineDrawerBody"></div>
+    </aside>
+  </div>
 </main>

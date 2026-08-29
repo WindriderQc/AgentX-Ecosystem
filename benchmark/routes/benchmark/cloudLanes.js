@@ -55,9 +55,9 @@ router.post('/cloud-lanes/attribute', (req, res) => respond(res, () => attribute
 router.post('/cloud-lanes/compare', (req, res) => respond(res, () => compareLaneObservations(req.body || {})));
 
 /**
- * Validate and compare receipts produced by separately operated workers.
- * This endpoint executes no harness/provider call, stores no transcript, and
- * never promotes a candidate or mutates routing.
+ * Validate and compare envelope-bound receipts produced by separately operated
+ * workers. This route performs no execution, persistence, promotion, or routing
+ * mutation.
  */
 router.post('/worker-evidence/compare', (req, res) => respond(res, () => compareWorkerEvidence(req.body || {})));
 

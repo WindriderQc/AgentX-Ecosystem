@@ -125,6 +125,8 @@ describe('formatStalenessLedgerEntry', () => {
     const entry = formatStalenessLedgerEntry(report, { date: '2026-06-19' });
     expect(entry).toMatch(/^## 2026-06-19 — Staleness crawl: 1 model\(s\) flagged/);
     expect(entry).toMatch(/Category:.*Maintenance/);
+    expect(entry).toMatch(/- \*\*Actor:\*\* Operator/);
+    expect(entry).not.toMatch(/Self-Tuning Lane|Claude Code/);
     expect(entry).toMatch(/`primary` · `ax\/qwopus:27b-q5_K_M`/);
     expect(entry).toMatch(/Proposed:.*re-profile 1 model\(s\) on `primary`/);
     expect(entry).toMatch(/NOT auto-run/);
