@@ -196,6 +196,9 @@
     $('planningDecisionRationale').value = item.decision?.rationale || '';
     $('planningDecisionAlternatives').value = (item.decision?.alternatives || []).join('\n');
     syncConditionalFields();
+    if (app().isFrozenReference()) {
+      $('planningModalSubtitle').textContent = 'Correct fields on this historical record. This does not create or change current Pipeline execution.';
+    }
   }
 
   function formPayload() {
@@ -274,32 +277,35 @@
 
   function linkedScheduleRows(item) {
     const schedules = app().state.dashboard?.schedules || [];
+    const frozen = app().isFrozenReference();
     return (item.scheduleRefs || []).map((ref) => {
       const schedule = schedules.find((row) => row.sourceId === ref.sourceId);
       return `
         <div class="planning-link-row">
           <div><strong>${esc(schedule?.name || ref.label || ref.sourceId)}</strong><small>${esc(schedule?.source || ref.source || '')} · ${esc(schedule?.schedule?.cron || schedule?.schedule?.type || '')}</small></div>
-          <button type="button" data-unlink-schedule="${esc(ref.sourceId)}" title="Unlink"><i class="fas fa-xmark"></i></button>
+          ${frozen ? '' : `<button type="button" data-unlink-schedule="${esc(ref.sourceId)}" title="Unlink"><i class="fas fa-xmark"></i></button>`}
         </div>`;
     }).join('');
   }
 
   function taskRows(item) {
+    const frozen = app().isFrozenReference();
     return (item.linkedTasks || []).map((task) => `
       <div class="planning-link-row">
-        <div><strong>[${esc(task.pipelineId)}] ${esc(task.title)}</strong><small>${esc(formatStatus(task.status))} · ${esc(task.service || task.epic || 'unclassified')}</small></div>
-        <button type="button" data-unlink-task="${esc(task.pipelineId)}" title="Unlink"><i class="fas fa-xmark"></i></button>
+        <div><strong>[${esc(task.pipelineId)}] ${esc(task.title)}</strong><small>Current Pipeline state: ${esc(formatStatus(task.status))} · ${esc(task.service || task.epic || 'unclassified')}</small></div>
+        ${frozen ? '' : `<button type="button" data-unlink-task="${esc(task.pipelineId)}" title="Unlink"><i class="fas fa-xmark"></i></button>`}
       </div>`).join('');
   }
 
   function evidenceRows(item) {
+    const frozen = app().isFrozenReference();
     return (item.evidence || []).slice().reverse().map((evidence) => `
       <div class="planning-link-row">
         <div>
           <strong>${evidence.url ? `<a href="${esc(evidence.url)}" target="_blank" rel="noopener">${esc(evidence.label)}</a>` : esc(evidence.label)}</strong>
           <small>${esc(evidence.source || 'manual')} · ${esc(evidence.kind)}${evidence.occurredAt || evidence.addedAt ? ` · ${esc(isoDate(evidence.occurredAt || evidence.addedAt))}` : ''}${evidence.ref ? ` · ${esc(evidence.ref)}` : ''}${evidence.note ? ` · ${esc(evidence.note)}` : ''}</small>
         </div>
-        <button type="button" data-remove-evidence="${esc(evidence._id || evidence.id)}" title="Remove"><i class="fas fa-xmark"></i></button>
+        ${frozen ? '' : `<button type="button" data-remove-evidence="${esc(evidence._id || evidence.id)}" title="Remove"><i class="fas fa-xmark"></i></button>`}
       </div>`).join('');
   }
 
@@ -312,6 +318,7 @@
   }
 
   function workflowActionButtons(item) {
+    if (app().isFrozenReference()) return '';
     return (item.workflowActions || []).map((action) => `
       <button
         type="button"
@@ -336,6 +343,7 @@
   }
 
   function drawerHtml(item) {
+    const frozen = app().isFrozenReference();
     const schedules = app().state.dashboard?.schedules || [];
     const linkedScheduleIds = new Set((item.scheduleRefs || []).map((ref) => ref.sourceId));
     const availableSchedules = schedules.filter((row) => !linkedScheduleIds.has(row.sourceId));
@@ -344,13 +352,13 @@
     const metric = item.progress?.metric || {};
     const target = item.dates?.targetAt ? app().dateOnly(item.dates.targetAt) : 'No target';
     const parent = item.parentId ? app().getItem(String(item.parentId)) : null;
-    const childActions = item.type === 'workstream'
+    const childActions = frozen ? '' : (item.type === 'workstream'
       ? `
         <button type="button" class="planning-btn planning-btn-secondary" data-add-child="outcome"><i class="fas fa-bullseye"></i> Add outcome</button>
         <button type="button" class="planning-btn planning-btn-secondary" data-add-child="milestone"><i class="fas fa-flag-checkered"></i> Add milestone</button>`
       : (item.type === 'outcome'
         ? '<button type="button" class="planning-btn planning-btn-secondary" data-add-child="milestone"><i class="fas fa-flag-checkered"></i> Add milestone</button>'
-        : '');
+        : ''));
     return `
       <header class="planning-drawer-header planning-card-type-${esc(item.type)}">
         <div class="planning-drawer-title-row">
@@ -365,14 +373,14 @@
         </div>
         <div class="planning-drawer-command-row">
           <div class="planning-drawer-status-control">
-            <span class="planning-status-badge planning-status-${esc(item.status)}">${esc(formatStatus(item.status))}</span>
-            <span class="planning-health-badge planning-health-level-${esc(item.health?.level || 'unknown')}">${esc(formatStatus(item.health?.level || 'unknown'))}</span>
+            <span class="planning-status-badge planning-status-${esc(item.status)}" title="Saved historical Planning state">${esc(app().statusLabel(item.status))}</span>
+            <span class="planning-health-badge planning-health-level-${esc(item.health?.level || 'unknown')}" title="Reference flag, not a live execution state">Reference ${esc(formatStatus(item.health?.level || 'unknown'))}</span>
             <span class="planning-priority-badge planning-priority-${esc(item.priority)}">${esc(item.priority)}</span>
           </div>
           <div class="planning-drawer-actions">
             ${workflowActionButtons(item)}
-            <button type="button" class="planning-btn planning-btn-secondary" data-edit-item><i class="fas fa-pen"></i> Edit</button>
-            ${item.type === 'idea' && item.status === 'triaged' ? `
+            <button type="button" class="planning-btn planning-btn-secondary" data-edit-item><i class="fas fa-pen"></i> ${frozen ? 'Correct record' : 'Edit'}</button>
+            ${!frozen && item.type === 'idea' && item.status === 'triaged' ? `
               <select id="planningPromoteType" aria-label="Promotion target">
                 <option value="workstream">Workstream</option>
                 <option value="outcome">Outcome</option>
@@ -384,17 +392,22 @@
         </div>
       </header>
       <div class="planning-drawer-body">
+        ${frozen ? `
+          <div class="planning-reference-note" role="note">
+            <i class="fas fa-snowflake" aria-hidden="true"></i>
+            <span><strong>Historical Planning record.</strong> Status and percentage describe this saved record or its reference calculation. Even 100% is not current execution. Pipeline tasks and schedules below are references to their owning systems.</span>
+          </div>` : ''}
         <section class="planning-detail-section planning-detail-overview">
-          <div class="planning-progress-row">
+          <div class="planning-progress-row" title="${esc(app().progressMeaning(item))}">
             <div class="planning-progress-track"><div class="planning-progress-fill" style="width:${Number(item.computedProgress) || 0}%"></div></div>
-            <strong>${Number(item.computedProgress) || 0}%</strong>
+            <strong>${esc(app().progressLabel(item))}</strong>
           </div>
           ${healthReasonsHtml(item)}
           <p>${esc(item.summary || 'No summary yet.')}</p>
           <div class="planning-detail-grid">
             <div class="planning-detail-kv"><span>Owner</span><strong>${esc(item.owner || 'Unassigned')}</strong></div>
             <div class="planning-detail-kv"><span>Target</span><strong class="${item.isOverdue ? 'planning-card-overdue' : ''}">${esc(target)}</strong></div>
-            <div class="planning-detail-kv"><span>Progress</span><strong>${esc(item.progress?.mode || 'tasks')}</strong></div>
+            <div class="planning-detail-kv"><span>Reference basis</span><strong>${esc(formatStatus(item.referenceSemantics?.progressBasis || item.progress?.mode || 'tasks'))}</strong></div>
             <div class="planning-detail-kv"><span>Workstream</span><strong>${esc(item.workstream?.title || (item.type === 'workstream' ? 'Self' : 'None'))}</strong></div>
             <div class="planning-detail-kv"><span>Parent</span><strong>${esc(parent?.title || 'None')}</strong></div>
             <div class="planning-detail-kv"><span>Updated</span><strong>${esc(app().dateOnly(item.updatedAt) || '--')}</strong></div>
@@ -409,7 +422,7 @@
               <div class="planning-detail-kv"><span>Metric</span><strong>${esc(metric.label || '--')}</strong></div>
               <div class="planning-detail-kv"><span>Direction</span><strong>${esc(metric.direction || 'increase')}</strong></div>
               <div class="planning-detail-kv"><span>Baseline</span><strong>${esc(metric.baseline ?? '--')} ${esc(metric.unit || '')}</strong></div>
-              <div class="planning-detail-kv"><span>Current / target</span><strong>${esc(metric.current ?? '--')} / ${esc(metric.target ?? '--')} ${esc(metric.unit || '')}</strong></div>
+              <div class="planning-detail-kv"><span>Recorded / target</span><strong>${esc(metric.current ?? '--')} / ${esc(metric.target ?? '--')} ${esc(metric.unit || '')}</strong></div>
               <div class="planning-detail-kv"><span>Adapter</span><strong>${esc(metric.adapter || 'Manual source')}</strong></div>
               <div class="planning-detail-kv"><span>Observation</span><strong>${esc(formatStatus(metric.observation?.status || 'unconfigured'))}</strong></div>
               <div class="planning-detail-kv"><span>Observed</span><strong>${esc(app().dateOnly(metric.observation?.observedAt) || '--')}</strong></div>
@@ -425,33 +438,33 @@
           </section>` : ''}
 
         <section class="planning-detail-section">
-          <h3><i class="fas fa-list-check"></i> Pipeline Tasks</h3>
-          <div class="planning-link-list">${taskRows(item) || '<div class="planning-empty">No linked tasks.</div>'}</div>
-          <div class="planning-inline-form">
+          <h3><i class="fas fa-list-check"></i> Pipeline references <a href="/pipeline" title="Open current execution source"><i class="fas fa-arrow-up-right"></i></a></h3>
+          <div class="planning-link-list">${taskRows(item) || '<div class="planning-empty">No Pipeline task references.</div>'}</div>
+          ${frozen ? '' : `<div class="planning-inline-form">
             <select id="planningLinkTaskSelect">
               <option value="">Link an open task...</option>
               ${availableTasks.slice(0, 100).map((task) => `<option value="${esc(task.pipelineId)}">[${esc(task.pipelineId)}] ${esc(task.title)}</option>`).join('')}
             </select>
             <button type="button" class="planning-btn planning-btn-secondary" data-link-task>Link</button>
-          </div>
+          </div>`}
         </section>
 
         <section class="planning-detail-section">
-          <h3><i class="fas fa-clock"></i> Runtime Schedule</h3>
-          <div class="planning-link-list">${linkedScheduleRows(item) || '<div class="planning-empty">No linked runtime schedules.</div>'}</div>
-          <div class="planning-inline-form">
+          <h3><i class="fas fa-clock"></i> Runtime Schedule references <a href="/cluster-schedule" title="Open current schedule source"><i class="fas fa-arrow-up-right"></i></a></h3>
+          <div class="planning-link-list">${linkedScheduleRows(item) || '<div class="planning-empty">No Runtime Schedule references.</div>'}</div>
+          ${frozen ? '' : `<div class="planning-inline-form">
             <select id="planningLinkScheduleSelect">
               <option value="">Link a schedule...</option>
               ${availableSchedules.map((schedule) => `<option value="${esc(schedule.sourceId)}">${esc(schedule.name)} · ${esc(schedule.source)}</option>`).join('')}
             </select>
             <button type="button" class="planning-btn planning-btn-secondary" data-link-schedule>Link</button>
-          </div>
+          </div>`}
         </section>
 
         <section class="planning-detail-section">
-          <h3><i class="fas fa-link"></i> Evidence & Artifacts</h3>
+          <h3><i class="fas fa-link"></i> Recorded evidence &amp; artifacts</h3>
           <div class="planning-link-list">${evidenceRows(item) || '<div class="planning-empty">No evidence attached.</div>'}</div>
-          <form class="planning-evidence-form" id="planningEvidenceForm">
+          ${frozen ? '' : `<form class="planning-evidence-form" id="planningEvidenceForm">
             <select id="planningEvidenceKind">
               <option value="note">Note</option><option value="artifact">RAG artifact</option>
               <option value="commit">Commit</option><option value="task_feedback">Task feedback</option>
@@ -464,7 +477,7 @@
             <input id="planningEvidenceUrl" type="url" placeholder="Optional URL">
             <textarea id="planningEvidenceNote" rows="2" placeholder="Why this evidence matters"></textarea>
             <button type="submit" class="planning-btn planning-btn-secondary"><i class="fas fa-plus"></i> Add evidence</button>
-          </form>
+          </form>`}
         </section>
 
         <section class="planning-detail-section">
@@ -472,9 +485,9 @@
           <div class="planning-history">${historyRows(item) || '<div class="planning-empty">No activity recorded.</div>'}</div>
         </section>
 
-        <button type="button" class="planning-btn planning-btn-danger" data-archive-item>
+        ${frozen ? '' : `<button type="button" class="planning-btn planning-btn-danger" data-archive-item>
           <i class="fas fa-box-archive"></i> Archive planning item
-        </button>
+        </button>`}
       </div>`;
   }
 
@@ -558,34 +571,62 @@
       }
       if (event.target.closest('[data-promote-idea]')) return promoteIdea();
       if (event.target.closest('[data-archive-item]')) {
-        if (confirm('Archive this planning item? Links and history will be preserved.')) {
-          await mutate(`/api/planning/items/${encodeURIComponent(currentItemId)}`, {
-            method: 'DELETE',
-            body: JSON.stringify({ by: 'operator' })
-          });
-        }
+        const headers = await window.AgentXTypedConfirmation.confirm({
+          action: 'ARCHIVE PLANNING ITEM',
+          resource: currentItemId,
+          title: 'Archive planning item',
+          description: 'Archive this planning item? Links and history remain as evidence, but the item leaves the active plan.'
+        });
+        if (!headers) return;
+        await mutate(`/api/planning/items/${encodeURIComponent(currentItemId)}`, {
+          method: 'DELETE', headers, body: JSON.stringify({ by: 'operator' })
+        });
         return;
       }
       const unlinkTask = event.target.closest('[data-unlink-task]');
       if (unlinkTask) {
+        const pipelineId = unlinkTask.dataset.unlinkTask;
+        const headers = await window.AgentXTypedConfirmation.confirm({
+          action: 'UNLINK PLANNING TASK',
+          resource: [currentItemId, pipelineId],
+          title: 'Unlink pipeline task',
+          description: 'Remove this task link from the planning item? The underlying pipeline task is preserved.'
+        });
+        if (!headers) return;
         await mutate(`/api/planning/items/${encodeURIComponent(currentItemId)}/tasks/${encodeURIComponent(unlinkTask.dataset.unlinkTask)}`, {
-          method: 'DELETE',
+          method: 'DELETE', headers,
           body: JSON.stringify({ by: 'operator' })
         });
         return;
       }
       const unlinkSchedule = event.target.closest('[data-unlink-schedule]');
       if (unlinkSchedule) {
+        const sourceId = unlinkSchedule.dataset.unlinkSchedule;
+        const headers = await window.AgentXTypedConfirmation.confirm({
+          action: 'UNLINK PLANNING SCHEDULE',
+          resource: [currentItemId, sourceId],
+          title: 'Unlink schedule',
+          description: 'Remove this schedule link from the planning item? The source schedule itself is preserved.'
+        });
+        if (!headers) return;
         await mutate(`/api/planning/items/${encodeURIComponent(currentItemId)}/schedules/${encodeURIComponent(unlinkSchedule.dataset.unlinkSchedule)}`, {
-          method: 'DELETE',
+          method: 'DELETE', headers,
           body: JSON.stringify({ by: 'operator' })
         });
         return;
       }
       const removeEvidence = event.target.closest('[data-remove-evidence]');
       if (removeEvidence) {
+        const evidenceId = removeEvidence.dataset.removeEvidence;
+        const headers = await window.AgentXTypedConfirmation.confirm({
+          action: 'DELETE PLANNING EVIDENCE',
+          resource: [currentItemId, evidenceId],
+          title: 'Delete planning evidence',
+          description: 'Permanently remove this evidence link from the planning record?'
+        });
+        if (!headers) return;
         await mutate(`/api/planning/items/${encodeURIComponent(currentItemId)}/evidence/${encodeURIComponent(removeEvidence.dataset.removeEvidence)}`, {
-          method: 'DELETE',
+          method: 'DELETE', headers,
           body: JSON.stringify({ by: 'operator' })
         });
         return;

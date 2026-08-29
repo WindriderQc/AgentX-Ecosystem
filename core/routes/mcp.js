@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { handleMcpMessage } = require('../src/services/mcpSkillBus');
-const { tokenAllowed } = require('../src/helpers/mcpToken');
+const { mcpIngressAllowed } = require('../src/helpers/mcpToken');
 
 router.post('/', async (req, res) => {
-  if (!tokenAllowed(req)) {
+  if (!mcpIngressAllowed(req)) {
     return res.status(401).json({
       jsonrpc: '2.0',
       id: req.body?.id ?? null,

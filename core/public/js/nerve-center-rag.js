@@ -8,6 +8,7 @@
     async function loadRag() {
         const body = document.getElementById('nc-rag-body');
         if (!body) return;
+        shared.setSectionBusy(body, true);
 
         try {
             const [statusRes, docsRes] = await Promise.all([
@@ -80,7 +81,9 @@
 
             body.innerHTML = html;
         } catch (err) {
-            body.innerHTML = `<p class="nc-muted" style="text-align:center;padding:16px">RAG service unavailable</p>`;
+            shared.renderSectionError(body, 'RAG service unavailable');
+        } finally {
+            shared.finishSectionLoad(body);
         }
 
         if (!refreshTimer) refreshTimer = setInterval(loadRag, 60000);

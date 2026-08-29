@@ -156,7 +156,9 @@ class ModelComparator {
         `;
 
         target.querySelector('.compare-action-chat')?.addEventListener('click', () => {
-            window.location.href = `/playground?model=${encodeURIComponent(model.name)}`;
+            const modelName = model.deployment?.resolvedName || model.name;
+            const host = model.source?.url || model.deployment?.ollamaHost || '';
+            window.location.href = window.AgentXPlaygroundLink.buildPlaygroundHref(modelName, host);
         });
         target.querySelector('.compare-action-details')?.addEventListener('click', () => {
             this.unifiedModels.openDetailDrawer(model);

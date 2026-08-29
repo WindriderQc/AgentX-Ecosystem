@@ -181,43 +181,16 @@ router.get('/', async (req, res) => {
     if (status) filters.status = status;
     if (ruleId) filters.ruleId = ruleId;
 
-    const limitNum = parseInt(limit, 10);
-    const skipNum = parseInt(skip, 10);
-
-    // Sort by severity priority (critical -> error -> warning -> info), then recency
-    const alerts = await Alert.aggregate([
-      { $match: filters },
-      {
-        $addFields: {
-          __severityRank: {
-            $switch: {
-              branches: [
-                { case: { $eq: ['$severity', 'critical'] }, then: 3 },
-                { case: { $eq: ['$severity', 'error'] }, then: 2 },
-                { case: { $eq: ['$severity', 'warning'] }, then: 1 },
-                { case: { $eq: ['$severity', 'info'] }, then: 0 }
-              ],
-              default: 0
-            }
-          }
-        }
-      },
-      { $sort: { __severityRank: -1, createdAt: -1 } },
-      { $skip: skipNum },
-      { $limit: limitNum },
-      { $project: { __severityRank: 0 } }
-    ]);
-
-    const total = await Alert.countDocuments(filters);
+    const snapshot = await alertService.getAlertSnapshot({
+      filters,
+      limit,
+      skip,
+      sort: 'severity'
+    });
 
     res.json({
       status: 'success',
-      data: {
-        alerts,
-        total,
-        limit: limitNum,
-        skip: skipNum
-      }
+      data: snapshot
     });
   } catch (error) {
     logger.error('Failed to list alerts', { error: error.message });

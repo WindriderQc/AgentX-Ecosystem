@@ -66,6 +66,7 @@ describe('Roundtable v2 orchestrator', () => {
         },
         systemPrompt: 'Assess operations.'
       }],
+      synthesizer: { model: 'runtime/model-a', systemPrompt: 'Synthesize.' },
       governance: { requireApproval: true }
     });
 

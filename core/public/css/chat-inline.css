@@ -560,6 +560,32 @@
   flex-shrink: 0;
 }
 
+.history-list-state {
+  display: grid;
+  gap: 6px;
+  margin: 12px 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  line-height: 1.4;
+}
+
+.history-list-state strong {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+
+.history-list-state span {
+  font-size: 0.75rem;
+}
+
+.history-list-state[data-state="error"] {
+  border-color: rgba(255, 107, 107, 0.35);
+  background: rgba(255, 107, 107, 0.06);
+}
+
 /* ==========================================
    Composer Enhancements (Phase 5)
    ========================================== */
@@ -717,14 +743,26 @@
 
 /* ── Fixed viewport layout (chat page) ── */
 /* Page fills viewport exactly — no page-level scroll */
-body:has(.chat-page-content) { overflow: hidden; height: 100vh; }
+body:has(.chat-page-content) {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+body:has(.chat-page-content) #nav-container {
+  flex: 0 0 auto;
+}
 body:has(.chat-page-content) .page {
-  height: calc(100vh - var(--nav-height, 52px));
-  min-height: 0; overflow: hidden;
+  flex: 1 1 auto;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 .chat-page-content {
   display: flex; flex-direction: column;
-  height: 100%; overflow: hidden; flex: 1; min-width: 0;
+  height: 100%; overflow: hidden; flex: 1; min-width: 0; min-height: 0;
 }
 .chat-layout {
   display: flex; flex-direction: column;
@@ -741,8 +779,15 @@ body:has(.chat-page-content) .page {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 20px; cursor: pointer; user-select: none;
   transition: background 0.15s;
+  width: 100%; border: 0; background: transparent; color: inherit;
+  font: inherit; text-align: left;
 }
 .agent-selector-bar:hover { background: rgba(124, 58, 237, 0.05); }
+.agent-selector-bar:focus-visible,
+.agent-selector-panel .agentx-card:focus-visible {
+  outline: 3px solid var(--accent, #7c3aed);
+  outline-offset: -3px;
+}
 .agent-selector-bar-left { display: flex; align-items: center; font-weight: 600; font-size: 0.85rem; }
 .agent-selector-bar-right { display: flex; align-items: center; gap: 10px; }
 .agent-selector-count {
@@ -781,6 +826,8 @@ body:has(.chat-page-content) .page {
   border: 1px solid var(--border, #2a2a3e);
   border-radius: 10px; padding: 14px;
   transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+  width: 100%; color: inherit; font: inherit; text-align: left;
+  text-decoration: none;
 }
 .agent-selector-panel .agentx-card:hover {
   border-color: var(--accent, #7c3aed);
@@ -792,6 +839,18 @@ body:has(.chat-page-content) .page {
   -webkit-line-clamp: 3; max-height: 3.5em;
 }
 .launcher-default-card.selected { border-color: var(--accent, #7c3aed); }
+
+.chat-announcements {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
 
 /* Tool cards get a teal accent */
 .agent-selector-panel .tool-card:hover { border-color: #34d399; box-shadow: 0 4px 16px rgba(52, 211, 153, 0.1); }

@@ -141,6 +141,12 @@
   cursor: wait;
 }
 
+.agent-ops-page [data-openclaw-native][hidden],
+.agent-ops-page [data-agent-ops-native-control][hidden],
+.agent-ops-page a[href^="/api/openclaw/"][hidden] {
+  display: none !important;
+}
+
 .agent-ops-orbit {
   position: relative;
   z-index: 1;
@@ -225,6 +231,13 @@
   transform: translateX(-50%);
 }
 
+.agent-ops-orbit-live strong {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  white-space: nowrap;
+}
+
 .agent-ops-orbit-live span {
   width: 7px;
   height: 7px;
@@ -276,6 +289,104 @@
 .agent-ops-state[data-tone="error"] {
   border-color: rgba(248, 113, 113, 0.35);
   background: rgba(67, 20, 25, 0.62);
+}
+
+.agent-ops-unavailable[hidden] {
+  display: none !important;
+}
+
+.agent-ops-unavailable {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  margin-bottom: 12px;
+  padding: clamp(20px, 3vw, 30px);
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 0 0, rgba(251, 191, 36, 0.09), transparent 24rem),
+    rgba(20, 22, 31, 0.93);
+  box-shadow: 0 24px 65px rgba(0, 0, 0, 0.24);
+}
+
+.agent-ops-unavailable-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  border-radius: 13px;
+  background: rgba(251, 191, 36, 0.08);
+  color: #fde68a;
+  font-size: 1.35rem;
+}
+
+.agent-ops-unavailable-copy h2 {
+  margin: 6px 0 8px;
+  color: var(--ops-bright);
+  font-size: clamp(1.2rem, 2vw, 1.55rem);
+}
+
+.agent-ops-unavailable-copy > p {
+  max-width: 900px;
+  margin: 0;
+  color: #aebbd0;
+  line-height: 1.55;
+}
+
+.agent-ops-unavailable-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 18px 0 14px;
+}
+
+.agent-ops-unavailable-evidence > div {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.agent-ops-unavailable-evidence dt {
+  color: #718198;
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.agent-ops-unavailable-evidence dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  color: #e2e8f0;
+  font-size: 0.74rem;
+}
+
+.agent-ops-unavailable-evidence code {
+  color: #cffafe;
+}
+
+.agent-ops-unavailable-guidance {
+  color: #94a3b8 !important;
+  font-size: 0.78rem;
+}
+
+.agent-ops-unavailable-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 17px;
+}
+
+.agent-ops-is-unavailable .agent-ops-orbit-live {
+  color: #fde68a;
+}
+
+.agent-ops-is-unavailable .agent-ops-orbit-live span {
+  background: #fbbf24;
+  box-shadow: 0 0 0 5px rgba(251, 191, 36, 0.1), 0 0 16px rgba(251, 191, 36, 0.7);
 }
 
 .agent-ops-metrics {
@@ -363,6 +474,19 @@
 }
 
 .agent-ops-metric:hover .agent-ops-card-arrow { color: #67e8f9; transform: translateX(3px); }
+
+.agent-ops-metric:disabled,
+.agent-ops-tabs button:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.agent-ops-metric:disabled:hover,
+.agent-ops-metric:disabled:focus-visible {
+  border-color: var(--ops-border);
+  outline: 0;
+  transform: none;
+}
 
 .agent-ops-tabs {
   display: flex;
@@ -1443,6 +1567,7 @@ body.agent-ops-drawer-open { overflow: hidden; }
   .agent-ops-page { width: min(100% - 20px, 1500px); padding-top: 20px; }
   .agent-ops-hero { align-items: flex-start; flex-direction: column; padding: 24px; }
   .agent-ops-actions { justify-content: flex-start; max-width: none; }
+  .agent-ops-unavailable-evidence { grid-template-columns: 1fr; }
   .agent-ops-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-ops-overview-grid { grid-template-columns: 1fr; }
   .agent-ops-panel.span-two,
@@ -1478,6 +1603,8 @@ body.agent-ops-drawer-open { overflow: hidden; }
   .agent-ops-actions .cockpit-help-button span { display: inline; }
   .agent-ops-state { align-items: flex-start; flex-direction: column; }
   .agent-ops-state > div { align-items: flex-start; flex-wrap: wrap; }
+  .agent-ops-unavailable { grid-template-columns: 1fr; }
+  .agent-ops-unavailable-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .agent-ops-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-ops-metric { min-height: 96px; }
   .agent-ops-toolbar { align-items: stretch; flex-direction: column; }

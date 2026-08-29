@@ -238,6 +238,25 @@
 .pipeline-metric-blocked { border-top-color: #f87171; }
 .pipeline-metric-done { border-top-color: #22c55e; }
 
+.pipeline-count-evidence {
+  margin: -4px 0 18px;
+  color: #9fb0c7;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.pipeline-count-evidence::before {
+  content: '\f1da';
+  font-family: 'Font Awesome 6 Free';
+  font-weight: 900;
+  margin-right: 7px;
+  color: #67e8f9;
+}
+
+.pipeline-count-evidence.pipeline-evidence-warning {
+  color: #fbbf24;
+}
+
 .pipeline-main-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
@@ -282,6 +301,35 @@
   color: #94a3b8;
   font-size: 0.82rem;
   line-height: 1.35;
+}
+
+.pipeline-filters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pipeline-filters label {
+  display: grid;
+  gap: 3px;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pipeline-filters select {
+  min-width: 118px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 7px;
+  padding: 6px 28px 6px 8px;
+  color: #e5e7eb;
+  background: #111827;
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .pipeline-table-wrap {

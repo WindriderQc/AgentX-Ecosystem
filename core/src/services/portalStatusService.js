@@ -13,15 +13,16 @@
  * so this routes identically to how core already reaches its siblings.
  */
 
+const { createServiceIdentity } = require('../../../shared/serviceIdentity');
+
+const CORE_VERSION = require('../../package.json').version || '0.0.0';
 const PROBE_TIMEOUT_MS = Number(process.env.PORTAL_HEALTH_TIMEOUT_MS) || 1500;
 
 // id ↔ portal tile mapping is by `id` (the portal sets data-service on each tile).
 const SERVICES = [
-    { id: 'core',      label: 'AgentX Core',     port: 3080, env: null,                    path: '/health' },
-    { id: 'benchmark', label: 'Benchmark',       port: 3081, env: 'BENCHMARK_SERVICE_URL', path: '/health' },
-    // RAG's status endpoint reports dependency readiness (Mongo, embeddings,
-    // Qdrant). Its /health endpoint is intentionally only a liveness probe.
-    { id: 'rag',       label: 'RAG',             port: 3082, env: 'RAG_SERVICE_URL',        path: '/api/rag/status' }
+    { id: 'core',      identity: 'agentx-core',      label: 'AgentX Core', port: 3080, env: null,                    path: '/health' },
+    { id: 'benchmark', identity: 'agentx-benchmark', label: 'Benchmark',   port: 3081, env: 'BENCHMARK_SERVICE_URL', path: '/health' },
+    { id: 'rag',       identity: 'agentx-rag',       label: 'RAG',         port: 3082, env: 'RAG_SERVICE_URL',        path: '/health' }
 ];
 
 function baseFor(svc) {
@@ -69,7 +70,46 @@ function issuesFromDetail(detail) {
 
     return Object.entries(dependencies)
         .filter(([, dependency]) => dependency?.healthy === false)
-        .map(([name, dependency]) => `${name}: ${dependency.error || 'not ready'}`);
+        .map(([name]) => `${/^[a-z0-9-]{1,32}$/i.test(name) ? name : 'dependency'}: not ready`);
+}
+
+function identityFromDetail(detail) {
+    if (!detail || typeof detail !== 'object') return null;
+    const payload = detail.data && typeof detail.data === 'object' ? detail.data : detail;
+    const source = payload.identity && typeof payload.identity === 'object'
+        ? payload.identity
+        : payload;
+    const required = ['service', 'version', 'profile', 'revision', 'ts'];
+    if (required.some((key) => typeof source[key] !== 'string' || source[key].length === 0)) return null;
+    if (!/^agentx-[a-z0-9-]+$/.test(source.service)) return null;
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(source.version)) return null;
+    if (!['demo', 'full'].includes(source.profile)) return null;
+    if (!/^(?:[A-Fa-f0-9]{7,64}|[A-Za-z][A-Za-z0-9_-]{0,127})$/.test(source.revision)) return null;
+    if (!Number.isFinite(Date.parse(source.ts)) || new Date(source.ts).toISOString() !== source.ts) return null;
+    return Object.freeze(Object.fromEntries(required.map((key) => [key, source[key]])));
+}
+
+function summarizeIdentityConsistency(services) {
+    const identities = services.map((service) => service.identity).filter(Boolean);
+    const missing = services.filter((service) => !service.identity).map((service) => service.id);
+    const distinct = (key) => [...new Set(identities.map((identity) => identity[key]))];
+    const profiles = distinct('profile');
+    const versions = distinct('version');
+    const revisions = distinct('revision');
+    const issues = [];
+
+    if (missing.length) issues.push(`Identity unavailable: ${missing.join(', ')}`);
+    if (profiles.length > 1) issues.push(`Mixed runtime profiles: ${profiles.join(', ')}`);
+    if (versions.length > 1) issues.push(`Mixed product versions: ${versions.join(', ')}`);
+    if (revisions.length > 1) issues.push(`Mixed build revisions: ${revisions.join(', ')}`);
+
+    let status = issues.length ? 'degraded' : 'ok';
+    if (status === 'ok' && revisions.length === 1 && revisions[0] === 'unknown') {
+        status = 'unverified';
+        issues.push('Build revision is not embedded in this process.');
+    }
+
+    return Object.freeze({ status, profiles, versions, revisions, missing, issues });
 }
 
 /**
@@ -83,12 +123,15 @@ async function probe(svc, localHealth) {
         const ollama = localHealth && localHealth.ollama && localHealth.ollama.status;
         const issues = [];
         if (mongo !== 'connected') issues.push(`mongodb: ${mongo || 'unknown'}`);
-        if (ollama !== 'connected') issues.push(`ollama: ${ollama || 'unknown'}`);
         return {
             id: svc.id, label: svc.label, port: svc.port,
             status: issues.length ? 'degraded' : 'ok',
             latency_ms: 0,
             issues,
+            identity: identityFromDetail(createServiceIdentity({ service: 'agentx-core', version: CORE_VERSION })),
+            capabilities: {
+                ollama: { status: ollama || 'unknown', optional: true }
+            },
             detail: { mongodb: mongo || 'unknown', ollama: ollama || 'unknown' }
         };
     }
@@ -105,18 +148,28 @@ async function probe(svc, localHealth) {
 
         let status = (res.status >= 200 && res.status < 400) ? 'ok' : 'degraded';
         status = statusFromDetail(detail, status);
+        const observedIdentity = identityFromDetail(detail);
+        const identityMatches = observedIdentity?.service === svc.identity;
+        const issues = issuesFromDetail(detail);
+        if (observedIdentity && !identityMatches) {
+            issues.push('identity: unexpected service');
+            status = 'degraded';
+        }
         return {
             id: svc.id, label: svc.label, port: svc.port,
             status, latency_ms: latency,
-            issues: issuesFromDetail(detail),
-            detail: detail || { http: res.status }
+            issues,
+            identity: identityMatches ? observedIdentity : null,
+            detail: { httpStatus: res.status }
         };
     } catch (err) {
+        const reason = err && err.name === 'AbortError' ? 'timeout' : 'unreachable';
         return {
             id: svc.id, label: svc.label, port: svc.port,
             status: 'down', latency_ms: null,
-            issues: [(err && err.name === 'AbortError' ? 'timeout' : (err && (err.code || err.message)) || 'unreachable')],
-            detail: { error: err && err.name === 'AbortError' ? 'timeout' : (err && (err.code || err.message)) || 'unreachable' }
+            issues: [reason],
+            identity: null,
+            detail: { reason }
         };
     } finally {
         clearTimeout(timer);
@@ -130,22 +183,34 @@ async function probe(svc, localHealth) {
  */
 async function getPortalStatus(localHealth) {
     const services = await Promise.all(SERVICES.map((service) => probe(service, localHealth)));
+    const consistency = summarizeIdentityConsistency(services);
     const count = (s) => services.filter((r) => r.status === s).length;
     const serviceDown = count('down');
     const serviceDegraded = count('degraded');
-    const status = serviceDown ? 'down' : (serviceDegraded ? 'degraded' : 'ok');
+    const status = serviceDown
+        ? 'down'
+        : (serviceDegraded || consistency.status === 'degraded' ? 'degraded' : 'ok');
+    const generatedAt = new Date().toISOString();
 
     return {
-        generated_at: new Date().toISOString(),
+        generatedAt,
+        generated_at: generatedAt,
         summary: {
             status,
             total: services.length,
             healthy: count('ok'),
             degraded: serviceDegraded,
-            down: serviceDown
+            down: serviceDown,
+            identityStatus: consistency.status
         },
+        consistency,
         services
     };
 }
 
-module.exports = { getPortalStatus, SERVICES };
+module.exports = {
+    getPortalStatus,
+    identityFromDetail,
+    summarizeIdentityConsistency,
+    SERVICES
+};

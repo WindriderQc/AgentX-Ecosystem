@@ -130,12 +130,18 @@ class ModelManager {
     async deleteModel(model) {
         const target = this.modelTarget(model);
         if (!target.host) return alert('This model does not have a specific Ollama host.');
-        if (!confirm(`Delete ${target.name} from ${target.hostName}? This cannot be undone.`)) return;
+        const headers = await window.AgentXTypedConfirmation.confirm({
+            action: 'DELETE OLLAMA MODEL',
+            resource: [target.name, 'FROM', target.host],
+            title: 'Delete installed model',
+            description: `Delete ${target.name} from ${target.hostName}? The model files will have to be pulled again to recover them.`
+        });
+        if (!headers) return;
 
         try {
             if (model.source?.type === 'ollama-host' || model.provider === 'ollama') {
                 const endpoint = `/api/models/ollama/${encodeURIComponent(target.name)}?host=${encodeURIComponent(target.host)}`;
-                const res = await fetch(endpoint, { method: 'DELETE' });
+                const res = await fetch(endpoint, { method: 'DELETE', headers });
                 await this.readResponse(res);
             } else {
                 alert('Deletion not supported for this provider yet.');
@@ -187,9 +193,7 @@ class ModelManager {
         // Or opening a mini-modal.
         // Let's use startChat since it's robust.
         const target = this.modelTarget(model);
-        const params = new URLSearchParams({ model: target.name });
-        if (target.host) params.set('host', target.host);
-        window.location.href = `/chat?${params.toString()}`;
+        window.location.href = window.AgentXPlaygroundLink.buildPlaygroundHref(target.name, target.host);
     }
 }
 

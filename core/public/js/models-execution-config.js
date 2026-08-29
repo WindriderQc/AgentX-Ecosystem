@@ -175,13 +175,20 @@ class ModelExecutionConfig {
 
     async reset() {
         if (!this.currentModel) return;
-        if (!confirm('Reset to auto-detected defaults?')) return;
+        const headers = await window.AgentXTypedConfirmation.confirm({
+            action: 'RESET MODEL EXECUTION CONFIG',
+            resource: this.currentModel,
+            title: 'Reset model execution settings',
+            description: `Remove every saved execution override for ${this.currentModel} and return to auto-detected defaults.`
+        });
+        if (!headers) return;
 
         try {
             this.resetBtn.disabled = true;
             this.resetBtn.textContent = 'Resetting...';
             const resp = await fetch(`/api/models/registry/${encodeURIComponent(this.currentModel)}/execution-config`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                headers
             });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();

@@ -19,6 +19,8 @@ const hostPrefService = require('../src/services/hostPreferenceService');
 const { modelsMatch } = require('../src/helpers/modelNameNormalization');
 const { validateHostUrl } = require('../src/helpers/ollamaHostConfig');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
+const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
 
 function resolveHostPreferenceUrl(req, res) {
   let rawHostUrl;
@@ -61,6 +63,7 @@ router.get('/host-preferences', async (_req, res) => {
     // canonical surface — legacy emit (defaultModels / pinnedModel / flat
     // keepAlive / contextSize / autoRestore) was retired in task 0158.
     const data = await Promise.all(normalizedPrefs.map(async (pref) => {
+      const observedAt = new Date().toISOString();
       const validation = validateHostUrl(pref.hostUrl);
       if (!validation.valid) {
         return {
@@ -72,7 +75,8 @@ router.get('/host-preferences', async (_req, res) => {
             runningModels: [],
             pinnedLoaded: null,
             anyPinnedLoaded: false,
-            blockedByAllowlist: true
+            blockedByAllowlist: true,
+            observedAt
           }
         };
       }
@@ -111,7 +115,8 @@ router.get('/host-preferences', async (_req, res) => {
             pinnedLoaded: primaryPin
               ? runningModels.some(rm => modelsMatch(rm.name, primaryPin))
               : null,
-            anyPinnedLoaded
+            anyPinnedLoaded,
+            observedAt
           }
         };
       } catch {
@@ -119,7 +124,7 @@ router.get('/host-preferences', async (_req, res) => {
           ...pref,
           pinnedModels: pinnedEntries,
           driftModels,
-          live: { online: false, runningModels: [], pinnedLoaded: null, anyPinnedLoaded: false }
+          live: { online: false, runningModels: [], pinnedLoaded: null, anyPinnedLoaded: false, observedAt }
         };
       }
     }));
@@ -202,6 +207,7 @@ router.delete('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
+    if (!requireTypedConfirmation(req, res, 'CLEAR HOST PIN', hostUrl)) return;
     const pref = await hostPrefService.clearPinnedModel(hostUrl);
     if (!pref) {
       return res.status(404).json({ status: 'error', message: 'Host preference not found' });
@@ -259,7 +265,7 @@ router.post('/host-preferences/:hostUrl(*)/swap', async (req, res) => {
 // 'benchmarking' so other consumers can route around the host.
 // ========================================
 
-router.post('/host-preferences/:hostUrl(*)/benchmark-claim', async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkServiceAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -286,7 +292,7 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim', async (req, res) =>
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', requireBenchmarkServiceAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -310,7 +316,7 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', 
   }
 });
 
-router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', async (req, res) => {
+router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkServiceAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -398,7 +404,7 @@ router.put('/host-preferences/:hostUrl(*)', async (req, res) => {
 // POST /host-preferences/:hostUrl/reload — reload default models on host
 // ========================================
 
-router.post('/host-preferences/:hostUrl(*)/reload', async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;

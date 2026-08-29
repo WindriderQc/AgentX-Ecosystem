@@ -28,11 +28,14 @@ describe('Health Check API', () => {
     expect(res.statusCode).toBe(200);
     expect(refreshOllamaHealth).toHaveBeenCalledTimes(1);
     expect(refreshOllamaHealth).toHaveBeenCalledWith(systemHealth);
-    // Canonical envelope (task 0355): {ok, service, version, ts}.
+    // Canonical envelope: release, profile, and observation identity are
+    // additive so older health consumers remain compatible.
     expect(res.body).toEqual(expect.objectContaining({
       ok: true,
       service: 'agentx-core',
       version: expect.any(String),
+      profile: expect.stringMatching(/^(demo|full)$/),
+      revision: expect.any(String),
       ts: expect.any(String),
     }));
     expect(new Date(res.body.ts).toISOString()).toBe(res.body.ts);

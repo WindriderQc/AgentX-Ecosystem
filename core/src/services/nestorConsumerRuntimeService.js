@@ -232,7 +232,37 @@ async function executeInference(input, { runtimeServices, signal } = {}) {
   };
 }
 
-async function getRouterSnapshot() {
+const ABSOLUTE_URL_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
+
+function publicMessage(value) {
+  if (value == null) return null;
+  return String(value).replace(ABSOLUTE_URL_PATTERN, '[redacted-endpoint]').slice(0, 500);
+}
+
+function publicConfiguredRoute(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    model: value.model || null,
+    host: value.host || null,
+  };
+}
+
+function publicReadiness(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    stage: value.stage || null,
+    profiledAt: value.profiledAt || null,
+    profileDepth: value.profileDepth || null,
+    benchmarkQualified: value.benchmarkQualified === true,
+    benchmarkedAt: value.benchmarkedAt || null,
+    stale: value.stale === true,
+    hostId: value.hostId || null,
+    scope: value.scope || null,
+    isReady: value.isReady === true,
+  };
+}
+
+async function getRouterSnapshot(options = {}) {
   await routerConfig.ensureTaskModelOverridesLoaded();
   const state = routerConfig.getTaskModelConfigState();
   const routes = {};
@@ -245,43 +275,51 @@ async function getRouterSnapshot() {
         durationMs: 30000,
         createSoftClaim: false,
       });
+      const resolvedHostUrl = recommendation.url || routerConfig.HOSTS[configured.effective?.host] || null;
+      const available = Boolean(recommendation.model && resolvedHostUrl);
       routes[operation] = {
         taskType,
-        default: configured.default || null,
-        override: configured.override || null,
-        effective: configured.effective || null,
+        default: publicConfiguredRoute(configured.default),
+        override: publicConfiguredRoute(configured.override),
+        effective: publicConfiguredRoute(configured.effective),
         provenance: configured.isOverride ? 'operator-override' : 'router-default',
         model: recommendation.model || configured.effective?.model || null,
         hostKey: recommendation.host || configured.effective?.host || null,
-        hostUrl: recommendation.url || routerConfig.HOSTS[configured.effective?.host] || null,
-        readiness: recommendation.readiness || null,
+        readiness: publicReadiness(recommendation.readiness),
         lane: lanePolicy.resolveLane(`nestor/desktop/${operation}`).name,
         routingSource: recommendation.source || null,
-        reason: recommendation.reason || null,
-        available: Boolean(recommendation.model && recommendation.url),
+        reason: publicMessage(recommendation.reason)
+          || (available ? null : 'Routing target is unavailable.'),
+        available,
       };
     } catch (error) {
       routes[operation] = {
         taskType,
-        default: configured.default || null,
-        override: configured.override || null,
-        effective: configured.effective || null,
+        default: publicConfiguredRoute(configured.default),
+        override: publicConfiguredRoute(configured.override),
+        effective: publicConfiguredRoute(configured.effective),
         provenance: configured.isOverride ? 'operator-override' : 'router-default',
         model: configured.effective?.model || null,
         hostKey: configured.effective?.host || null,
-        hostUrl: routerConfig.HOSTS[configured.effective?.host] || null,
         readiness: null,
         lane: lanePolicy.resolveLane(`nestor/desktop/${operation}`).name,
         routingSource: null,
-        reason: error.message,
+        reason: publicMessage(error.message),
         available: false,
       };
     }
   }
 
+  const observedAt = typeof options.now === 'function' ? options.now() : new Date();
+  const generatedAt = observedAt instanceof Date
+    ? observedAt.toISOString()
+    : new Date(observedAt).toISOString();
+
   return {
+    generatedAt,
     available: Object.values(routes).some((route) => route.available),
     readOnly: true,
+    topology: 'opaque',
     modelCatalog: '/api/models/all',
     modelCatalogMode: 'embedded-in-routes',
     effectiveRoute: '/api/consumers/nestor/v1/router',
@@ -294,4 +332,7 @@ module.exports = {
   normalizeRequest,
   executeInference,
   getRouterSnapshot,
+  publicConfiguredRoute,
+  publicMessage,
+  publicReadiness,
 };

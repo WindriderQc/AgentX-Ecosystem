@@ -1,5 +1,83 @@
 /* AgentX shared platform chrome: one global, intent-oriented navigation. */
 
+.agentx-confirm-dialog {
+  width: min(560px, calc(100vw - 32px));
+  padding: 0;
+  color: #e5edf7;
+  background: #111827;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  border-radius: 14px;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.62);
+}
+
+.agentx-confirm-dialog::backdrop {
+  background: rgba(2, 6, 23, 0.78);
+  backdrop-filter: blur(4px);
+}
+
+.agentx-confirm-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px 16px;
+  padding: 24px;
+}
+
+.agentx-confirm-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: #fecaca;
+  background: rgba(220, 38, 38, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.34);
+  border-radius: 12px;
+}
+
+.agentx-confirm-copy { min-width: 0; }
+.agentx-confirm-copy h2 { margin: 2px 0 8px; font-size: 1.22rem; }
+.agentx-confirm-copy p { margin: 0 0 12px; color: #bac6d6; line-height: 1.5; }
+.agentx-confirm-copy .agentx-confirm-kicker { margin: 0; color: #fca5a5; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.11em; text-transform: uppercase; }
+.agentx-confirm-copy code { overflow-wrap: anywhere; color: #fff; }
+.agentx-confirm-copy label { display: block; margin-bottom: 6px; font-size: 0.82rem; font-weight: 700; }
+.agentx-confirm-copy input { box-sizing: border-box; width: 100%; padding: 10px 12px; color: #f8fafc; background: #080f1c; border: 1px solid #64748b; border-radius: 8px; font: inherit; }
+.agentx-confirm-copy input:focus-visible { outline: 3px solid #7cf0ff; outline-offset: 2px; }
+.agentx-confirm-copy .agentx-confirm-error { min-height: 1.4em; margin: 6px 0 0; color: #fca5a5; font-size: 0.82rem; }
+.agentx-confirm-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+.agentx-confirm-submit { color: #fff; background: #b91c1c; border-color: #ef4444; }
+.agentx-confirm-submit:disabled { cursor: not-allowed; opacity: 0.45; }
+
+@media (max-width: 520px) {
+  .agentx-confirm-card { grid-template-columns: 1fr; padding: 20px; }
+  .agentx-confirm-actions { flex-direction: column-reverse; }
+  .agentx-confirm-actions .btn { width: 100%; }
+}
+
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 12px;
+  z-index: 12000;
+  padding: 10px 14px;
+  border: 2px solid #7cf0ff;
+  border-radius: 8px;
+  background: #07111f;
+  color: #fff;
+  font: 750 14px/1.2 system-ui, sans-serif;
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.skip-content-target {
+  display: block;
+  height: 0;
+  overflow: hidden;
+}
+
 #nav-container {
   position: sticky;
   top: 0;
@@ -101,6 +179,11 @@
   border-color: rgba(148, 163, 184, 0.12);
 }
 
+#nav-container :where(a, button):focus-visible {
+  outline: 3px solid #7cf0ff;
+  outline-offset: 3px;
+}
+
 .nav-link.active,
 .nav-item.open > .nav-link {
   color: var(--accent, #7cf0ff);
@@ -151,7 +234,6 @@
   height: 12px;
 }
 
-.nav-item:hover .nav-dropdown,
 .nav-item.open .nav-dropdown {
   display: block;
   animation: navFadeIn 0.2s ease-out;
@@ -279,7 +361,7 @@ body[data-agentx-profile="demo"] #nav-container .nav-brand {
 @media (max-width: 860px) {
   #nav-container {
     max-width: 100vw;
-    overflow-x: clip;
+    overflow: visible;
   }
 
   #nav-container .top-nav {
@@ -290,7 +372,7 @@ body[data-agentx-profile="demo"] #nav-container .nav-brand {
     height: auto !important;
     min-height: 88px;
     padding: 10px 14px 12px;
-    overflow: clip;
+    overflow: visible;
     max-width: 100vw;
   }
 
@@ -323,6 +405,10 @@ body[data-agentx-profile="demo"] #nav-container .nav-brand {
 
   #nav-container .top-nav .nav-right::-webkit-scrollbar {
     display: none;
+  }
+
+  #nav-container.has-open-menu .top-nav .nav-right {
+    overflow: visible !important;
   }
 
   #nav-container .top-nav .nav-item {
@@ -369,7 +455,7 @@ body[data-agentx-profile="demo"] #nav-container .nav-brand {
   #nav-container .top-nav .nav-right {
     justify-content: space-between;
     gap: 2px;
-    overflow-x: visible !important;
+    overflow-x: auto !important;
   }
 
   #nav-container .top-nav .nav-link {
@@ -392,5 +478,17 @@ body[data-agentx-profile="demo"] #nav-container .nav-brand {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link,
+  .nav-link,
+  .dropdown-item {
+    transition: none !important;
+  }
+
+  .nav-item.open .nav-dropdown {
+    animation: none !important;
   }
 }

@@ -28,19 +28,15 @@ describe('browser public URL authority', () => {
   });
 
   test('composed services resolve the canonical contract from Core config', async () => {
-    const fetchImpl = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        publicUrls: {
-          core: 'https://192.0.2.99/',
-          benchmark: 'http://bench.lan:4081/',
-          rag: 'http://rag.lan:4082/',
-        },
-      }),
+    const loadCoreConfig = jest.fn().mockResolvedValue({
+      publicUrls: {
+        core: 'https://192.0.2.99/',
+        benchmark: 'http://bench.lan:4081/',
+        rag: 'http://rag.lan:4082/',
+      },
     });
     const resolve = createCorePublicUrlsResolver({
-      coreServiceUrl: 'http://core:3080/',
-      fetchImpl,
+      loadCoreConfig,
       env: {},
     });
 
@@ -49,9 +45,24 @@ describe('browser public URL authority', () => {
       benchmark: 'http://bench.lan:4081',
       rag: 'http://rag.lan:4082',
     });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      'http://core:3080/api/config',
-      expect.objectContaining({ headers: { Accept: 'application/json' } })
-    );
+    expect(loadCoreConfig).toHaveBeenCalledWith(expect.objectContaining({
+      signal: expect.any(Object),
+    }));
+  });
+
+  test('does not own a fallback transport when no bounded config loader is injected', async () => {
+    const fetchImpl = jest.fn();
+    const resolve = createCorePublicUrlsResolver({
+      coreServiceUrl: 'http://core:3080/',
+      fetchImpl,
+      env: {},
+    });
+
+    await expect(resolve()).resolves.toEqual({
+      core: 'http://localhost:3080',
+      benchmark: 'http://localhost:3081',
+      rag: 'http://localhost:3082',
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,47 @@ function isLoopbackAddress(address) {
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 }
 
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeHostname(value) {
+  const input = String(value || '').trim();
+  if (!input) return '';
+  try {
+    const parsed = new URL(input.includes('://') ? input : `http://${input}`);
+    return parsed.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function configuredOperatorUiHosts() {
+  const configured = [
+    ...splitList(process.env.AGENTX_OPERATOR_UI_HOSTS),
+    ...splitList(process.env.AGENTX_TRUSTED_UI_HOSTS),
+    process.env.CORE_PUBLIC_URL,
+  ].filter(Boolean);
+  return new Set([
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    ...configured.map(normalizeHostname).filter(Boolean),
+  ]);
+}
+
+function requestHostname(req) {
+  return normalizeHostname(String(req.get?.('host') || '').split(',')[0].trim());
+}
+
+function operatorUiHostAllowed(req) {
+  const host = requestHostname(req);
+  return Boolean(host) && configuredOperatorUiHosts().has(host);
+}
+
 function expectedOperatorToken() {
   return process.env.AGENTX_OPERATOR_TOKEN || process.env.AGENTX_ADMIN_TOKEN || '';
 }
@@ -31,6 +72,13 @@ function operatorTokenAllowed(req) {
 }
 
 function sameOriginUiAllowed(req) {
+  if (!operatorUiHostAllowed(req)) return false;
+  const remoteAddress = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '';
+  const hostName = requestHostname(req);
+  const localTarget = hostName === 'localhost' || hostName === '127.0.0.1' || hostName === '::1';
+  const trustLoopbackProxyUi = String(process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI || '')
+    .trim().toLowerCase() === 'true';
+  if (!isLoopbackAddress(remoteAddress) && !(trustLoopbackProxyUi && localTarget)) return false;
   let origin = String(req.get?.('origin') || '').trim();
   const fetchSite = String(req.get?.('sec-fetch-site') || '').trim().toLowerCase();
   if (!origin) {
@@ -51,11 +99,14 @@ function sameOriginUiAllowed(req) {
 }
 
 function hasBrowserRequestSignals(req) {
+  // Native Node/Undici fetch sends `Sec-Fetch-Mode: cors` even for CLI and
+  // service calls. Mode alone is therefore not browser identity. Origin,
+  // Referer, and Sec-Fetch-Site are the signals that require browser CSRF
+  // handling.
   return Boolean(
     req.get?.('origin')
     || req.get?.('referer')
     || req.get?.('sec-fetch-site')
-    || req.get?.('sec-fetch-mode')
   );
 }
 
@@ -102,6 +153,9 @@ function requireOperatorUiAccess(req, res, next) {
 
 module.exports = {
   isLoopbackAddress,
+  configuredOperatorUiHosts,
+  requestHostname,
+  operatorUiHostAllowed,
   expectedOperatorToken,
   presentedOperatorToken,
   operatorTokenAllowed,

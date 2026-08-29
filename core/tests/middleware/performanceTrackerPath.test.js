@@ -23,6 +23,15 @@ describe('performance tracker path capture', () => {
       expect(tracker.normalizePath('/api/widgets/summary/events'))
         .toBe('/api/widgets/summary/events');
     });
+
+    test('rolls nullish client interpolation into one visible invalid-id bucket', () => {
+      expect(tracker.normalizePath('/api/family/room/undefined'))
+        .toBe('/api/family/room/:invalid-id');
+      expect(tracker.normalizePath('/api/family/room/null'))
+        .toBe('/api/family/room/:invalid-id');
+      expect(tracker.normalizePath('/api/family/room/undefined-room'))
+        .toBe('/api/family/room/undefined-room');
+    });
   });
 
   describe('mounted routers', () => {

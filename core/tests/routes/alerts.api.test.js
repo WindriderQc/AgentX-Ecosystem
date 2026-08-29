@@ -240,6 +240,12 @@ describe('Alert API Routes', () => {
       expect(response.body.status).toBe('success');
       expect(response.body.data.alerts).toHaveLength(3);
       expect(response.body.data.total).toBe(3);
+      expect(response.body.data.summary).toEqual(expect.objectContaining({
+        total: 3,
+        activeCount: 1,
+        byStatus: { active: 1, acknowledged: 1, resolved: 1 }
+      }));
+      expect(response.body.data.summary.basis.activePredicate).toEqual({ status: 'active' });
     });
 
     it('should filter alerts by status', async () => {
@@ -281,6 +287,33 @@ describe('Alert API Routes', () => {
       const severities = response.body.data.alerts.map(a => a.severity);
       // Critical should come first (high priority)
       expect(severities[0]).toBe('critical');
+    });
+
+    it('normalizes legacy templates and returns full active counts with a limited page', async () => {
+      await Alert.create({
+        title: 'VRAM displacement — {{component}}',
+        message: 'Displacement on {{component}}',
+        severity: 'critical',
+        status: 'active',
+        source: 'agentx',
+        fingerprint: 'legacy-template',
+        ruleId: 'vram-displacement',
+        ruleName: 'VRAM displacement',
+        context: { component: 'scheduler' },
+        lastOccurrence: new Date('2030-01-01T00:00:00Z')
+      });
+
+      const response = await request(app)
+        .get('/api/alerts')
+        .query({ status: 'active', limit: 1 })
+        .expect(200);
+
+      expect(response.body.data.alerts).toHaveLength(1);
+      expect(response.body.data.total).toBe(2);
+      expect(response.body.data.summary.activeCount).toBe(2);
+      expect(response.body.data.summary.bySeverity.critical).toBe(2);
+      expect(response.body.data.alerts[0].title).toBe('VRAM displacement — scheduler');
+      expect(JSON.stringify(response.body.data.alerts[0])).not.toContain('{{component}}');
     });
   });
 

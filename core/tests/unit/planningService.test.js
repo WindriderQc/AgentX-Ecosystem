@@ -1,6 +1,7 @@
 const {
   computeMetricProgress,
-  computeTaskProgress
+  computeTaskProgress,
+  referenceSemanticsFor
 } = require('../../src/services/planningService');
 
 describe('planningService progress calculations', () => {
@@ -43,5 +44,23 @@ describe('planningService progress calculations', () => {
 
   test('returns zero when no tasks are linked', () => {
     expect(computeTaskProgress([])).toBe(0);
+  });
+
+  test('marks completed percentages and task links as non-execution reference semantics', () => {
+    expect(referenceSemanticsFor({
+      status: 'completed',
+      progress: { mode: 'tasks' }
+    }, [
+      { status: 'done' },
+      { status: 'in_progress' }
+    ])).toEqual(expect.objectContaining({
+      lifecycle: 'frozen',
+      currentExecution: false,
+      progressBasis: 'recorded_completed_status',
+      progressImpliesCurrentExecution: false,
+      linkageMeaning: 'reference_only',
+      linkedOpenTaskCount: 1,
+      currentExecutionSource: '/pipeline'
+    }));
   });
 });

@@ -12,55 +12,36 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const logger = require('../config/logger');
 const ActivityLog = require('../models/ActivityLog');
-const fetch = require('node-fetch');
 const { normalizeHostUrl } = require('../src/helpers/ollamaHostConfig');
+const {
+  createOperationsHealthClient,
+  publicOperationsHealthError,
+} = require('../src/services/operationsHealthClient');
 
 const DEFAULT_CLAWDX_OLLAMA_URL = '';
-function joinUrl(baseUrl, path) {
-  const base = String(baseUrl || '').replace(/\/+$/, '');
-  const suffix = String(path || '').startsWith('/') ? path : `/${path || ''}`;
-  return `${base}${suffix}`;
-}
 
-async function probeFirstJson(baseUrl, paths, timeoutMs = 5000) {
+async function probeFirstJson(healthClient, paths) {
   let lastError = 'No response';
   let lastStatus = null;
 
   for (const path of paths) {
-    const url = joinUrl(baseUrl, path);
     try {
-      const response = await fetch(url, { timeout: timeoutMs });
-      lastStatus = response.status;
-      const bodyText = await response.text();
-      let data = null;
-      // `json` records whether the body actually parsed. `ok` stays "the HTTP
-      // call succeeded" because some probes (e.g. /health) legitimately answer
-      // in plain text — but a caller that needs structure must be able to tell
-      // "empty list" from "not JSON at all". Without that distinction an HTML
-      // page scores as a successful probe carrying zero items (task 0538).
-      let json = false;
-      if (bodyText) {
-        try {
-          data = JSON.parse(bodyText);
-          json = true;
-        } catch (_err) {
-          data = bodyText;
-        }
-      }
+      const result = await healthClient.probeOptionalRuntime(path);
+      lastStatus = result.status;
 
-      if (response.ok) {
+      if (result.ok) {
         return {
           ok: true,
-          json,
-          url,
-          status: response.status,
-          data
+          json: result.json,
+          url: result.url,
+          status: result.status,
+          data: result.data
         };
       }
 
-      lastError = `HTTP ${response.status}`;
+      lastError = `HTTP ${result.status}`;
     } catch (error) {
-      lastError = error.message;
+      lastError = publicOperationsHealthError(error);
     }
   }
 
@@ -82,6 +63,13 @@ router.get('/health', async (req, res) => {
       process.env.OLLAMA_HOST_TERTIARY ||
       process.env.OLLAMA_HOST_3 ||
       DEFAULT_CLAWDX_OLLAMA_URL;
+    const ollamaHost = normalizeHostUrl(process.env.OLLAMA_HOST) || 'http://localhost:11434';
+    const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
+    const healthClient = createOperationsHealthClient({
+      optionalRuntimeUrl: clawdxOllamaUrl,
+      ollamaUrl: ollamaHost,
+      qdrantUrl,
+    });
     const healthStatus = {
       timestamp: new Date().toISOString(),
       status: 'healthy', // Will be downgraded if any service fails
@@ -135,11 +123,10 @@ router.get('/health', async (req, res) => {
 
     // 3. Ollama (primary host)
     try {
-      const ollamaHost = normalizeHostUrl(process.env.OLLAMA_HOST) || 'http://localhost:11434';
-      const response = await fetch(`${ollamaHost}/api/tags`, { timeout: 5000 });
+      const response = await healthClient.getOllamaTags();
 
       if (response.ok) {
-        const data = await response.json();
+        const data = response.data;
         healthStatus.services.ollama = {
           status: 'up',
           host: ollamaHost,
@@ -153,7 +140,7 @@ router.get('/health', async (req, res) => {
         healthStatus.services.ollama = {
           status: 'error',
           host: normalizeHostUrl(process.env.OLLAMA_HOST) || process.env.OLLAMA_HOST,
-          error: error.message
+          error: publicOperationsHealthError(error)
         };
       healthStatus.status = 'degraded';
     }
@@ -161,8 +148,7 @@ router.get('/health', async (req, res) => {
     // 6. Qdrant (if configured)
     if (process.env.VECTOR_STORE_TYPE === 'qdrant') {
       try {
-        const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
-        const response = await fetch(`${qdrantUrl}/healthz`, { timeout: 5000 });
+        const response = await healthClient.getQdrantHealth();
 
         if (response.ok) {
           healthStatus.services.qdrant = {
@@ -176,15 +162,15 @@ router.get('/health', async (req, res) => {
         healthStatus.services.qdrant = {
           status: 'error',
           url: process.env.QDRANT_URL,
-          error: error.message
+          error: publicOperationsHealthError(error)
         };
       }
     }
 
     // 7. Optional runtime fallback plus external-adapter status
     const [clawdxTagsProbe, clawdxPsProbe] = await Promise.all([
-      probeFirstJson(clawdxOllamaUrl, ['/api/tags']),
-      probeFirstJson(clawdxOllamaUrl, ['/api/ps'])
+      probeFirstJson(healthClient, ['/api/tags']),
+      probeFirstJson(healthClient, ['/api/ps'])
     ]);
     const clawdxModels = clawdxTagsProbe.ok && Array.isArray(clawdxTagsProbe.data?.models)
       ? clawdxTagsProbe.data.models

@@ -202,9 +202,13 @@ describe('Router Config API Routes', () => {
 
     const response = await request(app)
       .post('/api/router/config/reset')
-      .expect(409);
+      .expect(400);
 
-    expect(response.body.code).toBe('deployment_defaults_confirmation_required');
+    expect(response.body.code).toBe('CONFIRMATION_REQUIRED');
+    expect(response.body.confirmation).toEqual({
+      header: 'X-AgentX-Confirm',
+      expected: 'RESET ROUTER CONFIG'
+    });
     expect(mockOverrides.quick_chat).toEqual({ model: 'qwen2.5:7b', host: 'tertiary' });
   });
 
@@ -216,7 +220,7 @@ describe('Router Config API Routes', () => {
 
     const response = await request(app)
       .post('/api/router/config/reset')
-      .send({ confirmDeploymentDefaults: true })
+      .set('X-AgentX-Confirm', 'RESET ROUTER CONFIG')
       .expect(200);
 
     expect(response.body.data.taskModels.quick_chat).toEqual(mockDefaultTaskModels.quick_chat);

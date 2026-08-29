@@ -1,5 +1,5 @@
   <div class="bg-grid"></div>
-  <div class="page history-hidden">
+  <main class="page history-hidden" id="main-content">
     <aside class="sidebar">
       <div class="sidebar-head">
         <h2>History</h2>
@@ -104,7 +104,7 @@
       <% const fullPlayground = locals.agentxProfile !== 'demo'; %>
       <details class="chat-routing-lab" <%= fullPlayground ? 'open' : '' %>>
         <summary>
-          <span><i class="fas fa-route" aria-hidden="true"></i> Open routing cockpit</span>
+          <span><i class="fas fa-route" aria-hidden="true"></i> Routing cockpit</span>
           <small>Intent, host fleet, route evidence, and manual controls</small>
         </summary>
         <div class="chat-routing-lab__surface">
@@ -210,7 +210,7 @@
           <span class="chat-command-status__icon" aria-hidden="true"><i class="fas fa-circle-notch"></i></span>
           <span class="chat-command-status__copy">
             <strong class="status-chip" id="statusChip" data-tone="muted" aria-live="polite">Getting ready</strong>
-            <small id="chatStatusHelp">Agent X will handle the setup when you send.</small>
+            <small id="chatStatusHelp">Agent X is checking the configured route.</small>
           </span>
         </div>
 
@@ -224,7 +224,7 @@
           <button id="toggleHistoryBtn" class="chat-command-secondary" type="button" title="Show conversation history" aria-label="Show conversation history">
             <i class="fas fa-clock-rotate-left" aria-hidden="true"></i><span>Conversations</span>
           </button>
-          <button id="toggleConfigBtn" class="take-controls-button" type="button" aria-expanded="false" aria-controls="configDrawer">
+          <button id="toggleConfigBtn" class="take-controls-button" type="button" aria-label="Open precision controls" aria-expanded="false" aria-controls="configDrawer">
             <i class="fas fa-sliders" aria-hidden="true"></i><span>Take the controls</span>
           </button>
         </div>
@@ -266,19 +266,19 @@
         <!-- Agent Selector (collapsible panel) -->
         <div class="agent-selector" id="agentSelector">
           <!-- Collapsed bar -->
-          <div class="agent-selector-bar" id="agentSelectorBar">
-            <div class="agent-selector-bar-left">
+          <button class="agent-selector-bar" id="agentSelectorBar" type="button" aria-expanded="false" aria-controls="agentSelectorPanel">
+            <span class="agent-selector-bar-left">
               <i class="fas fa-layer-group" style="color: var(--accent, #7c3aed); margin-right: 8px;"></i>
               <span class="agent-selector-label" id="selectorLabel">Quick Chat</span>
-            </div>
-            <div class="agent-selector-bar-right">
+            </span>
+            <span class="agent-selector-bar-right">
               <span class="agent-selector-count" id="selectorCount"></span>
               <i class="fas fa-chevron-down agent-selector-chevron" id="selectorChevron"></i>
-            </div>
-          </div>
+            </span>
+          </button>
 
           <!-- Expanded panel (slides open) -->
-          <div class="agent-selector-panel" id="agentSelectorPanel">
+          <div class="agent-selector-panel" id="agentSelectorPanel" inert>
 
             <!-- Chat Agents -->
             <div class="launcher-section" id="launcherChat">
@@ -286,20 +286,20 @@
                 <i class="fas fa-comments"></i> Chat
               </div>
               <div class="agentx-launcher-grid" id="chatLauncherGrid">
-                <div class="agentx-card launcher-default-card selected" id="startChatCard" tabindex="0">
-                  <div class="agentx-card-avatar" style="--avatar-color: #7c3aed">
+                <button class="agentx-card launcher-default-card selected" id="startChatCard" type="button" aria-pressed="true">
+                  <span class="agentx-card-avatar" style="--avatar-color: #7c3aed">
                     <i class="fas fa-comments"></i>
-                  </div>
-                  <div class="agentx-card-content">
-                    <div class="agentx-card-header">
-                      <h4 class="agentx-card-name">Quick Chat</h4>
-                    </div>
-                    <p class="agentx-card-description">Start typing; Agent X handles the setup.</p>
-                  </div>
-                  <div class="agentx-card-actions">
-                    <button class="agentx-select-btn selected"><i class="fas fa-check"></i></button>
-                  </div>
-                </div>
+                  </span>
+                  <span class="agentx-card-content">
+                    <span class="agentx-card-header">
+                      <span class="agentx-card-name">Quick Chat</span>
+                    </span>
+                    <span class="agentx-card-description">Start with the configured route; manual recovery stays explicit.</span>
+                  </span>
+                  <span class="agentx-card-actions">
+                    <span class="agentx-select-btn selected" aria-hidden="true"><i class="fas fa-check"></i></span>
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -314,26 +314,37 @@
         </div>
 
         <!-- Chat Window (fills remaining height) -->
-        <div class="chat-window" id="chatWindow">
+        <div class="chat-window" id="chatWindow" role="region" aria-label="Conversation transcript" tabindex="0">
           <section class="chat-welcome" aria-labelledby="chat-welcome-title">
             <span class="chat-welcome__icon" aria-hidden="true"><i class="fas fa-message"></i></span>
             <p class="chat-welcome__eyebrow">Quick chat</p>
             <h1 id="chat-welcome-title">Ask Agent X anything.</h1>
-            <p>Just start typing. Agent X will handle the setup and keep every decision inspectable.</p>
+            <p>Start typing when the configured route is ready. If it needs attention, Agent X will name an installed model you can choose.</p>
             <div class="chat-welcome__starters" aria-label="Conversation starters">
               <button type="button" data-chat-starter="Summarize this topic for me: ">Summarize a topic</button>
               <button type="button" data-chat-starter="Help me brainstorm: ">Brainstorm</button>
               <button type="button" data-chat-starter="Explain this clearly: ">Explain something</button>
             </div>
-            <small><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> A balanced response is automatic. You can take control at any time.</small>
+            <small><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> Balanced uses the configured Standard route. You can take control at any time.</small>
           </section>
         </div>
+        <p class="chat-announcements" id="chatAnnouncements" role="status" aria-live="polite" aria-atomic="true"></p>
+
+        <section class="chat-route-recovery" id="chatRouteRecovery" aria-labelledby="chatRouteRecoveryTitle" hidden>
+          <span class="chat-route-recovery__icon" aria-hidden="true"><i class="fas fa-route"></i></span>
+          <div class="chat-route-recovery__copy">
+            <strong id="chatRouteRecoveryTitle">Configured route unavailable</strong>
+            <p id="chatRouteRecoveryStatus" role="status" aria-live="polite" aria-atomic="true">Checking installed models.</p>
+          </div>
+          <button class="chat-route-recovery__action" id="chatRouteRecoveryAction" type="button" aria-describedby="chatRouteRecoveryStatus">Review manual controls</button>
+        </section>
 
         <!-- Composer -->
         <div class="composer">
-          <textarea id="messageInput" rows="1" placeholder="Ask Agent X anything…"></textarea>
+          <label class="chat-announcements" for="messageInput">Message Agent X</label>
+          <textarea id="messageInput" rows="1" placeholder="Ask Agent X anything…" aria-describedby="chatStatusHelp"></textarea>
           <div class="composer-actions">
-            <select class="quick-select" id="quickActionSelect" title="Quick prompts">
+            <select class="quick-select" id="quickActionSelect" title="Quick prompts" aria-label="Choose a conversation starter">
               <option value="" disabled selected>Try a prompt...</option>
               <option value="What can you help me with?">Help</option>
               <option value="Summarize recent events.">Summary</option>
@@ -344,7 +355,7 @@
             <span class="char-count" id="charCount"></span>
             <div class="flex-spacer"></div>
             <button class="ghost small" id="clearBtn">Clear</button>
-            <button class="primary" id="sendBtn">Send</button>
+            <button class="primary" id="sendBtn" disabled title="Checking chat readiness">Send</button>
           </div>
         </div>
 
@@ -352,7 +363,7 @@
         <span id="threadId" style="display:none;"></span>
       </section>
     </div>
-  </div>
+  </main>
 
   <!-- Config Drawer (slides from right) -->
   <div class="config-drawer-backdrop" id="configDrawerBackdrop" aria-hidden="true"></div>
@@ -369,11 +380,11 @@
 
       <!-- Quick Access -->
       <div style="display:flex;gap:8px;margin-bottom:14px;">
-        <button class="ghost small" id="profileBtn" style="flex:1;">
-          <i class="fas fa-user" style="margin-right:5px;"></i>Profile
+        <button class="ghost small" id="profileBtn" type="button" aria-haspopup="dialog" aria-controls="profileModal" aria-expanded="false" style="flex:1;">
+          <i class="fas fa-user" aria-hidden="true" style="margin-right:5px;"></i>Profile
         </button>
-        <button class="ghost small" id="showShortcutsBtn" style="flex:1;" title="Keyboard Shortcuts (Ctrl+/)">
-          <i class="fas fa-keyboard" style="margin-right:5px;"></i>Shortcuts
+        <button class="ghost small" id="showShortcutsBtn" type="button" aria-haspopup="dialog" aria-controls="keyboardShortcutsDialog" aria-expanded="false" style="flex:1;" title="Keyboard Shortcuts (Ctrl+/)">
+          <i class="fas fa-keyboard" aria-hidden="true" style="margin-right:5px;"></i>Shortcuts
         </button>
       </div>
 
@@ -417,8 +428,8 @@
       </div>
 
       <div class="field">
-        <label>Response strategy</label>
-        <select id="routingModeSelect">
+        <label for="routingModeSelect">Response strategy</label>
+        <select id="routingModeSelect" aria-describedby="routingModeHint">
           <option value="quick">Fast — prioritize speed</option>
           <option value="standard">Balanced — recommended</option>
           <option value="deep">Deep reasoning — prioritize depth</option>
@@ -428,9 +439,9 @@
       </div>
 
       <div class="field">
-        <label>Ollama Host</label>
+        <label for="hostInput">Ollama host</label>
         <div class="input-row">
-          <select id="hostInput" style="flex: 1;">
+          <select id="hostInput" style="flex: 1;" aria-describedby="hostInputHint">
             <option value="">Loading hosts&hellip;</option>
           </select>
         </div>
@@ -438,9 +449,9 @@
       </div>
 
       <div class="field">
-        <label>Model</label>
+        <label for="modelSelect">Model</label>
         <div class="input-row">
-          <select id="modelSelect" style="flex: 1;">
+          <select id="modelSelect" style="flex: 1;" aria-describedby="modelSelectHint">
             <option value="">Load available models&hellip;</option>
           </select>
           <button class="icon-btn" id="refreshModels" title="Refresh models from Ollama" aria-label="Refresh available models">&orarr;</button>
@@ -449,61 +460,61 @@
       </div>
 
       <div class="field">
-        <label>System Prompt</label>
+        <label for="promptSelect">System prompt</label>
         <div class="input-row">
-          <select id="promptSelect" style="flex: 1;">
+          <select id="promptSelect" style="flex: 1;" aria-describedby="promptSelectHint">
             <option value="default_chat">Loading prompts&hellip;</option>
           </select>
           <button class="icon-btn" id="promptInfoBtn" title="View prompt details" aria-label="View prompt details">&oplus;</button>
         </div>
-        <div class="hint">Choose which system prompt to use for AI behavior.</div>
+        <div class="hint" id="promptSelectHint">Choose which system prompt to use for AI behavior.</div>
       </div>
 
       <div class="note" id="feedback">Waiting for configuration.</div>
 
       <div class="field inline-toggle">
-        <label>Streaming</label>
+        <span id="streamToggleLabel">Streaming</span>
         <label class="switch">
-          <input type="checkbox" id="streamToggle" checked>
-          <span class="slider"></span>
+          <input type="checkbox" id="streamToggle" checked aria-labelledby="streamToggleLabel" aria-describedby="streamToggleHint">
+          <span class="slider" aria-hidden="true"></span>
         </label>
-        <div class="hint">Stream responses in real-time.</div>
+        <div class="hint" id="streamToggleHint">Stream responses in real-time.</div>
       </div>
 
       <div class="field inline-toggle">
-        <label>Enable RAG</label>
+        <span id="ragToggleLabel">Enable RAG</span>
         <label class="switch">
-          <input type="checkbox" id="ragToggle" checked>
-          <span class="slider"></span>
+          <input type="checkbox" id="ragToggle" checked aria-labelledby="ragToggleLabel" aria-describedby="ragToggleHint">
+          <span class="slider" aria-hidden="true"></span>
         </label>
-        <div class="hint">Retrieve context from vector store.</div>
+        <div class="hint" id="ragToggleHint">Retrieve context from vector store.</div>
       </div>
 
       <div class="field inline-toggle">
-        <label>Thinking Mode</label>
+        <span id="thinkingToggleLabel">Thinking mode</span>
         <label class="switch">
-          <input type="checkbox" id="thinkingToggle">
-          <span class="slider"></span>
+          <input type="checkbox" id="thinkingToggle" aria-labelledby="thinkingToggleLabel" aria-describedby="thinkingToggleHint">
+          <span class="slider" aria-hidden="true"></span>
         </label>
-        <div class="hint">Unchecked uses automatic lane policy; checked forces think: true.</div>
+        <div class="hint" id="thinkingToggleHint">Unchecked uses automatic lane policy; checked forces think: true.</div>
       </div>
 
       <div class="field inline-toggle">
-        <label>Web Search</label>
+        <span id="webSearchToggleLabel">Web search</span>
         <label class="switch">
-          <input type="checkbox" id="webSearchToggle">
-          <span class="slider"></span>
+          <input type="checkbox" id="webSearchToggle" aria-labelledby="webSearchToggleLabel" aria-describedby="webSearchToggleHint">
+          <span class="slider" aria-hidden="true"></span>
         </label>
-        <div class="hint">Search the web via SearXNG before responding.</div>
+        <div class="hint" id="webSearchToggleHint">Search the web via SearXNG before responding.</div>
       </div>
 
       <!-- RAG Advanced Options Panel -->
       <div class="rag-options-panel" id="ragOptionsPanel" style="display: none;">
-        <div class="rag-panel-header" id="ragPanelHeader">
+        <button class="rag-panel-header" id="ragPanelHeader" type="button" aria-expanded="false" aria-controls="ragOptionsContent">
           <span><i class="fas fa-sliders-h" style="margin-right: 8px;"></i>RAG Advanced Options</span>
           <i class="fas fa-chevron-down" id="ragChevron"></i>
-        </div>
-        <div class="rag-panel-content" id="ragOptionsContent" style="display: none;">
+        </button>
+        <div class="rag-panel-content" id="ragOptionsContent" style="display: none;" hidden inert>
           <div class="rag-option-row">
             <label class="rag-toggle-label">
               <input type="checkbox" id="ragExpandQuery">
@@ -543,71 +554,71 @@
       </div>
 
       <div class="field inline-toggle">
-        <label>Show Message Stats</label>
+        <span id="statsToggleLabel">Show message stats</span>
         <label class="switch">
-          <input type="checkbox" id="statsToggle" checked>
-          <span class="slider"></span>
+          <input type="checkbox" id="statsToggle" checked aria-labelledby="statsToggleLabel" aria-describedby="statsToggleHint">
+          <span class="slider" aria-hidden="true"></span>
         </label>
-        <div class="hint">Display token usage and timing for each message.</div>
+        <div class="hint" id="statsToggleHint">Display token usage and timing for each message.</div>
       </div>
 
       <div class="field">
-        <label>System prompt</label>
+        <label for="systemPrompt">System prompt override</label>
         <textarea id="systemPrompt" rows="3">You are AgentX, a concise and capable local assistant. Keep answers brief and actionable.</textarea>
       </div>
 
       <div class="collapsible-section">
-        <div class="section-header" id="tuningHeader">
-          <h3>Model Tuning Parameters <span class="panel-toggle-icon">&#x25bc;</span></h3>
-        </div>
-        <div class="section-content hidden" id="tuningContent">
+        <button class="section-header" id="tuningHeader" type="button" aria-expanded="false" aria-controls="tuningContent">
+          <span class="tuning-section-title">Model Tuning Parameters <span class="panel-toggle-icon">&#x25bc;</span></span>
+        </button>
+        <div class="section-content hidden" id="tuningContent" hidden inert>
           <div class="options-grid">
             <div class="field">
-              <label>Temperature</label>
+              <label for="temperature">Temperature</label>
               <input type="range" id="temperature" min="0" max="2" step="0.05" value="0.7">
               <div class="value" data-for="temperature">0.7</div>
             </div>
             <div class="field">
-              <label>Top P</label>
+              <label for="topP">Top P</label>
               <input type="range" id="topP" min="0" max="1" step="0.01" value="0.9">
               <div class="value" data-for="topP">0.9</div>
             </div>
             <div class="field">
-              <label>Top K</label>
+              <label for="topK">Top K</label>
               <input type="number" id="topK" value="64" min="1" max="32000">
             </div>
             <div class="field">
-              <label>Context (tokens)</label>
+              <label for="numCtx">Context (tokens)</label>
               <input type="number" id="numCtx" value="" min="256" max="32000" step="256" placeholder="Modelfile default">
               <div class="hint">Blank uses the model's Modelfile or registry context. Set a value only for an explicit override.</div>
             </div>
             <div class="field">
-              <label>Repeat penalty</label>
+              <label for="repeatPenalty">Repeat penalty</label>
               <input type="number" id="repeatPenalty" value="1.05" min="0" max="2" step="0.01">
             </div>
             <div class="field">
-              <label>Presence penalty</label>
+              <label for="presencePenalty">Presence penalty</label>
               <input type="number" id="presencePenalty" value="0" min="-2" max="2" step="0.01">
             </div>
             <div class="field">
-              <label>Frequency penalty</label>
+              <label for="frequencyPenalty">Frequency penalty</label>
               <input type="number" id="frequencyPenalty" value="0" min="-2" max="2" step="0.01">
             </div>
             <div class="field">
-              <label>Num predict</label>
+              <label for="numPredict">Num predict</label>
               <input type="number" id="numPredict" value="" min="-1" max="8192" step="16" placeholder="Blank or -1 = unlimited">
               <div class="hint">Leave blank for uncapped responses. Use a number only if you want to limit output.</div>
             </div>
             <div class="field">
-              <label>Seed</label>
+              <label for="seed">Seed</label>
               <input type="number" id="seed" value="" placeholder="random">
             </div>
             <div class="field">
-              <label>Stop sequences</label>
+              <label for="stopSequences">Stop sequences</label>
               <input type="text" id="stopSequences" placeholder="e.g. ###,END">
             </div>
             <div class="field">
-              <label>Keep alive</label>
+              <label for="keepAlive">Keep alive</label>
               <input type="text" id="keepAlive" placeholder="e.g. 30s or -1">
               <div class="hint">Keep the model warm between calls.</div>
             </div>
@@ -628,39 +639,40 @@
   </div>
 
   <!-- Profile Modal -->
-  <div id="profileModal" class="modal hidden">
+  <div id="profileModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle" aria-describedby="profileModalDescription profilePersistenceNote" aria-hidden="true" tabindex="-1" inert>
     <div class="modal-content">
       <div class="modal-header">
-        <h2>User Profile & Memory</h2>
-        <button id="closeProfileBtn" class="close-btn">&times;</button>
+        <h2 id="profileModalTitle">User Profile &amp; Memory</h2>
+        <button id="closeProfileBtn" class="close-btn" type="button" aria-label="Close user profile">&times;</button>
       </div>
       <div class="modal-body">
+        <p class="hint" id="profileModalDescription">Personalize what Agent X remembers and how it should respond.</p>
         <div class="field">
-          <label>About You (Memory)</label>
-          <div class="hint">Facts the agent should remember about you (e.g., job, interests, background).</div>
-          <textarea id="userAbout" rows="5" placeholder="I am a software engineer interested in AI..."></textarea>
+          <label for="userAbout">About You (Memory)</label>
+          <div class="hint" id="userAboutHint">Facts the agent should remember about you (e.g., job, interests, background).</div>
+          <textarea id="userAbout" rows="5" aria-describedby="userAboutHint" placeholder="I am a software engineer interested in AI..."></textarea>
         </div>
         <div class="field">
-          <label>Preferred Language</label>
+          <label for="memoryLanguage">Preferred Language</label>
           <input type="text" id="memoryLanguage" placeholder="English">
         </div>
         <div class="field">
-          <label>Role / Context</label>
+          <label for="memoryRole">Role / Context</label>
           <input type="text" id="memoryRole" placeholder="e.g. Product manager focusing on UX">
         </div>
         <div class="field">
-          <label>Response Style</label>
+          <label for="memoryStyle">Response Style</label>
           <textarea id="memoryStyle" rows="2" placeholder="Concise, decisive, include next steps."></textarea>
         </div>
         <div class="field">
-          <label>Custom Instructions</label>
-          <div class="hint">How the agent should behave (e.g., always be concise).</div>
-          <textarea id="userInstructions" rows="3" placeholder="Be brief and professional."></textarea>
+          <label for="userInstructions">Custom Instructions</label>
+          <div class="hint" id="userInstructionsHint">How the agent should behave (e.g., always be concise).</div>
+          <textarea id="userInstructions" rows="3" aria-describedby="userInstructionsHint" placeholder="Be brief and professional."></textarea>
         </div>
-        <div class="hint">All profile data is saved to your AgentX database and persisted across conversations.</div>
+        <div class="hint" id="profilePersistenceNote">All profile data is saved to your AgentX database and persisted across conversations.</div>
         <div class="action-row">
-          <button class="ghost" id="resetProfileBtn">Reset</button>
-          <button class="primary" id="saveProfileBtn">Save Profile</button>
+          <button class="ghost" id="resetProfileBtn" type="button">Reset</button>
+          <button class="primary" id="saveProfileBtn" type="button">Save Profile</button>
         </div>
       </div>
     </div>

@@ -5,7 +5,7 @@
         <header class="backup-header" style="margin-bottom: 24px;">
             <div class="eyebrow">OPERATIONS</div>
             <h1><i class="fas fa-database"></i> Backup &amp; Restore</h1>
-            <p class="lede">Manual snapshot management for MongoDB, Qdrant, and ecosystem configuration. Trigger on demand, restore a named snapshot, or delete old ones.</p>
+            <p class="lede">Create and inspect persistent MongoDB, Qdrant, and supported product-configuration recovery artifacts. Live restore is disabled until a controlled offline rehearsal is explicitly enabled.</p>
         </header>
 
         <div id="toast" style="display:none; position:fixed; top:80px; right:24px; padding:12px 20px; border-radius:6px; color:#fff; z-index:1000; font-weight:500;"></div>
@@ -16,19 +16,19 @@
                 <div>
                     <h2 style="margin:0;"><i class="fas fa-gear" style="color:#7cf0ff;"></i> Settings</h2>
                     <div style="font-size:12px; color:#888; margin-top:4px;">
-                        Runtime settings persist to <code id="cfgFile">.backup-config.json</code> in the backup root. Env values set on boot win unless overridden at runtime.
+                        Retention settings persist inside logical recovery storage. Internal paths, service endpoints, and credentials are never projected to this page.
                     </div>
                 </div>
             </div>
 
             <div style="display:grid; grid-template-columns:auto 1fr auto; gap:12px 16px; align-items:center;">
-                <label style="color:#cbd5e1;">Backup root</label>
-                <code id="cfgBackupDir" style="color:#94a3b8;">—</code>
-                <span id="cfgBackupDirSrc" style="font-size:11px; color:#888;">—</span>
+                <label style="color:#cbd5e1;">Recovery storage</label>
+                <span id="cfgStorage" style="color:#94a3b8;">—</span>
+                <span id="cfgStorageLifecycle" style="font-size:11px; color:#888;">—</span>
 
-                <label style="color:#cbd5e1;">Qdrant local copy</label>
-                <code id="cfgQdrantDir" style="color:#94a3b8;">—</code>
-                <span style="font-size:11px; color:#888;">auto (root/qdrant)</span>
+                <label style="color:#cbd5e1;">Host-loss protection</label>
+                <span id="cfgStorageExport" style="color:#94a3b8;">—</span>
+                <span style="font-size:11px; color:#888;">not implied by local persistence</span>
 
                 <label style="color:#cbd5e1;">Retention (days, 0 = forever)</label>
                 <div>
@@ -37,19 +37,32 @@
                 </div>
                 <span id="cfgRetentionSrc" style="font-size:11px; color:#888;">—</span>
 
-                <label style="color:#cbd5e1;">Mongo URI</label>
-                <code id="cfgMongoUri" style="color:#94a3b8;">—</code>
-                <span style="font-size:11px; color:#888;">env (MONGODB_URI)</span>
+                <label style="color:#cbd5e1;">Config backup scope</label>
+                <span id="cfgConfigScope" style="color:#94a3b8;">—</span>
+                <span style="font-size:11px; color:#888;">runtime env, secrets, private adapters, data, and crontab excluded</span>
 
-                <label style="color:#cbd5e1;">RAG service URL</label>
-                <code id="cfgRagUrl" style="color:#94a3b8;">—</code>
-                <span style="font-size:11px; color:#888;">env (RAG_SERVICE_URL)</span>
+                <label style="color:#cbd5e1;">Restore policy</label>
+                <span id="cfgRestorePolicy" style="color:#f59e0b;">—</span>
+                <span style="font-size:11px; color:#888;">no coherent recovery-set proof yet</span>
+            </div>
+
+            <div id="cfgPolicyPanel" role="status" aria-live="polite" style="margin-top:16px; padding:12px 14px; border:1px solid #2a3145; border-radius:6px; background:#111827;">
+                <div style="display:grid; grid-template-columns:minmax(130px, auto) 1fr; gap:8px 16px; font-size:12px;">
+                    <strong style="color:#cbd5e1;">Creation cadence</strong>
+                    <span id="cfgScheduleStatus" style="color:#94a3b8;">Loading effective scheduler policy...</span>
+                    <strong style="color:#cbd5e1;">Failure retry</strong>
+                    <span id="cfgScheduleDetail" style="color:#94a3b8;">—</span>
+                    <strong style="color:#cbd5e1;">Retention enforcement</strong>
+                    <span id="cfgRetentionPolicy" style="color:#94a3b8;">—</span>
+                    <strong style="color:#cbd5e1;">Growth risk</strong>
+                    <span id="cfgGrowthRisk" style="color:#94a3b8;">—</span>
+                </div>
+                <div id="cfgPolicyWarnings" style="margin-top:10px; color:#94a3b8; font-size:11px; line-height:1.55;"></div>
             </div>
 
             <div style="margin-top:12px; padding:10px 12px; background:rgba(124,240,255,0.05); border-left:3px solid #7cf0ff; font-size:12px; color:#94a3b8;">
                 <i class="fas fa-info-circle"></i>
-                <strong>Backup root</strong> and <strong>Mongo/RAG URLs</strong> are env-only — changing requires editing the relevant <code>.env</code> (or <code>docker-compose.yml</code>) and re-applying with <code>./agentx up</code> to recreate the affected services.
-                <strong>Retention</strong> is runtime-editable and applies to the next backup operation.
+                <strong>Retention</strong> is runtime-editable and pruning runs after each successful backup operation; changing it does not delete anything immediately. Ordinary <code>down</code> preserves recovery storage. Only the exact confirmed <code>reset</code> removes it.
             </div>
         </section>
 
@@ -58,7 +71,8 @@
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px;">
                 <div>
                     <h2 style="margin:0;"><i class="fas fa-leaf" style="color:#4db33d;"></i> MongoDB</h2>
-                    <div style="font-size:12px; color:#888; margin-top:4px;">Stored at <code id="mongoRoot">—</code> &bull; override via <code>BACKUP_DIR</code> env</div>
+                    <div style="font-size:12px; color:#888; margin-top:4px;">Stored in persistent recovery storage.</div>
+                    <div id="mongoEvidence" style="font-size:11px; color:#94a3b8; margin-top:5px;">Loading inventory basis...</div>
                 </div>
                 <div style="display:flex; gap:12px; align-items:center;">
                     <span id="mongoStatus" style="color:#888; font-size:14px;">—</span>
@@ -76,22 +90,23 @@
                         <th style="padding:8px 4px;">Name</th>
                         <th style="padding:8px 4px;">Date</th>
                         <th style="padding:8px 4px; text-align:right;">Size</th>
-                        <th style="padding:8px 4px;">Location</th>
                         <th style="padding:8px 4px; text-align:right;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="mongoBackupsList">
-                    <tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
+                    <tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
                 </tbody>
             </table>
+            <div id="mongoPager" aria-live="polite" style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; color:#94a3b8; font-size:12px;"></div>
         </section>
 
         <!-- Qdrant section -->
         <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px; margin-bottom:24px;">
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px;">
                 <div>
-                    <h2 style="margin:0;"><i class="fas fa-cube" style="color:#dc3545;"></i> Qdrant <span style="font-size:14px; color:#888; font-weight:normal;">(collection: <code id="qdrantCollection">agentx_embeddings</code>)</span></h2>
-                    <div style="font-size:12px; color:#888; margin-top:4px;">Stored on Qdrant server disk at <code id="qdrantRoot">—</code></div>
+                    <h2 style="margin:0;"><i class="fas fa-cube" style="color:#dc3545;"></i> Qdrant</h2>
+                    <div style="font-size:12px; color:#888; margin-top:4px;">Stored in the logical Qdrant snapshot store, with a best-effort persistent recovery copy.</div>
+                    <div id="qdrantEvidence" style="font-size:11px; color:#94a3b8; margin-top:5px;">Loading inventory basis...</div>
                 </div>
                 <div style="display:flex; gap:12px; align-items:center;">
                     <span id="qdrantStatus" style="color:#888; font-size:14px;">—</span>
@@ -109,14 +124,14 @@
                         <th style="padding:8px 4px;">Name</th>
                         <th style="padding:8px 4px;">Created</th>
                         <th style="padding:8px 4px; text-align:right;">Size</th>
-                        <th style="padding:8px 4px;">Location</th>
                         <th style="padding:8px 4px; text-align:right;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="qdrantBackupsList">
-                    <tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
+                    <tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
                 </tbody>
             </table>
+            <div id="qdrantPager" aria-live="polite" style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; color:#94a3b8; font-size:12px;"></div>
         </section>
 
         <!-- Config section -->
@@ -125,8 +140,9 @@
                 <div>
                     <h2 style="margin:0;"><i class="fas fa-sliders" style="color:#f59e0b;"></i> Config</h2>
                     <div style="font-size:12px; color:#888; margin-top:4px;">
-                        Tarball of product configuration files, the effective runtime env file, and the system <code>crontab</code> — each included only if present. Legacy <code>ecosystem.config.js</code> is also captured when found (historical; PM2 is retired and it is no longer the runtime/env source of truth). Stored at <code id="configRoot">—</code>.
+                        Tarball of the explicit supported, secret-free Compose and product configuration allowlist. Runtime env files, credentials, private adapters, data, historical sources, and system crontab are never captured.
                     </div>
+                    <div id="configEvidence" style="font-size:11px; color:#94a3b8; margin-top:5px;">Loading inventory basis...</div>
                 </div>
                 <div style="display:flex; gap:12px; align-items:center;">
                     <span id="configStatus" style="color:#888; font-size:14px;">—</span>
@@ -144,18 +160,34 @@
                         <th style="padding:8px 4px;">Name</th>
                         <th style="padding:8px 4px;">Date</th>
                         <th style="padding:8px 4px; text-align:right;">Size</th>
-                        <th style="padding:8px 4px;">Location</th>
                         <th style="padding:8px 4px; text-align:right;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="configBackupsList">
-                    <tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
+                    <tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
                 </tbody>
             </table>
+            <div id="configPager" aria-live="polite" style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; color:#94a3b8; font-size:12px;"></div>
         </section>
 
         <footer style="margin-top:24px; padding:16px; color:#888; font-size:13px;">
             <i class="fas fa-info-circle"></i>
-            Config backups are manually restored (extract the tar over its original paths). MongoDB and Qdrant restore replace the current data and require explicit confirmation.
+            These artifacts are recovery inputs, not proof of a coherent or restorable recovery set. MongoDB and Qdrant restore remain unavailable in the running product until a controlled offline release rehearsal is explicitly enabled; exact typed confirmation remains required after that gate.
         </footer>
     </div>
+
+    <dialog id="backupConfirmDialog" aria-labelledby="backupConfirmTitle" aria-describedby="backupConfirmDescription" style="width:min(560px, calc(100vw - 32px)); color:#e5e7eb; background:#111827; border:1px solid #475569; border-radius:10px; padding:0; box-shadow:0 24px 80px rgba(0,0,0,.55);">
+        <form id="backupConfirmForm" style="padding:24px;">
+            <h2 id="backupConfirmTitle" style="margin:0 0 10px;"></h2>
+            <p id="backupConfirmDescription" style="color:#cbd5e1; line-height:1.55;"></p>
+            <label for="backupConfirmInput" style="display:block; margin-top:18px; color:#cbd5e1;">
+                Type <code id="backupConfirmExpected" style="color:#fbbf24;"></code> exactly
+            </label>
+            <input id="backupConfirmInput" type="text" autocomplete="off" spellcheck="false" aria-describedby="backupConfirmError" style="box-sizing:border-box; width:100%; margin-top:8px; padding:10px 12px; color:#fff; background:#0f1629; border:1px solid #475569; border-radius:6px;">
+            <div id="backupConfirmError" role="status" aria-live="polite" style="min-height:1.4em; margin-top:6px; color:#fca5a5; font-size:12px;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:18px;">
+                <button id="backupConfirmCancel" class="btn" type="button">Cancel</button>
+                <button id="backupConfirmSubmit" class="btn" type="submit" disabled style="background:#dc3545; color:#fff;">Confirm destructive action</button>
+            </div>
+        </form>
+    </dialog>

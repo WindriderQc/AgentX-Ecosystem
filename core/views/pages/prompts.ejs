@@ -1,178 +1,162 @@
-  <!-- Background Grid -->
-  <div class="bg-grid"></div>
+  <div class="bg-grid" aria-hidden="true"></div>
 
-  <!-- Main Content -->
-  <div class="prompts-page">
-
-    <!-- Header -->
+  <main class="prompts-page" id="main-content">
     <header class="prompts-header">
       <div>
         <div class="eyebrow">AgentX • Configuration</div>
         <h1>
-          <i class="fas fa-users"></i>
-          <span class="title-separator"></span>
+          <i class="fas fa-users" aria-hidden="true"></i>
+          <span class="title-separator" aria-hidden="true"></span>
           Persona Library
         </h1>
-        <p class="lede">Manage product prompt assets, linked identity surfaces, and archived role patterns. Agent X stores configuration and observability; external automation stays outside the product.</p>
+        <p class="lede">Inspect and version the product prompts Agent X can use. Runtime configuration stays unchanged until you explicitly save a new version.</p>
+        <p class="prompt-evidence" id="promptEvidenceStatus" aria-live="polite">Connecting to <code>/api/prompts</code>…</p>
       </div>
       <div class="header-controls">
-        <!-- Simple Mode Toggle -->
-        <label class="simple-mode-toggle" title="Toggle between simple and advanced mode">
-          <input type="checkbox" id="simpleModeToggle">
-          <span class="toggle-label">
-            <i class="fas fa-toggle-off"></i> Simple Mode
-          </span>
-        </label>
-
-        <button id="exportPromptsBtn" class="ghost btn-sm advanced-feature" title="Export prompt library as JSON">
-          <i class="fas fa-download"></i> Export
+        <button id="exportPromptsBtn" class="ghost btn-sm" type="button" disabled>
+          <i class="fas fa-download" aria-hidden="true"></i> Export JSON
         </button>
-        <button id="importPromptsBtn" class="ghost btn-sm advanced-feature" title="Import prompts from JSON file">
-          <i class="fas fa-upload"></i> Import
-        </button>
-        <button id="compareVersionsBtn" class="ghost btn-sm advanced-feature" title="Compare prompt versions">
-          <i class="fas fa-columns"></i> Compare Versions
-        </button>
-        <button id="showOnboardingBtn" class="ghost btn-sm">
-          <i class="fas fa-graduation-cap"></i> Show Tutorial
-        </button>
-        <button id="createPromptBtn" class="btn-primary">
-          <i class="fas fa-plus"></i> Create Prompt
+        <button id="createPromptBtn" class="btn-primary" type="button" disabled aria-describedby="promptEvidenceStatus">
+          <i class="fas fa-plus" aria-hidden="true"></i> Create Prompt
         </button>
       </div>
-      <!-- Hidden file input for import -->
-      <input type="file" id="importFileInput" accept=".json" style="display: none;">
     </header>
 
-    <!-- Quick Stats -->
-    <div class="stats-row">
+    <section class="stats-row" aria-label="Prompt library summary">
       <div class="stat-card">
         <div class="label">Prompt Assets</div>
         <div class="value" id="totalPrompts">—</div>
-        <div class="sub">Runtime-safe prompt configs</div>
+        <div class="sub">Distinct prompt names</div>
       </div>
-      <div class="stat-card advanced-feature">
+      <div class="stat-card">
         <div class="label">Active A/B Tests</div>
         <div class="value" id="activeTests">—</div>
-        <div class="sub">Running experiments</div>
+        <div class="sub">Names with multiple active versions</div>
       </div>
-      <div class="stat-card advanced-feature">
-        <div class="label">Avg. Positive Rate</div>
+      <div class="stat-card">
+        <div class="label">Positive Feedback</div>
         <div class="value" id="avgPositiveRate">—</div>
-        <div class="sub">Across all prompts</div>
+        <div class="sub">Across recorded feedback only</div>
       </div>
       <div class="stat-card">
         <div class="label">Total Impressions</div>
         <div class="value" id="totalImpressions">—</div>
-        <div class="sub">Prompt render count</div>
+        <div class="sub">Across every stored version</div>
       </div>
-    </div>
+    </section>
 
-    <!-- Simple Mode Notice -->
-    <div class="advanced-notice">
-      <i class="fas fa-info-circle"></i>
-      <strong>Simple Mode Active:</strong> Advanced features are hidden. Toggle off Simple Mode above to access A/B testing, version comparison, performance metrics, and improvement wizard.
-    </div>
-
-    <!-- Performance Metrics Dashboard -->
-    <div id="metricsDashboard" class="advanced-feature"></div>
-
-    <!-- Prompt Health Alert -->
-    <div id="promptHealthAlert" class="advanced-feature"></div>
-
-    <!-- Filter/Search Bar -->
-    <div class="toolbar">
+    <section class="toolbar" aria-label="Filter prompt library">
       <div class="search-box">
-        <i class="fas fa-search"></i>
-        <input type="text" id="searchInput" placeholder="Search prompt assets, linked identities, and archived patterns...">
+        <i class="fas fa-search" aria-hidden="true"></i>
+        <label class="sr-only" for="searchInput">Search prompts</label>
+        <input type="search" id="searchInput" placeholder="Search names, descriptions, and prompt text" autocomplete="off">
       </div>
       <div class="filter-controls">
+        <label class="sr-only" for="statusFilter">Filter by status</label>
         <select id="statusFilter">
-          <option value="all">All Status</option>
-          <option value="active">Active Only</option>
-          <option value="inactive">Inactive Only</option>
+          <option value="all">All status</option>
+          <option value="active">Active only</option>
+          <option value="inactive">Inactive only</option>
         </select>
+        <label class="sr-only" for="sortBy">Sort prompts</label>
         <select id="sortBy">
-          <option value="name">Sort by Name</option>
-          <option value="version">Sort by Version</option>
-          <option value="impressions">Sort by Usage</option>
-          <option value="positiveRate">Sort by Performance</option>
+          <option value="name">Sort by name</option>
+          <option value="version">Sort by newest version</option>
+          <option value="impressions">Sort by usage</option>
+          <option value="positiveRate">Sort by feedback</option>
         </select>
-        <button id="advancedFiltersBtn" class="btn-sm ghost advanced-feature" title="Show Advanced Filters">
-          <i class="fas fa-filter"></i>
-          <span>More Filters</span>
-        </button>
       </div>
-    </div>
+    </section>
 
-    <!-- Advanced Filters Panel (collapsible) -->
-    <div id="advancedFiltersPanel" class="advanced-filters-panel advanced-feature" style="display: none;">
-      <div class="advanced-filters-content">
-        <div class="filter-group">
-          <label>
-            <i class="fas fa-tags"></i>
-            Tags
-          </label>
-          <select id="tagFilter" multiple size="4">
-            <option value="">-- All Tags --</option>
-          </select>
-          <div class="field-note">Hold Ctrl/Cmd to select multiple tags</div>
+    <section id="promptListContainer" class="prompt-list-container" aria-live="polite" hidden></section>
+
+    <section id="emptyState" class="empty-state" hidden>
+      <i class="fas fa-code" aria-hidden="true"></i>
+      <h2>No prompt assets yet</h2>
+      <p>The prompt service is healthy, but its library is empty. Create the first version without changing any external adapter.</p>
+      <button id="emptyCreateBtn" class="btn-primary" type="button" disabled>
+        <i class="fas fa-plus" aria-hidden="true"></i> Create First Prompt
+      </button>
+    </section>
+
+    <section id="loadingState" class="loading-state" role="status">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Loading prompt evidence…</p>
+    </section>
+
+    <section id="errorState" class="prompt-error-state" role="alert" hidden>
+      <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
+      <h2>Prompt library unavailable</h2>
+      <p id="errorStateMessage">Agent X could not load prompt evidence.</p>
+      <p class="field-note">No runtime configuration was changed.</p>
+      <button id="retryPromptsBtn" class="btn-primary" type="button">
+        <i class="fas fa-rotate-right" aria-hidden="true"></i> Retry
+      </button>
+    </section>
+  </main>
+
+  <div id="promptEditorModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="promptEditorTitle" aria-describedby="promptEditorContext" tabindex="-1" hidden>
+    <div class="modal-container prompt-editor-modal">
+      <form id="promptEditorForm" novalidate>
+        <div class="modal-header">
+          <div>
+            <h2 id="promptEditorTitle"><i class="fas fa-pen" aria-hidden="true"></i> Create prompt</h2>
+            <p id="promptEditorContext" class="modal-subtitle">Create version 1. It starts inactive unless you choose otherwise.</p>
+          </div>
+          <button id="promptEditorCloseBtn" class="modal-close" type="button" aria-label="Close prompt editor">×</button>
         </div>
 
-        <div class="filter-group">
-          <label>
-            <i class="fas fa-calendar"></i>
-            Created Date Range
-          </label>
-          <div class="date-range-inputs">
-            <input type="date" id="dateFrom" placeholder="From">
-            <span>to</span>
-            <input type="date" id="dateTo" placeholder="To">
+        <div class="modal-body">
+          <div id="promptEditorError" class="editor-error" role="alert" hidden></div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="promptNameInput">Prompt name <span class="required" aria-hidden="true">*</span></label>
+              <input id="promptNameInput" name="name" type="text" required maxlength="120" autocomplete="off" aria-describedby="promptNameHelp">
+              <div class="field-note" id="promptNameHelp">Use a stable product identifier, for example <code>default_chat</code>.</div>
+            </div>
+            <div class="form-group">
+              <label for="promptDescriptionInput">Description</label>
+              <input id="promptDescriptionInput" name="description" type="text" maxlength="500" autocomplete="off">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="systemPromptInput">System prompt <span class="required" aria-hidden="true">*</span></label>
+            <div class="editor-toolbar" aria-hidden="true">
+              <span>Built-in text editor</span>
+              <div class="editor-stats">
+                <span id="editorCharacterCount">0 characters</span>
+                <span id="editorLineCount">1 line</span>
+              </div>
+            </div>
+            <textarea id="systemPromptInput" name="systemPrompt" class="prompt-textarea" rows="18" required spellcheck="true" aria-describedby="systemPromptHelp"></textarea>
+            <div class="field-note" id="systemPromptHelp">This local textarea always works; the page does not require Monaco or a CDN.</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="checkbox-label" for="promptActiveInput">
+                <input id="promptActiveInput" name="isActive" type="checkbox">
+                <span>Make this version active</span>
+              </label>
+              <div class="field-note">Leave off to review the new version without changing runtime selection.</div>
+            </div>
+            <div class="form-group">
+              <label for="promptTrafficWeightInput">Traffic weight</label>
+              <input id="promptTrafficWeightInput" name="trafficWeight" type="number" min="0" max="100" step="1" value="100">
+              <div class="field-note">Used only when this version participates in active selection.</div>
+            </div>
           </div>
         </div>
 
-        <div class="filter-group">
-          <label>
-            <i class="fas fa-user"></i>
-            Author
-          </label>
-          <input type="text" id="authorFilter" placeholder="Filter by author name">
-        </div>
-
-        <div class="filter-actions">
-          <button id="clearFiltersBtn" class="btn-secondary btn-sm">
-            <i class="fas fa-times"></i>
-            Clear All Filters
-          </button>
-          <button id="applyFiltersBtn" class="btn-primary btn-sm">
-            <i class="fas fa-check"></i>
-            Apply Filters
+        <div class="modal-footer">
+          <button id="promptEditorCancelBtn" class="btn-secondary" type="button">Cancel</button>
+          <button id="promptEditorSaveBtn" class="btn-primary" type="submit">
+            <i class="fas fa-code-branch" aria-hidden="true"></i>
+            <span>Save new version</span>
           </button>
         </div>
-      </div>
-    </div>
-
-    <!-- Prompt List Container -->
-    <div id="promptListContainer" class="prompt-list-container">
-      <!-- PromptListView component renders here -->
-    </div>
-
-    <!-- Empty State -->
-    <div id="emptyState" class="empty-state" style="display: none;">
-      <i class="fas fa-code" style="font-size: 64px; color: var(--muted); margin-bottom: 20px; opacity: 0.3;"></i>
-      <h2>No Prompts Yet</h2>
-      <p>Create your first system prompt to get started with AgentX customization.</p>
-      <button id="emptyCreateBtn" class="btn-primary">
-        <i class="fas fa-plus"></i> Create First Prompt
-      </button>
-    </div>
-
-    <!-- Loading State -->
-    <div id="loadingState" class="loading-state">
-      <div class="spinner"></div>
-      <p>Loading prompts...</p>
+      </form>
     </div>
   </div>
-
-  <!-- Modals Container -->
-  <div id="modals"></div>

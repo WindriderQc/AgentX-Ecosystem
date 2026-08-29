@@ -21,6 +21,14 @@ const TASK_FIELDS = [
   'epic', 'source', 'priority', 'dependsOn', 'notBefore', 'dueAt', 'risk',
   'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt'
 ].join(' ');
+const PLANNING_REFERENCE_SEMANTICS = Object.freeze({
+  lifecycle: 'frozen',
+  purpose: 'historical_strategy_and_evidence_reference',
+  currentExecutionSource: '/pipeline',
+  statusMeaning: 'Saved Planning record state; it is not a current execution signal.',
+  completionMeaning: 'Completed or 100% describes the Planning record or its reference calculation; it does not mean work is currently executing.',
+  linkageMeaning: 'Task and schedule links are references. Pipeline and Runtime Schedule remain their execution sources of truth.'
+});
 class PlanningError extends Error {
   constructor(message, { status = 400, code = 'PLANNING_ERROR' } = {}) {
     super(message);
@@ -152,6 +160,28 @@ function planningIds(task) {
   return (task.planningItemIds || []).map((id) => String(id));
 }
 
+function referenceSemanticsFor(item, linkedTasks = []) {
+  const mode = item.progress?.mode || 'tasks';
+  const progressBasis = item.status === 'completed'
+    ? 'recorded_completed_status'
+    : ({
+      tasks: 'current_state_of_referenced_pipeline_tasks',
+      metric: 'recorded_metric_observation',
+      manual: 'recorded_manual_value',
+      children: 'derived_from_planning_child_records'
+    }[mode] || 'recorded_planning_state');
+  return {
+    lifecycle: PLANNING_REFERENCE_SEMANTICS.lifecycle,
+    currentExecution: false,
+    statusMeaning: 'historical_record_state',
+    progressBasis,
+    progressImpliesCurrentExecution: false,
+    linkageMeaning: 'reference_only',
+    linkedOpenTaskCount: linkedTasks.filter((task) => ACTIVE_TASK_STATUSES.includes(task.status)).length,
+    currentExecutionSource: PLANNING_REFERENCE_SEMANTICS.currentExecutionSource
+  };
+}
+
 function enrichItems(items, tasks, now = new Date(), schedules = []) {
   const rows = items.map(serialize);
   const byId = new Map(rows.map((item) => [item.id, item]));
@@ -215,6 +245,7 @@ function enrichItems(items, tasks, now = new Date(), schedules = []) {
     );
     item.workflowActions = planningWorkflowService.actionsFor(item.type, item.status);
     calculate(item);
+    item.referenceSemantics = referenceSemanticsFor(item, linkedTasks);
     const linkedSchedules = (item.scheduleRefs || [])
       .map((ref) => schedulesBySourceId.get(ref.sourceId))
       .filter(Boolean);
@@ -450,6 +481,7 @@ async function getDashboard() {
     schedules: schedules.length
   };
   return {
+    referenceSemantics: PLANNING_REFERENCE_SEMANTICS,
     summary,
     items: enriched,
     tasks: activeTasks.map(serialize),
@@ -679,9 +711,11 @@ async function promoteIdea(id, input = {}) {
   return { idea: serialize(idea), promoted };
 }
 module.exports = {
+  PLANNING_REFERENCE_SEMANTICS,
   PlanningError,
   computeMetricProgress,
   computeTaskProgress,
+  referenceSemanticsFor,
   enrichItems,
   listItems,
   getDashboard,

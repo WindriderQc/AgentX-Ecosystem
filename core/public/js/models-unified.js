@@ -209,7 +209,10 @@ class UnifiedModels {
         if (this.actionMenuDismissalBound) return;
         this.actionMenuDismissalBound = true;
         document.addEventListener('click', () => {
-            document.querySelectorAll('.action-menu.active').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.action-menu.active').forEach((menu) => {
+                menu.classList.remove('active');
+                menu.parentElement?.querySelector('.btn-actions')?.setAttribute('aria-expanded', 'false');
+            });
         });
     }
 
@@ -548,7 +551,7 @@ class UnifiedModels {
 
             tr.querySelector('.action-chat')?.addEventListener('click', (e) => {
                 e.stopPropagation();
-                startChat(model.name);
+                startChat(model);
             });
 
             // Action menu
@@ -556,8 +559,13 @@ class UnifiedModels {
             if (actionBtn) {
                 actionBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    document.querySelectorAll('.action-menu.active').forEach(el => el.classList.remove('active'));
-                    tr.querySelector('.action-menu')?.classList.toggle('active');
+                    document.querySelectorAll('.action-menu.active').forEach((menu) => {
+                        menu.classList.remove('active');
+                        menu.parentElement?.querySelector('.btn-actions')?.setAttribute('aria-expanded', 'false');
+                    });
+                    const actionMenu = tr.querySelector('.action-menu');
+                    const expanded = actionMenu?.classList.toggle('active') || false;
+                    actionBtn.setAttribute('aria-expanded', String(expanded));
                 });
             }
 
@@ -634,15 +642,15 @@ class UnifiedModels {
             ? '<span class="status-dot idle" title="Installed (not loaded)"></span>'
             : '';
         const runtimeAction = loaded === true
-            ? '<button class="menu-item action-stop"><i class="fas fa-stop"></i> Stop on this host</button>'
-            : '<button class="menu-item action-start"><i class="fas fa-play"></i> Start on this host</button>';
+            ? '<button role="menuitem" class="menu-item action-stop"><i class="fas fa-stop"></i> Stop on this host</button>'
+            : '<button role="menuitem" class="menu-item action-start"><i class="fas fa-play"></i> Start on this host</button>';
         const runtimeMenu = isOllama && !isGone
             ? `${runtimeAction}
-               <button class="menu-item action-test"><i class="fas fa-flask"></i> Test on this host</button>
-               <button class="menu-item action-config"><i class="fas fa-sliders-h"></i> Config</button>
+               <button role="menuitem" class="menu-item action-test"><i class="fas fa-flask"></i> Test on this host</button>
+               <button role="menuitem" class="menu-item action-config"><i class="fas fa-sliders-h"></i> Config</button>
                <div class="divider"></div>
-               <button class="menu-item action-delete text-red"><i class="fas fa-trash"></i> Delete from this host</button>`
-            : '<button class="menu-item action-config"><i class="fas fa-sliders-h"></i> Config</button>';
+               <button role="menuitem" class="menu-item action-delete text-red"><i class="fas fa-trash"></i> Delete from this host</button>`
+            : '<button role="menuitem" class="menu-item action-config"><i class="fas fa-sliders-h"></i> Config</button>';
 
         return `
             <td>
@@ -674,10 +682,10 @@ class UnifiedModels {
                         <i class="fas fa-comment-alt"></i>
                         <span>Chat</span>
                     </button>
-                    <button class="btn-icon btn-actions" title="More">
+                    <button class="btn-icon btn-actions" title="More actions for ${escapeHtml(model.name)}" aria-label="More actions for ${escapeHtml(model.name)}" aria-haspopup="menu" aria-expanded="false">
                         <i class="fas fa-ellipsis-v"></i>
                     </button>
-                    <div class="action-menu glass-panel">
+                    <div class="action-menu glass-panel" role="menu" aria-label="Actions for ${escapeHtml(model.name)}">
                         ${runtimeMenu}
                     </div>
                 </div>
@@ -979,8 +987,10 @@ class UnifiedModels {
     showBenchmarkPopout() { showBenchmarkPopout(this); }
 }
 
-function startChat(modelName) {
-    window.location.href = `/playground?model=${encodeURIComponent(modelName)}`;
+function startChat(model) {
+    const modelName = model?.deployment?.resolvedName || model?.name || '';
+    const host = model?.source?.url || model?.deployment?.ollamaHost || '';
+    window.location.href = window.AgentXPlaygroundLink.buildPlaygroundHref(modelName, host);
 }
 
 document.addEventListener('DOMContentLoaded', () => {

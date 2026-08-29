@@ -5,6 +5,7 @@ jest.mock('../../src/services/roundtable', () => ({
   DEFAULT_PANEL: [],
   DEFAULT_SYNTHESIZER: {},
   COUNCIL_OPTIONS: [{ id: 'debate', rounds: 2 }],
+  getCouncilDefaults: jest.fn(),
   startRoundtable: jest.fn(),
   listRoundtables: jest.fn(),
   getActiveRoundtableId: jest.fn(),
@@ -36,6 +37,19 @@ describe('Roundtable v2 API', () => {
   beforeEach(() => {
     app = buildApp();
     jest.clearAllMocks();
+    roundtableService.getCouncilDefaults.mockResolvedValue({
+      panel: [{ agentId: 'critic', role: 'Critic', model: 'runtime/model-a' }],
+      synthesizer: { model: 'runtime/model-a', systemPrompt: 'Synthesize.' },
+      models: ['runtime/model-a'],
+      readiness: {
+        canStart: true,
+        selectedModel: 'runtime/model-a',
+        selectedSource: 'runtime-discovery',
+        discoveredCount: 1,
+        selectedModelDiscovered: true,
+        downloadsImplicit: false
+      }
+    });
     delete process.env.ROUNDTABLE_CHAIR_TOKEN;
   });
 
@@ -80,12 +94,19 @@ describe('Roundtable v2 API', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.options).toEqual([{ id: 'debate', rounds: 2 }]);
+    expect(response.body.data.models).toEqual(['runtime/model-a']);
+    expect(response.body.data.readiness).toMatchObject({
+      canStart: true,
+      selectedSource: 'runtime-discovery',
+      downloadsImplicit: false
+    });
     expect(response.body.data.policy).toEqual(expect.objectContaining({
       canonicalSurface: '/council',
       advisoryOnlyDefault: true,
       executionAuthority: 'none',
       qualityScoringDefault: false,
-      runtimeParticipantsEnabled: false
+      runtimeParticipantsEnabled: false,
+      modelDownloadsImplicit: false
     }));
   });
 

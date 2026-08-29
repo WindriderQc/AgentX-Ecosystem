@@ -61,12 +61,33 @@
     </div>
   </section>
 
+  <p id="pipelineCountEvidence" class="pipeline-count-evidence" aria-live="polite">
+    Loading count scope and observation evidence...
+  </p>
+
   <section class="pipeline-main-grid">
     <section class="pipeline-panel">
       <div class="pipeline-panel-header">
         <div>
           <h2><i class="fas fa-wave-square"></i> Open Work</h2>
           <p id="pipelineOpenMeta">Loading task status...</p>
+        </div>
+        <div class="pipeline-filters" aria-label="Open work filters">
+          <label>Service
+            <select id="pipelineServiceFilter"><option value="all">All services</option></select>
+          </label>
+          <label>Lane
+            <select id="pipelineLaneFilter"><option value="all">All lanes</option></select>
+          </label>
+          <label>Status
+            <select id="pipelineStatusFilter">
+              <option value="all">All open states</option>
+              <option value="blocked">Blocked</option>
+              <option value="review">Review</option>
+              <option value="in_progress">In progress</option>
+              <option value="queued">Queued</option>
+            </select>
+          </label>
         </div>
       </div>
       <div class="pipeline-table-wrap">
@@ -78,7 +99,7 @@
               <th>Status</th>
               <th>Owner</th>
               <th>Service</th>
-              <th>Heartbeat</th>
+              <th title="Only in-progress tasks own a worker heartbeat">Heartbeat <small>(active only)</small></th>
             </tr>
           </thead>
           <tbody id="pipelineOpenRows">

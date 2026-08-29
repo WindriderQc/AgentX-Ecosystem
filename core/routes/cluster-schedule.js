@@ -14,6 +14,7 @@ const clusterLiveService = require('../src/services/clusterLiveService');
 const HostUsageLedger = require('../models/HostUsageLedger');
 const { getUtilizationHeatmap } = require('../src/services/hostUsageAggregator');
 const { defaultPlanningTimeZone } = require('../src/services/planningDateService');
+const { requireScheduleMachineAccess } = require('../src/helpers/scheduleMachineAccess');
 
 /**
  * GET /schedule
@@ -110,7 +111,19 @@ router.get('/schedule/next', async (req, res) => {
   try {
     const count = Math.min(parseInt(req.query.count) || 5, 50);
     const tasks = await clusterScheduleService.getNextTasks(count);
-    res.json({ status: 'success', data: { tasks, count: tasks.length } });
+    const observedAt = new Date().toISOString();
+    res.json({
+      status: 'success',
+      data: {
+        tasks,
+        count: tasks.length,
+        evidence: {
+          authority: 'agentx.cluster-schedule',
+          scope: 'upcoming-assignment-projection',
+          observedAt
+        }
+      }
+    });
   } catch (err) {
     logger.error('Failed to get next cluster tasks', { error: err.message });
     res.status(500).json({ status: 'error', error: err.message });
@@ -122,7 +135,7 @@ router.get('/schedule/next', async (req, res) => {
  * Upsert entries by source+sourceId. Idempotent.
  * Body: { entries: [...] }
  */
-router.post('/schedule/sync', async (req, res) => {
+router.post('/schedule/sync', requireScheduleMachineAccess, async (req, res) => {
   try {
     const entries = req.body.entries;
     if (!Array.isArray(entries) || entries.length === 0) {
@@ -348,7 +361,7 @@ router.get('/schedule/recommend', async (req, res) => {
  * the same time window. Mongo-backed with TTL.
  * Body: { host, model, caller, ttlMs }
  */
-router.post('/schedule/claim', async (req, res) => {
+router.post('/schedule/claim', requireScheduleMachineAccess, async (req, res) => {
   try {
     const { host, model, caller, ttlMs } = req.body;
     if (!host || !model || !caller) {
@@ -369,7 +382,7 @@ router.post('/schedule/claim', async (req, res) => {
  * DELETE /schedule/claim/:claimId
  * Release a soft-claim early.
  */
-router.delete('/schedule/claim/:claimId', async (req, res) => {
+router.delete('/schedule/claim/:claimId', requireScheduleMachineAccess, async (req, res) => {
   try {
     const released = await clusterScheduleService.releaseClaim(req.params.claimId);
     res.json({ status: 'success', data: { released } });

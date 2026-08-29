@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { observedPathMatcher } = require('../src/services/endpointPathPolicy');
 
 /**
  * PerformanceSnapshot Schema
@@ -149,18 +150,19 @@ PerformanceSnapshotSchema.statics.getLastHours = async function(hours = 24) {
  */
 PerformanceSnapshotSchema.statics.getEndpointMetrics = async function(path, hours = 24) {
   const startDate = new Date(Date.now() - hours * 60 * 60 * 1000);
+  const pathMatcher = observedPathMatcher(path);
 
   return this.aggregate([
     {
       $match: {
         hour: { $gte: startDate },
-        'by_endpoint.path': path
+        'by_endpoint.path': pathMatcher
       }
     },
     { $unwind: '$by_endpoint' },
     {
       $match: {
-        'by_endpoint.path': path
+        'by_endpoint.path': pathMatcher
       }
     },
     {

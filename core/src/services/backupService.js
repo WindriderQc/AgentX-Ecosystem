@@ -3,14 +3,15 @@
  *
  * MongoDB — uses mongodump/mongorestore via execFile (no shell injection risk).
  * Qdrant — delegates to the RAG service's /api/rag/snapshots proxy.
- * Backup directory defaults to ../backups/ relative to core/. Docker sets it
- * to /backups, which is a host-visible persistent bind mount.
+ * Backup directory defaults to ../backups/ relative to core/. The supported
+ * Docker runtime mounts a dedicated named recovery volume at /backups.
  */
 
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { pipeline } = require('stream/promises');
 const fetch = require('node-fetch');
 const logger = require('../../config/logger');
 
@@ -23,14 +24,44 @@ const DEFAULT_ECOSYSTEM_ROOT = path.resolve(__dirname, '..', '..', '..');
 const ECOSYSTEM_ROOT = process.env.BACKUP_CONFIG_ROOT
   ? path.resolve(process.env.BACKUP_CONFIG_ROOT)
   : DEFAULT_ECOSYSTEM_ROOT;
-const RUNTIME_ENV_FILE = process.env.BACKUP_RUNTIME_ENV_FILE
-  ? path.resolve(process.env.BACKUP_RUNTIME_ENV_FILE)
-  : null;
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb://mongo:27017/agentx';
 const RAG_URL = process.env.RAG_SERVICE_URL || 'http://localhost:3082';
 const QDRANT_FETCH_TIMEOUT = Number(process.env.QDRANT_SNAPSHOT_TIMEOUT_MS) || 120000;
 const DEFAULT_RETENTION_DAYS = Number(process.env.BACKUP_RETENTION_DAYS || 30); // 0 = keep forever
 const RUNTIME_CONFIG_FILE = path.join(BACKUP_DIR, '.backup-config.json');
+const OFFLINE_RESTORE_REQUIRED = 'OFFLINE_RESTORE_REQUIRED';
+
+const PRODUCT_CONFIG_SOURCES = Object.freeze([
+  'docker-compose.yml',
+  'docker-compose.ollama.yml',
+  'config/agentx.env',
+  'config/rag-ingestion-policy.json',
+  'config/product-surfaces.json',
+  'config/adapter-consumer-contracts.json',
+  'config/container-image-pins.json'
+]);
+
+function restoreRehearsalEnabled(env = process.env) {
+  return String(env.AGENTX_RESTORE_REHEARSAL_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
+function getRestorePolicy(env = process.env) {
+  const enabled = restoreRehearsalEnabled(env);
+  return {
+    enabled,
+    mode: enabled ? 'controlled-rehearsal' : 'offline-rehearsal-required',
+    code: enabled ? null : OFFLINE_RESTORE_REQUIRED,
+    message: enabled
+      ? 'Restore is enabled only for a controlled, offline release rehearsal.'
+      : 'Restore requires a controlled offline release rehearsal and is disabled in the running product.',
+    coherentRecoverySetVerified: false
+  };
+}
+
+function assertRestoreRehearsalEnabled() {
+  if (restoreRehearsalEnabled()) return;
+  throw Object.assign(new Error(getRestorePolicy().message), { code: OFFLINE_RESTORE_REQUIRED });
+}
 
 function parseOwnerId(value) {
   if (value === undefined || value === null || String(value).trim() === '') return null;
@@ -51,7 +82,7 @@ function secureBackupPath(target, mode) {
         BACKUP_OWNER_GID === null ? stat.gid : BACKUP_OWNER_GID
       );
     }
-  } catch { /* unsupported Windows bind mount or insufficient ownership rights */ }
+  } catch { /* unsupported filesystem ownership or insufficient rights */ }
   try { fs.chmodSync(target, mode); } catch { /* platform/mount limitation */ }
 }
 
@@ -77,7 +108,7 @@ function getConfig() {
     retentionDaysSource: Number.isFinite(override.retentionDays) ? 'runtime' : (process.env.BACKUP_RETENTION_DAYS ? 'env' : 'default'),
     backupDirSource: process.env.BACKUP_DIR ? 'env' : 'default',
     configRoot: ECOSYSTEM_ROOT,
-    runtimeEnvFileAvailable: !!(RUNTIME_ENV_FILE && fs.existsSync(RUNTIME_ENV_FILE)),
+    configSources: [...PRODUCT_CONFIG_SOURCES],
     ownerUid: BACKUP_OWNER_UID,
     ownerGid: BACKUP_OWNER_GID,
     mongoUri: MONGO_URI,
@@ -129,6 +160,33 @@ function validateBackupName(name) {
   return { valid: true };
 }
 
+function validateMongoBackupName(name) {
+  const validation = validateBackupName(name);
+  if (!validation.valid) return validation;
+  if (!/^agentx-[a-zA-Z0-9][a-zA-Z0-9._-]*(?:\.tar\.gz)?$/.test(name)) {
+    return { valid: false, reason: 'Invalid MongoDB recovery artifact name' };
+  }
+  return { valid: true };
+}
+
+function validateConfigBackupName(name) {
+  const validation = validateBackupName(name);
+  if (!validation.valid) return validation;
+  if (!/^config-[a-zA-Z0-9][a-zA-Z0-9._-]*\.tar\.gz$/.test(name)) {
+    return { valid: false, reason: 'Invalid configuration recovery artifact name' };
+  }
+  return { valid: true };
+}
+
+function validateQdrantSnapshotName(name) {
+  const validation = validateBackupName(name);
+  if (!validation.valid) return validation;
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.snapshot$/.test(name)) {
+    return { valid: false, reason: 'Invalid Qdrant recovery snapshot name' };
+  }
+  return { valid: true };
+}
+
 /**
  * Parse the MongoDB URI to extract host, port, and database name.
  */
@@ -155,8 +213,8 @@ function ensureBackupDir() {
   if (!fs.existsSync(QDRANT_LOCAL_DIR)) {
     fs.mkdirSync(QDRANT_LOCAL_DIR, { recursive: true, mode: 0o700 });
   }
-  // Best effort: ownership makes secure host-side replication possible while
-  // 0700/0600 keeps runtime secrets private. Windows bind mounts may ignore it.
+  // Best effort: ownership makes secure volume export possible while 0700/0600
+  // protects artifacts. Some host filesystems may ignore POSIX ownership.
   secureBackupPath(BACKUP_DIR, 0o700);
   secureBackupPath(QDRANT_LOCAL_DIR, 0o700);
 
@@ -298,19 +356,6 @@ async function createBackup() {
 // Config — tarball of bounded product configuration files
 // ============================================================
 
-const CONFIG_SOURCES_RELATIVE = [
-  'docker-compose.yml',
-  'docker-compose.dev.yml',
-  'config/platform-map.yml',
-  'config/agent-registry.yml',
-  'config/secrets.json',
-  '.env',
-  'core/.env',
-  'benchmark/.env',
-  'rag/.env',
-  'data/.env'
-];
-
 async function createConfigBackup() {
   if (operationInProgress) {
     throw Object.assign(new Error(`Another operation is in progress: ${operationInProgress}`), { code: 'BUSY' });
@@ -329,35 +374,16 @@ async function createConfigBackup() {
   try {
     const included = [];
 
-    // Copy ecosystem-root files that exist
-    for (const rel of CONFIG_SOURCES_RELATIVE) {
+    // This is intentionally an exact product-owned, secret-free allowlist.
+    // Runtime env files, private adapters, crontabs, data, and secrets are
+    // never discovered or archived.
+    for (const rel of PRODUCT_CONFIG_SOURCES) {
       const src = path.join(ECOSYSTEM_ROOT, rel);
       if (!fs.existsSync(src)) continue;
       const dest = path.join(stagingDir, rel);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(src, dest);
       included.push(rel);
-    }
-
-    // Compose receives its runtime env from a non-synced host file. The
-    // wrapper mounts that exact file read-only at BACKUP_RUNTIME_ENV_FILE so a
-    // disaster-recovery config archive contains the effective secret/config
-    // source without ever adding it to the image or repository.
-    if (RUNTIME_ENV_FILE && fs.existsSync(RUNTIME_ENV_FILE)) {
-      const rel = path.join('runtime', 'agentx.env');
-      const dest = path.join(stagingDir, rel);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(RUNTIME_ENV_FILE, dest);
-      included.push(rel.replace(/\\/g, '/'));
-    }
-
-    // Capture system crontab (optional)
-    try {
-      const { stdout } = await execFileAsync('crontab', ['-l']);
-      fs.writeFileSync(path.join(stagingDir, 'crontab.txt'), stdout);
-      included.push('crontab.txt');
-    } catch {
-      // No crontab installed — skip silently
     }
 
     if (included.length === 0) {
@@ -411,7 +437,7 @@ function listConfigBackups() {
 }
 
 function deleteConfigBackup(name) {
-  const validation = validateBackupName(name);
+  const validation = validateConfigBackupName(name);
   if (!validation.valid) {
     throw Object.assign(new Error(validation.reason), { code: 'INVALID_NAME' });
   }
@@ -423,6 +449,9 @@ function deleteConfigBackup(name) {
   if (!resolved.startsWith(BACKUP_DIR + path.sep) && resolved !== BACKUP_DIR) {
     throw Object.assign(new Error('Invalid backup path'), { code: 'INVALID_NAME' });
   }
+  if (!fs.lstatSync(target).isFile()) {
+    throw Object.assign(new Error('Configuration recovery artifact must be a regular file'), { code: 'INVALID_NAME' });
+  }
   fs.rmSync(target, { force: true });
   logger.info('Config backup deleted', { name });
   return { name, deleted: true };
@@ -433,8 +462,23 @@ function deleteConfigBackup(name) {
 // ============================================================
 
 async function ragFetch(pathSuffix, options = {}) {
+  const recoveryToken = String(process.env.AGENTX_RECOVERY_TOKEN || '').trim();
+  const operatorToken = String(process.env.AGENTX_OPERATOR_TOKEN || '').trim();
+  if (!recoveryToken) {
+    throw Object.assign(new Error('Recovery snapshot authorization is not configured'), {
+      code: 'RECOVERY_AUTH_REQUIRED'
+    });
+  }
   const url = `${RAG_URL}/api/rag${pathSuffix}`;
-  const resp = await fetch(url, { timeout: QDRANT_FETCH_TIMEOUT, ...options });
+  const resp = await fetch(url, {
+    timeout: QDRANT_FETCH_TIMEOUT,
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      'X-AgentX-Recovery-Token': recoveryToken,
+      ...(operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {})
+    }
+  });
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || body.ok === false) {
     const msg = body.error || `RAG ${options.method || 'GET'} ${pathSuffix} failed (${resp.status})`;
@@ -446,27 +490,64 @@ async function ragFetch(pathSuffix, options = {}) {
   return { data: body.data, meta: body.meta || {} };
 }
 
+async function downloadQdrantSnapshot(snapshotName) {
+  const recoveryToken = String(process.env.AGENTX_RECOVERY_TOKEN || '').trim();
+  const operatorToken = String(process.env.AGENTX_OPERATOR_TOKEN || '').trim();
+  if (!recoveryToken) {
+    throw Object.assign(new Error('Recovery snapshot authorization is not configured'), {
+      code: 'RECOVERY_AUTH_REQUIRED'
+    });
+  }
+  const resp = await fetch(`${RAG_URL}/api/rag/snapshots/${encodeURIComponent(snapshotName)}/download`, {
+    timeout: QDRANT_FETCH_TIMEOUT,
+    headers: {
+      'X-AgentX-Recovery-Token': recoveryToken,
+      ...(operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {})
+    }
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw Object.assign(new Error(body.error || 'RAG snapshot download failed'), {
+      code: resp.status === 404 ? 'NOT_FOUND' : 'RAG_ERROR'
+    });
+  }
+  return resp;
+}
+
 async function createQdrantBackup() {
   ensureBackupDir();
   logger.info('Starting Qdrant snapshot via RAG');
   const { data } = await ragFetch('/snapshots', { method: 'POST' });
 
   let localPath = null;
-  if (data?.url) {
+  if (data?.name && validateQdrantSnapshotName(data.name).valid) {
+    const finalPath = path.join(QDRANT_LOCAL_DIR, data.name);
+    const tempPath = path.join(
+      QDRANT_LOCAL_DIR,
+      `.${data.name}.${process.pid}.${Date.now()}.partial`
+    );
     try {
-      const resp = await fetch(data.url, { timeout: QDRANT_FETCH_TIMEOUT });
-      if (!resp.ok) throw new Error(`Download HTTP ${resp.status}`);
-      localPath = path.join(QDRANT_LOCAL_DIR, data.name);
-      await new Promise((resolve, reject) => {
-        const out = fs.createWriteStream(localPath);
-        resp.body.pipe(out);
-        resp.body.on('error', reject);
-        out.on('finish', resolve);
-        out.on('error', reject);
-      });
-      secureBackupPath(localPath, 0o600);
+      const resp = await downloadQdrantSnapshot(data.name);
+      if (!resp.body || typeof resp.body.pipe !== 'function') {
+        throw new Error('RAG snapshot response is not streamable');
+      }
+      await pipeline(resp.body, fs.createWriteStream(tempPath, { flags: 'wx', mode: 0o600 }));
+      try {
+        fs.linkSync(tempPath, finalPath);
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          throw Object.assign(new Error('A local snapshot with this immutable name already exists'), {
+            code: 'SNAPSHOT_EXISTS'
+          });
+        }
+        throw error;
+      }
+      fs.rmSync(tempPath, { force: true });
+      localPath = finalPath;
+      secureBackupPath(finalPath, 0o600);
       logger.info('Qdrant snapshot downloaded locally', { name: data.name, localPath });
     } catch (err) {
+      if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
       logger.warn('Qdrant local download failed (snapshot still exists on server)', { error: err.message });
       localPath = null;
     }
@@ -517,11 +598,15 @@ async function listQdrantBackups() {
 }
 
 async function restoreQdrantBackup(snapshotName) {
+  assertRestoreRehearsalEnabled();
   if (!snapshotName || !/^[a-zA-Z0-9._-]+$/.test(snapshotName)) {
     throw Object.assign(new Error('Invalid snapshot name'), { code: 'INVALID_NAME' });
   }
   logger.info('Starting Qdrant restore', { snapshotName });
-  const { data } = await ragFetch(`/snapshots/${encodeURIComponent(snapshotName)}/restore`, { method: 'POST' });
+  const { data } = await ragFetch(`/snapshots/${encodeURIComponent(snapshotName)}/restore`, {
+    method: 'POST',
+    headers: { 'X-AgentX-Confirm': `RESTORE ${snapshotName}` }
+  });
   logger.info('Qdrant snapshot restored', { snapshotName });
   return data;
 }
@@ -534,7 +619,10 @@ async function deleteQdrantBackup(snapshotName) {
   // Best-effort server-side delete (may already be gone)
   let serverDeleted = false;
   try {
-    await ragFetch(`/snapshots/${encodeURIComponent(snapshotName)}`, { method: 'DELETE' });
+    await ragFetch(`/snapshots/${encodeURIComponent(snapshotName)}`, {
+      method: 'DELETE',
+      headers: { 'X-AgentX-Confirm': `DELETE ${snapshotName}` }
+    });
     serverDeleted = true;
   } catch (err) {
     if (err.code !== 'NOT_FOUND') throw err;
@@ -597,7 +685,8 @@ function listBackups() {
  * Restore from a named backup. Accepts both tarballs (.tar.gz) and legacy directories.
  */
 async function restoreBackup(backupName) {
-  const validation = validateBackupName(backupName);
+  assertRestoreRehearsalEnabled();
+  const validation = validateMongoBackupName(backupName);
   if (!validation.valid) {
     throw Object.assign(new Error(validation.reason), { code: 'INVALID_NAME' });
   }
@@ -609,6 +698,11 @@ async function restoreBackup(backupName) {
   const backupPath = path.join(BACKUP_DIR, backupName);
   if (!fs.existsSync(backupPath)) {
     throw Object.assign(new Error(`Backup not found: ${backupName}`), { code: 'NOT_FOUND' });
+  }
+
+  const backupStat = fs.lstatSync(backupPath);
+  if (backupStat.isSymbolicLink() || (!backupStat.isFile() && !backupStat.isDirectory())) {
+    throw Object.assign(new Error('MongoDB recovery artifact has an unsupported type'), { code: 'INVALID_NAME' });
   }
 
   const { host, port, db } = parseMongoUri(MONGO_URI);
@@ -658,7 +752,7 @@ async function restoreBackup(backupName) {
  * Delete a named backup (handles both tarballs and legacy directories).
  */
 function deleteBackup(backupName) {
-  const validation = validateBackupName(backupName);
+  const validation = validateMongoBackupName(backupName);
   if (!validation.valid) {
     throw Object.assign(new Error(validation.reason), { code: 'INVALID_NAME' });
   }
@@ -673,6 +767,11 @@ function deleteBackup(backupName) {
     throw Object.assign(new Error('Invalid backup path'), { code: 'INVALID_NAME' });
   }
 
+  const backupStat = fs.lstatSync(backupPath);
+  if (backupStat.isSymbolicLink() || (!backupStat.isFile() && !backupStat.isDirectory())) {
+    throw Object.assign(new Error('MongoDB recovery artifact has an unsupported type'), { code: 'INVALID_NAME' });
+  }
+
   fs.rmSync(backupPath, { recursive: true, force: true });
   logger.info('Backup deleted', { backupName });
 
@@ -681,6 +780,9 @@ function deleteBackup(backupName) {
 
 module.exports = {
   validateBackupName,
+  validateMongoBackupName,
+  validateConfigBackupName,
+  validateQdrantSnapshotName,
   createBackup,
   listBackups,
   restoreBackup,
@@ -694,6 +796,10 @@ module.exports = {
   deleteQdrantBackup,
   getConfig,
   setConfig,
+  getRestorePolicy,
+  restoreRehearsalEnabled,
+  OFFLINE_RESTORE_REQUIRED,
+  PRODUCT_CONFIG_SOURCES,
   BACKUP_DIR,
   parseOwnerId
 };

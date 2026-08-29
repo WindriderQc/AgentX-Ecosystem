@@ -540,6 +540,12 @@ async function createRoundtable(options) {
     model: synthesizer.model || DEFAULT_SYNTHESIZER.model,
     systemPrompt: synthesizer.systemPrompt || DEFAULT_SYNTHESIZER.systemPrompt
   };
+  if (!String(mergedSynthesizer.model || '').trim()) {
+    const err = new Error('synthesizer model is required; select a configured or discovered model');
+    err.status = 400;
+    err.code = 'COUNCIL_MODEL_REQUIRED';
+    throw err;
+  }
 
   return Roundtable.create({
     question,

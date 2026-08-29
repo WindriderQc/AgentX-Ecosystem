@@ -21,6 +21,7 @@ const PerformanceBaseline = require('../models/PerformanceBaseline');
 const PerformanceSnapshot = require('../models/PerformanceSnapshot');
 const artilleryParser = require('../src/services/artilleryParser');
 const { calculateDiff } = require('./performance-helpers');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 // ── Load Tests ──────────────────────────────────────────────────────────────
 
@@ -195,6 +196,7 @@ router.post('/baselines/:id/activate', async (req, res) => {
 router.delete('/baselines/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!requireTypedConfirmation(req, res, 'DELETE PERFORMANCE BASELINE', id)) return;
     const deleted = await PerformanceBaseline.findByIdAndDelete(id).lean();
     if (!deleted) {
       return res.status(404).json({ status: 'error', message: 'Baseline not found' });

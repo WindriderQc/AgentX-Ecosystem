@@ -4,6 +4,7 @@
  */
 
 const request = require('supertest');
+const http = require('http');
 
 // Mock chatService before requiring app
 jest.mock('../../src/services/chatService');
@@ -417,45 +418,89 @@ describe('POST /api/chat/stream - Streaming SSE Endpoint', () => {
     });
 
     describe('6. Client Disconnect Handling', () => {
-        it('should log when client disconnects', (done) => {
-            let isDone = false;
-            const server = app.listen();
-            const finish = (err) => {
-                if (!isDone) {
-                    isDone = true;
-                    server.close((closeErr) => {
-                        done(err || closeErr);
-                    });
-                }
-            };
-
-            chatService.handleChatRequestStream = jest.fn(async ({ onToken, onComplete }) => {
-                // Simulate slow streaming
-                await new Promise(resolve => setTimeout(resolve, 500));
-                // Only call callbacks if we haven't timed out locally
-                try {
-                    if (onToken) onToken('Slow token');
-                    if (onComplete) onComplete({ response: 'Slow response' });
-                } catch (e) {
-                    // Ignore errors writing to closed response
-                }
+        it('does not cancel when the POST body finishes normally', async () => {
+            let signalAfterBodyCompletion = null;
+            chatService.handleChatRequestStream = jest.fn(async ({ abortSignal, onComplete }) => {
+                await new Promise(resolve => setTimeout(resolve, 30));
+                signalAfterBodyCompletion = abortSignal.aborted;
+                onComplete({ response: 'Still streaming', conversationId: 'conv-body-complete' });
             });
 
-            const req = request(server)
+            const response = await request(app)
                 .post('/api/chat/stream')
                 .send({ model: 'llama2', message: 'Test' });
 
-            // Simulate client disconnect after 50ms
-            setTimeout(() => {
-                req.abort();
-                // Allow time for server to handle disconnect
-                setTimeout(finish, 100);
-            }, 50);
+            expect(response.status).toBe(200);
+            expect(signalAfterBodyCompletion).toBe(false);
+            expect(response.text).toContain('event: done');
+        }, 10000);
 
-            req.end((err) => {
-                // If it ends (error or success), finish
-                finish(err);
+        it('aborts the service when the downstream SSE response disconnects', async () => {
+            let server;
+            let clientRequest;
+            let clientResponse;
+            let capturedSignal;
+            let markStarted;
+            let markAborted;
+            const serviceStarted = new Promise(resolve => { markStarted = resolve; });
+            const serviceAborted = new Promise(resolve => { markAborted = resolve; });
+            const within = (promise, label) => Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 3000))
+            ]);
+
+            chatService.handleChatRequestStream = jest.fn(({ abortSignal }) => {
+                capturedSignal = abortSignal;
+                markStarted();
+                return new Promise(resolve => {
+                    abortSignal.addEventListener('abort', () => {
+                        markAborted();
+                        resolve();
+                    }, { once: true });
+                });
             });
+
+            try {
+                server = await new Promise((resolve, reject) => {
+                    const listeningServer = app.listen(0, '127.0.0.1', () => resolve(listeningServer));
+                    listeningServer.once('error', reject);
+                });
+                const body = JSON.stringify({ model: 'llama2', message: 'Test' });
+                const responseStarted = new Promise((resolve, reject) => {
+                    clientRequest = http.request({
+                        hostname: '127.0.0.1',
+                        port: server.address().port,
+                        path: '/api/chat/stream',
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Content-Length': Buffer.byteLength(body)
+                        }
+                    }, (response) => {
+                        clientResponse = response;
+                        resolve();
+                    });
+                    clientRequest.once('error', (error) => {
+                        if (!clientResponse) reject(error);
+                    });
+                    clientRequest.end(body);
+                });
+
+                await within(Promise.all([serviceStarted, responseStarted]), 'stream start');
+                expect(capturedSignal.aborted).toBe(false);
+
+                clientResponse.destroy();
+                await within(serviceAborted, 'service abort');
+
+                expect(capturedSignal.aborted).toBe(true);
+            } finally {
+                clientResponse?.destroy();
+                clientRequest?.destroy();
+                if (server) {
+                    server.closeAllConnections?.();
+                    await new Promise(resolve => server.close(resolve));
+                }
+            }
         }, 10000);
     });
 

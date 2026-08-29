@@ -183,6 +183,32 @@ describe('chatService', () => {
             }));
         });
 
+        it('uses and receipts an explicitly requested prompt version', async () => {
+            PromptConfig.findOne.mockResolvedValueOnce({
+                ...mockPrompt,
+                name: 'reviewer',
+                version: 4,
+                isActive: false
+            });
+
+            const result = await handleChatRequest({
+                userId: 'user123',
+                model: 'llama2',
+                message: 'Review this',
+                persona: 'reviewer',
+                promptVersion: 4
+            });
+
+            expect(PromptConfig.findOne).toHaveBeenCalledWith({ name: 'reviewer', version: 4 });
+            expect(PromptConfig.getActive).not.toHaveBeenCalled();
+            expect(result.prompt).toEqual({
+                name: 'reviewer',
+                version: 4,
+                exact: true,
+                requestedVersion: 4
+            });
+        });
+
         it('uses the matching pin context and keep-alive for non-streaming chat (0512)', async () => {
             hostPreferenceService.getByHost.mockResolvedValue({
                 pinnedModels: [{

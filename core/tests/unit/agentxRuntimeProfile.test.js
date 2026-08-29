@@ -14,6 +14,7 @@ describe('Agent X runtime profile', () => {
   });
 
   test.each([
+    '/api/agent-ops',
     '/api/ollama-vram/status',
     '/api/ollama-watchdog/status',
     '/api/analytics/federated',
@@ -21,6 +22,7 @@ describe('Agent X runtime profile', () => {
     '/api/analytics/voice',
     '/api/reports/morning-brief',
     '/api/pipeline/tasks',
+    '/agent-ops',
     '/portal',
     '/voice-personas.html'
   ])('disables integration surface %s', (pathname) => {

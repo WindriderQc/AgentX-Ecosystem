@@ -64,7 +64,7 @@ async function safe(fn, fallback) {
   try {
     return await fn();
   } catch (err) {
-    logger.warn('[reports] safe() caught error:', err.message);
+    logger.warn('[reports] safe() caught error', { error: err.message });
     return fallback;
   }
 }

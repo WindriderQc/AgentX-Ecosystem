@@ -12,6 +12,12 @@ const ARCHIVED_PERSONAS = new Set([
   'repo_watcher'
 ]);
 
+// Persisted test fixtures remain available on the Prompts management surface,
+// but must never become a selectable production chat persona.
+const TEST_FIXTURE_PERSONAS = new Set([
+  'testin'
+]);
+
 const TOOL_SURFACES = {
   repo_watcher: {
     route: '/repo-watch',
@@ -23,6 +29,7 @@ const TOOL_SURFACES = {
 
 function classifyPersona(prompt) {
   const name = prompt && prompt.name;
+  const normalizedName = String(name || '').trim().toLowerCase();
   const uiType = prompt && prompt.uiConfig && prompt.uiConfig.type
     ? prompt.uiConfig.type
     : 'chat';
@@ -35,6 +42,17 @@ function classifyPersona(prompt) {
       archiveReason: 'Removed from runtime; historical docs may still mention it.',
       promotionTarget: null,
       routeStatus: 'removed'
+    };
+  }
+
+  if (TEST_FIXTURE_PERSONAS.has(normalizedName)) {
+    return {
+      kind: 'test_fixture',
+      selectable: false,
+      launchable: false,
+      archiveReason: 'Retained test fixture; excluded from user-facing persona selectors.',
+      promotionTarget: null,
+      routeStatus: 'test_only'
     };
   }
 

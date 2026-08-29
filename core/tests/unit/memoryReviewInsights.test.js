@@ -45,6 +45,22 @@ describe('Dreaming Review insights read model', () => {
     expect(result.safeDigest).toContain('1 overdue reconciliation(s)');
   });
 
+  test('a previously seen collector becomes stale instead of remaining healthy forever', () => {
+    const result = summarizeRuns([{
+      runId: 'old-quiet-run', status: 'completed', createdAt: new Date('2026-08-08T03:30:00Z'),
+      collectors: [{ runtime: 'agentx', submittedAt: new Date('2026-08-08T03:31:00Z'), errors: [], drift: [] }],
+      candidates: [], summary: { noEligibleObservations: true },
+    }], 30, new Date('2026-08-12T03:45:00Z'));
+
+    expect(result.health).toEqual(expect.objectContaining({
+      state: 'attention', stale: 1, staleRuntimes: ['agentx'], errors: 0,
+    }));
+    expect(result.runtimes.find((runtime) => runtime.runtime === 'agentx')).toEqual(expect.objectContaining({
+      health: 'stale', staleAfterMs: 48 * 60 * 60 * 1000,
+    }));
+    expect(result.safeDigest).toContain('1 stale collector(s)');
+  });
+
   test('safe digest and distributions never include candidate statements', () => {
     const result = summarizeRuns([{
       runId: 'one', status: 'ready_for_review', createdAt: new Date(), collectors: [], summary: { modelCalled: true },

@@ -30,10 +30,13 @@ const { modelsMatch } = require('../src/helpers/modelNameNormalization');
 const alertService = require('../src/services/alertService');
 const { getObservedFailoverStatus } = require('../src/services/failoverStatusService');
 const { buildEcosystemSnapshot: buildProductEcosystemSnapshot } = require('../src/services/ecosystemSnapshotService');
+const portalStatusService = require('../src/services/portalStatusService');
+const systemHealth = require('../src/systemHealth');
 const { calculateMessageCost } = require('../src/services/costCalculator');
 const InferenceLog = require('../models/InferenceLog');
 const { describeHost } = require('../src/services/hostIdentityService');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
+const { projectHealthFeed } = require('../src/services/alertFeedProjection');
 
 // ========================================
 // Helpers
@@ -44,12 +47,16 @@ const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
  * Exported so unit tests can verify the shape without HTTP.
  */
 async function buildIntelligenceSummary() {
-  const [clusterHealth, failoverStatus, hostPreferences, recentAlerts, routingLog] =
+  const [clusterHealth, failoverStatus, hostPreferences, activeAlertSnapshot, routingLog] =
     await Promise.all([
       getAllModelsHealth(),
       getObservedFailoverStatus(getFailoverStatus()),
       hostPrefService.getAll(),
-      alertService.getRecentAlerts(5, { status: 'active' }),
+      alertService.getAlertSnapshot({
+        limit: 5,
+        filters: { status: 'active' },
+        sort: 'recency'
+      }),
       InferenceLog.find()
         .sort({ timestamp: -1 })
         .limit(10)
@@ -60,7 +67,8 @@ async function buildIntelligenceSummary() {
     cluster: clusterHealth,
     routing: failoverStatus,
     hostPreferences,
-    alerts: recentAlerts,
+    alerts: activeAlertSnapshot.alerts,
+    alertSummary: activeAlertSnapshot.summary,
     recentRouting: routingLog
   };
 }
@@ -77,6 +85,8 @@ async function buildEcosystemSnapshot(options = {}) {
   return buildProductEcosystemSnapshot({
     buildIntelligence: buildIntelligenceSummary,
     buildRoutingConfig: getRoutingConfig,
+    buildServiceStatus: options.buildServiceStatus
+      || (() => portalStatusService.getPortalStatus(systemHealth)),
     now: options.now
   });
 }
@@ -461,10 +471,22 @@ router.get('/inference-stats', async (_req, res) => {
 
 router.get('/health/feed', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
+    const parsedLimit = parseInt(req.query.limit, 10);
+    const limit = Math.min(Math.max(Number.isFinite(parsedLimit) ? parsedLimit : 30, 1), 100);
+    const candidateLimit = Math.min(limit * 5, 500);
 
-    const [alerts, errorLogs] = await Promise.all([
-      alertService.getRecentAlerts(limit),
+    const [recentAlertSnapshot, activeAlertSnapshot, errorLogs] = await Promise.all([
+      alertService.getAlertSnapshot({
+        limit: candidateLimit,
+        maxLimit: 500,
+        sort: 'recency'
+      }),
+      alertService.getAlertSnapshot({
+        limit: 500,
+        maxLimit: 500,
+        filters: { status: 'active' },
+        sort: 'recency'
+      }),
       InferenceLog.find({
         $or: [
           { status: 'error' },
@@ -473,55 +495,26 @@ router.get('/health/feed', async (req, res) => {
         ]
       })
         .sort({ timestamp: -1 })
-        .limit(limit)
+        .limit(candidateLimit)
         .lean()
     ]);
 
-    // Normalize alerts into unified event format
-    const alertEvents = (alerts || []).map(a => {
-      const ctx = a.context || {};
-      const extra = ctx.additionalData || {};
-      const detailBits = [];
-      if (extra.model) detailBits.push(extra.model + (extra.host ? ` on ${extra.host}` : ''));
-      if (ctx.metric) detailBits.push(ctx.currentValue !== undefined && ctx.currentValue !== null
-        ? `${ctx.metric} = ${ctx.currentValue}` : ctx.metric);
-      if (ctx.threshold !== undefined && ctx.threshold !== null) detailBits.push(`threshold ${ctx.threshold}`);
-      const occurrences = a.occurrenceCount > 1 ? ` · ${a.occurrenceCount}×` : '';
-      return {
-        type: 'alert',
-        severity: a.severity || a.level || 'info',
-        source: ctx.component || a.source || 'alerts',
-        title: `${a.title || a.message || 'Alert'}${occurrences}`,
-        description: [a.message !== a.title ? a.message : '', detailBits.join(' · ')].filter(Boolean).join(' — '),
-        ruleName: a.ruleName || null,
-        occurrenceCount: a.occurrenceCount || 1,
-        status: a.status || a.state || 'active',
-        timestamp: a.lastOccurrence || a.createdAt || a.timestamp,
-        id: a._id ? String(a._id) : null,
-        expandable: true
-      };
+    const projection = projectHealthFeed({
+      alerts: [...activeAlertSnapshot.alerts, ...recentAlertSnapshot.alerts],
+      inferenceLogs: errorLogs || [],
+      limit
     });
 
-    // Normalize inference errors/failovers
-    const inferenceEvents = (errorLogs || []).map(log => ({
-      type: log.fallbackUsed ? 'failover' : 'inference_error',
-      severity: log.status === 'timeout' ? 'warning' : 'error',
-      source: 'inferenceLog',
-      title: log.fallbackUsed
-        ? `Failover: ${log.model} on ${log.hostKey || log.host}`
-        : `${log.status}: ${log.model} on ${log.hostKey || log.host}`,
-      description: log.error || log.fallbackReason || '',
-      timestamp: log.timestamp,
-      id: log._id ? String(log._id) : null,
-      expandable: !!log.error
-    }));
-
-    // Merge and sort by timestamp descending
-    const feed = [...alertEvents, ...inferenceEvents]
-      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-      .slice(0, limit);
-
-    res.json({ status: 'success', data: feed });
+    res.json({
+      status: 'success',
+      data: projection.events,
+      meta: {
+        ...projection.meta,
+        activeAlertCount: activeAlertSnapshot.summary.activeCount,
+        activeAlertBasis: activeAlertSnapshot.summary.basis.activePredicate,
+        alertSnapshotObservedAt: activeAlertSnapshot.summary.observedAt
+      }
+    });
   } catch (err) {
     logger.error('[NerveCenter] health feed failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });
@@ -701,7 +694,11 @@ const RAG_SERVICE_URL = (process.env.RAG_SERVICE_URL || 'http://localhost:3082')
 
 router.get('/rag/status', async (_req, res) => {
     try {
-        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/status`);
+        const operatorToken = String(process.env.AGENTX_OPERATOR_TOKEN || '').trim();
+        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/status/refresh`, {
+          method: 'POST',
+          headers: operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {}
+        });
         const data = await response.json();
         res.json({ status: 'success', data: data.data || data });
     } catch (err) {

@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 
 const {
@@ -48,6 +49,12 @@ describe('trusted extension loader', () => {
       .toEqual([extensionA, extensionB]);
     expect(() => parseExtensionModules('[broken'))
       .toThrow(`${EXTENSION_ENV} must be a JSON array`);
+    const malformedSecret = 'private-token-inside-malformed-json';
+    try {
+      parseExtensionModules(`["${malformedSecret}`);
+    } catch (error) {
+      expect(error.message).not.toContain(malformedSecret);
+    }
     expect(() => parseExtensionModules(JSON.stringify([extensionA, ''])))
       .toThrow('non-empty module paths');
   });
@@ -76,10 +83,26 @@ describe('trusted extension loader', () => {
     const app = {};
     const conversationLifecycle = { capabilities: { provider: 'agentx-core', contractVersion: 1 } };
     const logger = { info: jest.fn() };
+    const requireOperatorAccess = jest.fn();
+    const requireOperatorUiAccess = jest.fn();
+    const deploymentSecret = 'do-not-expose-this-token';
+    const privateAddress = 'https://private-adapter.invalid:9999';
     const loaded = load({
       app,
       conversationLifecycle,
       logger,
+      security: {
+        contractVersion: 1,
+        requireOperatorAccess,
+        requireOperatorUiAccess,
+        expectedOperatorToken: () => deploymentSecret,
+        privateAddress
+      },
+      env: {
+        [EXTENSION_ENV]: extensionA,
+        PRIVATE_ADAPTER_TOKEN: deploymentSecret,
+        PRIVATE_ADAPTER_URL: privateAddress
+      },
       requireModule: jest.fn(() => ({
         id: 'example-extension',
         version: '1.2.3',
@@ -109,6 +132,15 @@ describe('trusted extension loader', () => {
       'security',
       'standardJsonParser'
     ]);
+    const injected = register.mock.calls[0][0];
+    expect(injected.security).toEqual({
+      contractVersion: 1,
+      requireOperatorAccess,
+      requireOperatorUiAccess
+    });
+    expect(Object.isFrozen(injected.security)).toBe(true);
+    expect(injected.security.expectedOperatorToken).toBeUndefined();
+    expect(injected.security.privateAddress).toBeUndefined();
     expect(loaded).toEqual([{
       id: 'example-extension',
       version: '1.2.3',
@@ -118,6 +150,10 @@ describe('trusted extension loader', () => {
     expect(Object.isFrozen(loaded[0])).toBe(true);
     expect(Object.isFrozen(loaded[0].capabilities)).toBe(true);
     expect(logger.info).toHaveBeenCalledWith('Loaded trusted extension: example-extension@1.2.3');
+    expect(JSON.stringify(loaded)).not.toContain(deploymentSecret);
+    expect(JSON.stringify(loaded)).not.toContain(privateAddress);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(deploymentSecret);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(privateAddress);
   });
 
   test('rejects relative paths and malformed manifests before registration', () => {
@@ -182,5 +218,56 @@ describe('trusted extension loader', () => {
       .toThrow('runtimeServices contract v1');
     expect(() => load({ security: null }))
       .toThrow('security contract v1');
+  });
+
+  test('fails closed without reflecting module paths or extension-thrown secrets', () => {
+    const privateAddress = 'https://private-adapter.invalid:9999';
+    const deploymentSecret = 'operator-token-that-must-not-be-logged';
+    const missingPath = path.resolve(__dirname, `missing-${deploymentSecret}.js`);
+
+    expect(() => load({ env: { [EXTENSION_ENV]: missingPath } }))
+      .toThrow('Configured trusted extension path could not be resolved.');
+    try {
+      load({ env: { [EXTENSION_ENV]: missingPath } });
+    } catch (error) {
+      expect(error.message).not.toContain(missingPath);
+      expect(error.message).not.toContain(deploymentSecret);
+    }
+
+    const loadFailure = new Error(`${deploymentSecret} at ${privateAddress}`);
+    expect(() => load({ requireModule: jest.fn(() => { throw loadFailure; }) }))
+      .toThrow('Configured trusted extension module could not be loaded.');
+    try {
+      load({ requireModule: jest.fn(() => { throw loadFailure; }) });
+    } catch (error) {
+      expect(error.message).not.toContain(deploymentSecret);
+      expect(error.message).not.toContain(privateAddress);
+    }
+
+    const registerFailure = new Error(`${deploymentSecret} at ${privateAddress}`);
+    expect(() => load({
+      requireModule: jest.fn(() => ({
+        id: 'failing-extension',
+        version: '1.0.0',
+        register: () => { throw registerFailure; }
+      }))
+    })).toThrow('Trusted extension failing-extension registration failed.');
+  });
+
+  test('ships no extension activation or private implementation in the product defaults', () => {
+    const repositoryRoot = path.resolve(__dirname, '../../..');
+    const compose = fs.readFileSync(path.join(repositoryRoot, 'docker-compose.yml'), 'utf8');
+    const defaultEnv = fs.readFileSync(path.join(repositoryRoot, 'config', 'agentx.env'), 'utf8');
+    expect(compose).not.toMatch(/^\s*AGENTX_EXTENSION_MODULES\s*:/m);
+    expect(defaultEnv).not.toMatch(/^\s*AGENTX_EXTENSION_MODULES\s*=/m);
+
+    const productExtensionFiles = fs.readdirSync(
+      path.resolve(__dirname, '../../src/extensions'),
+      { withFileTypes: true }
+    ).map((entry) => entry.name).sort();
+    expect(productExtensionFiles).toEqual([
+      'trustedExtensionLoader.js',
+      'trustedRuntimeServices.js'
+    ]);
   });
 });

@@ -84,6 +84,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-wrap: wrap;
 }
 
 .cs-header-status-item {
@@ -164,6 +165,24 @@
     color: var(--text);
     min-width: 120px;
     text-align: center;
+}
+
+.cs-date-context {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 140px;
+}
+
+.cs-date-zone {
+    max-width: 180px;
+    color: var(--muted);
+    font-size: 0.65rem;
+    line-height: 1.1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ── View Toggles ────────────────────────────────────────────── */
@@ -296,6 +315,17 @@
 }
 
 /* ── Live Host Cards ─────────────────────────────────────────── */
+
+.cs-live-evidence {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.45;
+}
+
+.cs-live-evidence[data-status="unavailable"] {
+    color: #f59e0b;
+}
 
 .cs-live-bar {
     display: grid;

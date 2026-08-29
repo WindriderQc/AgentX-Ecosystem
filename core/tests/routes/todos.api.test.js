@@ -8,8 +8,20 @@ const { createTaskInMongo } = require('../../src/services/pipelineTaskService');
 const { app } = require('../../src/app');
 
 describe('POST /api/todos', () => {
+  const originalPipelineToken = process.env.AGENTX_PIPELINE_TOKEN;
+  const originalPublicHosts = process.env.AGENTX_PUBLIC_HOSTS;
+
   beforeEach(() => {
     createTaskInMongo.mockReset();
+    delete process.env.AGENTX_PIPELINE_TOKEN;
+    delete process.env.AGENTX_PUBLIC_HOSTS;
+  });
+
+  afterAll(() => {
+    if (originalPipelineToken === undefined) delete process.env.AGENTX_PIPELINE_TOKEN;
+    else process.env.AGENTX_PIPELINE_TOKEN = originalPipelineToken;
+    if (originalPublicHosts === undefined) delete process.env.AGENTX_PUBLIC_HOSTS;
+    else process.env.AGENTX_PUBLIC_HOSTS = originalPublicHosts;
   });
 
   test('creates a Mongo pipeline task through the legacy TODO endpoint', async () => {
@@ -64,5 +76,34 @@ describe('POST /api/todos', () => {
     expect(res.body.status).toBe('error');
     expect(res.body.message).toBe('service is required');
     expect(res.body.code).toBe('INVALID_TODO_INPUT');
+  });
+
+  test('admits the exact pipeline token through the public boundary and route-local validator', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+    createTaskInMongo.mockResolvedValue({ pipelineId: '0401', status: 'queued' });
+
+    const response = await request(app)
+      .post('/api/todos')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-secret')
+      .send({ title: 'Bounded compatibility task', service: 'core' });
+
+    expect(response.status).toBe(201);
+    expect(createTaskInMongo).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects a wrong pipeline token before legacy task creation', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+
+    const response = await request(app)
+      .post('/api/todos')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Pipeline-Token', 'wrong-secret')
+      .send({ title: 'Must not be created', service: 'core' });
+
+    expect(response.status).toBe(403);
+    expect(createTaskInMongo).not.toHaveBeenCalled();
   });
 });

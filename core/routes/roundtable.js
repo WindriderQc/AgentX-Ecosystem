@@ -21,6 +21,7 @@ const router = express.Router();
 const logger = require('../config/logger');
 const roundtableService = require('../src/services/roundtable');
 const Roundtable = require('../models/Roundtable');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 function secretMatches(actual, expected) {
   if (!actual || !expected) return false;
@@ -89,7 +90,11 @@ router.post('/', express.json(), async (req, res) => {
     });
   } catch (err) {
     logger.error('POST /api/roundtable failed', { error: err.message });
-    res.status(err.status || 500).json({ status: 'error', message: err.message });
+    res.status(err.status || 500).json({
+      status: 'error',
+      message: err.message,
+      ...(err.code ? { code: err.code } : {})
+    });
   }
 });
 
@@ -111,24 +116,30 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.get('/defaults', (req, res) => {
-  res.json({
-    status: 'ok',
-    data: {
-      panel: roundtableService.DEFAULT_PANEL,
-      synthesizer: roundtableService.DEFAULT_SYNTHESIZER,
-      options: roundtableService.COUNCIL_OPTIONS,
-      policy: {
-        canonicalSurface: '/council',
-        advisoryOnlyDefault: true,
-        executionAuthority: 'none',
-        qualityScoringDefault: false,
-        runtimeParticipantsEnabled: ['1', 'true', 'yes', 'on'].includes(
-          String(process.env.ROUNDTABLE_RUNTIME_PARTICIPANTS_ENABLED || '').trim().toLowerCase()
-        )
+router.get('/defaults', async (_req, res) => {
+  try {
+    const defaults = await roundtableService.getCouncilDefaults();
+    res.json({
+      status: 'ok',
+      data: {
+        ...defaults,
+        options: roundtableService.COUNCIL_OPTIONS,
+        policy: {
+          canonicalSurface: '/council',
+          advisoryOnlyDefault: true,
+          executionAuthority: 'none',
+          qualityScoringDefault: false,
+          modelDownloadsImplicit: false,
+          runtimeParticipantsEnabled: ['1', 'true', 'yes', 'on'].includes(
+            String(process.env.ROUNDTABLE_RUNTIME_PARTICIPANTS_ENABLED || '').trim().toLowerCase()
+          )
+        }
       }
-    }
-  });
+    });
+  } catch (err) {
+    logger.error('GET /api/roundtable/defaults failed', { error: err.message });
+    res.status(500).json({ status: 'error', message: 'Council model defaults are unavailable' });
+  }
 });
 
 router.get('/active', async (req, res) => {
@@ -160,6 +171,7 @@ router.get('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!requireTypedConfirmation(req, res, 'DELETE COUNCIL RECORD', req.params.id)) return;
     const result = await Roundtable.deleteOne({ _id: req.params.id });
     if (result.deletedCount === 0) {
       return res.status(404).json({ status: 'error', message: 'Not found' });

@@ -43,7 +43,7 @@
             <div class="stat-card clickable" id="statTotalCard">
                 <div class="icon-box blue"><i class="fas fa-cubes"></i></div>
                 <div class="stat-info">
-                    <h3>Total Models</h3>
+                    <h3>Unique model tags</h3>
                     <div class="number" id="statTotal">--</div>
                     <div class="sub-text" id="statTotalSub"></div>
                 </div>
@@ -73,6 +73,9 @@
                 </div>
             </div>
         </div>
+        <p class="models-count-scope" id="modelsCountScope">
+            Inventory scope: unique active model tags across configured Ollama hosts and custom providers. Host installs are counted separately; “Benchmarked” means unique tags with recorded positive-score evidence.
+        </p>
 
         <!-- Category Pill Strip -->
         <div class="category-strip" id="categoryStrip">

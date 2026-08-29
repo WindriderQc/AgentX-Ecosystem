@@ -63,10 +63,45 @@ describe('shared navigation public URL contract', () => {
   test('Chat is a first-class direct destination in full and demo navigation', async () => {
     for (const profile of ['full', 'demo']) {
       const html = await renderNav('core', profile, 'playground');
-      const directChat = html.match(/<a href="\/playground" class="nav-link primary active">[\s\S]*?<\/a>/g) || [];
+      const directChat = html.match(/<a href="\/playground" class="nav-link primary active"[^>]*>[\s\S]*?<\/a>/g) || [];
       expect(directChat).toHaveLength(1);
       expect(directChat[0]).toContain('Chat');
+      expect(directChat[0]).toContain('aria-current="page"');
     }
+  });
+
+  test('navigation exposes every release-critical demo surface and exact RAG page state', async () => {
+    const demo = await renderNav('core', 'demo', 'prompts');
+    for (const label of ['Prompts', 'Profiler', 'Courthouse', 'Efficiency Map']) {
+      expect(hrefFor(demo, label)).toBeTruthy();
+    }
+
+    const ragMaintenance = await renderNav('rag', 'full', 'rag-maintenance');
+    expect(hrefFor(ragMaintenance, 'Maintenance')).toBe('/maintenance');
+    expect(ragMaintenance).toMatch(/href="\/maintenance"[\s\S]*?aria-current="page"/);
+  });
+
+  test('navigation exposes a complete disclosure and keyboard contract', async () => {
+    const html = await renderNav('core', 'full', 'pipeline');
+    expect(html).toContain('<nav class="top-nav" aria-label="Primary">');
+    expect(html).toContain('id="nav-trigger-work-group"');
+    expect(html).toContain('aria-controls="nav-menu-work-group"');
+    expect(html).toContain('id="nav-menu-work-group" aria-labelledby="nav-trigger-work-group"');
+    expect(hrefFor(html, 'Pipeline')).toBe('/pipeline');
+    expect(html.match(/href="\/pipeline"[\s\S]*?aria-current="page"/)).not.toBeNull();
+    expect(html).toContain("e.key === 'ArrowDown'");
+    expect(html).toContain("e.key === 'Escape'");
+    expect(html).toContain("e.key === 'Home'");
+    expect(html).toContain("e.key === 'End'");
+    expect(html).toContain("container.classList.toggle('has-open-menu'");
+  });
+
+  test('shared layout provides a skip-to-content target without replacing page-owned ids', () => {
+    const layout = fs.readFileSync(path.join(__dirname, '../../views/layouts/main.ejs'), 'utf8');
+    expect(layout).toContain('class="skip-link"');
+    expect(layout).toContain('href="#main-content"');
+    expect(layout).toContain("document.querySelector('main, [role=\"main\"]')");
+    expect(layout).toContain("main.parentNode.insertBefore(target, main)");
   });
 
   test('nav source does not synthesize URLs from request hosts or service ports', () => {

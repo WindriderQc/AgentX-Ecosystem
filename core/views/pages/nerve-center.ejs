@@ -1,7 +1,7 @@
   <div class="bg-grid"></div>
 
   <!-- Main Content -->
-  <div class="nc-container">
+  <main class="nc-container" id="main-content">
 
       <!-- Page Header -->
       <div class="nc-page-header">
@@ -25,30 +25,38 @@
 
       <!-- Summary Strip -->
       <div class="nc-summary-strip">
-          <div class="nc-widget nominal" data-scroll="cluster" id="widgetHostsOnline">
-              <div class="nc-widget-value" id="widgetHostsOnlineValue">--</div>
-              <div class="nc-widget-label">Hosts Online</div>
-          </div>
-          <div class="nc-widget nominal" data-scroll="routing" id="widgetActiveHost" title="Configured routing intent paired with the most recent successful chat or proxy route; embeddings are excluded">
-              <div class="nc-widget-value" id="widgetActiveHostValue">--</div>
-              <div class="nc-widget-label">Intent → Last Served</div>
-          </div>
-          <div class="nc-widget nominal" data-scroll="cluster" id="widgetHostPrefs">
-              <div class="nc-widget-value" id="widgetHostPrefsValue">--</div>
-              <div class="nc-widget-label">Host Defaults</div>
-          </div>
-          <div class="nc-widget nominal" data-scroll="health" id="widgetAlerts">
-              <div class="nc-widget-value" id="widgetAlertsValue">--</div>
-              <div class="nc-widget-label">Active Alerts</div>
-          </div>
-          <div class="nc-widget nominal" data-scroll="routing" id="widgetRoutingMode">
-              <div class="nc-widget-value" id="widgetRoutingModeValue">--</div>
-              <div class="nc-widget-label">Routing Mode</div>
-          </div>
-          <div class="nc-widget nominal" data-scroll="performance" id="widgetInferences">
-              <div class="nc-widget-value" id="widgetInferencesValue">--</div>
-              <div class="nc-widget-label">Inferences Today</div>
-          </div>
+          <button class="nc-widget nominal" type="button" data-scroll="cluster" id="widgetHostsOnline" aria-expanded="true" aria-controls="sectionClusterBody">
+              <span class="nc-widget-value" id="widgetHostsOnlineValue">--</span>
+              <span class="nc-widget-label">Hosts Online</span>
+          </button>
+          <button class="nc-widget nominal" type="button" data-scroll="routing" id="widgetActiveHost" aria-expanded="true" aria-controls="sectionRoutingBody" title="Configured routing intent paired with the most recent successful chat or proxy route; embeddings are excluded">
+              <span class="nc-widget-value" id="widgetActiveHostValue">--</span>
+              <span class="nc-widget-label">Intent → Last Served</span>
+          </button>
+          <button class="nc-widget nominal" type="button" data-scroll="cluster" id="widgetHostPrefs" aria-expanded="true" aria-controls="sectionClusterBody">
+              <span class="nc-widget-value" id="widgetHostPrefsValue">--</span>
+              <span class="nc-widget-label">Host Defaults</span>
+          </button>
+          <button class="nc-widget nominal" type="button" data-scroll="health" id="widgetAlerts" aria-expanded="true" aria-controls="sectionHealthBody">
+              <span class="nc-widget-value" id="widgetAlertsValue">--</span>
+              <span class="nc-widget-label">Active Alerts</span>
+          </button>
+          <button class="nc-widget nominal" type="button" data-scroll="routing" id="widgetRoutingMode" aria-expanded="true" aria-controls="sectionRoutingBody">
+              <span class="nc-widget-value" id="widgetRoutingModeValue">--</span>
+              <span class="nc-widget-label">Routing Mode</span>
+          </button>
+          <button class="nc-widget nominal" type="button" data-scroll="health" id="widgetServiceBuild" aria-expanded="true" aria-controls="sectionHealthBody">
+              <span class="nc-widget-value" id="widgetServiceBuildValue">--</span>
+              <span class="nc-widget-label">Services / Build</span>
+          </button>
+          <button class="nc-widget nominal" type="button" data-scroll="health" id="widgetEvidenceTrust" aria-expanded="true" aria-controls="sectionHealthBody">
+              <span class="nc-widget-value" id="widgetEvidenceTrustValue">--</span>
+              <span class="nc-widget-label">Evidence Trust</span>
+          </button>
+          <button class="nc-widget nominal" type="button" data-scroll="performance" id="widgetInferences" aria-expanded="true" aria-controls="sectionPerformanceBody">
+              <span class="nc-widget-value" id="widgetInferencesValue">--</span>
+              <span class="nc-widget-label">Inferences Today</span>
+          </button>
       </div>
 
       <div class="nc-view-controls" role="group" aria-label="Nerve Center detail level">
@@ -60,174 +68,182 @@
 
       <!-- Section: Cluster -->
       <div class="nc-section cluster" id="sectionCluster">
-          <div class="nc-section-header" data-section="sectionCluster">
+          <div class="nc-section-header">
+              <button class="nc-section-toggle" type="button" data-section="sectionCluster" aria-expanded="true" aria-controls="sectionClusterBody" aria-labelledby="sectionClusterTitle"></button>
               <div class="nc-section-title-group">
-                  <i class="fas fa-server nc-section-icon"></i>
+                  <i class="fas fa-server nc-section-icon" aria-hidden="true"></i>
                   <div>
-                      <h2>Cluster</h2>
+                      <h2 id="sectionClusterTitle">Cluster</h2>
                       <span class="nc-section-subtitle">Host status, vRAM usage, and loaded models</span>
                   </div>
               </div>
               <div class="nc-section-actions">
-                  <button class="nc-btn" id="btnRefreshCluster">
-                      <i class="fas fa-sync"></i> Refresh All
+                  <button class="nc-btn" id="btnRefreshCluster" type="button">
+                      <i class="fas fa-sync" aria-hidden="true"></i> Refresh All
                   </button>
-                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+                  <i class="fas fa-chevron-down nc-collapse-icon" aria-hidden="true"></i>
               </div>
           </div>
-          <div class="nc-section-body" id="sectionClusterBody">
-              <div class="nc-section-placeholder">
-                  <i class="fas fa-spinner fa-spin"></i> Loading cluster data...
+          <div class="nc-section-body" id="sectionClusterBody" aria-busy="true">
+              <div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true">
+                  <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading cluster data...
               </div>
           </div>
       </div>
 
       <!-- Section: Inference -->
       <div class="nc-section inference nc-detail-only" id="sectionInference">
-          <div class="nc-section-header" data-section="sectionInference">
+          <div class="nc-section-header">
+              <button class="nc-section-toggle" type="button" data-section="sectionInference" aria-expanded="true" aria-controls="sectionInferenceBody" aria-labelledby="sectionInferenceTitle"></button>
               <div class="nc-section-title-group">
-                  <i class="fas fa-network-wired nc-section-icon"></i>
+                  <i class="fas fa-network-wired nc-section-icon" aria-hidden="true"></i>
                   <div>
-                      <h2>Inference Routing &amp; Activity</h2>
+                      <h2 id="sectionInferenceTitle">Inference Routing &amp; Activity</h2>
                       <span class="nc-section-subtitle">GPU fleet, task routing, and recent inference logs</span>
                   </div>
               </div>
               <div class="nc-section-actions">
-                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+                  <i class="fas fa-chevron-down nc-collapse-icon" aria-hidden="true"></i>
               </div>
           </div>
-          <div class="nc-section-body" id="sectionInferenceBody">
-              <div class="nc-section-placeholder">
-                  <i class="fas fa-spinner fa-spin"></i> Loading inference data…
+          <div class="nc-section-body" id="sectionInferenceBody" aria-busy="true">
+              <div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true">
+                  <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading inference data…
               </div>
           </div>
       </div>
 
       <!-- Section: Inference Health (admission gate, benchmark claims, drift) -->
       <div class="nc-section inference-health nc-detail-only" id="sectionInferenceHealth">
-          <div class="nc-section-header" data-section="sectionInferenceHealth">
+          <div class="nc-section-header">
+              <button class="nc-section-toggle" type="button" data-section="sectionInferenceHealth" aria-expanded="true" aria-controls="sectionInferenceHealthBody" aria-labelledby="sectionInferenceHealthTitle"></button>
               <div class="nc-section-title-group">
-                  <i class="fas fa-heart-pulse nc-section-icon"></i>
+                  <i class="fas fa-heart-pulse nc-section-icon" aria-hidden="true"></i>
                   <div>
-                      <h2>Inference Health</h2>
+                      <h2 id="sectionInferenceHealthTitle">Inference Health</h2>
                       <span class="nc-section-subtitle">Gate queue, benchmark claims, watchdog, and num_ctx drift</span>
                   </div>
               </div>
               <div class="nc-section-actions">
                   <span class="nc-muted" id="nc-ih-summary" style="margin-right:12px;font-size:12px;"></span>
-                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+                  <i class="fas fa-chevron-down nc-collapse-icon" aria-hidden="true"></i>
               </div>
           </div>
-          <div class="nc-section-body" id="sectionInferenceHealthBody">
-              <div class="nc-section-placeholder">
-                  <i class="fas fa-spinner fa-spin"></i> Loading inference health…
+          <div class="nc-section-body" id="sectionInferenceHealthBody" aria-busy="true">
+              <div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true">
+                  <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading inference health…
               </div>
           </div>
       </div>
 
       <!-- Section: Routing & Host Preferences -->
       <div class="nc-section routing nc-detail-only" id="sectionRouting">
-          <div class="nc-section-header" data-section="sectionRouting">
+          <div class="nc-section-header">
+              <button class="nc-section-toggle" type="button" data-section="sectionRouting" aria-expanded="true" aria-controls="sectionRoutingBody" aria-labelledby="sectionRoutingTitle"></button>
               <div class="nc-section-title-group">
-                  <i class="fas fa-bolt nc-section-icon"></i>
+                  <i class="fas fa-bolt nc-section-icon" aria-hidden="true"></i>
                   <div>
-                      <h2>Routing &amp; Host Preferences</h2>
+                      <h2 id="sectionRoutingTitle">Routing &amp; Host Preferences</h2>
                       <span class="nc-section-subtitle">Persisted actual-route state and host preferences</span>
                   </div>
               </div>
               <div class="nc-section-actions">
-                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+                  <i class="fas fa-chevron-down nc-collapse-icon" aria-hidden="true"></i>
               </div>
           </div>
-          <div class="nc-section-body" id="sectionRoutingBody">
-              <div class="nc-section-placeholder">
-                  <i class="fas fa-spinner fa-spin"></i> Loading routing data...
+          <div class="nc-section-body" id="sectionRoutingBody" aria-busy="true">
+              <div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true">
+                  <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading routing data...
               </div>
           </div>
       </div>
 
       <!-- Section: Health & Alerts -->
       <div class="nc-section health" id="sectionHealth">
-          <div class="nc-section-header" data-section="sectionHealth">
+          <div class="nc-section-header">
+              <button class="nc-section-toggle" type="button" data-section="sectionHealth" aria-expanded="true" aria-controls="sectionHealthBody" aria-labelledby="sectionHealthTitle"></button>
               <div class="nc-section-title-group">
-                  <i class="fas fa-shield-halved nc-section-icon"></i>
+                  <i class="fas fa-shield-halved nc-section-icon" aria-hidden="true"></i>
                   <div>
-                      <h2>Health &amp; Alerts</h2>
+                      <h2 id="sectionHealthTitle">Health &amp; Alerts</h2>
                       <span class="nc-section-subtitle">Alert feed, system events, and monitoring rules</span>
                   </div>
               </div>
               <div class="nc-section-actions">
-                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+                  <i class="fas fa-chevron-down nc-collapse-icon" aria-hidden="true"></i>
               </div>
           </div>
-          <div class="nc-section-body" id="sectionHealthBody">
-              <div class="nc-section-placeholder">
-                  <i class="fas fa-spinner fa-spin"></i> Loading health data...
+          <div class="nc-section-body" id="sectionHealthBody" aria-busy="true">
+              <div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true">
+                  <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading health data...
               </div>
           </div>
       </div>
 
       <!-- Section: Alerts -->
       <div class="nc-section alerts nc-detail-only" id="sectionAlerts">
-          <div class="nc-section-header" data-section="sectionAlerts">
+          <div class="nc-section-header">
+              <button class="nc-section-toggle" type="button" data-section="sectionAlerts" aria-expanded="true" aria-controls="nc-alerts-body" aria-labelledby="sectionAlertsTitle"></button>
               <div class="nc-section-title-group">
-                  <i class="fas fa-bell nc-section-icon"></i>
+                  <i class="fas fa-bell nc-section-icon" aria-hidden="true"></i>
                   <div>
-                      <h2>Alerts &amp; Rules</h2>
+                      <h2 id="sectionAlertsTitle">Alerts &amp; Rules</h2>
                       <span class="nc-section-subtitle">Active alerts, severity summary, and configured rules</span>
                   </div>
               </div>
               <div class="nc-section-actions">
-                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+                  <i class="fas fa-chevron-down nc-collapse-icon" aria-hidden="true"></i>
               </div>
           </div>
-          <div class="nc-section-body" id="nc-alerts-body">
-              <div class="nc-section-placeholder">
-                  <i class="fas fa-spinner fa-spin"></i> Loading alerts...
+          <div class="nc-section-body" id="nc-alerts-body" aria-busy="true">
+              <div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true">
+                  <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading alerts...
               </div>
           </div>
       </div>
 
       <!-- Section: RAG Knowledge Base -->
       <div class="nc-section rag nc-detail-only" id="sectionRag">
-          <div class="nc-section-header" data-section="sectionRag">
+          <div class="nc-section-header">
+              <button class="nc-section-toggle" type="button" data-section="sectionRag" aria-expanded="true" aria-controls="nc-rag-body" aria-labelledby="sectionRagTitle"></button>
               <div class="nc-section-title-group">
-                  <i class="fas fa-brain nc-section-icon"></i>
+                  <i class="fas fa-brain nc-section-icon" aria-hidden="true"></i>
                   <div>
-                      <h2>RAG Knowledge Base</h2>
+                      <h2 id="sectionRagTitle">RAG Knowledge Base</h2>
                       <span class="nc-section-subtitle">Document store, vector health, embedding cache, and recent ingestion</span>
                   </div>
               </div>
               <div class="nc-section-actions">
-                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+                  <i class="fas fa-chevron-down nc-collapse-icon" aria-hidden="true"></i>
               </div>
           </div>
-          <div class="nc-section-body" id="nc-rag-body">
-              <div class="nc-section-placeholder">
-                  <i class="fas fa-spinner fa-spin"></i> Loading RAG status...
+          <div class="nc-section-body" id="nc-rag-body" aria-busy="true">
+              <div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true">
+                  <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading RAG status...
               </div>
           </div>
       </div>
 
       <!-- Section: Performance -->
       <div class="nc-section performance nc-detail-only" id="sectionPerformance">
-          <div class="nc-section-header" data-section="sectionPerformance">
+          <div class="nc-section-header">
+              <button class="nc-section-toggle" type="button" data-section="sectionPerformance" aria-expanded="true" aria-controls="sectionPerformanceBody" aria-labelledby="sectionPerformanceTitle"></button>
               <div class="nc-section-title-group">
-                  <i class="fas fa-bolt nc-section-icon"></i>
+                  <i class="fas fa-bolt nc-section-icon" aria-hidden="true"></i>
                   <div>
-                      <h2>Performance</h2>
+                      <h2 id="sectionPerformanceTitle">Performance</h2>
                       <span class="nc-section-subtitle">Inference latency, throughput, and cost metrics</span>
                   </div>
               </div>
               <div class="nc-section-actions">
-                  <i class="fas fa-chevron-down nc-collapse-icon"></i>
+                  <i class="fas fa-chevron-down nc-collapse-icon" aria-hidden="true"></i>
               </div>
           </div>
-          <div class="nc-section-body" id="sectionPerformanceBody">
-              <div class="nc-section-placeholder">
-                  <i class="fas fa-spinner fa-spin"></i> Loading performance data...
+          <div class="nc-section-body" id="sectionPerformanceBody" aria-busy="true">
+              <div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true">
+                  <i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Loading performance data...
               </div>
           </div>
       </div>
 
-  </div>
+  </main>

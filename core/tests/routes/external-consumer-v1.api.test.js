@@ -80,6 +80,7 @@ describe('external consumer v1 routes', () => {
       agentx: { healthEndpoint: '/health' },
       inference: { stateless: true, persistence: false, routed: true },
     });
+    expect(response.headers['x-agentx-consumer-contract']).toBe('1.0.0');
   });
 
   test('executes non-streaming inference with stable output and no private host URL', async () => {
@@ -121,7 +122,25 @@ describe('external consumer v1 routes', () => {
       tasks: { general_chat: { model: 'exact:model', hostKey: 'primary' } },
     });
     expect(JSON.stringify(response.body)).not.toContain('http://private-host');
+    expect(response.headers['x-agentx-consumer-contract']).toBe('1.0.0');
     expect(runtimeServices.routing.getEffectiveSnapshot).toHaveBeenCalledWith({ includeCatalog: false });
+  });
+
+  test('redacts deployment locations from degraded error projections', async () => {
+    runtimeServices.routing.getEffectiveSnapshot.mockRejectedValueOnce(
+      new Error('ECONNREFUSED 10.0.0.99:11434 at C:\\Users\\operator\\agentx and /var/run/agentx.sock via http://private-host:11434')
+    );
+
+    const response = await request(buildApp(runtimeServices))
+      .get('/api/consumers/v1/routing')
+      .expect(500);
+
+    expect(response.body.error).toBe('External consumer request failed.');
+    expect(JSON.stringify(response.body)).not.toContain('http://private-host');
+    expect(JSON.stringify(response.body)).not.toContain('10.0.0.99');
+    expect(JSON.stringify(response.body)).not.toContain('Users');
+    expect(JSON.stringify(response.body)).not.toContain('/var/run');
+    expect(response.headers['x-agentx-consumer-contract']).toBe('1.0.0');
   });
 
   test('converts the upstream NDJSON stream into stable SSE events', async () => {
@@ -153,6 +172,34 @@ describe('external consumer v1 routes', () => {
     expect(response.text).toContain('event: done');
     expect(response.text).toContain('"completionTokens":2');
     expect(response.text).not.toContain('http://private-host');
+  });
+
+  test('fails honestly when an upstream stream ends without terminal evidence', async () => {
+    const upstream = new PassThrough();
+    runtimeServices.inference.execute.mockImplementation(async () => {
+      setImmediate(() => {
+        upstream.end(`${JSON.stringify({ message: { role: 'assistant', content: 'partial' }, done: false })}\n`);
+      });
+      return runtimeResult({ stream: upstream, body: undefined });
+    });
+
+    const response = await request(buildApp(runtimeServices))
+      .post('/api/consumers/v1/inference')
+      .send({
+        consumer: 'example-app',
+        mode: 'chat',
+        taskType: 'general_chat',
+        messages: [{ role: 'user', content: 'Hi' }],
+        stream: true,
+      })
+      .expect('Content-Type', /text\/event-stream/)
+      .expect(200);
+
+    expect(response.text).toContain('event: delta');
+    expect(response.text).toContain('"text":"partial"');
+    expect(response.text).toContain('event: error');
+    expect(response.text).toContain('"code":"INFERENCE_STREAM_INCOMPLETE"');
+    expect(response.text).not.toContain('event: done');
   });
 
   test('turns a client disconnect into an AbortSignal for upstream cancellation', () => {

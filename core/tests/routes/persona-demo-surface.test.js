@@ -22,6 +22,8 @@ describe('guided persona demo', () => {
     expect(html).toContain('What do you want to do?');
     expect(html).toContain('Try a guided conversation');
     expect(html).toContain('href="/playground?persona=learning_guide"');
+    expect(html).toContain('If chat is not ready, it names an installed model you can choose.');
+    expect(html).not.toContain('No setup choices required.');
     expect(html).not.toMatch(/openclaw|herm[eè]s|nestor|192\.168\.|credential|token/i);
   });
 
@@ -34,11 +36,16 @@ describe('guided persona demo', () => {
       expect(source).toContain("new URLSearchParams(window.location.search).get('persona')");
     }
     expect(profileSource).toContain('Array.from(promptSelect.options)');
+    expect(profileSource).toContain('v.disposition?.selectable !== false');
+    expect(profileSource).toContain("query.get('promptVersion')");
+    expect(profileSource).toContain('promptSelect.dataset.promptVersion');
+    expect(profileSource).toContain('escapePromptText');
     expect(profileSource).toContain('await loadActivePrompt(promptSelect.value)');
     expect(profileSource).toContain("promptSelect.addEventListener('change'");
     expect(selectorSource).toContain('personas.find(persona => persona.name ===');
     expect(selectorSource).toContain('Ignoring unknown requested persona');
-    expect(mainSource).toContain('await loadPromptSelector();');
+    expect(mainSource).toContain('loadPromptSelector(),');
+    expect(mainSource).toContain('Promise.allSettled(optionalEvidence)');
     expect(mainSource).not.toContain('loadActivePrompt();');
   });
 });

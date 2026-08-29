@@ -24,9 +24,6 @@
         <a class="agent-ops-button" href="/nerve-center">
           <i class="fas fa-brain"></i><span>Nerve Center</span>
         </a>
-        <a class="agent-ops-button" href="/api/openclaw/control-launch/overview" data-openclaw-native="/overview" target="_blank" rel="noopener">
-          <i class="fas fa-arrow-up-right-from-square"></i><span>OpenClaw Control</span>
-        </a>
         <button class="cockpit-help-button" type="button" data-cockpit-guide-open="agentOpsGuide"><i class="fas fa-circle-question"></i><span>Page guide</span></button>
       </div>
     </div>
@@ -42,7 +39,7 @@
       <div class="agent-ops-orbit-node runtime" tabindex="0" data-cockpit-tip-title="Runtime" data-cockpit-tip="Observed OpenClaw, Hermes, and product evidence; observation does not imply active execution."><i class="fas fa-satellite-dish"></i><span>Runtime</span></div>
       <div class="agent-ops-orbit-node cadence" tabindex="0" data-cockpit-tip-title="Cadence" data-cockpit-tip="Live automation receipts reconciled with documented recurring obligations."><i class="fas fa-clock"></i><span>Cadence</span></div>
       <div class="agent-ops-orbit-node delivery" tabindex="0" data-cockpit-tip-title="Delivery" data-cockpit-tip="Open coding work and ownership projected from the Mongo pipeline."><i class="fas fa-list-check"></i><span>Delivery</span></div>
-      <div class="agent-ops-orbit-live"><span></span> Live projection</div>
+      <div class="agent-ops-orbit-live"><span></span><strong id="agentOpsOrbitStatus">Checking projection</strong></div>
     </aside>
   </header>
 
@@ -53,6 +50,27 @@
       <span id="agentOpsStateDetail">Checking registry and runtime sources.</span>
     </div>
     <time id="agentOpsUpdated"></time>
+  </section>
+
+  <section class="agent-ops-unavailable" id="agentOpsUnavailable" aria-labelledby="agentOpsUnavailableTitle" hidden>
+    <div class="agent-ops-unavailable-icon" aria-hidden="true"><i class="fas fa-plug-circle-xmark"></i></div>
+    <div class="agent-ops-unavailable-copy">
+      <span class="agent-ops-kicker">Optional projection unavailable</span>
+      <h2 id="agentOpsUnavailableTitle">Install an Agent Ops trusted extension to populate this view</h2>
+      <p id="agentOpsUnavailableReason">No installed trusted extension handled the Agent Ops projection.</p>
+      <dl class="agent-ops-unavailable-evidence">
+        <div><dt>Authority</dt><dd id="agentOpsUnavailableAuthority">agentx.trusted-extension · read-only</dd></div>
+        <div><dt>Product data</dt><dd>Not inferred; all counts remain —</dd></div>
+        <div><dt>Setup reference</dt><dd><code id="agentOpsUnavailableDocsPath">docs/TRUSTED_EXTENSIONS.md</code></dd></div>
+      </dl>
+      <p class="agent-ops-unavailable-guidance" id="agentOpsUnavailableGuidance">Install and pin a separately owned Agent Ops extension, enable the full profile, then restart Core.</p>
+      <div class="agent-ops-unavailable-actions">
+        <button class="agent-ops-button primary" id="agentOpsUnavailableRetry" type="button"><i class="fas fa-rotate"></i>Retry projection</button>
+        <a class="agent-ops-button" href="/nerve-center"><i class="fas fa-brain"></i>Nerve Center</a>
+        <a class="agent-ops-button" href="/pipeline"><i class="fas fa-list-check"></i>Pipeline</a>
+        <a class="agent-ops-button" href="https://github.com/WindriderQc/AgentX-Ecosystem/blob/main/docs/TRUSTED_EXTENSIONS.md" target="_blank" rel="noopener"><i class="fas fa-book-open"></i>Setup docs</a>
+      </div>
+    </div>
   </section>
 
   <section class="agent-ops-metrics" aria-label="Agent Ops summary">
@@ -281,8 +299,7 @@
       links: [
         { href: '/playground', icon: 'fa-comments', label: 'Playground', detail: 'Talk with the models' },
         { href: '/pipeline', icon: 'fa-list-check', label: 'Pipeline', detail: 'Coding delivery queue' },
-        { href: '/nerve-center', icon: 'fa-brain', label: 'Nerve Center', detail: 'Fleet and routing health' },
-        { href: '/api/openclaw/control-launch/overview', icon: 'fa-satellite-dish', label: 'OpenClaw Control', detail: 'Native runtime authority', external: true }
+        { href: '/nerve-center', icon: 'fa-brain', label: 'Nerve Center', detail: 'Fleet and routing health' }
       ]
     }
   }) %>

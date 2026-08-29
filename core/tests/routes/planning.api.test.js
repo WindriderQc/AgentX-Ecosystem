@@ -1,4 +1,4 @@
-const request = require('supertest');
+const supertest = require('supertest');
 
 const PlanningItem = require('../../models/PlanningItem');
 const PlanningAutomationState = require('../../models/PlanningAutomationState');
@@ -6,7 +6,27 @@ const PipelineTask = require('../../models/PipelineTask');
 const ClusterScheduleEntry = require('../../models/ClusterScheduleEntry');
 const { app } = require('../../src/app');
 
+let testServer;
+function request() {
+  if (!testServer) throw new Error('Planning test server is not ready');
+  return supertest(testServer);
+}
+
 describe('AgentX Planning API', () => {
+  beforeAll((done) => {
+    testServer = app.listen(0, '127.0.0.1', done);
+  });
+
+  afterAll((done) => {
+    const server = testServer;
+    testServer = null;
+    if (!server) {
+      done();
+      return;
+    }
+    server.close(done);
+  });
+
   beforeEach(async () => {
     await Promise.all([
       PlanningItem.deleteMany({}),
@@ -24,6 +44,10 @@ describe('AgentX Planning API', () => {
     expect(response.text).toContain('id="planningRoot"');
     expect(response.text).toContain('data-lifecycle="frozen"');
     expect(response.text).toContain('Planning is frozen by the platform realignment.');
+    expect(response.text).toContain('100% does not mean work is currently executing');
+    expect(response.text).toContain('Task and schedule links are references only');
+    expect(response.text).toContain('Pipeline references');
+    expect(response.text).toContain('Recorded draft');
     expect(response.text).toContain('Open Pipeline');
     expect(response.text).toContain('id="planningViewTabs"');
     expect(response.text).toContain('id="planningTaskContext"');
@@ -66,6 +90,11 @@ describe('AgentX Planning API', () => {
       activeTasks: 1,
       unlinkedTasks: 1,
       schedules: 1
+    });
+    expect(response.body.data.referenceSemantics).toMatchObject({
+      lifecycle: 'frozen',
+      purpose: 'historical_strategy_and_evidence_reference',
+      currentExecutionSource: '/pipeline'
     });
     expect(response.body.data.unlinkedTasks[0].pipelineId).toBe('0401');
     expect(response.body.data.schedules[0].sourceId).toBe('weekly-review');
@@ -452,6 +481,12 @@ describe('AgentX Planning API', () => {
 
     const outcome = dashboard.body.data.items.find((item) => item.type === 'outcome');
     expect(outcome.computedProgress).toBe(50);
+    expect(outcome.referenceSemantics).toMatchObject({
+      currentExecution: false,
+      progressBasis: 'recorded_metric_observation',
+      progressImpliesCurrentExecution: false,
+      linkageMeaning: 'reference_only'
+    });
     expect(outcome.workstream.title).toBe('Nerve Center Trust');
 
     const detail = await request(app)
@@ -830,6 +865,7 @@ describe('AgentX Planning API', () => {
 
     const archiveResponse = await request(app)
       .delete(`/api/planning/items/${itemId}`)
+      .set('X-AgentX-Confirm', `ARCHIVE PLANNING ITEM ${itemId}`)
       .send({ by: 'codex' })
       .expect(200);
 

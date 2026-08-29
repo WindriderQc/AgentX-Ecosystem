@@ -12,6 +12,7 @@ const demoCssPath = path.join(root, 'public/css/demo.css');
 const chatCssPath = path.join(root, 'public/css/chat-experience.css');
 const chatMainPath = path.join(root, 'public/js/chat/chat-main.js');
 const chatConfigPath = path.join(root, 'public/js/chat/chat-config.js');
+const chatMessagingPath = path.join(root, 'public/js/chat/chat-messaging.js');
 const demoJsPath = path.join(root, 'public/js/demo.js');
 const modelsExperiencePath = path.join(root, 'public/js/models-experience.js');
 const modelsUnifiedPath = path.join(root, 'public/js/models-unified.js');
@@ -86,13 +87,14 @@ describe('simple-to-expert UX contract', () => {
     expect(html).toContain('data-ci-field="vram"');
   });
 
-  test('chat starts with an actionable empty state and no model prerequisite', async () => {
+  test('chat starts with an actionable empty state and states recovery precisely', async () => {
     const html = await renderChat();
     const source = fs.readFileSync(chatMainPath, 'utf8');
 
     expect(html).toContain('Ask Agent X anything.');
     expect(html).toContain('data-chat-starter="Help me brainstorm: "');
-    expect(html).toContain('A balanced response is automatic.');
+    expect(html).toContain('Balanced uses the configured Standard route.');
+    expect(html).toContain('Agent X will name an installed model you can choose.');
     expect(html).not.toMatch(/Pick a model/i);
     expect(source).toContain("state.history.length === 0 ? welcomeMarkup : ''");
   });
@@ -126,6 +128,7 @@ describe('simple-to-expert UX contract', () => {
   test('an optional missing model runtime is presented as recoverable setup', () => {
     const mainSource = fs.readFileSync(chatMainPath, 'utf8');
     const configSource = fs.readFileSync(chatConfigPath, 'utf8');
+    const messagingSource = fs.readFileSync(chatMessagingPath, 'utf8');
     const demoSource = fs.readFileSync(demoJsPath, 'utf8');
 
     expect(configSource).toContain('if (!state.ollamaHostsLoaded)');
@@ -135,9 +138,14 @@ describe('simple-to-expert UX contract', () => {
     expect(mainSource).toContain(": 'Model setup needed'");
     expect(mainSource).toContain("recoverable ? 'warning' : 'error'");
     expect(mainSource).toContain("document.querySelectorAll('[data-chat-starter]')");
-    expect(configSource).toContain("fetch('/api/models/routing'");
+    expect(configSource).toContain("fetchWithDeadline('/api/models/routing'");
     expect(configSource).toContain('but that model is not installed. Take the controls');
     expect(demoSource).toContain("'Chat route needs attention'");
+    expect(mainSource).toContain('const optionalEvidence = [');
+    expect(mainSource).toContain('Promise.allSettled(optionalEvidence)');
+    expect(configSource).toContain("fetchWithDeadline('/api/ollama-hosts')");
+    expect(messagingSource).toContain('fetchWithDeadline(`/api/models/all?host=');
+    expect(messagingSource).toContain('&scope=runtime`');
   });
 
   test('visual grammar includes responsive and reduced-motion behavior', () => {
@@ -183,6 +191,9 @@ describe('simple-to-expert UX contract', () => {
     const source = fs.readFileSync(modelsExperiencePath, 'utf8');
     const catalog = fs.readFileSync(modelsUnifiedPath, 'utf8');
     const comparison = fs.readFileSync(modelsComparisonPath, 'utf8');
+    const chatMain = fs.readFileSync(chatMainPath, 'utf8');
+    const chatConfig = fs.readFileSync(chatConfigPath, 'utf8');
+    const chatMessaging = fs.readFileSync(chatMessagingPath, 'utf8');
     const css = fs.readFileSync(modelsExperienceCssPath, 'utf8');
 
     expect(source).toContain('cockpitSurface.inert = !cockpit.open');
@@ -191,8 +202,15 @@ describe('simple-to-expert UX contract', () => {
     expect(source).toContain("setStatus('attention'");
     expect(source).toContain("setStatus('blocked'");
     expect(catalog).toContain("document.body.dataset.agentxProfile === 'demo'");
-    expect(catalog).toContain('`/playground?model=${encodeURIComponent(modelName)}`');
-    expect(comparison).toContain('`/playground?model=${encodeURIComponent(model.name)}`');
+    expect(catalog).toContain('aria-label="More actions for ${escapeHtml(model.name)}"');
+    expect(catalog).toContain('aria-haspopup="menu" aria-expanded="false"');
+    expect(catalog).toContain('actionBtn.setAttribute(\'aria-expanded\', String(expanded))');
+    expect(catalog).toContain('role="menu" aria-label="Actions for ${escapeHtml(model.name)}"');
+    expect(catalog).toContain('AgentXPlaygroundLink.buildPlaygroundHref(modelName, host)');
+    expect(comparison).toContain('AgentXPlaygroundLink.buildPlaygroundHref(modelName, host)');
+    expect(chatMain).toContain('requestedRuntime');
+    expect(chatConfig).toContain('Requested host');
+    expect(chatMessaging).toContain('Requested model');
     expect(css).toContain('@media (max-width: 600px)');
     expect(css).toContain('@media (prefers-reduced-motion: reduce)');
   });
@@ -222,6 +240,8 @@ describe('simple-to-expert UX contract', () => {
     expect(source).toContain("setStatus('ready'");
     expect(source).toContain("setStatus('attention'");
     expect(source).toContain("setStatus('unknown'");
+    expect(source).toContain('parseCompactNumber');
+    expect(source).toContain("of conversations used knowledge");
     expect(html).toContain("document.body.dataset.agentxProfile === 'demo'");
     expect(html).toContain("section.setAttribute('aria-hidden', 'true')");
     expect(inference).toContain("document.body.dataset.agentxProfile === 'demo'");

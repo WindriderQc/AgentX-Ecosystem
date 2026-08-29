@@ -3,6 +3,7 @@
 const express = require('express');
 const envelope = require('../src/helpers/responseEnvelope');
 const logger = require('../config/logger');
+const { sanitizePublicProjection: sanitizePublicValue } = require('../../shared/publicProjection');
 const {
   CONTRACT_NAME,
   CONTRACT_VERSION,
@@ -17,14 +18,17 @@ const {
 function sendError(res, error) {
   const statusCode = Number(error.statusCode) || 500;
   if (statusCode >= 500) logger.error('[ExternalConsumerV1] request failed', { error: error.message });
+  const message = statusCode >= 500
+    ? 'External consumer request failed.'
+    : sanitizePublicValue(error.message || 'External consumer request failed.');
   const body = {
     ok: false,
     status: 'error',
-    error: error.message,
-    message: error.message,
+    error: message,
+    message,
     code: error.code || 'EXTERNAL_CONSUMER_ERROR',
   };
-  if (error.details) body.details = error.details;
+  if (statusCode < 500 && error.details) body.details = sanitizePublicValue(error.details);
   return res.status(statusCode).json(body);
 }
 
@@ -64,7 +68,10 @@ function createDisconnectSignal(req, res) {
 }
 
 function streamEventFromUpstream(data) {
-  if (data?.error) return { event: 'error', data: { code: 'INFERENCE_UPSTREAM_ERROR', message: String(data.error) } };
+  if (data?.error) return {
+    event: 'error',
+    data: { code: 'INFERENCE_UPSTREAM_ERROR', message: 'Upstream inference failed.' },
+  };
   const text = typeof data?.message?.content === 'string'
     ? data.message.content
     : (typeof data?.response === 'string' ? data.response : '');
@@ -119,7 +126,13 @@ function relaySseStream(stream, res) {
     });
     stream.once('end', () => {
       if (buffer) processLine(buffer);
-      if (!terminal && !res.destroyed) writeSse(res, 'done', { usage, persistence: { persisted: false } });
+      if (!terminal && !res.destroyed) {
+        terminal = true;
+        writeSse(res, 'error', {
+          code: 'INFERENCE_STREAM_INCOMPLETE',
+          message: 'The inference stream ended before completion.',
+        });
+      }
       if (!res.destroyed) res.end();
       resolve();
     });
@@ -153,6 +166,14 @@ function createExternalConsumerV1Routes({ runtimeServices, systemHealth } = {}) 
     throw new Error('External consumer routes require Core runtime services.');
   }
   const router = express.Router();
+
+  // Discovery and read-only projections carry the same version receipt as
+  // inference. Consumers can reject an incompatible deployment before using
+  // any part of the contract.
+  router.use((_req, res, next) => {
+    res.set('X-AgentX-Consumer-Contract', CONTRACT_VERSION);
+    next();
+  });
 
   router.get('/capabilities', (_req, res) => {
     envelope.success(res, {
@@ -259,4 +280,5 @@ function createExternalConsumerV1Routes({ runtimeServices, systemHealth } = {}) 
 module.exports = createExternalConsumerV1Routes;
 module.exports.createDisconnectSignal = createDisconnectSignal;
 module.exports.relaySseStream = relaySseStream;
+module.exports.sanitizePublicValue = sanitizePublicValue;
 module.exports.sendError = sendError;

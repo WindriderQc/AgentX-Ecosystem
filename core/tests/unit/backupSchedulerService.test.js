@@ -25,6 +25,11 @@ describe('backupSchedulerService', () => {
     expect(scheduler.start()).toBe(false);
     expect(setTimeout).not.toHaveBeenCalled();
     expect(scheduler.getStatus()).toMatchObject({ enabled: false, lastStatus: 'never' });
+    expect(scheduler.getStatus()).toMatchObject({
+      enabledSource: 'default',
+      intervalMsSource: 'default',
+      retryDelayMsSource: 'default'
+    });
   });
 
   test('runs Mongo, config, and Qdrant backups as one successful cycle', async () => {
@@ -66,6 +71,11 @@ describe('backupSchedulerService', () => {
     });
 
     expect(scheduler.start()).toBe(true);
+    expect(scheduler.getStatus()).toMatchObject({
+      enabledSource: 'env',
+      intervalMsSource: 'env',
+      retryDelayMsSource: 'env'
+    });
     expect(delays).toEqual([1000]);
 
     await callbacks.shift()();

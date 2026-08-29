@@ -14,9 +14,12 @@ const applyService = require('../src/services/memoryReview/applyService');
 const policy = require('../src/services/memoryReview/policy');
 const {
   operatorRequestIdentity,
-  requireOperatorAccess,
   requireOperatorUiAccess,
 } = require('../src/middleware/operatorAccess');
+const {
+  memoryReviewProducerRequestIdentity,
+  requireMemoryReviewProducerAccess,
+} = require('../src/middleware/memoryReviewProducerAccess');
 const { version: coreVersion } = require('../package.json');
 
 router.use((req, res, next) => {
@@ -50,7 +53,7 @@ router.get('/config', requireOperatorUiAccess, (req, res) => {
   });
 });
 
-router.post('/runs', requireOperatorAccess, async (req, res) => {
+router.post('/runs', requireMemoryReviewProducerAccess, async (req, res) => {
   try {
     const run = await service.openRun(req.body || {});
     res.json({ status: 'success', data: { runId: run.runId, status: run.status, mode: run.mode } });
@@ -92,7 +95,7 @@ router.get('/runs/:runId/audit', requireOperatorUiAccess, async (req, res) => {
   } catch (err) { fail(res, err, 'MEMORY_REVIEW_AUDIT_FAILED'); }
 });
 
-router.post('/runs/:runId/observations', requireOperatorAccess, async (req, res) => {
+router.post('/runs/:runId/observations', requireMemoryReviewProducerAccess, async (req, res) => {
   try {
     const body = req.body || {};
     policy.assertKnownKeys(body, ['collector', 'observations'], 'body');
@@ -100,27 +103,27 @@ router.post('/runs/:runId/observations', requireOperatorAccess, async (req, res)
       req.params.runId,
       body.collector,
       body.observations,
-      { submittedBy: operatorRequestIdentity(req) }
+      { submittedBy: memoryReviewProducerRequestIdentity(req) }
     );
     res.json({ status: 'success', data });
   } catch (err) { fail(res, err, 'MEMORY_REVIEW_OBSERVATIONS_FAILED'); }
 });
 
-router.post('/runs/:runId/finalize', requireOperatorAccess, async (req, res) => {
+router.post('/runs/:runId/finalize', requireMemoryReviewProducerAccess, async (req, res) => {
   try {
     const run = await service.finalizeCollection(req.params.runId);
     res.json({ status: 'success', data: { runId: run.runId, status: run.status, summary: run.summary, dedupDegraded: !!run.dedupContext?.degraded } });
   } catch (err) { fail(res, err, 'MEMORY_REVIEW_FINALIZE_FAILED'); }
 });
 
-router.get('/runs/:runId/synthesis-input', requireOperatorAccess, async (req, res) => {
+router.get('/runs/:runId/synthesis-input', requireMemoryReviewProducerAccess, async (req, res) => {
   try {
     const run = await service.getRunOrThrow(req.params.runId);
     res.json({ status: 'success', data: service.buildSynthesisInput(run) });
   } catch (err) { fail(res, err, 'MEMORY_REVIEW_SYNTHESIS_INPUT_FAILED'); }
 });
 
-router.post('/runs/:runId/candidates', requireOperatorAccess, async (req, res) => {
+router.post('/runs/:runId/candidates', requireMemoryReviewProducerAccess, async (req, res) => {
   try {
     const body = req.body || {};
     policy.assertKnownKeys(body, ['candidates', 'promptVersion', 'model'], 'body');
@@ -132,7 +135,7 @@ router.post('/runs/:runId/candidates', requireOperatorAccess, async (req, res) =
   } catch (err) { fail(res, err, 'MEMORY_REVIEW_CANDIDATES_FAILED'); }
 });
 
-router.post('/runs/:runId/fail', requireOperatorAccess, async (req, res) => {
+router.post('/runs/:runId/fail', requireMemoryReviewProducerAccess, async (req, res) => {
   try {
     const run = await service.failRun(req.params.runId, req.body || {});
     res.json({ status: 'success', data: { runId: run.runId, status: run.status, failure: run.failure } });

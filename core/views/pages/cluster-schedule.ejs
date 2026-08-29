@@ -15,7 +15,10 @@
                     <div id="headerStatus" class="cs-header-status"></div>
                     <div class="cs-date-nav">
                         <button class="cs-btn cs-btn-icon" onclick="shiftDate(-1)" title="Previous day"><i class="fas fa-chevron-left"></i></button>
-                        <span id="dateLabel" class="cs-date-label">--</span>
+                        <span class="cs-date-context" aria-live="polite">
+                            <time id="dateLabel" class="cs-date-label">--</time>
+                            <span id="dateZoneLabel" class="cs-date-zone" aria-label="Browser time zone"></span>
+                        </span>
                         <button class="cs-btn cs-btn-icon" onclick="shiftDate(1)" title="Next day"><i class="fas fa-chevron-right"></i></button>
                         <button class="cs-btn cs-btn-sm" onclick="goToday()">Today</button>
                     </div>
@@ -28,8 +31,11 @@
             </div>
         </div>
 
-        <!-- Live Host Cards -->
-        <div id="liveBar" class="cs-live-bar">
+        <!-- Live Host Cards: separate loaded-model/VRAM detail evidence. -->
+        <p id="liveEvidence" class="cs-live-evidence" aria-live="polite">
+            Loaded-model and VRAM detail evidence has not been observed yet.
+        </p>
+        <div id="liveBar" class="cs-live-bar" aria-describedby="liveEvidence">
             <div class="cs-loading"><i class="fas fa-spinner fa-spin"></i> Loading host data...</div>
         </div>
 

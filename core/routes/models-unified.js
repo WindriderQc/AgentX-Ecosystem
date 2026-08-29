@@ -12,6 +12,7 @@ const logger = require('../config/logger');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
 const { getConfiguredHosts, hostUrlKey, validateHostUrl } = require('../src/helpers/ollamaHostConfig');
 const { requireOperatorUiAccess } = require('../src/middleware/operatorAccess');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 function readModelFilters(query = {}) {
   const { provider, category, tag, search, status, host } = query;
@@ -62,16 +63,20 @@ function sendOperationError(res, error, context) {
 router.get('/all', async (req, res) => {
   try {
     const filters = readModelFilters(req.query);
+    const profiledGate = requireProfiledModels();
+    const runtimeScope = req.query.scope === 'runtime' && !profiledGate;
 
     const models = applyChatEligibility(await modelAggregator.getAllModels({
       includeOllama: true,
-      includeCustom: true,
-      includeRegistry: true,
+      includeCustom: !runtimeScope,
+      includeRegistry: !runtimeScope,
+      includeEvidence: !runtimeScope,
       filters,
-      useCache: true
+      useCache: !runtimeScope
     }));
 
-    res.set('X-Require-Profiled-Models', String(requireProfiledModels()));
+    res.set('X-Require-Profiled-Models', String(profiledGate));
+    res.set('X-Model-Evidence', runtimeScope ? 'deferred' : 'available');
     res.json(models);
 
   } catch (error) {
@@ -301,6 +306,8 @@ router.delete('/ollama/:name', requireOperatorUiAccess, async (req, res) => {
       return res.status(400).json({ status: 'error', message: hostCheck.message });
     }
 
+    if (!requireTypedConfirmation(req, res, 'DELETE OLLAMA MODEL', name, 'FROM', hostCheck.host)) return;
+
     const result = await ollamaModelOperations.deleteModel(hostCheck.host, name);
     modelAggregator.clearCache();
     res.json({ status: 'success', data: result, message: `Deleted ${name} from ${hostCheck.host}.` });
@@ -383,7 +390,7 @@ router.get('/cluster-summary', async (_req, res) => {
       generatedAt: new Date().toISOString()
     });
   } catch (err) {
-    logger.warn('[models] cluster-summary failed:', err.message);
+    logger.warn('[models] cluster-summary failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });
   }
 });

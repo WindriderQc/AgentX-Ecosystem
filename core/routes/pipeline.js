@@ -2,7 +2,11 @@ const express = require('express');
 const router = express.Router();
 const envelope = require('../src/helpers/responseEnvelope');
 const PipelineTask = require('../models/PipelineTask');
-const { operatorAccessAllowed } = require('../src/middleware/operatorAccess');
+const {
+  PIPELINE_AUTHORITY,
+  requirePipelineWorkerAccess,
+  requirePipelineStatusAccess,
+} = require('../src/helpers/pipelineAccess');
 const {
   createTaskInMongo,
   findNextEligibleTask,
@@ -57,6 +61,59 @@ function buildTaskListQuery(params = {}) {
   return q;
 }
 
+async function aggregateTaskCounts(query) {
+  const rows = await PipelineTask.aggregate([
+    { $match: query },
+    { $group: { _id: '$status', count: { $sum: 1 } } }
+  ]);
+  const byStatus = Object.fromEntries(STATUSES.map(status => [status, 0]));
+  for (const row of rows) {
+    if (STATUSES.includes(row?._id)) byStatus[row._id] = Number(row.count) || 0;
+  }
+  const matchedCount = Object.values(byStatus).reduce((sum, count) => sum + count, 0);
+  const openCount = ACTIVE_STATUSES.reduce((sum, status) => sum + byStatus[status], 0);
+  return { byStatus, matchedCount, openCount, doneCount: byStatus.done };
+}
+
+function taskListEvidence(query, limit, returnedCount, summary, observedAt) {
+  const filteredStatuses = typeof query.status === 'string'
+    ? [query.status]
+    : (Array.isArray(query.status?.$in) ? query.status.$in : STATUSES);
+  const filters = {};
+  for (const key of ['assignee', 'service', 'source']) {
+    if (query[key]) filters[key] = query[key];
+  }
+  return {
+    authority: 'core.pipeline',
+    source: {
+      service: 'core',
+      store: 'mongodb',
+      collection: PipelineTask.collection?.collectionName || 'pipelinetasks'
+    },
+    scope: {
+      statuses: filteredStatuses,
+      includesDone: filteredStatuses.includes('done'),
+      filters,
+      timeWindow: {
+        kind: 'all_time',
+        label: 'All matching task records; no date filter',
+        from: null,
+        to: observedAt
+      }
+    },
+    rows: {
+      order: 'pipelineId ascending',
+      limit,
+      returnedCount,
+      matchedCount: summary.matchedCount,
+      truncated: returnedCount < summary.matchedCount
+    },
+    countBasis: 'Exact MongoDB status aggregation over the stated scope',
+    consistency: 'Counts and rows are sampled during one request but are not a database transaction',
+    observedAt
+  };
+}
+
 function feedbackTextFromBody(body = {}) {
   return String(body.text ?? body.summary ?? '').trim().slice(0, 5000);
 }
@@ -66,17 +123,22 @@ router.get('/tasks', async (req, res) => {
   try {
     const q = buildTaskListQuery(req.query);
     const limit = Math.min(Number(req.query.limit) || 200, 1000);
+    const observedAt = new Date().toISOString();
     let query = PipelineTask.find(q).sort({ pipelineId: 1 }).limit(limit);
     if (req.query.view === 'summary') {
       query = query.select(SUMMARY_FIELDS);
     }
-    const tasks = await query.lean();
-    return envelope.success(res, { count: tasks.length, tasks });
+    const [tasks, summary] = await Promise.all([
+      query.lean(),
+      aggregateTaskCounts(q)
+    ]);
+    const evidence = taskListEvidence(q, limit, tasks.length, summary, observedAt);
+    return envelope.success(res, { count: tasks.length, tasks, summary, evidence });
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
 
 // Next queued task for an agent to pick up.
-router.get('/tasks/next', async (req, res) => {
+router.get('/tasks/next', requirePipelineWorkerAccess, async (req, res) => {
   try {
     const task = await findNextEligibleTask(req.query);
     return envelope.success(res, {
@@ -88,7 +150,7 @@ router.get('/tasks/next', async (req, res) => {
 });
 
 // Atomically claim a task — kills the multi-agent race. POST .../tasks/:id/claim { assignee }
-router.post('/tasks/:id/claim', async (req, res) => {
+router.post('/tasks/:id/claim', requirePipelineWorkerAccess, async (req, res) => {
   const assignee = (req.body && req.body.assignee) || 'unknown-agent';
   try {
     const task = await claimEligibleTask(req.params.id, assignee);
@@ -100,13 +162,14 @@ router.post('/tasks/:id/claim', async (req, res) => {
 //
 // Governance gate (task 0354): confirming a task to `done` is overseer work, not
 // worker self-certification. Enforced ONLY for the ->done transition; every other
-// transition stays open per the token-free multi-agent design (see file header).
+// transition is available to the purpose-scoped pipeline worker credential.
 // Rules for ->done: (1) reachable only from `review` (no skipping the review
 // stage); (2) `by` is required and must differ from the task's `assignee` (the
-// worker). This is an auditable honesty gate for cooperating LAN agents, not a
-// cryptographic boundary; an explicit operator-token caller bypasses it (human
-// force), and every confirmation is recorded in the feedback audit trail.
-router.post('/tasks/:id/status', async (req, res) => {
+// worker). The route-owned identity gate adds a cryptographic boundary: a
+// remote worker token cannot reach any status=done variant, regardless of the
+// caller-supplied `by`. An explicit operator token retains its human-force
+// override, and every confirmation is recorded in the feedback audit trail.
+router.post('/tasks/:id/status', requirePipelineStatusAccess, async (req, res) => {
   const b = req.body || {};
   const status = b.status;
   if (!STATUSES.includes(status)) return envelope.error(res, 400, `status must be one of ${STATUSES.join('|')}`, 'INVALID_STATUS');
@@ -125,7 +188,7 @@ router.post('/tasks/:id/status', async (req, res) => {
 
     if (status === 'done' && current.status !== 'done') {
       const by = String(b.by || '').trim();
-      const operator = operatorAccessAllowed(req, { allowLoopback: false });
+      const operator = req.pipelineAuthority === PIPELINE_AUTHORITY.OPERATOR;
       if (!operator) {
         if (current.status !== 'review') {
           return envelope.error(res, 409, `Task ${current.pipelineId} is '${current.status}', not 'review' — it must pass review before being confirmed done.`, 'DONE_REQUIRES_REVIEW');
@@ -147,7 +210,7 @@ router.post('/tasks/:id/status', async (req, res) => {
 });
 
 // Submit feedback. "done" sends it to REVIEW (overseer-gated). POST .../tasks/:id/feedback { text, status?, by? }
-router.post('/tasks/:id/feedback', async (req, res) => {
+router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res) => {
   const b = req.body || {};
   const text = feedbackTextFromBody(b);
   if (!text) return envelope.error(res, 400, 'feedback text is required', 'EMPTY_FEEDBACK');
@@ -162,7 +225,7 @@ router.post('/tasks/:id/feedback', async (req, res) => {
 });
 
 // Heartbeat a claimed task. POST .../tasks/:id/heartbeat
-router.post('/tasks/:id/heartbeat', async (req, res) => {
+router.post('/tasks/:id/heartbeat', requirePipelineWorkerAccess, async (req, res) => {
   try {
     const task = await PipelineTask.findOneAndUpdate(
       { pipelineId: req.params.id }, { $set: { heartbeatAt: new Date() } }, { new: true },

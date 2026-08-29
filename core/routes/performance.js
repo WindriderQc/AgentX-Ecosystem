@@ -7,6 +7,10 @@ const PerformanceSnapshot = require('../models/PerformanceSnapshot');
 const artilleryParser = require('../src/services/artilleryParser');
 const { calculateSystemHealth, buildHistogram } = require('./performance-helpers');
 const envelope = require('../src/helpers/responseEnvelope');
+const {
+  normalizeObservedPath,
+  coalesceEndpointRows
+} = require('../src/services/endpointPathPolicy');
 
 /**
  * Performance Monitoring Routes
@@ -325,38 +329,14 @@ router.get('/dashboard', async (req, res) => {
     const facet = Array.isArray(endpointFacet) && endpointFacet.length ? endpointFacet[0] : {};
     const totals = Array.isArray(facet.totals) ? facet.totals : [];
     const categories = Array.isArray(facet.categories) ? facet.categories : [];
-    const topEndpoints = (Array.isArray(facet.top_endpoints) ? facet.top_endpoints : [])
-      .map(e => ({
-        path: e?.path,
-        method: e?.method,
-        count: e?.count || 0,
-        error_count: e?.error_count || 0,
-        error_rate: Number.isFinite(e?.error_rate) ? e.error_rate : 0,
-        avg_latency: e?.avg_latency || 0
-      }))
-      .filter(e => typeof e.path === 'string' && e.path.length > 0);
+    const topEndpoints = coalesceEndpointRows(facet.top_endpoints)
+      .sort((a, b) => b.count - a.count);
 
-    const topErrorEndpoints = (Array.isArray(facet.top_error_endpoints) ? facet.top_error_endpoints : [])
-      .map(e => ({
-        path: e?.path,
-        method: e?.method,
-        count: e?.count || 0,
-        error_count: e?.error_count || 0,
-        error_rate: Number.isFinite(e?.error_rate) ? e.error_rate : 0,
-        avg_latency: e?.avg_latency || 0
-      }))
-      .filter(e => typeof e.path === 'string' && e.path.length > 0);
+    const topErrorEndpoints = coalesceEndpointRows(facet.top_error_endpoints)
+      .sort((a, b) => b.error_rate - a.error_rate || b.error_count - a.error_count || b.count - a.count);
 
-    const topSlowEndpoints = (Array.isArray(facet.top_slow_endpoints) ? facet.top_slow_endpoints : [])
-      .map(e => ({
-        path: e?.path,
-        method: e?.method,
-        count: e?.count || 0,
-        error_count: e?.error_count || 0,
-        error_rate: Number.isFinite(e?.error_rate) ? e.error_rate : 0,
-        avg_latency: e?.avg_latency || 0
-      }))
-      .filter(e => typeof e.path === 'string' && e.path.length > 0);
+    const topSlowEndpoints = coalesceEndpointRows(facet.top_slow_endpoints)
+      .sort((a, b) => b.avg_latency - a.avg_latency || b.count - a.count);
 
     const breakdown = {
       api_requests: 0,
@@ -638,9 +618,11 @@ router.get('/endpoints', async (req, res) => {
       { $sort: { _id: 1 } }
     ]);
 
-    const paths = endpoints
+    const paths = [...new Set(endpoints
       .map(e => e._id)
-      .filter(p => typeof p === 'string' && p.length > 0);
+      .filter(p => typeof p === 'string' && p.length > 0)
+      .map(normalizeObservedPath))]
+      .sort();
 
     res.json({
       status: 'success',

@@ -49,4 +49,78 @@ describe('chat model readiness helper', () => {
       readiness: { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: true }
     }, true)).toMatchObject({ ready: false, blocked: true, label: 'Profile stale' });
   });
+
+  it('labels intentionally deferred evidence without claiming the model is unprofiled', () => {
+    const model = {
+      name: 'live-model',
+      readiness: { stage: 'available', evidenceState: 'deferred' }
+    };
+
+    expect(readinessUi.getReadinessMeta(model, false)).toMatchObject({
+      ready: false,
+      blocked: false,
+      label: 'Live on host'
+    });
+    expect(readinessUi.buildOptionLabel(model, false)).toBe('live-model - Live on host');
+    expect(readinessUi.getReadinessMeta(model, true)).toMatchObject({
+      blocked: true,
+      label: 'Profile evidence required'
+    });
+  });
+
+  it('offers the first selectable installed model without selecting it', () => {
+    const options = [
+      { value: '', textContent: 'Model chosen by mode', disabled: false },
+      { value: 'blocked-model:latest', textContent: 'Blocked model', disabled: true },
+      { value: 'qwen2.5:3b', textContent: 'qwen2.5:3b - Live on host', disabled: false }
+    ];
+
+    expect(readinessUi.findManualRecoveryCandidate(options)).toEqual({
+      model: 'qwen2.5:3b',
+      label: 'qwen2.5:3b - Live on host'
+    });
+    expect(options.every((option) => option.selected !== true)).toBe(true);
+  });
+
+  it('describes an explicit local Manual recovery without changing routing truth', () => {
+    const recovery = readinessUi.describeManualRouteRecovery({
+      mode: 'router',
+      unavailableKind: 'route setup',
+      routeModel: 'gemma4:26b-a4b-it-qat'
+    }, 'Standard', [
+      { value: '', textContent: 'Model chosen by mode', disabled: false },
+      { value: 'qwen2.5:3b', textContent: 'qwen2.5:3b', disabled: false }
+    ]);
+
+    expect(recovery).toMatchObject({
+      title: 'Standard route unavailable',
+      actionLabel: 'Use qwen2.5:3b manually',
+      candidate: { model: 'qwen2.5:3b' }
+    });
+    expect(recovery.detail).toContain('gemma4:26b-a4b-it-qat');
+    expect(recovery.detail).toContain('switch chat to explicit Manual control and save that choice locally');
+    expect(recovery.detail).toContain('configured Standard route will not be changed');
+  });
+
+  it('does not offer a model action outside the configured-route failure state', () => {
+    expect(readinessUi.describeManualRouteRecovery({
+      mode: 'router',
+      unavailableKind: null
+    }, 'Standard', [{ value: 'qwen2.5:3b', disabled: false }])).toBeNull();
+  });
+
+  it('routes users to Manual controls when no installed option is selectable', () => {
+    const recovery = readinessUi.describeManualRouteRecovery({
+      mode: 'router',
+      unavailableKind: 'route setup',
+      routeModel: 'missing-model'
+    }, 'Standard', [
+      { value: '', disabled: false },
+      { value: 'profile-gated-model', disabled: true }
+    ]);
+
+    expect(recovery.candidate).toBeNull();
+    expect(recovery.actionLabel).toBe('Review manual controls');
+    expect(recovery.detail).toContain('No selectable installed model is listed');
+  });
 });

@@ -57,6 +57,7 @@ const handleChatRequestStream = async ({
     authoritativeSystem = false,
     options = {},
     persona,
+    promptVersion,
     conversationId,
     persist = true,
     callerDetail = null,
@@ -82,6 +83,7 @@ const handleChatRequestStream = async ({
     onError
 }) => {
     const personaName = persona || options.persona || 'default_chat';
+    const exactPromptVersion = promptVersion ?? options.promptVersion;
     const effectiveCallerDetail = callerDetail
         || (userId ? 'chat-' + String(userId) : 'chat');
     let resolvedHost = null;
@@ -95,9 +97,9 @@ const handleChatRequestStream = async ({
         if (abortSignal?.aborted) return;
 
         // Standard Chat Flow with Streaming
-        const activePrompt = await getActivePrompt(system, personaName, {
-            preferSystem: authoritativeSystem === true
-        });
+        const promptResolutionOptions = { preferSystem: authoritativeSystem === true };
+        if (exactPromptVersion != null) promptResolutionOptions.promptVersion = exactPromptVersion;
+        const activePrompt = await getActivePrompt(system, personaName, promptResolutionOptions);
         const userProfile = loadUserProfile === false ? {} : await getOrCreateProfile(userId);
 
         // Shared orchestration prelude — routing + RAG + web-search in one call.
@@ -347,6 +349,12 @@ const handleChatRequestStream = async ({
                 model: effectiveModel,
                 target: effectiveTarget,
                 routing: routingPayload,
+                prompt: {
+                    name: activePrompt.name || personaName,
+                    version: activePrompt.version,
+                    exact: exactPromptVersion != null,
+                    requestedVersion: exactPromptVersion == null ? null : Number(exactPromptVersion)
+                },
                 numCtx: streamSanitized.num_ctx || null,
                 inferenceContract,
                 stats: stats || null,

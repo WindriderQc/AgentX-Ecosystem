@@ -311,6 +311,7 @@
     async function loadInferenceHealth() {
         const body = document.getElementById('sectionInferenceHealthBody');
         if (!body) return;
+        shared.setSectionBusy(body, true);
         try {
             const resp = await shared.fetchJson('/api/nerve-center/inference-health');
             const data = resp.data || {};
@@ -324,7 +325,9 @@
             const summary = document.getElementById('nc-ih-summary');
             if (summary) summary.innerHTML = buildSummary(data);
         } catch (err) {
-            body.innerHTML = `<div class="nc-error" style="color:#f87171;padding:12px;">Failed to load inference health: ${shared.escapeHtml(err.message)}</div>`;
+            shared.renderSectionError(body, `Failed to load inference health: ${err.message}`);
+        } finally {
+            shared.finishSectionLoad(body);
         }
 
         // Cheap auto-refresh: 30s ticker, guarded so collapsed sections don't

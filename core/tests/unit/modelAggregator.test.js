@@ -196,6 +196,40 @@ describe('modelAggregator', () => {
     });
   });
 
+  it('returns live runtime inventory without touching optional evidence sources', async () => {
+    mockFetch.mockImplementation(async (url) => ({
+      ok: true,
+      json: async () => ({
+        models: url.includes('primary') ? [ollamaModel('qwen3.5:9b')] : []
+      })
+    }));
+    const resolveCapabilityContract = jest.fn();
+    const readinessService = require('../../src/services/modelReadinessService');
+
+    const models = await modelAggregator.getAllModels({
+      includeCustom: false,
+      includeRegistry: false,
+      includeEvidence: false,
+      useCache: false,
+      filters: { host: 'http://primary:11434' },
+      resolveCapabilityContract
+    });
+
+    expect(models).toHaveLength(1);
+    expect(models[0].readiness).toMatchObject({
+      stage: 'available',
+      evidenceState: 'deferred',
+      scope: 'runtime',
+      isReady: false
+    });
+    expect(readinessService.getModelReadiness).not.toHaveBeenCalled();
+    expect(resolveCapabilityContract).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledWith('http://primary:11434/api/tags', { timeout: 5000 });
+    expect(mockCustomFind).not.toHaveBeenCalled();
+    expect(mockRegistryFind).not.toHaveBeenCalled();
+  });
+
   it('reports registry source coverage from registry records instead of categories', async () => {
     mockRegistryFind.mockReturnValue(leanResult([
       {

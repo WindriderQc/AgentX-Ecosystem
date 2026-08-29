@@ -85,9 +85,34 @@ jest.mock('node-fetch', () =>
 jest.mock('../../src/services/alertService', () => {
   const mock = {
     getRecentAlerts: jest.fn(),
+    getAlertSnapshot: jest.fn(),
     getStatistics: jest.fn(),
     getAlertService: jest.fn()
   };
+  mock.getAlertSnapshot.mockImplementation(async ({ limit = 50, filters = {} } = {}) => {
+    const result = await mock.getRecentAlerts(limit, filters);
+    const candidates = Array.isArray(result) ? result : [];
+    const alerts = filters.status
+      ? candidates.filter(alert => (alert.status || 'active') === filters.status)
+      : candidates;
+    const activeCount = filters.status === 'active'
+      ? alerts.length
+      : alerts.filter(alert => (alert.status || 'active') === 'active').length;
+    return {
+      alerts,
+      total: alerts.length,
+      limit,
+      skip: 0,
+      summary: {
+        total: alerts.length,
+        activeCount,
+        bySeverity: {},
+        byStatus: activeCount ? { active: activeCount } : {},
+        basis: { activePredicate: { status: 'active' } },
+        observedAt: new Date().toISOString()
+      }
+    };
+  });
   mock.getAlertService.mockReturnValue(mock);
   return mock;
 });
@@ -105,6 +130,11 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
   heartbeatBenchmarkClaim: jest.fn(),
   releaseBenchmarkClaim: jest.fn(),
   listBenchmarkClaims: jest.fn()
+}));
+
+const mockGetPortalStatus = jest.fn();
+jest.mock('../../src/services/portalStatusService', () => ({
+  getPortalStatus: (...args) => mockGetPortalStatus(...args)
 }));
 
 // ── Require modules AFTER mocks ─────────────────────────────────────────────
@@ -144,6 +174,31 @@ describe('Nerve Center API Routes', () => {
     hostPrefService.reload.mockResolvedValue();
     hostPrefService.getHealthCheckIntervalMs.mockReturnValue(30000);
     hostPrefService.getPinnedEntries.mockImplementation((pref) => pref.pinnedModels || []);
+    const observedAt = new Date().toISOString();
+    const identity = (service) => ({
+      service,
+      version: '0.1.1',
+      profile: 'full',
+      revision: 'test-revision',
+      ts: observedAt
+    });
+    mockGetPortalStatus.mockResolvedValue({
+      generatedAt: observedAt,
+      summary: { status: 'ok', total: 3, healthy: 3, degraded: 0, down: 0 },
+      consistency: {
+        status: 'ok',
+        profiles: ['full'],
+        versions: ['0.1.1'],
+        revisions: ['test-revision'],
+        missing: [],
+        issues: []
+      },
+      services: [
+        { id: 'core', status: 'ok', identity: identity('agentx-core') },
+        { id: 'benchmark', status: 'ok', identity: identity('agentx-benchmark') },
+        { id: 'rag', status: 'ok', identity: identity('agentx-rag') }
+      ]
+    });
 
     // Restore config objects to original state
     Object.keys(TASK_MODELS).forEach(k => delete TASK_MODELS[k]);
@@ -284,7 +339,7 @@ describe('Nerve Center API Routes', () => {
 
       expect(res.body.status).toBe('success');
       expect(res.body.data).toEqual(expect.objectContaining({
-        schemaVersion: 1,
+        schemaVersion: 2,
         authority: 'agentx-product',
         readOnly: true
       }));
@@ -296,8 +351,25 @@ describe('Nerve Center API Routes', () => {
       expect(res.body.data.cluster).toHaveLength(3);
       expect(res.body.data.routing).toHaveProperty('authority', 'inference_log');
       expect(res.body.data.routingConfig).toHaveProperty('taskModels');
+      expect(res.body.data.serviceHealth).toEqual(expect.objectContaining({ status: 'ok' }));
+      expect(res.body.data.services).toHaveLength(3);
+      expect(res.body.data.identityConsistency).toEqual(expect.objectContaining({ status: 'ok' }));
+      expect(res.body.data.evidenceTrust).toEqual(expect.objectContaining({
+        schemaVersion: 1,
+        status: 'verified',
+        operationalStatus: 'ok',
+        contradictionBudget: expect.objectContaining({
+          allowed: 0,
+          observed: 0,
+          withinBudget: true
+        })
+      }));
       expect(res.body.data.hostPreferences).toHaveLength(1);
       expect(res.body.data.alerts).toEqual([{ title: 'test alert' }]);
+      expect(res.body.data.alertSummary).toEqual(expect.objectContaining({
+        activeCount: 1,
+        basis: { activePredicate: { status: 'active' } }
+      }));
       expect(res.body.data.recentRouting).toEqual([{ model: 'qwen3:14b', host: 'primary' }]);
     });
 
@@ -793,7 +865,7 @@ describe('Nerve Center API Routes', () => {
       expect(first.source).toBe('host-alpha');
       expect(first.id).toBe('alert-1');
       expect(first.severity).toBe('critical');
-      expect(first.title).toBe('Host unreachable — host-alpha · 5×');
+      expect(first.title).toBe('Host unreachable — host-alpha');
       expect(first.ruleName).toBe('Ollama host unreachable');
       expect(first.occurrenceCount).toBe(5);
       expect(first.description).toContain('Host down');
@@ -805,6 +877,8 @@ describe('Nerve Center API Routes', () => {
       expect(second.severity).toBe('error');
       expect(second.title).toContain('error');
       expect(second.title).toContain('qwen3:14b');
+      expect(res.body.meta.activeAlertCount).toBe(1);
+      expect(res.body.meta.activeAlertBasis).toEqual({ status: 'active' });
     });
 
     it('events have required shape: type, severity, source, title, timestamp, id', async () => {
@@ -880,7 +954,11 @@ describe('Nerve Center API Routes', () => {
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
-      expect(alertService.getRecentAlerts).toHaveBeenCalledWith(30);
+      expect(alertService.getAlertSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+        limit: 150,
+        maxLimit: 500,
+        sort: 'recency'
+      }));
 
       jest.clearAllMocks();
       mockLean.mockResolvedValue([]);
@@ -891,7 +969,11 @@ describe('Nerve Center API Routes', () => {
         .get('/api/nerve-center/health/feed?limit=500')
         .expect(200);
 
-      expect(alertService.getRecentAlerts).toHaveBeenCalledWith(100);
+      expect(alertService.getAlertSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+        limit: 500,
+        maxLimit: 500,
+        sort: 'recency'
+      }));
     });
 
     it('custom limit is respected', async () => {
@@ -902,7 +984,11 @@ describe('Nerve Center API Routes', () => {
         .get('/api/nerve-center/health/feed?limit=10')
         .expect(200);
 
-      expect(alertService.getRecentAlerts).toHaveBeenCalledWith(10);
+      expect(alertService.getAlertSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+        limit: 50,
+        maxLimit: 500,
+        sort: 'recency'
+      }));
     });
 
     it('returns empty array when no alerts or errors', async () => {
@@ -968,6 +1054,57 @@ describe('Nerve Center API Routes', () => {
       expect(timestamps[1]).toBe(t2);
       expect(timestamps[2]).toBe(t1);
     });
+
+    it('groups repeated cancelled inference history without deleting its evidence ids', async () => {
+      alertService.getRecentAlerts.mockResolvedValue([]);
+      mockLean.mockResolvedValue(Array.from({ length: 25 }, (_, index) => ({
+        _id: `cancel-${index}`,
+        status: 'error',
+        model: 'qwen3:14b',
+        hostKey: 'primary',
+        caller: 'chat',
+        taskType: 'general_chat',
+        fallbackUsed: false,
+        error: 'Inference request cancelled.',
+        timestamp: new Date(Date.UTC(2026, 7, 28, 12, index)).toISOString()
+      })));
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed?limit=30')
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0]).toEqual(expect.objectContaining({
+        type: 'inference_cancelled',
+        severity: 'info',
+        groupedCount: 25,
+        occurrenceCount: 25
+      }));
+      expect(res.body.data[0].memberIds).toHaveLength(25);
+      expect(res.body.meta.groupedRows).toBe(24);
+    });
+
+    it('normalizes unresolved alert templates in the health projection', async () => {
+      alertService.getRecentAlerts.mockResolvedValue([{
+        _id: 'legacy-alert',
+        fingerprint: 'legacy-alert',
+        severity: 'info',
+        status: 'resolved',
+        title: 'VRAM displacement — {{component}}',
+        message: 'Displacement on {{component}}',
+        context: { component: 'scheduler' },
+        createdAt: '2026-08-28T10:00:00Z'
+      }]);
+      mockLean.mockResolvedValue([]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/health/feed')
+        .expect(200);
+
+      expect(res.body.data[0].title).toBe('VRAM displacement — scheduler');
+      expect(JSON.stringify(res.body.data[0])).not.toContain('{{component}}');
+      expect(res.body.data[0].lifecycle).toBe('history');
+    });
   });
 
   describe('GET /host-preferences', () => {
@@ -983,6 +1120,48 @@ describe('Nerve Center API Routes', () => {
 
     afterEach(() => {
       global.fetch = originalFetch;
+    });
+
+    it('returns loaded-model evidence with an observation timestamp', async () => {
+      hostPrefService.getAll.mockResolvedValue([
+        {
+          hostUrl: 'http://primary:11434',
+          hostKey: 'primary',
+          displayName: 'Host Alpha',
+          pinnedModels: [{ model: 'qwen3:14b' }],
+          vramTotalMiB: 24576
+        }
+      ]);
+      global.fetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          models: [{
+            name: 'qwen3:14b',
+            size: 8_000_000_000,
+            size_vram: 7_500_000_000,
+            expires_at: '2026-08-28T14:00:00.000Z'
+          }]
+        })
+      });
+
+      const res = await request(app)
+        .get('/api/nerve-center/host-preferences')
+        .expect(200);
+
+      expect(res.body.data[0].live).toEqual(expect.objectContaining({
+        online: true,
+        pinnedLoaded: true,
+        anyPinnedLoaded: true,
+        observedAt: expect.any(String)
+      }));
+      expect(res.body.data[0].live.runningModels).toEqual([
+        expect.objectContaining({
+          name: 'qwen3:14b',
+          sizeVram: 7_500_000_000,
+          matchedPinned: 'qwen3:14b'
+        })
+      ]);
+      expect(Number.isNaN(Date.parse(res.body.data[0].live.observedAt))).toBe(false);
     });
 
     it('normalizes duplicate persisted primary keys to configured active keys', async () => {

@@ -44,7 +44,12 @@
     var label = '';
     var tip = '';
 
-    if (stage === 'benchmarked') {
+    if (readiness.evidenceState === 'deferred') {
+      label = blocked ? 'Profile evidence required' : 'Live on host';
+      tip = blocked
+        ? 'This deployment requires current profiler evidence before chat use.'
+        : 'Runtime availability is current. Open Models or Benchmark for profiler evidence.';
+    } else if (stage === 'benchmarked') {
       label = ready ? 'Benchmarked' : 'Benchmark evidence stale';
       tip = ready ? 'Ready for chat and routing.' : 'Re-profile the exact installed artifact before use.';
     } else if (stage === 'profiled') {
@@ -95,6 +100,50 @@
     optionEl.setAttribute('data-chat-allowed', meta.blocked ? 'false' : 'true');
   }
 
+  function findManualRecoveryCandidate(options) {
+    var candidates = options ? Array.prototype.slice.call(options) : [];
+    for (var index = 0; index < candidates.length; index += 1) {
+      var option = candidates[index];
+      var model = String(option && option.value || '').trim();
+      if (model && option.disabled !== true) {
+        return {
+          model: model,
+          label: String(option.textContent || model).trim()
+        };
+      }
+    }
+    return null;
+  }
+
+  function describeManualRouteRecovery(hostState, modeLabel, options) {
+    if (!hostState || hostState.mode !== 'router' || hostState.unavailableKind !== 'route setup') {
+      return null;
+    }
+
+    var label = String(modeLabel || 'Standard').trim() || 'Standard';
+    var configuredModel = String(hostState.routeModel || '').trim();
+    var configuredCopy = configuredModel
+      ? label + ' is configured for ' + configuredModel + ', but that model is not installed on its configured host.'
+      : label + ' does not currently have an installed configured model.';
+    var candidate = findManualRecoveryCandidate(options);
+
+    if (!candidate) {
+      return {
+        title: label + ' route unavailable',
+        detail: configuredCopy + ' No selectable installed model is listed on the selected host. Review Manual controls to choose a host or refresh its inventory.',
+        candidate: null,
+        actionLabel: 'Review manual controls'
+      };
+    }
+
+    return {
+      title: label + ' route unavailable',
+      detail: configuredCopy + ' ' + candidate.model + ' is available on the selected host. Choose it to switch chat to explicit Manual control and save that choice locally; the configured ' + label + ' route will not be changed.',
+      candidate: candidate,
+      actionLabel: 'Use ' + candidate.model + ' manually'
+    };
+  }
+
   return {
     normalizeStage: normalizeStage,
     getStageRank: getStageRank,
@@ -102,6 +151,8 @@
     getReadinessMeta: getReadinessMeta,
     buildOptionLabel: buildOptionLabel,
     compareForDropdown: compareForDropdown,
-    applyOptionState: applyOptionState
+    applyOptionState: applyOptionState,
+    findManualRecoveryCandidate: findManualRecoveryCandidate,
+    describeManualRouteRecovery: describeManualRouteRecovery
   };
 });

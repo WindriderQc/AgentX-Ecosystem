@@ -16,11 +16,13 @@ describe('Prompts API', () => {
         // Clear test data
         await PromptConfig.deleteMany({ name: { $regex: /^test_/ } });
         await PromptConfig.deleteMany({ name: 'visual_llm' });
+        await PromptConfig.deleteMany({ name: 'Testin' });
     });
 
     afterAll(async () => {
         await PromptConfig.deleteMany({ name: { $regex: /^test_/ } });
         await PromptConfig.deleteMany({ name: 'visual_llm' });
+        await PromptConfig.deleteMany({ name: 'Testin' });
     });
 
     describe('POST /api/prompts', () => {
@@ -97,6 +99,25 @@ describe('Prompts API', () => {
                 .expect(200);
 
             expect(res.body.data.visual_llm).toBeUndefined();
+        });
+
+        it('retains Testin for prompt management but marks it non-selectable', async () => {
+            await PromptConfig.create({
+                name: 'Testin',
+                systemPrompt: 'Legacy test-only persona',
+                version: 1,
+                isActive: true
+            });
+
+            const res = await request(app)
+                .get('/api/prompts')
+                .expect(200);
+
+            expect(res.body.data.Testin[0].disposition).toEqual(expect.objectContaining({
+                kind: 'test_fixture',
+                selectable: false,
+                routeStatus: 'test_only'
+            }));
         });
     });
 
@@ -220,6 +241,7 @@ describe('Prompts API', () => {
 
             const res = await request(app)
                 .delete(`/api/prompts/${prompt._id}`)
+                .set('X-AgentX-Confirm', `DELETE PROMPT ${prompt._id}`)
                 .expect(200);
 
             expect(res.body.status).toBe('success');

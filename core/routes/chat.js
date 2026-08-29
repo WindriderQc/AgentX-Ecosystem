@@ -6,6 +6,10 @@ const { getUserId } = require('../src/helpers/userHelpers');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { getRagServiceClient } = require('../src/services/ragServiceClient');
 const { validateHostUrl } = require('../src/helpers/ollamaHostConfig');
+const {
+  TurnActionProvenanceError,
+  validateTurnActionProvenance
+} = require('../src/helpers/turnActionProvenance');
 const ragStore = getRagServiceClient();
 
 function resolveAllowlistedTarget(target) {
@@ -22,6 +26,22 @@ function resolveAllowlistedTarget(target) {
   };
 }
 
+function sendTurnActionError(res, error) {
+  const isContractError = error instanceof TurnActionProvenanceError;
+  const statusCode = isContractError ? error.statusCode : 500;
+  if (!isContractError) {
+    logger.error('Turn action provenance validation failed', {
+      error: error?.message,
+      stack: error?.stack
+    });
+  }
+  return res.status(statusCode).json({
+    status: 'error',
+    code: isContractError ? error.code : 'TURN_ACTION_VALIDATION_FAILED',
+    message: isContractError ? error.message : 'Unable to validate turn action provenance.'
+  });
+}
+
 // CHAT: Delegated to chatService
 router.post('/chat', async (req, res) => {
   const {
@@ -35,6 +55,7 @@ router.post('/chat', async (req, res) => {
     messages = [],
     system,
     persona,
+    promptVersion,
     options = {},
     conversationId,
     useRag,
@@ -47,10 +68,22 @@ router.post('/chat', async (req, res) => {
     enableWebSearch = false,
     think,
     thinkingMode,
-    thinking_mode
+    thinking_mode,
+    turnAction: rawTurnAction
   } = req.body;
 
   const userId = getUserId(res);
+
+  let turnAction = null;
+  try {
+    turnAction = await validateTurnActionProvenance({
+      rawTurnAction,
+      conversationId,
+      userId
+    });
+  } catch (error) {
+    return sendTurnActionError(res, error);
+  }
 
   // Model is optional if autoRoute or taskType is enabled
   if (!model && !autoRoute && !taskType) return res.status(400).json({ status: 'error', message: 'Model is required (or enable autoRoute/taskType)' });
@@ -75,6 +108,7 @@ router.post('/chat', async (req, res) => {
         messages,
         system,
         persona,
+        promptVersion,
         options,
         conversationId,
         useRag,
@@ -87,12 +121,15 @@ router.post('/chat', async (req, res) => {
         taskType,
         enableWebSearch,
         think,
-        thinkingMode: thinkingMode ?? thinking_mode
+        thinkingMode: thinkingMode ?? thinking_mode,
+        turnAction
     });
+
+    const responseData = turnAction ? { ...result, turnAction } : result;
 
     res.json({
         status: 'success',
-        data: result,
+        data: responseData,
         // Top-level fields for backward compatibility or cleaner API response
         model: result.model,
         target: result.target,
@@ -103,7 +140,8 @@ router.post('/chat', async (req, res) => {
         autoRouted: result.routing?.autoRouted || false,
         ragUsed: result.ragUsed,
         ragSources: result.ragSources,
-        warning: result.warning
+        warning: result.warning,
+        ...(turnAction ? { turnAction } : {})
     });
 
     const modelName = result.model || req.body.model || 'unknown';
@@ -156,6 +194,7 @@ const handleChatStreamRequest = async (req, res, payload) => {
     messages = [],
     system,
     persona,
+    promptVersion,
     options = {},
     conversationId,
     useRag,
@@ -168,10 +207,22 @@ const handleChatStreamRequest = async (req, res, payload) => {
     enableWebSearch = false,
     think,
     thinkingMode,
-    thinking_mode
+    thinking_mode,
+    turnAction: rawTurnAction
   } = payload || {};
 
   const userId = getUserId(res);
+
+  let turnAction = null;
+  try {
+    turnAction = await validateTurnActionProvenance({
+      rawTurnAction,
+      conversationId,
+      userId
+    });
+  } catch (error) {
+    return sendTurnActionError(res, error);
+  }
 
   logger.info('DEBUG_STREAM: handleChatStreamRequest', {
     userId,
@@ -201,27 +252,62 @@ const handleChatStreamRequest = async (req, res, payload) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering
 
+  const abortController = new AbortController();
+  let streamTerminal = false;
+  let clientDisconnected = false;
+  let heartbeat = null;
+
   // Helper to send SSE event
   const sendEvent = (event, data) => {
-    if (res.writableEnded) return;
+    if (clientDisconnected || res.writableEnded || res.destroyed) return false;
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
+    return true;
   };
 
-  const abortController = new AbortController();
-  const heartbeat = setInterval(() => {
-    if (!res.writableEnded) {
+  const clearStreamResources = () => {
+    if (heartbeat !== null) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+    req.off('aborted', handleRequestAborted);
+    res.off('close', handleResponseClose);
+  };
+
+  const handleClientDisconnect = (source) => {
+    if (streamTerminal || res.writableEnded) {
+      clearStreamResources();
+      return;
+    }
+    clientDisconnected = true;
+    clearStreamResources();
+    if (!abortController.signal.aborted) abortController.abort();
+    logger.info('Client disconnected from streaming', { source });
+  };
+
+  // IncomingMessage `close` means the POST body has finished on supported
+  // Node releases; it is not evidence that the browser stopped reading SSE.
+  // Response `close` is the downstream disconnect signal we actually need.
+  const handleRequestAborted = () => handleClientDisconnect('request-aborted');
+  const handleResponseClose = () => handleClientDisconnect('response-closed');
+  req.once('aborted', handleRequestAborted);
+  res.once('close', handleResponseClose);
+
+  const finishStream = (event, data) => {
+    if (streamTerminal || clientDisconnected || res.writableEnded || res.destroyed) return false;
+    streamTerminal = true;
+    sendEvent(event, data);
+    clearStreamResources();
+    res.end();
+    return true;
+  };
+
+  heartbeat = setInterval(() => {
+    if (!clientDisconnected && !res.writableEnded && !res.destroyed) {
       res.write(': ping\n\n');
     }
   }, 15000);
-
-  const handleClose = () => {
-    clearInterval(heartbeat);
-    abortController.abort();
-    logger.info('Client disconnected from streaming');
-  };
-
-  req.on('close', handleClose);
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
   try {
     const { handleChatRequestStream } = require('../src/services/chatService');
@@ -234,6 +320,7 @@ const handleChatStreamRequest = async (req, res, payload) => {
       messages,
       system,
       persona,
+      promptVersion,
       options,
       conversationId,
       useRag,
@@ -247,6 +334,7 @@ const handleChatStreamRequest = async (req, res, payload) => {
       enableWebSearch,
       think,
       thinkingMode: thinkingMode ?? thinking_mode,
+      turnAction,
       abortSignal: abortController.signal,
       onWebSearchStart: () => {
         sendEvent('web-search-start', {});
@@ -261,32 +349,39 @@ const handleChatStreamRequest = async (req, res, payload) => {
         sendEvent('thinking', { content: thinking });
       },
       onComplete: (result) => {
-        if (abortController.signal.aborted) return;
-        sendEvent('done', result);
-        emitBuddyEvent('message_received', 'chat', 'Streamed response completed', 'normal');
-        clearInterval(heartbeat);
-        res.end();
+        const completionReceipt = turnAction ? { ...result, turnAction } : result;
+        if (finishStream('done', completionReceipt)) {
+          emitBuddyEvent('message_received', 'chat', 'Streamed response completed', 'normal');
+        }
       },
       onError: (error) => {
         if (abortController.signal.aborted) return;
         const errorPayload = { message: error.message };
         if (error.code) errorPayload.code = error.code;
         if (Number.isInteger(error.statusCode)) errorPayload.statusCode = error.statusCode;
-        sendEvent('error', errorPayload);
-        emitBuddyEvent('error', 'chat', 'Chat stream error', 'normal');
-        clearInterval(heartbeat);
-        res.end();
+        if (finishStream('error', errorPayload)) {
+          emitBuddyEvent('error', 'chat', 'Chat stream error', 'normal');
+        }
       }
     });
 
+    if (!streamTerminal && !clientDisconnected && !abortController.signal.aborted) {
+      const err = new Error('Chat stream ended without a terminal event');
+      logger.error('Chat streaming lifecycle error', { error: err.message });
+      finishStream('error', { message: err.message, code: 'STREAM_TERMINAL_EVENT_MISSING' });
+    }
+
   } catch (err) {
+    if (clientDisconnected || abortController.signal.aborted || streamTerminal) return;
     logger.error('Chat streaming error', { error: err.message, stack: err.stack });
     const errorPayload = { message: err.message };
     if (err.code) errorPayload.code = err.code;
     if (Number.isInteger(err.statusCode)) errorPayload.statusCode = err.statusCode;
-    sendEvent('error', errorPayload);
-    clearInterval(heartbeat);
-    res.end();
+    finishStream('error', errorPayload);
+  } finally {
+    if (streamTerminal || clientDisconnected || res.writableEnded || res.destroyed) {
+      clearStreamResources();
+    }
   }
 };
 
@@ -305,6 +400,7 @@ router.get('/chat/stream', async (req, res) => {
     messages: safeJsonParse(req.query.messages, []),
     system: req.query.system,
     persona: req.query.persona,
+    promptVersion: req.query.promptVersion,
     options: safeJsonParse(req.query.options, {}),
     conversationId: req.query.conversationId,
     useRag: req.query.useRag === 'true',
@@ -314,6 +410,15 @@ router.get('/chat/stream', async (req, res) => {
     autoRoute: req.query.autoRoute === 'true',
     taskType: req.query.taskType
   };
+
+  if (req.query.turnAction !== undefined
+      || Object.prototype.hasOwnProperty.call(payload, 'turnAction')) {
+    return res.status(400).json({
+      status: 'error',
+      code: 'TURN_ACTION_GET_UNSUPPORTED',
+      message: 'Turn actions require POST /api/chat/stream.'
+    });
+  }
 
   await handleChatStreamRequest(req, res, payload);
 });

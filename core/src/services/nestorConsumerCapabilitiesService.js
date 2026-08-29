@@ -12,6 +12,13 @@ const {
 } = require('./nestorConsumerContract');
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;
+const ABSOLUTE_URL_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
+
+function publicMessage(value) {
+  return String(value || 'unavailable')
+    .replace(ABSOLUTE_URL_PATTERN, '[redacted-endpoint]')
+    .slice(0, 500);
+}
 
 async function settle(label, action, fallback, timeoutMs = DEFAULT_PROBE_TIMEOUT_MS) {
   let timer;
@@ -26,7 +33,7 @@ async function settle(label, action, fallback, timeoutMs = DEFAULT_PROBE_TIMEOUT
       }),
     ]);
   } catch (error) {
-    return { ...fallback, available: false, warning: `${label}: ${error.message}` };
+    return { ...fallback, available: false, warning: `${label}: ${publicMessage(error.message)}` };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -104,4 +111,4 @@ async function getCapabilities({ systemHealth, probeTimeoutMs = DEFAULT_PROBE_TI
   };
 }
 
-module.exports = { getCapabilities, settle, DEFAULT_PROBE_TIMEOUT_MS };
+module.exports = { getCapabilities, publicMessage, settle, DEFAULT_PROBE_TIMEOUT_MS };

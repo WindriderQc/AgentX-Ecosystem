@@ -4,6 +4,7 @@ const customModelService = require('../src/services/customModelService');
 const CustomModel = require('../models/CustomModel');
 const logger = require('../config/logger');
 const { validateHostUrl } = require('../src/helpers/ollamaHostConfig');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 /**
  * GET /api/custom-models
@@ -159,6 +160,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!requireTypedConfirmation(req, res, 'ARCHIVE CUSTOM MODEL', id)) return;
     const { reason } = req.body;
 
     const model = await customModelService.archiveModel(id, reason || 'User requested');
@@ -232,6 +234,8 @@ router.post('/:id/rollback', async (req, res) => {
         error: 'targetVersion is required'
       });
     }
+
+    if (!requireTypedConfirmation(req, res, 'ROLLBACK CUSTOM MODEL', id, 'TO', targetVersion)) return;
 
     const model = await customModelService.rollbackToVersion(id, targetVersion);
 
@@ -379,6 +383,7 @@ router.post('/:id/inference', async (req, res) => {
 router.post('/:id/deprecate', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!requireTypedConfirmation(req, res, 'DEPRECATE CUSTOM MODEL', id)) return;
     const { reason } = req.body;
 
     const model = await customModelService.deprecateVersion(id, reason || 'User requested');

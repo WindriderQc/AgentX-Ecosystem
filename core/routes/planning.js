@@ -7,6 +7,7 @@ const planningMetricRegistry = require('../src/services/planningMetricRegistry')
 const planningAutomationService = require('../src/services/planningAutomationService');
 const planningEvidenceService = require('../src/services/planningEvidenceService');
 const { planningAutomationAllowed } = require('../src/helpers/planningAutomationAuth');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 const router = express.Router();
 
@@ -143,6 +144,7 @@ router.post('/items/:id/actions/:action', async (req, res) => {
 
 router.delete('/items/:id', async (req, res) => {
   try {
+    if (!requireTypedConfirmation(req, res, 'ARCHIVE PLANNING ITEM', req.params.id)) return;
     const item = await planningService.archiveItem(req.params.id, req.body || {});
     return envelope.success(res, { item });
   } catch (err) {
@@ -164,6 +166,7 @@ router.post('/items/:id/tasks/:pipelineId', async (req, res) => {
 
 router.delete('/items/:id/tasks/:pipelineId', async (req, res) => {
   try {
+    if (!requireTypedConfirmation(req, res, 'UNLINK PLANNING TASK', req.params.id, req.params.pipelineId)) return;
     return envelope.success(res, await planningService.unlinkTask(
       req.params.id,
       req.params.pipelineId,
@@ -184,9 +187,11 @@ router.post('/items/:id/schedules', async (req, res) => {
 
 router.delete('/items/:id/schedules/:sourceId', async (req, res) => {
   try {
+    const sourceId = decodeURIComponent(req.params.sourceId);
+    if (!requireTypedConfirmation(req, res, 'UNLINK PLANNING SCHEDULE', req.params.id, sourceId)) return;
     const item = await planningService.unlinkSchedule(
       req.params.id,
-      decodeURIComponent(req.params.sourceId),
+      sourceId,
       req.body || {}
     );
     return envelope.success(res, { item });
@@ -205,6 +210,7 @@ router.post('/items/:id/evidence', async (req, res) => {
 
 router.delete('/items/:id/evidence/:evidenceId', async (req, res) => {
   try {
+    if (!requireTypedConfirmation(req, res, 'DELETE PLANNING EVIDENCE', req.params.id, req.params.evidenceId)) return;
     const item = await planningService.removeEvidence(
       req.params.id,
       req.params.evidenceId,

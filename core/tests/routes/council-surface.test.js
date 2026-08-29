@@ -35,6 +35,18 @@ describe('AgentX Council surface', () => {
     expect(read('core/views/pages/roundtable.ejs')).toContain('Council is advisory');
   });
 
+  it('makes model readiness explicit and does not imply a model download', () => {
+    const page = read('core/views/pages/roundtable.ejs');
+    const client = read('core/public/js/roundtable.js');
+
+    expect(page).toContain('id="formModelReadiness"');
+    expect(page).toContain('id="councilModelOptions"');
+    expect(page).toMatch(/id="formStartBtn"[^>]*disabled/);
+    expect(client).toContain('data.readiness');
+    expect(client).toContain('Council never downloads a model implicitly');
+    expect(client).toContain("href=\"/models\"");
+  });
+
   it('renders Council and preserves old question links through redirects', async () => {
     const page = await request(app).get('/council');
     expect(page.status).toBe(200);

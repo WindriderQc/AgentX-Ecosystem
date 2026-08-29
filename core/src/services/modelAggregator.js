@@ -88,6 +88,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
  * @param {Boolean} options.includeOllama - Include Ollama models (default: true)
  * @param {Boolean} options.includeCustom - Include custom models (default: true)
  * @param {Boolean} options.includeRegistry - Include registry metadata (default: true)
+ * @param {Boolean} options.includeEvidence - Enrich readiness/capability evidence (default: true)
  * @param {Object} options.filters - Additional filters (provider, category, tag, search)
  * @param {Boolean} options.useCache - Use cached results (default: true)
  * @returns {Promise<Array>} Array of unified model objects
@@ -97,6 +98,7 @@ async function getAllModels(options = {}) {
     includeOllama = true,
     includeCustom = true,
     includeRegistry = true,
+    includeEvidence = true,
     filters = {},
     useCache = true,
     deduplicateOllama = true,
@@ -106,20 +108,20 @@ async function getAllModels(options = {}) {
   // Cache only applies when all sources are included (default case).
   // Partial-source requests bypass cache to avoid stale cross-caller pollution.
   const allSourcesIncluded = includeOllama && includeCustom && includeRegistry;
-  const cacheEligible = allSourcesIncluded && deduplicateOllama;
+  const cacheEligible = allSourcesIncluded && includeEvidence && deduplicateOllama;
   if (useCache && cacheEligible && modelCache && cacheTimestamp && (Date.now() - cacheTimestamp < CACHE_TTL_MS)) {
     logger.debug('Returning cached models', { count: modelCache.length, age: Date.now() - cacheTimestamp });
     return applyFilters(modelCache, filters);
   }
 
-  logger.info('Aggregating models from all sources', { includeOllama, includeCustom, includeRegistry });
+  logger.info('Aggregating models from all sources', { includeOllama, includeCustom, includeRegistry, includeEvidence });
 
   const models = [];
   const readinessHost = filters.host || null;
 
   // Fetch from all sources in parallel
   const [ollamaModels, customModels, registryData] = await Promise.all([
-    includeOllama ? fetchOllamaModels() : Promise.resolve([]),
+    includeOllama ? fetchOllamaModels(readinessHost) : Promise.resolve([]),
     includeCustom ? fetchCustomModels() : Promise.resolve([]),
     includeRegistry ? fetchRegistryMetadata() : Promise.resolve([])
   ]);
@@ -130,6 +132,7 @@ async function getAllModels(options = {}) {
   }
   const capabilityContracts = new Map();
   async function capabilityContractFor(model, host, registryEntry) {
+    if (!includeEvidence) return null;
     const key = `${modelNameIdentityKey(model) || model}@@${normalizeHostUrl(host) || ''}`;
     if (!capabilityContracts.has(key)) {
       capabilityContracts.set(key, resolveCapabilityContract(
@@ -138,6 +141,20 @@ async function getAllModels(options = {}) {
       ).catch(() => null));
     }
     return capabilityContracts.get(key);
+  }
+
+  async function readinessFor(model, host) {
+    if (includeEvidence) return getModelReadiness(model, host);
+    const deferred = {
+      stage: 'available',
+      profileDepth: null,
+      benchmarkQualified: false,
+      stale: false,
+      isReady: false,
+      evidenceState: 'deferred',
+      scope: 'runtime'
+    };
+    return { readiness: { ...deferred }, bestReadiness: { ...deferred } };
   }
 
   // Daily-use callers get one logical model (primary host wins). The models
@@ -150,7 +167,7 @@ async function getAllModels(options = {}) {
     if (deduplicateOllama && seenOllamaModels.has(modelKey)) continue;
     seenOllamaModels.add(modelKey);
     const hostName = resolveHostName(ollamaModel.host);
-    const readinessData = await getModelReadiness(normalizedName, readinessHost || ollamaModel.host);
+    const readinessData = await readinessFor(normalizedName, readinessHost || ollamaModel.host);
     const unified = {
       id: `ollama:${ollamaModel.host}:${normalizedName}`,
       name: normalizedName,
@@ -228,7 +245,7 @@ async function getAllModels(options = {}) {
 
   for (const customModel of customModels) {
     const modelName = normalizeModelName(customModel.modelName || customModel.modelId);
-    const readinessData = await getModelReadiness(
+    const readinessData = await readinessFor(
       modelName,
       readinessHost || customModel.deployedHost || customModel.ollamaHost
     );
@@ -292,7 +309,7 @@ async function getAllModels(options = {}) {
       if (seenRegistryNames.has(modelKey)) continue; // dedup :latest/case variants
       seenRegistryNames.add(modelKey);
       const hostName = resolveHostName(reg.host);
-      const readinessData = await getModelReadiness(normalizedRegName, readinessHost || reg.host);
+      const readinessData = await readinessFor(normalizedRegName, readinessHost || reg.host);
       const registryOnlyModel = {
         id: `registry:${normalizedRegName}`,
         name: normalizedRegName,
@@ -369,38 +386,37 @@ async function getAllModels(options = {}) {
 }
 
 /** Fetch every exact artifact reported by each Ollama host. */
-async function fetchOllamaModels() {
-  const models = [];
-
-  const hosts = getHostUrls();
+async function fetchOllamaModels(hostFilter = null) {
+  const configuredHosts = getHostUrls();
+  const requestedHost = normalizeHostUrl(hostFilter);
+  const hosts = requestedHost
+    ? configuredHosts.filter((host) => normalizeHostUrl(host) === requestedHost)
+    : configuredHosts;
 
   logger.debug('Fetching models from Ollama hosts', { hosts });
 
-  for (const host of hosts) {
+  const inventories = await Promise.all(hosts.map(async (host) => {
     try {
       const response = await fetch(`${host}/api/tags`, { timeout: 5000 });
 
       if (!response.ok) {
         logger.warn('Ollama host unreachable', { host, status: response.status });
-        continue;
+        return [];
       }
 
       const data = await response.json();
 
       if (data.models && Array.isArray(data.models)) {
-        for (const model of data.models) {
-          models.push({
-            ...model,
-            host
-          });
-        }
+        return data.models.map((model) => ({ ...model, host }));
       }
+      return [];
     } catch (error) {
       logger.error('Failed to fetch from Ollama host', { host, error: error.message });
+      return [];
     }
-  }
+  }));
 
-  return models;
+  return inventories.flat();
 }
 
 

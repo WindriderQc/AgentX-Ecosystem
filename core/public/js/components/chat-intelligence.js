@@ -118,6 +118,10 @@ const ChatIntelligence = (() => {
       parts.push(`<span class="ci-badge-route">Route: <strong>${_esc(taskLabel)}</strong></span>`);
     }
     if (destination.length > 0) parts.push(destination.join(' on '));
+    if (info.prompt?.name && info.prompt?.version != null) {
+      const exactLabel = info.prompt.exact ? 'exact prompt' : 'prompt';
+      parts.push(`<span class="ci-badge-prompt">${_esc(exactLabel)}: ${_esc(info.prompt.name)} v${_esc(info.prompt.version)}</span>`);
+    }
     if (info.duration) parts.push(`<span class="ci-badge-time">${_esc(info.duration)}</span>`);
 
     badge.innerHTML = parts.join(' ');

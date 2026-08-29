@@ -1,14 +1,30 @@
 /**
  * Roundtable Panel Defaults
  *
- * Agent lineup + system prompts. All roles use the deployment's product
- * default model unless the run explicitly chooses another model. This keeps
- * the reusable product independent from a maintainer's installed model roster
- * and avoids unnecessary model swaps. The panel remains editable per run.
+ * Agent lineup + system prompts. A model is attached only when the operator
+ * explicitly configured one. Runtime discovery is applied by defaultResolver;
+ * this module never turns a code fallback into an apparently installed model.
+ * The panel remains editable per run.
  */
 
-const { PRODUCT_DEFAULT_MODEL } = require('../modelRouterDefaults');
-const ROUNDTABLE_MODEL = process.env.ROUNDTABLE_MODEL || PRODUCT_DEFAULT_MODEL;
+const COUNCIL_MODEL_ENV_KEYS = [
+  'ROUNDTABLE_MODEL',
+  'AGENTX_GENERAL_CHAT_MODEL',
+  'AGENTX_AUTOROUTE_GENERAL_MODEL',
+  'AGENTX_DEFAULT_CHAT_MODEL',
+  'AGENTX_CHAT_MODEL',
+  'OLLAMA_MODEL'
+];
+
+function configuredModelFromEnv(env = process.env) {
+  for (const key of COUNCIL_MODEL_ENV_KEYS) {
+    const value = String(env?.[key] || '').trim();
+    if (value) return { model: value, source: `environment:${key}` };
+  }
+  return { model: '', source: 'none' };
+}
+
+const ROUNDTABLE_MODEL = configuredModelFromEnv().model;
 
 const DEFAULT_PANEL = [
   {
@@ -73,6 +89,68 @@ Rules:
 - Keep your response under 500 words`
 };
 
+function isUsableDiscoveredModel(entry) {
+  if (!entry || entry.chatAllowed === false) return false;
+  const status = String(entry.deployment?.status || '').toLowerCase();
+  if (!['available', 'deployed'].includes(status)) return false;
+  const name = String(entry.deployment?.resolvedName || entry.name || '').trim();
+  return Boolean(name) && !/embed/i.test(name);
+}
+
+function discoveredModelNames(catalog = []) {
+  const names = catalog
+    .filter(isUsableDiscoveredModel)
+    .map((entry) => String(entry.deployment?.resolvedName || entry.name || '').trim())
+    .filter(Boolean);
+  return [...new Set(names)].sort((left, right) => left.localeCompare(right));
+}
+
+function withDefaultModel(model = '') {
+  const selectedModel = String(model || '').trim();
+  return {
+    panel: DEFAULT_PANEL.map((panelist) => ({ ...panelist, model: selectedModel })),
+    synthesizer: { ...DEFAULT_SYNTHESIZER, model: selectedModel }
+  };
+}
+
+function buildCouncilDefaults({
+  catalog = [],
+  configuredModel = '',
+  configuredSource = '',
+  preferredDiscoveredModel = ''
+} = {}) {
+  const availableModels = discoveredModelNames(catalog);
+  const explicitModel = String(configuredModel || '').trim();
+  const preferred = String(preferredDiscoveredModel || '').trim().toLowerCase();
+  const preferredAvailable = preferred
+    ? availableModels.find((model) => model.toLowerCase() === preferred) || ''
+    : '';
+  const selectedModel = explicitModel || preferredAvailable || availableModels[0] || '';
+  const selectedSource = explicitModel
+    ? (configuredSource || 'configured')
+    : (selectedModel ? 'runtime-discovery' : 'none');
+  const modelOptions = [...new Set([selectedModel, ...availableModels].filter(Boolean))];
+  const preset = withDefaultModel(selectedModel);
+
+  return {
+    ...preset,
+    models: modelOptions,
+    readiness: {
+      canStart: Boolean(selectedModel),
+      selectedModel: selectedModel || null,
+      selectedSource,
+      discoveredCount: availableModels.length,
+      selectedModelDiscovered: Boolean(selectedModel && availableModels.includes(selectedModel)),
+      downloadsImplicit: false,
+      message: selectedModel
+        ? (availableModels.includes(selectedModel)
+          ? `Using ${selectedModel}, discovered on a configured runtime.`
+          : `Using ${selectedModel}, explicitly configured for this deployment; live availability is checked when Council runs.`)
+        : 'No configured or runtime-discovered chat model is available. Select an installed model before convening Council.'
+    }
+  };
+}
+
 const COUNCIL_ADVISORY_GUARD = `Council authority policy (higher priority than panel instructions):
 - Your output is analysis and advice only.
 - AgentX orchestrates and records the Council; the Council itself has no approval, authorization, tool-use, deployment, or execution authority.
@@ -126,8 +204,13 @@ const COUNCIL_OPTIONS = [
 ];
 
 module.exports = {
+  COUNCIL_MODEL_ENV_KEYS,
   DEFAULT_PANEL,
   DEFAULT_SYNTHESIZER,
+  configuredModelFromEnv,
+  discoveredModelNames,
+  withDefaultModel,
+  buildCouncilDefaults,
   COUNCIL_ADVISORY_GUARD,
   withCouncilAdvisoryGuard,
   COUNCIL_OPTIONS,

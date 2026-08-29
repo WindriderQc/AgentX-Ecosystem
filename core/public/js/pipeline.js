@@ -7,7 +7,10 @@
 
   const state = {
     tasks: [],
+    summary: null,
+    evidence: null,
     loading: false,
+    filters: { service: 'all', lane: 'all', status: 'all' },
     context: readContext()
   };
 
@@ -117,17 +120,21 @@
   function normalizePayload(payload) {
     const data = payload && payload.data ? payload.data : payload;
     const tasks = data && Array.isArray(data.tasks) ? data.tasks : [];
-    return tasks.map((task) => ({
-      pipelineId: task.pipelineId || '',
-      title: task.title || '',
-      service: task.service || '',
-      status: task.status || 'queued',
-      assignee: task.assignee || '',
-      heartbeatAt: task.heartbeatAt || null,
-      epic: task.epic || '',
-      source: task.source || '',
-      updatedAt: task.updatedAt || task.createdAt || null
-    }));
+    return {
+      tasks: tasks.map((task) => ({
+        pipelineId: task.pipelineId || '',
+        title: task.title || '',
+        service: task.service || '',
+        status: task.status || 'queued',
+        assignee: task.assignee || '',
+        heartbeatAt: task.heartbeatAt || null,
+        epic: task.epic || '',
+        source: task.source || '',
+        updatedAt: task.updatedAt || task.createdAt || null
+      })),
+      summary: data?.summary || null,
+      evidence: data?.evidence || null
+    };
   }
 
   async function fetchJson(url) {
@@ -149,7 +156,7 @@
   }
 
   function renderCounts() {
-    const counts = countByStatus(state.tasks);
+    const counts = state.summary?.byStatus || countByStatus(state.tasks);
     const map = {
       queued: 'pipelineCountQueued',
       in_progress: 'pipelineCountProgress',
@@ -163,6 +170,60 @@
     });
   }
 
+  function matchesFilters(task) {
+    return (state.filters.service === 'all' || task.service === state.filters.service)
+      && (state.filters.lane === 'all' || (task.source || 'unspecified') === state.filters.lane)
+      && (state.filters.status === 'all' || task.status === state.filters.status);
+  }
+
+  function optionLabel(value) {
+    return String(value || 'unspecified').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  function populateFilter(id, values, current, allLabel) {
+    const select = $(id);
+    if (!select) return 'all';
+    const available = [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
+    const selected = current === 'all' || available.includes(current) ? current : 'all';
+    select.innerHTML = `<option value="all">${escapeHtml(allLabel)}</option>${available.map((value) => (
+      `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(optionLabel(value))}</option>`
+    )).join('')}`;
+    return selected;
+  }
+
+  function renderFilters() {
+    const open = state.tasks.filter((task) => task.status !== 'done');
+    state.filters.service = populateFilter(
+      'pipelineServiceFilter', open.map((task) => task.service || 'unspecified'), state.filters.service, 'All services'
+    );
+    state.filters.lane = populateFilter(
+      'pipelineLaneFilter', open.map((task) => task.source || 'unspecified'), state.filters.lane, 'All lanes'
+    );
+    const status = $('pipelineStatusFilter');
+    if (status) status.value = state.filters.status;
+  }
+
+  function renderEvidence() {
+    const el = $('pipelineCountEvidence');
+    if (!el) return;
+    const evidence = state.evidence;
+    const summary = state.summary;
+    if (!evidence || !summary) {
+      el.textContent = 'Count evidence unavailable; cards reflect only the rows loaded in this browser.';
+      el.classList.add('pipeline-evidence-warning');
+      return;
+    }
+    const statusScope = evidence.scope?.includesDone ? 'all statuses, including done' : 'open statuses only';
+    const returned = Number(evidence.rows?.returnedCount) || 0;
+    const matched = Number(evidence.rows?.matchedCount) || 0;
+    const rowWindow = evidence.rows?.truncated
+      ? `rows show ${returned} of ${matched}`
+      : `rows show all ${returned} matched records`;
+    const observed = formatDate(evidence.observedAt);
+    el.textContent = `MongoDB task authority · exact full-scope totals (${statusScope}) · all-time, no date filter · ${rowWindow} · sampled ${observed}`;
+    el.classList.remove('pipeline-evidence-warning');
+  }
+
   function renderOpenWork() {
     const rows = $('pipelineOpenRows');
     const meta = $('pipelineOpenMeta');
@@ -171,6 +232,7 @@
     const allOpenTasks = state.tasks.filter((task) => task.status !== 'done');
     const openTasks = allOpenTasks
       .filter(matchesContext)
+      .filter(matchesFilters)
       .sort((a, b) => {
         const statusDiff = (OPEN_ORDER[a.status] ?? 99) - (OPEN_ORDER[b.status] ?? 99);
         if (statusDiff) return statusDiff;
@@ -178,9 +240,17 @@
       });
 
     if (meta) {
+      const exactOpen = Number.isFinite(Number(state.summary?.openCount))
+        ? Number(state.summary.openCount)
+        : allOpenTasks.length;
+      const matched = Number.isFinite(Number(state.summary?.matchedCount))
+        ? Number(state.summary.matchedCount)
+        : state.tasks.length;
       meta.textContent = state.context
-        ? `${openTasks.length} matching open task${openTasks.length === 1 ? '' : 's'} · ${allOpenTasks.length} open overall`
-        : `${openTasks.length} open task${openTasks.length === 1 ? '' : 's'} across ${state.tasks.length} loaded records`;
+        ? `${openTasks.length} matching loaded open task${openTasks.length === 1 ? '' : 's'} · ${exactOpen} open overall in the API scope`
+        : Object.values(state.filters).some((value) => value !== 'all')
+          ? `Showing ${openTasks.length} of ${allOpenTasks.length} loaded open tasks · ${exactOpen} open overall in the API scope`
+          : `${exactOpen} open task${exactOpen === 1 ? '' : 's'} across ${matched} all-time records`;
     }
 
     if (!openTasks.length) {
@@ -195,7 +265,7 @@
         <tr class="${state.context ? 'pipeline-row-context' : ''}" data-pipeline-task="${escapeHtml(task.pipelineId)}">
           <td class="pipeline-id">${escapeHtml(task.pipelineId)}</td>
           <td>
-            <div class="pipeline-title">${escapeHtml(task.title || 'Untitled task')}</div>
+            <div class="pipeline-title" title="${escapeHtml(task.title || 'Untitled task')}">${escapeHtml(task.title || 'Untitled task')}</div>
             ${task.epic ? `<div class="pipeline-subtle">${escapeHtml(task.epic)}</div>` : ''}
           </td>
           <td>${statusBadge(task.status)}</td>
@@ -209,7 +279,7 @@
 
   function attentionItems() {
     const items = [];
-    state.tasks.filter(matchesContext).forEach((task) => {
+    state.tasks.filter(matchesContext).filter(matchesFilters).forEach((task) => {
       if (task.status === 'blocked') {
         items.push({
           rank: 0,
@@ -281,6 +351,8 @@
   function renderAll() {
     renderContext();
     renderCounts();
+    renderEvidence();
+    renderFilters();
     renderOpenWork();
     renderAttention();
   }
@@ -289,7 +361,10 @@
     setLoading(true);
     try {
       const payload = await fetchJson('/api/pipeline/tasks?limit=1000&view=summary&includeDone=true');
-      state.tasks = normalizePayload(payload);
+      const normalized = normalizePayload(payload);
+      state.tasks = normalized.tasks;
+      state.summary = normalized.summary;
+      state.evidence = normalized.evidence;
       renderAll();
     } catch (error) {
       renderError(error);
@@ -301,6 +376,17 @@
   document.addEventListener('DOMContentLoaded', () => {
     const refresh = $('pipelineRefreshBtn');
     if (refresh) refresh.addEventListener('click', loadTasks);
+    for (const [id, key] of [
+      ['pipelineServiceFilter', 'service'],
+      ['pipelineLaneFilter', 'lane'],
+      ['pipelineStatusFilter', 'status'],
+    ]) {
+      $(id)?.addEventListener('change', (event) => {
+        state.filters[key] = event.target.value;
+        renderOpenWork();
+        renderAttention();
+      });
+    }
     loadTasks();
   });
 })();

@@ -170,11 +170,15 @@ describe('Nestor consumer inference runtime', () => {
       readiness: { stage: 'ready' },
     }));
     const snapshot = await getRouterSnapshot();
+    expect(new Date(snapshot.generatedAt).toISOString()).toBe(snapshot.generatedAt);
+    expect(snapshot.topology).toBe('opaque');
     expect(snapshot.modelCatalog).toBe('/api/models/all');
     expect(snapshot.modelCatalogMode).toBe('embedded-in-routes');
     expect(snapshot.routes.chat.provenance).toBe('router-default');
     expect(snapshot.routes.react.provenance).toBe('operator-override');
     expect(snapshot.routes.analyze.taskType).toBe('analysis');
     expect(Object.values(snapshot.routes).every((route) => route.lane === 'interactive')).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain('http://local:11434');
+    expect(Object.values(snapshot.routes).every((route) => !Object.hasOwn(route, 'hostUrl'))).toBe(true);
   });
 });

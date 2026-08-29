@@ -559,6 +559,7 @@
                     });
                     if (data.status === 'success') {
                         Toast.success(`Saved routing for ${formatTaskLabel(task, config.taskMetadata?.[task] || {})}`);
+                        shared.invalidateEcosystemSnapshot();
                         await window.NerveCenter.loadRouting();
                     } else {
                         Toast.error(data.message || 'Save failed');
@@ -583,6 +584,7 @@
                     });
                     if (data.status === 'success') {
                         Toast.success(`Using deployment default for ${formatTaskLabel(task, config.taskMetadata?.[task] || {})}`);
+                        shared.invalidateEcosystemSnapshot();
                         await window.NerveCenter.loadRouting();
                     } else {
                         Toast.error(data.message || 'Reset failed');
@@ -621,20 +623,25 @@
         const body = document.getElementById('sectionRoutingBody');
         if (!body) return;
 
-        body.innerHTML = '<div class="nc-section-placeholder"><i class="fas fa-spinner fa-spin"></i> Loading routing data...</div>';
+        shared.renderSectionLoading(body, 'Loading routing data...');
 
         try {
-            const [configJson, logJson, analyticsJson, intelligenceJson] = await Promise.all([
-                shared.fetchJson('/api/nerve-center/routing/config'),
+            const [snapshot, logJson, analyticsJson] = await Promise.all([
+                shared.getEcosystemSnapshot(),
                 shared.fetchJson('/api/nerve-center/routing/log?limit=20'),
-                shared.fetchJson('/api/nerve-center/routing/analytics?hours=24'),
-                shared.fetchJson('/api/nerve-center/intelligence')
+                shared.fetchJson('/api/nerve-center/routing/analytics?hours=24')
             ]);
 
-            const config = configJson.data || {};
+            const config = snapshot?.routingConfig;
             const logs = logJson.data || [];
             const analytics = analyticsJson.data || {};
-            const failover = intelligenceJson.data?.routing || {};
+            const failover = snapshot?.routing;
+            if (!config || typeof config !== 'object') {
+                throw new Error('Ecosystem snapshot is missing routing configuration evidence');
+            }
+            if (!failover || typeof failover !== 'object') {
+                throw new Error('Ecosystem snapshot is missing routing-state evidence');
+            }
 
             body.innerHTML = buildRoutingSection(config, logs, analytics, failover);
             shared.attachCollapsibleHandlers(body);
@@ -642,7 +649,9 @@
             attachRoutingLogHandlers();
         } catch (err) {
             console.error('[NerveCenter] loadRouting failed', err);
-            body.innerHTML = `<div class="nc-section-placeholder" style="color:#f87171;"><i class="fas fa-exclamation-triangle"></i> Failed to load routing data: ${shared.escapeHtml(err.message)}</div>`;
+            shared.renderSectionError(body, `Failed to load routing data: ${err.message}`);
+        } finally {
+            shared.finishSectionLoad(body);
         }
     }
 

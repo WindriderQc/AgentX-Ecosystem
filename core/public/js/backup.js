@@ -2,6 +2,13 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
+  const PAGE_SIZE = 25;
+  const inventories = {
+    mongo: { items: [], page: 1 },
+    qdrant: { items: [], page: 1 },
+    config: { items: [], page: 1 }
+  };
+  let confirmationResolve = null;
 
   // ---------- utility ----------
   function escape(s) {
@@ -27,7 +34,68 @@
   function formatDate(v) {
     if (!v) return '—';
     const d = new Date(v);
-    return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
+    return isNaN(d.getTime()) ? String(v) : d.toLocaleString('en-US');
+  }
+
+  function formatDuration(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return 'unknown';
+    if (value === 0) return 'immediately';
+    const minutes = value / 60000;
+    if (minutes < 60) return `${Math.round(minutes * 10) / 10} min`;
+    const hours = minutes / 60;
+    if (hours < 48) return `${Math.round(hours * 10) / 10} h`;
+    return `${Math.round((hours / 24) * 10) / 10} d`;
+  }
+
+  function renderInventoryEvidence(id, evidence) {
+    const el = $(id);
+    const inventory = evidence?.inventory;
+    if (!el) return;
+    if (!inventory) {
+      el.textContent = 'Inventory evidence unavailable; the displayed count is not independently scoped.';
+      el.style.color = '#f59e0b';
+      return;
+    }
+    const size = inventory.knownSizeCount
+      ? `${formatBytes(inventory.totalKnownBytes)} across ${inventory.knownSizeCount} sized record${inventory.knownSizeCount === 1 ? '' : 's'}`
+      : 'artifact sizes unavailable from this source';
+    const range = inventory.oldestAt
+      ? `${formatDate(inventory.oldestAt)} to ${formatDate(inventory.newestAt)}`
+      : 'no dated records';
+    el.textContent = `${inventory.count} recognized record${inventory.count === 1 ? '' : 's'} · ${size} · ${range} · complete all-time inventory, paginated locally · observed ${formatDate(inventory.observedAt)}`;
+    el.title = `${inventory.source}. ${inventory.scope}. ${inventory.countBasis}.`;
+  }
+
+  function renderPolicyEvidence(config) {
+    const policy = config?.policyEvidence;
+    if (!policy) {
+      $('cfgScheduleStatus').textContent = 'Policy evidence unavailable';
+      $('cfgGrowthRisk').textContent = 'Unknown — cadence and retention could not be reconciled';
+      $('cfgPolicyPanel').style.borderColor = '#f59e0b';
+      return;
+    }
+    const schedule = policy.schedule;
+    const retention = policy.retention;
+    const risk = policy.growthRisk;
+    const source = schedule.enabledSource === 'unknown' ? '' : `, ${schedule.enabledSource}`;
+
+    $('cfgScheduleStatus').textContent = schedule.enabled
+      ? `Enabled${source} · normal cycle every ${formatDuration(schedule.normalEveryMs)} · 3 logical operations/cycle (${schedule.normalCyclesPerDay}/day at normal cadence)`
+      : `Disabled${source} · only explicit manual backup requests create artifacts`;
+    $('cfgScheduleDetail').textContent = schedule.enabled
+      ? `After partial/failed cycles only: retry every ${formatDuration(schedule.failureRetryEveryMs)}${schedule.nextRunAt ? ` · next run ${formatDate(schedule.nextRunAt)}` : ''}`
+      : `Inactive while scheduler is disabled (configured retry: ${formatDuration(schedule.failureRetryEveryMs)})`;
+    $('cfgRetentionPolicy').textContent = retention.mode === 'unbounded'
+      ? `Forever (${retention.source}) · automatic pruning disabled`
+      : `${retention.days} days (${retention.source}) · pruning after each successful backup operation`;
+    $('cfgGrowthRisk').textContent = `${String(risk.level || 'unknown').toUpperCase()} · ${(risk.reasons || []).join(' ')}`;
+    $('cfgPolicyWarnings').textContent = (risk.warnings || []).join(' ');
+
+    const colors = { high: '#dc3545', watch: '#f59e0b', low: '#22c55e' };
+    const color = colors[risk.level] || '#94a3b8';
+    $('cfgGrowthRisk').style.color = color;
+    $('cfgPolicyPanel').style.borderColor = color;
   }
 
   async function jsonFetch(url, opts = {}) {
@@ -37,36 +105,107 @@
     return body;
   }
 
-  function locationCell(text) {
-    return `<code style="font-size:11px; color:#94a3b8; word-break:break-all;">${escape(text || '—')}</code>`;
+  function rowFor(kind, item) {
+    if (kind === 'mongo') return `
+      <tr style="border-bottom:1px solid var(--border, #2a3145);">
+        <td style="padding:8px 4px;"><code>${escape(item.name)}</code></td>
+        <td style="padding:8px 4px;">${formatDate(item.date)}</td>
+        <td style="padding:8px 4px; text-align:right;">${formatBytes(item.size)}</td>
+        <td style="padding:8px 4px; text-align:right;">
+          <button class="btn btn-sm" type="button" disabled title="Restore requires a controlled offline rehearsal" style="padding:4px 10px; margin-right:4px;">Restore unavailable</button>
+          <button class="btn btn-sm" data-action="delete-mongo" data-name="${escape(item.name)}" style="padding:4px 10px; background:#dc3545; color:#fff;">Delete</button>
+        </td>
+      </tr>`;
+    if (kind === 'qdrant') {
+      return `
+        <tr style="border-bottom:1px solid var(--border, #2a3145);">
+          <td style="padding:8px 4px;"><code>${escape(item.name)}</code></td>
+          <td style="padding:8px 4px;">${formatDate(item.creation_time)}</td>
+          <td style="padding:8px 4px; text-align:right;">${formatBytes(item.size)}</td>
+          <td style="padding:8px 4px; text-align:right;">
+            <button class="btn btn-sm" type="button" disabled title="Restore requires a controlled offline rehearsal" style="padding:4px 10px; margin-right:4px;">Restore unavailable</button>
+            <button class="btn btn-sm" data-action="delete-qdrant" data-name="${escape(item.name)}" style="padding:4px 10px; background:#dc3545; color:#fff;">Delete</button>
+          </td>
+        </tr>`;
+    }
+    return `
+      <tr style="border-bottom:1px solid var(--border, #2a3145);">
+        <td style="padding:8px 4px;"><code>${escape(item.name)}</code></td>
+        <td style="padding:8px 4px;">${formatDate(item.date)}</td>
+        <td style="padding:8px 4px; text-align:right;">${formatBytes(item.size)}</td>
+        <td style="padding:8px 4px; text-align:right;">
+          <button class="btn btn-sm" data-action="delete-config" data-name="${escape(item.name)}" style="padding:4px 10px; background:#dc3545; color:#fff;">Delete</button>
+        </td>
+      </tr>`;
+  }
+
+  function renderInventoryPage(kind) {
+    const state = inventories[kind];
+    const list = $(`${kind}BackupsList`);
+    const pager = $(`${kind}Pager`);
+    const empty = kind === 'qdrant' ? 'No snapshots yet.' : kind === 'config' ? 'No config backups yet.' : 'No backups yet.';
+    const pageCount = Math.max(1, Math.ceil(state.items.length / PAGE_SIZE));
+    state.page = Math.min(Math.max(1, state.page), pageCount);
+    const start = (state.page - 1) * PAGE_SIZE;
+    const visible = state.items.slice(start, start + PAGE_SIZE);
+
+    list.innerHTML = visible.length
+      ? visible.map((item) => rowFor(kind, item)).join('')
+      : `<tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">${empty}</td></tr>`;
+
+    if (!pager) return;
+    const first = state.items.length ? start + 1 : 0;
+    const last = Math.min(start + PAGE_SIZE, state.items.length);
+    pager.innerHTML = `
+      <span>Showing ${first}–${last} of ${state.items.length}</span>
+      <span>
+        <button class="btn btn-sm" type="button" data-action="page-inventory" data-kind="${kind}" data-page="${state.page - 1}" ${state.page === 1 ? 'disabled' : ''} aria-label="Previous ${kind} backup page">Previous</button>
+        <span aria-current="page">Page ${state.page} of ${pageCount}</span>
+        <button class="btn btn-sm" type="button" data-action="page-inventory" data-kind="${kind}" data-page="${state.page + 1}" ${state.page === pageCount ? 'disabled' : ''} aria-label="Next ${kind} backup page">Next</button>
+      </span>`;
+  }
+
+  function typedConfirmation(action, name, description) {
+    const expected = `${action} ${name}`;
+    const dialog = $('backupConfirmDialog');
+    if (!dialog?.showModal) {
+      return Promise.resolve(window.prompt(`${description}\n\nType ${expected} to continue.`) === expected);
+    }
+    if (confirmationResolve) confirmationResolve(false);
+    $('backupConfirmTitle').textContent = 'Confirm permanent deletion';
+    $('backupConfirmDescription').textContent = description;
+    $('backupConfirmExpected').textContent = expected;
+    $('backupConfirmInput').value = '';
+    $('backupConfirmError').textContent = '';
+    $('backupConfirmSubmit').disabled = true;
+    dialog.showModal();
+    setTimeout(() => $('backupConfirmInput').focus(), 0);
+    return new Promise((resolve) => { confirmationResolve = resolve; });
+  }
+
+  function finishConfirmation(confirmed) {
+    const resolve = confirmationResolve;
+    confirmationResolve = null;
+    if ($('backupConfirmDialog')?.open) $('backupConfirmDialog').close();
+    if (resolve) resolve(confirmed);
+  }
+
+  function confirmationHeaders(action, name) {
+    return { 'X-AgentX-Confirm': `${action} ${name}` };
   }
 
   // ---------- MongoDB ----------
   async function loadMongoBackups() {
     const list = $('mongoBackupsList');
-    list.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>';
+    list.innerHTML = '<tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>';
     try {
-      const { backups = [], root } = await jsonFetch('/api/operations/backups');
-      $('mongoRoot').textContent = root || '—';
+      const { backups = [], evidence } = await jsonFetch('/api/operations/backups');
       $('mongoStatus').textContent = `${backups.length} backup${backups.length === 1 ? '' : 's'}`;
-      if (!backups.length) {
-        list.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">No backups yet.</td></tr>';
-        return;
-      }
-      list.innerHTML = backups.map((b) => `
-        <tr style="border-bottom:1px solid var(--border, #2a3145);">
-          <td style="padding:8px 4px;"><code>${escape(b.name)}</code></td>
-          <td style="padding:8px 4px;">${formatDate(b.date)}</td>
-          <td style="padding:8px 4px; text-align:right;">${formatBytes(b.size)}</td>
-          <td style="padding:8px 4px;">${locationCell(b.path)}</td>
-          <td style="padding:8px 4px; text-align:right;">
-            <button class="btn btn-sm" data-action="restore-mongo" data-name="${escape(b.name)}" style="padding:4px 10px; margin-right:4px;">Restore</button>
-            <button class="btn btn-sm" data-action="delete-mongo" data-name="${escape(b.name)}" style="padding:4px 10px; background:#dc3545; color:#fff;">Delete</button>
-          </td>
-        </tr>
-      `).join('');
+      renderInventoryEvidence('mongoEvidence', evidence);
+      inventories.mongo = { items: backups, page: 1 };
+      renderInventoryPage('mongo');
     } catch (err) {
-      list.innerHTML = `<tr><td colspan="5" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
+      list.innerHTML = `<tr><td colspan="4" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
     }
   }
 
@@ -86,20 +225,10 @@
     }
   }
 
-  async function restoreMongoBackup(name) {
-    if (!confirm(`Restore MongoDB from "${name}"?\n\nThis will REPLACE all data in the agentx database.`)) return;
-    try {
-      await jsonFetch(`/api/operations/restore/${encodeURIComponent(name)}?confirm=true`, { method: 'POST' });
-      showToast(`Restored from ${name}`, 'success');
-    } catch (err) {
-      showToast(`Restore failed: ${err.message}`, 'error');
-    }
-  }
-
   async function deleteMongoBackup(name) {
-    if (!confirm(`Delete backup "${name}"?\nThis cannot be undone.`)) return;
+    if (!await typedConfirmation('DELETE', name, `Delete MongoDB backup “${name}”? This cannot be undone.`)) return;
     try {
-      await jsonFetch(`/api/operations/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      await jsonFetch(`/api/operations/backups/${encodeURIComponent(name)}`, { method: 'DELETE', headers: confirmationHeaders('DELETE', name) });
       showToast(`Deleted ${name}`, 'success');
       await loadMongoBackups();
     } catch (err) {
@@ -110,33 +239,15 @@
   // ---------- Qdrant ----------
   async function loadQdrantBackups() {
     const list = $('qdrantBackupsList');
-    list.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>';
+    list.innerHTML = '<tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>';
     try {
-      const { snapshots = [], root, collection } = await jsonFetch('/api/operations/qdrant/backups');
-      if (root) $('qdrantRoot').textContent = root;
-      if (collection) $('qdrantCollection').textContent = collection;
+      const { snapshots = [], evidence } = await jsonFetch('/api/operations/qdrant/backups');
       $('qdrantStatus').textContent = `${snapshots.length} snapshot${snapshots.length === 1 ? '' : 's'}`;
-      if (!snapshots.length) {
-        list.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">No snapshots yet.</td></tr>';
-        return;
-      }
-      list.innerHTML = snapshots.map((s) => {
-        const loc = root ? `${root}/${s.name}` : s.name;
-        return `
-        <tr style="border-bottom:1px solid var(--border, #2a3145);">
-          <td style="padding:8px 4px;"><code>${escape(s.name)}</code></td>
-          <td style="padding:8px 4px;">${formatDate(s.creation_time)}</td>
-          <td style="padding:8px 4px; text-align:right;">${formatBytes(s.size)}</td>
-          <td style="padding:8px 4px;">${locationCell(loc)}</td>
-          <td style="padding:8px 4px; text-align:right;">
-            <button class="btn btn-sm" data-action="restore-qdrant" data-name="${escape(s.name)}" style="padding:4px 10px; margin-right:4px;">Restore</button>
-            <button class="btn btn-sm" data-action="delete-qdrant" data-name="${escape(s.name)}" style="padding:4px 10px; background:#dc3545; color:#fff;">Delete</button>
-          </td>
-        </tr>
-      `;
-      }).join('');
+      renderInventoryEvidence('qdrantEvidence', evidence);
+      inventories.qdrant = { items: snapshots, page: 1 };
+      renderInventoryPage('qdrant');
     } catch (err) {
-      list.innerHTML = `<tr><td colspan="5" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
+      list.innerHTML = `<tr><td colspan="4" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
       $('qdrantStatus').textContent = 'unavailable';
     }
   }
@@ -157,20 +268,10 @@
     }
   }
 
-  async function restoreQdrantBackup(name) {
-    if (!confirm(`Restore Qdrant collection from "${name}"?\n\nThis will REPLACE all vectors in the collection.`)) return;
-    try {
-      await jsonFetch(`/api/operations/qdrant/restore/${encodeURIComponent(name)}?confirm=true`, { method: 'POST' });
-      showToast(`Restored from ${name}`, 'success');
-    } catch (err) {
-      showToast(`Restore failed: ${err.message}`, 'error');
-    }
-  }
-
   async function deleteQdrantBackup(name) {
-    if (!confirm(`Delete snapshot "${name}"?\nThis cannot be undone.`)) return;
+    if (!await typedConfirmation('DELETE', name, `Delete Qdrant snapshot “${name}”? This cannot be undone.`)) return;
     try {
-      await jsonFetch(`/api/operations/qdrant/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      await jsonFetch(`/api/operations/qdrant/backups/${encodeURIComponent(name)}`, { method: 'DELETE', headers: confirmationHeaders('DELETE', name) });
       showToast(`Deleted ${name}`, 'success');
       await loadQdrantBackups();
     } catch (err) {
@@ -181,28 +282,15 @@
   // ---------- Config ----------
   async function loadConfigBackups() {
     const list = $('configBackupsList');
-    list.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>';
+    list.innerHTML = '<tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>';
     try {
-      const { backups = [], root } = await jsonFetch('/api/operations/config/backups');
-      $('configRoot').textContent = root || '—';
+      const { backups = [], evidence } = await jsonFetch('/api/operations/config/backups');
       $('configStatus').textContent = `${backups.length} backup${backups.length === 1 ? '' : 's'}`;
-      if (!backups.length) {
-        list.innerHTML = '<tr><td colspan="5" style="padding:16px; text-align:center; color:#888;">No config backups yet.</td></tr>';
-        return;
-      }
-      list.innerHTML = backups.map((b) => `
-        <tr style="border-bottom:1px solid var(--border, #2a3145);">
-          <td style="padding:8px 4px;"><code>${escape(b.name)}</code></td>
-          <td style="padding:8px 4px;">${formatDate(b.date)}</td>
-          <td style="padding:8px 4px; text-align:right;">${formatBytes(b.size)}</td>
-          <td style="padding:8px 4px;">${locationCell(b.path)}</td>
-          <td style="padding:8px 4px; text-align:right;">
-            <button class="btn btn-sm" data-action="delete-config" data-name="${escape(b.name)}" style="padding:4px 10px; background:#dc3545; color:#fff;">Delete</button>
-          </td>
-        </tr>
-      `).join('');
+      renderInventoryEvidence('configEvidence', evidence);
+      inventories.config = { items: backups, page: 1 };
+      renderInventoryPage('config');
     } catch (err) {
-      list.innerHTML = `<tr><td colspan="5" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
+      list.innerHTML = `<tr><td colspan="4" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
     }
   }
 
@@ -212,8 +300,7 @@
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running…';
     try {
       const { backup } = await jsonFetch('/api/operations/config/backup', { method: 'POST' });
-      const includes = (backup.includes || []).join(', ');
-      showToast(`Config backup created: ${backup.name} (${includes})`, 'success');
+      showToast(`Config backup created: ${backup.name} (${backup.sourceCount || 0} supported sources)`, 'success');
       await loadConfigBackups();
     } catch (err) {
       showToast(`Config backup failed: ${err.message}`, 'error');
@@ -224,9 +311,9 @@
   }
 
   async function deleteConfigBackup(name) {
-    if (!confirm(`Delete config backup "${name}"?\nThis cannot be undone.`)) return;
+    if (!await typedConfirmation('DELETE', name, `Delete configuration backup “${name}”? This cannot be undone.`)) return;
     try {
-      await jsonFetch(`/api/operations/config/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      await jsonFetch(`/api/operations/config/backups/${encodeURIComponent(name)}`, { method: 'DELETE', headers: confirmationHeaders('DELETE', name) });
       showToast(`Deleted ${name}`, 'success');
       await loadConfigBackups();
     } catch (err) {
@@ -235,22 +322,21 @@
   }
 
   // ---------- Settings ----------
-  function maskUri(uri) {
-    if (!uri) return '—';
-    // Hide credentials if present in URI (user:pass@host)
-    return uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:***@');
-  }
-
   async function loadConfig() {
     try {
       const { config } = await jsonFetch('/api/operations/backup/config');
-      $('cfgBackupDir').textContent = config.backupDir;
-      $('cfgBackupDirSrc').textContent = `from ${config.backupDirSource}`;
-      $('cfgQdrantDir').textContent = config.qdrantLocalDir;
+      $('cfgStorage').textContent = 'Persistent recovery storage';
+      $('cfgStorageLifecycle').textContent = config.storage?.lifecycle === 'preserved-by-ordinary-down'
+        ? 'Preserved by ordinary stop/down'
+        : 'Lifecycle unavailable';
+      $('cfgStorageExport').textContent = config.storage?.hostLossProtection === 'separate-export-required'
+        ? 'Separate export required for host-loss protection'
+        : 'Export policy unavailable';
       $('cfgRetentionDays').value = config.retentionDays;
       $('cfgRetentionSrc').textContent = `from ${config.retentionDaysSource}`;
-      $('cfgMongoUri').textContent = maskUri(config.mongoUri);
-      $('cfgRagUrl').textContent = config.ragUrl;
+      $('cfgConfigScope').textContent = `${config.configBackup?.sourceCount || 0} supported secret-free product sources`;
+      $('cfgRestorePolicy').textContent = config.restorePolicy?.message || 'Restore policy unavailable';
+      renderPolicyEvidence(config);
     } catch (err) {
       showToast(`Failed to load settings: ${err.message}`, 'error');
     }
@@ -287,9 +373,10 @@
     if (!action) return;
     const name = action.getAttribute('data-name');
     switch (action.getAttribute('data-action')) {
-      case 'restore-mongo': return restoreMongoBackup(name);
+      case 'page-inventory':
+        inventories[action.dataset.kind].page = Number(action.dataset.page);
+        return renderInventoryPage(action.dataset.kind);
       case 'delete-mongo': return deleteMongoBackup(name);
-      case 'restore-qdrant': return restoreQdrantBackup(name);
       case 'delete-qdrant': return deleteQdrantBackup(name);
       case 'delete-config': return deleteConfigBackup(name);
     }
@@ -303,6 +390,17 @@
     $('configBackupBtn').addEventListener('click', createConfigBackup);
     $('configRefreshBtn').addEventListener('click', loadConfigBackups);
     $('cfgSaveBtn').addEventListener('click', saveConfig);
+    $('backupConfirmInput').addEventListener('input', (event) => {
+      const expected = $('backupConfirmExpected').textContent;
+      $('backupConfirmSubmit').disabled = event.target.value !== expected;
+      $('backupConfirmError').textContent = event.target.value && event.target.value !== expected ? 'Confirmation does not match.' : '';
+    });
+    $('backupConfirmForm').addEventListener('submit', (event) => {
+      event.preventDefault();
+      finishConfirmation($('backupConfirmInput').value === $('backupConfirmExpected').textContent);
+    });
+    $('backupConfirmCancel').addEventListener('click', () => finishConfirmation(false));
+    $('backupConfirmDialog').addEventListener('cancel', (event) => { event.preventDefault(); finishConfirmation(false); });
     loadConfig();
     loadMongoBackups();
     loadQdrantBackups();

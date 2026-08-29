@@ -12,9 +12,32 @@
     return document.getElementById(id)?.textContent.trim() || '';
   }
 
+  function parseCompactNumber(value) {
+    var match = String(value || '')
+      .trim()
+      .match(/-?[\d,.]+\s*[kmb]?/i);
+    if (!match) return null;
+
+    var compact = match[0].replace(/,/g, '').replace(/\s+/g, '');
+    var suffix = compact.slice(-1).toLowerCase();
+    var multiplier = { k: 1e3, m: 1e6, b: 1e9 }[suffix] || 1;
+    var numericText = multiplier === 1 ? compact : compact.slice(0, -1);
+    var parsed = Number(numericText);
+    return Number.isFinite(parsed) ? parsed * multiplier : null;
+  }
+
   function number(id) {
-    var match = text(id).match(/-?[\d,.]+/);
-    return match ? Number(match[0].replace(/,/g, '')) : null;
+    return parseCompactNumber(text(id));
+  }
+
+  function formatCount(value) {
+    return Number.isFinite(value) ? value.toLocaleString('en-US') : '—';
+  }
+
+  function observedLabel(value) {
+    var label = String(value || '').trim();
+    if (!label || /^(?:—|--|n\/?a|unknown|loading…?)$/i.test(label)) return null;
+    return label;
   }
 
   function setStatus(state, label, detail, icon) {
@@ -30,27 +53,27 @@
     var errorRate = text('infErrorRate');
     var conversations = number('totalConversations');
     var messages = number('totalMessages');
-    var ragUsage = text('ragUsage');
+    var ragUsage = observedLabel(text('ragUsage'));
     var documents = number('ragTotalDocs');
     var windowLabel = document.querySelector('#infWindow option:checked')?.textContent.toLowerCase() || 'recent window';
 
     if (calls == null || errors == null) {
       setStatus('unknown', 'Activity is still being observed', 'Refresh if the recent inference summary does not appear.', 'fa-circle-question');
     } else if (errors > 0) {
-      setStatus('attention', 'Inference needs review', errors + ' failed call' + (errors === 1 ? '' : 's') + ' · ' + errorRate + ' error rate · ' + windowLabel, 'fa-circle-info');
+      setStatus('attention', 'Inference needs review', formatCount(errors) + ' failed call' + (errors === 1 ? '' : 's') + ' · ' + errorRate + ' error rate · ' + windowLabel, 'fa-circle-info');
     } else {
-      setStatus('ready', 'Inference is healthy', calls + ' call' + (calls === 1 ? '' : 's') + ' · no failures · ' + windowLabel, 'fa-circle-check');
+      setStatus('ready', 'Inference is healthy', formatCount(calls) + ' call' + (calls === 1 ? '' : 's') + ' · no failures · ' + windowLabel, 'fa-circle-check');
     }
 
     document.getElementById('analytics-inference-detail').textContent = calls == null
       ? 'Calls and reliability are not observed yet'
-      : calls + ' call' + (calls === 1 ? '' : 's') + ' · ' + (errors || 0) + ' failed';
+      : formatCount(calls) + ' call' + (calls === 1 ? '' : 's') + ' · ' + formatCount(errors || 0) + ' failed · ' + windowLabel;
     document.getElementById('analytics-chat-detail').textContent = conversations == null
       ? 'Conversation activity is not observed yet'
-      : conversations + ' conversation' + (conversations === 1 ? '' : 's') + ' · ' + (messages || 0) + ' messages';
+      : formatCount(conversations) + ' conversation' + (conversations === 1 ? '' : 's') + ' · ' + formatCount(messages || 0) + ' messages';
     document.getElementById('analytics-knowledge-detail').textContent = documents == null
-      ? (ragUsage || 'Knowledge usage is not observed yet')
-      : documents + ' source' + (documents === 1 ? '' : 's') + ' · ' + (ragUsage || 'usage not observed');
+      ? (ragUsage ? ragUsage + ' of conversations used knowledge · ' + windowLabel : 'Knowledge usage is not observed yet')
+      : formatCount(documents) + ' source' + (documents === 1 ? '' : 's') + ' · ' + (ragUsage ? ragUsage + ' of conversations used knowledge' : 'usage not observed') + ' · ' + windowLabel;
   }
 
   function syncCockpitAccessibility() {
@@ -79,7 +102,7 @@
     window.setTimeout(refreshSummary, 900);
   }
 
-  document.addEventListener('DOMContentLoaded', function () {
+  if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', function () {
     cockpit = document.getElementById('analytics-cockpit');
     surface = cockpit.querySelector('.analytics-cockpit-surface');
     status = document.getElementById('analytics-experience-status');
@@ -99,4 +122,11 @@
     syncCockpitAccessibility();
     refreshSummary();
   });
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      parseCompactNumber: parseCompactNumber,
+      observedLabel: observedLabel
+    };
+  }
 })();

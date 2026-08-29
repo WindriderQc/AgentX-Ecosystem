@@ -372,6 +372,12 @@ describe('clusterLiveService', () => {
     const result = await clusterLiveService.getLiveState();
     expect(result.hosts).toBeDefined();
     expect(result.polledAt).toBeDefined();
+    expect(result.evidence).toEqual({
+      authority: 'agentx.cluster-schedule-live-detail',
+      scope: 'loaded-model-and-vram-detail',
+      observedAt: result.polledAt,
+      headlineAuthority: false
+    });
     // At least one host should be online (from test env vars)
     const online = result.hosts.filter(h => h.status === 'online');
     expect(online.length).toBeGreaterThanOrEqual(1);

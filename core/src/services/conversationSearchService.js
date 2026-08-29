@@ -12,6 +12,7 @@
 
 const Conversation = require('../../models/Conversation');
 const logger = require('../../config/logger');
+const { withPlaygroundHistoryFilter } = require('./conversationSurfacePolicy');
 
 /**
  * Search conversations with advanced filtering and pagination
@@ -229,10 +230,10 @@ function buildMatchStage(filters) {
     tags
   } = filters;
 
-  const match = {
+  const match = withPlaygroundHistoryFilter({
     userId,
     'lifecycle.status': { $ne: 'archived' }
-  };
+  });
 
   // Model filter (multiple models - OR logic)
   if (models && models.length > 0) {

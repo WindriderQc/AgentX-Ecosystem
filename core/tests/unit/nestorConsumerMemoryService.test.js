@@ -54,9 +54,17 @@ describe('Nestor consumer memory adapters', () => {
       if (source === 'agentx') throw new Error('offline');
       return { source, available: true };
     });
-    mockGetRagStatus.mockResolvedValue({ healthy: true, documentCount: 4 });
+    mockGetRagStatus.mockResolvedValue({
+      healthy: true,
+      documentCount: 4,
+      vectorStore: { healthy: true, url: 'http://private-rag:6333' },
+    });
     const result = await getMemoryStatus(['agentx', 'rag']);
+    expect(new Date(result.generatedAt).toISOString()).toBe(result.generatedAt);
+    expect(result.readOnly).toBe(true);
     expect(result.sources.rag.available).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('http://private-rag:6333');
+    expect(result.sources.rag.vectorStore).not.toHaveProperty('url');
     expect(result.sources.agentx.available).toBe(false);
     expect(result.warnings[0]).toEqual(expect.objectContaining({ source: 'agentx' }));
   });
