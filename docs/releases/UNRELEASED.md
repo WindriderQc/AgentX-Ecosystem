@@ -114,6 +114,9 @@ v0.1.1.
   cross-site mutation rejection, local-only standalone listeners, and narrowly
   scoped machine credentials. Compose enables internal/proxy trust only inside
   its loopback-published product topology.
+- Product regression evidence now covers the deployment-owned remote operator
+  UI host through an exact HTTPS same-origin reverse-proxy request while proving
+  that the identical allowlist never admits cross-site browser traffic.
 - Benchmark prompt synchronization, host/judge refresh, and batch repair are
   explicit protected actions. Their GET projections no longer seed, probe with
   inference, emit events, or persist reconciliation writes.
