@@ -6,8 +6,10 @@
 (function () {
   'use strict';
 
+  var documentContext = window.RAGDocumentContext;
   var HISTORY_KEY = 'rag-ingest-history';
   var HISTORY_MAX = 20;
+  var MAX_TEXT_LENGTH = 2_000_000;
   var FILE_WARN_SIZE = 5 * 1024 * 1024;   // 5MB
   var FILE_MAX_SIZE = 50 * 1024 * 1024;    // 50MB
   var ALLOWED_EXTS = ['.txt', '.md', '.json', '.csv'];
@@ -57,7 +59,7 @@
 
   function hasDocumentText() {
     var text = activeTab === 'paste' ? pasteArea.value : fileText;
-    return !!(text && text.trim());
+    return !!(text && text.trim()) && text.length <= MAX_TEXT_LENGTH;
   }
 
   function updateIngestAvailability() {
@@ -101,12 +103,15 @@
   pasteArea.addEventListener('input', function () {
     charCount.textContent = pasteArea.value.length;
     updateIngestAvailability();
+    var textTooLong = pasteArea.value.length > MAX_TEXT_LENGTH;
     setIngestStatus(
-      pasteArea.value.trim() ? 'ok' : 'loading',
-      pasteArea.value.trim() ? 'Document text ready' : 'Waiting for pasted text',
-      pasteArea.value.trim()
-        ? pasteArea.value.length.toLocaleString() + ' characters ready to add.'
-        : 'Paste a document to continue.'
+      textTooLong ? 'error' : (pasteArea.value.trim() ? 'ok' : 'loading'),
+      textTooLong ? 'Document text is too long' : (pasteArea.value.trim() ? 'Document text ready' : 'Waiting for pasted text'),
+      textTooLong
+        ? 'Document text must be ' + MAX_TEXT_LENGTH.toLocaleString() + ' characters or fewer.'
+        : (pasteArea.value.trim()
+          ? pasteArea.value.length.toLocaleString() + ' characters ready to add.'
+          : 'Paste a document to continue.')
     );
   });
 
@@ -158,7 +163,16 @@
     var reader = new FileReader();
     setIngestStatus('loading', 'Reading file', file.name + ' is being read locally before ingestion.');
     reader.onload = function (e) {
-      fileText = e.target.result;
+      var loadedText = typeof e.target.result === 'string' ? e.target.result : '';
+      if (loadedText.length > MAX_TEXT_LENGTH) {
+        fileWarning.textContent = 'File text is too long (max ' + MAX_TEXT_LENGTH.toLocaleString() + ' characters). Please choose a smaller file.';
+        fileWarning.hidden = false;
+        fileText = null;
+        updateIngestAvailability();
+        setIngestStatus('error', 'File text is too long', 'Choose a file with ' + MAX_TEXT_LENGTH.toLocaleString() + ' characters or fewer.');
+        return;
+      }
+      fileText = loadedText;
       updateIngestAvailability();
       setIngestStatus(
         'ok',
@@ -213,6 +227,12 @@
       showResult(false, 'No text to ingest. Paste text or upload a file first.');
       return;
     }
+    if (text.length > MAX_TEXT_LENGTH) {
+      var maxTextMessage = 'Document text must be ' + MAX_TEXT_LENGTH.toLocaleString() + ' characters or fewer.';
+      setIngestStatus('error', 'Document text is too long', maxTextMessage);
+      showResult(false, maxTextMessage);
+      return;
+    }
 
     setIngestStatus('loading', 'Validating ingest request', 'Checking metadata, chunk size, and chunk overlap before sending to RAG.');
 
@@ -221,18 +241,24 @@
     var tagsRaw = metaTags.value.trim();
     var tags = tagsRaw ? tagsRaw.split(',').map(function (t) { return t.trim(); }).filter(Boolean) : undefined;
     var documentId = metaDocId.value.trim() || undefined;
-    var chunkSize = parseInt(chunkSizeEl.value, 10);
-    var chunkOverlap = parseInt(chunkOverlapEl.value, 10);
+    var chunkSize = Number(chunkSizeEl.value);
+    var chunkOverlap = Number(chunkOverlapEl.value);
 
     // Validate chunk params
-    if (isNaN(chunkSize) || chunkSize < 100 || chunkSize > 5000) {
+    if (!Number.isInteger(chunkSize) || chunkSize < 100 || chunkSize > 5000) {
       setIngestStatus('error', 'Chunk size invalid', 'Chunk size must be between 100 and 5000.');
       showResult(false, 'Chunk size must be between 100 and 5000.');
       return;
     }
-    if (isNaN(chunkOverlap) || chunkOverlap < 0 || chunkOverlap > 500) {
+    if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0 || chunkOverlap > 500) {
       setIngestStatus('error', 'Chunk overlap invalid', 'Chunk overlap must be between 0 and 500.');
       showResult(false, 'Chunk overlap must be between 0 and 500.');
+      return;
+    }
+    if (chunkOverlap > Math.floor(chunkSize / 2)) {
+      var overlapMessage = 'Chunk overlap must not exceed half the chunk size (' + Math.floor(chunkSize / 2) + ').';
+      setIngestStatus('error', 'Chunk overlap invalid', overlapMessage);
+      showResult(false, overlapMessage);
       return;
     }
 
@@ -253,18 +279,17 @@
 
       var res = await RAG.ingestDocument(params);
       var d = res.data;
-      setIngestStatus(
-        'ok',
-        'Knowledge added',
-        'Your source is searchable in ' + d.chunkCount + ' passage' + (d.chunkCount === 1 ? '' : 's') + '.'
-      );
-      showResult(true, null, d);
+      var alreadyIndexed = d.unchanged === true;
+      setIngestStatus('ok', alreadyIndexed ? 'Already indexed' : 'Knowledge added', alreadyIndexed
+        ? 'This exact source and content was already searchable, so no duplicate was added.'
+        : 'Your source is searchable in ' + d.chunkCount + ' passage' + (d.chunkCount === 1 ? '' : 's') + '.');
+      showResult(true, null, d, source || 'api');
       addToHistory({
         timestamp: new Date().toISOString(),
         source: source || 'api',
         documentId: d.documentId,
         chunkCount: d.chunkCount,
-        status: d.status || 'ingested'
+        status: alreadyIndexed ? 'unchanged' : (d.status || 'ingested')
       });
     } catch (err) {
       var detail = err.detail ? ' \u2014 ' + err.detail : '';
@@ -288,15 +313,19 @@
 
   // ── Result display ─────────────────────────────────────
 
-  function showResult(success, message, data) {
+  function showResult(success, message, data, source) {
     resultArea.hidden = false;
     if (success && data) {
+      var alreadyIndexed = data.unchanged === true;
+      var sourceHref = documentContext
+        ? documentContext.documentsHref({ docId: data.documentId, source: source })
+        : '/documents';
       resultArea.className = 'result-success';
       resultArea.innerHTML =
-        '<div class="result-callout"><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span><strong>Knowledge added</strong>' +
+        '<div class="result-callout"><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span><strong>' + (alreadyIndexed ? 'Already indexed' : 'Knowledge added') + '</strong>' +
         '<small><span class="mono">' + escHtml(data.documentId) + '</span> · ' + data.chunkCount + ' searchable passage' + (data.chunkCount === 1 ? '' : 's') + '</small></span></div>' +
         '<div class="result-actions"><a class="btn btn-primary" href="/search">Ask about it</a>' +
-        '<a class="btn btn-secondary" href="/documents?docId=' + encodeURIComponent(data.documentId) + '">View source</a></div>';
+        '<a class="btn btn-secondary" href="' + escHtml(sourceHref) + '">View source</a></div>';
     } else {
       resultArea.className = 'result-error';
       resultArea.innerHTML = '<strong>Ingestion failed</strong><br>' + escHtml(message);

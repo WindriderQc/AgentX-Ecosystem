@@ -7,13 +7,32 @@ const {
   getPublicUrls,
 } = require('../shared/browserPublicUrls');
 const { currentAgentXProfile } = require('../shared/agentxRuntimeProfile');
+const { createServiceIdentity } = require('../shared/serviceIdentity');
+const { sanitizePublicProjection } = require('./src/utils/publicProjection');
+const { registerLocalStyleVendorAssets } = require('../shared/localStyleVendorAssets');
+const { createApiHostGuard } = require('../shared/apiHostGuard');
+const {
+  createCoreOutboundClient,
+  createCorePublicUrlsConfigLoader,
+} = require('./src/clients/coreOutboundClient');
+
+const SERVICE_VERSION = require('./package.json').version || '0.0.0';
 
 const app = express();
 app.locals.publicUrls = getPublicUrls();
 app.locals.agentxProfile = currentAgentXProfile();
+app.locals.coreOutboundClient = createCoreOutboundClient();
 const resolvePublicUrls = createCorePublicUrlsResolver({
   enabled: process.env.NODE_ENV !== 'test',
+  loadCoreConfig: createCorePublicUrlsConfigLoader({
+    coreOutboundClient: app.locals.coreOutboundClient,
+  }),
 });
+app.use(createApiHostGuard({
+  serviceHosts: ['rag', 'agentx-rag'],
+  publicUrlEnv: ['RAG_PUBLIC_URL'],
+  protectMutations: true,
+}));
 
 // EJS templating — shared layouts from core, local pages
 app.set('view engine', 'ejs');
@@ -40,24 +59,18 @@ app.use(cors({
 // Shared browser controls also consume Core's unified model catalog. Keep the
 // request same-origin on standalone RAG deployments.
 app.get('/api/models/all', async (req, res) => {
-  const coreUrl = String(
-    process.env.CORE_URL || process.env.CORE_PROXY_URL || 'http://localhost:3080'
-  ).replace(/\/+$/, '');
   const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
   try {
-    const headers = { Accept: req.get('accept') || 'application/json' };
-    if (process.env.AGENTX_OPERATOR_TOKEN) {
-      headers['X-AgentX-Operator-Token'] = process.env.AGENTX_OPERATOR_TOKEN;
-    }
-    const response = await fetch(`${coreUrl}/api/models/all${query}`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
+    const response = await req.app.locals.coreOutboundClient.getModelCatalog({
+      accept: req.get('accept') || 'application/json',
+      operatorToken: process.env.AGENTX_OPERATOR_TOKEN,
+      query,
     });
     for (const header of ['content-type', 'cache-control', 'x-require-profiled-models']) {
       const value = response.headers.get(header);
       if (value) res.set(header, value);
     }
-    return res.status(response.status).send(Buffer.from(await response.arrayBuffer()));
+    return res.status(response.status).send(response.body);
   } catch (error) {
     return res.status(502).json({
       status: 'error',
@@ -68,6 +81,10 @@ app.get('/api/models/all', async (req, res) => {
 });
 
 app.use(express.json({ limit: '10mb' }));
+
+// Fonts and icons are pinned production dependencies exposed through an exact
+// route allowlist; node_modules is never mounted as a public directory.
+registerLocalStyleVendorAssets(app, path.join(__dirname, 'node_modules'));
 
 app.get('/favicon.ico', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'favicon.svg'));
@@ -86,10 +103,12 @@ const sharedPublicRoot = path.join(__dirname, '..', 'core', 'public');
 const sharedAssets = {
   '/dist/shared-tokens.css': ['dist', 'shared-tokens.css'],
   '/dist/shared-utils.js': ['dist', 'shared-utils.js'],
+  '/css/local-fonts.css': ['css', 'local-fonts.css'],
   '/css/platform-chrome.css': ['css', 'platform-chrome.css'],
   '/js/utils/polling-controller.js': ['js', 'utils', 'polling-controller.js'],
   '/js/utils/polling-controller-global.js': ['js', 'utils', 'polling-controller-global.js'],
   '/js/utils/shared.js': ['js', 'utils', 'shared.js'],
+  '/js/utils/typed-confirmation.js': ['js', 'utils', 'typed-confirmation.js'],
   '/js/utils/shortcut-hints.js': ['js', 'utils', 'shortcut-hints.js'],
   '/js/utils/shortcuts-modal.js': ['js', 'utils', 'shortcuts-modal.js'],
   '/js/utils/toast.js': ['js', 'utils', 'toast.js']
@@ -134,12 +153,12 @@ app.get('/', (req, res) => {
 app.get('/documents', (req, res) => {
   res.render('layouts/main', {
     pageView: documentsPageView,
-    title: 'Agent X Knowledge — Your Sources',
+    title: 'Agent X Knowledge — Indexed Documents',
     service: 'rag',
-    activePage: 'rag',
+    activePage: 'rag-documents',
     ragWorkflowStep: 'documents',
     headCss: ragHeadCss,
-    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/documents.js"></script>'
+    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/document-context.js"></script>\n<script src="/js/documents.js"></script>'
   });
 });
 
@@ -148,10 +167,10 @@ app.get('/search', (req, res) => {
     pageView: searchPageView,
     title: 'Agent X Knowledge — Ask Your Knowledge',
     service: 'rag',
-    activePage: 'rag',
+    activePage: 'rag-search',
     ragWorkflowStep: 'search',
     headCss: ragHeadCss,
-    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/search.js"></script>'
+    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/document-context.js"></script>\n<script src="/js/search.js"></script>'
   });
 });
 
@@ -160,10 +179,10 @@ app.get('/upload', (req, res) => {
     pageView: uploadPageView,
     title: 'Agent X Knowledge — Add Knowledge',
     service: 'rag',
-    activePage: 'rag',
+    activePage: 'rag-upload',
     ragWorkflowStep: 'upload',
     headCss: ragHeadCss,
-    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/upload.js"></script>'
+    footerJs: '<script src="/js/api.js"></script>\n<script src="/js/document-context.js"></script>\n<script src="/js/upload.js"></script>'
   });
 });
 
@@ -172,7 +191,7 @@ app.get('/maintenance', (req, res) => {
     pageView: maintenancePageView,
     title: 'Agent X Knowledge — Maintenance',
     service: 'rag',
-    activePage: 'rag',
+    activePage: 'rag-maintenance',
     ragWorkflowStep: 'maintenance',
     headCss: ragHeadCss,
     footerJs: '<script src="/js/api.js"></script>\n<script src="/js/maintenance.js"></script>'
@@ -205,10 +224,10 @@ app.get('/health', async (req, res) => {
   res.status(ready ? 200 : 503).json({
     ok: ready,
     status,
-    service: 'agentx-rag',
+    ...createServiceIdentity({ service: 'agentx-rag', version: SERVICE_VERSION }),
     port: parseInt(process.env.PORT, 10) || 3082,
     db: dbReady ? 'connected' : 'disconnected',
-    vectorStore
+    vectorStore: sanitizePublicProjection(vectorStore)
   });
 });
 
@@ -219,7 +238,11 @@ app.use('/api/rag', (req, res, next) => {
   res.json = function (body) {
     if (body && typeof body === 'object' && req.startTime) {
       const durationMs = Date.now() - req.startTime;
-      body.meta = { ...(body.meta || {}), durationMs };
+      body.meta = {
+        ...(body.meta || {}),
+        durationMs,
+        observedAt: new Date().toISOString()
+      };
     }
     return originalJson(body);
   };

@@ -1,7 +1,14 @@
 const fetchWithTimeout = require('../../utils/fetchWithTimeout');
+const {
+  SERVICE_OUTBOUND_OPERATION_IDS,
+  SERVICE_OUTBOUND_TIMEOUTS,
+  configuredServiceOrigin,
+} = require('../../clients/serviceOutboundClient');
 const logger = require('../../../config/logger');
 
-const EMBEDDING_TIMEOUT = Number(process.env.EMBEDDING_TIMEOUT_MS) || 60000;
+const EMBEDDING_TIMEOUT = SERVICE_OUTBOUND_TIMEOUTS[
+  SERVICE_OUTBOUND_OPERATION_IDS.OLLAMA_EMBED_SINGLE
+];
 
 class OllamaProvider {
   constructor(config = {}) {
@@ -34,12 +41,17 @@ class OllamaProvider {
       return null;
     }
 
-    return /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`;
+    return configuredServiceOrigin(
+      /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`
+    );
   }
 
   _getAttemptHosts(preferredHost = null) {
     if (preferredHost) {
       const normalizedPreferredHost = this._normalizeHost(preferredHost);
+      if (!this.hosts.includes(normalizedPreferredHost)) {
+        throw new Error('preferredHost must be one of the configured Ollama authorities');
+      }
       return [
         normalizedPreferredHost,
         ...this.hosts.filter((host) => host !== normalizedPreferredHost)
@@ -123,7 +135,10 @@ class OllamaProvider {
         model: this.model,
         input: texts,
       }),
-    }, EMBEDDING_TIMEOUT);
+    }, EMBEDDING_TIMEOUT, {
+      expectedOrigins: this.hosts,
+      operationId: SERVICE_OUTBOUND_OPERATION_IDS.OLLAMA_EMBED_BATCH,
+    });
 
     if (response.status === 404) {
       logger.warn('Ollama batch embed endpoint unavailable; falling back to legacy embeddings endpoint', { host });
@@ -171,7 +186,10 @@ class OllamaProvider {
             model: this.model,
             prompt: text,
           }),
-        }, EMBEDDING_TIMEOUT);
+        }, EMBEDDING_TIMEOUT, {
+          expectedOrigins: this.hosts,
+          operationId: SERVICE_OUTBOUND_OPERATION_IDS.OLLAMA_EMBED_SINGLE,
+        });
 
         if (!response.ok) {
           const errorText = await response.text();

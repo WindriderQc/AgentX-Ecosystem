@@ -13,18 +13,63 @@ jest.mock('mammoth', () => ({
 }));
 
 jest.mock('pdf-parse', () => jest.fn());
+jest.mock('../../src/utils/fetchWithTimeout', () => jest.fn());
 
 const fs = require('fs/promises');
+const fetchWithTimeout = require('../../src/utils/fetchWithTimeout');
 
 const {
+  INGEST_API_TIMEOUT_MS,
   IngestWorker,
   buildTags,
+  createIngestApiClient,
   deriveSourceTag,
   describeSkip,
   needsReindex
 } = require('../../src/services/ingestWorker');
 
 describe('ingestWorker utilities', () => {
+  beforeEach(() => fetchWithTimeout.mockReset());
+
+  it('submits API ingestion through the exact bounded worker operation and preserves operator auth', async () => {
+    fetchWithTimeout.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, data: { documentId: 'doc-1' } }),
+    });
+    const ingest = createIngestApiClient({
+      baseUrl: 'http://rag.test:3082',
+      operatorToken: 'operator-token',
+    });
+
+    await expect(ingest({ text: 'hello', source: 'worker' })).resolves.toEqual({
+      documentId: 'doc-1',
+    });
+    expect(fetchWithTimeout).toHaveBeenCalledWith(
+      'http://rag.test:3082/api/rag/ingest',
+      expect.objectContaining({
+        headers: {
+          'Content-Type': 'application/json',
+          'X-AgentX-Operator-Token': 'operator-token',
+        },
+        method: 'POST',
+      }),
+      INGEST_API_TIMEOUT_MS,
+      {
+        expectedOrigins: ['http://rag.test:3082'],
+        operationId: 'rag.ingest-worker.submit',
+      }
+    );
+  });
+
+  it('rejects a configurable ingest path escape before dispatch', () => {
+    expect(() => createIngestApiClient({
+      baseUrl: 'http://rag.test:3082',
+      ingestPath: '//other.test/ingest',
+    })).toThrow('supports only the product ingest endpoint');
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
   it('derives a stable source tag and tags from the first folder beneath the configured root', () => {
     const filePath = '/data/imports/finance-docs/2026/plan.md';
     const roots = ['/data/imports', '/external/imports'];
@@ -201,6 +246,46 @@ describe('IngestWorker', () => {
       expect.objectContaining({
         $set: expect.objectContaining({
           indexed_status: 'updated'
+        })
+      })
+    );
+  });
+
+  it('records the canonical document ID returned by the ingestion boundary', async () => {
+    const record = {
+      _id: 'doc-duplicate',
+      path: '/data/imports/docs/copy.md',
+      ext: 'md',
+      size: 64,
+      mtime: 1710001000
+    };
+    fs.readFile.mockResolvedValue('Same exact content');
+    const worker = new IngestWorker({
+      db,
+      roots: ['/data/imports/docs'],
+      ingestDocument: jest.fn().mockResolvedValue({
+        documentId: '/data/imports/docs/original.md',
+        requestedDocumentId: record.path,
+        chunkCount: 1,
+        unchanged: true,
+        deduplicated: true
+      }),
+      batchDelayMs: 0
+    });
+
+    const result = await worker.processRecord(record);
+
+    expect(result).toMatchObject({
+      status: 'unchanged',
+      documentId: '/data/imports/docs/original.md',
+      deduplicated: true
+    });
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { _id: 'doc-duplicate' },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          indexed_status: 'unchanged',
+          indexed_document_id: '/data/imports/docs/original.md'
         })
       })
     );

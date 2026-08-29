@@ -1,21 +1,21 @@
 /**
- * Snapshot Routes — thin proxy to Qdrant's snapshot API.
- *
- * POST   /snapshots              — Create a new snapshot of the collection
- * GET    /snapshots              — List all snapshots for the collection
- * DELETE /snapshots/:name        — Delete a named snapshot
- * POST   /snapshots/:name/restore — Recover the collection from a named snapshot
+ * Recovery snapshot routes. These are an internal Core↔RAG contract, not a
+ * public Qdrant topology API. Every route requires the ephemeral recovery
+ * token supplied only to Core and RAG by the launcher.
  */
 
 const express = require('express');
+const { pipeline } = require('stream/promises');
 const router = express.Router();
 const logger = require('../config/logger');
 const fetchWithTimeout = require('../src/utils/fetchWithTimeout');
+const { requireRecoveryToken } = require('../src/middleware/recoveryAuth');
 const { sendOk, sendError } = require('../src/utils/response');
 
 const QDRANT_URL = process.env.QDRANT_URL || 'http://localhost:6333';
 const QDRANT_COLLECTION = process.env.QDRANT_COLLECTION || 'agentx_embeddings';
 const SNAPSHOT_TIMEOUT = Number(process.env.QDRANT_SNAPSHOT_TIMEOUT_MS) || 120000;
+const OFFLINE_RESTORE_REQUIRED = 'OFFLINE_RESTORE_REQUIRED';
 
 const baseUrl = () => `${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots`;
 
@@ -27,96 +27,145 @@ function isSafeName(name) {
     && /^[a-zA-Z0-9._-]+$/.test(name);
 }
 
-// POST /snapshots ────────────────────────────────────────
+function restoreRehearsalEnabled(env = process.env) {
+  return String(env.AGENTX_RESTORE_REHEARSAL_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
+function projectSnapshot(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const projected = {};
+  if (isSafeName(source.name)) projected.name = source.name;
+  const creationTime = new Date(source.creation_time).getTime();
+  if (Number.isFinite(creationTime)) projected.creation_time = new Date(creationTime).toISOString();
+  const size = Number(source.size);
+  if (Number.isFinite(size) && size >= 0) projected.size = size;
+  if (typeof source.checksum === 'string' && /^[a-fA-F0-9]{8,128}$/.test(source.checksum)) {
+    projected.checksum = source.checksum;
+  }
+  return projected;
+}
+
+router.use(requireRecoveryToken);
+
 router.post('/snapshots', async (req, res) => {
   try {
     const qres = await fetchWithTimeout(baseUrl(), { method: 'POST' }, SNAPSHOT_TIMEOUT);
     const body = await qres.json().catch(() => ({}));
     if (!qres.ok) {
-      logger.error('Qdrant snapshot create failed', { status: qres.status, body });
-      return sendError(res, 502, 'Qdrant snapshot creation failed', JSON.stringify(body));
+      logger.error('Qdrant snapshot create failed', { status: qres.status });
+      return sendError(res, 502, 'Qdrant snapshot creation failed');
     }
-    logger.info('Qdrant snapshot created', { snapshot: body?.result?.name });
-    const result = body.result || {};
-    const url = result.name
-      ? `${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots/${encodeURIComponent(result.name)}`
-      : null;
-    return sendOk(res, { ...result, url }, { collection: QDRANT_COLLECTION });
+    const result = projectSnapshot(body.result);
+    logger.info('Qdrant snapshot created', { snapshot: result.name });
+    return sendOk(res, result, { storage: 'qdrant-snapshot-store' });
   } catch (err) {
     logger.error('Snapshot create error', { error: err.message });
-    return sendError(res, 502, 'Failed to reach Qdrant', err.message);
+    return sendError(res, 502, 'Qdrant snapshot service unavailable');
   }
 });
 
-// GET /snapshots ─────────────────────────────────────────
 router.get('/snapshots', async (req, res) => {
   try {
     const qres = await fetchWithTimeout(baseUrl(), {}, SNAPSHOT_TIMEOUT);
     const body = await qres.json().catch(() => ({}));
-    if (!qres.ok) {
-      return sendError(res, 502, 'Qdrant snapshot list failed', JSON.stringify(body));
-    }
-    return sendOk(res, body.result || [], {
-      collection: QDRANT_COLLECTION,
-      qdrantUrl: QDRANT_URL,
-      root: `${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots`
-    });
+    if (!qres.ok) return sendError(res, 502, 'Qdrant snapshot list failed');
+    const snapshots = Array.isArray(body.result) ? body.result.map(projectSnapshot) : [];
+    return sendOk(res, snapshots, { storage: 'qdrant-snapshot-store' });
   } catch (err) {
     logger.error('Snapshot list error', { error: err.message });
-    return sendError(res, 502, 'Failed to reach Qdrant', err.message);
+    return sendError(res, 502, 'Qdrant snapshot service unavailable');
   }
 });
 
-// DELETE /snapshots/:name ────────────────────────────────
+router.get('/snapshots/:name/download', async (req, res) => {
+  const { name } = req.params;
+  if (!isSafeName(name)) return sendError(res, 400, 'Invalid snapshot name');
+
+  try {
+    const qres = await fetchWithTimeout(`${baseUrl()}/${encodeURIComponent(name)}`, {}, SNAPSHOT_TIMEOUT);
+    if (!qres.ok) {
+      return sendError(res, qres.status === 404 ? 404 : 502, 'Qdrant snapshot download failed');
+    }
+    if (!qres.body || typeof qres.body.pipe !== 'function') {
+      return sendError(res, 502, 'Qdrant snapshot download failed');
+    }
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', `attachment; filename="${name}"`);
+    await pipeline(qres.body, res);
+    return undefined;
+  } catch (err) {
+    logger.error('Snapshot download error', { error: err.message });
+    if (res.headersSent) {
+      if (!res.destroyed) res.destroy(err);
+      return undefined;
+    }
+    return sendError(res, 502, 'Qdrant snapshot service unavailable');
+  }
+});
+
 router.delete('/snapshots/:name', async (req, res) => {
   const { name } = req.params;
-  if (!isSafeName(name)) {
-    return sendError(res, 400, 'Invalid snapshot name');
+  if (!isSafeName(name)) return sendError(res, 400, 'Invalid snapshot name');
+  const expectedConfirmation = `DELETE ${name}`;
+  if (req.get('x-agentx-confirm') !== expectedConfirmation) {
+    return res.status(400).json({
+      ok: false,
+      code: 'CONFIRMATION_REQUIRED',
+      error: 'Type the exact snapshot deletion phrase before retrying this destructive operation',
+      confirmation: { header: 'X-AgentX-Confirm', expected: expectedConfirmation }
+    });
   }
   try {
     const qres = await fetchWithTimeout(`${baseUrl()}/${encodeURIComponent(name)}`, { method: 'DELETE' }, SNAPSHOT_TIMEOUT);
-    const body = await qres.json().catch(() => ({}));
     if (!qres.ok) {
-      return sendError(res, qres.status === 404 ? 404 : 502, 'Qdrant snapshot delete failed', JSON.stringify(body));
+      return sendError(res, qres.status === 404 ? 404 : 502, 'Qdrant snapshot delete failed');
     }
     logger.info('Qdrant snapshot deleted', { snapshot: name });
     return sendOk(res, { name, deleted: true });
   } catch (err) {
     logger.error('Snapshot delete error', { error: err.message });
-    return sendError(res, 502, 'Failed to reach Qdrant', err.message);
+    return sendError(res, 502, 'Qdrant snapshot service unavailable');
   }
 });
 
-// POST /snapshots/:name/restore ──────────────────────────
-// Uses Qdrant's recover-from-URL feature. Qdrant fetches the snapshot from its
-// own HTTP endpoint, which is always reachable to itself.
 router.post('/snapshots/:name/restore', async (req, res) => {
-  const { name } = req.params;
-  if (!isSafeName(name)) {
-    return sendError(res, 400, 'Invalid snapshot name');
+  if (!restoreRehearsalEnabled()) {
+    return res.status(409).json({
+      ok: false,
+      code: OFFLINE_RESTORE_REQUIRED,
+      error: 'Restore requires a controlled offline release rehearsal and is disabled in the running product.'
+    });
   }
 
-  const snapshotUrl = `${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots/${encodeURIComponent(name)}`;
-  const recoverUrl = `${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots/recover`;
+  const { name } = req.params;
+  if (!isSafeName(name)) return sendError(res, 400, 'Invalid snapshot name');
+  const expectedConfirmation = `RESTORE ${name}`;
+  if (req.get('x-agentx-confirm') !== expectedConfirmation) {
+    return res.status(400).json({
+      ok: false,
+      code: 'CONFIRMATION_REQUIRED',
+      error: `Type ${expectedConfirmation} exactly to confirm this destructive operation`
+    });
+  }
 
+  const snapshotUrl = `${baseUrl()}/${encodeURIComponent(name)}`;
+  const recoverUrl = `${baseUrl()}/recover`;
   try {
     const qres = await fetchWithTimeout(recoverUrl, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ location: snapshotUrl, priority: 'snapshot' })
     }, SNAPSHOT_TIMEOUT);
-
-    const body = await qres.json().catch(() => ({}));
-    if (!qres.ok) {
-      logger.error('Qdrant restore failed', { status: qres.status, body });
-      return sendError(res, 502, 'Qdrant restore failed', JSON.stringify(body));
-    }
-    logger.info('Qdrant snapshot restored', { snapshot: name });
-    return sendOk(res, { name, restored: true, result: body.result });
+    if (!qres.ok) return sendError(res, 502, 'Qdrant restore failed');
+    logger.info('Qdrant snapshot restored during controlled rehearsal', { snapshot: name });
+    return sendOk(res, { name, restored: true, mode: 'controlled-rehearsal' });
   } catch (err) {
     logger.error('Snapshot restore error', { error: err.message });
-    return sendError(res, 502, 'Failed to reach Qdrant', err.message);
+    return sendError(res, 502, 'Qdrant snapshot service unavailable');
   }
 });
 
 module.exports = router;
+module.exports.projectSnapshot = projectSnapshot;
+module.exports.restoreRehearsalEnabled = restoreRehearsalEnabled;
+module.exports.OFFLINE_RESTORE_REQUIRED = OFFLINE_RESTORE_REQUIRED;

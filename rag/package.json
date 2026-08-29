@@ -12,6 +12,9 @@
     "test:relevance": "jest --forceExit --detectOpenHandles --runTestsByPath tests/integration/relevance-golden.test.js"
   },
   "dependencies": {
+    "@fontsource-variable/space-grotesk": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fortawesome/fontawesome-free": "6.4.0",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "ejs": "^5.0.1",

@@ -33,6 +33,7 @@ const {
 } = require('../../shared/ingestionPolicy');
 
 const { sendError } = require('../src/utils/response');
+const { sanitizePublicProjection } = require('../src/utils/publicProjection');
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -45,6 +46,19 @@ function classifyRagAvailabilityError(err) {
     return { status: 503, code: 'EMBEDDING_SERVICE_UNAVAILABLE', detail: 'Embedding service (core proxy) is not reachable' };
   }
   return null;
+}
+
+function requireDocumentDeleteConfirmation(req, res, documentId) {
+  const expected = `DELETE ${documentId}`;
+  if (req.body?.confirmation === expected) return true;
+
+  res.status(400).json({
+    ok: false,
+    error: 'CONFIRMATION_REQUIRED',
+    detail: 'Type the exact document deletion phrase before retrying this destructive operation',
+    confirmation: { field: 'confirmation', expected }
+  });
+  return false;
 }
 
 // ── POST /ingest (alias: POST /documents) ────────────────
@@ -201,7 +215,17 @@ router.post('/ingest/batch', async (req, res) => {
           chunkOverlap: doc.chunkOverlap,
           documentId: doc.documentId
         });
-        results.push({ index, documentId: result.documentId, status: 'ok', chunkCount: result.chunkCount });
+        results.push({
+          index,
+          documentId: result.documentId,
+          status: result.unchanged ? 'unchanged' : 'ok',
+          chunkCount: result.chunkCount,
+          ...(result.unchanged ? { unchanged: true } : {}),
+          ...(result.deduplicated ? {
+            deduplicated: true,
+            requestedDocumentId: result.requestedDocumentId
+          } : {})
+        });
         succeeded++;
       } catch (err) {
         // Abort early on availability errors from the first document
@@ -440,6 +464,8 @@ router.delete('/documents/:documentId', async (req, res) => {
   try {
     const { documentId } = req.params;
 
+    if (!requireDocumentDeleteConfirmation(req, res, documentId)) return;
+
     const ragStore = getRagStore();
     const deleted = await ragStore.deleteDocument(documentId);
     if (!deleted) {
@@ -465,9 +491,10 @@ router.post('/cache/clear', (req, res) => {
   }
 });
 
-// ── GET /status ──────────────────────────────────────────
+// ── GET /status + POST /status/refresh ───────────────────
 
-router.get('/status', async (req, res) => {
+async function handleStatus(req, res) {
+  const refreshRequested = req.method === 'POST';
   try {
     const ragStore = getRagStore();
 
@@ -476,7 +503,7 @@ router.get('/status', async (req, res) => {
     try {
       stats = await ragStore.getStats();
     } catch (err) {
-      logger.warn('Status: ragStore.getStats() failed —', err.message);
+      logger.warn('Status: ragStore.getStats() failed', { error: err.message });
     }
 
     // ── Per-dependency health matrix ──
@@ -496,17 +523,14 @@ router.get('/status', async (req, res) => {
       const embStatus = typeof embSvc.getStatusInfo === 'function'
         ? embSvc.getStatusInfo()
         : { provider: embSvc.providerName, model: embSvc.model };
+      if (refreshRequested && typeof embSvc.refreshConnectionStatus === 'function') {
+        await embSvc.refreshConnectionStatus();
+      }
       const cachedEmbedding = typeof embSvc.getCachedConnectionStatus === 'function'
         ? embSvc.getCachedConnectionStatus()
         : null;
 
       if (cachedEmbedding) {
-        if (cachedEmbedding.stale && typeof embSvc.refreshConnectionStatus === 'function') {
-          embSvc.refreshConnectionStatus().catch((refreshErr) => {
-            logger.warn('Background embedding health refresh failed', { error: refreshErr.message });
-          });
-        }
-
         dependencies.embedding = {
           healthy: cachedEmbedding.healthy === true,
           ...embStatus,
@@ -515,17 +539,11 @@ router.get('/status', async (req, res) => {
           ...(cachedEmbedding.healthy === true ? {} : { error: 'Embedding connection test failed' })
         };
       } else {
-        if (typeof embSvc.refreshConnectionStatus === 'function') {
-          embSvc.refreshConnectionStatus().catch((refreshErr) => {
-            logger.warn('Background embedding health refresh failed', { error: refreshErr.message });
-          });
-        }
-
         dependencies.embedding = {
           healthy: false,
           ...embStatus,
-          checking: true,
-          error: 'Checking connection...'
+          evidence: 'unknown',
+          error: 'No embedding connection evidence has been collected.'
         };
       }
     } catch (err) {
@@ -562,12 +580,14 @@ router.get('/status', async (req, res) => {
     // Ready = all deps healthy AND a non-empty corpus → intent:suggesting.
     // Otherwise (deps down or empty corpus) → intent:warning.
     const documentCount = Number(stats.documentCount) || 0;
-    if (healthy && documentCount > 0) {
-      buddyRagEvents.indexReady(`RAG index ready: ${documentCount} documents`);
-    } else if (!healthy) {
-      buddyRagEvents.corpusNotReady('RAG corpus not ready: a dependency is unavailable');
-    } else {
-      buddyRagEvents.corpusNotReady('RAG corpus not ready: no documents ingested yet');
+    if (refreshRequested) {
+      if (healthy && documentCount > 0) {
+        buddyRagEvents.indexReady(`RAG index ready: ${documentCount} documents`);
+      } else if (!healthy) {
+        buddyRagEvents.corpusNotReady('RAG corpus not ready: a dependency is unavailable');
+      } else {
+        buddyRagEvents.corpusNotReady('RAG corpus not ready: no documents ingested yet');
+      }
     }
 
     // Embedding cache stats
@@ -577,9 +597,9 @@ router.get('/status', async (req, res) => {
     res.json({
       ok: true,
       data: {
-        ...stats,
+        ...sanitizePublicProjection(stats),
         cache: cacheStats,
-        dependencies,
+        dependencies: sanitizePublicProjection(dependencies),
         healthy
       }
     });
@@ -587,6 +607,11 @@ router.get('/status', async (req, res) => {
     logger.error('Status error:', err);
     sendError(res, 500, 'Status check failed', err.message);
   }
-});
+}
+
+// GET is observational and never starts embedding inference or emits readiness
+// events. The same-origin/operator-protected POST owns active refresh work.
+router.get('/status', handleStatus);
+router.post('/status/refresh', handleStatus);
 
 module.exports = router;

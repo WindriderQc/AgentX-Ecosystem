@@ -5,7 +5,9 @@ const connectDB = require('./config/db');
 const logger = require('./config/logger');
 
 const PORT = process.env.PORT || 3082;
-const HOST = process.env.HOST || '::';
+// Standalone development is local-only by default. Compose opts into the
+// container interface explicitly and publishes it back to host loopback.
+const HOST = process.env.HOST || '127.0.0.1';
 
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled Promise Rejection', {

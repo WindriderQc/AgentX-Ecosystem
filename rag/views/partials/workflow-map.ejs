@@ -12,7 +12,7 @@
       <a
         class="rag-flow-step <%= currentStep === step.key ? 'is-current' : '' %>"
         href="<%= step.href %>"
-        <%= currentStep === step.key ? 'aria-current="page"' : '' %>
+        <% if (currentStep === step.key) { %>aria-current="page"<% } %>
         data-rag-flow-step="<%= step.key %>"
       >
         <span class="rag-flow-index" aria-hidden="true"><i class="fa-solid <%= step.icon %>"></i></span>
@@ -27,11 +27,11 @@
   <details class="rag-instruments-door" <%= currentStep === 'maintenance' ? 'open' : '' %>>
     <summary><i class="fa-solid fa-sliders" aria-hidden="true"></i> Open instruments</summary>
     <div class="rag-instruments-links">
-      <a href="/" class="<%= currentStep === 'dashboard' ? 'is-current' : '' %>" <%= currentStep === 'dashboard' ? 'aria-current="page"' : '' %>>
+      <a href="/" class="<%= currentStep === 'dashboard' ? 'is-current' : '' %>" <% if (currentStep === 'dashboard') { %>aria-current="page"<% } %>>
         <i class="fa-solid fa-gauge-high" aria-hidden="true"></i>
         <span><strong>Knowledge readiness</strong><small>Health, corpus and embedding route</small></span>
       </a>
-      <a href="/maintenance" class="<%= currentStep === 'maintenance' ? 'is-current' : '' %>" <%= currentStep === 'maintenance' ? 'aria-current="page"' : '' %>>
+      <a href="/maintenance" class="<%= currentStep === 'maintenance' ? 'is-current' : '' %>" <% if (currentStep === 'maintenance') { %>aria-current="page"<% } %>>
         <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>
         <span><strong>Maintenance</strong><small>Reindex, snapshots and migrations</small></span>
       </a>

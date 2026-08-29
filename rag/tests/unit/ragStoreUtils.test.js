@@ -1,4 +1,12 @@
-const { splitIntoChunks, generateDocumentId, hashText, reciprocalRankFusion } = require('../../src/services/ragStoreUtils');
+const {
+  buildDocumentIdentity,
+  splitIntoChunks,
+  generateDocumentId,
+  hashContentIdentity,
+  hashText,
+  normalizeSourceIdentity,
+  reciprocalRankFusion
+} = require('../../src/services/ragStoreUtils');
 
 // ═══════════════════════════════════════════════════════════
 // Existing tests (preserved)
@@ -45,6 +53,41 @@ describe('generateDocumentId', () => {
   it('returns a 32-character hex string (MD5)', () => {
     const id = generateDocumentId('test', '/path');
     expect(id).toMatch(/^[0-9a-f]{32}$/);
+  });
+});
+
+describe('canonical source/content identity', () => {
+  it('normalizes source whitespace and Unicode without folding case', () => {
+    expect(normalizeSourceIdentity('  cafe\u0301.md  ')).toBe('caf\u00e9.md');
+    expect(normalizeSourceIdentity('README.md')).not.toBe(normalizeSourceIdentity('readme.md'));
+  });
+
+  it('keeps the legacy automatic ID and source value while exposing canonical identity', () => {
+    const identity = buildDocumentIdentity(' guide.md ', 'exact content');
+
+    expect(identity.documentId).toBe(generateDocumentId(' guide.md ', 'exact content'));
+    expect(identity.contentHash).toBe(hashContentIdentity('exact content'));
+    expect(identity.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(identity.source).toBe(' guide.md ');
+    expect(identity.sourceIdentity).toBe('source-label:guide.md');
+    expect(identity.sourceIdentityKind).toBe('source_label');
+    expect(identity.identityVersion).toBe('source-content-v1');
+  });
+
+  it('treats an explicit document ID as the stable source identity', () => {
+    const identity = buildDocumentIdentity('guide.md', 'exact content', 'guide:v2');
+
+    expect(identity.documentId).toBe('guide:v2');
+    expect(identity.sourceIdentity).toBe('document-id:guide:v2');
+    expect(identity.sourceIdentityKind).toBe('document_id');
+  });
+
+  it('treats changed extracted text as a distinct revision', () => {
+    const first = buildDocumentIdentity('guide.md', 'version one');
+    const second = buildDocumentIdentity('guide.md', 'version two');
+
+    expect(second.contentHash).not.toBe(first.contentHash);
+    expect(second.documentId).not.toBe(first.documentId);
   });
 });
 

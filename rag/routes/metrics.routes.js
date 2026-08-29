@@ -24,7 +24,7 @@ router.get('/metrics', async (req, res) => {
       totals.documents = stats.documentCount || 0;
       totals.chunks = stats.chunkCount || 0;
     } catch (err) {
-      logger.warn('Metrics: getStats() failed —', err.message);
+      logger.warn('Metrics: getStats() failed', { error: err.message });
     }
 
     // ── Per-source breakdown ──
@@ -43,7 +43,7 @@ router.get('/metrics', async (req, res) => {
       }
       bySource = Array.from(sourceMap.values());
     } catch (err) {
-      logger.warn('Metrics: listDocuments() failed —', err.message);
+      logger.warn('Metrics: listDocuments() failed', { error: err.message });
     }
 
     // ── Last ingest timestamp from RagManifest ──
@@ -57,7 +57,7 @@ router.get('/metrics', async (req, res) => {
         };
       }
     } catch (err) {
-      logger.warn('Metrics: RagManifest query failed —', err.message);
+      logger.warn('Metrics: RagManifest query failed', { error: err.message });
     }
 
     res.json({

@@ -6,6 +6,13 @@
 const crypto = require('crypto');
 const logger = require('../../config/logger');
 
+const DOCUMENT_IDENTITY_VERSION = 'source-content-v1';
+
+function normalizeSourceIdentity(source) {
+  const normalized = String(source || 'unknown').trim().normalize('NFC');
+  return normalized || 'unknown';
+}
+
 function generateDocumentId(source, filePath) {
   const combined = `${source}:${filePath}`;
   return crypto.createHash('md5').update(combined).digest('hex');
@@ -13,6 +20,39 @@ function generateDocumentId(source, filePath) {
 
 function hashText(text) {
   return crypto.createHash('md5').update(text).digest('hex');
+}
+
+function hashContentIdentity(text) {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+/**
+ * Canonical identity for one knowledge source revision.
+ *
+ * Source labels are trimmed and Unicode-normalized. Content remains exact
+ * after extraction: whitespace and line-ending changes intentionally create a
+ * new revision. `generateDocumentId(source, text)` is retained for backward
+ * compatibility with already-indexed automatic IDs.
+ */
+function buildDocumentIdentity(source, text, explicitDocumentId = null) {
+  const sourceLabel = String(source || 'unknown');
+  const canonicalSourceLabel = normalizeSourceIdentity(sourceLabel);
+  // Explicit IDs are opaque, caller-owned source identities. Preserve their
+  // exact spelling so case, path syntax, or intentional version suffixes are
+  // never collapsed by source-label normalization.
+  const stableDocumentId = explicitDocumentId || null;
+  const sourceIdentityKind = stableDocumentId ? 'document_id' : 'source_label';
+  const sourceIdentity = stableDocumentId
+    ? `document-id:${stableDocumentId}`
+    : `source-label:${canonicalSourceLabel}`;
+  return {
+    identityVersion: DOCUMENT_IDENTITY_VERSION,
+    source: sourceLabel,
+    sourceIdentity,
+    sourceIdentityKind,
+    contentHash: hashContentIdentity(text),
+    documentId: stableDocumentId || generateDocumentId(sourceLabel, text)
+  };
 }
 
 function splitIntoChunks(text, chunkSize, chunkOverlap) {
@@ -126,4 +166,13 @@ function reciprocalRankFusion(list1, list2, k = 60) {
     }));
 }
 
-module.exports = { generateDocumentId, hashText, splitIntoChunks, reciprocalRankFusion };
+module.exports = {
+  DOCUMENT_IDENTITY_VERSION,
+  buildDocumentIdentity,
+  generateDocumentId,
+  hashContentIdentity,
+  hashText,
+  normalizeSourceIdentity,
+  splitIntoChunks,
+  reciprocalRankFusion
+};

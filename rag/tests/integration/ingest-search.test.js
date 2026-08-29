@@ -113,7 +113,8 @@ describe('Integration: ingest → search → delete cycle', () => {
 
   it('deletes the document via DELETE /api/rag/documents/:id', async () => {
     const res = await supertest(app)
-      .delete(`/api/rag/documents/${documentId}`);
+      .delete(`/api/rag/documents/${documentId}`)
+      .send({ confirmation: `DELETE ${documentId}` });
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);

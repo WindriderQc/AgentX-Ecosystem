@@ -21,6 +21,7 @@
     if (body.ok === false) {
       var err = new Error(body.error || 'Request failed');
       err.detail = body.detail;
+      err.confirmation = body.confirmation;
       err.status = res.status;
       throw err;
     }
@@ -28,10 +29,10 @@
   }
 
   /**
-   * GET /api/rag/status — service stats + dependency health.
+   * POST /api/rag/status/refresh — actively refresh dependency health.
    */
   async function getStatus() {
-    return apiFetch('/api/rag/status');
+    return apiFetch('/api/rag/status/refresh', { method: 'POST' });
   }
 
   /**
@@ -74,9 +75,15 @@
 
   /**
    * DELETE /api/rag/documents/:id — delete a document.
+   * @param {string} id - Full opaque document identifier.
+   * @param {string} confirmation - Exact `DELETE <id>` typed confirmation.
    */
-  async function deleteDocument(id) {
-    return apiFetch('/api/rag/documents/' + encodeURIComponent(id), { method: 'DELETE' });
+  async function deleteDocument(id, confirmation) {
+    return apiFetch('/api/rag/documents/' + encodeURIComponent(id), {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmation: confirmation })
+    });
   }
 
   /**
@@ -142,23 +149,26 @@
    * POST /api/rag/cleanup — delete stale documents.
    * @param {string} source
    * @param {boolean} [dryRun=false]
+   * @param {string} [confirmation] - Exact source-bound phrase for destructive runs.
    */
-  async function runCleanup(source, dryRun) {
+  async function runCleanup(source, dryRun, confirmation) {
+    var body = { source: source, dryRun: dryRun !== undefined ? dryRun : false };
+    if (confirmation !== undefined) body.confirmation = confirmation;
     return apiFetch('/api/rag/cleanup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source: source, dryRun: dryRun !== undefined ? dryRun : false })
+      body: JSON.stringify(body)
     });
   }
 
   /**
    * POST /api/rag/embedding-migration/reindex — trigger embedding reindex.
    */
-  async function triggerReindex() {
+  async function triggerReindex(confirmation) {
     return apiFetch('/api/rag/embedding-migration/reindex', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm: true })
+      body: JSON.stringify({ confirmation: confirmation })
     });
   }
 

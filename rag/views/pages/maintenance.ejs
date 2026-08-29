@@ -13,7 +13,7 @@
       <div class="filter-bar">
         <label for="drift-source">Source</label>
         <input id="drift-source" class="input-field" type="text" placeholder="e.g., nas-docs">
-        <button id="btn-check-manifest" class="btn btn-primary">Check</button>
+        <button id="btn-check-manifest" class="btn btn-primary" type="button">Check</button>
       </div>
 
       <!-- Manifest summary -->
@@ -21,7 +21,7 @@
 
       <!-- Check drift button -->
       <div id="drift-actions" style="display:none;">
-        <button id="btn-check-drift" class="btn btn-secondary" style="margin-bottom:12px;">Check Drift</button>
+        <button id="btn-check-drift" class="btn btn-secondary" type="button" style="margin-bottom:12px;">Check Drift</button>
       </div>
 
       <!-- Drift results -->
@@ -29,7 +29,7 @@
 
       <!-- Cleanup button -->
       <div id="cleanup-actions" style="display:none;">
-        <button id="btn-cleanup" class="btn btn-danger">Clean Up Stale</button>
+        <button id="btn-cleanup" class="btn btn-danger" type="button">Clean Up Stale</button>
       </div>
 
       <!-- Cleanup result -->
@@ -46,7 +46,7 @@
 
       <!-- Reindex button -->
       <div id="reindex-actions" style="display:none; margin-top:16px;">
-        <button id="btn-reindex" class="btn btn-danger" disabled>Reindex All</button>
+        <button id="btn-reindex" class="btn btn-danger" type="button" disabled>Reindex All</button>
       </div>
 
       <!-- Reindex result -->
@@ -58,6 +58,23 @@
     </div>
 
   </div>
+
+  <dialog id="maintenance-confirm-dialog" class="delete-confirm-dialog" aria-labelledby="maintenance-confirm-title" aria-describedby="maintenance-confirm-description">
+    <form id="maintenance-confirm-form" class="delete-confirm-form">
+      <h2 id="maintenance-confirm-title">Confirm maintenance action</h2>
+      <p id="maintenance-confirm-description"></p>
+      <dl class="delete-confirm-context">
+        <div><dt>Scope</dt><dd id="maintenance-confirm-scope"></dd></div>
+      </dl>
+      <label for="maintenance-confirm-input">Type <code id="maintenance-confirm-expected"></code> exactly to confirm.</label>
+      <input id="maintenance-confirm-input" class="input-field" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="maintenance-confirm-error">
+      <div id="maintenance-confirm-error" class="delete-confirm-error" role="status" aria-live="polite"></div>
+      <div class="delete-confirm-actions">
+        <button id="maintenance-confirm-cancel" class="btn btn-secondary" type="button">Cancel</button>
+        <button id="maintenance-confirm-submit" class="btn btn-danger" type="submit" disabled>Confirm action</button>
+      </div>
+    </form>
+  </dialog>
 
   <div class="footer">AgentX RAG Maintenance</div>
 </div>

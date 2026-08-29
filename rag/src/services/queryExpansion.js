@@ -7,10 +7,17 @@
  */
 
 const fetchWithTimeout = require('../utils/fetchWithTimeout');
+const {
+  SERVICE_OUTBOUND_OPERATION_IDS,
+  SERVICE_OUTBOUND_TIMEOUTS,
+  configuredServiceOrigin,
+} = require('../clients/serviceOutboundClient');
 const logger = require('../../config/logger');
 
-const CORE_PROXY_URL = (process.env.CORE_PROXY_URL || 'http://localhost:3080').replace(/\/+$/, '');
-const EXPANSION_TIMEOUT = Number(process.env.QUERY_EXPANSION_TIMEOUT_MS) || 15000;
+const CORE_PROXY_URL = configuredServiceOrigin(process.env.CORE_PROXY_URL || 'http://localhost:3080');
+const EXPANSION_TIMEOUT = SERVICE_OUTBOUND_TIMEOUTS[
+  SERVICE_OUTBOUND_OPERATION_IDS.QUERY_EXPANSION_GENERATE
+];
 const MAX_EXPANSIONS = 3;
 
 /**
@@ -46,7 +53,10 @@ Return ONLY the queries, one per line, without numbering or explanation.`;
           num_predict: 200
         }
       })
-    }, EXPANSION_TIMEOUT);
+    }, EXPANSION_TIMEOUT, {
+      expectedOrigins: [CORE_PROXY_URL],
+      operationId: SERVICE_OUTBOUND_OPERATION_IDS.QUERY_EXPANSION_GENERATE,
+    });
 
     if (!response.ok) {
       logger.warn('Query expansion failed, using original query only');

@@ -157,7 +157,28 @@ describe('GET /api/rag/status — dependency health matrix', () => {
     expect(emb.healthy).toBe(true);
     expect(emb.provider).toBe('core-proxy');
     expect(emb.model).toBe('nomic-embed-text:v1.5');
-    expect(emb.endpoint).toBe('http://localhost:3080');
+    expect(emb).not.toHaveProperty('endpoint');
+  });
+
+  it('keeps GET observational when embedding evidence is stale', async () => {
+    mockEmbeddingsService.getCachedConnectionStatus.mockReturnValue({
+      healthy: true,
+      checkedAt: 1710000000000,
+      stale: true,
+    });
+
+    const res = await api.get('/api/rag/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.dependencies.embedding.stale).toBe(true);
+    expect(mockEmbeddingsService.refreshConnectionStatus).not.toHaveBeenCalled();
+  });
+
+  it('runs the embedding connection check only through POST refresh', async () => {
+    const res = await api.post('/api/rag/status/refresh');
+
+    expect(res.status).toBe(200);
+    expect(mockEmbeddingsService.refreshConnectionStatus).toHaveBeenCalledTimes(1);
   });
 
   it('marks embedding unhealthy when the connection test returns false', async () => {
@@ -179,7 +200,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
     const qdrant = res.body.data.dependencies.qdrant;
 
     expect(qdrant.healthy).toBe(true);
-    expect(qdrant.url).toBe('http://qdrant:6333');
+    expect(qdrant).not.toHaveProperty('url');
   });
 
   it('does not crash if getStats throws', async () => {

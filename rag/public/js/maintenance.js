@@ -21,11 +21,23 @@
   var reindexActions    = document.getElementById('reindex-actions');
   var btnReindex        = document.getElementById('btn-reindex');
   var reindexResult     = document.getElementById('reindex-result');
+  var actionConfirmDialog = document.getElementById('maintenance-confirm-dialog');
+  var actionConfirmForm = document.getElementById('maintenance-confirm-form');
+  var actionConfirmTitle = document.getElementById('maintenance-confirm-title');
+  var actionConfirmDescription = document.getElementById('maintenance-confirm-description');
+  var actionConfirmScope = document.getElementById('maintenance-confirm-scope');
+  var actionConfirmExpected = document.getElementById('maintenance-confirm-expected');
+  var actionConfirmInput = document.getElementById('maintenance-confirm-input');
+  var actionConfirmError = document.getElementById('maintenance-confirm-error');
+  var actionConfirmCancel = document.getElementById('maintenance-confirm-cancel');
+  var actionConfirmSubmit = document.getElementById('maintenance-confirm-submit');
 
   // ── State ─────────────────────────────────────────────────
 
   var currentSource = '';
   var staleCount = 0;
+  var actionConfirmationResolve = null;
+  var actionConfirmationOpener = null;
 
   // ── Helpers ───────────────────────────────────────────────
 
@@ -54,6 +66,42 @@
 
   function showError(container, message) {
     container.innerHTML = '<div class="error-state">' + esc(message) + '</div>';
+  }
+
+  function finishActionConfirmation(confirmed) {
+    var resolve = actionConfirmationResolve;
+    var opener = actionConfirmationOpener;
+    actionConfirmationResolve = null;
+    actionConfirmationOpener = null;
+    if (actionConfirmDialog.open) actionConfirmDialog.close();
+    if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
+    if (resolve) resolve(confirmed);
+  }
+
+  function requestActionConfirmation(options, opener) {
+    if (!actionConfirmDialog || typeof actionConfirmDialog.showModal !== 'function') {
+      return Promise.resolve(window.prompt(
+        options.description + '\n\nType ' + options.expected + ' exactly to confirm.'
+      ) === options.expected);
+    }
+
+    if (actionConfirmationResolve) finishActionConfirmation(false);
+    actionConfirmationOpener = opener;
+    actionConfirmTitle.textContent = options.title;
+    actionConfirmDescription.textContent = options.description;
+    actionConfirmScope.textContent = options.scope;
+    actionConfirmExpected.textContent = options.expected;
+    actionConfirmInput.value = '';
+    actionConfirmInput.setAttribute('aria-invalid', 'false');
+    actionConfirmError.textContent = '';
+    actionConfirmSubmit.textContent = options.submitLabel;
+    actionConfirmSubmit.disabled = true;
+    actionConfirmDialog.showModal();
+    window.setTimeout(function () { actionConfirmInput.focus(); }, 0);
+
+    return new Promise(function (resolve) {
+      actionConfirmationResolve = resolve;
+    });
   }
 
   // ── Drift Panel ───────────────────────────────────────────
@@ -151,15 +199,21 @@
   }
 
   async function performCleanup(source) {
-    if (!confirm('This will permanently delete ' + staleCount + ' stale document' + (staleCount !== 1 ? 's' : '') + '. Proceed?')) {
-      return;
-    }
+    var expected = 'DELETE STALE DOCUMENTS FROM ' + source;
+    var confirmed = await requestActionConfirmation({
+      title: 'Delete stale documents?',
+      description: 'This permanently deletes ' + staleCount + ' stale document' + (staleCount !== 1 ? 's' : '') + ' from the selected source. This cannot be undone.',
+      scope: source,
+      expected: expected,
+      submitLabel: 'Delete stale documents'
+    }, btnCleanup);
+    if (!confirmed) return;
 
     cleanupResult.innerHTML = '<p class="loading">Cleaning up...</p>';
     btnCleanup.disabled = true;
 
     try {
-      var res = await RAG.runCleanup(source, false);
+      var res = await RAG.runCleanup(source, false, expected);
       var data = res.data;
       var stats = data.stats || {};
       var succeeded = stats.succeeded || 0;
@@ -179,7 +233,7 @@
       if (err.status === 404) {
         showBannerInfo(cleanupResult, 'Cleanup API not available');
       } else {
-        showError(cleanupResult, 'Cleanup failed: ' + (err.message || 'Unknown error'));
+        showError(cleanupResult, 'Cleanup failed: ' + (err.detail || err.message || 'Unknown error'));
       }
     } finally {
       btnCleanup.disabled = false;
@@ -262,21 +316,27 @@
   }
 
   async function triggerReindex() {
-    if (!confirm('This will reindex all documents with the current embedding model. This can take significant time. Proceed?')) {
-      return;
-    }
+    var expected = 'REINDEX ALL DOCUMENTS';
+    var confirmed = await requestActionConfirmation({
+      title: 'Reindex every document?',
+      description: 'This replaces all stored embeddings with vectors from the current model. It can take significant time and cannot be paused from this page.',
+      scope: 'All indexed documents',
+      expected: expected,
+      submitLabel: 'Start reindex'
+    }, btnReindex);
+    if (!confirmed) return;
 
     reindexResult.innerHTML = '<p class="loading">Triggering reindex...</p>';
     btnReindex.disabled = true;
 
     try {
-      await RAG.triggerReindex();
+      await RAG.triggerReindex(expected);
       reindexResult.innerHTML = '<div class="result-success">Reindex triggered successfully.</div>';
     } catch (err) {
       if (err.status === 404) {
         showBannerInfo(reindexResult, 'Reindex API not available yet — this feature requires task implementation');
       } else {
-        showError(reindexResult, 'Reindex failed: ' + (err.message || 'Unknown error'));
+        showError(reindexResult, 'Reindex failed: ' + (err.detail || err.message || 'Unknown error'));
       }
     } finally {
       btnReindex.disabled = false;
@@ -315,6 +375,33 @@
 
   btnReindex.addEventListener('click', function () {
     triggerReindex();
+  });
+
+  actionConfirmInput.addEventListener('input', function () {
+    var matches = actionConfirmInput.value === actionConfirmExpected.textContent;
+    actionConfirmSubmit.disabled = !matches;
+    actionConfirmInput.setAttribute('aria-invalid', actionConfirmInput.value && !matches ? 'true' : 'false');
+    actionConfirmError.textContent = actionConfirmInput.value && !matches ? 'Confirmation does not match.' : '';
+  });
+
+  actionConfirmForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (actionConfirmInput.value !== actionConfirmExpected.textContent) {
+      actionConfirmInput.setAttribute('aria-invalid', 'true');
+      actionConfirmError.textContent = 'Type the full confirmation phrase exactly.';
+      actionConfirmInput.focus();
+      return;
+    }
+    finishActionConfirmation(true);
+  });
+
+  actionConfirmCancel.addEventListener('click', function () {
+    finishActionConfirmation(false);
+  });
+
+  actionConfirmDialog.addEventListener('cancel', function (event) {
+    event.preventDefault();
+    finishActionConfirmation(false);
   });
 
   // ── Init ──────────────────────────────────────────────────

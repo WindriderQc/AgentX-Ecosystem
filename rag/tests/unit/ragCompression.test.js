@@ -63,7 +63,8 @@ describe('ragCompression', () => {
       expect(fetchWithTimeout).toHaveBeenCalledWith(
         expect.stringContaining('/api/inference/generate'),
         expect.objectContaining({ method: 'POST' }),
-        expect.any(Number)
+        expect.any(Number),
+        expect.objectContaining({ operationId: 'rag.compression.generate' })
       );
 
       const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
