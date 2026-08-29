@@ -145,6 +145,25 @@ describe('operator UI access', () => {
     expect(sameOriginUiAllowed(req)).toBe(true);
   });
 
+  it('binds a deployment-owned remote UI host to exact same-origin proxy traffic', () => {
+    process.env.AGENTX_OPERATOR_UI_HOSTS = '192.0.2.99';
+    const sameOrigin = request({
+      referer: 'https://192.0.2.99/dad',
+      host: '192.0.2.99',
+      'sec-fetch-site': 'same-origin',
+    }, { ip: '127.0.0.1', protocol: 'https' });
+    const crossSite = request({
+      origin: 'https://evil.example',
+      host: '192.0.2.99',
+      'sec-fetch-site': 'cross-site',
+    }, { ip: '127.0.0.1', protocol: 'https' });
+
+    expect(sameOriginUiAllowed(sameOrigin)).toBe(true);
+    expect(operatorUiAccessAllowed(sameOrigin)).toBe(true);
+    expect(sameOriginUiAllowed(crossSite)).toBe(false);
+    expect(operatorUiAccessAllowed(crossSite)).toBe(false);
+  });
+
   it('rejects an explicit cross-site hint even when Origin is forged to match', () => {
     process.env.AGENTX_OPERATOR_UI_HOSTS = '192.0.2.99';
     const req = request({
