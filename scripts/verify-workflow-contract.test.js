@@ -200,10 +200,12 @@ test('live cancellation runs in a separate ephemeral Compose project with exact 
   assert.match(live, /Object\.keys\(config\.volumes \|\| \{\}\)\.length !== 0/);
   assert.match(live, /docker\\\.sock/);
   assert.match(live, /up --detach --build --wait --wait-timeout 120 mongo ollama-fixture/);
-  assert.equal((live.match(/exec -T /g) || []).length, 2);
+  assert.equal((live.match(/exec -T /g) || []).length, 3);
   assert.match(live, /exec -T mongo[\s\S]*?live-cancellation-seed\.mongodb\.js/);
   assert.match(live, /exec -T ollama-fixture[\s\S]*?node \/app\/run-live-cancellation\.js/);
+  assert.match(live, /exec -T ollama-fixture[\s\S]*?cat \/tmp\/agentx-live-cancellation\.json[\s\S]*?> \/tmp\/agentx-live-cancellation\.json/);
   assert.doesNotMatch(live, /exec --no-tty/);
+  assert.doesNotMatch(live, /\bcp ollama-fixture:\/tmp\/agentx-live-cancellation\.json/);
   assert.match(topology, /WATCHDOG_INTERVAL_MS:\s*"3600000"/);
   assert.match(live, /node \/app\/run-live-cancellation\.js/);
   assert.match(live, /validateLiveCancellationReceipt\(receipt\)/);

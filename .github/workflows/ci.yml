@@ -689,7 +689,9 @@ jobs:
           docker compose \
             --project-name "$AGENTX_LIVE_CANCEL_PROJECT" \
             --file docker-compose.live-cancellation.yml \
-            cp ollama-fixture:/tmp/agentx-live-cancellation.json /tmp/agentx-live-cancellation.json
+            exec -T ollama-fixture \
+            cat /tmp/agentx-live-cancellation.json \
+            > /tmp/agentx-live-cancellation.json
           DRIVER_STATUS="$driver_status" node <<'NODE'
           const fs = require('fs');
           const { validateLiveCancellationReceipt } = require('./e2e/live-cancellation-receipt');
