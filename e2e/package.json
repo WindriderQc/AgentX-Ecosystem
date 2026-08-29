@@ -1,0 +1,22 @@
+{
+  "name": "agentx-browser-release-gate",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Deterministic browser release checks for the Agent X product surfaces",
+  "scripts": {
+    "test": "playwright test",
+    "test:unit": "node --test unit/*.test.js",
+    "test:upgrade-rollback:unit": "node --test unit/*upgrade-rollback*.test.js",
+    "test:actions": "node run-action-journeys.js && node run-prompts-action-journey.js && node run-playground-action-journey.js && node run-rag-action-journey.js",
+    "test:desktop": "playwright test --project=desktop-chromium",
+    "test:mobile": "playwright test --project=mobile-chromium",
+    "install:chromium": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

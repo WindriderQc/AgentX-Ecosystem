@@ -2,7 +2,7 @@ name: agentx-ecosystem
 
 services:
   mongo:
-    image: mongo:7
+    image: mongo:7.0.34@sha256:c1a84ab5d0c17deed1e0dba1d24bd7c76e5c7b281145fe536911939b1551754c
     container_name: agentx-ecosystem-mongo
     restart: unless-stopped
     volumes:
@@ -15,7 +15,7 @@ services:
       start_period: 20s
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.1@sha256:45f8e3ddc2570a4d029877e1b5ec1045c19b3852b4e22a55c7f43b05aea0ca89
     container_name: agentx-ecosystem-qdrant
     restart: unless-stopped
     volumes:
@@ -25,6 +25,8 @@ services:
     build:
       context: .
       dockerfile: docker/core.Dockerfile
+      args:
+        AGENTX_BUILD_REVISION: ${AGENTX_BUILD_REVISION:-working-tree}
     container_name: agentx-ecosystem-core
     restart: unless-stopped
     ports:
@@ -32,7 +34,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3080
-      AGENTX_PROFILE: demo
+      AGENTX_PROFILE: ${AGENTX_PROFILE:-demo}
       MONGODB_URI: mongodb://mongo:27017/agentx_product
       OLLAMA_HOST: ${AGENTX_OLLAMA_HOST:-http://host.docker.internal:11434}
       OLLAMA_HOST_NAME: ${OLLAMA_HOST_NAME:-Local Ollama}
@@ -44,13 +46,24 @@ services:
       QDRANT_COLLECTION: agentx_product_embeddings
       BENCHMARK_SERVICE_URL: http://benchmark:3081
       RAG_SERVICE_URL: http://rag:3082
-      CORE_PUBLIC_URL: http://localhost:${CORE_PORT:-3180}
-      BENCHMARK_PUBLIC_URL: http://localhost:${BENCHMARK_PORT:-3181}
-      RAG_PUBLIC_URL: http://localhost:${RAG_PORT:-3182}
-      AGENTX_OPERATOR_TOKEN: ""
+      CORE_PUBLIC_URL: http://127.0.0.1:${CORE_PORT:-3180}
+      BENCHMARK_PUBLIC_URL: http://127.0.0.1:${BENCHMARK_PORT:-3181}
+      RAG_PUBLIC_URL: http://127.0.0.1:${RAG_PORT:-3182}
+      AGENTX_OPERATOR_TOKEN: ${AGENTX_OPERATOR_TOKEN:-}
+      AGENTX_OPERATOR_UI_HOSTS: ${AGENTX_OPERATOR_UI_HOSTS:-}
+      AGENTX_TRUST_INTERNAL_SERVICE_HOSTS: "true"
+      AGENTX_TRUST_LOOPBACK_PROXY_UI: "true"
       AGENTX_BENCHMARK_TOKEN: ${AGENTX_BENCHMARK_TOKEN:-}
-      AGENTX_MCP_TOKEN: ""
+      AGENTX_MEMORY_REVIEW_TOKEN: ${AGENTX_MEMORY_REVIEW_TOKEN:-}
+      AGENTX_SCHEDULE_TOKEN: ${AGENTX_SCHEDULE_TOKEN:-}
+      AGENTX_PIPELINE_TOKEN: ${AGENTX_PIPELINE_TOKEN:-}
+      AGENTX_ALERT_DELIVERY_TOKEN: ${AGENTX_ALERT_DELIVERY_TOKEN:-}
+      AGENTX_RECOVERY_TOKEN: ${AGENTX_RECOVERY_TOKEN:-}
+      AGENTX_RESTORE_REHEARSAL_ENABLED: ${AGENTX_RESTORE_REHEARSAL_ENABLED:-false}
+      AGENTX_MCP_TOKEN: ${AGENTX_MCP_TOKEN:-}
       AGENTX_CODEX_USAGE_TOKEN: ""
+      BACKUP_DIR: /backups
+      BACKUP_CONFIG_ROOT: /app/product-config
       BACKUP_SCHEDULE_ENABLED: "false"
       MEMORY_REVIEW_MODE: shadow
       CORS_ORIGINS: http://localhost:${CORE_PORT:-3180},http://127.0.0.1:${CORE_PORT:-3180},http://localhost:${BENCHMARK_PORT:-3181},http://127.0.0.1:${BENCHMARK_PORT:-3181},http://localhost:${RAG_PORT:-3182},http://127.0.0.1:${RAG_PORT:-3182}
@@ -67,11 +80,14 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - core_logs:/app/logs
+      - recovery_data:/backups
 
   benchmark:
     build:
       context: .
       dockerfile: docker/benchmark.Dockerfile
+      args:
+        AGENTX_BUILD_REVISION: ${AGENTX_BUILD_REVISION:-working-tree}
     container_name: agentx-ecosystem-benchmark
     restart: unless-stopped
     ports:
@@ -79,7 +95,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3081
-      AGENTX_PROFILE: demo
+      HOST: 0.0.0.0
+      AGENTX_PROFILE: ${AGENTX_PROFILE:-demo}
+      JUDGE_DEFAULTS_PATH: /app/config-data/judge-host-defaults.json
       MONGODB_URI: mongodb://mongo:27017/agentx_product
       OLLAMA_HOST: ${AGENTX_OLLAMA_HOST:-http://host.docker.internal:11434}
       OLLAMA_HOST_NAME: ${OLLAMA_HOST_NAME:-Local Ollama}
@@ -88,8 +106,13 @@ services:
       OLLAMA_HOST_3: ""
       OLLAMA_HOST_3_NAME: ""
       CORE_URL: http://core:3080
-      CORE_PUBLIC_URL: http://localhost:${CORE_PORT:-3180}
+      CORE_PUBLIC_URL: http://127.0.0.1:${CORE_PORT:-3180}
       AGENTX_BENCHMARK_TOKEN: ${AGENTX_BENCHMARK_TOKEN:-}
+      AGENTX_OPERATOR_TOKEN: ${AGENTX_OPERATOR_TOKEN:-}
+      AGENTX_OPERATOR_UI_HOSTS: ${AGENTX_OPERATOR_UI_HOSTS:-}
+      AGENTX_OLLAMA_ALLOWED_TARGETS: ${AGENTX_OLLAMA_ALLOWED_TARGETS:-}
+      AGENTX_TRUST_INTERNAL_SERVICE_HOSTS: "true"
+      AGENTX_TRUST_LOOPBACK_PROXY_UI: "true"
       AGENTX_PLATFORM_EVENT_TOKEN: ""
       CORS_ORIGINS: http://localhost:${CORE_PORT:-3180},http://127.0.0.1:${CORE_PORT:-3180},http://localhost:${BENCHMARK_PORT:-3181},http://127.0.0.1:${BENCHMARK_PORT:-3181}
     depends_on:
@@ -113,6 +136,8 @@ services:
     build:
       context: .
       dockerfile: docker/rag.Dockerfile
+      args:
+        AGENTX_BUILD_REVISION: ${AGENTX_BUILD_REVISION:-working-tree}
     container_name: agentx-ecosystem-rag
     restart: unless-stopped
     ports:
@@ -121,7 +146,7 @@ services:
       NODE_ENV: production
       PORT: 3082
       HOST: 0.0.0.0
-      AGENTX_PROFILE: demo
+      AGENTX_PROFILE: ${AGENTX_PROFILE:-demo}
       MONGODB_URI: mongodb://mongo:27017/agentx_product
       VECTOR_STORE_TYPE: qdrant
       QDRANT_URL: http://qdrant:6333
@@ -131,6 +156,12 @@ services:
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
       CORE_PROXY_URL: http://core:3080
       CORE_URL: http://core:3080
+      AGENTX_RECOVERY_TOKEN: ${AGENTX_RECOVERY_TOKEN:-}
+      AGENTX_OPERATOR_TOKEN: ${AGENTX_OPERATOR_TOKEN:-}
+      AGENTX_OPERATOR_UI_HOSTS: ${AGENTX_OPERATOR_UI_HOSTS:-}
+      AGENTX_TRUST_INTERNAL_SERVICE_HOSTS: "true"
+      AGENTX_TRUST_LOOPBACK_PROXY_UI: "true"
+      AGENTX_RESTORE_REHEARSAL_ENABLED: ${AGENTX_RESTORE_REHEARSAL_ENABLED:-false}
       AGENTX_PLATFORM_EVENT_TOKEN: ""
       RAG_INGESTION_POLICY_PATH: /config/rag-ingestion-policy.json
       CORS_ORIGINS: http://localhost:${CORE_PORT:-3180},http://127.0.0.1:${CORE_PORT:-3180},http://localhost:${RAG_PORT:-3182},http://127.0.0.1:${RAG_PORT:-3182}
@@ -157,6 +188,8 @@ volumes:
     name: agentx_ecosystem_qdrant_data
   core_logs:
     name: agentx_ecosystem_core_logs
+  recovery_data:
+    name: agentx_ecosystem_recovery_data
   benchmark_config:
     name: agentx_ecosystem_benchmark_config
   benchmark_logs:

@@ -3,35 +3,57 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { DEFAULT_URLS, parseArgs, verifyCleanFirstRun } = require('./verify-clean-first-run');
+const {
+  DEFAULT_URLS,
+  MAX_CLEAN_FIRST_RUN_RESPONSE_BYTES,
+  parseArgs,
+  verifyCleanFirstRun,
+} = require('./verify-clean-first-run');
 
 function response(body, { status = 200, url = '' } = {}) {
+  const bytes = Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
   return {
     ok: status >= 200 && status < 300,
     status,
     url,
-    async json() { return body; },
-    async text() { return String(body); },
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === 'content-length' ? String(bytes.byteLength) : null;
+      },
+    },
+    body: {
+      async *[Symbol.asyncIterator]() {
+        yield bytes;
+      },
+    },
   };
 }
 
 function harness(overrides = {}) {
+  const identity = (service) => ({
+    service,
+    version: '0.1.1',
+    profile: 'demo',
+    revision: 'test-revision',
+    ts: '2026-08-28T12:00:00.000Z',
+  });
   const routes = new Map([
     [`${DEFAULT_URLS.core}/health`, response({
       ok: true,
       status: 'ok',
-      service: 'agentx-core',
+      ...identity('agentx-core'),
       details: { mongodb: 'connected', ollama: 'unavailable' },
     })],
     [`${DEFAULT_URLS.benchmark}/health`, response({
+      ok: true,
       status: 'ok',
-      service: 'agentx-benchmark',
+      ...identity('agentx-benchmark'),
       db: 'connected',
     })],
     [`${DEFAULT_URLS.rag}/health`, response({
       ok: true,
       status: 'ok',
-      service: 'agentx-rag',
+      ...identity('agentx-rag'),
       db: 'connected',
       vectorStore: { healthy: true, type: 'qdrant' },
     })],
@@ -56,7 +78,16 @@ test('accepts a healthy standalone demo without Ollama', async () => {
 test('rejects a degraded or wrongly identified product service', async () => {
   await assert.rejects(
     verifyCleanFirstRun({ fetchImpl: harness({
-      [`${DEFAULT_URLS.benchmark}/health`]: response({ status: 'ok', service: 'personal-benchmark', db: 'connected' }),
+      [`${DEFAULT_URLS.benchmark}/health`]: response({
+        ok: true,
+        status: 'ok',
+        service: 'personal-benchmark',
+        version: '0.1.1',
+        profile: 'demo',
+        revision: 'test-revision',
+        ts: '2026-08-28T12:00:00.000Z',
+        db: 'connected',
+      }),
     }) }),
     /Benchmark health service identity is invalid/
   );
@@ -68,6 +99,25 @@ test('rejects a first run that is not in the demo profile', async () => {
       [`${DEFAULT_URLS.core}/api/config`]: response({ profile: 'full' }),
     }) }),
     /did not start in the demo profile/
+  );
+});
+
+test('rejects a mixed or unidentified service build', async () => {
+  await assert.rejects(
+    verifyCleanFirstRun({ fetchImpl: harness({
+      [`${DEFAULT_URLS.rag}/health`]: response({
+        ok: true,
+        status: 'ok',
+        service: 'agentx-rag',
+        version: '0.1.1',
+        profile: 'full',
+        revision: '',
+        ts: '2026-08-28T12:00:00.000Z',
+        db: 'connected',
+        vectorStore: { healthy: true, type: 'qdrant' },
+      }),
+    }) }),
+    /RAG health profile is not demo/
   );
 });
 
@@ -89,6 +139,25 @@ test('rejects a demo that omits the guided persona doorway', async () => {
       [`${DEFAULT_URLS.core}/`]: response('<title>Agent X</title>', { url: `${DEFAULT_URLS.core}/demo` }),
     }) }),
     /missing the Learning Guide path/
+  );
+});
+
+test('rejects a first-run response that exceeds the byte budget', async () => {
+  await assert.rejects(
+    verifyCleanFirstRun({ fetchImpl: harness({
+      [`${DEFAULT_URLS.core}/api/config`]: {
+        ok: true,
+        status: 200,
+        url: `${DEFAULT_URLS.core}/api/config`,
+        headers: { get: () => String(MAX_CLEAN_FIRST_RUN_RESPONSE_BYTES + 1) },
+        body: {
+          async *[Symbol.asyncIterator]() {
+            yield Buffer.from('{}');
+          },
+        },
+      },
+    }) }),
+    /Core config response could not be read: Response body exceeded its byte limit/
   );
 });
 

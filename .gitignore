@@ -21,6 +21,11 @@ reports/
 
 # Runtime data and caches
 .agentx/
+/backups/
+agentx-recovery-v1-*/
+.agentx-recovery-partial-*/
+recovery-drill-receipt*.json
+.agentx-recovery-receipt-partial-*
 .tmp/
 .cache/
 .playwright-cli/

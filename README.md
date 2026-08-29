@@ -1,8 +1,12 @@
 # Agent X Ecosystem
 
-Agent X is a local-first AI workbench that routes Ollama inference, grounds
-answers in a bounded knowledge base, and compares models with reproducible
-evidence.
+Agent X is a local-first agent-capability platform that routes inference,
+grounds answers in a bounded knowledge base, and compares models or external
+worker evidence with reproducible contracts.
+
+AgentX supplies inference, evaluation, RAG, task/tool contracts, and evidence.
+An external harness keeps ownership of its identity, private conversations,
+internal memory, tools, credentials, and execution loop.
 
 ## What belongs here
 
@@ -55,7 +59,7 @@ chmod +x agentx
 ```
 
 `up` starts the demo profile and waits up to 180 seconds for its five product
-services. Open <http://localhost:3180/> when it succeeds. MongoDB and Qdrant
+services. Open <http://127.0.0.1:3180/> when it succeeds. MongoDB and Qdrant
 stay internal; the three public ports bind to loopback only, and persisted data
 uses dedicated `agentx-ecosystem` named volumes.
 
@@ -77,6 +81,21 @@ The equivalent Linux commands use `./agentx`. Read
 [First installation](docs/GETTING_STARTED.md) before choosing a local or
 remote endpoint.
 
+The safe default is always `demo`. Advanced product deployments can select the
+supported full profile explicitly without adding any private adapter:
+
+```bash
+AGENTX_PROFILE=full ./agentx up
+```
+
+```powershell
+$env:AGENTX_PROFILE = 'full'
+.\agentx.ps1 up
+```
+
+Full profile exposes the product-owned operational workspaces. Trusted
+extensions remain separately pinned and disabled unless configured explicitly.
+
 ## Three guided demos
 
 1. **Route a local answer:** open Chat and ask a short question. Agent X routes
@@ -94,13 +113,85 @@ Detailed steps live in [Demo guide](docs/DEMO.md). The current architecture is
 defined by [Architecture](docs/ARCHITECTURE.md) and the rendered Compose model.
 The permanent simple-to-expert interaction and visual rules are defined by the
 [UX doctrine](docs/UX_DOCTRINE.md).
+The measurable delivery horizons and release quality bars are in the
+[Product evolution plan](docs/PRODUCT_EVOLUTION_PLAN.md).
+
+The canonical product-owned page inventory is
+[`config/product-surfaces.json`](config/product-surfaces.json). After startup,
+verify every supported demo page (or only the release-critical set) with:
+
+```bash
+node scripts/verify-product-surfaces.js --profile demo
+node scripts/verify-product-surfaces.js --profile demo --critical-only
+```
+
+Full-profile deployments run the same verifier with `--profile full`; private
+adapters and redirect aliases are intentionally outside this product registry.
+
+For a release candidate, collect one fail-closed, machine-readable receipt that
+reconciles the release contract, live health identity and freshness, every
+registered page, and (in the full profile) the zero-contradiction ecosystem
+evidence budget. A release-candidate receipt must bind the runtime to the exact
+full 40-character Git commit under test:
+
+```bash
+candidate_revision="$(git rev-parse HEAD)"
+node scripts/verify-release-evidence.js \
+  --profile demo \
+  --expected-revision "$candidate_revision" \
+  --output reports/release-evidence.json
+```
+
+Omitting `--expected-revision` is allowed only for a local working-tree
+rehearsal; that receipt does not prove an explicitly selected release revision.
+
+For troubleshooting, export a separate bounded, privacy-safe support receipt.
+It records only allowlisted identity, component readiness, trust/freshness
+counts, contradiction categories, and surface-registry fields—never raw logs,
+addresses, paths, secrets, configuration, or conversation content:
+
+```bash
+node scripts/export-support-receipt.js --profile demo --output support-receipt.json
+```
+
+See [Support receipts](docs/SUPPORT_RECEIPTS.md) for the exact privacy and
+failure contract.
+
+The browser gate then exercises every critical page for the running profile at
+desktop and mobile widths, checks serious accessibility failures and overflow,
+and runs the Playground and Courthouse keyboard journeys:
+
+```bash
+cd e2e
+npm ci
+npx playwright install chromium
+npm test
+```
+
+It defaults to `demo`; set `AGENTX_E2E_PROFILE=full` against a full-profile
+runtime. Product CI runs both.
+
+Ollama remains optional in both gates. Missing required databases, stale or
+contradictory evidence, mixed service identity, or a broken critical journey is
+a release failure rather than a green-looking partial result.
 
 ## Stop, clean up, and troubleshoot
 
 Use `status` to inspect containers and `logs core` (or another service name) to
 follow an error. `down` stops both the product and opt-in Docker Ollama while
-preserving named volumes. `reset` requires typing a confirmation phrase and
-deletes only this Compose project's containers, network, and data volumes.
+preserving every named volume, including persistent recovery archives. `reset`
+requires typing `delete agentx-ecosystem data and recovery archives` exactly
+and deletes only this Compose project's containers, network, data volumes, and
+recovery archives.
+
+The backup page stores artifacts in a dedicated named recovery volume. This
+survives ordinary container recreation and `down`, but is not host-loss
+protection; export it separately. MongoDB and Qdrant restore are disabled by
+default with `OFFLINE_RESTORE_REQUIRED` until a controlled offline release
+rehearsal is explicitly enabled. Existing artifacts are recovery inputs, not
+proof of a coherent or restorable recovery set.
+See [Recovery contract](docs/RECOVERY.md) for the strict portable bundle,
+offline verifier, and disposable exact-image capture/restore drill.
 
 Port conflicts can be handled without editing Compose:
 
@@ -137,8 +228,10 @@ a deployment-owned authenticated integration.
 
 Normal users should follow the latest stable GitHub release. Controlled
 deployments pin the Core, Benchmark, and RAG container digests. Advanced users
-may opt into the moving `main`/`test` channel. Exact commands and rollback
-expectations are in [Install and update modes](docs/RELEASES.md).
+may follow `main` and select the immutable `sha-<full-commit>` images for one
+exact revision. The workflow does not move `test` or `latest` tags. Exact
+commands and rollback expectations are in
+[Install and update modes](docs/RELEASES.md).
 
 Agent X does not require an operations repository. Host-specific automation
 and private integrations stay outside this repository and may call the bounded
@@ -146,10 +239,21 @@ product APIs. Independently deployed applications can use the generic,
 stateless [external consumer API](docs/EXTERNAL_CONSUMERS.md) for authenticated
 routed inference, effective capability discovery, streaming, and cancellation
 without loading application code or storing application transcripts in Core.
+All separately operated consumers follow the
+[external adapter consumer contract](docs/EXTERNAL_ADAPTER_CONTRACT.md) for
+API allowlisting, identity and provenance, freshness, failure behavior, and
+deployment ownership.
 Nestor-style assistants can instead use the fixed-operation
 [Nestor consumer API](docs/NESTOR_CONSUMER.md), including bounded SSE inference
 for live speech overlap while keeping persona and transcript ownership outside
 the product.
+Both contracts, product health identity, ecosystem evidence, and bounded RAG
+reads can be checked with the address-free
+[adapter-consumer conformance verifier](docs/ADAPTER_CONSUMER_CONFORMANCE.md).
+External execution harnesses can exchange provider-neutral, fingerprinted
+[worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md). Benchmark
+can compare imported portable or native-ceiling evidence, but AgentX does not
+run the harness or own its conversation/orchestration state.
 Advanced operators may also install an absolute-path trusted
 extension in the full profile; Core owns only the generic loader and versioned
 contracts, never the extension source, secret, mount, or deployment. See
