@@ -5,20 +5,54 @@ on:
     branches: [main]
   release:
     types: [published]
-  workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   release-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      lifecycle_run_id: ${{ steps.release-gates.outputs.lifecycle_run_id }}
+      lifecycle_run_attempt: ${{ steps.release-gates.outputs.lifecycle_run_attempt }}
+      previous_asset_id: ${{ steps.previous-asset.outputs.asset_id }}
+      previous_tag: ${{ steps.lifecycle-bind.outputs.upgrade_previous_tag }}
+      previous_revision: ${{ steps.lifecycle-bind.outputs.upgrade_previous_revision }}
+      previous_manifest_sha256: ${{ steps.lifecycle-bind.outputs.upgrade_previous_manifest_sha256 }}
+      previous_identity_evidence_mode: ${{ steps.lifecycle-bind.outputs.upgrade_previous_identity_evidence_mode }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+          fetch-depth: 1
+      - name: Resolve the exact checked-out source commit
+        id: source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          if ! [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected a full lowercase Git commit, received: $source_sha" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "release" ] && [ "$source_sha" != "$GITHUB_SHA" ]; then
+            echo "Checkout does not match the triggering source SHA" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "release" ] \
+              && ! [[ "$RELEASE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Release tag is not an exact Docker/OCI tag (build metadata with '+' is unsupported)" >&2
+            exit 1
+          fi
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -26,45 +60,280 @@ jobs:
         env:
           AGENTX_RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
         run: node scripts/verify-release-contract.js
+      - name: Require exact green Product CI and lifecycle push runs for a release
+        id: release-gates
+        if: github.event_name == 'release'
+        uses: actions/github-script@v8
+        env:
+          AGENTX_RELEASE_COMMIT: ${{ steps.source.outputs.sha }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const sourceSha = String(process.env.AGENTX_RELEASE_COMMIT || '').trim();
+            if (!/^[0-9a-f]{40}$/.test(sourceSha)) {
+              core.setFailed(`Cannot verify release gates for invalid commit ${JSON.stringify(sourceSha)}`);
+              return;
+            }
+            const publishedAt = Date.parse(String(context.payload.release?.published_at || ''));
+            if (!Number.isFinite(publishedAt)) {
+              core.setFailed('release event does not contain a valid publication time');
+              return;
+            }
+            const exactRuns = async (workflowId) => {
+              const response = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                head_sha: sourceSha,
+                branch: 'main',
+                event: 'push',
+                per_page: 100,
+              });
+              return response.data.workflow_runs
+                .filter((run) => run.head_sha === sourceSha
+                  && run.head_branch === 'main'
+                  && run.event === 'push'
+                  && Date.parse(run.created_at) <= publishedAt)
+                .sort((left, right) => new Date(right.created_at) - new Date(left.created_at));
+            };
+            const requireLatestSuccess = (runs, label) => {
+              const latest = runs[0];
+              const updatedAt = Date.parse(String(latest?.updated_at || ''));
+              if (!latest || !Number.isFinite(updatedAt) || updatedAt > publishedAt) {
+                throw new Error(`${label} did not complete before release publication`);
+              }
+              if (!latest || latest.status !== 'completed' || latest.conclusion !== 'success') {
+                const state = latest ? `${latest.status}/${latest.conclusion || 'no-conclusion'}` : 'missing';
+                throw new Error(`${label} for exact release commit ${sourceSha} is not green (${state})`);
+              }
+              return latest;
+            };
+            try {
+              const ciRun = requireLatestSuccess(await exactRuns('ci.yml'), 'Product CI');
+              const lifecycleRun = requireLatestSuccess(
+                await exactRuns('publish-images.yml'),
+                'publish-product-images push lifecycle'
+              );
+              if (!Number.isSafeInteger(ciRun.run_attempt) || ciRun.run_attempt < 1
+                  || !Number.isSafeInteger(lifecycleRun.run_attempt) || lifecycleRun.run_attempt < 1) {
+                throw new Error('required workflow run attempt is invalid');
+              }
+              const artifacts = await github.paginate(
+                github.rest.actions.listWorkflowRunArtifacts,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: lifecycleRun.id,
+                  per_page: 100,
+                },
+                (response) => response.data.artifacts
+              );
+              const expectedNames = [
+                `agentx-candidate-image-manifest-${sourceSha}-${lifecycleRun.run_attempt}`,
+                `agentx-immutable-upgrade-rollback-evidence-${sourceSha}-${lifecycleRun.run_attempt}`,
+                `agentx-mongodb-qdrant-recovery-evidence-${sourceSha}-${lifecycleRun.run_attempt}`,
+              ];
+              for (const name of expectedNames) {
+                const matches = artifacts.filter((artifact) => artifact.name === name);
+                if (matches.length !== 1 || matches[0].expired || matches[0].size_in_bytes <= 0) {
+                  throw new Error(`exact lifecycle artifact is unavailable or ambiguous: ${name}`);
+                }
+              }
+              core.setOutput('lifecycle_run_id', String(lifecycleRun.id));
+              core.setOutput('lifecycle_run_attempt', String(lifecycleRun.run_attempt));
+              core.info(`Verified Product CI ${ciRun.html_url} and lifecycle ${lifecycleRun.html_url}`);
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+      - name: Download the exact candidate manifest used by the lifecycle run
+        if: github.event_name == 'release'
+        uses: actions/download-artifact@v8
+        with:
+          name: agentx-candidate-image-manifest-${{ steps.source.outputs.sha }}-${{ steps.release-gates.outputs.lifecycle_run_attempt }}
+          path: release-lifecycle/candidate
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.release-gates.outputs.lifecycle_run_id }}
+      - name: Download the exact upgrade and rollback receipt
+        if: github.event_name == 'release'
+        uses: actions/download-artifact@v8
+        with:
+          name: agentx-immutable-upgrade-rollback-evidence-${{ steps.source.outputs.sha }}-${{ steps.release-gates.outputs.lifecycle_run_attempt }}
+          path: release-lifecycle/upgrade
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.release-gates.outputs.lifecycle_run_id }}
+      - name: Download the exact MongoDB and Qdrant recovery receipt
+        if: github.event_name == 'release'
+        uses: actions/download-artifact@v8
+        with:
+          name: agentx-mongodb-qdrant-recovery-evidence-${{ steps.source.outputs.sha }}-${{ steps.release-gates.outputs.lifecycle_run_attempt }}
+          path: release-lifecycle/recovery
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.release-gates.outputs.lifecycle_run_id }}
+      - name: Revalidate all lifecycle artifacts and compare the candidate image set field-for-field
+        id: lifecycle-bind
+        if: github.event_name == 'release'
+        run: |
+          node scripts/verify-lifecycle-evidence.js \
+            --candidate-artifact release-lifecycle/candidate \
+            --upgrade-artifact release-lifecycle/upgrade \
+            --recovery-artifact release-lifecycle/recovery \
+            --expected-candidate-revision "${{ steps.source.outputs.sha }}" \
+            --dependency-pins config/container-image-pins.json \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Resolve the exact attached previous-release manifest named by the validated receipt
+        id: previous-asset
+        if: github.event_name == 'release'
+        uses: actions/github-script@v8
+        env:
+          PREVIOUS_TAG: ${{ steps.lifecycle-bind.outputs.upgrade_previous_tag }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const tag = String(process.env.PREVIOUS_TAG || '');
+            if (!/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(tag)) {
+              core.setFailed('validated upgrade receipt did not name a valid previous release tag');
+              return;
+            }
+            try {
+              const response = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              const release = response.data;
+              if (release.draft || release.prerelease || !release.published_at) {
+                throw new Error(`previous release ${tag} is not a published stable release`);
+              }
+              const expectedName = `agentx-${tag}-images.json`;
+              const matches = release.assets.filter((asset) => asset.name === expectedName);
+              if (matches.length !== 1 || matches[0].size <= 0) {
+                throw new Error(`previous release must retain exactly one non-empty ${expectedName}`);
+              }
+              core.setOutput('asset_id', String(matches[0].id));
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+      - name: Download the exact attached previous-release bytes
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_ASSET_ID: ${{ steps.previous-asset.outputs.asset_id }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PREVIOUS_ASSET_ID" =~ ^[0-9]+$ ]]; then
+            echo "Previous release asset id is invalid" >&2
+            exit 1
+          fi
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/${GITHUB_REPOSITORY}/releases/assets/${PREVIOUS_ASSET_ID}" \
+            > release-lifecycle/previous-image-manifest.json
+      - name: Log in for exact legacy baseline reconstruction
+        if: github.event_name == 'release' && steps.lifecycle-bind.outputs.upgrade_previous_identity_evidence_mode == 'legacy-oci-bound'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reconstruct the exact legacy baseline from attached bytes and live OCI labels
+        if: github.event_name == 'release' && steps.lifecycle-bind.outputs.upgrade_previous_identity_evidence_mode == 'legacy-oci-bound'
+        run: |
+          node scripts/assemble-previous-release-baseline.js \
+            --manifest release-lifecycle/previous-image-manifest.json \
+            --output release-lifecycle/previous-release-baseline.json \
+            --expected-tag "${{ steps.lifecycle-bind.outputs.upgrade_previous_tag }}" \
+            --policy config/legacy-release-baselines.json \
+            --pull-exact-images true
+      - name: Rebind the upgrade receipt to the exact attached previous-release evidence
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_args=()
+          mode="${{ steps.lifecycle-bind.outputs.upgrade_previous_identity_evidence_mode }}"
+          if [ "$mode" = "legacy-oci-bound" ]; then
+            baseline_args+=(--previous-baseline release-lifecycle/previous-release-baseline.json)
+          elif [ "$mode" != "in-band-health" ]; then
+            echo "Previous release identity evidence mode is invalid" >&2
+            exit 1
+          fi
+          node scripts/verify-lifecycle-evidence.js \
+            --candidate-artifact release-lifecycle/candidate \
+            --previous release-lifecycle/previous-image-manifest.json \
+            --upgrade-artifact release-lifecycle/upgrade \
+            --recovery-artifact release-lifecycle/recovery \
+            --expected-candidate-revision "${{ steps.source.outputs.sha }}" \
+            --expected-previous-revision "${{ steps.lifecycle-bind.outputs.upgrade_previous_revision }}" \
+            --expected-previous-tag "${{ steps.lifecycle-bind.outputs.upgrade_previous_tag }}" \
+            --dependency-pins config/container-image-pins.json \
+            "${baseline_args[@]}"
 
   publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: release-contract
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         service: [core, benchmark, rag]
+    concurrency:
+      group: publish-product-image-${{ matrix.service }}-${{ needs.release-contract.outputs.source_sha }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
-
+          ref: ${{ needs.release-contract.outputs.source_sha }}
       - uses: docker/setup-buildx-action@v4
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate immutable and channel tags
+      - name: Detect an existing immutable image
+        id: immutable
+        shell: bash
+        env:
+          IMAGE: ghcr.io/windriderqc/agentx-${{ matrix.service }}
+          SOURCE_SHA: ${{ needs.release-contract.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          immutable_ref="${IMAGE}:sha-${SOURCE_SHA}"
+          inspect_error="$(mktemp)"
+          trap 'rm -f "$inspect_error"' EXIT
+          if digest="$(docker buildx imagetools inspect "$immutable_ref" --format '{{.Manifest.Digest}}' 2>"$inspect_error")"; then
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Registry returned an invalid digest for $immutable_ref" >&2
+              exit 1
+            fi
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          else
+            inspect_message="$(tr -d '\r' < "$inspect_error")"
+            if [ "$inspect_message" = "ERROR: ${immutable_ref}: not found" ] \
+                || [ "$inspect_message" = "ERROR: ${immutable_ref}: manifest unknown" ]; then
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Registry lookup failed without an exact not-found response" >&2
+              exit 1
+            fi
+          fi
+      - name: Generate immutable image metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/windriderqc/agentx-${{ matrix.service }}
           labels: |
             org.opencontainers.image.source=https://github.com/WindriderQc/AgentX-Ecosystem
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.release-contract.outputs.source_sha }}
           tags: |
-            type=sha,format=long,prefix=sha-
-            type=raw,value=test,enable=${{ github.event_name != 'release' || github.event.release.prerelease }}
-            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
-
-      - name: Build and publish linux/amd64 image
+            type=raw,value=sha-${{ needs.release-contract.outputs.source_sha }}
+      - name: Build and publish a missing immutable linux/amd64 image
         id: build
+        if: steps.immutable.outputs.exists != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -75,58 +344,698 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
-
-      - name: Record immutable release image
-        if: github.event_name == 'release'
+          build-args: |
+            AGENTX_BUILD_REVISION=${{ needs.release-contract.outputs.source_sha }}
+      - name: Resolve and verify the immutable image digest
+        id: resolved
+        shell: bash
         env:
-          RELEASE_SERVICE: ${{ matrix.service }}
-          RELEASE_IMAGE: ghcr.io/windriderqc/agentx-${{ matrix.service }}
-          RELEASE_DIGEST: ${{ steps.build.outputs.digest }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_COMMIT: ${{ github.sha }}
+          IMAGE: ghcr.io/windriderqc/agentx-${{ matrix.service }}
+          SOURCE_SHA: ${{ needs.release-contract.outputs.source_sha }}
+          EXISTING_DIGEST: ${{ steps.immutable.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          mkdir -p release-receipts
-          node -e "const fs=require('fs'); const receipt={schemaVersion:1,service:process.env.RELEASE_SERVICE,image:process.env.RELEASE_IMAGE,digest:process.env.RELEASE_DIGEST,tag:process.env.RELEASE_TAG,commit:process.env.RELEASE_COMMIT}; fs.writeFileSync('release-receipts/'+receipt.service+'.json',JSON.stringify(receipt,null,2)+'\n');"
-
-      - name: Preserve immutable release image receipt
-        if: github.event_name == 'release'
+          set -euo pipefail
+          immutable_ref="${IMAGE}:sha-${SOURCE_SHA}"
+          digest="$(docker buildx imagetools inspect "$immutable_ref" --format '{{.Manifest.Digest}}')"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Registry returned an invalid digest for $immutable_ref" >&2
+            exit 1
+          fi
+          if [ -n "$EXISTING_DIGEST" ] && [ "$digest" != "$EXISTING_DIGEST" ]; then
+            echo "Immutable image changed during verification" >&2
+            exit 1
+          fi
+          if [ -n "$BUILD_DIGEST" ] && [ "$digest" != "$BUILD_DIGEST" ]; then
+            echo "Published tag digest does not match the build digest" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Create the exact per-service immutable image receipt
+        shell: bash
+        env:
+          RECEIPT_SERVICE: ${{ matrix.service }}
+          RECEIPT_COMMIT: ${{ needs.release-contract.outputs.source_sha }}
+          RECEIPT_IMAGE: ghcr.io/windriderqc/agentx-${{ matrix.service }}
+          RECEIPT_DIGEST: ${{ steps.resolved.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p immutable-image-receipts
+          node <<'NODE'
+          const fs = require('node:fs');
+          const service = process.env.RECEIPT_SERVICE;
+          const commit = process.env.RECEIPT_COMMIT;
+          const image = process.env.RECEIPT_IMAGE;
+          const digest = process.env.RECEIPT_DIGEST;
+          if (!['core', 'benchmark', 'rag'].includes(service)
+              || !/^[0-9a-f]{40}$/.test(commit)
+              || image !== `ghcr.io/windriderqc/agentx-${service}`
+              || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+            throw new Error('immutable image receipt input is invalid');
+          }
+          const receipt = {
+            schema: 'agentx.immutable-image-receipt/v1',
+            service,
+            commit,
+            image,
+            digest,
+            ref: `${image}@${digest}`,
+          };
+          fs.writeFileSync(`immutable-image-receipts/${service}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+          NODE
+      - name: Preserve the unique immutable image receipt
         uses: actions/upload-artifact@v7
         with:
-          name: release-image-${{ matrix.service }}
-          path: release-receipts/${{ matrix.service }}.json
+          name: agentx-immutable-image-receipt-${{ matrix.service }}-${{ needs.release-contract.outputs.source_sha }}-${{ github.run_attempt }}
+          path: immutable-image-receipts/${{ matrix.service }}.json
           if-no-files-found: error
+          retention-days: 30
 
-  release-record:
-    if: github.event_name == 'release'
-    needs: publish
+  candidate-manifest:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [release-contract, publish]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
-      contents: write
+      actions: read
+      contents: read
+    outputs:
+      candidate_revision: ${{ steps.manifest.outputs.commit }}
+      core_digest: ${{ steps.manifest.outputs.core_digest }}
+      core_ref: ${{ steps.manifest.outputs.core_ref }}
+      benchmark_digest: ${{ steps.manifest.outputs.benchmark_digest }}
+      benchmark_ref: ${{ steps.manifest.outputs.benchmark_ref }}
+      rag_digest: ${{ steps.manifest.outputs.rag_digest }}
+      rag_ref: ${{ steps.manifest.outputs.rag_ref }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.release-contract.outputs.source_sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v8
+      - name: Download only this run's three immutable image receipts
+        uses: actions/download-artifact@v8
         with:
-          pattern: release-image-*
-          path: release-receipts
+          pattern: agentx-immutable-image-receipt-*-${{ needs.release-contract.outputs.source_sha }}-${{ github.run_attempt }}
+          path: immutable-image-receipts
           merge-multiple: true
-      - name: Assemble and validate the release image manifest
+      - name: Assemble and validate the exact candidate manifest
+        id: manifest
+        run: |
+          node scripts/assemble-candidate-image-manifest.js \
+            --receipts immutable-image-receipts \
+            --output candidate-image-manifest.json \
+            --commit "${{ needs.release-contract.outputs.source_sha }}" \
+            --github-output "$GITHUB_OUTPUT"
+          node scripts/verify-lifecycle-evidence.js \
+            --candidate candidate-image-manifest.json \
+            --expected-candidate-revision "${{ needs.release-contract.outputs.source_sha }}" \
+            --dependency-pins config/container-image-pins.json
+      - name: Preserve the exact candidate image manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentx-candidate-image-manifest-${{ needs.release-contract.outputs.source_sha }}-${{ github.run_attempt }}
+          path: candidate-image-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+  previous-stable:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: release-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      asset_id: ${{ steps.stable.outputs.asset_id }}
+      previous_revision: ${{ steps.validate.outputs.previous_revision }}
+      previous_tag: ${{ steps.validate.outputs.previous_tag }}
+      previous_version: ${{ steps.validate.outputs.previous_version }}
+      previous_manifest_sha256: ${{ steps.validate.outputs.previous_manifest_sha256 }}
+      identity_evidence_mode: ${{ steps.validate.outputs.previous_identity_evidence_mode }}
+      core_digest: ${{ steps.validate.outputs.previous_core_digest }}
+      core_ref: ${{ steps.validate.outputs.previous_core_ref }}
+      benchmark_digest: ${{ steps.validate.outputs.previous_benchmark_digest }}
+      benchmark_ref: ${{ steps.validate.outputs.previous_benchmark_ref }}
+      rag_digest: ${{ steps.validate.outputs.previous_rag_digest }}
+      rag_ref: ${{ steps.validate.outputs.previous_rag_ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-contract.outputs.source_sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Resolve the latest stable release and its attached immutable image manifest
+        id: stable
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            try {
+              const releases = await github.paginate(github.rest.repos.listReleases, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              });
+              const stable = releases
+                .filter((release) => !release.draft && !release.prerelease && release.published_at)
+                .sort((left, right) => new Date(right.published_at) - new Date(left.published_at))[0];
+              if (!stable || !/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(stable.tag_name)) {
+                throw new Error('a valid previous stable GitHub release is required');
+              }
+              const expectedName = `agentx-${stable.tag_name}-images.json`;
+              const matches = stable.assets.filter((asset) => asset.name === expectedName);
+              if (matches.length !== 1 || matches[0].size <= 0) {
+                throw new Error(`previous stable release must attach exactly one non-empty ${expectedName}`);
+              }
+              core.setOutput('asset_id', String(matches[0].id));
+              core.setOutput('tag', stable.tag_name);
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+      - name: Download the previous stable attached image manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_ASSET_ID: ${{ steps.stable.outputs.asset_id }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PREVIOUS_ASSET_ID" =~ ^[0-9]+$ ]]; then
+            echo "Previous stable release asset id is invalid" >&2
+            exit 1
+          fi
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/${GITHUB_REPOSITORY}/releases/assets/${PREVIOUS_ASSET_ID}" \
+            > previous-stable-image-manifest.json
+      - name: Validate the previous stable attached manifest and expose only exact refs
+        id: validate
+        run: |
+          node scripts/verify-lifecycle-evidence.js \
+            --previous previous-stable-image-manifest.json \
+            --expected-candidate-revision "${{ needs.release-contract.outputs.source_sha }}" \
+            --expected-previous-tag "${{ steps.stable.outputs.tag }}" \
+            --dependency-pins config/container-image-pins.json \
+            --github-output "$GITHUB_OUTPUT"
+
+  upgrade-rollback:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [release-contract, candidate-manifest, previous-stable]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    env:
+      AGENTX_UPGRADE_ROLLBACK_PREVIOUS_CORE_IMAGE: ${{ needs.previous-stable.outputs.core_ref }}
+      AGENTX_UPGRADE_ROLLBACK_PREVIOUS_BENCHMARK_IMAGE: ${{ needs.previous-stable.outputs.benchmark_ref }}
+      AGENTX_UPGRADE_ROLLBACK_PREVIOUS_RAG_IMAGE: ${{ needs.previous-stable.outputs.rag_ref }}
+      AGENTX_UPGRADE_ROLLBACK_CANDIDATE_CORE_IMAGE: ${{ needs.candidate-manifest.outputs.core_ref }}
+      AGENTX_UPGRADE_ROLLBACK_CANDIDATE_BENCHMARK_IMAGE: ${{ needs.candidate-manifest.outputs.benchmark_ref }}
+      AGENTX_UPGRADE_ROLLBACK_CANDIDATE_RAG_IMAGE: ${{ needs.candidate-manifest.outputs.rag_ref }}
+      AGENTX_UPGRADE_ROLLBACK_EXPECTED_PREVIOUS_REVISION: ${{ needs.previous-stable.outputs.previous_revision }}
+      AGENTX_UPGRADE_ROLLBACK_EXPECTED_CANDIDATE_REVISION: ${{ needs.release-contract.outputs.source_sha }}
+      AGENTX_UPGRADE_ROLLBACK_OUTPUT: lifecycle-evidence/upgrade-rollback-receipt.json
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-contract.outputs.source_sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Log in to GitHub Container Registry for exact-digest inspection
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Load only reviewed upgrade dependency references
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pins = JSON.parse(fs.readFileSync('config/container-image-pins.json', 'utf8'));
+          const rows = [
+            ['AGENTX_UPGRADE_ROLLBACK_MONGO_IMAGE', pins.images.mongodb.reference],
+            ['AGENTX_UPGRADE_ROLLBACK_QDRANT_IMAGE', pins.images.qdrant.reference],
+          ];
+          const pattern = /^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$/;
+          if (rows.some(([, value]) => !pattern.test(String(value || '')))) {
+            throw new Error('upgrade dependency pin is invalid');
+          }
+          fs.appendFileSync(process.env.GITHUB_ENV, `${rows.map((row) => row.join('=')).join('\n')}\n`);
+          NODE
+      - name: Download the independently retained candidate manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: agentx-candidate-image-manifest-${{ needs.release-contract.outputs.source_sha }}-${{ github.run_attempt }}
+          path: candidate-artifact
+      - name: Download and revalidate the previous stable attached manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_ASSET_ID: ${{ needs.previous-stable.outputs.asset_id }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/${GITHUB_REPOSITORY}/releases/assets/${PREVIOUS_ASSET_ID}" \
+            > previous-stable-image-manifest.json
+          node scripts/verify-lifecycle-evidence.js \
+            --candidate-artifact candidate-artifact \
+            --previous previous-stable-image-manifest.json \
+            --expected-candidate-revision "${{ needs.release-contract.outputs.source_sha }}" \
+            --expected-previous-revision "${{ needs.previous-stable.outputs.previous_revision }}" \
+            --expected-previous-tag "${{ needs.previous-stable.outputs.previous_tag }}" \
+            --dependency-pins config/container-image-pins.json
+      - name: Generate the one-time normalized baseline only from exact legacy bytes and OCI labels
+        if: needs.previous-stable.outputs.identity_evidence_mode == 'legacy-oci-bound'
+        run: |
+          node scripts/assemble-previous-release-baseline.js \
+            --manifest previous-stable-image-manifest.json \
+            --output previous-release-baseline.json \
+            --expected-tag "${{ needs.previous-stable.outputs.previous_tag }}" \
+            --policy config/legacy-release-baselines.json \
+            --pull-exact-images true
+      - name: Rehearse the exact-digest upgrade and rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p lifecycle-evidence
+          baseline_args=()
+          mode="${{ needs.previous-stable.outputs.identity_evidence_mode }}"
+          if [ "$mode" = "legacy-oci-bound" ]; then
+            baseline_args+=(--previous-baseline previous-release-baseline.json)
+          elif [ "$mode" != "in-band-health" ]; then
+            echo "Previous release identity evidence mode is invalid" >&2
+            exit 1
+          fi
+          node e2e/run-upgrade-rollback.js \
+            --project "agentx-upgrade-rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --previous-manifest previous-stable-image-manifest.json \
+            --previous-manifest-sha256 "${{ needs.previous-stable.outputs.previous_manifest_sha256 }}" \
+            --output lifecycle-evidence/upgrade-rollback-receipt.json \
+            "${baseline_args[@]}"
+      - name: Remove only the unique upgrade and rollback project
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="agentx-upgrade-rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if ! [[ "$project" =~ ^agentx-upgrade-rollback-[a-z0-9][a-z0-9-]{5,35}$ ]]; then
+            echo "Refusing cleanup for an invalid upgrade and rollback project" >&2
+            exit 1
+          fi
+          set +e
+          docker compose --project-name "$project" --file docker-compose.upgrade-rollback.yml \
+            down --volumes --remove-orphans --timeout 30
+          set -e
+          filter="label=com.docker.compose.project=$project"
+          containers_output="$(docker container ls --all --quiet --filter "$filter")" || exit 1
+          networks_output="$(docker network ls --quiet --filter "$filter")" || exit 1
+          volumes_output="$(docker volume ls --quiet --filter "$filter")" || exit 1
+          containers=()
+          networks=()
+          volumes=()
+          if [ -n "$containers_output" ]; then mapfile -t containers <<< "$containers_output"; fi
+          if [ -n "$networks_output" ]; then mapfile -t networks <<< "$networks_output"; fi
+          if [ -n "$volumes_output" ]; then mapfile -t volumes <<< "$volumes_output"; fi
+          if [ "$((${#containers[@]} + ${#networks[@]} + ${#volumes[@]}))" -gt 10 ]; then
+            echo "Upgrade and rollback cleanup resource bound exceeded" >&2
+            exit 1
+          fi
+          if [ "${#containers[@]}" -gt 0 ]; then docker container rm --force "${containers[@]}"; fi
+          if [ "${#networks[@]}" -gt 0 ]; then docker network rm "${networks[@]}"; fi
+          if [ "${#volumes[@]}" -gt 0 ]; then docker volume rm "${volumes[@]}"; fi
+          containers_output="$(docker container ls --all --quiet --filter "$filter")" || exit 1
+          networks_output="$(docker network ls --quiet --filter "$filter")" || exit 1
+          volumes_output="$(docker volume ls --quiet --filter "$filter")" || exit 1
+          test -z "$containers_output"
+          test -z "$networks_output"
+          test -z "$volumes_output"
+      - name: Independently validate the upgrade receipt against both manifests and dependency pins
+        if: always()
+        run: |
+          baseline_args=()
+          if [ "${{ needs.previous-stable.outputs.identity_evidence_mode }}" = "legacy-oci-bound" ]; then
+            baseline_args+=(--previous-baseline previous-release-baseline.json)
+          fi
+          node scripts/verify-lifecycle-evidence.js \
+            --candidate-artifact candidate-artifact \
+            --previous previous-stable-image-manifest.json \
+            --upgrade lifecycle-evidence/upgrade-rollback-receipt.json \
+            --expected-candidate-revision "${{ needs.release-contract.outputs.source_sha }}" \
+            --expected-previous-revision "${{ needs.previous-stable.outputs.previous_revision }}" \
+            --expected-previous-tag "${{ needs.previous-stable.outputs.previous_tag }}" \
+            --dependency-pins config/container-image-pins.json \
+            "${baseline_args[@]}"
+      - name: Preserve exact-SHA immutable upgrade and rollback evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentx-immutable-upgrade-rollback-evidence-${{ needs.release-contract.outputs.source_sha }}-${{ github.run_attempt }}
+          path: lifecycle-evidence/upgrade-rollback-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+  recovery-drill:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [release-contract, candidate-manifest, previous-stable]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    env:
+      AGENTX_RECOVERY_DRILL_CORE_IMAGE: ${{ needs.candidate-manifest.outputs.core_ref }}
+      AGENTX_RECOVERY_DRILL_BENCHMARK_IMAGE: ${{ needs.candidate-manifest.outputs.benchmark_ref }}
+      AGENTX_RECOVERY_DRILL_RAG_IMAGE: ${{ needs.candidate-manifest.outputs.rag_ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-contract.outputs.source_sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Log in to GitHub Container Registry for exact-digest recovery inputs
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download and validate the independently retained candidate manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: agentx-candidate-image-manifest-${{ needs.release-contract.outputs.source_sha }}-${{ github.run_attempt }}
+          path: candidate-artifact
+      - name: Load only reviewed recovery dependency references
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pins = JSON.parse(fs.readFileSync('config/container-image-pins.json', 'utf8'));
+          const rows = [
+            ['AGENTX_RECOVERY_DRILL_MONGODB_IMAGE', pins.images.mongodb.reference],
+            ['AGENTX_RECOVERY_DRILL_QDRANT_IMAGE', pins.images.qdrant.reference],
+            ['AGENTX_RECOVERY_DRILL_HELPER_IMAGE', pins.images['recovery-helper'].reference],
+          ];
+          const pattern = /^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$/;
+          if (rows.some(([, value]) => !pattern.test(String(value || '')))) {
+            throw new Error('recovery dependency pin is invalid');
+          }
+          fs.appendFileSync(process.env.GITHUB_ENV, `${rows.map((row) => row.join('=')).join('\n')}\n`);
+          NODE
+          node scripts/verify-lifecycle-evidence.js \
+            --candidate-artifact candidate-artifact \
+            --expected-candidate-revision "${{ needs.release-contract.outputs.source_sha }}" \
+            --dependency-pins config/container-image-pins.json
+      - name: Rehearse exact-digest MongoDB and Qdrant recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          scope="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if ! [[ "$scope" =~ ^[a-z0-9-]{6,25}$ ]]; then
+            echo "Generated recovery run scope is invalid" >&2
+            exit 1
+          fi
+          mkdir -p lifecycle-evidence
+          node scripts/run-recovery-drill.js \
+            --output lifecycle-evidence/recovery-drill-receipt.json \
+            --product-profile full \
+            --expected-candidate-revision "${{ needs.release-contract.outputs.source_sha }}" \
+            --candidate-core-image "${{ needs.candidate-manifest.outputs.core_ref }}" \
+            --candidate-benchmark-image "${{ needs.candidate-manifest.outputs.benchmark_ref }}" \
+            --candidate-rag-image "${{ needs.candidate-manifest.outputs.rag_ref }}" \
+            --run-scope "$scope"
+      - name: Remove only the three unique recovery drill projects
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          scope="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if ! [[ "$scope" =~ ^[a-z0-9-]{6,25}$ ]]; then
+            echo "Refusing cleanup for an invalid recovery run scope" >&2
+            exit 1
+          fi
+          cleanup_status=0
+          for phase in source negative positive; do
+            project="agentx-rd-${scope}-${phase}"
+            set +e
+            docker compose --project-name "$project" --file docker-compose.recovery-drill.yml \
+              down --volumes --remove-orphans --timeout 10
+            set -e
+            filter="label=com.docker.compose.project=$project"
+            if ! containers_output="$(docker container ls --all --quiet --filter "$filter")" \
+                || ! networks_output="$(docker network ls --quiet --filter "$filter")" \
+                || ! volumes_output="$(docker volume ls --quiet --filter "$filter")"; then
+              echo "Recovery cleanup could not enumerate exact resources for $project" >&2
+              cleanup_status=1
+              continue
+            fi
+            containers=()
+            networks=()
+            volumes=()
+            if [ -n "$containers_output" ]; then mapfile -t containers <<< "$containers_output"; fi
+            if [ -n "$networks_output" ]; then mapfile -t networks <<< "$networks_output"; fi
+            if [ -n "$volumes_output" ]; then mapfile -t volumes <<< "$volumes_output"; fi
+            if [ "$((${#containers[@]} + ${#networks[@]} + ${#volumes[@]}))" -gt 12 ]; then
+              echo "Recovery cleanup resource bound exceeded for $project" >&2
+              cleanup_status=1
+              continue
+            fi
+            if [ "${#containers[@]}" -gt 0 ]; then docker container rm --force "${containers[@]}"; fi
+            if [ "${#networks[@]}" -gt 0 ]; then docker network rm "${networks[@]}"; fi
+            if [ "${#volumes[@]}" -gt 0 ]; then docker volume rm "${volumes[@]}"; fi
+            if ! containers_output="$(docker container ls --all --quiet --filter "$filter")" \
+                || ! networks_output="$(docker network ls --quiet --filter "$filter")" \
+                || ! volumes_output="$(docker volume ls --quiet --filter "$filter")"; then
+              echo "Recovery cleanup could not verify exact residue for $project" >&2
+              cleanup_status=1
+            elif [ -n "$containers_output" ] || [ -n "$networks_output" ] || [ -n "$volumes_output" ]; then
+              echo "Recovery cleanup left resources for $project" >&2
+              cleanup_status=1
+            fi
+          done
+          exit "$cleanup_status"
+      - name: Independently validate the recovery receipt against the candidate and dependency pins
+        if: always()
+        run: |
+          node scripts/verify-lifecycle-evidence.js \
+            --candidate-artifact candidate-artifact \
+            --recovery lifecycle-evidence/recovery-drill-receipt.json \
+            --expected-candidate-revision "${{ needs.release-contract.outputs.source_sha }}" \
+            --dependency-pins config/container-image-pins.json
+      - name: Preserve exact-SHA MongoDB and Qdrant recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentx-mongodb-qdrant-recovery-evidence-${{ needs.release-contract.outputs.source_sha }}-${{ github.run_attempt }}
+          path: lifecycle-evidence/recovery-drill-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+  release-record:
+    if: github.event_name == 'release'
+    needs: release-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: promote-product-release-${{ github.event.release.tag_name }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-contract.outputs.source_sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download the exact candidate lifecycle artifact again
+        uses: actions/download-artifact@v8
+        with:
+          name: agentx-candidate-image-manifest-${{ needs.release-contract.outputs.source_sha }}-${{ needs.release-contract.outputs.lifecycle_run_attempt }}
+          path: release-lifecycle/candidate
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.release-contract.outputs.lifecycle_run_id }}
+      - name: Download the exact upgrade and rollback lifecycle artifact again
+        uses: actions/download-artifact@v8
+        with:
+          name: agentx-immutable-upgrade-rollback-evidence-${{ needs.release-contract.outputs.source_sha }}-${{ needs.release-contract.outputs.lifecycle_run_attempt }}
+          path: release-lifecycle/upgrade
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.release-contract.outputs.lifecycle_run_id }}
+      - name: Download the exact recovery lifecycle artifact again
+        uses: actions/download-artifact@v8
+        with:
+          name: agentx-mongodb-qdrant-recovery-evidence-${{ needs.release-contract.outputs.source_sha }}-${{ needs.release-contract.outputs.lifecycle_run_attempt }}
+          path: release-lifecycle/recovery
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.release-contract.outputs.lifecycle_run_id }}
+      - name: Download the exact previous-release manifest bytes again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_ASSET_ID: ${{ needs.release-contract.outputs.previous_asset_id }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PREVIOUS_ASSET_ID" =~ ^[0-9]+$ ]]; then
+            echo "Previous release asset id is invalid" >&2
+            exit 1
+          fi
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/${GITHUB_REPOSITORY}/releases/assets/${PREVIOUS_ASSET_ID}" \
+            > release-lifecycle/previous-image-manifest.json
+      - name: Reconstruct the exact legacy baseline again before release promotion
+        if: needs.release-contract.outputs.previous_identity_evidence_mode == 'legacy-oci-bound'
+        run: |
+          node scripts/assemble-previous-release-baseline.js \
+            --manifest release-lifecycle/previous-image-manifest.json \
+            --output release-lifecycle/previous-release-baseline.json \
+            --expected-tag "${{ needs.release-contract.outputs.previous_tag }}" \
+            --policy config/legacy-release-baselines.json \
+            --pull-exact-images true
+      - name: Revalidate lifecycle evidence before creating the release record
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_args=()
+          mode="${{ needs.release-contract.outputs.previous_identity_evidence_mode }}"
+          if [ "$mode" = "legacy-oci-bound" ]; then
+            baseline_args+=(--previous-baseline release-lifecycle/previous-release-baseline.json)
+          elif [ "$mode" != "in-band-health" ]; then
+            echo "Previous release identity evidence mode is invalid" >&2
+            exit 1
+          fi
+          node scripts/verify-lifecycle-evidence.js \
+            --candidate-artifact release-lifecycle/candidate \
+            --previous release-lifecycle/previous-image-manifest.json \
+            --upgrade-artifact release-lifecycle/upgrade \
+            --recovery-artifact release-lifecycle/recovery \
+            --expected-candidate-revision "${{ needs.release-contract.outputs.source_sha }}" \
+            --expected-previous-revision "${{ needs.release-contract.outputs.previous_revision }}" \
+            --expected-previous-tag "${{ needs.release-contract.outputs.previous_tag }}" \
+            --dependency-pins config/container-image-pins.json \
+            "${baseline_args[@]}"
+      - name: Assemble the authoritative release image manifest from the validated candidate
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_COMMIT: ${{ needs.release-contract.outputs.source_sha }}
         run: |
+          set -euo pipefail
+          mkdir -p release-image-receipts
+          node <<'NODE'
+          const fs = require('node:fs');
+          const candidate = JSON.parse(fs.readFileSync('release-lifecycle/candidate/candidate-image-manifest.json', 'utf8'));
+          for (const [service, image] of Object.entries(candidate.images)) {
+            const receipt = {
+              schemaVersion: 1,
+              service,
+              image: image.image,
+              digest: image.digest,
+              tag: process.env.RELEASE_TAG,
+              commit: process.env.RELEASE_COMMIT,
+            };
+            fs.writeFileSync(`release-image-receipts/${service}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+          }
+          NODE
           node scripts/assemble-release-image-manifest.js \
-            --receipts release-receipts \
+            --receipts release-image-receipts \
             --output "agentx-${RELEASE_TAG}-images.json" \
             --tag "$RELEASE_TAG" \
             --commit "$RELEASE_COMMIT"
-      - name: Attach immutable image manifest to the GitHub release
+      - name: Promote only the validated digest set without overwriting release tags
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          promotion_rows="$(mktemp)"
+          missing_rows="$(mktemp)"
+          inspect_error="$(mktemp)"
+          trap 'rm -f "$promotion_rows" "$missing_rows" "$inspect_error"' EXIT
+          node -e "const m=require('./agentx-${RELEASE_TAG}-images.json'); for (const [s,x] of Object.entries(m.images)) process.stdout.write(s+'|'+x.image+'|'+x.ref+'|'+x.digest+'\n')" \
+            > "$promotion_rows"
+          : > "$missing_rows"
+          while IFS='|' read -r service image ref digest; do
+            release_ref="${image}:${RELEASE_TAG}"
+            candidate_digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+            if [ "$candidate_digest" != "$digest" ]; then
+              echo "Candidate registry content does not match the validated $service digest" >&2
+              exit 1
+            fi
+            : > "$inspect_error"
+            if current_digest="$(docker buildx imagetools inspect "$release_ref" --format '{{.Manifest.Digest}}' 2>"$inspect_error")"; then
+              if [ "$current_digest" != "$digest" ]; then
+                echo "Refusing to overwrite $release_ref" >&2
+                exit 1
+              fi
+            else
+              inspect_message="$(tr -d '\r' < "$inspect_error")"
+              if [ "$inspect_message" = "ERROR: ${release_ref}: not found" ] \
+                  || [ "$inspect_message" = "ERROR: ${release_ref}: manifest unknown" ]; then
+                printf '%s|%s|%s|%s\n' "$service" "$image" "$ref" "$digest" >> "$missing_rows"
+              else
+                echo "Release-tag lookup failed without an exact target-ref not-found response" >&2
+                exit 1
+              fi
+            fi
+          done < "$promotion_rows"
+          while IFS='|' read -r service image ref digest; do
+            [ -n "$service" ] || continue
+            release_ref="${image}:${RELEASE_TAG}"
+            : > "$inspect_error"
+            if current_digest="$(docker buildx imagetools inspect "$release_ref" --format '{{.Manifest.Digest}}' 2>"$inspect_error")"; then
+              if [ "$current_digest" != "$digest" ]; then
+                echo "Refusing to overwrite concurrently-created $release_ref" >&2
+                exit 1
+              fi
+              continue
+            else
+              inspect_message="$(tr -d '\r' < "$inspect_error")"
+              if [ "$inspect_message" != "ERROR: ${release_ref}: not found" ] \
+                  && [ "$inspect_message" != "ERROR: ${release_ref}: manifest unknown" ]; then
+                echo "Release-tag recheck failed without an exact target-ref not-found response" >&2
+                exit 1
+              fi
+            fi
+            docker buildx imagetools create --tag "$release_ref" "$ref"
+            promoted_digest="$(docker buildx imagetools inspect "$release_ref" --format '{{.Manifest.Digest}}')"
+            if [ "$promoted_digest" != "$digest" ]; then
+              echo "Release tag verification failed for $release_ref" >&2
+              exit 1
+            fi
+          done < "$missing_rows"
+      - name: Retain the authoritative release image manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-image-manifest-${{ github.event.release.tag_name }}-${{ needs.release-contract.outputs.source_sha }}
+          path: agentx-${{ github.event.release.tag_name }}-images.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Attach the immutable manifest and exact lifecycle receipts to the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" "agentx-${RELEASE_TAG}-images.json" --clobber
+          RELEASE_SHA: ${{ needs.release-contract.outputs.source_sha }}
+          LIFECYCLE_ATTEMPT: ${{ needs.release-contract.outputs.lifecycle_run_attempt }}
+        run: |
+          set -euo pipefail
+          cp release-lifecycle/candidate/candidate-image-manifest.json \
+            "agentx-${RELEASE_TAG}-lifecycle-${RELEASE_SHA}-${LIFECYCLE_ATTEMPT}-candidate-images.json"
+          cp release-lifecycle/upgrade/upgrade-rollback-receipt.json \
+            "agentx-${RELEASE_TAG}-lifecycle-${RELEASE_SHA}-${LIFECYCLE_ATTEMPT}-upgrade-rollback.json"
+          cp release-lifecycle/recovery/recovery-drill-receipt.json \
+            "agentx-${RELEASE_TAG}-lifecycle-${RELEASE_SHA}-${LIFECYCLE_ATTEMPT}-recovery-drill.json"
+          gh release upload "$RELEASE_TAG" \
+            "agentx-${RELEASE_TAG}-images.json" \
+            "agentx-${RELEASE_TAG}-lifecycle-${RELEASE_SHA}-${LIFECYCLE_ATTEMPT}-candidate-images.json" \
+            "agentx-${RELEASE_TAG}-lifecycle-${RELEASE_SHA}-${LIFECYCLE_ATTEMPT}-upgrade-rollback.json" \
+            "agentx-${RELEASE_TAG}-lifecycle-${RELEASE_SHA}-${LIFECYCLE_ATTEMPT}-recovery-drill.json" \
+            --clobber

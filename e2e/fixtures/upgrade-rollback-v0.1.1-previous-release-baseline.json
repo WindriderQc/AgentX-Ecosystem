@@ -1,0 +1,43 @@
+{
+  "schema": "agentx.previous-release-baseline/v1",
+  "identityEvidenceMode": "legacy-oci-bound",
+  "tag": "v0.1.1",
+  "version": "0.1.1",
+  "commit": "6888750556cecc5277bf36b91f64a27806ea42a5",
+  "profile": "demo",
+  "manifestSha256": "9a6d1b84fec83bd6a42d2a79852d3ac3e4e17ab4b70b5bf7c59cdef350e4912a",
+  "images": {
+    "core": {
+      "image": "ghcr.io/windriderqc/agentx-core",
+      "digest": "sha256:7000ef7e85cf4ca23387bce1959f00f626aeb5e76ac4ba973441b05b0bd7d794",
+      "ref": "ghcr.io/windriderqc/agentx-core@sha256:7000ef7e85cf4ca23387bce1959f00f626aeb5e76ac4ba973441b05b0bd7d794"
+    },
+    "benchmark": {
+      "image": "ghcr.io/windriderqc/agentx-benchmark",
+      "digest": "sha256:4525c3c2c44bb4e91dac3964d7cf7be1a1216035905cbfef4d63fc616164747f",
+      "ref": "ghcr.io/windriderqc/agentx-benchmark@sha256:4525c3c2c44bb4e91dac3964d7cf7be1a1216035905cbfef4d63fc616164747f"
+    },
+    "rag": {
+      "image": "ghcr.io/windriderqc/agentx-rag",
+      "digest": "sha256:763511e85ad0ca67403e7ba0a9039a661eaf6ae56303a97b71ee65535e4e1423",
+      "ref": "ghcr.io/windriderqc/agentx-rag@sha256:763511e85ad0ca67403e7ba0a9039a661eaf6ae56303a97b71ee65535e4e1423"
+    }
+  },
+  "ociLabels": {
+    "core": {
+      "revision": "6888750556cecc5277bf36b91f64a27806ea42a5",
+      "version": "v0.1.1",
+      "source": "https://github.com/WindriderQc/AgentX-Ecosystem"
+    },
+    "benchmark": {
+      "revision": "6888750556cecc5277bf36b91f64a27806ea42a5",
+      "version": "v0.1.1",
+      "source": "https://github.com/WindriderQc/AgentX-Ecosystem"
+    },
+    "rag": {
+      "revision": "6888750556cecc5277bf36b91f64a27806ea42a5",
+      "version": "v0.1.1",
+      "source": "https://github.com/WindriderQc/AgentX-Ecosystem"
+    }
+  }
+}
