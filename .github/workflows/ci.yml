@@ -168,6 +168,7 @@ jobs:
           node --test scripts/verify-release-evidence.test.js
           node --test scripts/verify-degraded-release.test.js
           node --test scripts/verify-recovery-contract.test.js
+          node --test shared/outboundHttpExecutor.test.js
           node --test shared/recoveryBundleContract.test.js
           node --test shared/recoveryDrillReceiptContract.test.js
           node --test scripts/verify-recovery-bundle.test.js
