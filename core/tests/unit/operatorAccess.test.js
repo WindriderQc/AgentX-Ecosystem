@@ -22,6 +22,7 @@ describe('operator UI access', () => {
   const originalUiHosts = process.env.AGENTX_OPERATOR_UI_HOSTS;
   const originalCorePublicUrl = process.env.CORE_PUBLIC_URL;
   const originalLoopbackProxyTrust = process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
+  const originalTrustedProxyAddresses = process.env.AGENTX_TRUSTED_UI_PROXY_ADDRESSES;
 
   afterEach(() => {
     if (originalToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
@@ -32,6 +33,8 @@ describe('operator UI access', () => {
     else process.env.CORE_PUBLIC_URL = originalCorePublicUrl;
     if (originalLoopbackProxyTrust === undefined) delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
     else process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI = originalLoopbackProxyTrust;
+    if (originalTrustedProxyAddresses === undefined) delete process.env.AGENTX_TRUSTED_UI_PROXY_ADDRESSES;
+    else process.env.AGENTX_TRUSTED_UI_PROXY_ADDRESSES = originalTrustedProxyAddresses;
   });
 
   it('does not treat a remote same-origin header set as operator identity', () => {
@@ -145,18 +148,19 @@ describe('operator UI access', () => {
     expect(sameOriginUiAllowed(req)).toBe(true);
   });
 
-  it('binds a deployment-owned remote UI host to exact same-origin proxy traffic', () => {
+  it('binds a deployment-owned remote UI host to its exact trusted proxy source', () => {
     process.env.AGENTX_OPERATOR_UI_HOSTS = '192.0.2.99';
+    process.env.AGENTX_TRUSTED_UI_PROXY_ADDRESSES = '172.18.0.1';
     const sameOrigin = request({
-      referer: 'https://192.0.2.99/dad',
+      referer: 'http://192.0.2.99/dad',
       host: '192.0.2.99',
       'sec-fetch-site': 'same-origin',
-    }, { ip: '127.0.0.1', protocol: 'https' });
+    }, { ip: '::ffff:172.18.0.1', protocol: 'http' });
     const crossSite = request({
       origin: 'https://evil.example',
       host: '192.0.2.99',
       'sec-fetch-site': 'cross-site',
-    }, { ip: '127.0.0.1', protocol: 'https' });
+    }, { ip: '::ffff:172.18.0.1', protocol: 'http' });
 
     expect(sameOriginUiAllowed(sameOrigin)).toBe(true);
     expect(operatorUiAccessAllowed(sameOrigin)).toBe(true);

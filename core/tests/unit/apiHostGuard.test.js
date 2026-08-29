@@ -123,6 +123,28 @@ describe('shared service API Host guard', () => {
       .expect(({ body }) => expect(body.code).toBe('CROSS_SITE_MUTATION_FORBIDDEN'));
   });
 
+  test('admits exact same-origin mutation only from the configured UI proxy peer', async () => {
+    const env = {
+      BENCHMARK_PUBLIC_URL: 'https://bench.example.test',
+      AGENTX_TRUSTED_UI_PROXY_ADDRESSES: '172.18.0.1',
+    };
+    await request(appFor(env, '::ffff:172.18.0.1')).post('/api/mutate')
+      .set('Host', 'bench.example.test')
+      .set('Origin', 'https://bench.example.test')
+      .set('Sec-Fetch-Site', 'same-origin')
+      .expect(200);
+    await request(appFor(env, '172.18.0.2')).post('/api/mutate')
+      .set('Host', 'bench.example.test')
+      .set('Origin', 'https://bench.example.test')
+      .set('Sec-Fetch-Site', 'same-origin')
+      .expect(403);
+    await request(appFor(env, '::ffff:172.18.0.1')).post('/api/mutate')
+      .set('Host', 'bench.example.test')
+      .set('Origin', 'https://bench.example.test')
+      .set('Sec-Fetch-Site', 'cross-site')
+      .expect(403);
+  });
+
   test('rejects a remote caller that forges the localhost Host and Origin', async () => {
     const app = appFor({}, '198.51.100.7');
     await request(app).post('/api/mutate')

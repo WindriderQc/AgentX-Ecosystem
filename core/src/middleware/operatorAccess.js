@@ -1,11 +1,10 @@
 'use strict';
 
 const crypto = require('crypto');
-
-function isLoopbackAddress(address) {
-  const ip = String(address || '').trim();
-  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-}
+const {
+  isLoopbackAddress,
+  trustedUiProxySourceAllowed,
+} = require('../../../shared/apiHostGuard');
 
 function splitList(value) {
   return String(value || '')
@@ -78,7 +77,8 @@ function sameOriginUiAllowed(req) {
   const localTarget = hostName === 'localhost' || hostName === '127.0.0.1' || hostName === '::1';
   const trustLoopbackProxyUi = String(process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI || '')
     .trim().toLowerCase() === 'true';
-  if (!isLoopbackAddress(remoteAddress) && !(trustLoopbackProxyUi && localTarget)) return false;
+  if (!trustedUiProxySourceAllowed(remoteAddress)
+    && !(trustLoopbackProxyUi && localTarget)) return false;
   let origin = String(req.get?.('origin') || '').trim();
   const fetchSite = String(req.get?.('sec-fetch-site') || '').trim().toLowerCase();
   if (!origin) {

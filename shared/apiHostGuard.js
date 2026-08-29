@@ -35,8 +35,26 @@ function operatorTokenAllowed(req, env) {
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function isLoopbackAddress(address) {
+  const value = normalizeRemoteAddress(address);
+  return value === '127.0.0.1' || value === '::1';
+}
+
+function normalizeRemoteAddress(address) {
   const value = String(address || '').trim().toLowerCase();
-  return value === '127.0.0.1' || value === '::1' || value === '::ffff:127.0.0.1';
+  const mappedIpv4 = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  return mappedIpv4 ? mappedIpv4[1] : value;
+}
+
+function configuredTrustedUiProxyAddresses(env = process.env) {
+  return new Set(splitList(env.AGENTX_TRUSTED_UI_PROXY_ADDRESSES)
+    .map(normalizeRemoteAddress)
+    .filter(Boolean));
+}
+
+function trustedUiProxySourceAllowed(address, env = process.env) {
+  const normalized = normalizeRemoteAddress(address);
+  return isLoopbackAddress(normalized)
+    || configuredTrustedUiProxyAddresses(env).has(normalized);
 }
 
 function hasBrowserRequestSignals(req) {
@@ -79,7 +97,7 @@ function sameOriginMutationAllowed(
   req,
   allowedHosts,
   allowedOrigins,
-  { trustLoopbackProxyUi = false } = {}
+  { trustLoopbackProxyUi = false, trustedProxyAddresses = new Set() } = {}
 ) {
   const fetchSite = String(req.get?.('sec-fetch-site') || '').trim().toLowerCase();
   if (fetchSite && fetchSite !== 'same-origin') return false;
@@ -94,7 +112,10 @@ function sameOriginMutationAllowed(
   // deployments must use the operator-token path.
   const remoteAddress = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '';
   const localTarget = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
-  if (!isLoopbackAddress(remoteAddress) && !(trustLoopbackProxyUi && localTarget)) return false;
+  const normalizedRemoteAddress = normalizeRemoteAddress(remoteAddress);
+  if (!isLoopbackAddress(normalizedRemoteAddress)
+    && !trustedProxyAddresses.has(normalizedRemoteAddress)
+    && !(trustLoopbackProxyUi && localTarget)) return false;
 
   try {
     const parsedOrigin = new URL(origin);
@@ -150,7 +171,10 @@ function createApiHostGuard({
         req,
         allowedHosts,
         configuredOrigins(publicUrlEnv, env),
-        { trustLoopbackProxyUi }
+        {
+          trustLoopbackProxyUi,
+          trustedProxyAddresses: configuredTrustedUiProxyAddresses(env),
+        }
       )) {
         return next();
       }
@@ -182,10 +206,13 @@ function createApiHostGuard({
 }
 
 module.exports = {
+  configuredTrustedUiProxyAddresses,
   createApiHostGuard,
   hasBrowserRequestSignals,
   isLoopbackAddress,
   normalizeHostname,
+  normalizeRemoteAddress,
   sameOriginMutationAllowed,
   safeTokenMatch,
+  trustedUiProxySourceAllowed,
 };
