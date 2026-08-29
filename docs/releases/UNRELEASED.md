@@ -54,6 +54,9 @@ v0.1.1.
 - Separately operated consumers have bounded, versioned conformance contracts
   for identity, provenance, freshness, authentication, timeouts, cancellation,
   degraded behavior, and ownership.
+- Default Compose now passes the deployment-owned external-consumer credential
+  only to Core, and conformance probes authenticate both generic and Nestor
+  contract families without sending that credential to unrelated reads.
 - Provider-neutral WorkerEnvelope/WorkerReceipt v1 contracts now bind logical
   work, budgets, policies, exact harness/model/API/environment identity, and
   deterministic evidence fingerprints. Benchmark can compare imported

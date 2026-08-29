@@ -711,7 +711,7 @@ async function verifyCheck(check, options) {
     headers: {
       Accept: 'application/json',
       ...(headersByService[check.service] || {}),
-      ...(consumerToken && check.contract?.flavor === 'generic'
+      ...(consumerToken && ['generic', 'nestor'].includes(check.contract?.flavor)
         ? { 'X-AgentX-Consumer-Token': consumerToken }
         : {}),
     },

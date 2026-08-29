@@ -36,6 +36,11 @@ from `AGENTX_EXTERNAL_CONSUMER_TOKEN`. Use `--consumer-token-env NAME` to select
 a different deployment-owned environment variable. URLs and credentials never
 belong in `config/adapter-consumer-contracts.json`.
 
+The verifier sends that credential only to the registered generic and Nestor
+consumer contract families. When checking the default Compose deployment,
+supply the same process-environment value used to create Core; Compose passes
+it to Core without storing it in `config/agentx.env`.
+
 Run the fixture suite without any services or network access:
 
 ```powershell

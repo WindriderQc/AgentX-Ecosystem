@@ -135,6 +135,13 @@ the value from an existing Core or RAG container when possible. Compose passes
 it only to Core and RAG. It authorizes the internal snapshot contract and must
 never be committed or exposed to browser code.
 
+A separately deployed generic or Nestor consumer may receive the shared,
+route-scoped `AGENTX_EXTERNAL_CONSUMER_TOKEN`. Compose passes a value supplied
+through the process environment only to Core; it remains empty by default and
+does not belong in `config/agentx.env`. The credential authorizes only the two
+versioned `/api/consumers/` contract families and must not be distributed as an
+operator credential.
+
 Full-profile deployments may also supply four purpose-scoped worker
 credentials to Core. They are optional for the loopback-only website, but a
 remote machine call fails closed unless its own value is configured and sent

@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -127,8 +128,23 @@ test('verifies every healthy fixture and sends only the bounded registered reque
     calls.find((call) => call.check === 'generic-consumer-routing').options.headers['X-AgentX-Consumer-Token'],
     'fixture-token'
   );
+  assert.equal(
+    calls.find((call) => call.check === 'nestor-consumer-routing').options.headers['X-AgentX-Consumer-Token'],
+    'fixture-token'
+  );
   assert.equal(calls.find((call) => call.check === 'core-health').options.headers['X-AgentX-Consumer-Token'], undefined);
-  assert.equal(calls.find((call) => call.check === 'nestor-consumer-routing').options.headers['X-AgentX-Consumer-Token'], undefined);
+  assert.equal(calls.find((call) => call.check === 'rag-status').options.headers['X-AgentX-Consumer-Token'], undefined);
+});
+
+test('default Compose passes the deployment-owned consumer credential only to Core', () => {
+  const compose = fs.readFileSync(path.resolve(__dirname, '..', 'docker-compose.yml'), 'utf8');
+  const core = compose.slice(compose.indexOf('\n  core:'), compose.indexOf('\n  benchmark:'));
+  const remainingServices = compose.slice(compose.indexOf('\n  benchmark:'));
+  const declaration = 'AGENTX_EXTERNAL_CONSUMER_TOKEN: ${AGENTX_EXTERNAL_CONSUMER_TOKEN:-}';
+
+  assert(core.includes(declaration));
+  assert(!remainingServices.includes('AGENTX_EXTERNAL_CONSUMER_TOKEN'));
+  assert.equal((compose.match(/^\s+AGENTX_EXTERNAL_CONSUMER_TOKEN:/gm) || []).length, 1);
 });
 
 test('rejects a response whose declared size exceeds the conformance byte budget', async () => {
