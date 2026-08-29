@@ -393,7 +393,9 @@ function createLifecycle(policy, initialCallerSignal) {
   const timer = abortCode
     ? null
     : setTimeout(() => abort(OUTBOUND_ERROR_CODES.DEADLINE_EXCEEDED), policy.deadlineMs);
-  timer?.unref?.();
+  // A stalled authority, transport, or response body may own no event-loop
+  // handles of its own. Keep this timer referenced so the promised deadline
+  // remains enforceable even when it is the operation's only live handle.
 
   const close = () => {
     if (closed) return;
