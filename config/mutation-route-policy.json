@@ -1,0 +1,367 @@
+{
+  "schemaVersion": 1,
+  "classifications": {
+    "action-observation": "A non-safe HTTP action used to compute, validate, search, refresh, or probe without an intended durable business-state mutation.",
+    "user-mutation": "A user or operator action that creates or changes durable product state.",
+    "destructive-mutation": "An action that deletes, resets, restores over, stops, cancels, prunes, or otherwise removes or replaces state.",
+    "scoped-machine-call": "A machine-to-machine or worker lifecycle contract admitted only within its declared route and caller boundary."
+  },
+  "routeRoots": {
+    "core": "core/routes",
+    "benchmark": "benchmark/routes",
+    "rag": "rag/routes"
+  },
+  "routeEntrypoints": {
+    "core": [
+      "core/src/app.js",
+      "core/server.js"
+    ],
+    "benchmark": [
+      "benchmark/server.js"
+    ],
+    "rag": [
+      "rag/app.js",
+      "rag/server.js"
+    ]
+  },
+  "routes": {
+    "core/routes/alerts-ops.js": {
+      "PUT /:id/acknowledge": "user-mutation",
+      "PUT /:id/resolve": "user-mutation",
+      "POST /:id/delivery-status": "scoped-machine-call",
+      "POST /rules/load": "user-mutation",
+      "POST /notifications/test": "action-observation",
+      "POST /notifications/verify": "action-observation",
+      "POST /bulk-resolve": "user-mutation",
+      "POST /rules": "user-mutation",
+      "PUT /rules/:ruleId": "user-mutation",
+      "DELETE /rules/:ruleId": "destructive-mutation",
+      "POST /rules/seed-defaults": "user-mutation"
+    },
+    "core/routes/alerts.js": {
+      "POST /": "user-mutation",
+      "POST /evaluate": "user-mutation"
+    },
+    "core/routes/analytics-effectiveness.js": {
+      "POST /effectiveness/outcomes": "user-mutation"
+    },
+    "core/routes/analytics-federated.js": {
+      "POST /codex-usage": "scoped-machine-call"
+    },
+    "core/routes/analytics-prompt.js": {
+      "POST /feedback": "user-mutation"
+    },
+    "core/routes/chat.js": {
+      "POST /chat": "user-mutation",
+      "POST /chat/stream": "user-mutation",
+      "POST /feedback": "user-mutation"
+    },
+    "core/routes/cluster-schedule.js": {
+      "POST /schedule/sync": "scoped-machine-call",
+      "POST /schedule/sync/system-cron": "user-mutation",
+      "POST /schedule/claim": "scoped-machine-call",
+      "DELETE /schedule/claim/:claimId": "scoped-machine-call"
+    },
+    "core/routes/custom-models.js": {
+      "POST /": "user-mutation",
+      "PUT /:id": "user-mutation",
+      "DELETE /:id": "destructive-mutation",
+      "POST /:id/deploy": "user-mutation",
+      "POST /:id/rollback": "destructive-mutation",
+      "POST /:id/validate": "action-observation",
+      "POST /:id/inference": "user-mutation",
+      "POST /:id/deprecate": "destructive-mutation"
+    },
+    "core/routes/external-consumer-v1.js": {
+      "POST /inference": "scoped-machine-call"
+    },
+    "core/routes/history.js": {
+      "POST /": "user-mutation",
+      "POST /:id/tags": "user-mutation",
+      "DELETE /:id/tags": "destructive-mutation"
+    },
+    "core/routes/inference.js": {
+      "POST /inference/embed": "action-observation",
+      "POST /inference/contract/resolve": "scoped-machine-call",
+      "POST /inference/generate": "scoped-machine-call",
+      "PUT /router/config/tasks/:taskType": "user-mutation",
+      "POST /router/config/reset": "destructive-mutation",
+      "POST /models/classify": "action-observation"
+    },
+    "core/routes/mcp.js": {
+      "POST /": "scoped-machine-call"
+    },
+    "core/routes/memory-review.js": {
+      "POST /runs": "scoped-machine-call",
+      "POST /runs/:runId/observations": "scoped-machine-call",
+      "POST /runs/:runId/finalize": "scoped-machine-call",
+      "POST /runs/:runId/candidates": "scoped-machine-call",
+      "POST /runs/:runId/fail": "scoped-machine-call",
+      "POST /runs/:runId/candidates/:candidateId/review": "user-mutation",
+      "POST /runs/:runId/authorize-apply": "user-mutation",
+      "POST /runs/:runId/candidates/:candidateId/apply": "user-mutation"
+    },
+    "core/routes/model-registry.js": {
+      "POST /sync-hosts": "user-mutation",
+      "POST /": "user-mutation",
+      "PATCH /:name": "user-mutation",
+      "DELETE /:name": "destructive-mutation",
+      "POST /:name/categories": "user-mutation",
+      "DELETE /:name/categories/:category": "destructive-mutation",
+      "POST /:name/execution-config": "user-mutation",
+      "DELETE /:name/execution-config": "destructive-mutation"
+    },
+    "core/routes/models-unified.js": {
+      "POST /refresh-cache": "action-observation",
+      "POST /ollama/pull": "user-mutation",
+      "POST /ollama/start": "user-mutation",
+      "POST /ollama/stop": "destructive-mutation",
+      "DELETE /ollama/:name": "destructive-mutation"
+    },
+    "core/routes/nerve-center-host-preferences.js": {
+      "PUT /host-preferences/health-check-interval": "user-mutation",
+      "PUT /host-preferences/:hostUrl(*)/pin": "user-mutation",
+      "DELETE /host-preferences/:hostUrl(*)/pin": "destructive-mutation",
+      "POST /host-preferences/:hostUrl(*)/restore": "user-mutation",
+      "POST /host-preferences/:hostUrl(*)/swap": "user-mutation",
+      "POST /host-preferences/:hostUrl(*)/benchmark-claim": "scoped-machine-call",
+      "POST /host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat": "scoped-machine-call",
+      "DELETE /host-preferences/:hostUrl(*)/benchmark-claim/:batchId": "scoped-machine-call",
+      "POST /host-preferences/benchmark-claims/reap": "destructive-mutation",
+      "PUT /host-preferences/:hostUrl(*)": "user-mutation",
+      "POST /host-preferences/:hostUrl(*)/reload": "scoped-machine-call"
+    },
+    "core/routes/nerve-center.js": {
+      "PUT /routing/config": "user-mutation",
+      "POST /failover": "user-mutation",
+      "POST /failover/reset": "destructive-mutation",
+      "PUT /inference/routing-config/:taskType": "user-mutation"
+    },
+    "core/routes/nestor-consumer-v1.js": {
+      "POST /inference": "scoped-machine-call",
+      "POST /memory/search": "scoped-machine-call"
+    },
+    "core/routes/ollama-vram.js": {
+      "POST /override": "user-mutation",
+      "DELETE /override/:hostIp": "destructive-mutation"
+    },
+    "core/routes/ollama-watchdog.js": {
+      "POST /probe": "destructive-mutation",
+      "POST /unjam": "destructive-mutation",
+      "POST /unjam-all": "destructive-mutation"
+    },
+    "core/routes/operations-backup.js": {
+      "PATCH /backup/config": "user-mutation",
+      "POST /backup": "user-mutation",
+      "POST /restore/:backupName": "destructive-mutation",
+      "DELETE /backups/:backupName": "destructive-mutation",
+      "POST /config/backup": "user-mutation",
+      "DELETE /config/backups/:name": "destructive-mutation",
+      "POST /qdrant/backup": "user-mutation",
+      "POST /qdrant/restore/:snapshotName": "destructive-mutation",
+      "DELETE /qdrant/backups/:snapshotName": "destructive-mutation"
+    },
+    "core/routes/performance-data.js": {
+      "POST /load-tests": "user-mutation",
+      "POST /baselines/:id/activate": "user-mutation",
+      "DELETE /baselines/:id": "destructive-mutation",
+      "POST /baselines": "user-mutation"
+    },
+    "core/routes/pipeline.js": {
+      "POST /leantime-sync": "action-observation",
+      "POST /tasks": "user-mutation",
+      "POST /tasks/:id/claim": "scoped-machine-call",
+      "POST /tasks/:id/status": "scoped-machine-call",
+      "POST /tasks/:id/feedback": "scoped-machine-call",
+      "POST /tasks/:id/heartbeat": "scoped-machine-call"
+    },
+    "core/routes/planning.js": {
+      "POST /bootstrap": "user-mutation",
+      "POST /reference-plans/:key/import": "user-mutation",
+      "POST /automation/reconcile": "scoped-machine-call",
+      "POST /items": "user-mutation",
+      "PATCH /items/:id": "user-mutation",
+      "POST /items/:id/actions/:action": "user-mutation",
+      "DELETE /items/:id": "destructive-mutation",
+      "POST /items/:id/tasks/:pipelineId": "user-mutation",
+      "DELETE /items/:id/tasks/:pipelineId": "destructive-mutation",
+      "POST /items/:id/schedules": "user-mutation",
+      "DELETE /items/:id/schedules/:sourceId": "destructive-mutation",
+      "POST /items/:id/evidence": "user-mutation",
+      "DELETE /items/:id/evidence/:evidenceId": "destructive-mutation",
+      "POST /ideas/:id/promote": "user-mutation"
+    },
+    "core/routes/platform-events.js": {
+      "POST /": "scoped-machine-call"
+    },
+    "core/routes/profile.js": {
+      "POST /": "user-mutation"
+    },
+    "core/routes/prompt-templates.js": {
+      "POST /": "user-mutation",
+      "PUT /:id": "user-mutation",
+      "DELETE /:id": "destructive-mutation",
+      "POST /:id/render": "action-observation",
+      "POST /:id/duplicate": "user-mutation"
+    },
+    "core/routes/prompts.js": {
+      "POST /": "user-mutation",
+      "PUT /:id": "user-mutation",
+      "POST /:name/ab-test": "user-mutation",
+      "DELETE /:id": "destructive-mutation",
+      "POST /render": "action-observation",
+      "POST /:name/analyze-failures": "action-observation"
+    },
+    "core/routes/rag.js": {
+      "POST /search": "action-observation",
+      "POST /documents": "user-mutation",
+      "POST /ingest": "user-mutation",
+      "DELETE /documents/:documentId": "destructive-mutation"
+    },
+    "core/routes/roundtable.js": {
+      "POST /": "user-mutation",
+      "POST /telegram/webhook": "scoped-machine-call",
+      "DELETE /:id": "destructive-mutation",
+      "POST /:id/interjections": "user-mutation",
+      "POST /:id/decision": "user-mutation",
+      "POST /:id/score": "user-mutation"
+    },
+    "core/routes/todos.js": {
+      "POST /": "scoped-machine-call"
+    },
+    "benchmark/routes/benchmark/analytics.js": {
+      "POST /quality-breakdown/batch": "action-observation",
+      "POST /compare-batches": "action-observation",
+      "POST /regression/compare": "action-observation",
+      "POST /retention/archive": "destructive-mutation",
+      "POST /retention/prune": "destructive-mutation",
+      "POST /retention/purge-dead": "destructive-mutation",
+      "POST /retention/reset-all": "destructive-mutation"
+    },
+    "benchmark/routes/benchmark/batches.js": {
+      "POST /batch/:id/reconcile": "user-mutation",
+      "POST /batch/:id/recover": "user-mutation",
+      "POST /batch/:id/rejudge-pending": "user-mutation",
+      "POST /batch/:id/judge": "user-mutation",
+      "POST /batch/:id/judge/stop": "destructive-mutation"
+    },
+    "benchmark/routes/benchmark/cloudLanes.js": {
+      "POST /cloud-lanes/plan": "action-observation",
+      "POST /cloud-lanes/approval-check": "action-observation",
+      "POST /cloud-lanes/attribute": "action-observation",
+      "POST /cloud-lanes/compare": "action-observation",
+      "POST /worker-evidence/compare": "action-observation"
+    },
+    "benchmark/routes/benchmark/core.js": {
+      "POST /prompts/sync": "user-mutation",
+      "POST /test": "user-mutation",
+      "POST /batch": "user-mutation",
+      "POST /batch/:id/stop": "destructive-mutation",
+      "POST /batch/:id/resume": "user-mutation",
+      "POST /batch/:id/rerun-invalid": "user-mutation",
+      "POST /validate-judge": "action-observation",
+      "POST /judge/calibrate": "action-observation",
+      "POST /judge/calibrate-accuracy": "action-observation",
+      "POST /preflight": "action-observation"
+    },
+    "benchmark/routes/benchmark/diagnostics.js": {
+      "POST /judge/health": "action-observation",
+      "POST /judge/validate/consistency": "action-observation",
+      "POST /judge/validate/ground-truth": "action-observation",
+      "POST /judge/ground-truth": "user-mutation",
+      "PATCH /judge/ground-truth/:id": "user-mutation",
+      "DELETE /judge/ground-truth/:id": "destructive-mutation",
+      "POST /judge/matrix-calibrate": "user-mutation",
+      "POST /judge/retro-calibrate": "user-mutation",
+      "POST /judge/auto-promote": "user-mutation",
+      "POST /judge/governance-run": "user-mutation"
+    },
+    "benchmark/routes/benchmark/drift.js": {
+      "POST /drift/compute": "action-observation",
+      "POST /drift/baseline": "user-mutation"
+    },
+    "benchmark/routes/benchmark/judgeDefaults.js": {
+      "PUT /judge-defaults": "user-mutation"
+    },
+    "benchmark/routes/benchmark/results.js": {
+      "POST /results/:id/human-review": "user-mutation",
+      "POST /results/:id/rejudge": "user-mutation",
+      "DELETE /results": "destructive-mutation",
+      "DELETE /results/failed": "destructive-mutation",
+      "POST /results/:id/promote-ground-truth": "user-mutation"
+    },
+    "benchmark/routes/benchmark/scoringProfile.js": {
+      "PUT /scoring-profile": "user-mutation",
+      "POST /scoring-profile/reset": "destructive-mutation"
+    },
+    "benchmark/routes/benchmark/sweeps.js": {
+      "POST /sweeps/plan": "action-observation",
+      "POST /sweeps/run": "user-mutation",
+      "POST /sweeps/recommend": "action-observation"
+    },
+    "benchmark/routes/benchmark/templates.js": {
+      "POST /templates": "user-mutation",
+      "PUT /templates/:id": "user-mutation",
+      "DELETE /templates/:id": "destructive-mutation",
+      "POST /templates/:id/use": "user-mutation"
+    },
+    "benchmark/routes/profiler/hosts.js": {
+      "POST /discover": "user-mutation",
+      "PUT /test/config": "user-mutation",
+      "POST /test/ensure-baseline": "user-mutation",
+      "POST /test/detect-host": "user-mutation",
+      "POST /test/run": "user-mutation",
+      "POST /test/run-all": "user-mutation",
+      "POST /test/run-fleet": "user-mutation",
+      "POST /test/run-fleet/:queueId/cancel": "destructive-mutation",
+      "POST /test/compare": "user-mutation",
+      "POST /test/context-probe/run": "destructive-mutation",
+      "POST /:hostId/release": "destructive-mutation",
+      "POST /:hostId/status/refresh": "user-mutation",
+      "PUT /:hostId": "user-mutation",
+      "POST /:hostId/sync": "user-mutation"
+    },
+    "benchmark/routes/profiler/models.js": {
+      "PUT /:name": "user-mutation"
+    },
+    "benchmark/routes/profiler/pipeline.js": {
+      "POST /scout": "user-mutation",
+      "POST /profile": "user-mutation",
+      "POST /profile-host": "user-mutation",
+      "POST /profile-host/:queueId/cancel": "destructive-mutation",
+      "POST /adapt": "action-observation",
+      "POST /full": "user-mutation",
+      "POST /preflight": "action-observation"
+    },
+    "benchmark/routes/profiler/settings.js": {
+      "PUT /": "user-mutation"
+    },
+    "benchmark/routes/setup.js": {
+      "POST /test-host": "action-observation",
+      "POST /save": "user-mutation"
+    },
+    "rag/routes/manifest.routes.js": {
+      "POST /manifests": "user-mutation",
+      "POST /cleanup": "destructive-mutation"
+    },
+    "rag/routes/migration.routes.js": {
+      "POST /embedding-migration/reindex": "destructive-mutation"
+    },
+    "rag/routes/rag.js": {
+      "POST /ingest": "user-mutation",
+      "POST /documents": "user-mutation",
+      "POST /ingest/batch": "user-mutation",
+      "POST /ingest-scan": "user-mutation",
+      "DELETE /ingest-scan/:jobId": "destructive-mutation",
+      "POST /search": "action-observation",
+      "DELETE /documents/:documentId": "destructive-mutation",
+      "POST /cache/clear": "destructive-mutation",
+      "POST /status/refresh": "action-observation"
+    },
+    "rag/routes/snapshots.routes.js": {
+      "POST /snapshots": "user-mutation",
+      "DELETE /snapshots/:name": "destructive-mutation",
+      "POST /snapshots/:name/restore": "destructive-mutation"
+    }
+  }
+}

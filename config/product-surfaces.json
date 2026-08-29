@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 2,
+  "description": "Canonical browser surfaces owned by the Agent X product. Redirect aliases and external deployment adapters are intentionally excluded.",
+  "profiles": ["demo", "full"],
+  "services": ["core", "benchmark", "rag"],
+  "performanceBudgets": {
+    "standard": {
+      "maxDecodedBytes": 1572864,
+      "maxJavaScriptBytes": 786432,
+      "maxAssetRequests": 40,
+      "maxDomNodes": 5000
+    },
+    "visualization": {
+      "maxDecodedBytes": 2097152,
+      "maxJavaScriptBytes": 1048576,
+      "maxAssetRequests": 52,
+      "maxDomNodes": 7000
+    }
+  },
+  "surfaces": [
+    { "id": "core-demo", "service": "core", "path": "/demo", "profiles": ["demo"], "journey": "learn", "critical": true, "performanceBudget": "standard" },
+    { "id": "core-portal", "service": "core", "path": "/", "profiles": ["full"], "journey": "operate", "critical": true, "performanceBudget": "standard" },
+    { "id": "core-playground", "service": "core", "path": "/playground", "profiles": ["demo", "full"], "journey": "try", "critical": true, "performanceBudget": "standard" },
+    { "id": "core-models", "service": "core", "path": "/models", "profiles": ["demo", "full"], "journey": "configure", "critical": true, "performanceBudget": "standard" },
+    { "id": "core-analytics", "service": "core", "path": "/analytics", "profiles": ["demo", "full"], "journey": "understand", "critical": false },
+    { "id": "core-performance", "service": "core", "path": "/performance", "profiles": ["demo", "full"], "journey": "understand", "critical": false },
+    { "id": "core-prompts", "service": "core", "path": "/prompts", "profiles": ["demo", "full"], "journey": "configure", "critical": true, "performanceBudget": "standard" },
+    { "id": "core-council", "service": "core", "path": "/council", "profiles": ["demo", "full"], "journey": "compare", "critical": false },
+    { "id": "core-nerve-center", "service": "core", "path": "/nerve-center", "profiles": ["full"], "journey": "operate", "critical": true, "performanceBudget": "visualization" },
+    { "id": "core-agent-ops", "service": "core", "path": "/agent-ops", "profiles": ["full"], "journey": "operate", "critical": false },
+    { "id": "core-cluster-schedule", "service": "core", "path": "/cluster-schedule", "profiles": ["full"], "journey": "operate", "critical": false },
+    { "id": "core-memory-review", "service": "core", "path": "/memory-review", "profiles": ["full"], "journey": "govern", "critical": false },
+    { "id": "core-pipeline", "service": "core", "path": "/pipeline", "profiles": ["full"], "journey": "operate", "critical": false },
+    { "id": "core-planning", "service": "core", "path": "/planning", "profiles": ["full"], "journey": "operate", "critical": false },
+    { "id": "core-backup", "service": "core", "path": "/backup", "profiles": ["full"], "journey": "recover", "critical": false },
+
+    { "id": "benchmark-home", "service": "benchmark", "path": "/", "profiles": ["demo", "full"], "journey": "evaluate", "critical": true, "performanceBudget": "visualization" },
+    { "id": "benchmark-leaderboard", "service": "benchmark", "path": "/leaderboard", "profiles": ["demo", "full"], "journey": "compare", "critical": true, "performanceBudget": "visualization" },
+    { "id": "benchmark-courthouse", "service": "benchmark", "path": "/courthouse", "profiles": ["demo", "full"], "journey": "judge", "critical": true, "performanceBudget": "visualization" },
+    { "id": "benchmark-profiler", "service": "benchmark", "path": "/profiler", "profiles": ["demo", "full"], "journey": "evaluate", "critical": true, "performanceBudget": "visualization" },
+    { "id": "benchmark-efficiency", "service": "benchmark", "path": "/efficiency-map", "profiles": ["demo", "full"], "journey": "compare", "critical": true, "performanceBudget": "visualization" },
+    { "id": "benchmark-results", "service": "benchmark", "path": "/results-explorer", "profiles": ["demo", "full"], "journey": "understand", "critical": true, "performanceBudget": "visualization" },
+    { "id": "benchmark-setup", "service": "benchmark", "path": "/setup", "profiles": ["demo", "full"], "journey": "configure", "critical": false },
+
+    { "id": "rag-home", "service": "rag", "path": "/", "profiles": ["demo", "full"], "journey": "knowledge", "critical": true, "performanceBudget": "standard" },
+    { "id": "rag-documents", "service": "rag", "path": "/documents", "profiles": ["demo", "full"], "journey": "knowledge", "critical": true, "performanceBudget": "standard" },
+    { "id": "rag-search", "service": "rag", "path": "/search", "profiles": ["demo", "full"], "journey": "knowledge", "critical": true, "performanceBudget": "standard" },
+    { "id": "rag-upload", "service": "rag", "path": "/upload", "profiles": ["demo", "full"], "journey": "knowledge", "critical": true, "performanceBudget": "standard" },
+    { "id": "rag-maintenance", "service": "rag", "path": "/maintenance", "profiles": ["demo", "full"], "journey": "govern", "critical": false }
+  ]
+}

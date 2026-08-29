@@ -1,0 +1,1324 @@
+{
+  "schemaVersion": 1,
+  "mutationPolicy": "config/mutation-route-policy.json",
+  "mechanisms": {
+    "sameOriginBrowser": "A browser request may cross the service boundary only from the exact local product origin. This is a CSRF boundary, not remote machine identity.",
+    "operatorCredential": "A valid Agent X operator token admits remote administrative access at the service boundary; route-local requirements may still apply.",
+    "scopedMachineCredential": "A purpose-specific credential is admitted only to its declared route family and, for complete enforcement, is validated again by the route-owned contract.",
+    "typedConfirmation": "An irreversible delete, bulk replacement, or restore requires an exact non-boolean phrase bound to the action or selected resource. Reversible stop, cancel, lease-release, and ephemeral maintenance controls are tracked in separate consequence tiers.",
+    "routeLocalValidator": "Authorization logic owned by the route or its mounted router runs after the global boundary. Ordinary payload/schema validation is not counted here."
+  },
+  "limitations": [
+    "The global Core, Benchmark, and RAG boundaries intentionally admit headerless loopback callers and, when explicitly enabled, product-internal service hosts. That local topology admission is not a scoped machine credential.",
+    "Static evidence proves checked-in middleware placement and exact route coverage; it does not replace wrong-host, wrong-token, cross-site, or browser journey tests.",
+    "CI rejects missing or stale route audits and reports any enforcementStatus=gap entry explicitly; the current checked-in matrix has no unresolved authorization gap.",
+    "The matrix evaluates declared route actions. Conditional behavior inside one route may still need finer action-variant authorization in a future schema."
+  ],
+  "serviceBoundaries": {
+    "core": {
+      "sameOriginBrowser": "admitted-local-only",
+      "operatorCredential": "admitted",
+      "uncredentialedLocalMachine": "admitted-local-or-configured-internal",
+      "evidence": [
+        "core-boundary-mount",
+        "core-boundary-authorities"
+      ],
+      "limitation": "publicExposureGuard admits operator tokens, exact local same-origin UI, headerless loopback, and explicitly enabled product-internal hosts; scoped tokens are path-limited but do not replace route-local validation."
+    },
+    "benchmark": {
+      "sameOriginBrowser": "admitted-local-only",
+      "operatorCredential": "admitted",
+      "uncredentialedLocalMachine": "admitted-local-or-configured-internal",
+      "evidence": [
+        "benchmark-boundary-mount",
+        "shared-boundary-authorities"
+      ],
+      "limitation": "createApiHostGuard protects every /api mutation while retaining loopback and explicitly enabled product-internal machine calls. Benchmark defines no route-scoped machine credential in this inventory."
+    },
+    "rag": {
+      "sameOriginBrowser": "admitted-local-only",
+      "operatorCredential": "admitted",
+      "uncredentialedLocalMachine": "admitted-local-or-configured-internal",
+      "evidence": [
+        "rag-boundary-mount",
+        "shared-boundary-authorities"
+      ],
+      "limitation": "createApiHostGuard protects every /api mutation while retaining loopback and explicitly enabled product-internal machine calls. Snapshot routes additionally require the recovery token."
+    }
+  },
+  "classificationDefaults": {
+    "action-observation": {
+      "scopedMachineCredential": "not-applicable",
+      "typedConfirmation": "not-required",
+      "routeLocalValidator": "not-required",
+      "enforcementStatus": "enforced",
+      "note": "The service boundary is the authorization contract for this non-safe observation action.",
+      "evidence": []
+    },
+    "user-mutation": {
+      "scopedMachineCredential": "not-applicable",
+      "typedConfirmation": "not-required",
+      "routeLocalValidator": "not-required",
+      "enforcementStatus": "enforced",
+      "note": "The service boundary is the authorization contract for this non-destructive user mutation unless an exact override records a stronger route gate.",
+      "evidence": []
+    },
+    "destructive-mutation": {
+      "scopedMachineCredential": "not-applicable",
+      "typedConfirmation": "gap",
+      "routeLocalValidator": "not-required",
+      "enforcementStatus": "gap",
+      "note": "The destructive route is globally admitted but has no verified exact typed-confirmation phrase.",
+      "evidence": []
+    },
+    "scoped-machine-call": {
+      "scopedMachineCredential": "gap",
+      "typedConfirmation": "not-required",
+      "routeLocalValidator": "gap",
+      "enforcementStatus": "gap",
+      "note": "The machine action currently relies on the global local/operator boundary and has no verified purpose-scoped credential plus route-local validator.",
+      "evidence": []
+    }
+  },
+  "destructiveConsequenceTiers": {
+    "irreversible-delete-bulk-or-restore": {
+      "description": "Deletes durable product data or artifacts, replaces persisted configuration/state, performs a restore, or executes a bulk archival/removal operation. Exact typed confirmation is required.",
+      "typedConfirmationRequired": true,
+      "routes": [
+        "benchmark/routes/benchmark/analytics.js#POST /retention/archive",
+        "benchmark/routes/benchmark/analytics.js#POST /retention/prune",
+        "benchmark/routes/benchmark/analytics.js#POST /retention/purge-dead",
+        "benchmark/routes/benchmark/analytics.js#POST /retention/reset-all",
+        "benchmark/routes/benchmark/diagnostics.js#DELETE /judge/ground-truth/:id",
+        "benchmark/routes/benchmark/results.js#DELETE /results",
+        "benchmark/routes/benchmark/results.js#DELETE /results/failed",
+        "benchmark/routes/benchmark/scoringProfile.js#POST /scoring-profile/reset",
+        "benchmark/routes/benchmark/templates.js#DELETE /templates/:id",
+        "core/routes/alerts-ops.js#DELETE /rules/:ruleId",
+        "core/routes/custom-models.js#DELETE /:id",
+        "core/routes/custom-models.js#POST /:id/deprecate",
+        "core/routes/custom-models.js#POST /:id/rollback",
+        "core/routes/history.js#DELETE /:id/tags",
+        "core/routes/inference.js#POST /router/config/reset",
+        "core/routes/model-registry.js#DELETE /:name",
+        "core/routes/model-registry.js#DELETE /:name/categories/:category",
+        "core/routes/model-registry.js#DELETE /:name/execution-config",
+        "core/routes/models-unified.js#DELETE /ollama/:name",
+        "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/pin",
+        "core/routes/ollama-vram.js#DELETE /override/:hostIp",
+        "core/routes/operations-backup.js#DELETE /backups/:backupName",
+        "core/routes/operations-backup.js#DELETE /config/backups/:name",
+        "core/routes/operations-backup.js#DELETE /qdrant/backups/:snapshotName",
+        "core/routes/operations-backup.js#POST /qdrant/restore/:snapshotName",
+        "core/routes/operations-backup.js#POST /restore/:backupName",
+        "core/routes/performance-data.js#DELETE /baselines/:id",
+        "core/routes/planning.js#DELETE /items/:id",
+        "core/routes/planning.js#DELETE /items/:id/evidence/:evidenceId",
+        "core/routes/planning.js#DELETE /items/:id/schedules/:sourceId",
+        "core/routes/planning.js#DELETE /items/:id/tasks/:pipelineId",
+        "core/routes/prompt-templates.js#DELETE /:id",
+        "core/routes/prompts.js#DELETE /:id",
+        "core/routes/rag.js#DELETE /documents/:documentId",
+        "core/routes/roundtable.js#DELETE /:id",
+        "rag/routes/manifest.routes.js#POST /cleanup",
+        "rag/routes/migration.routes.js#POST /embedding-migration/reindex",
+        "rag/routes/rag.js#DELETE /documents/:documentId",
+        "rag/routes/snapshots.routes.js#DELETE /snapshots/:name",
+        "rag/routes/snapshots.routes.js#POST /snapshots/:name/restore"
+      ]
+    },
+    "reversible-runtime-control": {
+      "description": "Stops or cancels active work, releases a lease, resets a reversible routing state, or performs bounded runtime recovery. Typed confirmation would add friction without protecting durable data; an observable acknowledgement/recovery path remains required.",
+      "typedConfirmationRequired": false,
+      "routes": [
+        "benchmark/routes/benchmark/batches.js#POST /batch/:id/judge/stop",
+        "benchmark/routes/benchmark/core.js#POST /batch/:id/stop",
+        "benchmark/routes/profiler/hosts.js#POST /:hostId/release",
+        "benchmark/routes/profiler/hosts.js#POST /test/context-probe/run",
+        "benchmark/routes/profiler/hosts.js#POST /test/run-fleet/:queueId/cancel",
+        "benchmark/routes/profiler/pipeline.js#POST /profile-host/:queueId/cancel",
+        "core/routes/models-unified.js#POST /ollama/stop",
+        "core/routes/nerve-center-host-preferences.js#POST /host-preferences/benchmark-claims/reap",
+        "core/routes/nerve-center.js#POST /failover/reset",
+        "core/routes/ollama-watchdog.js#POST /probe",
+        "core/routes/ollama-watchdog.js#POST /unjam",
+        "core/routes/ollama-watchdog.js#POST /unjam-all",
+        "rag/routes/rag.js#DELETE /ingest-scan/:jobId"
+      ]
+    },
+    "ephemeral-maintenance": {
+      "description": "Clears rebuildable in-process cache state without deleting durable product records. Typed confirmation is not required.",
+      "typedConfirmationRequired": false,
+      "routes": [
+        "rag/routes/rag.js#POST /cache/clear"
+      ]
+    }
+  },
+  "auditedRoutes": [
+    "benchmark/routes/benchmark/analytics.js#POST /compare-batches",
+    "benchmark/routes/benchmark/analytics.js#POST /quality-breakdown/batch",
+    "benchmark/routes/benchmark/analytics.js#POST /regression/compare",
+    "benchmark/routes/benchmark/analytics.js#POST /retention/archive",
+    "benchmark/routes/benchmark/analytics.js#POST /retention/prune",
+    "benchmark/routes/benchmark/analytics.js#POST /retention/purge-dead",
+    "benchmark/routes/benchmark/analytics.js#POST /retention/reset-all",
+    "benchmark/routes/benchmark/batches.js#POST /batch/:id/judge",
+    "benchmark/routes/benchmark/batches.js#POST /batch/:id/judge/stop",
+    "benchmark/routes/benchmark/batches.js#POST /batch/:id/reconcile",
+    "benchmark/routes/benchmark/batches.js#POST /batch/:id/recover",
+    "benchmark/routes/benchmark/batches.js#POST /batch/:id/rejudge-pending",
+    "benchmark/routes/benchmark/cloudLanes.js#POST /cloud-lanes/approval-check",
+    "benchmark/routes/benchmark/cloudLanes.js#POST /cloud-lanes/attribute",
+    "benchmark/routes/benchmark/cloudLanes.js#POST /cloud-lanes/compare",
+    "benchmark/routes/benchmark/cloudLanes.js#POST /cloud-lanes/plan",
+    "benchmark/routes/benchmark/cloudLanes.js#POST /worker-evidence/compare",
+    "benchmark/routes/benchmark/core.js#POST /batch",
+    "benchmark/routes/benchmark/core.js#POST /batch/:id/rerun-invalid",
+    "benchmark/routes/benchmark/core.js#POST /batch/:id/resume",
+    "benchmark/routes/benchmark/core.js#POST /batch/:id/stop",
+    "benchmark/routes/benchmark/core.js#POST /judge/calibrate",
+    "benchmark/routes/benchmark/core.js#POST /judge/calibrate-accuracy",
+    "benchmark/routes/benchmark/core.js#POST /preflight",
+    "benchmark/routes/benchmark/core.js#POST /prompts/sync",
+    "benchmark/routes/benchmark/core.js#POST /test",
+    "benchmark/routes/benchmark/core.js#POST /validate-judge",
+    "benchmark/routes/benchmark/diagnostics.js#DELETE /judge/ground-truth/:id",
+    "benchmark/routes/benchmark/diagnostics.js#PATCH /judge/ground-truth/:id",
+    "benchmark/routes/benchmark/diagnostics.js#POST /judge/auto-promote",
+    "benchmark/routes/benchmark/diagnostics.js#POST /judge/governance-run",
+    "benchmark/routes/benchmark/diagnostics.js#POST /judge/ground-truth",
+    "benchmark/routes/benchmark/diagnostics.js#POST /judge/health",
+    "benchmark/routes/benchmark/diagnostics.js#POST /judge/matrix-calibrate",
+    "benchmark/routes/benchmark/diagnostics.js#POST /judge/retro-calibrate",
+    "benchmark/routes/benchmark/diagnostics.js#POST /judge/validate/consistency",
+    "benchmark/routes/benchmark/diagnostics.js#POST /judge/validate/ground-truth",
+    "benchmark/routes/benchmark/drift.js#POST /drift/baseline",
+    "benchmark/routes/benchmark/drift.js#POST /drift/compute",
+    "benchmark/routes/benchmark/judgeDefaults.js#PUT /judge-defaults",
+    "benchmark/routes/benchmark/results.js#DELETE /results",
+    "benchmark/routes/benchmark/results.js#DELETE /results/failed",
+    "benchmark/routes/benchmark/results.js#POST /results/:id/human-review",
+    "benchmark/routes/benchmark/results.js#POST /results/:id/promote-ground-truth",
+    "benchmark/routes/benchmark/results.js#POST /results/:id/rejudge",
+    "benchmark/routes/benchmark/scoringProfile.js#POST /scoring-profile/reset",
+    "benchmark/routes/benchmark/scoringProfile.js#PUT /scoring-profile",
+    "benchmark/routes/benchmark/sweeps.js#POST /sweeps/plan",
+    "benchmark/routes/benchmark/sweeps.js#POST /sweeps/recommend",
+    "benchmark/routes/benchmark/sweeps.js#POST /sweeps/run",
+    "benchmark/routes/benchmark/templates.js#DELETE /templates/:id",
+    "benchmark/routes/benchmark/templates.js#POST /templates",
+    "benchmark/routes/benchmark/templates.js#POST /templates/:id/use",
+    "benchmark/routes/benchmark/templates.js#PUT /templates/:id",
+    "benchmark/routes/profiler/hosts.js#POST /:hostId/release",
+    "benchmark/routes/profiler/hosts.js#POST /:hostId/status/refresh",
+    "benchmark/routes/profiler/hosts.js#POST /:hostId/sync",
+    "benchmark/routes/profiler/hosts.js#POST /discover",
+    "benchmark/routes/profiler/hosts.js#POST /test/compare",
+    "benchmark/routes/profiler/hosts.js#POST /test/context-probe/run",
+    "benchmark/routes/profiler/hosts.js#POST /test/detect-host",
+    "benchmark/routes/profiler/hosts.js#POST /test/ensure-baseline",
+    "benchmark/routes/profiler/hosts.js#POST /test/run",
+    "benchmark/routes/profiler/hosts.js#POST /test/run-all",
+    "benchmark/routes/profiler/hosts.js#POST /test/run-fleet",
+    "benchmark/routes/profiler/hosts.js#POST /test/run-fleet/:queueId/cancel",
+    "benchmark/routes/profiler/hosts.js#PUT /:hostId",
+    "benchmark/routes/profiler/hosts.js#PUT /test/config",
+    "benchmark/routes/profiler/models.js#PUT /:name",
+    "benchmark/routes/profiler/pipeline.js#POST /adapt",
+    "benchmark/routes/profiler/pipeline.js#POST /full",
+    "benchmark/routes/profiler/pipeline.js#POST /preflight",
+    "benchmark/routes/profiler/pipeline.js#POST /profile",
+    "benchmark/routes/profiler/pipeline.js#POST /profile-host",
+    "benchmark/routes/profiler/pipeline.js#POST /profile-host/:queueId/cancel",
+    "benchmark/routes/profiler/pipeline.js#POST /scout",
+    "benchmark/routes/profiler/settings.js#PUT /",
+    "benchmark/routes/setup.js#POST /save",
+    "benchmark/routes/setup.js#POST /test-host",
+    "core/routes/alerts-ops.js#DELETE /rules/:ruleId",
+    "core/routes/alerts-ops.js#POST /:id/delivery-status",
+    "core/routes/alerts-ops.js#POST /bulk-resolve",
+    "core/routes/alerts-ops.js#POST /notifications/test",
+    "core/routes/alerts-ops.js#POST /notifications/verify",
+    "core/routes/alerts-ops.js#POST /rules",
+    "core/routes/alerts-ops.js#POST /rules/load",
+    "core/routes/alerts-ops.js#POST /rules/seed-defaults",
+    "core/routes/alerts-ops.js#PUT /:id/acknowledge",
+    "core/routes/alerts-ops.js#PUT /:id/resolve",
+    "core/routes/alerts-ops.js#PUT /rules/:ruleId",
+    "core/routes/alerts.js#POST /",
+    "core/routes/alerts.js#POST /evaluate",
+    "core/routes/analytics-effectiveness.js#POST /effectiveness/outcomes",
+    "core/routes/analytics-federated.js#POST /codex-usage",
+    "core/routes/analytics-prompt.js#POST /feedback",
+    "core/routes/chat.js#POST /chat",
+    "core/routes/chat.js#POST /chat/stream",
+    "core/routes/chat.js#POST /feedback",
+    "core/routes/cluster-schedule.js#DELETE /schedule/claim/:claimId",
+    "core/routes/cluster-schedule.js#POST /schedule/claim",
+    "core/routes/cluster-schedule.js#POST /schedule/sync",
+    "core/routes/cluster-schedule.js#POST /schedule/sync/system-cron",
+    "core/routes/custom-models.js#DELETE /:id",
+    "core/routes/custom-models.js#POST /",
+    "core/routes/custom-models.js#POST /:id/deploy",
+    "core/routes/custom-models.js#POST /:id/deprecate",
+    "core/routes/custom-models.js#POST /:id/inference",
+    "core/routes/custom-models.js#POST /:id/rollback",
+    "core/routes/custom-models.js#POST /:id/validate",
+    "core/routes/custom-models.js#PUT /:id",
+    "core/routes/external-consumer-v1.js#POST /inference",
+    "core/routes/history.js#DELETE /:id/tags",
+    "core/routes/history.js#POST /",
+    "core/routes/history.js#POST /:id/tags",
+    "core/routes/inference.js#POST /inference/contract/resolve",
+    "core/routes/inference.js#POST /inference/embed",
+    "core/routes/inference.js#POST /inference/generate",
+    "core/routes/inference.js#POST /models/classify",
+    "core/routes/inference.js#POST /router/config/reset",
+    "core/routes/inference.js#PUT /router/config/tasks/:taskType",
+    "core/routes/mcp.js#POST /",
+    "core/routes/memory-review.js#POST /runs",
+    "core/routes/memory-review.js#POST /runs/:runId/authorize-apply",
+    "core/routes/memory-review.js#POST /runs/:runId/candidates",
+    "core/routes/memory-review.js#POST /runs/:runId/candidates/:candidateId/apply",
+    "core/routes/memory-review.js#POST /runs/:runId/candidates/:candidateId/review",
+    "core/routes/memory-review.js#POST /runs/:runId/fail",
+    "core/routes/memory-review.js#POST /runs/:runId/finalize",
+    "core/routes/memory-review.js#POST /runs/:runId/observations",
+    "core/routes/model-registry.js#DELETE /:name",
+    "core/routes/model-registry.js#DELETE /:name/categories/:category",
+    "core/routes/model-registry.js#DELETE /:name/execution-config",
+    "core/routes/model-registry.js#PATCH /:name",
+    "core/routes/model-registry.js#POST /",
+    "core/routes/model-registry.js#POST /:name/categories",
+    "core/routes/model-registry.js#POST /:name/execution-config",
+    "core/routes/model-registry.js#POST /sync-hosts",
+    "core/routes/models-unified.js#DELETE /ollama/:name",
+    "core/routes/models-unified.js#POST /ollama/pull",
+    "core/routes/models-unified.js#POST /ollama/start",
+    "core/routes/models-unified.js#POST /ollama/stop",
+    "core/routes/models-unified.js#POST /refresh-cache",
+    "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/benchmark-claim/:batchId",
+    "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/pin",
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim",
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat",
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/reload",
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/restore",
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/swap",
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/benchmark-claims/reap",
+    "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/:hostUrl(*)",
+    "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/:hostUrl(*)/pin",
+    "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/health-check-interval",
+    "core/routes/nerve-center.js#POST /failover",
+    "core/routes/nerve-center.js#POST /failover/reset",
+    "core/routes/nerve-center.js#PUT /inference/routing-config/:taskType",
+    "core/routes/nerve-center.js#PUT /routing/config",
+    "core/routes/nestor-consumer-v1.js#POST /inference",
+    "core/routes/nestor-consumer-v1.js#POST /memory/search",
+    "core/routes/ollama-vram.js#DELETE /override/:hostIp",
+    "core/routes/ollama-vram.js#POST /override",
+    "core/routes/ollama-watchdog.js#POST /probe",
+    "core/routes/ollama-watchdog.js#POST /unjam",
+    "core/routes/ollama-watchdog.js#POST /unjam-all",
+    "core/routes/operations-backup.js#DELETE /backups/:backupName",
+    "core/routes/operations-backup.js#DELETE /config/backups/:name",
+    "core/routes/operations-backup.js#DELETE /qdrant/backups/:snapshotName",
+    "core/routes/operations-backup.js#PATCH /backup/config",
+    "core/routes/operations-backup.js#POST /backup",
+    "core/routes/operations-backup.js#POST /config/backup",
+    "core/routes/operations-backup.js#POST /qdrant/backup",
+    "core/routes/operations-backup.js#POST /qdrant/restore/:snapshotName",
+    "core/routes/operations-backup.js#POST /restore/:backupName",
+    "core/routes/performance-data.js#DELETE /baselines/:id",
+    "core/routes/performance-data.js#POST /baselines",
+    "core/routes/performance-data.js#POST /baselines/:id/activate",
+    "core/routes/performance-data.js#POST /load-tests",
+    "core/routes/pipeline.js#POST /leantime-sync",
+    "core/routes/pipeline.js#POST /tasks",
+    "core/routes/pipeline.js#POST /tasks/:id/claim",
+    "core/routes/pipeline.js#POST /tasks/:id/feedback",
+    "core/routes/pipeline.js#POST /tasks/:id/heartbeat",
+    "core/routes/pipeline.js#POST /tasks/:id/status",
+    "core/routes/planning.js#DELETE /items/:id",
+    "core/routes/planning.js#DELETE /items/:id/evidence/:evidenceId",
+    "core/routes/planning.js#DELETE /items/:id/schedules/:sourceId",
+    "core/routes/planning.js#DELETE /items/:id/tasks/:pipelineId",
+    "core/routes/planning.js#PATCH /items/:id",
+    "core/routes/planning.js#POST /automation/reconcile",
+    "core/routes/planning.js#POST /bootstrap",
+    "core/routes/planning.js#POST /ideas/:id/promote",
+    "core/routes/planning.js#POST /items",
+    "core/routes/planning.js#POST /items/:id/actions/:action",
+    "core/routes/planning.js#POST /items/:id/evidence",
+    "core/routes/planning.js#POST /items/:id/schedules",
+    "core/routes/planning.js#POST /items/:id/tasks/:pipelineId",
+    "core/routes/planning.js#POST /reference-plans/:key/import",
+    "core/routes/platform-events.js#POST /",
+    "core/routes/profile.js#POST /",
+    "core/routes/prompt-templates.js#DELETE /:id",
+    "core/routes/prompt-templates.js#POST /",
+    "core/routes/prompt-templates.js#POST /:id/duplicate",
+    "core/routes/prompt-templates.js#POST /:id/render",
+    "core/routes/prompt-templates.js#PUT /:id",
+    "core/routes/prompts.js#DELETE /:id",
+    "core/routes/prompts.js#POST /",
+    "core/routes/prompts.js#POST /:name/ab-test",
+    "core/routes/prompts.js#POST /:name/analyze-failures",
+    "core/routes/prompts.js#POST /render",
+    "core/routes/prompts.js#PUT /:id",
+    "core/routes/rag.js#DELETE /documents/:documentId",
+    "core/routes/rag.js#POST /documents",
+    "core/routes/rag.js#POST /ingest",
+    "core/routes/rag.js#POST /search",
+    "core/routes/roundtable.js#DELETE /:id",
+    "core/routes/roundtable.js#POST /",
+    "core/routes/roundtable.js#POST /:id/decision",
+    "core/routes/roundtable.js#POST /:id/interjections",
+    "core/routes/roundtable.js#POST /:id/score",
+    "core/routes/roundtable.js#POST /telegram/webhook",
+    "core/routes/todos.js#POST /",
+    "rag/routes/manifest.routes.js#POST /cleanup",
+    "rag/routes/manifest.routes.js#POST /manifests",
+    "rag/routes/migration.routes.js#POST /embedding-migration/reindex",
+    "rag/routes/rag.js#DELETE /documents/:documentId",
+    "rag/routes/rag.js#DELETE /ingest-scan/:jobId",
+    "rag/routes/rag.js#POST /cache/clear",
+    "rag/routes/rag.js#POST /documents",
+    "rag/routes/rag.js#POST /ingest",
+    "rag/routes/rag.js#POST /ingest-scan",
+    "rag/routes/rag.js#POST /ingest/batch",
+    "rag/routes/rag.js#POST /search",
+    "rag/routes/rag.js#POST /status/refresh",
+    "rag/routes/snapshots.routes.js#DELETE /snapshots/:name",
+    "rag/routes/snapshots.routes.js#POST /snapshots",
+    "rag/routes/snapshots.routes.js#POST /snapshots/:name/restore"
+  ],
+  "overrides": {
+    "benchmark/routes/benchmark/analytics.js#POST /retention/archive": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "A non-dry-run archive requires DELETE RESULTS OLDER THAN <days> DAYS, bound to the selected retention window.",
+      "evidence": ["benchmark-retention-typed-confirmations"]
+    },
+    "benchmark/routes/benchmark/analytics.js#POST /retention/prune": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "A non-dry-run prune requires PRUNE RESULTS TO <keep> BATCHES PER MODEL, bound to the selected retention count.",
+      "evidence": ["benchmark-retention-typed-confirmations"]
+    },
+    "benchmark/routes/benchmark/analytics.js#POST /retention/purge-dead": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "A non-dry-run dead-model purge requires the exact PURGE DEAD MODEL RESULTS phrase.",
+      "evidence": ["benchmark-retention-typed-confirmations"]
+    },
+    "benchmark/routes/benchmark/analytics.js#POST /retention/reset-all": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The route requires the exact RESET phrase before deleting all Benchmark data.",
+      "evidence": ["benchmark-reset-confirmation"]
+    },
+    "benchmark/routes/benchmark/results.js#DELETE /results": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The route requires the exact DELETE_ALL phrase.",
+      "evidence": ["benchmark-result-confirmations"]
+    },
+    "benchmark/routes/benchmark/results.js#DELETE /results/failed": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The route requires the exact DELETE_FAILED phrase.",
+      "evidence": ["benchmark-result-confirmations"]
+    },
+    "benchmark/routes/benchmark/diagnostics.js#DELETE /judge/ground-truth/:id": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Ground-truth deletion requires DELETE GROUND TRUTH <id>, bound to the selected evidence record.",
+      "evidence": ["benchmark-ground-truth-typed-confirmation"]
+    },
+    "benchmark/routes/benchmark/scoringProfile.js#POST /scoring-profile/reset": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Resetting the persisted scoring profile requires the exact RESET SCORING PROFILE phrase.",
+      "evidence": ["benchmark-scoring-profile-typed-confirmation"]
+    },
+    "benchmark/routes/benchmark/templates.js#DELETE /templates/:id": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Template deletion requires DELETE TEMPLATE <id>, bound to the selected template.",
+      "evidence": ["benchmark-template-typed-confirmation"]
+    },
+    "core/routes/alerts-ops.js#DELETE /rules/:ruleId": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Custom alert-rule deletion requires DELETE ALERT RULE <ruleId> before lookup or mutation.",
+      "evidence": ["core-alert-rule-typed-confirmation"]
+    },
+    "core/routes/alerts-ops.js#POST /:id/delivery-status": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The alert-delivery token is path-admitted globally and revalidated before an automation workflow can persist a delivery receipt.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-alert-delivery-validator", "core-alert-delivery-mount"]
+    },
+    "core/routes/cluster-schedule.js#POST /schedule/sync": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The schedule token is admitted only to the schedule worker family and revalidated before synchronization writes.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-schedule-machine-validator", "core-schedule-machine-mount"]
+    },
+    "core/routes/cluster-schedule.js#POST /schedule/claim": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The schedule token is admitted only to the schedule worker family and revalidated before claim acquisition.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-schedule-machine-validator", "core-schedule-machine-mount"]
+    },
+    "core/routes/cluster-schedule.js#DELETE /schedule/claim/:claimId": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The schedule token is admitted only to the schedule worker family and revalidated before claim release.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-schedule-machine-validator", "core-schedule-machine-mount"]
+    },
+    "core/routes/custom-models.js#DELETE /:id": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Archiving a custom model requires ARCHIVE CUSTOM MODEL <id>.",
+      "evidence": ["core-custom-model-typed-confirmations"]
+    },
+    "core/routes/custom-models.js#POST /:id/rollback": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Rollback requires ROLLBACK CUSTOM MODEL <id> TO <version>, binding both model and target version.",
+      "evidence": ["core-custom-model-typed-confirmations"]
+    },
+    "core/routes/custom-models.js#POST /:id/deprecate": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Deprecating a custom model requires DEPRECATE CUSTOM MODEL <id>.",
+      "evidence": ["core-custom-model-typed-confirmations"]
+    },
+    "core/routes/history.js#DELETE /:id/tags": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Removing durable conversation tags requires REMOVE CONVERSATION TAGS <conversationId>.",
+      "evidence": ["core-history-tags-typed-confirmation"]
+    },
+    "core/routes/inference.js#POST /router/config/reset": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Bulk removal of router overrides requires RESET ROUTER CONFIG; the former boolean acknowledgement is no longer accepted.",
+      "evidence": ["core-router-reset-typed-confirmation"]
+    },
+    "core/routes/model-registry.js#DELETE /:name": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Retiring a registry model requires RETIRE MODEL <name>.",
+      "evidence": ["core-model-registry-typed-confirmations"]
+    },
+    "core/routes/model-registry.js#DELETE /:name/categories/:category": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Category removal requires REMOVE MODEL CATEGORY <name> <category>.",
+      "evidence": ["core-model-registry-typed-confirmations"]
+    },
+    "core/routes/model-registry.js#DELETE /:name/execution-config": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Clearing persisted execution overrides requires RESET MODEL EXECUTION CONFIG <name>.",
+      "evidence": ["core-model-registry-typed-confirmations"]
+    },
+    "core/routes/analytics-federated.js#POST /codex-usage": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The Codex usage credential is path-admitted globally and independently validated by the route-owned service contract.",
+      "evidence": ["core-codex-usage-validator"]
+    },
+    "core/routes/external-consumer-v1.js#POST /inference": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Remote consumers use the external-consumer token; the mounted route validator also preserves the documented loopback/operator paths.",
+      "evidence": ["core-external-consumer-validator"]
+    },
+    "core/routes/inference.js#POST /inference/contract/resolve": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The scoped Benchmark token is path-admitted at Core, revalidated by the contract-resolution route, and attached by Benchmark's snapshot caller; local UI and operator authorities remain separate.",
+      "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-contract-mount", "benchmark-core-contract-auth-caller"]
+    },
+    "core/routes/inference.js#POST /inference/generate": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The scoped Benchmark token is validated before it may select the Benchmark caller lane; interactive callers remain separately authorized by the global boundary.",
+      "evidence": ["core-inference-caller-mount", "core-inference-caller-validator"]
+    },
+    "core/routes/mcp.js#POST /": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Remote MCP callers require the purpose-scoped token even when it is unconfigured; the route separately preserves trusted loopback, same-origin UI, and operator authorities.",
+      "evidence": ["core-mcp-route-validator", "core-mcp-route-mount"]
+    },
+    "core/routes/memory-review.js#POST /runs": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The Memory Review producer token is path-admitted and revalidated before a producer opens a run.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-memory-producer-validator", "core-memory-producer-mount"]
+    },
+    "core/routes/memory-review.js#POST /runs/:runId/observations": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The Memory Review producer token is revalidated before bounded observations are persisted and attributed to the producer identity.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-memory-producer-validator", "core-memory-producer-mount"]
+    },
+    "core/routes/memory-review.js#POST /runs/:runId/finalize": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The Memory Review producer token is revalidated before collection finalization.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-memory-producer-validator", "core-memory-producer-mount"]
+    },
+    "core/routes/memory-review.js#POST /runs/:runId/candidates": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The Memory Review producer token is revalidated before bounded candidates are persisted; human review remains separately operator-owned.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-memory-producer-validator", "core-memory-producer-mount"]
+    },
+    "core/routes/memory-review.js#POST /runs/:runId/fail": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The Memory Review producer token is revalidated before a run failure receipt is persisted.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-memory-producer-validator", "core-memory-producer-mount"]
+    },
+    "core/routes/memory-review.js#POST /runs/:runId/candidates/:candidateId/review": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-memory-user-operator-validator"]
+    },
+    "core/routes/memory-review.js#POST /runs/:runId/authorize-apply": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-memory-user-operator-validator"]
+    },
+    "core/routes/memory-review.js#POST /runs/:runId/candidates/:candidateId/apply": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-memory-user-operator-validator"]
+    },
+    "core/routes/models-unified.js#POST /ollama/pull": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-model-lifecycle-operator-validator"]
+    },
+    "core/routes/models-unified.js#POST /ollama/start": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-model-lifecycle-operator-validator"]
+    },
+    "core/routes/models-unified.js#POST /ollama/stop": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-model-lifecycle-operator-validator"]
+    },
+    "core/routes/models-unified.js#DELETE /ollama/:name": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Deleting model files requires operator UI access plus DELETE OLLAMA MODEL <name> FROM <configured-host>.",
+      "evidence": ["core-model-lifecycle-operator-validator", "core-model-delete-typed-confirmation"]
+    },
+    "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/pin": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Clearing a persisted host pin requires CLEAR HOST PIN <canonical-host>.",
+      "evidence": ["core-host-pin-typed-confirmation"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The scoped Benchmark token is path-admitted at Core and revalidated before claim acquisition can mutate host state.",
+      "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-host-control-mount"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The scoped Benchmark token is path-admitted at Core and revalidated before a claim heartbeat can mutate host state.",
+      "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-host-control-mount"]
+    },
+    "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/benchmark-claim/:batchId": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The scoped Benchmark token is path-admitted at Core and revalidated before claim release can mutate host state.",
+      "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-host-control-mount"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/reload": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The scoped Benchmark token is path-admitted at Core and revalidated before remote reload; same-origin UI and operator access remain available for the interactive action.",
+      "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-host-control-mount"]
+    },
+    "core/routes/nestor-consumer-v1.js#POST /inference": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The documented external-consumer token is admitted only to the two versioned consumer families and is revalidated at the mounted Nestor contract.",
+      "evidence": ["core-nestor-consumer-mount-validator", "core-nestor-consumer-path-scope"]
+    },
+    "core/routes/nestor-consumer-v1.js#POST /memory/search": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The documented external-consumer token is admitted only to the two versioned consumer families and is revalidated at the mounted Nestor contract.",
+      "evidence": ["core-nestor-consumer-mount-validator", "core-nestor-consumer-path-scope"]
+    },
+    "core/routes/ollama-vram.js#DELETE /override/:hostIp": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Clearing a manual VRAM override requires CLEAR VRAM OVERRIDE <host>.",
+      "evidence": ["core-vram-typed-confirmation"]
+    },
+    "core/routes/operations-backup.js#PATCH /backup/config": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-recovery-operator-validator"]
+    },
+    "core/routes/operations-backup.js#POST /backup": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-recovery-operator-validator"]
+    },
+    "core/routes/operations-backup.js#POST /config/backup": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-recovery-operator-validator"]
+    },
+    "core/routes/operations-backup.js#POST /qdrant/backup": {
+      "routeLocalValidator": "enforced",
+      "evidence": ["core-recovery-operator-validator"]
+    },
+    "core/routes/operations-backup.js#POST /restore/:backupName": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "MongoDB restore is disabled outside a controlled rehearsal and requires operator access plus RESTORE <artifact>.",
+      "evidence": ["core-recovery-operator-validator", "core-recovery-typed-confirmation"]
+    },
+    "core/routes/operations-backup.js#DELETE /backups/:backupName": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "MongoDB backup deletion requires operator access plus DELETE <artifact>.",
+      "evidence": ["core-recovery-operator-validator", "core-recovery-typed-confirmation"]
+    },
+    "core/routes/operations-backup.js#DELETE /config/backups/:name": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Configuration backup deletion requires operator access plus DELETE <artifact>.",
+      "evidence": ["core-recovery-operator-validator", "core-recovery-typed-confirmation"]
+    },
+    "core/routes/operations-backup.js#POST /qdrant/restore/:snapshotName": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Qdrant restore is disabled outside a controlled rehearsal and requires operator access plus RESTORE <snapshot>.",
+      "evidence": ["core-recovery-operator-validator", "core-recovery-typed-confirmation"]
+    },
+    "core/routes/operations-backup.js#DELETE /qdrant/backups/:snapshotName": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Qdrant snapshot deletion requires operator access plus DELETE <snapshot>.",
+      "evidence": ["core-recovery-operator-validator", "core-recovery-typed-confirmation"]
+    },
+    "core/routes/performance-data.js#DELETE /baselines/:id": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Deleting a performance baseline requires DELETE PERFORMANCE BASELINE <id>.",
+      "evidence": ["core-baseline-typed-confirmation"]
+    },
+    "core/routes/pipeline.js#POST /tasks/:id/claim": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The pipeline worker token is path-admitted and revalidated before atomic task claim.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-pipeline-worker-validator", "core-pipeline-worker-mount"]
+    },
+    "core/routes/pipeline.js#POST /tasks/:id/feedback": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The pipeline worker token is path-admitted and revalidated before feedback; a worker's done verdict maps to review rather than final completion.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-pipeline-worker-validator", "core-pipeline-worker-mount"]
+    },
+    "core/routes/pipeline.js#POST /tasks/:id/heartbeat": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The pipeline worker token is path-admitted and revalidated before a claim heartbeat mutation.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-pipeline-worker-validator", "core-pipeline-worker-mount"]
+    },
+    "core/routes/pipeline.js#POST /tasks/:id/status": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The route revalidates worker identity for non-final status changes and rejects status=done for worker scope before Mongo access; final completion remains trusted reviewer/operator authority.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-pipeline-worker-validator", "core-pipeline-worker-mount"]
+    },
+    "core/routes/planning.js#DELETE /items/:id": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Archiving a planning item requires ARCHIVE PLANNING ITEM <id>.",
+      "evidence": ["core-planning-typed-confirmations"]
+    },
+    "core/routes/planning.js#DELETE /items/:id/tasks/:pipelineId": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Unlinking a pipeline task requires UNLINK PLANNING TASK <itemId> <pipelineId>.",
+      "evidence": ["core-planning-typed-confirmations"]
+    },
+    "core/routes/planning.js#DELETE /items/:id/schedules/:sourceId": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Unlinking a schedule requires UNLINK PLANNING SCHEDULE <itemId> <sourceId>.",
+      "evidence": ["core-planning-typed-confirmations"]
+    },
+    "core/routes/planning.js#DELETE /items/:id/evidence/:evidenceId": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Removing planning evidence requires DELETE PLANNING EVIDENCE <itemId> <evidenceId>.",
+      "evidence": ["core-planning-typed-confirmations"]
+    },
+    "core/routes/planning.js#POST /automation/reconcile": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The supported production profiles fail closed when the MCP token is absent and validate it before reconciliation; non-production local mode remains intentionally permissive.",
+      "evidence": ["core-planning-automation-validator"]
+    },
+    "core/routes/prompt-templates.js#DELETE /:id": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Deleting a user prompt template requires DELETE PROMPT TEMPLATE <id>.",
+      "evidence": ["core-prompt-template-typed-confirmation"]
+    },
+    "core/routes/prompts.js#DELETE /:id": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Deleting an inactive prompt version requires DELETE PROMPT <id>.",
+      "evidence": ["core-prompt-typed-confirmation"]
+    },
+    "core/routes/rag.js#DELETE /documents/:documentId": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Deleting through the Core RAG proxy requires DELETE RAG DOCUMENT <documentId>; Core then sends RAG its own bounded internal confirmation.",
+      "evidence": ["core-rag-delete-typed-confirmation"]
+    },
+    "core/routes/roundtable.js#DELETE /:id": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Deleting a Council record requires DELETE COUNCIL RECORD <id>.",
+      "evidence": ["core-council-delete-typed-confirmation"]
+    },
+    "core/routes/platform-events.js#POST /": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Remote event producers require the platform-event token; the route-local contract also permits loopback producers.",
+      "evidence": ["core-platform-event-validator"]
+    },
+    "core/routes/todos.js#POST /": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The legacy task-creation alias shares the bounded pipeline worker credential and revalidates it before Mongo task creation.",
+      "evidence": ["core-workflow-machine-boundary-scope", "core-pipeline-worker-validator", "core-todos-pipeline-mount"]
+    },
+    "core/routes/roundtable.js#POST /telegram/webhook": {
+      "scopedMachineCredential": "disabled",
+      "routeLocalValidator": "disabled",
+      "enforcementStatus": "disabled",
+      "note": "The retired embedded Telegram adapter endpoint always returns 410 and performs no mutation.",
+      "evidence": ["core-telegram-webhook-disabled"]
+    },
+    "rag/routes/manifest.routes.js#POST /cleanup": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Non-dry-run cleanup requires DELETE STALE DOCUMENTS FROM <source>, bound to the normalized source.",
+      "evidence": ["rag-cleanup-typed-confirmation"]
+    },
+    "rag/routes/migration.routes.js#POST /embedding-migration/reindex": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Full embedding reindex requires REINDEX ALL DOCUMENTS; the former boolean acknowledgement is rejected.",
+      "evidence": ["rag-reindex-typed-confirmation"]
+    },
+    "rag/routes/rag.js#DELETE /documents/:documentId": {
+      "typedConfirmation": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Document deletion requires the resource-bound phrase DELETE <documentId>.",
+      "evidence": ["rag-document-delete-confirmation"]
+    },
+    "rag/routes/snapshots.routes.js#POST /snapshots": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The internal Core-to-RAG snapshot creation contract requires the recovery token after the global RAG boundary.",
+      "evidence": ["rag-recovery-route-validator", "rag-recovery-token-validator"]
+    },
+    "rag/routes/snapshots.routes.js#DELETE /snapshots/:name": {
+      "scopedMachineCredential": "validated-at-route",
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Snapshot deletion requires the recovery token plus X-AgentX-Confirm: DELETE <snapshot>.",
+      "evidence": ["rag-recovery-route-validator", "rag-recovery-token-validator", "rag-snapshot-delete-confirmation"]
+    },
+    "rag/routes/snapshots.routes.js#POST /snapshots/:name/restore": {
+      "scopedMachineCredential": "validated-at-route",
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Snapshot restore is rehearsal-gated and requires both the recovery token and RESTORE <snapshot>.",
+      "evidence": ["rag-recovery-route-validator", "rag-recovery-token-validator", "rag-snapshot-restore-confirmation"]
+    }
+  },
+  "evidence": {
+    "core-boundary-mount": {
+      "file": "core/src/app.js",
+      "contains": "app.use(publicExposureGuard);"
+    },
+    "core-boundary-authorities": {
+      "file": "core/src/middleware/publicExposureGuard.js",
+      "contains": [
+        "if (operatorTokenAllowed(req)) return next();",
+        "const trustedBrowserUi = sameOriginUiAllowed(req);",
+        "const trustedLoopback = isLoopbackAddress(remoteAddress)",
+        "const trustedInternalMachine = INTERNAL_CORE_HOSTS.has(resolvedHost)"
+      ]
+    },
+    "core-workflow-machine-boundary-scope": {
+      "file": "core/src/middleware/publicExposureGuard.js",
+      "contains": [
+        "function workflowMachineCredential(pathname, method)",
+        "environmentVariable: 'AGENTX_MEMORY_REVIEW_TOKEN'",
+        "environmentVariable: 'AGENTX_SCHEDULE_TOKEN'",
+        "environmentVariable: 'AGENTX_PIPELINE_TOKEN'",
+        "environmentVariable: 'AGENTX_ALERT_DELIVERY_TOKEN'"
+      ]
+    },
+    "benchmark-boundary-mount": {
+      "file": "benchmark/server.js",
+      "contains": [
+        "app.use(createApiHostGuard({",
+        "serviceHosts: ['benchmark', 'agentx-benchmark']",
+        "protectMutations: true"
+      ]
+    },
+    "rag-boundary-mount": {
+      "file": "rag/app.js",
+      "contains": [
+        "app.use(createApiHostGuard({",
+        "serviceHosts: ['rag', 'agentx-rag']",
+        "protectMutations: true"
+      ]
+    },
+    "shared-boundary-authorities": {
+      "file": "shared/apiHostGuard.js",
+      "contains": [
+        "if (operatorTokenAllowed(req, env)) return next();",
+        "if (sameOriginMutationAllowed(",
+        "if (isLoopbackAddress(remoteAddress)",
+        "trustInternalServiceHosts && internalServiceHosts.has(host)"
+      ]
+    },
+    "benchmark-reset-confirmation": {
+      "file": "benchmark/routes/benchmark/analytics.js",
+      "contains": "if (confirm !== 'RESET')"
+    },
+    "benchmark-result-confirmations": {
+      "file": "benchmark/routes/benchmark/results.js",
+      "contains": [
+        "if (req.body?.confirm !== 'DELETE_ALL')",
+        "if (req.body?.confirm !== 'DELETE_FAILED')"
+      ]
+    },
+    "benchmark-retention-typed-confirmations": {
+      "file": "benchmark/routes/benchmark/analytics.js",
+      "contains": [
+        "const expectedConfirmation = `DELETE RESULTS OLDER THAN ${days} DAYS`;",
+        "const expectedConfirmation = `PRUNE RESULTS TO ${keep} BATCHES PER MODEL`;",
+        "const expectedConfirmation = 'PURGE DEAD MODEL RESULTS';",
+        "if (!dryRun && !requireExactConfirmation(req, res, expectedConfirmation)) return;"
+      ]
+    },
+    "benchmark-ground-truth-typed-confirmation": {
+      "file": "benchmark/routes/benchmark/diagnostics.js",
+      "contains": [
+        "const expectedConfirmation = `DELETE GROUND TRUTH ${id}`;",
+        "if (!requireExactConfirmation(req, res, expectedConfirmation)) return;"
+      ]
+    },
+    "benchmark-scoring-profile-typed-confirmation": {
+      "file": "benchmark/routes/benchmark/scoringProfile.js",
+      "contains": [
+        "const SCORING_PROFILE_RESET_CONFIRMATION = 'RESET SCORING PROFILE';",
+        "if (!requireExactConfirmation(req, res, SCORING_PROFILE_RESET_CONFIRMATION)) return;"
+      ]
+    },
+    "benchmark-template-typed-confirmation": {
+      "file": "benchmark/routes/benchmark/templates.js",
+      "contains": [
+        "const expectedConfirmation = `DELETE TEMPLATE ${req.params.id}`;",
+        "if (!requireExactConfirmation(req, res, expectedConfirmation)) return;"
+      ]
+    },
+    "core-codex-usage-validator": {
+      "file": "core/routes/analytics-federated.js",
+      "contains": "if (!codexUsageTokenAllowed(req))"
+    },
+    "core-external-consumer-validator": {
+      "file": "core/src/app.js",
+      "contains": [
+        "const { requireExternalConsumerAccess }",
+        "requireExternalConsumerAccess,"
+      ]
+    },
+    "core-benchmark-boundary-scope": {
+      "file": "core/src/middleware/publicExposureGuard.js",
+      "contains": [
+        "function benchmarkCredentialPath(pathname, method)",
+        "path === '/api/inference/contract/resolve'",
+        "path.endsWith('/benchmark-claim')",
+        "path.endsWith('/reload')"
+      ]
+    },
+    "core-benchmark-route-validator": {
+      "file": "core/src/middleware/benchmarkServiceAccess.js",
+      "contains": [
+        "function benchmarkServiceAccessAllowed(req)",
+        "if (benchmarkTokenAllowed(req)) return true;",
+        "function requireBenchmarkServiceAccess(req, res, next)",
+        "code: 'BENCHMARK_SERVICE_ACCESS_REQUIRED'"
+      ]
+    },
+    "core-benchmark-contract-mount": {
+      "file": "core/routes/inference.js",
+      "contains": "router.post('/inference/contract/resolve', requireBenchmarkServiceAccess"
+    },
+    "core-benchmark-host-control-mount": {
+      "file": "core/routes/nerve-center-host-preferences.js",
+      "contains": [
+        "router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkServiceAccess",
+        "router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', requireBenchmarkServiceAccess",
+        "router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkServiceAccess",
+        "router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAccess"
+      ]
+    },
+    "benchmark-core-contract-auth-caller": {
+      "file": "benchmark/src/services/benchmark/inferenceContractSnapshot.js",
+      "contains": [
+        "const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');",
+        "headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' })"
+      ]
+    },
+    "core-inference-caller-mount": {
+      "file": "core/src/app.js",
+      "contains": "app.use('/api/inference/generate', inferenceCallerRouter);"
+    },
+    "core-inference-caller-validator": {
+      "file": "core/src/services/routing/inferenceCallerAccess.js",
+      "contains": [
+        "function benchmarkTokenAllowed(req)",
+        "if (benchmarkTokenAllowed(req)) return 'benchmark-service';",
+        "if (requestedPolicy.rateBucket === 'benchmark')"
+      ]
+    },
+    "core-nestor-consumer-mount-validator": {
+      "file": "core/src/app.js",
+      "contains": [
+        "'/api/consumers/nestor/v1',",
+        "requireExternalConsumerAccess,",
+        "nestorConsumerLimiter,"
+      ]
+    },
+    "core-nestor-consumer-path-scope": {
+      "file": "core/src/middleware/externalConsumerAccess.js",
+      "contains": [
+        "const NESTOR_CONSUMER_BASE_PATH = '/api/consumers/nestor/v1';",
+        "const EXTERNAL_CONSUMER_BASE_PATHS = Object.freeze([",
+        "return EXTERNAL_CONSUMER_BASE_PATHS.some((basePath)"
+      ]
+    },
+    "core-mcp-route-validator": {
+      "file": "core/src/helpers/mcpToken.js",
+      "contains": [
+        "if (!expected) return options.allowUnset === true;",
+        "crypto.timingSafeEqual(left, right)",
+        "function mcpIngressAllowed(req)",
+        "|| tokenAllowed(req);"
+      ]
+    },
+    "core-mcp-route-mount": {
+      "file": "core/routes/mcp.js",
+      "contains": [
+        "const { mcpIngressAllowed } = require('../src/helpers/mcpToken');",
+        "if (!mcpIngressAllowed(req)) {",
+        "error: { code: -32001, message: 'Unauthorized' }"
+      ]
+    },
+    "core-memory-producer-validator": {
+      "file": "core/src/middleware/memoryReviewProducerAccess.js",
+      "contains": [
+        "function memoryReviewTokenAllowed(req)",
+        "function requireMemoryReviewProducerAccess(req, res, next)",
+        "code: 'MEMORY_REVIEW_PRODUCER_ACCESS_REQUIRED'"
+      ]
+    },
+    "core-memory-producer-mount": {
+      "file": "core/routes/memory-review.js",
+      "contains": [
+        "router.post('/runs', requireMemoryReviewProducerAccess",
+        "router.post('/runs/:runId/observations', requireMemoryReviewProducerAccess",
+        "router.post('/runs/:runId/finalize', requireMemoryReviewProducerAccess",
+        "router.get('/runs/:runId/synthesis-input', requireMemoryReviewProducerAccess",
+        "router.post('/runs/:runId/candidates', requireMemoryReviewProducerAccess",
+        "router.post('/runs/:runId/fail', requireMemoryReviewProducerAccess"
+      ]
+    },
+    "core-schedule-machine-validator": {
+      "file": "core/src/helpers/scheduleMachineAccess.js",
+      "contains": [
+        "function scheduleTokenAllowed(req)",
+        "function requireScheduleMachineAccess(req, res, next)",
+        "code: 'SCHEDULE_MACHINE_ACCESS_REQUIRED'"
+      ]
+    },
+    "core-schedule-machine-mount": {
+      "file": "core/routes/cluster-schedule.js",
+      "contains": [
+        "router.post('/schedule/sync', requireScheduleMachineAccess",
+        "router.post('/schedule/claim', requireScheduleMachineAccess",
+        "router.delete('/schedule/claim/:claimId', requireScheduleMachineAccess"
+      ]
+    },
+    "core-pipeline-worker-validator": {
+      "file": "core/src/helpers/pipelineAccess.js",
+      "contains": [
+        "function pipelineWorkerTokenAllowed(req)",
+        "function requirePipelineWorkerAccess(req, res, next)",
+        "function requirePipelineStatusAccess(req, res, next)",
+        "code: 'PIPELINE_FINALIZE_REQUIRES_CONTROL_AUTHORITY'"
+      ]
+    },
+    "core-pipeline-worker-mount": {
+      "file": "core/routes/pipeline.js",
+      "contains": [
+        "router.get('/tasks/next', requirePipelineWorkerAccess",
+        "router.post('/tasks/:id/claim', requirePipelineWorkerAccess",
+        "router.post('/tasks/:id/status', requirePipelineStatusAccess",
+        "router.post('/tasks/:id/feedback', requirePipelineWorkerAccess",
+        "router.post('/tasks/:id/heartbeat', requirePipelineWorkerAccess"
+      ]
+    },
+    "core-todos-pipeline-mount": {
+      "file": "core/routes/todos.js",
+      "contains": "router.post('/', requirePipelineWorkerAccess"
+    },
+    "core-alert-delivery-validator": {
+      "file": "core/src/helpers/alertDeliveryAccess.js",
+      "contains": [
+        "function alertDeliveryTokenAllowed(req)",
+        "function requireAlertDeliveryAccess(req, res, next)",
+        "code: 'ALERT_DELIVERY_ACCESS_REQUIRED'"
+      ]
+    },
+    "core-alert-delivery-mount": {
+      "file": "core/routes/alerts-ops.js",
+      "contains": "router.post('/:id/delivery-status', requireAlertDeliveryAccess"
+    },
+    "core-memory-user-operator-validator": {
+      "file": "core/routes/memory-review.js",
+      "contains": [
+        "router.post('/runs/:runId/candidates/:candidateId/review', requireOperatorUiAccess",
+        "router.post('/runs/:runId/authorize-apply', requireOperatorUiAccess",
+        "router.post('/runs/:runId/candidates/:candidateId/apply', requireOperatorUiAccess"
+      ]
+    },
+    "core-model-lifecycle-operator-validator": {
+      "file": "core/routes/models-unified.js",
+      "contains": [
+        "router.post('/ollama/pull', requireOperatorUiAccess",
+        "router.post('/ollama/start', requireOperatorUiAccess",
+        "router.post('/ollama/stop', requireOperatorUiAccess",
+        "router.delete('/ollama/:name', requireOperatorUiAccess"
+      ]
+    },
+    "core-alert-rule-typed-confirmation": {
+      "file": "core/routes/alerts-ops.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'DELETE ALERT RULE', ruleId)) return;"
+    },
+    "core-custom-model-typed-confirmations": {
+      "file": "core/routes/custom-models.js",
+      "contains": [
+        "if (!requireTypedConfirmation(req, res, 'ARCHIVE CUSTOM MODEL', id)) return;",
+        "if (!requireTypedConfirmation(req, res, 'ROLLBACK CUSTOM MODEL', id, 'TO', targetVersion)) return;",
+        "if (!requireTypedConfirmation(req, res, 'DEPRECATE CUSTOM MODEL', id)) return;"
+      ]
+    },
+    "core-history-tags-typed-confirmation": {
+      "file": "core/routes/history.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'REMOVE CONVERSATION TAGS', req.params.id)) return;"
+    },
+    "core-router-reset-typed-confirmation": {
+      "file": "core/routes/inference.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'RESET ROUTER CONFIG')) return;"
+    },
+    "core-model-registry-typed-confirmations": {
+      "file": "core/routes/model-registry.js",
+      "contains": [
+        "if (!requireTypedConfirmation(req, res, 'RETIRE MODEL', name)) return;",
+        "if (!requireTypedConfirmation(req, res, 'REMOVE MODEL CATEGORY', name, category)) return;",
+        "if (!requireTypedConfirmation(req, res, 'RESET MODEL EXECUTION CONFIG', req.params.name)) return;"
+      ]
+    },
+    "core-model-delete-typed-confirmation": {
+      "file": "core/routes/models-unified.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'DELETE OLLAMA MODEL', name, 'FROM', hostCheck.host)) return;"
+    },
+    "core-host-pin-typed-confirmation": {
+      "file": "core/routes/nerve-center-host-preferences.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'CLEAR HOST PIN', hostUrl)) return;"
+    },
+    "core-vram-typed-confirmation": {
+      "file": "core/routes/ollama-vram.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'CLEAR VRAM OVERRIDE', target)) return;"
+    },
+    "core-baseline-typed-confirmation": {
+      "file": "core/routes/performance-data.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'DELETE PERFORMANCE BASELINE', id)) return;"
+    },
+    "core-planning-typed-confirmations": {
+      "file": "core/routes/planning.js",
+      "contains": [
+        "if (!requireTypedConfirmation(req, res, 'ARCHIVE PLANNING ITEM', req.params.id)) return;",
+        "if (!requireTypedConfirmation(req, res, 'UNLINK PLANNING TASK', req.params.id, req.params.pipelineId)) return;",
+        "if (!requireTypedConfirmation(req, res, 'UNLINK PLANNING SCHEDULE', req.params.id, sourceId)) return;",
+        "if (!requireTypedConfirmation(req, res, 'DELETE PLANNING EVIDENCE', req.params.id, req.params.evidenceId)) return;"
+      ]
+    },
+    "core-prompt-template-typed-confirmation": {
+      "file": "core/routes/prompt-templates.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'DELETE PROMPT TEMPLATE', req.params.id)) return;"
+    },
+    "core-prompt-typed-confirmation": {
+      "file": "core/routes/prompts.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'DELETE PROMPT', req.params.id)) return;"
+    },
+    "core-rag-delete-typed-confirmation": {
+      "file": "core/routes/rag.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'DELETE RAG DOCUMENT', req.params.documentId)) return;"
+    },
+    "core-council-delete-typed-confirmation": {
+      "file": "core/routes/roundtable.js",
+      "contains": "if (!requireTypedConfirmation(req, res, 'DELETE COUNCIL RECORD', req.params.id)) return;"
+    },
+    "core-recovery-operator-validator": {
+      "file": "core/routes/operations-backup.js",
+      "contains": [
+        "router.patch('/backup/config', requireOperatorUiAccess",
+        "router.post('/backup', requireOperatorUiAccess",
+        "router.post('/restore/:backupName', requireOperatorUiAccess",
+        "router.delete('/backups/:backupName', requireOperatorUiAccess",
+        "router.post('/config/backup', requireOperatorUiAccess",
+        "router.delete('/config/backups/:name', requireOperatorUiAccess",
+        "router.post('/qdrant/backup', requireOperatorUiAccess",
+        "router.post('/qdrant/restore/:snapshotName', requireOperatorUiAccess",
+        "router.delete('/qdrant/backups/:snapshotName', requireOperatorUiAccess"
+      ]
+    },
+    "core-recovery-typed-confirmation": {
+      "file": "core/routes/operations-backup.js",
+      "contains": [
+        "function requireTypedConfirmation(req, res, action, name)",
+        "if (!requireTypedConfirmation(req, res, 'RESTORE', backupName)) return;",
+        "if (!requireTypedConfirmation(req, res, 'DELETE', backupName)) return;",
+        "if (!requireTypedConfirmation(req, res, 'DELETE', name)) return;",
+        "if (!requireTypedConfirmation(req, res, 'RESTORE', snapshotName)) return;",
+        "if (!requireTypedConfirmation(req, res, 'DELETE', snapshotName)) return;"
+      ]
+    },
+    "core-planning-automation-validator": {
+      "file": "core/src/helpers/planningAutomationAuth.js",
+      "contains": [
+        "if (process.env.NODE_ENV === 'production' && !configured)",
+        "if (!tokenAllowed(req, { allowUnset: true }))"
+      ]
+    },
+    "core-platform-event-validator": {
+      "file": "core/src/services/platformEventIngress.js",
+      "contains": [
+        "function callerAuthorized(req)",
+        "const expectedToken = process.env.AGENTX_PLATFORM_EVENT_TOKEN;",
+        "if (!callerAuthorized(req))"
+      ]
+    },
+    "core-telegram-webhook-disabled": {
+      "file": "core/routes/roundtable.js",
+      "contains": [
+        "router.post('/telegram/webhook'",
+        "res.status(410)"
+      ]
+    },
+    "rag-cleanup-typed-confirmation": {
+      "file": "rag/routes/manifest.routes.js",
+      "contains": [
+        "return `DELETE STALE DOCUMENTS FROM ${source}`;",
+        "if (!dryRun && !requireCleanupConfirmation(req, res, source)) return;"
+      ]
+    },
+    "rag-reindex-typed-confirmation": {
+      "file": "rag/routes/migration.routes.js",
+      "contains": [
+        "const REINDEX_CONFIRMATION = 'REINDEX ALL DOCUMENTS';",
+        "if (!requireReindexConfirmation(req, res)) return;"
+      ]
+    },
+    "rag-document-delete-confirmation": {
+      "file": "rag/routes/rag.js",
+      "contains": [
+        "const expected = `DELETE ${documentId}`;",
+        "if (!requireDocumentDeleteConfirmation(req, res, documentId)) return;"
+      ]
+    },
+    "rag-recovery-route-validator": {
+      "file": "rag/routes/snapshots.routes.js",
+      "contains": "router.use(requireRecoveryToken);"
+    },
+    "rag-recovery-token-validator": {
+      "file": "rag/src/middleware/recoveryAuth.js",
+      "contains": [
+        "function requireRecoveryToken(req, res, next)",
+        "if (recoveryTokensMatch(expected, presented)) return next();"
+      ]
+    },
+    "rag-snapshot-restore-confirmation": {
+      "file": "rag/routes/snapshots.routes.js",
+      "contains": [
+        "const expectedConfirmation = `RESTORE ${name}`;",
+        "if (req.get('x-agentx-confirm') !== expectedConfirmation)"
+      ]
+    },
+    "rag-snapshot-delete-confirmation": {
+      "file": "rag/routes/snapshots.routes.js",
+      "contains": [
+        "const expectedConfirmation = `DELETE ${name}`;",
+        "if (req.get('x-agentx-confirm') !== expectedConfirmation)"
+      ]
+    }
+  }
+}
