@@ -117,6 +117,9 @@ v0.1.1.
 - Product regression evidence now covers the deployment-owned remote operator
   UI host through an exact HTTPS same-origin reverse-proxy request while proving
   that the identical allowlist never admits cross-site browser traffic.
+- Reverse-proxied operator UI traffic can now bind to an exact configured socket
+  peer, including IPv4-mapped Docker gateway addresses, without trusting
+  forwarded client addresses, subnets, wildcards, or cross-site requests.
 - Benchmark prompt synchronization, host/judge refresh, and batch repair are
   explicit protected actions. Their GET projections no longer seed, probe with
   inference, emit events, or persist reconciliation writes.

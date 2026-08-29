@@ -217,7 +217,11 @@ conversations, memory, credentials, workspace realization, or execution loop.
   Benchmark/profiler families. Same-origin UI proof is a CSRF boundary, not
   machine identity, and grants credential-free mutations only across the local
   loopback UI boundary. `AGENTX_OPERATOR_UI_HOSTS` can admit remote hostnames
-  for read/UI routing but does not authenticate their mutations; the operator
+  for read/UI routing. A deployment may pair that allowlist with exact
+  `AGENTX_TRUSTED_UI_PROXY_ADDRESSES` socket peers so its own reverse proxy can
+  carry same-origin UI requests without trusting forwarded client metadata or
+  a subnet; Host, Origin/Referer, and browser same-origin checks still apply.
+  The operator
   token (normally injected by a trusted proxy) is the remote administrative
   path. Missing or
   invalid proof degrades to the automated lane and general rate bucket without
