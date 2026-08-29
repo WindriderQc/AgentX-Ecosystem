@@ -53,10 +53,17 @@ async function _restoreDedicationForHost(hostUrl) {
 
 router.post('/scout', async (req, res) => {
   try {
-    const { modelName, hosts } = req.body;
+    const { modelName, hosts } = req.body || {};
     if (!modelName || !hosts?.length) return res.status(400).json({ status: 'error', error: 'modelName and hosts[] required' });
-    res.json({ status: 'success', data: await orchestrator.scout(modelName, hosts) });
-  } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
+    const admittedHosts = [];
+    for (const requested of hosts) {
+      if (!requested?.hostId) return res.status(400).json({ status: 'error', error: 'Each scout host requires hostId' });
+      const persisted = await hostProfileService.getById(requested.hostId);
+      if (!persisted?.hostUrl) return res.status(404).json({ status: 'error', error: `Host not found: ${requested.hostId}` });
+      admittedHosts.push({ hostId: persisted.hostId || requested.hostId, hostUrl: persisted.hostUrl });
+    }
+    res.json({ status: 'success', data: await orchestrator.scout(modelName, admittedHosts) });
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message }); }
 });
 
 router.post('/profile', async (req, res) => {

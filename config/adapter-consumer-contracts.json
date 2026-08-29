@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 1,
+  "description": "Address-free conformance registry for product-owned APIs consumed by external adapters. Private adapters, credentials, and runtime locations are intentionally excluded.",
+  "productVersion": "0.1.1",
+  "services": [
+    { "id": "core", "identity": "agentx-core", "version": "0.1.1", "productOwned": true },
+    { "id": "rag", "identity": "agentx-rag", "version": "0.1.1", "productOwned": true }
+  ],
+  "checks": [
+    {
+      "id": "core-health",
+      "service": "core",
+      "method": "GET",
+      "path": "/health",
+      "validator": "service-health",
+      "acceptedStatuses": [200, 503],
+      "maxAgeMs": 120000
+    },
+    {
+      "id": "rag-health",
+      "service": "rag",
+      "method": "GET",
+      "path": "/health",
+      "validator": "service-health",
+      "acceptedStatuses": [200, 503],
+      "maxAgeMs": 120000
+    },
+    {
+      "id": "core-portal-health",
+      "service": "core",
+      "method": "GET",
+      "path": "/api/portal/health",
+      "validator": "portal-health",
+      "acceptedStatuses": [200],
+      "maxAgeMs": 120000,
+      "expectedServiceIds": ["core", "benchmark", "rag"]
+    },
+    {
+      "id": "core-ecosystem-snapshot",
+      "service": "core",
+      "method": "GET",
+      "path": "/api/nerve-center/ecosystem",
+      "validator": "ecosystem-snapshot",
+      "acceptedStatuses": [200, 503],
+      "maxAgeMs": 120000,
+      "schemaVersion": 2
+    },
+    {
+      "id": "generic-consumer-capabilities",
+      "service": "core",
+      "method": "GET",
+      "path": "/api/consumers/v1/capabilities",
+      "validator": "consumer-capabilities",
+      "acceptedStatuses": [200],
+      "maxAgeMs": 120000,
+      "contract": {
+        "flavor": "generic",
+        "name": "agentx.external-consumer",
+        "version": "1.0.0",
+        "basePath": "/api/consumers/v1"
+      }
+    },
+    {
+      "id": "generic-consumer-routing",
+      "service": "core",
+      "method": "GET",
+      "path": "/api/consumers/v1/routing",
+      "validator": "consumer-routing",
+      "acceptedStatuses": [200, 500, 502, 503],
+      "maxAgeMs": 120000,
+      "contract": { "flavor": "generic", "version": "1.0.0" }
+    },
+    {
+      "id": "nestor-consumer-capabilities",
+      "service": "core",
+      "method": "GET",
+      "path": "/api/consumers/nestor/v1/capabilities",
+      "validator": "consumer-capabilities",
+      "acceptedStatuses": [200],
+      "maxAgeMs": 120000,
+      "contract": {
+        "flavor": "nestor",
+        "name": "agentx.nestor.consumer",
+        "version": "1.2.0",
+        "basePath": "/api/consumers/nestor/v1"
+      }
+    },
+    {
+      "id": "nestor-consumer-routing",
+      "service": "core",
+      "method": "GET",
+      "path": "/api/consumers/nestor/v1/router",
+      "validator": "consumer-routing",
+      "acceptedStatuses": [200, 500, 502, 503],
+      "maxAgeMs": 120000,
+      "contract": { "flavor": "nestor", "version": "1.2.0" }
+    },
+    {
+      "id": "nestor-data-read-status",
+      "service": "core",
+      "method": "GET",
+      "path": "/api/consumers/nestor/v1/memory/status",
+      "query": { "source": "agentx" },
+      "validator": "source-status",
+      "acceptedStatuses": [200, 500, 502, 503],
+      "maxAgeMs": 120000,
+      "freshnessPath": "data.generatedAt",
+      "expectedSources": ["agentx"],
+      "contract": { "flavor": "nestor", "version": "1.2.0" }
+    },
+    {
+      "id": "nestor-data-read-search",
+      "service": "core",
+      "method": "POST",
+      "path": "/api/consumers/nestor/v1/memory/search",
+      "body": { "source": "agentx", "query": "agentx conformance probe", "k": 3 },
+      "validator": "bounded-read",
+      "acceptedStatuses": [200, 500, 502, 503],
+      "maxAgeMs": 120000,
+      "freshnessPath": "data.generatedAt",
+      "contract": { "flavor": "nestor", "version": "1.2.0" },
+      "read": {
+        "resultPath": "data.results",
+        "limit": 3,
+        "limitPath": "data.k",
+        "queryPath": "data.query",
+        "queryValue": "agentx conformance probe",
+        "sourceGroupsPath": "data.bySource",
+        "expectedSources": ["agentx"],
+        "provenance": [
+          { "paths": ["source"], "allowNull": false }
+        ]
+      }
+    },
+    {
+      "id": "rag-status",
+      "service": "rag",
+      "method": "GET",
+      "path": "/api/rag/status",
+      "validator": "rag-status",
+      "acceptedStatuses": [200, 500, 502, 503],
+      "maxAgeMs": 120000,
+      "freshnessPath": "meta.observedAt"
+    },
+    {
+      "id": "rag-documents-read",
+      "service": "rag",
+      "method": "GET",
+      "path": "/api/rag/documents",
+      "query": { "limit": 3, "offset": 0 },
+      "validator": "bounded-read",
+      "acceptedStatuses": [200, 500, 502, 503],
+      "maxAgeMs": 120000,
+      "freshnessPath": "meta.observedAt",
+      "read": {
+        "resultPath": "data.documents",
+        "limit": 3,
+        "limitPath": "data.limit",
+        "countPath": "data.total",
+        "provenance": [
+          { "paths": ["documentId"], "allowNull": false },
+          { "paths": ["source"], "allowNull": false }
+        ]
+      }
+    },
+    {
+      "id": "rag-search-read",
+      "service": "rag",
+      "method": "POST",
+      "path": "/api/rag/search",
+      "body": { "query": "agentx conformance probe", "topK": 3, "minScore": 0 },
+      "validator": "bounded-read",
+      "acceptedStatuses": [200, 500, 502, 503],
+      "maxAgeMs": 120000,
+      "freshnessPath": "meta.observedAt",
+      "read": {
+        "resultPath": "data.results",
+        "limit": 3,
+        "countPath": "data.count",
+        "countExact": true,
+        "provenance": [
+          { "paths": ["source", "metadata.source"], "allowNull": false },
+          { "paths": ["documentId", "metadata.documentId", "ref"], "allowNull": false }
+        ]
+      }
+    }
+  ]
+}

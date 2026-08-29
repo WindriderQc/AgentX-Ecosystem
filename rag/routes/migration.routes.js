@@ -17,6 +17,19 @@ const { sendError } = require('../src/utils/response');
 // A future version could persist to MongoDB if durability is needed.
 const jobs = new Map();
 const MAX_ERRORS = 100;
+const REINDEX_CONFIRMATION = 'REINDEX ALL DOCUMENTS';
+
+function requireReindexConfirmation(req, res) {
+  if (req.body?.confirmation === REINDEX_CONFIRMATION) return true;
+
+  res.status(400).json({
+    ok: false,
+    error: 'CONFIRMATION_REQUIRED',
+    detail: 'Type the exact reindex confirmation phrase before retrying this destructive operation',
+    confirmation: { field: 'confirmation', expected: REINDEX_CONFIRMATION }
+  });
+  return false;
+}
 
 /**
  * Compute the current embedding migration status.
@@ -88,10 +101,8 @@ router.get('/embedding-migration/status', async (req, res) => {
 
 router.post('/embedding-migration/reindex', async (req, res) => {
   try {
-    const { confirm, force } = req.body || {};
-    if (confirm !== true) {
-      return sendError(res, 400, 'CONFIRMATION_REQUIRED', 'Send { "confirm": true } to start reindex');
-    }
+    const { force } = req.body || {};
+    if (!requireReindexConfirmation(req, res)) return;
 
     // Guard: refuse no-op reindex when dimensions already match.
     // The reindex walks the entire corpus and re-embeds every chunk — burning
@@ -202,6 +213,9 @@ async function _runReindex(job) {
         documentId: docId,
         source: metadata?.source || 'unknown',
         tags: metadata?.tags || [],
+        // Migration must replace vectors even when canonical source/content is
+        // unchanged: the target embedding model/dimension is what changed.
+        forceReindex: true,
       });
 
       job.progress.succeeded++;
@@ -210,7 +224,7 @@ async function _runReindex(job) {
       if (job.progress.errors.length < MAX_ERRORS) {
         job.progress.errors.push({ documentId: docId, error: err.message });
       }
-      logger.warn(`Reindex failed for document "${docId}":`, err.message);
+      logger.warn(`Reindex failed for document "${docId}"`, { error: err.message });
     }
 
     job.progress.processed++;

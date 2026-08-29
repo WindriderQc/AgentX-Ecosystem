@@ -185,6 +185,8 @@ describe('GET /api/rag/deletion-preview', () => {
 });
 
 describe('POST /api/rag/cleanup', () => {
+  const CLEANUP_CONFIRMATION = 'DELETE STALE DOCUMENTS FROM test-source';
+
   const setupStaleMocks = () => {
     const sortMock = { lean: jest.fn().mockResolvedValue(mockManifestDoc) };
     RagManifest.findOne.mockReturnValue({ sort: () => sortMock });
@@ -219,13 +221,44 @@ describe('POST /api/rag/cleanup', () => {
     expect(mockVectorStore.deleteDocument).not.toHaveBeenCalled();
   });
 
-  it('actual cleanup deletes stale documents with per-doc results', async () => {
-    setupStaleMocks();
+  it('rejects a destructive cleanup without a source-bound phrase before reading or deleting documents', async () => {
     const app = buildApp();
 
     const res = await request(app)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', dryRun: false });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      ok: false,
+      error: 'CONFIRMATION_REQUIRED',
+      confirmation: { field: 'confirmation', expected: CLEANUP_CONFIRMATION }
+    });
+    expect(RagManifest.findOne).not.toHaveBeenCalled();
+    expect(mockVectorStore.listDocuments).not.toHaveBeenCalled();
+    expect(mockVectorStore.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('rejects the wrong cleanup phrase before reading or deleting documents', async () => {
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/api/rag/cleanup')
+      .send({ source: 'test-source', dryRun: false, confirmation: 'DELETE STALE DOCUMENTS' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.confirmation.expected).toBe(CLEANUP_CONFIRMATION);
+    expect(RagManifest.findOne).not.toHaveBeenCalled();
+    expect(mockVectorStore.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('accepts the exact source-bound phrase and deletes stale documents with per-doc results', async () => {
+    setupStaleMocks();
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/api/rag/cleanup')
+      .send({ source: 'test-source', dryRun: false, confirmation: CLEANUP_CONFIRMATION });
 
     expect(res.status).toBe(200);
     expect(res.body.data.dryRun).toBe(false);
@@ -268,7 +301,7 @@ describe('POST /api/rag/cleanup', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/cleanup')
-      .send({ source: 'test-source', dryRun: false, maxDeletes: 2 });
+      .send({ source: 'test-source', dryRun: false, maxDeletes: 2, confirmation: CLEANUP_CONFIRMATION });
 
     expect(res.status).toBe(400);
     expect(res.body.ok).toBe(false);
@@ -317,7 +350,7 @@ describe('POST /api/rag/cleanup', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/cleanup')
-      .send({ source: 'test-source', dryRun: false, maxDeletes: 100 });
+      .send({ source: 'test-source', dryRun: false, maxDeletes: 100, confirmation: CLEANUP_CONFIRMATION });
 
     expect(res.status).toBe(200);
     expect(res.body.data.deleted).toEqual(['also-stale.txt']);
@@ -344,7 +377,7 @@ describe('POST /api/rag/cleanup', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/cleanup')
-      .send({ source: 'test-source', manifestId: 'specific-manifest-id', dryRun: false });
+      .send({ source: 'test-source', manifestId: 'specific-manifest-id', dryRun: false, confirmation: CLEANUP_CONFIRMATION });
 
     expect(res.status).toBe(200);
     expect(res.body.data.manifestId).toBe('specific-manifest-id');
@@ -358,7 +391,7 @@ describe('POST /api/rag/cleanup', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/cleanup')
-      .send({ source: 'test-source', manifestId: 'nonexistent-id', dryRun: false });
+      .send({ source: 'test-source', manifestId: 'nonexistent-id', dryRun: false, confirmation: CLEANUP_CONFIRMATION });
 
     expect(res.status).toBe(404);
     expect(res.body.ok).toBe(false);
@@ -428,7 +461,12 @@ describe('Content hash unchanged detection', () => {
       hash: 'same-hash'
     });
 
-    expect(result).toEqual({ unchanged: true, documentId: 'doc1' });
+    expect(result).toMatchObject({
+      unchanged: true,
+      deduplicated: false,
+      documentId: 'doc1',
+      status: 'unchanged'
+    });
     expect(mockVectorStore.upsertDocument).not.toHaveBeenCalled();
   });
 
@@ -454,7 +492,7 @@ describe('Content hash unchanged detection', () => {
     expect(metaArg.hash).toBe('new-hash');
   });
 
-  it('ingests normally when no hash provided', async () => {
+  it('checks canonical identity and ingests normally when no hash is provided', async () => {
     mockVectorStore.upsertDocument.mockResolvedValue({
       documentId: 'doc1', chunkCount: 1, status: 'created'
     });
@@ -466,6 +504,6 @@ describe('Content hash unchanged detection', () => {
     });
 
     expect(result.documentId).toBe('doc1');
-    expect(mockVectorStore.getDocument).not.toHaveBeenCalled();
+    expect(mockVectorStore.getDocument).toHaveBeenCalledWith('doc1');
   });
 });

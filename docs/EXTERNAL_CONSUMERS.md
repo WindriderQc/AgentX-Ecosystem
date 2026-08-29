@@ -12,6 +12,11 @@ The v1 base path is `/api/consumers/v1`; discovery is
 `agentx.external-consumer` version `1.0.0`. `GET /health` remains the Core
 liveness/readiness endpoint.
 
+Every v1 response includes `X-AgentX-Consumer-Contract: 1.0.0`. Discovery and
+routing include fresh `generatedAt` evidence, and the routing projection is a
+strict allowlist: absolute URLs and runtime location fields never cross the
+consumer boundary.
+
 ## Authentication
 
 A separately deployed application uses the route-scoped credential configured

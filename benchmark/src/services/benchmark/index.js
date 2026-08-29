@@ -19,7 +19,14 @@ const { runTest, startBatch, resumeBatch, executeBatch, stopBatch, getActiveBatc
 const { getResults, getSummary, getDashboard, compareModels, getQualityBreakdown, getModelTrends, compareBatches, getBatchQualityBreakdown } = require('./results');
 const { getBatches, getBatch, getBatchStatsByTag, clearResults, clearFailedResults, getActiveStats } = require('./batches');
 const { getJudgeLeaderboard, getJudgeBreakdown, getJudgeActivity, getTruncationStats } = require('./judges');
-const { calculateAllGeneralistScores, getActiveCategoryWeights, getCategoryScoresByModel, getLeaderboardEntryStats, confidenceMargin } = require('./generalistScore');
+const {
+    calculateAllGeneralistScores,
+    getActiveCategoryWeights,
+    getCategoryScoresByModel,
+    getLeaderboardEntryStats,
+    buildCategoryEvidenceView,
+    confidenceMargin
+} = require('./generalistScore');
 const { getTopCategoryFromAverages } = require('./modelMetadata');
 const { getCurrentHostModelSnapshot, isModelAvailableForRow, serializeHostModelSnapshot } = require('./modelAvailability');
 const { judgeResult, judgeBatch, stopJudging, getJudgingStatus, stopAllJudging } = require('./judging');
@@ -238,6 +245,11 @@ class BenchmarkService {
             const catScores = categoryMap.get(key) || {};
             const totalTests = Object.values(catScores).reduce((sum, c) => sum + (c.count || 0), 0);
             const stats = entryStats.get(key) || {};
+            const categoryView = buildCategoryEvidenceView(
+                catScores,
+                data.categoryAverages,
+                categoryWeights
+            );
 
             const margin = confidenceMargin(
                 data.avgWithinCategoryStdDev || 0,
@@ -271,8 +283,9 @@ class BenchmarkService {
                 confidenceMargin: margin,
                 confidenceWeighted: data.confidenceWeighted || false,
                 categoryConfidence: data.categoryConfidence || null,
-                recommended_category: getTopCategoryFromAverages(data.categoryAverages, model),
-                categoryAverages: data.categoryAverages,
+                recommended_category: getTopCategoryFromAverages(categoryView.categoryAverages, model),
+                categoryAverages: categoryView.categoryAverages,
+                categoryEvidence: categoryView.categoryEvidence,
                 promptLevelCounts: stats.promptLevelCounts || {},
                 minPromptLevel: stats.minPromptLevel || null,
                 maxPromptLevel: stats.maxPromptLevel || null,

@@ -17,6 +17,23 @@ const { sendError } = require('../src/utils/response');
 const MAX_DELETES_DEFAULT = 100;
 const MAX_DELETES_HARD_CAP = 500;
 
+function cleanupConfirmationPhrase(source) {
+  return `DELETE STALE DOCUMENTS FROM ${source}`;
+}
+
+function requireCleanupConfirmation(req, res, source) {
+  const expected = cleanupConfirmationPhrase(source);
+  if (req.body?.confirmation === expected) return true;
+
+  res.status(400).json({
+    ok: false,
+    error: 'CONFIRMATION_REQUIRED',
+    detail: 'Type the exact source-bound cleanup phrase before retrying this destructive operation',
+    confirmation: { field: 'confirmation', expected }
+  });
+  return false;
+}
+
 // ── POST /manifests ──────────────────────────────────────
 
 router.post('/manifests', async (req, res) => {
@@ -146,15 +163,20 @@ router.get('/deletion-preview', async (req, res) => {
 
 router.post('/cleanup', async (req, res) => {
   try {
-    const { source, dryRun = true, manifestId = null } = req.body;
+    const payload = req.body || {};
+    const source = typeof payload.source === 'string' ? payload.source.trim() : '';
+    const dryRun = payload.dryRun !== false;
+    const manifestId = payload.manifestId || null;
     const maxDeletes = Math.min(
-      Math.max(Number(req.body.maxDeletes) || MAX_DELETES_DEFAULT, 1),
+      Math.max(Number(payload.maxDeletes) || MAX_DELETES_DEFAULT, 1),
       MAX_DELETES_HARD_CAP
     );
 
     if (!source) {
-      return res.status(400).json({ ok: false, error: 'source is required' });
+      return res.status(400).json({ ok: false, error: 'source is required and must be a non-empty string' });
     }
+
+    if (!dryRun && !requireCleanupConfirmation(req, res, source)) return;
 
     const startTime = Date.now();
     const { manifest, stale } = await computeStaleDocs(source, manifestId);

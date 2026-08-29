@@ -6,6 +6,8 @@ const NerveCenter = (() => {
     'use strict';
 
     const POLL_INTERVAL = 30_000;
+    const ECOSYSTEM_SNAPSHOT_URL = '/api/nerve-center/ecosystem';
+    const ECOSYSTEM_SNAPSHOT_TTL_MS = 2_000;
     const STORAGE_KEY = 'nc_section_states';
     const HOT_STATES = new Set(['READY']);
     const HOST_ORDER = ['primary', 'secondary', 'tertiary'];
@@ -21,6 +23,10 @@ const NerveCenter = (() => {
     };
 
     let _poller = null;
+    let _ecosystemSnapshot = null;
+    let _ecosystemSnapshotExpiresAt = 0;
+    let _ecosystemSnapshotInFlight = null;
+    let _ecosystemSnapshotGeneration = 0;
 
     function fetchJson(url, options) {
         return fetch(url, options).then(async response => {
@@ -32,12 +38,76 @@ const NerveCenter = (() => {
         });
     }
 
+    function invalidateEcosystemSnapshot() {
+        _ecosystemSnapshotGeneration += 1;
+        _ecosystemSnapshot = null;
+        _ecosystemSnapshotExpiresAt = 0;
+        _ecosystemSnapshotInFlight = null;
+    }
+
+    function getEcosystemSnapshot(options = {}) {
+        const force = options.force === true;
+        const now = Date.now();
+        if (!force && _ecosystemSnapshot && now < _ecosystemSnapshotExpiresAt) {
+            return Promise.resolve(_ecosystemSnapshot);
+        }
+        if (!force && _ecosystemSnapshotInFlight) return _ecosystemSnapshotInFlight;
+
+        if (force) invalidateEcosystemSnapshot();
+        const generation = _ecosystemSnapshotGeneration;
+        const request = fetchJson(ECOSYSTEM_SNAPSHOT_URL).then(envelope => {
+            if (envelope?.status !== 'success' || !envelope.data || typeof envelope.data !== 'object') {
+                throw new Error('Ecosystem snapshot returned no data');
+            }
+            if (Number(envelope.data.schemaVersion) !== 2) {
+                throw new Error(`Unsupported ecosystem snapshot schema: ${envelope.data.schemaVersion ?? 'missing'}`);
+            }
+            if (generation === _ecosystemSnapshotGeneration) {
+                _ecosystemSnapshot = envelope.data;
+                _ecosystemSnapshotExpiresAt = Date.now() + ECOSYSTEM_SNAPSHOT_TTL_MS;
+            }
+            return envelope.data;
+        });
+        const inFlight = request.finally(() => {
+            if (_ecosystemSnapshotInFlight === inFlight) _ecosystemSnapshotInFlight = null;
+        });
+        _ecosystemSnapshotInFlight = inFlight;
+        return inFlight;
+    }
+
     function normalizeHostUrl(hostUrl) {
         if (!hostUrl) return '';
         return String(hostUrl).replace(/\/+$/, '');
     }
 
     const escapeHtml = (value) => window.AgentXUtils.escapeHtml(value);
+
+    function motionSafeScrollBehavior(preferred = 'smooth') {
+        const reduceMotion = typeof window.matchMedia === 'function'
+            && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        return reduceMotion && preferred === 'smooth' ? 'auto' : preferred;
+    }
+
+    function setSectionBusy(body, busy) {
+        if (!body) return;
+        body.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+
+    function renderSectionLoading(body, message) {
+        if (!body) return;
+        setSectionBusy(body, true);
+        body.innerHTML = `<div class="nc-section-placeholder" role="status" aria-live="polite" aria-atomic="true"><i class="fas fa-spinner fa-spin" aria-hidden="true"></i> ${escapeHtml(message)}</div>`;
+    }
+
+    function finishSectionLoad(body) {
+        setSectionBusy(body, false);
+    }
+
+    function renderSectionError(body, message) {
+        if (!body) return;
+        body.innerHTML = `<div class="nc-section-placeholder nc-section-error" role="alert"><i class="fas fa-exclamation-triangle" aria-hidden="true"></i> ${escapeHtml(message)}</div>`;
+        finishSectionLoad(body);
+    }
 
     function timeAgo(dateStr) {
         if (!dateStr) return 'never';
@@ -156,6 +226,7 @@ const NerveCenter = (() => {
         restoreSectionStates();
         expandHashSection();
         setupHandoffContext();
+        syncSectionDisclosures();
         setupWidgetClicks();
         setupControls();
 
@@ -199,7 +270,7 @@ const NerveCenter = (() => {
             document.getElementById('ncContextDetail').textContent = `Showing the ${focus.replace(/-/g, ' ')} evidence surface; live Nerve Center data remains authoritative.`;
         }
         if (!section) return;
-        section.classList.remove('collapsed');
+        setSectionCollapsed(section, false);
         section.classList.add('nc-context-focus');
         const actions = section.querySelector('.nc-section-actions');
         if (actions) {
@@ -216,7 +287,7 @@ const NerveCenter = (() => {
         let stopTimer = 0;
         let hasResizeBaseline = false;
         const alignSection = (behavior) => {
-            if (active) section.scrollIntoView({ behavior, block: 'start' });
+            if (active) section.scrollIntoView({ behavior: motionSafeScrollBehavior(behavior), block: 'start' });
         };
         const observer = typeof window.ResizeObserver === 'function'
             ? new window.ResizeObserver(() => {
@@ -255,8 +326,38 @@ const NerveCenter = (() => {
     function toggleSection(sectionId) {
         const section = document.getElementById(sectionId);
         if (!section) return;
-        section.classList.toggle('collapsed');
+        setSectionCollapsed(section, !section.classList.contains('collapsed'));
         saveSectionStates();
+    }
+
+    function setSectionCollapsed(section, collapsed) {
+        section.classList.toggle('collapsed', collapsed);
+        syncSectionDisclosure(section);
+    }
+
+    function syncSectionDisclosure(section) {
+        if (!section) return;
+        const body = section.querySelector('.nc-section-body');
+        if (!body) return;
+        const collapsed = section.classList.contains('collapsed');
+
+        if (collapsed) {
+            body.setAttribute('aria-hidden', 'true');
+            body.setAttribute('inert', '');
+        } else {
+            body.removeAttribute('aria-hidden');
+            body.removeAttribute('inert');
+        }
+
+        document.querySelectorAll('[aria-controls]').forEach(control => {
+            if (control.getAttribute('aria-controls') === body.id) {
+                control.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            }
+        });
+    }
+
+    function syncSectionDisclosures() {
+        document.querySelectorAll('.nc-section').forEach(syncSectionDisclosure);
     }
 
     function saveSectionStates() {
@@ -282,16 +383,14 @@ const NerveCenter = (() => {
                 // First visit — apply defaults
                 DEFAULT_COLLAPSED.forEach(id => {
                     const section = document.getElementById(id);
-                    if (section) section.classList.add('collapsed');
+                    if (section) setSectionCollapsed(section, true);
                 });
                 return;
             }
             const states = JSON.parse(raw);
             Object.entries(states).forEach(([id, collapsed]) => {
                 const section = document.getElementById(id);
-                if (section && collapsed) {
-                    section.classList.add('collapsed');
-                }
+                if (section) setSectionCollapsed(section, Boolean(collapsed));
             });
         } catch (_) {
             // Ignore missing or invalid storage state.
@@ -303,7 +402,7 @@ const NerveCenter = (() => {
         if (!hash) return;
         const section = document.getElementById(hash);
         if (!section || !section.classList.contains('collapsed')) return;
-        section.classList.remove('collapsed');
+        setSectionCollapsed(section, false);
         saveSectionStates();
     }
 
@@ -324,24 +423,19 @@ const NerveCenter = (() => {
                 if (!section) return;
 
                 if (section.classList.contains('collapsed')) {
-                    section.classList.remove('collapsed');
+                    setSectionCollapsed(section, false);
                     saveSectionStates();
                 }
 
-                section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                section.scrollIntoView({ behavior: motionSafeScrollBehavior(), block: 'start' });
             });
         });
     }
 
     function setupControls() {
-        // Wire section header toggles (replaces inline onclick handlers for CSP compliance)
-        document.querySelectorAll('.nc-section-header[data-section]').forEach(header => {
-            header.addEventListener('click', () => {
-                toggleSection(header.getAttribute('data-section'));
-            });
-            // Prevent button clicks inside headers from toggling the section
-            header.querySelectorAll('.nc-btn').forEach(btn => {
-                btn.addEventListener('click', e => e.stopPropagation());
+        document.querySelectorAll('.nc-section-toggle[data-section]').forEach(control => {
+            control.addEventListener('click', () => {
+                toggleSection(control.getAttribute('data-section'));
             });
         });
 
@@ -349,15 +443,102 @@ const NerveCenter = (() => {
         if (btnRefresh) {
             btnRefresh.addEventListener('click', async () => {
                 Toast.info('Refreshing cluster data...');
-                await Promise.all([loadSummary(), loadSection('cluster')]);
+                await Promise.all([loadSummary({ forceSnapshot: true }), loadSection('cluster')]);
             });
         }
 
     }
 
-    async function loadSummary() {
-        const [intelligenceResult, inferenceResult, rulesResult] = await Promise.allSettled([
-            fetchJson('/api/nerve-center/intelligence'),
+    function serviceBuildWidget(snapshot) {
+        const serviceHealth = snapshot?.serviceHealth;
+        const consistency = snapshot?.identityConsistency;
+        if (!serviceHealth || typeof serviceHealth !== 'object' || !consistency || typeof consistency !== 'object') {
+            return { value: 'ERROR', state: 'critical', title: 'Service and build identity evidence is unavailable.' };
+        }
+
+        const serviceStatus = String(serviceHealth.status || '').toLowerCase();
+        const consistencyStatus = String(consistency.status || '').toLowerCase();
+        const profiles = Array.isArray(consistency.profiles) ? consistency.profiles.filter(Boolean).map(String) : [];
+        const issues = Array.isArray(consistency.issues) ? consistency.issues.filter(Boolean).map(String) : [];
+        const down = Number(serviceHealth.down);
+        const healthy = Number(serviceHealth.healthy);
+        const total = Number(serviceHealth.total);
+        const parts = [];
+
+        if (serviceStatus && serviceStatus !== 'ok') parts.push(serviceStatus.toUpperCase());
+        if (consistencyStatus === 'degraded' || profiles.length > 1) parts.push('MIXED');
+        else if (consistencyStatus === 'unverified') parts.push('UNVERIFIED');
+        else if (profiles.length === 1) parts.push(profiles[0].toUpperCase());
+
+        const titleParts = [];
+        if (Number.isFinite(healthy) && Number.isFinite(total)) titleParts.push(`${healthy}/${total} services healthy`);
+        if (profiles.length > 0) titleParts.push(`Build profiles: ${profiles.join(', ')}`);
+        titleParts.push(...issues);
+
+        return {
+            value: parts.join('/') || '—',
+            state: Number.isFinite(down) && down > 0
+                ? 'critical'
+                : (serviceStatus !== 'ok' || consistencyStatus !== 'ok' ? 'attention' : 'nominal'),
+            title: titleParts.join(' · ') || 'Service/build consistency evidence is incomplete.'
+        };
+    }
+
+    function evidenceTrustWidget(evidenceTrust) {
+        if (!evidenceTrust || typeof evidenceTrust !== 'object') {
+            return { value: 'ERROR', state: 'critical', title: 'Evidence trust assessment is unavailable.' };
+        }
+
+        const status = String(evidenceTrust.status || '').toLowerCase();
+        const labels = {
+            verified: 'VERIFIED',
+            partial: 'PARTIAL',
+            stale: 'STALE',
+            inconsistent: 'MIXED',
+            contradictory: 'CONFLICT'
+        };
+        const contradictions = Number(evidenceTrust.contradictionBudget?.observed);
+        const observedSources = Number(evidenceTrust.coverage?.observedSources);
+        const expectedSources = Number(evidenceTrust.coverage?.expectedSources);
+        const staleSources = Number(evidenceTrust.freshness?.stale);
+        const missing = Array.isArray(evidenceTrust.coverage?.missing)
+            ? evidenceTrust.coverage.missing.filter(Boolean).map(String)
+            : [];
+        const title = [
+            Number.isFinite(contradictions) ? `${contradictions} contradictions (budget 0)` : 'Contradiction count unavailable',
+            Number.isFinite(observedSources) && Number.isFinite(expectedSources)
+                ? `${observedSources}/${expectedSources} evidence sources observed`
+                : 'Evidence coverage unavailable',
+            Number.isFinite(staleSources) ? `${staleSources} stale sources` : 'Freshness unavailable',
+            missing.length > 0 ? `Missing: ${missing.join(', ')}` : '',
+            `Operational state: ${evidenceTrust.operationalStatus || 'unknown'}`
+        ].filter(Boolean).join(' · ');
+
+        return {
+            value: labels[status] || 'UNKNOWN',
+            state: status === 'contradictory' ? 'critical' : (status === 'verified' ? 'nominal' : 'attention'),
+            title
+        };
+    }
+
+    function markEcosystemSummaryUnavailable(error) {
+        const message = `Ecosystem snapshot unavailable: ${error?.message || 'unknown error'}`;
+        [
+            'widgetHostsOnline',
+            'widgetActiveHost',
+            'widgetHostPrefs',
+            'widgetAlerts',
+            'widgetRoutingMode',
+            'widgetServiceBuild',
+            'widgetEvidenceTrust'
+        ].forEach(widgetId => {
+            updateWidget(widgetId, () => ({ value: 'ERROR', state: 'critical', title: message }));
+        });
+    }
+
+    async function loadSummary(options = {}) {
+        const [ecosystemResult, inferenceResult, rulesResult] = await Promise.allSettled([
+            getEcosystemSnapshot({ force: options.forceSnapshot === true }),
             fetchJson('/api/nerve-center/inference-stats'),
             fetchJson('/api/alerts/rules')
         ]);
@@ -365,62 +546,85 @@ const NerveCenter = (() => {
             ? rulesResult.value?.data?.detectorCoverage
             : null;
 
-        if (intelligenceResult.status === 'fulfilled' && intelligenceResult.value.status === 'success' && intelligenceResult.value.data) {
-            const { cluster, routing, hostPreferences, alerts } = intelligenceResult.value.data;
+        if (ecosystemResult.status === 'fulfilled') {
+            const snapshot = ecosystemResult.value;
+            const { health, routing, hostPreferences, alertSummary, serviceHealth, identityConsistency, evidenceTrust } = snapshot;
+            const snapshotAge = snapshot.generatedAt ? timeAgo(snapshot.generatedAt) : 'unknown';
 
             updateWidget('widgetHostsOnline', () => {
-                const hosts = Array.isArray(cluster) ? cluster : [];
-                const online = hosts.filter(host => host.status === 'online').length;
-                const total = hosts.length;
+                const online = Number(health?.onlineHosts);
+                const total = Number(health?.configuredHosts);
+                if (!Number.isFinite(online) || !Number.isFinite(total)) {
+                    return { value: 'ERROR', state: 'critical', title: 'Host-count evidence is unavailable in the ecosystem snapshot.' };
+                }
                 let state = 'nominal';
                 if (online === 0) state = 'critical';
                 else if (online < total) state = 'attention';
-                return { value: `${online}/${total}`, state };
+                return { value: `${online}/${total}`, state, title: `Ecosystem snapshot observed ${snapshotAge}.` };
             });
 
             updateWidget('widgetActiveHost', () => {
-                if (!routing) return { value: '--', state: 'nominal' };
+                if (!routing) return { value: 'ERROR', state: 'critical', title: 'Routing evidence is unavailable in the ecosystem snapshot.' };
                 const actualHost = routing.observedRequest?.actualHost || routing.currentHost;
                 const intentHost = routing.requestedIntent?.currentHost || routing.primaryHost;
                 const actualKey = deriveHostKey(actualHost, routing).toUpperCase();
                 const intentKey = deriveHostKey(intentHost, routing).toUpperCase();
                 const diverged = normalizeHostUrl(actualHost) !== normalizeHostUrl(intentHost);
                 const state = routing.isFailedOver || diverged ? 'attention' : 'nominal';
-                return { value: `${intentKey}→${actualKey}`, state };
+                return {
+                    value: `${intentKey}→${actualKey}`,
+                    state,
+                    title: `Configured routing intent paired with the most recent successful chat or proxy route; embeddings are excluded. Snapshot observed ${snapshotAge}.`
+                };
             });
 
             updateWidget('widgetHostPrefs', () => {
                 const prefs = Array.isArray(hostPreferences) ? hostPreferences : [];
-                if (prefs.length === 0) return { value: '--', state: 'nominal' };
+                if (prefs.length === 0) return { value: '—', state: 'attention', title: 'No host-default evidence is present in the ecosystem snapshot.' };
                 const allReady = prefs.every(p => Array.isArray(p.pinnedModels) && p.pinnedModels.length > 0);
                 return {
                     value: allReady ? 'Configured' : 'Partial',
-                    state: allReady ? 'nominal' : 'attention'
+                    state: allReady ? 'nominal' : 'attention',
+                    title: `${prefs.length} host-default record${prefs.length === 1 ? '' : 's'} observed ${snapshotAge}.`
                 };
             });
 
             updateWidget('widgetAlerts', () => {
-                const count = Array.isArray(alerts) ? alerts.length : 0;
-                const disabled = Number(detectorCoverage?.disabled) || 0;
+                const reportedCount = Number(alertSummary?.activeCount);
+                if (!Number.isFinite(reportedCount) || reportedCount < 0) {
+                    return { value: 'ERROR', state: 'critical', title: 'Active-alert count evidence is unavailable in the ecosystem snapshot.' };
+                }
+                const count = reportedCount;
+                const disabledValue = Number(detectorCoverage?.disabled);
+                const disabled = Number.isFinite(disabledValue) ? disabledValue : null;
                 let state = 'nominal';
                 if (count >= 3) state = 'critical';
-                else if (count > 0 || disabled > 0) state = 'attention';
-                const widget = document.getElementById('widgetAlerts');
-                if (widget && detectorCoverage) {
-                    widget.title = `${detectorCoverage.active || 0} active detectors · ${disabled} disabled · ${detectorCoverage.retired_by_design || 0} retired by design`;
-                }
-                return { value: disabled > 0 ? `${count} · ${disabled} OFF` : String(count), state };
+                else if (count > 0 || (disabled !== null && disabled > 0) || !detectorCoverage) state = 'attention';
+                const detectorDetail = detectorCoverage
+                    ? `${detectorCoverage.active || 0} active detectors · ${disabled || 0} disabled · ${detectorCoverage.retired_by_design || 0} retired by design`
+                    : 'Detector coverage unavailable';
+                const observedAt = alertSummary?.observedAt ? ` · alerts observed ${timeAgo(alertSummary.observedAt)}` : '';
+                return {
+                    value: disabled !== null && disabled > 0 ? `${count} · ${disabled} OFF` : String(count),
+                    state,
+                    title: `${detectorDetail}${observedAt}`
+                };
             });
 
             updateWidget('widgetRoutingMode', () => {
-                if (!routing) return { value: '--', state: 'nominal' };
+                if (!routing) return { value: 'ERROR', state: 'critical', title: 'Routing evidence is unavailable in the ecosystem snapshot.' };
                 return {
                     value: routing.isFailedOver ? 'FAILOVER' : 'AUTO',
-                    state: routing.isFailedOver ? 'attention' : 'nominal'
+                    state: routing.isFailedOver ? 'attention' : 'nominal',
+                    title: `Routing authority: ${routing.authority || 'unavailable'} · snapshot observed ${snapshotAge}.`
                 };
             });
-        } else if (intelligenceResult.status === 'rejected') {
-            console.error('[NerveCenter] Failed to load summary intelligence', intelligenceResult.reason);
+
+            updateWidget('widgetServiceBuild', () => serviceBuildWidget({ serviceHealth, identityConsistency }));
+            updateWidget('widgetEvidenceTrust', () => evidenceTrustWidget(evidenceTrust));
+        } else {
+            console.error('[NerveCenter] Failed to load ecosystem snapshot', ecosystemResult.reason);
+            markEcosystemSummaryUnavailable(ecosystemResult.reason);
         }
 
         if (inferenceResult.status === 'fulfilled' && inferenceResult.value.status === 'success') {
@@ -452,7 +656,7 @@ const NerveCenter = (() => {
         const widget = document.getElementById(widgetId);
         if (!widget) return;
 
-        const { value, state } = computeFn();
+        const { value, state, title } = computeFn();
         const valueEl = widget.querySelector('.nc-widget-value');
         if (!valueEl) return;
 
@@ -461,6 +665,7 @@ const NerveCenter = (() => {
 
         widget.classList.remove('nominal', 'attention', 'critical');
         widget.classList.add(state);
+        if (typeof title === 'string') widget.title = title;
 
         if (oldValue !== value && oldValue !== '--' && oldValue !== '—') {
             widget.classList.remove('pulse');
@@ -493,7 +698,16 @@ const NerveCenter = (() => {
         formatUptime,
         formatCurrency,
         sortHostKeys,
-        attachCollapsibleHandlers
+        attachCollapsibleHandlers,
+        motionSafeScrollBehavior,
+        setSectionBusy,
+        renderSectionLoading,
+        finishSectionLoad,
+        renderSectionError,
+        getEcosystemSnapshot,
+        invalidateEcosystemSnapshot,
+        serviceBuildWidget,
+        evidenceTrustWidget
     };
 
     return {

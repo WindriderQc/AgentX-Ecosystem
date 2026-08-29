@@ -52,7 +52,7 @@
   display: flex;
   gap: 0.6rem;
   font-size: 0.92rem;
-  color: #666;
+  color: var(--r-text-muted);
   flex-wrap: wrap;
 }
 
@@ -185,7 +185,7 @@
 }
 
 .tm-cell.empty {
-  color: #333;
+  color: var(--r-text-muted);
 }
 
 /* Total column */
@@ -305,7 +305,7 @@
 /* Classification badge variants */
 .disc-easy { background: rgba(255, 167, 38, 0.10); color: var(--r-anomaly); }
 .disc-hard { background: rgba(239, 83, 80, 0.10);  color: var(--r-error); }
-.disc-ok   { background: rgba(102, 187, 106, 0.06); color: #4a8a4a; }
+.disc-ok   { background: rgba(102, 187, 106, 0.06); color: var(--r-good); }
 
 /* ═══ RESULTS LEDGER ═══ */
 
@@ -317,7 +317,7 @@
 
 .ledger-table th {
   text-align: left;
-  color: #444;
+  color: var(--r-text-muted);
   font-weight: 600;
   font-size: 0.86rem;
   text-transform: uppercase;
@@ -329,7 +329,7 @@
 .ledger-table td {
   padding: 0.2rem 0.4rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.02);
-  color: #777;
+  color: var(--r-text-muted);
   transition: background var(--r-transition);
 }
 
@@ -348,10 +348,27 @@
 /* Cell type variants */
 .ls-model  { color: #ccc; font-weight: 600; }
 .ls-prompt { color: #999; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ls-method { display: flex; align-items: center; gap: 0.3rem; }
 .ls-score  { font-weight: 700; }
 .ls-score.h { color: var(--r-good); }
 .ls-score.m { color: #eab308; }
 .ls-score.l { color: var(--r-error); }
+
+.ledger-open {
+  padding: 0.1rem 0.15rem;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ledger-row:focus-within td {
+  background: rgba(79, 195, 247, 0.08);
+}
 
 /* Status badges */
 .ls-status {
@@ -456,6 +473,14 @@
   color: var(--r-text-muted);
   letter-spacing: 0.5px;
   margin-bottom: 0.75rem;
+}
+
+.cal-run-safety {
+  max-width: 90ch;
+  margin: -0.35rem 0 0.75rem;
+  color: var(--r-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .cal-run-fields {
@@ -583,6 +608,10 @@
 /* Focus styles for keyboard navigation */
 .rq-chip:focus-visible,
 .rq-item:focus-visible,
+.ledger-open:focus-visible,
+.detail-panel:focus-visible,
+.dp-toggle-head:focus-visible,
+.dp-close:focus-visible,
 .dp-act:focus-visible {
   outline: 2px solid var(--r-active);
   outline-offset: 2px;

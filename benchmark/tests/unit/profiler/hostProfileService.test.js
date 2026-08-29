@@ -112,6 +112,16 @@ describe('hostProfileService', () => {
   });
 
   describe('upsert()', () => {
+    it('rejects a forbidden hostUrl before it can be persisted', async () => {
+      await expect(service.upsert({
+        hostId: 'metadata',
+        hostUrl: 'http://169.254.169.254:11434'
+      })).rejects.toMatchObject({ code: 'OLLAMA_TARGET_REJECTED', statusCode: 400 });
+
+      expect(HostProfile.findOne).not.toHaveBeenCalled();
+      expect(HostProfile.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
     it('upserts a host profile with findOneAndUpdate', async () => {
       const data = { hostId: 'host-delta', hostUrl: 'http://192.0.2.66:11434', status: 'online' };
       const updatedProfile = { ...data, displayName: 'Host Delta' };

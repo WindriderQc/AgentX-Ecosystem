@@ -7,6 +7,12 @@ const mammoth = require('mammoth');
 const mongoose = require('mongoose');
 
 const logger = require('../../config/logger');
+const fetchWithTimeout = require('../utils/fetchWithTimeout');
+const {
+  SERVICE_OUTBOUND_OPERATION_IDS,
+  SERVICE_OUTBOUND_TIMEOUTS,
+  configuredServiceOrigin,
+} = require('../clients/serviceOutboundClient');
 const { getRagStore } = require('./ragStore');
 const {
   classifyIngestionPath,
@@ -20,6 +26,9 @@ const INGESTION_POLICY = loadIngestionPolicy();
 const DEFAULT_ROOTS = INGESTION_POLICY.ingestion.approvedRoots.slice();
 const DEFAULT_MAX_FILE_SIZE_BYTES = INGESTION_POLICY.ingestion.maxFileSizeBytes;
 const DEFAULT_BATCH_DELAY_MS = 100;
+const INGEST_API_TIMEOUT_MS = SERVICE_OUTBOUND_TIMEOUTS[
+  SERVICE_OUTBOUND_OPERATION_IDS.INGEST_SUBMIT
+];
 
 const SUPPORTED_EXTENSIONS = new Set(INGESTION_POLICY.ingestion.allowedExtensions);
 const SKIP_EXTENSIONS = new Set([
@@ -299,16 +308,27 @@ function getPdfParser() {
 }
 
 function createIngestApiClient(options = {}) {
-  const fetchImpl = options.fetchImpl || require('node-fetch');
-  const baseUrl = String(options.baseUrl || process.env.RAG_API_URL || `http://127.0.0.1:${process.env.PORT || 3082}`)
-    .replace(/\/+$/, '');
+  const baseUrl = configuredServiceOrigin(
+    options.baseUrl || process.env.RAG_API_URL || `http://127.0.0.1:${process.env.PORT || 3082}`
+  );
   const ingestPath = options.ingestPath || '/api/rag/ingest';
+  if (ingestPath !== '/api/rag/ingest') {
+    throw new TypeError('The ingest worker supports only the product ingest endpoint.');
+  }
 
   return async (payload) => {
-    const response = await fetchImpl(`${baseUrl}${ingestPath}`, {
+    const headers = { 'Content-Type': 'application/json' };
+    const operatorToken = typeof (options.operatorToken || process.env.AGENTX_OPERATOR_TOKEN) === 'string'
+      ? String(options.operatorToken || process.env.AGENTX_OPERATOR_TOKEN).trim()
+      : '';
+    if (operatorToken) headers['X-AgentX-Operator-Token'] = operatorToken;
+    const response = await fetchWithTimeout(`${baseUrl}${ingestPath}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload)
+    }, INGEST_API_TIMEOUT_MS, {
+      expectedOrigins: [baseUrl],
+      operationId: SERVICE_OUTBOUND_OPERATION_IDS.INGEST_SUBMIT,
     });
 
     let body = {};
@@ -503,6 +523,7 @@ class IngestWorker {
         : record.indexed_at
           ? 'updated'
           : 'ingested';
+      const indexedDocumentId = ingestResult?.documentId || record.path;
 
       await this.collection.updateOne(updateFilter, {
         $set: {
@@ -510,7 +531,7 @@ class IngestWorker {
           indexed_status: resultStatus,
           indexed_source: source,
           indexed_tags: tags,
-          indexed_document_id: record.path,
+          indexed_document_id: indexedDocumentId,
           indexed_error: null
         }
       });
@@ -519,7 +540,8 @@ class IngestWorker {
         status: resultStatus,
         source,
         path: record.path,
-        documentId: record.path,
+        documentId: indexedDocumentId,
+        deduplicated: ingestResult?.deduplicated === true,
         chunkCount: ingestResult?.chunkCount || 0
       };
     } catch (error) {
@@ -620,6 +642,7 @@ async function runIngestScan(options = {}) {
 
 module.exports = {
   DEFAULT_BATCH_DELAY_MS,
+  INGEST_API_TIMEOUT_MS,
   DEFAULT_MAX_FILE_SIZE_BYTES,
   DEFAULT_ROOTS,
   IngestWorker,

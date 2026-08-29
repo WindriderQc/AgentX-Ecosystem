@@ -12,6 +12,7 @@
     lastFocus: null
   };
   let advanced = null;
+  let availability = null;
 
   const ragBase = String(root.dataset.ragBase || '').replace(/\/+$/, '');
   const dataBase = String(root.dataset.dataBase || '').replace(/\/+$/, '');
@@ -287,6 +288,12 @@
     button.disabled = loading;
     const icon = button.querySelector('i');
     if (icon) icon.classList.toggle('fa-spin', loading);
+    const retry = byId('agentOpsUnavailableRetry');
+    if (retry) {
+      retry.disabled = loading;
+      const retryIcon = retry.querySelector('i');
+      if (retryIcon) retryIcon.classList.toggle('fa-spin', loading);
+    }
   }
 
   function setStatus(tone, title, detail, generatedAt) {
@@ -958,8 +965,15 @@
       const response = await fetch('/api/agent-ops', { cache: 'no-store' });
       const body = await response.json();
       if (!response.ok || body.status === 'error') throw new Error(body.message || `HTTP ${response.status}`);
+      if (body.available === false) {
+        state.data = null;
+        availability?.show(body);
+        return;
+      }
+      availability?.clear();
       state.data = body.data || body;
       renderAll(state.data);
+      activateTab(state.tab, false, false);
       renderCurrentFilteredView();
       const warnings = asArray(state.data.warnings);
       setStatus(
@@ -996,6 +1010,7 @@
     renderCurrentFilteredView();
   });
   byId('agentOpsRefresh').addEventListener('click', load);
+  byId('agentOpsUnavailableRetry')?.addEventListener('click', load);
   root.addEventListener('click', (event) => {
     const nativeControl = event.target.closest('[data-openclaw-native]');
     if (nativeControl && openclawControlMode === 'ssh-tunnel') {
@@ -1096,6 +1111,12 @@
     openAutomationDrawer,
     closeAgentDrawer,
     reload: load
+  }) || null;
+
+  availability = window.AgentOpsAvailability?.create({
+    root,
+    byId,
+    setStatus
   }) || null;
 
   activateTab(window.location.hash.replace('#', '') || 'overview', false);

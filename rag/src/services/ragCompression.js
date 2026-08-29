@@ -13,11 +13,18 @@
 
 const crypto = require('crypto');
 const fetchWithTimeout = require('../utils/fetchWithTimeout');
+const {
+  SERVICE_OUTBOUND_OPERATION_IDS,
+  SERVICE_OUTBOUND_TIMEOUTS,
+  configuredServiceOrigin,
+} = require('../clients/serviceOutboundClient');
 const { boundedConcurrency } = require('../utils/boundedConcurrency');
 const logger = require('../../config/logger');
 
-const CORE_PROXY_URL = (process.env.CORE_PROXY_URL || 'http://localhost:3080').replace(/\/+$/, '');
-const COMPRESSION_TIMEOUT = Number(process.env.COMPRESSION_TIMEOUT_MS) || 15000;
+const CORE_PROXY_URL = configuredServiceOrigin(process.env.CORE_PROXY_URL || 'http://localhost:3080');
+const COMPRESSION_TIMEOUT = SERVICE_OUTBOUND_TIMEOUTS[
+  SERVICE_OUTBOUND_OPERATION_IDS.COMPRESSION_GENERATE
+];
 const COMPRESSION_CONCURRENCY = Number(process.env.COMPRESSION_CONCURRENCY) || 2;
 
 class RAGCompressionService {
@@ -164,7 +171,10 @@ Extract the most relevant sentences:`;
             num_predict: 300
           }
         })
-      }, COMPRESSION_TIMEOUT);
+      }, COMPRESSION_TIMEOUT, {
+        expectedOrigins: [CORE_PROXY_URL],
+        operationId: SERVICE_OUTBOUND_OPERATION_IDS.COMPRESSION_GENERATE,
+      });
 
       if (!response.ok) {
         throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);

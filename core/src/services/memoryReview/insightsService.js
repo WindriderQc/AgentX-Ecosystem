@@ -4,6 +4,11 @@
 const MemoryReviewRun = require('../../../models/MemoryReviewRun');
 const policy = require('./policy');
 
+// Dreaming is expected to be a recurring collection lane. Once a runtime has
+// contributed, silence for more than two days is evidence that coverage is
+// stale, not evidence that the collector is healthy.
+const DEFAULT_RUNTIME_STALE_AFTER_MS = 48 * 60 * 60 * 1000;
+
 function add(bucket, key, amount = 1) {
   if (!key) return;
   bucket[key] = (bucket[key] || 0) + amount;
@@ -33,7 +38,9 @@ function latestRuntimeState(runs) {
   return latest;
 }
 
-function summarizeRuns(runs, limit, now = new Date()) {
+function summarizeRuns(runs, limit, now = new Date(), {
+  runtimeStaleAfterMs = DEFAULT_RUNTIME_STALE_AFTER_MS,
+} = {}) {
   runs = [...runs].sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
   const totals = {
     runs: runs.length, completedRuns: 0, activeRuns: 0, failedRuns: 0,
@@ -96,11 +103,25 @@ function summarizeRuns(runs, limit, now = new Date()) {
     runtime.lastRunId = current?.runId || null;
     runtime.currentErrors = current?.errors?.length || 0;
     runtime.currentAdvisories = [...new Set(current?.advisories || [])].length;
-    runtime.health = runtime.currentErrors ? 'attention' : runtime.lastSeen ? 'healthy' : 'not_seen';
+    const lastSeenMs = new Date(runtime.lastSeen || 0).getTime();
+    runtime.ageMs = Number.isFinite(lastSeenMs) && lastSeenMs > 0
+      ? Math.max(0, now.getTime() - lastSeenMs)
+      : null;
+    runtime.staleAfterMs = runtimeStaleAfterMs;
+    runtime.health = runtime.currentErrors
+      ? 'attention'
+      : runtime.ageMs === null
+        ? 'not_seen'
+        : runtime.ageMs > runtimeStaleAfterMs
+          ? 'stale'
+          : 'healthy';
   });
 
   const currentErrors = Object.values(runtimes).reduce((sum, runtime) => sum + runtime.currentErrors, 0);
   const currentAdvisories = Object.values(runtimes).reduce((sum, runtime) => sum + runtime.currentAdvisories, 0);
+  const staleRuntimes = Object.values(runtimes)
+    .filter((runtime) => runtime.health === 'stale')
+    .map((runtime) => runtime.runtime);
   const activeRuns = runs.filter((run) => ['collecting', 'synthesizing'].includes(run.status));
   const activeRun = activeRuns[0] || null;
   const activeReconciliation = activeRun ? policy.reconciliationStatus(activeRun, now) : null;
@@ -116,9 +137,12 @@ function summarizeRuns(runs, limit, now = new Date()) {
       to: runs.length ? runs[0].createdAt : null,
     },
     health: {
-      state: !runs.length ? 'waiting' : (currentErrors || overdue) ? 'attention' : 'healthy',
+      state: !runs.length ? 'waiting' : (currentErrors || overdue || staleRuntimes.length) ? 'attention' : 'healthy',
       errors: currentErrors,
       advisories: currentAdvisories,
+      stale: staleRuntimes.length,
+      staleRuntimes,
+      runtimeStaleAfterMs,
       collecting: activeRuns.length > 0,
       overdue,
       activeRun: activeRun ? {
@@ -148,7 +172,7 @@ function summarizeRuns(runs, limit, now = new Date()) {
     distributions,
     rejectionReasons,
     safeDigest: latest
-      ? `Dreaming Review: ${totals.pending} awaiting review across ${totals.runs} recent runs; ${currentErrors ? `${currentErrors} collector error(s)` : overdue ? `${overdue} overdue reconciliation(s)` : 'collectors healthy'}; ${totals.applied} applied safely.`
+      ? `Dreaming Review: ${totals.pending} awaiting review across ${totals.runs} recent runs; ${currentErrors ? `${currentErrors} collector error(s)` : overdue ? `${overdue} overdue reconciliation(s)` : staleRuntimes.length ? `${staleRuntimes.length} stale collector(s)` : 'collectors healthy'}; ${totals.applied} applied safely.`
       : 'Dreaming Review: no runs recorded yet.',
   };
 }
@@ -167,4 +191,4 @@ async function buildInsights({ limit = 30 } = {}) {
   return summarizeRuns(runs, bounded);
 }
 
-module.exports = { buildInsights, summarizeRuns };
+module.exports = { DEFAULT_RUNTIME_STALE_AFTER_MS, buildInsights, summarizeRuns };

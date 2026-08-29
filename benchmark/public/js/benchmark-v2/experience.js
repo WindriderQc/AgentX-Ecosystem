@@ -66,12 +66,13 @@
   }
 
   async function refreshExperience() {
-    setReadiness('loading', 'Checking evaluation…', 'Confirming models, host profile and history');
+    setReadiness('loading', 'Checking evaluation…', 'Confirming models, host profile, judge and history');
     var responses = await Promise.allSettled([
       fetchJson('/api/ollama-hosts'),
       fetchJson('/api/profiler/hosts'),
       fetchJson('/api/benchmark/batches?limit=1'),
-      fetchJson('/api/benchmark/batches/active')
+      fetchJson('/api/benchmark/batches/active'),
+      fetchJson('/api/benchmark/judge/readiness')
     ]);
 
     var runtimes = responses[0].status === 'fulfilled' ? (responses[0].value.hosts || []) : [];
@@ -80,8 +81,13 @@
     var batchPayload = responses[2].status === 'fulfilled' ? responses[2].value : {};
     var batches = (batchPayload.data && batchPayload.data.batches) || [];
     var activePayload = responses[3].status === 'fulfilled' ? responses[3].value : {};
-    var active = (activePayload.data && (activePayload.data.batch || activePayload.data)) || null;
+    var activeData = activePayload.data || activePayload;
+    var active = Array.isArray(activeData)
+      ? (activeData[0] || null)
+      : (activeData && (activeData.batch || activeData)) || null;
     var activeId = active && (active._id || active.id);
+    var judgePayload = responses[4].status === 'fulfilled' ? responses[4].value : {};
+    var judgeReadiness = judgePayload.data || judgePayload;
     var onlineModels = runtimes.reduce(function (count, host) {
       return count + (host.available && Array.isArray(host.models) ? host.models.length : 0);
     }, 0);
@@ -115,7 +121,19 @@
       setPrimary('Prepare the host', 'Run one baseline so comparisons are trustworthy', '/profiler');
       return;
     }
-    setReadiness('ok', 'Ready to compare', onlineModels + ' model' + (onlineModels === 1 ? '' : 's') + ' available on a prepared host');
+
+    if (responses[4].status !== 'fulfilled') {
+      setReadiness('unknown', 'Judge status is unknown', 'Models and host profile are ready, but judge readiness could not be verified.');
+      setPrimary('Check judge setup', 'Verify an installed judge model before launching', '/setup?focus=judge&return=%2F');
+      return;
+    }
+    if (judgeReadiness.ready !== true) {
+      setReadiness('error', 'Judge is not ready', judgeReadiness.summary || 'Choose a reachable, already-installed judge model.');
+      setPrimary('Configure the judge', 'Choose and verify an installed model explicitly', '/setup?focus=judge&return=%2F');
+      return;
+    }
+
+    setReadiness('ok', 'Ready to compare', onlineModels + ' model' + (onlineModels === 1 ? '' : 's') + ' available on a prepared host · judge verified');
     setPrimary('Set up a comparison', 'Choose contenders and a focused test depth', '#benchmark-cockpit');
   }
 

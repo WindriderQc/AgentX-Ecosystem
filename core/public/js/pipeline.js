@@ -19,9 +19,11 @@
 
   const state = {
     tasks: [],
+    summary: null,
+    evidence: null,
     loading: false,
     context: readContext(),
-    filters: { status: null, search: '', service: '' },
+    filters: { status: null, search: '', service: '', lane: '' },
     sort: 'urgency',
     autoTimer: null,
     drawer: { open: false, pipelineId: null, opener: null, task: null }
@@ -215,22 +217,26 @@
   function normalizePayload(payload) {
     const data = payload && payload.data ? payload.data : payload;
     const tasks = data && Array.isArray(data.tasks) ? data.tasks : [];
-    return tasks.map((task) => ({
-      pipelineId: task.pipelineId || '',
-      title: task.title || '',
-      service: task.service || '',
-      status: task.status || 'queued',
-      assignee: task.assignee || '',
-      heartbeatAt: task.heartbeatAt || null,
-      epic: task.epic || '',
-      source: task.source || '',
-      priority: task.priority,
-      risk: task.risk || '',
-      dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : [],
-      dueAt: task.dueAt || null,
-      createdAt: task.createdAt || null,
-      updatedAt: task.updatedAt || task.createdAt || null
-    }));
+    return {
+      tasks: tasks.map((task) => ({
+        pipelineId: task.pipelineId || '',
+        title: task.title || '',
+        service: task.service || '',
+        status: task.status || 'queued',
+        assignee: task.assignee || '',
+        heartbeatAt: task.heartbeatAt || null,
+        epic: task.epic || '',
+        source: task.source || '',
+        priority: task.priority,
+        risk: task.risk || '',
+        dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : [],
+        dueAt: task.dueAt || null,
+        createdAt: task.createdAt || null,
+        updatedAt: task.updatedAt || task.createdAt || null
+      })),
+      summary: data?.summary || null,
+      evidence: data?.evidence || null
+    };
   }
 
   async function fetchJson(url, options) {
@@ -268,20 +274,21 @@
   }
 
   function summarizeState() {
-    const counts = countByStatus(state.tasks);
+    const counts = statusCounts();
     const stale = state.tasks.filter(isStale).length;
     if (counts.blocked) {
       setPageState('blocked', 'fa-hand', `${counts.blocked} task${counts.blocked === 1 ? '' : 's'} blocked`, 'Blocked work needs an operator or upstream action before it can move.');
     } else if (counts.review || stale) {
       const parts = [];
       if (counts.review) parts.push(`${counts.review} awaiting review`);
-      if (stale) parts.push(`${stale} stale heartbeat${stale === 1 ? '' : 's'}`);
+      if (stale) parts.push(`${stale} stale heartbeat${stale === 1 ? '' : 's'} in loaded rows`);
       setPageState('attention', 'fa-triangle-exclamation', 'Attention suggested', `${parts.join(' · ')} — see Needs attention for the next step.`);
     } else {
-      const open = state.tasks.filter((t) => t.status !== 'done').length;
+      const loadedOpen = state.tasks.filter((task) => task.status !== 'done').length;
+      const open = summaryCount('openCount', loadedOpen);
       setPageState('ready', 'fa-circle-check', open ? 'Pipeline healthy' : 'Queue clear', open
-        ? `${open} open task${open === 1 ? '' : 's'} moving without blockers.`
-        : 'No open work in the loaded task window.');
+        ? `${open} open task${open === 1 ? '' : 's'} in the exact API scope, with no reported blockers.`
+        : 'No open work in the exact API scope.');
     }
   }
 
@@ -294,8 +301,44 @@
     return counts;
   }
 
+  function hasExactCountEvidence() {
+    const summary = state.summary;
+    const evidence = state.evidence;
+    const byStatus = summary?.byStatus;
+    if (!summary || !byStatus || evidence?.authority !== 'core.pipeline' || evidence?.source?.store !== 'mongodb') return false;
+    if (evidence.scope?.includesDone !== true || evidence.scope?.timeWindow?.kind !== 'all_time') return false;
+    const scopedStatuses = Array.isArray(evidence.scope?.statuses) ? evidence.scope.statuses : [];
+    if (!STATUS_ORDER.every((status) => scopedStatuses.includes(status))) return false;
+    const counts = STATUS_ORDER.map((status) => Number(byStatus[status]));
+    if (counts.some((count) => !Number.isFinite(count) || count < 0)) return false;
+    const matched = counts.reduce((sum, count) => sum + count, 0);
+    const open = counts.slice(0, 4).reduce((sum, count) => sum + count, 0);
+    return matched === Number(summary.matchedCount)
+      && open === Number(summary.openCount)
+      && counts[4] === Number(summary.doneCount)
+      && matched === Number(evidence.rows?.matchedCount);
+  }
+
+  function summaryCount(key, fallback) {
+    if (!hasExactCountEvidence()) return fallback;
+    const value = Number(state.summary?.[key]);
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  }
+
+  function statusCounts() {
+    const loaded = countByStatus(state.tasks);
+    if (!hasExactCountEvidence()) return loaded;
+    const summary = state.summary?.byStatus;
+    const counts = {};
+    STATUS_ORDER.forEach((status) => {
+      const value = Number(summary[status]);
+      counts[status] = Number.isFinite(value) && value >= 0 ? value : loaded[status];
+    });
+    return counts;
+  }
+
   function renderCounts() {
-    const counts = countByStatus(state.tasks);
+    const counts = statusCounts();
     const map = {
       queued: 'pipelineCountQueued',
       in_progress: 'pipelineCountProgress',
@@ -314,11 +357,12 @@
   // ---------------------------------------------------------------------------
 
   function matchesFilters(task) {
-    const { status, search, service } = state.filters;
+    const { status, search, service, lane } = state.filters;
     if (status && task.status !== status) return false;
-    if (service && task.service !== service) return false;
+    if (service && (task.service || 'unspecified') !== service) return false;
+    if (lane && (task.source || 'unspecified') !== lane) return false;
     if (search) {
-      const haystack = [task.pipelineId, task.title, task.assignee, task.epic, task.service]
+      const haystack = [task.pipelineId, task.title, task.assignee, task.epic, task.service, task.source]
         .map((v) => String(v || '').toLowerCase()).join(' ');
       if (!haystack.includes(search)) return false;
     }
@@ -350,7 +394,7 @@
   }
 
   function hasActiveFilters() {
-    return Boolean(state.filters.status || state.filters.search || state.filters.service);
+    return Boolean(state.filters.status || state.filters.search || state.filters.service || state.filters.lane);
   }
 
   function renderFilterControls() {
@@ -363,17 +407,49 @@
     if (clear) clear.hidden = !hasActiveFilters();
   }
 
-  function renderServiceOptions() {
-    const select = $('pipelineServiceFilter');
-    if (!select) return;
-    const current = state.filters.service;
-    const services = [...new Set(state.tasks.map((t) => t.service).filter(Boolean))].sort();
-    select.innerHTML = ['<option value="">All services</option>']
-      .concat(services.map((s) => `<option value="${escapeHtml(s)}"${s === current ? ' selected' : ''}>${escapeHtml(s)}</option>`))
+  function optionLabel(value) {
+    return String(value || 'unspecified').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  function populateFilter(id, values, current, allLabel) {
+    const select = $(id);
+    if (!select) return '';
+    const available = [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
+    const selected = !current || available.includes(current) ? current : '';
+    select.innerHTML = [`<option value="">${escapeHtml(allLabel)}</option>`]
+      .concat(available.map((value) => `<option value="${escapeHtml(value)}"${value === selected ? ' selected' : ''}>${escapeHtml(optionLabel(value))}</option>`))
       .join('');
-    if (current && !services.includes(current)) {
-      state.filters.service = '';
+    return selected;
+  }
+
+  function renderFilterOptions() {
+    state.filters.service = populateFilter(
+      'pipelineServiceFilter', state.tasks.map((task) => task.service || 'unspecified'), state.filters.service, 'All services'
+    );
+    state.filters.lane = populateFilter(
+      'pipelineLaneFilter', state.tasks.map((task) => task.source || 'unspecified'), state.filters.lane, 'All lanes / sources'
+    );
+  }
+
+  function renderEvidence() {
+    const el = $('pipelineCountEvidence');
+    if (!el) return;
+    const evidence = state.evidence;
+    const summary = state.summary;
+    if (!hasExactCountEvidence()) {
+      el.textContent = 'Count evidence unavailable; cards reflect only the rows loaded in this browser.';
+      el.classList.add('pipeline-evidence-warning');
+      return;
     }
+    const statusScope = evidence.scope?.includesDone ? 'all statuses, including done' : 'open statuses only';
+    const returned = Number(evidence.rows?.returnedCount) || 0;
+    const matched = Number(evidence.rows?.matchedCount) || 0;
+    const rowWindow = evidence.rows?.truncated
+      ? `rows show ${returned} of ${matched}`
+      : `rows show all ${returned} matched records`;
+    const observed = formatDate(evidence.observedAt);
+    el.textContent = `MongoDB task authority · exact full-scope totals (${statusScope}) · all-time, no date filter · ${rowWindow} · sampled ${observed}`;
+    el.classList.remove('pipeline-evidence-warning');
   }
 
   function visibleTasks() {
@@ -392,14 +468,16 @@
     if (!rows) return;
 
     const tasks = visibleTasks();
-    const openTotal = state.tasks.filter((task) => task.status !== 'done').length;
+    const loadedOpen = state.tasks.filter((task) => task.status !== 'done').length;
+    const exactOpen = summaryCount('openCount', loadedOpen);
+    const exactMatched = summaryCount('matchedCount', state.tasks.length);
 
     if (meta) {
       const scope = state.filters.status ? `${formatStatus(state.filters.status)} tasks` : 'open tasks';
       const filtered = hasActiveFilters() || state.context;
       meta.textContent = filtered
-        ? `${tasks.length} matching ${scope} · ${openTotal} open overall`
-        : `${tasks.length} open task${tasks.length === 1 ? '' : 's'} · ${state.tasks.length} loaded records`;
+        ? `${tasks.length} matching loaded ${scope} · ${exactOpen} open overall across ${exactMatched} exact records`
+        : `${exactOpen} open task${exactOpen === 1 ? '' : 's'} across ${exactMatched} exact all-time record${exactMatched === 1 ? '' : 's'} · ${state.tasks.length} rows loaded`;
     }
 
     if (!tasks.length) {
@@ -426,7 +504,7 @@
             aria-label="Open task ${escapeHtml(task.pipelineId)} details">
           <td class="pipeline-id">${escapeHtml(task.pipelineId)}</td>
           <td>
-            <div class="pipeline-title">${escapeHtml(task.title || 'Untitled task')}</div>
+            <div class="pipeline-title" title="${escapeHtml(task.title || 'Untitled task')}">${escapeHtml(task.title || 'Untitled task')}</div>
             <div class="pipeline-title-meta">
               ${task.epic ? `<span class="pipeline-subtle">${escapeHtml(task.epic)}</span>` : ''}
               ${riskChip(task.risk)}
@@ -764,8 +842,9 @@
     renderContext();
     renderCounts();
     summarizeState();
+    renderEvidence();
+    renderFilterOptions();
     renderFilterControls();
-    renderServiceOptions();
     renderOpenWork();
     renderAttention();
     renderRecentlyDone();
@@ -776,7 +855,10 @@
     if (!silent) setLoading(true);
     try {
       const payload = await fetchJson('/api/pipeline/tasks?limit=1000&view=summary&includeDone=true');
-      state.tasks = normalizePayload(payload);
+      const normalized = normalizePayload(payload);
+      state.tasks = normalized.tasks;
+      state.summary = normalized.summary;
+      state.evidence = normalized.evidence;
       renderAll();
     } catch (error) {
       renderError(error);
@@ -806,11 +888,13 @@
   // ---------------------------------------------------------------------------
 
   function clearFilters() {
-    state.filters = { status: null, search: '', service: '' };
+    state.filters = { status: null, search: '', service: '', lane: '' };
     const search = $('pipelineSearch');
     if (search) search.value = '';
     const service = $('pipelineServiceFilter');
     if (service) service.value = '';
+    const lane = $('pipelineLaneFilter');
+    if (lane) lane.value = '';
     renderAll();
   }
 
@@ -845,6 +929,14 @@
     if (service) {
       service.addEventListener('change', () => {
         state.filters.service = service.value;
+        renderAll();
+      });
+    }
+
+    const lane = $('pipelineLaneFilter');
+    if (lane) {
+      lane.addEventListener('change', () => {
+        state.filters.lane = lane.value;
         renderAll();
       });
     }

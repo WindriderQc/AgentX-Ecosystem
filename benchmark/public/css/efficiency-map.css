@@ -5,6 +5,27 @@
    ═══════════════════════════════════════════════════════════════ */
 
 /* ═══ HERO PICKS ═══ */
+.eff-empty-state {
+    color: var(--r-text-muted);
+    text-align: center;
+    padding: 2rem;
+    margin: 0;
+}
+
+.eff-evidence-note {
+    margin: 0.75rem 1.5rem 1rem;
+    padding: 0.75rem 1rem;
+    color: var(--r-text-muted);
+    background: var(--r-bg-inner);
+    border: 1px solid var(--r-border);
+    border-radius: var(--r-radius);
+}
+
+.eff-evidence-note i {
+    color: var(--r-active);
+    margin-right: 0.35rem;
+}
+
 .eff-picks {
     display: flex;
     gap: 1rem;

@@ -105,7 +105,7 @@ function renderTodo({ id, title, objective, service, shortName, sourceFiles, ste
 
 Queued ${new Date().toISOString().slice(0, 10)} into the Mongo pipeline by AgentX MCP skill bus (\`create_todo\`). Unclaimed in Mongo \`pipelinetasks\`.
 
-Before starting, claim this task atomically via \`POST /api/pipeline/tasks/${id}/claim\` (body \`{"assignee":"<you>"}\`; a \`409\` means someone else holds it) and keep \`POST /api/pipeline/tasks/${id}/heartbeat\` current while you work. Task state is owned by the pipeline endpoints — never hand-edit it.
+Before starting, claim this task atomically via \`POST /api/pipeline/tasks/${id}/claim\` (body \`{"assignee":"<you>"}\`; a \`409\` means someone else holds it) and keep \`POST /api/pipeline/tasks/${id}/heartbeat\` current while you work. A remote worker must attach \`X-AgentX-Pipeline-Token: <AGENTX_PIPELINE_TOKEN>\` to the bounded next-task lookup, claim, heartbeat, status, and feedback requests. The credential does not grant the full task-list read. The worker credential may report \`status: "done"\` through feedback (which moves the task to review), but it cannot confirm \`status: "done"\` through the status endpoint; a trusted reviewer or operator owns that final transition. Task state is owned by the pipeline endpoints — never hand-edit it.
 
 ## Objective
 

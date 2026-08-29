@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { stableSerialize } = require('./artifactIdentity');
+const { sanitizePublicProjection } = require('./publicProjection');
 
 const WORKER_ENVELOPE_SCHEMA = 'agentx.worker-envelope/v1';
 const WORKER_RECEIPT_SCHEMA = 'agentx.worker-receipt/v1';
@@ -523,7 +524,7 @@ function normalizeWorkerReceipt(rawValue = {}, options = {}) {
 
 function projectWorkerReceiptPublic(rawValue, options = {}) {
   const receipt = normalizeWorkerReceipt(rawValue, options);
-  return {
+  return sanitizePublicProjection({
     schema: receipt.schema,
     schemaVersion: receipt.schemaVersion,
     executionProfile: receipt.executionProfile,
@@ -546,7 +547,7 @@ function projectWorkerReceiptPublic(rawValue, options = {}) {
     violations: receipt.violations,
     result: receipt.result,
     fingerprint: receipt.fingerprint,
-  };
+  });
 }
 
 module.exports = {

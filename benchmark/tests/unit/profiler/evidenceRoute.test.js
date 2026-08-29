@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const request = require('supertest');
+const { startTestHttpHarness } = require('../../helpers/testHttpServer');
 
 jest.mock('../../../models/HostProfile', () => ({ findOne: jest.fn() }));
 jest.mock('../../../models/ModelProfile', () => ({ find: jest.fn(), findOne: jest.fn() }));
@@ -32,6 +32,18 @@ function buildApp() {
   return app;
 }
 
+let httpHarness;
+let api;
+
+beforeAll(async () => {
+  httpHarness = await startTestHttpHarness(buildApp());
+  api = httpHarness.request;
+});
+
+afterAll(async () => {
+  await httpHarness?.close();
+});
+
 describe('profiler evidence ownership API', () => {
   beforeEach(() => jest.clearAllMocks());
 
@@ -40,7 +52,7 @@ describe('profiler evidence ownership API', () => {
       { name: 'model-a', readiness: new Map([['host-a', { stage: 'profiled' }]]) }
     ]));
 
-    const response = await request(buildApp())
+    const response = await api
       .get('/api/profiler/evidence/readiness')
       .expect(200);
 
@@ -62,7 +74,7 @@ describe('profiler evidence ownership API', () => {
       thinkingProfiles: new Map()
     }));
 
-    const response = await request(buildApp())
+    const response = await api
       .get('/api/profiler/evidence/inference/owner%2Fmodel%3A8b')
       .query({ hostUrl: 'http://host-a:11434' })
       .expect(200);
@@ -80,7 +92,7 @@ describe('profiler evidence ownership API', () => {
   it('returns only the exact-artifact context profile selected by Benchmark', async () => {
     contextProfiles.findContextProfile.mockResolvedValue({ verifiedMaxContext: 65536 });
 
-    const response = await request(buildApp())
+    const response = await api
       .get('/api/profiler/evidence/context/model-a')
       .query({
         hostUrl: 'http://host-a:11434',

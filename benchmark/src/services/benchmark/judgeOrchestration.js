@@ -39,10 +39,32 @@ function createJudgeOrchestrator({
     recordBatchTimelineEvent,
     setBatchPhase,
     expectedResultCount,
-    expectedJudgeCount = expectedResultCount
+    expectedJudgeCount = expectedResultCount,
+    cancelSignal = null
 }) {
     const deferredJudgeTasks = [];
+    let cancelDrainPromise = null;
     const _setPhase = typeof setBatchPhase === 'function' ? setBatchPhase : async () => {};
+    const cancellationReason = () => {
+        const reason = cancelSignal?.reason;
+        if (reason instanceof Error) return reason;
+        const error = new Error(`Benchmark batch ${batchId} judge queue cancelled`);
+        error.name = 'BenchmarkBatchStoppedError';
+        error.code = 'BENCHMARK_BATCH_STOPPED';
+        return error;
+    };
+    const isCancelled = () => cancelSignal?.aborted === true || judgeQueue.cancelled === true;
+    const isCancellationError = (error) => isCancelled()
+        || error?.code === 'BENCHMARK_BATCH_STOPPED'
+        || error?.code === 'QUEUE_CANCELLED';
+    const onCancel = () => {
+        deferredJudgeTasks.splice(0);
+        judgeQueue.cancel(cancellationReason());
+    };
+    if (cancelSignal) {
+        if (cancelSignal.aborted) onCancel();
+        else cancelSignal.addEventListener('abort', onCancel, { once: true });
+    }
 
     // Escalation budget for live batches — mirrors the standalone re-judge
     // path (judging.js). judgeConfig.multi_judge is shared BY REFERENCE across
@@ -115,8 +137,13 @@ function createJudgeOrchestrator({
 
     // ── Pipelined judge enqueue ────────────────────────────
     async function enqueueJudgeTask(model, prompt, judgeHostUrl, resultId) {
+        if (isCancelled()) throw cancellationReason();
         const capturedResultId = resultId.toString();
         const capturedJudgeConfig = { ...judgeConfig, host: judgeHostUrl };
+        delete capturedJudgeConfig.signal;
+        const runtimeJudgeConfig = cancelSignal
+            ? { ...capturedJudgeConfig, signal: cancelSignal }
+            : capturedJudgeConfig;
 
         // Persist queue entry so it survives crashes
         const queueEntry = await JudgeQueueEntry.create({
@@ -125,6 +152,7 @@ function createJudgeOrchestrator({
 
         await judgeQueue.waitForCapacity(10);
         judgeQueue.add(async () => {
+            if (isCancelled()) throw cancellationReason();
             if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'running', startedAt: new Date() } }).catch(() => {});
             const judgeStart = Date.now();
             try {
@@ -141,10 +169,11 @@ function createJudgeOrchestrator({
 
                 const judgeOutcome = await judgeResult(
                     capturedResultId,
-                    capturedJudgeConfig,
+                    runtimeJudgeConfig,
                     null,
                     capturedJudgeConfig.multi_judge || null
                 );
+                if (isCancelled()) throw cancellationReason();
                 const judgeDuration = Date.now() - judgeStart;
 
                 // Record judge_complete timeline event with score
@@ -169,6 +198,9 @@ function createJudgeOrchestrator({
                 );
                 if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'completed', completedAt: new Date() } }).catch(() => {});
             } catch (scoreErr) {
+                if (isCancellationError(scoreErr)) {
+                    throw cancellationReason();
+                }
                 const judgeDuration = Date.now() - judgeStart;
                 logger.warn('Pipelined judging failed', {
                     batchId,
@@ -222,6 +254,7 @@ function createJudgeOrchestrator({
                 if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'failed', completedAt: new Date(), error: scoreErr.message } }).catch(() => {});
             }
         }).catch(async (enqueueErr) => {
+            if (isCancellationError(enqueueErr)) return;
             logger.error('Failed to enqueue judge task', {
                 batchId,
                 model,
@@ -238,6 +271,7 @@ function createJudgeOrchestrator({
 
     // ── Same-host judge deferral ───────────────────────────
     function deferJudgeTask({ hostUrl, judgeHostUrl, model, prompt, resultId }) {
+        if (isCancelled()) return;
         deferredJudgeTasks.push({ hostUrl, judgeHostUrl, model, prompt, resultId });
         logger.info('Deferring same-host judge task until execution completes', {
             batchId,
@@ -249,6 +283,7 @@ function createJudgeOrchestrator({
     }
 
     async function enqueueDeferredJudgeTasks() {
+        if (isCancelled()) throw cancellationReason();
         if (deferredJudgeTasks.length === 0) {
             return;
         }
@@ -262,6 +297,7 @@ function createJudgeOrchestrator({
         });
 
         for (const deferredTask of deferredJudgeTasks) {
+            if (isCancelled()) throw cancellationReason();
             const { judgeHostUrl, model, prompt, resultId } = deferredTask;
             const warmupKey = `${judgeHostUrl}::${judgeModel}`;
 
@@ -311,6 +347,7 @@ function createJudgeOrchestrator({
 
     // ── Final drain ────────────────────────────────────────
     async function drainJudgeQueue() {
+        if (isCancelled()) throw cancellationReason();
         const judgeableFilter = {
             batch_id: batchId,
             success: true,
@@ -333,6 +370,8 @@ function createJudgeOrchestrator({
             stallTimeoutMs: executionConfig.judge_stall_timeout_ms || 2 * 60 * 1000,
             onProgress: (status) => logger.debug('Judge queue progress', { batchId, ...status })
         });
+
+        if (isCancelled()) throw cancellationReason();
 
         const [finalJudgeableCount, finalJudgeCompleted, finalJudgeFailed] = await Promise.all([
             BenchmarkResult.countDocuments(judgeableFilter),
@@ -368,13 +407,46 @@ function createJudgeOrchestrator({
         });
     }
 
+    async function cancelAndDrainJudgeQueue(reason = null) {
+        if (!cancelDrainPromise) {
+            cancelDrainPromise = (async () => {
+                deferredJudgeTasks.splice(0);
+                judgeQueue.cancel(reason instanceof Error ? reason : cancellationReason());
+                const drainResult = await judgeQueue.drain({
+                    timeoutMs: executionConfig.judge_drain_timeout_ms || 30 * 60 * 1000,
+                    stallTimeoutMs: executionConfig.judge_stall_timeout_ms || 2 * 60 * 1000,
+                    onProgress: (status) => logger.debug('Cancelled judge queue settling', { batchId, ...status })
+                });
+                await JudgeQueueEntry.updateMany(
+                    { batchId, status: { $in: ['pending', 'running'] } },
+                    {
+                        $set: {
+                            status: 'cancelled',
+                            completedAt: new Date(),
+                            error: 'BENCHMARK_BATCH_STOPPED'
+                        }
+                    }
+                ).catch(() => {});
+                if (cancelSignal) cancelSignal.removeEventListener('abort', onCancel);
+                return drainResult;
+            })();
+        }
+        return cancelDrainPromise;
+    }
+
+    function disposeCancellationListener() {
+        if (cancelSignal) cancelSignal.removeEventListener('abort', onCancel);
+    }
+
     return {
         resolveJudgeNumCtx,
         resolveJudgeTargetForHost,
         enqueueJudgeTask,
         deferJudgeTask,
         enqueueDeferredJudgeTasks,
-        drainJudgeQueue
+        drainJudgeQueue,
+        cancelAndDrainJudgeQueue,
+        disposeCancellationListener
     };
 }
 

@@ -99,6 +99,44 @@ function countByValue(values) {
 }
 
 /**
+ * Build the category values exposed by the leaderboard API without changing
+ * the scoring calculation. The calculator intentionally uses numeric zeroes
+ * internally for missing coverage so it can apply the configured penalty, but
+ * a zero in the UI reads as a measured score. Only categories with an actual
+ * aggregate are therefore numeric in this presentation view.
+ *
+ * A measured zero remains a real score when it has result rows. Attempted
+ * categories whose judge/infrastructure evidence never produced a score stay
+ * distinct from categories that were never run, while both render unavailable.
+ */
+function buildCategoryEvidenceView(categoryScores, calculatedAverages, categoryWeights) {
+    const categoryAverages = {};
+    const categoryEvidence = {};
+
+    for (const category of Object.keys(categoryWeights || {})) {
+        const categoryData = categoryScores?.[category];
+        const rawAverage = categoryData?.avg;
+        const hasNumericAverage = rawAverage !== null
+            && rawAverage !== undefined
+            && Number.isFinite(Number(rawAverage));
+        const hasScoredRows = hasNumericAverage
+            && ((Number(categoryData?.count) || 0) > 0 || Number(rawAverage) > 0);
+        const calculated = calculatedAverages?.[category];
+
+        categoryAverages[category] = hasScoredRows && Number.isFinite(Number(calculated))
+            ? Number(calculated)
+            : null;
+        categoryEvidence[category] = hasScoredRows
+            ? 'scored'
+            : categoryData?.attempted
+                ? 'attempted_unscored'
+                : 'untested';
+    }
+
+    return { categoryAverages, categoryEvidence };
+}
+
+/**
  * Calculate 95% confidence interval half-width for a score.
  * Uses t-distribution approximation for small samples.
  * @param {number} stddev - Standard deviation (0-100 scale)
@@ -122,5 +160,6 @@ module.exports = {
     clampNumber,
     normalizeRequiredPromptLevels,
     countByValue,
+    buildCategoryEvidenceView,
     confidenceMargin
 };

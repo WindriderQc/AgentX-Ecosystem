@@ -3,12 +3,71 @@
 const fetch = require('node-fetch');
 const hostGate = require('../hostGate');
 
-async function executeOllamaAttempt({ hostUrl, payload, useChat, stream = false, timeoutMs }) {
+const OLLAMA_ABORT_SOURCE = Object.freeze({
+  CALLER: 'caller',
+  TIMEOUT: 'timeout',
+});
+
+function createAttemptAbortBridge({ externalSignal, stream, timeoutMs }) {
+  const ownsTimeout = stream !== true;
+  if (!ownsTimeout && !externalSignal) {
+    return { signal: undefined, getAbortSource: () => null, cleanup() {} };
+  }
+
+  const controller = new AbortController();
+  let abortSource = null;
+  let callerListenerAttached = false;
+  let timer = null;
+
+  const abort = (source, message) => {
+    if (controller.signal.aborted) return;
+    abortSource = source;
+    // Do not forward an external signal's reason. It may contain caller-owned
+    // details that do not belong in Core errors or logs.
+    controller.abort(new Error(message));
+  };
+  const abortFromCaller = () => abort(
+    OLLAMA_ABORT_SOURCE.CALLER,
+    'Ollama attempt cancelled by caller'
+  );
+
+  if (externalSignal?.aborted) {
+    abortFromCaller();
+  } else if (externalSignal?.addEventListener) {
+    externalSignal.addEventListener('abort', abortFromCaller, { once: true });
+    callerListenerAttached = true;
+  }
+
+  if (ownsTimeout && !controller.signal.aborted) {
+    timer = setTimeout(() => abort(
+      OLLAMA_ABORT_SOURCE.TIMEOUT,
+      `Inference fetch timeout after ${timeoutMs}ms`
+    ), timeoutMs);
+  }
+
+  return {
+    signal: controller.signal,
+    getAbortSource: () => abortSource,
+    cleanup() {
+      if (timer) clearTimeout(timer);
+      if (callerListenerAttached) {
+        externalSignal.removeEventListener('abort', abortFromCaller);
+        callerListenerAttached = false;
+      }
+    },
+  };
+}
+
+async function executeOllamaAttempt({
+  hostUrl,
+  payload,
+  useChat,
+  stream = false,
+  timeoutMs,
+  signal: externalSignal,
+}) {
   const url = `${hostUrl}/api/${useChat ? 'chat' : 'generate'}`;
-  const controller = !stream ? new AbortController() : null;
-  const timer = controller
-    ? setTimeout(() => controller.abort(new Error(`Inference fetch timeout after ${timeoutMs}ms`)), timeoutMs)
-    : null;
+  const abortBridge = createAttemptAbortBridge({ externalSignal, stream, timeoutMs });
   const attemptStartedAt = Date.now();
 
   try {
@@ -16,7 +75,7 @@ async function executeOllamaAttempt({ hostUrl, payload, useChat, stream = false,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      ...(controller && { signal: controller.signal }),
+      ...(abortBridge.signal && { signal: abortBridge.signal }),
     });
     const raw = await response.text();
     let data;
@@ -30,18 +89,34 @@ async function executeOllamaAttempt({ hostUrl, payload, useChat, stream = false,
       durationMs: Date.now() - attemptStartedAt,
     };
   } catch (err) {
+    const abortSource = abortBridge.getAbortSource();
     err.attemptDurationMs = Date.now() - attemptStartedAt;
     err.isOllamaAttemptError = true;
+    err.ollamaAbortSource = abortSource;
+    err.isCallerCancellation = abortSource === OLLAMA_ABORT_SOURCE.CALLER;
+    err.isOllamaTimeout = abortSource === OLLAMA_ABORT_SOURCE.TIMEOUT;
     throw err;
   } finally {
-    if (timer) clearTimeout(timer);
+    abortBridge.cleanup();
   }
 }
 
 async function executeAdmittedOllamaAttempt(options) {
-  const release = options.skipGate
-    ? (() => {})
-    : await hostGate.acquire(options.hostUrl, options.model);
+  let release = () => {};
+  try {
+    if (!options.skipGate) {
+      release = await hostGate.acquire(options.hostUrl, options.model, {
+        signal: options.signal,
+      });
+    }
+  } catch (err) {
+    if (options.signal?.aborted) {
+      err.isCallerCancellation = true;
+      err.isOllamaTimeout = false;
+    }
+    throw err;
+  }
+
   try {
     return await executeOllamaAttempt(options);
   } finally {
@@ -83,6 +158,8 @@ async function resolveVerifiedFallbackModel({
 }
 
 module.exports = {
+  OLLAMA_ABORT_SOURCE,
+  createAttemptAbortBridge,
   executeAdmittedOllamaAttempt,
   executeOllamaAttempt,
   modelExistsOnHost,

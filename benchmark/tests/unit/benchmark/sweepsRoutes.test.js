@@ -25,6 +25,14 @@ jest.mock('../../../src/services/profiler/activeProfileState', () => ({
   activeProfileQueues: new Map()
 }));
 jest.mock('../../../routes/profiler/pipeline', () => ({ startProfileHostQueue: jest.fn() }));
+jest.mock('../../../src/services/benchmark/judgeReadiness', () => ({
+  resolveReadyJudgeTarget: jest.fn(),
+  judgeUnavailablePayload: jest.fn((readiness, action) => ({
+    status: 'error',
+    code: 'JUDGE_NOT_READY',
+    error: `${action} unavailable: ${readiness.error}`
+  }))
+}));
 jest.mock('../../../config/logger', () => ({
   warn: jest.fn(),
   error: jest.fn()
@@ -37,6 +45,7 @@ const ModelContextProfile = require('../../../models/ModelContextProfile');
 const ModelProfile = require('../../../models/ModelProfile');
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const { startProfileHostQueue } = require('../../../routes/profiler/pipeline');
+const { resolveReadyJudgeTarget } = require('../../../src/services/benchmark/judgeReadiness');
 const sweepsRouter = require('../../../routes/benchmark/sweeps');
 
 function queryResult(value) {
@@ -55,12 +64,21 @@ function buildApp() {
 }
 
 describe('sweeps HTTP contract', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resolveReadyJudgeTarget.mockResolvedValue({
+      ready: true,
+      code: 'ready',
+      target: { host: 'http://judge:11434', model: 'judge:7b', source: 'fixture' },
+      readiness: { ready: true }
+    });
+  });
 
   it('wires the profile executor into /run, making deferred needs_profile mode unreachable', async () => {
     startProfileHostQueue.mockResolvedValue({ queueId: 'queue-1' });
     runSweep.mockImplementation(async (input, deps) => {
       expect(input.execute).toBe(true);
+      expect(input.judge_config).toEqual({ host: 'http://judge:11434', model: 'judge:7b' });
       expect(typeof deps.startProfileQueue).toBe('function');
       await expect(deps.startProfileQueue({ hostId: 'host-a' })).resolves.toEqual({ queueId: 'queue-1' });
       return { phase: 'profiling', executed: true, queueId: 'queue-1' };
@@ -72,6 +90,7 @@ describe('sweeps HTTP contract', () => {
       .expect(200);
 
     expect(response.body.data).toMatchObject({ phase: 'profiling', executed: true, queueId: 'queue-1' });
+    expect(resolveReadyJudgeTarget).toHaveBeenCalledWith({ host: undefined, model: undefined });
     expect(startProfileHostQueue).toHaveBeenCalledWith({ hostId: 'host-a' });
   });
 

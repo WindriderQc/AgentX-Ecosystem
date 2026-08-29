@@ -3,8 +3,11 @@
 Agent X Core exposes a bounded, stateless contract for Nestor-style assistants
 at `/api/consumers/nestor/v1`. Core owns model routing, host admission,
 resident-model policy, and inference telemetry. The consumer owns its persona,
-prompt, transcript, memory policy, speech pipeline, authentication boundary,
-and user experience.
+prompt, transcript, memory policy, speech pipeline, end-user authentication
+boundary, and user experience. Calls from a separately deployed consumer to
+Core use the same route-scoped `AGENTX_EXTERNAL_CONSUMER_TOKEN` documented for
+the generic consumer API; headerless calls remain limited to the local product
+boundary.
 
 Discovery is `GET /api/consumers/nestor/v1/capabilities`. Contract version
 `1.2.0` adds optional streaming to the existing inference endpoint without
@@ -74,6 +77,12 @@ without a separate cancellation registry.
 - `GET /events/stream` relays platform events with in-memory cursor replay.
 - `GET /metrics` reports only server-attested `nestor-v1` inference rows.
 - `/personality/*` and `/panel-summary` return `ADAPTER_REQUIRED`; private behavior belongs to the consumer.
+
+Every v1 response includes `X-AgentX-Consumer-Contract: 1.2.0`. Router and
+memory reads include fresh `generatedAt` evidence. Their public projections are
+strict allowlists: host URLs, dependency endpoints, and absolute runtime
+locations are removed while opaque host keys and source/reference provenance
+remain available.
 
 Request and stream limits are advertised by the capabilities response. Runtime
 secrets, deployment addresses, personal prompts, and household policy must not

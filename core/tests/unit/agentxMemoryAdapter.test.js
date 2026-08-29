@@ -166,4 +166,17 @@ describe('statusForSource agentx (Phase 6g)', () => {
     expect(s.counts.conversations.total).toBe(100);
     expect(s.counts.alerts.total).toBe(5);
   });
+
+  it('reports a degraded source when any collection cannot be observed', async () => {
+    Conversation.countDocuments.mockRejectedValue(new Error('database unavailable'));
+    Alert.countDocuments.mockResolvedValue(5);
+    ActivityLog.countDocuments.mockResolvedValue(2);
+    InferenceLog.countDocuments.mockResolvedValue(50);
+
+    const status = await statusForSource('agentx');
+
+    expect(status.available).toBe(false);
+    expect(status.error).toBe('1 Core memory collection unavailable');
+    expect(status.counts.conversations).toEqual({ error: 'database unavailable' });
+  });
 });

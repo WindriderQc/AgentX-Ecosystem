@@ -235,11 +235,16 @@ function buildServiceNote(service) {
 
 function renderLegend(timeline) {
   const el = document.getElementById('legend');
-  const hostCounts = countBy(timeline, entry => getHostMeta(entry.host).id);
-  const sourceCounts = countBy(timeline, entry => entry.source || 'unknown');
+  const entries = timeline || [];
+  const declaredHostEntries = entries.filter(entry =>
+    entry.host && getHostMeta(entry.host).id !== 'unassigned'
+  );
+  const undeclaredAssignmentCount = entries.length - declaredHostEntries.length;
+  const hostCounts = countBy(declaredHostEntries, entry => getHostMeta(entry.host).id);
+  const sourceCounts = countBy(entries, entry => entry.source || 'unknown');
 
   el.innerHTML = `
-    ${renderLegendSection('Hosts', hostCounts, id => {
+    ${renderLegendSection('Declared host assignments', hostCounts, id => {
       const meta = getHostMeta(id);
       return {
         label: meta.label,
@@ -247,6 +252,11 @@ function renderLegend(timeline) {
         swatch: meta.color
       };
     })}
+    ${undeclaredAssignmentCount > 0 ? `
+      <div class="cs-legend-section">
+        <span class="cs-legend-title">Assignment evidence</span>
+        <span class="cs-legend-empty">Not declared for ${undeclaredAssignmentCount} scheduled job${undeclaredAssignmentCount === 1 ? '' : 's'}; this is not a hardware count.</span>
+      </div>` : ''}
     ${renderLegendSection('Sources', sourceCounts, id => {
       const meta = getSourceMeta(id);
       return {

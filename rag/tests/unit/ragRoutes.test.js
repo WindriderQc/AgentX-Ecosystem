@@ -294,20 +294,48 @@ describe('GET /api/rag/documents', () => {
 // ── DELETE /documents/:id ────────────────────────────────
 
 describe('DELETE /api/rag/documents/:id', () => {
-  it('deletes and returns documentId', async () => {
-    mockStore.deleteDocument.mockResolvedValue(true);
-
+  it('rejects a missing exact confirmation before reaching the store', async () => {
     const res = await request(buildApp()).delete('/api/rag/documents/doc123');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('CONFIRMATION_REQUIRED');
+    expect(res.body.confirmation).toEqual({
+      field: 'confirmation',
+      expected: 'DELETE doc123',
+    });
+    expect(mockStore.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('rejects a partial or generic confirmation before reaching the store', async () => {
+    const res = await request(buildApp())
+      .delete('/api/rag/documents/doc123')
+      .send({ confirmation: 'DELETE' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('CONFIRMATION_REQUIRED');
+    expect(mockStore.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it('deletes only after confirming the full decoded documentId', async () => {
+    mockStore.deleteDocument.mockResolvedValue(true);
+    const documentId = 'guide/v2 résumé #final';
+
+    const res = await request(buildApp())
+      .delete(`/api/rag/documents/${encodeURIComponent(documentId)}`)
+      .send({ confirmation: `DELETE ${documentId}` });
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.data.documentId).toBe('doc123');
+    expect(res.body.data.documentId).toBe(documentId);
+    expect(mockStore.deleteDocument).toHaveBeenCalledWith(documentId);
   });
 
   it('returns 404 when document not found', async () => {
     mockStore.deleteDocument.mockResolvedValue(false);
 
-    const res = await request(buildApp()).delete('/api/rag/documents/missing');
+    const res = await request(buildApp())
+      .delete('/api/rag/documents/missing')
+      .send({ confirmation: 'DELETE missing' });
 
     expect(res.status).toBe(404);
     expect(res.body.ok).toBe(false);
@@ -316,7 +344,9 @@ describe('DELETE /api/rag/documents/:id', () => {
   it('returns 500 on error', async () => {
     mockStore.deleteDocument.mockRejectedValue(new Error('fail'));
 
-    const res = await request(buildApp()).delete('/api/rag/documents/x');
+    const res = await request(buildApp())
+      .delete('/api/rag/documents/x')
+      .send({ confirmation: 'DELETE x' });
 
     expect(res.status).toBe(500);
   });

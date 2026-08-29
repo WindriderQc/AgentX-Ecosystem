@@ -1,5 +1,7 @@
 const { getConfiguredHosts, normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
 const { benchmarkFetch } = require('./http');
+const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmission');
+const { readBoundedJson } = require('../../helpers/boundedJsonResponse');
 const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
 const CACHE_TTL_MS = 30_000;
@@ -8,18 +10,20 @@ const TAGS_TIMEOUT_MS = 4_000;
 let cachedSnapshot = null;
 let cachedAt = 0;
 
-async function fetchHostTags(host) {
+async function fetchHostTags(host, configuredHosts) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TAGS_TIMEOUT_MS);
-    const url = `${host.url}/api/tags`;
 
     try {
-        const response = await benchmarkFetch(url, { signal: controller.signal });
+        const admittedUrl = await admitOllamaTargetResolved(host.url, { configuredHosts });
+        const response = await benchmarkFetch(`${admittedUrl}/api/tags`, {
+            signal: controller.signal
+        });
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
 
-        const payload = await response.json();
+        const payload = await readBoundedJson(response);
         const models = new Set(
             (payload.models || [])
                 .map((item) => normalizeModelName(item?.name || item?.model || item))
@@ -52,14 +56,15 @@ async function getCurrentHostModelSnapshot({ force = false } = {}) {
         return cachedSnapshot;
     }
 
-    const configuredHosts = getConfiguredHosts()
+    const admissionTargets = getConfiguredHosts();
+    const configuredHosts = admissionTargets
         .map((host) => ({
             name: host.name,
             url: normalizeHostUrl(host.url)
         }))
         .filter((host) => host.url);
 
-    const hosts = await Promise.all(configuredHosts.map(fetchHostTags));
+    const hosts = await Promise.all(configuredHosts.map((host) => fetchHostTags(host, admissionTargets)));
     const byHost = new Map(hosts.map((host) => [host.url, host]));
     const allModels = new Set();
     let reachableHostCount = 0;

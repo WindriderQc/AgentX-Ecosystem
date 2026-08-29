@@ -52,9 +52,11 @@ describe('external consumer access', () => {
     expect(externalConsumerTokenAllowed(buildRequest({ authorization: 'Bearer scoped-consumer-tokeN' }))).toBe(false);
   });
 
-  test('scopes its path matcher to the versioned consumer API', () => {
+  test('scopes its path matcher to both documented versioned consumer APIs', () => {
     expect(isExternalConsumerPath('/api/consumers/v1/inference')).toBe(true);
-    expect(isExternalConsumerPath('/api/consumers/nestor/v1/inference')).toBe(false);
+    expect(isExternalConsumerPath('/api/consumers/nestor/v1/inference')).toBe(true);
+    expect(isExternalConsumerPath('/api/consumers/nestor/v1/memory/search?source=agentx')).toBe(true);
+    expect(isExternalConsumerPath('/api/consumers/nestorish/v1/inference')).toBe(false);
     expect(isExternalConsumerPath('/api/config')).toBe(false);
   });
 

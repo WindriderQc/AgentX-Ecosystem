@@ -20,16 +20,33 @@ jest.mock('../../config/logger', () => ({
 }));
 
 jest.mock('../../src/services/alertService', () => {
+  const getRecentAlerts = jest.fn(() => Promise.resolve([
+    {
+      _id: 'alert-1',
+      severity: 'warning',
+      status: 'active',
+      message: 'High latency on primary',
+      details: 'Latency > 5000ms',
+      createdAt: new Date('2026-03-27T10:00:00Z')
+    }
+  ]));
   const mock = {
-    getRecentAlerts: jest.fn(() => Promise.resolve([
-      {
-        _id: 'alert-1',
-        severity: 'warning',
-        message: 'High latency on primary',
-        details: 'Latency > 5000ms',
-        createdAt: new Date('2026-03-27T10:00:00Z')
-      }
-    ])),
+    getRecentAlerts,
+    getAlertSnapshot: jest.fn(async ({ limit = 50, filters = {} } = {}) => {
+      const alerts = await getRecentAlerts(limit, filters);
+      return {
+        alerts,
+        total: alerts.length,
+        summary: {
+          total: alerts.length,
+          activeCount: alerts.length,
+          bySeverity: { warning: alerts.length },
+          byStatus: { active: alerts.length },
+          basis: { activePredicate: { status: 'active' } },
+          observedAt: '2026-08-28T12:00:00.000Z'
+        }
+      };
+    }),
     getStatistics: jest.fn(() => Promise.resolve({})),
     getAlertService: jest.fn()
   };
@@ -225,6 +242,7 @@ describe('Nerve Center Routes — Unit Tests', () => {
       expect(summary).toHaveProperty('routing');
       expect(summary).toHaveProperty('hostPreferences');
       expect(summary).toHaveProperty('alerts');
+      expect(summary).toHaveProperty('alertSummary');
       expect(summary).toHaveProperty('recentRouting');
     });
 
@@ -251,6 +269,10 @@ describe('Nerve Center Routes — Unit Tests', () => {
       expect(Array.isArray(summary.alerts)).toBe(true);
       expect(summary.alerts.length).toBeGreaterThan(0);
       expect(summary.alerts[0]).toHaveProperty('severity');
+      expect(summary.alertSummary).toEqual(expect.objectContaining({
+        activeCount: 1,
+        basis: { activePredicate: { status: 'active' } }
+      }));
     });
 
     it('should return recentRouting as an array of inference logs', async () => {

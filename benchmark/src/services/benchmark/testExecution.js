@@ -10,6 +10,8 @@ const BenchmarkResult = require('../../../models/BenchmarkResult');
 const { classifyBenchmarkError } = require('./errorClassifier');
 const { benchmarkFetch: fetch } = require('./http');
 const { getModelDigest } = require('./modelDigestService');
+const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
+const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmission');
 
 /**
  * Run a single benchmark test
@@ -18,6 +20,8 @@ async function runTest({ model, host, prompt }) {
     if (!model || !host || !prompt) {
         throw new Error('model, host, and prompt are required');
     }
+
+    host = await admitOllamaTargetResolved(host, { configuredHosts: getConfiguredHosts() });
 
     const start = Date.now();
 
@@ -33,7 +37,8 @@ async function runTest({ model, host, prompt }) {
                 stream: false,
                 options: {}
             }),
-            timeout: 600000
+            timeout: 600000,
+            redirect: 'manual'
         });
         const response = await fetch(url, fetchOptions);
 

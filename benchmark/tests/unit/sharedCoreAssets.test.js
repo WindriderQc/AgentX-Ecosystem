@@ -1,14 +1,22 @@
 'use strict';
 
-const request = require('supertest');
-const app = require('../../server');
-const api = request.agent(app);
+const fs = require('node:fs');
+const path = require('node:path');
+const expressApp = require('../../server');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 const originalFetch = global.fetch;
 const originalCoreUrl = process.env.CORE_URL;
 
-afterAll((done) => {
-  if (api.app.listening) return api.app.close(done);
-  return done();
+let httpHarness;
+let api;
+
+beforeAll(async () => {
+  httpHarness = await startTestHttpHarness(expressApp);
+  api = httpHarness.request;
+});
+
+afterAll(async () => {
+  await httpHarness?.close();
 });
 
 afterEach(() => {
@@ -36,6 +44,19 @@ describe('shared Core assets', () => {
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toMatch(/javascript/);
     expect(response.text).toContain('class PollingController');
+  });
+
+  it('packages and serves the typed-confirmation control required by the shared footer', async () => {
+    const dockerfilePath = path.resolve(__dirname, '..', '..', '..', 'docker', 'benchmark.Dockerfile');
+    const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
+    expect(dockerfile).toContain(
+      'COPY core/public/js/utils/typed-confirmation.js /core/public/js/utils/typed-confirmation.js'
+    );
+
+    const response = await api.get('/js/utils/typed-confirmation.js');
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/javascript/);
+    expect(response.text).toContain('root.AgentXTypedConfirmation = api;');
   });
 
   it('does not expose unrelated Core public pages', async () => {

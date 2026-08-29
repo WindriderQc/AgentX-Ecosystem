@@ -8,11 +8,17 @@ const {
 
 const TOKEN_HEADER = 'x-agentx-consumer-token';
 const EXTERNAL_CONSUMER_BASE_PATH = '/api/consumers/v1';
+const NESTOR_CONSUMER_BASE_PATH = '/api/consumers/nestor/v1';
+const EXTERNAL_CONSUMER_BASE_PATHS = Object.freeze([
+  EXTERNAL_CONSUMER_BASE_PATH,
+  NESTOR_CONSUMER_BASE_PATH,
+]);
 
 function isExternalConsumerPath(pathname) {
   const path = String(pathname || '').split('?', 1)[0];
-  return path === EXTERNAL_CONSUMER_BASE_PATH
-    || path.startsWith(`${EXTERNAL_CONSUMER_BASE_PATH}/`);
+  return EXTERNAL_CONSUMER_BASE_PATHS.some((basePath) => (
+    path === basePath || path.startsWith(`${basePath}/`)
+  ));
 }
 
 function expectedExternalConsumerToken() {
@@ -63,6 +69,8 @@ function requireExternalConsumerAccess(req, res, next) {
 module.exports = {
   TOKEN_HEADER,
   EXTERNAL_CONSUMER_BASE_PATH,
+  EXTERNAL_CONSUMER_BASE_PATHS,
+  NESTOR_CONSUMER_BASE_PATH,
   isExternalConsumerPath,
   expectedExternalConsumerToken,
   presentedExternalConsumerToken,

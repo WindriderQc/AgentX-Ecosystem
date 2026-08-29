@@ -3,12 +3,46 @@
  */
 import { sanitizeHTML } from './chat-messaging.js';
 
+function renderHistoryState(elements, state, title, detail = '') {
+  const container = elements?.historyList;
+  if (!container) return;
+  container.innerHTML = '';
+
+  const panel = document.createElement('div');
+  panel.className = 'history-list-state';
+  panel.dataset.state = state;
+  panel.setAttribute('role', state === 'error' ? 'alert' : 'status');
+
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  panel.appendChild(heading);
+
+  if (detail) {
+    const description = document.createElement('span');
+    description.textContent = detail;
+    panel.appendChild(description);
+  }
+
+  container.appendChild(panel);
+}
+
 export async function loadHistoryList(elements, state) {
+  renderHistoryState(elements, 'loading', 'Loading conversation history…');
   try {
     const res = await fetch('/api/history');
+    if (!res.ok) throw new Error(`History request failed: ${res.status}`);
     const { data } = await res.json();
     elements.historyList.innerHTML = '';
-    if (!Array.isArray(data)) return [];
+    if (!Array.isArray(data)) throw new Error('History response was invalid');
+    if (data.length === 0) {
+      renderHistoryState(
+        elements,
+        'empty',
+        'No conversations yet',
+        'Start a chat and it will appear here.'
+      );
+      return [];
+    }
 
     data.forEach(item => {
       const div = document.createElement('div');
@@ -51,6 +85,12 @@ export async function loadHistoryList(elements, state) {
     return data;
   } catch (err) {
     console.error('Failed to load history', err);
+    renderHistoryState(
+      elements,
+      'error',
+      'Conversation history unavailable',
+      'Your current chat still works. Try reopening History in a moment.'
+    );
     return [];
   }
 }

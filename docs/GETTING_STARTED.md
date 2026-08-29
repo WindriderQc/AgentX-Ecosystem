@@ -14,7 +14,7 @@ Start Docker Desktop, then run from the cloned repository:
 .\agentx.ps1 health
 ```
 
-Open <http://localhost:3180/>. Core, Benchmark, and RAG bind only to host
+Open <http://127.0.0.1:3180/>. Core, Benchmark, and RAG bind only to host
 loopback by default. To check an optional native Ollama later:
 
 ```powershell
@@ -45,7 +45,7 @@ chmod +x agentx
 ./agentx health
 ```
 
-Open <http://localhost:3180/>. Core, Benchmark, and RAG bind only to host
+Open <http://127.0.0.1:3180/>. Core, Benchmark, and RAG bind only to host
 loopback by default. To check an optional native Ollama later:
 
 ```bash
@@ -130,6 +130,36 @@ the variable explicitly; if it is absent or invalid, Benchmark requests remain
 functional through Core's automated lane and general rate bucket. Never commit
 the value.
 
+The launchers likewise generate an ephemeral `AGENTX_RECOVERY_TOKEN`, reusing
+the value from an existing Core or RAG container when possible. Compose passes
+it only to Core and RAG. It authorizes the internal snapshot contract and must
+never be committed or exposed to browser code.
+
+A separately deployed generic or Nestor consumer may receive the shared,
+route-scoped `AGENTX_EXTERNAL_CONSUMER_TOKEN`. Compose passes a value supplied
+through the process environment only to Core; it remains empty by default and
+does not belong in `config/agentx.env`. The credential authorizes only the two
+versioned `/api/consumers/` contract families and must not be distributed as an
+operator credential.
+
+Full-profile deployments may also supply four purpose-scoped worker
+credentials to Core. They are optional for the loopback-only website, but a
+remote machine call fails closed unless its own value is configured and sent
+in the matching header:
+
+| Environment variable | Request header | Bounded route family |
+| --- | --- | --- |
+| `AGENTX_MEMORY_REVIEW_TOKEN` | `X-AgentX-Memory-Review-Token` | Memory Review producer run/observation/finalize/synthesis-input/candidate/failure flow |
+| `AGENTX_SCHEDULE_TOKEN` | `X-AgentX-Schedule-Token` | Cluster schedule sync, claim, and claim release |
+| `AGENTX_PIPELINE_TOKEN` | `X-AgentX-Pipeline-Token` | Pipeline worker next-task discovery, claim, non-final status, feedback, heartbeat, and the legacy `/api/todos` creation alias |
+| `AGENTX_ALERT_DELIVERY_TOKEN` | `X-AgentX-Alert-Delivery-Token` | Alert delivery receipts only |
+
+These credentials are not interchangeable and do not grant general API or
+browser access. A pipeline worker credential cannot confirm `status=done`;
+that final transition remains a trusted reviewer/operator action. Supply
+values through the process environment or a separate deployment secret store,
+never in `config/agentx.env` or a committed Compose override.
+
 ## Common error paths
 
 - `doctor` says Docker is missing: install Docker separately, reopen the
@@ -148,6 +178,8 @@ the value.
 ## Stop and cleanup
 
 `down` stops product containers and the opt-in Docker Ollama container, if
-present, but preserves data. `reset` deletes this Compose project's named
-volumes after an exact confirmation phrase. Use `ollama-down` when you started
-the Docker Ollama path and want the same full-stack stop explicitly.
+present, but preserves data and the dedicated recovery volume. `reset` deletes
+this Compose project's named volumes, including recovery archives, only after
+typing `delete agentx-ecosystem data and recovery archives` exactly. Use
+`ollama-down` when you started the Docker Ollama path and want the same
+full-stack stop explicitly.

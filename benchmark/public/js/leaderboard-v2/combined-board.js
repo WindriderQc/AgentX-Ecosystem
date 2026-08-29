@@ -41,9 +41,20 @@ function entryKey(entry) {
   return `${entry.model || ''}::${entry.host || ''}`;
 }
 
+function categoryScore(entry, category) {
+  const raw = entry.categoryScores?.[category];
+  return raw !== null && raw !== undefined && Number.isFinite(Number(raw))
+    ? Number(raw)
+    : null;
+}
+
 function buildDimMap(dims) {
   const map = {};
-  for (const d of (dims || [])) map[d.name] = d.yesRate ?? 0;
+  for (const d of (dims || [])) {
+    if (d.yesRate !== null && d.yesRate !== undefined && Number.isFinite(Number(d.yesRate))) {
+      map[d.name] = Number(d.yesRate);
+    }
+  }
   return map;
 }
 
@@ -57,8 +68,8 @@ function buildChampionMap(rankings) {
     let winner = null;
     let winnerScore = -Infinity;
     for (const entry of rankings) {
-      const score = Number(entry.categoryScores?.[category]);
-      if (!Number.isFinite(score)) continue;
+      const score = categoryScore(entry, category);
+      if (score === null) continue;
       if (score > winnerScore) { winner = entry; winnerScore = score; }
     }
     if (!winner) continue;
@@ -88,9 +99,9 @@ function categoryExtremes(entry) {
     .map(category => ({
       category,
       meta: CATEGORY_META[category],
-      score: Number(entry.categoryScores?.[category])
+      score: categoryScore(entry, category)
     }))
-    .filter(item => Number.isFinite(item.score));
+    .filter(item => item.score !== null);
   if (scores.length === 0) return { best: null, watch: null };
   const sorted = scores.sort((a, b) => b.score - a.score);
   return { best: sorted[0], watch: sorted[sorted.length - 1] };
@@ -153,7 +164,7 @@ function compactCounts(counts, prefix = '') {
 // Category bars (no dots — leaner version)
 // ---------------------------------------------------------------------------
 
-function categoryBars(dims) {
+function categoryBars(dims, categoryEvidence = {}) {
   const dimMap = buildDimMap(dims);
   return CATEGORY_ORDER.map(cat => {
     const meta = CATEGORY_META[cat];
@@ -164,7 +175,11 @@ function categoryBars(dims) {
     const barColor = pct != null ? scoreColor(score10) : 'var(--r-border)';
     const valText = pct != null ? `${clamped}` : '—';
     const naCls = pct == null ? ' cb-bar-na' : '';
-    return `<div class="cb-bar${naCls}" title="${meta.label}: ${valText}${pct != null ? '%' : ''}">
+    const unavailableReason = categoryEvidence[cat] === 'attempted_unscored'
+      ? 'attempted; score unavailable'
+      : 'not tested';
+    const title = pct != null ? `${meta.label}: ${valText}%` : `${meta.label}: ${unavailableReason}`;
+    return `<div class="cb-bar${naCls}" title="${title}">
       <span class="cb-bar-l">${meta.label}</span>
       <div class="cb-bar-track"><div class="cb-bar-fill" style="width:${clamped}%;background:${barColor}"></div></div>
       <span class="cb-bar-v">${valText}</span>
@@ -244,9 +259,14 @@ function renderRow(entry, index, championMap, readinessMap) {
   </div>`;
 
   const dims = entry.dimensions || [];
+  const axisLabel = {
+    composite: 'Composite',
+    deterministic: 'Deterministic',
+    subjective: 'Judge'
+  }[entry.scoreAxis] || 'Score';
   const barsCol = `<div class="cb-col cb-col-bars">
-    <div class="cb-col-head">Quality (per category)</div>
-    ${dims.length > 0 ? categoryBars(dims) : '<div class="cb-no-data">No quality data yet</div>'}
+    <div class="cb-col-head">${axisLabel} (per category)</div>
+    ${dims.length > 0 ? categoryBars(dims, entry.categoryEvidence) : '<div class="cb-no-data">No scored categories yet</div>'}
   </div>`;
 
   const timingCol = `<div class="cb-col cb-col-timing">
@@ -367,10 +387,10 @@ function sortRankings(rankings, mode) {
   }
   // Category mode — sort by that category score; entries lacking the score sink to bottom.
   return [...rankings].sort((a, b) => {
-    const av = Number(a.categoryScores?.[mode]);
-    const bv = Number(b.categoryScores?.[mode]);
-    const aOk = Number.isFinite(av);
-    const bOk = Number.isFinite(bv);
+    const av = categoryScore(a, mode);
+    const bv = categoryScore(b, mode);
+    const aOk = av !== null;
+    const bOk = bv !== null;
     if (aOk && bOk) return bv - av;
     if (aOk) return -1;
     if (bOk) return 1;

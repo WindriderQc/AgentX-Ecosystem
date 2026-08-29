@@ -10,6 +10,7 @@ const PromptTemplate = require('../models/PromptTemplate');
 const { getUserId } = require('../src/helpers/userHelpers');
 const logger = require('../config/logger');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 /**
  * Reuse template rendering function from prompts.js
@@ -272,6 +273,7 @@ router.delete('/:id', async (req, res) => {
   try {
     // Validate ObjectId to prevent NoSQL injection
     if (!validateObjectId(req.params.id, res, 'Template ID')) return;
+    if (!requireTypedConfirmation(req, res, 'DELETE PROMPT TEMPLATE', req.params.id)) return;
 
     const template = await PromptTemplate.findById(req.params.id);
 

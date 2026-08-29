@@ -547,7 +547,7 @@
         const body = document.getElementById('sectionInferenceBody');
         if (!body) return;
 
-        body.innerHTML = '<div class="nc-section-placeholder"><i class="fas fa-spinner fa-spin"></i> Loading inference data…</div>';
+        shared.renderSectionLoading(body, 'Loading inference data…');
 
         try {
             const [configJson, activityJson] = await Promise.all([
@@ -602,7 +602,9 @@
             renderHeatmap();
         } catch (err) {
             console.error('[NerveCenter] loadInference failed', err);
-            body.innerHTML = `<div class="nc-section-placeholder" style="color:#f87171;"><i class="fas fa-exclamation-triangle"></i> Failed to load inference data: ${shared.escapeHtml(err.message)}</div>`;
+            shared.renderSectionError(body, `Failed to load inference data: ${err.message}`);
+        } finally {
+            shared.finishSectionLoad(body);
         }
     }
 

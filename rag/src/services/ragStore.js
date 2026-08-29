@@ -5,7 +5,13 @@
 const logger = require('../../config/logger');
 const { getEmbeddingsService } = require('./embeddings');
 const { createVectorStore } = require('./vectorStore/factory');
-const { generateDocumentId, splitIntoChunks, reciprocalRankFusion } = require('./ragStoreUtils');
+const {
+  buildDocumentIdentity,
+  generateDocumentId,
+  normalizeSourceIdentity,
+  splitIntoChunks,
+  reciprocalRankFusion
+} = require('./ragStoreUtils');
 const { expandQuery } = require('./queryExpansion');
 const { keywordSearch } = require('./keywordSearch');
 const { rerankResults } = require('./reranker');
@@ -19,20 +25,160 @@ class RagStore {
     this.embeddingsService = getEmbeddingsService();
     this.defaultChunkSize = config.chunkSize || 500;
     this.defaultChunkOverlap = config.chunkOverlap || 50;
+    this.identityLocks = new Map();
   }
 
-  async upsertDocumentWithChunks(text, metadata = {}) {
-    const documentId = metadata.documentId || generateDocumentId(metadata.source || 'unknown', text);
+  async _withIdentityLock(identityKey, work) {
+    const previous = this.identityLocks.get(identityKey) || Promise.resolve();
+    const current = previous.catch(() => {}).then(work);
+    this.identityLocks.set(identityKey, current);
+    try {
+      return await current;
+    } finally {
+      if (this.identityLocks.get(identityKey) === current) {
+        this.identityLocks.delete(identityKey);
+      }
+    }
+  }
+
+  async _candidateMatchesIdentity(candidate, identity, text, sourceHash) {
+    if (!candidate?.documentId) return false;
+    const hasPersistedIdentity = typeof candidate.sourceIdentity === 'string' && candidate.sourceIdentity.length > 0;
+    const candidateSource = normalizeSourceIdentity(candidate.source);
+    if (identity.sourceIdentityKind === 'document_id') {
+      if (candidate.documentId !== identity.documentId) return false;
+    } else if (hasPersistedIdentity) {
+      if (candidate.sourceIdentity !== identity.sourceIdentity) return false;
+    } else if (candidateSource !== identity.source) {
+      return false;
+    }
+
+    // Preserve the established manifest contract: for the same explicit
+    // document ID, an unchanged caller-provided source hash is authoritative.
+    // This keeps file scans idempotent without requiring a migration first.
+    if (identity.sourceIdentityKind === 'document_id'
+      && sourceHash
+      && candidate.hash === sourceHash) {
+      return true;
+    }
+
+    if (candidate.contentHash && candidate.contentHash !== identity.contentHash) return false;
+
+    // Identity-aware rows can be matched from their persisted facts even if
+    // the optional originalText payload was not written successfully.
+    if (candidate.identityVersion === identity.identityVersion
+      && candidate.contentHash === identity.contentHash) {
+      return true;
+    }
+
+    const originalText = typeof this.vectorStore.getDocumentOriginalText === 'function'
+      ? await this.vectorStore.getDocumentOriginalText(candidate.documentId)
+      : null;
+    if (typeof originalText === 'string') {
+      if (originalText !== text) return false;
+      // A legacy row without identity metadata is only treated as automatic
+      // when its ID matches the historical source+text generator. Arbitrary
+      // explicit IDs and distinct file paths retain their provenance.
+      if (identity.sourceIdentityKind === 'source_label' && !hasPersistedIdentity) {
+        return candidate.documentId === generateDocumentId(candidate.source || 'unknown', originalText);
+      }
+      return true;
+    }
+
+    // Legacy documents without source hash, original text, or canonical
+    // identity facts are not guessed from filenames or reconstructed chunks.
+    return false;
+  }
+
+  async _findExistingIdentity(identity, text, preferredDocumentId, sourceHash) {
+    const seen = new Set();
+    const inspect = async (candidate) => {
+      if (!candidate?.documentId || seen.has(candidate.documentId)) return null;
+      seen.add(candidate.documentId);
+      return await this._candidateMatchesIdentity(candidate, identity, text, sourceHash) ? candidate : null;
+    };
+
+    // Prefer the requested/automatic ID, preserving the existing stable-ID
+    // upsert contract when that exact document is already present.
+    const preferred = await this.vectorStore.getDocument(preferredDocumentId);
+    const preferredMatch = await inspect(preferred);
+    if (preferredMatch) return preferredMatch;
+
+    // An explicit document ID is the caller's stable source identity. Other
+    // IDs are not collapsed into it, even when their text happens to match.
+    if (identity.sourceIdentityKind === 'document_id') return null;
+
+    // Identity-aware documents take the cheap path through payload filters.
+    const identityMatches = await this.vectorStore.listDocuments({
+      sourceIdentity: identity.sourceIdentity,
+      contentHash: identity.contentHash
+    });
+    for (const candidate of [...(identityMatches.documents || [])]
+      .sort((left, right) => String(left.documentId).localeCompare(String(right.documentId)))) {
+      const match = await inspect(candidate);
+      if (match) return match;
+    }
+
+    // Legacy automatic rows are recognized through their deterministic
+    // preferred ID above. We deliberately do not sweep or merge older rows.
+    return null;
+  }
+
+  async _unchangedResult(existing, requestedDocumentId) {
+    let chunkCount = Number(existing.chunkCount);
+    if (!Number.isFinite(chunkCount)) {
+      const chunks = typeof this.vectorStore.getDocumentChunks === 'function'
+        ? await this.vectorStore.getDocumentChunks(existing.documentId)
+        : null;
+      chunkCount = Array.isArray(chunks) ? chunks.length : 0;
+    }
+    const deduplicated = existing.documentId !== requestedDocumentId;
+    return {
+      unchanged: true,
+      deduplicated,
+      documentId: existing.documentId,
+      chunkCount,
+      status: 'unchanged',
+      ...(deduplicated ? { requestedDocumentId } : {})
+    };
+  }
+
+  async _backfillOriginalTextIfMissing(existing, identity, text) {
+    if (existing?.identityVersion !== identity.identityVersion
+      || existing?.contentHash !== identity.contentHash
+      || typeof this.vectorStore.getDocumentOriginalText !== 'function'
+      || typeof this.vectorStore.setDocumentOriginalText !== 'function') {
+      return;
+    }
+
+    try {
+      const originalText = await this.vectorStore.getDocumentOriginalText(existing.documentId);
+      if (typeof originalText !== 'string') {
+        await this.vectorStore.setDocumentOriginalText(existing.documentId, text);
+        logger.info(`Backfilled originalText for unchanged document "${existing.documentId}"`);
+      }
+    } catch (err) {
+      // Keep the ingest idempotent, but retry the repair on every exact repeat.
+      // A transient payload-write failure must not make reindexability loss
+      // permanent just because canonical identity facts already exist.
+      logger.warn(`Failed to backfill originalText for "${existing.documentId}"`, { error: err.message });
+    }
+  }
+
+  async _upsertDocumentWithIdentity(text, metadata, identity) {
+    const documentId = metadata.documentId || identity.documentId;
     const chunkSize = metadata.chunkSize || this.defaultChunkSize;
     const chunkOverlap = metadata.chunkOverlap || this.defaultChunkOverlap;
 
-    // Content hash unchanged detection — skip re-ingestion if hash matches
-    if (metadata.hash) {
-      const existing = await this.vectorStore.getDocument(documentId);
-      if (existing && existing.hash === metadata.hash) {
-        logger.info(`Document "${documentId}" unchanged (hash match) — skipping ingestion`);
-        return { unchanged: true, documentId };
-      }
+    const existing = await this._findExistingIdentity(identity, text, documentId, metadata.hash);
+    if (existing && metadata.forceReindex !== true) {
+      await this._backfillOriginalTextIfMissing(existing, identity, text);
+      const result = await this._unchangedResult(existing, documentId);
+      logger.info(`Document "${documentId}" unchanged (canonical source/content match) — skipping ingestion`, {
+        canonicalDocumentId: result.documentId,
+        deduplicated: result.deduplicated
+      });
+      return result;
     }
 
     const textChunks = splitIntoChunks(text, chunkSize, chunkOverlap);
@@ -56,9 +202,15 @@ class RagStore {
     }));
 
     const result = await this.vectorStore.upsertDocument(documentId, {
-      source: metadata.source,
+      source: identity.source,
       tags: metadata.tags || [],
       ...(metadata.hash ? { hash: metadata.hash } : {}),
+      sourceIdentity: identity.sourceIdentity,
+      sourceIdentityKind: identity.sourceIdentityKind,
+      contentHash: identity.contentHash,
+      identityVersion: identity.identityVersion,
+      chunkSize,
+      chunkOverlap
     }, chunks);
 
     // Persist original (pre-chunking) text so reindex can re-chunk from
@@ -76,6 +228,15 @@ class RagStore {
 
     logger.info(`Upserted document "${documentId}" — ${chunks.length} chunks`);
     return result;
+  }
+
+  async upsertDocumentWithChunks(text, metadata = {}) {
+    const identity = buildDocumentIdentity(metadata.source || 'unknown', text, metadata.documentId);
+    const identityKey = identity.sourceIdentity;
+    return this._withIdentityLock(
+      identityKey,
+      () => this._upsertDocumentWithIdentity(text, metadata, identity)
+    );
   }
 
   async searchSimilarChunks(query, options = {}) {

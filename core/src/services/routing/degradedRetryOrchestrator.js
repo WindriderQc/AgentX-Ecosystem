@@ -81,6 +81,7 @@ async function prepareCandidates({
 }) {
   const prepared = [];
   for (const candidate of candidates) {
+    if (requestContext.signal?.aborted) break;
     const crossModel = candidate.crossModel === true
       || !modelsMatch(candidate.model, baseModel);
     const candidateModel = crossModel
@@ -170,6 +171,7 @@ async function tryDegradedRetry(options) {
     requestContext, beforeAttempt,
   } = options;
   const baseModel = options.baseModel || model;
+  if (requestContext.signal?.aborted) return { retried: false, reason: 'caller_cancelled' };
   if (!isEnabled()) return null;
   const eligibility = isRetryEligible(attemptState);
   if (!eligibility.eligible) return { retried: false, reason: eligibility.reason };
@@ -236,6 +238,7 @@ async function tryDegradedRetry(options) {
     }
 
     if (!prepared.length) return { retried: false, reason: REFUSAL_REASONS.ARTIFACT_NOT_VERIFIED };
+    if (requestContext.signal?.aborted) return { retried: false, reason: 'caller_cancelled' };
     if (typeof beforeAttempt === 'function') beforeAttempt();
 
     const outcome = await runDegradedRetry({
@@ -252,6 +255,7 @@ async function tryDegradedRetry(options) {
             stream: false,
             skipGate: requestContext.skipGate,
             timeoutMs: requestContext.timeoutMs,
+            signal: requestContext.signal,
           });
           return {
             ...result,
@@ -266,7 +270,9 @@ async function tryDegradedRetry(options) {
             ok: false,
             status: null,
             error: err,
-            isTimeout: err.name === 'AbortError',
+            isTimeout: err.isOllamaTimeout === true
+              || (err.name === 'AbortError' && err.isCallerCancellation !== true),
+            isCallerCancellation: err.isCallerCancellation === true,
             durationMs: err.attemptDurationMs || 0,
             model: candidate.model,
             contract: candidate.attempt.contract,
@@ -288,6 +294,7 @@ async function tryDegradedRetry(options) {
       status: outcome.result?.status,
       error: outcome.result?.error,
       isTimeout: outcome.result?.isTimeout === true,
+      isCallerCancellation: outcome.result?.isCallerCancellation === true,
       durationMs: outcome.result?.durationMs || 0,
       contract: outcome.result?.contract,
       thinkingPolicy: outcome.result?.thinkingPolicy,
@@ -295,6 +302,9 @@ async function tryDegradedRetry(options) {
       payload: outcome.result?.payload,
     };
   } catch (err) {
+    if (requestContext.signal?.aborted) {
+      return { retried: false, reason: 'caller_cancelled' };
+    }
     logger.debug('[InferenceProxy] degraded retry failed', { error: err.message });
     return { retried: false, reason: 'retry_execution_failed' };
   }

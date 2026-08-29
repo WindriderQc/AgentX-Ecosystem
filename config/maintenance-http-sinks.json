@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "reviewSemantics": "This is a bounded static reviewed-direct inventory—not executor enforcement. It covers recognized direct HTTP constructors in the declared operator and maintenance source scope and is not whole-program dataflow analysis.",
+  "scope": {
+    "directories": [
+      "scripts",
+      "core/scripts",
+      "benchmark/scripts"
+    ],
+    "files": [
+      "agentx.ps1"
+    ],
+    "excludedDirectoryNames": [
+      "__tests__",
+      "build",
+      "coverage",
+      "dist",
+      "fixtures",
+      "generated",
+      "node_modules",
+      "test",
+      "tests",
+      "vendor"
+    ],
+    "excludedFileSuffixes": [
+      ".test.cjs",
+      ".test.js",
+      ".test.mjs"
+    ]
+  },
+  "sinks": [
+    {
+      "id": "benchmark.maintenance.repo-coding.core-claim",
+      "source": "benchmark/scripts/repo-coding-qualification.js",
+      "line": 266,
+      "column": 26,
+      "constructor": "fetchImpl",
+      "authoritySource": "operator-supplied",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Read the active Core benchmark claim before a live repository-coding qualification campaign."
+    },
+    {
+      "id": "benchmark.maintenance.toolcall.ollama-chat",
+      "source": "benchmark/scripts/toolcall-qualification.js",
+      "line": 72,
+      "column": 23,
+      "constructor": "fetch",
+      "authoritySource": "operator-supplied",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Call the operator-selected Ollama host during an explicitly confirmed live tool-call qualification campaign."
+    },
+    {
+      "id": "maintenance.support-receipt.service-json",
+      "source": "scripts/export-support-receipt.js",
+      "line": 127,
+      "column": 22,
+      "constructor": "fetchImpl",
+      "authoritySource": "configured-or-loopback-default",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Collect bounded product health and ecosystem evidence for an operator support receipt."
+    },
+    {
+      "id": "maintenance.adapter-contract.service-check",
+      "source": "scripts/verify-adapter-consumer-contracts.js",
+      "line": 726,
+      "column": 26,
+      "constructor": "fetchImpl",
+      "authoritySource": "configured-or-loopback-default",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Exercise a declared bounded product API as an external adapter consumer contract check."
+    },
+    {
+      "id": "maintenance.clean-first-run.product-request",
+      "source": "scripts/verify-clean-first-run.js",
+      "line": 41,
+      "column": 22,
+      "constructor": "fetchImpl",
+      "authoritySource": "configured-or-loopback-default",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "follow",
+      "purpose": "Verify product health, configuration, and landing-page identity after a clean demo-profile start."
+    },
+    {
+      "id": "maintenance.degraded-release.product-request",
+      "source": "scripts/verify-degraded-release.js",
+      "line": 144,
+      "column": 36,
+      "constructor": "fetchImpl",
+      "authoritySource": "configured-or-loopback-default",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Collect product JSON evidence while verifying supported degraded-release behavior."
+    },
+    {
+      "id": "maintenance.product-surfaces.page",
+      "source": "scripts/verify-product-surfaces.js",
+      "line": 156,
+      "column": 22,
+      "constructor": "fetchImpl",
+      "authoritySource": "configured-or-loopback-default",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Fetch a registered product page and verify its canonical surface identity."
+    },
+    {
+      "id": "maintenance.product-surfaces.profile-boundary",
+      "source": "scripts/verify-product-surfaces.js",
+      "line": 208,
+      "column": 22,
+      "constructor": "fetchImpl",
+      "authoritySource": "configured-or-loopback-default",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Probe a full-only route and verify the demo-profile boundary response."
+    },
+    {
+      "id": "maintenance.release-evidence.product-json",
+      "source": "scripts/verify-release-evidence.js",
+      "line": 75,
+      "column": 22,
+      "constructor": "fetchImpl",
+      "authoritySource": "configured-or-loopback-default",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Collect product health and ecosystem JSON used by release-evidence gates."
+    },
+    {
+      "id": "launcher.bounded-loopback-http.send",
+      "source": "agentx.ps1",
+      "line": 39,
+      "column": 21,
+      "constructor": "HttpClient.SendAsync",
+      "authoritySource": "loopback-with-configured-port",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Perform bounded launcher GETs for published product health and optional native Ollama version on loopback."
+    }
+  ]
+}

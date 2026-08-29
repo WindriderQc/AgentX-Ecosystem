@@ -15,6 +15,16 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('hostGate', () => {
   beforeEach(() => {
     hostGate._resetForTests();
@@ -52,6 +62,52 @@ describe('hostGate', () => {
 
     r2();
     r3();
+  });
+
+  it('removes an aborted local waiter and hands the freed slot to the next waiter exactly once', async () => {
+    const r1 = await hostGate.acquire('http://cancel-local', 'm1');
+    const r2 = await hostGate.acquire('http://cancel-local', 'm1');
+    const controller = new AbortController();
+
+    const cancelled = hostGate
+      .acquire('http://cancel-local', 'm1', { signal: controller.signal })
+      .catch((error) => error);
+    const next = hostGate.acquire('http://cancel-local', 'm1');
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(hostGate.stats().entries['http://cancel-local::m1']).toMatchObject({
+      inFlight: 2,
+      waiters: 2,
+      totalAcquired: 2,
+      totalReleased: 0,
+    });
+
+    controller.abort(new Error('private caller reason'));
+    const cancellationError = await cancelled;
+    expect(cancellationError).toMatchObject({
+      name: 'AbortError',
+      code: hostGate.HOST_GATE_ABORT_CODE,
+    });
+    expect(cancellationError.message).not.toContain('private caller reason');
+    expect(hostGate.stats().entries['http://cancel-local::m1'].waiters).toBe(1);
+
+    r1();
+    const r3 = await next;
+    expect(hostGate.stats().entries['http://cancel-local::m1']).toMatchObject({
+      inFlight: 2,
+      waiters: 0,
+      totalAcquired: 3,
+      totalReleased: 1,
+    });
+
+    r2();
+    r3();
+    expect(hostGate.stats().entries['http://cancel-local::m1']).toMatchObject({
+      inFlight: 0,
+      waiters: 0,
+      totalAcquired: 3,
+      totalReleased: 3,
+    });
   });
 
   it('tracks peak inFlight and maxWaiters', async () => {
@@ -206,6 +262,84 @@ describe('hostGate (shared Mongo admission)', () => {
     r3();
     await delay(30);
     expect(await HostGateAdmission.countDocuments({ key: 'http://shared::m1' })).toBe(0);
+  });
+
+  it('cancels a shared waiter during its polling sleep without leaking waiter accounting', async () => {
+    const r1 = await sharedGate.acquire('http://shared-cancel', 'm1');
+    const r2 = await sharedGate.acquire('http://shared-cancel', 'm1');
+    const controller = new AbortController();
+    const pending = sharedGate
+      .acquire('http://shared-cancel', 'm1', { signal: controller.signal })
+      .catch((error) => error);
+
+    await delay(30);
+    expect(sharedGate.stats().entries['http://shared-cancel::m1']).toMatchObject({
+      inFlight: 2,
+      waiters: 1,
+      totalAcquired: 2,
+      totalReleased: 0,
+    });
+
+    controller.abort();
+    await expect(pending).resolves.toMatchObject({
+      name: 'AbortError',
+      code: sharedGate.HOST_GATE_ABORT_CODE,
+    });
+    expect(sharedGate.stats().entries['http://shared-cancel::m1']).toMatchObject({
+      inFlight: 2,
+      waiters: 0,
+      totalAcquired: 2,
+      totalReleased: 0,
+    });
+    expect(await HostGateAdmission.countDocuments({ key: 'http://shared-cancel::m1' })).toBe(2);
+
+    r1();
+    r2();
+    await delay(30);
+  });
+
+  it('releases a shared slot won after the caller aborts during acquisition', async () => {
+    const claim = deferred();
+    const findSpy = jest.spyOn(HostGateAdmission, 'findOneAndUpdate').mockImplementation(
+      (filter, update) => ({
+        lean: () => claim.promise.then(() => ({
+          _id: filter._id,
+          ...update.$set,
+        })),
+      })
+    );
+    const deleteSpy = jest.spyOn(HostGateAdmission, 'deleteOne').mockResolvedValue({ deletedCount: 1 });
+    const controller = new AbortController();
+
+    try {
+      const pending = sharedGate
+        .acquire('http://shared-race', 'm1', { signal: controller.signal })
+        .catch((error) => error);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(findSpy).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+      claim.resolve();
+
+      await expect(pending).resolves.toMatchObject({
+        name: 'AbortError',
+        code: sharedGate.HOST_GATE_ABORT_CODE,
+      });
+      const claimedOwnerId = findSpy.mock.calls[0][1].$set.ownerId;
+      expect(deleteSpy).toHaveBeenCalledWith({
+        _id: 'http://shared-race::m1::0',
+        ownerId: claimedOwnerId,
+      });
+      expect(sharedGate.stats().entries['http://shared-race::m1']).toMatchObject({
+        inFlight: 0,
+        waiters: 0,
+        totalAcquired: 0,
+        totalReleased: 0,
+      });
+    } finally {
+      findSpy.mockRestore();
+      deleteSpy.mockRestore();
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-jest.mock('node-fetch', () => jest.fn());
+jest.mock('../../src/utils/fetchWithTimeout', () => jest.fn());
 
 describe('Embeddings providers', () => {
   const originalEnv = process.env;
@@ -7,7 +7,7 @@ describe('Embeddings providers', () => {
   beforeEach(() => {
     jest.resetModules();
     process.env = { ...originalEnv, NODE_ENV: 'test' };
-    fetch = require('node-fetch');
+    fetch = require('../../src/utils/fetchWithTimeout');
     fetch.mockReset();
   });
 
@@ -84,6 +84,16 @@ describe('Embeddings providers', () => {
       'http://alpha:11434/api/embeddings',
       'http://beta:11434/api/embeddings'
     ]);
+  });
+
+  it('rejects a preferred Ollama authority that is outside configured hosts', async () => {
+    const OllamaProvider = require('../../src/services/embeddings/ollamaProvider');
+    const provider = new OllamaProvider({ ollamaHosts: 'alpha:11434,beta:11434' });
+
+    await expect(provider.embed('hello', 'http://other:11434')).rejects.toThrow(
+      'preferredHost must be one of the configured Ollama authorities'
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('uses native Ollama batch embed endpoint for a multi-text batch', async () => {

@@ -17,6 +17,10 @@ const { validateJudgeModel, probeJudgeCapability } = require('../../src/services
 const { callJudge } = require('../../src/services/scoring/judgeCall');
 const { validateExecutionHost } = require('../../src/services/benchmark/executionHostValidator');
 const { runPreflight } = require('../../src/services/benchmark/preflight');
+const {
+    resolveReadyJudgeTarget,
+    judgeUnavailablePayload
+} = require('../../src/services/benchmark/judgeReadiness');
 const buddySurface = require('../../src/services/benchmark/buddySurfaceEvents');
 const { resolveJudgeHost } = require('../../src/services/benchmark/judgeHostResolution');
 const { resolveMultiJudge } = require('../../src/services/benchmark/resolveMultiJudge');
@@ -42,7 +46,8 @@ const JUDGE_FALLBACK_MODEL = String(process.env.JUDGE_FALLBACK_MODEL || '').trim
 
 function readJudgeDefaults() {
     try {
-        const p = path.join(process.cwd(), 'config', 'judge-host-defaults.json');
+        const p = process.env.JUDGE_DEFAULTS_PATH
+            || path.join(process.cwd(), 'config', 'judge-host-defaults.json');
         if (!fs.existsSync(p)) return {};
         return JSON.parse(fs.readFileSync(p, 'utf8')) || {};
     } catch { return {}; }
@@ -50,6 +55,27 @@ function readJudgeDefaults() {
 
 function isDuplicateKeyError(err) {
     return !!(err && (err.code === 11000 || String(err.message || '').includes('E11000')));
+}
+
+function judgeValidationAdmissionFailure(check) {
+    const policy = {
+        invalid_judge_target: { statusCode: 400, code: 'JUDGE_TARGET_REJECTED' },
+        incomplete_judge_target: { statusCode: 400, code: 'JUDGE_TARGET_INCOMPLETE' },
+        judge_host_not_configured: { statusCode: 400, code: 'JUDGE_HOST_NOT_CONFIGURED' },
+        judge_model_unavailable: { statusCode: 409, code: 'JUDGE_MODEL_UNAVAILABLE' },
+        selected_models_unavailable: { statusCode: 409, code: 'JUDGE_MODEL_UNAVAILABLE' },
+        judge_host_unreachable: { statusCode: 503, code: 'JUDGE_HOST_UNREACHABLE' },
+        hosts_unreachable: { statusCode: 503, code: 'JUDGE_HOST_UNREACHABLE' }
+    }[check?.code] || { statusCode: 503, code: 'JUDGE_NOT_READY' };
+    const payload = judgeUnavailablePayload(check, 'Judge validation');
+    return {
+        statusCode: policy.statusCode,
+        payload: {
+            ...payload,
+            code: policy.code,
+            admission_code: check?.code || 'unknown'
+        }
+    };
 }
 
 // Look up the per-host stored default judge model for a given judge host,
@@ -224,6 +250,27 @@ router.get('/prompts', async (req, res) => {
 });
 
 /**
+ * POST /api/benchmark/prompts/sync
+ * Explicitly synchronize the product-owned prompt library.
+ */
+router.post('/prompts/sync', async (req, res) => {
+    try {
+        const total = await benchmarkService.seedPrompts();
+        const data = await benchmarkService.getPrompts();
+        res.json({
+            status: 'success',
+            data: {
+                ...data,
+                synchronized_total: total
+            }
+        });
+    } catch (err) {
+        logger.error('Failed to synchronize prompts', { error: err.message });
+        res.status(500).json({ status: 'error', error: err.message });
+    }
+});
+
+/**
  * POST /api/benchmark/test
  * Run a single benchmark test
  */
@@ -264,7 +311,7 @@ router.post('/test', async (req, res) => {
  * Start a batch benchmark test with quality scoring
  */
 router.post('/batch', async (req, res) => {
-    const { host, models, levels, prompt_ids, run_name, judge_config, execution_config, execution_mode, depth_config, tags, description, multi_judge } = req.body;
+    let { host, models, levels, prompt_ids, run_name, judge_config, execution_config, execution_mode, depth_config, tags, description, multi_judge } = req.body;
 
     // Validation
     if (!host || !models || !Array.isArray(models) || !levels || !Array.isArray(levels)) {
@@ -374,6 +421,23 @@ router.post('/batch', async (req, res) => {
         }
     }
 
+    // Resolve through the same readiness authority used by Courthouse. A
+    // caller may explicitly pin an installed host/model pair; otherwise an
+    // explicitly configured active judge is required. Never fall through to a
+    // product/chat-model default that the operator did not choose as judge.
+    const judgeReadiness = await resolveReadyJudgeTarget({
+        host: judge_config?.host,
+        model: judge_config?.model
+    });
+    if (!judgeReadiness.ready) {
+        return res.status(503).json(judgeUnavailablePayload(judgeReadiness, 'Benchmark launch'));
+    }
+    const readyJudgeConfig = {
+        ...(judge_config || {}),
+        host: judgeReadiness.target.host,
+        model: judgeReadiness.target.model
+    };
+
     // Verify execution host is an Ollama endpoint and requested models exist
     const hostCheck = await validateExecutionHost(host, models);
     if (!hostCheck.valid) {
@@ -383,6 +447,7 @@ router.post('/batch', async (req, res) => {
             ...(hostCheck.available_models && { available_models: hostCheck.available_models })
         });
     }
+    host = hostCheck.host || host;
 
     // Dedication check removed — the batch orchestrator handles dedication
     // lifecycle automatically (detect pins → run batch → restore pins).
@@ -408,7 +473,7 @@ router.post('/batch', async (req, res) => {
             { hostDefaults: multiJudgeHostDefaults }
         );
         const judgeConfigWithMulti = {
-            ...(judge_config || {}),
+            ...readyJudgeConfig,
             multi_judge: resolvedMultiJudge
         };
 
@@ -534,11 +599,14 @@ router.post('/batch', async (req, res) => {
 router.post('/batch/:id/stop', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
-        const { batch, alreadyStopped } = await benchmarkService.stopBatch(req.params.id);
+        const { batch, alreadyStopped, managedLocally } = await benchmarkService.stopBatch(req.params.id);
 
         // Also stop any active judging
         stopJudging(req.params.id);
-        const claimReleaseHosts = releaseStoppedBatchClaims(batch);
+        // A live in-process orchestrator owns its claim/dedication teardown and
+        // releases them only after every cancelled task has settled. Direct
+        // release remains the recovery path for an orphaned/non-local batch.
+        const claimReleaseHosts = managedLocally ? [] : releaseStoppedBatchClaims(batch);
 
         res.json({
             status: 'success',
@@ -547,6 +615,7 @@ router.post('/batch/:id/stop', async (req, res) => {
                 batch_id: batch._id,
                 status: batch.status,
                 already_stopped: alreadyStopped,
+                cleanup_managed_by_runner: managedLocally === true,
                 claim_release_started: claimReleaseHosts.length > 0,
                 claim_release_hosts: claimReleaseHosts
             }
@@ -566,7 +635,26 @@ router.post('/batch/:id/stop', async (req, res) => {
 router.post('/batch/:id/resume', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
-        const data = await benchmarkService.resumeBatch(req.params.id);
+        const batch = await BenchmarkBatch.findById(req.params.id)
+            .select('judge_config plan.judge_model plan.exec_hosts')
+            .lean();
+        if (!batch) {
+            return res.status(404).json({ status: 'error', error: 'Batch not found' });
+        }
+        const readiness = await resolveReadyJudgeTarget({
+            host: batch.judge_config?.host || batch.plan?.exec_hosts?.[0]?.judge_host,
+            model: batch.judge_config?.model || batch.plan?.judge_model
+        });
+        if (!readiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(readiness, 'Batch resume'));
+        }
+        const data = await benchmarkService.resumeBatch(req.params.id, {
+            judgeConfig: {
+                ...(batch.judge_config || {}),
+                host: readiness.target.host,
+                model: readiness.target.model
+            }
+        });
         res.json({ status: 'success', data });
     } catch (err) {
         logger.error('Failed to resume batch', { error: err.message });
@@ -674,6 +762,19 @@ router.post('/batch/:id/rerun-invalid', async (req, res) => {
             });
         }
 
+        const readiness = await resolveReadyJudgeTarget({
+            host: payload.judge_config?.host,
+            model: payload.judge_config?.model
+        });
+        if (!readiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(readiness, 'Corrected rerun'));
+        }
+        payload.judge_config = {
+            ...(payload.judge_config || {}),
+            host: readiness.target.host,
+            model: readiness.target.model
+        };
+
         const activeBatches = await BenchmarkBatch.getActive();
         if (activeBatches.length > 0) {
             return res.status(409).json(buildActiveBatchConflict(activeBatches[0]));
@@ -730,18 +831,19 @@ router.post('/batch/:id/rerun-invalid', async (req, res) => {
  * Pre-flight check: validate judge model availability and output capability
  */
 router.post('/validate-judge', async (req, res) => {
-    const { host, model } = req.body;
-    const judgeHost = host || JUDGE_CONFIG.host;
-    const judgeModel = model || JUDGE_CONFIG.model;
-
-    if (!judgeHost || !judgeModel) {
-        return res.status(400).json({
-            status: 'error',
-            error: 'host and model are required'
-        });
-    }
+    const { host, model } = req.body || {};
 
     try {
+        const admission = await resolveReadyJudgeTarget({ host, model });
+        if (!admission.ready) {
+            const failure = judgeValidationAdmissionFailure(admission);
+            return res.status(failure.statusCode).json(failure.payload);
+        }
+
+        // Only the canonical target returned by the configured-judge
+        // admission authority may reach the outbound validation sinks.
+        const judgeHost = admission.target.host;
+        const judgeModel = admission.target.model;
         const validation = await validateJudgeModel(judgeHost, judgeModel);
         if (validation.valid) {
             const probe = await probeJudgeCapability(judgeHost, judgeModel);
@@ -758,8 +860,10 @@ router.post('/validate-judge', async (req, res) => {
                 }
             });
         } else {
-            res.status(422).json({
+            const statusCode = validation.code === 'JUDGE_MODEL_UNAVAILABLE' ? 409 : 503;
+            res.status(statusCode).json({
                 status: 'error',
+                code: validation.code || 'JUDGE_VALIDATION_UNAVAILABLE',
                 error: validation.error,
                 available_models: validation.available_models || [],
                 latency_ms: validation.latency_ms
@@ -790,15 +894,12 @@ router.get('/judge/calibration-protocol', (req, res) => {
  */
 router.post('/judge/calibrate', async (req, res) => {
     const { host, model } = req.body || {};
-    const judgeHost = host || JUDGE_CONFIG.host;
-    const judgeModel = model || JUDGE_CONFIG.model;
-
-    if (!judgeHost || !judgeModel) {
-        return res.status(400).json({
-            status: 'error',
-            error: 'host and model are required'
-        });
+    const readiness = await resolveReadyJudgeTarget({ host, model });
+    if (!readiness.ready) {
+        return res.status(503).json(judgeUnavailablePayload(readiness, 'Judge calibration'));
     }
+    const judgeHost = readiness.target.host;
+    const judgeModel = readiness.target.model;
 
     const calibrationCases = getQuickJudgeCalibrationCases();
 
@@ -872,15 +973,12 @@ router.post('/judge/calibrate', async (req, res) => {
  */
 router.post('/judge/calibrate-accuracy', async (req, res) => {
     const { host, model } = req.body || {};
-    const judgeHost = host || JUDGE_CONFIG.host;
-    const judgeModel = model || JUDGE_CONFIG.model;
-
-    if (!judgeHost || !judgeModel) {
-        return res.status(400).json({
-            status: 'error',
-            error: 'host and model are required'
-        });
+    const readiness = await resolveReadyJudgeTarget({ host, model });
+    if (!readiness.ready) {
+        return res.status(503).json(judgeUnavailablePayload(readiness, 'Judge accuracy calibration'));
     }
+    const judgeHost = readiness.target.host;
+    const judgeModel = readiness.target.model;
 
     try {
         const calibrationSet = require('../../data/judge-calibration-set.json');
@@ -1013,9 +1111,37 @@ router.post('/judge/calibrate-accuracy', async (req, res) => {
 router.post('/preflight', async (req, res) => {
     try {
         const { targets = [], judge_config = {}, levels, prompt_ids = null, execution_config = null } = req.body || {};
+        const readiness = await resolveReadyJudgeTarget({
+            host: judge_config.host,
+            model: judge_config.model
+        });
+        if (!readiness.ready) {
+            const issue = readiness.error || 'No selected, reachable judge is ready.';
+            return res.json({
+                status: 'success',
+                data: {
+                    ready: false,
+                    issues: [`Judge: ${issue}`],
+                    checks: {
+                        judge: {
+                            ok: false,
+                            host: judge_config.host || null,
+                            model: judge_config.model || null,
+                            warnings: [],
+                            blockers: [issue],
+                            readiness: readiness.readiness
+                        }
+                    }
+                }
+            });
+        }
         const result = await runPreflight({
             targets,
-            judgeConfig: judge_config,
+            judgeConfig: {
+                ...judge_config,
+                host: readiness.target.host,
+                model: readiness.target.model
+            },
             levels: Array.isArray(levels) ? levels : [1, 2, 3, 4, 5],
             prompt_ids,
             executionConfig: execution_config
@@ -1036,3 +1162,4 @@ module.exports = router;
 // Exposed for unit tests — internal judge-target resolution helpers.
 module.exports.resolveBatchJudgeTarget = resolveBatchJudgeTarget;
 module.exports.lookupHostJudgeDefault = lookupHostJudgeDefault;
+module.exports.judgeValidationAdmissionFailure = judgeValidationAdmissionFailure;

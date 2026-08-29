@@ -47,8 +47,8 @@
 
     var hostLabel = hosts + ' runtime host' + (hosts === 1 ? '' : 's');
     var storageLabel = storage && storage !== '--' ? ' · ' + storage + ' installed' : '';
-    setStatus('ready', total + ' model' + (total === 1 ? '' : 's') + ' ready', hostLabel + storageLabel, 'fa-circle-check');
-    browseDetail.textContent = total + ' installed · search, inspect or choose an exact model';
+    setStatus('ready', total + ' unique model tag' + (total === 1 ? '' : 's') + ' ready', hostLabel + storageLabel, 'fa-circle-check');
+    browseDetail.textContent = total + ' unique active tags · search, inspect or choose an exact model';
   }
 
   function syncCockpitAccessibility() {

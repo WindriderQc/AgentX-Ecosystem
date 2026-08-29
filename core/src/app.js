@@ -13,6 +13,8 @@ const systemHealth = require('./systemHealth');
 const { normalizeHostUrl } = require('./helpers/ollamaHostConfig');
 const { refreshOllamaHealth } = require('./services/ollamaHealthProbe');
 const { normalizePublicUrls } = require('../../shared/browserPublicUrls');
+const { createServiceIdentity } = require('../../shared/serviceIdentity');
+const { registerLocalStyleVendorAssets } = require('../../shared/localStyleVendorAssets');
 const {
   currentAgentXProfile,
   isDemoProfile,
@@ -67,19 +69,14 @@ if (process.env.NODE_ENV === 'production') {
         defaultSrc: ["'self'"],
         scriptSrc: [
           "'self'",
-          "'unsafe-inline'", // TODO: Remove after refactoring inline scripts
-          "https://cdn.jsdelivr.net" // marked.js, Chart.js
+          "'unsafe-inline'" // TODO: Remove after refactoring inline scripts
         ],
         styleSrc: [
           "'self'",
-          "'unsafe-inline'", // TODO: Remove after refactoring inline styles
-          "https://fonts.googleapis.com",
-          "https://cdnjs.cloudflare.com"
+          "'unsafe-inline'" // TODO: Remove after refactoring inline styles
         ],
         fontSrc: [
           "'self'",
-          "https://fonts.gstatic.com",
-          "https://cdnjs.cloudflare.com",
           "data:"
         ],
         imgSrc: [
@@ -91,12 +88,7 @@ if (process.env.NODE_ENV === 'production') {
           "'self'",
           "blob:" // Blob URLs for client-side audio playback (Voice page TTS)
         ],
-        connectSrc: [
-          "'self'",
-          "https://cdn.jsdelivr.net"
-          // Add Ollama hosts if external
-          // process.env.OLLAMA_HOST ? new URL(process.env.OLLAMA_HOST).origin : null
-        ].filter(Boolean),
+        connectSrc: ["'self'"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
@@ -311,6 +303,13 @@ const trustedExtensions = loadTrustedExtensions({
 });
 app.locals.trustedExtensions = trustedExtensions;
 
+// Agent Ops is a product-owned read-only shell whose operational projection is
+// supplied by a separately installed trusted extension. Extensions register
+// above this fallback, so an installed projection remains authoritative. A
+// missing projection is an observed capability state, not a failed resource.
+const { createAgentOpsAvailabilityRouter } = require('../routes/agent-ops-availability');
+app.use('/api/agent-ops', createAgentOpsAvailabilityRouter({ profile: agentxProfile }));
+
 // Generic, stateless API for separately deployed applications. It reuses the
 // same Core routing authority injected into trusted extensions, but owns no
 // application transcript or private topology.
@@ -475,6 +474,7 @@ app.use('/api/platform-events', standardJsonParser, buddyLimiter, platformEventR
 const createNestorConsumerV1Routes = require('../routes/nestor-consumer-v1');
 app.use(
   '/api/consumers/nestor/v1',
+  requireExternalConsumerAccess,
   nestorConsumerLimiter,
   createNestorConsumerV1Routes({ runtimeServices, systemHealth })
 );
@@ -513,6 +513,25 @@ app.set('views', path.join(__dirname, '..', 'views'));
 // STATIC FILES (must come AFTER API routes)
 // ============================================
 
+// Browser-critical libraries are production dependencies served through an
+// explicit, immutable allowlist. Never expose node_modules as a static root.
+const coreVendorAssets = Object.freeze({
+  '/vendor/chart.js/4.4.4/chart.umd.js': path.join(__dirname, '..', 'node_modules', 'chart.js', 'dist', 'chart.umd.js'),
+  '/vendor/chart.js/4.5.1/chart.umd.js': path.join(__dirname, '..', 'node_modules', 'chartjs-4-5-1', 'dist', 'chart.umd.js'),
+  '/vendor/dompurify/3.4.14/purify.min.js': path.join(__dirname, '..', 'node_modules', 'dompurify', 'dist', 'purify.min.js'),
+  '/vendor/marked/18.0.11/marked.umd.js': path.join(__dirname, '..', 'node_modules', 'marked', 'lib', 'marked.umd.js')
+});
+
+for (const [route, assetPath] of Object.entries(coreVendorAssets)) {
+  app.get(route, (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.type('application/javascript');
+    res.sendFile(assetPath);
+  });
+}
+
+registerLocalStyleVendorAssets(app, path.join(__dirname, '..', 'node_modules'));
+
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Browsers often request /favicon.ico implicitly. We serve a real icon to avoid noisy 404s.
@@ -531,9 +550,7 @@ app.get('/health', async (_req, res) => {
 
   res.status(isHealthy ? 200 : 503).json({
     ok: isHealthy,
-    service: 'agentx-core',
-    version: SERVICE_VERSION,
-    ts: new Date().toISOString(),
+    ...createServiceIdentity({ service: 'agentx-core', version: SERVICE_VERSION }),
     // Legacy fields (pre-0355): retained for backward compatibility.
     status: isHealthy ? 'ok' : 'degraded',
     port: process.env.PORT || 3080,
@@ -639,7 +656,11 @@ app.get('/demo', (_req, res) => {
 });
 
 // Legacy alias: redirect /chat \u2192 /playground (page rename 2026-04-23)
-app.get('/chat', (req, res) => res.redirect(301, '/playground'));
+app.get('/chat', (req, res) => {
+  const queryIndex = req.originalUrl.indexOf('?');
+  const suffix = queryIndex >= 0 ? req.originalUrl.slice(queryIndex) : '';
+  res.redirect(301, `/playground${suffix}`);
+});
 
 app.get('/nestor', (_req, res) => res.redirect(302, '/playground'));
 
@@ -663,8 +684,8 @@ app.get('/playground', (req, res) => {
       '<link rel="stylesheet" href="/css/chat-experience.css">'
     ].join('\n'),
     footerJs: [
-      '<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>',
-      '<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>',
+      '<script src="/vendor/marked/18.0.11/marked.umd.js"></script>',
+      '<script src="/vendor/dompurify/3.4.14/purify.min.js"></script>',
       '<script src="/js/persona-selector.js"></script>',
       demo ? '' : '<script src="/js/components/chat-intelligence.js"></script>',
       '<script src="/js/chat/chat-context-indicator.js"></script>',
@@ -692,7 +713,7 @@ app.get('/nerve-center', (req, res) => {
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
       '<link rel="stylesheet" href="/css/nerve-center.css">',
-      '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>'
+      '<script src="/vendor/chart.js/4.5.1/chart.umd.js"></script>'
     ].join('\n'),
     footerJs: [
       '<script src="/js/nerve-center-mode.js"></script>',
@@ -725,6 +746,7 @@ app.get('/agent-ops', (_req, res) => {
       '<link rel="stylesheet" href="/css/cockpit-help.css">'
     ].join('\n'),
     footerJs: [
+      '<script src="/js/agent-ops-availability.js"></script>',
       '<script src="/js/agent-ops-advanced.js"></script>',
       '<script src="/js/cockpit-help.js"></script>',
       '<script src="/js/agent-ops.js"></script>'
@@ -744,6 +766,7 @@ app.get('/models', (req, res) => {
       '<link rel="stylesheet" href="/css/models-experience.css">'
     ].join('\n'),
     footerJs: [
+      '<script src="/js/utils/playground-link.js"></script>',
       '<script src="/js/models-unified.js"></script>',
       '<script src="/js/models-unified-popouts.js"></script>',
       '<script src="/js/models-management.js"></script>',
@@ -767,6 +790,9 @@ app.get('/cluster-schedule', (req, res) => {
       '<link rel="stylesheet" href="/css/cluster-schedule-components.css">'
     ].join('\n'),
     footerJs: [
+      '<script src="/js/cluster-schedule-date.js"></script>',
+      '<script src="/js/cluster-schedule-upcoming.js"></script>',
+      '<script src="/js/cluster-schedule-headline.js"></script>',
       '<script src="/js/cluster-schedule.js"></script>',
       '<script src="/js/cluster-schedule-services.js"></script>'
     ].join('\n')
@@ -832,7 +858,7 @@ app.get('/analytics', (req, res) => {
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
       '<link rel="stylesheet" href="/css/analytics-experience.css">',
-      '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>'
+      '<script src="/vendor/chart.js/4.4.4/chart.umd.js"></script>'
     ].join('\n'),
     footerJs: [
       '<script type="module" src="/js/analytics-cost.js"></script>',
@@ -851,7 +877,7 @@ app.get('/performance', (req, res) => {
     headCss: [
       '<link rel="stylesheet" href="/styles.css">',
       '<link rel="stylesheet" href="/css/performance.css">',
-      '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>'
+      '<script src="/vendor/chart.js/4.4.4/chart.umd.js"></script>'
     ].join('\n'),
     footerJs: [
       '<script src="/js/performance-page.js"></script>',
@@ -872,27 +898,9 @@ app.get('/prompts', (req, res) => {
       '<link rel="stylesheet" href="/styles.css">',
       '<link rel="stylesheet" href="/css/prompts-layout.css">',
       '<link rel="stylesheet" href="/css/prompts-editor.css">',
-      '<link rel="stylesheet" href="/css/prompts-cards.css">',
-      '<link rel="stylesheet" href="/css/prompts-variants.css">',
-      '<link rel="stylesheet" href="/css/agentx.css">',
-      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/editor/editor.main.css">',
-      '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>'
+      '<link rel="stylesheet" href="/css/agentx.css">'
     ].join('\n'),
-    footerJs: [
-      '<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>',
-      '<script>require.config({ paths: { \'vs\': \'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs\' }});</script>',
-      '<script>',
-      '  (function() {',
-      '    var simpleModeToggle = document.getElementById(\'simpleModeToggle\');',
-      '    var isSimpleMode = localStorage.getItem(\'agentx_simple_mode\') === \'true\';',
-      '    if (isSimpleMode) { simpleModeToggle.checked = true; document.body.classList.add(\'simple-mode\'); }',
-      '    simpleModeToggle.addEventListener(\'change\', function(e) {',
-      '      if (e.target.checked) { document.body.classList.add(\'simple-mode\'); localStorage.setItem(\'agentx_simple_mode\', \'true\'); }',
-      '      else { document.body.classList.remove(\'simple-mode\'); localStorage.setItem(\'agentx_simple_mode\', \'false\'); }',
-      '    });',
-      '  })();',
-      '</script>'
-    ].join('\n')
+    footerJs: '<script src="/js/prompts-page.js" defer></script>'
   });
 });
 

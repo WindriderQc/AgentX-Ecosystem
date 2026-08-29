@@ -57,9 +57,28 @@
         const gpuTemp = gpus.length > 0 ? gpus[0].temperature : null;
         const gpuUtil = gpus.length > 0 ? gpus[0].utilization : null;
 
+        const preferenceRunningModels = Array.isArray(pref?.live?.runningModels)
+            ? pref.live.runningModels
+            : [];
+        const ollamaRunningModels = Array.isArray(ollama.ollamaRunningModels)
+            ? ollama.ollamaRunningModels
+            : [];
+        const memoryRunningModels = Array.isArray(mem.runningModels) ? mem.runningModels : [];
+        const runningModels = ollamaRunningModels.length > 0
+            ? ollamaRunningModels
+            : (preferenceRunningModels.length > 0 ? preferenceRunningModels : memoryRunningModels);
+
+        const loadedModelVramMiB = Math.round(runningModels.reduce((sum, model) => {
+            const bytes = Number(model?.sizeVram ?? model?.size_vram ?? 0);
+            return sum + (Number.isFinite(bytes) && bytes > 0 ? bytes : 0);
+        }, 0) / (1024 * 1024));
+
         const ollamaVram = ollama.ollamaVram || doc.ollamaVram || {};
-        let vramTotalMiB = ollamaVram.totalMiB || 0;
-        let vramUsedMiB = ollamaVram.usedMiB || 0;
+        let vramTotalMiB = Number(ollamaVram.totalMiB)
+            || Number(pref?.vramTotalMiB)
+            || Number(pref?.gpu?.vramTotalMiB)
+            || 0;
+        let vramUsedMiB = Number(ollamaVram.usedMiB) || loadedModelVramMiB;
         if (vramTotalMiB === 0 && gpus.length > 0) {
             vramTotalMiB = gpus.reduce((sum, gpu) => sum + (gpu.vramTotal || 0), 0);
             vramUsedMiB = gpus.reduce((sum, gpu) => sum + (gpu.vramUsed || 0), 0);
@@ -77,7 +96,7 @@
             gpus,
             vramTotalMiB,
             vramUsedMiB,
-            runningModels: ollama.ollamaRunningModels || mem.runningModels || [],
+            runningModels,
             availableModels: ollama.ollamaModels || mem.models || [],
             cpuUsage: doc.cpu?.usage ?? null,
             memUsage: doc.memory?.usagePercent ?? null,
@@ -86,7 +105,7 @@
             ollamaVersion: ollama.ollamaVersion || mem.version || '',
             ollamaLatency: ollama.ollamaLatencyMs ?? mem.latencyMs ?? null,
             ollamaStatus,
-            lastChecked: ollama.ollamaLastChecked || null,
+            lastChecked: ollama.ollamaLastChecked || pref?.live?.observedAt || null,
             lastSeen: doc.lastSeen || null,
             uptime: doc.uptime || 0,
             disks: doc.disks || [],
@@ -264,10 +283,10 @@
                     '</div>' +
                 '</div>' +
                 '<div class="nc-pinned-empty-row">' +
-                    '<select class="nc-inline-select nc-pin-model-select" data-host-url="' + shared.escapeHtml(host.hostUrl) + '">' +
+                    '<select class="nc-inline-select nc-pin-model-select" aria-label="Choose primary pinned model" data-host-url="' + shared.escapeHtml(host.hostUrl) + '">' +
                         '<option value="">Choose primary pin...</option>' + availableOptions +
                     '</select>' +
-                    '<button class="nc-btn nc-pin-set nc-btn-icon" data-host-url="' + shared.escapeHtml(host.hostUrl) + '" title="Set primary pinned model">' +
+                    '<button type="button" class="nc-btn nc-pin-set nc-btn-icon" data-host-url="' + shared.escapeHtml(host.hostUrl) + '" title="Set primary pinned model" aria-label="Set primary pinned model">' +
                         '<i class="fas fa-thumbtack"></i>' +
                     '</button>' +
                 '</div>' +
@@ -711,11 +730,18 @@
         document.querySelectorAll('.nc-pin-clear').forEach(button => {
             button.addEventListener('click', async () => {
                 const hostUrl = button.dataset.hostUrl;
+                const headers = await window.AgentXTypedConfirmation.confirm({
+                    action: 'CLEAR HOST PIN',
+                    resource: hostUrl,
+                    title: 'Clear pinned model',
+                    description: `Clear the persisted model pin for ${hostUrl}? Automatic placement may select a different model afterward.`
+                });
+                if (!headers) return;
                 button.disabled = true;
                 try {
                     await shared.fetchJson(`/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/pin`, {
                         method: 'DELETE',
-                        headers: { 'Content-Type': 'application/json' }
+                        headers: { 'Content-Type': 'application/json', ...headers }
                     });
                     window.NerveCenterCluster?.loadCluster();
                 } catch (err) {
@@ -785,7 +811,7 @@
         const body = document.getElementById('sectionClusterBody');
         if (!body) return;
 
-        body.innerHTML = '<div class="nc-section-placeholder"><i class="fas fa-spinner fa-spin"></i> Loading cluster data...</div>';
+        shared.renderSectionLoading(body, 'Loading cluster data...');
 
         try {
             const [ollamaJson, hostPrefsJson] = await Promise.all([
@@ -805,8 +831,7 @@
                 ollamaUrl: host.url,
                 ollamaVersion: host.ollamaVersion || '',
                 ollamaModelCount: (host.installedModels || []).length,
-                ollamaModels: host.installedModels || host.models || [],
-                ollamaRunningModels: []
+                ollamaModels: host.installedModels || host.models || []
             }, {}, host, {}, prefByUrl.get(host.url)));
 
             if (cards.length === 0) {
@@ -820,7 +845,9 @@
             attachPinHandlers();
         } catch (err) {
             console.error('[NerveCenter] loadCluster failed', err);
-            body.innerHTML = `<div class="nc-section-placeholder" style="color:#f87171;"><i class="fas fa-exclamation-triangle"></i> Failed to load cluster data: ${shared.escapeHtml(err.message)}</div>`;
+            shared.renderSectionError(body, `Failed to load cluster data: ${err.message}`);
+        } finally {
+            shared.finishSectionLoad(body);
         }
     }
 

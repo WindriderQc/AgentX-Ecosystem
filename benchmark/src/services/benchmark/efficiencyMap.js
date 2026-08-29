@@ -11,6 +11,15 @@ const logger = require('../../../config/logger');
 const QUALITY_FLOOR = 3.0;
 const SPEED_CAP = 100;
 const MIN_TEST_COUNT = 5;
+const MAX_FINITE_NUMBER = Number.MAX_VALUE;
+
+function isFinitePositive(value) {
+    return Number.isFinite(value) && value > 0;
+}
+
+function isFiniteNumber(value) {
+    return Number.isFinite(value);
+}
 
 /**
  * Harmonic mean of two non-negative values.
@@ -27,9 +36,10 @@ function harmonicMean(a, b) {
  *
  * @param {number} avgQuality   - Average quality score (0–10)
  * @param {number} avgTokPerSec - Average tokens per second
- * @returns {number} Score in [0, 100]
+ * @returns {number|null} Score in [0, 100], or null without valid evidence
  */
 function efficiencyScore(avgQuality, avgTokPerSec) {
+    if (!isFiniteNumber(avgQuality) || !isFinitePositive(avgTokPerSec)) return null;
     if (avgQuality < QUALITY_FLOOR) return 0;
     const nQ = (avgQuality / 10) * 100;
     const nS = Math.min(SPEED_CAP, avgTokPerSec);
@@ -48,8 +58,9 @@ function efficiencyScore(avgQuality, avgTokPerSec) {
  * @returns {Array} Pareto-optimal subset, sorted descending by quality
  */
 function paretoFrontier(points) {
-    if (points.length === 0) return [];
-    const sorted = [...points].sort((a, b) => b.quality - a.quality);
+    const eligible = points.filter(p => isFiniteNumber(p.quality) && isFinitePositive(p.tokPerSec));
+    if (eligible.length === 0) return [];
+    const sorted = [...eligible].sort((a, b) => b.quality - a.quality);
     const frontier = [];
     let maxSpeed = -Infinity;
     for (const p of sorted) {
@@ -79,12 +90,37 @@ async function getEfficiencyMap() {
         excluded_from_leaderboard: { $ne: true }
     };
 
-    // Calibrated tps when present (from performance_baseline.tokensPerSec),
-    // falling back to the raw single-run tokens_per_sec. Keeps Efficiency Map
-    // aligned with the per-result composite scorer, which already prefers
-    // calibrated baselines.
+    // Prefer a calibrated measurement only when it is finite and positive,
+    // otherwise fall back to a finite positive raw measurement. $avg ignores
+    // the resulting nulls, preserving unavailable throughput as unavailable
+    // instead of manufacturing a zero-speed observation.
+    const finitePositiveMongo = value => ({
+        $and: [
+            { $isNumber: value },
+            { $gt: [value, 0] },
+            { $lte: [value, MAX_FINITE_NUMBER] }
+        ]
+    });
     const calibratedTps = {
-        $ifNull: ['$performance_baseline.tokensPerSec', '$tokens_per_sec']
+        $let: {
+            vars: {
+                calibrated: '$performance_baseline.tokensPerSec',
+                raw: '$tokens_per_sec'
+            },
+            in: {
+                $cond: [
+                    finitePositiveMongo('$$calibrated'),
+                    '$$calibrated',
+                    {
+                        $cond: [
+                            finitePositiveMongo('$$raw'),
+                            '$$raw',
+                            null
+                        ]
+                    }
+                ]
+            }
+        }
     };
 
     const raw = await BenchmarkResult.aggregate([
@@ -94,6 +130,9 @@ async function getEfficiencyMap() {
                 _id: { model: '$model', host: '$host' },
                 avgQuality: { $avg: '$quality_score' },
                 avgTokPerSec: { $avg: calibratedTps },
+                throughputTestCount: {
+                    $sum: { $cond: [{ $ne: [calibratedTps, null] }, 1, 0] }
+                },
                 avgTtft: { $avg: '$time_to_first_token_ms' },
                 avgLatency: { $avg: '$latency' },
                 testCount: { $sum: 1 },
@@ -121,20 +160,41 @@ async function getEfficiencyMap() {
         catLookup.get(key)[row._id.category] = Math.round(row.avg * 100) / 100;
     }
 
-    const entries = raw.map(row => {
+    const evaluated = raw.map(row => {
         const key = `${row._id.model}@@${row._id.host}`;
+        const avgQuality = isFiniteNumber(row.avgQuality)
+            ? Math.round(row.avgQuality * 100) / 100
+            : null;
+        const avgTokPerSec = isFinitePositive(row.avgTokPerSec)
+            ? Math.round(row.avgTokPerSec * 10) / 10
+            : null;
+        const score = efficiencyScore(avgQuality, avgTokPerSec);
+        const unrankedReason = avgQuality === null
+            ? 'invalid_quality'
+            : (avgTokPerSec === null ? 'missing_throughput' : null);
+
         return {
             model: row._id.model,
             host: row._id.host,
-            avgQuality: Math.round(row.avgQuality * 100) / 100,
-            avgTokPerSec: Math.round(row.avgTokPerSec * 10) / 10,
+            avgQuality,
+            avgTokPerSec,
             avgTtft: Math.round(row.avgTtft || 0),
             avgLatency: Math.round(row.avgLatency || 0),
             testCount: row.testCount,
-            efficiencyScore: Math.round(efficiencyScore(row.avgQuality, row.avgTokPerSec) * 100) / 100,
-            categoryScores: catLookup.get(key) || {}
+            throughputTestCount: Number.isFinite(row.throughputTestCount)
+                ? row.throughputTestCount
+                : (avgTokPerSec === null ? 0 : row.testCount),
+            efficiencyScore: score === null ? null : Math.round(score * 100) / 100,
+            categoryScores: catLookup.get(key) || {},
+            rankStatus: unrankedReason ? 'unranked' : 'ranked',
+            unrankedReason
         };
     });
+
+    const entries = evaluated.filter(entry => entry.rankStatus === 'ranked');
+    const unranked = evaluated
+        .filter(entry => entry.rankStatus === 'unranked')
+        .map(entry => ({ ...entry, paretoOptimal: false }));
 
     entries.sort((a, b) => b.efficiencyScore - a.efficiencyScore);
 
@@ -147,15 +207,32 @@ async function getEfficiencyMap() {
         e.paretoOptimal = frontierKeys.has(`${e.model}@@${e.host}`);
     }
 
-    logger.info(`[efficiencyMap] Built map: ${entries.length} entries, ${frontierKeys.size} Pareto-optimal`);
+    const unrankedReasonCounts = unranked.reduce((counts, entry) => {
+        counts[entry.unrankedReason] = (counts[entry.unrankedReason] || 0) + 1;
+        return counts;
+    }, {});
+
+    logger.info(
+        `[efficiencyMap] Built map: ${entries.length} ranked, ${unranked.length} unranked, ` +
+        `${frontierKeys.size} Pareto-optimal`
+    );
 
     return {
         entries,
+        unranked,
         frontier: [...frontierKeys],
         meta: {
-            totalModels: new Set(entries.map(e => e.model)).size,
-            totalHosts: new Set(entries.map(e => e.host)).size,
-            totalTests: entries.reduce((sum, e) => sum + e.testCount, 0),
+            totalModels: new Set(evaluated.map(e => e.model)).size,
+            totalHosts: new Set(evaluated.map(e => e.host)).size,
+            totalTests: evaluated.reduce((sum, e) => sum + e.testCount, 0),
+            totalCombinations: evaluated.length,
+            rankedModels: new Set(entries.map(e => e.model)).size,
+            rankedHosts: new Set(entries.map(e => e.host)).size,
+            rankedTests: entries.reduce((sum, e) => sum + e.testCount, 0),
+            throughputSamples: entries.reduce((sum, e) => sum + e.throughputTestCount, 0),
+            rankedCombinations: entries.length,
+            unrankedCombinations: unranked.length,
+            unrankedReasonCounts,
             generatedAt: new Date().toISOString()
         }
     };

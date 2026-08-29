@@ -4,18 +4,34 @@
 
 const VectorStoreAdapter = require('./VectorStoreAdapter');
 const fetchWithTimeout = require('../../utils/fetchWithTimeout');
+const {
+  SERVICE_OUTBOUND_OPERATION_IDS,
+  SERVICE_OUTBOUND_TIMEOUTS,
+  configuredServiceOrigin,
+} = require('../../clients/serviceOutboundClient');
 const crypto = require('crypto');
 const logger = require('../../../config/logger');
 
-const QDRANT_TIMEOUT = Number(process.env.QDRANT_TIMEOUT_MS) || 30000;
+const QDRANT_TIMEOUT = SERVICE_OUTBOUND_TIMEOUTS[
+  SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_COLLECTION_READ
+];
 
 class QdrantVectorStore extends VectorStoreAdapter {
   constructor(config = {}) {
     super(config);
-    this.qdrantUrl = config.qdrantUrl || process.env.QDRANT_URL || 'http://localhost:6333';
+    this.qdrantUrl = configuredServiceOrigin(
+      config.qdrantUrl || process.env.QDRANT_URL || 'http://localhost:6333'
+    );
     this.collectionName = config.collectionName || process.env.QDRANT_COLLECTION || 'agentx_embeddings';
     this.vectorDimension = Number(config.vectorDimension || process.env.EMBEDDING_DIMENSION) || 0;
     this._collectionVerified = false;
+  }
+
+  _outboundContext(operationId) {
+    return {
+      expectedOrigins: [this.qdrantUrl],
+      operationId,
+    };
   }
 
   _isMissingCollectionResponse(status, body) {
@@ -28,7 +44,12 @@ class QdrantVectorStore extends VectorStoreAdapter {
     if (this._collectionVerified) return;
 
     try {
-      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}`, {}, QDRANT_TIMEOUT);
+      const res = await fetchWithTimeout(
+        `${this.qdrantUrl}/collections/${this.collectionName}`,
+        {},
+        QDRANT_TIMEOUT,
+        this._outboundContext(SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_COLLECTION_READ)
+      );
       if (res.ok) {
         this._collectionVerified = true;
         return;
@@ -49,7 +70,9 @@ class QdrantVectorStore extends VectorStoreAdapter {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    }, QDRANT_TIMEOUT);
+    }, QDRANT_TIMEOUT, this._outboundContext(
+      SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_COLLECTION_CREATE
+    ));
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Failed to create Qdrant collection: ${res.status} ${text}`);
@@ -119,20 +142,30 @@ class QdrantVectorStore extends VectorStoreAdapter {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ points: batch })
-      }, QDRANT_TIMEOUT);
+      }, QDRANT_TIMEOUT, this._outboundContext(
+        SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_UPSERT
+      ));
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`Qdrant upsert failed: ${res.status} ${text}`);
       }
     }
 
-    // Delete old points by ID (not by documentId filter) so we only remove
-    // the previous version, not the freshly inserted points.
-    if (oldPointIds.length > 0) {
-      await this._deleteByPointIds(oldPointIds);
+    // Point IDs are deterministic for documentId + chunkIndex. An upsert can
+    // therefore replace an old point in place. Delete only IDs that are no
+    // longer part of the new revision; deleting every old ID here would also
+    // delete freshly replaced points with overlapping chunk indexes.
+    const currentPointIds = new Set(points.map((point) => point.id));
+    const stalePointIds = oldPointIds.filter((pointId) => !currentPointIds.has(pointId));
+    if (stalePointIds.length > 0) {
+      await this._deleteByPointIds(stalePointIds);
     }
 
-    return { documentId, chunkCount: chunks.length, status: 'created' };
+    return {
+      documentId,
+      chunkCount: chunks.length,
+      status: oldPointIds.length > 0 ? 'updated' : 'created'
+    };
   }
 
   async searchSimilar(queryEmbedding, options = {}) {
@@ -153,7 +186,9 @@ class QdrantVectorStore extends VectorStoreAdapter {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    }, QDRANT_TIMEOUT);
+    }, QDRANT_TIMEOUT, this._outboundContext(
+      SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_SEARCH
+    ));
 
     if (!res.ok) {
       const text = await res.text();
@@ -172,7 +207,18 @@ class QdrantVectorStore extends VectorStoreAdapter {
     const results = await this._scrollByFilter({ key: 'documentId', match: { value: documentId } }, 1);
     if (results.length === 0) return null;
     const payload = results[0].payload;
-    return { documentId, source: payload.source, tags: payload.tags, hash: payload.hash };
+    return {
+      documentId,
+      source: payload.source,
+      tags: payload.tags,
+      hash: payload.hash,
+      ...(payload.sourceIdentity ? { sourceIdentity: payload.sourceIdentity } : {}),
+      ...(payload.sourceIdentityKind ? { sourceIdentityKind: payload.sourceIdentityKind } : {}),
+      ...(payload.contentHash ? { contentHash: payload.contentHash } : {}),
+      ...(payload.identityVersion ? { identityVersion: payload.identityVersion } : {}),
+      ...(payload.chunkSize != null ? { chunkSize: payload.chunkSize } : {}),
+      ...(payload.chunkOverlap != null ? { chunkOverlap: payload.chunkOverlap } : {})
+    };
   }
 
   async listDocuments(filters = {}, pagination = {}) {
@@ -187,6 +233,12 @@ class QdrantVectorStore extends VectorStoreAdapter {
           documentId: docId,
           source: pt.payload.source,
           tags: pt.payload.tags,
+          ...(pt.payload.sourceIdentity ? { sourceIdentity: pt.payload.sourceIdentity } : {}),
+          ...(pt.payload.sourceIdentityKind ? { sourceIdentityKind: pt.payload.sourceIdentityKind } : {}),
+          ...(pt.payload.contentHash ? { contentHash: pt.payload.contentHash } : {}),
+          ...(pt.payload.identityVersion ? { identityVersion: pt.payload.identityVersion } : {}),
+          ...(pt.payload.chunkSize != null ? { chunkSize: pt.payload.chunkSize } : {}),
+          ...(pt.payload.chunkOverlap != null ? { chunkOverlap: pt.payload.chunkOverlap } : {}),
           chunkCount: 0
         });
       }
@@ -220,7 +272,9 @@ class QdrantVectorStore extends VectorStoreAdapter {
       body: JSON.stringify({
         filter: { must: [{ key: 'documentId', match: { value: documentId } }] }
       })
-    }, QDRANT_TIMEOUT);
+    }, QDRANT_TIMEOUT, this._outboundContext(
+      SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_DELETE
+    ));
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Qdrant delete by documentId failed: ${res.status} ${text}`);
@@ -233,7 +287,9 @@ class QdrantVectorStore extends VectorStoreAdapter {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ points: ids })
-    }, QDRANT_TIMEOUT);
+    }, QDRANT_TIMEOUT, this._outboundContext(
+      SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_DELETE
+    ));
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Qdrant delete by point IDs failed: ${res.status} ${text}`);
@@ -259,7 +315,9 @@ class QdrantVectorStore extends VectorStoreAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
-      }, QDRANT_TIMEOUT);
+      }, QDRANT_TIMEOUT, this._outboundContext(
+        SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_SCROLL
+      ));
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         if (this._isMissingCollectionResponse(res.status, text)) {
@@ -287,7 +345,12 @@ class QdrantVectorStore extends VectorStoreAdapter {
   }
 
   async getStats() {
-    const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}`, {}, QDRANT_TIMEOUT);
+    const res = await fetchWithTimeout(
+      `${this.qdrantUrl}/collections/${this.collectionName}`,
+      {},
+      QDRANT_TIMEOUT,
+      this._outboundContext(SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_COLLECTION_READ)
+    );
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       if (this._isMissingCollectionResponse(res.status, text)) {
@@ -340,7 +403,9 @@ class QdrantVectorStore extends VectorStoreAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
-      }, QDRANT_TIMEOUT);
+      }, QDRANT_TIMEOUT, this._outboundContext(
+        SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_SCROLL
+      ));
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         logger.warn('Qdrant scroll (lite) page-fetch failed', { status: res.status, body: text });
@@ -363,7 +428,12 @@ class QdrantVectorStore extends VectorStoreAdapter {
 
   async healthCheck(timeoutMs = Math.min(QDRANT_TIMEOUT, 2000)) {
     try {
-      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections`, {}, timeoutMs);
+      const res = await fetchWithTimeout(
+        `${this.qdrantUrl}/collections`,
+        {},
+        timeoutMs,
+        this._outboundContext(SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_COLLECTIONS_HEALTH)
+      );
       return { healthy: res.ok, type: 'qdrant', url: this.qdrantUrl };
     } catch (e) {
       return { healthy: false, type: 'qdrant', error: e.message };
@@ -410,7 +480,8 @@ class QdrantVectorStore extends VectorStoreAdapter {
           points: [point.id]
         })
       },
-      QDRANT_TIMEOUT
+      QDRANT_TIMEOUT,
+      this._outboundContext(SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_PAYLOAD)
     );
     if (!res.ok) {
       const body = await res.text().catch(() => '');

@@ -22,6 +22,32 @@ body {
   padding: 1.5rem;
 }
 
+.setup-return-link {
+  display: inline-flex;
+  margin-bottom: 0.9rem;
+  color: var(--r-text-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.setup-return-link[hidden] { display: none; }
+
+.setup-return-link:hover,
+.setup-return-link:focus-visible { color: var(--r-active); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ── Header ── */
 
 .setup-header {
@@ -113,8 +139,7 @@ body {
   padding: 0.65rem 0.7rem;
   background: var(--r-bg-inner);
   border: 1px solid var(--r-border);
-  border-left: none;
-  border-right: none;
+  border-radius: var(--r-radius);
   color: var(--r-text);
   font-family: 'Consolas', 'Courier New', monospace;
   font-size: 0.95rem;
@@ -139,6 +164,17 @@ body {
 .input-hint details summary {
   cursor: pointer;
   color: var(--r-text-muted);
+}
+
+.configured-host-field {
+  margin-bottom: 0.85rem;
+}
+
+.configured-host-field label {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--r-text-muted);
+  font-size: 0.88rem;
 }
 
 /* ── Buttons ── */
@@ -174,6 +210,14 @@ body {
 .setup-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.setup-btn:focus-visible,
+.setup-select:focus-visible,
+.input-row input:focus-visible,
+.setup-return-link:focus-visible {
+  outline: 2px solid var(--r-active);
+  outline-offset: 2px;
 }
 
 /* ── Status message ── */
@@ -274,3 +318,15 @@ body {
 .model-grid::-webkit-scrollbar { width: 5px; }
 .model-grid::-webkit-scrollbar-track { background: transparent; }
 .model-grid::-webkit-scrollbar-thumb { background: var(--r-border); border-radius: 3px; }
+
+@media (max-width: 600px) {
+  body { padding-top: 0; }
+  .setup-container { padding: 1rem; }
+  .step-card { padding: 1.1rem; }
+  .setup-btn { width: 100%; justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-btn,
+  .model-card-mini { transition: none; }
+}

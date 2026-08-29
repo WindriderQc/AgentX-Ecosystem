@@ -25,7 +25,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const DEFAULTS_PATH = path.join(process.cwd(), 'config', 'judge-host-defaults.json');
+const DEFAULTS_PATH = process.env.JUDGE_DEFAULTS_PATH
+    || path.join(process.cwd(), 'config', 'judge-host-defaults.json');
 
 const RULES = {
     OFF: 'off',

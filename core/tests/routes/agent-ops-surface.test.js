@@ -7,6 +7,7 @@ const viewPath = path.join(root, 'views/pages/agent-ops.ejs');
 const appPath = path.join(root, 'src/app.js');
 const mainScriptPath = path.join(root, 'public/js/agent-ops.js');
 const advancedScriptPath = path.join(root, 'public/js/agent-ops-advanced.js');
+const stylePath = path.join(root, 'public/css/agent-ops.css');
 
 describe('read-only Agent Ops shell', () => {
   test('renders all operating views without private adapter locals', async () => {
@@ -21,6 +22,13 @@ describe('read-only Agent Ops shell', () => {
     expect(html).toContain('data-cockpit-guide-open="agentOpsGuide"');
     expect(html).toContain('id="agentOpsGuide"');
     expect(html).toContain('data-cockpit-tip-title="Coverage"');
+    expect(html).toContain('id="agentOpsUnavailable"');
+    expect(html).toContain('all counts remain —');
+    expect(html).toContain('href="/nerve-center"');
+    expect(html).toContain('href="/pipeline"');
+    expect(html).toContain('docs/TRUSTED_EXTENSIONS.md');
+    expect(html).not.toContain('href="/api/openclaw/control-launch/overview"');
+    expect(fs.readFileSync(stylePath, 'utf8')).toMatch(/\[data-openclaw-native\]\[hidden\][\s\S]*display:\s*none\s*!important/);
     expect(html).not.toContain('agent-ops-launchpad');
     expect(html).not.toContain('agent-ops-handoff-panel');
     expect(html).not.toContain('id="agentOpsCapabilities"');
@@ -32,6 +40,11 @@ describe('read-only Agent Ops shell', () => {
     expect(source).toContain("app.get('/agent-ops'");
     expect(source).toContain("app.get('/agent-ops.html'");
     expect(source).toContain("pageView: '../pages/agent-ops'");
+    const extensionMount = source.indexOf('const trustedExtensions = loadTrustedExtensions({');
+    const fallbackMount = source.indexOf("app.use('/api/agent-ops'");
+    expect(extensionMount).toBeGreaterThan(-1);
+    expect(fallbackMount).toBeGreaterThan(extensionMount);
+    expect(source.indexOf('/js/agent-ops-availability.js')).toBeLessThan(source.indexOf('/js/agent-ops.js'));
   });
 
   test('contains no mutation path or action controls', () => {
@@ -46,5 +59,7 @@ describe('read-only Agent Ops shell', () => {
     expect(source).toContain('grant it the platform permission for managing topics');
     expect(source).toContain('/TOPIC[_\\s-]*CLOSED/i');
     expect(source).not.toMatch(/renderRuntimeHandoff|renderCapabilities/);
+    expect(source).toContain("if (body.available === false)");
+    expect(source).toContain("availability?.show(body)");
   });
 });

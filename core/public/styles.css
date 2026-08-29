@@ -751,6 +751,38 @@ body:has(.app-layout) {
   cursor: pointer;
 }
 
+#profileModal .modal-content {
+  max-height: min(90vh, 760px);
+  overflow-y: auto;
+}
+
+#profileModal button:focus-visible,
+#profileModal input:focus-visible,
+#profileModal textarea:focus-visible,
+#profileModal select:focus-visible,
+#profileModal [tabindex]:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#profileModalDescription {
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+}
+
+@media (max-width: 600px) {
+  #profileModal {
+    align-items: flex-end;
+  }
+
+  #profileModal .modal-content {
+    width: 100%;
+    max-height: 92vh;
+    padding: 1.25rem;
+    border-radius: 12px 12px 0 0;
+  }
+}
+
 .composer {
   margin-top: 16px;
   border: 1px solid var(--panel-border);

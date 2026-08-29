@@ -48,6 +48,75 @@ const {
 const { createResumeRevalidation, RESUME_CODES } = require('./resumeRevalidation');
 const { checkBatchPreflight, executionModelsFromHostGroups, preflightCounts, runBatchPreflight } = require('./batchPreflightLifecycle');
 
+// A throughput batch can have one in-flight Core request per host. Keep the
+// controllers grouped by the exact batch id so the stop route can interrupt
+// only the requested batch without coupling execution.js to prompt internals.
+const activeBatchControllers = new Map();
+const userStoppedControllers = new WeakSet();
+
+function registerActiveBatchController(batchId, controller) {
+    const key = String(batchId);
+    let controllers = activeBatchControllers.get(key);
+    if (!controllers) {
+        controllers = new Set();
+        activeBatchControllers.set(key, controllers);
+    }
+    controllers.add(controller);
+
+    let registered = true;
+    return () => {
+        if (!registered) return false;
+        registered = false;
+
+        // A late cleanup must not touch a newer Set created for the same batch.
+        const currentControllers = activeBatchControllers.get(key);
+        if (currentControllers !== controllers) return false;
+
+        const removed = currentControllers.delete(controller);
+        if (currentControllers.size === 0 && activeBatchControllers.get(key) === controllers) {
+            activeBatchControllers.delete(key);
+        }
+        return removed;
+    };
+}
+
+function abortActiveBatchRequests(batchId) {
+    const key = String(batchId);
+    const controllers = activeBatchControllers.get(key);
+    if (!controllers) {
+        return { batchId: key, activeRequestCount: 0, abortedRequestCount: 0 };
+    }
+
+    let abortedRequestCount = 0;
+    for (const controller of controllers) {
+        if (controller.signal.aborted) continue;
+
+        userStoppedControllers.add(controller);
+        const reason = new Error(`Benchmark batch ${key} stopped by user`);
+        reason.name = 'BenchmarkBatchStoppedError';
+        reason.code = 'BENCHMARK_BATCH_STOPPED';
+        controller.abort(reason);
+        abortedRequestCount += 1;
+    }
+
+    return {
+        batchId: key,
+        activeRequestCount: controllers.size,
+        abortedRequestCount
+    };
+}
+
+function wasControllerStoppedByUser(controller) {
+    return !!controller && (
+        userStoppedControllers.has(controller)
+        || controller.signal?.reason?.code === 'BENCHMARK_BATCH_STOPPED'
+    );
+}
+
+function getActiveBatchRequestCount(batchId) {
+    return activeBatchControllers.get(String(batchId))?.size || 0;
+}
+
 async function runBatchOrchestrator({
     batchId,
     defaultHost,
@@ -66,6 +135,12 @@ async function runBatchOrchestrator({
     if (typeof setBatchPhase !== 'function') {
         setBatchPhase = async () => {};
     }
+    if (typeof handleGracefulStop !== 'function') {
+        handleGracefulStop = () => {};
+    }
+    const batchCancellationController = new AbortController();
+    let unregisterBatchCancellation = () => false;
+    let orchestrationCompleted = false;
     const judgeQueue = new ConcurrencyQueue(executionMode === 'latency' ? 1 : (judgeConfig.concurrency || 2));
     const shouldPersistCurrentTest = createCurrentTestPersistenceStrategy(executionMode);
     const judge = createJudgeOrchestrator({
@@ -75,6 +150,7 @@ async function runBatchOrchestrator({
         executionConfig,
         recordBatchTimelineEvent,
         setBatchPhase,
+        cancelSignal: batchCancellationController.signal,
         // Sizes the multi-judge escalation budget for the live pipeline —
         // the same role pendingResults.length plays for standalone re-judges.
         expectedJudgeCount: (models?.length || 0) * (prompts?.length || 0)
@@ -84,7 +160,9 @@ async function runBatchOrchestrator({
         enqueueJudgeTask,
         deferJudgeTask,
         enqueueDeferredJudgeTasks,
-        drainJudgeQueue
+        drainJudgeQueue,
+        cancelAndDrainJudgeQueue,
+        disposeCancellationListener
     } = judge;
 
     // Load checkpoint for resume support — skip completed model+prompt pairs
@@ -102,6 +180,10 @@ async function runBatchOrchestrator({
     const executionState = { testsStarted: false, stopped: false, stopCheckCounter: 0, lastStopCheckAt: 0, stopCheckEvery: 5, stopCheckMinIntervalMs: 2000 };
     const shouldStopBatch = async (model, options = {}) => {
         const force = !!options.force;
+        if (batchCancellationController.signal.aborted) {
+            executionState.stopped = true;
+            return true;
+        }
         if (executionState.stopped) return true;
         executionState.stopCheckCounter += 1;
         const now = Date.now();
@@ -168,6 +250,8 @@ async function runBatchOrchestrator({
         repeatGroupId = null
     }) => {
         const start = Date.now();
+        const think = modelExecConfig.think === true;
+        let testController = null;
 
         try {
             pendingModelTimeline.push({
@@ -204,11 +288,6 @@ async function runBatchOrchestrator({
             const promptText = promptHints.promptText;
             const hintApplied = promptHints.applied;
             const hintText = promptHints.hintText;
-            const testController = new AbortController();
-            const testTimeoutId = setTimeout(
-                () => testController.abort(),
-                modelExecConfig.per_test_timeout_ms || 600000
-            );
             const ollamaOptions = { num_predict: numPredict };
             if (modelExecConfig.num_ctx) ollamaOptions.num_ctx = modelExecConfig.num_ctx;
             // Pin sampling params for fairness across models/hosts. Without these,
@@ -221,7 +300,6 @@ async function runBatchOrchestrator({
             if (Number.isFinite(modelExecConfig.seed)) ollamaOptions.seed = modelExecConfig.seed;
 
             const useChat = modelExecConfig.api_mode !== 'generate';
-            const think = modelExecConfig.think === true;
             const sendThink = modelExecConfig.send_think !== false;
             const url = `${CORE_URL}/api/inference/generate`;
             const requestBody = {
@@ -240,6 +318,16 @@ async function runBatchOrchestrator({
                     ? { messages: [{ role: 'user', content: promptText }] }
                     : { prompt: promptText })
             };
+
+            // Re-check immediately before registering the request. Once this
+            // await resolves there is no event-loop yield between registration
+            // and fetch, so a concurrent stop either sees the controller or has
+            // already persisted a stopped status here.
+            if (await shouldStopBatch(model, { force: true })) {
+                return { infraError: false, stopped: true, cancelled: true };
+            }
+
+            testController = new AbortController();
             const fetchOptions = getFetchOptions(url, {
                 method: 'POST',
                 headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
@@ -248,13 +336,28 @@ async function runBatchOrchestrator({
             });
 
             let response;
+            let data;
+            const testTimeoutId = setTimeout(
+                () => testController.abort(),
+                modelExecConfig.per_test_timeout_ms || 600000
+            );
+            const unregisterController = registerActiveBatchController(batchId, testController);
             try {
                 response = await fetch(url, fetchOptions);
+                // Headers alone do not complete a request. Keep the timeout and
+                // stop registry active until the response body is consumed.
+                data = await response.json();
             } finally {
                 clearTimeout(testTimeoutId);
+                unregisterController();
             }
 
-            const data = await response.json();
+            // A body implementation may resolve concurrently with abort
+            // delivery. Preserve the user's stop decision in that race.
+            if (wasControllerStoppedByUser(testController)) {
+                return { infraError: false, stopped: true, cancelled: true };
+            }
+
             const latency = Date.now() - start;
             const responseText = useChat ? (data.message?.content || '') : (data.response || '');
             const tokenEstimateText = `${responseText || ''}${data.thinking || data.message?.thinking || ''}`;
@@ -456,6 +559,16 @@ async function runBatchOrchestrator({
                 }
             }
         } catch (err) {
+            if (wasControllerStoppedByUser(testController) || batchCancellationController.signal.aborted) {
+                logger.info('Cancelled in-flight benchmark request after user stop', {
+                    batchId,
+                    model,
+                    prompt: prompt.name,
+                    host: hostUrl
+                });
+                return { infraError: false, stopped: true, cancelled: true };
+            }
+
             const classified = classifyBenchmarkError(err);
             await persistFailedResult({
                 batchId,
@@ -486,13 +599,19 @@ async function runBatchOrchestrator({
             });
             if (classified.infra) return { infraError: true };
         }
+        // A stop can arrive after the result was persisted while an async judge
+        // task is being scheduled. Treat that edge as cancelled before the
+        // prompt loop records a resumable checkpoint or starts more work.
+        if (batchCancellationController.signal.aborted) {
+            return { infraError: false, stopped: true, cancelled: true };
+        }
         return { infraError: false };
     };
 
     const runModelPromptLoop = async (hostUrl, judgeHostUrl, model) => {
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Skipping model because batch is stopped', { batchId, model, host: hostUrl });
-            return { stopped: true };
+            return { stopped: true, cancelled: false };
         }
 
         const modelExecConfig = isResuming
@@ -528,7 +647,7 @@ async function runBatchOrchestrator({
         });
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping before model warmup because batch is stopped', { batchId, model, host: hostUrl });
-            return { stopped: true };
+            return { stopped: true, cancelled: false };
         }
 
         const warmupTimeoutCold = executionConfig.warmup_timeout_cold || 180000;
@@ -544,7 +663,7 @@ async function runBatchOrchestrator({
         });
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping after model warmup because batch is stopped', { batchId, model, host: hostUrl });
-            return { stopped: true };
+            return { stopped: true, cancelled: false };
         }
 
         const hardwareSnapshot = null; // hardware detection now handled by profiler pipeline
@@ -577,10 +696,8 @@ async function runBatchOrchestrator({
 
                     if (await shouldStopBatch(model)) {
                         logger.info('Batch execution stopped by user', { batchId });
-                        await flushModelTimeline(pendingModelTimeline);
-                        await flushBatchProgress(true);
                         handleGracefulStop();
-                        return;
+                        return { stopped: true, cancelled: false };
                     }
 
                     if (consecutiveInfraErrors >= INFRA_ERROR_CIRCUIT_BREAKER_THRESHOLD) {
@@ -617,6 +734,21 @@ async function runBatchOrchestrator({
                         repeatTotal: repeats,
                         repeatGroupId: repeats > 1 ? repeatGroupId : null
                     });
+
+                    if (execResult?.stopped || batchCancellationController.signal.aborted) {
+                        executionState.stopped = true;
+                        logger.info('Batch request cancelled; stopping prompt loop', {
+                            batchId,
+                            model,
+                            prompt: prompt.name,
+                            host: hostUrl
+                        });
+                        handleGracefulStop();
+                        return {
+                            stopped: true,
+                            cancelled: execResult?.cancelled === true || batchCancellationController.signal.aborted
+                        };
+                    }
 
                     // Record checkpoint for resume support
                     completedPairs.add(pairKey);
@@ -669,6 +801,10 @@ async function runBatchOrchestrator({
     };
 
     const runHostBatch = async (hostUrl, hostModels) => {
+        if (await shouldStopBatch(null, { force: true })) {
+            return { stopped: true, cancelled: false };
+        }
+
         // Resolve the judge host once per host group. If this fails, the whole
         // host group is unrecoverable (no judge available) — that's the only
         // "host-level" failure left worth aborting the group for.
@@ -694,7 +830,7 @@ async function runBatchOrchestrator({
                 'run_blocked',
                 `Host failed — judge unavailable on ${hostUrl}; skipping ${hostModels.length} model(s).`
             );
-            return;
+            return { stopped: false, cancelled: false };
         }
 
         // 0212: per-model try/catch so model #1 throwing (typically warmupModel
@@ -705,7 +841,7 @@ async function runBatchOrchestrator({
         for (const model of hostModels) {
             if (await shouldStopBatch(model, { force: true })) {
                 logger.info('Stopping host model loop because batch is stopped', { batchId, host: hostUrl, model });
-                break;
+                return { stopped: true, cancelled: false };
             }
 
             const modelStartedAt = new Date();
@@ -714,11 +850,11 @@ async function runBatchOrchestrator({
                 { $push: { model_timings: { model, started_at: modelStartedAt, completed_at: null, duration_ms: null } } }
             ).catch((err) => logger.warn('Failed to record model start timing', { batchId, model, error: err.message }));
 
-            let stopAfterModel = false;
+            let stopAfterModel = null;
             try {
                 const modelResult = await runModelPromptLoop(hostUrl, judgeHostUrl, model);
                 if (modelResult?.stopped) {
-                    stopAfterModel = true;
+                    stopAfterModel = modelResult;
                 }
             } catch (modelErr) {
                 logger.error('Model execution failed - continuing with next model on this host', {
@@ -752,9 +888,10 @@ async function runBatchOrchestrator({
                 { $set: { 'model_timings.$.completed_at': modelCompletedAt, 'model_timings.$.duration_ms': modelDurationMs } }
             ).catch((err) => logger.warn('Failed to record model complete timing', { batchId, model, error: err.message }));
             if (stopAfterModel) {
-                break;
+                return stopAfterModel;
             }
         }
+        return { stopped: false, cancelled: false };
     };
 
 
@@ -874,6 +1011,10 @@ async function runBatchOrchestrator({
         await Promise.allSettled(tasks);
     };
 
+    // Registered only once claim/dedication lifecycle protection exists. From
+    // this point a stop aborts both prompt requests and the local judge queue.
+    unregisterBatchCancellation = registerActiveBatchController(batchId, batchCancellationController);
+
     try {
         if (dedicationState.size > 0) {
             try {
@@ -912,12 +1053,31 @@ async function runBatchOrchestrator({
         const hostTasks = executionHostGroups
             .map(([hostUrl, hostModels]) => async () => runHostBatch(hostUrl, hostModels));
 
+        const hostOutcomes = [];
         if (executionMode === 'latency') {
-            for (const task of hostTasks) await task();
+            for (const task of hostTasks) {
+                const outcome = await task();
+                hostOutcomes.push(outcome);
+                if (outcome?.stopped) break;
+            }
         } else {
-            await Promise.all(hostTasks.map((task) => task()));
+            hostOutcomes.push(...await Promise.all(hostTasks.map((task) => task())));
         }
+
         await flushBatchProgress(true);
+        const stoppedOutcome = hostOutcomes.find((outcome) => outcome?.stopped);
+        const cancelledAfterExecution = hostOutcomes.some((outcome) => outcome?.cancelled === true);
+        const stoppedAfterExecution = stoppedOutcome || await shouldStopBatch(null, { force: true });
+        if (stoppedAfterExecution) {
+            executionState.stopped = true;
+            await cancelAndDrainJudgeQueue();
+            handleGracefulStop();
+            return {
+                stopped: true,
+                cancelled: cancelledAfterExecution
+            };
+        }
+
         await setBatchPhase('judging', 'Draining judge queue…');
         // Enter the critical judge/scoring window. While active, buddySurface
         // suppresses suggesting/idle (quiet-during-critical); watching +
@@ -928,12 +1088,31 @@ async function runBatchOrchestrator({
         try {
             await enqueueDeferredJudgeTasks();
             await drainJudgeQueue();
+        } catch (error) {
+            if (batchCancellationController.signal.aborted) {
+                executionState.stopped = true;
+                await cancelAndDrainJudgeQueue(error);
+                handleGracefulStop();
+                return { stopped: true, cancelled: true };
+            }
+            throw error;
         } finally {
             buddySurface.emitLifecycle('judge_done', 'Judging complete.');
             buddySurface.endJudgePhase();
         }
+        orchestrationCompleted = true;
+        return { stopped: false, cancelled: false };
     } finally {
-        await finalizeHostLifecycle();
+        try {
+            if (!orchestrationCompleted || executionState.stopped || batchCancellationController.signal.aborted) {
+                await cancelAndDrainJudgeQueue();
+            } else {
+                disposeCancellationListener();
+            }
+        } finally {
+            unregisterBatchCancellation();
+            await finalizeHostLifecycle();
+        }
     }
 }
 
@@ -962,8 +1141,11 @@ function assertNoActiveProfiling(hostUrls) {
 
 module.exports = {
     runBatchOrchestrator,
+    abortActiveBatchRequests,
     assertNoActiveProfiling,
     // Exposed for unit testing — not part of the stable API
+    _registerActiveBatchController: registerActiveBatchController,
+    _getActiveBatchRequestCount: getActiveBatchRequestCount,
     _acquireBenchmarkClaims: acquireBenchmarkClaims,
     _releaseBenchmarkClaims: releaseBenchmarkClaims,
     _estimateBenchmarkClaimDurationMs: estimateBenchmarkClaimDurationMs

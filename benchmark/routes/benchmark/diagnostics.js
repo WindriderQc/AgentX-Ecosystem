@@ -20,18 +20,34 @@ const {
 } = require('../../src/services/judgeGovernance');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const BenchmarkResult = require('../../models/BenchmarkResult');
+const {
+    resolveReadyJudgeTarget,
+    judgeUnavailablePayload
+} = require('../../src/services/benchmark/judgeReadiness');
+const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
 
 // ============ Judge Validation Endpoints ============
 
 /**
- * GET /api/benchmark/judge/health
+ * POST /api/benchmark/judge/health
  * Run comprehensive judge health check
  */
-router.get('/judge/health', async (req, res) => {
+router.post('/judge/health', async (req, res) => {
     try {
         const { days } = req.query;
         const options = {};
         if (days) options.days = parseInt(days, 10);
+        const readiness = await resolveReadyJudgeTarget({
+            host: req.query.judge_host,
+            model: req.query.judge_model
+        });
+        if (!readiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(readiness, 'Live judge health check'));
+        }
+        options.judgeConfig = {
+            host: readiness.target.host,
+            model: readiness.target.model
+        };
 
         const health = await judgeValidation.runHealthCheck(options);
 
@@ -51,12 +67,20 @@ router.get('/judge/health', async (req, res) => {
  */
 router.post('/judge/validate/consistency', async (req, res) => {
     try {
-        const { sampleSize, repeats, category } = req.body;
+        const { sampleSize, repeats, category, judge_model, judge_host } = req.body;
+        const readiness = await resolveReadyJudgeTarget({ host: judge_host, model: judge_model });
+        if (!readiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(readiness, 'Judge consistency test'));
+        }
 
         const result = await judgeValidation.runConsistencyTest({
             sampleSize: sampleSize || 10,
             repeats: repeats || 3,
-            category: category || null
+            category: category || null,
+            judgeConfig: {
+                host: readiness.target.host,
+                model: readiness.target.model
+            }
         });
 
         res.json({
@@ -75,11 +99,19 @@ router.post('/judge/validate/consistency', async (req, res) => {
  */
 router.post('/judge/validate/ground-truth', async (req, res) => {
     try {
-        const { category, limit } = req.body;
+        const { category, limit, judge_model, judge_host } = req.body;
+        const readiness = await resolveReadyJudgeTarget({ host: judge_host, model: judge_model });
+        if (!readiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(readiness, 'Ground-truth judge evaluation'));
+        }
 
         const result = await judgeValidation.runGroundTruthEvaluation({
             category: category || null,
-            limit: limit || 50
+            limit: limit || 50,
+            judgeConfig: {
+                host: readiness.target.host,
+                model: readiness.target.model
+            }
         });
 
         res.json({
@@ -432,6 +464,9 @@ router.delete('/judge/ground-truth/:id', async (req, res) => {
             });
         }
 
+        const expectedConfirmation = `DELETE GROUND TRUTH ${id}`;
+        if (!requireExactConfirmation(req, res, expectedConfirmation)) return;
+
         const entry = await JudgeGroundTruth.findByIdAndDelete(id);
 
         if (!entry) {
@@ -477,16 +512,27 @@ router.post('/judge/matrix-calibrate', async (req, res) => {
             });
         }
 
+        const [judgeReadiness, referenceReadiness] = await Promise.all([
+            resolveReadyJudgeTarget({ host: judge_host, model: judge_model }),
+            resolveReadyJudgeTarget({ host: reference_host, model: reference_model })
+        ]);
+        if (!judgeReadiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(judgeReadiness, 'Judge calibration'));
+        }
+        if (!referenceReadiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(referenceReadiness, 'Reference judging'));
+        }
+
         const threshold = pass_threshold !== undefined ? pass_threshold : 1.5;
 
         const referenceScores = await runCalibrationBatch(entries, {
-            model: reference_model,
-            host: reference_host
+            model: referenceReadiness.target.model,
+            host: referenceReadiness.target.host
         });
 
         const challengerScores = await runCalibrationBatch(entries, {
-            model: judge_model,
-            host: judge_host
+            model: judgeReadiness.target.model,
+            host: judgeReadiness.target.host
         });
 
         const matrix = buildAccuracyMatrix(referenceScores, challengerScores, threshold);
@@ -636,9 +682,17 @@ router.post('/judge/retro-calibrate', async (req, res) => {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
         }
 
+        const readiness = await resolveReadyJudgeTarget({
+            host: reference_host,
+            model: reference_model
+        });
+        if (!readiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(readiness, 'Retro-calibration'));
+        }
+
         const result = await runRetroCalibration(batch_id, {
-            model: reference_model,
-            host: reference_host
+            model: readiness.target.model,
+            host: readiness.target.host
         }, {
             perCell: per_cell || 3,
             dryRun: dry_run || false
@@ -715,6 +769,19 @@ router.post('/judge/governance-run', async (req, res) => {
             pass_threshold, run_retro_calibration, retro_per_cell, retro_dry_run,
             triggered_by
         } = req.body || {};
+
+        if (judge_model || judge_host) {
+            const readiness = await resolveReadyJudgeTarget({ host: judge_host, model: judge_model });
+            if (!readiness.ready) {
+                return res.status(503).json(judgeUnavailablePayload(readiness, 'Judge governance'));
+            }
+        }
+        if (run_retro_calibration || reference_model || reference_host) {
+            const readiness = await resolveReadyJudgeTarget({ host: reference_host, model: reference_model });
+            if (!readiness.ready) {
+                return res.status(503).json(judgeUnavailablePayload(readiness, 'Reference governance'));
+            }
+        }
 
         const summary = await runJudgeGovernanceLoop({
             batchId: batch_id || null,

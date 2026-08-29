@@ -7,6 +7,8 @@ const viewPath = path.join(root, 'views/pages/chat.ejs');
 const appPath = path.join(root, 'src/app.js');
 const scriptPath = path.join(root, 'public/js/playground-cockpit.js');
 const stylePath = path.join(root, 'public/css/playground-cockpit.css');
+const chatStylePath = path.join(root, 'public/css/chat-inline.css');
+const experienceStylePath = path.join(root, 'public/css/chat-experience.css');
 const helpScriptPath = path.join(root, 'public/js/cockpit-help.js');
 const helpStylePath = path.join(root, 'public/css/cockpit-help.css');
 
@@ -54,7 +56,12 @@ describe('Playground conversational cockpit', () => {
       expect(source).toContain(route);
     }
     expect(source).toContain("document.body.dataset.agentxProfile === 'demo'");
+    expect(source).toContain("demoProfile ? getJson('/api/portal/health') : Promise.resolve(null)");
     expect(source).toContain('demoProfile ? Promise.resolve(null)');
+    expect(source).toContain('ecosystem?.serviceHealth || portal?.summary');
+    expect(source).toContain('Array.isArray(ecosystem?.services)');
+    expect(source).toContain('ecosystem?.identityConsistency || portal?.consistency');
+    expect(source).toContain('deployment mismatch');
     expect(source).not.toContain('/api/config');
     expect(source).toContain("new Event('change', { bubbles: true })");
     expect(source).not.toMatch(/method:\s*['"](?:POST|PUT|PATCH|DELETE)/i);
@@ -76,5 +83,22 @@ describe('Playground conversational cockpit', () => {
     expect(css).toContain('@media (max-width: 720px)');
     expect(fs.readFileSync(helpScriptPath, 'utf8')).toContain('data-cockpit-guide-open');
     expect(fs.readFileSync(helpStylePath, 'utf8')).toContain('.cockpit-guide');
+  });
+
+  test('keeps the composer reachable when the full cockpit meets a compact viewport', () => {
+    const source = fs.readFileSync(scriptPath, 'utf8');
+    const chatCss = fs.readFileSync(chatStylePath, 'utf8');
+    const experienceCss = fs.readFileSync(experienceStylePath, 'utf8');
+
+    expect(source).toContain("'(max-width: 720px), (max-height: 640px)'");
+    expect(source).toContain("routingLab.removeAttribute('open')");
+    expect(chatCss).toContain('height: 100dvh');
+    expect(chatCss).toContain('body:has(.chat-page-content) #nav-container');
+    expect(chatCss).toContain('flex: 1 1 auto');
+    expect(chatCss).toContain('min-width: 0; min-height: 0');
+    expect(chatCss).not.toContain('height: calc(100dvh - var(--nav-height');
+    expect(experienceCss).toContain('@media (max-width: 720px), (max-height: 640px)');
+    expect(experienceCss).toContain('max-height: min(40dvh, 300px)');
+    expect(experienceCss).toContain('.chat-routing-lab:not([open])');
   });
 });

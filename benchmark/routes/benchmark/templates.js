@@ -3,6 +3,7 @@ const router = express.Router();
 const BenchmarkTemplate = require('../../models/BenchmarkTemplate');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const { validateObjectId } = require('../../src/helpers/objectIdValidator');
+const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
 const logger = require('../../config/logger');
 
 const CONFIG_FIELDS = ['host', 'models', 'levels', 'prompt_ids', 'judge_config', 'execution_config', 'execution_mode', 'depth_config'];
@@ -121,6 +122,9 @@ router.put('/templates/:id', async (req, res) => {
 router.delete('/templates/:id', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Template ID')) return;
+        const expectedConfirmation = `DELETE TEMPLATE ${req.params.id}`;
+        if (!requireExactConfirmation(req, res, expectedConfirmation)) return;
+
         const template = await BenchmarkTemplate.findByIdAndDelete(req.params.id);
         if (!template) return res.status(404).json({ status: 'error', error: 'Template not found' });
         res.json({ status: 'success', message: 'Template deleted' });

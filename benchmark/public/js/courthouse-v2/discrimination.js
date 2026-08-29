@@ -90,7 +90,7 @@ export function renderDiscrimination(container, data) {
     if (!items.length) {
         container.innerHTML = `
             ${sectionHeader(0)}
-            <div class="r-empty" style="padding:1.5rem;text-align:center;color:#444;font-size:0.7rem;">No discrimination data available.</div>`;
+            <div class="r-empty ch-muted-state">No discrimination data available.</div>`;
         return;
     }
 
@@ -106,7 +106,7 @@ export function renderDiscrimination(container, data) {
         const displayItems = showAll ? items : flagged;
 
         if (!displayItems.length) {
-            return `<div style="padding:1.5rem;text-align:center;color:#444;font-size:0.7rem;">No flagged questions — all questions are well-calibrated.</div>`;
+            return '<div class="ch-muted-state">No flagged questions — all questions are well-calibrated.</div>';
         }
 
         const rows = displayItems.map(renderRow).join('');
@@ -116,7 +116,7 @@ export function renderDiscrimination(container, data) {
 
         return `
             <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;font-size:0.62rem;">
-                <span style="color:#555;">${displayItems.length} question${displayItems.length !== 1 ? 's' : ''}</span>
+                <span class="ch-muted-meta">${displayItems.length} question${displayItems.length !== 1 ? 's' : ''}</span>
                 <button class="rq-chip disc-toggle" style="margin-left:auto;">${toggleLabel}</button>
             </div>
             <div class="disc-list">${rows}</div>`;

@@ -26,6 +26,7 @@ const router = express.Router();
 const logger = require('../config/logger');
 const ModelRegistry = require('../models/ModelRegistry');
 const { getConfiguredHosts } = require('../src/helpers/ollamaHostConfig');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 /** Build URL → friendly-name map from configured hosts */
 function buildHostNameMap() {
@@ -449,6 +450,7 @@ router.patch('/:name', async (req, res) => {
 router.delete('/:name', async (req, res) => {
   try {
     const { name } = req.params;
+    if (!requireTypedConfirmation(req, res, 'RETIRE MODEL', name)) return;
     const { reason = 'No reason provided' } = req.query;
 
     const model = await ModelRegistry.findOne({ modelName: name });
@@ -540,6 +542,7 @@ router.post('/:name/categories', async (req, res) => {
 router.delete('/:name/categories/:category', async (req, res) => {
   try {
     const { name, category } = req.params;
+    if (!requireTypedConfirmation(req, res, 'REMOVE MODEL CATEGORY', name, category)) return;
 
     const model = await ModelRegistry.findOne({ modelName: name });
 
@@ -657,6 +660,7 @@ router.post('/:name/execution-config', async (req, res) => {
  */
 router.delete('/:name/execution-config', async (req, res) => {
   try {
+    if (!requireTypedConfirmation(req, res, 'RESET MODEL EXECUTION CONFIG', req.params.name)) return;
     const model = await ModelRegistry.findOne({ modelName: req.params.name });
     if (!model) {
       return res.status(404).json({ status: 'error', message: `Model not found: ${req.params.name}` });

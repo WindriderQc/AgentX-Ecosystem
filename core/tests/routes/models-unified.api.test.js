@@ -71,6 +71,37 @@ describe('Unified models routes', () => {
     expect(response.headers['x-require-profiled-models']).toBe('true');
   });
 
+  it('serves a runtime-only catalog without optional evidence work when the chat gate is off', async () => {
+    const response = await request(app)
+      .get('/api/models/all?scope=runtime&host=http%3A%2F%2Fsecondary%3A11434&status=available')
+      .expect(200);
+
+    expect(response.headers['x-model-evidence']).toBe('deferred');
+    expect(mockGetAllModels).toHaveBeenCalledWith(expect.objectContaining({
+      includeOllama: true,
+      includeCustom: false,
+      includeRegistry: false,
+      includeEvidence: false,
+      useCache: false
+    }));
+  });
+
+  it('keeps authoritative evidence enabled when the profiled-model gate is active', async () => {
+    process.env.REQUIRE_PROFILED_MODELS = 'true';
+
+    const response = await request(app)
+      .get('/api/models/all?scope=runtime')
+      .expect(200);
+
+    expect(response.headers['x-model-evidence']).toBe('available');
+    expect(mockGetAllModels).toHaveBeenCalledWith(expect.objectContaining({
+      includeCustom: true,
+      includeRegistry: true,
+      includeEvidence: true,
+      useCache: true
+    }));
+  });
+
   it('returns /catalog with envelope metadata for the catalog UI', async () => {
     const response = await request(app)
       .get('/api/models/catalog')

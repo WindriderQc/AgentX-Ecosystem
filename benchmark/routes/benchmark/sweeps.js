@@ -17,6 +17,10 @@ const { findActiveProfilingForHost, activeProfileQueues } = require('../../src/s
 const { startProfileHostQueue } = require('../profiler/pipeline');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const logger = require('../../config/logger');
+const {
+    resolveReadyJudgeTarget,
+    judgeUnavailablePayload
+} = require('../../src/services/benchmark/judgeReadiness');
 
 /**
  * POST /api/benchmark/sweeps/plan
@@ -53,7 +57,26 @@ router.post('/sweeps/plan', async (req, res) => {
  */
 router.post('/sweeps/run', async (req, res) => {
     try {
-        const result = await runSweep(req.body || {}, {
+        let sweepInput = req.body || {};
+        if (sweepInput.execute === true) {
+            const readiness = await resolveReadyJudgeTarget({
+                host: sweepInput.judge_config?.host,
+                model: sweepInput.judge_config?.model
+            });
+            if (!readiness.ready) {
+                return res.status(503).json(judgeUnavailablePayload(readiness, 'Sweep benchmark'));
+            }
+            sweepInput = {
+                ...sweepInput,
+                judge_config: {
+                    ...(sweepInput.judge_config || {}),
+                    host: readiness.target.host,
+                    model: readiness.target.model
+                }
+            };
+        }
+
+        const result = await runSweep(sweepInput, {
             buildSweepPlan,
             getActiveBatches: () => BenchmarkBatch.getActive(),
             findActiveProfilingForHost,

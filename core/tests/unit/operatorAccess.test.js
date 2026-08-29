@@ -19,20 +19,30 @@ function request(headers = {}, overrides = {}) {
 
 describe('operator UI access', () => {
   const originalToken = process.env.AGENTX_OPERATOR_TOKEN;
+  const originalUiHosts = process.env.AGENTX_OPERATOR_UI_HOSTS;
+  const originalCorePublicUrl = process.env.CORE_PUBLIC_URL;
+  const originalLoopbackProxyTrust = process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
 
   afterEach(() => {
     if (originalToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
     else process.env.AGENTX_OPERATOR_TOKEN = originalToken;
+    if (originalUiHosts === undefined) delete process.env.AGENTX_OPERATOR_UI_HOSTS;
+    else process.env.AGENTX_OPERATOR_UI_HOSTS = originalUiHosts;
+    if (originalCorePublicUrl === undefined) delete process.env.CORE_PUBLIC_URL;
+    else process.env.CORE_PUBLIC_URL = originalCorePublicUrl;
+    if (originalLoopbackProxyTrust === undefined) delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
+    else process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI = originalLoopbackProxyTrust;
   });
 
-  it('accepts a browser request from the same UI origin', () => {
+  it('does not treat a remote same-origin header set as operator identity', () => {
+    process.env.AGENTX_OPERATOR_UI_HOSTS = '192.0.2.99';
     const req = request({
       origin: 'http://192.0.2.99:3080',
       host: '192.0.2.99:3080',
       'sec-fetch-site': 'same-origin'
     });
-    expect(sameOriginUiAllowed(req)).toBe(true);
-    expect(operatorUiAccessAllowed(req)).toBe(true);
+    expect(sameOriginUiAllowed(req)).toBe(false);
+    expect(operatorUiAccessAllowed(req)).toBe(false);
   });
 
   it('rejects cross-origin and headerless LAN requests without a token', () => {
@@ -60,6 +70,9 @@ describe('operator UI access', () => {
   it('keeps headerless CLI and same-origin browser access on loopback', () => {
     delete process.env.AGENTX_OPERATOR_TOKEN;
     expect(operatorAccessAllowed(request({}, { ip: '127.0.0.1' }))).toBe(true);
+    expect(operatorAccessAllowed(request({
+      'sec-fetch-mode': 'cors',
+    }, { ip: '127.0.0.1' }))).toBe(true);
 
     const browserReq = request({
       origin: 'http://127.0.0.1:3080',
@@ -80,6 +93,30 @@ describe('operator UI access', () => {
     expect(sameOriginUiAllowed(req)).toBe(false);
   });
 
+  it('rejects forged localhost same-origin headers from a remote connection', () => {
+    delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
+    const req = request({
+      origin: 'http://localhost:3080',
+      host: 'localhost:3080',
+      'sec-fetch-site': 'same-origin',
+    }, { ip: '198.51.100.7' });
+
+    expect(sameOriginUiAllowed(req)).toBe(false);
+    expect(operatorUiAccessAllowed(req)).toBe(false);
+  });
+
+  it('accepts the loopback-published Compose UI only with explicit proxy trust', () => {
+    process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI = 'true';
+    const req = request({
+      origin: 'http://localhost:3180',
+      host: 'localhost:3180',
+      'sec-fetch-site': 'same-origin',
+    }, { ip: '172.20.0.1' });
+
+    expect(sameOriginUiAllowed(req)).toBe(true);
+    expect(operatorUiAccessAllowed(req)).toBe(true);
+  });
+
   it('retains the operator-token path for non-browser callers', () => {
     process.env.AGENTX_OPERATOR_TOKEN = 'test-operator-token';
     const req = request({
@@ -91,24 +128,25 @@ describe('operator UI access', () => {
     expect(operatorRequestIdentity(req)).toBe('operator-token');
   });
 
-  it('accepts same-origin UI reads that carry Referer instead of Origin', () => {
+  it('accepts local same-origin UI reads that carry Referer instead of Origin', () => {
     const req = request({
-      referer: 'http://192.0.2.99:3080/memory-review',
-      host: '192.0.2.99:3080',
+      referer: 'http://127.0.0.1:3080/memory-review',
+      host: '127.0.0.1:3080',
       'sec-fetch-site': 'same-origin',
-    });
+    }, { ip: '127.0.0.1' });
     expect(sameOriginUiAllowed(req)).toBe(true);
   });
 
-  it('accepts exact same-origin Referer from embedded browsers without Fetch Metadata', () => {
+  it('accepts exact local same-origin Referer from embedded browsers without Fetch Metadata', () => {
     const req = request({
-      referer: 'http://192.0.2.99:3080/memory-review',
-      host: '192.0.2.99:3080',
-    });
+      referer: 'http://127.0.0.1:3080/memory-review',
+      host: '127.0.0.1:3080',
+    }, { ip: '127.0.0.1' });
     expect(sameOriginUiAllowed(req)).toBe(true);
   });
 
   it('rejects an explicit cross-site hint even when Origin is forged to match', () => {
+    process.env.AGENTX_OPERATOR_UI_HOSTS = '192.0.2.99';
     const req = request({
       origin: 'http://192.0.2.99:3080',
       host: '192.0.2.99:3080',
@@ -119,11 +157,25 @@ describe('operator UI access', () => {
 
   it('does not treat same-origin browser identity as a caller-supplied name', () => {
     const req = request({
-      origin: 'http://192.0.2.99:3080',
-      host: '192.0.2.99:3080',
+      origin: 'http://127.0.0.1:3080',
+      host: '127.0.0.1:3080',
       'sec-fetch-site': 'same-origin',
       'x-agentx-operator-id': 'forged-name',
-    });
-    expect(operatorRequestIdentity(req)).toBe('same-origin-ui');
+    }, { ip: '127.0.0.1' });
+    expect(operatorRequestIdentity(req)).toBe('loopback-operator');
+    expect(operatorRequestIdentity(req)).not.toBe('forged-name');
+  });
+
+  it('rejects a DNS-rebinding origin even when it matches Host on a loopback connection', () => {
+    delete process.env.AGENTX_OPERATOR_UI_HOSTS;
+    delete process.env.CORE_PUBLIC_URL;
+    const req = request({
+      origin: 'http://attacker.example:3080',
+      host: 'attacker.example:3080',
+      'sec-fetch-site': 'same-origin',
+    }, { ip: '127.0.0.1' });
+
+    expect(sameOriginUiAllowed(req)).toBe(false);
+    expect(operatorUiAccessAllowed(req)).toBe(false);
   });
 });

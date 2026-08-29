@@ -6,7 +6,7 @@ Ollama; inference workflows require models chosen by the tester.
 
 ## Demo 1 — route a local answer
 
-1. Start the stack and open <http://localhost:3180/>.
+1. Start the stack and open <http://127.0.0.1:3180/>.
 2. Open **Chat**.
 3. After explicitly installing or pulling a chat model, ask a short question.
    Agent X routes automatically; open **Take the controls** only to demonstrate
@@ -19,7 +19,7 @@ inference is unavailable.
 
 ## Demo 2 — compare a persona on the same model
 
-1. Open <http://localhost:3180/playground?persona=learning_guide>.
+1. Open <http://127.0.0.1:3180/playground?persona=learning_guide>.
 2. Open the configuration drawer and confirm **System Prompt** is
    `learning_guide v1`. The adjacent details button shows the active prompt.
 3. Keep the host, model, routing mode, and question fixed. Ask one explanation

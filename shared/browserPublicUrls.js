@@ -37,26 +37,21 @@ function mergePublicUrls(fallback, authority) {
 function createCorePublicUrlsResolver(options = {}) {
   const env = options.env || process.env;
   const fallback = getPublicUrls(env);
-  const fetchImpl = options.fetchImpl || global.fetch;
-  const coreServiceBase = normalizeUrl(
-    options.coreServiceUrl || env.CORE_URL || env.CORE_PROXY_URL || ''
-  );
+  const loadCoreConfig = options.loadCoreConfig;
   const ttlMs = Number(options.ttlMs || 30_000);
   const timeoutMs = Number(options.timeoutMs || 2_000);
-  const enabled = options.enabled !== false && Boolean(coreServiceBase && fetchImpl);
+  const enabled = options.enabled !== false && typeof loadCoreConfig === 'function';
   let cached = fallback;
   let expiresAt = 0;
   let inFlight = null;
 
   async function refresh() {
     if (!enabled) return cached;
-    const requestOptions = { headers: { Accept: 'application/json' } };
+    const requestOptions = {};
     if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
       requestOptions.signal = AbortSignal.timeout(timeoutMs);
     }
-    const response = await fetchImpl(`${coreServiceBase}/api/config`, requestOptions);
-    if (!response.ok) throw new Error(`Core public URL authority returned HTTP ${response.status}`);
-    const payload = await response.json();
+    const payload = await loadCoreConfig(requestOptions);
     cached = mergePublicUrls(fallback, payload?.publicUrls || {});
     expiresAt = Date.now() + ttlMs;
     return cached;

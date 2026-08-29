@@ -2,6 +2,8 @@
  * Unit tests for Ollama Watchdog Service
  */
 
+const { Readable } = require('node:stream');
+
 jest.mock('../../config/logger', () => ({
   info: jest.fn(),
   warn: jest.fn(),
@@ -13,22 +15,58 @@ jest.mock('../../src/helpers/ollamaHostConfig', () => ({
   getConfiguredHosts: jest.fn()
 }));
 
+jest.mock('../../src/helpers/peerVerifiedNodeFetchTransport', () => ({
+  peerVerifiedNodeFetchTransport: async ({ fetchImpl, init, target }) => ({
+    response: await fetchImpl(target, init),
+    peerVerification: 'connect-time'
+  })
+}));
+
 const { getConfiguredHosts } = require('../../src/helpers/ollamaHostConfig');
 const watchdog = require('../../src/services/ollamaWatchdogService');
 const hostGate = require('../../src/services/hostGate');
 
 const MOCK_HOST = { id: 'primary', name: 'Host Gamma', url: 'http://192.0.2.99:11434', priority: 1 };
 
+function headers(values = {}) {
+  const normalized = new Map(Object.entries(values)
+    .map(([key, value]) => [key.toLowerCase(), String(value)]));
+  return { get: (name) => normalized.get(String(name).toLowerCase()) ?? null };
+}
+
+async function normalizeMockResponse(url, result) {
+  const value = result || {};
+  let body = value.body;
+  if (body === undefined && typeof value.json === 'function') {
+    body = JSON.stringify(await value.json());
+  } else if (body === undefined && typeof value.text === 'function') {
+    body = await value.text();
+  }
+  return {
+    ...value,
+    body: body && typeof body !== 'string' && !Buffer.isBuffer(body)
+      ? body
+      : Readable.from(body ? [body] : []),
+    headers: value.headers || headers(),
+    redirected: value.redirected === true,
+    status: Number.isInteger(value.status) ? value.status : (value.ok === false ? 500 : 200),
+    url: value.url || url
+  };
+}
+
 function makeMockFetch(handlers) {
   return jest.fn(async (url, opts) => {
     for (const [pattern, handler] of Object.entries(handlers)) {
-      if (url.includes(pattern)) return handler(url, opts);
+      if (url.includes(pattern)) {
+        return normalizeMockResponse(url, await handler(url, opts));
+      }
     }
-    return { ok: false, status: 500, json: async () => ({}) };
+    return normalizeMockResponse(url, { ok: false, status: 500, json: async () => ({}) });
   });
 }
 
 beforeEach(() => {
+  jest.useRealTimers();
   watchdog.stop();
   getConfiguredHosts.mockReturnValue([MOCK_HOST]);
 });
@@ -74,6 +112,7 @@ describe('probeHost', () => {
   });
 
   it('returns ok:false with reason timeout when request hangs', async () => {
+    jest.useFakeTimers();
     watchdog._setFetch(jest.fn(async (_url, opts) => {
       // Simulate hanging request that gets aborted
       return new Promise((_resolve, reject) => {
@@ -87,10 +126,12 @@ describe('probeHost', () => {
       });
     }));
 
-    const result = await watchdog.probeHost(MOCK_HOST, 'gemma4:26b');
+    const pending = watchdog.probeHost(MOCK_HOST, 'gemma4:26b');
+    await jest.advanceTimersByTimeAsync(watchdog.getStats().config.probeTimeoutMs + 1);
+    const result = await pending;
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('timeout');
-  }, 20000);
+  });
 
   it('returns ok:false with connection error reason', async () => {
     watchdog._setFetch(jest.fn(async () => {
@@ -99,7 +140,7 @@ describe('probeHost', () => {
 
     const result = await watchdog.probeHost(MOCK_HOST, 'gemma4:26b');
     expect(result.ok).toBe(false);
-    expect(result.reason).toBe('ECONNREFUSED');
+    expect(result.reason).toBe('The outbound request failed.');
   });
 });
 
@@ -164,12 +205,13 @@ describe('probeCycle (integration)', () => {
   });
 
   it('does not trigger on first timeout (requires consecutive fails)', async () => {
-    let callCount = 0;
-    watchdog._setFetch(jest.fn(async (url, opts) => {
-      if (url.includes('/api/ps')) {
-        return { ok: true, json: async () => ({ models: [{ name: 'gemma4:26b' }] }) };
-      }
-      if (url.includes('/api/generate')) {
+    jest.useFakeTimers();
+    watchdog._setFetch(makeMockFetch({
+      '/api/ps': () => ({
+        ok: true,
+        json: async () => ({ models: [{ name: 'gemma4:26b' }] })
+      }),
+      '/api/generate': (_url, opts) => {
         // Simulate timeout on probe
         return new Promise((_resolve, reject) => {
           if (opts?.signal) {
@@ -181,15 +223,16 @@ describe('probeCycle (integration)', () => {
           }
         });
       }
-      return { ok: false, status: 500 };
     }));
 
-    await watchdog.runNow();
+    const pending = watchdog.runNow();
+    await jest.advanceTimersByTimeAsync(watchdog.getStats().config.probeTimeoutMs + 1);
+    await pending;
     const stats = watchdog.getStats();
     // Should NOT unjam on first failure (needs MAX_CONSECUTIVE=2)
     expect(stats.jamsDetected).toBe(0);
     expect(stats.probesFailed).toBeGreaterThan(0);
-  }, 20000);
+  });
 });
 
 describe('getStats', () => {

@@ -118,12 +118,22 @@
     transition: all 0.25s ease;
     position: relative;
     overflow: hidden;
+    width: 100%;
+    appearance: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
 }
 
 .nc-widget:hover {
     transform: translateY(-2px);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
     border-color: rgba(255, 255, 255, 0.1);
+}
+
+.nc-widget:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 3px;
 }
 
 /* Widget states */
@@ -140,6 +150,7 @@
 }
 
 .nc-widget-value {
+    display: block;
     font-size: 22px;
     font-weight: 700;
     line-height: 1.2;
@@ -161,6 +172,7 @@
 }
 
 .nc-widget-label {
+    display: block;
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -236,10 +248,38 @@
     cursor: pointer;
     user-select: none;
     transition: background 0.2s ease;
+    position: relative;
 }
 
 .nc-section-header:hover {
     background: rgba(255, 255, 255, 0.02);
+}
+
+.nc-section-toggle {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+
+.nc-section-toggle:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: -3px;
+}
+
+.nc-section-header > :not(.nc-section-toggle) {
+    position: relative;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.nc-section-header .nc-btn {
+    pointer-events: auto;
 }
 
 .nc-section-title-group {
@@ -316,6 +356,10 @@
 
 .nc-section-placeholder i {
     margin-right: 8px;
+}
+
+.nc-section-error {
+    color: var(--danger);
 }
 
 /* ── Action Buttons ───────────────────────────────────────────── */
@@ -1537,5 +1581,24 @@
     .nc-view-controls .nc-btn {
         justify-content: center;
         width: 100%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nc-container,
+    .nc-container * {
+        scroll-behavior: auto !important;
+    }
+
+    .nc-container *,
+    .nc-container *::before,
+    .nc-container *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .nc-container .fa-spin {
+        animation: none !important;
     }
 }

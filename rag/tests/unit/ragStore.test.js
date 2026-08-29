@@ -1,5 +1,6 @@
 const { RagStore, resetRagStore } = require('../../src/services/ragStore');
 const { resetEmbeddingsService } = require('../../src/services/embeddings');
+const { generateDocumentId } = require('../../src/services/ragStoreUtils');
 
 // Mock queryExpansion module for expand tests
 jest.mock('../../src/services/queryExpansion', () => ({
@@ -118,24 +119,181 @@ describe('RagStore (in-memory, mocked embeddings)', () => {
     expect(callArg.length).toBeGreaterThanOrEqual(1);
   });
 
-  test('hash match returns unchanged without re-ingesting', async () => {
+  test('exact source/content repeat returns unchanged without re-embedding', async () => {
     // First ingest to populate
     await store.upsertDocumentWithChunks('Original text', {
       source: 'test',
-      documentId: 'hash-test',
-      hash: 'abc123'
+      documentId: 'stable-id'
     });
 
-    // Second ingest with same hash
-    const result = await store.upsertDocumentWithChunks('Same text', {
+    // Second ingest has no caller-provided file hash; canonical source/content
+    // facts still make it a no-op.
+    const result = await store.upsertDocumentWithChunks('Original text', {
       source: 'test',
-      documentId: 'hash-test',
-      hash: 'abc123'
+      documentId: 'stable-id'
     });
 
-    expect(result).toEqual({ unchanged: true, documentId: 'hash-test' });
+    expect(result).toEqual({
+      unchanged: true,
+      deduplicated: false,
+      documentId: 'stable-id',
+      chunkCount: 1,
+      status: 'unchanged'
+    });
     // embeddings should only be called once (first ingest)
     expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(1);
+  });
+
+  test('forceReindex replaces vectors for unchanged source content', async () => {
+    await store.upsertDocumentWithChunks('Original text', {
+      source: 'test',
+      documentId: 'stable-id'
+    });
+
+    const result = await store.upsertDocumentWithChunks('Original text', {
+      source: 'test',
+      documentId: 'stable-id',
+      forceReindex: true
+    });
+
+    expect(result.status).toBe('updated');
+    expect(result.unchanged).not.toBe(true);
+    expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(2);
+  });
+
+  test('an unchanged repeat repairs missing original text and retries after a transient failure', async () => {
+    await store.upsertDocumentWithChunks('Repairable text', {
+      source: 'test',
+      documentId: 'repairable-id'
+    });
+
+    const realGet = store.vectorStore.getDocumentOriginalText.bind(store.vectorStore);
+    const realSet = store.vectorStore.setDocumentOriginalText.bind(store.vectorStore);
+    store.vectorStore.getDocumentOriginalText = jest.fn().mockResolvedValue(null);
+    store.vectorStore.setDocumentOriginalText = jest.fn()
+      .mockRejectedValueOnce(new Error('transient write failure'))
+      .mockImplementation(realSet);
+
+    await expect(store.upsertDocumentWithChunks('Repairable text', {
+      source: 'test',
+      documentId: 'repairable-id'
+    })).resolves.toMatchObject({ unchanged: true });
+    await expect(store.upsertDocumentWithChunks('Repairable text', {
+      source: 'test',
+      documentId: 'repairable-id'
+    })).resolves.toMatchObject({ unchanged: true });
+
+    expect(store.vectorStore.setDocumentOriginalText).toHaveBeenCalledTimes(2);
+    expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(1);
+    store.vectorStore.getDocumentOriginalText = realGet;
+  });
+
+  test('updates a stable explicit document when its extracted content changed', async () => {
+    await store.upsertDocumentWithChunks('Version one', {
+      source: 'guide.md',
+      documentId: 'stable-guide'
+    });
+
+    const result = await store.upsertDocumentWithChunks('Version two', {
+      source: 'guide.md',
+      documentId: 'stable-guide'
+    });
+
+    expect(result.status).toBe('updated');
+    expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(2);
+    expect(await store.vectorStore.getDocumentOriginalText('stable-guide')).toBe('Version two');
+  });
+
+  test('preserves distinct explicit document IDs as separate source identities', async () => {
+    await store.upsertDocumentWithChunks('Shared exact content', {
+      source: 'guide.md',
+      documentId: 'guide-copy-a'
+    });
+
+    const second = await store.upsertDocumentWithChunks('Shared exact content', {
+      source: 'guide.md',
+      documentId: 'guide-copy-b'
+    });
+
+    expect(second.documentId).toBe('guide-copy-b');
+    expect(second.unchanged).not.toBe(true);
+    expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(2);
+    await expect(store.listDocuments()).resolves.toMatchObject({ total: 2 });
+  });
+
+  test('preserves changed content under the same source as a legitimate automatic version', async () => {
+    const first = await store.upsertDocumentWithChunks('Guide version one', { source: 'guide.md' });
+    const second = await store.upsertDocumentWithChunks('Guide version two', { source: 'guide.md' });
+
+    expect(second.documentId).not.toBe(first.documentId);
+    expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(2);
+    await expect(store.listDocuments()).resolves.toMatchObject({ total: 2 });
+  });
+
+  test('preserves identical content from different sources for provenance', async () => {
+    await store.upsertDocumentWithChunks('Shared text', { source: 'source-a.md' });
+    await store.upsertDocumentWithChunks('Shared text', { source: 'source-b.md' });
+
+    expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(2);
+    await expect(store.listDocuments()).resolves.toMatchObject({ total: 2 });
+  });
+
+  test('deduplicates equivalent automatic source labels without rewriting the existing row', async () => {
+    const first = await store.upsertDocumentWithChunks('Canonical source content', {
+      source: '  cafe\u0301.md  '
+    });
+
+    const second = await store.upsertDocumentWithChunks('Canonical source content', {
+      source: 'caf\u00e9.md'
+    });
+
+    expect(second).toEqual({
+      unchanged: true,
+      deduplicated: true,
+      documentId: first.documentId,
+      requestedDocumentId: generateDocumentId('caf\u00e9.md', 'Canonical source content'),
+      chunkCount: 1,
+      status: 'unchanged'
+    });
+    expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(1);
+    await expect(store.listDocuments()).resolves.toMatchObject({ total: 1 });
+  });
+
+  test('serializes concurrent exact repeats so only one document is embedded', async () => {
+    const [first, second] = await Promise.all([
+      store.upsertDocumentWithChunks('Concurrent content', { source: 'concurrent.md' }),
+      store.upsertDocumentWithChunks('Concurrent content', { source: 'concurrent.md' })
+    ]);
+
+    expect(second).toMatchObject({
+      unchanged: true,
+      deduplicated: false,
+      documentId: first.documentId
+    });
+    expect(store.embeddingsService.embedBatch).toHaveBeenCalledTimes(1);
+    await expect(store.listDocuments()).resolves.toMatchObject({ total: 1 });
+  });
+
+  test('recognizes a legacy same-source document by persisted original text without deleting it', async () => {
+    const legacyText = 'Legacy exact content';
+    const legacyId = generateDocumentId('legacy.md', legacyText);
+    await store.vectorStore.upsertDocument(legacyId, { source: 'legacy.md' }, [{
+      text: 'Legacy exact content',
+      embedding: [...mockEmbedding],
+      chunkIndex: 0
+    }]);
+    await store.vectorStore.setDocumentOriginalText(legacyId, legacyText);
+    store.embeddingsService.embedBatch.mockClear();
+
+    const result = await store.upsertDocumentWithChunks(legacyText, { source: 'legacy.md' });
+
+    expect(result).toMatchObject({
+      unchanged: true,
+      deduplicated: false,
+      documentId: legacyId
+    });
+    expect(store.embeddingsService.embedBatch).not.toHaveBeenCalled();
+    await expect(store.listDocuments()).resolves.toMatchObject({ total: 1 });
   });
 
   // ── Query expansion integration ──────────────────────────

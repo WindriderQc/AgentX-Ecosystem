@@ -51,7 +51,9 @@ export async function renderHostSelection(container, hosts) {
         // the simple surface and hides the actual next step (run a baseline).
         await Promise.all(data.map(async (h) => {
             try {
-                const statusRes = await fetch(`/api/profiler/hosts/${encodeURIComponent(h.hostId)}/status`);
+                const statusRes = await fetch(`/api/profiler/hosts/${encodeURIComponent(h.hostId)}/status/refresh`, {
+                    method: 'POST'
+                });
                 if (!statusRes.ok) return;
                 const status = await statusRes.json();
                 const d = status.data || status;

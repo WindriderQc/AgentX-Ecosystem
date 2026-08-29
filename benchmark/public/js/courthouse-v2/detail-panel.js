@@ -17,6 +17,8 @@ import {
     fetchHostNames,
 } from './api.js';
 import { escHtml, fmtNum, fmtMs, fmtPct } from '../utils/format.js';
+import { evidenceProvenance, evidenceBadge } from './evidence-provenance.js';
+import { isJudgeReady, judgeBlockedReason } from './readiness-state.js';
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
@@ -42,12 +44,13 @@ function shortHost(url) {
 function renderScoreHero(r) {
     const score = r.quality_score ?? r.composite_score;
     const cls = scoreClass(score);
-    const color = score != null ? scoreColor(score) : '#666';
+    const color = score != null ? scoreColor(score) : 'var(--r-text-muted)';
     const scoreDisplay = score != null ? score.toFixed(1) : 'n/a';
     const conf = r.judge_confidence;
     const method = r.scoring_method || r.judging_method || 'auto';
     const consensus = r.judge_consensus;
     const divergence = r.judge_divergence;
+    const evidence = evidenceProvenance(r);
 
     const confBar = conf != null
         ? `<div class="dp-conf-bar"><div class="dp-conf-fill" style="width:${Math.round(conf * 100)}%;background:${conf >= 0.8 ? 'var(--r-good)' : conf >= 0.5 ? '#eab308' : 'var(--r-error)'}"></div></div>
@@ -104,6 +107,8 @@ function renderScoreHero(r) {
             <span class="dp-score-max">/10</span>
         </div>
         <div class="dp-score-meta">
+            ${evidenceBadge(r)}
+            <span class="dp-evidence-copy">${escHtml(evidence.description)}</span>
             <span class="dp-method-badge">${escHtml(method)}</span>
             ${consBadge}${divBadge}
             ${confBar}
@@ -255,7 +260,7 @@ function renderJudgeConsensus(r) {
         const judgeModel = r.judge_model || r.judgeModel;
         if (!judgeModel) return '';
         const score = r.quality_score ?? r.composite_score;
-        const color = score != null ? scoreColor(score) : '#666';
+        const color = score != null ? scoreColor(score) : 'var(--r-text-muted)';
         const conf = r.judge_confidence;
         return `<div class="dp-card">
             <div class="dp-card-head">
@@ -274,7 +279,7 @@ function renderJudgeConsensus(r) {
 
     const rows = judges.map((j, i) => {
         const s = j.quality_score;
-        const color = s != null ? scoreColor(s) : '#666';
+        const color = s != null ? scoreColor(s) : 'var(--r-text-muted)';
         const time = j.scoring_time_ms ? fmtMs(j.scoring_time_ms) : '';
         return `<div class="dp-judge-row">
             <span class="dp-judge-num">#${i + 1}</span>
@@ -317,12 +322,12 @@ function renderJudgeTransparency(r) {
     if (!jp && !jr && !expl) return '';
 
     return `<div class="dp-card dp-collapsible" data-collapsed="true">
-        <div class="dp-card-head dp-toggle-head">
-            <span class="dp-card-icon">🔍</span>
+        <button type="button" class="dp-card-head dp-toggle-head" aria-expanded="false" aria-controls="dp-judge-transparency-body">
+            <span class="dp-card-icon" aria-hidden="true">🔍</span>
             <span class="dp-card-title">Judge Transparency</span>
-            <span class="dp-toggle-arrow">▶</span>
-        </div>
-        <div class="dp-collapse-body">
+            <span class="dp-toggle-arrow" aria-hidden="true">▶</span>
+        </button>
+        <div id="dp-judge-transparency-body" class="dp-collapse-body" hidden>
             ${expl ? `<div class="dp-trans-section">
                 <div class="dp-trans-label">Explanation</div>
                 <div class="dp-trans-text">${escHtml(expl)}</div>
@@ -344,13 +349,13 @@ function renderJudgeTransparency(r) {
 function renderThinking(r) {
     if (!r.thinking) return '';
     return `<div class="dp-card dp-collapsible" data-collapsed="true">
-        <div class="dp-card-head dp-toggle-head">
-            <span class="dp-card-icon">🧠</span>
+        <button type="button" class="dp-card-head dp-toggle-head" aria-expanded="false" aria-controls="dp-model-reasoning-body">
+            <span class="dp-card-icon" aria-hidden="true">🧠</span>
             <span class="dp-card-title">Model Reasoning</span>
             <span class="dp-mini-label">${r.thinking.length} chars</span>
-            <span class="dp-toggle-arrow">▶</span>
-        </div>
-        <div class="dp-collapse-body">
+            <span class="dp-toggle-arrow" aria-hidden="true">▶</span>
+        </button>
+        <div id="dp-model-reasoning-body" class="dp-collapse-body" hidden>
             <pre class="dp-thinking-pre">${escHtml(r.thinking)}</pre>
         </div>
     </div>`;
@@ -573,7 +578,7 @@ function renderReviewInfo(r) {
     const score = r.quality_score ?? r.composite_score;
     const scoreDisplay = score != null ? score.toFixed(1) : '—';
     const cls = scoreClass(score);
-    const color = score != null ? scoreColor(score) : '#666';
+    const color = score != null ? scoreColor(score) : 'var(--r-text-muted)';
 
     let statusIcon, statusLabel, statusCls;
     if (r.human_review_status === 'rejected') {
@@ -684,14 +689,41 @@ function renderExecutionSettings(r) {
 
 // ─── Action buttons ──────────────────────────────────────────────────────────
 
-function renderActions() {
+function renderActions(result) {
+    const provenance = evidenceProvenance(result);
+    const ready = isJudgeReady();
+    const approveLabel = provenance.kind === 'deterministic-only'
+        ? '✓ Verify deterministic evidence'
+        : '✓ Approve';
+    const approveTitle = provenance.kind === 'deterministic-only'
+        ? 'Human-verify this deterministic score. No LLM judge score is being approved.'
+        : "Accept the judge's score as-is. The result is marked as human-reviewed and removed from the review queue.";
+    const rejudgeTitle = ready
+        ? 'Send this result back to the selected ready judge for re-scoring.'
+        : `${judgeBlockedReason()} Choose an installed judge in The Bench, then retry readiness.`;
     return `<div class="dp-actions-bar">
-        <button class="dp-act approve"  data-dp-action="approve" title="Accept the judge's score as-is. The result is marked as human-reviewed and removed from the review queue.">✓ Approve</button>
+        <button class="dp-act approve"  data-dp-action="approve" title="${escHtml(approveTitle)}">${approveLabel}</button>
         <button class="dp-act override" data-dp-action="override" title="Replace the judge's score with your own (0–10). The human score will be used for leaderboard ranking and judge calibration.">✎ Override</button>
-        <button class="dp-act rejudge"  data-dp-action="rejudge" title="Send this result back to the judge for re-scoring. Use when the judge explanation seems off or you suspect a transient failure.">⟳ Re-judge</button>
+        <button class="dp-act rejudge"  data-dp-action="rejudge" data-judge-required="true" title="${escHtml(rejudgeTitle)}"${ready ? '' : ' disabled aria-disabled="true"'}>⟳ Re-judge${ready ? '' : ' · unavailable'}</button>
         <button class="dp-act reject"   data-dp-action="reject" title="Flag this result as invalid (bad prompt, broken response, etc.). It will be excluded from leaderboard aggregation. You can add a rejection reason.">✕ Reject</button>
         <button class="dp-act promote"  data-dp-action="promote" title="Save this prompt+response+score as a calibration reference. The more ground truth samples you have, the better you can measure judge accuracy.">📌 Ground Truth</button>
     </div>`;
+}
+
+function syncJudgeActionAvailability() {
+    const button = document.querySelector('[data-dp-action="rejudge"][data-judge-required="true"]');
+    if (!button) return;
+    const ready = isJudgeReady();
+    button.disabled = !ready;
+    button.setAttribute('aria-disabled', ready ? 'false' : 'true');
+    button.textContent = ready ? '⟳ Re-judge' : '⟳ Re-judge · unavailable';
+    button.title = ready
+        ? 'Send this result back to the selected ready judge for re-scoring.'
+        : `${judgeBlockedReason()} Choose an installed judge in The Bench, then retry readiness.`;
+}
+
+if (typeof document !== 'undefined') {
+    document.addEventListener('judge-readiness-changed', syncJudgeActionAvailability);
 }
 
 // ─── Panel HTML (full assembly) ──────────────────────────────────────────────
@@ -702,13 +734,13 @@ function buildPanelHTML(r, compResults, trendData, breakdownData, hostName) {
     const category = r.category || r.prompt_category || '';
     const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : '';
 
-    return `<div class="detail-panel dp-immersive" id="courthouse-detail-panel">
+    return `<div class="detail-panel dp-immersive" id="courthouse-detail-panel" role="region" aria-label="Result details" tabindex="-1">
         <div class="dp-header">
             ${levelBadge(level)}
             <span class="dp-label">${escHtml(model)}</span>
             ${category ? `<span class="dp-mini-pill dp-pill-info">${escHtml(category)}</span>` : ''}
             ${ts ? `<span class="dp-mini-label">${ts}</span>` : ''}
-            <span class="dp-close" title="Close panel" data-dp-close>✕</span>
+            <button type="button" class="dp-close" title="Close panel" aria-label="Close result details" data-dp-close>✕</button>
         </div>
 
         ${renderReviewInfo(r)}
@@ -742,7 +774,7 @@ function buildPanelHTML(r, compResults, trendData, breakdownData, hostName) {
             ${renderExecutionSettings(r)}
 
             <!-- Action buttons -->
-            ${renderActions()}
+            ${renderActions(r)}
         </div>
     </div>`;
 }
@@ -753,6 +785,11 @@ async function handleAction(containerEl, resultId, action) {
     // Promote is handled separately — it doesn't close the panel
     if (action === 'promote') {
         await handlePromote(containerEl, resultId);
+        return;
+    }
+
+    if (action === 'rejudge' && !isJudgeReady()) {
+        showToast(`Re-judge unavailable: ${judgeBlockedReason()}`, 'error');
         return;
     }
 
@@ -853,6 +890,10 @@ function wirePanel(containerEl, resultId) {
             if (card) {
                 const isCollapsed = card.dataset.collapsed === 'true';
                 card.dataset.collapsed = isCollapsed ? 'false' : 'true';
+                toggleHead.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+                const bodyId = toggleHead.getAttribute('aria-controls');
+                const body = bodyId ? card.querySelector(`#${bodyId}`) : card.querySelector('.dp-collapse-body');
+                if (body) body.hidden = !isCollapsed;
                 const arrow = toggleHead.querySelector('.dp-toggle-arrow');
                 if (arrow) arrow.textContent = isCollapsed ? '▼' : '▶';
             }
@@ -872,16 +913,29 @@ function wirePanel(containerEl, resultId) {
     });
 }
 
+function focusDetailWhenSourceIsHidden(containerEl) {
+    const source = containerEl.__detailReturnTarget;
+    if (!source?.classList.contains('ledger-open')) return;
+    requestAnimationFrame(() => {
+        containerEl.querySelector('#courthouse-detail-panel')?.focus({ preventScroll: true });
+    });
+}
+
 // ─── Public exports ──────────────────────────────────────────────────────────
 
 export async function renderDetailPanel(containerEl, result, allResults) {
-    closeDetailPanel(containerEl);
+    containerEl.__detailReturnTarget = document.querySelector(
+        '.rq-item[aria-expanded="true"], .ledger-open[aria-expanded="true"]'
+    );
+    // Replace any previous panel without clearing the source row/button that
+    // the operator just selected.
+    containerEl.innerHTML = '';
 
     // Show loading
-    containerEl.innerHTML = `<div class="detail-panel dp-immersive" id="courthouse-detail-panel">
+    containerEl.innerHTML = `<div class="detail-panel dp-immersive" id="courthouse-detail-panel" role="region" aria-label="Result details" tabindex="-1">
         <div class="dp-header">
             <span class="dp-label">Loading analytics…</span>
-            <span class="dp-close" data-dp-close>✕</span>
+            <button type="button" class="dp-close" aria-label="Close result details" data-dp-close>✕</button>
         </div>
         <div class="dp-body">
             <div class="dp-loading-grid">
@@ -894,6 +948,7 @@ export async function renderDetailPanel(containerEl, result, allResults) {
     </div>`;
 
     wirePanel(containerEl, String(result._id));
+    focusDetailWhenSourceIsHidden(containerEl);
 
     // Scroll to panel immediately (deep-link UX)
     containerEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -967,13 +1022,23 @@ export async function renderDetailPanel(containerEl, result, allResults) {
     // Render full panel
     containerEl.innerHTML = buildPanelHTML(fullResult, compResults, trendData, breakdownData, hostName);
     wirePanel(containerEl, String(fullResult._id));
+    focusDetailWhenSourceIsHidden(containerEl);
 }
 
 export function closeDetailPanel(containerEl) {
+    const returnTarget = containerEl.__detailReturnTarget
+        || document.querySelector('.rq-item[aria-expanded="true"], .ledger-open[aria-expanded="true"]');
+    const returnToLedger = returnTarget?.classList.contains('ledger-open');
     containerEl.innerHTML = '';
-    const reviewQueue = document.getElementById('review-queue');
-    if (reviewQueue) {
-        reviewQueue.querySelectorAll('.rq-item.is-active')
-            .forEach(el => el.classList.remove('is-active'));
+    document.querySelectorAll('.rq-item').forEach(el => {
+        el.classList.remove('is-active');
+        el.setAttribute('aria-expanded', 'false');
+    });
+    document.querySelectorAll('.ledger-row').forEach(el => el.classList.remove('is-active'));
+    document.querySelectorAll('.ledger-open').forEach(el => el.setAttribute('aria-expanded', 'false'));
+    if (returnToLedger) {
+        document.dispatchEvent(new CustomEvent('courthouse-activate-tab', { detail: { name: 'ledger' } }));
     }
+    if (returnTarget?.isConnected) returnTarget.focus();
+    containerEl.__detailReturnTarget = null;
 }

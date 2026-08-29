@@ -8,13 +8,23 @@ const {
   getPublicUrls,
 } = require('../shared/browserPublicUrls');
 const { currentAgentXProfile } = require('../shared/agentxRuntimeProfile');
+const { createServiceIdentity } = require('../shared/serviceIdentity');
+const { registerLocalStyleVendorAssets } = require('../shared/localStyleVendorAssets');
+const { createApiHostGuard } = require('../shared/apiHostGuard');
+const { admitOllamaTargetResolved } = require('./src/helpers/ollamaTargetAdmission');
+const { readBoundedJson } = require('./src/helpers/boundedJsonResponse');
+const { shouldRecoverBenchmarkClaims } = require('./src/helpers/benchmarkProfileCapabilities');
 
 require('dotenv').config({
   path: path.join(__dirname, '.env')
 });
+const { loadCorePublicConfig } = require('./src/clients/coreApiClient');
 
 const PORT = process.env.PORT || 3081;
-const HOST = process.env.HOST || '::';
+// Standalone development is local-only by default. Compose opts into the
+// container interface explicitly and publishes it back to host loopback.
+const HOST = process.env.HOST || '127.0.0.1';
+const SERVICE_VERSION = require('./package.json').version || '0.0.0';
 
 // Global error handlers
 process.on('unhandledRejection', (reason) => {
@@ -41,7 +51,17 @@ app.locals.publicUrls = getPublicUrls();
 app.locals.agentxProfile = currentAgentXProfile();
 const resolvePublicUrls = createCorePublicUrlsResolver({
   enabled: process.env.NODE_ENV !== 'test',
+  loadCoreConfig: loadCorePublicConfig,
 });
+// Guard every API route before proxies, parsers, or route modules run. Besides
+// rejecting untrusted Host values, mutation protection blocks cross-site form
+// submissions while retaining exact same-origin UI, loopback CLI, bounded
+// internal-service, and operator-token callers.
+app.use(createApiHostGuard({
+  serviceHosts: ['benchmark', 'agentx-benchmark'],
+  publicUrlEnv: ['BENCHMARK_PUBLIC_URL'],
+  protectMutations: true,
+}));
 
 // EJS templating — shared layouts from core, local pages
 app.set('view engine', 'ejs');
@@ -97,6 +117,22 @@ app.get('/api/models/all', async (req, res) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Browser-critical libraries are production dependencies served through an
+// explicit, immutable allowlist. Never expose node_modules as a static root.
+const benchmarkVendorAssets = Object.freeze({
+  '/vendor/chart.js/4.4.1/chart.umd.js': path.join(__dirname, 'node_modules', 'chart.js', 'dist', 'chart.umd.js')
+});
+
+for (const [route, assetPath] of Object.entries(benchmarkVendorAssets)) {
+  app.get(route, (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.type('application/javascript');
+    res.sendFile(assetPath);
+  });
+}
+
+registerLocalStyleVendorAssets(app, path.join(__dirname, 'node_modules'));
+
 // The shared-utils source is copied into /dist by the Benchmark image and its
 // relative module import resolves to this legacy-looking URL. Serve only the
 // required non-Buddy utility; do not restore the removed generic Buddy proxy.
@@ -117,10 +153,12 @@ const sharedPublicRoot = path.join(__dirname, '..', 'core', 'public');
 const sharedAssets = {
   '/dist/shared-tokens.css': ['dist', 'shared-tokens.css'],
   '/dist/shared-utils.js': ['dist', 'shared-utils.js'],
+  '/css/local-fonts.css': ['css', 'local-fonts.css'],
   '/css/platform-chrome.css': ['css', 'platform-chrome.css'],
   '/js/utils/polling-controller.js': ['js', 'utils', 'polling-controller.js'],
   '/js/utils/polling-controller-global.js': ['js', 'utils', 'polling-controller-global.js'],
   '/js/utils/shared.js': ['js', 'utils', 'shared.js'],
+  '/js/utils/typed-confirmation.js': ['js', 'utils', 'typed-confirmation.js'],
   '/js/utils/shortcut-hints.js': ['js', 'utils', 'shortcut-hints.js'],
   '/js/utils/shortcuts-modal.js': ['js', 'utils', 'shortcuts-modal.js'],
   '/js/utils/toast.js': ['js', 'utils', 'toast.js']
@@ -253,7 +291,7 @@ app.get('/results-explorer', (req, res) => {
       '<link rel="stylesheet" href="/css/results-explorer-components.css">',
       '<link rel="stylesheet" href="/css/benchmark-shell.css">',
       '<link rel="stylesheet" href="/css/model-evidence-experience.css">',
-      '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>'
+      '<script src="/vendor/chart.js/4.4.1/chart.umd.js"></script>'
     ].join('\n'),
     footerJs: [
       '<script src="/js/results-explorer.js"></script>',
@@ -293,8 +331,9 @@ app.get('/health', (req, res) => {
   const dbReady = require('mongoose').connection.readyState === 1;
   const status = dbReady ? 'ok' : 'degraded';
   res.status(dbReady ? 200 : 503).json({
+    ok: dbReady,
     status,
-    service: 'agentx-benchmark',
+    ...createServiceIdentity({ service: 'agentx-benchmark', version: SERVICE_VERSION }),
     uptime: process.uptime(),
     db: dbReady ? 'connected' : 'disconnected'
   });
@@ -306,13 +345,17 @@ app.get('/api/ollama-hosts', async (req, res) => {
   const hosts = getConfiguredHosts();
 
   const enriched = await Promise.all(hosts.map(async (host) => {
+    let timeout;
     try {
+      const admittedUrl = await admitOllamaTargetResolved(host.url, { configuredHosts: hosts });
       const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 4000);
-      const resp = await fetch(`${host.url}/api/tags`, { signal: ctrl.signal });
-      clearTimeout(timeout);
+      timeout = setTimeout(() => ctrl.abort(), 4000);
+      const resp = await fetch(`${admittedUrl}/api/tags`, {
+        signal: ctrl.signal,
+        redirect: 'manual'
+      });
       if (!resp.ok) return { ...host, available: false, models: [], modelDetails: [] };
-      const data = await resp.json();
+      const data = await readBoundedJson(resp);
       const models = (data.models || []).map(m => m.name);
       const modelDetails = (data.models || []).map(m => ({
         name: m.name,
@@ -324,6 +367,8 @@ app.get('/api/ollama-hosts', async (req, res) => {
       return { ...host, available: true, models, modelDetails };
     } catch {
       return { ...host, available: false, models: [], modelDetails: [] };
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }));
 
@@ -347,20 +392,29 @@ app.use('/api/profiler', require('./routes/profiler'));
 async function start() {
   await connectDB();
 
+  // Prompt-library synchronization is an explicit startup mutation. Keeping
+  // it out of GET /api/benchmark/prompts preserves safe-method semantics while
+  // ensuring a normal service start still presents the canonical library.
+  const benchmarkService = require('./src/services/benchmark');
+  await benchmarkService.seedPrompts();
+
   // Recover orphaned judge queue entries from previous crash
   const { recoverJudgeQueue } = require('./src/services/benchmark/judgeQueueRecovery');
   recoverJudgeQueue().catch(err => logger.warn('Judge queue recovery error', { error: err.message }));
 
-  // Reconcile benchmark claims with actual batch state. A pm2 restart or
-  // process crash mid-batch skips the `finally {}` that releases claims,
-  // leaving hosts claimed for up to 2h until the reaper's hard cap. This
-  // startup hook finds and releases those leaks immediately, and in the
-  // other direction re-claims hosts for batches that are still live but
-  // whose claims were reaped while this process was down.
-  const { recoverLeakedClaims, reacquireActiveBatchClaims } = require('./src/services/benchmark/claimRecovery');
-  recoverLeakedClaims()
-    .then(() => reacquireActiveBatchClaims())
-    .catch(err => logger.warn('Claim recovery error', { error: err.message }));
+  // Claim coordination is a full-profile capability. In demo, Core
+  // intentionally disables the Nerve Center routes, so Benchmark must not
+  // probe them and manufacture a misleading startup warning.
+  if (shouldRecoverBenchmarkClaims(app.locals.agentxProfile)) {
+    // Reconcile benchmark claims with actual batch state. A process crash
+    // mid-batch can otherwise leave a host claimed until the hard-cap reaper.
+    const { recoverLeakedClaims, reacquireActiveBatchClaims } = require('./src/services/benchmark/claimRecovery');
+    recoverLeakedClaims()
+      .then(() => reacquireActiveBatchClaims())
+      .catch(err => logger.warn('Claim recovery error', { error: err.message }));
+  } else {
+    logger.info('[ClaimRecovery] Disabled by the demo product profile');
+  }
 
   app.listen(PORT, HOST, () => {
     logger.info(`agentx-benchmark listening on ${HOST}:${PORT}`);

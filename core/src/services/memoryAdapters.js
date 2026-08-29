@@ -200,6 +200,7 @@ async function searchAgentx(query, k = 5) {
 
 async function agentxStatus() {
   const status = { source: 'agentx', available: true, lane: 'core-mongo', shared: false, counts: {} };
+  let unavailableCollections = 0;
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const targets = [
     ['../../models/Conversation', 'conversations', 'updatedAt'],
@@ -215,8 +216,13 @@ async function agentxStatus() {
         last7d: await Model.countDocuments({ [dateField]: { $gte: since7d } }),
       };
     } catch (error) {
+      unavailableCollections += 1;
       status.counts[name] = { error: error.message };
     }
+  }
+  if (unavailableCollections > 0) {
+    status.available = false;
+    status.error = `${unavailableCollections} Core memory collection${unavailableCollections === 1 ? '' : 's'} unavailable`;
   }
   return status;
 }

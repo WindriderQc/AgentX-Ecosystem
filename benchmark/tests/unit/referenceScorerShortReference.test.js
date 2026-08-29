@@ -15,7 +15,7 @@ jest.mock('../../src/helpers/httpAgent', () => ({
 jest.mock('../../src/services/benchmark/http', () => ({ benchmarkFetch: jest.fn() }));
 const { benchmarkFetch: mockFetch } = require('../../src/services/benchmark/http');
 
-const { score, extractKeyPoints } = require('../../src/services/referenceScorer');
+const { score, extractKeyPoints, checkOverallSimilarity } = require('../../src/services/referenceScorer');
 
 beforeEach(() => {
   mockFetch.mockImplementation(async (url, opts) => {
@@ -29,6 +29,36 @@ beforeEach(() => {
 });
 
 describe('reference scoring with short references', () => {
+  it('propagates caller cancellation during response-body parsing instead of returning a fallback score', async () => {
+    const controller = new AbortController();
+    let markBodyStarted;
+    const bodyStarted = new Promise((resolve) => { markBodyStarted = resolve; });
+    mockFetch.mockImplementation(async (url, opts) => ({
+      ok: true,
+      json: () => new Promise((resolve, reject) => {
+        markBodyStarted();
+        const onAbort = () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        };
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+        if (opts.signal.aborted) onAbort();
+      })
+    }));
+
+    const pending = checkOverallSimilarity('answer', 'reference', {
+      model: 'judge:latest',
+      host: 'http://judge:11434',
+      cancelSignal: controller.signal
+    });
+    await bodyStarted;
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: 'BENCHMARK_BATCH_STOPPED' });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('extractKeyPoints returns no points for a very short reference', () => {
     expect(extractKeyPoints('42')).toEqual([]);
     expect(extractKeyPoints('Paris.')).toEqual([]);

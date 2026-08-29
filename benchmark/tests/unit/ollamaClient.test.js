@@ -9,7 +9,8 @@ jest.mock('../../src/helpers/httpAgent', () => ({
     getFetchOptions: (_url, opts) => opts
 }));
 jest.mock('../../src/helpers/ollamaHostConfig', () => ({
-    normalizeHostUrl: (url) => url?.replace(/\/+$/, '') || 'http://localhost:11434'
+    normalizeHostUrl: (url) => url?.replace(/\/+$/, '') || 'http://localhost:11434',
+    getConfiguredHosts: jest.fn(() => [])
 }));
 jest.mock('../../config/logger', () => ({
     info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn()
@@ -28,7 +29,7 @@ describe('ollamaClient', () => {
             expect(result).toEqual({ models: ['a'] });
             expect(mockFetch).toHaveBeenCalledWith(
                 'http://host:11434/api/tags',
-                expect.objectContaining({ method: 'GET' })
+                expect.objectContaining({ method: 'GET', redirect: 'manual' })
             );
         });
 

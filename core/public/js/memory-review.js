@@ -59,14 +59,14 @@
   function shortDate(value) {
     if (!value) return 'Unknown time';
     const date = new Date(value);
-    return Number.isNaN(date.valueOf()) ? String(value).slice(0, 16) : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    return Number.isNaN(date.valueOf()) ? String(value).slice(0, 16) : date.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
   }
 
   function friendlyRunTitle(run) {
     const date = new Date(run.completedAt || run.createdAt);
     if (Number.isNaN(date.valueOf())) return 'Dreaming review';
-    const day = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const day = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const time = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     return `${day} · ${time} review`;
   }
 
@@ -145,11 +145,14 @@
       ? `${insight.health.errors} collector issue${insight.health.errors === 1 ? '' : 's'}`
       : insight.health.overdue
         ? `${insight.health.overdue} overdue`
-        : 'Healthy';
+        : insight.health.stale
+          ? `${insight.health.stale} stale collector${insight.health.stale === 1 ? '' : 's'}`
+          : 'Healthy';
     $('mrStatHealth').textContent = !latest ? 'Waiting' : healthLabel;
     $('mrStatHealth').classList.toggle('mr-stat-warning', insight.health.state === 'attention');
     $('mrStatHealth').title = insight.health.errors ? 'Current collector errors'
       : insight.health.overdue ? 'An unfinished cross-host reconciliation passed its recovery window'
+        : insight.health.stale ? `${insight.health.staleRuntimes.map(label).join(', ')} ${insight.health.stale === 1 ? 'has' : 'have'} not contributed within the freshness window`
         : insight.health.advisories ? `${insight.health.advisories} non-blocking advisories` : 'No current collector errors';
   }
 
@@ -176,6 +179,9 @@
       const missing = health.activeRun?.reconciliation?.missingRuntimes || [];
       tone = 'attention'; icon = 'fa-clock-rotate-left'; title = 'A Dreaming handoff is overdue';
       text = `${health.activeRun?.runId || 'The active run'} is safely holding accepted evidence${missing.length ? ` while waiting for ${missing.map(label).join(' and ')}` : ''}. The next reconciliation automatically recovers it.`;
+    } else if (health.stale) {
+      tone = 'attention'; icon = 'fa-clock'; title = `${health.stale} collector${health.stale === 1 ? '' : 's'} ${health.stale === 1 ? 'is' : 'are'} stale`;
+      text = `${health.staleRuntimes.map(label).join(', ')} ${health.stale === 1 ? 'has' : 'have'} not supplied evidence within the expected freshness window.`;
     } else if (totals.pending) {
       tone = 'ready'; icon = 'fa-inbox'; title = `${totals.pending} memor${totals.pending === 1 ? 'y is' : 'ies are'} waiting for you`;
       text = 'Each proposal is evidence-backed and remains inert until you review it individually.';
@@ -218,7 +224,7 @@
     $('mrInsightsState').hidden = true;
     $('mrInsightsGrid').hidden = false;
     $('mrRuntimeGrid').innerHTML = insight.runtimes.map((runtime) => `<div class="mr-runtime-tile mr-runtime-${esc(runtime.health)}">
-      <div><i class="fas ${runtime.health === 'attention' ? 'fa-triangle-exclamation' : runtime.health === 'not_seen' ? 'fa-circle-minus' : 'fa-circle-check'}"></i><strong>${esc(label(runtime.runtime))}</strong></div>
+      <div><i class="fas ${runtime.health === 'attention' ? 'fa-triangle-exclamation' : runtime.health === 'stale' ? 'fa-clock' : runtime.health === 'not_seen' ? 'fa-circle-minus' : 'fa-circle-check'}"></i><strong>${esc(label(runtime.runtime))}</strong></div>
       <span>${runtime.eligible} ${runtime.eligible === 1 ? 'signal' : 'signals'} · ${runtime.filtered} filtered</span>
       <small>${runtime.lastSeen ? `Seen ${esc(relativeDate(runtime.lastSeen))}` : 'No recent contribution'}${runtime.currentAdvisories ? ` · ${runtime.currentAdvisories} ${runtime.currentAdvisories === 1 ? 'advisory' : 'advisories'}` : ''}</small>
     </div>`).join('');

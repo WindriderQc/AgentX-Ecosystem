@@ -131,7 +131,8 @@ async function getAuthoritativeJudgeCounters(batchId) {
 
 /**
  * Get judging status for a batch.
- * Returns live queue stats if active, else batch counters with self-healing drift fix.
+ * Returns live queue stats if active, otherwise an authoritative read-only
+ * projection. Durable repair belongs to an explicit mutation action.
  * @param {string} batchId
  * @returns {Promise<Object>}
  */
@@ -184,26 +185,13 @@ async function getJudgingStatus(batchId) {
         Number(batch.judge_completed || 0) !== authoritative.judge_completed ||
         Number(batch.judge_failed || 0) !== authoritative.judge_failed;
 
-    if (countersDrifted) {
-        await BenchmarkBatch.updateOne(
-            { _id: batchId },
-            {
-                $set: {
-                    judge_total: authoritative.judge_total,
-                    judge_completed: authoritative.judge_completed,
-                    judge_failed: authoritative.judge_failed,
-                    last_activity_at: new Date()
-                }
-            }
-        );
-    }
-
     return {
         active: false,
         judge_status: batch.judge_status || 'none',
         judge_total: authoritative.judge_total,
         judge_completed: authoritative.judge_completed,
-        judge_failed: authoritative.judge_failed
+        judge_failed: authoritative.judge_failed,
+        counters_drifted: countersDrifted
     };
 }
 

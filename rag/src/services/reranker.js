@@ -10,11 +10,18 @@
 'use strict';
 
 const fetchWithTimeout = require('../utils/fetchWithTimeout');
+const {
+  SERVICE_OUTBOUND_OPERATION_IDS,
+  SERVICE_OUTBOUND_TIMEOUTS,
+  configuredServiceOrigin,
+} = require('../clients/serviceOutboundClient');
 const { boundedConcurrency } = require('../utils/boundedConcurrency');
 const logger = require('../../config/logger');
 
-const CORE_PROXY_URL = (process.env.CORE_PROXY_URL || 'http://localhost:3080').replace(/\/+$/, '');
-const RERANK_TIMEOUT = Number(process.env.RERANK_TIMEOUT_MS) || 15000;
+const CORE_PROXY_URL = configuredServiceOrigin(process.env.CORE_PROXY_URL || 'http://localhost:3080');
+const RERANK_TIMEOUT = SERVICE_OUTBOUND_TIMEOUTS[
+  SERVICE_OUTBOUND_OPERATION_IDS.RERANKER_GENERATE
+];
 const RERANK_CONCURRENCY = Number(process.env.RERANK_CONCURRENCY) || 2;
 
 /**
@@ -95,7 +102,10 @@ async function rerankResults(query, results, topK = 5) {
               num_predict: 10
             }
           })
-        }, RERANK_TIMEOUT);
+        }, RERANK_TIMEOUT, {
+          expectedOrigins: [CORE_PROXY_URL],
+          operationId: SERVICE_OUTBOUND_OPERATION_IDS.RERANKER_GENERATE,
+        });
 
         if (!response.ok) {
           logger.warn(`Re-ranking failed for result ${idx}`, { status: response.status });

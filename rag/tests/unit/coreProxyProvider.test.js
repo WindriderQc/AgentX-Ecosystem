@@ -1,9 +1,9 @@
-jest.mock('node-fetch', () => jest.fn());
+jest.mock('../../src/utils/fetchWithTimeout', () => jest.fn());
 jest.mock('../../config/logger', () => ({
   info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
 }));
 
-const fetch = require('node-fetch');
+const fetch = require('../../src/utils/fetchWithTimeout');
 const CoreProxyProvider = require('../../src/services/embeddings/coreProxyProvider');
 
 function okEmbedding(embedding = [0.1, 0.2, 0.3]) {

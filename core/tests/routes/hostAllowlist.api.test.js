@@ -197,6 +197,7 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
     it('200 — accepts configured host', async () => {
       const res = await request(app)
         .delete('/api/models/ollama/gemma4:26b')
+        .set('X-AgentX-Confirm', 'DELETE OLLAMA MODEL gemma4:26b FROM http://192.0.2.12:11434')
         .query({ host: 'http://192.0.2.12:11434' });
       expect(res.status).toBe(200);
     });

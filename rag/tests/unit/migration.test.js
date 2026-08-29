@@ -33,6 +33,7 @@ const express = require('express');
 const request = require('supertest');
 const { getRagStore, _mockRagStore } = require('../../src/services/ragStore');
 const { getEmbeddingsService, _mockEmbeddingsService } = require('../../src/services/embeddings');
+const REINDEX_CONFIRMATION = 'REINDEX ALL DOCUMENTS';
 
 function buildApp() {
   const app = express();
@@ -155,7 +156,7 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     jobs.clear();
   });
 
-  it('returns 400 when confirm is missing', async () => {
+  it('returns a stable descriptor when the typed confirmation is missing', async () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
@@ -164,35 +165,41 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     expect(res.status).toBe(400);
     expect(res.body.ok).toBe(false);
     expect(res.body.error).toBe('CONFIRMATION_REQUIRED');
+    expect(res.body.confirmation).toEqual({ field: 'confirmation', expected: REINDEX_CONFIRMATION });
+    expect(_mockRagStore.getStats).not.toHaveBeenCalled();
+    expect(_mockRagStore.listDocuments).not.toHaveBeenCalled();
   });
 
-  it('returns 400 when confirm is false', async () => {
+  it('rejects the wrong typed phrase before reading or replacing embeddings', async () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: false });
+      .send({ confirmation: 'REINDEX SOME DOCUMENTS' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('CONFIRMATION_REQUIRED');
+    expect(res.body.confirmation.expected).toBe(REINDEX_CONFIRMATION);
+    expect(_mockRagStore.getStats).not.toHaveBeenCalled();
+    expect(_mockRagStore.listDocuments).not.toHaveBeenCalled();
+  });
+
+  it('does not accept the legacy boolean confirmation', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/rag/embedding-migration/reindex')
+      .send({ confirm: true });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('CONFIRMATION_REQUIRED');
   });
 
-  it('returns 400 when confirm is a string "true"', async () => {
-    const app = buildApp();
-    const res = await request(app)
-      .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: 'true' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('CONFIRMATION_REQUIRED');
-  });
-
-  it('returns 202 with jobId when confirm is true', async () => {
+  it('returns 202 with jobId for the exact typed phrase', async () => {
     _mockRagStore.listDocuments.mockResolvedValue({ documents: [], total: 0 });
 
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
 
     expect(res.status).toBe(202);
     expect(res.body.ok).toBe(true);
@@ -208,12 +215,12 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
 
     const first = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
     expect(first.status).toBe(202);
 
     const second = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
     expect(second.status).toBe(409);
     expect(second.body.error).toBe('REINDEX_ALREADY_RUNNING');
     expect(second.body.data.activeJobId).toBe(first.body.data.jobId);
@@ -225,7 +232,7 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
 
     const jobId = res.body.data.jobId;
 
@@ -249,7 +256,7 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
 
     expect(res.status).toBe(400);
     expect(res.body.ok).toBe(false);
@@ -258,14 +265,14 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     expect(_mockRagStore.listDocuments).not.toHaveBeenCalled();
   });
 
-  it('accepts { confirm: true, force: true } even when migration is not needed', async () => {
+  it('accepts the typed phrase with force:true even when migration is not needed', async () => {
     _mockRagStore.getStats.mockResolvedValue(MIGRATION_NOT_NEEDED_STATS);
     _mockRagStore.listDocuments.mockResolvedValue({ documents: [], total: 0 });
 
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true, force: true });
+      .send({ confirmation: REINDEX_CONFIRMATION, force: true });
 
     // Accepted: 202 (running) or 409 (another reindex already running). Both prove
     // the guard was bypassed by force:true. In this isolated test, the jobs map
@@ -278,14 +285,14 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     }
   });
 
-  it('accepts { confirm: true } without force when migrationNeeded is true (happy path preserved)', async () => {
+  it('accepts the typed phrase without force when migrationNeeded is true', async () => {
     // Default beforeEach already sets MIGRATION_NEEDED_STATS.
     _mockRagStore.listDocuments.mockResolvedValue({ documents: [], total: 0 });
 
     const app = buildApp();
     const res = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
 
     expect(res.status).toBe(202);
     expect(res.body.ok).toBe(true);
@@ -307,7 +314,7 @@ describe('POST /api/rag/embedding-migration/reindex', () => {
     const app = buildApp();
     const startRes = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
 
     expect(startRes.status).toBe(202);
     const jobId = startRes.body.data.jobId;
@@ -357,7 +364,7 @@ describe('GET /api/rag/embedding-migration/reindex/:jobId', () => {
     const app = buildApp();
     const startRes = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
 
     const jobId = startRes.body.data.jobId;
 
@@ -393,7 +400,7 @@ describe('GET /api/rag/embedding-migration/reindex/:jobId', () => {
     const app = buildApp();
     const startRes = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
 
     const jobId = startRes.body.data.jobId;
 
@@ -410,6 +417,10 @@ describe('GET /api/rag/embedding-migration/reindex/:jobId', () => {
     expect(statusRes.body.data.progress.succeeded).toBe(2);
     expect(statusRes.body.data.progress.failed).toBe(0);
     expect(statusRes.body.data.currentDocument).toBeNull();
+    expect(_mockRagStore.upsertDocumentWithChunks).toHaveBeenCalledTimes(2);
+    for (const [, metadata] of _mockRagStore.upsertDocumentWithChunks.mock.calls) {
+      expect(metadata).toMatchObject({ forceReindex: true });
+    }
   });
 
   it('records failed documents without aborting the reindex', async () => {
@@ -435,7 +446,7 @@ describe('GET /api/rag/embedding-migration/reindex/:jobId', () => {
     const app = buildApp();
     const startRes = await request(app)
       .post('/api/rag/embedding-migration/reindex')
-      .send({ confirm: true });
+      .send({ confirmation: REINDEX_CONFIRMATION });
 
     const jobId = startRes.body.data.jobId;
 

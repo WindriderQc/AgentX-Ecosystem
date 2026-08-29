@@ -69,7 +69,7 @@ function buildJudgeableResultFilter(batchId, options = {}) {
 
 async function preflightJudgeBatch(batchId, options = {}) {
     const batch = await BenchmarkBatch.findById(batchId)
-        .select('status judge_status')
+        .select('status judge_status judge_config plan.judge_model plan.exec_hosts')
         .lean();
 
     if (!batch) {
@@ -96,7 +96,12 @@ async function preflightJudgeBatch(batchId, options = {}) {
 
     return {
         pendingCount,
-        batchStatus: batch.status || 'unknown'
+        batchStatus: batch.status || 'unknown',
+        judgeConfig: {
+            ...(batch.judge_config || {}),
+            model: batch.judge_config?.model || batch.plan?.judge_model || null,
+            host: batch.judge_config?.host || batch.plan?.exec_hosts?.[0]?.judge_host || null
+        }
     };
 }
 

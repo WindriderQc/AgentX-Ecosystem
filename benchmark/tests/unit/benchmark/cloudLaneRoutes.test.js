@@ -1,16 +1,28 @@
 'use strict';
 
 const express = require('express');
-const request = require('supertest');
 const router = require('../../../routes/benchmark/cloudLanes');
+const { startTestHttpHarness } = require('../../helpers/testHttpServer');
 
-const app = express();
-app.use(express.json());
-app.use('/api/benchmark', router);
+const expressApp = express();
+expressApp.use(express.json());
+expressApp.use('/api/benchmark', router);
+
+let httpHarness;
+let api;
+
+beforeAll(async () => {
+    httpHarness = await startTestHttpHarness(expressApp);
+    api = httpHarness.request;
+});
+
+afterAll(async () => {
+    await httpHarness?.close();
+});
 
 describe('cloud/local lane API', () => {
     test('the plan endpoint fails closed on a paid candidate without price provenance', async () => {
-        const response = await request(app).post('/api/benchmark/cloud-lanes/plan').send({
+        const response = await api.post('/api/benchmark/cloud-lanes/plan').send({
             campaignId: 'c1', lane: 'coding', estimatedCalls: 2, spendCeilingNanodollars: 1,
             contract: {
                 version: 'v1', lane: 'coding', suite: 'suite', suiteVersion: '1',
@@ -48,7 +60,7 @@ describe('cloud/local lane API', () => {
             contract, observedAt: '2026-08-27T12:00:00Z', attempts: 1, successes: 1,
             metrics: { qualityScore: quality, latencyMs: 100, contextTokens: 4096 }
         });
-        const response = await request(app).post('/api/benchmark/cloud-lanes/compare').send({
+        const response = await api.post('/api/benchmark/cloud-lanes/compare').send({
             lane: 'coding', generatedAt: '2026-08-27T12:00:00Z',
             observations: [observation('a', 'one', 0.8), observation('b', 'two', 0.9)]
         });

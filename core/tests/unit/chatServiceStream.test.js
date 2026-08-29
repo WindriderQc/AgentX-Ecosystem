@@ -185,11 +185,19 @@ describe('chatServiceStream', () => {
     });
 
     const onComplete = jest.fn();
+    mockGetActivePrompt.mockResolvedValueOnce({
+      _id: 'prompt-4',
+      name: 'reviewer',
+      version: 4,
+      systemPrompt: 'Review carefully.'
+    });
 
     await handleChatRequestStream({
       userId: 'user-1',
       model: 'auto',
       message: 'Analyze this',
+      persona: 'reviewer',
+      promptVersion: 4,
       autoRoute: true,
       onToken: jest.fn(),
       onThinking: jest.fn(),
@@ -198,6 +206,12 @@ describe('chatServiceStream', () => {
     });
 
     expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: {
+        name: 'reviewer',
+        version: 4,
+        exact: true,
+        requestedVersion: 4
+      },
       routing: expect.objectContaining({
         taskType: 'analysis',
         routed: true,
@@ -208,6 +222,10 @@ describe('chatServiceStream', () => {
         routedHostUrl: 'http://192.0.2.66:11434'
       })
     }));
+    expect(mockGetActivePrompt).toHaveBeenCalledWith(undefined, 'reviewer', {
+      preferSystem: false,
+      promptVersion: 4
+    });
     expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
       taskType: 'analysis',
       routed: true,

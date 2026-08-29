@@ -1,7 +1,8 @@
 'use strict';
 
-const ECOSYSTEM_SNAPSHOT_SCHEMA_VERSION = 1;
+const ECOSYSTEM_SNAPSHOT_SCHEMA_VERSION = 2;
 const DEFAULT_ECOSYSTEM_SNAPSHOT_TIMEOUT_MS = 7000;
+const { assessEcosystemEvidence } = require('./ecosystemEvidenceTrust');
 
 function positiveTimeout(value, fallback) {
   const parsed = Number(value);
@@ -43,6 +44,16 @@ function assertIntelligenceContract(value) {
   if (!value.routing || typeof value.routing !== 'object') {
     throw new Error('Nerve Center intelligence field routing must be an object');
   }
+  if (!value.alertSummary || typeof value.alertSummary !== 'object' || Array.isArray(value.alertSummary)) {
+    throw new Error('Nerve Center intelligence field alertSummary must be an object');
+  }
+  const activeAlertCount = Number(value.alertSummary.activeCount);
+  if (!Number.isFinite(activeAlertCount) || activeAlertCount < 0) {
+    throw new Error('Nerve Center intelligence field alertSummary.activeCount must be a non-negative number');
+  }
+  if (value.alertSummary.basis?.activePredicate?.status !== 'active') {
+    throw new Error('Nerve Center intelligence field alertSummary must use the active alert predicate');
+  }
 }
 
 function assertRoutingConfigContract(value) {
@@ -53,6 +64,21 @@ function assertRoutingConfigContract(value) {
     if (!value[key] || typeof value[key] !== 'object' || Array.isArray(value[key])) {
       throw new Error(`Nerve Center routing configuration field ${key} must be an object`);
     }
+  }
+}
+
+function assertServiceStatusContract(value) {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Portal service status returned no data');
+  }
+  if (!Array.isArray(value.services)) {
+    throw new Error('Portal service status field services must be an array');
+  }
+  if (!value.summary || typeof value.summary !== 'object') {
+    throw new Error('Portal service status field summary must be an object');
+  }
+  if (!value.consistency || typeof value.consistency !== 'object') {
+    throw new Error('Portal service status field consistency must be an object');
   }
 }
 
@@ -77,19 +103,23 @@ function summarizeCluster(cluster) {
 async function buildEcosystemSnapshot(options = {}) {
   const buildIntelligence = options.buildIntelligence;
   const buildRoutingConfig = options.buildRoutingConfig;
+  const buildServiceStatus = options.buildServiceStatus;
   assertBuilder(buildIntelligence, 'buildIntelligence');
   assertBuilder(buildRoutingConfig, 'buildRoutingConfig');
+  assertBuilder(buildServiceStatus, 'buildServiceStatus');
 
   const timeoutMs = positiveTimeout(
     options.timeoutMs ?? process.env.ECOSYSTEM_SNAPSHOT_TIMEOUT_MS,
     DEFAULT_ECOSYSTEM_SNAPSHOT_TIMEOUT_MS
   );
-  const [intelligence, routingConfig] = await collectWithinDeadline([
+  const [intelligence, routingConfig, serviceStatus] = await collectWithinDeadline([
     Promise.resolve().then(() => buildIntelligence()),
-    Promise.resolve().then(() => buildRoutingConfig())
+    Promise.resolve().then(() => buildRoutingConfig()),
+    Promise.resolve().then(() => buildServiceStatus())
   ], timeoutMs);
   assertIntelligenceContract(intelligence);
   assertRoutingConfigContract(routingConfig);
+  assertServiceStatusContract(serviceStatus);
 
   const now = typeof options.now === 'function' ? options.now() : new Date();
   const generatedDate = now instanceof Date ? now : new Date(now);
@@ -97,20 +127,37 @@ async function buildEcosystemSnapshot(options = {}) {
     throw new Error('Ecosystem snapshot timestamp is invalid');
   }
   const generatedAt = generatedDate.toISOString();
+  const clusterHealth = summarizeCluster(intelligence.cluster);
+  const serviceHealth = serviceStatus.summary;
 
-  return {
+  const snapshot = {
     schemaVersion: ECOSYSTEM_SNAPSHOT_SCHEMA_VERSION,
     generatedAt,
     authority: 'agentx-product',
     readOnly: true,
-    health: summarizeCluster(intelligence.cluster),
+    health: {
+      ...clusterHealth,
+      status: clusterHealth.status === 'ok' && serviceHealth.status === 'ok'
+        ? 'ok'
+        : 'degraded'
+    },
+    serviceHealth,
+    services: serviceStatus.services,
+    identityConsistency: serviceStatus.consistency,
+    evidence: {
+      snapshotObservedAt: generatedAt,
+      servicesObservedAt: serviceStatus.generatedAt || serviceStatus.generated_at || null
+    },
     cluster: intelligence.cluster,
     routing: intelligence.routing,
     routingConfig,
     hostPreferences: intelligence.hostPreferences,
     alerts: intelligence.alerts,
+    alertSummary: intelligence.alertSummary,
     recentRouting: intelligence.recentRouting
   };
+  snapshot.evidenceTrust = assessEcosystemEvidence(snapshot);
+  return snapshot;
 }
 
 module.exports = {
@@ -118,6 +165,7 @@ module.exports = {
   ECOSYSTEM_SNAPSHOT_SCHEMA_VERSION,
   assertIntelligenceContract,
   assertRoutingConfigContract,
+  assertServiceStatusContract,
   buildEcosystemSnapshot,
   summarizeCluster
 };

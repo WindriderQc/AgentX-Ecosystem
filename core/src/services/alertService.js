@@ -5,6 +5,10 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const { getNotificationService } = require('./notificationService');
 const { modelsMatch } = require('../helpers/modelNameNormalization');
+const {
+  ACTIVE_ALERT_STATUS,
+  normalizeAlertForRead
+} = require('./alertFeedProjection');
 
 class AlertService extends EventEmitter {
   constructor() {
@@ -756,6 +760,87 @@ class AlertService extends EventEmitter {
 
   async getStatistics(filters) {
     return Alert.getStatistics(filters);
+  }
+
+  /**
+   * Read a bounded alert page and its counts from one Mongo aggregation.
+   * Counts therefore describe the same persisted snapshot and filters as the
+   * returned rows instead of racing a separate count/statistics request.
+   */
+  async getAlertSnapshot({ limit = 50, skip = 0, filters = {}, sort = 'severity', maxLimit = 100 } = {}) {
+    const boundedMax = Math.min(Math.max(Number.parseInt(maxLimit, 10) || 100, 1), 500);
+    const boundedLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 50, 1), boundedMax);
+    const boundedSkip = Math.max(Number.parseInt(skip, 10) || 0, 0);
+    const match = {};
+    if (filters.severity) match.severity = filters.severity;
+    if (filters.status) match.status = filters.status;
+    if (filters.ruleId) match.ruleId = filters.ruleId;
+
+    const sortSpec = sort === 'recency'
+      ? { lastOccurrence: -1, createdAt: -1 }
+      : { __severityRank: -1, lastOccurrence: -1, createdAt: -1 };
+
+    const [facet = {}] = await Alert.aggregate([
+      { $match: match },
+      {
+        $addFields: {
+          __severityRank: {
+            $switch: {
+              branches: [
+                { case: { $eq: ['$severity', 'critical'] }, then: 3 },
+                { case: { $eq: ['$severity', 'error'] }, then: 2 },
+                { case: { $eq: ['$severity', 'warning'] }, then: 1 },
+                { case: { $eq: ['$severity', 'info'] }, then: 0 }
+              ],
+              default: 0
+            }
+          }
+        }
+      },
+      {
+        $facet: {
+          alerts: [
+            { $sort: sortSpec },
+            { $skip: boundedSkip },
+            { $limit: boundedLimit },
+            { $project: { __severityRank: 0 } }
+          ],
+          totals: [{ $count: 'count' }],
+          bySeverity: [{ $group: { _id: '$severity', count: { $sum: 1 } } }],
+          byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }]
+        }
+      }
+    ]);
+
+    const toCountObject = rows => (rows || []).reduce((counts, row) => {
+      if (row?._id) counts[row._id] = row.count;
+      return counts;
+    }, {});
+    const bySeverity = toCountObject(facet.bySeverity);
+    const byStatus = toCountObject(facet.byStatus);
+    const total = facet.totals?.[0]?.count || 0;
+    const activeCount = filters.status === ACTIVE_ALERT_STATUS
+      ? total
+      : (byStatus[ACTIVE_ALERT_STATUS] || 0);
+
+    return {
+      alerts: (facet.alerts || []).map(normalizeAlertForRead),
+      total,
+      limit: boundedLimit,
+      skip: boundedSkip,
+      summary: {
+        total,
+        activeCount,
+        bySeverity,
+        byStatus,
+        basis: {
+          entity: 'persisted_alert',
+          activePredicate: { status: ACTIVE_ALERT_STATUS },
+          appliedFilters: { ...match }
+        },
+        observedAt: new Date().toISOString()
+      }
+    };
   }
 
   async getRecentAlerts(limit = 10, filters = {}) {

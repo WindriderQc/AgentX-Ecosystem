@@ -1,15 +1,19 @@
 // public/js/efficiency-map/scatter-plot.js
 import { scoreColor } from '../components/score-color.js';
+import { NO_THROUGHPUT_MESSAGE, rankableEfficiencyEntries } from './evidence.js';
 
 const PAD = { top: 30, right: 30, bottom: 50, left: 55 };
 const HEIGHT = 400;
 
 function niceMax(val) {
+    if (!Number.isFinite(val) || val <= 0) return 1;
     const mag = Math.pow(10, Math.floor(Math.log10(val)));
-    return Math.ceil(val / mag) * mag;
+    const rounded = Math.ceil(val / mag) * mag;
+    return Number.isFinite(rounded) && rounded > 0 ? rounded : val;
 }
 
 function gridValues(max, steps) {
+    if (!Number.isFinite(max) || max <= 0 || !Number.isInteger(steps) || steps <= 0) return [];
     const step = max / steps;
     const vals = [];
     for (let i = 0; i <= steps; i++) vals.push(Math.round(step * i));
@@ -17,16 +21,22 @@ function gridValues(max, steps) {
 }
 
 export function renderScatterPlot(container, entries, { onPointClick } = {}) {
-    if (entries.length === 0) {
-        container.innerHTML = '<p style="color:var(--r-text-muted);text-align:center;padding:2rem">No data to plot.</p>';
+    const plottedEntries = rankableEfficiencyEntries(entries);
+    if (plottedEntries.length === 0) {
+        container.innerHTML = `<p class="eff-empty-state">${NO_THROUGHPUT_MESSAGE}</p>`;
         return;
     }
 
-    const width = Math.max(600, container.clientWidth || 700);
+    const containerWidth = Number.isFinite(container.clientWidth) ? container.clientWidth : 700;
+    const width = Math.max(600, containerWidth);
     const plotW = width - PAD.left - PAD.right;
     const plotH = HEIGHT - PAD.top - PAD.bottom;
 
-    const maxSpeed = niceMax(Math.max(...entries.map(e => e.avgTokPerSec)) * 1.1);
+    const observedMaxSpeed = Math.max(...plottedEntries.map(e => e.avgTokPerSec));
+    const paddedMaxSpeed = observedMaxSpeed <= (Number.MAX_VALUE / 1.1)
+        ? observedMaxSpeed * 1.1
+        : observedMaxSpeed;
+    const maxSpeed = niceMax(paddedMaxSpeed);
     const maxQ = 10;
 
     const xScale = v => PAD.left + (v / maxSpeed) * plotW;
@@ -55,7 +65,7 @@ export function renderScatterPlot(container, entries, { onPointClick } = {}) {
     `;
 
     // Pareto frontier line (step-line)
-    const frontier = entries.filter(e => e.paretoOptimal).sort((a, b) => a.avgTokPerSec - b.avgTokPerSec);
+    const frontier = plottedEntries.filter(e => e.paretoOptimal).sort((a, b) => a.avgTokPerSec - b.avgTokPerSec);
     let frontierPath = '';
     if (frontier.length > 1) {
         const pts = frontier.map(e => ({ x: xScale(e.avgTokPerSec), y: yScale(e.avgQuality) }));
@@ -69,14 +79,14 @@ export function renderScatterPlot(container, entries, { onPointClick } = {}) {
     // Points
     let points = '';
     // Dominated first (behind)
-    for (const e of entries.filter(e => !e.paretoOptimal)) {
+    for (const e of plottedEntries.filter(e => !e.paretoOptimal)) {
         const cx = xScale(e.avgTokPerSec);
         const cy = yScale(e.avgQuality);
         const key = `${e.model}@@${e.host}`;
         points += `<circle cx="${cx}" cy="${cy}" r="5" fill="none" stroke="#555" stroke-width="1.5" class="eff-dot" data-key="${key}"/>`;
     }
     // Pareto on top
-    for (const e of entries.filter(e => e.paretoOptimal)) {
+    for (const e of plottedEntries.filter(e => e.paretoOptimal)) {
         const cx = xScale(e.avgTokPerSec);
         const cy = yScale(e.avgQuality);
         const key = `${e.model}@@${e.host}`;
@@ -105,20 +115,23 @@ export function renderScatterPlot(container, entries, { onPointClick } = {}) {
 
     // Interactions
     const tooltip = container.querySelector(`#${tooltipId}`);
-    const entryMap = new Map(entries.map(e => [`${e.model}@@${e.host}`, e]));
+    const entryMap = new Map(plottedEntries.map(e => [`${e.model}@@${e.host}`, e]));
 
     container.querySelectorAll('.eff-dot').forEach(dot => {
         dot.addEventListener('mouseenter', ev => {
             const e = entryMap.get(dot.dataset.key);
             if (!e) return;
             const eColor = scoreColor(e.efficiencyScore / 10);
+            const throughputTestCount = Number.isFinite(e.throughputTestCount)
+                ? e.throughputTestCount
+                : e.testCount;
             tooltip.innerHTML = `
                 <div class="eff-tip-model">${e.model}</div>
                 <div class="eff-tip-host">${e.host}</div>
                 <div>Quality: <b style="color:${scoreColor(e.avgQuality)}">${e.avgQuality.toFixed(1)}</b></div>
                 <div>tok/s: <b>${e.avgTokPerSec.toFixed(1)}</b></div>
                 <div>Efficiency: <b style="color:${eColor}">${e.efficiencyScore.toFixed(1)}</b></div>
-                <div class="eff-tip-tests">${e.testCount} tests</div>
+                <div class="eff-tip-tests">${throughputTestCount} speed samples · ${e.testCount} quality tests</div>
             `;
             tooltip.classList.remove('hidden');
             const rect = container.querySelector('.eff-scatter-wrap').getBoundingClientRect();

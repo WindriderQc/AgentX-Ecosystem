@@ -3,6 +3,7 @@ const request = require('supertest');
 
 jest.mock('../../models/PipelineTask', () => ({
   find: jest.fn(),
+  aggregate: jest.fn(),
   findOne: jest.fn(),
   findOneAndUpdate: jest.fn(),
 }));
@@ -17,9 +18,15 @@ const PipelineTask = require('../../models/PipelineTask');
 const pipelineTaskService = require('../../src/services/pipelineTaskService');
 const pipelineRoutes = require('../../routes/pipeline');
 
-function createApp() {
+function createApp({ ip } = {}) {
   const app = express();
   app.use(express.json());
+  if (ip) {
+    app.use((req, _res, next) => {
+      Object.defineProperty(req, 'ip', { value: ip, configurable: true });
+      next();
+    });
+  }
   app.use('/api/pipeline', pipelineRoutes);
   return app;
 }
@@ -46,6 +53,7 @@ test('keeps the retired board-sync path as an explicit adapter shim', async () =
 describe('GET /api/pipeline/tasks', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    PipelineTask.aggregate.mockResolvedValue([]);
   });
 
   test('supports summary view for lightweight pipeline dashboards', async () => {
@@ -58,6 +66,10 @@ describe('GET /api/pipeline/tasks', () => {
       },
     ]);
     PipelineTask.find.mockReturnValue(query);
+    PipelineTask.aggregate.mockResolvedValue([
+      { _id: 'in_progress', count: 1 },
+      { _id: 'queued', count: 4 }
+    ]);
 
     const res = await request(createApp())
       .get('/api/pipeline/tasks?view=summary&limit=50')
@@ -78,6 +90,21 @@ describe('GET /api/pipeline/tasks', () => {
     expect(res.body.status).toBe('success');
     expect(res.body.data.count).toBe(1);
     expect(res.body.data.tasks[0].pipelineId).toBe('0326');
+    expect(res.body.data.summary).toEqual(expect.objectContaining({
+      matchedCount: 5,
+      openCount: 5,
+      doneCount: 0
+    }));
+    expect(res.body.data.evidence).toMatchObject({
+      authority: 'core.pipeline',
+      scope: {
+        statuses: ['queued', 'in_progress', 'review', 'blocked'],
+        includesDone: false,
+        timeWindow: { kind: 'all_time' }
+      },
+      rows: { limit: 50, returnedCount: 1, matchedCount: 5, truncated: true }
+    });
+    expect(res.body.data.evidence.observedAt).toEqual(expect.any(String));
   });
 
   test('allows explicit full-history listing when includeDone is true', async () => {
@@ -421,6 +448,223 @@ describe('POST /api/pipeline/tasks/:id/status (0354 review->done gate)', () => {
       { pipelineId: '0500' },
       { $set: { status: 'queued', assignee: null, heartbeatAt: null } },
       { new: true }
+    );
+  });
+});
+
+describe('pipeline scoped machine identity', () => {
+  const REMOTE_IP = '198.51.100.24';
+  const ENV_KEYS = [
+    'AGENTX_PIPELINE_TOKEN',
+    'AGENTX_OPERATOR_TOKEN',
+    'AGENTX_ADMIN_TOKEN',
+    'AGENTX_TRUST_INTERNAL_SERVICE_HOSTS',
+    'AGENTX_TRUST_LOOPBACK_PROXY_UI',
+    'AGENTX_OPERATOR_UI_HOSTS',
+    'AGENTX_TRUSTED_UI_HOSTS',
+    'CORE_PUBLIC_URL',
+  ];
+  const originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    for (const key of ENV_KEYS) delete process.env[key];
+  });
+
+  afterAll(() => {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const mutationCases = [
+    ['claim', '/api/pipeline/tasks/0700/claim', { assignee: 'remote-worker' }, () => {
+      expect(pipelineTaskService.claimEligibleTask).not.toHaveBeenCalled();
+    }],
+    ['heartbeat', '/api/pipeline/tasks/0700/heartbeat', {}, () => {
+      expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+    }],
+    ['status', '/api/pipeline/tasks/0700/status', { status: 'in_progress' }, () => {
+      expect(PipelineTask.findOne).not.toHaveBeenCalled();
+      expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+    }],
+    ['feedback', '/api/pipeline/tasks/0700/feedback', { status: 'partial', text: 'still working' }, () => {
+      expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+    }],
+  ];
+
+  const rejectedCredentialCases = [
+    ['missing', 'pipeline-secret', undefined],
+    ['wrong', 'pipeline-secret', 'not-the-secret'],
+    ['unconfigured', undefined, 'orphaned-token'],
+  ];
+
+  test.each(mutationCases.flatMap(([action, path, body, assertNoSideEffect]) => (
+    rejectedCredentialCases.map(([credentialState, configured, presented]) => [
+      action, credentialState, path, body, assertNoSideEffect, configured, presented,
+    ])
+  )))('rejects remote %s with a %s credential before side effects', async (
+    _action, _credentialState, path, body, assertNoSideEffect, configured, presented
+  ) => {
+    if (configured !== undefined) process.env.AGENTX_PIPELINE_TOKEN = configured;
+    let pending = request(createApp({ ip: REMOTE_IP }))
+      .post(path)
+      .set('Host', 'remote-worker.example');
+    if (presented !== undefined) pending = pending.set('X-AgentX-Pipeline-Token', presented);
+
+    const response = await pending.send(body).expect(403);
+
+    expect(response.body).toMatchObject({
+      ok: false,
+      status: 'error',
+      code: 'PIPELINE_ACCESS_REQUIRED',
+    });
+    assertNoSideEffect();
+  });
+
+  test('admits the exact scoped token to claim, heartbeat, non-final status, and feedback', async () => {
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+    const app = createApp({ ip: REMOTE_IP });
+    const workerHeaders = { Host: 'remote-worker.example', 'X-AgentX-Pipeline-Token': 'pipeline-secret' };
+
+    pipelineTaskService.claimEligibleTask.mockResolvedValue({
+      pipelineId: '0701', status: 'in_progress', assignee: 'remote-worker'
+    });
+    await request(app)
+      .post('/api/pipeline/tasks/0701/claim')
+      .set(workerHeaders)
+      .send({ assignee: 'remote-worker' })
+      .expect(200);
+
+    PipelineTask.findOneAndUpdate.mockResolvedValueOnce({
+      pipelineId: '0701', heartbeatAt: new Date('2026-08-28T12:00:00.000Z')
+    });
+    await request(app)
+      .post('/api/pipeline/tasks/0701/heartbeat')
+      .set(workerHeaders)
+      .send({})
+      .expect(200);
+
+    PipelineTask.findOne.mockResolvedValueOnce({
+      pipelineId: '0701', status: 'in_progress', assignee: 'remote-worker'
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValueOnce({
+      pipelineId: '0701', status: 'blocked', assignee: 'remote-worker'
+    });
+    await request(app)
+      .post('/api/pipeline/tasks/0701/status')
+      .set(workerHeaders)
+      .send({ status: 'blocked', by: 'remote-worker' })
+      .expect(200);
+
+    PipelineTask.findOneAndUpdate.mockResolvedValueOnce({
+      pipelineId: '0701', status: 'review', assignee: 'remote-worker'
+    });
+    await request(app)
+      .post('/api/pipeline/tasks/0701/feedback')
+      .set(workerHeaders)
+      .send({ status: 'done', by: 'remote-worker', text: 'implementation and verification complete' })
+      .expect(200);
+
+    expect(pipelineTaskService.claimEligibleTask).toHaveBeenCalledWith('0701', 'remote-worker');
+    expect(PipelineTask.findOneAndUpdate).toHaveBeenLastCalledWith(
+      { pipelineId: '0701' },
+      expect.objectContaining({ $set: { status: 'review' } }),
+      { new: true }
+    );
+  });
+
+  test('does not let a remote worker token acquire final authority through status=done', async () => {
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+
+    const response = await request(createApp({ ip: REMOTE_IP }))
+      .post('/api/pipeline/tasks/0702/status')
+      .set('Host', 'remote-worker.example')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-secret')
+      .send({ status: 'done', by: 'different-overseer-name' })
+      .expect(403);
+
+    expect(response.body.code).toBe('PIPELINE_FINALIZE_REQUIRES_CONTROL_AUTHORITY');
+    expect(PipelineTask.findOne).not.toHaveBeenCalled();
+    expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  test('retains remote operator finalization and its existing force override', async () => {
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+    process.env.AGENTX_OPERATOR_TOKEN = 'operator-secret';
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0703', status: 'in_progress', assignee: 'remote-worker'
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0703', status: 'done' });
+
+    await request(createApp({ ip: REMOTE_IP }))
+      .post('/api/pipeline/tasks/0703/status')
+      .set('Host', 'operator.example')
+      .set('X-AgentX-Operator-Token', 'operator-secret')
+      .send({ status: 'done' })
+      .expect(200);
+
+    expect(PipelineTask.findOneAndUpdate).toHaveBeenCalledWith(
+      { pipelineId: '0703' },
+      {
+        $set: { status: 'done' },
+        $push: { feedback: expect.objectContaining({ by: 'operator' }) }
+      },
+      { new: true }
+    );
+  });
+
+  test('retains explicit trusted internal-machine access without the worker token', async () => {
+    process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS = 'true';
+    pipelineTaskService.claimEligibleTask.mockResolvedValue({
+      pipelineId: '0704', status: 'in_progress', assignee: 'local-harness'
+    });
+
+    await request(createApp({ ip: REMOTE_IP }))
+      .post('/api/pipeline/tasks/0704/claim')
+      .set('Host', 'core:3080')
+      .send({ assignee: 'local-harness' })
+      .expect(200);
+
+    expect(pipelineTaskService.claimEligibleTask).toHaveBeenCalledWith('0704', 'local-harness');
+  });
+
+  test.each([
+    ['missing', 'pipeline-secret', undefined],
+    ['wrong', 'pipeline-secret', 'not-the-secret'],
+    ['unconfigured', undefined, 'orphaned-token'],
+  ])('rejects the bounded next-task read with a %s remote credential before task selection', async (
+    _credentialState, configured, presented
+  ) => {
+    if (configured !== undefined) process.env.AGENTX_PIPELINE_TOKEN = configured;
+    let pending = request(createApp({ ip: REMOTE_IP }))
+      .get('/api/pipeline/tasks/next?agent=remote-worker')
+      .set('Host', 'remote-worker.example');
+    if (presented !== undefined) pending = pending.set('X-AgentX-Pipeline-Token', presented);
+
+    const response = await pending.expect(403);
+
+    expect(response.body.code).toBe('PIPELINE_ACCESS_REQUIRED');
+    expect(pipelineTaskService.findNextEligibleTask).not.toHaveBeenCalled();
+  });
+
+  test('admits the exact worker token to the bounded next-task read', async () => {
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+    pipelineTaskService.findNextEligibleTask.mockResolvedValue({
+      pipelineId: '0706', status: 'queued', assignee: null
+    });
+    const app = createApp({ ip: REMOTE_IP });
+
+    const next = await request(app)
+      .get('/api/pipeline/tasks/next?agent=remote-worker')
+      .set('Host', 'remote-worker.example')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-secret')
+      .expect(200);
+
+    expect(next.body.data.nextTaskId).toBe('0706');
+    expect(pipelineTaskService.findNextEligibleTask).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'remote-worker' })
     );
   });
 });

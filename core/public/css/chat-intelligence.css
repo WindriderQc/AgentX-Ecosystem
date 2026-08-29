@@ -13,7 +13,7 @@
   border-top: 1px solid rgba(124, 240, 255, 0.08);
   font-family: 'Fira Code', 'Courier New', monospace;
   font-size: 0.86rem;
-  color: #585f73;
+  color: #a3adbd;
   overflow-x: auto;
   white-space: nowrap;
   flex-shrink: 0;
@@ -412,8 +412,12 @@
   color: var(--muted);
 }
 
+.ci-routing-badge .ci-badge-prompt {
+  color: var(--accent-2, #eeb0ff);
+}
+
 .ci-routing-badge .ci-badge-time {
-  color: #585f73;
+  color: #a3adbd;
 }
 
 /* ---------- Responsive ---------- */

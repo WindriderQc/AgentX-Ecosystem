@@ -4,6 +4,7 @@ const hostProfileService = require('./hostProfileService');
 const { checkHost } = require('../hostTestService');
 const { listRunning } = require('../../clients/ollamaClient');
 const { getConfiguredHosts, normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
+const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmission');
 
 function parseUrlHost(hostUrl) {
   try {
@@ -78,12 +79,9 @@ function summarizeTelemetry(ollamaPs, profile) {
 }
 
 async function detectOllamaHost({ hostUrl, displayName } = {}) {
-  const normalized = normalizeHostUrl(hostUrl || '');
-  if (!normalized) {
-    const error = new Error('hostUrl is required');
-    error.statusCode = 400;
-    throw error;
-  }
+  const normalized = await admitOllamaTargetResolved(hostUrl || '', {
+    configuredHosts: getConfiguredHosts()
+  });
 
   const check = await checkHost(normalized);
   if (!check.available) {

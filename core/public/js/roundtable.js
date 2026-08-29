@@ -39,6 +39,7 @@
   // ---------- Form: panel editor ----------
   let currentPanel = [];
   let currentSynth = { model: '', systemPrompt: '' };
+  let currentModelReadiness = null;
 
   function renderAgentCard(agent, index) {
     const runtime = agent.runtime || 'model';
@@ -54,7 +55,7 @@
         </div>
         <div class="rt-agent-edit-row">
           <div><label class="rt-label">Runtime</label><select class="rt-input" data-field="runtime">${runtimeOptions}</select></div>
-          <div><label class="rt-label">Model</label><input type="text" class="rt-input" data-field="model" value="${escape(agent.model || '')}" placeholder="required for model runtime"></div>
+          <div><label class="rt-label">Model</label><input type="text" class="rt-input" data-field="model" list="councilModelOptions" autocomplete="off" value="${escape(agent.model || '')}" placeholder="required for model runtime"></div>
         </div>
         <div class="rt-agent-edit-row">
           <div><label class="rt-label">Session key / ID</label><input type="text" class="rt-input" data-runtime-field="sessionKey" value="${escape(agent.runtimeConfig?.sessionKey || agent.runtimeConfig?.sessionId || '')}" placeholder="optional dedicated runtime session"></div>
@@ -75,6 +76,7 @@
     $('formAgents').innerHTML = currentPanel.map((a, i) => renderAgentCard(a, i)).join('');
     $('formSynthModel').value = currentSynth.model || '';
     $('formSynthPrompt').value = currentSynth.systemPrompt || '';
+    updateStartReadiness();
   }
 
   function readPanelFromDOM() {
@@ -94,15 +96,63 @@
     return panel;
   }
 
+  function renderModelReadiness(readiness, { formReady = false, manualSelection = false } = {}) {
+    const host = $('formModelReadiness');
+    if (!host) return;
+    host.classList.toggle('is-ready', formReady);
+    host.classList.toggle('is-blocked', !formReady);
+    let message = readiness?.message || 'No configured or runtime-discovered chat model is available.';
+    if (manualSelection) {
+      message = 'Using operator-selected model names; availability is checked when Council runs.';
+    } else if (!formReady && readiness?.canStart === true) {
+      message = `${message} Complete the participant and synthesizer selections.`;
+    }
+    host.innerHTML = `
+      <i class="fas ${formReady ? 'fa-circle-check' : 'fa-triangle-exclamation'}" aria-hidden="true"></i>
+      <span>${escape(message)} Council never downloads a model implicitly. <a href="/models">Review Models</a>.</span>`;
+  }
+
+  function updateStartReadiness() {
+    const btn = $('formStartBtn');
+    if (!btn) return;
+    const panel = readPanelFromDOM();
+    const synthModel = $('formSynthModel')?.value.trim() || '';
+    const ready = panel.length > 0 && Boolean(synthModel);
+    const selectedModels = [
+      ...panel
+        .filter((participant) => participant.runtime === 'model')
+        .map((participant) => participant.model),
+      synthModel
+    ].filter(Boolean);
+    const presetModel = currentModelReadiness?.selectedModel || '';
+    const manualSelection = ready && selectedModels.some((model) => model !== presetModel);
+    btn.disabled = !ready;
+    btn.title = ready ? '' : 'Select a model participant and synthesizer before convening Council.';
+    if (currentModelReadiness) {
+      renderModelReadiness(currentModelReadiness, { formReady: ready, manualSelection });
+    }
+  }
+
   async function loadDefaults(reset = false) {
     try {
       const { data } = await jsonFetch('/api/roundtable/defaults');
+      currentModelReadiness = data.readiness || { canStart: false };
+      $('councilModelOptions').innerHTML = (data.models || [])
+        .map((model) => `<option value="${escape(model)}"></option>`)
+        .join('');
       if (reset || !currentPanel.length) {
         currentPanel = data.panel.map((a) => ({ runtime: 'model', ...a }));
         currentSynth = { ...data.synthesizer };
         renderPanel();
       }
+      updateStartReadiness();
     } catch (err) {
+      currentModelReadiness = {
+        canStart: false,
+        message: `Model discovery failed: ${err.message}`
+      };
+      renderModelReadiness(currentModelReadiness);
+      updateStartReadiness();
       showToast(`Failed to load defaults: ${err.message}`, 'error');
     }
   }
@@ -515,6 +565,7 @@
 
     const panel = readPanelFromDOM();
     if (!panel.length) { showToast('Panel must have at least one agent', 'error'); return; }
+    if (!$('formSynthModel').value.trim()) { showToast('Select a synthesizer model', 'error'); return; }
 
     const body = {
       question,
@@ -548,8 +599,8 @@
     } catch (err) {
       showToast(`Failed: ${err.message}`, 'error');
     } finally {
-      btn.disabled = false;
       btn.innerHTML = '<i class="fas fa-rocket"></i> Convene Council';
+      updateStartReadiness();
     }
   }
 
@@ -603,6 +654,8 @@
 
   document.addEventListener('DOMContentLoaded', async () => {
     $('formStartBtn').addEventListener('click', startDiscussion);
+    $('formAgents').addEventListener('input', updateStartReadiness);
+    $('formSynthModel').addEventListener('input', updateStartReadiness);
     $('formResetBtn').addEventListener('click', () => loadDefaults(true));
     $('formAddAgent').addEventListener('click', () => {
       currentPanel = readPanelFromDOM();
@@ -620,9 +673,16 @@
     $('liveRejectBtn').addEventListener('click', () => submitDecision('rejected'));
     $('historyRefreshBtn').addEventListener('click', loadHistory);
     $('liveDeleteBtn').addEventListener('click', async () => {
-      if (!liveDoc || !confirm('Delete this Council record?')) return;
+      if (!liveDoc) return;
+      const headers = await window.AgentXTypedConfirmation.confirm({
+        action: 'DELETE COUNCIL RECORD',
+        resource: liveDoc._id,
+        title: 'Delete Council record',
+        description: 'Delete this Council discussion, transcript, verdict, and score record? This cannot be recovered.'
+      });
+      if (!headers) return;
       try {
-        await jsonFetch(`/api/roundtable/${liveDoc._id}`, { method: 'DELETE' });
+        await jsonFetch(`/api/roundtable/${liveDoc._id}`, { method: 'DELETE', headers });
         clearLive();
         loadHistory();
         showToast('Deleted', 'success');

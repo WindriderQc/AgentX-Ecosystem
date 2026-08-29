@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Ollama Watchdog Service
  *
@@ -16,16 +18,32 @@
  *
  * Lifecycle: start() is called from server.js during startup. stop() for cleanup.
  */
+const nodeFetch = require('node-fetch');
 const logger = require('../../config/logger');
 const { getConfiguredHosts } = require('../helpers/ollamaHostConfig');
+const {
+  OUTBOUND_ERROR_CODES,
+  createOutboundHttpExecutor,
+  readBoundedJson
+} = require('../../../shared/outboundHttpExecutor');
+const {
+  peerVerifiedNodeFetchTransport
+} = require('../helpers/peerVerifiedNodeFetchTransport');
 const hostGate = require('./hostGate');
 
-let _fetch = null;
-async function getFetch() {
-  if (!_fetch) _fetch = (await import('node-fetch')).default;
-  return _fetch;
+let _fetch = nodeFetch;
+let _outboundExecutor = null;
+
+// Preserve the long-standing injected-fetch test seam. The fetch still runs
+// through the governed executor and whichever peer-verifying transport the
+// module was constructed with; tests mock that transport at the module seam.
+function _setFetch(fn) {
+  if (fn !== undefined && fn !== null && typeof fn !== 'function') {
+    throw new TypeError('Watchdog fetch implementation must be a function');
+  }
+  _fetch = fn || nodeFetch;
+  _outboundExecutor = null;
 }
-function _setFetch(fn) { _fetch = fn; }
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -38,6 +56,177 @@ const RELOAD_AFTER_UNJAM = process.env.WATCHDOG_RELOAD !== 'false';             
 // this window so that cold model-load traffic doesn't trip the jam detector
 // (a warming model can hold the generate queue longer than the probe timeout).
 const RECOVERY_GRACE_MS  = parseInt(process.env.WATCHDOG_RECOVERY_GRACE_MS, 10) || 300_000; // 5 min
+
+const UNJAM_TIMEOUT_MS = 30_000;
+const RESTORE_TIMEOUT_MS = 300_000;
+const GENERATE_MAX_REQUEST_BYTES = 64 * 1024;
+const GENERATE_MAX_RESPONSE_BYTES = 64 * 1024;
+const META_MAX_RESPONSE_BYTES = 1024 * 1024;
+
+const WATCHDOG_OPERATIONS = Object.freeze({
+  GENERATE_PROBE: 'core.watchdog.generate-probe',
+  PS: 'core.watchdog.ps',
+  UNJAM: 'core.watchdog.unjam',
+  RESTORE: 'core.watchdog.restore'
+});
+
+function operation(method, pathPattern, {
+  deadlineMs,
+  maxRequestBytes = 0,
+  maxResponseBytes,
+  responseMode
+}) {
+  return Object.freeze({
+    allowSearch: false,
+    method,
+    pathPattern,
+    responseMode,
+    policy: Object.freeze({
+      authoritySource: 'configured',
+      deadlineMs,
+      maxRequestBytes,
+      maxResponseBytes
+    })
+  });
+}
+
+const WATCHDOG_OPERATION_SPECS = Object.freeze({
+  [WATCHDOG_OPERATIONS.GENERATE_PROBE]: operation('POST', '^/api/generate$', {
+    deadlineMs: PROBE_TIMEOUT_MS,
+    maxRequestBytes: GENERATE_MAX_REQUEST_BYTES,
+    maxResponseBytes: GENERATE_MAX_RESPONSE_BYTES,
+    responseMode: 'discard'
+  }),
+  [WATCHDOG_OPERATIONS.PS]: operation('GET', '^/api/ps$', {
+    deadlineMs: META_TIMEOUT_MS,
+    maxResponseBytes: META_MAX_RESPONSE_BYTES,
+    responseMode: 'json'
+  }),
+  [WATCHDOG_OPERATIONS.UNJAM]: operation('POST', '^/api/generate$', {
+    deadlineMs: UNJAM_TIMEOUT_MS,
+    maxRequestBytes: GENERATE_MAX_REQUEST_BYTES,
+    maxResponseBytes: GENERATE_MAX_RESPONSE_BYTES,
+    responseMode: 'discard'
+  }),
+  [WATCHDOG_OPERATIONS.RESTORE]: operation('POST', '^/api/generate$', {
+    deadlineMs: RESTORE_TIMEOUT_MS,
+    maxRequestBytes: GENERATE_MAX_REQUEST_BYTES,
+    maxResponseBytes: GENERATE_MAX_RESPONSE_BYTES,
+    responseMode: 'discard'
+  })
+});
+
+const WATCHDOG_OUTBOUND_OPERATIONS = Object.freeze(Object.fromEntries(
+  Object.entries(WATCHDOG_OPERATION_SPECS)
+    .map(([operationId, spec]) => [operationId, spec.policy])
+));
+
+function configuredOrigin(value) {
+  let parsed;
+  try {
+    parsed = new URL(String(value || '').trim());
+  } catch {
+    throw new Error('Watchdog Ollama authority is not configured');
+  }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    || parsed.username
+    || parsed.password
+    || parsed.pathname !== '/'
+    || parsed.search
+    || parsed.hash
+    || parsed.origin === 'null') {
+    throw new Error('Watchdog Ollama authority is not configured');
+  }
+  return parsed.origin;
+}
+
+function operationMatches(spec, method, target) {
+  return Boolean(spec)
+    && spec.method === method
+    && new RegExp(spec.pathPattern).test(target.pathname)
+    && (spec.allowSearch || !target.search)
+    && !target.hash;
+}
+
+function assertRegisteredOperation(operationId, method, target) {
+  const spec = WATCHDOG_OPERATION_SPECS[operationId];
+  if (!operationMatches(spec, method, target)) {
+    throw new Error('Watchdog outbound operation is not registered');
+  }
+  return spec;
+}
+
+function createConfiguredWatchdogAuthorityAdapter(configuredHosts = getConfiguredHosts) {
+  if (typeof configuredHosts !== 'function') {
+    throw new TypeError('Configured watchdog hosts must be provided by a function');
+  }
+
+  return ({ authoritySource, sinkId, target }) => {
+    const spec = WATCHDOG_OPERATION_SPECS[sinkId];
+    const requested = new URL(target);
+    const allowedOrigins = new Set((configuredHosts() || []).map((host) => {
+      try {
+        return configuredOrigin(host?.url);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean));
+
+    if (authoritySource !== 'configured'
+      || !operationMatches(spec, spec?.method, requested)
+      || !allowedOrigins.has(requested.origin)) {
+      throw new Error('Watchdog outbound target is not configured');
+    }
+    return Object.freeze({ expectedOrigin: requested.origin });
+  };
+}
+
+function createWatchdogExecutor(options = {}) {
+  return createOutboundHttpExecutor({
+    authorityAdapter: options.authorityAdapter
+      || createConfiguredWatchdogAuthorityAdapter(options.getConfiguredHosts || getConfiguredHosts),
+    fetchImpl: options.fetchImpl || nodeFetch,
+    operations: options.operations || WATCHDOG_OUTBOUND_OPERATIONS,
+    transportAdapter: options.transportAdapter || peerVerifiedNodeFetchTransport
+  });
+}
+
+function getWatchdogExecutor() {
+  if (!_outboundExecutor) {
+    _outboundExecutor = createWatchdogExecutor({ fetchImpl: _fetch });
+  }
+  return _outboundExecutor;
+}
+
+async function watchdogRequest(
+  operationId,
+  target,
+  options = {},
+  executor = getWatchdogExecutor()
+) {
+  let requested;
+  try {
+    requested = new URL(target);
+  } catch {
+    throw new Error('Watchdog outbound operation is not registered');
+  }
+  const method = String(options.method || 'GET').toUpperCase();
+  assertRegisteredOperation(operationId, method, requested);
+  const admission = await executor.admitTarget(operationId, requested.href, {
+    signal: options.signal
+  });
+  return executor.request(admission, { ...options, method });
+}
+
+function hostTarget(host, pathname) {
+  return new URL(pathname, `${configuredOrigin(host?.url)}/`).href;
+}
+
+function isDeadlineError(error) {
+  return error?.code === OUTBOUND_ERROR_CODES.DEADLINE_EXCEEDED
+    || error?.name === 'AbortError'
+    || error?.type === 'aborted';
+}
 
 // ── State ───────────────────────────────────────────────────
 
@@ -64,42 +253,44 @@ const _stats = {
  * control-plane check for hosts with nothing loaded.
  * Returns { ok: true } or { ok: false, reason: string }.
  */
-async function probeHost(host, model = null) {
-  const fetchFn = await getFetch();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-
+async function probeHost(host, model = null, executor = getWatchdogExecutor()) {
   try {
-    const res = await fetchFn(`${host.url}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: model || '_',
-        prompt: 'ok',
-        stream: false,
-        think: false,
-        keep_alive: -1,
-        options: { num_predict: 1 }
-      }),
-      signal: controller.signal
-    });
+    const res = await watchdogRequest(
+      WATCHDOG_OPERATIONS.GENERATE_PROBE,
+      hostTarget(host, '/api/generate'),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model || '_',
+          prompt: 'ok',
+          stream: false,
+          think: false,
+          keep_alive: -1,
+          options: { num_predict: 1 }
+        })
+      },
+      executor
+    );
 
     // Any completed response means the request reached the worker/control
     // plane. Model-capability errors are still useful responses; a jammed or
-    // false-ready worker hangs until the bounded timeout.
+    // false-ready worker hangs until the bounded timeout. The body is not part
+    // of this status-first result, so explicitly cancel it to close the socket
+    // lifecycle without waiting on an untrusted error body.
+    const status = res.status;
+    await res.cancel();
     return {
       ok: true,
-      status: res.status,
+      status,
       mode: model ? 'loaded-model' : 'control-plane',
       model
     };
   } catch (err) {
-    if (err.name === 'AbortError' || err.type === 'aborted') {
+    if (isDeadlineError(err)) {
       return { ok: false, reason: 'timeout' };
     }
     return { ok: false, reason: err.message };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -107,21 +298,25 @@ async function probeHost(host, model = null) {
  * Check if a host's metadata endpoint still works (/api/ps).
  * If metadata works but inference doesn't → queue is jammed (not a network issue).
  */
-async function checkMeta(host) {
-  const fetchFn = await getFetch();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), META_TIMEOUT_MS);
-
+async function checkMeta(host, executor = getWatchdogExecutor()) {
   try {
-    const res = await fetchFn(`${host.url}/api/ps`, { signal: controller.signal });
-    if (!res.ok) return { ok: false, models: [] };
-    const data = await res.json();
+    const res = await watchdogRequest(
+      WATCHDOG_OPERATIONS.PS,
+      hostTarget(host, '/api/ps'),
+      { method: 'GET' },
+      executor
+    );
+    if (!res.ok) {
+      // Preserve the legacy status-first metadata result. A failed status must
+      // not become a timeout merely because its body stalls.
+      await res.cancel();
+      return { ok: false, models: [] };
+    }
+    const data = await readBoundedJson(res);
     const models = (data.models || []).map(m => m.name || m.model);
     return { ok: true, models };
   } catch {
     return { ok: false, models: [] };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -136,8 +331,7 @@ async function checkMeta(host) {
  *
  * @returns {{ success: boolean, unloaded: string[], errors: string[], skipped: string[] }}
  */
-async function unjamHost(host, models) {
-  const fetchFn = await getFetch();
+async function unjamHost(host, models, executor = getWatchdogExecutor()) {
   const unloaded = [];
   const errors = [];
   const skipped = [];
@@ -150,21 +344,24 @@ async function unjamHost(host, models) {
     }
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30_000); // 30s for unload
+      const res = await watchdogRequest(
+        WATCHDOG_OPERATIONS.UNJAM,
+        hostTarget(host, '/api/generate'),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, keep_alive: 0 })
+        },
+        executor
+      );
+      const status = res.status;
+      const accepted = res.ok || status < 500;
+      await res.cancel();
 
-      const res = await fetchFn(`${host.url}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, keep_alive: 0 }),
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-
-      if (res.ok || res.status < 500) {
+      if (accepted) {
         unloaded.push(model);
       } else {
-        errors.push(`${model}: HTTP ${res.status}`);
+        errors.push(`${model}: HTTP ${status}`);
       }
     } catch (err) {
       errors.push(`${model}: ${err.message}`);
@@ -177,24 +374,26 @@ async function unjamHost(host, models) {
 /**
  * Reload a model on a host (warm it back up after unjam).
  */
-async function reloadModel(host, model) {
-  const fetchFn = await getFetch();
+async function reloadModel(host, model, executor = getWatchdogExecutor()) {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 300_000); // 5min for cold load
-
-    await fetchFn(`${host.url}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        prompt: 'warmup',
-        stream: false,
-        options: { num_predict: 1 }
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timer);
+    const res = await watchdogRequest(
+      WATCHDOG_OPERATIONS.RESTORE,
+      hostTarget(host, '/api/generate'),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          prompt: 'warmup',
+          stream: false,
+          options: { num_predict: 1 }
+        })
+      },
+      executor
+    );
+    // Legacy restore treats every completed response as success regardless of
+    // HTTP status. Close its unused body immediately and keep that contract.
+    await res.cancel();
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -473,4 +672,32 @@ async function forceUnjam(hostUrl) {
   return { host: host.name, ...result };
 }
 
-module.exports = { start, stop, getStats, runNow, forceUnjam, probeHost, checkMeta, _setFetch };
+module.exports = {
+  WATCHDOG_OPERATIONS,
+  checkMeta,
+  forceUnjam,
+  getStats,
+  probeHost,
+  runNow,
+  start,
+  stop,
+  _setFetch,
+  _internal: {
+    GENERATE_MAX_REQUEST_BYTES,
+    GENERATE_MAX_RESPONSE_BYTES,
+    META_MAX_RESPONSE_BYTES,
+    META_TIMEOUT_MS,
+    PROBE_TIMEOUT_MS,
+    RESTORE_TIMEOUT_MS,
+    UNJAM_TIMEOUT_MS,
+    WATCHDOG_OPERATION_SPECS,
+    WATCHDOG_OUTBOUND_OPERATIONS,
+    configuredOrigin,
+    createConfiguredWatchdogAuthorityAdapter,
+    createWatchdogExecutor,
+    operationMatches,
+    reloadModel,
+    unjamHost,
+    watchdogRequest
+  }
+};

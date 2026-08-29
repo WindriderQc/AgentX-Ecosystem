@@ -10,8 +10,12 @@ last_verified: 2026-07-27
 
 > Base URL: `http://localhost:3082`
 
-**Envelope:** `{ "ok": true, "data": { ... }, "meta": { "durationMs": 42 } }`
+**Envelope:** `{ "ok": true, "data": { ... }, "meta": { "durationMs": 42, "observedAt": "2026-08-28T12:00:00.000Z" } }`
 **Errors:** `{ "ok": false, "error": "CODE", "detail": "..." }`
+
+All `/api/rag` success and error envelopes include a fresh `meta.observedAt`
+receipt. Health and status expose dependency state but omit internal service
+URLs and provider endpoints.
 
 ## Health & Status
 
@@ -66,11 +70,34 @@ Ingest a text document (chunk + embed + store). `POST /api/rag/documents` is an 
 | chunkOverlap | int | no | 50 | 0 to chunkSize/2 |
 | documentId | string | no | MD5 auto | Stable ID; re-ingest replaces |
 
+Ingestion is idempotent at the source/content boundary:
+
+- A supplied `documentId` is an opaque, caller-owned source identity. Repeating
+  that ID with unchanged content returns `status: "unchanged"` without another
+  embedding pass. Changed content replaces that ID; distinct supplied IDs are
+  never collapsed, even when their content matches.
+- Without `documentId`, the backward-compatible automatic ID is derived from
+  the supplied source spelling plus exact extracted text. Source-label identity
+  additionally trims surrounding whitespace and applies Unicode NFC so an
+  equivalent retry can reuse the existing automatic row. Different text creates
+  a separate automatic revision, and different source labels remain distinct.
+  New identity metadata uses a SHA-256 content digest; the historical automatic
+  document ID format remains unchanged for backward compatibility.
+- Approved filesystem ingestion may use its existing source-file hash as the
+  unchanged-content proof for the same path ID. Existing rows are not merged or
+  deleted by ingestion.
+
 ```bash
 curl -X POST http://localhost:3082/api/rag/ingest \
   -H 'Content-Type: application/json' \
   -d '{ "text": "Content...", "source": "my-source", "tags": ["docs"] }'
 # => { "ok": true, "data": { "documentId": "abc123", "chunkCount": 7, "status": "ok" } }
+```
+
+An exact repeat returns the existing document and its passage count:
+
+```json
+{ "ok": true, "data": { "documentId": "abc123", "chunkCount": 7, "status": "unchanged", "unchanged": true, "deduplicated": false } }
 ```
 
 **Errors:** 400 (validation), 503 `VECTOR_STORE_UNAVAILABLE`, 503 `EMBEDDING_SERVICE_UNAVAILABLE`
@@ -197,11 +224,13 @@ to the original text when inference is unavailable.
 
 ### GET /api/rag/documents
 
-List documents with filtering and pagination.
+List indexed documents with filtering and pagination. Each row is one document,
+not one source group; multiple document rows may carry the same `source`
+provenance label.
 
 | Param | Type | Default | Notes |
 |-------|------|---------|-------|
-| source | string | -- | Filter |
+| source | string | -- | Exact provenance-label filter |
 | tags | string | -- | Comma-separated |
 | limit | int | 50 | Max 200 |
 | offset | int | 0 | |
@@ -231,12 +260,23 @@ curl http://localhost:3082/api/rag/documents/abc123/chunks
 
 ### DELETE /api/rag/documents/:id
 
-Delete a document and all its chunks. **Errors:** 404
+Delete a document and all its chunks. The JSON body must contain the exact
+case-sensitive phrase `DELETE <full document ID>` in `confirmation`. This
+destructive-action confirmation is an additional safety gate; it does not
+replace or grant operator authorization at the deployment boundary.
+
+**Errors:** 400 `CONFIRMATION_REQUIRED`, 404
 
 ```bash
-curl -X DELETE http://localhost:3082/api/rag/documents/abc123
+curl -X DELETE http://localhost:3082/api/rag/documents/abc123 \
+  -H 'Content-Type: application/json' \
+  -d '{ "confirmation": "DELETE abc123" }'
 # => { "ok": true, "data": { "documentId": "abc123" } }
 ```
+
+When confirmation is missing or does not match the decoded route ID exactly,
+the store is not called. The error includes
+`confirmation: { "field": "confirmation", "expected": "DELETE abc123" }`.
 
 ## Manifests & Cleanup
 
@@ -374,10 +414,16 @@ contain letters, numbers, dots, underscores, and hyphens only.
 |----------|--------|-------------|
 | `/api/rag/snapshots` | POST | Create a snapshot of the configured collection |
 | `/api/rag/snapshots` | GET | List collection snapshots |
+| `/api/rag/snapshots/:name/download` | GET | Stream snapshot bytes to Core |
 | `/api/rag/snapshots/:name` | DELETE | Delete a named snapshot |
-| `/api/rag/snapshots/:name/restore` | POST | Restore the collection from a named snapshot |
+| `/api/rag/snapshots/:name/restore` | POST | Controlled offline rehearsal only |
 
-Snapshot operations return 502 when Qdrant cannot complete the request. Delete
+Every snapshot route is an internal Core↔RAG contract and requires
+`X-AgentX-Recovery-Token`; missing server or caller credentials fail closed.
+Responses expose logical snapshot metadata only, never Qdrant URLs, storage
+roots, or filesystem paths. Restore returns `OFFLINE_RESTORE_REQUIRED` by
+default and remains disabled until a controlled offline rehearsal is explicitly
+enabled. Snapshot operations return 502 when Qdrant cannot complete the request. Delete
 returns 404 when Qdrant reports that the named snapshot does not exist.
 
 ## Error Codes
@@ -388,7 +434,7 @@ returns 404 when Qdrant reports that the named snapshot does not exist.
 | `EMBEDDING_SERVICE_UNAVAILABLE` | 503 | Embedding provider (Ollama) down |
 | `SCAN_ALREADY_RUNNING` | 409 | Ingest-scan already in progress |
 | `REINDEX_ALREADY_RUNNING` | 409 | Reindex migration in progress |
-| `CONFIRMATION_REQUIRED` | 400 | Destructive op needs `confirm: true` |
+| `CONFIRMATION_REQUIRED` | 400 | Endpoint-specific destructive confirmation is missing or invalid |
 | `MONGODB_UNAVAILABLE` | 503 | MongoDB not connected |
 | `INVALID_ROOTS` | 400 | Scan roots outside configured paths |
 | `JOB_NOT_RUNNING` | 400 | Cannot cancel non-running job |

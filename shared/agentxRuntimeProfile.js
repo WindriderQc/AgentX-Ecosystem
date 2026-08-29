@@ -5,6 +5,7 @@ const DEMO_PROFILE = 'demo';
 const FULL_PROFILE = 'full';
 
 const DEMO_DISABLED_PREFIXES = Object.freeze([
+  '/api/agent-ops',
   '/api/alerts',
   '/api/analytics/codex-subscription-value',
   '/api/analytics/codex-usage',
@@ -31,6 +32,7 @@ const DEMO_DISABLED_PREFIXES = Object.freeze([
   '/api/voice-personas',
   '/api/voix',
   '/mcp',
+  '/agent-ops',
   '/backup',
   '/cluster-schedule',
   '/lecture',

@@ -1,5 +1,6 @@
 // public/js/efficiency-map/ranked-table.js
 import { scoreColor } from '../components/score-color.js';
+import { NO_THROUGHPUT_MESSAGE, rankableEfficiencyEntries } from './evidence.js';
 
 const COLUMNS = [
     { key: 'rank',            label: '#',         sortable: false },
@@ -10,6 +11,7 @@ const COLUMNS = [
     { key: 'avgTtft',         label: 'TTFT',      sortable: true  },
     { key: 'efficiencyScore', label: 'Efficiency', sortable: true },
     { key: 'paretoOptimal',   label: 'Frontier',  sortable: true  },
+    { key: 'throughputTestCount', label: 'Speed samples', sortable: true },
     { key: 'testCount',       label: 'Tests',     sortable: true  },
 ];
 
@@ -39,6 +41,8 @@ function formatCell(col, entry) {
             return `<span style="color:${scoreColor(entry.efficiencyScore / 10)}">${entry.efficiencyScore.toFixed(1)}</span>`;
         case 'paretoOptimal':
             return entry.paretoOptimal ? '<span title="Pareto-optimal" style="color:var(--r-active)">★</span>' : '';
+        case 'throughputTestCount':
+            return Number.isFinite(entry.throughputTestCount) ? entry.throughputTestCount : entry.testCount;
         case 'testCount':
             return entry.testCount;
         default:
@@ -47,10 +51,12 @@ function formatCell(col, entry) {
 }
 
 function buildCsv(sorted) {
-    const headers = ['rank', 'model', 'host', 'quality', 'tokPerSec', 'ttft', 'efficiencyScore', 'paretoOptimal', 'testCount'];
+    const headers = ['rank', 'model', 'host', 'quality', 'tokPerSec', 'ttft', 'efficiencyScore', 'paretoOptimal', 'speedSampleCount', 'testCount'];
     const rows = sorted.map((e, i) => [
         i + 1, `"${e.model}"`, `"${e.host}"`, e.avgQuality.toFixed(2), e.avgTokPerSec.toFixed(1),
-        e.avgTtft, e.efficiencyScore.toFixed(2), e.paretoOptimal, e.testCount
+        e.avgTtft, e.efficiencyScore.toFixed(2), e.paretoOptimal,
+        Number.isFinite(e.throughputTestCount) ? e.throughputTestCount : e.testCount,
+        e.testCount
     ]);
     return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
 }
@@ -65,9 +71,15 @@ function downloadCsv(csv, filename) {
 }
 
 export function renderRankedTable(container, entries) {
+    const rankedEntries = rankableEfficiencyEntries(entries);
+    if (rankedEntries.length === 0) {
+        container.innerHTML = `<p class="eff-empty-state">${NO_THROUGHPUT_MESSAGE}</p>`;
+        return { highlightRow() {} };
+    }
+
     let sortKey = 'efficiencyScore';
     let sortAsc = false;
-    let sorted = [...entries];
+    let sorted = [...rankedEntries];
 
     function doSort() {
         sorted.sort((a, b) => {

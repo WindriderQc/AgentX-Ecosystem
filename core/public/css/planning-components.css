@@ -775,6 +775,29 @@
   padding: 13px;
 }
 
+.planning-reference-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px 14px;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.065);
+  color: #b8c8da;
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.planning-reference-note > i {
+  margin-top: 2px;
+  color: #7dd3fc;
+}
+
+.planning-reference-note strong {
+  color: #e0f2fe;
+}
+
 .planning-detail-section {
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.07);

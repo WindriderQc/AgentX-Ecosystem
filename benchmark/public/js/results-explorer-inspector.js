@@ -166,7 +166,7 @@ function renderInspectorContent() {
             break;
     }
 
-    content.innerHTML = html;
+    content.innerHTML = `${renderInspectorEvidenceNotice(r)}${html}`;
 
     // Wire Raw / Curated / Judge-raw tab toggles (task 0172). Each .rrp root
     // gets its own delegate; wireRawCuratedJudgePanesGlobal is idempotent via
@@ -185,6 +185,19 @@ function renderInspectorContent() {
             }
         });
     });
+}
+
+function renderInspectorEvidenceNotice(result) {
+    const exactRecordedAt = formatRecordedAt(result);
+    return `
+        <aside class="inspector-evidence-notice result-era-${result.evidence_era || 'undated'}" aria-label="Result evidence age">
+            ${renderEvidenceAge(result)}
+            <div>
+                <strong>Recorded ${exactRecordedAt}</strong>
+                <span>Age band uses only this timestamp: recent ≤30 days, aging 31–90 days, historical 91+ days.</span>
+            </div>
+        </aside>
+    `;
 }
 
 // Render Warmup tab

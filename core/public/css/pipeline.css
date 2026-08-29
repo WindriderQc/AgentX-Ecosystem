@@ -372,6 +372,25 @@
 .pipeline-metric.metric-done { border-top-color: #22c55e; }
 .pipeline-metric.metric-done span i { color: #22c55e; }
 
+.pipeline-count-evidence {
+  margin: -4px 2px 14px;
+  color: #9fb0c7;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.pipeline-count-evidence::before {
+  content: '\f1da';
+  font-family: 'Font Awesome 6 Free';
+  font-weight: 900;
+  margin-right: 7px;
+  color: #67e8f9;
+}
+
+.pipeline-count-evidence.pipeline-evidence-warning {
+  color: #fbbf24;
+}
+
 .pipeline-metric.active {
   border-color: rgba(124, 240, 255, 0.55);
   border-top-width: 3px;

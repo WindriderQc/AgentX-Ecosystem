@@ -125,8 +125,22 @@ function wireButtons(container) {
                 return;
             }
 
+            const expectedConfirmation = 'PURGE DEAD MODEL RESULTS';
+            const confirmation = window.prompt(
+                `This permanently deletes ${count} result(s) from models with at least 95% empty responses.\n\n`
+                + `Type ${expectedConfirmation} to confirm:`
+            );
+            if (confirmation !== expectedConfirmation) {
+                setStatus(statusEl, 'Purge cancelled — the exact phrase was not entered.', 'error');
+                btnPurge.disabled = false;
+                return;
+            }
+
             setStatus(statusEl, `Found ${count} dead-model results — purging…`, 'running');
-            const result = await postAction('purge-dead', { dry_run: false });
+            const result = await postAction('purge-dead', {
+                dry_run: false,
+                confirm: confirmation
+            });
             const deleted = result.deleted ?? result.results_deleted ?? count;
             setStatus(statusEl, `Purged ${deleted} dead-model results.`, 'ok');
             await refreshStats();
@@ -142,12 +156,25 @@ function wireButtons(container) {
     btnArchive?.addEventListener('click', async () => {
         const daysInput = container.querySelector('#dm-archive-days');
         const days = parseInt(daysInput?.value, 10) || 90;
+        const expectedConfirmation = `DELETE RESULTS OLDER THAN ${days} DAYS`;
+        const confirmation = window.prompt(
+            'Archiving removes stored result details and timelines while keeping batch metadata.\n\n'
+            + `Type ${expectedConfirmation} to confirm:`
+        );
+        if (confirmation !== expectedConfirmation) {
+            setStatus(statusEl, 'Archive cancelled — the exact phrase was not entered.', 'error');
+            return;
+        }
 
         btnArchive.disabled = true;
         setStatus(statusEl, `Archiving results older than ${days} days…`, 'running');
 
         try {
-            const result = await postAction('archive', { retention_days: days, dry_run: false });
+            const result = await postAction('archive', {
+                retention_days: days,
+                dry_run: false,
+                confirm: confirmation
+            });
             const archived = result.archived ?? result.results_archived ?? 0;
             setStatus(statusEl, `Archived ${archived} result(s) older than ${days} days.`, 'ok');
             await refreshStats();
@@ -207,7 +234,15 @@ export async function renderDataManagement(container) {
     } catch (err) {
         console.warn('[data-management] fetchStats failed:', err);
         const statsWrap = container.querySelector('#dm-stats-wrap');
-        if (statsWrap) statsWrap.innerHTML = '<div style="font-size:0.7rem;color:var(--r-error);">Failed to load stats.</div>';
+        if (statsWrap) {
+            statsWrap.innerHTML = `<div class="r-section-error ch-recoverable" role="alert">
+                <span>Retention evidence is unavailable. No zero-count conclusion was inferred.</span>
+                <button type="button" class="ch-retry-section dm-retry-stats">Retry</button>
+            </div>`;
+            statsWrap.querySelector('.dm-retry-stats')?.addEventListener('click', () => {
+                renderDataManagement(container);
+            });
+        }
     }
 
     wireButtons(container);

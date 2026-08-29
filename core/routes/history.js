@@ -4,7 +4,12 @@ const mongoose = require('mongoose');
 const Conversation = require('../models/Conversation');
 const { getUserId } = require('../src/helpers/userHelpers');
 const conversationSearchService = require('../src/services/conversationSearchService');
+const {
+    isPlaygroundConversation,
+    withPlaygroundHistoryFilter
+} = require('../src/services/conversationSurfacePolicy');
 const logger = require('../config/logger');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 function publicId(value) {
     if (value === null || value === undefined) return null;
@@ -100,14 +105,17 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const userId = getUserId(res);
-        const query = { userId, 'lifecycle.status': { $ne: 'archived' } };
+        const query = withPlaygroundHistoryFilter({
+            userId,
+            'lifecycle.status': { $ne: 'archived' }
+        });
 
         const conversations = await Conversation.find(query)
             .sort({ updatedAt: -1 })
             .limit(50)
             .select('title updatedAt model messages quality_assessment.overall_score quality_assessment.judged_at');
 
-        const previews = conversations.map(c => {
+        const previews = conversations.filter(isPlaygroundConversation).map(c => {
             const lastMessage = c.messages && c.messages.length > 0
                 ? c.messages[c.messages.length - 1]
                 : null;
@@ -135,7 +143,10 @@ router.get('/', async (req, res) => {
 router.get('/logs', async (req, res) => {
     try {
         const userId = getUserId(res);
-        const query = { userId, 'lifecycle.status': { $ne: 'archived' } };
+        const query = withPlaygroundHistoryFilter({
+            userId,
+            'lifecycle.status': { $ne: 'archived' }
+        });
 
         const conversation = await Conversation.findOne(query)
             .sort({ updatedAt: -1 });
@@ -251,14 +262,17 @@ router.get('/tags', async (req, res) => {
 router.get('/conversations', async (req, res) => {
     try {
         const userId = getUserId(res);
-        const query = { userId, 'lifecycle.status': { $ne: 'archived' } };
+        const query = withPlaygroundHistoryFilter({
+            userId,
+            'lifecycle.status': { $ne: 'archived' }
+        });
 
         const conversations = await Conversation.find(query)
             .sort({ updatedAt: -1 })
             .limit(50)
             .select('title updatedAt model messages');
 
-        const previews = conversations.map(c => ({
+        const previews = conversations.filter(isPlaygroundConversation).map(c => ({
             id: publicId(c._id),
             title: c.title,
             date: publicDate(c.updatedAt),
@@ -381,6 +395,8 @@ router.delete('/:id/tags', async (req, res) => {
                 message: 'Tags array is required and must not be empty'
             });
         }
+
+        if (!requireTypedConfirmation(req, res, 'REMOVE CONVERSATION TAGS', req.params.id)) return;
 
         const result = await conversationSearchService.removeTagsFromConversation({
             conversationId: req.params.id,

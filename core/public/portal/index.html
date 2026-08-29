@@ -63,6 +63,8 @@
     animation: tilefade .4s ease-out both;
   }
   .pulse-left { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .pulse-copy { display: grid; gap: 2px; min-width: 0; }
+  .pulse-copy small { color: var(--muted); font-size: 10.5px; font-weight: 450; line-height: 1.35; }
   .pulse-glyph {
     width: 11px; height: 11px; border-radius: 50%;
     background: var(--muted); flex-shrink: 0; position: relative;
@@ -211,6 +213,13 @@
   footer code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted-hi); font-size: 11px; background: rgba(0,0,0,0.3); padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border); }
   footer a { transition: color .12s; }
   footer a:hover { color: var(--accent); }
+  .skip-link {
+    position: fixed; top: 8px; left: 12px; z-index: 1000;
+    padding: 10px 14px; border: 2px solid var(--accent); border-radius: 8px;
+    background: #07111f; color: #fff; font-weight: 750; text-decoration: none;
+    transform: translateY(-160%); transition: transform .12s ease;
+  }
+  .skip-link:focus { transform: translateY(0); }
   @media (prefers-reduced-motion: reduce) {
     .tile, .pulse { animation: none; }
     .pulse-glyph.ok { animation: none; }
@@ -218,7 +227,8 @@
   }
 </style>
 </head>
-<body>
+<body data-agentx-profile="full" data-agentx-surface="core-portal">
+<a class="skip-link" href="#main-content">Skip to main content</a>
 <div class="shell">
 
   <header>
@@ -233,11 +243,15 @@
     </div>
   </header>
 
+  <main id="main-content" tabindex="-1">
   <!-- System Pulse — live, same-origin status from /api/portal/health -->
   <div class="pulse" id="system-pulse" aria-live="polite" aria-label="System status">
     <div class="pulse-left">
       <span class="pulse-glyph" id="pulse-glyph" aria-hidden="true"></span>
-      <span class="pulse-headline" id="pulse-headline">Checking system status…</span>
+      <span class="pulse-copy">
+        <span class="pulse-headline" id="pulse-headline">Checking product service status…</span>
+        <small>Core, Benchmark, and RAG HTTP contracts; each service reports its required dependency health.</small>
+      </span>
     </div>
     <div class="pulse-dots" id="pulse-dots"></div>
     <div class="pulse-meta">
@@ -270,8 +284,14 @@
         <li><a href="/models" data-public-service="core" data-public-path="/models">Models</a></li>
         <li><a href="/analytics" data-public-service="core" data-public-path="/analytics">Analytics</a></li>
         <li><a href="/cluster-schedule" data-public-service="core" data-public-path="/cluster-schedule">Schedule</a></li>
+        <li><a href="/prompts" data-public-service="core" data-public-path="/prompts">Prompts</a></li>
+        <li><a href="/council" data-public-service="core" data-public-path="/council">Council</a></li>
+        <li><a href="/performance" data-public-service="core" data-public-path="/performance">Performance</a></li>
+        <li><a href="/backup" data-public-service="core" data-public-path="/backup">Backup</a></li>
+        <li><a href="/memory-review" data-public-service="core" data-public-path="/memory-review">Dreaming Review</a></li>
+        <li><a href="/planning" data-public-service="core" data-public-path="/planning">Planning history</a></li>
       </ul>
-      <div class="note">Primary Ollama chat interface, plus model registry, host health, scheduling, and routing telemetry.</div>
+      <div class="note">All supported Core workspaces are listed here. Private deployment adapters do not expand the product portal.</div>
     </div>
 
     <!-- EVALUATION -->
@@ -319,6 +339,8 @@
     </div>
 
   </div>
+
+  </main>
 
   <footer>
     <div><code>MongoDB</code> mongo:27017 <span style="opacity:0.4">·</span> <code>Ollama</code> user-configured endpoints</div>
@@ -399,6 +421,8 @@
       setTile(s.id, s.status, s.latency_ms, s.issues);
     });
     const sum = data.summary || {};
+    const consistency = data.consistency || {};
+    const consistencyIssues = Array.isArray(consistency.issues) ? consistency.issues : [];
     const ecosystem = sum.ecosystem || {};
     const ecosystemIssues = Array.isArray(ecosystem.issues) ? ecosystem.issues : [];
     const state = sum.status || (sum.down > 0 ? 'down' : (sum.degraded > 0 ? 'degraded' : 'ok'));
@@ -408,6 +432,9 @@
       : sum.healthy + '/' + sum.total + ' online' +
         (sum.degraded ? ' · ' + sum.degraded + ' degraded' : '') +
         (sum.down ? ' · ' + sum.down + ' offline' : '') +
+        (consistency.status === 'degraded' ? ' · deployment mismatch' : '') +
+        (consistency.status === 'unverified' ? ' · build unverified' : '') +
+        (consistencyIssues.length ? ' · ' + consistencyIssues[0] : '') +
         (ecosystem.status === 'degraded' ? ' · ecosystem degraded' : '') +
         (ecosystem.status === 'down' ? ' · ecosystem down' : '') +
         (ecosystemIssues.length ? ' · ' + ecosystemIssues[0] : '');
@@ -446,5 +473,10 @@
 })();
 </script>
 
+<script>
+  window.addEventListener('DOMContentLoaded', function () {
+    document.body.dataset.agentxReady = 'true';
+  }, { once: true });
+</script>
 </body>
 </html>

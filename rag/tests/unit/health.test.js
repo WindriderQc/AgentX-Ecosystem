@@ -1,8 +1,8 @@
 const request = require('supertest');
 const app = require('../../app');
 const api = request.agent(app);
-const originalFetch = global.fetch;
 const originalCoreUrl = process.env.CORE_URL;
+const originalCoreOutboundClient = app.locals.coreOutboundClient;
 
 afterAll((done) => {
   if (api.app.listening) return api.app.close(done);
@@ -10,7 +10,7 @@ afterAll((done) => {
 });
 
 afterEach(() => {
-  global.fetch = originalFetch;
+  app.locals.coreOutboundClient = originalCoreOutboundClient;
   if (originalCoreUrl === undefined) delete process.env.CORE_URL;
   else process.env.CORE_URL = originalCoreUrl;
 });
@@ -24,7 +24,7 @@ function catalogResponse() {
   return {
     status: 200,
     headers: { get: (name) => headers[name.toLowerCase()] || null },
-    arrayBuffer: async () => Buffer.from(JSON.stringify({ ok: true, data: { models: [] } })),
+    body: Buffer.from(JSON.stringify({ ok: true, data: { models: [] } })),
   };
 }
 
@@ -32,9 +32,19 @@ describe('GET /health', () => {
   it('returns 503 with degraded when DB is not connected', async () => {
     const res = await api.get('/health');
     expect(res.status).toBe(503);
+    expect(res.body).toEqual(expect.objectContaining({
+      ok: false,
+      service: 'agentx-rag',
+      version: expect.any(String),
+      profile: expect.stringMatching(/^(demo|full)$/),
+      revision: expect.any(String),
+      ts: expect.any(String),
+    }));
+    expect(new Date(res.body.ts).toISOString()).toBe(res.body.ts);
     expect(res.body.status).toBe('degraded');
     expect(res.body.db).toBe('disconnected');
     expect(res.body.vectorStore.healthy).toBe(false);
+    expect(JSON.stringify(res.body)).not.toMatch(/https?:\/\//);
   });
 
   it('checks the configured in-memory vector store without an external call', async () => {
@@ -46,6 +56,14 @@ describe('GET /health', () => {
       if (previousType === undefined) delete process.env.VECTOR_STORE_TYPE;
       else process.env.VECTOR_STORE_TYPE = previousType;
     }
+  });
+});
+
+describe('RAG API observation receipts', () => {
+  it('adds a fresh observedAt timestamp to success and degraded API envelopes', async () => {
+    const res = await api.post('/api/rag/search').send({}).expect(400);
+    expect(res.body.meta.durationMs).toEqual(expect.any(Number));
+    expect(new Date(res.body.meta.observedAt).toISOString()).toBe(res.body.meta.observedAt);
   });
 });
 
@@ -88,17 +106,17 @@ describe('demo navigation', () => {
 
 describe('GET /api/models/all', () => {
   it('proxies model-catalog filters and readiness headers without restoring Buddy routes', async () => {
-    process.env.CORE_URL = 'http://core.test:3080/';
-    global.fetch = jest.fn().mockResolvedValue(catalogResponse());
+    const getModelCatalog = jest.fn().mockResolvedValue(catalogResponse());
+    app.locals.coreOutboundClient = { getModelCatalog };
 
     const response = await api
       .get('/api/models/all?host=primary&status=available')
       .expect(200);
 
-    expect(global.fetch).toHaveBeenCalledWith(
-      'http://core.test:3080/api/models/all?host=primary&status=available',
-      expect.objectContaining({ headers: expect.objectContaining({ Accept: 'application/json' }) })
-    );
+    expect(getModelCatalog).toHaveBeenCalledWith(expect.objectContaining({
+      accept: 'application/json',
+      query: '?host=primary&status=available',
+    }));
     expect(response.headers['x-require-profiled-models']).toBe('true');
     expect(response.body).toEqual({ ok: true, data: { models: [] } });
   });

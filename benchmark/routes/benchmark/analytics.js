@@ -13,6 +13,7 @@ const { calculateAllGeneralistScores, getActiveCategoryWeights } = require('../.
 const { compareBatchRegression, detectLatestRegression, generateChangelog } = require('../../src/services/benchmark/regressionDetector');
 const { archiveOldResults, pruneExcessBatches, purgeDeadModels, getRetentionStats } = require('../../src/services/benchmark/dataRetention');
 const { validateObjectId } = require('../../src/helpers/objectIdValidator');
+const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
 const BenchmarkResult = require('../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 
@@ -688,6 +689,9 @@ router.post('/retention/archive', async (req, res) => {
         const { retention_days, dry_run } = req.body || {};
         const days = parseInt(retention_days, 10) || 90;
         const dryRun = dry_run !== false && dry_run !== 0;
+        const expectedConfirmation = `DELETE RESULTS OLDER THAN ${days} DAYS`;
+
+        if (!dryRun && !requireExactConfirmation(req, res, expectedConfirmation)) return;
 
         const result = await archiveOldResults(days, dryRun);
         res.json({ status: 'success', data: result });
@@ -707,6 +711,9 @@ router.post('/retention/prune', async (req, res) => {
         const { keep_batches, dry_run } = req.body || {};
         const keep = parseInt(keep_batches, 10) || 3;
         const dryRun = dry_run !== false && dry_run !== 0;
+        const expectedConfirmation = `PRUNE RESULTS TO ${keep} BATCHES PER MODEL`;
+
+        if (!dryRun && !requireExactConfirmation(req, res, expectedConfirmation)) return;
 
         const result = await pruneExcessBatches(keep, dryRun);
         res.json({ status: 'success', data: result });
@@ -725,6 +732,9 @@ router.post('/retention/purge-dead', async (req, res) => {
     try {
         const { dry_run } = req.body || {};
         const dryRun = dry_run !== false && dry_run !== 0;
+        const expectedConfirmation = 'PURGE DEAD MODEL RESULTS';
+
+        if (!dryRun && !requireExactConfirmation(req, res, expectedConfirmation)) return;
 
         const result = await purgeDeadModels(dryRun);
         res.json({ status: 'success', data: result });

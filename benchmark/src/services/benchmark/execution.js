@@ -15,9 +15,9 @@ const { seedPrompts } = require('./init');
 const { samplePromptsByDepth } = require('./promptSampling');
 const { runTest } = require('./testExecution');
 const { buildExecutionPlan } = require('./batchPlanner');
-const { runBatchOrchestrator } = require('./batchOrchestrator');
+const { runBatchOrchestrator, abortActiveBatchRequests } = require('./batchOrchestrator');
 const {
-    deriveTerminalBatchStatus,
+    buildIdleCurrentTest,
     deriveTerminalBatchOutcome,
     setBatchPhase: _setBatchPhase
 } = require('./batchHelpers');
@@ -357,7 +357,7 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             await batch.save();
         }
 
-        await runBatchOrchestrator({
+        const orchestrationOutcome = await runBatchOrchestrator({
             batchId,
             defaultHost,
             models,
@@ -374,20 +374,47 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
 
         await flushBatchProgress(true);
 
-        const postExecBatch = await BenchmarkBatch.findById(batchId).select('status').lean();
-        if (postExecBatch && postExecBatch.status === 'stopped') {
-            return;
+        if (orchestrationOutcome?.stopped) {
+            return orchestrationOutcome;
         }
 
-        const finalBatch = await BenchmarkBatch.findById(batchId);
-        if (finalBatch) {
-            await finalBatch.clearCurrentTest();
+        const finalSnapshot = await BenchmarkBatch.findById(batchId);
+        if (finalSnapshot) {
             const outcome = deriveTerminalBatchOutcome({
-                totalTests: finalBatch.total_tests,
-                completed: finalBatch.completed,
-                failed: finalBatch.failed
+                totalTests: finalSnapshot.total_tests,
+                completed: finalSnapshot.completed,
+                failed: finalSnapshot.failed
             });
-            await finalBatch.markAsCompleted(outcome.status, outcome.failureReason);
+            const completedAt = new Date();
+            // Finalization is one conditional transition. A stop that wins
+            // before this write cannot be overwritten by a stale document
+            // save; a completion that wins first makes a later stop idempotent.
+            const finalBatch = await BenchmarkBatch.findOneAndUpdate(
+                {
+                    _id: batchId,
+                    status: { $in: ['pending', 'running', 'judging'] }
+                },
+                {
+                    $set: {
+                        status: outcome.status,
+                        failure_reason: outcome.failureReason || null,
+                        completed_at: completedAt,
+                        last_activity_at: completedAt,
+                        current_test: buildIdleCurrentTest(),
+                        active_slot: null,
+                        execution_pid: null
+                    }
+                },
+                { new: true }
+            );
+
+            if (!finalBatch) {
+                logger.info('Skipped batch finalization because a terminal transition already won', {
+                    batchId
+                });
+                return;
+            }
+
             if (outcome.failureReason === 'zero_cells_executed') {
                 logger.error('Batch finalized with zero cells executed — host or model orchestration silently failed (0212 root cause)', {
                     batchId,
@@ -427,6 +454,50 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             });
         });
 
+        const failedAt = new Date();
+        const failureTransition = await BenchmarkBatch.updateOne(
+            {
+                _id: batchId,
+                status: { $in: ['pending', 'running', 'judging'] }
+            },
+            {
+                $set: {
+                    status: 'failed',
+                    judge_status: 'failed',
+                    completed_at: failedAt,
+                    last_activity_at: failedAt,
+                    current_test: buildIdleCurrentTest(),
+                    active_slot: null,
+                    execution_pid: null
+                }
+            }
+        ).catch((persistErr) => {
+            logger.error('Failed to persist batch crash state', {
+                batchId,
+                error: persistErr.message
+            });
+            return null;
+        });
+
+        // A concurrent user stop is a successful terminal transition, not a
+        // crash. Never overwrite it or emit misleading failure telemetry.
+        if (failureTransition && failureTransition.matchedCount === 0) {
+            let terminalBatch = null;
+            try {
+                terminalBatch = await BenchmarkBatch.findById(batchId)
+                    .select('status')
+                    .lean();
+            } catch (_lookupErr) {
+                terminalBatch = null;
+            }
+            if (terminalBatch?.status === 'stopped') {
+                logger.info('Suppressed batch crash because user stop won the terminal race', {
+                    batchId
+                });
+                return { stopped: true, cancelled: true };
+            }
+        }
+
         logger.error('Batch execution crashed', {
             batchId,
             error: err.message,
@@ -448,23 +519,6 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             error: err.message
         }).catch(() => {}); // best-effort
 
-        await BenchmarkBatch.updateOne(
-            { _id: batchId },
-            {
-                $set: {
-                    status: 'failed',
-                    judge_status: 'failed',
-                    completed_at: new Date(),
-                    last_activity_at: new Date()
-                }
-            }
-        ).catch((persistErr) => {
-            logger.error('Failed to persist batch crash state', {
-                batchId,
-                error: persistErr.message
-            });
-        });
-
         throw err;
     } finally {
         await flushBatchProgress(true).catch((flushErr) => {
@@ -478,28 +532,78 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
 }
 
 async function stopBatch(batchId) {
-    const batch = await BenchmarkBatch.findById(batchId);
+    const stoppedAt = new Date();
+    const managedLocally = activeBatchId === String(batchId);
+
+    // Establish the user stop as durable truth before interrupting work. This
+    // small atomic write releases the singleton slot even if authoritative
+    // counter reconciliation later fails.
+    let batch = await BenchmarkBatch.findOneAndUpdate(
+        {
+            _id: batchId,
+            status: { $in: ['pending', 'running'] }
+        },
+        {
+            $set: {
+                status: 'stopped',
+                judge_status: 'stopped',
+                completed_at: stoppedAt,
+                last_activity_at: stoppedAt,
+                current_test: buildIdleCurrentTest(),
+                active_slot: null,
+                execution_pid: null
+            }
+        },
+        { new: true }
+    );
 
     if (!batch) {
-        throw new Error('Batch not found');
+        batch = await BenchmarkBatch.findById(batchId);
+        if (!batch) {
+            throw new Error('Batch not found');
+        }
+        if (batch.status === 'stopped') {
+            // Safe to repeat: already-aborted controllers are ignored.
+            abortActiveBatchRequests(batchId);
+        }
+        return { batch, alreadyStopped: true, managedLocally };
     }
 
-    const stoppableStatuses = new Set(['pending', 'running']);
-    if (!stoppableStatuses.has(batch.status)) {
-        return { batch, alreadyStopped: true };
-    }
+    abortActiveBatchRequests(batchId);
 
-    await batch.markAsStopped();
+    await BenchmarkTimelineEntry.create({
+        batchId,
+        timestamp: stoppedAt,
+        event: 'stop_requested',
+        success: false,
+        error: null
+    }).catch(() => {});
+
+    try {
+        batch = await batch.reconcileFromResults({ status: 'stopped' });
+    } catch (err) {
+        // The stop intent is already committed. Reconciliation is valuable,
+        // but its failure must never resurrect the runner or turn a successful
+        // stop into an HTTP 500.
+        logger.warn('Batch stopped but authoritative reconciliation failed', {
+            batchId,
+            error: err.message
+        });
+    } finally {
+        // Catch a request registered between the durable transition and the
+        // first abort pass.
+        abortActiveBatchRequests(batchId);
+    }
     logger.info('Batch stopped by user', { batchId });
 
-    return { batch, alreadyStopped: false };
+    return { batch, alreadyStopped: false, managedLocally };
 }
 
 /**
  * Resume a stopped/failed batch from its last checkpoint.
  * Re-uses the original batch config; the orchestrator skips completed pairs.
  */
-async function resumeBatch(batchId) {
+async function resumeBatch(batchId, options = {}) {
     const batch = await BenchmarkBatch.findById(batchId);
     if (!batch) throw new Error('Batch not found');
     if (!['stopped', 'failed', 'interrupted'].includes(batch.status)) {
@@ -521,6 +625,12 @@ async function resumeBatch(batchId) {
     }
 
     // Reset to running
+    if (options.judgeConfig && typeof options.judgeConfig === 'object') {
+        batch.judge_config = {
+            ...(batch.judge_config || {}),
+            ...options.judgeConfig
+        };
+    }
     batch.status = 'running';
     batch.active_slot = 'benchmark_singleton';
     batch.execution_started_at = null;

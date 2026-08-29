@@ -1,11 +1,34 @@
 const systemHealth = require('../systemHealth');
-const fetch = require('node-fetch');
+const nodeFetch = require('node-fetch');
+const {
+  createOutboundHttpExecutor,
+  readBoundedJson,
+} = require('../../../shared/outboundHttpExecutor');
+const {
+  peerVerifiedNodeFetchTransport,
+} = require('../helpers/peerVerifiedNodeFetchTransport');
 const { getRagServiceClient } = require('./ragServiceClient');
 const { createTaskInMongo } = require('./pipelineTaskService');
 
 const PROTOCOL_VERSION = '2025-06-18';
 const SERVER_INFO = { name: 'agentx-core-skill-bus', title: 'AgentX Core Skill Bus', version: '0.1.0' };
 const BUDGET_GATE_TIMEOUT_MS = 5000;
+const BUDGET_GATE_MAX_RESPONSE_BYTES = 128 * 1024;
+const BUDGET_GATE_OPERATION_ID = 'core.mcp.loopback-budget';
+const BUDGET_GATE_REQUEST_SPEC = Object.freeze({
+  allowSearch: true,
+  method: 'GET',
+  pathPattern: '^/api/budget/escalation-recommendation$',
+  responseMode: 'json',
+});
+const BUDGET_GATE_OPERATIONS = Object.freeze({
+  [BUDGET_GATE_OPERATION_ID]: Object.freeze({
+    authoritySource: 'canonical',
+    deadlineMs: BUDGET_GATE_TIMEOUT_MS,
+    maxRequestBytes: 0,
+    maxResponseBytes: BUDGET_GATE_MAX_RESPONSE_BYTES,
+  }),
+});
 
 class McpToolError extends Error {
   constructor(message, { code = 'MCP_TOOL_ERROR', status = 400 } = {}) {
@@ -165,24 +188,55 @@ async function checkHealth(args, deps) {
   return result;
 }
 
-async function defaultEscalationRecommendation({ hours }) {
-  const baseUrl = `http://127.0.0.1:${process.env.PORT || 3080}`;
-  const url = new URL('/api/budget/escalation-recommendation', baseUrl);
-  url.searchParams.set('hours', String(hours));
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), BUDGET_GATE_TIMEOUT_MS);
-  try {
-    const response = await fetch(url.toString(), {
-      headers: { accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`AgentX budget gate returned HTTP ${response.status}`);
-    }
-    return response.json();
-  } finally {
-    clearTimeout(timer);
+function canonicalLoopbackOrigin(rawPort = process.env.PORT) {
+  const candidate = rawPort === undefined || rawPort === null || rawPort === ''
+    ? '3080'
+    : String(rawPort);
+  if (!/^[1-9]\d{0,4}$/.test(candidate)) {
+    throw new Error('AgentX Core port configuration is invalid.');
   }
+  const port = Number(candidate);
+  if (!Number.isSafeInteger(port) || port > 65535) {
+    throw new Error('AgentX Core port configuration is invalid.');
+  }
+
+  const origin = new URL('http://127.0.0.1');
+  origin.port = String(port);
+  return origin;
+}
+
+async function defaultEscalationRecommendation({ hours }) {
+  const loopbackOrigin = canonicalLoopbackOrigin();
+  const url = new URL('/api/budget/escalation-recommendation', loopbackOrigin);
+  url.searchParams.set('hours', String(hours));
+  const expectedOrigin = loopbackOrigin.origin;
+  const outbound = createOutboundHttpExecutor({
+    operations: BUDGET_GATE_OPERATIONS,
+    fetchImpl: nodeFetch,
+    authorityAdapter: ({ authoritySource, sinkId, target }) => {
+      const requested = new URL(target);
+      if (authoritySource !== 'canonical'
+        || sinkId !== BUDGET_GATE_OPERATION_ID
+        || requested.origin !== expectedOrigin
+        || !new RegExp(BUDGET_GATE_REQUEST_SPEC.pathPattern).test(requested.pathname)
+        || (!BUDGET_GATE_REQUEST_SPEC.allowSearch && requested.search)) {
+        throw new Error('Budget gate target is not canonical.');
+      }
+      return { expectedOrigin };
+    },
+    transportAdapter: peerVerifiedNodeFetchTransport,
+  });
+  const admission = await outbound.admitTarget(BUDGET_GATE_OPERATION_ID, url.toString());
+  const response = await outbound.request(admission, {
+    headers: { accept: 'application/json' },
+    method: BUDGET_GATE_REQUEST_SPEC.method,
+  });
+  if (!response.ok) {
+    const status = response.status;
+    await response.cancel();
+    throw new Error(`AgentX budget gate returned HTTP ${status}`);
+  }
+  return readBoundedJson(response);
 }
 
 async function getEscalationRecommendation(args, deps) {
@@ -280,6 +334,11 @@ async function handleMcpMessage(message, deps = {}) {
 }
 
 module.exports = {
+  BUDGET_GATE_MAX_RESPONSE_BYTES,
+  BUDGET_GATE_OPERATION_ID,
+  BUDGET_GATE_OPERATIONS,
+  BUDGET_GATE_REQUEST_SPEC,
+  BUDGET_GATE_TIMEOUT_MS,
   PROTOCOL_VERSION,
   SERVER_INFO,
   TOOLS,

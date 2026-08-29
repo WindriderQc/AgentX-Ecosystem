@@ -263,9 +263,17 @@ Object.assign(PerformanceDashboard, {
 
             // Delete baseline
             async deleteBaseline(id) {
+                const headers = await window.AgentXTypedConfirmation.confirm({
+                    action: 'DELETE PERFORMANCE BASELINE',
+                    resource: id,
+                    title: 'Delete performance baseline',
+                    description: 'Delete this comparison baseline? Historical test results remain, but this baseline record cannot be recovered.'
+                });
+                if (!headers) return;
                 try {
                     const response = await fetch(`/api/performance/baselines/${id}`, {
-                        method: 'DELETE'
+                        method: 'DELETE',
+                        headers
                     });
 
                     const result = await response.json();

@@ -85,17 +85,27 @@
     </button>
   </section>
 
+  <p id="pipelineCountEvidence" class="pipeline-count-evidence" aria-live="polite">
+    Loading count scope and observation evidence&hellip;
+  </p>
+
   <section class="pipeline-panel pipeline-workbench" aria-label="Pipeline work table">
     <div class="pipeline-toolbar">
       <div class="pipeline-search">
         <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
-        <input id="pipelineSearch" type="search" placeholder="Search id, title, owner, epic&hellip;"
-          aria-label="Search tasks by id, title, owner, or epic" autocomplete="off">
+        <input id="pipelineSearch" type="search" placeholder="Search id, title, owner, epic, source&hellip;"
+          aria-label="Search tasks by id, title, owner, epic, or source" autocomplete="off">
       </div>
       <label class="pipeline-select">
         <span>Service</span>
         <select id="pipelineServiceFilter" aria-label="Filter by service">
           <option value="">All services</option>
+        </select>
+      </label>
+      <label class="pipeline-select">
+        <span>Lane / source</span>
+        <select id="pipelineLaneFilter" aria-label="Filter by lane or source">
+          <option value="">All lanes / sources</option>
         </select>
       </label>
       <label class="pipeline-select">
@@ -166,7 +176,7 @@
       summary: 'Pipeline is the human view of the product-owned task queue. Agents and external boards consume the same bounded HTTP API — nothing here bypasses it.',
       sections: [
         { title: 'Read the counts', body: 'The five status cards are global truth. Select one to focus the work table on that stage; select it again to release the filter.' },
-        { title: 'Find the work', body: 'Search matches id, title, owner, and epic. Urgency sort surfaces blocked and overdue work first; the other sorts answer narrower questions.' },
+        { title: 'Find the work', body: 'Search matches id, title, owner, epic, and source. Service and lane/source filters narrow the loaded rows; urgency sort surfaces blocked and overdue work first.' },
         { title: 'Open the dossier', body: 'Select any row for the full task: specification, priority, risk, dependencies, and the complete feedback audit trail.' },
         { title: 'Confirm like an overseer', body: 'A task in review can be confirmed done from its dossier — but only by an identity different from the worker. The gate is enforced server-side and every confirmation is audited.' },
         { title: 'Unstick what is stuck', body: 'Re-queue releases a task back to the queue (clearing its worker and heartbeat), and notes land in the same audit trail agents read.' },

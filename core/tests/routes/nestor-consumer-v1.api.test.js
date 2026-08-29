@@ -64,6 +64,7 @@ describe('Nestor v1 consumer contract routes', () => {
       .expect(200);
 
     expect(capabilities.body.data.contract.version).toBe('1.2.0');
+    expect(capabilities.headers['x-agentx-consumer-contract']).toBe('1.2.0');
   });
 
   it('delegates inference, memory, metrics, and router reads', async () => {
@@ -103,6 +104,21 @@ describe('Nestor v1 consumer contract routes', () => {
       message: 'Unknown memory source: mars',
       code: 'UNKNOWN_MEMORY_SOURCE',
     });
+    expect(response.headers['x-agentx-consumer-contract']).toBe('1.2.0');
+  });
+
+  it('redacts deployment locations from degraded error projections', async () => {
+    const error = new Error('Could not reach http://private-memory:3082');
+    error.statusCode = 503;
+    mockGetMemoryStatus.mockRejectedValueOnce(error);
+
+    const response = await request(app)
+      .get('/api/consumers/nestor/v1/memory/status?source=agentx')
+      .expect(503);
+
+    expect(response.body.error).toBe('Nestor consumer request failed.');
+    expect(JSON.stringify(response.body)).not.toContain('http://private-memory');
+    expect(response.headers['x-agentx-consumer-contract']).toBe('1.2.0');
   });
 
   it('relays bounded inference as route, delta, and terminal done SSE events', async () => {

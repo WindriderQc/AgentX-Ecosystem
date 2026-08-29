@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getRagServiceClient } = require('../src/services/ragServiceClient');
 const logger = require('../config/logger');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 const ragClient = getRagServiceClient();
 
@@ -126,6 +127,7 @@ router.post('/ingest', async (req, res) => {
 
 router.delete('/documents/:documentId', async (req, res) => {
   try {
+    if (!requireTypedConfirmation(req, res, 'DELETE RAG DOCUMENT', req.params.documentId)) return;
     const result = await ragClient.deleteDocument(req.params.documentId);
     return res.json({ status: 'success', data: result });
   } catch (err) {

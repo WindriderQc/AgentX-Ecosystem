@@ -6,11 +6,18 @@ import {
   isRouterMode, modelsEquivalent, readOptions, selectedHostPreference, sessionTaskType, targetHost,
   readProfileInputs, updateConfigSummary
 } from './chat-config.js';
+import { fetchWithDeadline } from './chat-network.js';
 
 function sanitizeHTML(dirty) {
   if (typeof DOMPurify === 'undefined') {
-    console.error('DOMPurify not loaded - XSS protection disabled!');
-    return dirty;
+    console.error('DOMPurify not loaded - rendering escaped text.');
+    return String(dirty ?? '').replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    })[character]);
   }
   return DOMPurify.sanitize(dirty, {
     ALLOWED_TAGS: [
@@ -26,6 +33,72 @@ function sanitizeHTML(dirty) {
 
 // Exported for use by other modules (quality assessment, history)
 export { sanitizeHTML };
+
+function messageIdOf(message) {
+  const value = message?.id ?? message?._id ?? null;
+  return value === null || value === undefined ? null : String(value);
+}
+
+/**
+ * Resolve the user turn paired with one rendered assistant response.
+ *
+ * New responses carry an explicit source id. Historical responses fall back
+ * to their exact assistant id and the closest preceding user turn. Content is
+ * deliberately never used as identity because repeated prompts are valid.
+ */
+export function userTurnForAssistant(history, assistantMessage) {
+  const turns = Array.isArray(history) ? history : [];
+  const explicitUserId = assistantMessage?.retryUserMessageId
+    || assistantMessage?.sourceUserMessageId
+    || null;
+
+  if (explicitUserId) {
+    const normalizedUserId = String(explicitUserId);
+    return turns.find((turn) => (
+      turn?.role === 'user' && messageIdOf(turn) === normalizedUserId
+    )) || null;
+  }
+
+  const assistantId = messageIdOf(assistantMessage);
+  let assistantIndex = turns.indexOf(assistantMessage);
+  if (assistantIndex < 0 && assistantId) {
+    assistantIndex = turns.findIndex((turn) => (
+      turn?.role === 'assistant' && messageIdOf(turn) === assistantId
+    ));
+  }
+  if (assistantIndex < 0) return null;
+
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    if (turns[index]?.role === 'user') return turns[index];
+  }
+  return null;
+}
+
+export function turnActionForRequest(turnAction) {
+  if (!turnAction) return null;
+  const kind = turnAction.kind || turnAction.action;
+  const sourceUserMessageId = turnAction.sourceUserMessageId == null
+    ? null
+    : String(turnAction.sourceUserMessageId);
+  const sourceAssistantMessageId = turnAction.sourceAssistantMessageId == null
+    ? null
+    : String(turnAction.sourceAssistantMessageId);
+
+  if ((kind !== 'ask-again' && kind !== 'retry') || !sourceUserMessageId) return null;
+  if (kind === 'ask-again' && !sourceAssistantMessageId) return null;
+  if (kind === 'retry' && sourceAssistantMessageId !== null) return null;
+
+  return { kind, sourceUserMessageId, sourceAssistantMessageId };
+}
+
+function safeExternalUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '#';
+  } catch {
+    return '#';
+  }
+}
 
 export function formatTime(value) {
   if (!value) return '';
@@ -212,22 +285,39 @@ export function renderMessage(message, state, elements) {
       actionBar.appendChild(editBtn);
     }
 
-    if (role === 'assistant') {
-      // Regenerate button
-      const regenBtn = document.createElement('button');
-      regenBtn.className = 'msg-action-btn';
-      regenBtn.title = 'Regenerate';
-      regenBtn.innerHTML = '<i class="fas fa-redo"></i>';
-      regenBtn.addEventListener('click', () => {
-        // Find the last user message
-        const lastUserMsg = [...state.history].reverse().find(m => m.role === 'user');
-        if (lastUserMsg) {
-          elements.messageInput.value = lastUserMsg.content;
-          // Trigger send
-          elements.sendBtn.click();
+    if (role === 'assistant' && (messageId || message.retryUserMessageId)) {
+      const isRetry = Boolean(message.retryUserMessageId);
+      // A completed persisted reply is not replaced by the current API. Call
+      // that operation "Ask again" and persist an honest new user turn. Retry
+      // is reserved for an attempt that never reached a durable completion.
+      const actionLabel = isRetry ? 'Retry' : 'Ask again';
+      const turnActionBtn = document.createElement('button');
+      turnActionBtn.type = 'button';
+      turnActionBtn.className = 'msg-action-btn';
+      turnActionBtn.title = actionLabel;
+      turnActionBtn.dataset.turnAction = isRetry ? 'retry' : 'ask-again';
+      turnActionBtn.setAttribute('aria-label', `${actionLabel} this turn`);
+      turnActionBtn.innerHTML = '<i class="fas fa-redo" aria-hidden="true"></i>';
+      turnActionBtn.addEventListener('click', async () => {
+        const userTurn = userTurnForAssistant(state.history, message);
+        const userMessageId = messageIdOf(userTurn);
+        if (!userTurn || !userMessageId || typeof state._helpers?.sendMessage !== 'function') {
+          state._helpers?.setFeedback?.('This turn no longer has stable message evidence. Reload the conversation and try again.', 'error');
+          return;
+        }
+
+        turnActionBtn.disabled = true;
+        try {
+          await state._helpers.sendMessage({
+            action: isRetry ? 'retry' : 'ask-again',
+            sourceUserMessageId: userMessageId,
+            sourceAssistantMessageId: messageId
+          });
+        } finally {
+          if (turnActionBtn.isConnected) turnActionBtn.disabled = false;
         }
       });
-      actionBar.appendChild(regenBtn);
+      actionBar.appendChild(turnActionBtn);
     }
 
     bubble.appendChild(actionBar);
@@ -322,8 +412,14 @@ export function renderMessage(message, state, elements) {
       if (source.wasCompressed) {
         const compressBadge = document.createElement('span');
         compressBadge.className = 'compression-badge';
-        compressBadge.innerHTML = `<i class="fas fa-compress-arrows-alt"></i> ${source.compressionRatio}%`;
-        compressBadge.title = 'Context compressed by ' + source.compressionRatio + '%';
+        const compressionRatio = Number.isFinite(Number(source.compressionRatio))
+          ? Math.max(0, Math.min(100, Number(source.compressionRatio)))
+          : 0;
+        const compressIcon = document.createElement('i');
+        compressIcon.className = 'fas fa-compress-arrows-alt';
+        compressBadge.appendChild(compressIcon);
+        compressBadge.appendChild(document.createTextNode(` ${compressionRatio}%`));
+        compressBadge.title = `Context compressed by ${compressionRatio}%`;
         sourceHeader.appendChild(compressBadge);
       }
 
@@ -371,7 +467,7 @@ export function renderMessage(message, state, elements) {
       item.className = 'web-source-item';
 
       const link = document.createElement('a');
-      link.href = result.url || '#';
+      link.href = safeExternalUrl(result.url);
       link.target = '_blank';
       link.rel = 'noopener';
       link.className = 'web-source-link';
@@ -572,6 +668,13 @@ export function appendMessage(messageOrRole, contentOrOptions, state, elements) 
     if (message.role === 'assistant') state.stats.replies += 1;
   }
   elements.statMessages.textContent = state.stats.replies;
+
+  if (options.announcement && elements.chatAnnouncements) {
+    elements.chatAnnouncements.textContent = '';
+    window.setTimeout(() => {
+      elements.chatAnnouncements.textContent = options.announcement;
+    }, 0);
+  }
 }
 
 /**
@@ -604,6 +707,7 @@ export function buildRoutingInfo(serverData) {
     taskType: routing.taskType || null,
     routedHost: routing.routedHost || null,
     autoRouted: routing.autoRouted === true,
+    prompt: serverData.prompt || null,
     numCtx: serverData.numCtx || null,
     tokensIn: usage.promptTokens || 0,
     tokensOut: usage.completionTokens || 0,
@@ -616,7 +720,24 @@ export function buildRoutingInfo(serverData) {
   };
 }
 
-function buildPayload(elements, state, defaults, message) {
+export function historyBeforeCurrentTurn(history, currentUserMessageId) {
+  const turns = Array.isArray(history) ? history : [];
+  if (!currentUserMessageId || turns.length === 0) return turns;
+  const normalizedId = String(currentUserMessageId);
+  const currentTurnIndex = turns.findIndex((turn) => (
+    turn?.role === 'user' && messageIdOf(turn) === normalizedId
+  ));
+  return currentTurnIndex >= 0 ? turns.slice(0, currentTurnIndex) : turns;
+}
+
+function buildPayload(
+  elements,
+  state,
+  defaults,
+  message,
+  currentUserMessageId = null,
+  turnAction = null
+) {
   const ragOpts = getRagOptions(elements);
   const routerMode = isRouterMode(elements, state);
   const forceThinking = elements.thinkingToggle?.checked === true;
@@ -641,6 +762,9 @@ function buildPayload(elements, state, defaults, message) {
     autoRoute: false,
     taskType: taskType || undefined,
     system: elements.systemPrompt.value.trim(),
+    promptVersion: elements.promptSelect?.dataset.promptVersion
+      ? Number(elements.promptSelect.dataset.promptVersion)
+      : undefined,
     options,
     useRag: ragOpts.useRag,
     ragTopK: ragOpts.ragTopK,
@@ -650,8 +774,12 @@ function buildPayload(elements, state, defaults, message) {
     threadId: state.threadId,
     message,
     profile: readProfileInputs(elements),
-    messages: state.history,
-    conversationId: state.conversationId
+    // The visible user turn is persisted before dispatch. The service appends
+    // `message` to the inference envelope, so exclude that exact turn by id
+    // while preserving intentional earlier prompts with identical text.
+    messages: historyBeforeCurrentTurn(state.history, currentUserMessageId),
+    conversationId: state.conversationId,
+    ...(turnAction ? { turnAction } : {})
   };
 }
 
@@ -672,11 +800,24 @@ function markSelectedManualModelLoaded(elements, state, defaults, model) {
   };
 }
 
-export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
+export async function sendMessageStreamFetch(
+  ctx,
+  msgInput,
+  modelInput,
+  currentUserMessageId = null,
+  turnAction = null
+) {
   const { elements, state, defaults, helpers } = ctx;
   const message = msgInput || elements.messageInput.value.trim();
 
-  const payload = buildPayload(elements, state, defaults, message);
+  const payload = buildPayload(
+    elements,
+    state,
+    defaults,
+    message,
+    currentUserMessageId,
+    turnAction
+  );
 
   const assistantMessageDiv = document.createElement('div');
   assistantMessageDiv.className = 'message assistant';
@@ -697,19 +838,21 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
 
   elements.sendBtn.textContent = 'Stop';
   elements.sendBtn.onclick = () => {
-    if (state.streamAbortController) {
-      state.streamAbortController.abort();
-      state.streamAbortController = null;
-    }
-    state.sending = false;
-    elements.sendBtn.textContent = 'Send';
-    elements.sendBtn.onclick = () => helpers.sendMessage();
-    helpers.setFeedback('Streaming stopped.', 'warning');
+    const activeController = state.streamAbortController;
+    if (!activeController) return;
+    activeController.abort();
+    // The active attempt owns `state.sending` and the controller until its
+    // finally block settles. This prevents a late old attempt from clearing a
+    // newer request that the user launched during an abort race.
+    elements.sendBtn.disabled = true;
+    elements.sendBtn.textContent = 'Stopping\u2026';
+    helpers.setFeedback('Stopping stream\u2026', 'warning');
   };
 
   let fullContent = '';
   let thinkingContent = '';
   let doneReceived = false;
+  let requestAbortController = null;
 
   const safeParseJson = (text, fallback) => {
     try { return JSON.parse(text); } catch { return fallback; }
@@ -730,7 +873,7 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
     if (eventName === 'thinking') {
       const data = typeof rawData === 'string' ? safeParseJson(rawData, {}) : rawData;
       thinkingContent += data.content || '';
-      thinkingDiv.innerHTML = `<strong>Thinking:</strong><br>${marked.parse(thinkingContent)}`;
+      thinkingDiv.innerHTML = sanitizeHTML(`<strong>Thinking:</strong><br>${marked.parse(thinkingContent)}`);
       thinkingDiv.style.display = 'block';
       elements.chatWindow.scrollTop = elements.chatWindow.scrollHeight;
       return;
@@ -742,7 +885,7 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
     }
     if (eventName === 'web-search-done') {
       const data = typeof rawData === 'string' ? safeParseJson(rawData, {}) : rawData;
-      const count = data.resultCount || 0;
+      const count = Number.isInteger(data.resultCount) && data.resultCount >= 0 ? data.resultCount : 0;
       contentDiv.innerHTML = `<span style="color:var(--accent);font-size:0.9em;"><i class="fas fa-globe" style="margin-right:4px"></i> Found ${count} result${count !== 1 ? 's' : ''}. Thinking\u2026</span>`;
       elements.chatWindow.scrollTop = elements.chatWindow.scrollHeight;
       return;
@@ -756,13 +899,14 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
         role: 'assistant', content: fullContent,
         createdAt: new Date().toISOString(),
         id: finalData.messageId || null,
+        sourceUserMessageId: currentUserMessageId,
         stats: finalData.stats || null,
         thinking: thinkingContent || null,
         webSearchResults: finalData.webSearchResults || null,
         routingInfo
       };
       if (elements.chatWindow.contains(assistantMessageDiv)) elements.chatWindow.removeChild(assistantMessageDiv);
-      helpers.appendMessage(assistantMessage);
+      helpers.appendMessage(assistantMessage, { announcement: 'Assistant response complete.' });
       helpers.speakText(fullContent);
       helpers.setFeedback('Response received.', 'success');
       helpers.loadHistoryList();
@@ -815,6 +959,7 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
 
   try {
     const abortController = new AbortController();
+    requestAbortController = abortController;
     state.streamAbortController = abortController;
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
@@ -837,29 +982,45 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
       const { value, done } = await reader.read();
       if (done) break;
       parseAndDispatchSse(decoder.decode(value, { stream: true }), bufferState);
-      if (doneReceived) { abortController.abort(); }
+      if (doneReceived) {
+        // `done` is the successful terminal receipt. Stop reading without
+        // reusing the user-cancellation AbortError path, which can otherwise
+        // append the completed assistant turn a second time.
+        await reader.cancel().catch(() => {});
+        break;
+      }
     }
     if (!doneReceived) {
-      if (elements.chatWindow.contains(assistantMessageDiv)) elements.chatWindow.removeChild(assistantMessageDiv);
-      helpers.appendMessage({ role: 'assistant', content: fullContent || '(no content)', createdAt: new Date().toISOString() });
-      helpers.setFeedback('Response received.', 'success');
+      throw new Error('The response stream ended before completion.');
     }
   } catch (err) {
     if (err.name === 'AbortError') {
       if (elements.chatWindow.contains(assistantMessageDiv)) elements.chatWindow.removeChild(assistantMessageDiv);
-      if (fullContent || thinkingContent) {
+      if (!doneReceived) {
         helpers.appendMessage(
-          { role: 'assistant', content: fullContent || '(stopped)', createdAt: new Date().toISOString(), thinking: thinkingContent || null },
-          { persist: false }
+          {
+            role: 'assistant',
+            content: fullContent || '(stopped)',
+            createdAt: new Date().toISOString(),
+            thinking: thinkingContent || null,
+            retryUserMessageId: currentUserMessageId
+          },
+          { persist: false, announcement: 'Response stopped.' }
         );
       }
+      if (!doneReceived) helpers.setFeedback('Streaming stopped.', 'warning');
       return;
     }
     console.error('Fetch streaming error:', err);
     if (elements.chatWindow.contains(assistantMessageDiv)) elements.chatWindow.removeChild(assistantMessageDiv);
     helpers.appendMessage(
-      { role: 'assistant', content: `\u26a0\ufe0f ${err.message || 'Streaming failed.'}`, createdAt: new Date().toISOString() },
-      { persist: false }
+      {
+        role: 'assistant',
+        content: `\u26a0\ufe0f ${err.message || 'Streaming failed.'}`,
+        createdAt: new Date().toISOString(),
+        retryUserMessageId: currentUserMessageId
+      },
+      { persist: false, announcement: 'Response failed. Review the status message.' }
     );
     const routeSetupError = /model unavailable|model .*not found/i.test(err.message || '');
     helpers.setStatus(routeSetupError ? 'Model route needs attention' : 'Response blocked', routeSetupError ? 'warning' : 'error');
@@ -871,14 +1032,18 @@ export async function sendMessageStreamFetch(ctx, msgInput, modelInput) {
     }
     helpers.setFeedback(err.message, 'error');
   } finally {
-    state.streamAbortController = null;
-    state.sending = false;
-    elements.sendBtn.textContent = 'Send';
-    elements.sendBtn.onclick = () => helpers.sendMessage();
+    if (state.streamAbortController === requestAbortController) {
+      state.streamAbortController = null;
+      state.sending = false;
+      elements.sendBtn.disabled = false;
+      elements.sendBtn.textContent = 'Send';
+      elements.sendBtn.onclick = () => helpers.sendMessage();
+      helpers.applyChatAvailability?.();
+    }
   }
 }
 
-export async function sendMessage(ctx) {
+export async function sendMessage(ctx, turnAction = null) {
   const { elements, state, defaults, helpers } = ctx;
   if (state.sending) return;
   if (state.warming) {
@@ -886,7 +1051,38 @@ export async function sendMessage(ctx) {
     return;
   }
 
-  const message = elements.messageInput.value.trim();
+  const actionKind = turnAction?.action || null;
+  const isRetry = actionKind === 'retry';
+  const isAskAgain = actionKind === 'ask-again';
+  if (turnAction && (!actionKind || (!isRetry && !isAskAgain))) {
+    helpers.setFeedback('Unknown turn action. Reload the conversation and try again.', 'error');
+    return;
+  }
+  const sourceUserMessageId = turnAction?.sourceUserMessageId == null
+    ? null
+    : String(turnAction.sourceUserMessageId);
+  const sourceUserMessage = sourceUserMessageId
+    ? state.history.find((turn) => (
+        turn?.role === 'user' && messageIdOf(turn) === sourceUserMessageId
+      ))
+    : null;
+  if (actionKind && !sourceUserMessage) {
+    helpers.setFeedback('The selected user turn is no longer available. Reload the conversation and try again.', 'error');
+    return;
+  }
+  const requestTurnAction = actionKind ? turnActionForRequest({
+    kind: actionKind,
+    sourceUserMessageId,
+    sourceAssistantMessageId: turnAction?.sourceAssistantMessageId ?? null
+  }) : null;
+  if (actionKind && !requestTurnAction) {
+    helpers.setFeedback('The selected turn action has incomplete message evidence. Reload the conversation and try again.', 'error');
+    return;
+  }
+
+  const message = actionKind
+    ? String(sourceUserMessage.content || '').trim()
+    : elements.messageInput.value.trim();
   const model = elements.modelSelect.value;
   const routerMode = isRouterMode(elements, state);
   if (!message) return;
@@ -904,26 +1100,49 @@ export async function sendMessage(ctx) {
   if (runtimeChange.pending && state.pendingRuntimeNoticeKey !== runtimeChange.key) {
     state.pendingRuntimeNoticeKey = runtimeChange.key;
     helpers.setStatus('Runtime change pending', 'warning');
-    helpers.setFeedback(`${runtimeChange.message} Click Send again to run.`, 'warning');
+    const confirmationLabel = isRetry ? 'Retry' : isAskAgain ? 'Ask again' : 'Send';
+    helpers.setFeedback(`${runtimeChange.message} Click ${confirmationLabel} again to run.`, 'warning');
     elements.sendBtn.textContent = 'Send and load';
-    elements.messageInput.focus();
+    if (!actionKind) elements.messageInput.focus();
     return;
   }
 
-  const userMessage = { role: 'user', content: message, id: `u-${Date.now()}`, createdAt: new Date().toISOString() };
-  helpers.appendMessage(userMessage);
-  elements.messageInput.value = '';
-  elements.messageInput.style.height = 'auto'; // Reset auto-resize
+  // Retry reuses the visible, unpersisted user turn. Ask again intentionally
+  // creates a new user turn because the current API does not replace a
+  // completed response; this keeps the UI aligned with durable history.
+  const userMessage = isRetry
+    ? sourceUserMessage
+    : { role: 'user', content: message, id: `u-${Date.now()}`, createdAt: new Date().toISOString() };
+  const currentUserMessageId = messageIdOf(userMessage);
+  if (!currentUserMessageId) {
+    helpers.setFeedback('The selected turn has no stable message identity. Reload the conversation and try again.', 'error');
+    return;
+  }
+  if (!isRetry) helpers.appendMessage(userMessage);
+  if (!actionKind) {
+    elements.messageInput.value = '';
+    elements.messageInput.style.height = 'auto'; // Reset auto-resize
+  }
   state.sending = true;
   elements.sendBtn.textContent = 'Sending\u2026';
 
   if (elements.streamToggle && elements.streamToggle.checked) {
-    await sendMessageStreamFetch(ctx, message, model);
+    await sendMessageStreamFetch(ctx, message, model, currentUserMessageId, requestTurnAction);
     return;
   }
 
   try {
-    const payload = { ...buildPayload(elements, state, defaults, message), stream: false };
+    const payload = {
+      ...buildPayload(
+        elements,
+        state,
+        defaults,
+        message,
+        currentUserMessageId,
+        requestTurnAction
+      ),
+      stream: false
+    };
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -943,11 +1162,12 @@ export async function sendMessage(ctx) {
       role: 'assistant', content: responseText,
       createdAt: new Date().toISOString(),
       id: data.data?.messageId || null,
+      sourceUserMessageId: currentUserMessageId,
       stats: data.data?.stats || null,
       webSearchResults: data.data?.webSearchResults || null,
       routingInfo
     };
-    helpers.appendMessage(assistantMessage);
+    helpers.appendMessage(assistantMessage, { announcement: 'Assistant response complete.' });
     helpers.speakText(responseText);
 
     // Update Chat Intelligence status bar
@@ -978,8 +1198,13 @@ export async function sendMessage(ctx) {
   } catch (err) {
     console.error(err);
     helpers.appendMessage(
-      { role: 'assistant', content: `\u26a0\ufe0f ${err.message || 'Request failed.'}`, createdAt: new Date().toISOString() },
-      { persist: false }
+      {
+        role: 'assistant',
+        content: `\u26a0\ufe0f ${err.message || 'Request failed.'}`,
+        createdAt: new Date().toISOString(),
+        retryUserMessageId: currentUserMessageId
+      },
+      { persist: false, announcement: 'Response failed. Review the status message.' }
     );
     helpers.setFeedback(err.message, 'error');
     helpers.setStatus('Check host/model.', 'error');
@@ -1009,11 +1234,13 @@ export async function fetchModels(ctx, showStatus = true) {
       updateConfigSummary(elements);
       return;
     }
-    const res = await fetch(`/api/models/all?host=${encodeURIComponent(host)}&status=available`);
+    const res = await fetchWithDeadline(`/api/models/all?host=${encodeURIComponent(host)}&status=available&scope=runtime`);
     if (!res.ok) throw new Error(`Server returned ${res.status}`);
     const data = await res.json();
     const requireProfiledModels = res.headers.get('x-require-profiled-models') === 'true';
+    const modelEvidence = res.headers.get('x-model-evidence') || 'available';
     elements.modelSelect.dataset.requireProfiledModels = requireProfiledModels ? 'true' : 'false';
+    elements.modelSelect.dataset.modelEvidence = modelEvidence;
     const models = Array.isArray(data)
       ? data
       : (data.data && data.data.models) || data.data || data.models || [];
@@ -1053,28 +1280,47 @@ export async function fetchModels(ctx, showStatus = true) {
         }
         elements.modelSelect.appendChild(opt);
       });
-      if (!routerMode && hostState.available) {
+      const requestedModel = !routerMode ? state.requestedRuntime?.model : null;
+      const selectableOptions = Array.from(elements.modelSelect.options)
+        .filter((option) => option.value && !option.disabled);
+      if (requestedModel) {
+        const requestedOption = selectableOptions
+          .find((option) => modelsEquivalent(option.value, requestedModel));
+        if (requestedOption) {
+          elements.modelSelect.value = requestedOption.value;
+          state.requestedRuntime.error = null;
+        } else {
+          elements.modelSelect.value = '';
+          const requestedHost = state.requestedRuntime.host || host;
+          state.requestedRuntime.error = `Requested model ${requestedModel} is unavailable on ${requestedHost}. Choose another model or host to continue.`;
+          helpers.setStatus('Requested route unavailable', 'error');
+          helpers.setFeedback(state.requestedRuntime.error, 'error');
+          updateConfigSummary(elements);
+          return;
+        }
+      } else if (!routerMode && hostState.available) {
         const pref = selectedHostPreference(elements, state, defaults);
         const priorityModels = [
           ...getHostRunningModels(pref),
           ...getHostPinnedModels(pref),
           state.settings.model
         ].filter(Boolean);
-        const options = Array.from(elements.modelSelect.options).filter((option) => option.value && !option.disabled);
         const picked = priorityModels
-          .map((candidate) => options.find((option) => modelsEquivalent(option.value, candidate)))
+          .map((candidate) => selectableOptions.find((option) => modelsEquivalent(option.value, candidate)))
           .find(Boolean);
         if (picked) elements.modelSelect.value = picked.value;
       }
 
-      if (!routerMode && hostState.available && !elements.modelSelect.value) {
-        const firstAllowedOption = Array.from(elements.modelSelect.options).find((option) => option.value && !option.disabled);
+      if (!requestedModel && !routerMode && hostState.available && !elements.modelSelect.value) {
+        const firstAllowedOption = selectableOptions[0];
         if (firstAllowedOption) elements.modelSelect.value = firstAllowedOption.value;
       }
     }
     helpers.setStatus('Ready', 'success');
     helpers.setFeedback(
-      requireProfiledModels
+      modelEvidence === 'deferred'
+        ? 'Live host inventory is ready. Profiler evidence stays on the Models and Benchmark surfaces so chat startup remains responsive.'
+        : requireProfiledModels
         ? 'Models refreshed with profiler gate active.'
         : routerMode
           ? 'Session mode active. Manual model list refreshed but not selected.'

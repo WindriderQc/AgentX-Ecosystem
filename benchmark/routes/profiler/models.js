@@ -4,6 +4,8 @@ const express = require('express');
 const router = express.Router();
 const modelProfileService = require('../../src/services/profiler/modelProfileService');
 const modelPerformanceProfileService = require('../../src/services/profiler/modelPerformanceProfileService');
+const { getConfiguredHosts } = require('../../src/helpers/ollamaHostConfig');
+const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdmission');
 
 function validateHostId(hostId, res) {
   if (/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(String(hostId || ''))) return true;
@@ -55,8 +57,13 @@ router.put('/:name', async (req, res) => {
     for (const key of allowed) {
       if (req.body[key] !== undefined) update[key] = req.body[key];
     }
+    if (update.sourceHost) {
+      update.sourceHost = await admitOllamaTargetResolved(update.sourceHost, {
+        configuredHosts: getConfiguredHosts()
+      });
+    }
     res.json({ status: 'success', data: await modelProfileService.upsert(update) });
-  } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message }); }
 });
 
 module.exports = router;

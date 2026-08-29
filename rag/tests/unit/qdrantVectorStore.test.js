@@ -1,6 +1,6 @@
-jest.mock('node-fetch', () => jest.fn());
+jest.mock('../../src/utils/fetchWithTimeout', () => jest.fn());
 
-const fetch = require('node-fetch');
+const fetch = require('../../src/utils/fetchWithTimeout');
 const QdrantVectorStore = require('../../src/services/vectorStore/QdrantVectorStore');
 
 // ─── Helper ─────────────────────────────────────────────────
@@ -279,7 +279,7 @@ describe('QdrantVectorStore.upsertDocument', () => {
       { text: 'new content', embedding: [0.5, 0.6], chunkIndex: 0 }
     ];
 
-    await store.upsertDocument('doc-1', { source: 'test' }, chunks);
+    const result = await store.upsertDocument('doc-1', { source: 'test' }, chunks);
 
     // scroll (1) + upsert (1) + deleteByPointIds (1) = 3
     expect(fetch).toHaveBeenCalledTimes(3);
@@ -288,6 +288,29 @@ describe('QdrantVectorStore.upsertDocument', () => {
     expect(deleteCall[0]).toContain('/points/delete');
     const deleteBody = JSON.parse(deleteCall[1].body);
     expect(deleteBody.points).toEqual(['old-uuid-1', 'old-uuid-2']);
+    expect(result.status).toBe('updated');
+  });
+
+  it('does not delete a deterministic point that was replaced in place', async () => {
+    const currentPointId = store._generatePointId('doc-1', 0);
+    // scroll — the existing revision has the same deterministic chunk-0 ID
+    fetch.mockResolvedValueOnce(mockOk({
+      result: {
+        points: [{ id: currentPointId, payload: { documentId: 'doc-1' } }]
+      }
+    }));
+    // upsert batch
+    fetch.mockResolvedValueOnce(mockOk());
+
+    const result = await store.upsertDocument('doc-1', { source: 'test' }, [{
+      text: 'replacement content',
+      embedding: [0.5, 0.6],
+      chunkIndex: 0
+    }]);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1][0]).toContain('/points');
+    expect(result).toEqual({ documentId: 'doc-1', chunkCount: 1, status: 'updated' });
   });
 
   it('batches upserts in groups of 100', async () => {
@@ -501,6 +524,47 @@ describe('QdrantVectorStore.listDocuments', () => {
 
     const body = JSON.parse(fetch.mock.calls[0][1].body);
     expect(body.filter).toEqual({ must: [{ key: 'source', match: { value: 'api' } }] });
+  });
+
+  it('filters and returns canonical source/content identity metadata', async () => {
+    fetch.mockResolvedValueOnce(mockOk({
+      result: {
+        points: [{
+          payload: {
+            documentId: 'doc-identity',
+            source: 'guide.md',
+            tags: [],
+            sourceIdentity: 'source-label:guide.md',
+            sourceIdentityKind: 'source_label',
+            contentHash: 'content-123',
+            identityVersion: 'source-content-v1',
+            chunkSize: 500,
+            chunkOverlap: 50
+          }
+        }]
+      }
+    }));
+
+    const { documents } = await store.listDocuments({
+      sourceIdentity: 'source-label:guide.md',
+      contentHash: 'content-123'
+    });
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.filter.must).toEqual([
+      { key: 'sourceIdentity', match: { value: 'source-label:guide.md' } },
+      { key: 'contentHash', match: { value: 'content-123' } }
+    ]);
+    expect(documents[0]).toMatchObject({
+      documentId: 'doc-identity',
+      sourceIdentity: 'source-label:guide.md',
+      sourceIdentityKind: 'source_label',
+      contentHash: 'content-123',
+      identityVersion: 'source-content-v1',
+      chunkSize: 500,
+      chunkOverlap: 50,
+      chunkCount: 1
+    });
   });
 
   it('supports pagination via offset and limit', async () => {

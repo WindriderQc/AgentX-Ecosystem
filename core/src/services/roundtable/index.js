@@ -17,7 +17,13 @@ const {
   emitterRegistry
 } = require('./orchestrator');
 const { formatTranscript, formatCompactSummary } = require('./formatters');
-const { DEFAULT_PANEL, DEFAULT_SYNTHESIZER, COUNCIL_OPTIONS } = require('./defaults');
+const {
+  DEFAULT_PANEL,
+  DEFAULT_SYNTHESIZER,
+  COUNCIL_OPTIONS,
+  withDefaultModel
+} = require('./defaults');
+const { resolveCouncilDefaults } = require('./defaultResolver');
 const { analyzeQuality } = require('./qualityAnalyzer');
 const {
   addInterjection,
@@ -34,11 +40,46 @@ function getActiveRoundtableId() { return activeRoundtableId; }
  * orchestrator runs in the background. Caller should subscribe to the
  * streaming emitter (via getEmitter) if they want live updates.
  */
-async function startRoundtable(options) {
-  validateRuntimeConfiguration(options.panel || DEFAULT_PANEL);
-  const doc = await createRoundtable(options);
+function firstExplicitPanelModel(panel) {
+  if (!Array.isArray(panel)) return '';
+  const participant = panel.find((entry) =>
+    String(entry?.runtime || 'model').toLowerCase() === 'model'
+    && String(entry?.model || '').trim()
+  );
+  return String(participant?.model || '').trim();
+}
+
+async function resolveStartOptions(options = {}) {
+  const hasPanel = Object.prototype.hasOwnProperty.call(options, 'panel');
+  const callerModel = String(options.synthesizer?.model || '').trim()
+    || firstExplicitPanelModel(options.panel);
+  let defaults = null;
+
+  if (callerModel) {
+    defaults = withDefaultModel(callerModel);
+  } else if (!hasPanel || !String(options.synthesizer?.model || '').trim()) {
+    defaults = await resolveCouncilDefaults();
+  }
+
+  const synthesizer = {
+    ...(defaults?.synthesizer || DEFAULT_SYNTHESIZER),
+    ...(options.synthesizer || {})
+  };
+  synthesizer.model = String(options.synthesizer?.model || defaults?.synthesizer?.model || '').trim();
+
+  return {
+    ...options,
+    panel: hasPanel ? options.panel : defaults?.panel,
+    synthesizer
+  };
+}
+
+async function startRoundtable(options = {}) {
+  const resolvedOptions = await resolveStartOptions(options);
+  validateRuntimeConfiguration(resolvedOptions.panel || DEFAULT_PANEL);
+  const doc = await createRoundtable(resolvedOptions);
   const id = doc._id.toString();
-  const enableScoring = options.enableScoring === true;
+  const enableScoring = resolvedOptions.enableScoring === true;
 
   const emitter = new EventEmitter();
   emitter.setMaxListeners(20);
@@ -95,6 +136,8 @@ module.exports = {
   DEFAULT_PANEL,
   DEFAULT_SYNTHESIZER,
   COUNCIL_OPTIONS,
+  getCouncilDefaults: resolveCouncilDefaults,
+  resolveStartOptions,
   getActiveRoundtableId,
   getEmitter,
   analyzeQuality,

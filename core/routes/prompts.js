@@ -9,6 +9,90 @@ const PromptConfig = require('../models/PromptConfig');
 const logger = require('../config/logger');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
 const { classifyPersona, isRemovedPersona } = require('../src/services/personaDisposition');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
+
+const MAX_PROMPT_NAME_LENGTH = 120;
+const MAX_PROMPT_DESCRIPTION_LENGTH = 500;
+const MAX_VERSION_ALLOCATION_ATTEMPTS = 3;
+const VERSION_ALLOCATION_CONFLICT_MESSAGE = 'Could not allocate a prompt version because of concurrent updates. Please retry.';
+
+function validateCreatePromptBody(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return { error: 'Request body must be a JSON object' };
+    }
+
+    if (typeof body.name !== 'string' || !body.name.trim()) {
+        return { error: 'name must be a non-empty string' };
+    }
+    const name = body.name.trim();
+    if (name.length > MAX_PROMPT_NAME_LENGTH) {
+        return { error: `name must be ${MAX_PROMPT_NAME_LENGTH} characters or fewer` };
+    }
+
+    if (typeof body.systemPrompt !== 'string' || !body.systemPrompt.trim()) {
+        return { error: 'systemPrompt must be a non-empty string' };
+    }
+
+    let description;
+    if (body.description !== undefined) {
+        if (typeof body.description !== 'string') {
+            return { error: 'description must be a string' };
+        }
+        description = body.description.trim();
+        if (description.length > MAX_PROMPT_DESCRIPTION_LENGTH) {
+            return { error: `description must be ${MAX_PROMPT_DESCRIPTION_LENGTH} characters or fewer` };
+        }
+    }
+
+    const isActive = body.isActive === undefined ? false : body.isActive;
+    if (typeof isActive !== 'boolean') {
+        return { error: 'isActive must be a boolean' };
+    }
+
+    const trafficWeight = body.trafficWeight === undefined ? 100 : body.trafficWeight;
+    if (typeof trafficWeight !== 'number'
+        || !Number.isFinite(trafficWeight)
+        || trafficWeight < 0
+        || trafficWeight > 100) {
+        return { error: 'trafficWeight must be a number between 0 and 100' };
+    }
+
+    return {
+        value: {
+            name,
+            systemPrompt: body.systemPrompt,
+            description,
+            isActive,
+            trafficWeight
+        }
+    };
+}
+
+async function createPromptVersion({ name, systemPrompt, description, isActive, trafficWeight }) {
+    for (let attempt = 1; attempt <= MAX_VERSION_ALLOCATION_ATTEMPTS; attempt += 1) {
+        const existing = await PromptConfig.findOne({ name }).sort({ version: -1 });
+        const newVersion = existing ? existing.version + 1 : 1;
+        const prompt = new PromptConfig({
+            name,
+            systemPrompt,
+            description: description || `${name} v${newVersion}`,
+            version: newVersion,
+            isActive,
+            trafficWeight
+        });
+
+        try {
+            await prompt.save();
+            return prompt;
+        } catch (err) {
+            if (err?.code !== 11000) throw err;
+        }
+    }
+
+    const error = new Error(VERSION_ALLOCATION_CONFLICT_MESSAGE);
+    error.code = 'PROMPT_VERSION_ALLOCATION_CONFLICT';
+    throw error;
+}
 
 function serializePrompt(prompt) {
     const obj = prompt.toObject ? prompt.toObject() : prompt;
@@ -99,14 +183,11 @@ router.get('/:name', async (req, res) => {
  * Create a new prompt or new version * Body: { name, systemPrompt, description?, isActive?, trafficWeight? }
  */
 router.post('/', async (req, res) => {
-    const { name, systemPrompt, description, isActive = false, trafficWeight = 100 } = req.body;
-
-    if (!name || !systemPrompt) {
-        return res.status(400).json({
-            status: 'error',
-            message: 'name and systemPrompt are required'
-        });
+    const validation = validateCreatePromptBody(req.body);
+    if (validation.error) {
+        return res.status(400).json({ status: 'error', message: validation.error });
     }
+    const { name, systemPrompt, description, isActive, trafficWeight } = validation.value;
 
     if (isRemovedPersona(name)) {
         return res.status(410).json({
@@ -116,30 +197,31 @@ router.post('/', async (req, res) => {
     }
 
     try {
-        const query = { name };
-
-        // Find highest version for this name
-        const existing = await PromptConfig.findOne(query).sort({ version: -1 });
-        const newVersion = existing ? existing.version + 1 : 1;
-
-        const prompt = new PromptConfig({
+        const prompt = await createPromptVersion({
             name,
             systemPrompt,
-            description: description || `${name} v${newVersion}`,
-            version: newVersion,
+            description,
             isActive,
             trafficWeight
         });
 
-        await prompt.save();
-
-        logger.info('Prompt created', { name, version: newVersion });
+        logger.info('Prompt created', { name, version: prompt.version });
 
         res.status(201).json({
             status: 'success',
             data: serializePrompt(prompt)
         });
     } catch (err) {
+        if (err?.code === 'PROMPT_VERSION_ALLOCATION_CONFLICT') {
+            logger.warn('Prompt version allocation conflict', {
+                name,
+                attempts: MAX_VERSION_ALLOCATION_ATTEMPTS
+            });
+            return res.status(409).json({
+                status: 'error',
+                message: VERSION_ALLOCATION_CONFLICT_MESSAGE
+            });
+        }
         logger.error('Create prompt error', { error: err.message });
         res.status(500).json({ status: 'error', message: err.message });
     }
@@ -266,6 +348,7 @@ router.delete('/:id', async (req, res) => {
     try {
         // Validate ObjectId to prevent NoSQL injection
         if (!validateObjectId(req.params.id, res, 'Prompt ID')) return;
+        if (!requireTypedConfirmation(req, res, 'DELETE PROMPT', req.params.id)) return;
 
         const prompt = await PromptConfig.findById(req.params.id);
 

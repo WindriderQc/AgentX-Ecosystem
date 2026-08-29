@@ -7,39 +7,220 @@
  * @see docs/SERVICE_CONTRACTS.md
  */
 
-const fetch = require('node-fetch');
 const logger = require('../../config/logger');
+const nodeFetch = require('node-fetch');
+const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
+const { createNodeFetchPeerTransport } = require('../helpers/outboundHttpTransport');
+const {
+  createOutboundHttpExecutor,
+  readBoundedJson,
+  readBoundedText,
+} = require('../../../shared/outboundHttpExecutor');
 
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const SERVICE_NAME = 'benchmark';
 const DEFAULT_TIMEOUT_MS = 10000;
-const PIN_RESTORE_TIMEOUT_MS = parseInt(process.env.CORE_PIN_RESTORE_TIMEOUT_MS, 10) || 600000;
+const PIN_RESTORE_TIMEOUT_MS = 600000;
+const PROTECTED_CORE_HEADERS = new Set([
+  ':authority',
+  'content-type',
+  'host',
+  'x-agentx-benchmark-token',
+  'x-service-caller',
+]);
+
+const CORE_OPERATIONS = Object.freeze({
+  MODEL_REGISTRIES: 'benchmark.core-api.model-registries',
+  MODEL_REGISTRY: 'benchmark.core-api.model-registry',
+  PUBLIC_CONFIG: 'benchmark.core-api.public-config',
+  HOST_PREFERENCES: 'benchmark.core-api.host-preferences',
+  HOST_RELOAD: 'benchmark.core-api.host-reload',
+  CLAIM_ACQUIRE: 'benchmark.core-api.claim-acquire',
+  CLAIM_HEARTBEAT: 'benchmark.core-api.claim-heartbeat',
+  CLAIM_RELEASE: 'benchmark.core-api.claim-release',
+  CLAIMS_ACTIVE: 'benchmark.core-api.claims-active',
+});
+
+function operation(method, pathPattern, {
+  allowSearch = false,
+  deadlineMs = DEFAULT_TIMEOUT_MS,
+  maxRequestBytes = 0,
+  maxResponseBytes = 1024 * 1024,
+} = {}) {
+  return Object.freeze({
+    allowSearch,
+    method,
+    pathPattern,
+    policy: Object.freeze({
+      authoritySource: 'configured',
+      deadlineMs,
+      maxRequestBytes,
+      maxResponseBytes,
+    }),
+  });
+}
+
+const CORE_OPERATION_SPECS = Object.freeze({
+  [CORE_OPERATIONS.MODEL_REGISTRIES]: operation('GET', '^/api/models/registry$', {
+    allowSearch: true,
+    maxResponseBytes: 2 * 1024 * 1024,
+  }),
+  [CORE_OPERATIONS.MODEL_REGISTRY]: operation('GET', '^/api/models/registry/[^/]+$', {
+    allowSearch: true,
+  }),
+  [CORE_OPERATIONS.PUBLIC_CONFIG]: operation('GET', '^/api/config$', {
+    deadlineMs: 2_000,
+    maxResponseBytes: 64 * 1024,
+  }),
+  [CORE_OPERATIONS.HOST_PREFERENCES]: operation('GET', '^/api/nerve-center/host-preferences$'),
+  [CORE_OPERATIONS.HOST_RELOAD]: operation(
+    'POST',
+    '^/api/nerve-center/host-preferences/[^/]+/reload$',
+    { deadlineMs: PIN_RESTORE_TIMEOUT_MS }
+  ),
+  [CORE_OPERATIONS.CLAIM_ACQUIRE]: operation(
+    'POST',
+    '^/api/nerve-center/host-preferences/[^/]+/benchmark-claim$',
+    { maxRequestBytes: 64 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.CLAIM_HEARTBEAT]: operation(
+    'POST',
+    '^/api/nerve-center/host-preferences/[^/]+/benchmark-claim/[^/]+/heartbeat$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.CLAIM_RELEASE]: operation(
+    'DELETE',
+    '^/api/nerve-center/host-preferences/[^/]+/benchmark-claim/[^/]+$',
+    { deadlineMs: PIN_RESTORE_TIMEOUT_MS, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.CLAIMS_ACTIVE]: operation(
+    'GET',
+    '^/api/nerve-center/host-preferences/benchmark-claims/active$'
+  ),
+});
+
+function configuredCoreOrigin() {
+  let parsed;
+  try {
+    parsed = new URL(CORE_URL);
+  } catch {
+    throw new Error('Core service URL is invalid');
+  }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    || parsed.username
+    || parsed.password
+    || parsed.pathname !== '/'
+    || parsed.search
+    || parsed.hash) {
+    throw new Error('Core service URL is invalid');
+  }
+  return parsed.origin;
+}
+
+function parseCorePath(path) {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+    throw new Error('Core API path is not registered');
+  }
+  return new URL(path, `${configuredCoreOrigin()}/`);
+}
+
+function operationMatches(spec, method, target) {
+  return spec.method === method
+    && new RegExp(spec.pathPattern).test(target.pathname)
+    && (spec.allowSearch || !target.search);
+}
+
+function classifyCoreOperation(path, method) {
+  const target = parseCorePath(path);
+  const matches = Object.entries(CORE_OPERATION_SPECS)
+    .filter(([, spec]) => operationMatches(spec, method, target));
+  if (matches.length !== 1) throw new Error('Core API operation is not registered');
+  return matches[0][0];
+}
+
+function normalizeCallerHeaders(headers) {
+  if (headers === undefined || headers === null) return {};
+  let entries;
+  try {
+    if (Array.isArray(headers)) entries = headers;
+    else if (typeof headers.entries === 'function') entries = [...headers.entries()];
+    else if (typeof headers === 'object') entries = Object.entries(headers);
+    else throw new TypeError('invalid headers');
+  } catch {
+    throw new Error('Core API headers are invalid');
+  }
+
+  const normalized = {};
+  for (const entry of entries) {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      throw new Error('Core API headers are invalid');
+    }
+    const name = String(entry[0]);
+    if (PROTECTED_CORE_HEADERS.has(name.toLowerCase())) {
+      throw new Error('Core API protected headers cannot be overridden');
+    }
+    normalized[name] = entry[1];
+  }
+  return normalized;
+}
+
+const coreExecutor = createOutboundHttpExecutor({
+  operations: Object.fromEntries(Object.entries(CORE_OPERATION_SPECS)
+    .map(([operationId, spec]) => [operationId, spec.policy])),
+  authorityAdapter: ({ sinkId, target }) => {
+    const spec = CORE_OPERATION_SPECS[sinkId];
+    const requested = new URL(target);
+    const expectedOrigin = configuredCoreOrigin();
+    if (!spec || requested.origin !== expectedOrigin
+      || !new RegExp(spec.pathPattern).test(requested.pathname)
+      || (!spec.allowSearch && requested.search)) {
+      throw new Error('Core API target is not registered');
+    }
+    return { expectedOrigin };
+  },
+  fetchImpl: nodeFetch,
+  transportAdapter: createNodeFetchPeerTransport(),
+});
 
 /**
  * Base fetch wrapper with service-caller header and error handling.
  */
 async function coreRequest(path, options = {}) {
-  const url = `${CORE_URL}${path}`;
-  const timeout = options.timeout || DEFAULT_TIMEOUT_MS;
+  const method = String(options.method || 'GET').toUpperCase();
+  const operationId = options.operationId || classifyCoreOperation(path, method);
+  const spec = CORE_OPERATION_SPECS[operationId];
+  const target = parseCorePath(path);
+  if (!spec || !operationMatches(spec, method, target)) {
+    throw new Error('Core API operation is not registered');
+  }
 
-  const res = await fetch(url, {
-    ...options,
-    timeout,
-    headers: {
-      'x-service-caller': SERVICE_NAME,
-      'Content-Type': 'application/json',
-      ...options.headers
-    }
+  const {
+    operationId: _operationId,
+    timeout: _legacyTimeout,
+    ...requestOptions
+  } = options;
+  const headers = withBenchmarkServiceAuth({
+    ...normalizeCallerHeaders(options.headers),
+    'x-service-caller': SERVICE_NAME,
+    'Content-Type': 'application/json',
+  });
+  const receipt = await coreExecutor.admitTarget(operationId, target.href, {
+    signal: requestOptions.signal,
+  });
+  const res = await coreExecutor.request(receipt, {
+    ...requestOptions,
+    method,
+    headers,
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
+    const body = await readBoundedText(res);
     const err = new Error(`Core API ${res.status}: ${path} — ${body.slice(0, 200)}`);
     err.status = res.status;
     throw err;
   }
 
-  return res.json();
+  return readBoundedJson(res);
 }
 
 /**
@@ -56,7 +237,7 @@ async function getModelRegistries(query = {}) {
   const qs = params.toString();
   const path = `/api/models/registry${qs ? `?${qs}` : ''}`;
 
-  const data = await coreRequest(path);
+  const data = await coreRequest(path, { operationId: CORE_OPERATIONS.MODEL_REGISTRIES });
   return data.data?.models || [];
 }
 
@@ -71,12 +252,26 @@ async function getModelRegistryByName(name, options = {}) {
     const params = new URLSearchParams();
     if (options.host) params.set('host', options.host);
     const qs = params.toString();
-    const data = await coreRequest(`/api/models/registry/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`);
+    const data = await coreRequest(`/api/models/registry/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`, {
+      operationId: CORE_OPERATIONS.MODEL_REGISTRY,
+    });
     return data.data?.model || data.data || null;
   } catch (err) {
     if (err.status === 404) return null;
     throw err;
   }
+}
+
+/**
+ * GET /api/config — resolve Core-owned public browser URLs. The shared browser
+ * resolver receives this as an injected loader so Benchmark never invokes its
+ * generic raw-fetch fallback at runtime.
+ */
+async function loadCorePublicConfig({ signal } = {}) {
+  return coreRequest('/api/config', {
+    operationId: CORE_OPERATIONS.PUBLIC_CONFIG,
+    signal,
+  });
 }
 
 // ── GPU Host Preferences (Nerve Center) ─────────────────────────────────────
@@ -89,7 +284,9 @@ async function getModelRegistryByName(name, options = {}) {
  * @returns {Promise<Object[]>} Array of { host, pinnedModels, ... }
  */
 async function getDedicationStatuses() {
-  const data = await coreRequest('/api/nerve-center/host-preferences');
+  const data = await coreRequest('/api/nerve-center/host-preferences', {
+    operationId: CORE_OPERATIONS.HOST_PREFERENCES,
+  });
   const prefs = Array.isArray(data) ? data : (data.data || []);
   return prefs.map(p => ({
     host: p.hostUrl,
@@ -128,6 +325,7 @@ async function restoreDedication(hostUrlOrKey) {
   }
   return coreRequest(`/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/reload`, {
     method: 'POST',
+    operationId: CORE_OPERATIONS.HOST_RELOAD,
     timeout: PIN_RESTORE_TIMEOUT_MS
   });
 }
@@ -152,6 +350,7 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
   try {
     const data = await coreRequest(path, {
       method: 'POST',
+      operationId: CORE_OPERATIONS.CLAIM_ACQUIRE,
       body: JSON.stringify({ batchId, estimatedDurationMs, ...claimOptions })
     });
     return data.data || { claimed: true };
@@ -172,6 +371,7 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = n
   try {
     const data = await coreRequest(path, {
       method: 'POST',
+      operationId: CORE_OPERATIONS.CLAIM_HEARTBEAT,
       body: JSON.stringify({
         estimatedDurationMs,
         source: 'benchmark',
@@ -193,7 +393,11 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = n
  */
 async function releaseBenchmarkClaim(hostUrl, batchId) {
   const path = `/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/benchmark-claim/${encodeURIComponent(batchId)}`;
-  const data = await coreRequest(path, { method: 'DELETE', timeout: PIN_RESTORE_TIMEOUT_MS });
+  const data = await coreRequest(path, {
+    method: 'DELETE',
+    operationId: CORE_OPERATIONS.CLAIM_RELEASE,
+    timeout: PIN_RESTORE_TIMEOUT_MS,
+  });
   return data.data || { released: true };
 }
 
@@ -203,13 +407,17 @@ async function releaseBenchmarkClaim(hostUrl, batchId) {
  * @returns {Promise<Array<{hostUrl, hostKey, batchId, prevStatus, claimedAt, estimatedDurationMs}>>}
  */
 async function getBenchmarkClaims() {
-  const data = await coreRequest('/api/nerve-center/host-preferences/benchmark-claims/active', { method: 'GET' });
+  const data = await coreRequest('/api/nerve-center/host-preferences/benchmark-claims/active', {
+    method: 'GET',
+    operationId: CORE_OPERATIONS.CLAIMS_ACTIVE,
+  });
   return data?.data?.claims || [];
 }
 
 module.exports = {
   getModelRegistries,
   getModelRegistryByName,
+  loadCorePublicConfig,
   coreRequest,
   getDedicationStatuses,
   resolveHostKey,
@@ -217,5 +425,12 @@ module.exports = {
   claimHostForBenchmark,
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
-  getBenchmarkClaims
+  getBenchmarkClaims,
+  CORE_OPERATIONS,
+  _internal: {
+    classifyCoreOperation,
+    configuredCoreOrigin,
+    CORE_OPERATION_SPECS,
+    normalizeCallerHeaders,
+  },
 };

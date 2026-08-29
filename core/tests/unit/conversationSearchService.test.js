@@ -40,12 +40,14 @@ describe('conversationSearchService', () => {
     expect(resultPipeline[0]).toEqual({
       $match: expect.objectContaining({
         userId: 'default',
+        $nor: expect.any(Array),
         $text: { $search: 'smoke test' }
       })
     });
     expect(countPipeline[0]).toEqual({
       $match: expect.objectContaining({
         userId: 'default',
+        $nor: expect.any(Array),
         $text: { $search: 'smoke test' }
       })
     });

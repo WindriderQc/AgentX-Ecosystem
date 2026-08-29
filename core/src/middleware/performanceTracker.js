@@ -1,5 +1,6 @@
 const logger = require('../../config/logger');
 const PerformanceSnapshot = require('../../models/PerformanceSnapshot');
+const { normalizeObservedPath } = require('../services/endpointPathPolicy');
 
 /**
  * Performance Tracking Middleware
@@ -48,16 +49,7 @@ const SKIP_PATHS = [
  * A Mongo ObjectId, UUID, or bare number in a path is an argument, not a route.
  */
 function normalizePath(pathname) {
-  return pathname
-    .split('/')
-    .map((seg) => {
-      if (!seg) return seg;
-      if (/^[0-9a-f]{24}$/i.test(seg)) return ':id';
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return ':id';
-      if (/^\d+$/.test(seg)) return ':id';
-      return seg;
-    })
-    .join('/');
+  return normalizeObservedPath(pathname);
 }
 
 function trackRequest(req, res, next) {

@@ -41,7 +41,7 @@ export async function initAgentSystem(elements, state) {
   }
 
   agentElements.selectorBar?.addEventListener('click', () => {
-    agentElements.selector.classList.toggle('expanded');
+    setSelectorExpanded(agentElements, !agentElements.selector.classList.contains('expanded'));
   });
   agentElements.changeBtn?.addEventListener('click', () => expandSelector(agentElements));
 
@@ -113,8 +113,9 @@ function renderTools(dedicatedPersonas = []) {
     const icon = personaIcons[persona.name] || 'fa-robot';
     const label = formatLabel(persona.name);
     const desc = (persona.description || '').slice(0, 60);
+    const href = `${route}?persona=${encodeURIComponent(persona.name)}`;
     return `
-      <div class="agentx-card tool-card" data-tool-href="${escapeHtml(route)}?persona=${escapeHtml(persona.name)}" tabindex="0">
+      <a class="agentx-card tool-card" href="${escapeHtml(href)}">
         <div class="agentx-card-avatar" style="--avatar-color: #34d399">
           <i class="fas ${escapeHtml(icon)}"></i>
         </div>
@@ -125,31 +126,18 @@ function renderTools(dedicatedPersonas = []) {
           ${desc ? `<p class="agentx-card-description">${escapeHtml(desc)}</p>` : ''}
         </div>
         <div class="agentx-card-actions">
-          <button class="agentx-select-btn"><i class="fas fa-external-link-alt"></i> Open</button>
+          <span class="agentx-select-btn" aria-hidden="true"><i class="fas fa-external-link-alt"></i> Open</span>
         </div>
-      </div>`;
+      </a>`;
   }).join('');
 
   grid.innerHTML = personaCards;
-  bindCardActivation(grid, '.tool-card', (card) => {
-    window.location.href = card.dataset.toolHref;
-  });
-}
-
-function bindCardActivation(container, selector, activate) {
-  container.querySelectorAll(selector).forEach((card) => {
-    card.addEventListener('click', () => activate(card));
-    card.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      activate(card);
-    });
-  });
 }
 
 function markQuickChatSelected() {
   document.querySelectorAll('.agent-selector-panel .agentx-card').forEach((card) => {
     card.classList.toggle('selected', card.id === 'startChatCard');
+    if (card.id === 'startChatCard') card.setAttribute('aria-pressed', 'true');
     const button = card.querySelector('.agentx-select-btn');
     if (button && card.id === 'startChatCard') {
       button.classList.add('selected');
@@ -194,11 +182,20 @@ export function updateHeaderBar(agent, state) {
 }
 
 function expandSelector(agentElements) {
-  agentElements.selector?.classList.add('expanded');
+  setSelectorExpanded(agentElements, true);
 }
 
 function collapseSelector(agentElements) {
-  agentElements.selector?.classList.remove('expanded');
+  setSelectorExpanded(agentElements, false);
+}
+
+function setSelectorExpanded(agentElements, expanded) {
+  agentElements.selector?.classList.toggle('expanded', expanded);
+  agentElements.selectorBar?.setAttribute('aria-expanded', String(expanded));
+  const panel = document.getElementById('agentSelectorPanel');
+  if (!panel) return;
+  if (expanded) panel.removeAttribute('inert');
+  else panel.setAttribute('inert', '');
 }
 
 function formatLabel(name) {

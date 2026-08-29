@@ -24,6 +24,8 @@ const logger = require('../config/logger');
 const fetch = require('node-fetch');
 const { resolveTarget } = require('../src/helpers/ollamaUtils');
 const { normalizeHostUrl, validateHostUrl, getHostUrls, hostUrlKey } = require('../src/helpers/ollamaHostConfig');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
+const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
 const {
   HOSTS,
   buildRouterConfigPayload,
@@ -77,6 +79,44 @@ function safeRoutingConfigVersion() {
 
 const INFERENCE_FETCH_TIMEOUT_MS =
   parseInt(process.env.INFERENCE_FETCH_TIMEOUT_MS, 10) || 600000;
+
+function createInferenceDisconnectSignal(req, res) {
+    const controller = new AbortController();
+    let complete = false;
+
+    const cancel = () => {
+        if (complete || controller.signal.aborted) return;
+        controller.abort(new Error('Inference caller disconnected'));
+    };
+    const handleResponseClose = () => {
+        // ServerResponse emits `close` after an ordinary completed response too.
+        // Only a close before either completion flag is a caller disconnect.
+        if (res.writableEnded || res.writableFinished) return;
+        cancel();
+    };
+
+    req.once('aborted', cancel);
+    res.once('close', handleResponseClose);
+
+    // The caller can disappear during earlier routing work, before this
+    // deliberately bounded listener window begins.
+    if (req.aborted || (res.destroyed && !res.writableEnded && !res.writableFinished)) {
+        cancel();
+    }
+
+    return {
+        signal: controller.signal,
+        isDisconnected() {
+            return controller.signal.aborted
+                || (res.destroyed && !res.writableEnded && !res.writableFinished);
+        },
+        cleanup() {
+            complete = true;
+            req.off('aborted', cancel);
+            res.off('close', handleResponseClose);
+        }
+    };
+}
 
 function requireProfiledModels() {
   return process.env.REQUIRE_PROFILED_MODELS === 'true';
@@ -624,7 +664,7 @@ router.post('/inference/embed', async (req, res) => {
  * returned snapshot and reuse it rather than resolving capabilities between
  * attempts.
  */
-router.post('/inference/contract/resolve', async (req, res) => {
+router.post('/inference/contract/resolve', requireBenchmarkServiceAccess, async (req, res) => {
     const body = req.body || {};
     const model = typeof body.model === 'string' ? body.model.trim() : '';
     const host = typeof body.host === 'string' ? body.host.trim() : '';
@@ -958,7 +998,8 @@ router.post('/inference/generate', async (req, res) => {
     //   - interactive: KEEP admission — load-bearing for cron fairness
     //   - automated:   keep admission
     const skipGate = stream || !lane.admit;
-    const gateRelease = skipGate ? (() => {}) : await hostGate.acquire(target, model);
+    const disconnect = createInferenceDisconnectSignal(req, res);
+    let gateRelease = () => {};
 
     // recordInference dispatcher honoring the lane's sync/async preference.
     // recordInference is self-contained (only reads its `data` arg, no req/res
@@ -1093,6 +1134,27 @@ router.post('/inference/generate', async (req, res) => {
         error: error || null,
     });
 
+    let primaryAttemptRecorded = false;
+    const dispatchPrimaryAttemptRecord = (entry) => {
+        primaryAttemptRecorded = true;
+        dispatchAttemptRecord(entry);
+    };
+    const recordClientCancellation = () => {
+        if (primaryAttemptRecorded) return;
+        dispatchPrimaryAttemptRecord({
+            hostUrl: target,
+            hostKey: routedHostKey || resolveHostKey(target),
+            attemptModel: model,
+            attempt: telemetryContext.attempt,
+            attemptTrace: routingTrace,
+            attemptOptions: options,
+            attemptNumCtxSource: numCtxSource,
+            durationMs: Date.now() - startedAt,
+            status: 'error',
+            error: 'Inference request cancelled: caller disconnected',
+        });
+    };
+
     const attemptDegradedResponse = (failure) => tryAndRespondDegraded({
         failure,
         res,
@@ -1125,17 +1187,30 @@ router.post('/inference/generate', async (req, res) => {
         buildRoutingDifference,
         timeoutMs: INFERENCE_FETCH_TIMEOUT_MS,
         routeManaged,
+        signal: disconnect.signal,
     });
 
     try {
+        if (!skipGate) {
+            gateRelease = await hostGate.acquire(target, model, {
+                signal: disconnect.signal,
+            });
+        }
+
         const primaryAttempt = await executeOllamaAttempt({
             hostUrl: target,
             payload: ollamaPayload,
             useChat,
             stream,
             timeoutMs: INFERENCE_FETCH_TIMEOUT_MS,
+            signal: disconnect.signal,
         });
         const { response, raw, data } = primaryAttempt;
+
+        if (disconnect.isDisconnected()) {
+            recordClientCancellation();
+            return undefined;
+        }
 
         setInferenceResponseHeaders(res, {
             model,
@@ -1150,7 +1225,7 @@ router.post('/inference/generate', async (req, res) => {
             taskType,
         });
 
-        dispatchAttemptRecord({
+        dispatchPrimaryAttemptRecord({
             hostUrl: target,
             hostKey: routedHostKey || resolveHostKey(target),
             attemptModel: model,
@@ -1201,11 +1276,14 @@ router.post('/inference/generate', async (req, res) => {
         }
 
         if (!response.ok) {
+            if (disconnect.isDisconnected()) return undefined;
             const degradedResponded = await attemptDegradedResponse(
                 classifyHttpRetryFailure(response.status, data, raw)
             );
+            if (disconnect.isDisconnected()) return undefined;
             if (degradedResponded) return undefined;
             emitBuddyEvent('inference_error', 'infrastructure', 'Inference failed: ' + model + ' (' + response.status + ')', 'high');
+            if (disconnect.isDisconnected()) return undefined;
             return res.status(response.status).json({
                 status: 'error',
                 message: data?.error || raw || 'Ollama request failed',
@@ -1220,6 +1298,7 @@ router.post('/inference/generate', async (req, res) => {
             rawResponseRequested,
             stream
         );
+        if (disconnect.isDisconnected()) return undefined;
         res.json(clientData);
 
         // Shadow route evaluation (task 0522), deliberately AFTER the reply is
@@ -1241,6 +1320,18 @@ router.post('/inference/generate', async (req, res) => {
         );
         return undefined;
     } catch (err) {
+        const isClientCancellation = err.isCallerCancellation === true
+            || disconnect.isDisconnected();
+        if (isClientCancellation) {
+            recordClientCancellation();
+            logger.debug('[InferenceProxy] caller disconnected; upstream attempt cancelled', {
+                host: target,
+                model,
+                lane: laneName,
+            });
+            return undefined;
+        }
+
         if (err.isOllamaAttemptError !== true) {
             logger.error('[InferenceProxy] response processing failed', {
                 host: target,
@@ -1252,14 +1343,14 @@ router.post('/inference/generate', async (req, res) => {
             return res.status(500).json({ status: 'error', message: 'Inference response processing failed' });
         }
 
-        const isTimeout = err.name === 'AbortError';
+        const isTimeout = err.isOllamaTimeout === true || err.name === 'AbortError';
         if (isTimeout) {
             logger.warn('[InferenceProxy] fetch timeout — gate slot released', {
                 host: target, model, timeoutMs: INFERENCE_FETCH_TIMEOUT_MS, lane: laneName
             });
         }
 
-        dispatchAttemptRecord({
+        dispatchPrimaryAttemptRecord({
             hostUrl: target,
             hostKey: routedHostKey || resolveHostKey(target),
             attemptModel: model,
@@ -1293,6 +1384,7 @@ router.post('/inference/generate', async (req, res) => {
                 ? { kind: 'timeout', streamStarted: false }
                 : { kind: 'connection' }
         );
+        if (disconnect.isDisconnected()) return undefined;
         if (degradedResponded) return undefined;
 
         emitBuddyEvent('inference_error', 'infrastructure',
@@ -1300,8 +1392,10 @@ router.post('/inference/generate', async (req, res) => {
                 ? 'Inference timeout: ' + model + ' @ ' + target
                 : 'Host unreachable: ' + model + ' @ ' + target,
             'high');
+        if (disconnect.isDisconnected()) return undefined;
         return res.status(isTimeout ? 504 : 502).json({ status: 'error', message: err.message });
     } finally {
+        disconnect.cleanup();
         gateRelease();
     }
 });
@@ -1364,13 +1458,7 @@ router.put('/router/config/tasks/:taskType', async (req, res) => {
 });
 
 router.post('/router/config/reset', async (req, res) => {
-    if (req.body?.confirmDeploymentDefaults !== true) {
-        return res.status(409).json({
-            status: 'error',
-            code: 'deployment_defaults_confirmation_required',
-            message: 'Bulk reset removes every app override. Retry with confirmDeploymentDefaults: true after reviewing GET /api/router/config/defaults.'
-        });
-    }
+    if (!requireTypedConfirmation(req, res, 'RESET ROUTER CONFIG')) return;
     try {
         const taskConfigState = await resetAllTaskModelOverrides();
         const data = await buildRouterConfigPayload();

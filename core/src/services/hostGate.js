@@ -31,9 +31,11 @@ const SHARED_OWNER_ID = `${os.hostname()}:${process.pid}:${randomUUID()}`;
 
 // key = `${host}::${model}` → { inFlight, peak, totalAcquired, totalRejected, waiters }
 const _stats = new Map();
-// key → array of pending resolve() callbacks waiting for a slot
+// key → array of pending waiter records waiting for a slot
 const _waitQueues = new Map();
 let HostGateAdmission = null;
+
+const HOST_GATE_ABORT_CODE = 'HOST_GATE_ADMISSION_ABORTED';
 
 function _key(host, model) {
   return `${host || 'unknown'}::${model || 'unknown'}`;
@@ -61,8 +63,44 @@ function sharedStateReady() {
   return sharedStateEnabled() && mongoose.connection.readyState === 1;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function createAdmissionAbortError() {
+  const error = new Error('Host gate admission cancelled');
+  error.name = 'AbortError';
+  error.code = HOST_GATE_ABORT_CODE;
+  return error;
+}
+
+function throwIfAdmissionAborted(signal) {
+  if (signal?.aborted) throw createAdmissionAbortError();
+}
+
+function abortableSleep(ms, signal) {
+  if (!signal) return new Promise(resolve => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.reject(createAdmissionAbortError());
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    };
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+    };
+    const onAbort = () => finish(() => reject(createAdmissionAbortError()));
+
+    timer = setTimeout(() => finish(resolve), ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    // Cover a signal that changed between the pre-check and listener setup;
+    // the timer already exists here, so the abort path always clears it.
+    if (signal.aborted) onAbort();
+  });
 }
 
 /**
@@ -74,24 +112,28 @@ function sleep(ms) {
  *
  * @param {string} host
  * @param {string} model
+ * @param {{signal?: AbortSignal}} options
  * @returns {Promise<() => void>} release fn
  */
-async function acquire(host, model) {
+async function acquire(host, model, { signal } = {}) {
+  throwIfAdmissionAborted(signal);
+
   if (!ENABLED) {
     // No-op release — gate disabled
     return () => {};
   }
 
   if (sharedStateReady()) {
-    return acquireShared(host, model);
+    return acquireShared(host, model, { signal });
   }
 
-  return acquireLocal(host, model);
+  return acquireLocal(host, model, { signal });
 }
 
-async function acquireLocal(host, model) {
+async function acquireLocal(host, model, { signal } = {}) {
   const key = _key(host, model);
   const s = _getStats(key);
+  throwIfAdmissionAborted(signal);
 
   if (s.inFlight < MAX_INFLIGHT) {
     s.inFlight++;
@@ -108,28 +150,54 @@ async function acquireLocal(host, model) {
     logger.info('[HostGate] queue forming', { key, inFlight: s.inFlight, limit: MAX_INFLIGHT });
   }
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let q = _waitQueues.get(key);
     if (!q) {
       q = [];
       _waitQueues.set(key, q);
     }
-    q.push(() => {
-      s.waiters--;
-      s.inFlight++;
-      s.totalAcquired++;
-      if (s.inFlight > s.peak) s.peak = s.inFlight;
-      resolve(_makeRelease(key));
-    });
+
+    const waiter = {
+      state: 'waiting',
+      signal,
+      resolve,
+      reject,
+      onAbort: null,
+    };
+
+    waiter.onAbort = () => {
+      if (waiter.state !== 'waiting') return;
+      waiter.state = 'cancelled';
+
+      const currentQueue = _waitQueues.get(key);
+      if (currentQueue) {
+        const index = currentQueue.indexOf(waiter);
+        if (index >= 0) currentQueue.splice(index, 1);
+        if (currentQueue.length === 0 && _waitQueues.get(key) === currentQueue) {
+          _waitQueues.delete(key);
+        }
+      }
+
+      s.waiters = Math.max(0, s.waiters - 1);
+      signal?.removeEventListener('abort', waiter.onAbort);
+      reject(createAdmissionAbortError());
+    };
+
+    q.push(waiter);
+    if (signal?.addEventListener) {
+      signal.addEventListener('abort', waiter.onAbort, { once: true });
+      if (signal.aborted) waiter.onAbort();
+    }
   });
 }
 
-async function tryAcquireSharedSlot(key, host, model, ownerId) {
+async function tryAcquireSharedSlot(key, host, model, ownerId, signal) {
   const Admission = _admissionModel();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + SHARED_SLOT_TTL_MS);
 
   for (let slot = 0; slot < MAX_INFLIGHT; slot++) {
+    throwIfAdmissionAborted(signal);
     const slotId = `${key}::${slot}`;
     try {
       const claimed = await Admission.findOneAndUpdate(
@@ -157,8 +225,10 @@ async function tryAcquireSharedSlot(key, host, model, ownerId) {
       if (claimed && claimed.ownerId === ownerId) {
         return { slotId, ownerId, expiresAt };
       }
+      throwIfAdmissionAborted(signal);
     } catch (err) {
       if (err && (err.code === 11000 || /duplicate key/i.test(err.message || ''))) {
+        throwIfAdmissionAborted(signal);
         continue;
       }
       throw err;
@@ -168,32 +238,58 @@ async function tryAcquireSharedSlot(key, host, model, ownerId) {
   return null;
 }
 
-async function acquireShared(host, model) {
+async function releaseSharedSlotWonAfterAbort(key, slotId, ownerId) {
+  try {
+    await _admissionModel().deleteOne({ _id: slotId, ownerId });
+  } catch (err) {
+    logger.warn('[HostGate] failed to release shared slot after cancelled admission', {
+      key,
+      error: err.message,
+    });
+  }
+}
+
+async function acquireShared(host, model, { signal } = {}) {
   const key = _key(host, model);
   const s = _getStats(key);
   const ownerId = `${SHARED_OWNER_ID}:${randomUUID()}`;
   let countedWaiter = false;
 
-  while (true) {
-    const slot = await tryAcquireSharedSlot(key, host, model, ownerId);
-    if (slot) {
-      if (countedWaiter) {
-        s.waiters = Math.max(0, s.waiters - 1);
+  try {
+    while (true) {
+      throwIfAdmissionAborted(signal);
+      const slot = await tryAcquireSharedSlot(key, host, model, ownerId, signal);
+      if (signal?.aborted) {
+        if (slot) {
+          await releaseSharedSlotWonAfterAbort(key, slot.slotId, ownerId);
+        }
+        throw createAdmissionAbortError();
       }
-      s.inFlight++;
-      s.totalAcquired++;
-      if (s.inFlight > s.peak) s.peak = s.inFlight;
-      return _makeSharedRelease(key, slot.slotId, ownerId);
-    }
 
-    if (!countedWaiter) {
-      countedWaiter = true;
-      s.waiters++;
-      if (s.waiters > s.maxWaiters) s.maxWaiters = s.waiters;
-      logger.info('[HostGate] shared queue forming', { key, limit: MAX_INFLIGHT });
-    }
+      if (slot) {
+        if (countedWaiter) {
+          s.waiters = Math.max(0, s.waiters - 1);
+          countedWaiter = false;
+        }
+        s.inFlight++;
+        s.totalAcquired++;
+        if (s.inFlight > s.peak) s.peak = s.inFlight;
+        return _makeSharedRelease(key, slot.slotId, ownerId);
+      }
 
-    await sleep(SHARED_RETRY_MS);
+      if (!countedWaiter) {
+        countedWaiter = true;
+        s.waiters++;
+        if (s.waiters > s.maxWaiters) s.maxWaiters = s.waiters;
+        logger.info('[HostGate] shared queue forming', { key, limit: MAX_INFLIGHT });
+      }
+
+      await abortableSleep(SHARED_RETRY_MS, signal);
+    }
+  } finally {
+    if (countedWaiter) {
+      s.waiters = Math.max(0, s.waiters - 1);
+    }
   }
 }
 
@@ -206,15 +302,37 @@ function _makeRelease(key) {
     s.inFlight--;
     s.totalReleased++;
 
-    const q = _waitQueues.get(key);
-    if (q && q.length > 0) {
-      const next = q.shift();
-      if (q.length === 0) _waitQueues.delete(key);
-      // Schedule the next acquirer on a microtask so the current caller
-      // finishes its release bookkeeping before the next one starts counting.
-      Promise.resolve().then(next);
-    }
+    _admitNextLocalWaiter(key, s);
   };
+}
+
+function _admitNextLocalWaiter(key, s) {
+  const q = _waitQueues.get(key);
+  if (!q) return;
+
+  while (q.length > 0) {
+    const waiter = q.shift();
+    if (q.length === 0 && _waitQueues.get(key) === q) {
+      _waitQueues.delete(key);
+    }
+    if (!waiter || waiter.state !== 'waiting') continue;
+
+    if (waiter.signal?.aborted) {
+      waiter.onAbort();
+      continue;
+    }
+
+    // Handoff is synchronous with release. Abort-before-release removes the
+    // waiter; release-before-abort transfers ownership and a release function.
+    waiter.state = 'admitted';
+    waiter.signal?.removeEventListener('abort', waiter.onAbort);
+    s.waiters = Math.max(0, s.waiters - 1);
+    s.inFlight++;
+    s.totalAcquired++;
+    if (s.inFlight > s.peak) s.peak = s.inFlight;
+    waiter.resolve(_makeRelease(key));
+    return;
+  }
 }
 
 function _makeSharedRelease(key, slotId, ownerId) {
@@ -312,5 +430,6 @@ module.exports = {
   MAX_INFLIGHT,
   ENABLED,
   get SHARED_STATE_ENABLED() { return sharedStateEnabled(); },
-  SHARED_SLOT_TTL_MS
+  SHARED_SLOT_TTL_MS,
+  HOST_GATE_ABORT_CODE
 };

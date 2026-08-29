@@ -10,6 +10,7 @@ const logger = require('../config/logger');
 const ollamaVramService = require('../src/services/ollamaVramService');
 const HostPreference = require('../models/HostPreference');
 const { getConfiguredHosts } = require('../src/helpers/ollamaHostConfig');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 /**
  * GET /api/ollama-vram
@@ -88,6 +89,8 @@ router.delete('/override/:hostIp', async (req, res) => {
     if (!target) {
       return res.status(400).json({ status: 'error', message: 'hostIp is required' });
     }
+
+    if (!requireTypedConfirmation(req, res, 'CLEAR VRAM OVERRIDE', target)) return;
 
     const doc = await HostPreference.findOneAndUpdate(
       { hostUrl: { $regex: target, $options: 'i' } },

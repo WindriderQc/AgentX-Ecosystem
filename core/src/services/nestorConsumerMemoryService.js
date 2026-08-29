@@ -8,6 +8,37 @@ const {
   NestorConsumerError,
 } = require('./nestorConsumerContract');
 
+const ABSOLUTE_URL_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
+const PRIVATE_LOCATION_KEYS = new Set(['address', 'endpoint']);
+
+function isPrivateLocationKey(key) {
+  const normalized = String(key).toLowerCase();
+  return normalized.endsWith('url') || PRIVATE_LOCATION_KEYS.has(normalized);
+}
+
+function publicMessage(value) {
+  return String(value || 'unavailable')
+    .replace(ABSOLUTE_URL_PATTERN, '[redacted-endpoint]')
+    .slice(0, 500);
+}
+
+function sanitizePublicStatus(value) {
+  if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'string') return publicMessage(value);
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(sanitizePublicStatus);
+  if (typeof value !== 'object') return null;
+
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !isPrivateLocationKey(key))
+    .map(([key, entry]) => [key, sanitizePublicStatus(entry)]));
+}
+
+function observationTimestamp(options = {}) {
+  const observedAt = typeof options.now === 'function' ? options.now() : new Date();
+  return (observedAt instanceof Date ? observedAt : new Date(observedAt)).toISOString();
+}
+
 function normalizeSources(input) {
   const requested = Array.isArray(input) ? input : (input ? [input] : MEMORY_SOURCES);
   const sources = Array.from(new Set(requested.map((source) => String(source).trim().toLowerCase())));
@@ -27,21 +58,29 @@ function normalizeK(value) {
 function normalizeResult(result, source) {
   const metadata = result?.metadata || {};
   const text = String(result?.compressedText || result?.text || result?.snippet || '').slice(0, 4000);
+  const resolvedSource = String(result?.source || metadata.source || source || '').trim();
+  const rawReference = result?.ref || metadata.ref || metadata.documentId || result?.documentId || null;
   return {
-    source: result?.source || metadata.source || source,
+    source: /^[a-z][a-z0-9+.-]*:\/\//i.test(resolvedSource) ? source : resolvedSource,
     text,
     snippet: text,
     score: Number.isFinite(Number(result?.score)) ? Number(result.score) : null,
-    ref: result?.ref || metadata.ref || metadata.documentId || result?.documentId || null,
+    ref: rawReference && !/^[a-z][a-z0-9+.-]*:\/\//i.test(String(rawReference))
+      ? String(rawReference).slice(0, 500)
+      : null,
   };
 }
 
 async function statusForSource(source) {
   if (source === 'rag') {
     const status = await getRagServiceClient().getStatus();
-    return { source: 'rag', available: status?.healthy !== false, ...status };
+    const sanitized = sanitizePublicStatus(status || {});
+    const publicStatus = sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+      ? sanitized
+      : {};
+    return { ...publicStatus, source: 'rag', available: publicStatus?.healthy !== false };
   }
-  return memoryAdapters.statusForSource(source);
+  return sanitizePublicStatus(await memoryAdapters.statusForSource(source));
 }
 
 async function searchSource(source, query, k) {
@@ -51,26 +90,33 @@ async function searchSource(source, query, k) {
   return memoryAdapters.searchSingle(source, query, k);
 }
 
-async function getMemoryStatus(inputSources) {
+async function getMemoryStatus(inputSources, options = {}) {
   const sources = normalizeSources(inputSources);
   const entries = await Promise.all(sources.map(async (source) => {
     try {
       return [source, await statusForSource(source)];
     } catch (error) {
-      return [source, { source, available: false, error: error.message }];
+      return [source, { source, available: false, error: publicMessage(error.message) }];
     }
   }));
   const statuses = Object.fromEntries(entries);
   return {
+    generatedAt: observationTimestamp(options),
+    readOnly: true,
     sources: statuses,
     available: sources.filter((source) => statuses[source]?.available !== false),
     warnings: sources
       .filter((source) => statuses[source]?.available === false)
-      .map((source) => ({ source, code: 'MEMORY_SOURCE_UNAVAILABLE', message: statuses[source].error || 'unavailable' })),
+      .map((source) => ({
+        source,
+        code: 'MEMORY_SOURCE_UNAVAILABLE',
+        message: publicMessage(statuses[source].error),
+      })),
   };
 }
 
-async function searchMemory({ source, sources, query, k } = {}) {
+async function searchMemory(input = {}, options = {}) {
+  const { source, sources, query, k } = input;
   const normalizedQuery = String(query == null ? '' : query).trim();
   if (!normalizedQuery) {
     throw new NestorConsumerError('query is required', 400, 'MEMORY_QUERY_REQUIRED');
@@ -100,12 +146,14 @@ async function searchMemory({ source, sources, query, k } = {}) {
       warnings.push({
         source: selectedSource,
         code: 'MEMORY_SOURCE_SEARCH_FAILED',
-        message: error.message,
+        message: publicMessage(error.message),
       });
     }
   }));
 
   return {
+    generatedAt: observationTimestamp(options),
+    readOnly: true,
     query: normalizedQuery,
     k: boundedK,
     sources: selected,
@@ -117,6 +165,10 @@ async function searchMemory({ source, sources, query, k } = {}) {
 
 module.exports = {
   normalizeSources,
+  normalizeResult,
   getMemoryStatus,
+  observationTimestamp,
+  publicMessage,
+  sanitizePublicStatus,
   searchMemory,
 };

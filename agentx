@@ -58,6 +58,36 @@ ensure_benchmark_token() {
   export AGENTX_BENCHMARK_TOKEN
 }
 
+ensure_recovery_token() {
+  if [[ -n "${AGENTX_RECOVERY_TOKEN:-}" ]]; then
+    return
+  fi
+  local container line current=""
+  for container in agentx-ecosystem-core agentx-ecosystem-rag; do
+    while IFS= read -r line; do
+      if [[ "$line" == AGENTX_RECOVERY_TOKEN=* ]]; then
+        current="${line#AGENTX_RECOVERY_TOKEN=}"
+        break
+      fi
+    done < <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null || true)
+    if [[ -n "$current" ]]; then
+      AGENTX_RECOVERY_TOKEN="$current"
+      export AGENTX_RECOVERY_TOKEN
+      return
+    fi
+  done
+  if [[ ! -r /dev/urandom ]] || ! command -v od >/dev/null 2>&1 || ! command -v tr >/dev/null 2>&1; then
+    echo "Cannot generate the ephemeral recovery credential. Set AGENTX_RECOVERY_TOKEN explicitly." >&2
+    exit 3
+  fi
+  AGENTX_RECOVERY_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')"
+  if [[ ${#AGENTX_RECOVERY_TOKEN} -ne 64 ]]; then
+    echo "Failed to generate the ephemeral recovery credential." >&2
+    exit 3
+  fi
+  export AGENTX_RECOVERY_TOKEN
+}
+
 show_product_health() {
   local failed=0
   local spec label container needs_health state runtime health display
@@ -90,6 +120,30 @@ show_product_health() {
   echo "Product services are healthy. Ollama and models remain optional."
 }
 
+wait_published_product_endpoints() {
+  local deadline=$((SECONDS + 30))
+  local ready port
+  local ports=("${CORE_PORT:-3180}" "${BENCHMARK_PORT:-3181}" "${RAG_PORT:-3182}")
+
+  while (( SECONDS < deadline )); do
+    ready=1
+    for port in "${ports[@]}"; do
+      if command -v curl >/dev/null 2>&1; then
+        curl --fail --silent --max-time 2 "http://127.0.0.1:${port}/health" >/dev/null || ready=0
+      else
+        (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null || ready=0
+      fi
+    done
+    if [[ $ready -eq 1 ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Containers are healthy, but the loopback-published product endpoints did not become reachable within 30 seconds." >&2
+  return 1
+}
+
 usage() {
   cat <<'EOF'
 Agent X Ecosystem
@@ -98,7 +152,7 @@ Usage: ./agentx <command> [args...]
 
 Commands:
   doctor                Check Docker CLI, Compose, and engine availability
-  up                    Start the demo and wait for product health
+  up                    Start the selected product profile (demo by default) and wait for health
   health                Verify the five required product containers
   down                  Stop product and Docker Ollama; preserve volumes
   status                Show product service status
@@ -109,9 +163,9 @@ Commands:
   ollama-status         Show Docker Ollama status and installed models
   ollama-pull <model>   Explicitly download one model into its named volume
   ollama-down           Stop the Ollama-backed stack; preserve volumes
-  reset                 Delete only agentx-ecosystem containers and volumes
+  reset                 Delete containers, data volumes, and recovery archives
 
-Open http://localhost:3180/ after startup.
+Open http://127.0.0.1:3180/ after startup.
 EOF
 }
 
@@ -126,11 +180,13 @@ case "$cmd" in
   up)
     require_docker
     ensure_benchmark_token
+    ensure_recovery_token
     if ! docker compose "${COMPOSE[@]}" up -d --wait --wait-timeout 180 "$@" mongo qdrant core benchmark rag; then
       echo "Startup did not become healthy within 180 seconds. Run './agentx status' and './agentx logs core'." >&2
       exit 1
     fi
-    echo "Agent X started: http://localhost:${CORE_PORT:-3180}/"
+    wait_published_product_endpoints || exit 1
+    echo "Agent X started: http://127.0.0.1:${CORE_PORT:-3180}/"
     ;;
   health)
     require_docker
@@ -152,6 +208,7 @@ case "$cmd" in
   rebuild)
     require_docker
     ensure_benchmark_token
+    ensure_recovery_token
     docker compose "${COMPOSE[@]}" build --no-cache "$@"
     docker compose "${COMPOSE[@]}" up -d "$@"
     ;;
@@ -179,10 +236,12 @@ case "$cmd" in
   ollama-up)
     require_docker
     ensure_benchmark_token
+    ensure_recovery_token
     if ! docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama up -d --wait --wait-timeout 180 "$@" ollama mongo qdrant core benchmark rag; then
       echo "The Docker Ollama stack did not become healthy within 180 seconds. Run './agentx status' and inspect logs." >&2
       exit 1
     fi
+    wait_published_product_endpoints || exit 1
     echo "Agent X started with isolated Docker Ollama. No model was downloaded."
     ;;
   ollama-status)
@@ -204,9 +263,9 @@ case "$cmd" in
     ;;
   reset)
     require_docker
-    echo "This deletes only agentx-ecosystem containers, network, and named data volumes."
-    read -r -p "Type 'delete agentx-ecosystem data' to continue: " confirm
-    if [[ "$confirm" == "delete agentx-ecosystem data" ]]; then
+    echo "This deletes only agentx-ecosystem containers, network, named data volumes, and persistent recovery archives."
+    read -r -p "Type 'delete agentx-ecosystem data and recovery archives' to continue: " confirm
+    if [[ "$confirm" == "delete agentx-ecosystem data and recovery archives" ]]; then
       docker compose "${OLLAMA_COMPOSE[@]}" --profile ollama down --volumes
     else
       echo "Cancelled."

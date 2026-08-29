@@ -1,12 +1,21 @@
 const fetchWithTimeout = require('../../utils/fetchWithTimeout');
+const {
+  SERVICE_OUTBOUND_OPERATION_IDS,
+  SERVICE_OUTBOUND_TIMEOUTS,
+  configuredServiceOrigin,
+} = require('../../clients/serviceOutboundClient');
 const logger = require('../../../config/logger');
 
-const EMBEDDING_TIMEOUT = Number(process.env.EMBEDDING_TIMEOUT_MS) || 60000;
+const EMBEDDING_TIMEOUT = SERVICE_OUTBOUND_TIMEOUTS[
+  SERVICE_OUTBOUND_OPERATION_IDS.CORE_EMBED
+];
 
 class CoreProxyProvider {
   constructor(config = {}) {
     this.name = 'core-proxy';
-    this.coreProxyUrl = config.coreProxyUrl || process.env.CORE_PROXY_URL || 'http://localhost:3080';
+    this.coreProxyUrl = configuredServiceOrigin(
+      config.coreProxyUrl || process.env.CORE_PROXY_URL || 'http://localhost:3080'
+    );
     this.model = config.embeddingModel || process.env.EMBEDDING_MODEL || 'nomic-embed-text:v1.5';
     this.dimension = config.dimension || Number(process.env.EMBEDDING_DIMENSION) || 768;
     this.batchSize = config.batchSize || 10;
@@ -63,7 +72,10 @@ class CoreProxyProvider {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }, EMBEDDING_TIMEOUT);
+      }, EMBEDDING_TIMEOUT, {
+        expectedOrigins: [this.coreProxyUrl],
+        operationId: SERVICE_OUTBOUND_OPERATION_IDS.CORE_EMBED,
+      });
 
       if (!response.ok) {
         const errorText = await response.text();

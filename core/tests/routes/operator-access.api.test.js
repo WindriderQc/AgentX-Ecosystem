@@ -20,7 +20,10 @@ describe('operator access app boundary', () => {
       .set('Sec-Fetch-Site', 'cross-site')
       .expect(403);
 
-    expect(response.body.error).toBe('forbidden');
+    expect(response.body).toEqual(expect.objectContaining({
+      ok: false,
+      code: 'PUBLIC_EXPOSURE_GUARD'
+    }));
   });
 
   it('allows the same loopback surface from its exact UI origin', async () => {

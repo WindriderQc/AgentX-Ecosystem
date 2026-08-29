@@ -3,6 +3,7 @@
 
 import { fetchResults } from './api.js';
 import { escHtml } from '../utils/format.js';
+import { evidenceBadge } from './evidence-provenance.js';
 
 const PAGE_LIMIT = 25;
 
@@ -48,22 +49,30 @@ function scoreClass(score) {
 
 function renderRow(r) {
     const id = r._id || r.id || '';
-    const model = escHtml((r.model || '').replace(/:latest$/, ''));
-    const prompt = escHtml((r.prompt_name || r.prompt || '').slice(0, 60));
+    const rawModel = (r.model || '').replace(/:latest$/, '');
+    const rawPrompt = r.prompt_name || r.prompt || '';
+    const model = escHtml(rawModel);
+    const prompt = escHtml(rawPrompt.slice(0, 60));
     const level = r.prompt_level ?? r.level ?? '—';
     const category = escHtml(r.category || r.prompt_category || '—');
     const score = r.quality_score ?? r.composite_score;
     const scoreDisplay = score !== null && score !== undefined ? score.toFixed(1) : '—';
     const sc = scoreClass(score);
     const method = escHtml(r.judging_method || r.scoring_method || '—');
+    const accessibleLabel = escHtml([
+        `Open result details for ${rawModel || 'unknown model'}`,
+        rawPrompt || 'unnamed prompt',
+        `level ${level}`,
+        `score ${scoreDisplay}`
+    ].join(', '));
 
     return `<tr class="ledger-row" data-id="${escHtml(id)}" style="cursor:pointer;">
-        <td class="ls-model">${model}</td>
-        <td class="ls-prompt" title="${escHtml(r.prompt_name || r.prompt || '')}">${prompt}</td>
+        <td class="ls-model"><button type="button" class="ledger-open" aria-expanded="false" aria-controls="courthouse-detail-panel" aria-label="${accessibleLabel}">${model || '—'}</button></td>
+        <td class="ls-prompt" title="${escHtml(rawPrompt)}">${prompt}</td>
         <td>${level}</td>
         <td>${category}</td>
         <td class="ls-score ${sc}">${scoreDisplay}</td>
-        <td>${method}</td>
+        <td><span class="ls-method">${evidenceBadge(r, { compact: true })}<span>${method}</span></span></td>
         <td>${statusBadge(r)}</td>
     </tr>`;
 }
@@ -86,9 +95,9 @@ function paginationHTML(page, totalPages) {
     const prevDisabled = page <= 1 ? ' disabled' : '';
     const nextDisabled = page >= totalPages ? ' disabled' : '';
     return `<div class="ledger-pagination" style="display:flex;align-items:center;gap:0.5rem;margin-top:0.4rem;font-size:0.62rem;">
-        <button class="rq-chip ledger-prev"${prevDisabled}>← Prev</button>
-        <span style="color:#555;">Page ${page} of ${totalPages || 1}</span>
-        <button class="rq-chip ledger-next"${nextDisabled}>Next →</button>
+        <button type="button" class="rq-chip ledger-prev"${prevDisabled}>← Prev</button>
+        <span class="ch-muted-meta">Page ${page} of ${totalPages || 1}</span>
+        <button type="button" class="rq-chip ledger-next"${nextDisabled}>Next →</button>
     </div>`;
 }
 
@@ -108,7 +117,7 @@ async function loadAndRender(container, page) {
     // Show loading indicator in body area without clobbering the header
     let bodyEl = container.querySelector('.ledger-body');
     if (bodyEl) {
-        bodyEl.innerHTML = `<div style="padding:1rem;text-align:center;color:#444;font-size:0.7rem;">Loading…</div>`;
+        bodyEl.innerHTML = '<div class="ch-muted-state">Loading…</div>';
     }
 
     let results, total, totalPages;
@@ -130,7 +139,13 @@ async function loadAndRender(container, page) {
     } catch (err) {
         console.error('[results-ledger] fetchResults error:', err);
         if (bodyEl) {
-            bodyEl.innerHTML = `<div style="padding:1rem;text-align:center;color:var(--r-error);font-size:0.7rem;">Failed to load results: ${escHtml(err.message)}</div>`;
+            bodyEl.innerHTML = `<div class="r-section-error ch-recoverable" role="alert">
+                <span>Results-ledger evidence is unavailable. No empty-ledger conclusion was inferred.</span>
+                <button type="button" class="ch-retry-section ledger-retry">Retry</button>
+            </div>`;
+            bodyEl.querySelector('.ledger-retry')?.addEventListener('click', () => {
+                loadAndRender(container, page);
+            });
         }
         return;
     }
@@ -140,7 +155,7 @@ async function loadAndRender(container, page) {
     // Re-render the full container (header + body) to update count in header
     const rows = results.length > 0
         ? results.map(renderRow).join('')
-        : `<tr><td colspan="7" style="text-align:center;color:#444;padding:1rem;">No results found.</td></tr>`;
+        : '<tr><td colspan="7" class="ch-muted-cell">No results found.</td></tr>';
 
     container.innerHTML = `
         ${sectionHeader(total)}
@@ -191,11 +206,16 @@ function wireRowClicks(container) {
         row.addEventListener('click', () => {
             const id = row.dataset.id;
             const results = getState(container).results || [];
-            const result = results.find(r => (r._id || r.id) === id);
+            const result = results.find(r => String(r._id || r.id || '') === id);
             if (result) {
-                // Highlight active row
-                container.querySelectorAll('.ledger-row').forEach(el => el.classList.remove('is-active'));
+                document.querySelectorAll('.ledger-row').forEach(el => el.classList.remove('is-active'));
+                document.querySelectorAll('.ledger-open').forEach(el => el.setAttribute('aria-expanded', 'false'));
+                document.querySelectorAll('.rq-item').forEach(el => {
+                    el.classList.remove('is-active');
+                    el.setAttribute('aria-expanded', 'false');
+                });
                 row.classList.add('is-active');
+                row.querySelector('.ledger-open')?.setAttribute('aria-expanded', 'true');
                 onSelect(result);
             }
         });
@@ -217,7 +237,7 @@ export async function renderResultsLedger(container, initialPage = 1, onSelect =
     container.innerHTML = `
         ${sectionHeader(null)}
         <div class="ledger-body">
-            <div style="padding:1rem;text-align:center;color:#444;font-size:0.7rem;">Loading…</div>
+            <div class="ch-muted-state">Loading…</div>
         </div>`;
 
     await loadAndRender(container, initialPage);

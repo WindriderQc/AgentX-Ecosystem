@@ -22,7 +22,9 @@ const {
   isRetiredBuiltIn,
 } = require('../src/services/alertRuleLifecycle');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
+const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 const { getStatusProjection } = require('../src/services/laneObservabilityService');
+const { requireAlertDeliveryAccess } = require('../src/helpers/alertDeliveryAccess');
 
 /**
  * PUT /api/alerts/:id/acknowledge
@@ -134,7 +136,7 @@ router.put('/:id/resolve', async (req, res) => {
  * Update delivery status for an alert (called by automation workflows)
  * Body: { channel, sent, error }
  */
-router.post('/:id/delivery-status', async (req, res) => {
+router.post('/:id/delivery-status', requireAlertDeliveryAccess, async (req, res) => {
   try {
     // Validate ObjectId to prevent NoSQL injection
     if (!validateObjectId(req.params.id, res, 'Alert ID')) return;
@@ -567,6 +569,7 @@ router.put('/rules/:ruleId', async (req, res) => {
 router.delete('/rules/:ruleId', async (req, res) => {
   try {
     const { ruleId } = req.params;
+    if (!requireTypedConfirmation(req, res, 'DELETE ALERT RULE', ruleId)) return;
     const rule = await AlertRule.findOne({ ruleId });
     if (!rule) {
       return res.status(404).json({ status: 'error', message: 'Rule not found' });

@@ -128,4 +128,48 @@ describe('GET /api/performance/dashboard', () => {
     expect(res.body.data.metrics_24h.total_requests).toBe(0);
     expect(res.body.data.metrics_24h.uptime_percent).toBe(100);
   });
+
+  test('coalesces persisted nullish endpoint IDs without losing diagnostic volume', async () => {
+    wireSnapshots({ current: metrics(), previous: metrics() });
+    PerformanceSnapshot.aggregate.mockResolvedValue([{
+      totals: [{ _id: true, count: 5 }],
+      categories: [],
+      top_endpoints: [
+        { path: '/api/family/room/undefined', method: 'GET', count: 2, error_count: 2, avg_latency: 100 },
+        { path: '/api/family/room/null', method: 'GET', count: 3, error_count: 1, avg_latency: 200 }
+      ],
+      top_error_endpoints: [],
+      top_slow_endpoints: []
+    }]);
+
+    const res = await request(app()).get('/api/performance/dashboard?hours=24');
+
+    expect(res.body.data.sources.production.top_endpoints).toEqual([expect.objectContaining({
+      path: '/api/family/room/:invalid-id',
+      count: 5,
+      error_count: 3,
+      error_rate: 60,
+      avg_latency: 160
+    })]);
+  });
+});
+
+describe('GET /api/performance/endpoints', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('deduplicates legacy placeholder spellings into the visible invalid-id aggregate', async () => {
+    PerformanceSnapshot.aggregate.mockResolvedValue([
+      { _id: '/api/family/room/undefined' },
+      { _id: '/api/family/room/null' },
+      { _id: '/api/chat' }
+    ]);
+
+    const res = await request(app()).get('/api/performance/endpoints').expect(200);
+
+    expect(res.body.data).toEqual([
+      '/api/chat',
+      '/api/family/room/:invalid-id'
+    ]);
+    expect(res.body.data.join(' ')).not.toMatch(/\/undefined|\/null/);
+  });
 });

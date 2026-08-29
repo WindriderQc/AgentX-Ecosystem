@@ -23,6 +23,7 @@ import {
 import { initAgentSystem, reapplyAgentModel, updateHeaderBar } from './chat-agents.js';
 import {
   loadProfile as _loadProfile, saveProfile as _saveProfile,
+  openProfileModal as _openProfileModal, closeProfileModal as _closeProfileModal,
   loadPromptSelector, showPromptInfo
 } from './chat-profile.js';
 
@@ -31,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const elements = {
     chatWindow: document.getElementById('chatWindow'),
+    chatAnnouncements: document.getElementById('chatAnnouncements'),
     messageInput: document.getElementById('messageInput'),
     sendBtn: document.getElementById('sendBtn'),
     clearBtn: document.getElementById('clearBtn'),
@@ -54,6 +56,10 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshModels: document.getElementById('refreshModels'),
     saveDefaults: document.getElementById('saveDefaults'),
     feedback: document.getElementById('feedback'),
+    routeRecovery: document.getElementById('chatRouteRecovery'),
+    routeRecoveryTitle: document.getElementById('chatRouteRecoveryTitle'),
+    routeRecoveryStatus: document.getElementById('chatRouteRecoveryStatus'),
+    routeRecoveryAction: document.getElementById('chatRouteRecoveryAction'),
     quickActionSelect: document.getElementById('quickActionSelect'),
     streamToggle: document.getElementById('streamToggle'),
     ragToggle: document.getElementById('ragToggle'),
@@ -122,7 +128,10 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionLoadedModel: null,
     hostPreferences: [],
     hostPreferencesByUrl: new Map(),
+    requestedRuntime: null,
     pendingRuntimeNoticeKey: null,
+    manualRecoveryPending: null,
+    routeRecoveryNoticeKey: null,
     _helpers: null,
   };
 
@@ -133,7 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
     appendMessage: (msgOrRole, opts) => {
       _appendMessage(msgOrRole, opts, state, elements);
     },
-    sendMessage: () => _sendMessage({ elements, state, defaults, helpers }),
+    sendMessage: (turnAction) => _sendMessage({ elements, state, defaults, helpers }, turnAction),
     loadHistoryList: () => _loadHistoryList(elements, state),
     loadConversation: (id, preserve) => _loadConversation(id, state, elements, helpers, preserve),
     speakText: () => {},
@@ -252,6 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
     elements.configDrawer.inert = !isOpen;
     elements.configDrawer.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
     elements.toggleConfigBtn?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    elements.toggleConfigBtn?.setAttribute('aria-label', isOpen ? 'Close precision controls' : 'Open precision controls');
     elements.configDrawerBackdrop?.classList.toggle('visible', isOpen);
     elements.configDrawerBackdrop?.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
     document.body.classList.toggle('chat-controls-open', isOpen);
@@ -330,6 +340,62 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function announceChatStatus(message) {
+    if (elements.chatAnnouncements) elements.chatAnnouncements.textContent = message;
+  }
+
+  function syncManualRouteRecovery(hostState) {
+    if (!elements.routeRecovery) return;
+
+    if (state.manualRecoveryPending) {
+      const pending = state.manualRecoveryPending;
+      elements.routeRecovery.hidden = false;
+      elements.routeRecovery.setAttribute('aria-busy', 'true');
+      elements.routeRecoveryTitle.textContent = 'Switching to Manual control';
+      elements.routeRecoveryStatus.textContent = `Selecting ${pending.model} in Manual control and saving it as the local chat default. The configured ${pending.modeLabel} route will remain unchanged.`;
+      elements.routeRecoveryAction.disabled = true;
+      elements.routeRecoveryAction.textContent = `Selecting ${pending.model}\u2026`;
+      return;
+    }
+
+    const modeLabel = routingModeLabel(routingMode(elements, state));
+    const recoveryUi = window.ChatModelReadiness;
+    const recovery = recoveryUi?.describeManualRouteRecovery
+      ? recoveryUi.describeManualRouteRecovery(hostState, modeLabel, elements.modelSelect?.options)
+      : hostState.mode === 'router' && hostState.unavailableKind === 'route setup'
+        ? {
+            title: `${modeLabel} route unavailable`,
+            detail: `${hostState.reason || 'The configured model is unavailable.'} Review Manual controls to choose an installed model explicitly.`,
+            candidate: null,
+            actionLabel: 'Review manual controls'
+          }
+        : null;
+
+    if (!recovery) {
+      elements.routeRecovery.hidden = true;
+      elements.routeRecovery.setAttribute('aria-busy', 'false');
+      elements.routeRecoveryAction.disabled = false;
+      state.routeRecoveryNoticeKey = null;
+      return;
+    }
+
+    const candidateModel = recovery.candidate?.model || '';
+    const host = targetHost(elements, defaults, { includeRouter: true });
+    const noticeKey = [modeLabel, hostState.routeModel || '', candidateModel, host].join('|');
+    elements.routeRecovery.hidden = false;
+    elements.routeRecovery.setAttribute('aria-busy', 'false');
+    elements.routeRecoveryTitle.textContent = recovery.title;
+    if (state.routeRecoveryNoticeKey !== noticeKey || elements.routeRecoveryStatus.textContent !== recovery.detail) {
+      elements.routeRecoveryStatus.textContent = recovery.detail;
+      state.routeRecoveryNoticeKey = noticeKey;
+    }
+    elements.routeRecoveryAction.disabled = false;
+    elements.routeRecoveryAction.textContent = recovery.actionLabel;
+    elements.routeRecoveryAction.dataset.model = candidateModel;
+    elements.routeRecoveryAction.dataset.host = host;
+    elements.routeRecoveryAction.dataset.modeLabel = modeLabel;
+  }
+
   function applyChatAvailability({ announce = false } = {}) {
     updateRoutingModeUi(elements, state, defaults);
     const hostState = getHostChatState(elements, state, defaults);
@@ -338,6 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
       cancelModelWarmup({ elements, state });
     }
     updateExperienceSummary(hostState);
+    syncManualRouteRecovery(hostState);
 
     if (elements.messageInput && !state.warming) {
       elements.messageInput.disabled = blocked;
@@ -417,6 +484,104 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.classList.toggle('active', active);
   }
 
+  let routingModeChangePromise = Promise.resolve();
+
+  async function applyRoutingModeSelection() {
+    helpers.persistSettings();
+    // Switching modes invalidates the previously-routed model — clear it so
+    // the header reflects the new mode until the next reply lands.
+    state.lastRoutedModel = null;
+    await loadHostPreferences(state);
+    let hostState = applyChatAvailability({ announce: true });
+    if (hostState.mode !== 'router') {
+      await _fetchModels({ elements, state, defaults, helpers }, false);
+      hostState = applyChatAvailability({ announce: true });
+    }
+    updateConfigSummary(elements);
+    updateHeaderBar(null, state);
+    if (typeof ChatContextIndicator !== 'undefined') {
+      if (hostState.mode === 'router') {
+        ChatContextIndicator.reset();
+      } else if (elements.modelSelect.value) {
+        ChatContextIndicator.refresh({
+          model: elements.modelSelect.value,
+          host: targetHost(elements, defaults, { includeRouter: true }) || state.settings?.host
+        });
+      }
+    }
+    if (typeof ChatIntelligence !== 'undefined') {
+      const modeLabel = routingModeLabel(routingMode(elements, state));
+      ChatIntelligence.updateStatusBar({
+        model: hostState.mode === 'router' ? `${modeLabel} mode` : (elements.modelSelect.value || hostState.primaryPin || '---'),
+        host: hostState.mode === 'router' ? 'server-routed' : currentHostLabel(),
+        routeReason: hostState.mode === 'router' ? (sessionTaskType(elements, state) || 'session') : (hostState.selectedBasis || 'direct'),
+      });
+    }
+    announcePendingRuntimeChange();
+    return hostState;
+  }
+
+  function queueRoutingModeSelection() {
+    routingModeChangePromise = applyRoutingModeSelection();
+    return routingModeChangePromise;
+  }
+
+  async function activateManualRouteRecovery() {
+    const action = elements.routeRecoveryAction;
+    if (!action) return;
+
+    const model = String(action.dataset.model || '').trim();
+    if (!model) {
+      setConfigDrawerState(true);
+      elements.routingModeSelect?.focus({ preventScroll: true });
+      announceChatStatus('Manual controls opened. Choose a host and installed model explicitly.');
+      return;
+    }
+
+    const host = String(action.dataset.host || '').replace(/\/+$/, '');
+    const currentHost = String(targetHost(elements, defaults, { includeRouter: true }) || '').replace(/\/+$/, '');
+    const optionStillAvailable = Array.from(elements.modelSelect?.options || [])
+      .some((option) => option.value === model && option.disabled !== true);
+    if (!optionStillAvailable || host !== currentHost) {
+      applyChatAvailability({ announce: true });
+      announceChatStatus('The available model inventory changed. Review the refreshed recovery choice before continuing.');
+      action.focus({ preventScroll: true });
+      return;
+    }
+
+    const modeLabel = action.dataset.modeLabel || routingModeLabel(routingMode(elements, state));
+    state.manualRecoveryPending = { model, modeLabel };
+    syncManualRouteRecovery(getHostChatState(elements, state, defaults));
+
+    try {
+      // Drive the same controls and change events as an explicit Manual
+      // selection. This does not rewrite the configured server route.
+      elements.routingModeSelect.value = 'manual';
+      elements.modelSelect.value = model;
+      elements.modelSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      elements.routingModeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      await routingModeChangePromise;
+
+      const hostState = getHostChatState(elements, state, defaults);
+      if (hostState.mode !== 'manual' || !hostState.available || hostState.requiresModel || elements.modelSelect.value !== model) {
+        throw new Error(`${model} could not be selected on the current host.`);
+      }
+
+      state.manualRecoveryPending = null;
+      applyChatAvailability({ announce: true });
+      announcePendingRuntimeChange();
+      announceChatStatus(`${model} is selected in Manual control and saved as the local chat default. The configured ${modeLabel} route was not changed. The message box is ready.`);
+      elements.messageInput.focus({ preventScroll: true });
+    } catch (err) {
+      state.manualRecoveryPending = null;
+      applyChatAvailability({ announce: true });
+      helpers.setFeedback(err.message || `Could not select ${model}.`, 'error');
+      announceChatStatus(`Manual model selection failed. ${err.message || 'Review the host and model controls.'}`);
+      setConfigDrawerState(true);
+      elements.modelSelect?.focus({ preventScroll: true });
+    }
+  }
+
   // Event wiring
   function attachEvents() {
     const roundtableBtn = document.getElementById('roundtableBtn');
@@ -451,13 +616,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const tuningHeader = document.getElementById('tuningHeader');
     const tuningContent = document.getElementById('tuningContent');
     if (tuningHeader && tuningContent) {
-      tuningHeader.addEventListener('click', () => { tuningContent.classList.toggle('hidden'); tuningHeader.classList.toggle('expanded'); });
+      tuningHeader.addEventListener('click', () => {
+        const nextOpen = tuningContent.hidden;
+        tuningContent.hidden = !nextOpen;
+        tuningContent.classList.toggle('hidden', !nextOpen);
+        tuningContent.toggleAttribute('inert', !nextOpen);
+        tuningHeader.classList.toggle('expanded', nextOpen);
+        tuningHeader.setAttribute('aria-expanded', String(nextOpen));
+      });
     }
 
     // Config drawer
     if (elements.toggleConfigBtn) elements.toggleConfigBtn.addEventListener('click', toggleConfigDrawer);
     if (elements.configDrawerClose) elements.configDrawerClose.addEventListener('click', closeConfigDrawer);
     if (elements.configDrawerBackdrop) elements.configDrawerBackdrop.addEventListener('click', closeConfigDrawer);
+    if (elements.routeRecoveryAction) elements.routeRecoveryAction.addEventListener('click', () => { void activateManualRouteRecovery(); });
 
     elements.chatWindow?.addEventListener('click', (event) => {
       const starter = event.target.closest('[data-chat-starter]');
@@ -526,6 +699,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     elements.modelSelect.addEventListener('change', () => {
+      state.requestedRuntime = null;
       state.settings.model = elements.modelSelect.value;
       helpers.persistSettings();
       updateConfigSummary(elements);
@@ -547,38 +721,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (elements.routingModeSelect) {
-      elements.routingModeSelect.addEventListener('change', async () => {
-        helpers.persistSettings();
-        // Switching modes invalidates the previously-routed model — clear it so
-        // the header reflects the new mode until the next reply lands.
-        state.lastRoutedModel = null;
-        await loadHostPreferences(state);
-        let hostState = applyChatAvailability({ announce: true });
-        if (hostState.mode !== 'router') {
-          await _fetchModels({ elements, state, defaults, helpers }, false);
-          hostState = applyChatAvailability({ announce: true });
-        }
-        updateConfigSummary(elements);
-        updateHeaderBar(null, state);
-        if (typeof ChatContextIndicator !== 'undefined') {
-          if (hostState.mode === 'router') {
-            ChatContextIndicator.reset();
-          } else if (elements.modelSelect.value) {
-            ChatContextIndicator.refresh({
-              model: elements.modelSelect.value,
-              host: targetHost(elements, defaults, { includeRouter: true }) || state.settings?.host
-            });
-          }
-        }
-        if (typeof ChatIntelligence !== 'undefined') {
-          const modeLabel = routingModeLabel(routingMode(elements, state));
-          ChatIntelligence.updateStatusBar({
-            model: hostState.mode === 'router' ? `${modeLabel} mode` : (elements.modelSelect.value || hostState.primaryPin || '---'),
-            host: hostState.mode === 'router' ? 'server-routed' : currentHostLabel(),
-            routeReason: hostState.mode === 'router' ? (sessionTaskType(elements, state) || 'session') : (hostState.selectedBasis || 'direct'),
-          });
-        }
-        announcePendingRuntimeChange();
+      elements.routingModeSelect.addEventListener('change', () => {
+        void queueRoutingModeSelection().catch((err) => {
+          if (state.manualRecoveryPending) return;
+          helpers.setStatus('Route update failed', 'error');
+          helpers.setFeedback(err.message || 'Could not update the chat route.', 'error');
+        });
       });
     }
 
@@ -598,6 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (elements.ragCompress) elements.ragCompress.addEventListener('change', () => helpers.persistSettings());
 
     elements.hostInput.addEventListener('change', async () => {
+      state.requestedRuntime = null;
       helpers.persistSettings();
       await loadHostPreferences(state);
       applyChatAvailability();
@@ -620,8 +769,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     elements.newChatBtn.addEventListener('click', clearChat);
-    elements.profileBtn.addEventListener('click', () => { _loadProfile(elements); elements.profileModal.classList.remove('hidden'); });
-    elements.closeProfileBtn.addEventListener('click', () => elements.profileModal.classList.add('hidden'));
+    elements.profileBtn.addEventListener('click', () => { _loadProfile(elements); _openProfileModal(elements); });
+    elements.closeProfileBtn.addEventListener('click', () => _closeProfileModal(elements));
+    elements.profileModal.addEventListener('click', event => {
+      if (event.target === elements.profileModal) _closeProfileModal(elements);
+    });
     elements.saveProfileBtn.addEventListener('click', () => _saveProfile(elements, (msg, tone) => _setFeedback(elements, msg, tone)));
     elements.resetProfileBtn.addEventListener('click', () => _loadProfile(elements));
 
@@ -636,12 +788,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const urlParams = new URLSearchParams(window.location.search);
     const modelParam = urlParams.get('model');
     const hostParam = urlParams.get('host');
+    if (modelParam || hostParam) {
+      state.requestedRuntime = {
+        model: modelParam || null,
+        host: hostParam ? hostParam.replace(/\/+$/, '') : null,
+        error: null
+      };
+    }
     if (modelParam) {
-      state.settings.model = decodeURIComponent(modelParam);
+      state.settings.model = state.requestedRuntime.model;
       state.settings.routingMode = 'manual';
     }
     if (hostParam) {
-      state.settings.hostUrl = decodeURIComponent(hostParam);
+      state.settings.hostUrl = state.requestedRuntime.host;
       state.settings.routingMode = 'manual';
     }
 
@@ -671,15 +830,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     clearChat({ showToast: false });
-    _loadProfile(elements);
-    await loadPromptSelector();
+    const optionalEvidence = [
+      Promise.resolve(_loadProfile(elements)),
+      loadPromptSelector(),
+      loadRoutingStatus(state),
+      loadHostPreferences(state)
+    ];
     await loadOllamaHosts(elements, state);
-    await loadRoutingStatus(state);
-    await loadHostPreferences(state);
     applyChatAvailability();
     await _fetchModels({ elements, state, defaults, helpers });
     applyChatAvailability({ announce: true });
     announcePendingRuntimeChange();
+    void Promise.allSettled(optionalEvidence).then(() => {
+      applyChatAvailability({ announce: true });
+      announcePendingRuntimeChange();
+      updateHeaderBar(null, state);
+    });
 
     // Populate info bar with initial model/host
     if (typeof ChatIntelligence !== 'undefined') {

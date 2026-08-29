@@ -10,6 +10,7 @@
 
 import { escHtml } from '../utils/format.js';
 import { apiFetch } from '../utils/api.js';
+import { settleEvidence, withRecoverableJudgeSetup } from './settled-evidence.js';
 
 function hostBadge(name) {
     const parts = String(name || 'Host').trim().split(/\s+/).filter(Boolean);
@@ -52,7 +53,7 @@ function candidateRow(host, judge, isActive, cal) {
 
 function hostColumn(host, calMap, index) {
     const tone = index % 3;
-    const active = host.defaultJudgeModel || null;
+    const active = host.selectedJudgeModel || host.defaultJudgeModel || null;
     const candidates = (host.judges || []).slice(0, 6);
 
     // Keep the active judge on top even if it's not in the top-N
@@ -63,12 +64,16 @@ function hostColumn(host, calMap, index) {
           ]
         : candidates;
 
-    const rows = ordered.length
+    const rows = host.evidenceUnavailable
+        ? `<div class="tb-empty">Judge roster evidence is unavailable. Use Retry check to try again.</div>`
+        : ordered.length
         ? ordered.map(j => candidateRow(host, j, j.modelName === active, calMap[j.modelName])).join('')
         : `<div class="tb-empty">No judge-capable models discovered on this host.</div>`;
 
-    const header = active
-        ? `<div class="tb-host-active">⚖ ${escHtml(active)}</div>`
+    const header = host.judgeReady
+        ? `<div class="tb-host-active" title="Selected model is installed and the host answered the readiness probe">READY · ⚖ ${escHtml(active)}</div>`
+        : active
+        ? `<div class="tb-host-idle" title="${escHtml(host.readinessReason || 'Judge unavailable')}">configured · unavailable</div>`
         : `<div class="tb-host-idle">no judge assigned</div>`;
 
     return `
@@ -85,6 +90,38 @@ function hostColumn(host, calMap, index) {
         </div>`;
 }
 
+function readinessBanner(readiness) {
+    const ready = readiness?.ready === true;
+    const mode = ready ? (readiness.status === 'degraded' ? 'degraded' : 'ready') : 'blocked';
+    const title = ready
+        ? (mode === 'degraded' ? 'Judge scoring is partially ready' : 'Judge scoring is ready')
+        : 'Judge scoring is unavailable';
+    const summary = readiness?.summary || 'Judge readiness could not be confirmed.';
+    const judgeCopy = readiness?.evidence_modes?.judge_scored?.description
+        || 'Judge-dependent actions require a selected, reachable model.';
+    const setupHref = readiness?.setup?.href || '#the-bench';
+    const setupLabel = readiness?.setup?.label || 'Choose an installed model below';
+
+    return `<div class="tb-readiness tb-readiness-${mode}" role="${ready ? 'status' : 'alert'}" data-judge-ready="${ready ? 'true' : 'false'}">
+        <div class="tb-readiness-main">
+            <span class="tb-readiness-dot" aria-hidden="true"></span>
+            <div>
+                <strong>${escHtml(title)}</strong>
+                <span>${escHtml(summary)} ${escHtml(judgeCopy)}</span>
+            </div>
+        </div>
+        <div class="tb-readiness-actions">
+            <button type="button" class="tb-retry-readiness">Retry check</button>
+            ${ready ? '' : `<a href="${escHtml(setupHref)}" class="tb-choose-judge">${escHtml(setupLabel)}</a>`}
+        </div>
+        <div class="tb-evidence-modes" aria-label="Evidence availability">
+            <span class="tb-evidence tb-evidence-ok"><strong>Deterministic evidence</strong> available</span>
+            <span class="tb-evidence ${ready ? 'tb-evidence-ok' : 'tb-evidence-blocked'}"><strong>Judge-scored evidence</strong> ${ready ? 'available' : 'blocked'}</span>
+            <span class="tb-no-implicit">No model is downloaded or selected automatically.</span>
+        </div>
+    </div>`;
+}
+
 function statChip(label, value, tone = '', icon = '') {
     return `
         <div class="tb-stat tb-stat-${tone}">
@@ -95,6 +132,9 @@ function statChip(label, value, tone = '', icon = '') {
 }
 
 function deriveDashboardCounts(dashboard) {
+    if (!dashboard) {
+        return { total: null, review: null, approved: null, overrides: null, gt: null };
+    }
     const d = dashboard?.data || {};
     const o = d.overview || {};
     const ms = Array.isArray(d.model_stats) ? d.model_stats : [];
@@ -105,6 +145,60 @@ function deriveDashboardCounts(dashboard) {
         overrides: o.override_count       ?? ms.reduce((s, m) => s + (m.overrides || 0), 0),
         gt:        o.ground_truth_count   ?? 0,
     };
+}
+
+function countDisplay(value) {
+    return value == null ? '—' : Number(value).toLocaleString();
+}
+
+function fallbackReadiness(hostPanels = []) {
+    return {
+        ready: false,
+        status: 'blocked',
+        code: 'readiness_unavailable',
+        ready_host_count: 0,
+        configured_host_count: hostPanels.length,
+        summary: 'Judge readiness could not be confirmed. Retry the check or open setup.',
+        evidence_modes: {
+            deterministic: { status: 'available' },
+            judge_scored: {
+                status: 'blocked',
+                description: 'Judge-dependent actions remain blocked until readiness can be confirmed.'
+            }
+        },
+        setup: {
+            href: '/setup?focus=judge',
+            label: 'Open judge setup'
+        },
+        retry: {
+            method: 'GET',
+            href: '/api/benchmark/judge/readiness?refresh=1',
+            label: 'Retry readiness check'
+        }
+    };
+}
+
+function panelsFromReadiness(readiness) {
+    return (readiness?.hosts || []).map((host) => ({
+        hostUrl: host.hostUrl,
+        hostName: host.hostName,
+        defaultJudgeModel: null,
+        selectedJudgeModel: host.selectedModel || null,
+        selectionSource: host.selectionSource || null,
+        judgeReady: host.ready === true,
+        readinessReason: host.reason || 'readiness_unavailable',
+        reachable: host.reachable === true,
+        judges: [],
+        evidenceUnavailable: true
+    }));
+}
+
+function unavailableEvidenceBanner(labels) {
+    if (!labels.length) return '';
+    return `<div class="tb-evidence-unavailable" role="alert">
+        <strong>Some Courthouse evidence is unavailable.</strong>
+        <span>${escHtml(labels.join(', '))}. Ready data remains visible; use Retry check to reload these sources.</span>
+    </div>`;
 }
 
 function attachPromoteHandlers(root) {
@@ -132,24 +226,39 @@ function attachPromoteHandlers(root) {
     });
 }
 
+function attachReadinessHandlers(root, rerender) {
+    root.querySelector('.tb-retry-readiness')?.addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        button.textContent = 'Checking…';
+        await rerender();
+    });
+}
+
 export async function renderBench(container, { dashboard } = {}) {
     if (!container) return;
 
     container.innerHTML = `<div class="tb-loading">Loading the bench…</div>`;
 
-    let rosterRes, calRes;
-    try {
-        [rosterRes, calRes] = await Promise.all([
-            apiFetch('/api/benchmark/judge-roster'),
-            apiFetch('/api/benchmark/judge/calibration-status').catch(() => ({ data: { matrices: [] } })),
-        ]);
-    } catch (err) {
-        console.error('[the-bench] fetch error', err);
-        container.innerHTML = `<div class="tb-error">Could not load the bench. ${escHtml(err.message || '')}</div>`;
-        return;
-    }
+    const evidence = await settleEvidence({
+        dashboard: () => dashboard === undefined
+            ? apiFetch('/api/benchmark/dashboard')
+            : dashboard,
+        readiness: () => apiFetch('/api/benchmark/judge/readiness'),
+        roster: () => apiFetch('/api/benchmark/judge-roster'),
+        calibration: () => apiFetch('/api/benchmark/judge/calibration-status')
+    });
 
-    const hostPanels = rosterRes?.data?.hostPanels || [];
+    const rosterData = evidence.roster.ok ? evidence.roster.value?.data : null;
+    const authoritativeReadiness = evidence.readiness.ok
+        ? (evidence.readiness.value?.data || evidence.readiness.value)
+        : (rosterData?.readiness || fallbackReadiness(rosterData?.hostPanels || []));
+    const hostPanels = rosterData?.hostPanels || panelsFromReadiness(authoritativeReadiness);
+    const readiness = withRecoverableJudgeSetup(authoritativeReadiness, {
+        rosterAvailable: evidence.roster.ok,
+        hostPanels
+    });
+    const calRes = evidence.calibration.ok ? evidence.calibration.value : null;
     const calMap = {};
     for (const m of (calRes?.data?.matrices || [])) {
         calMap[m.judge_model] = {
@@ -160,10 +269,18 @@ export async function renderBench(container, { dashboard } = {}) {
         };
     }
 
-    const columns = hostPanels.map((host, index) => hostColumn(host, calMap, index)).join('');
-    const counts = deriveDashboardCounts(dashboard);
-    const assigned = hostPanels.filter(h => h.defaultJudgeModel).length;
-    const totalHosts = hostPanels.length;
+    const columns = hostPanels.length
+        ? hostPanels.map((host, index) => hostColumn(host, calMap, index)).join('')
+        : `<div class="tb-hosts-unavailable">No configured judge hosts are available. Open setup to configure one, or retry readiness.</div>`;
+    const dashboardData = evidence.dashboard.ok ? evidence.dashboard.value : null;
+    const counts = deriveDashboardCounts(dashboardData);
+    const readyHosts = readiness.ready_host_count || 0;
+    const totalHosts = readiness.configured_host_count ?? hostPanels.length;
+    const unavailable = [];
+    if (!evidence.dashboard.ok) unavailable.push('dashboard counts');
+    if (!evidence.roster.ok) unavailable.push('judge roster history');
+    if (!evidence.calibration.ok) unavailable.push('calibration history');
+    if (!evidence.readiness.ok && !rosterData?.readiness) unavailable.push('live judge readiness');
 
     container.innerHTML = `
         <div class="tb-frame">
@@ -172,17 +289,19 @@ export async function renderBench(container, { dashboard } = {}) {
                     <span class="tb-gavel">⚖</span>
                     <div>
                         <div class="tb-title-main">The Bench</div>
-                        <div class="tb-title-sub">${assigned}/${totalHosts} hosts have an active judge — set who scores on each host before running a benchmark.</div>
+                        <div class="tb-title-sub">${readyHosts}/${totalHosts} hosts ready for judge scoring — readiness requires an explicit selection, a reachable host, and an installed model.</div>
                     </div>
                 </div>
                 <div class="tb-stat-strip">
-                    ${statChip('Results',      counts.total.toLocaleString(),     'total',    '▣')}
-                    ${statChip('Need Review',  counts.review.toLocaleString(),    'review',   '⚑')}
-                    ${statChip('Approved',     counts.approved.toLocaleString(),  'approved', '✓')}
-                    ${statChip('Overrides',    counts.overrides.toLocaleString(), 'override', '⇄')}
-                    ${statChip('Ground Truth', counts.gt.toLocaleString(),        'gt',       '◎')}
+                    ${statChip('Results',      countDisplay(counts.total),     'total',    '▣')}
+                    ${statChip('Need Review',  countDisplay(counts.review),    'review',   '⚑')}
+                    ${statChip('Approved',     countDisplay(counts.approved),  'approved', '✓')}
+                    ${statChip('Overrides',    countDisplay(counts.overrides), 'override', '⇄')}
+                    ${statChip('Ground Truth', countDisplay(counts.gt),        'gt',       '◎')}
                 </div>
             </div>
+            ${readinessBanner(readiness)}
+            ${unavailableEvidenceBanner(unavailable)}
             <div class="tb-columns">${columns}</div>
             <div class="tb-quick-links">
                 <a href="/leaderboard"       class="tb-link">Leaderboard →</a>
@@ -192,8 +311,14 @@ export async function renderBench(container, { dashboard } = {}) {
         </div>`;
 
     attachPromoteHandlers(container);
+    // A retry starts fresh for every source, including dashboard evidence that
+    // may have been unavailable during the initial page bootstrap.
+    attachReadinessHandlers(container, () => renderBench(container));
+    document.dispatchEvent(new CustomEvent('judge-readiness-changed', { detail: readiness }));
 
     // Expose review count for the tab badge
     const badge = document.getElementById('ch-tab-review-badge');
     if (badge && counts.review > 0) badge.textContent = String(counts.review);
+
+    return readiness;
 }

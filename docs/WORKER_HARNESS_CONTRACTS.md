@@ -144,7 +144,7 @@ contract remain unchanged.
 
 The public receipt projection is an explicit allowlist. It never includes the
 work description, prompt text, response, transcript, tool arguments/results,
-error messages, credentials, URLs, or filesystem paths. The private receipt
+error messages, credentials, URLs, hostnames, or filesystem paths. The private receipt
 retains the logical environment identity, version, and fingerprint; the public
 projection emits only its fingerprint. Unknown input fields are discarded
 before projection and fingerprinting. Logical evidence references are not

@@ -1,26 +1,30 @@
 <div class="setup-container">
 
+  <a id="setup-return-link" class="setup-return-link" href="/" hidden>&larr; Back to Benchmark</a>
+
   <div class="setup-header">
     <div class="setup-logo">&#9889;</div>
     <h1>AgentX Benchmark</h1>
-    <p class="setup-subtitle">Let's connect to your Ollama instance</p>
+    <p class="setup-subtitle">Connect an existing Ollama endpoint and explicitly choose a judge</p>
   </div>
 
   <!-- Step 1: Connect -->
   <div id="step-connect" class="step-card">
-    <h2>1. Where's your Ollama?</h2>
-    <p>Enter the IP address (or hostname) of the machine running Ollama.<br>
-       If Ollama is on this machine, just use <code>localhost</code>.</p>
+    <h2>1. Connect to Ollama</h2>
+    <p>Use <code>host.docker.internal</code> when AgentX runs with the default Docker Compose profile, or <code>localhost</code> when Benchmark runs directly on the same machine. You can also enter another reachable URL.</p>
+    <div id="configured-host-field" class="configured-host-field" hidden>
+      <label for="configured-host">Configured host</label>
+      <select id="configured-host" class="setup-select"></select>
+    </div>
     <div class="input-row">
-      <span class="input-prefix">http://</span>
-      <input type="text" id="ollama-ip" placeholder="ollama.example.test" autocomplete="off" spellcheck="false">
-      <span class="input-suffix">:11434</span>
+      <label class="sr-only" for="ollama-ip">Ollama endpoint URL</label>
+      <input type="text" id="ollama-ip" placeholder="http://host.docker.internal:11434" autocomplete="url" spellcheck="false" inputmode="url">
     </div>
     <div class="input-hint">
       <details>
         <summary>Using a different port?</summary>
         <div style="margin-top:0.4rem;">
-          Enter the full address instead, e.g. <code>ollama.example.test:8080</code>
+          Enter the full address, for example <code>http://ollama.example.test:8080</code>.
         </div>
       </details>
     </div>
@@ -38,13 +42,13 @@
   <!-- Step 3: Judge + Save -->
   <div id="step-judge" class="step-card" style="display:none">
     <h2>3. Judge Model</h2>
-    <p>The judge evaluates benchmark responses for quality scoring.
-       We picked a good default — you can change it later.</p>
+    <p>The judge evaluates benchmark responses for quality scoring. Choose one model already installed on the selected host. AgentX never downloads or silently chooses a judge.</p>
     <div class="judge-field">
       <label for="judge-model">Judge Model</label>
-      <select id="judge-model" class="setup-select"></select>
+      <select id="judge-model" class="setup-select" aria-describedby="judge-status"></select>
+      <div id="judge-status" class="status-msg" aria-live="polite"></div>
     </div>
-    <button id="btn-save" class="setup-btn primary large">Save &amp; Start Benchmarking &#8594;</button>
+    <button id="btn-save" class="setup-btn primary large" disabled>Save &amp; Start Benchmarking &#8594;</button>
   </div>
 
   <!-- Already configured banner -->

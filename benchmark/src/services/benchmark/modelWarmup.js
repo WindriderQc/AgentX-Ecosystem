@@ -11,9 +11,19 @@
  */
 
 const logger = require('../../../config/logger');
+const nodeFetch = require('node-fetch');
 const { isSameOllamaModel } = require('../../helpers/ollamaModelIdentity');
 const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
-const { benchmarkFetch: fetch } = require('./http');
+const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
+const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmission');
+const { createNodeFetchPeerTransport } = require('../../helpers/outboundHttpTransport');
+const {
+    OUTBOUND_ERROR_CODES,
+    createOutboundHttpExecutor,
+    discardBoundedResponse,
+    readBoundedJson,
+    readBoundedText
+} = require('../../../../shared/outboundHttpExecutor');
 
 // Warmup routes through core's /api/inference/generate. As of task 0168,
 // the scoped Benchmark credential plus `callerDetail: 'benchmark-warmup'`
@@ -22,6 +32,184 @@ const { benchmarkFetch: fetch } = require('./http');
 // WITHOUT losing telemetry. /api/ps probe + keep_alive:0 unloads stay
 // direct — metadata + admin ops.
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
+
+const MODEL_WARMUP_OPERATIONS = Object.freeze({
+    UNLOAD_OTHERS: 'benchmark.model-warmup.unload-others',
+    UNLOAD_ONE: 'benchmark.model-warmup.unload-one',
+    PS: 'benchmark.model-warmup.ps',
+    GENERATE: 'benchmark.model-warmup.generate'
+});
+
+function operation(authoritySource, method, pathPattern, {
+    deadlineMs,
+    maxRequestBytes = 0,
+    maxResponseBytes,
+    responseMode
+}) {
+    return Object.freeze({
+        allowSearch: false,
+        method,
+        pathPattern,
+        responseMode,
+        policy: Object.freeze({
+            authoritySource,
+            deadlineMs,
+            maxRequestBytes,
+            maxResponseBytes
+        })
+    });
+}
+
+const MODEL_WARMUP_OPERATION_SPECS = Object.freeze({
+    [MODEL_WARMUP_OPERATIONS.UNLOAD_OTHERS]: operation(
+        'request-admitted',
+        'POST',
+        '^/api/generate$',
+        {
+            deadlineMs: 5_000,
+            maxRequestBytes: 64 * 1024,
+            maxResponseBytes: 64 * 1024,
+            responseMode: 'discard'
+        }
+    ),
+    [MODEL_WARMUP_OPERATIONS.UNLOAD_ONE]: operation(
+        'request-admitted',
+        'POST',
+        '^/api/generate$',
+        {
+            deadlineMs: 5_000,
+            maxRequestBytes: 64 * 1024,
+            maxResponseBytes: 64 * 1024,
+            responseMode: 'discard'
+        }
+    ),
+    [MODEL_WARMUP_OPERATIONS.PS]: operation(
+        'request-admitted',
+        'GET',
+        '^/api/ps$',
+        {
+            deadlineMs: 5_000,
+            maxResponseBytes: 1024 * 1024,
+            responseMode: 'json'
+        }
+    ),
+    [MODEL_WARMUP_OPERATIONS.GENERATE]: operation(
+        'configured',
+        'POST',
+        '^/api/inference/generate$',
+        {
+            deadlineMs: 600_000,
+            maxRequestBytes: 1024 * 1024,
+            maxResponseBytes: 1024 * 1024,
+            responseMode: 'json'
+        }
+    )
+});
+
+function configuredCoreOrigin(coreUrl = CORE_URL) {
+    let parsed;
+    try {
+        parsed = new URL(coreUrl);
+    } catch {
+        throw new Error('Core service URL is invalid');
+    }
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+        || parsed.username
+        || parsed.password
+        || parsed.pathname !== '/'
+        || parsed.search
+        || parsed.hash) {
+        throw new Error('Core service URL is invalid');
+    }
+    return parsed.origin;
+}
+
+function operationMatches(spec, method, target) {
+    return spec.method === method
+        && new RegExp(spec.pathPattern).test(target.pathname)
+        && (spec.allowSearch || !target.search);
+}
+
+function assertRegisteredOperation(operationId, method, target) {
+    const spec = MODEL_WARMUP_OPERATION_SPECS[operationId];
+    if (!spec || !operationMatches(spec, method, target)) {
+        throw new Error('Model warmup outbound operation is not registered');
+    }
+    return spec;
+}
+
+function createModelWarmupExecutor(options = {}) {
+    const admitTarget = options.admitOllamaTargetResolved || admitOllamaTargetResolved;
+    const configuredHosts = options.getConfiguredHosts || getConfiguredHosts;
+    const coreUrl = options.coreUrl || CORE_URL;
+
+    return createOutboundHttpExecutor({
+        operations: Object.fromEntries(Object.entries(MODEL_WARMUP_OPERATION_SPECS)
+            .map(([operationId, spec]) => [operationId, spec.policy])),
+        authorityAdapter: async ({ sinkId, target }) => {
+            const spec = MODEL_WARMUP_OPERATION_SPECS[sinkId];
+            const requested = new URL(target);
+            if (!spec
+                || !new RegExp(spec.pathPattern).test(requested.pathname)
+                || (!spec.allowSearch && requested.search)) {
+                throw new Error('Model warmup outbound target is not registered');
+            }
+
+            if (sinkId === MODEL_WARMUP_OPERATIONS.GENERATE) {
+                const coreOrigin = configuredCoreOrigin(coreUrl);
+                if (requested.origin !== coreOrigin) {
+                    throw new Error('Model warmup Core target is not configured');
+                }
+                return { expectedOrigin: coreOrigin };
+            }
+
+            const expectedOrigin = await admitTarget(requested.origin, {
+                configuredHosts: configuredHosts()
+            });
+            if (requested.origin !== expectedOrigin) {
+                throw new Error('Model warmup Ollama target is not admitted');
+            }
+            return { expectedOrigin };
+        },
+        fetchImpl: options.fetchImpl || nodeFetch,
+        transportAdapter: options.transportAdapter || createNodeFetchPeerTransport()
+    });
+}
+
+const modelWarmupExecutor = createModelWarmupExecutor();
+
+async function modelWarmupRequest(operationId, target, options = {}, executor = modelWarmupExecutor) {
+    let requested;
+    try {
+        requested = new URL(target);
+    } catch {
+        throw new Error('Model warmup outbound target is not registered');
+    }
+    const method = String(options.method || 'GET').toUpperCase();
+    assertRegisteredOperation(operationId, method, requested);
+    const receipt = await executor.admitTarget(operationId, requested.href, {
+        signal: options.signal
+    });
+    return executor.request(receipt, {
+        ...options,
+        method
+    });
+}
+
+function createLocalDeadline(timeoutMs, maximumMs) {
+    const parsed = Number(timeoutMs);
+    const durationMs = Number.isFinite(parsed)
+        ? Math.min(Math.max(0, Math.round(parsed)), maximumMs)
+        : maximumMs;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), durationMs);
+    timer.unref?.();
+    return Object.freeze({
+        signal: controller.signal,
+        dispose: () => clearTimeout(timer),
+        get expired() { return controller.signal.aborted; }
+    });
+}
 
 // Models that should NOT be unloaded during pre-warmup (always stay resident):
 //   - embeddings: small, shared across consumers, cheap to keep
@@ -49,7 +237,7 @@ const UNLOAD_TIMEOUT_MS = 5000;
  * the Ollama side, and serialising them on a host with 8+ loaded models
  * was adding ~30–90s to benchmark batch startup for no benefit.
  */
-async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, _fetch) {
+async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, executor) {
     const names = Array.isArray(loadedNames) ? loadedNames : [];
     if (names.length === 0) return [];
 
@@ -59,21 +247,30 @@ async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, _fetc
     if (toUnload.length === 0) return [];
 
     const results = await Promise.all(toUnload.map(async (name) => {
-        const uc = new AbortController();
-        const ut = setTimeout(() => uc.abort(), UNLOAD_TIMEOUT_MS);
+        const deadline = createLocalDeadline(
+            UNLOAD_TIMEOUT_MS,
+            MODEL_WARMUP_OPERATION_SPECS[MODEL_WARMUP_OPERATIONS.UNLOAD_OTHERS].policy.deadlineMs
+        );
         try {
-            await _fetch(`${hostUrl}/api/generate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: name, keep_alive: 0, stream: false }),
-                signal: uc.signal
-            });
+            const response = await modelWarmupRequest(
+                MODEL_WARMUP_OPERATIONS.UNLOAD_OTHERS,
+                `${hostUrl}/api/generate`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: name, keep_alive: 0, stream: false }),
+                    signal: deadline.signal
+                },
+                executor
+            );
+            if (response.ok) await discardBoundedResponse(response);
+            else await response.cancel();
             return name;
         } catch (err) {
             logger.debug('[warmup] unload best-effort failed', { hostUrl, model: name, error: err.message });
             return null;
         } finally {
-            clearTimeout(ut);
+            deadline.dispose();
         }
     }));
 
@@ -90,18 +287,27 @@ function readLoadedContextLength(modelInfo) {
     return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
 }
 
-async function unloadLoadedModel(hostUrl, modelName, _fetch) {
-    const uc = new AbortController();
-    const ut = setTimeout(() => uc.abort(), UNLOAD_TIMEOUT_MS);
+async function unloadLoadedModel(hostUrl, modelName, executor) {
+    const deadline = createLocalDeadline(
+        UNLOAD_TIMEOUT_MS,
+        MODEL_WARMUP_OPERATION_SPECS[MODEL_WARMUP_OPERATIONS.UNLOAD_ONE].policy.deadlineMs
+    );
     try {
-        await _fetch(`${hostUrl}/api/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: modelName, keep_alive: 0, stream: false }),
-            signal: uc.signal
-        });
+        const response = await modelWarmupRequest(
+            MODEL_WARMUP_OPERATIONS.UNLOAD_ONE,
+            `${hostUrl}/api/generate`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelName, keep_alive: 0, stream: false }),
+                signal: deadline.signal
+            },
+            executor
+        );
+        if (response.ok) await discardBoundedResponse(response);
+        else await response.cancel();
     } finally {
-        clearTimeout(ut);
+        deadline.dispose();
     }
 }
 
@@ -109,10 +315,15 @@ function normalizeWarmupError(err, timeoutMs) {
     const rawMessage = String(err?.message || '').trim();
     const aborted = err?.name === 'AbortError' ||
         err?.type === 'aborted' ||
+        err?.code === OUTBOUND_ERROR_CODES.CALLER_ABORTED ||
+        err?.code === OUTBOUND_ERROR_CODES.DEADLINE_EXCEEDED ||
         /aborted|aborterror/i.test(rawMessage);
     if (aborted) {
         const timeoutSec = Math.max(1, Math.round((Number(timeoutMs) || 0) / 1000));
         return `Warmup timed out after ${timeoutSec}s (model may still be loading)`;
+    }
+    if (err?.code === OUTBOUND_ERROR_CODES.REDIRECT_REJECTED && Number.isInteger(err.status)) {
+        return `Warmup failed: HTTP ${err.status}`;
     }
     return rawMessage || 'Warmup failed';
 }
@@ -136,7 +347,9 @@ async function warmupModel(hostUrl, model, options = {}) {
         recordTimelineEvent = null,
         strict = false,
         num_ctx = null,
-        _fetch = fetch,
+        _fetch = nodeFetch,
+        _executor = null,
+        _transportAdapter = null,
         timeoutOverride = null,
         warmupTimeoutCold = null,
         warmupTimeoutLoaded = null,
@@ -151,6 +364,14 @@ async function warmupModel(hostUrl, model, options = {}) {
         // Optional callback for sub-phase progress strings (UI visibility).
         onPhaseDetail = null
     } = options;
+    const executor = _executor || (
+        _fetch !== nodeFetch || _transportAdapter
+            ? createModelWarmupExecutor({
+                fetchImpl: _fetch,
+                transportAdapter: _transportAdapter
+            })
+            : modelWarmupExecutor
+    );
     const warmupStart = Date.now();
     const warmupPrompt = 'Hi';
     let timeoutMs = timeoutOverride !== null ? timeoutOverride : (warmupTimeoutCold || 180000);
@@ -173,23 +394,38 @@ async function warmupModel(hostUrl, model, options = {}) {
         let loadedModels = [];
         let loadedTarget = null;
         try {
-            const psController = new AbortController();
-            const psTimeoutId = setTimeout(() => psController.abort(), 5000);
-            const psResponse = await _fetch(`${hostUrl}/api/ps`, {
-                method: 'GET',
-                signal: psController.signal
-            });
-            clearTimeout(psTimeoutId);
+            const psDeadline = createLocalDeadline(
+                5_000,
+                MODEL_WARMUP_OPERATION_SPECS[MODEL_WARMUP_OPERATIONS.PS].policy.deadlineMs
+            );
+            let psResponse;
+            try {
+                psResponse = await modelWarmupRequest(
+                    MODEL_WARMUP_OPERATIONS.PS,
+                    `${hostUrl}/api/ps`,
+                    {
+                        method: 'GET',
+                        signal: psDeadline.signal
+                    },
+                    executor
+                );
 
-            if (psResponse.ok) {
-                const psData = await psResponse.json();
-                const loadedInfos = psData.models || [];
-                loadedModels = loadedInfos.map(m => m.name || m.model).filter(Boolean);
-                loadedTarget = loadedInfos.find((loaded) => isSameOllamaModel(loaded.name || loaded.model, model)) || null;
-                modelAlreadyLoaded = !!loadedTarget;
-                if (modelAlreadyLoaded) {
-                    logger.debug('Model already loaded in VRAM', { host: hostUrl, model, loadedModels });
+                if (psResponse.ok) {
+                    const psData = await readBoundedJson(psResponse);
+                    const loadedInfos = psData.models || [];
+                    loadedModels = loadedInfos.map(m => m.name || m.model).filter(Boolean);
+                    loadedTarget = loadedInfos.find((loaded) => isSameOllamaModel(loaded.name || loaded.model, model)) || null;
+                    modelAlreadyLoaded = !!loadedTarget;
+                    if (modelAlreadyLoaded) {
+                        logger.debug('Model already loaded in VRAM', { host: hostUrl, model, loadedModels });
+                    }
+                } else {
+                    // Inventory failure is best-effort. Preserve the status-first
+                    // behavior and do not let an error body delay warmup.
+                    await psResponse.cancel();
                 }
+            } finally {
+                psDeadline.dispose();
             }
         } catch (psErr) {
             logger.debug('Could not check /api/ps', { host: hostUrl, error: psErr.message });
@@ -214,7 +450,7 @@ async function warmupModel(hostUrl, model, options = {}) {
             if (typeof onPhaseDetail === 'function') {
                 try { await onPhaseDetail(`Reloading ${model} at ${requestedNumCtx} ctx…`); } catch (_e) {}
             }
-            await unloadLoadedModel(hostUrl, loadedName, _fetch);
+            await unloadLoadedModel(hostUrl, loadedName, executor);
             loadedModels = loadedModels.filter(name => !isSameOllamaModel(name, model));
             modelAlreadyLoaded = false;
             warmupData.already_loaded = false;
@@ -231,7 +467,7 @@ async function warmupModel(hostUrl, model, options = {}) {
             if (typeof onPhaseDetail === 'function') {
                 try { await onPhaseDetail(`Unloading ${loadedModels.length} other model(s) from ${hostUrl}…`); } catch (_e) {}
             }
-            warmupData.pre_unloaded = await unloadOthers(hostUrl, model, loadedModels, keepLoaded, _fetch);
+            warmupData.pre_unloaded = await unloadOthers(hostUrl, model, loadedModels, keepLoaded, executor);
         } else {
             warmupData.pre_unloaded = [];
         }
@@ -249,8 +485,10 @@ async function warmupModel(hostUrl, model, options = {}) {
         });
 
         const url = `${CORE_URL}/api/inference/generate`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const deadline = createLocalDeadline(
+            timeoutMs,
+            MODEL_WARMUP_OPERATION_SPECS[MODEL_WARMUP_OPERATIONS.GENERATE].policy.deadlineMs
+        );
 
         let response;
         try {
@@ -270,33 +508,38 @@ async function warmupModel(hostUrl, model, options = {}) {
                 options: warmupOptions
             };
 
-            response = await _fetch(url, {
-                method: 'POST',
-                headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify(requestBody),
-                signal: controller.signal
-            });
-        } finally {
-            clearTimeout(timeoutId);
-        }
+            response = await modelWarmupRequest(
+                MODEL_WARMUP_OPERATIONS.GENERATE,
+                url,
+                {
+                    method: 'POST',
+                    headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify(requestBody),
+                    signal: deadline.signal
+                },
+                executor
+            );
 
-        const durationMs = Date.now() - warmupStart;
-        warmupData.latency_ms = durationMs;
+            const durationMs = Date.now() - warmupStart;
+            warmupData.latency_ms = durationMs;
 
-        if (response.ok) {
-            const data = await response.json();
-            warmupData.response = data.message?.content || '';
-            warmupData.success = true;
-            logger.info('Model ready', { host: hostUrl, model, durationMs, wasLoaded: modelAlreadyLoaded });
-            if (timelinePrefix && recordTimelineEvent) {
-                await recordTimelineEvent(`${timelinePrefix}_complete`, {
-                    model, duration_ms: durationMs, success: true
-                });
+            if (response.ok) {
+                const data = await readBoundedJson(response);
+                warmupData.response = data.message?.content || '';
+                warmupData.success = true;
+                logger.info('Model ready', { host: hostUrl, model, durationMs, wasLoaded: modelAlreadyLoaded });
+                if (timelinePrefix && recordTimelineEvent) {
+                    await recordTimelineEvent(`${timelinePrefix}_complete`, {
+                        model, duration_ms: durationMs, success: true
+                    });
+                }
+            } else {
+                const errorText = await readBoundedText(response).catch(() => '');
+                warmupData.error = `Warmup failed: HTTP ${response.status} - ${errorText.substring(0, 100)}`;
+                throw new Error(warmupData.error);
             }
-        } else {
-            const errorText = await response.text().catch(() => '');
-            warmupData.error = `Warmup failed: HTTP ${response.status} - ${errorText.substring(0, 100)}`;
-            throw new Error(warmupData.error);
+        } finally {
+            deadline.dispose();
         }
     } catch (err) {
         const durationMs = Date.now() - warmupStart;
@@ -319,4 +562,16 @@ async function warmupModel(hostUrl, model, options = {}) {
     return warmupData;
 }
 
-module.exports = { warmupModel };
+module.exports = {
+    warmupModel,
+    MODEL_WARMUP_OPERATIONS,
+    _internal: {
+        MODEL_WARMUP_OPERATION_SPECS,
+        configuredCoreOrigin,
+        createLocalDeadline,
+        createModelWarmupExecutor,
+        modelWarmupRequest,
+        normalizeWarmupError,
+        operationMatches
+    }
+};

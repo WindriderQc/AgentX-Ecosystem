@@ -52,7 +52,7 @@
     <i class="fas fa-snowflake" aria-hidden="true"></i>
     <div>
       <strong>Planning is frozen by the platform realignment.</strong>
-      <span>No reconcile automation runs here. Existing records remain available for reference and correction; current delivery belongs in Pipeline.</span>
+      <span>No reconcile automation runs here. DRAFT and other statuses are saved historical states; percentages are reference calculations, and 100% does not mean work is currently executing. Task and schedule links are references only. Current delivery belongs in Pipeline.</span>
     </div>
     <a class="planning-btn planning-btn-primary" href="/pipeline"><i class="fas fa-list-check"></i> Open Pipeline</a>
   </section>
@@ -119,19 +119,19 @@
     <section class="planning-center">
       <section class="planning-pulse" aria-label="Portfolio pulse">
         <button class="planning-pulse-card planning-pulse-progress" type="button" data-planning-view-target="portfolio">
-          <span><small>Portfolio</small><strong id="planningPortfolioProgress">--</strong><em id="planningPortfolioProgressMeta">Across active work</em></span>
+          <span><small>Recorded portfolio</small><strong id="planningPortfolioProgress">--</strong><em id="planningPortfolioProgressMeta">Historical Planning records</em></span>
           <span class="planning-mini-ring" id="planningPortfolioRing" style="--ring-progress:0"></span>
         </button>
         <button class="planning-pulse-card planning-pulse-attention" type="button" data-planning-view-target="board" data-planning-attention="true">
-          <span><small>Attention</small><strong id="planningCountAttention">--</strong><em id="planningAttentionMetaTop">Risk, blocks, overdue</em></span>
+          <span><small>Recorded attention</small><strong id="planningCountAttention">--</strong><em id="planningAttentionMetaTop">Saved risk, block, and date flags</em></span>
           <i class="fas fa-triangle-exclamation"></i>
         </button>
         <button class="planning-pulse-card planning-pulse-alignment" type="button" data-planning-view-target="board">
-          <span><small>Pipeline linked</small><strong id="planningPipelineCoverage">--</strong><em id="planningCoverageMeta">Tasks tied to intent</em></span>
+          <span><small>Pipeline references</small><strong id="planningPipelineCoverage">--</strong><em id="planningCoverageMeta">References only; Pipeline owns execution</em></span>
           <i class="fas fa-diagram-project"></i>
         </button>
         <button class="planning-pulse-card planning-pulse-ideas" type="button" data-planning-view-target="ideas">
-          <span><small>Idea inbox</small><strong id="planningCountIdeas">--</strong><em id="planningIdeasMeta">Waiting for triage</em></span>
+          <span><small>Recorded idea inbox</small><strong id="planningCountIdeas">--</strong><em id="planningIdeasMeta">Saved historical state</em></span>
           <i class="fas fa-lightbulb"></i>
         </button>
       </section>
@@ -158,13 +158,13 @@
           <select id="planningStatusFilter" aria-label="Filter by status">
             <option value="">All states</option>
             <option value="inbox">Inbox</option>
-            <option value="draft">Draft</option>
+            <option value="draft">Recorded draft</option>
             <option value="triaged">Triaged</option>
             <option value="planned">Planned</option>
             <option value="active">Active</option>
             <option value="at_risk">At risk</option>
             <option value="blocked">Blocked</option>
-            <option value="completed">Completed</option>
+            <option value="completed">Recorded completed</option>
             <option value="promoted">Promoted</option>
             <option value="parked">Parked</option>
             <option value="rejected">Rejected</option>
@@ -201,10 +201,10 @@
 
       <section class="planning-rail-panel" id="planningUnlinkedPanel">
         <header>
-          <div><span class="planning-section-kicker">Delivery intake</span><h3>Unlinked pipeline</h3></div>
+          <div><span class="planning-section-kicker">Current Pipeline</span><h3>No historical reference</h3></div>
           <button type="button" class="planning-text-btn" data-planning-review-intake>Review all <i class="fas fa-arrow-right"></i></button>
         </header>
-        <p class="planning-rail-meta" id="planningUnlinkedMeta">Open work outside the planning structure</p>
+        <p class="planning-rail-meta" id="planningUnlinkedMeta">Open Pipeline work without a reference to these historical records</p>
         <div class="planning-side-list" id="planningUnlinkedList">
           <div class="planning-empty planning-empty-compact">Loading…</div>
         </div>

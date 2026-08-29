@@ -3,7 +3,6 @@
  * Tests for benchmark routes and service layer
  */
 
-const request = require('supertest');
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 
@@ -50,7 +49,46 @@ jest.mock('../../src/services/benchmark/preflight', () => ({
     }))
 }));
 
-const app = require('../../server');
+jest.mock('../../src/services/benchmark/judgeReadiness', () => {
+    const actual = jest.requireActual('../../src/services/benchmark/judgeReadiness');
+    const publicReadiness = {
+        ready: true,
+        status: 'ready',
+        code: 'ready',
+        configured_host_count: 1,
+        reachable_host_count: 1,
+        selected_host_count: 1,
+        ready_host_count: 1,
+        summary: '1/1 configured host has a selected, reachable judge.',
+        blockers: [],
+        hosts: [],
+        preferred_target: { host: 'http://localhost:11434', model: 'test-judge', source: 'test' },
+        evidence_modes: {
+            deterministic: { status: 'available' },
+            judge_scored: { status: 'available' }
+        },
+        setup: { href: '#the-bench', label: 'Choose a judge' },
+        retry: { method: 'GET', href: '/api/benchmark/judge/readiness?refresh=1' }
+    };
+    return {
+        ...actual,
+        getJudgeReadiness: jest.fn(async () => publicReadiness),
+        resolveReadyJudgeTarget: jest.fn(async ({ host, model } = {}) => ({
+            ready: true,
+            code: 'ready',
+            error: null,
+            target: {
+                host: host || 'http://localhost:11434',
+                model: model || 'test-judge',
+                source: 'test'
+            },
+            readiness: publicReadiness
+        }))
+    };
+});
+
+const expressApp = require('../../server');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 const { runPreflight } = require('../../src/services/benchmark/preflight');
 const { validateJudgeModel } = require('../../src/services/benchmark/judgeModelValidator');
 const activeProfileState = require('../../src/services/profiler/activeProfileState');
@@ -62,9 +100,18 @@ const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
 const ModelProfile = require('../../models/ModelProfile');
 const { CATEGORY_COMPOSITE_PROFILES } = require('../../src/services/scoring/scoringConfigs');
+const {
+    _registerActiveBatchController: registerActiveBatchController,
+    _getActiveBatchRequestCount: getActiveBatchRequestCount
+} = require('../../src/services/benchmark/batchOrchestrator');
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 let mongoServer;
+let httpHarness;
+let api;
+
+// Windows process startup/teardown can be delayed by antivirus scanning.
+const MONGO_MEMORY_HOOK_TIMEOUT_MS = process.platform === 'win32' ? 120_000 : 30_000;
 
 // Server.js only connects inside start(), which is gated by
 // `require.main === module`. Integration tests own an isolated MongoMemory
@@ -72,12 +119,15 @@ let mongoServer;
 beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
     await mongoose.connect(mongoServer.getUri());
-}, 15000);
+    httpHarness = await startTestHttpHarness(expressApp);
+    api = httpHarness.request;
+}, MONGO_MEMORY_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
+    await httpHarness?.close();
     await mongoose.disconnect();
     await mongoServer.stop();
-});
+}, MONGO_MEMORY_HOOK_TIMEOUT_MS);
 
 afterEach(async () => {
     // Clear all collections between tests
@@ -96,7 +146,7 @@ afterEach(async () => {
 describe('Benchmark System - Integration Tests', () => {
     describe('POST /api/benchmark/test', () => {
         it('should validate required fields', async () => {
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/test')
                 .send({ model: 'test-model' }); // Missing host and prompt
 
@@ -107,17 +157,18 @@ describe('Benchmark System - Integration Tests', () => {
     });
 
     describe('GET /api/benchmark/prompts', () => {
-        it('should return prompts (seeding from JSON if empty)', async () => {
-            const response = await request(app).get('/api/benchmark/prompts');
+        it('should return prompts without seeding from a safe GET', async () => {
+            const response = await api.get('/api/benchmark/prompts');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
             expect(Array.isArray(response.body.data.prompts)).toBe(true);
-            expect(response.body.data.total).toBeGreaterThanOrEqual(0);
+            expect(response.body.data.total).toBe(0);
+            expect(await BenchmarkPrompt.countDocuments()).toBe(0);
         });
 
-        it('should seed prompts from JSON file if collection is empty', async () => {
-            const response = await request(app).get('/api/benchmark/prompts');
+        it('should seed prompts only through the explicit sync mutation', async () => {
+            const response = await api.post('/api/benchmark/prompts/sync');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -155,7 +206,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/prompts');
+            const response = await api.get('/api/benchmark/prompts');
 
             expect(response.status).toBe(200);
             expect(response.body.data.prompts.length).toBeGreaterThanOrEqual(2);
@@ -188,7 +239,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/results?limit=10');
+            const response = await api.get('/api/benchmark/results?limit=10');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -211,7 +262,7 @@ describe('Benchmark System - Integration Tests', () => {
             }
             await BenchmarkResult.create(results);
 
-            const response = await request(app).get('/api/benchmark/results?limit=3');
+            const response = await api.get('/api/benchmark/results?limit=3');
 
             expect(response.status).toBe(200);
             expect(response.body.data.results).toHaveLength(3);
@@ -222,7 +273,7 @@ describe('Benchmark System - Integration Tests', () => {
 
     describe('GET /api/benchmark/summary', () => {
         it('should return empty summary when no results exist', async () => {
-            const response = await request(app).get('/api/benchmark/summary');
+            const response = await api.get('/api/benchmark/summary');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -262,7 +313,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/summary');
+            const response = await api.get('/api/benchmark/summary');
 
             expect(response.status).toBe(200);
             expect(response.body.data.total_tests).toBe(3);
@@ -286,7 +337,7 @@ describe('Benchmark System - Integration Tests', () => {
                 success: true
             });
 
-            const response = await request(app).get('/api/benchmark/dashboard');
+            const response = await api.get('/api/benchmark/dashboard');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -323,10 +374,10 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const responseLatency = await request(app).get('/api/benchmark/dashboard?sort=latency&includeUnavailableModels=true');
+            const responseLatency = await api.get('/api/benchmark/dashboard?sort=latency&includeUnavailableModels=true');
             expect(responseLatency.body.data.model_stats[0].model).toBe('fast-model');
 
-            const responseSpeed = await request(app).get('/api/benchmark/dashboard?sort=speed&includeUnavailableModels=true');
+            const responseSpeed = await api.get('/api/benchmark/dashboard?sort=speed&includeUnavailableModels=true');
             expect(responseSpeed.body.data.model_stats[0].model).toBe('fast-model');
         });
 
@@ -362,7 +413,7 @@ describe('Benchmark System - Integration Tests', () => {
                 source: 'benchmark_host_test'
             });
 
-            const response = await request(app).get('/api/benchmark/dashboard?includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/dashboard?includeUnavailableModels=true');
             expect(response.status).toBe(200);
 
             const row = response.body.data.model_stats.find((item) => item.model === 'aligned-model');
@@ -391,7 +442,7 @@ describe('Benchmark System - Integration Tests', () => {
                 composite_score: 82
             });
 
-            const response = await request(app).get('/api/benchmark/dashboard?includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/dashboard?includeUnavailableModels=true');
             expect(response.status).toBe(200);
 
             const row = response.body.data.model_stats.find((item) => item.model === 'category-honest-model');
@@ -449,7 +500,7 @@ describe('Benchmark System - Integration Tests', () => {
                 source: 'benchmark_host_test'
             });
 
-            const response = await request(app).get('/api/benchmark/dashboard?includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/dashboard?includeUnavailableModels=true');
             expect(response.status).toBe(200);
 
             const driftRow = response.body.data.model_stats.find((item) => item.model === 'drift-model');
@@ -471,7 +522,7 @@ describe('Benchmark System - Integration Tests', () => {
 
     describe('GET /api/benchmark/judge-breakdown', () => {
         it('should require judge_model', async () => {
-            const response = await request(app).get('/api/benchmark/judge-breakdown');
+            const response = await api.get('/api/benchmark/judge-breakdown');
             expect(response.status).toBe(400);
             expect(response.body.status).toBe('error');
             expect(response.body.error).toContain('judge_model');
@@ -520,7 +571,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/judge-breakdown')
+            const response = await api.get('/api/benchmark/judge-breakdown')
                 .query({ judge_model: 'judge-a', judge_host: 'http://localhost:11435', groupBy: 'level' });
 
             expect(response.status).toBe(200);
@@ -562,7 +613,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/judge-breakdown')
+            const response = await api.get('/api/benchmark/judge-breakdown')
                 .query({ judge_model: 'judge-b', groupBy: 'model', limit: 10 });
 
             expect(response.status).toBe(200);
@@ -576,7 +627,7 @@ describe('Benchmark System - Integration Tests', () => {
 
     describe('GET /api/benchmark/compare', () => {
         it('should require models parameter', async () => {
-            const response = await request(app).get('/api/benchmark/compare');
+            const response = await api.get('/api/benchmark/compare');
 
             expect(response.status).toBe(400);
             expect(response.body.status).toBe('error');
@@ -605,7 +656,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app)
+            const response = await api
                 .get('/api/benchmark/compare?models=model-a,model-b');
 
             expect(response.status).toBe(200);
@@ -635,7 +686,7 @@ describe('Benchmark System - Integration Tests', () => {
         });
 
         it('should validate required fields', async () => {
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({ host: 'http://localhost:11434' }); // Missing models and levels
 
@@ -645,7 +696,7 @@ describe('Benchmark System - Integration Tests', () => {
         });
 
         it('should create batch with valid inputs', async () => {
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -669,7 +720,7 @@ describe('Benchmark System - Integration Tests', () => {
         });
 
         it('should not report pending judge work immediately after launch', async () => {
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -681,7 +732,7 @@ describe('Benchmark System - Integration Tests', () => {
 
             expect(response.status).toBe(200);
 
-            const batchResponse = await request(app)
+            const batchResponse = await api
                 .get(`/api/benchmark/batch/${response.body.data.batch_id}`)
                 .expect(200);
 
@@ -715,7 +766,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             });
 
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -729,7 +780,7 @@ describe('Benchmark System - Integration Tests', () => {
         });
 
         it('should handle multiple models and levels', async () => {
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -746,7 +797,7 @@ describe('Benchmark System - Integration Tests', () => {
         it('should create a batch from exact prompt IDs when provided', async () => {
             const prompt = await BenchmarkPrompt.findOne({ name: 'Complex Test' }).lean();
 
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -774,7 +825,7 @@ describe('Benchmark System - Integration Tests', () => {
             validateJudgeModel.mockClear();
             runPreflight.mockClear();
 
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -829,7 +880,7 @@ describe('Benchmark System - Integration Tests', () => {
                 .mockImplementationOnce(() => [])
                 .mockImplementation((...args) => realGetActive(...args));
 
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -858,7 +909,7 @@ describe('Benchmark System - Integration Tests', () => {
                 startedAt: Date.now()
             });
 
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -886,7 +937,7 @@ describe('Benchmark System - Integration Tests', () => {
                 startedAt: Date.now()
             });
 
-            const response = await request(app)
+            const response = await api
                 .post('/api/benchmark/batch')
                 .send({
                     host: 'http://localhost:11434',
@@ -909,7 +960,7 @@ describe('Benchmark System - Integration Tests', () => {
     describe('GET /api/benchmark/batch/:id', () => {
         it('should return 404 for non-existent batch', async () => {
             const fakeId = new mongoose.Types.ObjectId();
-            const response = await request(app).get(`/api/benchmark/batch/${fakeId}`);
+            const response = await api.get(`/api/benchmark/batch/${fakeId}`);
 
             expect(response.status).toBe(404);
             expect(response.body.status).toBe('error');
@@ -925,7 +976,7 @@ describe('Benchmark System - Integration Tests', () => {
                 status: 'completed'
             });
 
-            const response = await request(app).get(`/api/benchmark/batch/${batch._id}`);
+            const response = await api.get(`/api/benchmark/batch/${batch._id}`);
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -935,7 +986,7 @@ describe('Benchmark System - Integration Tests', () => {
             expect(response.body.data).toHaveProperty('success_rate');
         });
 
-        it('should reconcile persisted batch counters from actual results', async () => {
+        it('should project authoritative counters on GET and persist them only on explicit reconcile', async () => {
             const batch = await BenchmarkBatch.create({
                 host: 'http://localhost:11434',
                 models: ['test-model'],
@@ -976,15 +1027,21 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get(`/api/benchmark/batch/${batch._id}`);
+            const response = await api.get(`/api/benchmark/batch/${batch._id}`);
             expect(response.status).toBe(200);
             expect(response.body.data.completed).toBe(2);
             expect(response.body.data.failed).toBe(1);
             expect(response.body.data._countMismatch).toBe(true);
 
             const refreshed = await BenchmarkBatch.findById(batch._id).lean();
-            expect(refreshed.completed).toBe(2);
-            expect(refreshed.failed).toBe(1);
+            expect(refreshed.completed).toBe(0);
+            expect(refreshed.failed).toBe(0);
+
+            const reconcile = await api.post(`/api/benchmark/batch/${batch._id}/reconcile`);
+            expect(reconcile.status).toBe(200);
+            const reconciled = await BenchmarkBatch.findById(batch._id).lean();
+            expect(reconciled.completed).toBe(2);
+            expect(reconciled.failed).toBe(1);
         });
 
         it('should omit heavy result fields by default and include them when requested', async () => {
@@ -1016,7 +1073,7 @@ describe('Benchmark System - Integration Tests', () => {
                 judge_warmup: { prompt: 'Judge', response: 'Done' }
             });
 
-            const compact = await request(app).get(`/api/benchmark/batch/${batch._id}`);
+            const compact = await api.get(`/api/benchmark/batch/${batch._id}`);
             expect(compact.status).toBe(200);
             expect(compact.body.data.results).toHaveLength(1);
             expect(compact.body.data.results[0].prompt).toBeUndefined();
@@ -1028,14 +1085,14 @@ describe('Benchmark System - Integration Tests', () => {
             expect(compact.body.data.results[0].warmup).toBeUndefined();
             expect(compact.body.data.results[0].judge_warmup).toBeUndefined();
 
-            const fullText = await request(app).get(`/api/benchmark/batch/${batch._id}?include_full_text=1`);
+            const fullText = await api.get(`/api/benchmark/batch/${batch._id}?include_full_text=1`);
             expect(fullText.status).toBe(200);
             expect(fullText.body.data.results).toHaveLength(1);
             expect(fullText.body.data.results[0].prompt).toBe('What is 2+2?');
             expect(fullText.body.data.results[0].response).toBe('4');
             expect(fullText.body.data.results[0].judge_raw_response).toBeUndefined();
 
-            const full = await request(app).get(`/api/benchmark/batch/${batch._id}?include_heavy=1`);
+            const full = await api.get(`/api/benchmark/batch/${batch._id}?include_heavy=1`);
             expect(full.status).toBe(200);
             expect(full.body.data.results).toHaveLength(1);
             expect(full.body.data.results[0].judge_raw_response).toBe('{"score":10}');
@@ -1099,7 +1156,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app)
+            const response = await api
                 .get(`/api/benchmark/batch/${batch._id}?result_limit=2&result_offset=1`);
 
             expect(response.status).toBe(200);
@@ -1174,7 +1231,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app)
+            const response = await api
                 .get(`/api/benchmark/batch/${batch._id}?result_limit=1`);
 
             expect(response.status).toBe(200);
@@ -1201,7 +1258,7 @@ describe('Benchmark System - Integration Tests', () => {
 
     describe('GET /api/benchmark/batches', () => {
         it('should return empty list when no batches exist', async () => {
-            const response = await request(app).get('/api/benchmark/batches');
+            const response = await api.get('/api/benchmark/batches');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -1232,7 +1289,7 @@ describe('Benchmark System - Integration Tests', () => {
                 created_at: new Date()
             });
 
-            const response = await request(app).get('/api/benchmark/batches');
+            const response = await api.get('/api/benchmark/batches');
 
             expect(response.status).toBe(200);
             expect(response.body.data.batches).toHaveLength(2);
@@ -1256,7 +1313,7 @@ describe('Benchmark System - Integration Tests', () => {
             }
             await BenchmarkBatch.create(batches);
 
-            const response = await request(app).get('/api/benchmark/batches?limit=3');
+            const response = await api.get('/api/benchmark/batches?limit=3');
 
             expect(response.status).toBe(200);
             expect(response.body.data.batches).toHaveLength(3);
@@ -1285,7 +1342,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app)
+            const response = await api
                 .get('/api/benchmark/batches?tag=planning%3Aagentx%3Abenchmark-capability&limit=1');
 
             expect(response.status).toBe(200);
@@ -1306,7 +1363,7 @@ describe('Benchmark System - Integration Tests', () => {
                 total_tests: 1
             });
 
-            const response = await request(app).post(`/api/benchmark/batch/${batch._id}/stop`);
+            const response = await api.post(`/api/benchmark/batch/${batch._id}/stop`);
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -1315,6 +1372,44 @@ describe('Benchmark System - Integration Tests', () => {
 
             const refreshed = await BenchmarkBatch.findById(batch._id).lean();
             expect(refreshed.status).toBe('stopped');
+        });
+
+        it('aborts the active request and remains idempotent when stop is repeated', async () => {
+            const batch = await BenchmarkBatch.create({
+                host: 'http://localhost:11434',
+                models: ['stop-live-model'],
+                levels: [1],
+                run_name: 'Stop Live Request',
+                status: 'running',
+                total_tests: 1
+            });
+            const controller = new AbortController();
+            const unregister = registerActiveBatchController(batch._id, controller);
+
+            try {
+                const first = await api.post(`/api/benchmark/batch/${batch._id}/stop`);
+                expect(first.status).toBe(200);
+                expect(first.body.data).toMatchObject({
+                    status: 'stopped',
+                    already_stopped: false
+                });
+                expect(controller.signal.aborted).toBe(true);
+                expect(controller.signal.reason).toMatchObject({
+                    code: 'BENCHMARK_BATCH_STOPPED'
+                });
+
+                const second = await api.post(`/api/benchmark/batch/${batch._id}/stop`);
+                expect(second.status).toBe(200);
+                expect(second.body.data).toMatchObject({
+                    status: 'stopped',
+                    already_stopped: true
+                });
+                expect(getActiveBatchRequestCount(batch._id)).toBe(1);
+            } finally {
+                unregister();
+            }
+
+            expect(getActiveBatchRequestCount(batch._id)).toBe(0);
         });
     });
 
@@ -1390,7 +1485,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).post(`/api/benchmark/batch/${batch._id}/recover`);
+            const response = await api.post(`/api/benchmark/batch/${batch._id}/recover`);
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -1595,7 +1690,7 @@ describe('Benchmark System - Integration Tests', () => {
                 response: 'This is a response to evaluate.'
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/batch/${batch._id}/judge`)
                 .send({ concurrency: 1, force: false });
 
@@ -1616,7 +1711,7 @@ describe('Benchmark System - Integration Tests', () => {
                 total_tests: 1
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/batch/${batch._id}/judge`)
                 .send({ concurrency: 1 });
 
@@ -1635,7 +1730,7 @@ describe('Benchmark System - Integration Tests', () => {
                 total_tests: 1
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/batch/${batch._id}/judge`)
                 .send({ force: false });
 
@@ -1646,7 +1741,7 @@ describe('Benchmark System - Integration Tests', () => {
     });
 
     describe('GET /api/benchmark/batch/:id/judge/status', () => {
-        it('should return persisted judge status counters', async () => {
+        it('should project authoritative judge counters without persisting from GET', async () => {
             const batch = await BenchmarkBatch.create({
                 host: 'http://localhost:11434',
                 models: ['judge-status-model'],
@@ -1655,12 +1750,33 @@ describe('Benchmark System - Integration Tests', () => {
                 status: 'completed',
                 total_tests: 2,
                 judge_status: 'completed',
-                judge_total: 2,
-                judge_completed: 2,
-                judge_failed: 1
+                judge_total: 99,
+                judge_completed: 99,
+                judge_failed: 99
             });
 
-            const response = await request(app).get(`/api/benchmark/batch/${batch._id}/judge/status`);
+            await BenchmarkResult.create([
+                {
+                    batch_id: batch._id.toString(),
+                    model: 'judge-status-model',
+                    host: 'http://localhost:11434',
+                    prompt: 'p1',
+                    response: 'r1',
+                    success: true,
+                    scoring_method: 'llm_judge'
+                },
+                {
+                    batch_id: batch._id.toString(),
+                    model: 'judge-status-model',
+                    host: 'http://localhost:11434',
+                    prompt: 'p2',
+                    response: 'r2',
+                    success: true,
+                    scoring_method: 'llm_failed'
+                }
+            ]);
+
+            const response = await api.get(`/api/benchmark/batch/${batch._id}/judge/status`);
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -1669,6 +1785,18 @@ describe('Benchmark System - Integration Tests', () => {
             expect(response.body.data.judge_total).toBe(2);
             expect(response.body.data.judge_completed).toBe(2);
             expect(response.body.data.judge_failed).toBe(1);
+            expect(response.body.data.counters_drifted).toBe(true);
+
+            const unchanged = await BenchmarkBatch.findById(batch._id).lean();
+            expect(unchanged.judge_total).toBe(99);
+            expect(unchanged.judge_completed).toBe(99);
+            expect(unchanged.judge_failed).toBe(99);
+
+            await api.post(`/api/benchmark/batch/${batch._id}/reconcile`).expect(200);
+            const reconciled = await BenchmarkBatch.findById(batch._id).lean();
+            expect(reconciled.judge_total).toBe(2);
+            expect(reconciled.judge_completed).toBe(2);
+            expect(reconciled.judge_failed).toBe(1);
         });
     });
 
@@ -1696,7 +1824,7 @@ describe('Benchmark System - Integration Tests', () => {
                 response: 'Rejudge this response.'
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/batch/${batch._id}/rejudge-pending`)
                 .send({ concurrency: 1 });
 
@@ -1717,7 +1845,7 @@ describe('Benchmark System - Integration Tests', () => {
                 total_tests: 1
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/batch/${batch._id}/rejudge-pending`)
                 .send({ concurrency: 1 });
 
@@ -1761,7 +1889,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app)
+            const response = await api
                 .get('/api/benchmark/results/advanced')
                 .query({
                     batchId,
@@ -1797,7 +1925,7 @@ describe('Benchmark System - Integration Tests', () => {
                 success: true
             });
 
-            const response = await request(app)
+            const response = await api
                 .get('/api/benchmark/results/advanced')
                 .query({
                     limit: 999999,
@@ -1812,6 +1940,107 @@ describe('Benchmark System - Integration Tests', () => {
             expect(response.body.data.offset).toBe(0);
             expect(response.body.data.sort).toBe('timestamp');
             expect(response.body.data.sortDir).toBe('asc');
+        });
+
+        it('returns honest matching totals, stable recent ordering, and timestamp-derived eras', async () => {
+            const now = Date.now();
+            await BenchmarkResult.create([
+                {
+                    model: 'recent-evidence-model',
+                    host: 'http://localhost:11434',
+                    prompt: 'Recent prompt',
+                    prompt_category: 'math',
+                    prompt_level: 2,
+                    success: true,
+                    timestamp: new Date(now - 24 * 60 * 60 * 1000)
+                },
+                {
+                    model: 'aging-evidence-model',
+                    host: 'http://localhost:11434',
+                    prompt: 'Aging prompt',
+                    prompt_category: 'math',
+                    prompt_level: 2,
+                    success: true,
+                    timestamp: new Date(now - 45 * 24 * 60 * 60 * 1000)
+                },
+                {
+                    model: 'historical-evidence-model',
+                    host: 'http://localhost:11434',
+                    prompt: 'Historical prompt',
+                    prompt_category: 'math',
+                    prompt_level: 2,
+                    composite_formula: 'legacy',
+                    success: true,
+                    timestamp: new Date(now - 120 * 24 * 60 * 60 * 1000)
+                }
+            ]);
+
+            const firstPage = await api
+                .get('/api/benchmark/results/advanced')
+                .query({ limit: 2, offset: 0, includeFacets: 'true' });
+
+            expect(firstPage.status).toBe(200);
+            expect(firstPage.body.data).toMatchObject({
+                total: 3,
+                archiveTotal: 3,
+                page: 1,
+                totalPages: 2,
+                returned: 2,
+                sort: 'timestamp',
+                sortDir: 'desc',
+                hasMore: true,
+                evidenceCounts: {
+                    recent: 1,
+                    aging: 1,
+                    historical: 1,
+                    undated: 0,
+                    legacy_scoring: 1
+                }
+            });
+            expect(firstPage.body.data.results.map(result => result.model)).toEqual([
+                'recent-evidence-model',
+                'aging-evidence-model'
+            ]);
+            expect(firstPage.body.data.results.map(result => result.evidence_era)).toEqual([
+                'recent',
+                'aging'
+            ]);
+            expect(firstPage.body.data.facets.models).toEqual(expect.arrayContaining([
+                'recent-evidence-model',
+                'aging-evidence-model',
+                'historical-evidence-model'
+            ]));
+
+            const historical = await api
+                .get('/api/benchmark/results/advanced')
+                .query({
+                    evidenceEra: 'historical',
+                    limit: 50,
+                    offset: 0,
+                    includeEvidenceMeta: 'true'
+                });
+
+            expect(historical.status).toBe(200);
+            expect(historical.body.data.total).toBe(1);
+            expect(historical.body.data.results[0]).toMatchObject({
+                model: 'historical-evidence-model',
+                evidence_era: 'historical',
+                legacy_scoring: true
+            });
+            expect(historical.body.data.evidencePolicy).toMatchObject({
+                basis: 'timestamp',
+                recent_max_age_days: 30,
+                aging_max_age_days: 90
+            });
+        });
+
+        it('rejects an unknown evidence age band', async () => {
+            const response = await api
+                .get('/api/benchmark/results/advanced')
+                .query({ evidenceEra: 'legacy-ish' });
+
+            expect(response.status).toBe(400);
+            expect(response.body.error).toBe('Invalid evidenceEra');
         });
     });
 
@@ -1828,7 +2057,7 @@ describe('Benchmark System - Integration Tests', () => {
                 success: true
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/results/${result._id}/human-review`)
                 .send({ action: 'override', human_score: 9.5, reviewer: 'qa-reviewer' });
 
@@ -1859,7 +2088,7 @@ describe('Benchmark System - Integration Tests', () => {
                 success: true
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/results/${result._id}/human-review`)
                 .send({ action: 'approve', reviewer: 'qa-reviewer' });
 
@@ -1890,7 +2119,7 @@ describe('Benchmark System - Integration Tests', () => {
                 success: true
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/results/${result._id}/human-review`)
                 .send({ action: 'reject', reviewer: 'qa-reviewer', notes: 'invalid prompt/response pair' });
 
@@ -1917,10 +2146,13 @@ describe('Benchmark System - Integration Tests', () => {
                 prompt_level: 3,
                 latency: 10, tokens: 5,
                 quality_score: 7.0,
+                subjective_score: 7.0,
+                scoring_method: 'decomposed',
+                judge_model: 'judge-test:latest',
                 success: true
             });
 
-            const response = await request(app)
+            const response = await api
                 .post(`/api/benchmark/results/${result._id}/human-review`)
                 .send({ action: 'override', human_score: 4.0, reviewer: 'yb' });
 
@@ -1937,6 +2169,40 @@ describe('Benchmark System - Integration Tests', () => {
             expect(gt.judge_score_at_review).toBe(7.0);
             expect(String(gt.source_result_id)).toBe(String(result._id));
             expect(gt.category).toBe('coding');
+            expect(gt.tags).toContain('judge_scored');
+        });
+
+        it('keeps deterministic-only evidence distinct in review and calibration records', async () => {
+            const result = await BenchmarkResult.create({
+                model: 'deterministic-review-model',
+                host: 'http://localhost:11434',
+                prompt: 'Deterministic review prompt',
+                response: 'deterministic response',
+                prompt_category: 'coding',
+                prompt_level: 2,
+                latency: 10,
+                tokens: 5,
+                quality_score: 8.0,
+                deterministic_score: 8.0,
+                scoring_method: 'deterministic_fallback',
+                success: true
+            });
+
+            const response = await api
+                .post(`/api/benchmark/results/${result._id}/human-review`)
+                .send({ action: 'override', human_score: 6.0, reviewer: 'det-reviewer' });
+
+            expect(response.status).toBe(200);
+            expect(response.body.data.evidence_mode).toBe('deterministic_only');
+
+            const refreshed = await BenchmarkResult.findById(result._id).lean();
+            expect(refreshed.judge_quality_score).toBeNull();
+
+            const gt = await JudgeGroundTruth.findOne({
+                name: `courthouse-review-${result._id}`
+            }).lean();
+            expect(gt.judge_score_at_review).toBeNull();
+            expect(gt.tags).toContain('deterministic_only');
         });
 
         it('is idempotent on re-review — overwrites the same ground truth entry', async () => {
@@ -1952,10 +2218,10 @@ describe('Benchmark System - Integration Tests', () => {
                 success: true
             });
 
-            await request(app)
+            await api
                 .post(`/api/benchmark/results/${result._id}/human-review`)
                 .send({ action: 'override', human_score: 3.0, reviewer: 'r1' });
-            await request(app)
+            await api
                 .post(`/api/benchmark/results/${result._id}/human-review`)
                 .send({ action: 'override', human_score: 8.0, reviewer: 'r2' });
 
@@ -1980,7 +2246,7 @@ describe('Benchmark System - Integration Tests', () => {
                 success: true
             });
 
-            await request(app)
+            await api
                 .post(`/api/benchmark/results/${result._id}/human-review`)
                 .send({ action: 'reject', reviewer: 'r3', notes: 'broken' });
 
@@ -2031,7 +2297,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -2042,6 +2308,51 @@ describe('Benchmark System - Integration Tests', () => {
             expect(response.body.data.categoryWeights).not.toHaveProperty('refactoring');
             expect(response.body.data.leaderboard.length).toBeGreaterThan(0);
             expect(response.body.data.leaderboard[0]).toHaveProperty('generalistScore');
+        });
+
+        it('exposes untested categories as unavailable while preserving coverage penalties', async () => {
+            await BenchmarkPrompt.create([
+                {
+                    name: 'Coding evidence prompt',
+                    prompt: 'Write a helper function',
+                    level: 4,
+                    category: 'coding'
+                },
+                {
+                    name: 'Reasoning coverage prompt',
+                    prompt: 'Solve a logic puzzle',
+                    level: 4,
+                    category: 'reasoning'
+                }
+            ]);
+            await BenchmarkResult.create({
+                model: 'partial-evidence-model',
+                host: 'http://localhost:11434',
+                prompt: 'Code task',
+                prompt_name: 'Coding evidence prompt',
+                prompt_category: 'coding',
+                prompt_level: 4,
+                quality_score: 8.0,
+                success: true
+            });
+
+            const response = await api
+                .get('/api/benchmark/generalist-leaderboard?axis=quality&challengeScope=all&includeUnavailableModels=true');
+
+            expect(response.status).toBe(200);
+            const row = response.body.data.leaderboard.find(
+                (entry) => entry.model === 'partial-evidence-model'
+            );
+            expect(row).toBeTruthy();
+            expect(row.categoryAverages.coding).toBe(80);
+            expect(row.categoryAverages.reasoning).toBeNull();
+            expect(row.categoryEvidence).toMatchObject({
+                coding: 'scored',
+                reasoning: 'untested'
+            });
+            expect(row.coveragePenalty).toBeGreaterThan(0);
+            expect(row.fullScopeEligible).toBe(false);
+            expect(row.evidenceStatus).toBe('partial_scope');
         });
 
         it('can scope the generalist leaderboard to currently configured hosts', async () => {
@@ -2095,7 +2406,7 @@ describe('Benchmark System - Integration Tests', () => {
                     }
                 ]);
 
-                const currentResponse = await request(app)
+                const currentResponse = await api
                     .get('/api/benchmark/generalist-leaderboard?axis=quality&hostScope=current&includeUnavailableModels=true');
 
                 expect(currentResponse.status).toBe(200);
@@ -2111,7 +2422,7 @@ describe('Benchmark System - Integration Tests', () => {
                 expect(currentModels).toContain('current-host-model');
                 expect(currentModels).not.toContain('retired-host-model');
 
-                const allResponse = await request(app)
+                const allResponse = await api
                     .get('/api/benchmark/generalist-leaderboard?axis=quality&hostScope=all&includeUnavailableModels=true');
                 const allModels = allResponse.body.data.leaderboard.map((row) => row.model);
                 expect(allResponse.body.data.hostScope).toBe('all');
@@ -2171,7 +2482,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -2218,7 +2529,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -2264,7 +2575,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -2297,7 +2608,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app)
+            const response = await api
                 .delete('/api/benchmark/results')
                 .send({ confirm: 'DELETE_ALL' });
 
@@ -2331,7 +2642,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app)
+            const response = await api
                 .delete('/api/benchmark/results/failed')
                 .send({ confirm: 'DELETE_FAILED' });
 
@@ -2374,7 +2685,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await request(app).get('/api/benchmark/quality-breakdown');
+            const response = await api.get('/api/benchmark/quality-breakdown');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');

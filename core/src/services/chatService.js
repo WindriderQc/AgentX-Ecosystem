@@ -54,6 +54,7 @@ const handleChatRequest = async ({
     system,
     options = {},
     persona,
+    promptVersion,
     conversationId,
     useRag,
     ragEnabled,
@@ -68,6 +69,7 @@ const handleChatRequest = async ({
     thinkingMode
 }) => {
     let personaName = persona || options.persona || 'default_chat';
+    const exactPromptVersion = promptVersion ?? options.promptVersion;
 
     // Shared orchestration prelude — routing decision.
     //     RAG + web-search happen later (after tool/image branches), so we
@@ -101,7 +103,11 @@ const handleChatRequest = async ({
     });
 
     // 2. Standard Chat Flow
-    const activePrompt = await getActivePrompt(system, personaName);
+    const activePrompt = await getActivePrompt(
+        system,
+        personaName,
+        exactPromptVersion == null ? {} : { promptVersion: exactPromptVersion }
+    );
     const userProfile = await getOrCreateProfile(userId);
 
     // Shared prelude, second pass: RAG + web-search.
@@ -302,6 +308,12 @@ const handleChatRequest = async ({
         model: effectiveModel,
         target: effectiveTarget,
         routing: routingPayload,
+        prompt: {
+            name: activePrompt.name || personaName,
+            version: activePrompt.version,
+            exact: exactPromptVersion != null,
+            requestedVersion: exactPromptVersion == null ? null : Number(exactPromptVersion)
+        },
         numCtx: sanitized.num_ctx || null,
         inferenceContract,
         stats: stats || null,

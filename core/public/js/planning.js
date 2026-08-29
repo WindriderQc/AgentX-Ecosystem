@@ -12,31 +12,31 @@
   const VIEW_META = {
     portfolio: {
       title: 'Home',
-      description: 'A concise view of strategic focus, goals in motion, and upcoming delivery.'
+      description: 'A historical view of saved strategic records; Pipeline is the current delivery source.'
     },
     goals: {
       title: 'Goals',
-      description: 'Measurable outcomes grouped by the strategic workstream they advance.'
+      description: 'Recorded outcomes grouped by the historical workstream they referenced.'
     },
     roadmap: {
       title: 'Roadmap',
-      description: 'Outcomes and milestones ordered by their target horizon.'
+      description: 'Recorded outcomes and milestones ordered by their saved target horizon.'
     },
     board: {
       title: 'Delivery board',
-      description: 'Planning commitments organized by delivery state.'
+      description: 'Historical Planning records organized by saved delivery state.'
     },
     ideas: {
       title: 'Idea lab',
-      description: 'Capture, triage, park, and promote possibilities without polluting delivery.'
+      description: 'Historical idea states preserved for reference.'
     },
     decisions: {
       title: 'Decision log',
-      description: 'The context, choice, and rationale behind AgentX direction.'
+      description: 'Recorded context, choices, and rationale preserved for reference.'
     },
     evidence: {
       title: 'Evidence',
-      description: 'Artifacts, commits, benchmarks, alerts, documents, and runtime proof.'
+      description: 'Recorded artifacts, commits, benchmarks, alerts, documents, and runtime evidence.'
     }
   };
 
@@ -63,9 +63,10 @@
   }
 
   async function api(path, options = {}) {
+    const { headers = {}, ...requestOptions } = options;
     const response = await fetch(path, {
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(options.headers || {}) },
-      ...options
+      ...requestOptions,
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...headers }
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`);
@@ -74,6 +75,26 @@
 
   function formatStatus(value) {
     return String(value || 'unknown').replace(/_/g, ' ');
+  }
+
+  function isFrozenReference() {
+    return $('planningRoot')?.dataset.lifecycle === 'frozen';
+  }
+
+  function statusLabel(status) {
+    const label = formatStatus(status);
+    return isFrozenReference() ? `Recorded ${label}` : label;
+  }
+
+  function progressLabel(item) {
+    const progress = Math.max(0, Math.min(100, Number(item?.computedProgress) || 0));
+    return isFrozenReference() ? `${progress}% recorded` : `${progress}%`;
+  }
+
+  function progressMeaning(item) {
+    if (!isFrozenReference()) return `Calculated from ${item?.progress?.mode || 'tasks'}`;
+    const basis = item?.referenceSemantics?.progressBasis || item?.progress?.mode || 'recorded planning state';
+    return `Historical Planning reference (${formatStatus(basis)}). This percentage is not a current execution signal; open Pipeline for current delivery.`;
   }
 
   function dateOnly(value, options = {}) {
@@ -112,7 +133,10 @@
   }
 
   function statusBadge(status) {
-    return `<span class="planning-status-badge planning-status-${esc(status)}">${esc(formatStatus(status))}</span>`;
+    const title = isFrozenReference()
+      ? 'Saved historical Planning state; not a current execution signal.'
+      : '';
+    return `<span class="planning-status-badge planning-status-${esc(status)}"${title ? ` title="${esc(title)}"` : ''}>${esc(statusLabel(status))}</span>`;
   }
 
   function priorityBadge(priority) {
@@ -122,9 +146,9 @@
   function progressBar(item, { compact = false } = {}) {
     const progress = Math.max(0, Math.min(100, Number(item.computedProgress) || 0));
     return `
-      <div class="planning-progress-row${compact ? ' planning-progress-compact' : ''}" title="Calculated from ${esc(item.progress?.mode || 'tasks')}">
+      <div class="planning-progress-row${compact ? ' planning-progress-compact' : ''}" title="${esc(progressMeaning(item))}">
         <div class="planning-progress-track"><div class="planning-progress-fill" style="width:${progress}%"></div></div>
-        <strong>${progress}%</strong>
+        <strong>${esc(progressLabel(item))}</strong>
       </div>`;
   }
 
@@ -167,7 +191,8 @@
     const bits = [];
     if (item.owner) bits.push(`<span><i class="fas fa-user"></i>${esc(item.owner)}</span>`);
     bits.push(`<span class="${item.isOverdue ? 'planning-card-overdue' : ''}"><i class="fas fa-calendar-day"></i>${esc(targetLabel(item))}</span>`);
-    bits.push(`<span><i class="fas fa-list-check"></i>${item.linkedTaskCount || 0}</span>`);
+    const taskCount = item.linkedTaskCount || 0;
+    bits.push(`<span title="Historical references only; Pipeline owns execution"><i class="fas fa-list-check"></i>${taskCount} task ref${taskCount === 1 ? '' : 's'}</span>`);
     return bits.join('');
   }
 
@@ -180,21 +205,21 @@
     const progress = averageProgress(portfolioItems);
     const activeTasks = Number(summary.activeTasks) || 0;
     const unlinkedTasks = Number(summary.unlinkedTasks) || 0;
-    const coverage = activeTasks ? Math.round(((activeTasks - unlinkedTasks) / activeTasks) * 100) : 100;
+    const coverage = activeTasks ? Math.round(((activeTasks - unlinkedTasks) / activeTasks) * 100) : null;
 
-    $('planningPortfolioProgress').textContent = `${progress}%`;
+    $('planningPortfolioProgress').textContent = isFrozenReference() ? `${progress}% recorded` : `${progress}%`;
     $('planningPortfolioProgressMeta').textContent = portfolioItems.length
-      ? `${portfolioItems.length} active strategic item${portfolioItems.length === 1 ? '' : 's'}`
-      : 'Ready for your first workstream';
+      ? `${portfolioItems.length} non-complete historical record${portfolioItems.length === 1 ? '' : 's'}`
+      : 'No non-complete historical records';
     $('planningPortfolioRing').style.setProperty('--ring-progress', progress);
     $('planningCountAttention').textContent = summary.atRisk ?? 0;
     $('planningAttentionMetaTop').textContent = summary.atRisk
       ? `${summary.overdueMilestones || 0} overdue milestone${summary.overdueMilestones === 1 ? '' : 's'}`
-      : 'Portfolio is calm';
-    $('planningPipelineCoverage').textContent = `${coverage}%`;
+      : 'No recorded attention flags';
+    $('planningPipelineCoverage').textContent = coverage == null ? '—' : `${coverage}%`;
     $('planningCoverageMeta').textContent = activeTasks
-      ? `${activeTasks - unlinkedTasks} of ${activeTasks} open tasks linked`
-      : 'No open delivery tasks';
+      ? `${activeTasks - unlinkedTasks} of ${activeTasks} open Pipeline tasks carry a historical reference`
+      : 'No open Pipeline tasks; coverage is not scored';
     $('planningCountIdeas').textContent = summary.ideaInbox ?? 0;
     $('planningIdeasMeta').textContent = summary.ideaInbox ? 'Waiting for triage' : 'Inbox is clear';
     $('planningNavGoalCount').textContent = summary.outcome ?? 0;
@@ -202,7 +227,7 @@
     $('planningNavDecisionCount').textContent = summary.decision ?? 0;
     $('planningNavEvidenceCount').textContent = (dashboard.items || [])
       .reduce((sum, item) => sum + (item.evidenceCount || 0), 0);
-    $('planningBootstrapBtn').hidden = !(summary.unlinkedTasks > 0);
+    $('planningBootstrapBtn').hidden = isFrozenReference() || !(summary.unlinkedTasks > 0);
     $('planningBootstrapBtn').innerHTML = `<i class="fas fa-inbox"></i> Review ${unlinkedTasks} task${unlinkedTasks === 1 ? '' : 's'}`;
   }
 
@@ -218,6 +243,15 @@
   }
 
   function renderFirstRun() {
+    if (isFrozenReference()) {
+      return emptyState({
+        icon: 'fa-box-archive',
+        eyebrow: 'Historical reference',
+        title: 'No Planning records were preserved',
+        copy: 'This frozen surface does not create a current plan. Open Pipeline for live delivery state.',
+        actions: '<a class="planning-btn planning-btn-primary" href="/pipeline"><i class="fas fa-list-check"></i> Open Pipeline</a>'
+      });
+    }
     const unlinked = state.dashboard?.summary?.unlinkedTasks || 0;
     const primaryAction = unlinked
       ? `<button type="button" class="planning-btn planning-btn-primary" data-planning-review-intake><i class="fas fa-inbox"></i> Review ${unlinked} pipeline task${unlinked === 1 ? '' : 's'}</button>`
@@ -277,7 +311,10 @@
   function renderWorkstreamTile(workstream) {
     const goals = relatedItems(workstream.id, 'outcome');
     const milestones = relatedItems(workstream.id, 'milestone');
-    const progress = Number(workstream.computedProgress) || averageProgress([...goals, ...milestones]);
+    const recordedProgress = Number(workstream.computedProgress);
+    const progress = Number.isFinite(recordedProgress)
+      ? recordedProgress
+      : averageProgress([...goals, ...milestones]);
     return `
       <article class="planning-workstream-tile planning-card-type-workstream" data-planning-item-id="${esc(workstream.id)}" tabindex="0">
         <header>
@@ -300,7 +337,7 @@
       <button type="button" class="planning-focus-row" data-planning-item-id="${esc(item.id)}">
         <span class="planning-focus-icon planning-card-type-${esc(item.type)}"><i class="fas ${TYPE_META[item.type]?.icon || 'fa-circle'}"></i></span>
         <span><strong>${esc(item.title)}</strong><small>${esc(item.workstream?.title || item.owner || 'Portfolio-wide')}</small></span>
-        <span>${Number(item.computedProgress) || 0}%</span>
+        <span>${esc(progressLabel(item))}</span>
         ${statusBadge(item.status)}
       </button>`;
   }
@@ -342,7 +379,7 @@
       <div class="planning-home-columns">
         <section class="planning-home-section">
           <header>
-            <div><span class="planning-section-kicker">Success</span><h3>Goals in motion</h3></div>
+            <div><span class="planning-section-kicker">Historical outcomes</span><h3>Recorded goals</h3></div>
             <button type="button" class="planning-text-btn" data-planning-view-target="goals">See all</button>
           </header>
           <div class="planning-focus-list">
@@ -373,7 +410,7 @@
     const metric = item.progress?.metric || {};
     const metricText = metric.label
       ? `${metric.current ?? '—'} → ${metric.target ?? '—'} ${metric.unit || ''}`.trim()
-      : `${Number(item.computedProgress) || 0}% complete`;
+      : progressLabel(item);
     return `
       <article class="planning-goal-card planning-card-type-outcome" data-planning-item-id="${esc(item.id)}" tabindex="0">
         <div class="planning-card-top">${statusBadge(item.status)}${priorityBadge(item.priority)}</div>
@@ -499,11 +536,11 @@
     const items = filteredItems(['milestone']);
     const intake = state.attentionOnly ? '' : renderDeliveryIntake();
     const lanes = [
-      { key: 'backlog', label: 'Planned', icon: 'fa-circle-dot', statuses: ['draft', 'planned'] },
-      { key: 'active', label: 'In motion', icon: 'fa-bolt', statuses: ['active'] },
-      { key: 'risk', label: 'At risk', icon: 'fa-triangle-exclamation', statuses: ['at_risk'] },
-      { key: 'blocked', label: 'Blocked', icon: 'fa-ban', statuses: ['blocked'] },
-      { key: 'done', label: 'Complete', icon: 'fa-circle-check', statuses: ['completed'] }
+      { key: 'backlog', label: 'Recorded planned', icon: 'fa-circle-dot', statuses: ['draft', 'planned'] },
+      { key: 'active', label: 'Recorded active', icon: 'fa-bolt', statuses: ['active'] },
+      { key: 'risk', label: 'Recorded at risk', icon: 'fa-triangle-exclamation', statuses: ['at_risk'] },
+      { key: 'blocked', label: 'Recorded blocked', icon: 'fa-ban', statuses: ['blocked'] },
+      { key: 'done', label: 'Recorded complete', icon: 'fa-circle-check', statuses: ['completed'] }
     ];
     if (!items.length) {
       return `${intake}${emptyState({
@@ -551,23 +588,23 @@
         <article class="planning-intake-task">
           <div class="planning-intake-task-main">
             <span class="planning-task-id">${esc(task.pipelineId)}</span>
-            <div>
+          <div>
               <h4>${esc(task.title)}</h4>
               <p>${esc(taskMeta(task))}</p>
             </div>
           </div>
-          <button type="button" class="planning-btn planning-btn-secondary" data-planning-organize-task="${esc(task.pipelineId)}">
+          ${isFrozenReference() ? '' : `<button type="button" class="planning-btn planning-btn-secondary" data-planning-organize-task="${esc(task.pipelineId)}">
             Review <i class="fas fa-arrow-right"></i>
-          </button>
+          </button>`}
         </article>`).join('')
       : '<div class="planning-intake-empty"><i class="fas fa-magnifying-glass"></i><span><strong>No intake tasks match this search</strong><small>Clear the search to review the full delivery intake.</small></span></div>';
     return `
       <section class="planning-delivery-intake">
         <header>
           <div>
-            <span class="planning-section-kicker">Review before linking</span>
-            <h3>Delivery intake <strong>${allTasks.length}</strong></h3>
-            <p>Connect each task to the milestone, goal, or workstream it advances. Pipeline remains the delivery source of truth.</p>
+            <span class="planning-section-kicker">Current Pipeline</span>
+            <h3>Without a historical reference <strong>${allTasks.length}</strong></h3>
+            <p>These open Pipeline tasks do not reference a preserved Planning record. No link is created here; Pipeline remains the current delivery source of truth.</p>
           </div>
           <a class="planning-btn planning-btn-secondary" href="/pipeline"><i class="fas fa-list-check"></i> Open pipeline</a>
         </header>
@@ -576,7 +613,7 @@
   }
 
   function renderIdeaCard(item) {
-    const actions = item.status === 'inbox'
+    const actions = isFrozenReference() ? '' : (item.status === 'inbox'
       ? `
         <button type="button" data-idea-action="triaged" data-idea-id="${esc(item.id)}">Triage</button>
         <button type="button" data-idea-action="parked" data-idea-id="${esc(item.id)}">Park</button>`
@@ -586,7 +623,7 @@
           <button type="button" data-idea-action="parked" data-idea-id="${esc(item.id)}">Park</button>`
         : (['parked', 'rejected'].includes(item.status)
           ? `<button type="button" data-idea-action="inbox" data-idea-id="${esc(item.id)}">Reopen</button>`
-          : ''));
+          : '')));
     return `
       <article class="planning-idea-card" data-planning-item-id="${esc(item.id)}" tabindex="0">
         <div class="planning-card-top">${priorityBadge(item.priority)}${statusBadge(item.status)}</div>
@@ -656,7 +693,7 @@
             </div>
             <div>
               <span>${esc(item.workstream?.title || 'Portfolio-wide')}</span>
-              <small><i class="fas fa-link"></i> ${item.evidenceCount || 0} evidence · <i class="fas fa-list-check"></i> ${item.linkedTaskCount || 0} tasks</small>
+              <small><i class="fas fa-link"></i> ${item.evidenceCount || 0} evidence · <i class="fas fa-list-check"></i> ${item.linkedTaskCount || 0} task refs</small>
             </div>
           </article>`).join('')}
       </div>`;
@@ -733,7 +770,7 @@
     const meta = VIEW_META[state.activeView] || VIEW_META.portfolio;
     $('planningWorkspaceTitle').textContent = state.attentionOnly ? 'Needs attention' : meta.title;
     $('planningWorkspaceMeta').textContent = state.attentionOnly
-      ? 'Blocked, at-risk, and overdue planning commitments.'
+      ? 'Historical Planning flags shown beside current Pipeline blockers; they are not one execution state.'
       : meta.description;
     $('planningWorkspaceActions').innerHTML = workspaceActions();
     const renderers = {
@@ -756,12 +793,14 @@
     const blockedTasks = (state.dashboard?.tasks || []).filter((task) => task.status === 'blocked').slice(0, 4);
     const count = items.length + blockedTasks.length;
     $('planningAttentionCountRail').textContent = count;
-    $('planningAttentionMeta').textContent = count ? `${count} signal${count === 1 ? '' : 's'} surfaced across planning and delivery` : 'No active risk, blockers, or overdue milestones';
+    $('planningAttentionMeta').textContent = count
+      ? `${count} historical-record or current-Pipeline signal${count === 1 ? '' : 's'}`
+      : 'No recorded Planning flags or current Pipeline blockers';
     const rows = [
       ...items.map((item) => `
         <button type="button" class="planning-side-item planning-side-alert" data-planning-item-id="${esc(item.id)}">
           <span class="planning-side-icon"><i class="fas ${item.isOverdue ? 'fa-calendar-xmark' : 'fa-triangle-exclamation'}"></i></span>
-          <span><strong>${esc(item.title)}</strong><small>${esc(item.isOverdue ? `Overdue · ${dateOnly(item.dates?.targetAt)}` : `${TYPE_META[item.type]?.label || item.type} · ${formatStatus(item.status)}`)}</small></span>
+          <span><strong>${esc(item.title)}</strong><small>${esc(item.isOverdue ? `Recorded target passed · ${dateOnly(item.dates?.targetAt)}` : `${TYPE_META[item.type]?.label || item.type} · ${statusLabel(item.status)}`)}</small></span>
           <i class="fas fa-chevron-right"></i>
         </button>`),
       ...blockedTasks.map((task) => `
@@ -773,14 +812,14 @@
     ];
     $('planningAttentionList').innerHTML = rows.length
       ? rows.join('')
-      : '<div class="planning-quiet-state"><i class="fas fa-shield-check"></i><span><strong>All quiet</strong><small>No planning intervention needed.</small></span></div>';
+      : '<div class="planning-quiet-state"><i class="fas fa-shield-check"></i><span><strong>No flags</strong><small>No historical Planning flags or current Pipeline blockers.</small></span></div>';
   }
 
   function renderUnlinked() {
     const tasks = state.dashboard?.unlinkedTasks || [];
     $('planningUnlinkedMeta').textContent = tasks.length
-      ? `${tasks.length} open task${tasks.length === 1 ? '' : 's'} not connected to strategy`
-      : 'Every open pipeline task is connected';
+      ? `${tasks.length} open Pipeline task${tasks.length === 1 ? '' : 's'} without a historical Planning reference`
+      : 'Every open Pipeline task carries a historical Planning reference';
     $('planningUnlinkedList').innerHTML = tasks.length
       ? tasks.slice(0, 6).map((task) => `
         <article class="planning-side-task">
@@ -788,7 +827,7 @@
           <div><strong>${esc(task.title)}</strong><small>${esc(task.service || task.epic || 'unclassified')} · ${esc(formatStatus(task.status))}</small></div>
           <button type="button" data-planning-organize-task="${esc(task.pipelineId)}" title="Create and link a planning item"><i class="fas fa-plus"></i></button>
         </article>`).join('')
-      : '<div class="planning-quiet-state"><i class="fas fa-link"></i><span><strong>Delivery aligned</strong><small>No orphaned pipeline work.</small></span></div>';
+      : '<div class="planning-quiet-state"><i class="fas fa-link"></i><span><strong>References present</strong><small>This does not change Pipeline execution ownership.</small></span></div>';
   }
 
   function renderSchedules() {
@@ -1083,6 +1122,10 @@
     api,
     esc,
     formatStatus,
+    statusLabel,
+    progressLabel,
+    progressMeaning,
+    isFrozenReference,
     dateOnly,
     relativeTime,
     typeMeta: TYPE_META,

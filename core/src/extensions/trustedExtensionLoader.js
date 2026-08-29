@@ -17,8 +17,8 @@ function parseExtensionModules(raw = '') {
   let parsed;
   try {
     parsed = JSON.parse(value);
-  } catch (error) {
-    throw new Error(`${EXTENSION_ENV} must be a JSON array of absolute module paths: ${error.message}`);
+  } catch {
+    throw new Error(`${EXTENSION_ENV} must be a JSON array of absolute module paths.`);
   }
 
   if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== 'string' || !entry.trim())) {
@@ -27,14 +27,14 @@ function parseExtensionModules(raw = '') {
   return parsed.map((entry) => entry.trim());
 }
 
-function normalizeManifest(exported, modulePath) {
+function normalizeManifest(exported) {
   if (!exported || typeof exported !== 'object' || Array.isArray(exported)) {
-    throw new Error(`Trusted extension ${modulePath} must export a manifest object.`);
+    throw new Error('Configured trusted extension must export a manifest object.');
   }
 
   const id = String(exported.id || '');
   if (!IDENTIFIER.test(id)) {
-    throw new Error(`Trusted extension ${modulePath} has an invalid id; use lowercase letters, numbers, and hyphens.`);
+    throw new Error('Configured trusted extension has an invalid id; use lowercase letters, numbers, and hyphens.');
   }
 
   const version = String(exported.version || '');
@@ -64,19 +64,44 @@ function normalizeManifest(exported, modulePath) {
 
 function resolveConfiguredModule(configuredPath) {
   if (!path.isAbsolute(configuredPath)) {
-    throw new Error(`${EXTENSION_ENV} entries must be absolute paths: ${configuredPath}`);
+    throw new Error(`${EXTENSION_ENV} entries must be absolute paths.`);
   }
 
-  const modulePath = fs.realpathSync(configuredPath);
-  const stat = fs.statSync(modulePath);
+  let modulePath;
+  let stat;
+  try {
+    modulePath = fs.realpathSync(configuredPath);
+    stat = fs.statSync(modulePath);
+  } catch {
+    // Environment values and filesystem errors may contain deployment paths.
+    // Keep startup fail-closed without reflecting that topology into logs.
+    throw new Error('Configured trusted extension path could not be resolved.');
+  }
   if (!stat.isDirectory() && !stat.isFile()) {
-    throw new Error(`Trusted extension path must resolve to a file or directory: ${configuredPath}`);
+    throw new Error('Configured trusted extension path must resolve to a file or directory.');
   }
 
   return {
     modulePath,
     extensionRoot: stat.isDirectory() ? modulePath : path.dirname(modulePath)
   };
+}
+
+function boundedSecurityContract(security) {
+  if (!security
+    || security.contractVersion !== 1
+    || typeof security.requireOperatorAccess !== 'function'
+    || typeof security.requireOperatorUiAccess !== 'function') {
+    throw new Error('Trusted extension security contract v1 is unavailable or invalid.');
+  }
+
+  // operatorAccess also owns token-reading and request-inspection helpers.
+  // Those are deliberately not part of the injected extension contract.
+  return Object.freeze({
+    contractVersion: 1,
+    requireOperatorAccess: security.requireOperatorAccess,
+    requireOperatorUiAccess: security.requireOperatorUiAccess
+  });
 }
 
 function loadTrustedExtensions({
@@ -106,12 +131,7 @@ function loadTrustedExtensions({
     || typeof runtimeServices.routing?.getEffectiveSnapshot !== 'function') {
     throw new Error('Trusted extension runtimeServices contract v1 is unavailable or invalid.');
   }
-  if (!security
-    || security.contractVersion !== 1
-    || typeof security.requireOperatorAccess !== 'function'
-    || typeof security.requireOperatorUiAccess !== 'function') {
-    throw new Error('Trusted extension security contract v1 is unavailable or invalid.');
-  }
+  const injectedSecurity = boundedSecurityContract(security);
 
   const seenPaths = new Set();
   const seenIds = new Set();
@@ -121,10 +141,16 @@ function loadTrustedExtensions({
   for (const configuredPath of configured) {
     const { modulePath, extensionRoot } = resolveConfiguredModule(configuredPath);
     if (seenPaths.has(modulePath)) {
-      throw new Error(`Trusted extension module is configured twice: ${modulePath}`);
+      throw new Error('A trusted extension module is configured twice.');
     }
 
-    const manifest = normalizeManifest(requireModule(modulePath), modulePath);
+    let exported;
+    try {
+      exported = requireModule(modulePath);
+    } catch {
+      throw new Error('Configured trusted extension module could not be loaded.');
+    }
+    const manifest = normalizeManifest(exported);
     if (seenIds.has(manifest.id)) {
       throw new Error(`Duplicate trusted extension id: ${manifest.id}`);
     }
@@ -144,10 +170,15 @@ function loadTrustedExtensions({
       standardJsonParser,
       conversationLifecycle,
       runtimeServices,
-      security,
+      security: injectedSecurity,
       extensionRoot
     });
-    const result = manifest.register(api);
+    let result;
+    try {
+      result = manifest.register(api);
+    } catch {
+      throw new Error(`Trusted extension ${manifest.id} registration failed.`);
+    }
     if (result && typeof result.then === 'function') {
       throw new Error(`Trusted extension ${manifest.id} register(api) must be synchronous.`);
     }

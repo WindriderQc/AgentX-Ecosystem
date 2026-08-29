@@ -2,6 +2,7 @@
  * Chat config — Settings persistence, form hydration, config summary, RAG options
  */
 import { STORAGE_KEYS, DEFAULTS } from './chat-constants.js';
+import { fetchWithDeadline } from './chat-network.js';
 
 function readOptionalNumberInput(value) {
   if (value == null) return '';
@@ -144,6 +145,16 @@ export function getHostChatState(elements, state, defaults) {
       reason: hasInstalledModel
         ? `${routingModeLabel(routingMode(elements, state))} mode uses one server-selected model for the whole session.`
         : 'Install at least one model in the connected Ollama runtime to start a conversation.'
+    };
+  }
+
+  if (state.requestedRuntime?.error) {
+    return {
+      available: false,
+      recoverable: true,
+      mode: 'manual',
+      unavailableKind: 'requested route',
+      reason: state.requestedRuntime.error
     };
   }
 
@@ -515,9 +526,13 @@ export function toggleRagOptions(elements) {
   const content = elements.ragOptionsContent;
   const chevron = elements.ragChevron;
   if (!content || !chevron) return;
-  const isOpen = content.style.display === 'block';
-  content.style.display = isOpen ? 'none' : 'block';
-  chevron.className = isOpen ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
+  const nextOpen = content.hidden;
+  content.hidden = !nextOpen;
+  content.style.display = nextOpen ? 'block' : 'none';
+  if (nextOpen) content.removeAttribute('inert');
+  else content.setAttribute('inert', '');
+  elements.ragPanelHeader?.setAttribute('aria-expanded', String(nextOpen));
+  chevron.className = nextOpen ? 'fas fa-chevron-up' : 'fas fa-chevron-down';
 }
 
 export async function checkRagAvailability(elements) {
@@ -625,7 +640,7 @@ export async function loadServerConfig(defaults) {
 export async function loadOllamaHosts(elements, state) {
   const hostSelect = elements.hostInput;
   try {
-    const res = await fetch('/api/ollama-hosts');
+    const res = await fetchWithDeadline('/api/ollama-hosts');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     const data = json.data || json;
@@ -656,9 +671,18 @@ export async function loadOllamaHosts(elements, state) {
 
     // Select saved host URL, or first available host
     const savedUrl = state.settings?.hostUrl;
-    const savedExists = savedUrl && Array.from(hostSelect.options).some(o => o.value === savedUrl);
+    const savedOption = savedUrl && Array.from(hostSelect.options)
+      .find(o => normalizeHostUrl(o.value) === normalizeHostUrl(savedUrl));
+    const savedExists = Boolean(savedOption);
     if (savedExists) {
-      hostSelect.value = savedUrl;
+      hostSelect.value = savedOption.value;
+    } else if (state.requestedRuntime?.host) {
+      const opt = document.createElement('option');
+      opt.value = state.requestedRuntime.host;
+      opt.textContent = `Requested host unavailable (${state.requestedRuntime.host})`;
+      hostSelect.appendChild(opt);
+      hostSelect.value = state.requestedRuntime.host;
+      state.requestedRuntime.error = `Requested host ${state.requestedRuntime.host} is not configured. Choose another host to continue.`;
     } else {
       const firstAvailable = hosts.find(h => h.available);
       if (firstAvailable) hostSelect.value = firstAvailable.url;
@@ -690,7 +714,7 @@ export async function loadHostPreferences(state) {
     return [];
   }
   try {
-    const res = await fetch('/api/nerve-center/host-preferences', { credentials: 'include' });
+    const res = await fetchWithDeadline('/api/nerve-center/host-preferences', { credentials: 'include' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     const prefs = Array.isArray(json.data) ? json.data : [];
@@ -795,7 +819,7 @@ function applyDevMode(enabled) {
 
 export async function loadRoutingStatus(state) {
   try {
-    const res = await fetch('/api/models/routing', { credentials: 'include' });
+    const res = await fetchWithDeadline('/api/models/routing', { credentials: 'include' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     state.routingStatus = json.data || json;

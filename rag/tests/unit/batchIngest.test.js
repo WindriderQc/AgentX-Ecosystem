@@ -171,6 +171,38 @@ describe('POST /api/rag/ingest/batch', () => {
     });
   });
 
+  it('reports an exact repeat as unchanged and names its canonical document', async () => {
+    mockUpsert.mockResolvedValue({
+      documentId: 'canonical-id',
+      requestedDocumentId: 'duplicate-id',
+      chunkCount: 3,
+      unchanged: true,
+      deduplicated: true,
+      status: 'unchanged'
+    });
+
+    const res = await request(buildApp())
+      .post('/api/rag/ingest/batch')
+      .send({
+        documents: [{
+          text: 'Same source and content',
+          source: 'guide.md',
+          documentId: 'duplicate-id'
+        }]
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.results[0]).toEqual({
+      index: 0,
+      documentId: 'canonical-id',
+      requestedDocumentId: 'duplicate-id',
+      status: 'unchanged',
+      chunkCount: 3,
+      unchanged: true,
+      deduplicated: true
+    });
+  });
+
   it('passes correct options to upsertDocumentWithChunks', async () => {
     mockUpsert.mockResolvedValue({ documentId: 'x', chunkCount: 1 });
 

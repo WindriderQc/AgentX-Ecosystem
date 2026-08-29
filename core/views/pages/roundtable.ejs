@@ -117,6 +117,12 @@
                 </div>
             </div>
 
+            <div id="formModelReadiness" class="rt-model-readiness" role="status" aria-live="polite">
+                <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
+                <span>Checking configured runtimes for Council-capable models…</span>
+            </div>
+            <datalist id="councilModelOptions"></datalist>
+
             <div class="rt-section-head">
                 <div class="rt-eyebrow">PANEL</div>
                 <button id="formAddAgent" class="btn btn-sm">+ Add agent</button>
@@ -129,7 +135,7 @@
             <div class="rt-synth-edit">
                 <div>
                     <label class="rt-label">Model</label>
-                    <input id="formSynthModel" type="text" class="rt-input" placeholder="model name">
+                    <input id="formSynthModel" type="text" class="rt-input" list="councilModelOptions" autocomplete="off" placeholder="Select a discovered or configured model">
                 </div>
                 <div>
                     <label class="rt-label">System prompt</label>
@@ -138,7 +144,7 @@
             </div>
 
             <div class="rt-form-actions">
-                <button id="formStartBtn" class="btn btn-primary rt-primary"><i class="fas fa-rocket"></i> Convene Council</button>
+                <button id="formStartBtn" class="btn btn-primary rt-primary" disabled><i class="fas fa-rocket"></i> Convene Council</button>
             </div>
         </section>
 
@@ -201,6 +207,10 @@
     .rt-agent-edit-card .rt-remove:hover { color:#dc3545; }
     .rt-agent-edit-row { display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-bottom:8px; }
     .rt-synth-edit { display:grid; grid-template-columns: 1fr 2fr; gap:12px; }
+    .rt-model-readiness { display:flex; align-items:flex-start; gap:9px; margin:14px 0 4px; padding:11px 13px; border:1px solid rgba(124,240,255,0.2); border-radius:8px; background:rgba(124,240,255,0.05); color:#b7c5d8; font-size:12px; line-height:1.45; }
+    .rt-model-readiness.is-ready { border-color:rgba(134,239,172,0.25); background:rgba(134,239,172,0.055); color:#c9f7d8; }
+    .rt-model-readiness.is-blocked { border-color:rgba(251,191,36,0.28); background:rgba(251,191,36,0.06); color:#fde7a7; }
+    .rt-model-readiness a { color:inherit; text-decoration:underline; }
 
     .rt-phases { display:flex; align-items:center; gap:6px; margin-bottom:20px; padding:14px; background:#0a0f1d; border-radius:8px; overflow-x:auto; }
     .rt-phase { display:flex; align-items:center; gap:8px; padding:6px 12px; border-radius:20px; background:rgba(42,49,69,0.5); color:#666; font-size:13px; white-space:nowrap; transition: all 0.3s; }

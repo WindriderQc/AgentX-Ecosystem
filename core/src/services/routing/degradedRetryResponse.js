@@ -17,7 +17,10 @@ async function tryAndRespondDegraded(context) {
     requestedThink, thinkingMode, lane, laneName, rawResponseRequested,
     stream, skipGate, routingSource, routingTrace, requestedModel,
     dispatchAttemptRecord, buildRoutingDifference, timeoutMs, routeManaged,
+    signal,
   } = context;
+  if (signal?.aborted) return false;
+
   const degradedOutcome = await tryDegradedRetry({
     attemptState: {
       lane: taskType || null,
@@ -49,8 +52,11 @@ async function tryAndRespondDegraded(context) {
       rawResponseRequested,
       skipGate,
       timeoutMs,
+      signal,
     },
   });
+
+  if (signal?.aborted) return false;
 
   if (degradedOutcome?.retried) {
     const fallbackType = degradedOutcome.degraded.fallbackType || 'same_model';

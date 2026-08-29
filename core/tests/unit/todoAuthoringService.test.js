@@ -31,6 +31,9 @@ describe('todoAuthoringService', () => {
     // Instructions point at the Mongo pipeline, not the retired git TODO/ tree.
     expect(spec).toContain('POST /api/pipeline/tasks/0320/claim');
     expect(spec).toContain('POST /api/pipeline/tasks/0320/feedback');
+    expect(spec).toContain('X-AgentX-Pipeline-Token: <AGENTX_PIPELINE_TOKEN>');
+    expect(spec).toContain('credential does not grant the full task-list read');
+    expect(spec).toContain('a trusted reviewer or operator owns that final transition');
     expect(spec).not.toContain('TODO/ASSIGNMENTS.md');
     expect(spec).not.toContain('TODO/FEEDBACK');
     expect(spec).toContain('| `core/src/app.js` | Relevant to this task |');

@@ -4,6 +4,7 @@ const express = require('express');
 const { StringDecoder } = require('string_decoder');
 const envelope = require('../src/helpers/responseEnvelope');
 const logger = require('../config/logger');
+const { sanitizePublicProjection: sanitizePublicValue } = require('../../shared/publicProjection');
 const buddyEvents = require('../src/services/buddyEvents');
 const { getCapabilities } = require('../src/services/nestorConsumerCapabilitiesService');
 const { executeInference, getRouterSnapshot } = require('../src/services/nestorConsumerRuntimeService');
@@ -14,14 +15,17 @@ const { CONTRACT_VERSION, LIMITS } = require('../src/services/nestorConsumerCont
 function sendError(res, error) {
   const statusCode = Number(error.statusCode) || 500;
   if (statusCode >= 500) logger.error('[NestorConsumerV1] request failed', { error: error.message });
+  const message = statusCode >= 500
+    ? 'Nestor consumer request failed.'
+    : sanitizePublicValue(error.message || 'Nestor consumer request failed.');
   const body = {
     ok: false,
     status: 'error',
-    error: error.message,
-    message: error.message,
+    error: message,
+    message,
     code: error.code || 'NESTOR_CONSUMER_ERROR',
   };
-  if (error.details) body.details = error.details;
+  if (statusCode < 500 && error.details) body.details = sanitizePublicValue(error.details);
   return res.status(statusCode).json(body);
 }
 
@@ -113,7 +117,7 @@ async function relayInferenceStream(stream, res, identity) {
     }
 
     if (data?.error) {
-      await fail('INFERENCE_UPSTREAM_ERROR', String(data.error));
+      await fail('INFERENCE_UPSTREAM_ERROR', 'Upstream inference failed.');
       return false;
     }
 
@@ -194,6 +198,13 @@ function createNestorConsumerV1Routes({ runtimeServices, systemHealth } = {}) {
     throw new Error('Nestor consumer routes require Core runtime services.');
   }
   const router = express.Router();
+
+  // Every Nestor response is attributable to the same stable contract, not
+  // only inference responses.
+  router.use((_req, res, next) => {
+    res.set('X-AgentX-Consumer-Contract', CONTRACT_VERSION);
+    next();
+  });
 
   router.get('/capabilities', asyncRoute(async (_req, res) => {
     envelope.success(res, await getCapabilities({ systemHealth }));
@@ -316,4 +327,5 @@ function createNestorConsumerV1Routes({ runtimeServices, systemHealth } = {}) {
 module.exports = createNestorConsumerV1Routes;
 module.exports.createDisconnectSignal = createDisconnectSignal;
 module.exports.relayInferenceStream = relayInferenceStream;
+module.exports.sanitizePublicValue = sanitizePublicValue;
 module.exports.sendError = sendError;

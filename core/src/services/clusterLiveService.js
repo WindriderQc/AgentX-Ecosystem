@@ -24,7 +24,6 @@ const LIVE_TIMEOUT_MS = 3000;
  */
 async function getLiveState() {
   const hosts = getConfiguredHosts();
-  const polledAt = new Date().toISOString();
 
   const results = await Promise.allSettled(
     hosts.map(host => pollHost(host))
@@ -42,8 +41,18 @@ async function getLiveState() {
       models: []
     };
   });
+  const polledAt = new Date().toISOString();
 
-  return { hosts: hostStates, polledAt };
+  return {
+    hosts: hostStates,
+    polledAt,
+    evidence: {
+      authority: 'agentx.cluster-schedule-live-detail',
+      scope: 'loaded-model-and-vram-detail',
+      observedAt: polledAt,
+      headlineAuthority: false
+    }
+  };
 }
 
 /**

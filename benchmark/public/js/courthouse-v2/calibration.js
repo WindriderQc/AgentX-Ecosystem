@@ -1,5 +1,7 @@
 // calibration.js — Judge Calibration section for courthouse-v2
 // Renders a calibration heatmap (category × difficulty) + "Run Calibration" form.
+
+import { isJudgeReady, judgeBlockedReason } from './readiness-state.js';
 // Export: renderCalibration(container, { matrices, hosts })
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -189,8 +191,9 @@ function renderStats(matrix) {
  * @returns {string}
  */
 function hostOptions(hosts) {
-    if (!hosts.length) return '<option value="">No hosts available</option>';
-    return hosts.map(h => `<option value="${escHtml(h.url)}">${escHtml(h.name)}</option>`).join('');
+    if (!hosts.length) return '<option value="">No configured hosts available</option>';
+    return '<option value="">Select a configured host…</option>'
+        + hosts.map(h => `<option value="${escHtml(h.url)}">${escHtml(h.name)}</option>`).join('');
 }
 
 /**
@@ -200,9 +203,13 @@ function hostOptions(hosts) {
  */
 function renderRunForm(hosts) {
     const opts = hostOptions(hosts);
+    const readinessNote = isJudgeReady()
+        ? 'Readiness is confirmed for at least one configured judge. Select both models explicitly for this calibration run.'
+        : `${judgeBlockedReason()} You may choose installed models explicitly below; the server will probe them again before starting.`;
     return `
         <div class="cal-run-form" id="cal-run-form">
             <div class="cal-run-title">Run Calibration</div>
+            <p class="cal-run-safety" role="note">${escHtml(readinessNote)} Agent X will not download or auto-select a model.</p>
             <div class="cal-run-fields">
                 <label class="cal-field">
                     <span class="cal-field-label">Judge Host</span>
@@ -210,7 +217,7 @@ function renderRunForm(hosts) {
                 </label>
                 <label class="cal-field">
                     <span class="cal-field-label">Judge Model</span>
-                    <select class="cal-select" id="cal-judge"><option value="">Loading…</option></select>
+                    <select class="cal-select" id="cal-judge" disabled><option value="">Choose a host first</option></select>
                 </label>
                 <label class="cal-field">
                     <span class="cal-field-label">Reference Host</span>
@@ -218,7 +225,7 @@ function renderRunForm(hosts) {
                 </label>
                 <label class="cal-field">
                     <span class="cal-field-label">Reference Model</span>
-                    <select class="cal-select" id="cal-ref"><option value="">Loading…</option></select>
+                    <select class="cal-select" id="cal-ref" disabled><option value="">Choose a host first</option></select>
                 </label>
             </div>
             <div class="cal-run-actions">
@@ -247,8 +254,8 @@ function wireRunButton(container, hosts) {
         const refModel   = container.querySelector('#cal-ref')?.value?.trim();
         const refHost    = container.querySelector('#cal-ref-host')?.value;
 
-        if (!judgeModel) {
-            setStatus(status, 'Judge model is required.', 'error');
+        if (!judgeHost || !judgeModel || !refHost || !refModel) {
+            setStatus(status, 'Choose judge and reference host/model pairs explicitly.', 'error');
             return;
         }
 
@@ -315,7 +322,14 @@ function setStatus(el, msg, type) {
  * @param {HTMLElement} selectEl - the <select> to populate
  */
 async function loadModelsForHost(hostUrl, selectEl) {
-    if (!hostUrl || !selectEl) return;
+    if (!selectEl) return;
+    if (!hostUrl) {
+        selectEl.disabled = true;
+        selectEl.innerHTML = '<option value="">Choose a host first</option>';
+        return;
+    }
+    selectEl.disabled = true;
+    selectEl.innerHTML = '<option value="">Checking installed models…</option>';
     try {
         const res  = await fetch('/api/profiler/hosts/test/hosts-status');
         const data = await res.json();
@@ -323,11 +337,14 @@ async function loadModelsForHost(hostUrl, selectEl) {
         const hostData = hosts.find(h => (h.url || h.host) === hostUrl);
         const models   = hostData?.models || [];
         selectEl.innerHTML = models.length
-            ? models.map(m => `<option value="${m.name || m}">${m.name || m}</option>`).join('')
+            ? '<option value="">Select an installed model…</option>'
+                + models.map(m => `<option value="${escHtml(m.name || m)}">${escHtml(m.name || m)}</option>`).join('')
             : '<option value="">No models found</option>';
+        selectEl.disabled = models.length === 0;
     } catch (err) {
         console.warn('[calibration] loadModelsForHost error:', err);
         selectEl.innerHTML = '<option value="">Failed to load</option>';
+        selectEl.disabled = true;
     }
 }
 
@@ -375,10 +392,6 @@ export function renderCalibration(container, { matrices = [], hosts = [] } = {})
     const refHostSel   = container.querySelector('#cal-ref-host');
     const judgeSel     = container.querySelector('#cal-judge');
     const refSel       = container.querySelector('#cal-ref');
-
-    // Initial load from the currently selected host
-    if (judgeHostSel?.value) loadModelsForHost(judgeHostSel.value, judgeSel);
-    if (refHostSel?.value)   loadModelsForHost(refHostSel.value,   refSel);
 
     // Reload when host selection changes
     judgeHostSel?.addEventListener('change', () => loadModelsForHost(judgeHostSel.value, judgeSel));

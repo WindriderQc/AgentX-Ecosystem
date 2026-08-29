@@ -193,6 +193,50 @@ describe('ConcurrencyQueue — drain behavior', () => {
         const result = await drainPromise;
         expect(result.completed).toBe(2);
     });
+
+    it('cancels queued work and waits for the active task to settle', async () => {
+        const queue = new ConcurrencyQueue(1);
+        let releaseActive;
+        const active = queue.add(() => new Promise(resolve => {
+            releaseActive = resolve;
+        }));
+        const queued = queue.add(makeQuickTask('must-not-run'));
+        await new Promise(resolve => setImmediate(resolve));
+
+        const reason = new Error('batch stopped');
+        reason.code = 'BENCHMARK_BATCH_STOPPED';
+        expect(queue.cancel(reason)).toEqual({
+            cancelled: true,
+            queuedCancelled: 1,
+            running: 1
+        });
+        await expect(queued).rejects.toMatchObject({ code: 'BENCHMARK_BATCH_STOPPED' });
+
+        let drained = false;
+        const drainPromise = queue.drain({ timeoutMs: 1000 }).then((result) => {
+            drained = true;
+            return result;
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(drained).toBe(false);
+
+        releaseActive('done');
+        await expect(active).resolves.toBe('done');
+        await expect(drainPromise).resolves.toMatchObject({
+            timedOut: false,
+            cancelled: true
+        });
+    });
+
+    it('rejects new work and capacity waiters after cancellation', async () => {
+        const queue = new ConcurrencyQueue(1);
+        const reason = new Error('stopped');
+        reason.code = 'BENCHMARK_BATCH_STOPPED';
+        queue.cancel(reason);
+
+        await expect(queue.add(makeQuickTask())).rejects.toBe(reason);
+        await expect(queue.waitForCapacity()).rejects.toBe(reason);
+    });
 });
 
 describe('ConcurrencyQueue — edge cases', () => {

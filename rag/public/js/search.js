@@ -6,6 +6,7 @@
 (function () {
   'use strict';
 
+  var documentContext = window.RAGDocumentContext;
   var els = {};
   var searching = false;
   var searchReady = false;
@@ -80,11 +81,22 @@
       var response = await window.RAG.getStatus();
       var data = response && response.data ? response.data : {};
       var documents = Number(data.documentCount || 0);
+      var dependencies = data.dependencies || {};
+      var mongo = dependencies.mongodb;
       var vectorOk = !!(data.vectorStore && data.vectorStore.healthy);
-      var embedding = data.dependencies && data.dependencies.embedding;
+      var mongoOk = !!(mongo && mongo.healthy);
+      var embedding = dependencies.embedding;
       var embeddingOk = !!(embedding && embedding.healthy);
-      if (!vectorOk || !embeddingOk) {
-        setReadiness('error', 'Search needs attention', !vectorOk ? 'The vector store is unavailable.' : 'The embedding route is unavailable.', { label: 'View status', href: '/' });
+      var overallOk = data.healthy === true;
+      if (!overallOk || !mongoOk || !vectorOk || !embeddingOk) {
+        var dependencyDetail = !mongoOk
+          ? 'The document database is unavailable.'
+          : !vectorOk
+            ? 'The vector store is unavailable.'
+            : !embeddingOk
+              ? 'The embedding route is unavailable.'
+              : 'One or more required knowledge dependencies are unavailable.';
+        setReadiness('error', 'Search needs attention', dependencyDetail, { label: 'View status', href: '/' });
         setSearchStatus('error', 'Search is unavailable', 'Open knowledge status for the affected dependency.');
       } else if (documents === 0) {
         setReadiness('warn', 'Add a source first', 'Search is healthy, but there is nothing to retrieve yet.', { label: 'Add knowledge', href: '/upload' });
@@ -113,27 +125,30 @@
   function renderResults(results) {
     els.results.innerHTML = '';
     results.forEach(function (result, index) {
-      var score = typeof result.score === 'number' ? result.score : 0;
+      var judged = typeof result.llmScore === 'number';
+      var score = judged ? result.llmScore : (typeof result.score === 'number' ? result.score : 0);
+      var scoreKind = judged ? 'Judge relevance' : 'Retrieval match';
       var signal = matchSignal(score);
       var meta = result.metadata || {};
-      var docSource = meta.source || meta.documentId || '';
+      var docSource = meta.source || '';
       var docId = meta.documentId || '';
+      var displaySource = docSource || docId;
       var displayText = result.wasCompressed && result.compressedText ? result.compressedText : (result.text || '');
-      var params = [];
-      if (docSource) params.push('source=' + encodeURIComponent(docSource));
-      if (docId) params.push('docId=' + encodeURIComponent(docId));
+      var sourceHref = documentContext ? documentContext.documentsHref({ source: docSource, docId: docId }) : '';
+      var hasBoundedSourceContext = sourceHref && sourceHref !== '/documents';
 
       var card = document.createElement('article');
       card.className = 'result-card';
       card.innerHTML =
-        '<div class="result-header"><span class="result-rank">Evidence ' + (index + 1) + '</span>' +
-          '<span class="match-signal is-' + signal.state + '"><i class="fa-solid ' + signal.icon + '" aria-hidden="true"></i> ' + signal.label + ' · ' + Math.round(score * 100) + '%</span></div>' +
+        '<div class="result-header"><span class="result-rank">Evidence ' + (index + 1) + ' of ' + results.length + '</span>' +
+          '<span class="match-signal is-' + signal.state + '"><i class="fa-solid ' + signal.icon + '" aria-hidden="true"></i> ' + signal.label + ' · ' + scoreKind + ' ' + Math.round(score * 100) + '%</span></div>' +
         '<button type="button" class="result-text" data-full="' + escapeHtml(displayText) + '" data-truncated="true" aria-expanded="false">' + truncateText(displayText, 260) + '</button>' +
         '<div class="result-meta">' +
-          (docSource ? '<span><i class="fa-regular fa-file-lines" aria-hidden="true"></i> ' + escapeHtml(docSource) + '</span>' : '') +
+          (displaySource ? '<span><i class="fa-regular fa-file-lines" aria-hidden="true"></i> ' + escapeHtml(displaySource) + '</span>' : '') +
           (docId ? '<span class="mono">ID: ' + escapeHtml(docId) + '</span>' : '') +
+          (judged && typeof result.vectorScore === 'number' ? '<span>Vector match ' + Math.round(result.vectorScore * 100) + '%</span>' : '') +
           (result.wasCompressed ? '<span><i class="fa-solid fa-compress" aria-hidden="true"></i> Focused excerpt</span>' : '') +
-          (params.length ? '<a class="result-source-link" href="/documents?' + params.join('&') + '">Open source <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></a>' : '') +
+          (hasBoundedSourceContext ? '<a class="result-source-link" href="' + escapeHtml(sourceHref) + '">Open exact source <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></a>' : '') +
         '</div>';
 
       var textButton = card.querySelector('.result-text');

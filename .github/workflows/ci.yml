@@ -76,14 +76,23 @@ jobs:
           node-version: '22'
       - name: Validate release version contract
         run: |
-          node --test scripts/verify-release-contract.test.js scripts/assemble-release-image-manifest.test.js
+          node --test scripts/verify-release-contract.test.js scripts/assemble-release-image-manifest.test.js scripts/assemble-candidate-image-manifest.test.js scripts/assemble-previous-release-baseline.test.js scripts/verify-lifecycle-evidence.test.js scripts/verify-workflow-contract.test.js scripts/verify-container-image-pins.test.js
+          node --test e2e/unit/upgrade-rollback-receipt.test.js e2e/unit/run-upgrade-rollback.test.js
           node scripts/verify-release-contract.js
+          node scripts/verify-container-image-pins.js
       - name: Validate command scripts
         run: |
           bash -n agentx
           node --check core/server.js
           node --check benchmark/server.js
           node --check rag/server.js
+          node --check scripts/assemble-candidate-image-manifest.js
+          node --check scripts/assemble-previous-release-baseline.js
+          node --check scripts/verify-lifecycle-evidence.js
+          node --check scripts/run-recovery-drill.js
+          node --check e2e/upgrade-rollback-baseline.js
+          node --check e2e/upgrade-rollback-receipt.js
+          node --check e2e/run-upgrade-rollback.js
           node --check skills/obsidian-open-formats/scripts/validate.js
       - name: Validate portable Obsidian skill
         run: |
@@ -95,17 +104,21 @@ jobs:
             skills/obsidian-open-formats/references/sources.md
       - name: Render default and Ollama Compose profiles
         run: |
-          docker compose --env-file config/agentx.env -f docker-compose.yml config --format json > /tmp/agentx-base.json
-          docker compose --env-file config/agentx.env -f docker-compose.yml -f docker-compose.ollama.yml --profile ollama config --format json > /tmp/agentx-ollama.json
+          AGENTX_BUILD_REVISION=ci-contract docker compose --env-file config/agentx.env -f docker-compose.yml config --format json > /tmp/agentx-base.json
+          AGENTX_BUILD_REVISION=ci-contract docker compose --env-file config/agentx.env -f docker-compose.yml -f docker-compose.ollama.yml --profile ollama config --format json > /tmp/agentx-ollama.json
+          AGENTX_PROFILE=full AGENTX_BUILD_REVISION=ci-contract docker compose --env-file config/agentx.env -f docker-compose.yml config --format json > /tmp/agentx-full.json
           node <<'NODE'
           const fs = require('fs');
           const base = JSON.parse(fs.readFileSync('/tmp/agentx-base.json', 'utf8'));
           const overlay = JSON.parse(fs.readFileSync('/tmp/agentx-ollama.json', 'utf8'));
+          const full = JSON.parse(fs.readFileSync('/tmp/agentx-full.json', 'utf8'));
           const names = value => Object.keys(value.services).sort().join(',');
           if (names(base) !== 'benchmark,core,mongo,qdrant,rag') throw new Error(`Unexpected default services: ${names(base)}`);
           if (names(overlay) !== 'benchmark,core,mongo,ollama,qdrant,rag') throw new Error(`Unexpected Ollama services: ${names(overlay)}`);
           for (const name of ['core', 'benchmark', 'rag']) {
             if (base.services[name].environment.AGENTX_PROFILE !== 'demo') throw new Error(`${name} is not in demo profile`);
+            if (full.services[name].environment.AGENTX_PROFILE !== 'full') throw new Error(`${name} is not in full profile`);
+            if (base.services[name].build.args.AGENTX_BUILD_REVISION !== 'ci-contract') throw new Error(`${name} did not receive the build revision`);
             for (const port of base.services[name].ports || []) {
               if (port.host_ip !== '127.0.0.1') throw new Error(`${name} is not bound to loopback`);
             }
@@ -113,13 +126,25 @@ jobs:
               throw new Error(`${name} health check does not require HTTP 200`);
             }
           }
+          const recoveryVolume = base.services.core.volumes?.find(volume => volume.target === '/backups');
+          if (recoveryVolume?.type !== 'volume' || recoveryVolume.source !== 'recovery_data') {
+            throw new Error('Core recovery storage is not the dedicated named volume');
+          }
+          if (base.volumes?.recovery_data?.name !== 'agentx_ecosystem_recovery_data') {
+            throw new Error('Recovery volume has an unexpected runtime name');
+          }
+          if (!Object.hasOwn(base.services.core.environment, 'AGENTX_RECOVERY_TOKEN')
+              || !Object.hasOwn(base.services.rag.environment, 'AGENTX_RECOVERY_TOKEN')
+              || Object.hasOwn(base.services.benchmark.environment, 'AGENTX_RECOVERY_TOKEN')) {
+            throw new Error('Recovery credential is not scoped exclusively to Core and RAG');
+          }
           if (Object.hasOwn(base.services.core.environment, 'AGENTX_EXTENSION_MODULES')) {
             throw new Error('Default Core Compose must not configure trusted extensions');
           }
           for (const service of Object.values(base.services)) {
             if ((service.volumes || []).some(volume => volume.type === 'bind')) throw new Error('Default Compose contains a bind mount');
           }
-          const rendered = JSON.stringify({ base, overlay });
+          const rendered = JSON.stringify({ base, overlay, full });
           if (/aiops|obsidian|openclaw|hermes|octoprint|specialblend|192\.168\.|10\.0\.0\.99/i.test(rendered)) {
             throw new Error('Rendered Compose contains a forbidden environment marker');
           }
@@ -127,24 +152,55 @@ jobs:
 
   clean-first-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: Validate the clean-first-run verifier
-        run: node --test scripts/verify-clean-first-run.test.js
+        run: |
+          node --test scripts/bounded-response.test.js
+          node --test scripts/verify-launcher-readiness.test.js
+          node --test scripts/verify-clean-first-run.test.js
+          node --test scripts/verify-product-surfaces.test.js
+          node --test scripts/verify-adapter-consumer-contracts.test.js
+          node --test scripts/verify-release-evidence.test.js
+          node --test scripts/verify-degraded-release.test.js
+          node --test scripts/verify-recovery-contract.test.js
+          node --test shared/outboundHttpExecutor.test.js
+          node --test shared/recoveryBundleContract.test.js
+          node --test shared/recoveryDrillReceiptContract.test.js
+          node --test scripts/verify-recovery-bundle.test.js
+          node --test scripts/run-recovery-drill.test.js
+          node --test scripts/verify-mutation-route-policy.test.js
+          node scripts/verify-mutation-route-policy.js
+          node --test scripts/verify-action-authorization-matrix.test.js
+          node scripts/verify-action-authorization-matrix.js
+          node --test scripts/verify-outbound-http-sinks.test.js
+          node scripts/verify-outbound-http-sinks.js
+          node --test scripts/verify-maintenance-http-sinks.test.js
+          node scripts/verify-maintenance-http-sinks.js
+          node --test scripts/export-support-receipt.test.js
+      - name: Install deterministic browser release gate
+        run: |
+          npm ci
+          npm run test:unit
+          npx playwright install --with-deps chromium
+        working-directory: e2e
       - name: Follow the documented Linux first run
         run: |
           chmod +x agentx
           ./agentx doctor
-          ./agentx up
+          AGENTX_BUILD_REVISION="$GITHUB_SHA" ./agentx up
           ./agentx health
       - name: Verify the running standalone demo
         run: |
           node scripts/verify-clean-first-run.js
-          docker container inspect agentx-ecosystem-core agentx-ecosystem-benchmark > /tmp/agentx-first-run-containers.json
+          node scripts/verify-product-surfaces.js --profile demo
+          node scripts/verify-release-evidence.js --profile demo --expected-revision "$GITHUB_SHA" --output /tmp/agentx-demo-release-evidence.json
+          node scripts/export-support-receipt.js --profile demo --output /tmp/agentx-demo-support-receipt.json
+          docker container inspect agentx-ecosystem-core agentx-ecosystem-benchmark agentx-ecosystem-rag > /tmp/agentx-first-run-containers.json
           node <<'NODE'
           const fs = require('fs');
           const rows = JSON.parse(fs.readFileSync('/tmp/agentx-first-run-containers.json', 'utf8'));
@@ -155,7 +211,8 @@ jobs:
           }));
           const core = environment('agentx-ecosystem-core');
           const benchmark = environment('agentx-ecosystem-benchmark');
-          if (core.AGENTX_PROFILE !== 'demo' || benchmark.AGENTX_PROFILE !== 'demo') {
+          const rag = environment('agentx-ecosystem-rag');
+          if (core.AGENTX_PROFILE !== 'demo' || benchmark.AGENTX_PROFILE !== 'demo' || rag.AGENTX_PROFILE !== 'demo') {
             throw new Error('Clean first run did not keep Product services in the demo profile');
           }
           if (Object.hasOwn(core, 'AGENTX_EXTENSION_MODULES')) {
@@ -165,11 +222,225 @@ jobs:
               || core.AGENTX_BENCHMARK_TOKEN !== benchmark.AGENTX_BENCHMARK_TOKEN) {
             throw new Error('Launchers did not provide one ephemeral Benchmark credential');
           }
+          if (!/^[a-f0-9]{64}$/.test(core.AGENTX_RECOVERY_TOKEN || '')
+              || core.AGENTX_RECOVERY_TOKEN !== rag.AGENTX_RECOVERY_TOKEN
+              || Object.hasOwn(benchmark, 'AGENTX_RECOVERY_TOKEN')) {
+            throw new Error('Launchers did not provide one scoped ephemeral recovery credential');
+          }
           NODE
           if docker container inspect agentx-ecosystem-ollama >/dev/null 2>&1; then
             echo "Clean first run unexpectedly created the optional Ollama container" >&2
             exit 1
           fi
+      - name: Verify critical journeys at desktop and mobile widths
+        run: |
+          set +e
+          npm test
+          browser_status=$?
+          npm run test:actions
+          action_status=$?
+          set -e
+          if test -f test-results/agentx-browser-performance-demo.json; then
+            cp test-results/agentx-browser-performance-demo.json /tmp/agentx-browser-performance-demo.json
+          fi
+          if test -f test-results/agentx-browser-actions-demo.json; then
+            cp test-results/agentx-browser-actions-demo.json /tmp/agentx-browser-actions-demo.json
+          fi
+          for receipt in \
+            agentx-browser-actions-prompts-demo.json \
+            agentx-browser-actions-playground-demo.json \
+            agentx-browser-actions-rag-demo.json; do
+            if test -f "test-results/$receipt"; then cp "test-results/$receipt" "/tmp/$receipt"; fi
+          done
+          if test "$browser_status" -ne 0; then exit "$browser_status"; fi
+          exit "$action_status"
+        working-directory: e2e
+      - name: Start the supported full product profile from clean storage
+        run: |
+          ./agentx down --volumes --remove-orphans
+          AGENTX_PROFILE=full AGENTX_BUILD_REVISION="$GITHUB_SHA" ./agentx up
+          ./agentx health
+      - name: Verify full-profile evidence and registered pages
+        run: |
+          node scripts/verify-product-surfaces.js --profile full
+          node scripts/verify-release-evidence.js --profile full --expected-revision "$GITHUB_SHA" --output /tmp/agentx-full-release-evidence.json
+          node scripts/export-support-receipt.js --profile full --output /tmp/agentx-full-support-receipt.json
+      - name: Verify full-profile critical journeys at desktop and mobile widths
+        run: |
+          set +e
+          npm test
+          browser_status=$?
+          npm run test:actions
+          action_status=$?
+          set -e
+          if test -f test-results/agentx-browser-performance-full.json; then
+            cp test-results/agentx-browser-performance-full.json /tmp/agentx-browser-performance-full.json
+          fi
+          if test -f test-results/agentx-browser-actions-full.json; then
+            cp test-results/agentx-browser-actions-full.json /tmp/agentx-browser-actions-full.json
+          fi
+          for receipt in \
+            agentx-browser-actions-prompts-full.json \
+            agentx-browser-actions-playground-full.json \
+            agentx-browser-actions-rag-full.json; do
+            if test -f "test-results/$receipt"; then cp "test-results/$receipt" "/tmp/$receipt"; fi
+          done
+          if test "$browser_status" -ne 0; then exit "$browser_status"; fi
+          exit "$action_status"
+        working-directory: e2e
+        env:
+          AGENTX_E2E_PROFILE: full
+      - name: Rehearse a bounded RAG outage and verified recovery
+        run: |
+          set +e
+          scenario_run_id="compose-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}"
+          stop_status=1
+          degraded_status=1
+          restart_status=1
+          ready_status=1
+          recovery_status=1
+
+          docker stop --time 10 agentx-ecosystem-rag
+          stop_status=$?
+          if [ "$stop_status" -eq 0 ]; then
+            node scripts/verify-degraded-release.js \
+              --phase degraded \
+              --scenario rag-unavailable \
+              --scenario-run-id "$scenario_run_id" \
+              --execution-mode compose-ci \
+              --expected-revision "$GITHUB_SHA" \
+              --timeout-ms 12000 \
+              --output /tmp/agentx-rag-unavailable-degraded.json
+            degraded_status=$?
+          fi
+
+          docker start agentx-ecosystem-rag
+          restart_status=$?
+          if [ "$restart_status" -eq 0 ]; then
+            for attempt in $(seq 1 60); do
+              health_status="$(docker container inspect \
+                --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+                agentx-ecosystem-rag 2>/dev/null)"
+              if [ "$health_status" = "healthy" ]; then
+                ready_status=0
+                break
+              fi
+              sleep 1
+            done
+          fi
+
+          if [ "$ready_status" -eq 0 ]; then
+            node scripts/verify-degraded-release.js \
+              --phase recovery \
+              --scenario rag-unavailable \
+              --scenario-run-id "$scenario_run_id" \
+              --execution-mode compose-ci \
+              --expected-revision "$GITHUB_SHA" \
+              --timeout-ms 12000 \
+              --output /tmp/agentx-rag-unavailable-recovery.json
+            recovery_status=$?
+          fi
+
+          set -e
+          if [ "$stop_status" -ne 0 ] \
+            || [ "$degraded_status" -ne 0 ] \
+            || [ "$restart_status" -ne 0 ] \
+            || [ "$ready_status" -ne 0 ] \
+            || [ "$recovery_status" -ne 0 ]; then
+            echo "RAG resilience rehearsal failed: stop=$stop_status degraded=$degraded_status restart=$restart_status ready=$ready_status recovery=$recovery_status" >&2
+            exit 1
+          fi
+      - name: Require the complete release and resilience receipt set
+        if: always()
+        run: |
+          missing=0
+          for receipt in \
+            /tmp/agentx-demo-release-evidence.json \
+            /tmp/agentx-full-release-evidence.json \
+            /tmp/agentx-browser-actions-demo.json \
+            /tmp/agentx-browser-actions-full.json \
+            /tmp/agentx-browser-actions-prompts-demo.json \
+            /tmp/agentx-browser-actions-prompts-full.json \
+            /tmp/agentx-browser-actions-playground-demo.json \
+            /tmp/agentx-browser-actions-playground-full.json \
+            /tmp/agentx-browser-actions-rag-demo.json \
+            /tmp/agentx-browser-actions-rag-full.json \
+            /tmp/agentx-rag-unavailable-degraded.json \
+            /tmp/agentx-rag-unavailable-recovery.json; do
+            if ! test -s "$receipt"; then
+              echo "Required CI receipt is missing or empty: $receipt" >&2
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: Print machine-readable release evidence
+        if: always()
+        run: |
+          for receipt in \
+            /tmp/agentx-demo-release-evidence.json \
+            /tmp/agentx-full-release-evidence.json \
+            /tmp/agentx-demo-support-receipt.json \
+            /tmp/agentx-full-support-receipt.json \
+            /tmp/agentx-browser-performance-demo.json \
+            /tmp/agentx-browser-performance-full.json \
+            /tmp/agentx-browser-actions-demo.json \
+            /tmp/agentx-browser-actions-full.json \
+            /tmp/agentx-browser-actions-prompts-demo.json \
+            /tmp/agentx-browser-actions-prompts-full.json \
+            /tmp/agentx-browser-actions-playground-demo.json \
+            /tmp/agentx-browser-actions-playground-full.json \
+            /tmp/agentx-browser-actions-rag-demo.json \
+            /tmp/agentx-browser-actions-rag-full.json \
+            /tmp/agentx-rag-unavailable-degraded.json \
+            /tmp/agentx-rag-unavailable-recovery.json; do
+            if test -f "$receipt"; then
+              cat "$receipt"
+            fi
+          done
+      - name: Retain browser performance receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: agentx-browser-performance
+          path: /tmp/agentx-browser-performance-*.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain browser action receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: agentx-browser-actions
+          path: /tmp/agentx-browser-actions-*.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain release evidence receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: agentx-release-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            /tmp/agentx-demo-release-evidence.json
+            /tmp/agentx-full-release-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain degraded and recovery resilience receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: agentx-resilience-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            /tmp/agentx-rag-unavailable-degraded.json
+            /tmp/agentx-rag-unavailable-recovery.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain privacy-safe support receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: agentx-support-receipts
+          path: /tmp/agentx-*-support-receipt.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Show bounded service status on failure
         if: failure()
         run: ./agentx status || true
@@ -193,6 +464,7 @@ jobs:
             agentx_ecosystem_mongo_data \
             agentx_ecosystem_qdrant_data \
             agentx_ecosystem_core_logs \
+            agentx_ecosystem_recovery_data \
             agentx_ecosystem_benchmark_config \
             agentx_ecosystem_benchmark_logs \
             agentx_ecosystem_rag_logs \
@@ -206,6 +478,283 @@ jobs:
             echo "Cleanup left network: agentx-ecosystem_default" >&2
             exit 1
           fi
+
+  live-cancellation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Establish an isolated, exact-revision cancellation run
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="agentx-live-cancel-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          scenario="compose-ci:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${GITHUB_SHA}"
+          token="$(openssl rand -hex 32)"
+          if ! [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Live cancellation requires an exact lowercase commit SHA" >&2
+            exit 1
+          fi
+          if ! [[ "$project" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
+            echo "Generated Compose project name is invalid" >&2
+            exit 1
+          fi
+          if ! [[ "$token" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Generated Benchmark credential is invalid" >&2
+            exit 1
+          fi
+          if ! [[ "$scenario" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,191}$ ]]; then
+            echo "Generated scenario identifier is invalid" >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          {
+            echo "AGENTX_LIVE_CANCEL_PROJECT=$project"
+            echo "AGENTX_LIVE_CANCEL_SCENARIO=$scenario"
+            echo "AGENTX_BUILD_REVISION=$GITHUB_SHA"
+            echo "AGENTX_BENCHMARK_TOKEN=$token"
+          } >> "$GITHUB_ENV"
+      - name: Render, hash, and verify the isolated topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose \
+            --project-name "$AGENTX_LIVE_CANCEL_PROJECT" \
+            --file docker-compose.live-cancellation.yml \
+            config --format json > /tmp/agentx-live-cancellation-compose.json
+          topology_sha256="$(sha256sum /tmp/agentx-live-cancellation-compose.json | awk '{print $1}')"
+          if ! [[ "$topology_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Rendered topology did not produce a SHA-256 digest" >&2
+            exit 1
+          fi
+          echo "AGENTX_LIVE_CANCEL_TOPOLOGY_SHA256=$topology_sha256" >> "$GITHUB_ENV"
+          node <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('/tmp/agentx-live-cancellation-compose.json', 'utf8'));
+          const expectedServices = ['benchmark', 'core', 'mongo', 'ollama-fixture'];
+          const serviceNames = Object.keys(config.services || {}).sort();
+          if (JSON.stringify(serviceNames) !== JSON.stringify(expectedServices)) {
+            throw new Error(`Unexpected live-cancellation services: ${serviceNames.join(',')}`);
+          }
+          const networkNames = Object.keys(config.networks || {});
+          if (networkNames.length !== 1 || networkNames[0] !== 'live-cancellation'
+              || config.networks['live-cancellation'].internal !== true) {
+            throw new Error('Live cancellation requires one internal-only network');
+          }
+          if (Object.keys(config.volumes || {}).length !== 0
+              || Object.keys(config.secrets || {}).length !== 0
+              || Object.keys(config.configs || {}).length !== 0) {
+            throw new Error('Live cancellation topology must not declare persistent storage, secrets, or configs');
+          }
+          for (const [name, service] of Object.entries(config.services)) {
+            if (JSON.stringify(Object.keys(service.networks || {})) !== JSON.stringify(['live-cancellation'])) {
+              throw new Error(`${name} is not confined to the live-cancellation network`);
+            }
+            if ((service.ports || []).length !== 0
+                || (service.volumes || []).length !== 0
+                || (service.extra_hosts || []).length !== 0
+                || service.network_mode === 'host'
+                || service.privileged === true
+                || Object.hasOwn(service, 'container_name')) {
+              throw new Error(`${name} weakens the isolated topology`);
+            }
+            if (service.restart !== 'no') throw new Error(`${name} must not outlive the gate`);
+          }
+          for (const name of ['core', 'benchmark']) {
+            const service = config.services[name];
+            if (service.environment.AGENTX_PROFILE !== 'full'
+                || service.environment.AGENTX_BUILD_REVISION !== process.env.GITHUB_SHA
+                || service.build?.args?.AGENTX_BUILD_REVISION !== process.env.GITHUB_SHA
+                || service.environment.OLLAMA_HOST !== 'http://ollama-fixture:11434') {
+              throw new Error(`${name} did not retain the exact full-profile fixture contract`);
+            }
+          }
+          if (config.services['ollama-fixture'].read_only !== true
+              || !(config.services.mongo.tmpfs || []).includes('/data/db')) {
+            throw new Error('Ephemeral fixture or Mongo storage contract is invalid');
+          }
+          if (/docker\.sock/i.test(JSON.stringify(config))) {
+            throw new Error('Live cancellation topology must not mount the Docker socket');
+          }
+          NODE
+      - name: Start and seed only the isolated fixture dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose \
+            --project-name "$AGENTX_LIVE_CANCEL_PROJECT" \
+            --file docker-compose.live-cancellation.yml \
+            up --detach --build --wait --wait-timeout 120 mongo ollama-fixture
+          docker compose \
+            --project-name "$AGENTX_LIVE_CANCEL_PROJECT" \
+            --file docker-compose.live-cancellation.yml \
+            exec -T mongo \
+            mongosh --quiet mongodb://127.0.0.1:27017/agentx_product \
+            < e2e/fixtures/live-cancellation-seed.mongodb.js
+      - name: Start the exact-revision Core and Benchmark pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose \
+            --project-name "$AGENTX_LIVE_CANCEL_PROJECT" \
+            --file docker-compose.live-cancellation.yml \
+            up --detach --build --wait --wait-timeout 180 core benchmark
+      - name: Prove runtime isolation and ephemeral storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t container_ids < <(docker container ls --all --quiet \
+            --filter "label=com.docker.compose.project=$AGENTX_LIVE_CANCEL_PROJECT")
+          if [ "${#container_ids[@]}" -ne 4 ]; then
+            echo "Expected exactly four isolated project containers" >&2
+            exit 1
+          fi
+          network_name="${AGENTX_LIVE_CANCEL_PROJECT}_live-cancellation"
+          docker container inspect "${container_ids[@]}" > /tmp/agentx-live-cancellation-containers.json
+          docker network inspect "$network_name" > /tmp/agentx-live-cancellation-network.json
+          AGENTX_LIVE_CANCEL_NETWORK="$network_name" node <<'NODE'
+          const fs = require('fs');
+          const containers = JSON.parse(fs.readFileSync('/tmp/agentx-live-cancellation-containers.json', 'utf8'));
+          const [network] = JSON.parse(fs.readFileSync('/tmp/agentx-live-cancellation-network.json', 'utf8'));
+          const project = process.env.AGENTX_LIVE_CANCEL_PROJECT;
+          const networkName = process.env.AGENTX_LIVE_CANCEL_NETWORK;
+          const expectedServices = ['benchmark', 'core', 'mongo', 'ollama-fixture'];
+          const observedServices = containers.map(container => (
+            container.Config?.Labels?.['com.docker.compose.service']
+          )).sort();
+          if (JSON.stringify(observedServices) !== JSON.stringify(expectedServices)) {
+            throw new Error(`Runtime service set drifted: ${observedServices.join(',')}`);
+          }
+          for (const container of containers) {
+            const service = container.Config.Labels['com.docker.compose.service'];
+            if (container.Config.Labels['com.docker.compose.project'] !== project
+                || container.State?.Running !== true
+                || container.State?.Health?.Status !== 'healthy') {
+              throw new Error(`${service} is not a healthy member of the exact isolated project`);
+            }
+            if (!Array.isArray(container.Mounts) || container.Mounts.length !== 0) {
+              throw new Error(`${service} retained a runtime mount`);
+            }
+            if (container.HostConfig?.NetworkMode !== networkName
+                || container.HostConfig?.Privileged === true
+                || (container.HostConfig?.Binds || []).length !== 0
+                || (container.HostConfig?.Mounts || []).length !== 0
+                || (container.HostConfig?.ExtraHosts || []).length !== 0) {
+              throw new Error(`${service} weakened its runtime isolation`);
+            }
+            const attachedNetworks = Object.keys(container.NetworkSettings?.Networks || {});
+            if (JSON.stringify(attachedNetworks) !== JSON.stringify([networkName])) {
+              throw new Error(`${service} is attached outside the exact internal network`);
+            }
+            if (Object.keys(container.HostConfig?.PortBindings || {}).length !== 0
+                || Object.values(container.NetworkSettings?.Ports || {}).some(bindings => (
+                  Array.isArray(bindings) ? bindings.length !== 0 : bindings !== null
+                ))) {
+              throw new Error(`${service} published a runtime port`);
+            }
+          }
+          if (network?.Name !== networkName
+              || network?.Internal !== true
+              || network?.Labels?.['com.docker.compose.project'] !== project) {
+            throw new Error('Runtime network is not the exact project-scoped internal network');
+          }
+          NODE
+      - name: Observe cancellation and retain a privacy-safe receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          docker compose \
+            --project-name "$AGENTX_LIVE_CANCEL_PROJECT" \
+            --file docker-compose.live-cancellation.yml \
+            exec -T ollama-fixture \
+            node /app/run-live-cancellation.js \
+              --benchmark-origin http://benchmark:3081 \
+              --core-origin http://core:3080 \
+              --fixture-control-origin http://127.0.0.1:11435 \
+              --expected-revision "$GITHUB_SHA" \
+              --expected-profile full \
+              --scenario-run-id "$AGENTX_LIVE_CANCEL_SCENARIO" \
+              --topology-sha256 "$AGENTX_LIVE_CANCEL_TOPOLOGY_SHA256" \
+              --socket-close-budget-ms 1000 \
+              --start-timeout-ms 30000 \
+              --settle-timeout-ms 5000 \
+              --quiescence-ms 2500 \
+              --output /tmp/agentx-live-cancellation.json
+          driver_status=$?
+          set -e
+          docker compose \
+            --project-name "$AGENTX_LIVE_CANCEL_PROJECT" \
+            --file docker-compose.live-cancellation.yml \
+            exec -T ollama-fixture \
+            cat /tmp/agentx-live-cancellation.json \
+            > /tmp/agentx-live-cancellation.json
+          DRIVER_STATUS="$driver_status" node <<'NODE'
+          const fs = require('fs');
+          const { validateLiveCancellationReceipt } = require('./e2e/live-cancellation-receipt');
+          const receipt = JSON.parse(fs.readFileSync('/tmp/agentx-live-cancellation.json', 'utf8'));
+          const errors = validateLiveCancellationReceipt(receipt);
+          if (errors.length > 0) throw new Error(`Invalid live-cancellation receipt: ${errors.join('; ')}`);
+          if (receipt.buildRevision !== process.env.GITHUB_SHA
+              || receipt.topology?.composeConfigHash !== process.env.AGENTX_LIVE_CANCEL_TOPOLOGY_SHA256) {
+            throw new Error('Receipt is not bound to the exact commit and rendered topology');
+          }
+          const driverPassed = process.env.DRIVER_STATUS === '0';
+          if ((driverPassed && receipt.status !== 'pass') || (!driverPassed && receipt.status !== 'fail')) {
+            throw new Error('Driver exit status and receipt status disagree');
+          }
+          if (Object.values(receipt.privacy).some(value => value !== false)) {
+            throw new Error('Live-cancellation receipt is not privacy-safe');
+          }
+          NODE
+          exit "$driver_status"
+      - name: Remove only the isolated cancellation project
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="agentx-live-cancel-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if ! [[ "$project" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
+            echo "Refusing cleanup for an invalid Compose project name" >&2
+            exit 1
+          fi
+          cleanup_status=0
+          if [ -n "${AGENTX_LIVE_CANCEL_PROJECT:-}" ] && [ "$AGENTX_LIVE_CANCEL_PROJECT" != "$project" ]; then
+            echo "Recorded Compose project drifted; cleaning only the exact generated project" >&2
+            cleanup_status=1
+          fi
+          export AGENTX_BUILD_REVISION="${AGENTX_BUILD_REVISION:-$GITHUB_SHA}"
+          export AGENTX_BENCHMARK_TOKEN="${AGENTX_BENCHMARK_TOKEN:-0000000000000000000000000000000000000000000000000000000000000000}"
+          set +e
+          docker compose \
+            --project-name "$project" \
+            --file docker-compose.live-cancellation.yml \
+            down --volumes --remove-orphans --timeout 10
+          down_status=$?
+          set -e
+          if [ "$down_status" -ne 0 ]; then
+            echo "Exact-project Compose cleanup failed" >&2
+            cleanup_status=1
+          fi
+          containers="$(docker container ls --all --quiet --filter "label=com.docker.compose.project=$project")"
+          networks="$(docker network ls --quiet --filter "label=com.docker.compose.project=$project")"
+          volumes="$(docker volume ls --quiet --filter "label=com.docker.compose.project=$project")"
+          if [ -n "$containers" ] || [ -n "$networks" ] || [ -n "$volumes" ]; then
+            echo "Isolated cancellation cleanup left labeled Docker resources" >&2
+            cleanup_status=1
+          fi
+          exit "$cleanup_status"
+      - name: Retain exact-revision live cancellation evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: agentx-live-cancellation-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: /tmp/agentx-live-cancellation.json
+          if-no-files-found: error
+          retention-days: 30
 
   image-builds:
     runs-on: ubuntu-latest

@@ -1,0 +1,154 @@
+services:
+  mongo:
+    image: mongo:7.0.34@sha256:c1a84ab5d0c17deed1e0dba1d24bd7c76e5c7b281145fe536911939b1551754c
+    restart: "no"
+    command: ["mongod", "--bind_ip_all", "--quiet"]
+    tmpfs:
+      - /data/db
+      - /data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks:
+      - live-cancellation
+
+  ollama-fixture:
+    build:
+      context: .
+      dockerfile: docker/live-cancellation-fixture.Dockerfile
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          require('http').get('http://127.0.0.1:11435/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    networks:
+      - live-cancellation
+
+  core:
+    build:
+      context: .
+      dockerfile: docker/core.Dockerfile
+      args:
+        AGENTX_BUILD_REVISION: ${AGENTX_BUILD_REVISION:?AGENTX_BUILD_REVISION is required}
+    restart: "no"
+    tmpfs:
+      - /tmp
+      - /app/logs
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3080
+      AGENTX_PROFILE: full
+      AGENTX_BUILD_REVISION: ${AGENTX_BUILD_REVISION:?AGENTX_BUILD_REVISION is required}
+      MONGODB_URI: mongodb://mongo:27017/agentx_product
+      OLLAMA_HOST: http://ollama-fixture:11434
+      OLLAMA_HOST_NAME: Live cancellation fixture
+      OLLAMA_HOST_2: ""
+      OLLAMA_HOST_2_NAME: ""
+      OLLAMA_HOST_3: ""
+      OLLAMA_HOST_3_NAME: ""
+      BENCHMARK_SERVICE_URL: http://benchmark:3081
+      CORE_PUBLIC_URL: http://core:3080
+      BENCHMARK_PUBLIC_URL: http://benchmark:3081
+      AGENTX_TRUST_INTERNAL_SERVICE_HOSTS: "true"
+      AGENTX_TRUST_LOOPBACK_PROXY_UI: "false"
+      AGENTX_BENCHMARK_TOKEN: ${AGENTX_BENCHMARK_TOKEN:?AGENTX_BENCHMARK_TOKEN is required}
+      BACKUP_DIR: /tmp/backups
+      BACKUP_CONFIG_ROOT: /app/product-config
+      BACKUP_SCHEDULE_ENABLED: "false"
+      CORE_LEADER_LEASE_ENABLED: "false"
+      # Keep the fixture generation lane exclusive to this scenario. The
+      # production watchdog's first probe otherwise lands at 60s and can race a
+      # slow image build/startup before the driver establishes its fresh state.
+      WATCHDOG_INTERVAL_MS: "3600000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      ollama-fixture:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          require('http').get('http://127.0.0.1:3080/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+    networks:
+      - live-cancellation
+
+  benchmark:
+    build:
+      context: .
+      dockerfile: docker/benchmark.Dockerfile
+      args:
+        AGENTX_BUILD_REVISION: ${AGENTX_BUILD_REVISION:?AGENTX_BUILD_REVISION is required}
+    restart: "no"
+    tmpfs:
+      - /tmp
+      - /app/logs
+      - /app/config-data
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3081
+      AGENTX_PROFILE: full
+      AGENTX_BUILD_REVISION: ${AGENTX_BUILD_REVISION:?AGENTX_BUILD_REVISION is required}
+      MONGODB_URI: mongodb://mongo:27017/agentx_product
+      OLLAMA_HOST: http://ollama-fixture:11434
+      OLLAMA_HOST_NAME: Live cancellation fixture
+      OLLAMA_HOST_2: ""
+      OLLAMA_HOST_2_NAME: ""
+      OLLAMA_HOST_3: ""
+      OLLAMA_HOST_3_NAME: ""
+      CORE_URL: http://core:3080
+      CORE_PUBLIC_URL: http://core:3080
+      BENCHMARK_PUBLIC_URL: http://benchmark:3081
+      JUDGE_HOST: http://ollama-fixture:11434
+      JUDGE_MODEL: agentx-cancel-judge:1
+      JUDGE_DEFAULTS_PATH: /tmp/judge-host-defaults.json
+      AGENTX_OLLAMA_ALLOWED_TARGETS: http://ollama-fixture:11434
+      AGENTX_TRUST_INTERNAL_SERVICE_HOSTS: "true"
+      AGENTX_TRUST_LOOPBACK_PROXY_UI: "false"
+      AGENTX_BENCHMARK_TOKEN: ${AGENTX_BENCHMARK_TOKEN:?AGENTX_BENCHMARK_TOKEN is required}
+      AGENTX_PLATFORM_EVENT_TOKEN: ""
+    depends_on:
+      mongo:
+        condition: service_healthy
+      ollama-fixture:
+        condition: service_healthy
+      core:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          require('http').get('http://127.0.0.1:3081/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+    networks:
+      - live-cancellation
+
+networks:
+  live-cancellation:
+    internal: true

@@ -15,16 +15,17 @@
     async function loadAlerts() {
         const body = document.getElementById('nc-alerts-body');
         if (!body) return;
+        shared.setSectionBusy(body, true);
 
         try {
-            const [alertsRes, summaryRes, rulesRes] = await Promise.all([
+            const [alertsRes, rulesRes] = await Promise.all([
                 shared.fetchJson('/api/alerts?status=active&limit=20'),
-                shared.fetchJson('/api/alerts/stats/summary?status=active'),
                 shared.fetchJson('/api/alerts/rules').catch(() => ({ data: { rules: [] } })),
             ]);
 
-            const alerts = alertsRes.data || alertsRes || [];
-            const summary = summaryRes.data?.statistics || summaryRes.data || summaryRes || {};
+            const alertData = alertsRes.data || alertsRes || {};
+            const alerts = Array.isArray(alertData) ? alertData : (alertData.alerts || []);
+            const summary = Array.isArray(alertData) ? {} : (alertData.summary || {});
             const rules = (rulesRes.data && rulesRes.data.rules) || [];
             const detectorCoverage = rulesRes.data?.detectorCoverage || {
                 active: rules.filter(r => r.detectorState === 'active' || (!r.detectorState && r.enabled)).length,
@@ -71,9 +72,15 @@
                 </div>`;
 
             // Active alerts table
-            const alertList = Array.isArray(alerts) ? alerts : (alerts.alerts || []);
+            const alertList = Array.isArray(alerts) ? alerts : [];
             if (alertList.length > 0) {
-                html += `<h4 style="color:var(--text-bright);margin:0 0 8px"><i class="fa-solid fa-bell"></i> Active Alerts</h4>`;
+                const activeTotal = Number.isFinite(Number(summary.activeCount))
+                    ? Number(summary.activeCount)
+                    : alertList.length;
+                html += `<h4 style="color:var(--text-bright);margin:0 0 8px"><i class="fa-solid fa-bell"></i> Active Alerts <span class="nc-muted">(${activeTotal})</span></h4>`;
+                if (activeTotal > alertList.length) {
+                    html += `<div class="nc-muted nc-fs-sm" style="margin:-4px 0 8px">Showing ${alertList.length} of ${activeTotal} active alerts. Severity cards count the complete active set.</div>`;
+                }
                 html += `<table class="nc-table"><thead><tr>
                     <th>Severity</th><th>Alert</th><th>Where</th><th>Count</th><th>Last Seen</th><th>Actions</th>
                 </tr></thead><tbody>`;
@@ -122,7 +129,9 @@
             attachAlertHandlers(body);
             attachRuleHandlers(body, rules);
         } catch (err) {
-            body.innerHTML = `<p class="nc-muted" style="text-align:center;padding:16px">Alert service unavailable</p>`;
+            shared.renderSectionError(body, 'Alert service unavailable');
+        } finally {
+            shared.finishSectionLoad(body);
         }
 
         if (!_poller) {
@@ -385,8 +394,14 @@
         body.querySelectorAll('.nc-rule-delete').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const ruleId = btn.dataset.rule;
-                if (!confirm('Delete rule "' + ruleId + '"?')) return;
-                await shared.fetchJson(`/api/alerts/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' });
+                const headers = await window.AgentXTypedConfirmation.confirm({
+                    action: 'DELETE ALERT RULE',
+                    resource: ruleId,
+                    title: 'Delete alert rule',
+                    description: `Delete alert rule “${ruleId}”? Built-in rules remain protected, but a custom rule cannot be recovered.`
+                });
+                if (!headers) return;
+                await shared.fetchJson(`/api/alerts/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE', headers });
                 loadAlerts();
             });
         });

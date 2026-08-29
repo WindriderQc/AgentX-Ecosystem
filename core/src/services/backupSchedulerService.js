@@ -16,6 +16,10 @@ function positiveMs(value, fallback, minimum = 1000) {
   return Number.isFinite(parsed) && parsed >= minimum ? Math.floor(parsed) : fallback;
 }
 
+function configSource(value) {
+  return value === undefined || value === null || String(value).trim() === '' ? 'default' : 'env';
+}
+
 function createBackupScheduler(options = {}) {
   const env = options.env || process.env;
   const service = options.backupService || backupService;
@@ -26,9 +30,13 @@ function createBackupScheduler(options = {}) {
 
   const config = Object.freeze({
     enabled: flagEnabled(env.BACKUP_SCHEDULE_ENABLED),
+    enabledSource: configSource(env.BACKUP_SCHEDULE_ENABLED),
     intervalMs: positiveMs(env.BACKUP_INTERVAL_MS, DEFAULT_INTERVAL_MS),
+    intervalMsSource: configSource(env.BACKUP_INTERVAL_MS),
     startupDelayMs: positiveMs(env.BACKUP_STARTUP_DELAY_MS, DEFAULT_STARTUP_DELAY_MS, 0),
-    retryDelayMs: positiveMs(env.BACKUP_RETRY_DELAY_MS, DEFAULT_RETRY_DELAY_MS)
+    startupDelayMsSource: configSource(env.BACKUP_STARTUP_DELAY_MS),
+    retryDelayMs: positiveMs(env.BACKUP_RETRY_DELAY_MS, DEFAULT_RETRY_DELAY_MS),
+    retryDelayMsSource: configSource(env.BACKUP_RETRY_DELAY_MS)
   });
 
   let timer = null;
@@ -160,6 +168,7 @@ module.exports = {
   createBackupScheduler,
   flagEnabled,
   positiveMs,
+  configSource,
   DEFAULT_INTERVAL_MS,
   DEFAULT_STARTUP_DELAY_MS,
   DEFAULT_RETRY_DELAY_MS

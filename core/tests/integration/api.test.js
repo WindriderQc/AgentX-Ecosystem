@@ -90,10 +90,41 @@ describe('API Routes Integration', () => {
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].id).toBe('507f1f77bcf86cd799439011');
       expect(res.body.data[0].date).toBe('2026-08-20T02:00:00.000Z');
-      expect(mockFind).toHaveBeenCalledWith({
+      expect(mockFind).toHaveBeenCalledWith(expect.objectContaining({
         userId: 'default',
-        'lifecycle.status': { $ne: 'archived' }
-      });
+        'lifecycle.status': { $ne: 'archived' },
+        $nor: expect.any(Array)
+      }));
+    });
+
+    it('keeps exact internal canary artifacts stored but out of Playground history', async () => {
+      const mockConversations = [
+        {
+          _id: { toHexString: () => '507f1f77bcf86cd799439011' },
+          title: 'Reply exactly FINAL_CORE_QWEN38_OK',
+          updatedAt: new Date('2026-08-20T02:00:00.000Z'),
+          model: 'qwen',
+          messages: [{ role: 'user', content: 'Reply exactly FINAL_CORE_QWEN38_OK' }]
+        },
+        {
+          _id: { toHexString: () => '507f1f77bcf86cd799439012' },
+          title: 'Plan a benchmark canary rollout',
+          updatedAt: new Date('2026-08-20T01:00:00.000Z'),
+          model: 'qwen',
+          messages: [{ role: 'user', content: 'Help with a canary rollout.' }]
+        }
+      ];
+      const mockFind = Conversation.__mocks.find;
+      const mockSelect = jest.fn().mockResolvedValue(mockConversations);
+      const mockLimit = jest.fn().mockReturnValue({ select: mockSelect });
+      const mockSort = jest.fn().mockReturnValue({ limit: mockLimit });
+      mockFind.mockReturnValue({ sort: mockSort });
+
+      const res = await request(app).get('/api/history').expect(200);
+
+      expect(res.body.data.map((item) => item.title))
+        .toEqual(['Plan a benchmark canary rollout']);
+      expect(mockConversations).toHaveLength(2);
     });
 
     it('should handle errors gracefully', async () => {

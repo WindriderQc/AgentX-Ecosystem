@@ -28,7 +28,8 @@ jest.mock('../../src/helpers/ollamaModelIdentity', () => ({
   isSameOllamaModel: jest.fn((left, right) => left === right)
 }));
 jest.mock('../../src/helpers/ollamaHostConfig', () => ({
-  normalizeHostUrl: jest.fn((hostUrl) => hostUrl)
+  normalizeHostUrl: jest.fn((hostUrl) => hostUrl),
+  getConfiguredHosts: jest.fn(() => [])
 }));
 jest.mock('../../src/services/modelContextResolver', () => ({
   normalizeModelName: jest.fn((name) => String(name || '').replace(/:latest$/i, '')),
@@ -90,6 +91,17 @@ describe('contextProbeService', () => {
         context_length: 262144
       }]
     }));
+  });
+
+  test('rejects an explicit metadata host before any Ollama context probe call', async () => {
+    await expect(contextProbeService.probeModelContext('gemma4:26b', {
+      hostUrl: 'http://169.254.169.254:11434',
+      acknowledgeMaintenance: true
+    })).rejects.toMatchObject({ code: 'OLLAMA_TARGET_REJECTED', statusCode: 400 });
+
+    expect(ollamaClient.showModel).not.toHaveBeenCalled();
+    expect(ollamaClient.generate).not.toHaveBeenCalled();
+    expect(ollamaClient.listRunning).not.toHaveBeenCalled();
   });
 
   it('allows a seven-minute client budget for full-window context probes', () => {

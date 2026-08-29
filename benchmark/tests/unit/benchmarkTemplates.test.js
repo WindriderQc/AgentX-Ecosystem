@@ -12,12 +12,24 @@ const BenchmarkBatch = require('../../models/BenchmarkBatch');
 
 // Use supertest to test Express routes
 const express = require('express');
-const request = require('supertest');
 const templatesRouter = require('../../routes/benchmark/templates');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 
-const app = express();
-app.use(express.json());
-app.use('/api/benchmark', templatesRouter);
+const expressApp = express();
+expressApp.use(express.json());
+expressApp.use('/api/benchmark', templatesRouter);
+
+let httpHarness;
+let api;
+
+beforeAll(async () => {
+    httpHarness = await startTestHttpHarness(expressApp);
+    api = httpHarness.request;
+});
+
+afterAll(async () => {
+    await httpHarness?.close();
+});
 
 const VALID_ID = '507f1f77bcf86cd799439011';
 const INVALID_ID = 'not-an-objectid';
@@ -35,7 +47,7 @@ describe('benchmark templates routes', () => {
                 })
             });
 
-            const res = await request(app).get('/api/benchmark/templates');
+            const res = await api.get('/api/benchmark/templates');
             expect(res.status).toBe(200);
             expect(res.body.status).toBe('success');
             expect(res.body.data).toHaveLength(1);
@@ -49,7 +61,7 @@ describe('benchmark templates routes', () => {
                 })
             });
 
-            const res = await request(app).get('/api/benchmark/templates');
+            const res = await api.get('/api/benchmark/templates');
             expect(res.status).toBe(500);
             expect(res.body.status).toBe('error');
         });
@@ -61,7 +73,7 @@ describe('benchmark templates routes', () => {
                 _id: VALID_ID, name: 'Test', config: { host: 'h' }, tags: []
             });
 
-            const res = await request(app)
+            const res = await api
                 .post('/api/benchmark/templates')
                 .send({ name: 'Test', config: { host: 'h' } });
 
@@ -73,7 +85,7 @@ describe('benchmark templates routes', () => {
         });
 
         it('rejects missing name', async () => {
-            const res = await request(app)
+            const res = await api
                 .post('/api/benchmark/templates')
                 .send({ config: {} });
 
@@ -82,7 +94,7 @@ describe('benchmark templates routes', () => {
         });
 
         it('rejects name over 200 chars', async () => {
-            const res = await request(app)
+            const res = await api
                 .post('/api/benchmark/templates')
                 .send({ name: 'x'.repeat(201) });
 
@@ -100,7 +112,7 @@ describe('benchmark templates routes', () => {
             });
             BenchmarkTemplate.create.mockResolvedValue({ _id: 'new', name: 'From Batch' });
 
-            const res = await request(app)
+            const res = await api
                 .post('/api/benchmark/templates')
                 .send({ name: 'From Batch', source_batch_id: VALID_ID });
 
@@ -113,7 +125,7 @@ describe('benchmark templates routes', () => {
         });
 
         it('rejects invalid source_batch_id', async () => {
-            const res = await request(app)
+            const res = await api
                 .post('/api/benchmark/templates')
                 .send({ name: 'Test', source_batch_id: INVALID_ID });
 
@@ -125,7 +137,7 @@ describe('benchmark templates routes', () => {
                 lean: jest.fn().mockResolvedValue(null)
             });
 
-            const res = await request(app)
+            const res = await api
                 .post('/api/benchmark/templates')
                 .send({ name: 'Test', source_batch_id: VALID_ID });
 
@@ -135,7 +147,7 @@ describe('benchmark templates routes', () => {
         it('sanitizes tags', async () => {
             BenchmarkTemplate.create.mockResolvedValue({ _id: VALID_ID, name: 'T' });
 
-            await request(app)
+            await api
                 .post('/api/benchmark/templates')
                 .send({ name: 'T', tags: ['good', 'a'.repeat(100)] });
 
@@ -150,7 +162,7 @@ describe('benchmark templates routes', () => {
                 lean: jest.fn().mockResolvedValue({ _id: VALID_ID, name: 'Found' })
             });
 
-            const res = await request(app).get(`/api/benchmark/templates/${VALID_ID}`);
+            const res = await api.get(`/api/benchmark/templates/${VALID_ID}`);
             expect(res.status).toBe(200);
             expect(res.body.data.name).toBe('Found');
         });
@@ -160,29 +172,64 @@ describe('benchmark templates routes', () => {
                 lean: jest.fn().mockResolvedValue(null)
             });
 
-            const res = await request(app).get(`/api/benchmark/templates/${VALID_ID}`);
+            const res = await api.get(`/api/benchmark/templates/${VALID_ID}`);
             expect(res.status).toBe(404);
         });
 
         it('rejects invalid ID', async () => {
-            const res = await request(app).get(`/api/benchmark/templates/${INVALID_ID}`);
+            const res = await api.get(`/api/benchmark/templates/${INVALID_ID}`);
             expect(res.status).toBe(400);
         });
     });
 
     describe('DELETE /api/benchmark/templates/:id', () => {
-        it('deletes template', async () => {
+        const CONFIRMATION = `DELETE TEMPLATE ${VALID_ID}`;
+
+        it('rejects a missing exact confirmation before deleting', async () => {
+            const res = await api.delete(`/api/benchmark/templates/${VALID_ID}`);
+
+            expect(res.status).toBe(400);
+            expect(res.body).toMatchObject({
+                status: 'error',
+                code: 'DESTRUCTIVE_CONFIRMATION_REQUIRED',
+                confirmation: {
+                    kind: 'exact-phrase',
+                    field: 'confirm',
+                    expected: CONFIRMATION
+                }
+            });
+            expect(BenchmarkTemplate.findByIdAndDelete).not.toHaveBeenCalled();
+        });
+
+        it('rejects a wrong exact confirmation before deleting', async () => {
+            const res = await api
+                .delete(`/api/benchmark/templates/${VALID_ID}`)
+                .send({ confirm: 'DELETE TEMPLATE' });
+
+            expect(res.status).toBe(400);
+            expect(res.body.code).toBe('DESTRUCTIVE_CONFIRMATION_REQUIRED');
+            expect(BenchmarkTemplate.findByIdAndDelete).not.toHaveBeenCalled();
+        });
+
+        it('deletes the template with the target-bound exact confirmation', async () => {
             BenchmarkTemplate.findByIdAndDelete.mockResolvedValue({ _id: VALID_ID });
 
-            const res = await request(app).delete(`/api/benchmark/templates/${VALID_ID}`);
+            const res = await api
+                .delete(`/api/benchmark/templates/${VALID_ID}`)
+                .send({ confirm: CONFIRMATION });
+
             expect(res.status).toBe(200);
             expect(res.body.message).toMatch(/deleted/i);
+            expect(BenchmarkTemplate.findByIdAndDelete).toHaveBeenCalledWith(VALID_ID);
         });
 
         it('returns 404 for missing template', async () => {
             BenchmarkTemplate.findByIdAndDelete.mockResolvedValue(null);
 
-            const res = await request(app).delete(`/api/benchmark/templates/${VALID_ID}`);
+            const res = await api
+                .delete(`/api/benchmark/templates/${VALID_ID}`)
+                .send({ confirm: CONFIRMATION });
+
             expect(res.status).toBe(404);
         });
     });
@@ -193,7 +240,7 @@ describe('benchmark templates routes', () => {
                 _id: VALID_ID, config: { host: 'h' }, run_count: 2
             });
 
-            const res = await request(app).post(`/api/benchmark/templates/${VALID_ID}/use`);
+            const res = await api.post(`/api/benchmark/templates/${VALID_ID}/use`);
             expect(res.status).toBe(200);
             expect(BenchmarkTemplate.findByIdAndUpdate).toHaveBeenCalledWith(
                 VALID_ID,
@@ -205,7 +252,7 @@ describe('benchmark templates routes', () => {
         it('returns 404 for missing template', async () => {
             BenchmarkTemplate.findByIdAndUpdate.mockResolvedValue(null);
 
-            const res = await request(app).post(`/api/benchmark/templates/${VALID_ID}/use`);
+            const res = await api.post(`/api/benchmark/templates/${VALID_ID}/use`);
             expect(res.status).toBe(404);
         });
     });

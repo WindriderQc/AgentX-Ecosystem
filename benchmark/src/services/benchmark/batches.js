@@ -8,7 +8,7 @@ const mongoose = require('mongoose');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const { JUDGE_CONFIG } = require('../qualityScorer');
-const { deriveTerminalBatchStatus, deriveTerminalBatchOutcome } = require('./batchHelpers');
+const { deriveTerminalBatchOutcome } = require('./batchHelpers');
 
 /**
  * Compute percentile/summary stats from a raw array of numbers.
@@ -486,65 +486,23 @@ async function getBatch(batchId, {
     const batchFailedCount = Number(batch.failed) || 0;
     const hasCounterMismatch = actualResultsCount !== batchCompletedCount || actualFailedCount !== batchFailedCount;
 
-    // Only reconcile counters when batch is NOT actively running.
-    // During execution, $inc operations on completed/failed are in flight — a $set here
-    // would race and roll back progress (same pattern as judge counter fix).
-    let isActiveExecution = ['running', 'judging'].includes(batch.status);
-
-    // STATUS RECONCILIATION: If all tests finished but the batch document still
-    // says 'running', the markAsCompleted() call in execution.js hasn't landed yet
-    // (or crashed). Reconcile status so the API never returns a stale 'running'
-    // when progress is already 100%.
+    // Project terminal truth from persisted results without mutating on GET.
+    // Execution, startup recovery, and the explicit POST reconcile action own
+    // durable state transitions.
     const totalTests = Number(batch.total_tests) || 0;
     const hasPendingJudgeWork = effectiveJudgeTotal > 0 && judgeCompletedCount < effectiveJudgeTotal;
+    let statusMismatch = false;
     if (batch.status === 'running' && totalTests > 0 && actualResultsCount >= totalTests && !hasPendingJudgeWork) {
         const outcome = deriveTerminalBatchOutcome({
             totalTests,
             completed: actualResultsCount,
             failed: actualFailedCount
         });
-        logger.info('Batch status reconciliation: all tests done but status still running', {
-            batchId, actualResults: actualResultsCount, totalTests, reconciledStatus: outcome.status, failureReason: outcome.failureReason
-        });
+        statusMismatch = true;
         batch.status = outcome.status;
         batch.completed_at = batch.completed_at || new Date();
         batch.active_slot = null;
-        isActiveExecution = false;
-        const updateSet = { status: outcome.status, completed_at: batch.completed_at, active_slot: null };
-        if (outcome.failureReason) updateSet.failure_reason = outcome.failureReason;
-        await BenchmarkBatch.updateOne(
-            { _id: batchId, status: 'running' },
-            { $set: updateSet }
-        );
-    }
-
-    if (hasCounterMismatch && !isActiveExecution) {
-        const completedDiff = batchCompletedCount - actualResultsCount;
-        const failedDiff = batchFailedCount - actualFailedCount;
-        const mismatchMagnitude = Math.max(Math.abs(completedDiff), Math.abs(failedDiff));
-
-        const logMethod = mismatchMagnitude >= 5 ? 'warn' : 'info';
-
-        logger[logMethod]('Batch counter mismatch detected; reconciling from results', {
-            batchId,
-            status: batch.status,
-            batchCompleted: batchCompletedCount,
-            actualResults: actualResultsCount,
-            batchFailed: batchFailedCount,
-            actualFailed: actualFailedCount,
-            completedDiff,
-            failedDiff
-        });
-
-        await BenchmarkBatch.updateOne(
-            { _id: batchId },
-            {
-                $set: {
-                    completed: actualResultsCount,
-                    failed: actualFailedCount
-                }
-            }
-        );
+        if (outcome.failureReason) batch.failure_reason = outcome.failureReason;
     }
 
     // Use actual results count for progress calculation to ensure accuracy
@@ -614,6 +572,7 @@ async function getBatch(batchId, {
         full_pass_rate: fullPassRate,
         full_passed: fullPassedCount,
         _countMismatch: hasCounterMismatch,  // Debug flag
+        _statusMismatch: statusMismatch,
         per_model_counters: perModelCounters,
         results_meta: {
             returned: returnedResultsCount,

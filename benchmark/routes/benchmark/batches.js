@@ -9,6 +9,10 @@ const logger = require('../../config/logger');
 const benchmarkService = require('../../src/services/benchmark');
 const { judgeBatch, preflightJudgeBatch, stopJudging, stopPersistedJudging, getJudgingStatus } = require('../../src/services/benchmark/judging');
 const { resolveMultiJudge } = require('../../src/services/benchmark/resolveMultiJudge');
+const {
+    resolveReadyJudgeTarget,
+    judgeUnavailablePayload
+} = require('../../src/services/benchmark/judgeReadiness');
 const { validateObjectId } = require('../../src/helpers/objectIdValidator');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const BenchmarkTimelineEntry = require('../../models/BenchmarkTimelineEntry');
@@ -72,6 +76,37 @@ router.get('/batch/:id', async (req, res) => {
 
         const statusCode = err.message.includes('not found') ? 404 : 500;
         res.status(statusCode).json({ status: 'error', error: err.message });
+    }
+});
+
+/**
+ * POST /api/benchmark/batch/:id/reconcile
+ * Persist authoritative result and judge counters for a terminal batch.
+ */
+router.post('/batch/:id/reconcile', async (req, res) => {
+    try {
+        if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
+
+        const batch = await BenchmarkBatch.findById(req.params.id);
+        if (!batch) {
+            return res.status(404).json({ status: 'error', error: 'Batch not found' });
+        }
+        if (['running', 'judging'].includes(batch.status) || batch.judge_status === 'running') {
+            return res.status(409).json({
+                status: 'error',
+                error: 'Active batches must finish or use the explicit recovery action before reconciliation'
+            });
+        }
+
+        await batch.reconcileFromResults({
+            status: batch.status,
+            timelineEvent: 'manual_reconcile'
+        });
+        const data = await benchmarkService.getBatch(req.params.id);
+        res.json({ status: 'success', data });
+    } catch (err) {
+        logger.error('Failed to reconcile batch', { error: err.message, batchId: req.params.id });
+        res.status(500).json({ status: 'error', error: err.message });
     }
 });
 
@@ -326,10 +361,23 @@ router.post('/batch/:id/rejudge-pending', async (req, res) => {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
         const requestBody = req.body || {};
         const concurrency = parsePositiveInt(requestBody.concurrency, 2);
-        const judgeConfig = requestBody.judge_config || {};
+        const requestedJudgeConfig = requestBody.judge_config || {};
         const multiJudge = resolveMultiJudge(requestBody.multi_judge);
 
         const preflight = await preflightJudgeBatch(req.params.id, { force: false });
+        const readiness = await resolveReadyJudgeTarget({
+            host: requestedJudgeConfig.host || preflight.judgeConfig?.host,
+            model: requestedJudgeConfig.model || preflight.judgeConfig?.model
+        });
+        if (!readiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(readiness, 'Pending-result judging'));
+        }
+        const judgeConfig = {
+            ...(preflight.judgeConfig || {}),
+            ...requestedJudgeConfig,
+            host: readiness.target.host,
+            model: readiness.target.model
+        };
 
         logger.info('Rejudging pending results', {
             batchId: req.params.id,
@@ -372,16 +420,28 @@ router.post('/batch/:id/judge', async (req, res) => {
         const requestBody = req.body || {};
         const concurrency = parsePositiveInt(requestBody.concurrency, 2);
         const force = parseBoolean(requestBody.force, false);
-        const judgeConfig = requestBody.judge_config || {};
+        const requestedJudgeConfig = requestBody.judge_config || {};
         const multiJudge = resolveMultiJudge(requestBody.multi_judge);
-
+        const preflight = await preflightJudgeBatch(req.params.id, { force });
+        const readiness = await resolveReadyJudgeTarget({
+            host: requestedJudgeConfig.host || preflight.judgeConfig?.host,
+            model: requestedJudgeConfig.model || preflight.judgeConfig?.model
+        });
+        if (!readiness.ready) {
+            return res.status(503).json(judgeUnavailablePayload(readiness, 'Batch judging'));
+        }
+        const judgeConfig = {
+            ...(preflight.judgeConfig || {}),
+            ...requestedJudgeConfig,
+            host: readiness.target.host,
+            model: readiness.target.model
+        };
         const options = {
             judgeConfig,
             concurrency,
             force,
             multiJudge
         };
-        const preflight = await preflightJudgeBatch(req.params.id, { force });
 
         // Start judging in background
         judgeBatch(req.params.id, options).catch(err => {

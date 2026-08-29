@@ -7,7 +7,7 @@
         const body = document.getElementById('sectionPerformanceBody');
         if (!body) return;
 
-        body.innerHTML = '<div class="nc-section-placeholder"><i class="fas fa-spinner fa-spin"></i> Loading performance data...</div>';
+        shared.renderSectionLoading(body, 'Loading performance data...');
 
         let html = '';
 
@@ -35,10 +35,11 @@
                 html += '<p style="color:#585f73;font-style:italic">No baseline data available</p>';
             }
         } catch (_) {
-            html += '<p style="color:#585f73;font-style:italic">No baseline data available</p>';
+            html += '<p class="nc-section-error" role="alert" style="font-style:italic">Performance baseline data unavailable</p>';
         }
 
         body.innerHTML = html || '<div class="nc-section-placeholder" style="color:var(--muted)"><i class="fas fa-chart-line"></i> No performance data available</div>';
+        shared.finishSectionLoad(body);
     }
 
     window.NerveCenterPerformance = { loadPerformance };

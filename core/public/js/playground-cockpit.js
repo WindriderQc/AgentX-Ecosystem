@@ -7,6 +7,7 @@
   if (!root) return;
 
   const COLLAPSE_KEY = 'agentx.playground.cockpit.collapsed.v1';
+  const COMPACT_DISCLOSURE_QUERY = '(max-width: 720px), (max-height: 640px)';
   const MODE_META = {
     quick: { label: 'Quick chat', task: 'Fast route', tone: 'router' },
     standard: { label: 'Standard chat', task: 'Core router', tone: 'router' },
@@ -202,7 +203,7 @@
     const demoProfile = document.body.dataset.agentxProfile === 'demo';
 
     const [portalResult, ecosystemResult, hostsResult] = await Promise.allSettled([
-      getJson('/api/portal/health'),
+      demoProfile ? getJson('/api/portal/health') : Promise.resolve(null),
       demoProfile ? Promise.resolve(null) : getJson('/api/nerve-center/ecosystem'),
       getJson('/api/ollama-hosts', 12_000),
     ]);
@@ -212,23 +213,32 @@
     const ecosystem = ecosystemEnvelope?.status === 'success' ? ecosystemEnvelope.data : null;
     const hostEnvelope = hostsResult.status === 'fulfilled' ? hostsResult.value : null;
     const hosts = Array.isArray(hostEnvelope?.data?.hosts) ? hostEnvelope.data.hosts : [];
-    const services = Array.isArray(portal?.services) ? portal.services : [];
+    const services = Array.isArray(ecosystem?.services)
+      ? ecosystem.services
+      : (Array.isArray(portal?.services) ? portal.services : []);
 
     renderHosts(hosts);
 
-    const total = Number(portal?.summary?.total || services.length || 0);
-    const healthy = Number(portal?.summary?.healthy || services.filter((service) => service.status === 'ok').length || 0);
-    const portalStatus = portal?.summary?.status || (portal ? 'degraded' : 'error');
+    const serviceHealth = ecosystem?.serviceHealth || portal?.summary || null;
+    const total = Number(serviceHealth?.total || services.length || 0);
+    const healthy = Number(serviceHealth?.healthy || services.filter((service) => service.status === 'ok').length || 0);
+    const portalStatus = serviceHealth?.status || (portal || ecosystem ? 'degraded' : 'error');
+    const identityConsistency = ecosystem?.identityConsistency || portal?.consistency || null;
     const onlineHosts = Number(ecosystem?.health?.onlineHosts ?? hosts.filter((host) => host.available).length);
     const configuredHosts = Number(ecosystem?.health?.configuredHosts ?? hosts.length);
     const observedModels = Number(ecosystem?.health?.observedModels ?? new Set(hosts.flatMap((host) => host.installedModels || host.models || [])).size);
 
-    setText(elements.serviceSummary, total ? `${healthy}/${total} product services ready` : 'Product health unavailable');
+    const identitySuffix = identityConsistency?.status === 'degraded'
+      ? ' · deployment mismatch'
+      : (identityConsistency?.status === 'unverified' ? ' · build unverified' : '');
+    setText(elements.serviceSummary, total
+      ? `${healthy}/${total} product services ready${identitySuffix}`
+      : 'Product health unavailable');
     setText(elements.fleetSummary, `${onlineHosts}/${configuredHosts} hosts online · ${observedModels} observed models`);
     setText(elements.updated, `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
 
     if (!portal && !ecosystem && !hosts.length) root.dataset.state = 'error';
-    else if (portalStatus !== 'ok' || ecosystem?.health?.status === 'degraded' || hosts.some((host) => !host.available)) root.dataset.state = 'degraded';
+    else if (portalStatus !== 'ok' || identityConsistency?.status === 'degraded' || ecosystem?.health?.status === 'degraded' || hosts.some((host) => !host.available)) root.dataset.state = 'degraded';
     else root.dataset.state = 'ok';
 
     if (elements.refresh) elements.refresh.disabled = false;
@@ -264,6 +274,11 @@
   }
 
   function init() {
+    const routingLab = root.closest('.chat-routing-lab');
+    if (routingLab && window.matchMedia(COMPACT_DISCLOSURE_QUERY).matches) {
+      routingLab.removeAttribute('open');
+    }
+
     let collapsed = false;
     try { collapsed = window.localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { /* storage is optional */ }
     setCollapsed(collapsed, false);

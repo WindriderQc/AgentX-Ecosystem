@@ -71,6 +71,8 @@ kbd { display: inline-grid; min-width: 20px; height: 20px; place-items: center; 
 .mr-runtime-tile > small { color: rgba(225,231,245,.56); }
 .mr-runtime-attention { border-color: rgba(240,117,117,.35); }
 .mr-runtime-attention > div i { color: #f48181; }
+.mr-runtime-stale { border-color: rgba(255,189,102,.38); }
+.mr-runtime-stale > div i { color: #ffbd66; }
 .mr-runtime-not_seen > div i { color: rgba(225,231,245,.3); }
 .mr-quality-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .mr-quality-metric { min-height: 67px; padding: 8px; border-radius: 8px; background: rgba(10,16,27,.3); }

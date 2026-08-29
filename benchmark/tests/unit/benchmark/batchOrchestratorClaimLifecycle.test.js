@@ -128,8 +128,9 @@ jest.mock('../../../src/helpers/ollamaResponseHandler', () => ({
     extractThinkingBlocks: jest.fn((text) => ({ content: text, thinking: null }))
 }));
 
+const mockJudgeResult = jest.fn();
 jest.mock('../../../src/services/benchmark/judging', () => ({
-    judgeResult: jest.fn()
+    judgeResult: (...args) => mockJudgeResult(...args)
 }));
 
 jest.mock('../../../src/services/qualityScorer', () => ({
@@ -161,21 +162,29 @@ jest.mock('../../../models/BenchmarkTimelineEntry', () => ({
 
 jest.mock('../../../models/JudgeQueueEntry', () => ({
     create: jest.fn(() => Promise.resolve({ _id: 'queue-1' })),
-    updateOne: jest.fn(() => Promise.resolve())
+    updateOne: jest.fn(() => Promise.resolve()),
+    updateMany: jest.fn(() => Promise.resolve())
 }));
 
 const mockWaitForCapacity = jest.fn();
 const mockAdd = jest.fn();
 const mockGetStatus = jest.fn();
 const mockDrain = jest.fn();
+const mockCancel = jest.fn();
 jest.mock('../../../src/services/benchmark/ConcurrencyQueue', () => jest.fn().mockImplementation(() => ({
     waitForCapacity: (...args) => mockWaitForCapacity(...args),
     add: (...args) => mockAdd(...args),
     getStatus: (...args) => mockGetStatus(...args),
-    drain: (...args) => mockDrain(...args)
+    drain: (...args) => mockDrain(...args),
+    cancel: (...args) => mockCancel(...args),
+    get cancelled() { return mockCancel.mock.calls.length > 0; }
 })));
 
-const { runBatchOrchestrator } = require('../../../src/services/benchmark/batchOrchestrator');
+const {
+    runBatchOrchestrator,
+    abortActiveBatchRequests,
+    _getActiveBatchRequestCount: getActiveBatchRequestCount
+} = require('../../../src/services/benchmark/batchOrchestrator');
 const { estimateBenchmarkClaimDurationMs } = require('../../../src/services/benchmark/benchmarkClaimLifecycle');
 
 function deferred() {
@@ -211,6 +220,27 @@ function setResumeCheckpoint({ completedPairs, lastModel, lastPrompt, currentBat
                 lean: jest.fn().mockResolvedValue({ status: 'running' })
             })
         };
+    });
+}
+
+function setRunnableBatchLookup() {
+    const currentBatch = {
+        completed: 0,
+        select: jest.fn().mockReturnValue({
+            lean: jest.fn().mockResolvedValue({ status: 'running' })
+        })
+    };
+    let firstLookup = true;
+    mockFindById.mockImplementation(() => {
+        if (firstLookup) {
+            firstLookup = false;
+            return {
+                select: jest.fn().mockReturnValue({
+                    lean: jest.fn().mockResolvedValue({ checkpoint: { completed_pairs: [] } })
+                })
+            };
+        }
+        return currentBatch;
     });
 }
 
@@ -250,6 +280,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         mockCreateCurrentTestPersistenceStrategy.mockReturnValue(() => false);
         mockPersistSuccessfulResult.mockResolvedValue('result-1');
         mockPersistFailedResult.mockResolvedValue(undefined);
+        mockJudgeResult.mockResolvedValue({ quality_score: 8 });
         mockBenchmarkFetch.mockResolvedValue({
             ok: true,
             json: async () => ({
@@ -404,6 +435,120 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         expect(recordBatchTimelineEvent).toHaveBeenCalledWith('benchmark_claim_released', {
             hosts: ['http://exec:11434']
         });
+    });
+
+    it('cancels and settles an active pipelined judge before releasing host lifecycle', async () => {
+        const judgeStarted = deferred();
+        const finishJudge = deferred();
+        const stalledBodyStarted = deferred();
+        let activeJudgePromise = null;
+
+        mockGroupModelsByHost.mockReturnValue({
+            'http://exec-a:11434': ['model-a'],
+            'http://exec-b:11434': ['model-b']
+        });
+        mockResolveJudgeHost.mockReturnValue({
+            judgeHost: 'http://judge:11434',
+            resolution: 'explicit'
+        });
+        mockJudgeResult.mockImplementation(async () => {
+            judgeStarted.resolve();
+            return finishJudge.promise;
+        });
+        mockAdd.mockImplementation((task) => {
+            activeJudgePromise = Promise.resolve().then(task);
+            return activeJudgePromise;
+        });
+        mockDrain.mockImplementation(async () => {
+            if (activeJudgePromise) await Promise.allSettled([activeJudgePromise]);
+            return { completed: 0, failed: 0, timedOut: false, cancelled: true };
+        });
+        mockBenchmarkFetch.mockImplementation(async (_url, options) => {
+            const payload = JSON.parse(options.body);
+            if (payload.model === 'model-b') {
+                return {
+                    ok: true,
+                    json: () => new Promise((_resolve, reject) => {
+                        const onAbort = () => reject(
+                            options.signal.reason || Object.assign(new Error('aborted'), { name: 'AbortError' })
+                        );
+                        if (options.signal.aborted) onAbort();
+                        else options.signal.addEventListener('abort', onAbort, { once: true });
+                        stalledBodyStarted.resolve();
+                    })
+                };
+            }
+            return {
+                ok: true,
+                json: async () => ({
+                    message: { content: 'judge me' },
+                    eval_count: 12,
+                    prompt_eval_duration: 1_000_000,
+                    done_reason: 'stop'
+                })
+            };
+        });
+
+        const runPromise = runBatchOrchestrator({
+            batchId: 'batch-active-judge-cancel',
+            defaultHost: 'http://exec-a:11434',
+            models: ['model-a', 'model-b'],
+            prompts: [{
+                _id: 'prompt-1',
+                name: 'Prompt 1',
+                prompt: 'Say hello',
+                level: 1,
+                category: 'reasoning'
+            }],
+            judgeConfig: { model: 'judge-1', concurrency: 2 },
+            executionConfig: {
+                per_test_timeout_ms: 60_000,
+                judge_drain_timeout_ms: 120_000,
+                judge_stall_timeout_ms: 30_000
+            },
+            executionMode: 'throughput',
+            recordBatchTimelineEvent: jest.fn(() => Promise.resolve()),
+            queueBatchProgress: jest.fn(),
+            flushBatchProgress: jest.fn(() => Promise.resolve()),
+            setBatchPhase: jest.fn(() => Promise.resolve()),
+            handleGracefulStop: jest.fn()
+        });
+
+        await Promise.all([judgeStarted.promise, stalledBodyStarted.promise]);
+        expect(abortActiveBatchRequests('batch-active-judge-cancel')).toMatchObject({
+            activeRequestCount: 2,
+            abortedRequestCount: 2
+        });
+
+        await new Promise(resolve => setImmediate(resolve));
+        expect(mockCancel).toHaveBeenCalled();
+        expect(mockDrain).toHaveBeenCalledTimes(1);
+        expect(mockReleaseBenchmarkClaim).not.toHaveBeenCalled();
+        expect(mockRestoreAllDedication).not.toHaveBeenCalled();
+
+        finishJudge.resolve({ quality_score: 8 });
+        await expect(runPromise).resolves.toEqual({ stopped: true, cancelled: true });
+
+        expect(mockReleaseBenchmarkClaim).toHaveBeenCalledTimes(3);
+        expect(mockRestoreAllDedication).toHaveBeenCalledTimes(1);
+        const judgeCounterWrites = mockUpdateOne.mock.calls.filter(([, update]) => (
+            update?.$inc?.judge_completed
+        ));
+        expect(judgeCounterWrites).toHaveLength(0);
+        const JudgeQueueEntry = require('../../../models/JudgeQueueEntry');
+        expect(JudgeQueueEntry.updateMany).toHaveBeenCalledWith(
+            {
+                batchId: 'batch-active-judge-cancel',
+                status: { $in: ['pending', 'running'] }
+            },
+            expect.objectContaining({
+                $set: expect.objectContaining({
+                    status: 'cancelled',
+                    error: 'BENCHMARK_BATCH_STOPPED'
+                })
+            })
+        );
+        expect(getActiveBatchRequestCount('batch-active-judge-cancel')).toBe(0);
     });
 
     it('defers same-host judging until execution completes and warms the judge once', async () => {
@@ -1039,5 +1184,178 @@ describe('runBatchOrchestrator claim lifecycle', () => {
                 reload_required: true
             })
         );
+    });
+
+    it('cancels a stalled response body without persisting, judging, checkpointing, or recovering', async () => {
+        const bodyStarted = deferred();
+        let requestSignal;
+        setRunnableBatchLookup();
+        mockDrain.mockResolvedValue({ completed: 0, failed: 0, timedOut: false });
+        mockBenchmarkFetch.mockImplementation(async (_url, options) => {
+            requestSignal = options.signal;
+            return {
+                ok: true,
+                json: () => new Promise((resolve, reject) => {
+                    const rejectOnAbort = () => reject(
+                        requestSignal.reason || Object.assign(new Error('aborted'), { name: 'AbortError' })
+                    );
+                    if (requestSignal.aborted) rejectOnAbort();
+                    else requestSignal.addEventListener('abort', rejectOnAbort, { once: true });
+                    bodyStarted.resolve();
+                })
+            };
+        });
+
+        const handleGracefulStop = jest.fn();
+        const runPromise = runBatchOrchestrator({
+            batchId: 'batch-cancel-body',
+            defaultHost: 'http://exec:11434',
+            models: ['model-a'],
+            prompts: [
+                { _id: 'prompt-1', name: 'Prompt 1', prompt: 'Say hello', level: 1, category: 'reasoning' },
+                { _id: 'prompt-2', name: 'Prompt 2', prompt: 'Say world', level: 1, category: 'reasoning' }
+            ],
+            judgeConfig: { model: 'judge-1', concurrency: 2 },
+            executionConfig: {
+                per_test_timeout_ms: 60_000,
+                judge_drain_timeout_ms: 120_000,
+                judge_stall_timeout_ms: 30_000
+            },
+            executionMode: 'throughput',
+            recordBatchTimelineEvent: jest.fn(() => Promise.resolve()),
+            queueBatchProgress: jest.fn(),
+            flushBatchProgress: jest.fn(() => Promise.resolve()),
+            setBatchPhase: jest.fn(() => Promise.resolve()),
+            handleGracefulStop
+        });
+
+        await bodyStarted.promise;
+        // One batch-lifecycle controller plus the active response-body request.
+        expect(getActiveBatchRequestCount('batch-cancel-body')).toBe(2);
+        expect(requestSignal.aborted).toBe(false);
+
+        expect(abortActiveBatchRequests('batch-cancel-body')).toMatchObject({
+            activeRequestCount: 2,
+            abortedRequestCount: 2
+        });
+        expect(abortActiveBatchRequests('batch-cancel-body')).toMatchObject({
+            activeRequestCount: 2,
+            abortedRequestCount: 0
+        });
+
+        await expect(runPromise).resolves.toEqual({ stopped: true, cancelled: true });
+
+        expect(mockBenchmarkFetch).toHaveBeenCalledTimes(1);
+        expect(mockPersistSuccessfulResult).not.toHaveBeenCalled();
+        expect(mockPersistFailedResult).not.toHaveBeenCalled();
+        expect(mockAdd).not.toHaveBeenCalled();
+        expect(mockDrain).toHaveBeenCalledTimes(1);
+        expect(mockUpdateOne.mock.calls.some(([, update]) => (
+            update?.$addToSet?.['checkpoint.completed_pairs']
+        ))).toBe(false);
+        expect(mockWarmupModel).toHaveBeenCalledTimes(1);
+        expect(handleGracefulStop).toHaveBeenCalled();
+        expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith(
+            'http://exec:11434',
+            'batch-cancel-body'
+        );
+        expect(mockRestoreAllDedication).toHaveBeenCalledTimes(1);
+        expect(getActiveBatchRequestCount('batch-cancel-body')).toBe(0);
+    });
+
+    it('does not checkpoint or start another prompt when stop lands during judge enqueue', async () => {
+        setRunnableBatchLookup();
+        mockResolveJudgeHost.mockReturnValue({
+            judgeHost: 'http://judge:11434',
+            resolution: 'explicit'
+        });
+        mockDrain.mockResolvedValue({ completed: 0, failed: 0, timedOut: false, cancelled: true });
+        mockAdd.mockImplementation(() => {
+            expect(abortActiveBatchRequests('batch-cancel-after-persist')).toMatchObject({
+                activeRequestCount: 1,
+                abortedRequestCount: 1
+            });
+            return Promise.resolve();
+        });
+
+        const handleGracefulStop = jest.fn();
+        await expect(runBatchOrchestrator({
+            batchId: 'batch-cancel-after-persist',
+            defaultHost: 'http://exec:11434',
+            models: ['model-a'],
+            prompts: [
+                { _id: 'prompt-1', name: 'Prompt 1', prompt: 'Say hello', level: 1, category: 'reasoning' },
+                { _id: 'prompt-2', name: 'Prompt 2', prompt: 'Say world', level: 1, category: 'reasoning' }
+            ],
+            judgeConfig: { model: 'judge-1', concurrency: 2 },
+            executionConfig: {
+                per_test_timeout_ms: 60_000,
+                judge_drain_timeout_ms: 120_000,
+                judge_stall_timeout_ms: 30_000
+            },
+            executionMode: 'throughput',
+            recordBatchTimelineEvent: jest.fn(() => Promise.resolve()),
+            queueBatchProgress: jest.fn(),
+            flushBatchProgress: jest.fn(() => Promise.resolve()),
+            setBatchPhase: jest.fn(() => Promise.resolve()),
+            handleGracefulStop
+        })).resolves.toEqual({ stopped: true, cancelled: true });
+
+        expect(mockPersistSuccessfulResult).toHaveBeenCalledTimes(1);
+        expect(mockBenchmarkFetch).toHaveBeenCalledTimes(1);
+        expect(mockUpdateOne.mock.calls.some(([, update]) => (
+            update?.$addToSet?.['checkpoint.completed_pairs']
+        ))).toBe(false);
+        expect(handleGracefulStop).toHaveBeenCalled();
+        expect(getActiveBatchRequestCount('batch-cancel-after-persist')).toBe(0);
+    });
+
+    it('keeps the per-test timeout active while a response body is stalled', async () => {
+        const bodyStarted = deferred();
+        let requestSignal;
+        setRunnableBatchLookup();
+        mockDrain.mockResolvedValue({ completed: 0, failed: 0, timedOut: false });
+        mockBenchmarkFetch.mockImplementation(async (_url, options) => {
+            requestSignal = options.signal;
+            return {
+                ok: true,
+                json: () => new Promise((resolve, reject) => {
+                    requestSignal.addEventListener('abort', () => {
+                        reject(Object.assign(new Error('request timed out'), { name: 'AbortError' }));
+                    }, { once: true });
+                    bodyStarted.resolve();
+                })
+            };
+        });
+
+        const runPromise = runBatchOrchestrator({
+            batchId: 'batch-timeout-body',
+            defaultHost: 'http://exec:11434',
+            models: ['model-a'],
+            prompts: [
+                { _id: 'prompt-1', name: 'Prompt 1', prompt: 'Say hello', level: 1, category: 'reasoning' }
+            ],
+            judgeConfig: { model: 'judge-1', concurrency: 2 },
+            executionConfig: {
+                per_test_timeout_ms: 25,
+                judge_drain_timeout_ms: 120_000,
+                judge_stall_timeout_ms: 30_000
+            },
+            executionMode: 'throughput',
+            recordBatchTimelineEvent: jest.fn(() => Promise.resolve()),
+            queueBatchProgress: jest.fn(),
+            flushBatchProgress: jest.fn(() => Promise.resolve()),
+            setBatchPhase: jest.fn(() => Promise.resolve()),
+            handleGracefulStop: jest.fn()
+        });
+
+        await bodyStarted.promise;
+        expect(getActiveBatchRequestCount('batch-timeout-body')).toBe(2);
+        await expect(runPromise).resolves.toEqual({ stopped: false, cancelled: false });
+
+        expect(requestSignal.aborted).toBe(true);
+        expect(mockPersistSuccessfulResult).not.toHaveBeenCalled();
+        expect(mockPersistFailedResult).toHaveBeenCalledTimes(1);
+        expect(getActiveBatchRequestCount('batch-timeout-body')).toBe(0);
     });
 });
