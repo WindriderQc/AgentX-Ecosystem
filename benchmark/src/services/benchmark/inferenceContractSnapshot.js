@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const { getFetchOptions } = require('../../helpers/httpAgent');
+const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const { benchmarkFetch } = require('./http');
 const { getModelDigest } = require('./modelDigestService');
 const { normalizeModelTag } = require('../../../../shared/modelNames');
@@ -141,7 +142,7 @@ async function fetchSnapshot(request, deps = {}) {
     const url = `${coreUrl}/api/inference/contract/resolve`;
     const response = await fetchImpl(url, getFetchOptions(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(request)
     }));
     const payload = await response.json();

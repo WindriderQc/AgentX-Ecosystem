@@ -49,6 +49,13 @@ describe('efficiencyMap', () => {
         it('handles perfect scores', () => {
             expect(efficiencyScore(10, 100)).toBe(100);
         });
+
+        it.each([null, undefined, 0, -1, NaN, Infinity, -Infinity])(
+            'preserves unavailable or invalid throughput (%p) as unscored',
+            throughput => {
+                expect(efficiencyScore(8, throughput)).toBeNull();
+            }
+        );
     });
 
     describe('paretoFrontier', () => {
@@ -81,6 +88,18 @@ describe('efficiencyMap', () => {
             const points = [{ model: 'a', host: 'h1', quality: 8, tokPerSec: 20 }];
             expect(paretoFrontier(points)).toHaveLength(1);
         });
+
+        it('excludes zero and non-finite throughput from the frontier', () => {
+            const points = [
+                { model: 'measured', host: 'h1', quality: 7, tokPerSec: 20 },
+                { model: 'missing', host: 'h1', quality: 10, tokPerSec: null },
+                { model: 'zero', host: 'h1', quality: 9, tokPerSec: 0 },
+                { model: 'nan', host: 'h1', quality: 8, tokPerSec: NaN },
+                { model: 'infinite', host: 'h1', quality: 8, tokPerSec: Infinity },
+            ];
+
+            expect(paretoFrontier(points).map(point => point.model)).toEqual(['measured']);
+        });
     });
 
     describe('getEfficiencyMap — match filters and calibrated tps', () => {
@@ -101,17 +120,124 @@ describe('efficiencyMap', () => {
             }
         });
 
-        it('uses performance_baseline.tokensPerSec via $ifNull for avgTokPerSec', async () => {
+        it('prefers finite positive calibrated throughput and otherwise falls back to raw throughput', async () => {
             BenchmarkResult.aggregate.mockResolvedValue([]);
             await getEfficiencyMap();
 
             const rawPipeline = BenchmarkResult.aggregate.mock.calls[0][0];
             const groupStage = rawPipeline.find(s => s.$group);
             const tpsExpr = groupStage.$group.avgTokPerSec.$avg;
-            // tokens_per_sec is stored numeric now -- no $toDouble cast.
-            const ifNullPath = tpsExpr.$ifNull;
-            expect(ifNullPath[0]).toBe('$performance_baseline.tokensPerSec');
-            expect(ifNullPath[1]).toBe('$tokens_per_sec');
+            expect(tpsExpr.$let.vars).toEqual({
+                calibrated: '$performance_baseline.tokensPerSec',
+                raw: '$tokens_per_sec'
+            });
+
+            const [calibratedPredicate, calibratedValue, rawFallback] = tpsExpr.$let.in.$cond;
+            expect(calibratedValue).toBe('$$calibrated');
+            expect(calibratedPredicate.$and).toEqual(expect.arrayContaining([
+                { $isNumber: '$$calibrated' },
+                { $gt: ['$$calibrated', 0] }
+            ]));
+            expect(rawFallback.$cond[1]).toBe('$$raw');
+            expect(rawFallback.$cond[2]).toBeNull();
+            expect(rawFallback.$cond[0].$and).toEqual(expect.arrayContaining([
+                { $isNumber: '$$raw' },
+                { $gt: ['$$raw', 0] }
+            ]));
+        });
+
+        it('quarantines quality-only and invalid-throughput combinations instead of ranking them at zero', async () => {
+            BenchmarkResult.aggregate
+                .mockResolvedValueOnce([
+                    {
+                        _id: { model: 'measured', host: 'host-a' },
+                        avgQuality: 8,
+                        avgTokPerSec: 40,
+                        avgTtft: 120,
+                        avgLatency: 900,
+                        testCount: 6,
+                        throughputTestCount: 4
+                    },
+                    {
+                        _id: { model: 'missing', host: 'host-a' },
+                        avgQuality: 9.5,
+                        avgTokPerSec: null,
+                        testCount: 6,
+                        throughputTestCount: 0
+                    },
+                    {
+                        _id: { model: 'zero', host: 'host-a' },
+                        avgQuality: 9,
+                        avgTokPerSec: 0,
+                        testCount: 6,
+                        throughputTestCount: 0
+                    },
+                    {
+                        _id: { model: 'nan', host: 'host-a' },
+                        avgQuality: 9,
+                        avgTokPerSec: NaN,
+                        testCount: 6,
+                        throughputTestCount: 0
+                    },
+                    {
+                        _id: { model: 'infinite', host: 'host-a' },
+                        avgQuality: 9,
+                        avgTokPerSec: Infinity,
+                        testCount: 6,
+                        throughputTestCount: 0
+                    }
+                ])
+                .mockResolvedValueOnce([]);
+
+            const map = await getEfficiencyMap();
+
+            expect(map.entries).toHaveLength(1);
+            expect(map.entries[0]).toMatchObject({
+                model: 'measured',
+                avgTokPerSec: 40,
+                throughputTestCount: 4,
+                rankStatus: 'ranked'
+            });
+            expect(map.unranked).toHaveLength(4);
+            expect(map.unranked.map(entry => entry.model)).toEqual(['missing', 'zero', 'nan', 'infinite']);
+            for (const entry of map.unranked) {
+                expect(entry).toMatchObject({
+                    avgTokPerSec: null,
+                    efficiencyScore: null,
+                    paretoOptimal: false,
+                    rankStatus: 'unranked',
+                    unrankedReason: 'missing_throughput'
+                });
+            }
+            expect(map.meta).toMatchObject({ rankedCombinations: 1, unrankedCombinations: 4 });
+        });
+
+        it('orders measured combinations by efficiency rather than quality alone', async () => {
+            BenchmarkResult.aggregate
+                .mockResolvedValueOnce([
+                    {
+                        _id: { model: 'quality-only-winner', host: 'host-a' },
+                        avgQuality: 10,
+                        avgTokPerSec: 1,
+                        testCount: 5,
+                        throughputTestCount: 5
+                    },
+                    {
+                        _id: { model: 'efficient-winner', host: 'host-a' },
+                        avgQuality: 8,
+                        avgTokPerSec: 80,
+                        testCount: 5,
+                        throughputTestCount: 5
+                    }
+                ])
+                .mockResolvedValueOnce([]);
+
+            const map = await getEfficiencyMap();
+
+            expect(map.entries.map(entry => entry.model)).toEqual([
+                'efficient-winner',
+                'quality-only-winner'
+            ]);
         });
     });
 });

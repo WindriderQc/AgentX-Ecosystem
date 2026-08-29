@@ -41,6 +41,12 @@ export const fetchConfig = () => apiFetch(`${BASE}/config`);
 /** GET /api/benchmark/dashboard */
 export const fetchDashboard = () => apiFetch(`${BASE}/dashboard`);
 
+/** GET /api/benchmark/judge/calibration-status */
+export const fetchCalibrationStatus = () => apiFetch(`${BASE}/judge/calibration-status`);
+
+/** GET /api/benchmark/judge/ground-truth/gaps */
+export const fetchGroundTruthGaps = () => apiFetch(`${BASE}/judge/ground-truth/gaps`);
+
 /**
  * GET /api/benchmark/question-discrimination
  * @param {object} params - optional: batch_id, summary, flagged_only

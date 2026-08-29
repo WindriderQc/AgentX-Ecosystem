@@ -3,15 +3,18 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 
 let mongoServer;
 
+// Windows process startup/teardown can be delayed by antivirus scanning.
+const MONGO_MEMORY_HOOK_TIMEOUT_MS = process.platform === 'win32' ? 120_000 : 30_000;
+
 beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
     await mongoose.connect(mongoServer.getUri());
-});
+}, MONGO_MEMORY_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {
     await mongoose.disconnect();
     await mongoServer.stop();
-});
+}, MONGO_MEMORY_HOOK_TIMEOUT_MS);
 
 afterEach(async () => {
     await HostProfile.deleteMany({});

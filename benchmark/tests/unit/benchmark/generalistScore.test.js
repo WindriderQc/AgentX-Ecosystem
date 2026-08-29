@@ -7,6 +7,7 @@ const {
     normalizeQualityTo100,
     normalizeScoreTo100,
     normalizeCategoryKey,
+    buildCategoryEvidenceView,
     calculateGeneralistScoreFromCategories,
     confidenceMargin,
     COVERAGE_PENALTY_MAX,
@@ -67,6 +68,37 @@ describe('normalizeCategoryKey', () => {
         expect(normalizeCategoryKey('')).toBeNull();
         expect(normalizeCategoryKey(null)).toBeNull();
         expect(normalizeCategoryKey(undefined)).toBeNull();
+    });
+});
+
+describe('buildCategoryEvidenceView', () => {
+    it('renders untested and attempted-unscored categories as unavailable', () => {
+        const scores = {
+            coding: { avg: 8.4, count: 4, attempted: true },
+            reasoning: { count: 0, attempted: true, judge_failed: true }
+        };
+        const calculated = { coding: 84, reasoning: 0, math: 0 };
+
+        const view = buildCategoryEvidenceView(scores, calculated, TEST_WEIGHTS);
+
+        expect(view.categoryAverages).toEqual({ coding: 84, reasoning: null, math: null });
+        expect(view.categoryEvidence).toEqual({
+            coding: 'scored',
+            reasoning: 'attempted_unscored',
+            math: 'untested'
+        });
+    });
+
+    it('preserves a measured zero without turning missing coverage into zero', () => {
+        const scores = { coding: { avg: 0, count: 3, attempted: true } };
+        const calculated = { coding: 0, reasoning: 0, math: 0 };
+
+        const view = buildCategoryEvidenceView(scores, calculated, TEST_WEIGHTS);
+
+        expect(view.categoryAverages.coding).toBe(0);
+        expect(view.categoryEvidence.coding).toBe('scored');
+        expect(view.categoryAverages.reasoning).toBeNull();
+        expect(view.categoryEvidence.reasoning).toBe('untested');
     });
 });
 

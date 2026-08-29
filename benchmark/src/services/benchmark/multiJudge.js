@@ -16,6 +16,10 @@
 
 const logger = require('../../../config/logger');
 const { scoreResponse } = require('../qualityScorer');
+const {
+    rethrowIfJudgeCancelled,
+    throwIfJudgeCancelled
+} = require('../scoring/judgeCall');
 
 /** Max score difference (0-10 scale) before escalation to tiebreaker */
 const DIVERGENCE_THRESHOLD = 2.0;
@@ -79,8 +83,13 @@ async function multiJudgeScore({
     judges,
     tiebreakerJudge = null,
     _batchHardwareSnapshot = null,
-    seedJudgeResult = null
+    seedJudgeResult = null,
+    cancelSignal = null,
+    signal = null
 }) {
+    const sharedCancelSignal = cancelSignal || signal || null;
+    const sharedCancellationConfig = { cancelSignal: sharedCancelSignal };
+    throwIfJudgeCancelled(sharedCancellationConfig);
     if (!judges || judges.length === 0) {
         throw new Error('At least one judge config is required');
     }
@@ -111,16 +120,19 @@ async function multiJudgeScore({
     // Score with all primary judges in parallel
     const judgePromises = effectiveJudges.map(async (judgeConfig, idx) => {
         const start = Date.now();
+        const effectiveJudgeConfig = {
+            ...judgeConfig,
+            ...(sharedCancelSignal ? { cancelSignal: sharedCancelSignal } : {})
+        };
         try {
+            throwIfJudgeCancelled(effectiveJudgeConfig);
             const scores = await scoreResponse({
                 response,
                 prompt,
-                judgeConfig: {
-                    model: judgeConfig.model,
-                    host: judgeConfig.host
-                },
+                judgeConfig: effectiveJudgeConfig,
                 _batchHardwareSnapshot
             });
+            throwIfJudgeCancelled(effectiveJudgeConfig);
 
             return {
                 judge_model: judgeConfig.model,
@@ -132,6 +144,7 @@ async function multiJudgeScore({
                 success: true
             };
         } catch (err) {
+            rethrowIfJudgeCancelled(err, effectiveJudgeConfig);
             logger.warn('Multi-judge: judge failed', {
                 judge_model: judgeConfig.model,
                 judge_index: idx,
@@ -149,6 +162,7 @@ async function multiJudgeScore({
     });
 
     const judgeResults = await Promise.all(judgePromises);
+    throwIfJudgeCancelled(sharedCancellationConfig);
     results.push(...judgeResults);
 
     // Extract successful scores
@@ -186,7 +200,12 @@ async function multiJudgeScore({
     let tiebreakerUsed = false;
     if (divergent && tiebreakerJudge) {
         const start = Date.now();
+        const effectiveTiebreakerConfig = {
+            ...tiebreakerJudge,
+            ...(sharedCancelSignal ? { cancelSignal: sharedCancelSignal } : {})
+        };
         try {
+            throwIfJudgeCancelled(effectiveTiebreakerConfig);
             logger.info('Multi-judge: divergence detected, escalating to tiebreaker', {
                 scores: validScores,
                 divergence: divergence.toFixed(1),
@@ -196,12 +215,10 @@ async function multiJudgeScore({
             const tbScores = await scoreResponse({
                 response,
                 prompt,
-                judgeConfig: {
-                    model: tiebreakerJudge.model,
-                    host: tiebreakerJudge.host
-                },
+                judgeConfig: effectiveTiebreakerConfig,
                 _batchHardwareSnapshot
             });
+            throwIfJudgeCancelled(effectiveTiebreakerConfig);
 
             results.push({
                 judge_model: tiebreakerJudge.model,
@@ -217,6 +234,7 @@ async function multiJudgeScore({
             validScores.push(tbScores.quality_score);
             tiebreakerUsed = true;
         } catch (err) {
+            rethrowIfJudgeCancelled(err, effectiveTiebreakerConfig);
             logger.warn('Multi-judge: tiebreaker failed', {
                 tiebreaker: tiebreakerJudge.model,
                 error: err.message

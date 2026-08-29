@@ -35,13 +35,15 @@ function sortResults(results) {
 // Update results count
 function updateResultsCount() {
     const countEl = document.getElementById('resultsCount');
-    const showing = filteredResults.length;
-    const total = paginationState.total || showing;
-    if (total > showing) {
-        countEl.textContent = `${showing} of ${total} results (page ${paginationState.page}/${paginationState.totalPages})`;
-    } else {
-        countEl.textContent = `${showing} result${showing !== 1 ? 's' : ''}`;
+    const showing = allResults.length;
+    const total = paginationState.total;
+    if (total === 0) {
+        countEl.textContent = '0 matching results';
+        return;
     }
+    const start = (paginationState.page - 1) * paginationState.limit + 1;
+    const end = start + showing - 1;
+    countEl.textContent = `Showing ${start}–${end} of ${total} matching results`;
 }
 
 // Update selected count
@@ -84,14 +86,17 @@ function exportCSV(data) {
     const headers = [
         'model', 'host', 'category', 'level', 'quality_score', 'composite_score',
         'latency', 'tokens', 'tokens_per_sec', 'backend', 'quantization',
-        'scoring_method', 'success', 'batch_id', 'timestamp'
+        'scoring_method', 'success', 'batch_id', 'evidence_era',
+        'evidence_age_days', 'legacy_scoring', 'timestamp'
     ];
 
     const csvContent = [
         headers.join(','),
         ...data.map(row => headers.map(header => {
             let value;
-            if (header === 'backend') value = row.hardware_snapshot?.backend ?? '';
+            if (header === 'category') value = row.prompt_category ?? '';
+            else if (header === 'level') value = row.prompt_level ?? '';
+            else if (header === 'backend') value = row.hardware_snapshot?.backend ?? '';
             else if (header === 'quantization') value = row.hardware_snapshot?.quantization ?? '';
             else value = row[header] ?? '';
 
@@ -224,6 +229,14 @@ function renderComparisonCard(result) {
                 <div class="value"><span class="badge badge-${result.success ? 'success' : 'failed'}">
                     ${result.success ? 'Success' : 'Failed'}
                 </span></div>
+            </div>
+            <div class="comparison-field">
+                <label>Evidence age</label>
+                <div class="value">${renderEvidenceAge(result)}</div>
+            </div>
+            <div class="comparison-field">
+                <label>Recorded at</label>
+                <div class="value">${formatRecordedAt(result)}</div>
             </div>
         </div>
     `;
@@ -598,12 +611,14 @@ function updateModelBarChart() {
 
     // If no model data, show empty state
     if (Object.keys(modelData).length === 0) {
-        const canvas = document.getElementById('modelBarChart');
-        const parent = canvas.parentElement;
-        parent.innerHTML = '<div style="padding: 2rem; text-align: center; color: rgba(255,255,255,0.5);">No model data available</div>';
-        if (charts.modelBar) charts.modelBar.destroy();
+        setChartEmptyState(ctx, true, 'No scored model data on this visible page');
+        if (charts.modelBar) {
+            charts.modelBar.destroy();
+            charts.modelBar = null;
+        }
         return;
     }
+    setChartEmptyState(ctx, false);
 
     const models = Object.keys(modelData)
         .sort((a, b) => (modelData[b].total / modelData[b].count) - (modelData[a].total / modelData[a].count))
@@ -689,6 +704,23 @@ function updateModelBarChart() {
     } catch (error) {
         console.error('Error rendering model bar chart:', error);
     }
+}
+
+function setChartEmptyState(canvas, empty, message = '') {
+    if (!canvas?.parentElement) return;
+    const marker = `chart-empty-${canvas.id}`;
+    let emptyState = canvas.parentElement.querySelector(`[data-chart-empty="${marker}"]`);
+    if (!emptyState) {
+        emptyState = document.createElement('div');
+        emptyState.className = 'chart-empty-state';
+        emptyState.dataset.chartEmpty = marker;
+        emptyState.hidden = true;
+        canvas.insertAdjacentElement('afterend', emptyState);
+    }
+    canvas.hidden = empty;
+    canvas.style.display = empty ? 'none' : 'block';
+    emptyState.hidden = !empty;
+    if (empty) emptyState.textContent = message;
 }
 
 // Render category statistics table
@@ -783,10 +815,9 @@ function renderSummaryStats() {
     const container = document.getElementById('summaryStatsBar');
     if (!container) return;
 
-    const total = filteredResults.length;
+    const pageTotal = filteredResults.length;
     const successCount = filteredResults.filter(r => r.success).length;
-    const failedCount = total - successCount;
-    const successRate = total > 0 ? ((successCount / total) * 100).toFixed(1) : '0.0';
+    const successRate = pageTotal > 0 ? ((successCount / pageTotal) * 100).toFixed(1) : '0.0';
 
     const scores = filteredResults
         .filter(r => r.quality_score !== null && r.quality_score !== undefined)
@@ -794,21 +825,12 @@ function renderSummaryStats() {
     const avgQuality = scores.length > 0
         ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2)
         : 'N/A';
-    const minQuality = scores.length > 0 ? Math.min(...scores).toFixed(1) : 'N/A';
-    const maxQuality = scores.length > 0 ? Math.max(...scores).toFixed(1) : 'N/A';
 
     const latencies = filteredResults
         .filter(r => r.latency)
         .map(r => r.latency);
     const avgLatency = latencies.length > 0
         ? (latencies.reduce((a, b) => a + b, 0) / latencies.length).toFixed(0)
-        : 'N/A';
-
-    const tps = filteredResults
-        .filter(r => r.tokens_per_sec)
-        .map(r => parseFloat(r.tokens_per_sec));
-    const avgTps = tps.length > 0
-        ? (tps.reduce((a, b) => a + b, 0) / tps.length).toFixed(1)
         : 'N/A';
 
     const models = new Set(filteredResults.map(r => r.model)).size;
@@ -820,95 +842,54 @@ function renderSummaryStats() {
         if (n >= 6) return 'score-medium';
         return 'score-low';
     }
+    const successClass = Number(successRate) >= 90
+        ? 'score-high'
+        : (Number(successRate) >= 70 ? 'score-medium' : 'score-low');
 
     container.innerHTML = `
         <div class="summary-stat-card">
-            <div class="stat-value">${total}</div>
-            <div class="stat-label">Total Results</div>
+            <div class="stat-value">${paginationState.total}</div>
+            <div class="stat-label">Matching Results</div>
+        </div>
+        <div class="summary-stat-card">
+            <div class="stat-value evidence-count-recent">${Number(evidenceCounts.recent) || 0}</div>
+            <div class="stat-label">Recent · ≤30d</div>
+        </div>
+        <div class="summary-stat-card">
+            <div class="stat-value evidence-count-aging">${Number(evidenceCounts.aging) || 0}</div>
+            <div class="stat-label">Aging · 31–90d</div>
+        </div>
+        <div class="summary-stat-card">
+            <div class="stat-value evidence-count-historical">${Number(evidenceCounts.historical) || 0}</div>
+            <div class="stat-label">Historical · 91d+</div>
         </div>
         <div class="summary-stat-card">
             <div class="stat-value">${models}</div>
-            <div class="stat-label">Models</div>
+            <div class="stat-label">Models on Page</div>
         </div>
         <div class="summary-stat-card">
             <div class="stat-value ${qualityClass(avgQuality)}">${avgQuality}</div>
-            <div class="stat-label">Avg Quality</div>
-        </div>
-        <div class="summary-stat-card">
-            <div class="stat-value">${minQuality} – ${maxQuality}</div>
-            <div class="stat-label">Quality Range</div>
+            <div class="stat-label">Page Avg Quality</div>
         </div>
         <div class="summary-stat-card">
             <div class="stat-value">${avgLatency === 'N/A' ? 'N/A' : avgLatency + 'ms'}</div>
-            <div class="stat-label">Avg Latency</div>
+            <div class="stat-label">Page Avg Latency</div>
         </div>
         <div class="summary-stat-card">
-            <div class="stat-value">${avgTps === 'N/A' ? 'N/A' : avgTps}</div>
-            <div class="stat-label">Avg Tokens/sec</div>
+            <div class="stat-value ${successClass}">${successRate}%</div>
+            <div class="stat-label">Page Success Rate</div>
         </div>
+        ${Number(evidenceCounts.undated) > 0 ? `
         <div class="summary-stat-card">
-            <div class="stat-value score-high">${successRate}%</div>
-            <div class="stat-label">Success Rate</div>
-        </div>
+            <div class="stat-value">${Number(evidenceCounts.undated)}</div>
+            <div class="stat-label">Undated</div>
+        </div>` : ''}
+        ${Number(evidenceCounts.legacy_scoring) > 0 ? `
         <div class="summary-stat-card">
-            <div class="stat-value score-low">${failedCount}</div>
-            <div class="stat-label">Failed</div>
-        </div>
+            <div class="stat-value evidence-count-legacy">${Number(evidenceCounts.legacy_scoring)}</div>
+            <div class="stat-label">Explicit Legacy Scoring</div>
+        </div>` : ''}
     `;
-}
-
-// URL state management
-function saveURLState() {
-    const params = new URLSearchParams();
-
-    // Save active filters
-    const dateFrom = document.getElementById('dateFrom').value;
-    const dateTo = document.getElementById('dateTo').value;
-    if (dateFrom) params.set('dateFrom', dateFrom);
-    if (dateTo) params.set('dateTo', dateTo);
-
-    const selectedModels = Array.from(document.querySelectorAll('#modelSelectContainer input:checked'))
-        .map(cb => cb.value);
-    if (selectedModels.length > 0) params.set('models', selectedModels.join(','));
-
-    const selectedCategories = Array.from(document.querySelectorAll('#categorySelectContainer input:checked'))
-        .map(cb => cb.value);
-    if (selectedCategories.length > 0) params.set('categories', selectedCategories.join(','));
-
-    // Update URL without reload
-    const newUrl = `${window.location.pathname}${params.toString() ? '?' + params.toString() : ''}`;
-    window.history.replaceState({}, '', newUrl);
-}
-
-function loadURLState() {
-    const params = new URLSearchParams(window.location.search);
-
-    // Restore filters from URL
-    const dateFrom = params.get('dateFrom');
-    const dateTo = params.get('dateTo');
-    if (dateFrom) document.getElementById('dateFrom').value = dateFrom;
-    if (dateTo) document.getElementById('dateTo').value = dateTo;
-
-    const models = params.get('models');
-    if (models) {
-        models.split(',').forEach(model => {
-            const cb = document.querySelector(`#modelSelectContainer input[value="${model}"]`);
-            if (cb) cb.checked = true;
-        });
-    }
-
-    const categories = params.get('categories');
-    if (categories) {
-        categories.split(',').forEach(cat => {
-            const cb = document.querySelector(`#categorySelectContainer input[value="${cat}"]`);
-            if (cb) cb.checked = true;
-        });
-    }
-
-    // Apply filters if any were set
-    if (params.toString()) {
-        applyFilters();
-    }
 }
 
 // Utility function to escape HTML

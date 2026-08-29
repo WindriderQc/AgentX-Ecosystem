@@ -12,7 +12,8 @@
  */
 
 const { getFetchOptions } = require('../helpers/httpAgent');
-const { normalizeHostUrl } = require('../helpers/ollamaHostConfig');
+const { getConfiguredHosts } = require('../helpers/ollamaHostConfig');
+const { admitOllamaTargetResolved } = require('../helpers/ollamaTargetAdmission');
 const logger = require('../../config/logger');
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -88,7 +89,7 @@ function normalizeCreateBody(body = {}) {
  * @returns {Promise<any>}  parsed JSON body
  */
 async function ollamaFetch(hostUrl, path, opts = {}) {
-    const host = normalizeHostUrl(hostUrl);
+    const host = await admitOllamaTargetResolved(hostUrl, { configuredHosts: getConfiguredHosts() });
     const url = `${host}${path}`;
     const method = opts.method || 'GET';
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -105,6 +106,7 @@ async function ollamaFetch(hostUrl, path, opts = {}) {
         method,
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
+        redirect: 'manual',
         ...(opts.body ? { body: JSON.stringify(opts.body) } : {})
     });
 

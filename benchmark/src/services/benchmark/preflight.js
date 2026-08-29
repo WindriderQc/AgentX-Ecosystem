@@ -19,7 +19,9 @@ const { JUDGE_CONFIG } = require('../qualityScorer');
 const { probeJudgeCapability } = require('./judgeModelValidator');
 const { benchmarkFetch: fetch } = require('./http');
 const { normalizeModelName } = require('./modelMetadata');
-const { normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
+const { normalizeHostUrl, getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
+const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmission');
+const { readBoundedJson } = require('../../helpers/boundedJsonResponse');
 const { getDedicationStatuses } = require('../../clients/coreApiClient');
 const { identitiesMatch, resolveArtifactIdentity } = require('../profiler/artifactIdentityService');
 const { normalizeJudgeNumCtx } = require('../scoring/judgeRuntimeConfig');
@@ -267,9 +269,11 @@ async function checkBenchmarkTargetEligibility(model, hostUrl, executionConfig =
  * @returns {Object} { ok, latency_ms, error, models_loaded }
  */
 async function checkHostModel(hostUrl, model = null) {
-    const normalizedHost = normalizeHostUrl(hostUrl);
-    if (!normalizedHost) {
-        return { ok: false, latency_ms: 0, error: 'Host URL is required' };
+    let normalizedHost;
+    try {
+        normalizedHost = await admitOllamaTargetResolved(hostUrl, { configuredHosts: getConfiguredHosts() });
+    } catch (error) {
+        return { ok: false, latency_ms: 0, error: error.message };
     }
 
     const start = Date.now();
@@ -279,15 +283,15 @@ async function checkHostModel(hostUrl, model = null) {
     try {
         const response = await fetch(`${normalizedHost}/api/tags`, {
             method: 'GET',
-            signal: controller.signal
+            signal: controller.signal,
+            redirect: 'manual'
         });
-        clearTimeout(timeoutId);
 
         if (!response.ok) {
             return { ok: false, latency_ms: Date.now() - start, error: `HTTP ${response.status}` };
         }
 
-        const data = await response.json();
+        const data = await readBoundedJson(response);
         const availableModels = (data.models || []).map((m) => normalizeModelName(m.name || m.model));
         const latency = Date.now() - start;
 
@@ -306,11 +310,12 @@ async function checkHostModel(hostUrl, model = null) {
 
         return { ok: true, latency_ms: latency, models_loaded: availableModels.slice(0, 10) };
     } catch (err) {
-        clearTimeout(timeoutId);
         const msg = err.name === 'AbortError'
             ? `Host unreachable (timeout ${HOST_CHECK_TIMEOUT_MS}ms)`
             : err.message;
         return { ok: false, latency_ms: Date.now() - start, error: msg };
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 

@@ -1,7 +1,11 @@
 'use strict';
 
+const express = require('express');
+const request = require('supertest');
+
 jest.mock('../../../src/services/profiler/profilerOrchestrator', () => ({
-  profile: jest.fn().mockResolvedValue({ ok: true })
+  profile: jest.fn().mockResolvedValue({ ok: true }),
+  scout: jest.fn().mockResolvedValue([])
 }));
 jest.mock('../../../src/services/profiler/hostProfileService', () => ({
   getById: jest.fn()
@@ -33,6 +37,11 @@ const hostTestService = require('../../../src/services/hostTestService');
 const coreApiClient = require('../../../src/clients/coreApiClient');
 const { activeProfileQueues, clearActiveProfilingState } = require('../../../src/services/profiler/activeProfileState');
 const { startProfileHostQueue } = require('../../../routes/profiler/pipeline');
+const pipelineRouter = require('../../../routes/profiler/pipeline');
+
+const pipelineApp = express();
+pipelineApp.use(express.json());
+pipelineApp.use('/api/profiler/pipeline', pipelineRouter);
 
 const flushPromises = () => new Promise(resolve => setImmediate(resolve));
 
@@ -125,5 +134,28 @@ describe('profile-host queue depth selection', () => {
       'full',
       expect.any(Object)
     );
+  });
+});
+
+describe('profiler scout target authority', () => {
+  it('ignores a client-supplied URL and resolves the admitted persisted host by ID', async () => {
+    hostProfileService.getById.mockResolvedValue({
+      hostId: 'host-beta',
+      hostUrl: 'http://localhost:11434'
+    });
+    orchestrator.scout.mockResolvedValue([{ hostId: 'host-beta', fit: true }]);
+
+    const response = await request(pipelineApp)
+      .post('/api/profiler/pipeline/scout')
+      .send({
+        modelName: 'qwen:7b',
+        hosts: [{ hostId: 'host-beta', hostUrl: 'http://169.254.169.254:11434' }]
+      });
+
+    expect(response.status).toBe(200);
+    expect(orchestrator.scout).toHaveBeenCalledWith('qwen:7b', [{
+      hostId: 'host-beta',
+      hostUrl: 'http://localhost:11434'
+    }]);
   });
 });

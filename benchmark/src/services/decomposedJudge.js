@@ -18,6 +18,12 @@ const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { DECOMPOSED_QUESTIONS } = require('./decomposedJudgeQuestions');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
 const {
+    createJudgeAbortContext,
+    rethrowIfJudgeCancelled,
+    throwIfJudgeCancelled,
+    waitForJudgeRetry
+} = require('./scoring/judgeCall');
+const {
     DEFAULT_SCORING_CATEGORY,
     ENHANCED_SCORING_CONFIGS,
     normalizeScoringCategory
@@ -127,15 +133,15 @@ RESPONSE_END
 
 Answer ONLY "YES" or "NO" for this specific question: ${question}`;
 
-    const controller = new AbortController();
     // Task 0184 — default raised 15_000 → 45_000ms. Single qwen2.5:14b judge
     // call takes ~13s; binary fan-out fires 4-deep against the same model
     // so the 3rd/4th wait at the per-host queue and routinely run past 15s.
     // 45s gives a comfortable margin without unbounded waits. Override via
     // judge_config.timeout in the batch API (validated 5000–120000).
-    const timeoutId = setTimeout(() => controller.abort(), judgeConfig.timeout || 45000);
+    const abortContext = createJudgeAbortContext(judgeConfig, judgeConfig.timeout || 45000);
 
     try {
+        throwIfJudgeCancelled(judgeConfig);
         const numCtx = normalizeJudgeNumCtx(judgeConfig.num_ctx);
         const think = judgeConfig.think !== undefined ? judgeConfig.think : false;
         const url = `${CORE_URL}/api/inference/generate`;
@@ -157,17 +163,17 @@ Answer ONLY "YES" or "NO" for this specific question: ${question}`;
             method: 'POST',
             headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
-            signal: controller.signal
+            signal: abortContext.signal
         });
 
         const res = await fetch(url, fetchOptions);
-        clearTimeout(timeoutId);
 
         if (!res.ok) {
             throw new Error(`Judge HTTP ${res.status}`);
         }
 
         const data = await res.json();
+        throwIfJudgeCancelled(judgeConfig);
         const text = (data.response || '').toLowerCase().trim();
         const verdict = text.match(/^[^a-z0-9]*(yes|no)\b/);
 
@@ -184,8 +190,10 @@ Answer ONLY "YES" or "NO" for this specific question: ${question}`;
             return false;
         }
     } catch (err) {
-        clearTimeout(timeoutId);
+        rethrowIfJudgeCancelled(err, judgeConfig);
         throw err; // Let caller handle
+    } finally {
+        abortContext.cleanup();
     }
 }
 
@@ -210,11 +218,13 @@ async function askBinaryQuestion(response, question, judgeConfig, taskContext = 
         try {
             return await singleBinaryCall(response, question, judgeConfig, taskContext);
         } catch (err) {
+            rethrowIfJudgeCancelled(err, judgeConfig);
             logger.warn('Binary call failed, retrying once', { question: question.substring(0, 80), error: err.message });
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await waitForJudgeRetry(500, judgeConfig);
             try {
                 return await singleBinaryCall(response, question, judgeConfig, taskContext);
             } catch (retryErr) {
+                rethrowIfJudgeCancelled(retryErr, judgeConfig);
                 logger.error('Binary call failed after retry', { question, firstError: err.message, retryError: retryErr.message });
                 return null; // null = error, distinct from false = judge said NO
             }
@@ -227,6 +237,7 @@ async function askBinaryQuestion(response, question, judgeConfig, taskContext = 
         calls.push(singleBinaryCall(response, question, judgeConfig, taskContext));
     }
     const votes = await Promise.allSettled(calls);
+    throwIfJudgeCancelled(judgeConfig);
 
     const successes = votes
         .filter(v => v.status === 'fulfilled')
@@ -483,9 +494,11 @@ async function score(response, prompt, judgeConfig) {
     const dimensionResults = [];
     for (const [dimension, dimensionQuestions] of dimensionEntries) {
         try {
+            throwIfJudgeCancelled(judgeConfig);
             const result = await scoreDimension(response, dimensionQuestions, judgeConfig, taskContext);
             dimensionResults.push({ dimension, result });
         } catch (err) {
+            rethrowIfJudgeCancelled(err, judgeConfig);
             logger.error('Dimension scoring threw unexpectedly, penalizing with 0', {
                 dimension,
                 prompt: prompt.name || 'unknown',

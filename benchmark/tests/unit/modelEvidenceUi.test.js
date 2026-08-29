@@ -50,7 +50,7 @@ describe('Agent X model-evidence progressive disclosure', () => {
     expect(results).toContain('id="results-empty-experience"');
     expect(results).toContain('No evaluation evidence yet');
     expect(results).toContain('id="results-data-workbench"');
-    expect(resultsJs).toContain('const hasEvidence = paginationState.total > 0');
+    expect(resultsJs).toContain('const hasEvidence = archiveTotal > 0');
     expect(resultsJs).toContain('setExperienceSurfaceHidden(workbench, !hasEvidence)');
     expect(resultsJs).toContain('element.inert = hidden');
     expect(leaderboardJs).toContain('hideInactiveSurface(filterBar)');

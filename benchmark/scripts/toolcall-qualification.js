@@ -34,12 +34,20 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  readBoundedJson,
+  readBoundedText
+} = require('../../scripts/bounded-response');
 
 const {
   runHarness,
   makeScriptedTransport
 } = require('../src/services/qualification/toolCallHarness');
 const { SCENARIOS_V1 } = require('../src/services/qualification/toolCallFixtures');
+
+const DEFAULT_LIVE_TIMEOUT_MS = 600_000;
+const MAX_LIVE_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_LIVE_ERROR_BYTES = 64 * 1024;
 
 function parseArgs(argv) {
   const args = { live: false, confirmCampaign: false, scenarios: null, model: null, host: null, out: null };
@@ -56,17 +64,31 @@ function parseArgs(argv) {
   return args;
 }
 
-function buildLiveTransport({ model, host }) {
+function buildLiveTransport({ model, host, fetchImpl, timeoutMs = DEFAULT_LIVE_TIMEOUT_MS }) {
   // Lazy import so the dry-run path never touches node-fetch.
-  const fetch = require('node-fetch');
+  const fetch = fetchImpl || require('node-fetch');
   return async function liveTransport({ messages, tools }) {
+    const signal = AbortSignal.timeout(timeoutMs);
     const res = await fetch(`${host.replace(/\/$/, '')}/api/chat`, {
       method: 'POST',
+      redirect: 'manual',
+      signal,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model, messages, tools, stream: false, think: false })
     });
-    if (!res.ok) throw new Error(`ollama chat ${res.status}: ${await res.text()}`);
-    const data = await res.json();
+    if (!res.ok) {
+      let detail;
+      try {
+        detail = await readBoundedText(res, { maxBytes: MAX_LIVE_ERROR_BYTES, signal });
+      } catch (error) {
+        detail = `unreadable response (${error.message})`;
+      }
+      throw new Error(`ollama chat ${res.status}: ${detail}`);
+    }
+    const data = await readBoundedJson(res, {
+      maxBytes: MAX_LIVE_RESPONSE_BYTES,
+      signal
+    });
     const msg = data.message || {};
     if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       return {
@@ -134,7 +156,18 @@ async function main() {
   process.exit(r.graded > 0 && r.passed === r.graded ? 0 : 1);
 }
 
-main().catch((err) => {
-  console.error('[toolcall-qualification] fatal:', err.message);
-  process.exit(3);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('[toolcall-qualification] fatal:', err.message);
+    process.exit(3);
+  });
+}
+
+module.exports = {
+  DEFAULT_LIVE_TIMEOUT_MS,
+  MAX_LIVE_ERROR_BYTES,
+  MAX_LIVE_RESPONSE_BYTES,
+  buildLiveTransport,
+  main,
+  parseArgs
+};

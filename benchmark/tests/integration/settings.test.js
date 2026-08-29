@@ -1,4 +1,4 @@
-const request = require('supertest');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 
 jest.mock('../../src/services/profiler/settingsService', () => ({
   getAll: jest.fn(),
@@ -13,8 +13,20 @@ jest.mock('../../src/services/profiler/settingsService', () => ({
   },
 }));
 
-const app = require('../../server');
+const expressApp = require('../../server');
 const settingsService = require('../../src/services/profiler/settingsService');
+
+let httpHarness;
+let api;
+
+beforeAll(async () => {
+  httpHarness = await startTestHttpHarness(expressApp);
+  api = httpHarness.request;
+});
+
+afterAll(async () => {
+  await httpHarness?.close();
+});
 
 describe('Profiler Settings Routes', () => {
   afterEach(() => {
@@ -33,7 +45,7 @@ describe('Profiler Settings Routes', () => {
       };
       settingsService.getAll.mockResolvedValue(mockSettings);
 
-      const response = await request(app).get('/api/profiler/settings');
+      const response = await api.get('/api/profiler/settings');
 
       expect(response.status).toBe(200);
       expect(response.body.data).toEqual(mockSettings);
@@ -43,7 +55,7 @@ describe('Profiler Settings Routes', () => {
     it('should return 500 on service error', async () => {
       settingsService.getAll.mockRejectedValue(new Error('db failure'));
 
-      const response = await request(app).get('/api/profiler/settings');
+      const response = await api.get('/api/profiler/settings');
 
       expect(response.status).toBe(500);
       expect(response.body).toMatchObject({ error: 'db failure' });
@@ -62,7 +74,7 @@ describe('Profiler Settings Routes', () => {
       };
       settingsService.save.mockResolvedValue(updated);
 
-      const response = await request(app)
+      const response = await api
         .put('/api/profiler/settings')
         .send({ degradationThreshold: 50 });
 
@@ -74,7 +86,7 @@ describe('Profiler Settings Routes', () => {
     it('should return 500 on save error', async () => {
       settingsService.save.mockRejectedValue(new Error('write failed'));
 
-      const response = await request(app)
+      const response = await api
         .put('/api/profiler/settings')
         .send({ numPredict: 128 });
 

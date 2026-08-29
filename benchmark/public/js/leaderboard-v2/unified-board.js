@@ -116,7 +116,9 @@ export function speedometer(value, max, { unit = '', size = 90, zones } = {}) {
 function buildDimMap(dims) {
   const map = {};
   for (const d of dims) {
-    map[d.name] = d.yesRate ?? 0;
+    if (d.yesRate !== null && d.yesRate !== undefined && Number.isFinite(Number(d.yesRate))) {
+      map[d.name] = Number(d.yesRate);
+    }
   }
   return map;
 }

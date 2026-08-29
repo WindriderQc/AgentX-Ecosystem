@@ -15,7 +15,9 @@ function inferModelCategory(modelName) {
 }
 
 function getTopCategoryFromAverages(categoryAverages = {}, modelName = '') {
-    const entries = Object.entries(categoryAverages || {}).filter(([, value]) => Number.isFinite(Number(value)));
+    const entries = Object.entries(categoryAverages || {}).filter(([, value]) => (
+        value !== null && value !== undefined && Number.isFinite(Number(value))
+    ));
     if (!entries.length) {
         return inferModelCategory(modelName);
     }

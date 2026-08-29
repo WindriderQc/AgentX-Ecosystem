@@ -56,6 +56,38 @@ describe('multiJudgeScore', () => {
         })).rejects.toThrow('At least one judge config is required');
     });
 
+    it('propagates shared cancellation to every active judge instead of converting it to failed scores', async () => {
+        const controller = new AbortController();
+        let started = 0;
+        let markAllStarted;
+        const allStarted = new Promise((resolve) => { markAllStarted = resolve; });
+        scoreResponse.mockImplementation(({ judgeConfig }) => new Promise((resolve, reject) => {
+            started += 1;
+            if (started === 2) markAllStarted();
+            const onAbort = () => {
+                const error = new Error('Benchmark batch judging cancelled');
+                error.name = 'BenchmarkBatchStoppedError';
+                error.code = 'BENCHMARK_BATCH_STOPPED';
+                reject(error);
+            };
+            judgeConfig.cancelSignal.addEventListener('abort', onAbort, { once: true });
+            if (judgeConfig.cancelSignal.aborted) onAbort();
+        }));
+
+        const pending = multiJudgeScore({
+            response: 'answer',
+            prompt: makePrompt(),
+            judges: [makeJudge(7, 'http://judge-a:11434'), makeJudge(8, 'http://judge-b:11434')],
+            cancelSignal: controller.signal
+        });
+        await allStarted;
+        controller.abort();
+
+        await expect(pending).rejects.toMatchObject({ code: 'BENCHMARK_BATCH_STOPPED' });
+        expect(scoreResponse).toHaveBeenCalledTimes(2);
+        expect(scoreResponse.mock.calls.every(([call]) => call.judgeConfig.cancelSignal === controller.signal)).toBe(true);
+    });
+
     it('returns single_judge consensus when only one judge succeeds', async () => {
         scoreResponse.mockResolvedValueOnce({
             quality_score: 7,

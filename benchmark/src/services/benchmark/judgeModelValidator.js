@@ -27,7 +27,11 @@ async function validateJudgeModel(host, model, options = {}) {
     const start = Date.now();
 
     if (!host || !model) {
-        return { valid: false, error: 'host and model are required' };
+        return {
+            valid: false,
+            code: 'JUDGE_TARGET_INCOMPLETE',
+            error: 'host and model are required'
+        };
     }
 
     // Step 1 (HARD): Check model exists in host's model list.
@@ -40,7 +44,8 @@ async function validateJudgeModel(host, model, options = {}) {
         try {
             res = await _fetch(`${host}/api/tags`, {
                 method: 'GET',
-                signal: controller.signal
+                signal: controller.signal,
+                redirect: 'manual'
             });
         } finally {
             clearTimeout(timeoutId);
@@ -49,6 +54,7 @@ async function validateJudgeModel(host, model, options = {}) {
         if (!res.ok) {
             return {
                 valid: false,
+                code: 'JUDGE_HOST_UNAVAILABLE',
                 error: `Failed to list models on judge host: HTTP ${res.status}`,
                 latency_ms: Date.now() - start
             };
@@ -62,6 +68,7 @@ async function validateJudgeModel(host, model, options = {}) {
         if (!found) {
             return {
                 valid: false,
+                code: 'JUDGE_MODEL_UNAVAILABLE',
                 error: `Judge model "${model}" not found on judge host ${host}`,
                 available_models: availableModels,
                 latency_ms: Date.now() - start
@@ -71,6 +78,7 @@ async function validateJudgeModel(host, model, options = {}) {
         const msg = err.name === 'AbortError' ? 'Host unreachable (timeout)' : err.message;
         return {
             valid: false,
+            code: 'JUDGE_HOST_UNREACHABLE',
             error: `Cannot connect to judge host ${host}: ${msg}`,
             latency_ms: Date.now() - start
         };
@@ -100,7 +108,8 @@ async function validateJudgeModel(host, model, options = {}) {
                     think: false,
                     options: { num_predict: 100, temperature: 0.1 }
                 }),
-                signal: controller.signal
+                signal: controller.signal,
+                redirect: 'manual'
             });
         } finally {
             clearTimeout(timeoutId);
@@ -203,7 +212,8 @@ async function probeJudgeCapability(host, model, options = {}) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model }),
-                signal: controller.signal
+                signal: controller.signal,
+                redirect: 'manual'
             });
         } finally {
             clearTimeout(timeoutId);

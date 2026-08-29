@@ -11,7 +11,7 @@ const mongoose = require('mongoose');
 const judgeQueueEntrySchema = new mongoose.Schema({
     batchId:     { type: mongoose.Schema.Types.ObjectId, ref: 'BenchmarkBatch', required: true, index: true },
     resultId:    { type: mongoose.Schema.Types.ObjectId, ref: 'BenchmarkResult', required: true, index: true },
-    status:      { type: String, enum: ['pending', 'running', 'completed', 'failed'], default: 'pending', index: true },
+    status:      { type: String, enum: ['pending', 'running', 'completed', 'failed', 'cancelled'], default: 'pending', index: true },
     judgeConfig: { type: Object, default: {} },
     error:       { type: String },
     createdAt:   { type: Date, default: Date.now },

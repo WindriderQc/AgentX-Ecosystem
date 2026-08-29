@@ -240,7 +240,6 @@ async function cleanupStaleBatches() {
  * Get all prompts grouped by level
  */
 async function getPrompts() {
-    await seedPrompts();
     const { prompts, byLevel } = await BenchmarkPrompt.getAllGroupedByLevel();
 
     return {

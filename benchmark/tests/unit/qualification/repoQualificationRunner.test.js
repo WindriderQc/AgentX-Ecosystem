@@ -325,6 +325,43 @@ describe('repoQualificationRunner.runQualification (offline dry-run)', () => {
 });
 
 describe('repo-coding-qualification.js CLI (--dry-run smoke test)', () => {
+  test('bounds the live Core claim response and rejects redirects', async () => {
+    const payload = Buffer.from(JSON.stringify({ data: { claims: [] } }));
+    const fetchImpl = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => String(payload.byteLength) },
+      body: {
+        async *[Symbol.asyncIterator]() {
+          yield payload;
+        }
+      }
+    }));
+
+    await expect(qualificationCli.requestJson('http://core:3080/claims', fetchImpl))
+      .resolves.toEqual({ data: { claims: [] } });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://core:3080/claims',
+      expect.objectContaining({
+        redirect: 'manual',
+        signal: expect.any(AbortSignal)
+      })
+    );
+
+    fetchImpl.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => String(qualificationCli.MAX_CORE_CLAIM_RESPONSE_BYTES + 1) },
+      body: {
+        async *[Symbol.asyncIterator]() {
+          yield Buffer.from('{}');
+        }
+      }
+    });
+    await expect(qualificationCli.requestJson('http://core:3080/claims', fetchImpl))
+      .rejects.toThrow(/Response body exceeded its byte limit/);
+  });
+
   test('live defaults are the frozen 8K/4K five-seed matrix and require a claim id', () => {
     expect(() => qualificationCli.parseArgs([])).toThrow(/claim-id is required/);
     const args = qualificationCli.parseArgs([
@@ -343,15 +380,17 @@ describe('repo-coding-qualification.js CLI (--dry-run smoke test)', () => {
   });
 
   test('refuses live execution when the exact host claim is absent', async () => {
-    const fetchImpl = jest.fn(async () => ({
-      ok: true,
-      json: async () => ({ data: { claims: [{ hostUrl: 'http://exec:11434', batchId: 'other' }] } })
+    const requestJson = jest.fn(async () => ({
+      data: { claims: [{ hostUrl: 'http://exec:11434', batchId: 'other' }] }
     }));
     await expect(qualificationCli.assertExpectedActiveClaim({
       core: 'http://core:3080',
       host: 'http://exec:11434',
       claimId: 'expected'
-    }, { fetchImpl })).rejects.toThrow(/requires active claim expected/);
+    }, { requestJson })).rejects.toThrow(/requires active claim expected/);
+    expect(requestJson).toHaveBeenCalledWith(
+      'http://core:3080/api/nerve-center/host-preferences/benchmark-claims/active'
+    );
   });
 
   test('rejects a Core contract that changes any frozen campaign setting', () => {

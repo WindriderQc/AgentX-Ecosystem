@@ -11,7 +11,14 @@
 export function showFatalError(message, container) {
     const el = document.createElement('div');
     el.className = 'r-fatal-error';
-    el.innerHTML = `<span class="r-fatal-icon">⚠</span> ${message}`;
+    el.setAttribute('role', 'alert');
+    el.setAttribute('aria-live', 'assertive');
+    const icon = document.createElement('span');
+    icon.className = 'r-fatal-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = '⚠';
+    el.appendChild(icon);
+    el.appendChild(document.createTextNode(` ${message}`));
     if (container) {
         container.prepend(el);
     } else {
@@ -27,5 +34,10 @@ export function showFatalError(message, container) {
  */
 export function showSectionError(container, message) {
     if (!container) return;
-    container.innerHTML = `<div class="r-section-error">${message}</div>`;
+    container.textContent = '';
+    const error = document.createElement('div');
+    error.className = 'r-section-error';
+    error.setAttribute('role', 'alert');
+    error.textContent = message;
+    container.appendChild(error);
 }

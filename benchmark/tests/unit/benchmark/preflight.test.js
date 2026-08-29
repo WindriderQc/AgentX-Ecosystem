@@ -104,6 +104,11 @@ jest.mock('../../../src/services/modelContextResolver', () => ({
     })
 }));
 
+jest.mock('../../../src/helpers/ollamaHostConfig', () => ({
+    normalizeHostUrl: jest.fn((host) => String(host || '').replace(/\/+$/, '')),
+    getConfiguredHosts: jest.fn(() => [])
+}));
+
 // coreApiClient.getDedicationStatuses is called in checkDedication; without a
 // mock it tries to reach real core via node-fetch and times out.
 jest.mock('../../../src/clients/coreApiClient', () => ({
@@ -118,6 +123,7 @@ const ModelProfile = require('../../../models/ModelProfile');
 const { benchmarkFetch } = require('../../../src/services/benchmark/http');
 const { probeJudgeCapability } = require('../../../src/services/benchmark/judgeModelValidator');
 const {
+    checkHostModel,
     checkJudgeConfiguration,
     runPreflight
 } = require('../../../src/services/benchmark/preflight');
@@ -131,10 +137,15 @@ function chainResolved(value) {
 }
 
 function okJson(data) {
+    const payload = JSON.stringify(data);
     return {
         ok: true,
         status: 200,
-        json: async () => data
+        body: {
+            async *[Symbol.asyncIterator]() {
+                yield Buffer.from(payload);
+            }
+        }
     };
 }
 
@@ -155,6 +166,14 @@ describe('benchmark preflight', () => {
             context_length: 8192,
             parameter_size: '7B'
         });
+    });
+
+    it('rejects a metadata execution target before inventory fetch', async () => {
+        benchmarkFetch.mockClear();
+
+        await expect(checkHostModel('http://169.254.169.254:11434', 'model-a'))
+            .resolves.toMatchObject({ ok: false, latency_ms: 0 });
+        expect(benchmarkFetch).not.toHaveBeenCalled();
     });
 
     it('blocks when judge host is unreachable', async () => {

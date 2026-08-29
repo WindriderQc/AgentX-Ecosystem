@@ -14,10 +14,15 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('../../config/logger');
 const BenchmarkResult = require('../../models/BenchmarkResult');
-const { getConfiguredHosts } = require('../../src/helpers/ollamaHostConfig');
-const { benchmarkFetch: fetch } = require('../../src/services/benchmark/http');
+const {
+    getJudgeReadiness,
+    resolveReadyJudgeTarget,
+    judgeUnavailablePayload,
+    toPublicReadiness
+} = require('../../src/services/benchmark/judgeReadiness');
 
-const DEFAULTS_PATH = path.join(process.cwd(), 'config', 'judge-host-defaults.json');
+const DEFAULTS_PATH = process.env.JUDGE_DEFAULTS_PATH
+    || path.join(process.cwd(), 'config', 'judge-host-defaults.json');
 
 function normalizeModelName(name) {
     return String(name || '').trim().replace(/:latest$/i, '');
@@ -41,50 +46,43 @@ function readDefaults() {
 }
 
 function writeDefaults(data) {
+    fs.mkdirSync(path.dirname(DEFAULTS_PATH), { recursive: true });
     fs.writeFileSync(DEFAULTS_PATH, JSON.stringify(data, null, 2), 'utf8');
 }
 
-async function fetchHostModels(hostUrl) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    try {
-        const res = await fetch(`${hostUrl}/api/tags`, { method: 'GET', signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (!res.ok) return [];
-        const data = await res.json();
-        return (data.models || []).map((model) => ({
-            name: normalizeModelName(model.name || model.model || ''),
-            size: model.size || 0,
-            details: model.details || {}
-        })).filter((model) => model.name);
-    } catch {
-        clearTimeout(timeoutId);
-        return [];
-    }
-}
-
-router.get('/judge-defaults', (req, res) => {
+router.get('/judge-defaults', async (req, res) => {
     try {
         const defaults = readDefaults();
-        const hosts = getConfiguredHosts();
-        const hostDefaults = hosts.map((host) => ({
-            hostUrl: host.url,
-            hostName: host.name,
-            defaultJudgeModel: defaults[host.url] || null
+        const readiness = await getJudgeReadiness();
+        const hostDefaults = readiness.hosts.map((host) => ({
+            hostUrl: host.hostUrl,
+            hostName: host.hostName,
+            defaultJudgeModel: defaults[host.hostUrl] || null,
+            selectedJudgeModel: host.selectedModel,
+            selectionSource: host.selectionSource,
+            ready: host.ready
         }));
-        res.json({ status: 'success', data: { hosts: hostDefaults, raw: defaults } });
+        res.json({ status: 'success', data: { hosts: hostDefaults, raw: defaults, readiness } });
     } catch (err) {
         logger.error('Failed to read judge defaults', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
     }
 });
 
-router.put('/judge-defaults', (req, res) => {
+router.put('/judge-defaults', async (req, res) => {
     try {
         const { hostUrl, judgeModel } = req.body;
         if (!hostUrl || typeof hostUrl !== 'string') {
             return res.status(400).json({ status: 'error', error: 'hostUrl is required' });
         }
+
+        if (judgeModel) {
+            const check = await resolveReadyJudgeTarget({ host: hostUrl, model: judgeModel });
+            if (!check.ready) {
+                return res.status(503).json(judgeUnavailablePayload(check, 'Judge selection'));
+            }
+        }
+
         const defaults = readDefaults();
         if (judgeModel) {
             defaults[hostUrl.trim()] = normalizeModelName(judgeModel);
@@ -100,14 +98,36 @@ router.put('/judge-defaults', (req, res) => {
     }
 });
 
+/**
+ * GET /api/benchmark/judge/readiness
+ * One operator-facing state for judge selection, reachability, and installed
+ * model availability. A blocked state is an observation, so it returns 200.
+ */
+router.get('/judge/readiness', async (_req, res) => {
+    try {
+        const readiness = await getJudgeReadiness();
+        res.set('Cache-Control', 'no-store');
+        res.json({ status: 'success', data: readiness });
+    } catch (err) {
+        logger.error('Failed to determine judge readiness', { error: err.message });
+        res.status(500).json({ status: 'error', error: 'Judge readiness check failed' });
+    }
+});
+
 router.get('/judge-roster', async (req, res) => {
     try {
-        const hosts = getConfiguredHosts();
         const defaults = readDefaults();
-
-        const hostModelMaps = await Promise.all(
-            hosts.map(async (host) => ({ host, models: await fetchHostModels(host.url) }))
-        );
+        const readinessState = await getJudgeReadiness({ includeModels: true });
+        const readiness = toPublicReadiness(readinessState);
+        const hostModelMaps = readinessState.hosts.map((host) => ({
+            host: {
+                url: host.hostUrl,
+                name: host.hostName,
+                id: host.hostId
+            },
+            models: host.models,
+            readiness: host
+        }));
 
         const modelHostMap = new Map();
         hostModelMaps.forEach(({ host, models }) => {
@@ -163,10 +183,15 @@ router.get('/judge-roster', async (req, res) => {
             };
         }).sort((left, right) => right.evalCount - left.evalCount);
 
-        const hostPanels = hosts.map((host) => ({
+        const hostPanels = hostModelMaps.map(({ host, readiness: hostReadiness }) => ({
             hostUrl: host.url,
             hostName: host.name,
             defaultJudgeModel: defaults[host.url] || null,
+            selectedJudgeModel: hostReadiness.selectedModel,
+            selectionSource: hostReadiness.selectionSource,
+            judgeReady: hostReadiness.ready,
+            readinessReason: hostReadiness.reason,
+            reachable: hostReadiness.reachable,
             judges: allJudges.filter((judge) => judge.availableOn.some((entry) => entry.url === host.url))
         }));
 
@@ -175,7 +200,8 @@ router.get('/judge-roster', async (req, res) => {
             data: {
                 judges: allJudges,
                 hostPanels,
-                defaults
+                defaults,
+                readiness
             }
         });
     } catch (err) {

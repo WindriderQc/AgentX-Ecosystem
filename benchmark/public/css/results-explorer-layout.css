@@ -270,7 +270,8 @@
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 12px;
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: hidden;
     margin-bottom: 2rem;
 }
 
@@ -464,6 +465,109 @@
     color: #eab308;
     border: 1px solid rgba(234, 179, 8, 0.3);
 }
+
+/* Timestamp-derived evidence age. These styles describe recency only; they do
+   not imply that an older row used a legacy schema. */
+.evidence-age-guide {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+    margin: -0.5rem 0 0.75rem;
+    padding: 0.9rem 1rem;
+    color: rgba(255, 255, 255, 0.72);
+    background: rgba(56, 139, 253, 0.08);
+    border: 1px solid rgba(56, 139, 253, 0.24);
+    border-radius: 8px;
+    line-height: 1.45;
+}
+
+.evidence-age-guide i,
+.evidence-age-guide strong { color: #79c0ff; }
+.evidence-age-guide strong,
+.evidence-age-guide span { display: block; }
+
+.results-evidence-scope {
+    margin: 0 0 1.25rem;
+    color: rgba(255, 255, 255, 0.64);
+    font-size: 0.88rem;
+}
+
+.evidence-age-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.28rem;
+    min-width: 120px;
+}
+
+.evidence-age-cell small,
+.evidence-undated-text { color: rgba(255, 255, 255, 0.58); }
+
+.evidence-era-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.48rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.evidence-era-recent {
+    color: #3fb950;
+    background: rgba(46, 160, 67, 0.12);
+    border-color: rgba(46, 160, 67, 0.32);
+}
+
+.evidence-era-aging {
+    color: #d29922;
+    background: rgba(187, 128, 9, 0.12);
+    border-color: rgba(187, 128, 9, 0.34);
+}
+
+.evidence-era-historical,
+.evidence-era-undated {
+    color: #b1bac4;
+    background: rgba(139, 148, 158, 0.12);
+    border-color: rgba(139, 148, 158, 0.3);
+}
+
+.evidence-era-legacy {
+    color: #f0883e;
+    background: rgba(240, 136, 62, 0.1);
+    border-color: rgba(240, 136, 62, 0.3);
+}
+
+.results-table tbody tr.result-era-historical > td:first-child,
+.results-table tbody tr.result-era-undated > td:first-child {
+    box-shadow: inset 3px 0 0 rgba(139, 148, 158, 0.42);
+}
+
+.evidence-count-recent { color: #3fb950 !important; }
+.evidence-count-aging { color: #d29922 !important; }
+.evidence-count-historical { color: #b1bac4 !important; }
+.evidence-count-legacy { color: #f0883e !important; }
+
+.inspector-evidence-notice {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 0.85rem 1rem;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 3px solid rgba(139, 148, 158, 0.55);
+    border-radius: 8px;
+}
+
+.inspector-evidence-notice.result-era-recent { border-left-color: #3fb950; }
+.inspector-evidence-notice.result-era-aging { border-left-color: #d29922; }
+.inspector-evidence-notice strong,
+.inspector-evidence-notice span { display: block; }
+.inspector-evidence-notice span { color: rgba(255, 255, 255, 0.62); font-size: 0.78rem; }
 
 /* Score Display */
 .score-display {
@@ -729,4 +833,28 @@
     color: rgba(239, 68, 68, 1);
     font-size: 1.2rem;
     font-weight: bold;
+}
+
+.chart-empty-state {
+    min-height: 310px;
+    display: grid;
+    place-items: center;
+    color: rgba(255, 255, 255, 0.55);
+    text-align: center;
+}
+
+.chart-empty-state[hidden] { display: none; }
+
+.chart-card h4 span,
+.scope-label {
+    margin-left: auto;
+    padding: 0.18rem 0.45rem;
+    color: rgba(255, 255, 255, 0.58);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }

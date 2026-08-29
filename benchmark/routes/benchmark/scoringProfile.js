@@ -14,6 +14,9 @@ const {
     updateScoringProfile,
     resetScoringProfile
 } = require('../../src/services/benchmark/scoringProfile');
+const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
+
+const SCORING_PROFILE_RESET_CONFIRMATION = 'RESET SCORING PROFILE';
 
 /**
  * GET /api/benchmark/scoring-profile
@@ -70,6 +73,8 @@ router.put('/scoring-profile', async (req, res) => {
  */
 router.post('/scoring-profile/reset', async (req, res) => {
     try {
+        if (!requireExactConfirmation(req, res, SCORING_PROFILE_RESET_CONFIRMATION)) return;
+
         const defaults = await resetScoringProfile();
         res.json({
             status: 'success',

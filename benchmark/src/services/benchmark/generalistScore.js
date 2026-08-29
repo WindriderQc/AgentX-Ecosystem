@@ -57,6 +57,7 @@ const {
     normalizeQualityTo100,
     normalizeScoreTo100,
     normalizeCategoryKey,
+    buildCategoryEvidenceView,
     confidenceMargin
 } = require('./generalistScoreNormalizers');
 const { calculateGeneralistScoreFromCategories } = require('./generalistScoreCalculator');
@@ -86,6 +87,7 @@ module.exports = {
     normalizeQualityTo100,
     normalizeScoreTo100,
     normalizeCategoryKey,
+    buildCategoryEvidenceView,
     getActiveCategoryWeights,
     calculateGeneralistScoreFromCategories,
     getCategoryScoresByModel,

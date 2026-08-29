@@ -149,7 +149,10 @@ export const fetchTemplates = () => apiFetch(`${BASE}/templates`);
 export const saveTemplate = (payload) => apiFetch(`${BASE}/templates`, { method: 'POST', body: payload });
 
 /** DELETE /api/benchmark/templates/:id */
-export const deleteTemplate = (id) => apiFetch(`${BASE}/templates/${id}`, { method: 'DELETE' });
+export const deleteTemplate = (id, confirmation) => apiFetch(`${BASE}/templates/${id}`, {
+    method: 'DELETE',
+    body: { confirm: confirmation },
+});
 
 /** POST /api/benchmark/templates/:id/use — record a template use */
 export const useTemplate = (id) => apiFetch(`${BASE}/templates/${id}/use`, { method: 'POST' });

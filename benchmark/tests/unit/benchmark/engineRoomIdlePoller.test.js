@@ -144,6 +144,8 @@ function loadEngineRoomModule(overrides = {}) {
     source += `
 module.exports = {
     _enterIdle,
+    _enterLive,
+    _handleStop,
     _checkForActiveBatchDuringIdle,
     __setElements(elements) {
         $actionZone = elements.actionZone ?? $actionZone;
@@ -158,6 +160,7 @@ module.exports = {
         $batchConfig = elements.batchConfig ?? $batchConfig;
         $launchSummary = elements.launchSummary ?? $launchSummary;
         $btnStop = elements.btnStop ?? $btnStop;
+        $stopStatus = elements.stopStatus ?? $stopStatus;
     },
     __getState() {
         return {
@@ -165,6 +168,7 @@ module.exports = {
             idlePoller: _idlePoller,
             livePoller: _poller,
             idlePollSession: _idlePollSession,
+            stopRequestInFlight: _stopRequestInFlight,
         };
     },
 };
@@ -354,5 +358,88 @@ describe('benchmark-v2 idle poller', () => {
         expect(liveSections.style.display).toBe('');
         expect(context.renderActionZoneLive).toHaveBeenCalledWith(actionZoneBits.actionZone, expect.objectContaining({ _id: 'batch-42' }));
         expect(engineRoom.__getState().livePoller).not.toBeNull();
+    });
+});
+
+describe('benchmark-v2 acknowledged stop flow', () => {
+    it('stays live after a failed stop and permits retry before entering idle on acknowledgement', async () => {
+        const actionZoneBits = buildActionZone();
+        const idleSections = new FakeElement('div', { id: 'idle-sections' });
+        const liveSections = new FakeElement('div', { id: 'live-sections' });
+        const btnStop = new FakeElement('button', { id: 'btn-stop', textContent: 'Stop' });
+        const stopStatus = new FakeElement('span', { id: 'stop-status' });
+        stopStatus.hidden = true;
+        const stopFailure = Object.assign(new Error('request failed'), {
+            payload: { error: 'Fixture stop acknowledgement unavailable' },
+        });
+        const doc = buildDocument();
+        const { engineRoom, context } = loadEngineRoomModule({
+            document: doc,
+            stubs: {
+                stopBatch: jest.fn()
+                    .mockRejectedValueOnce(stopFailure)
+                    .mockResolvedValueOnce({
+                        status: 'success',
+                        message: 'Batch stopped',
+                        data: { status: 'stopped' },
+                    }),
+            },
+        });
+
+        engineRoom.__setElements({
+            actionZone: actionZoneBits.actionZone,
+            idleSections,
+            liveSections,
+            infrastructure: new FakeElement('div', { id: 'host-cards' }),
+            batchConfig: new FakeElement('div', { id: 'batch-config' }),
+            launchSummary: new FakeElement('div', { id: 'launch-summary' }),
+            batchCard: new FakeElement('div', { id: 'batch-card' }),
+            liveDetail: new FakeElement('div', { id: 'live-detail' }),
+            modelArena: new FakeElement('div', { id: 'model-arena' }),
+            anomalies: new FakeElement('div', { id: 'anomalies' }),
+            eventLog: new FakeElement('div', { id: 'event-log' }),
+            btnStop,
+            stopStatus,
+        });
+
+        engineRoom._enterLive({
+            _id: 'batch-stop-contract',
+            status: 'running',
+            total_tests: 2,
+            completed: 1,
+            current_test: { stage: 'executing' },
+        });
+        const livePoller = engineRoom.__getState().livePoller;
+
+        await expect(engineRoom._handleStop()).resolves.toBe(false);
+
+        expect(context.stopBatch).toHaveBeenCalledTimes(1);
+        expect(engineRoom.__getState().batchId).toBe('batch-stop-contract');
+        expect(engineRoom.__getState().livePoller).toBe(livePoller);
+        expect(livePoller.destroyed).toBe(false);
+        expect(doc.body.classList.contains('state-live')).toBe(true);
+        expect(idleSections.style.display).toBe('none');
+        expect(liveSections.style.display).toBe('');
+        expect(btnStop.disabled).toBe(false);
+        expect(btnStop.dataset.stopState).toBe('failed');
+        expect(btnStop.textContent).toBe('Retry stop');
+        expect(stopStatus.hidden).toBe(false);
+        expect(stopStatus.textContent).toContain('The batch is still running');
+        expect(context.showFatalError).toHaveBeenCalledWith(expect.stringContaining('Stop failed'));
+
+        await expect(engineRoom._handleStop()).resolves.toBe(true);
+        await flushPromises();
+
+        expect(context.stopBatch).toHaveBeenCalledTimes(2);
+        expect(livePoller.destroyed).toBe(true);
+        expect(engineRoom.__getState().batchId).toBeNull();
+        expect(engineRoom.__getState().livePoller).toBeNull();
+        expect(doc.body.classList.contains('state-live')).toBe(false);
+        expect(idleSections.style.display).toBe('');
+        expect(liveSections.style.display).toBe('none');
+        expect(btnStop.dataset.stopState).toBe('ready');
+        expect(btnStop.textContent).toBe('Stop');
+        expect(stopStatus.hidden).toBe(true);
+        expect(context.showToast).toHaveBeenCalledWith('Batch stopped', 'success', 8000);
     });
 });

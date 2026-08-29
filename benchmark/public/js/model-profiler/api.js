@@ -19,7 +19,9 @@ export const getDashboard = () => fetchJson(`${BASE}/dashboard`);
 export const getHosts = () => fetchJson(`${BASE}/hosts`);
 export const discoverHosts = () => fetchJson(`${BASE}/hosts/discover`, { method: 'POST' });
 export const getHost = (hostId) => fetchJson(`${BASE}/hosts/${hostId}`);
-export const getHostStatus = (hostId) => fetchJson(`${BASE}/hosts/${hostId}/status`);
+export const getHostStatus = (hostId) => fetchJson(`${BASE}/hosts/${hostId}/status/refresh`, {
+    method: 'POST'
+});
 export const upsertHost = (hostId, data) => fetchJson(`${BASE}/hosts/${hostId}`, { method: 'PUT', body: data });
 export const syncHostModels = (hostId) => fetchJson(`${BASE}/hosts/${hostId}/sync`, { method: 'POST' });
 export const getHostFitReport = (hostId) => fetchJson(`${BASE}/hosts/${encodeURIComponent(hostId)}/fit-report`);

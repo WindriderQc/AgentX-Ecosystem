@@ -52,6 +52,36 @@ beforeEach(() => {
 });
 
 describe('Default voting (single call, voting_count=1)', () => {
+    test('caller cancellation aborts the active call without retry or null fallback', async () => {
+        const controller = new AbortController();
+        let markStarted;
+        const started = new Promise((resolve) => { markStarted = resolve; });
+        mockFetchFn.mockImplementation((url, options) => new Promise((resolve, reject) => {
+            markStarted();
+            const onAbort = () => {
+                const error = new Error('aborted');
+                error.name = 'AbortError';
+                reject(error);
+            };
+            options.signal.addEventListener('abort', onAbort, { once: true });
+            if (options.signal.aborted) onAbort();
+        }));
+
+        const pending = askBinaryQuestion('response', 'Is this good?', {
+            ...JUDGE_CONFIG,
+            cancelSignal: controller.signal
+        });
+        await started;
+        controller.abort();
+
+        await expect(pending).rejects.toMatchObject({ code: 'BENCHMARK_BATCH_STOPPED' });
+        expect(mockFetchFn).toHaveBeenCalledTimes(1);
+        expect(logger.warn).not.toHaveBeenCalledWith(
+            'Binary call failed, retrying once',
+            expect.any(Object)
+        );
+    });
+
     test('YES → true (1 call)', async () => {
         mockFetchSequence(['YES']);
         const result = await askBinaryQuestion('response', 'Is this good?', JUDGE_CONFIG);

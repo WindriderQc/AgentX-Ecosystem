@@ -14,7 +14,8 @@ const { identitiesMatch, resolveArtifactIdentity } = require('./profiler/artifac
 const { showModel, generate, listRunning } = require('../clients/ollamaClient');
 const { generateFillPrompt } = require('./contextProbePayload');
 const { isSameOllamaModel } = require('../helpers/ollamaModelIdentity');
-const { normalizeHostUrl } = require('../helpers/ollamaHostConfig');
+const { normalizeHostUrl, getConfiguredHosts } = require('../helpers/ollamaHostConfig');
+const { admitOllamaTargetResolved } = require('../helpers/ollamaTargetAdmission');
 const { normalizeModelName, resolveModelNumCtxDetails } = require('./modelContextResolver');
 const logger = require('../../config/logger');
 
@@ -158,7 +159,7 @@ async function refinePassingBracket(lowerPassingCtx, upperFailingCtx, minIncreme
 
 async function resolveHostUrl(modelName, explicitHostUrl) {
   if (explicitHostUrl) {
-    return normalizeHostUrl(explicitHostUrl);
+    return admitOllamaTargetResolved(explicitHostUrl, { configuredHosts: getConfiguredHosts() });
   }
 
   const entry = await ModelProfile.findOne({
@@ -172,7 +173,7 @@ async function resolveHostUrl(modelName, explicitHostUrl) {
     throw new Error(`No host URL found for model: ${modelName}`);
   }
 
-  return hostUrl;
+  return admitOllamaTargetResolved(hostUrl, { configuredHosts: getConfiguredHosts() });
 }
 
 async function fetchModelMetadata(hostUrl, modelName) {

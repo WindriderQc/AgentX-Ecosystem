@@ -14,11 +14,11 @@ const SK_JUDGE = 'bv2_judgeConfig';
 export function buildJudgeRoster(judgeRoster, config, onlineHosts) {
     const panels = _normalizeHostPanels(judgeRoster);
     if (!panels.length) {
-        return _buildFallbackDropdowns(onlineHosts, config);
+        return _buildFallbackDropdowns(onlineHosts);
     }
 
     const saved = loadObj(SK_JUDGE) || {};
-    const selection = _resolveInitialSelection(panels, saved, config);
+    const selection = _resolveInitialSelection(panels, saved, judgeRoster?.readiness);
     const missingSavedHost = !!(saved.host && !panels.some((p) => p.hostUrl === saved.host) && saved.host !== selection.host);
     const warningBanner = missingSavedHost
         ? `<div class="jrc-warning" role="alert">
@@ -27,7 +27,14 @@ export function buildJudgeRoster(judgeRoster, config, onlineHosts) {
           </div>`
         : '';
 
-    return `<div class="jrc-header">
+    const readiness = judgeRoster?.readiness;
+    const readinessBanner = readiness?.ready
+        ? `<div class="jrc-readiness jrc-readiness-ok" role="status">${esc(readiness.summary || 'Judge readiness confirmed.')}</div>`
+        : `<div class="jrc-readiness jrc-readiness-blocked" role="alert">
+            <strong>Judge scoring is not ready.</strong> ${esc(readiness?.summary || 'No selected, reachable judge is ready.')} Choose an installed host/model pair below; launch preflight will probe it. No model is downloaded or selected automatically.
+          </div>`;
+
+    return `${readinessBanner}<div class="jrc-header">
         <span class="jrc-title">Judge Host</span>
         <a href="/courthouse" class="jrc-courthouse-link">Courthouse &rarr;</a>
       </div>
@@ -130,16 +137,22 @@ function _normalizeHostPanels(judgeRoster) {
                 hostUrl: panel.hostUrl || '',
                 hostName: panel.hostName || panel.hostUrl || 'Unknown host',
                 defaultJudgeModel,
+                selectedJudgeModel: normalizeModelName(panel.selectedJudgeModel || ''),
+                selectionSource: panel.selectionSource || null,
+                judgeReady: panel.judgeReady === true,
                 judges,
             };
         })
         .filter((panel) => panel.hostUrl);
 }
 
-function _resolveInitialSelection(panels, saved = {}, config = {}) {
+function _resolveInitialSelection(panels, saved = {}, readiness = null) {
     const candidates = [
         { host: saved.host || '', model: normalizeModelName(saved.model || '') },
-        { host: config.judge_host || '', model: normalizeModelName(config.judge_model || '') },
+        {
+            host: readiness?.preferred_target?.host || '',
+            model: normalizeModelName(readiness?.preferred_target?.model || '')
+        },
     ];
 
     for (const candidate of candidates) {
@@ -163,8 +176,9 @@ function _resolveInitialSelection(panels, saved = {}, config = {}) {
 }
 
 function _getDefaultJudge(panel) {
-    if (!panel.defaultJudgeModel) return null;
-    return panel.judges.find((judge) => judge.model === panel.defaultJudgeModel) || null;
+    const selectedModel = panel.selectedJudgeModel || panel.defaultJudgeModel;
+    if (!selectedModel) return null;
+    return panel.judges.find((judge) => judge.model === selectedModel) || null;
 }
 
 function _buildHostCard(panel, selection) {
@@ -371,10 +385,10 @@ function normalizeModelName(name) {
     return String(name || '').trim().replace(/:latest$/i, '');
 }
 
-function _buildFallbackDropdowns(onlineHosts, config) {
+function _buildFallbackDropdowns(onlineHosts) {
     const saved = loadObj(SK_JUDGE);
-    const pickModel = saved.model || config.judge_model || '';
-    const pickHost = saved.host || config.judge_host || '';
+    const pickModel = saved.model || '';
+    const pickHost = saved.host || '';
 
     const allModels = new Set();
     (onlineHosts || []).forEach((host) => {
@@ -382,13 +396,13 @@ function _buildFallbackDropdowns(onlineHosts, config) {
     });
 
     const modelOpts = allModels.size
-        ? Array.from(allModels).sort().map((model) =>
+        ? '<option value="">Select an installed model…</option>' + Array.from(allModels).sort().map((model) =>
             `<option value="${esc(model)}"${model === pickModel ? ' selected' : ''}>${esc(model)}</option>`
         ).join('')
         : '<option value="">\u2014 No models \u2014</option>';
 
     const hostOpts = (onlineHosts || []).length
-        ? onlineHosts.map((host) => {
+        ? '<option value="">Select a configured host…</option>' + onlineHosts.map((host) => {
             const url = host.url || '';
             const name = host.name || host.hostname || url;
             return `<option value="${esc(url)}"${url === pickHost ? ' selected' : ''}>${esc(name)}</option>`;

@@ -38,6 +38,16 @@ function laneScores(entry) {
     return out;
 }
 
+function hasFullScopeEvidence(entry) {
+    if (entry.fullScopeEligible === false || entry.evidenceStatus === 'partial_scope') return false;
+    return entry.fullScopeEligible === true || entry.evidenceStatus === 'full_scope';
+}
+
+function podiumTitle(entry, medalIdx) {
+    if (medalIdx === 1 && !hasFullScopeEvidence(entry)) return 'Partial leader';
+    return POD_TITLES[medalIdx];
+}
+
 function categoryHighlights(entry) {
     const lanes = laneScores(entry);
     const scored = CATEGORIES
@@ -149,7 +159,11 @@ function laneStrip(entry, field) {
         const s = lanes[cat];
         const tiny = CAT_TINY[cat] || cat;
         if (s == null) {
-            return `<div class="pod-lane pod-lane-empty" title="${CAT_LABELS[cat]}: not tested">
+            const evidence = entry.categoryEvidence?.[cat];
+            const unavailableReason = evidence === 'attempted_unscored'
+                ? 'attempted; score unavailable'
+                : 'not tested';
+            return `<div class="pod-lane pod-lane-empty" title="${CAT_LABELS[cat]}: ${unavailableReason}">
                 <div class="pod-lane-track"></div>
                 <span class="pod-lane-val">–</span>
                 <span class="pod-lane-lbl">${tiny}</span>
@@ -263,7 +277,7 @@ function podCard(entry, medalIdx, opts = {}) {
         <div class="pod-accent-bar"></div>
         <div class="pod-header">
             <div class="r-pod-medal" aria-label="${MEDAL_LABELS[medalIdx]}">${MEDALS[medalIdx]}</div>
-            <div class="r-pod-label">${POD_TITLES[medalIdx]}</div>
+            <div class="r-pod-label">${podiumTitle(entry, medalIdx)}</div>
             ${sig ? `<div class="pod-signature" title="Derived from category profile">${sig}</div>` : ''}
         </div>
         <div class="pod-topline">

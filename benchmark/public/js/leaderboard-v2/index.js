@@ -5,7 +5,6 @@
 import {
     fetchDashboard,
     fetchGeneralistLeaderboard,
-    fetchBatchQualityBreakdown,
     fetchResults,
     fetchHosts
 } from './api.js';
@@ -22,10 +21,11 @@ import { showFatalError, showSectionError } from '../components/error-banner.js'
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Convert generalist leaderboard entry to the shape expected by generalist-board */
-function toGeneralistBoardEntry(entry) {
+/** Convert generalist leaderboard entry to the shape expected by the boards. */
+function toGeneralistBoardEntry(entry, scoreAxis = 'composite') {
     // generalistScore is 0-100 scale; board expects 0-10
     const score = entry.generalistScore != null ? entry.generalistScore / 10 : 0;
+    const categoryScores = buildCategoryScores(entry.categoryAverages || {});
     return {
         model:           entry.model,
         host:            entry.host || null,
@@ -51,7 +51,10 @@ function toGeneralistBoardEntry(entry) {
         minConsistencyResults: entry.minConsistencyResults ?? 0,
         needsReviewCount: entry.needsReviewCount || 0,
         lowConfidenceCount: entry.lowConfidenceCount || 0,
-        categoryScores:  buildCategoryScores(entry.categoryAverages || {}),
+        categoryScores,
+        categoryEvidence: entry.categoryEvidence || {},
+        dimensions: buildCategoryDimensions(categoryScores),
+        scoreAxis,
         confidence:      entry.confidenceMargin != null ? entry.confidenceMargin : null,
         reviewCount:     entry.needsReviewCount || 0,
         trend:           null,
@@ -67,6 +70,16 @@ function buildCategoryScores(categoryAverages) {
         scores[cat] = val != null ? Number(val) / 10 : null;
     }
     return scores;
+}
+
+/** Use the exact filtered leaderboard cohort for category bars and map cells. */
+function buildCategoryDimensions(categoryScores) {
+    return Object.entries(categoryScores || {})
+        .filter(([, value]) => value !== null && value !== undefined && Number.isFinite(Number(value)))
+        .map(([name, value]) => ({
+            name,
+            yesRate: Math.min(1, Math.max(0, Number(value) / 10))
+        }));
 }
 
 /** Render the initial loading skeleton in <main> */
@@ -348,71 +361,6 @@ function wireAxisChip(main, leaderboardMeta = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Data enrichment — quality board
-// ---------------------------------------------------------------------------
-
-/**
- * For each unique model/host combo in rankings, fetch quality-breakdown via
- * a single batch POST and derive a `dimensions` array ([{ name, yesRate }])
- * from the breakdown data.
- *
- * quality-breakdown returns { overall, by_category, ... } per pair.
- * `overall` gives avg_quality per model (0-10 scale).
- * `by_category` is keyed by model name -> { catName: { avg_quality, tests } }.
- * We treat category scores (normalised to 0-1) as yesRate proxies.
- *
- * Also attaches `avgQuality` from overall when available.
- *
- * Mutates entries in place; returns the enriched array.
- */
-async function enrichWithQualityData(rankings) {
-    const pairs = rankings.map(e => ({ model: e.model, host: e.host || null }));
-
-    let batchResults = [];
-    try {
-        const res = await fetchBatchQualityBreakdown(pairs);
-        batchResults = res?.data?.results || [];
-    } catch (err) {
-        console.warn('[quality] batch fetch failed:', err.message);
-        rankings.forEach(e => { e.dimensions = []; });
-        return rankings;
-    }
-
-    rankings.forEach((entry, i) => {
-        const item = batchResults[i];
-        const data = item?.breakdown || {};
-
-        if (!item || item.error) {
-            entry.dimensions = [];
-            return;
-        }
-
-        // overall score for this specific model/host
-        const overall = Array.isArray(data.overall)
-            ? data.overall.find(o => o.model === entry.model)
-            : null;
-        if (overall) {
-            entry.avgQuality = parseFloat(overall.avg_quality) || entry.avgQuality;
-        }
-
-        // Build dimension list from by_category for this model
-        const byCategory = data.by_category?.[entry.model] || {};
-        const dims = Object.entries(byCategory)
-            .map(([name, stats]) => ({
-                name,
-                yesRate: stats.avg_quality != null
-                    ? Math.min(1, Math.max(0, parseFloat(stats.avg_quality) / 10))
-                    : 0
-            }))
-            .sort((a, b) => b.yesRate - a.yesRate);
-
-        entry.dimensions = dims;
-    });
-
-    return rankings;
-}
-
-// ---------------------------------------------------------------------------
 // Data enrichment — performance board
 // ---------------------------------------------------------------------------
 
@@ -617,7 +565,7 @@ async function init() {
     }
 
     // Build working copy enriched for generalist-board / category-map
-    const rankings = rawRankings.map(toGeneralistBoardEntry);
+    const rankings = rawRankings.map(entry => toGeneralistBoardEntry(entry, _currentAxis));
 
     // Resolve host IPs to friendly names
     for (const entry of rankings) {
@@ -728,14 +676,12 @@ async function init() {
             excluded: Number(generalistRes?.data?.trustedFilters?.excludedIncompleteBatches || 0)
         });
 
-        // Enrich with quality dimensions, performance metrics, and judge calibration,
-        // then re-render in place so the section shows the full unified info.
+        // Enrich with performance metrics and judge calibration, then re-render.
+        // Category values already come from the exact filtered leaderboard
+        // cohort; a broader quality-breakdown query must not overwrite them.
         (async () => {
             try {
-                await Promise.all([
-                    enrichWithQualityData(visibleRankings),
-                    enrichWithPerfData(visibleRankings)
-                ]);
+                await enrichWithPerfData(visibleRankings);
 
                 try {
                     const calRes = await fetch('/api/benchmark/judge/calibration-status').then(r => r.json());

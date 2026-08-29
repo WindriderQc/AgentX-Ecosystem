@@ -10,6 +10,11 @@ const { getFetchOptions } = require('../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
 const { DEFAULT_SCORING_CATEGORY, normalizeScoringCategory } = require('./scoring/scoringConfigs');
+const {
+    createJudgeAbortContext,
+    rethrowIfJudgeCancelled,
+    throwIfJudgeCancelled
+} = require('./scoring/judgeCall');
 
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const JUDGE_RESPONSE_CHAR_BUDGET = 8000;
@@ -96,26 +101,26 @@ RESPONSE_END
 
 Answer ONLY "YES" or "NO":`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), judgeConfig.timeout || 15000);
+    const abortContext = createJudgeAbortContext(judgeConfig, judgeConfig.timeout || 15000);
 
     try {
+        throwIfJudgeCancelled(judgeConfig);
         const { url, body } = buildGenerateRequest(judgeConfig, prompt, 10, 'benchmark-ref-keypoint');
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
             headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
-            signal: controller.signal
+            signal: abortContext.signal
         });
 
         const res = await fetch(url, fetchOptions);
-        clearTimeout(timeoutId);
 
         if (!res.ok) {
             throw new Error(`Judge HTTP ${res.status}`);
         }
 
         const data = await res.json();
+        throwIfJudgeCancelled(judgeConfig);
         const text = (data.response || '').toLowerCase().trim();
         const verdict = text.match(/^[^a-z0-9]*(yes|no)\b/);
         const found = !!verdict && verdict[1] === 'yes';
@@ -125,12 +130,14 @@ Answer ONLY "YES" or "NO":`;
             confidence: found ? 'present' : 'absent'
         };
     } catch (err) {
-        clearTimeout(timeoutId);
+        rethrowIfJudgeCancelled(err, judgeConfig);
         logger.error('Key point check failed', {
             error: err.message,
             keyPoint: keyPoint.substring(0, 50)
         });
         return { found: false, confidence: 'error' };
+    } finally {
+        abortContext.cleanup();
     }
 }
 
@@ -153,26 +160,26 @@ ${response.substring(0, REFERENCE_CHAR_BUDGET)}
 
 Answer ONLY "YES" if there are contradictions, or "NO" if there are no contradictions:`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), judgeConfig.timeout || 20000);
+    const abortContext = createJudgeAbortContext(judgeConfig, judgeConfig.timeout || 20000);
 
     try {
+        throwIfJudgeCancelled(judgeConfig);
         const { url, body } = buildGenerateRequest(judgeConfig, prompt, 10, 'benchmark-ref-contradictions');
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
             headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
-            signal: controller.signal
+            signal: abortContext.signal
         });
 
         const res = await fetch(url, fetchOptions);
-        clearTimeout(timeoutId);
 
         if (!res.ok) {
             throw new Error(`Judge HTTP ${res.status}`);
         }
 
         const data = await res.json();
+        throwIfJudgeCancelled(judgeConfig);
         const text = (data.response || '').toLowerCase().trim();
         const verdict = text.match(/^[^a-z0-9]*(yes|no)\b/);
         const hasContradictions = !!verdict && verdict[1] === 'yes';
@@ -184,9 +191,11 @@ Answer ONLY "YES" if there are contradictions, or "NO" if there are no contradic
                 : 'No contradictions found'
         };
     } catch (err) {
-        clearTimeout(timeoutId);
+        rethrowIfJudgeCancelled(err, judgeConfig);
         logger.error('Contradiction check failed', { error: err.message });
         return { hasContradictions: false, details: 'Check failed' };
+    } finally {
+        abortContext.cleanup();
     }
 }
 
@@ -213,26 +222,26 @@ ${response.substring(0, REFERENCE_CHAR_BUDGET)}
 
 Answer with ONLY one word: EXCELLENT, GOOD, PARTIAL, or POOR:`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), judgeConfig.timeout || 20000);
+    const abortContext = createJudgeAbortContext(judgeConfig, judgeConfig.timeout || 20000);
 
     try {
+        throwIfJudgeCancelled(judgeConfig);
         const { url, body } = buildGenerateRequest(judgeConfig, prompt, 15, 'benchmark-ref-overall');
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
             headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
-            signal: controller.signal
+            signal: abortContext.signal
         });
 
         const res = await fetch(url, fetchOptions);
-        clearTimeout(timeoutId);
 
         if (!res.ok) {
             throw new Error(`Judge HTTP ${res.status}`);
         }
 
         const data = await res.json();
+        throwIfJudgeCancelled(judgeConfig);
         const text = (data.response || '').toLowerCase().trim();
 
         const scoreMap = {
@@ -252,9 +261,11 @@ Answer with ONLY one word: EXCELLENT, GOOD, PARTIAL, or POOR:`;
         logger.warn('Unclear similarity rating', { response: text });
         return { similarity: 'partial', score: 5 };
     } catch (err) {
-        clearTimeout(timeoutId);
+        rethrowIfJudgeCancelled(err, judgeConfig);
         logger.error('Similarity check failed', { error: err.message });
         return { similarity: 'error', score: 5 };
+    } finally {
+        abortContext.cleanup();
     }
 }
 
@@ -290,6 +301,7 @@ async function score(response, prompt, judgeConfig) {
     // ceiling at 8k context, so parallel judge calls make scoring flaky.
     const keyPointResults = [];
     for (const point of keyPoints) {
+        throwIfJudgeCancelled(judgeConfig);
         keyPointResults.push(await checkKeyPoint(response, point, judgeConfig));
     }
 
@@ -300,9 +312,11 @@ async function score(response, prompt, judgeConfig) {
 
     // Check for contradictions
     const contradictions = await checkContradictions(response, reference, judgeConfig);
+    throwIfJudgeCancelled(judgeConfig);
 
     // Get overall similarity
     const similarity = await checkOverallSimilarity(response, reference, judgeConfig);
+    throwIfJudgeCancelled(judgeConfig);
 
     // Calculate final score
     // 70% similarity rating, 30% key-point coverage, penalty if contradictions.

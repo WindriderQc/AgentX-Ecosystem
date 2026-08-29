@@ -38,6 +38,21 @@ describe('applyScoresToResult — composite_score uses performance_baseline', ()
         judge_confidence: 0.9
     };
 
+    it('does not persist scores when batch cancellation is already committed', async () => {
+        const controller = new AbortController();
+        controller.abort(new Error('private stop reason'));
+
+        await expect(applyScoresToResult('cancelled-id', baseScores, {
+            latency: 500,
+            tokens_per_sec: 20,
+            prompt_category: 'knowledge'
+        }, { cancelSignal: controller.signal })).rejects.toMatchObject({
+            code: 'BENCHMARK_BATCH_STOPPED',
+            message: 'Benchmark batch judging cancelled'
+        });
+        expect(captured).toHaveLength(0);
+    });
+
     it('produces a higher composite when calibrated baseline is present', async () => {
         const slowRaw = {
             latency: 5000,

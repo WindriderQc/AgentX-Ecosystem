@@ -76,6 +76,13 @@ function entryKey(entry) {
   return `${entry.model || ''}::${entry.host || ''}`;
 }
 
+function categoryScore(entry, category) {
+  const raw = entry.categoryScores?.[category];
+  return raw !== null && raw !== undefined && Number.isFinite(Number(raw))
+    ? Number(raw)
+    : null;
+}
+
 function buildChampionMap(rankings) {
   const champions = new Map();
 
@@ -84,8 +91,8 @@ function buildChampionMap(rankings) {
     let winnerScore = -Infinity;
 
     for (const entry of rankings) {
-      const score = Number(entry.categoryScores?.[category]);
-      if (!Number.isFinite(score)) continue;
+      const score = categoryScore(entry, category);
+      if (score === null) continue;
       if (score > winnerScore) {
         winner = entry;
         winnerScore = score;
@@ -124,9 +131,9 @@ function categoryExtremes(entry) {
     .map(category => ({
       category,
       meta: CATEGORY_META[category],
-      score: Number(entry.categoryScores?.[category])
+      score: categoryScore(entry, category)
     }))
-    .filter(item => Number.isFinite(item.score));
+    .filter(item => item.score !== null);
 
   if (scores.length === 0) {
     return { best: null, watch: null };

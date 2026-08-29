@@ -3,6 +3,8 @@
 
 import { levelBadge } from '../components/level-badge.js';
 import { getReadinessMap, getBadgeHtml } from '../model-profiler/components/readiness-cache.js';
+import { evidenceBadge } from './evidence-provenance.js';
+import { escHtml } from '../utils/format.js';
 
 // ─── Filter definitions ──────────────────────────────────────────────────────
 
@@ -96,9 +98,11 @@ function applyFilter(candidates, filterId) {
 // ─── Single item row ─────────────────────────────────────────────────────────
 
 function renderItem(r, readinessMap) {
+    const id = String(r._id || r.id || '');
     const level = r.prompt_level || 1;
     const flag = classifyFlag(r) || 'anomaly';
-    const promptText = (r.prompt_name || r.prompt || '').slice(0, 90);
+    const rawPrompt = r.prompt_name || r.prompt || '';
+    const promptText = rawPrompt.slice(0, 90);
     const model = (r.model || '').replace(/:latest$/, '');
     const score = r.quality_score ?? r.composite_score;
     const scoreDisplay = score !== null && score !== undefined
@@ -119,17 +123,22 @@ function renderItem(r, readinessMap) {
         : conf >= 0.4 ? 'conf-low'
         : 'conf-crit';
 
-    const promptTitle = (r.prompt_name || r.prompt || '').replace(/"/g, '&quot;');
+    const accessibleLabel = [
+        `Open review details for ${promptText || 'unnamed prompt'}`,
+        model ? `model ${model}` : '',
+        `confidence ${confDisplay}`,
+        `score ${scoreDisplay}`
+    ].filter(Boolean).join(', ');
 
-    return `<div class="rq-item rq-flag-${flag}" data-id="${r._id}">
+    return `<button type="button" class="rq-item rq-flag-${flag}" data-id="${escHtml(id)}" aria-expanded="false" aria-controls="courthouse-detail-panel" aria-label="${escHtml(accessibleLabel)}">
         ${levelBadge(level)}
         ${flagChip(flag)}
-        <span class="rq-prompt" title="${promptTitle}">${promptText}</span>
-        <span class="rq-model" title="${model}">${model}${readinessBadge}</span>
+        <span class="rq-prompt" title="${escHtml(rawPrompt)}">${escHtml(promptText)}</span>
+        <span class="rq-model" title="${escHtml(model)}">${escHtml(model)}${readinessBadge}${evidenceBadge(r, { compact: true })}</span>
         <span class="rq-conf ${confClass}">${confDisplay}</span>
         <span class="rq-score ${sc}">${scoreDisplay}</span>
-        <span class="rq-arrow">›</span>
-    </div>`;
+        <span class="rq-arrow" aria-hidden="true">›</span>
+    </button>`;
 }
 
 // ─── Empty state ─────────────────────────────────────────────────────────────
@@ -138,7 +147,7 @@ function renderEmpty(filterId) {
     const msg = filterId === 'all'
         ? 'No results need review'
         : `No results match "${FILTERS.find(f => f.id === filterId)?.label || filterId}"`;
-    return `<div style="padding:1.5rem;text-align:center;color:#444;font-size:0.7rem;">${msg}</div>`;
+    return `<div class="ch-muted-state">${msg}</div>`;
 }
 
 // ─── Public export ────────────────────────────────────────────────────────────
@@ -160,7 +169,7 @@ export async function renderReviewQueue(container, results, onItemClick) {
         const chips = FILTERS.map(f => {
             const count = f.id === 'all' ? candidates.length : applyFilter(candidates, f.id).length;
             const active = f.id === filterId ? ' active' : '';
-            return `<button class="rq-chip${active}" data-filter="${f.id}">${f.label} <span style="opacity:0.6">(${count})</span></button>`;
+            return `<button type="button" class="rq-chip${active}" data-filter="${f.id}">${f.label} <span class="rq-chip-count">(${count})</span></button>`;
         }).join('');
 
         const items = filtered.length > 0
@@ -204,11 +213,16 @@ export async function renderReviewQueue(container, results, onItemClick) {
         const item = e.target.closest('.rq-item');
         if (item && typeof onItemClick === 'function') {
             const id = item.dataset.id;
-            const result = candidates.find(r => String(r._id) === id);
+            const result = candidates.find(r => String(r._id || r.id || '') === id);
             if (result) {
-                // Mark item active
-                container.querySelectorAll('.rq-item').forEach(el => el.classList.remove('is-active'));
+                document.querySelectorAll('.rq-item').forEach(el => {
+                    el.classList.remove('is-active');
+                    el.setAttribute('aria-expanded', 'false');
+                });
+                document.querySelectorAll('.ledger-row').forEach(el => el.classList.remove('is-active'));
+                document.querySelectorAll('.ledger-open').forEach(el => el.setAttribute('aria-expanded', 'false'));
                 item.classList.add('is-active');
+                item.setAttribute('aria-expanded', 'true');
                 onItemClick(result);
             }
         }

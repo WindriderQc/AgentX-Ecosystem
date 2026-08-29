@@ -17,11 +17,23 @@
 
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
 const ollamaVramService        = require('./ollamaVramService');
-const { getFetchOptions }      = require('../helpers/httpAgent');
+const nodeFetch                = require('node-fetch');
 const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { isSameOllamaModel }    = require('../helpers/ollamaModelIdentity');
 const { generateFillPrompt }   = require('./contextProbePayload');
 const { getConfiguredHosts }   = require('../helpers/ollamaHostConfig');
+const {
+  admitOllamaTarget,
+  admitOllamaTargetResolved
+} = require('../helpers/ollamaTargetAdmission');
+const { createNodeFetchPeerTransport } = require('../helpers/outboundHttpTransport');
+const {
+  OUTBOUND_ERROR_CODES,
+  createOutboundHttpExecutor,
+  discardBoundedResponse,
+  readBoundedJson,
+  readBoundedText
+} = require('../../../shared/outboundHttpExecutor');
 const { resolveModelNumCtxDetails, normalizeModelName } = require('./modelContextResolver');
 
 // Host test warm-up routes through core's /api/inference/generate. As of
@@ -35,6 +47,184 @@ const { resolveModelNumCtxDetails, normalizeModelName } = require('./modelContex
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const circuitBreaker           = require('../helpers/circuitBreaker');
 const logger                   = require('../../config/logger');
+
+const HOST_TEST_OPERATIONS = Object.freeze({
+  TAGS: 'benchmark.host-test.tags',
+  LOADED_PS: 'benchmark.host-test.loaded-ps',
+  UNLOAD_PS: 'benchmark.host-test.unload-ps',
+  UNLOAD_CURRENT: 'benchmark.host-test.unload-current',
+  UNLOAD_ONE: 'benchmark.host-test.unload-one',
+  WARMUP: 'benchmark.host-test.warmup',
+  PROBE: 'benchmark.host-test.probe'
+});
+
+function operation(method, pathPattern, {
+  deadlineMs,
+  maxRequestBytes = 0,
+  maxResponseBytes,
+  responseMode
+}) {
+  return Object.freeze({
+    allowSearch: false,
+    method,
+    pathPattern,
+    responseMode,
+    policy: Object.freeze({
+      authoritySource: 'request-admitted',
+      deadlineMs,
+      maxRequestBytes,
+      maxResponseBytes
+    })
+  });
+}
+
+const HOST_TEST_OPERATION_SPECS = Object.freeze({
+  [HOST_TEST_OPERATIONS.TAGS]: operation('GET', '^/api/tags$', {
+    deadlineMs: 5_000,
+    maxResponseBytes: 1024 * 1024,
+    responseMode: 'json'
+  }),
+  [HOST_TEST_OPERATIONS.LOADED_PS]: operation('GET', '^/api/ps$', {
+    deadlineMs: 5_000,
+    maxResponseBytes: 1024 * 1024,
+    responseMode: 'json'
+  }),
+  [HOST_TEST_OPERATIONS.UNLOAD_PS]: operation('GET', '^/api/ps$', {
+    deadlineMs: 5_000,
+    maxResponseBytes: 1024 * 1024,
+    responseMode: 'json'
+  }),
+  [HOST_TEST_OPERATIONS.UNLOAD_CURRENT]: operation('POST', '^/api/generate$', {
+    deadlineMs: 15_000,
+    maxRequestBytes: 64 * 1024,
+    maxResponseBytes: 64 * 1024,
+    responseMode: 'discard'
+  }),
+  [HOST_TEST_OPERATIONS.UNLOAD_ONE]: operation('POST', '^/api/generate$', {
+    deadlineMs: 15_000,
+    maxRequestBytes: 64 * 1024,
+    maxResponseBytes: 64 * 1024,
+    responseMode: 'discard'
+  }),
+  [HOST_TEST_OPERATIONS.WARMUP]: operation('POST', '^/api/(?:inference/)?generate$', {
+    deadlineMs: 600_000,
+    maxRequestBytes: 1024 * 1024,
+    maxResponseBytes: 1024 * 1024,
+    responseMode: 'text'
+  }),
+  [HOST_TEST_OPERATIONS.PROBE]: operation('POST', '^/api/generate$', {
+    deadlineMs: 600_000,
+    maxRequestBytes: 16 * 1024 * 1024,
+    maxResponseBytes: 8 * 1024 * 1024,
+    responseMode: 'json'
+  })
+});
+
+function configuredCoreOrigin(coreUrl = CORE_URL) {
+  let parsed;
+  try {
+    parsed = new URL(coreUrl);
+  } catch {
+    throw new Error('Core service URL is invalid');
+  }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    || parsed.username
+    || parsed.password
+    || parsed.pathname !== '/'
+    || parsed.search
+    || parsed.hash) {
+    throw new Error('Core service URL is invalid');
+  }
+  return parsed.origin;
+}
+
+function operationMatches(spec, method, target) {
+  return spec.method === method
+    && new RegExp(spec.pathPattern).test(target.pathname)
+    && (spec.allowSearch || !target.search);
+}
+
+function assertRegisteredOperation(operationId, method, target) {
+  const spec = HOST_TEST_OPERATION_SPECS[operationId];
+  if (!spec || !operationMatches(spec, method, target)) {
+    throw new Error('Host test outbound operation is not registered');
+  }
+  return spec;
+}
+
+function createHostTestExecutor(options = {}) {
+  const admitTarget = options.admitOllamaTargetResolved || admitOllamaTargetResolved;
+  const configuredHosts = options.getConfiguredHosts || getConfiguredHosts;
+  const coreUrl = options.coreUrl || CORE_URL;
+
+  return createOutboundHttpExecutor({
+    operations: Object.fromEntries(Object.entries(HOST_TEST_OPERATION_SPECS)
+      .map(([operationId, spec]) => [operationId, spec.policy])),
+    authorityAdapter: async ({ sinkId, target }) => {
+      const spec = HOST_TEST_OPERATION_SPECS[sinkId];
+      const requested = new URL(target);
+      if (!spec
+        || !new RegExp(spec.pathPattern).test(requested.pathname)
+        || (!spec.allowSearch && requested.search)) {
+        throw new Error('Host test outbound target is not registered');
+      }
+
+      if (sinkId === HOST_TEST_OPERATIONS.WARMUP
+        && requested.pathname === '/api/inference/generate') {
+        const coreOrigin = configuredCoreOrigin(coreUrl);
+        if (requested.origin !== coreOrigin) {
+          throw new Error('Host test Core warm-up target is not configured');
+        }
+        return { expectedOrigin: coreOrigin };
+      }
+
+      const expectedOrigin = await admitTarget(requested.origin, {
+        configuredHosts: configuredHosts()
+      });
+      if (requested.origin !== expectedOrigin) {
+        throw new Error('Host test Ollama target is not admitted');
+      }
+      return { expectedOrigin };
+    },
+    fetchImpl: options.fetchImpl || nodeFetch,
+    transportAdapter: options.transportAdapter || createNodeFetchPeerTransport()
+  });
+}
+
+const hostTestExecutor = createHostTestExecutor();
+
+async function hostTestRequest(operationId, target, options = {}, executor = hostTestExecutor) {
+  let requested;
+  try {
+    requested = new URL(target);
+  } catch {
+    throw new Error('Host test outbound target is not registered');
+  }
+  const method = String(options.method || 'GET').toUpperCase();
+  assertRegisteredOperation(operationId, method, requested);
+  const receipt = await executor.admitTarget(operationId, requested.href, {
+    signal: options.signal
+  });
+  return executor.request(receipt, {
+    ...options,
+    method
+  });
+}
+
+function createLocalDeadline(timeoutMs, maximumMs) {
+  const parsed = Number(timeoutMs);
+  const durationMs = Number.isFinite(parsed) && parsed > 0
+    ? Math.min(Math.round(parsed), maximumMs)
+    : maximumMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), durationMs);
+  timer.unref?.();
+  return Object.freeze({
+    signal: controller.signal,
+    dispose: () => clearTimeout(timer),
+    get expired() { return controller.signal.aborted; }
+  });
+}
 
 // ── Configuration ──────────────────────────────────────────────────────────────
 
@@ -92,14 +282,39 @@ function buildProbePlan(numCtx, cfg) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-const _fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
+function legacyHttpErrorMessage(error) {
+  return error?.code === OUTBOUND_ERROR_CODES.REDIRECT_REJECTED
+    && Number.isInteger(error.status)
+    ? `HTTP ${error.status}`
+    : error.message;
+}
 
 /**
  * Check host connectivity and return model list.
  * @param {string} hostUrl
  * @returns {Promise<{ available: boolean, models: string[], latency: number, error?: string }>}
  */
-async function checkHost(hostUrl) {
+async function checkHost(hostUrl, options = {}) {
+  const admitTarget = options.admitOllamaTargetResolved || admitOllamaTargetResolved;
+  const admitOrigin = options.admitOllamaTarget || admitOllamaTarget;
+  const configuredHosts = options.getConfiguredHosts || getConfiguredHosts;
+  const executor = options.executor || (
+    options.fetchImpl || options.transportAdapter || options.admitOllamaTargetResolved
+      ? createHostTestExecutor({
+        admitOllamaTargetResolved: admitTarget,
+        coreUrl: options.coreUrl,
+        fetchImpl: options.fetchImpl,
+        getConfiguredHosts: configuredHosts,
+        transportAdapter: options.transportAdapter
+      })
+      : hostTestExecutor
+  );
+  try {
+    hostUrl = admitOrigin(hostUrl, { configuredHosts: configuredHosts() });
+  } catch (error) {
+    return { available: false, models: [], latency: 0, error: error.message };
+  }
+
   // Circuit breaker gate
   const gate = circuitBreaker.canRequest(hostUrl);
   if (!gate.allowed) {
@@ -109,9 +324,15 @@ async function checkHost(hostUrl) {
   const start = Date.now();
   try {
     const url = `${hostUrl}/api/tags`;
-    const res = await _fetch(url, { method: 'GET', timeout: 5000, ...getFetchOptions(url) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const res = await hostTestRequest(HOST_TEST_OPERATIONS.TAGS, url, { method: 'GET' }, executor);
+    if (!res.ok) {
+      // Preserve the legacy status-first connectivity result.  Draining an
+      // untrusted error body can otherwise turn an immediate HTTP failure into
+      // a response-read timeout or byte-limit error.
+      await res.cancel();
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await readBoundedJson(res);
     const models = (data.models || [])
       .filter(m => {
         const name   = m.name.toLowerCase();
@@ -126,19 +347,32 @@ async function checkHost(hostUrl) {
     return { available: true, models, latency: Date.now() - start };
   } catch (err) {
     circuitBreaker.recordFailure(hostUrl);
-    return { available: false, models: [], latency: Date.now() - start, error: err.message };
+    return {
+      available: false,
+      models: [],
+      latency: Date.now() - start,
+      error: legacyHttpErrorMessage(err)
+    };
   }
 }
 
 /**
  * Return loaded model metadata from /api/ps when the target is already in VRAM.
  */
-async function getLoadedModelInfo(hostUrl, modelName) {
+async function getLoadedModelInfo(hostUrl, modelName, executor = hostTestExecutor) {
   try {
     const url = `${hostUrl}/api/ps`;
-    const res = await _fetch(url, { method: 'GET', timeout: 5000, ...getFetchOptions(url) });
-    if (!res.ok) return null;
-    const data = await res.json();
+    const res = await hostTestRequest(
+      HOST_TEST_OPERATIONS.LOADED_PS,
+      url,
+      { method: 'GET' },
+      executor
+    );
+    if (!res.ok) {
+      await res.cancel();
+      return null;
+    }
+    const data = await readBoundedJson(res);
     const loaded = data.models || [];
     return loaded.find(m => isSameOllamaModel(m.name || m.model, modelName)) || null;
   } catch {
@@ -196,40 +430,46 @@ function buildWarmupRequest(hostUrl, modelName, alreadyLoaded, numCtx) {
  * Unload whatever model is currently occupying VRAM so the target model
  * can load cleanly without Ollama juggling both simultaneously.
  */
-async function unloadCurrentModel(hostUrl, targetModelName) {
+async function unloadCurrentModel(hostUrl, targetModelName, executor = hostTestExecutor) {
   try {
     const url = `${hostUrl}/api/ps`;
-    const res = await _fetch(url, { method: 'GET', timeout: 5000, ...getFetchOptions(url) });
-    if (!res.ok) return;
-    const data = await res.json();
+    const res = await hostTestRequest(
+      HOST_TEST_OPERATIONS.UNLOAD_PS,
+      url,
+      { method: 'GET' },
+      executor
+    );
+    if (!res.ok) {
+      await res.cancel();
+      return;
+    }
+    const data = await readBoundedJson(res);
     const loaded = data.models || [];
 
     for (const m of loaded) {
       if (isSameOllamaModel(m.name, targetModelName)) continue; // already our target
       logger.info('Unloading model before warmup', { hostUrl, model: m.name });
       const genUrl = `${hostUrl}/api/generate`;
-      await _fetch(genUrl, {
+      const unloadResponse = await hostTestRequest(HOST_TEST_OPERATIONS.UNLOAD_CURRENT, genUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: m.name, keep_alive: 0, stream: false }),
-        timeout: 15000,
-        ...getFetchOptions(genUrl)
-      });
+        body: JSON.stringify({ model: m.name, keep_alive: 0, stream: false })
+      }, executor);
+      await discardBoundedResponse(unloadResponse);
     }
   } catch (err) {
     logger.debug('Pre-warmup unload best-effort failed', { hostUrl, error: err.message });
   }
 }
 
-async function unloadOneModel(hostUrl, modelName) {
+async function unloadOneModel(hostUrl, modelName, executor = hostTestExecutor) {
   const genUrl = `${hostUrl}/api/generate`;
-  await _fetch(genUrl, {
+  const response = await hostTestRequest(HOST_TEST_OPERATIONS.UNLOAD_ONE, genUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: modelName, keep_alive: 0, stream: false }),
-    timeout: 15000,
-    ...getFetchOptions(genUrl)
-  });
+    body: JSON.stringify({ model: modelName, keep_alive: 0, stream: false })
+  }, executor);
+  await discardBoundedResponse(response);
 }
 
 /**
@@ -237,8 +477,8 @@ async function unloadOneModel(hostUrl, modelName) {
  * Ensures the model is loaded into VRAM before the timed test.
  * Uses a longer timeout for cold loads (model not yet in VRAM).
  */
-async function warmUp(hostUrl, modelName, _timeoutMs, numCtx) {
-  const loadedInfo = await getLoadedModelInfo(hostUrl, modelName);
+async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTestExecutor) {
+  const loadedInfo = await getLoadedModelInfo(hostUrl, modelName, executor);
   const requestedNumCtx = Number.isFinite(Number(numCtx)) && Number(numCtx) > 0
     ? Math.round(Number(numCtx))
     : null;
@@ -256,7 +496,7 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx) {
       requestedNumCtx
     });
     try {
-      await unloadOneModel(hostUrl, loadedName);
+      await unloadOneModel(hostUrl, loadedName, executor);
     } catch (err) {
       logger.debug('Context-mismatch unload best-effort failed', { hostUrl, modelName, error: err.message });
     }
@@ -264,7 +504,7 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx) {
   }
 
   if (!alreadyLoaded) {
-    await unloadCurrentModel(hostUrl, modelName);
+    await unloadCurrentModel(hostUrl, modelName, executor);
   }
 
   // Cold loading goes directly to the claimed Ollama host. This prevents a
@@ -280,29 +520,39 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx) {
     timeoutMs: request.timeoutMs
   });
 
+  const deadline = createLocalDeadline(
+    request.timeoutMs,
+    HOST_TEST_OPERATION_SPECS[HOST_TEST_OPERATIONS.WARMUP].policy.deadlineMs
+  );
   try {
-    const response = await _fetch(request.url, {
+    const response = await hostTestRequest(HOST_TEST_OPERATIONS.WARMUP, request.url, {
       method:  'POST',
       headers: request.phase === 'loaded_prime'
         ? withBenchmarkServiceAuth({ 'Content-Type': 'application/json' })
         : { 'Content-Type': 'application/json' },
       body: JSON.stringify(request.body),
-      timeout: request.timeoutMs,
-      ...getFetchOptions(request.url)
-    });
+      signal: deadline.signal
+    }, executor);
     if (!response.ok) {
-      const detail = await response.text().catch(() => '');
+      const detail = await readBoundedText(response).catch(() => '');
       throw new Error(`HTTP ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
     }
+    await discardBoundedResponse(response);
   } catch (err) {
+    const errorMessage = deadline.expired
+      && err?.code === OUTBOUND_ERROR_CODES.CALLER_ABORTED
+      ? `request timeout after ${request.timeoutMs}ms`
+      : legacyHttpErrorMessage(err);
     logger.warn('Host test warm-up failed', {
       hostUrl,
       modelName,
       phase: request.phase,
       timeoutMs: request.timeoutMs,
-      error: err.message
+      error: errorMessage
     });
-    throw new Error(`Warm-up failed during ${request.phase}: ${err.message}`);
+    throw new Error(`Warm-up failed during ${request.phase}: ${errorMessage}`);
+  } finally {
+    deadline.dispose();
   }
 }
 
@@ -420,9 +670,13 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
 
   const start = Date.now();
   let probeData;
+  const probeDeadline = createLocalDeadline(
+    cfg.timeoutMs,
+    HOST_TEST_OPERATION_SPECS[HOST_TEST_OPERATIONS.PROBE].policy.deadlineMs
+  );
   try {
     const url = `${hostUrl}/api/generate`;
-    const res = await _fetch(url, {
+    const res = await hostTestRequest(HOST_TEST_OPERATIONS.PROBE, url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -435,15 +689,14 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
           temperature: 0.1
         }
       }),
-      timeout: cfg.timeoutMs,
-      ...getFetchOptions(url)
+      signal: probeDeadline.signal
     });
 
     const latencyMs = Date.now() - start;
 
     if (!res.ok) {
       circuitBreaker.recordFailure(hostUrl);
-      const body = await res.text().catch(() => '');
+      const body = await readBoundedText(res).catch(() => '');
       const snapshot = {
         hostUrl, hostId, tokensPerSec: 0, latencyMs, numCtx,
         numCtxSource,
@@ -455,21 +708,30 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       return snapshot;
     }
 
-    probeData = await res.json();
+    probeData = await readBoundedJson(res);
     probeData._latencyMs = latencyMs;
   } catch (err) {
     circuitBreaker.recordFailure(hostUrl);
     const latencyMs = Date.now() - start;
-    const isTimeout = err.type === 'request-timeout' || err.message.includes('timeout');
+    const isTimeout = probeDeadline.expired
+      || err.code === OUTBOUND_ERROR_CODES.DEADLINE_EXCEEDED
+      || err.type === 'request-timeout'
+      || err.message.includes('timeout');
+    const errorMessage = probeDeadline.expired
+      && err?.code === OUTBOUND_ERROR_CODES.CALLER_ABORTED
+      ? `request timeout after ${cfg.timeoutMs}ms`
+      : legacyHttpErrorMessage(err);
     const snapshot = {
       hostUrl, hostId, tokensPerSec: 0, latencyMs, numCtx,
       numCtxSource,
       testedAt: new Date(), status: isTimeout ? 'timeout' : 'error',
-      error: err.message,
+      error: errorMessage,
       source: 'benchmark_host_test'
     };
     await persistFailureSnapshot(normalizedModelName, snapshot);
     return snapshot;
+  } finally {
+    probeDeadline.dispose();
   }
 
   // 4. Parse metrics from Ollama response
@@ -630,5 +892,18 @@ module.exports = {
   checkHost,
   getConfig,
   buildProbePlan,
-  buildWarmupRequest
+  buildWarmupRequest,
+  HOST_TEST_OPERATIONS,
+  _internal: {
+    HOST_TEST_OPERATION_SPECS,
+    configuredCoreOrigin,
+    createHostTestExecutor,
+    createLocalDeadline,
+    getLoadedModelInfo,
+    hostTestRequest,
+    operationMatches,
+    unloadCurrentModel,
+    unloadOneModel,
+    warmUp
+  }
 };

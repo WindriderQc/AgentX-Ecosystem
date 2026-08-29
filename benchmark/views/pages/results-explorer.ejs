@@ -1,3 +1,4 @@
+<main>
 <div class="bg-grid"></div>
 
 <div class="explorer-container">
@@ -41,29 +42,39 @@
         <!-- Populated by JS -->
     </div>
 
+    <section class="evidence-age-guide" aria-labelledby="evidence-age-guide-title">
+        <i class="fas fa-clock-rotate-left" aria-hidden="true"></i>
+        <div>
+            <strong id="evidence-age-guide-title">Evidence age is based only on the recorded timestamp.</strong>
+            <span id="evidenceAgeGuideRule">Recent: within 30 days. Aging: more than 30 through 90 days. Historical: more than 90 days. “Legacy scoring” appears only when that exact formula is stored on the result.</span>
+        </div>
+    </section>
+
+    <p id="resultsEvidenceScope" class="results-evidence-scope" role="status" aria-live="polite"></p>
+
     <!-- Visualizations — standalone chart grid (no parent card wrapper) -->
     <div class="charts-grid">
         <div class="chart-card">
-            <h4>Quality Distribution</h4>
+            <h4>Quality Distribution <span>Visible page</span></h4>
             <canvas id="qualityDistChart"></canvas>
         </div>
         <div class="chart-card">
-            <h4>Latency vs Quality</h4>
+            <h4>Latency vs Quality <span>Visible page</span></h4>
             <canvas id="latencyScatterChart"></canvas>
         </div>
         <div class="chart-card">
-            <h4>Category Performance</h4>
+            <h4>Category Performance <span>Visible page</span></h4>
             <canvas id="categoryRadarChart"></canvas>
         </div>
         <div class="chart-card">
-            <h4>Model Comparison</h4>
+            <h4>Model Comparison <span>Visible page</span></h4>
             <canvas id="modelBarChart"></canvas>
         </div>
     </div>
 
     <!-- Category Statistics Table -->
     <div class="stats-section">
-        <h3><i class="fas fa-table"></i> Category Performance Breakdown</h3>
+        <h3><i class="fas fa-table"></i> Category Performance Breakdown <span class="scope-label">Visible page</span></h3>
         <div class="stats-table-container" id="categoryStatsContainer">
             <!-- Populated by JS -->
         </div>
@@ -160,6 +171,16 @@
                     </div>
                     <div class="filter-section">
                         <h4><i class="fas fa-filter"></i> Additional</h4>
+                        <div class="filter-group">
+                            <label title="Age band derived only from the recorded timestamp">Evidence Age</label>
+                            <select id="evidenceEraFilter">
+                                <option value="">All Ages</option>
+                                <option value="recent">Recent (within 30 days)</option>
+                                <option value="aging">Aging (31–90 days)</option>
+                                <option value="historical">Historical (91+ days)</option>
+                                <option value="undated">Undated</option>
+                            </select>
+                        </div>
                         <div class="filter-group">
                             <label>Success Status</label>
                             <select id="successFilter">
@@ -287,3 +308,4 @@
         </div>
     </div>
 </div>
+</main>

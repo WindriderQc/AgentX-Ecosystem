@@ -14,10 +14,16 @@ class ConcurrencyQueue {
         this.completed = 0;
         this.failed = 0;
         this.lastActivityAt = Date.now();
+        this.cancelled = false;
+        this.cancelReason = null;
     }
 
     add(task) {
         return new Promise((resolve, reject) => {
+            if (this.cancelled) {
+                reject(this.cancelReason || new Error('Queue cancelled'));
+                return;
+            }
             this.queue.push({ task, resolve, reject, addedAt: Date.now() });
             logger.debug('Judge task queued', { queueLength: this.queue.length, running: this.running });
             this.process();
@@ -26,7 +32,7 @@ class ConcurrencyQueue {
 
     process() {
         // Fill up to concurrency limit (not just one task per call)
-        while (this.running < this.concurrency && this.queue.length > 0) {
+        while (!this.cancelled && this.running < this.concurrency && this.queue.length > 0) {
             this.running++;
             const { task, resolve, reject } = this.queue.shift();
             logger.debug('Starting judge task', { running: this.running, queueLength: this.queue.length });
@@ -64,6 +70,7 @@ class ConcurrencyQueue {
             running: this.running,
             completed: this.completed,
             failed: this.failed,
+            cancelled: this.cancelled,
             lastActivityAt: this.lastActivityAt,
             stalledMs: Date.now() - this.lastActivityAt
         };
@@ -77,6 +84,9 @@ class ConcurrencyQueue {
      * @returns {Promise<void>}
      */
     async waitForCapacity(maxPending = 10, checkIntervalMs = 100) {
+        if (this.cancelled) {
+            throw this.cancelReason || new Error('Queue cancelled');
+        }
         const pending = this.queue.length + this.running;
         if (pending < maxPending) {
             return; // Capacity available
@@ -92,12 +102,43 @@ class ConcurrencyQueue {
         // Wait until queue drains below threshold
         while (this.queue.length + this.running >= maxPending) {
             await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
+            if (this.cancelled) {
+                throw this.cancelReason || new Error('Queue cancelled');
+            }
         }
 
         logger.debug('Judge queue backpressure released', {
             queued: this.queue.length,
             running: this.running
         });
+    }
+
+    /**
+     * Reject work that has not started. Active tasks are deliberately allowed
+     * to settle; callers can pair this with an AbortSignal owned by the task
+     * and then await drain() before releasing external lifecycle protection.
+     */
+    cancel(reason = null) {
+        if (this.cancelled) {
+            return { cancelled: true, queuedCancelled: 0, running: this.running };
+        }
+
+        const cancellation = reason instanceof Error ? reason : new Error('Queue cancelled');
+        if (!cancellation.code) cancellation.code = 'QUEUE_CANCELLED';
+        this.cancelled = true;
+        this.cancelReason = cancellation;
+        this.lastActivityAt = Date.now();
+
+        const queued = this.queue.splice(0);
+        for (const entry of queued) {
+            entry.reject(cancellation);
+        }
+
+        return {
+            cancelled: true,
+            queuedCancelled: queued.length,
+            running: this.running
+        };
     }
 
     /**
@@ -170,7 +211,12 @@ class ConcurrencyQueue {
             await new Promise(resolve => setTimeout(resolve, 100));
         }
 
-        return { completed: this.completed, failed: this.failed, timedOut: false };
+        return {
+            completed: this.completed,
+            failed: this.failed,
+            timedOut: false,
+            cancelled: this.cancelled
+        };
     }
 }
 

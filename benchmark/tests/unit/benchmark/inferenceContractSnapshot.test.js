@@ -68,6 +68,31 @@ function batchModel(existingDocs = []) {
 }
 
 describe('campaign inference contract snapshots', () => {
+    it('sends the scoped Benchmark token when resolving a Core contract snapshot', async () => {
+        const previousToken = process.env.AGENTX_BENCHMARK_TOKEN;
+        process.env.AGENTX_BENCHMARK_TOKEN = 'scoped-benchmark-token';
+        try {
+            const fetchImpl = jest.fn(async () => response(snapshot()));
+            await resolveStandaloneCampaignInferenceContracts({
+                hostGroups: [['http://exec:11434', ['model-a']]],
+                executionConfig: { response_mode: 'final_only' }
+            }, { fetchImpl, coreUrl: 'http://core:3080' });
+
+            expect(fetchImpl).toHaveBeenCalledWith(
+                'http://core:3080/api/inference/contract/resolve',
+                expect.objectContaining({
+                    headers: expect.objectContaining({
+                        'Content-Type': 'application/json',
+                        'X-AgentX-Benchmark-Token': 'scoped-benchmark-token'
+                    })
+                })
+            );
+        } finally {
+            if (previousToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
+            else process.env.AGENTX_BENCHMARK_TOKEN = previousToken;
+        }
+    });
+
     it('resolves a standalone immutable campaign without Mongo persistence', async () => {
         const fetchImpl = jest.fn(async () => response(snapshot()));
         const campaign = await resolveStandaloneCampaignInferenceContracts({

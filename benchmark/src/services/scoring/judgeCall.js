@@ -41,6 +41,99 @@ const JUDGE_CONFIG = {
 // Track judge failures for observability
 let judgeFailureCount = 0;
 
+const BENCHMARK_BATCH_STOPPED_CODE = 'BENCHMARK_BATCH_STOPPED';
+
+function getJudgeCancelSignal(config = {}) {
+    for (const signal of [config?.cancelSignal, config?.signal]) {
+        if (signal
+            && typeof signal.aborted === 'boolean'
+            && typeof signal.addEventListener === 'function'
+            && typeof signal.removeEventListener === 'function') {
+            return signal;
+        }
+    }
+    return null;
+}
+
+function createBenchmarkBatchStoppedError() {
+    const error = new Error('Benchmark batch judging cancelled');
+    error.name = 'BenchmarkBatchStoppedError';
+    error.code = BENCHMARK_BATCH_STOPPED_CODE;
+    return error;
+}
+
+function isBenchmarkBatchStoppedError(error) {
+    return error?.code === BENCHMARK_BATCH_STOPPED_CODE;
+}
+
+function throwIfJudgeCancelled(config = {}) {
+    if (getJudgeCancelSignal(config)?.aborted) {
+        throw createBenchmarkBatchStoppedError();
+    }
+}
+
+function rethrowIfJudgeCancelled(error, config = {}) {
+    if (isBenchmarkBatchStoppedError(error) || getJudgeCancelSignal(config)?.aborted) {
+        throw createBenchmarkBatchStoppedError();
+    }
+}
+
+/**
+ * Compose a caller-owned cancellation signal with a per-attempt timeout.
+ * The returned signal remains live through response-body consumption; callers
+ * must invoke cleanup() in a finally block. Caller abort reasons are never
+ * forwarded because they can contain request or operator data.
+ */
+function createJudgeAbortContext(config = {}, timeoutMs) {
+    const controller = new AbortController();
+    const callerSignal = getJudgeCancelSignal(config);
+    let cleaned = false;
+
+    const onCallerAbort = () => controller.abort();
+    if (callerSignal) {
+        if (callerSignal.aborted) onCallerAbort();
+        else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+
+    const normalizedTimeoutMs = Number(timeoutMs);
+    const timeoutId = Number.isFinite(normalizedTimeoutMs) && normalizedTimeoutMs > 0
+        ? setTimeout(() => controller.abort(), normalizedTimeoutMs)
+        : null;
+
+    return {
+        signal: controller.signal,
+        cleanup() {
+            if (cleaned) return;
+            cleaned = true;
+            if (timeoutId) clearTimeout(timeoutId);
+            if (callerSignal) callerSignal.removeEventListener('abort', onCallerAbort);
+        }
+    };
+}
+
+function waitForJudgeRetry(delayMs, config = {}) {
+    const signal = getJudgeCancelSignal(config);
+    throwIfJudgeCancelled(config);
+    if (!signal) {
+        return new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (callback) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            signal.removeEventListener('abort', onAbort);
+            callback();
+        };
+        const onAbort = () => finish(() => reject(createBenchmarkBatchStoppedError()));
+        const timeoutId = setTimeout(() => finish(resolve), delayMs);
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+    });
+}
+
 /**
  * Normalize a raw host value to a full URL (adds http:// if missing).
  * Wildcard bind addresses (0.0.0.0, ::) are remapped to 127.0.0.1 because
@@ -206,10 +299,10 @@ function isRetryableError(message) {
 async function callJudge(evalPrompt, config = {}, retryCount = 0) {
     const { resolveJudgeConfig } = require('./resolveJudgeConfig');
     const judgeConfig = resolveJudgeConfig(config);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), judgeConfig.timeout);
+    const abortContext = createJudgeAbortContext(judgeConfig, judgeConfig.timeout);
 
     try {
+        throwIfJudgeCancelled(judgeConfig);
         if (!judgeConfig.host) {
             throw new Error('Judge host is not configured');
         }
@@ -245,17 +338,16 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
             method: 'POST',
             headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(requestBody),
-            signal: controller.signal
+            signal: abortContext.signal
         });
         const response = await fetch(url, fetchOptions);
-
-        clearTimeout(timeoutId);
 
         if (!response.ok) {
             throw new Error(`Judge HTTP ${response.status}`);
         }
 
         const data = await response.json();
+        throwIfJudgeCancelled(judgeConfig);
         const text = data.message?.content || data.response || '';
 
         const judgeTruncated = data.done_reason === 'length';
@@ -281,6 +373,8 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
                     attempt: retryCount + 1
                 });
                 const expandedConfig = { ...config, num_predict: expanded };
+                abortContext.cleanup();
+                throwIfJudgeCancelled(judgeConfig);
                 return callJudge(evalPrompt, expandedConfig, retryCount + 1);
             }
         }
@@ -378,7 +472,7 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         }
 
     } catch (err) {
-        clearTimeout(timeoutId);
+        rethrowIfJudgeCancelled(err, judgeConfig);
 
         const maxRetries = judgeConfig.max_retries || 2;
         const isRetryable = isRetryableError(err.message);
@@ -390,7 +484,8 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
                 attempt: retryCount + 1,
                 maxRetries
             });
-            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            abortContext.cleanup();
+            await waitForJudgeRetry(backoffMs, judgeConfig);
             return callJudge(evalPrompt, config, retryCount + 1);
         }
 
@@ -400,6 +495,8 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
             error: err.message,
             scores: null
         };
+    } finally {
+        abortContext.cleanup();
     }
 }
 
@@ -409,6 +506,14 @@ module.exports = {
     buildDynamicJudgePrompt,
     extractBalancedJson,
     isRetryableError,
+    BENCHMARK_BATCH_STOPPED_CODE,
+    createBenchmarkBatchStoppedError,
+    createJudgeAbortContext,
+    getJudgeCancelSignal,
+    isBenchmarkBatchStoppedError,
+    rethrowIfJudgeCancelled,
+    throwIfJudgeCancelled,
+    waitForJudgeRetry,
     getJudgeFailureCount,
     incrementJudgeFailureCount,
     normalizeJudgeHost

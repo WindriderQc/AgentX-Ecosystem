@@ -80,6 +80,12 @@ let _lastStage = null;
 /** @type {HTMLElement|null} Active error banner element */
 let _errorBannerEl = null;
 
+/** @type {'poll'|'action'|'general'|null} What produced the active error banner */
+let _errorBannerKind = null;
+
+/** @type {boolean} Prevent duplicate stop requests while acknowledgement is pending */
+let _stopRequestInFlight = false;
+
 /** @type {{state:string,message:string,detail:string}|null} Transient launch/preflight status for the sticky dock */
 let _launchStatusOverride = null;
 
@@ -99,6 +105,7 @@ let $launchSummary  = null;
 let $workflowGuide  = null;
 let $launchDock     = null;
 let $btnStop        = null;
+let $stopStatus     = null;
 
 /** @type {Array} Profiler model profiles */
 let _modelProfiles  = [];
@@ -121,6 +128,7 @@ function _resolveElements() {
     $workflowGuide  = document.getElementById('workflow-guide');
     $launchDock     = document.getElementById('launch-dock');
     $btnStop        = document.getElementById('btn-stop');
+    $stopStatus     = document.getElementById('stop-status');
 }
 
 // ── Error display helpers ─────────────────────────────────────────────────────
@@ -130,9 +138,10 @@ function _resolveElements() {
  * @param {string}   message
  * @param {Function} [onRetry]
  */
-function _showErrorBanner(message, onRetry) {
+function _showErrorBanner(message, onRetry, kind = 'general') {
     _clearErrorBanner();
     _errorBannerEl = showFatalError(`Error: ${message}`);
+    _errorBannerKind = kind;
     if (typeof onRetry === 'function') {
         const btn = document.createElement('button');
         btn.textContent = 'Retry';
@@ -149,6 +158,27 @@ function _clearErrorBanner() {
     if (_errorBannerEl) {
         _errorBannerEl.remove();
         _errorBannerEl = null;
+    }
+    _errorBannerKind = null;
+}
+
+function _clearPollingErrorBanner() {
+    if (_errorBannerKind === 'poll') _clearErrorBanner();
+}
+
+function _setStopControl(state = 'ready', message = '') {
+    if ($btnStop) {
+        $btnStop.disabled = state === 'pending';
+        $btnStop.dataset.stopState = state;
+        $btnStop.textContent = state === 'pending'
+            ? 'Stopping\u2026'
+            : state === 'failed'
+                ? 'Retry stop'
+                : 'Stop';
+    }
+    if ($stopStatus) {
+        $stopStatus.textContent = message;
+        $stopStatus.hidden = !message;
     }
 }
 
@@ -494,6 +524,9 @@ async function _enterIdle() {
     _stopPolling();
     _stopIdlePoll();
     stopElapsedTimer();
+    _stopRequestInFlight = false;
+    _setStopControl();
+    _clearErrorBanner();
     _batchId   = null;
     _lastStage = null;
     _seenEvents.clear();
@@ -650,6 +683,8 @@ function _enterLive(batch) {
     _liveSession += 1;
     _lastStage = batch.current_test ? batch.current_test.stage : null;
     _seenEvents.clear();
+    _stopRequestInFlight = false;
+    _setStopControl();
 
     if ($idleSections) $idleSections.style.display  = 'none';
     if ($liveSections) $liveSections.style.display  = '';
@@ -668,7 +703,9 @@ function _enterLive(batch) {
     if ($eventLog)    renderEventLog($eventLog);
 
     if ($btnStop) {
-        $btnStop.addEventListener('click', _handleStop, { once: true });
+        // Browsers ignore duplicate registrations for the same callback, so this
+        // remains one listener while preserving an explicit retry after failure.
+        $btnStop.addEventListener('click', _handleStop);
     }
 
     _startPolling(_batchId);
@@ -751,9 +788,9 @@ async function _pollBatch(batchId) {
     try {
         const res = await fetchBatchProgress(batchId);
         batch = res?.data || res;
-        _clearErrorBanner();
+        _clearPollingErrorBanner();
     } catch (err) {
-        _showErrorBanner(err.message, () => _pollBatch(batchId));
+        _showErrorBanner(err.message, () => _pollBatch(batchId), 'poll');
         return;
     }
 
@@ -923,16 +960,47 @@ async function _handleResume(batch) {
  * Called when the stop button is clicked.
  */
 async function _handleStop() {
-    if (!_batchId) return;
+    if (!_batchId || _stopRequestInFlight) return false;
+
+    const requestedBatchId = _batchId;
+    const requestedLiveSession = _liveSession;
+    _stopRequestInFlight = true;
+    _setStopControl('pending', 'Waiting for stop acknowledgement\u2026');
+    _clearErrorBanner();
+
     try {
-        await stopBatch(_batchId);
+        const response = await stopBatch(requestedBatchId);
+        const acknowledgedStatus = response?.data?.status;
+        const terminalStatuses = new Set(['stopped', 'completed', 'failed', 'interrupted']);
+        if (response?.status !== 'success' || !terminalStatuses.has(acknowledgedStatus)) {
+            throw new Error('The service did not acknowledge a terminal batch state');
+        }
+
+        // Ignore a late response from an older live session. It must never tear
+        // down a newer batch that appeared while this request was outstanding.
+        if (_batchId !== requestedBatchId || _liveSession !== requestedLiveSession) return false;
+
+        _clearErrorBanner();
+        showToast(response.message || 'Batch stopped', 'success', 8000);
+        _stopPolling();
+        stopElapsedTimer();
+        await _enterIdle();
+        return true;
     } catch (err) {
         console.warn('[bv2] stopBatch failed:', err.message);
+        if (_batchId === requestedBatchId && _liveSession === requestedLiveSession) {
+            const detail = err.payload?.message || err.payload?.error || err.message || 'Unknown error';
+            const message = `Stop failed: ${detail}. The batch is still running.`;
+            _setStopControl('failed', message);
+            _showErrorBanner(message, () => _handleStop(), 'action');
+        }
+        return false;
+    } finally {
+        if (_batchId === requestedBatchId && _liveSession === requestedLiveSession) {
+            _stopRequestInFlight = false;
+            if ($btnStop?.dataset.stopState === 'pending') _setStopControl();
+        }
     }
-
-    _stopPolling();
-    stopElapsedTimer();
-    await _enterIdle();
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────

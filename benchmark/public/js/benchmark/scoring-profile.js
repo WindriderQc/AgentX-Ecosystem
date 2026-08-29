@@ -21,6 +21,7 @@ const CAT_LABELS = {
     knowledge: 'Knowledge', instruction: 'Instruction',
     creative: 'Creative', translation: 'Translation'
 };
+const SCORING_PROFILE_RESET_CONFIRMATION = 'RESET SCORING PROFILE';
 
 // ---------------------------------------------------------------------------
 // API helpers
@@ -44,8 +45,12 @@ async function saveProfile(overrides) {
     return json;
 }
 
-async function resetProfile() {
-    const res = await fetch('/api/benchmark/scoring-profile/reset', { method: 'POST' });
+async function resetProfile(confirmation) {
+    const res = await fetch('/api/benchmark/scoring-profile/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: confirmation })
+    });
     const json = await res.json();
     if (json.status !== 'success') throw new Error(json.error || 'Reset failed');
     return json;
@@ -280,9 +285,13 @@ function wirePanel(panel, currentProfile, onClose) {
 
     // Reset
     panel.querySelector('#sp-reset')?.addEventListener('click', async () => {
-        if (!confirm('Reset all scoring parameters to defaults?')) return;
+        const confirmation = window.prompt(
+            'Reset all scoring parameters to defaults?\n\n'
+            + `Type ${SCORING_PROFILE_RESET_CONFIRMATION} to confirm:`
+        );
+        if (confirmation !== SCORING_PROFILE_RESET_CONFIRMATION) return;
         try {
-            await resetProfile();
+            await resetProfile(confirmation);
             showToast('Scoring profile reset to defaults.');
             close();
         } catch (err) {

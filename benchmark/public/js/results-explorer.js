@@ -7,9 +7,14 @@ let _readinessMap = {};
 let allResults = [];
 let filteredResults = [];
 let _profilerHostMap = {};
+let resultFacets = null;
+let archiveTotal = 0;
+let evidenceCounts = { recent: 0, aging: 0, historical: 0, undated: 0, legacy_scoring: 0 };
+let evidencePolicy = { basis: 'timestamp', recent_max_age_days: 30, aging_max_age_days: 90 };
+let resultsRequestSequence = 0;
 let selectedResults = new Set();
 let visibleColumns = new Set([
-    'select', 'expand', 'inspect', 'model', 'category', 'level', 'quality_score',
+    'select', 'expand', 'inspect', 'model', 'category', 'level', 'evidence_age', 'quality_score',
     'latency', 'tokens_per_sec', 'success', 'timestamp'
 ]);
 
@@ -21,7 +26,7 @@ let paginationState = { page: 1, limit: 50, total: 0, totalPages: 0 };
 function renderExperienceState() {
     const empty = document.getElementById('results-empty-experience');
     const workbench = document.getElementById('results-data-workbench');
-    const hasEvidence = paginationState.total > 0;
+    const hasEvidence = archiveTotal > 0;
     setExperienceSurfaceHidden(empty, hasEvidence);
     setExperienceSurfaceHidden(workbench, !hasEvidence);
 }
@@ -54,7 +59,8 @@ const AVAILABLE_COLUMNS = {
     scoring_method: { label: 'Scoring', sortable: true, width: '100px', tooltip: 'How this result was scored: decomposed (binary question voting), deterministic (pattern matching), reference (compared to expert answer), quick (heuristic).' },
     success: { label: 'Status', sortable: true, width: '90px', tooltip: 'Whether the model successfully completed the task without errors or timeouts.' },
     batch_id: { label: 'Batch ID', sortable: true, width: '100px', tooltip: 'The benchmark batch run this result belongs to.' },
-    timestamp: { label: 'Timestamp', sortable: true, width: '160px', tooltip: 'When this result was recorded.' }
+    evidence_age: { label: 'Evidence age', sortable: false, width: '150px', tooltip: 'Recent means recorded within 30 days; aging means 31–90 days; historical means older than 90 days. This is based only on the recorded timestamp.' },
+    timestamp: { label: 'Recorded at', sortable: true, width: '180px', tooltip: 'Exact time when this result was recorded. Newest results are shown first by default.' }
 };
 
 // Chart instances
@@ -70,32 +76,133 @@ const CATEGORIES = [
     'coding', 'reasoning', 'math', 'knowledge', 'instruction', 'creative', 'translation'
 ];
 
-// ── URL state persistence ────────────────────────────────────────────────────
+// ── Server-backed filtering and URL state ───────────────────────────────────
 
-const URL_FILTER_KEYS = [
-    { param: 'host',     id: 'hostFilter' },
-    { param: 'category', id: 'categoryFilter' },
-    { param: 'level',    id: 'levelFilter' },
-    { param: 'success',  id: 'successFilter' },
-    { param: 'batch',    id: 'batchIdFilter' },
-    { param: 'scoring',  id: 'scoringMethodFilter' },
-];
+const SERVER_SORT_FIELDS = {
+    model: 'model',
+    host: 'host',
+    category: 'prompt_category',
+    level: 'prompt_level',
+    quality_score: 'quality_score',
+    composite_score: 'composite_score',
+    latency: 'latency',
+    tokens: 'tokens',
+    tokens_per_sec: 'tokens_per_sec',
+    backend: 'hardware_snapshot.backend',
+    quantization: 'hardware_snapshot.quantization',
+    scoring_method: 'scoring_method',
+    success: 'success',
+    batch_id: 'batch_id',
+    timestamp: 'timestamp'
+};
+
+function selectedValues(containerSelector) {
+    return Array.from(document.querySelectorAll(`${containerSelector} input[type="checkbox"]:checked`))
+        .map(cb => cb.value);
+}
+
+function readFilterState() {
+    return {
+        dateFrom: document.getElementById('dateFrom')?.value || '',
+        dateTo: document.getElementById('dateTo')?.value || '',
+        models: selectedValues('#modelSelectContainer'),
+        categories: selectedValues('#categorySelectContainer'),
+        levelMin: document.getElementById('levelMin')?.value || '1',
+        levelMax: document.getElementById('levelMax')?.value || '5',
+        qualityMin: document.getElementById('qualityMin')?.value || '0',
+        qualityMax: document.getElementById('qualityMax')?.value || '10',
+        host: document.getElementById('hostFilter')?.value || '',
+        backend: document.getElementById('backendFilter')?.value || '',
+        quantization: document.getElementById('quantizationFilter')?.value || '',
+        success: document.getElementById('successFilter')?.value || '',
+        batchId: document.getElementById('batchIdFilter')?.value.trim() || '',
+        scoringMethod: document.getElementById('scoringMethodFilter')?.value || '',
+        evidenceEra: document.getElementById('evidenceEraFilter')?.value || ''
+    };
+}
+
+function parseURLState() {
+    const params = new URLSearchParams(location.search);
+    const sortParam = params.get('sort') || '';
+    const [sortField, sortDirection] = sortParam.split(':');
+    if (SERVER_SORT_FIELDS[sortField]) currentSort.field = sortField;
+    if (sortDirection === 'asc' || sortDirection === 'desc') currentSort.direction = sortDirection;
+
+    const page = parseInt(params.get('page'), 10);
+    paginationState.page = page > 0 ? page : 1;
+    return {
+        dateFrom: params.get('dateFrom') || '',
+        dateTo: params.get('dateTo') || '',
+        models: (params.get('models') || '').split(',').filter(Boolean),
+        categories: (params.get('categories') || '').split(',').filter(Boolean),
+        levelMin: params.get('levelMin') || '1',
+        levelMax: params.get('levelMax') || '5',
+        qualityMin: params.get('qualityMin') || '0',
+        qualityMax: params.get('qualityMax') || '10',
+        host: params.get('host') || '',
+        backend: params.get('backend') || '',
+        quantization: params.get('quantization') || '',
+        success: params.get('success') || '',
+        batchId: params.get('batchId') || params.get('batch') || '',
+        scoringMethod: params.get('scoringMethod') || params.get('scoring') || '',
+        evidenceEra: params.get('evidenceEra') || ''
+    };
+}
+
+function applyFilterState(state = {}) {
+    const valuesById = {
+        dateFrom: state.dateFrom,
+        dateTo: state.dateTo,
+        levelMin: state.levelMin,
+        levelMax: state.levelMax,
+        qualityMin: state.qualityMin,
+        qualityMax: state.qualityMax,
+        hostFilter: state.host,
+        backendFilter: state.backend,
+        quantizationFilter: state.quantization,
+        successFilter: state.success,
+        batchIdFilter: state.batchId,
+        scoringMethodFilter: state.scoringMethod,
+        evidenceEraFilter: state.evidenceEra
+    };
+    Object.entries(valuesById).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element && value !== undefined && value !== null) element.value = value;
+    });
+
+    const wantedModels = new Set(state.models || []);
+    const wantedCategories = new Set(state.categories || []);
+    document.querySelectorAll('#modelSelectContainer input[type="checkbox"]').forEach(cb => {
+        cb.checked = wantedModels.has(cb.value);
+    });
+    document.querySelectorAll('#categorySelectContainer input[type="checkbox"]').forEach(cb => {
+        cb.checked = wantedCategories.has(cb.value);
+    });
+    updateRangeDisplayText('levelMin', 'levelMax', 'levelRangeDisplay');
+    updateRangeDisplayText('qualityMin', 'qualityMax', 'qualityRangeDisplay');
+}
 
 function saveURLState() {
+    const state = readFilterState();
     const params = new URLSearchParams();
-    for (const { param, id } of URL_FILTER_KEYS) {
-        const el = document.getElementById(id);
-        if (el && el.value) params.set(param, el.value);
-    }
-    // Model multi-select
-    const models = Array.from(document.querySelectorAll('#modelSelectContainer input[type="checkbox"]:checked'))
-        .map(cb => cb.value);
-    if (models.length) params.set('models', models.join(','));
-    // Sort
+    if (state.dateFrom) params.set('dateFrom', state.dateFrom);
+    if (state.dateTo) params.set('dateTo', state.dateTo);
+    if (state.models.length) params.set('models', state.models.join(','));
+    if (state.categories.length) params.set('categories', state.categories.join(','));
+    if (state.levelMin !== '1') params.set('levelMin', state.levelMin);
+    if (state.levelMax !== '5') params.set('levelMax', state.levelMax);
+    if (state.qualityMin !== '0') params.set('qualityMin', state.qualityMin);
+    if (state.qualityMax !== '10') params.set('qualityMax', state.qualityMax);
+    if (state.host) params.set('host', state.host);
+    if (state.backend) params.set('backend', state.backend);
+    if (state.quantization) params.set('quantization', state.quantization);
+    if (state.success) params.set('success', state.success);
+    if (state.batchId) params.set('batchId', state.batchId);
+    if (state.scoringMethod) params.set('scoringMethod', state.scoringMethod);
+    if (state.evidenceEra) params.set('evidenceEra', state.evidenceEra);
     if (currentSort.field !== 'timestamp' || currentSort.direction !== 'desc') {
         params.set('sort', `${currentSort.field}:${currentSort.direction}`);
     }
-    // Page
     if (paginationState.page > 1) params.set('page', paginationState.page);
 
     const qs = params.toString();
@@ -103,33 +210,26 @@ function saveURLState() {
     history.replaceState(null, '', url);
 }
 
-function loadURLState() {
-    const params = new URLSearchParams(location.search);
-    for (const { param, id } of URL_FILTER_KEYS) {
-        const val = params.get(param);
-        const el = document.getElementById(id);
-        if (val && el) el.value = val;
-    }
-    // Model multi-select
-    const modelsCsv = params.get('models');
-    if (modelsCsv) {
-        const wantedModels = new Set(modelsCsv.split(','));
-        document.querySelectorAll('#modelSelectContainer input[type="checkbox"]').forEach(cb => {
-            cb.checked = wantedModels.has(cb.value);
+function buildResultsParams(page, filterState = {}, includeFacets = false) {
+    const params = new URLSearchParams({
+        limit: String(paginationState.limit),
+        offset: String((Math.max(1, page) - 1) * paginationState.limit),
+        sort: SERVER_SORT_FIELDS[currentSort.field] || 'timestamp',
+        sortDir: currentSort.direction,
+        includeEvidenceMeta: 'true'
+    });
+    if (includeFacets) params.set('includeFacets', 'true');
+    ['dateFrom', 'dateTo', 'host', 'backend', 'quantization', 'success', 'batchId', 'scoringMethod', 'evidenceEra']
+        .forEach(key => {
+            if (filterState[key] !== undefined && filterState[key] !== '') params.set(key, filterState[key]);
         });
-    }
-    // Sort
-    const sortParam = params.get('sort');
-    if (sortParam) {
-        const [field, dir] = sortParam.split(':');
-        if (field) currentSort.field = field;
-        if (dir === 'asc' || dir === 'desc') currentSort.direction = dir;
-    }
-    // Page
-    const page = parseInt(params.get('page'), 10);
-    if (page > 0) paginationState.page = page;
-
-    applyFilters();
+    if (filterState.models?.length) params.set('models', filterState.models.join(','));
+    if (filterState.categories?.length) params.set('categories', filterState.categories.join(','));
+    if (String(filterState.levelMin || '1') !== '1') params.set('levelMin', filterState.levelMin);
+    if (String(filterState.levelMax || '5') !== '5') params.set('levelMax', filterState.levelMax);
+    if (String(filterState.qualityMin || '0') !== '0') params.set('qualityMin', filterState.qualityMin);
+    if (String(filterState.qualityMax || '10') !== '10') params.set('qualityMax', filterState.qualityMax);
+    return params;
 }
 
 // Initialize on page load
@@ -140,80 +240,113 @@ document.addEventListener('DOMContentLoaded', async () => {
         _readinessMap = await mod.getReadinessMap();
     } catch (_) {}
 
-    await loadResults();
+    const initialState = parseURLState();
+    const loaded = await loadResults(paginationState.page, {
+        filterState: initialState,
+        includeFacets: true,
+        render: false
+    });
     initializeFilters();
+    applyFilterState(initialState);
     setupEventListeners();
-    loadURLState();
-    renderTable();
-    updateCharts();
-    renderSummaryStats();
-    renderPagination();
+    if (loaded) renderExplorerData();
 });
 
 // Load benchmark results for the current page
-async function loadResults(page) {
+async function loadResults(page, { filterState = readFilterState(), includeFacets = false, render = true } = {}) {
     if (page !== undefined) paginationState.page = page;
+    const requestId = ++resultsRequestSequence;
     try {
+        const params = buildResultsParams(paginationState.page, filterState, includeFacets);
         const [resultsRes, hostsRes] = await Promise.all([
-            fetch(`/api/benchmark/results?page=${paginationState.page}&limit=${paginationState.limit}`),
-            fetch('/api/profiler/hosts').catch(() => null),
+            fetch(`/api/benchmark/results/advanced?${params.toString()}`),
+            includeFacets ? fetch('/api/profiler/hosts').catch(() => null) : Promise.resolve(null)
         ]);
         if (!resultsRes.ok) throw new Error('Failed to fetch results');
 
         const data = await resultsRes.json();
-        allResults = data.data.results || [];
+        if (requestId !== resultsRequestSequence) return false;
+        const payload = data.data || {};
+        allResults = payload.results || [];
         filteredResults = [...allResults];
 
         // Update pagination state from server response
-        paginationState.page = data.data.page || 1;
-        paginationState.limit = data.data.limit || 50;
-        paginationState.total = data.data.total || 0;
-        paginationState.totalPages = data.data.totalPages || 0;
-        renderExperienceState();
+        paginationState.page = payload.page || 1;
+        paginationState.limit = payload.limit || 50;
+        paginationState.total = Number(payload.total) || 0;
+        paginationState.totalPages = Number(payload.totalPages) || 0;
+        archiveTotal = Number(payload.archiveTotal) || 0;
+        evidenceCounts = { ...evidenceCounts, ...(payload.evidenceCounts || {}) };
+        evidencePolicy = { ...evidencePolicy, ...(payload.evidencePolicy || {}) };
+        if (payload.facets) resultFacets = payload.facets;
 
         // Build host name map from profiler for friendly display
-        _profilerHostMap = {};
-        try {
-            const hostData = hostsRes ? await hostsRes.json() : null;
-            const hosts = hostData?.data || hostData || [];
-            if (Array.isArray(hosts)) {
-                hosts.forEach(h => {
-                    const url = h.hostUrl || h.url || '';
-                    if (url && h.name) _profilerHostMap[url] = h.name;
-                });
-            }
-        } catch (_) {}
+        if (hostsRes) {
+            _profilerHostMap = {};
+            try {
+                const hostData = await hostsRes.json();
+                const hosts = hostData?.data || hostData || [];
+                if (Array.isArray(hosts)) {
+                    hosts.forEach(h => {
+                        const url = h.hostUrl || h.url || '';
+                        if (url && h.name) _profilerHostMap[url] = h.name;
+                    });
+                }
+            } catch (_) {}
+        }
+
+        // A saved page can become invalid after filters or deletions. Land on
+        // the final real page rather than showing an impossible empty page.
+        if (paginationState.totalPages > 0 && paginationState.page > paginationState.totalPages) {
+            return loadResults(paginationState.totalPages, { filterState, render });
+        }
+
+        selectedResults.clear();
+        updateSelectedCount();
+        if (render) renderExplorerData();
 
         console.log(`Loaded ${allResults.length} results (page ${paginationState.page}/${paginationState.totalPages}, total ${paginationState.total})`);
+        return true;
     } catch (error) {
+        if (requestId !== resultsRequestSequence) return false;
         console.error('Error loading results:', error);
         showError('Failed to load results: ' + error.message);
+        return false;
     }
+}
+
+function renderExplorerData() {
+    renderExperienceState();
+    renderTable();
+    updateCharts();
+    updateResultsCount();
+    renderSummaryStats();
+    renderPagination();
+    renderEvidenceScope();
 }
 
 // Navigate to a specific page
 async function goToPage(page) {
     if (page < 1 || page > paginationState.totalPages) return;
-    await loadResults(page);
-    initializeFilters();
-    applyFilters();
-    renderPagination();
+    await loadResults(page, { filterState: readFilterState() });
+    saveURLState();
 }
 
 // Initialize filter options
 function initializeFilters() {
     // Populate model multi-select
-    const models = [...new Set(allResults.map(r => r.model))].sort();
+    const models = [...new Set((resultFacets?.models || allResults.map(r => r.model)).filter(Boolean))].sort();
     populateMultiSelect('modelSelectContainer', models, 'model');
 
     // Populate category multi-select
     populateMultiSelect('categorySelectContainer', CATEGORIES, 'category');
 
     // Populate host dropdown — merge result hosts + profiler hosts
-    const resultHosts = [...new Set(allResults.map(r => r.host))];
+    const resultHosts = [...new Set((resultFacets?.hosts || allResults.map(r => r.host)).filter(Boolean))];
     const profilerHosts = Object.keys(_profilerHostMap);
     const allHosts = [...new Set([...resultHosts, ...profilerHosts])].sort();
     const hostSelect = document.getElementById('hostFilter');
+    hostSelect.querySelectorAll('option:not(:first-child)').forEach(option => option.remove());
     allHosts.forEach(url => {
         const name = _profilerHostMap[url];
         const opt = document.createElement('option');
@@ -223,21 +356,21 @@ function initializeFilters() {
     });
 
     // Populate quantization dropdown
-    const quantizations = [...new Set(allResults
+    const quantizations = [...new Set((resultFacets?.quantizations || allResults
         .filter(r => r.hardware_snapshot?.quantization)
-        .map(r => r.hardware_snapshot.quantization))].sort();
+        .map(r => r.hardware_snapshot.quantization)).filter(Boolean))].sort();
     populateDropdown('quantizationFilter', quantizations);
 
     // Populate backend dropdown
-    const backends = [...new Set(allResults
+    const backends = [...new Set((resultFacets?.backends || allResults
         .filter(r => r.hardware_snapshot?.backend)
-        .map(r => r.hardware_snapshot.backend))].sort();
+        .map(r => r.hardware_snapshot.backend)).filter(Boolean))].sort();
     populateDropdown('backendFilter', backends);
 
     // Populate scoring method dropdown
-    const methods = [...new Set(allResults
+    const methods = [...new Set((resultFacets?.scoring_methods || allResults
         .filter(r => r.scoring_method)
-        .map(r => r.scoring_method))].sort();
+        .map(r => r.scoring_method)).filter(Boolean))].sort();
     populateDropdown('scoringMethodFilter', methods);
 
     // Setup range slider displays
@@ -272,14 +405,22 @@ function populateDropdown(selectId, options) {
 }
 
 // Update range slider display
+function updateRangeDisplayText(minId, maxId, displayId) {
+    const min = document.getElementById(minId);
+    const max = document.getElementById(maxId);
+    const display = document.getElementById(displayId);
+    if (!min || !max || !display) return;
+    display.textContent = `${min.value} - ${max.value}`;
+}
+
 function updateRangeDisplay(minId, maxId, displayId) {
     const min = document.getElementById(minId);
     const max = document.getElementById(maxId);
     const display = document.getElementById(displayId);
 
     const update = () => {
-        const minVal = parseInt(min.value);
-        const maxVal = parseInt(max.value);
+        const minVal = Number(min.value);
+        const maxVal = Number(max.value);
 
         // Ensure min <= max
         if (minVal > maxVal) {
@@ -290,7 +431,7 @@ function updateRangeDisplay(minId, maxId, displayId) {
             }
         }
 
-        display.textContent = `${min.value} - ${max.value}`;
+        updateRangeDisplayText(minId, maxId, displayId);
     };
 
     min.addEventListener('input', update);
@@ -302,10 +443,7 @@ function updateRangeDisplay(minId, maxId, displayId) {
 function setupEventListeners() {
     // Refresh button
     document.getElementById('refreshBtn').addEventListener('click', async () => {
-        await loadResults();
-        initializeFilters();
-        applyFilters();
-        renderPagination();
+        await loadResults(paginationState.page, { filterState: readFilterState() });
     });
 
     // Clear filters button
@@ -341,90 +479,18 @@ function setupEventListeners() {
 }
 
 // Handle filter changes
-function handleFilterChange() {
-    applyFilters();
-    saveURLState();
+async function handleFilterChange() {
+    await applyFilters({ page: 1 });
 }
 
 // Apply all filters
-function applyFilters() {
-    filteredResults = allResults.filter(result => {
-        // Date range
-        const dateFrom = document.getElementById('dateFrom').value;
-        const dateTo = document.getElementById('dateTo').value;
-
-        if (dateFrom || dateTo) {
-            const resultDate = new Date(result.timestamp);
-            if (dateFrom && resultDate < new Date(dateFrom)) return false;
-            if (dateTo && resultDate > new Date(dateTo + 'T23:59:59')) return false;
-        }
-
-        // Model filter
-        const selectedModels = Array.from(document.querySelectorAll('#modelSelectContainer input:checked'))
-            .map(cb => cb.value);
-        if (selectedModels.length > 0 && !selectedModels.includes(result.model)) return false;
-
-        // Category filter
-        const selectedCategories = Array.from(document.querySelectorAll('#categorySelectContainer input:checked'))
-            .map(cb => cb.value);
-        if (selectedCategories.length > 0 && !selectedCategories.includes(result.prompt_category)) return false;
-
-        // Level range
-        const levelMin = parseInt(document.getElementById('levelMin').value);
-        const levelMax = parseInt(document.getElementById('levelMax').value);
-        if (result.prompt_level < levelMin || result.prompt_level > levelMax) return false;
-
-        // Quality range
-        const qualityMinInput = parseFloat(document.getElementById('qualityMin').value);
-        const qualityMaxInput = parseFloat(document.getElementById('qualityMax').value);
-        const qualityMin = Number.isNaN(qualityMinInput) ? 0 : qualityMinInput;
-        const qualityMax = Number.isNaN(qualityMaxInput) ? 10 : qualityMaxInput;
-
-        const isQualityFilterActive = qualityMin > 0 || qualityMax < 10;
-
-        if (isQualityFilterActive) {
-            if (result.quality_score === null || result.quality_score === undefined) return false;
-            if (result.quality_score < qualityMin || result.quality_score > qualityMax) return false;
-        }
-
-        // Host filter
-        const hostFilter = document.getElementById('hostFilter').value;
-        if (hostFilter && result.host !== hostFilter) return false;
-
-        // Backend filter
-        const backendFilter = document.getElementById('backendFilter').value;
-        if (backendFilter && result.hardware_snapshot?.backend !== backendFilter) return false;
-
-        // Quantization filter
-        const quantizationFilter = document.getElementById('quantizationFilter').value;
-        if (quantizationFilter && result.hardware_snapshot?.quantization !== quantizationFilter) return false;
-
-        // Success filter
-        const successFilter = document.getElementById('successFilter').value;
-        if (successFilter !== '') {
-            if (successFilter === 'true' && !result.success) return false;
-            if (successFilter === 'false' && result.success) return false;
-        }
-
-        // Batch ID filter
-        const batchIdFilter = document.getElementById('batchIdFilter').value.trim();
-        if (batchIdFilter && result.batch_id !== batchIdFilter) return false;
-
-        // Scoring method filter
-        const scoringMethodFilter = document.getElementById('scoringMethodFilter').value;
-        if (scoringMethodFilter && result.scoring_method !== scoringMethodFilter) return false;
-
-        return true;
-    });
-
-    renderTable();
-    updateCharts();
-    updateResultsCount();
-    renderSummaryStats();
+async function applyFilters({ page = 1 } = {}) {
+    await loadResults(page, { filterState: readFilterState() });
+    saveURLState();
 }
 
 // Clear all filters
-function clearAllFilters() {
+async function clearAllFilters() {
     // Reset date inputs
     document.getElementById('dateFrom').value = '';
     document.getElementById('dateTo').value = '';
@@ -439,8 +505,8 @@ function clearAllFilters() {
     document.getElementById('levelMax').value = 5;
     document.getElementById('qualityMin').value = 0;
     document.getElementById('qualityMax').value = 10;
-    updateRangeDisplay('levelMin', 'levelMax', 'levelRangeDisplay');
-    updateRangeDisplay('qualityMin', 'qualityMax', 'qualityRangeDisplay');
+    updateRangeDisplayText('levelMin', 'levelMax', 'levelRangeDisplay');
+    updateRangeDisplayText('qualityMin', 'qualityMax', 'qualityRangeDisplay');
 
     // Reset dropdowns
     document.getElementById('hostFilter').value = '';
@@ -449,6 +515,7 @@ function clearAllFilters() {
     document.getElementById('successFilter').value = '';
     document.getElementById('batchIdFilter').value = '';
     document.getElementById('scoringMethodFilter').value = '';
+    document.getElementById('evidenceEraFilter').value = '';
 
     // Clear model search
     document.getElementById('modelSearch').value = '';
@@ -456,8 +523,7 @@ function clearAllFilters() {
         item.style.display = 'flex';
     });
 
-    applyFilters();
-    saveURLState();
+    await applyFilters({ page: 1 });
 }
 
 // Render results table
@@ -474,8 +540,9 @@ function renderTable() {
         return;
     }
 
-    // Apply sorting
-    const sorted = sortResults([...filteredResults]);
+    // The API owns ordering so pagination and sorting describe the same full
+    // result set. Never re-sort only the visible page in the browser.
+    const sorted = filteredResults;
 
     // Build table HTML
     const tableHtml = `
@@ -522,8 +589,11 @@ function renderTableHeaders() {
 function renderTableRow(result) {
     const isSelected = selectedResults.has(result._id);
     const rowId = `row-${result._id}`;
+    const evidenceEra = ['recent', 'aging', 'historical', 'undated'].includes(result.evidence_era)
+        ? result.evidence_era
+        : 'undated';
 
-    let html = `<tr data-id="${result._id}">`;
+    let html = `<tr data-id="${result._id}" class="result-era-${evidenceEra}">`;
 
     // Select checkbox
     if (visibleColumns.has('select')) {
@@ -617,8 +687,11 @@ function renderTableRow(result) {
     if (visibleColumns.has('batch_id')) {
         html += `<td>${result.batch_id || 'N/A'}</td>`;
     }
+    if (visibleColumns.has('evidence_age')) {
+        html += `<td>${renderEvidenceAge(result)}</td>`;
+    }
     if (visibleColumns.has('timestamp')) {
-        html += `<td>${new Date(result.timestamp).toLocaleString()}</td>`;
+        html += `<td>${formatRecordedAt(result)}</td>`;
     }
 
     html += '</tr>';
@@ -631,6 +704,57 @@ function renderTableRow(result) {
     </tr>`;
 
     return html;
+}
+
+function renderEvidenceAge(result) {
+    const era = ['recent', 'aging', 'historical', 'undated'].includes(result.evidence_era)
+        ? result.evidence_era
+        : 'undated';
+    const labels = {
+        recent: 'Recent',
+        aging: 'Aging',
+        historical: 'Historical',
+        undated: 'Undated'
+    };
+    const rawAge = result.evidence_age_days;
+    const age = rawAge === null || rawAge === undefined ? null : Number(rawAge);
+    const ageText = Number.isFinite(age)
+        ? (age < 1 ? '<1 day old' : (age === 1 ? '1 day old' : `${age} days old`))
+        : 'age unavailable';
+    const legacy = result.legacy_scoring
+        ? '<span class="evidence-era-badge evidence-era-legacy" title="This record explicitly stores composite_formula=legacy.">Legacy scoring</span>'
+        : '';
+    return `<span class="evidence-age-cell">
+        <span class="evidence-era-badge evidence-era-${era}">${labels[era]}</span>
+        <small>${ageText}</small>${legacy}
+    </span>`;
+}
+
+function formatRecordedAt(result) {
+    const raw = result.evidence_recorded_at || result.timestamp;
+    const date = new Date(raw);
+    if (!raw || !Number.isFinite(date.getTime())) return '<span class="evidence-undated-text">Not recorded</span>';
+    return `<time datetime="${date.toISOString()}" title="${date.toISOString()}">${escapeHtml(date.toLocaleString())}</time>`;
+}
+
+function renderEvidenceScope() {
+    const scope = document.getElementById('resultsEvidenceScope');
+    const policyRule = document.getElementById('evidenceAgeGuideRule');
+    if (policyRule) {
+        const recentMax = Number(evidencePolicy.recent_max_age_days) || 30;
+        const agingMax = Number(evidencePolicy.aging_max_age_days) || 90;
+        policyRule.textContent = `Recent: within ${recentMax} days. Aging: more than ${recentMax} through ${agingMax} days. Historical: more than ${agingMax} days. “Legacy scoring” appears only when that exact formula is stored on the result.`;
+    }
+    if (!scope) return;
+    if (paginationState.total === 0) {
+        scope.textContent = archiveTotal > 0
+            ? `No archive results match these filters. ${archiveTotal} total result${archiveTotal === 1 ? '' : 's'} remain in the archive.`
+            : 'No recorded evaluation evidence is available.';
+        return;
+    }
+    const start = (paginationState.page - 1) * paginationState.limit + 1;
+    const end = start + allResults.length - 1;
+    scope.textContent = `Showing ${start}–${end} of ${paginationState.total} matching results, newest first by default. Charts and detailed aggregates summarize this visible page.`;
 }
 
 // Render expanded row content
@@ -721,19 +845,19 @@ function renderPagination() {
     const { page, totalPages, total, limit } = paginationState;
 
     if (totalPages <= 1) {
-        container.innerHTML = `<span class="pagination-info">${total} result${total !== 1 ? 's' : ''}</span>`;
+        container.innerHTML = `<span class="pagination-info">${total} matching result${total !== 1 ? 's' : ''}</span>`;
         return;
     }
 
     const start = Math.min((page - 1) * limit + 1, total);
-    const end = Math.min(page * limit, total);
+    const end = Math.min(start + allResults.length - 1, total);
 
     container.innerHTML = `
         <button class="btn-action pagination-btn" id="paginationPrev" ${page <= 1 ? 'disabled' : ''}>
             <i class="fas fa-chevron-left"></i> Previous
         </button>
         <span class="pagination-info">
-            Page ${page} of ${totalPages} &nbsp;&middot;&nbsp; ${start}-${end} of ${total} results
+            Page ${page} of ${totalPages} &nbsp;&middot;&nbsp; ${start}-${end} of ${total} matching results
         </span>
         <button class="btn-action pagination-btn" id="paginationNext" ${page >= totalPages ? 'disabled' : ''}>
             Next <i class="fas fa-chevron-right"></i>
@@ -780,7 +904,7 @@ function setupTableEventListeners() {
 
     // Sort header listeners
     document.querySelectorAll('.sortable').forEach(th => {
-        th.addEventListener('click', (e) => {
+        th.addEventListener('click', async (e) => {
             const field = e.currentTarget.dataset.sort;
 
             if (currentSort.field === field) {
@@ -790,7 +914,8 @@ function setupTableEventListeners() {
                 currentSort.direction = 'desc';
             }
 
-            renderTable();
+            await loadResults(1, { filterState: readFilterState() });
+            saveURLState();
         });
     });
 }

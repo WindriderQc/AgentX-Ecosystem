@@ -3,6 +3,7 @@
 const HostProfile = require('../../../models/HostProfile');
 const { listModels, listRunning, generate } = require('../../clients/ollamaClient');
 const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
+const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmission');
 const logger = require('../../../config/logger');
 
 const STATUS_TIMEOUT_MS = 4000;
@@ -116,6 +117,9 @@ async function upsert(data) {
     if (Number.isFinite(configuredVram) && configuredVram > 0) {
       input.gpu = { ...(input.gpu || {}), vramTotalMiB: configuredVram };
     }
+  }
+  if (input.hostUrl) {
+    input.hostUrl = await admitOllamaTargetResolved(input.hostUrl, { configuredHosts: getConfiguredHosts() });
   }
   const hasDedicatedInput = Object.prototype.hasOwnProperty.call(input, 'dedicated');
   const dedicated = input.dedicated;

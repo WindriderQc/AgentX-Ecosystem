@@ -1036,9 +1036,15 @@ function _wirePersistenceUI(container, onlineHosts, config, judgeRoster, onLaunc
                         showToast(`Loaded "${tpl.name}"`, 'success');
                     }
                     if (delBtn) {
-                        if (!confirm(`Delete template?`)) return;
+                        const template = templates.find(t => t._id === delBtn.dataset.id);
+                        const expectedConfirmation = `DELETE TEMPLATE ${delBtn.dataset.id}`;
+                        const confirmation = window.prompt(
+                            `Delete template "${template?.name || 'Unnamed template'}"?\n\n`
+                            + `Type ${expectedConfirmation} to confirm:`
+                        );
+                        if (confirmation !== expectedConfirmation) return;
                         try {
-                            await deleteTemplate(delBtn.dataset.id);
+                            await deleteTemplate(delBtn.dataset.id, confirmation);
                             delBtn.closest('li').remove();
                             showToast('Template deleted', 'success');
                         } catch (err) {

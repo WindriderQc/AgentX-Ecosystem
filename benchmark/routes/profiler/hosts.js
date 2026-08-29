@@ -200,7 +200,11 @@ router.post('/test/detect-host', async (req, res) => {
     const data = await liveProbeService.detectOllamaHost(req.body || {});
     res.json({ status: 'success', data });
   } catch (err) {
-    logger.warn('Profiler host detection failed', { error: err.message, body: req.body });
+    logger.warn('Profiler host detection failed', {
+      error: err.message,
+      targetProvided: typeof req.body?.hostUrl === 'string' && Boolean(req.body.hostUrl.trim()),
+      displayNameProvided: typeof req.body?.displayName === 'string' && Boolean(req.body.displayName.trim())
+    });
     res.status(err.statusCode || 500).json({
       status: 'error',
       message: err.message,
@@ -297,7 +301,7 @@ router.post('/test/run-all', async (req, res) => {
       }
     }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; });
     res.json({ status: 'success', data: { testId, totalModels: hostCheck.models.length, models: hostCheck.models } });
-  } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message }); }
 });
 
 /** GET /test/run-all/:testId/progress */
@@ -540,7 +544,7 @@ router.post('/test/context-probe/run', async (req, res) => {
       force: !!force,
       acknowledgeMaintenance: true
     }) });
-  } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message }); }
 });
 
 /** GET /test/context-probe/status/:modelName */
@@ -635,6 +639,21 @@ router.get('/:hostId/status', async (req, res) => {
   try {
     const host = await hostProfileService.getById(req.params.hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
+    // GET is observational only. Live probes update evidence and therefore use
+    // the protected POST /status/refresh action below.
+    res.json({ status: 'success', data: {
+      hostId: req.params.hostId,
+      status: host.status || 'unknown',
+      lastSeenAt: host.lastSeenAt || null,
+      dedicated: host.dedicated || null
+    }});
+  } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
+});
+
+router.post('/:hostId/status/refresh', async (req, res) => {
+  try {
+    const host = await hostProfileService.getById(req.params.hostId);
+    if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
     const status = await hostProfileService.checkStatus(host.hostUrl);
     await hostProfileService.updateStatus(req.params.hostId, status.status);
     await hostProfileService.upsert({
@@ -659,7 +678,7 @@ router.get('/:hostId/fit-report', async (req, res) => {
 router.put('/:hostId', async (req, res) => {
   try {
     res.json({ status: 'success', data: await hostProfileService.upsert({ ...req.body, hostId: req.params.hostId }) }); }
-  catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
+  catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message }); }
 });
 
 router.post('/:hostId/sync', async (req, res) => {

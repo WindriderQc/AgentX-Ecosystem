@@ -2,7 +2,10 @@
  * Tests for Judge Model Validator
  */
 
-const { validateJudgeModel } = require('../../src/services/benchmark/judgeModelValidator');
+const {
+    validateJudgeModel,
+    probeJudgeCapability
+} = require('../../src/services/benchmark/judgeModelValidator');
 
 // Mock logger
 jest.mock('../../config/logger', () => ({
@@ -40,6 +43,7 @@ describe('Judge Model Validator', () => {
         it('should return invalid when host is empty', async () => {
             const result = await validateJudgeModel('', 'some-model');
             expect(result.valid).toBe(false);
+            expect(result.code).toBe('JUDGE_TARGET_INCOMPLETE');
             expect(result.error).toContain('host and model are required');
         });
 
@@ -63,6 +67,7 @@ describe('Judge Model Validator', () => {
 
             const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
             expect(result.valid).toBe(false);
+            expect(result.code).toBe('JUDGE_MODEL_UNAVAILABLE');
             expect(result.error).toContain('not found on judge host');
             expect(result.available_models).toEqual(['llama3.1:8b', 'mistral:7b']);
         });
@@ -74,6 +79,7 @@ describe('Judge Model Validator', () => {
 
             const result = await validateJudgeModel('http://dead-host:11434', 'some-model', { _fetch });
             expect(result.valid).toBe(false);
+            expect(result.code).toBe('JUDGE_HOST_UNREACHABLE');
             expect(result.error).toContain('Cannot connect');
         });
 
@@ -82,6 +88,7 @@ describe('Judge Model Validator', () => {
 
             const result = await validateJudgeModel(HOST, 'some-model', { _fetch });
             expect(result.valid).toBe(false);
+            expect(result.code).toBe('JUDGE_HOST_UNAVAILABLE');
             expect(result.error).toContain('Failed to list models');
         });
 
@@ -123,6 +130,8 @@ describe('Judge Model Validator', () => {
             expect(result.warning).toBeUndefined();
             expect(result.latency_ms).toBeDefined();
             expect(JSON.parse(_fetch.mock.calls[1][1].body)).toMatchObject({ think: false });
+            expect(_fetch.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
+            expect(_fetch.mock.calls[1][1]).toMatchObject({ redirect: 'manual' });
         });
 
         it('should return invalid when model produces no JSON', async () => {
@@ -199,6 +208,27 @@ describe('Judge Model Validator', () => {
             const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
             expect(result.valid).toBe(true);
             expect(result.warning).toContain('cold start');
+        });
+    });
+
+    describe('capability metadata probe', () => {
+        it('does not follow redirects', async () => {
+            const _fetch = mockFetch(okJson({
+                model_info: { 'fixture.context_length': 32768 },
+                details: { parameter_size: '7B' }
+            }));
+
+            const result = await probeJudgeCapability(HOST, 'judge:7b', { _fetch });
+
+            expect(result).toMatchObject({
+                ok: true,
+                context_length: 32768,
+                parameter_size: '7B'
+            });
+            expect(_fetch).toHaveBeenCalledWith(
+                `${HOST}/api/show`,
+                expect.objectContaining({ method: 'POST', redirect: 'manual' })
+            );
         });
     });
 });

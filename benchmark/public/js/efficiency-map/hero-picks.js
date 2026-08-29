@@ -1,5 +1,6 @@
 // public/js/efficiency-map/hero-picks.js
 import { scoreColor } from '../components/score-color.js';
+import { NO_THROUGHPUT_MESSAGE, rankableEfficiencyEntries } from './evidence.js';
 
 const MEDALS = ['\u{1F947}', '\u{1F948}', '\u{1F949}'];
 const MEDAL_LABELS = ['Most Efficient', 'Runner-up', 'Third'];
@@ -17,6 +18,9 @@ function pickCard(entry, idx) {
     const qColor = scoreColor(entry.avgQuality);
     const eColor = scoreColor(entry.efficiencyScore / 10);
     const host = shortHost(entry.host);
+    const throughputTestCount = Number.isFinite(entry.throughputTestCount)
+        ? entry.throughputTestCount
+        : entry.testCount;
     const pareto = entry.paretoOptimal ? '<span class="eff-pareto-badge" title="Pareto-optimal">★</span>' : '';
 
     return `<div class="eff-pick" style="border-left: 3px solid ${BORDER_COLORS[idx]}">
@@ -39,14 +43,14 @@ function pickCard(entry, idx) {
                 <span class="eff-pick-stat-val" style="color:${eColor}">${entry.efficiencyScore.toFixed(1)}</span>
             </div>
         </div>
-        <div class="eff-pick-tests">${entry.testCount} tests</div>
+        <div class="eff-pick-tests">${throughputTestCount} speed samples · ${entry.testCount} quality tests</div>
     </div>`;
 }
 
 export function renderHeroPicks(container, entries) {
-    const top = entries.slice(0, 3);
+    const top = rankableEfficiencyEntries(entries).slice(0, 3);
     if (top.length === 0) {
-        container.innerHTML = '<p style="color:var(--r-text-muted);text-align:center;padding:2rem">No models with enough data yet.</p>';
+        container.innerHTML = `<p class="eff-empty-state">${NO_THROUGHPUT_MESSAGE}</p>`;
         return;
     }
     container.innerHTML = `<div class="eff-picks">${top.map((e, i) => pickCard(e, i)).join('')}</div>`;

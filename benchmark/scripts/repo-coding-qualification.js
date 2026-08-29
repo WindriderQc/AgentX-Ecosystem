@@ -32,6 +32,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { readBoundedJson } = require('../../scripts/bounded-response');
 
 const { loadRepoTasks } = require('../src/services/qualification/repoTaskFixtures');
 const { toJsonlLine } = require('../src/services/qualification/executableRepoGrader');
@@ -69,6 +70,8 @@ const DEFAULT_REPEAT_PENALTY = 1.1;
 const DEFAULT_RESPONSE_MODE = 'final_only';
 const DEFAULT_MODEL_TIMEOUT_MS = 600_000; // generous: 30B on a shared host
 const DEFAULT_GRADE_TIMEOUT_MS = 30_000;
+const CORE_CLAIM_TIMEOUT_MS = 10_000;
+const MAX_CORE_CLAIM_RESPONSE_BYTES = 1024 * 1024;
 const DEFAULT_OUTPUT_ROOT = path.join(__dirname, '..', '.agentx', 'reports', 'repo-coding-qualification');
 
 function parseList(value) {
@@ -259,16 +262,23 @@ function buildOllamaCallModel({ host, modelConfigs, timeoutMs }) {
 }
 
 async function requestJson(url, fetchImpl = benchmarkFetch) {
-  const response = await fetchImpl(url, getFetchOptions(url));
-  const payload = await response.json();
+  const signal = AbortSignal.timeout(CORE_CLAIM_TIMEOUT_MS);
+  const response = await fetchImpl(url, getFetchOptions(url, {
+    redirect: 'manual',
+    signal
+  }));
+  const payload = await readBoundedJson(response, {
+    maxBytes: MAX_CORE_CLAIM_RESPONSE_BYTES,
+    signal
+  });
   if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status} from ${url}`);
   return payload;
 }
 
 async function assertExpectedActiveClaim({ core, host, claimId }, deps = {}) {
-  const payload = await requestJson(
-    `${core.replace(/\/+$/, '')}/api/nerve-center/host-preferences/benchmark-claims/active`,
-    deps.fetchImpl
+  const loadClaims = deps.requestJson || requestJson;
+  const payload = await loadClaims(
+    `${core.replace(/\/+$/, '')}/api/nerve-center/host-preferences/benchmark-claims/active`
   );
   const normalizedHost = host.replace(/\/+$/, '').toLowerCase();
   const claims = payload?.data?.claims || [];
@@ -532,8 +542,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  CORE_CLAIM_TIMEOUT_MS,
+  MAX_CORE_CLAIM_RESPONSE_BYTES,
   parseArgs,
   buildOllamaCallModel,
+  requestJson,
   assertExpectedActiveClaim,
   assertExactFrozenSettings,
   fingerprint,
