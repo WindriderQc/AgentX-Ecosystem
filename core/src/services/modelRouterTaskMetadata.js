@@ -24,8 +24,8 @@ const TASK_TYPE_METADATA = Object.freeze({
 });
 
 const ROUTING_EXPLAINER_STEPS = Object.freeze([
-  'Your prompt enters the chat API with either auto-routing enabled or an explicit task type.',
-  'A lightweight classifier maps the prompt to one routing category.',
+  'Each request enters with either an explicit task type or auto-routing enabled.',
+  'Explicit task types—including the Playground Quick, Standard, and Deep session modes—bypass classification. Auto-routing requests alone invoke the lightweight classifier.',
   'That category resolves to a model and preferred host based on the current task map.',
   'The inference request runs on the selected host and the response carries routing metadata back to the UI.'
 ]);

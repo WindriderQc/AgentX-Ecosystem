@@ -19,7 +19,7 @@ jest.mock('../../src/services/hostGate', () => ({ stats: () => ({ enabled: false
 jest.mock('../../src/services/ollamaWatchdogService', () => ({ getStats: () => ({ isRunning: false }) }));
 jest.mock('../../src/services/hostPreferenceService', () => ({ listBenchmarkClaims: async () => [] }));
 
-const { getJudgeDriftSnapshot } = require('../../src/services/inferenceHealthService');
+const { getJudgeDriftSnapshot, summarizeDriftRows } = require('../../src/services/inferenceHealthService');
 
 describe('inferenceHealthService.getJudgeDriftSnapshot', () => {
   beforeEach(() => {
@@ -53,5 +53,29 @@ describe('inferenceHealthService.getJudgeDriftSnapshot', () => {
 
     const snap = await getJudgeDriftSnapshot();
     expect(snap).toMatchObject({ unavailable: true, error: 'boom' });
+  });
+});
+
+describe('inferenceHealthService num_ctx evidence', () => {
+  it('treats host preference pins as compliant policy instead of drift', () => {
+    const result = summarizeDriftRows([
+      { _id: { caller: 'chat', source: 'host_preference_pin' }, count: 8 },
+      { _id: { caller: 'benchmark', source: 'caller' }, count: 2 },
+      { _id: { caller: 'proxy', source: 'fallback' }, count: 1 },
+      { _id: { caller: 'embedding', source: 'n/a' }, count: 20 },
+      { _id: { caller: 'chat', source: null }, count: 3 },
+    ], 900000, '2026-08-30T12:00:00.000Z');
+
+    expect(result.totals).toEqual({
+      total: 11, modelfile: 0, caller: 2, pinned: 8, resolved: 1, unknown: 3, na: 20,
+    });
+    expect(result).toEqual(expect.objectContaining({ hasSamples: true, driftPct: 9.1 }));
+  });
+
+  it('returns unknown drift instead of a healthy zero for an empty denominator', () => {
+    const result = summarizeDriftRows([
+      { _id: { caller: 'embedding', source: 'n/a' }, count: 5 },
+    ]);
+    expect(result).toEqual(expect.objectContaining({ hasSamples: false, driftPct: null }));
   });
 });

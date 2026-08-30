@@ -614,9 +614,9 @@ const NerveCenter = (() => {
             updateWidget('widgetRoutingMode', () => {
                 if (!routing) return { value: 'ERROR', state: 'critical', title: 'Routing evidence is unavailable in the ecosystem snapshot.' };
                 return {
-                    value: routing.isFailedOver ? 'FAILOVER' : 'AUTO',
+                    value: routing.isFailedOver ? 'FAILOVER' : 'NOMINAL',
                     state: routing.isFailedOver ? 'attention' : 'nominal',
-                    title: `Routing authority: ${routing.authority || 'unavailable'} · snapshot observed ${snapshotAge}.`
+                    title: `Failover policy state. Classifier use is recorded per request and is not implied here. Routing authority: ${routing.authority || 'unavailable'} · snapshot observed ${snapshotAge}.`
                 };
             });
 
@@ -630,7 +630,7 @@ const NerveCenter = (() => {
         if (inferenceResult.status === 'fulfilled' && inferenceResult.value.status === 'success') {
             updateWidget('widgetInferences', () => formatInferenceWidget(inferenceResult.value.data));
         } else {
-            updateWidget('widgetInferences', () => ({ value: '—', state: 'nominal' }));
+            updateWidget('widgetInferences', () => ({ value: '—', state: 'attention', title: 'Internal inference-call evidence is unavailable.' }));
             if (inferenceResult.status === 'rejected') {
                 console.error('[NerveCenter] Failed to load inference stats', inferenceResult.reason);
             }
@@ -649,7 +649,16 @@ const NerveCenter = (() => {
             value += ` · ${formatCurrency(totalCost)}`;
         }
 
-        return { value, state: 'nominal' };
+        const nonSuccess = Number(stats.nonSuccessCount) || 0;
+        const callerBreakdown = Object.entries(stats.byCaller || {})
+            .sort((left, right) => right[1] - left[1])
+            .map(([caller, calls]) => `${caller}: ${calls}`)
+            .join(' · ');
+        return {
+            value,
+            state: nonSuccess > 0 ? 'attention' : 'nominal',
+            title: `All internal inference-log records since 00:00 UTC, not conversation count.${callerBreakdown ? ` ${callerBreakdown}.` : ''}${nonSuccess ? ` ${nonSuccess} non-success.` : ''}`
+        };
     }
 
     function updateWidget(widgetId, computeFn) {

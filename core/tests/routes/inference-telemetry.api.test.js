@@ -55,6 +55,11 @@ describe('Inference telemetry API', () => {
 
     const pipeline = mockAggregate.mock.calls[0][0];
     const match = pipeline[0].$match;
+    expect(pipeline[1].$group).toEqual(expect.objectContaining({
+      errorCount: { $sum: { $cond: [{ $eq: ['$status', 'error'] }, 1, 0] } },
+      timeoutCount: { $sum: { $cond: [{ $eq: ['$status', 'timeout'] }, 1, 0] } },
+      nonSuccessCount: { $sum: { $cond: [{ $ne: ['$status', 'success'] }, 1, 0] } },
+    }));
     expect(match).toEqual(expect.objectContaining({
       host: 'http://primary:11434',
       model: 'qwen3.5:9b',
@@ -121,6 +126,8 @@ describe('Inference telemetry API', () => {
 
     expect(mockAggregate.mock.calls[0][0][1].$group._id).toBe('$model');
     expect(mockAggregate.mock.calls[1][0][1].$group._id).toBe('$caller');
+    expect(mockAggregate.mock.calls[0][0][2].$project).toHaveProperty('nonSuccessRate');
+    expect(mockAggregate.mock.calls[1][0][2].$project).toHaveProperty('nonSuccessRate');
     expect(modelResponse.body.data[0]).toEqual(expect.objectContaining({
       model: 'qwen3.5:9b',
       avgTokensOut: 42

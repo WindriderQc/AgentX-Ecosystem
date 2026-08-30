@@ -114,7 +114,13 @@ async function buildInferenceStats(now = new Date()) {
   }).lean();
 
   let totalCost = 0;
+  const byCaller = {};
+  const byStatus = {};
   for (const log of logs) {
+    const caller = log.caller || 'unknown';
+    const status = log.status || 'unknown';
+    byCaller[caller] = (byCaller[caller] || 0) + 1;
+    byStatus[status] = (byStatus[status] || 0) + 1;
     const promptTokens = log.tokensIn || 0;
     const completionTokens = log.tokensOut || 0;
     const cost = await calculateMessageCost(log.model, {
@@ -129,7 +135,12 @@ async function buildInferenceStats(now = new Date()) {
 
   return {
     count: logs.length,
-    totalCost: parseFloat(totalCost.toFixed(6))
+    totalCost: parseFloat(totalCost.toFixed(6)),
+    nonSuccessCount: logs.filter(log => log.status !== 'success').length,
+    byCaller,
+    byStatus,
+    observedAt: now.toISOString(),
+    scope: 'All internal inference-log records since 00:00 UTC; this is not a conversation count.'
   };
 }
 
@@ -140,7 +151,7 @@ function parseAnalyticsWindowHours(value) {
 }
 
 function roundMetric(value) {
-  return Number.isFinite(value) ? parseFloat(value.toFixed(1)) : 0;
+  return Number.isFinite(value) ? parseFloat(value.toFixed(1)) : null;
 }
 
 function buildDistribution(items, keyField, valueField = 'count') {
@@ -151,7 +162,7 @@ function buildDistribution(items, keyField, valueField = 'count') {
       avgDurationMs: roundMetric(stats.durationTotal / stats.count),
       avgClassificationMs: stats.classificationCount > 0
         ? roundMetric(stats.classificationTotal / stats.classificationCount)
-        : 0,
+        : null,
       autoRouted: stats.autoRouted,
       percentage: 0
     }))
@@ -174,10 +185,10 @@ async function buildRoutingAnalytics(windowHours = 24, now = new Date()) {
     since: since.toISOString(),
     totalRequests: logs.length,
     autoRoutedCount: 0,
-    avgDurationMs: 0,
-    avgClassificationMs: 0,
-    avgTotalForClassifiedMs: 0,
-    classificationOverheadPct: 0,
+    avgDurationMs: null,
+    avgClassificationMs: null,
+    avgTotalForClassifiedMs: null,
+    classificationOverheadPct: null,
     classificationSamples: 0
   };
 
@@ -235,13 +246,13 @@ async function buildRoutingAnalytics(windowHours = 24, now = new Date()) {
   summary.avgDurationMs = roundMetric(durationTotal / logs.length);
   summary.avgClassificationMs = summary.classificationSamples > 0
     ? roundMetric(classificationTotal / summary.classificationSamples)
-    : 0;
+    : null;
   summary.avgTotalForClassifiedMs = summary.classificationSamples > 0
     ? roundMetric(classifiedDurationTotal / summary.classificationSamples)
-    : 0;
+    : null;
   summary.classificationOverheadPct = classifiedDurationTotal > 0
     ? roundMetric((classificationTotal / classifiedDurationTotal) * 100)
-    : 0;
+    : null;
 
   const taskDistribution = buildDistribution(taskBuckets, 'taskType');
   const modelDistribution = buildDistribution(modelBuckets, 'model');
@@ -670,7 +681,10 @@ router.get('/inference/activity', async (req, res) => {
       }}
     ]);
 
-    const hourStats = stats[0] || { totalCalls: 0, avgLatencyMs: 0, errorCount: 0 };
+    const hourStats = stats[0] || { totalCalls: 0, avgLatencyMs: null, errorCount: 0 };
+    const nonSuccessRate = hourStats.totalCalls > 0
+      ? Number((hourStats.errorCount / hourStats.totalCalls * 100).toFixed(1))
+      : null;
 
     res.json({
       status: 'success',
@@ -679,10 +693,11 @@ router.get('/inference/activity', async (req, res) => {
         stats: {
           lastHour: {
             totalCalls: hourStats.totalCalls,
-            avgLatencyMs: Math.round(hourStats.avgLatencyMs || 0),
-            errorRate: hourStats.totalCalls > 0
-              ? (hourStats.errorCount / hourStats.totalCalls * 100).toFixed(1)
-              : '0.0',
+            avgLatencyMs: hourStats.totalCalls > 0 ? Math.round(hourStats.avgLatencyMs || 0) : null,
+            nonSuccessCount: hourStats.errorCount,
+            nonSuccessRate,
+            errorRate: nonSuccessRate,
+            observedAt: new Date().toISOString(),
           }
         }
       }

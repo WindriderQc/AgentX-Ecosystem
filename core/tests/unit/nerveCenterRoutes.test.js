@@ -345,6 +345,20 @@ describe('Nerve Center Routes — Unit Tests', () => {
         count: 2
       }));
     });
+
+    it('uses unknown rates instead of healthy zeroes when the window has no chat requests', async () => {
+      mockInferenceLogLean.mockResolvedValueOnce([]);
+      const analytics = await buildRoutingAnalytics(24, new Date('2026-03-27T12:00:00Z'));
+
+      expect(analytics.summary).toEqual(expect.objectContaining({
+        totalRequests: 0,
+        autoRoutedCount: 0,
+        avgDurationMs: null,
+        avgClassificationMs: null,
+        classificationOverheadPct: null,
+      }));
+      expect(analytics.summary.autoRoutedPct).toBeUndefined();
+    });
   });
 
   describe('buildInferenceStats()', () => {
@@ -353,7 +367,12 @@ describe('Nerve Center Routes — Unit Tests', () => {
 
       expect(stats).toEqual({
         count: 1,
-        totalCost: 0.0015
+        totalCost: 0.0015,
+        nonSuccessCount: 0,
+        byCaller: { unknown: 1 },
+        byStatus: { success: 1 },
+        observedAt: '2026-03-27T12:00:00.000Z',
+        scope: 'All internal inference-log records since 00:00 UTC; this is not a conversation count.'
       });
       expect(calculateMessageCost).toHaveBeenCalledWith('qwen2.5:7b', expect.objectContaining({
         usage: expect.objectContaining({
