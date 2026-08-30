@@ -38,6 +38,24 @@ function latestRuntimeState(runs) {
   return latest;
 }
 
+function latestCollectorObservation(runtimes) {
+  const timestamps = Object.values(runtimes)
+    .map((runtime) => new Date(runtime.lastSeen || 0).getTime())
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+  return timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
+}
+
+function measuredMetric(value, denominator, evidence) {
+  const hasDenominator = Number.isFinite(denominator) && denominator > 0;
+  return {
+    value: evidence.state === 'current' && hasDenominator ? value : null,
+    lastValue: hasDenominator ? value : null,
+    denominator: Number.isFinite(denominator) ? denominator : 0,
+    state: hasDenominator ? evidence.state : 'insufficient',
+    observedAt: evidence.observedAt,
+  };
+}
+
 function summarizeRuns(runs, limit, now = new Date(), {
   runtimeStaleAfterMs = DEFAULT_RUNTIME_STALE_AFTER_MS,
 } = {}) {
@@ -122,6 +140,9 @@ function summarizeRuns(runs, limit, now = new Date(), {
   const staleRuntimes = Object.values(runtimes)
     .filter((runtime) => runtime.health === 'stale')
     .map((runtime) => runtime.runtime);
+  const missingRuntimes = Object.values(runtimes)
+    .filter((runtime) => runtime.health === 'not_seen')
+    .map((runtime) => runtime.runtime);
   const activeRuns = runs.filter((run) => ['collecting', 'synthesizing'].includes(run.status));
   const activeRun = activeRuns[0] || null;
   const activeReconciliation = activeRun ? policy.reconciliationStatus(activeRun, now) : null;
@@ -129,6 +150,24 @@ function summarizeRuns(runs, limit, now = new Date(), {
   const latest = runs.find((run) => ['ready_for_review', 'partially_reviewed', 'completed'].includes(run.status)) || runs[0] || null;
   const decided = quality.approved + quality.rejected;
   const observed = totals.eligibleObservations + totals.filteredObservations;
+  const observedAt = latestCollectorObservation(runtimes);
+  const evidenceState = !runs.length || !observedAt
+    ? 'unavailable'
+    : currentErrors || overdue
+      ? 'attention'
+      : staleRuntimes.length
+        ? 'stale'
+        : missingRuntimes.length
+          ? 'partial'
+          : 'current';
+  const qualityEvidence = {
+    state: evidenceState,
+    observedAt,
+    missingRuntimes,
+    staleRuntimes,
+  };
+  const approvalPrecision = decided ? Math.round((quality.approved / decided) * 100) : null;
+  const filterRate = observed ? Math.round((totals.filteredObservations / observed) * 100) : null;
 
   return {
     window: {
@@ -137,11 +176,13 @@ function summarizeRuns(runs, limit, now = new Date(), {
       to: runs.length ? runs[0].createdAt : null,
     },
     health: {
-      state: !runs.length ? 'waiting' : (currentErrors || overdue || staleRuntimes.length) ? 'attention' : 'healthy',
+      state: !runs.length ? 'waiting' : (currentErrors || overdue || staleRuntimes.length || missingRuntimes.length) ? 'attention' : 'healthy',
       errors: currentErrors,
       advisories: currentAdvisories,
       stale: staleRuntimes.length,
       staleRuntimes,
+      missing: missingRuntimes.length,
+      missingRuntimes,
       runtimeStaleAfterMs,
       collecting: activeRuns.length > 0,
       overdue,
@@ -165,8 +206,17 @@ function summarizeRuns(runs, limit, now = new Date(), {
     totals,
     quality: {
       ...quality,
-      approvalPrecision: decided ? Math.round((quality.approved / decided) * 100) : null,
-      filterRate: observed ? Math.round((totals.filteredObservations / observed) * 100) : null,
+      evidence: qualityEvidence,
+      metrics: {
+        filterRate: measuredMetric(filterRate, observed, qualityEvidence),
+        approvalPrecision: measuredMetric(approvalPrecision, decided, qualityEvidence),
+        modelSkips: measuredMetric(totals.modelSkips, totals.runs, qualityEvidence),
+        crossRuntime: measuredMetric(quality.crossRuntime, totals.candidates, qualityEvidence),
+        conflicts: measuredMetric(quality.conflicts, totals.candidates, qualityEvidence),
+        riskFlags: measuredMetric(quality.riskFlags, totals.candidates, qualityEvidence),
+      },
+      approvalPrecision: evidenceState === 'current' ? approvalPrecision : null,
+      filterRate: evidenceState === 'current' ? filterRate : null,
     },
     runtimes: Object.values(runtimes),
     distributions,

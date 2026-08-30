@@ -207,8 +207,26 @@
     ].join('');
   }
 
-  function metric(value, name, detail) {
-    return `<div class="mr-quality-metric"><strong>${esc(value)}</strong><span>${esc(name)}</span><small>${esc(detail)}</small></div>`;
+  function metric(metricEvidence, name, detail, { suffix = '', historicalValue = null } = {}) {
+    const evidence = metricEvidence || {};
+    const current = evidence.state === 'current' && evidence.value != null;
+    const value = current ? `${evidence.value}${suffix}` : '—';
+    const state = evidence.state || 'unavailable';
+    let evidenceDetail = detail;
+    if (!current) {
+      const lastValue = evidence.lastValue == null ? historicalValue : evidence.lastValue;
+      const measured = lastValue == null ? '' : ` Historical result: ${lastValue}${suffix}.`;
+      const lastSeen = evidence.observedAt ? ` Last evidence ${relativeDate(evidence.observedAt)}.` : '';
+      const reasons = {
+        stale: 'Collector coverage is stale.',
+        partial: 'Collector coverage is incomplete.',
+        attention: 'Collector or reconciliation evidence needs attention.',
+        insufficient: 'No measured denominator is available.',
+        unavailable: 'Evidence is unavailable.',
+      };
+      evidenceDetail = `${reasons[state] || reasons.unavailable}${lastSeen}${measured}`;
+    }
+    return `<div class="mr-quality-metric mr-metric-${esc(state)}"><strong>${esc(value)}</strong><span>${esc(name)}</span><small>${esc(evidenceDetail)}</small></div>`;
   }
 
   function distributionBars(values, emptyText) {
@@ -228,15 +246,14 @@
       <span>${runtime.eligible} ${runtime.eligible === 1 ? 'signal' : 'signals'} · ${runtime.filtered} filtered</span>
       <small>${runtime.lastSeen ? `Seen ${esc(relativeDate(runtime.lastSeen))}` : 'No recent contribution'}${runtime.currentAdvisories ? ` · ${runtime.currentAdvisories} ${runtime.currentAdvisories === 1 ? 'advisory' : 'advisories'}` : ''}</small>
     </div>`).join('');
-    const precision = insight.quality.approvalPrecision == null ? '—' : `${insight.quality.approvalPrecision}%`;
-    const filterRate = insight.quality.filterRate == null ? '—' : `${insight.quality.filterRate}%`;
+    const metrics = insight.quality.metrics || {};
     $('mrQualityGrid').innerHTML = [
-      metric(filterRate, 'Noise filtered', `${insight.totals.filteredObservations} items stopped before synthesis`),
-      metric(precision, 'Approval precision', insight.totals.reviewed ? `${insight.totals.reviewed} decisions measured` : 'Starts after your first decisions'),
-      metric(insight.totals.modelSkips, 'Review-model calls saved', 'Empty evidence windows stay deterministic'),
-      metric(insight.quality.crossRuntime, 'Cross-agent consensus', 'Candidates confirmed by multiple runtimes'),
-      metric(insight.quality.conflicts, 'Conflicts surfaced', 'Never resolved silently'),
-      metric(insight.quality.riskFlags, 'Risk flags', 'Privacy, governance, staleness, or injection'),
+      metric(metrics.filterRate, 'Noise filtered', `${insight.totals.filteredObservations} of ${metrics.filterRate?.denominator || 0} observations stopped before synthesis`, { suffix: '%', historicalValue: insight.quality.filterRate }),
+      metric(metrics.approvalPrecision, 'Approval precision', `${metrics.approvalPrecision?.denominator || 0} approve/reject decisions measured`, { suffix: '%', historicalValue: insight.quality.approvalPrecision }),
+      metric(metrics.modelSkips, 'Review-model calls saved', 'Empty evidence windows stay deterministic', { historicalValue: insight.totals.modelSkips }),
+      metric(metrics.crossRuntime, 'Cross-agent consensus', 'Candidates confirmed by multiple runtimes', { historicalValue: insight.quality.crossRuntime }),
+      metric(metrics.conflicts, 'Conflicts surfaced', 'Never resolved silently', { historicalValue: insight.quality.conflicts }),
+      metric(metrics.riskFlags, 'Risk flags', 'Privacy, governance, staleness, or injection', { historicalValue: insight.quality.riskFlags }),
     ].join('');
     $('mrAtlas').innerHTML = `<div><h4>Candidate types</h4>${distributionBars(insight.distributions.candidateTypes, 'The atlas will grow with the first trustworthy proposal.')}</div>
       <div><h4>Destinations</h4>${distributionBars(insight.distributions.targets, 'No semantic destination has been proposed yet.')}</div>`;
