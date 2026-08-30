@@ -103,6 +103,51 @@ describe('leaderboard evidence-honesty UI', () => {
         expect(sorted[0].model).toBe('scored');
     });
 
+    test('keeps missing provenance confidence neutral and separates needs-review from reviewed', () => {
+        const { renderRow } = loadBrowserModule(
+            'combined-board.js',
+            'renderRow',
+            {
+                getBadgeHtml: () => '',
+                speedometer: () => '',
+                shortHost: () => 'host'
+            }
+        );
+
+        const html = renderRow({
+            model: 'legacy-judge-scored',
+            score: 6.5,
+            fullScopeEligible: false,
+            evidenceConfidence: null,
+            evidenceConfidencePenalty: 0,
+            needsReviewCount: 8,
+            categoryScores: { coding: 6.5 },
+            dimensions: [],
+            promptLevelCounts: { 2: 1 }
+        }, 0, new Map(), {}, { provisional: true });
+
+        expect(html).toContain('Legacy rows may still contain an LLM judge score');
+        expect(html).toContain('<span class="cb-stat-v ">—</span>');
+        expect(html).not.toContain('<span class="cb-stat-v good">—</span>');
+        expect(html).toContain('<span class="cb-stat-l">Needs review</span>');
+        expect(html).toContain('>8</span>');
+    });
+
+    test('keeps missing Courthouse calibration unknown and describes judge selection precisely', () => {
+        const source = fs.readFileSync(
+            path.join(PUBLIC_ROOT, '../courthouse-v2/the-bench.js'),
+            'utf8'
+        );
+
+        expect(source).toContain('unknown agreement');
+        expect(source).not.toContain('const pr = cal.pass_rate ?? 0');
+        expect(source).not.toContain('const dv = cal.avg_deviation ?? 0');
+        expect(source).not.toContain('cal.ground_truth_count || 0');
+        expect(source).toContain('>set active</button>');
+        expect(source).toContain('does not add load balancing or capacity');
+        expect(source).not.toContain('>promote</button>');
+    });
+
     test('renders partial-scope results as provisional evidence without a medal', () => {
         const { renderPodium } = loadBrowserModule('podium.js', 'renderPodium');
         const container = { innerHTML: '' };

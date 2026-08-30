@@ -1,12 +1,12 @@
 // the-bench.js — Courthouse v2 top zone: host-grouped judge selector.
 // Replaces the legacy hero + judge-roster sections. One column per host;
-// each column shows its active (default) judge + promote-able candidates.
+// each column shows its active (default) judge + selectable candidates.
 //
 // Endpoints:
 //   GET /api/benchmark/judge-roster               — host panels + candidates
 //   GET /api/benchmark/judge/calibration-status   — pass rate, avg deviation
 //   GET /api/benchmark/dashboard                  — global stat strip
-//   PUT /api/benchmark/judge-defaults             — promote a judge
+//   PUT /api/benchmark/judge-defaults             — select one active judge target
 
 import { escHtml } from '../utils/format.js';
 import { apiFetch } from '../utils/api.js';
@@ -19,10 +19,21 @@ function hostBadge(name) {
 
 function calBadge(cal) {
     if (!cal) return `<span class="tb-cal tb-cal-none">uncalibrated</span>`;
-    const pr = cal.pass_rate ?? 0;
-    const dv = cal.avg_deviation ?? 0;
+    const passKnown = cal.pass_rate !== null && cal.pass_rate !== undefined
+        && Number.isFinite(Number(cal.pass_rate));
+    const deviationKnown = cal.avg_deviation !== null && cal.avg_deviation !== undefined
+        && Number.isFinite(Number(cal.avg_deviation));
+    if (!passKnown || !deviationKnown) {
+        return `<span class="tb-cal tb-cal-none" title="A calibration record exists, but its agreement measurements are unavailable">unknown agreement</span>`;
+    }
+    const pr = Number(cal.pass_rate);
+    const dv = Number(cal.avg_deviation);
+    const corpusCount = cal.ground_truth_count !== null && cal.ground_truth_count !== undefined
+        && Number.isFinite(Number(cal.ground_truth_count))
+        ? Number(cal.ground_truth_count).toLocaleString()
+        : 'unknown';
     const tone = pr >= 80 ? 'ok' : pr >= 50 ? 'warn' : 'bad';
-    return `<span class="tb-cal tb-cal-${tone}" title="reference-judge agreement · entry pass ${pr.toFixed(0)}% · dev ${dv.toFixed(2)} · ${cal.ground_truth_count || 0} corpus entries">
+    return `<span class="tb-cal tb-cal-${tone}" title="reference-judge agreement · entry pass ${pr.toFixed(0)}% · dev ${dv.toFixed(2)} · ${corpusCount} corpus entries">
               ${pr.toFixed(0)}% · Δ${dv.toFixed(2)}
             </span>`;
 }
@@ -40,8 +51,9 @@ function candidateRow(host, judge, isActive, cal) {
     const btn = isActive
         ? `<span class="tb-active-pill">ACTIVE</span>`
         : `<button class="tb-promote"
+                   title="Set this model as the selected judge target for this host. Batches still use one selected judge target; this does not add load balancing or capacity."
                    data-host-url="${escHtml(host.hostUrl)}"
-                   data-judge="${name}">promote</button>`;
+                   data-judge="${name}">set active</button>`;
     return `
         <div class="tb-cand ${isActive ? 'tb-cand-active' : ''}">
             <div class="tb-cand-top">
@@ -244,18 +256,18 @@ function attachPromoteHandlers(root) {
             const hostUrl = btn.dataset.hostUrl;
             const judgeModel = btn.dataset.judge;
             btn.disabled = true;
-            btn.textContent = 'promoting…';
+            btn.textContent = 'setting…';
             try {
                 await apiFetch('/api/benchmark/judge-defaults', {
                     method: 'PUT',
                     body: { hostUrl, judgeModel }
                 });
-                // Re-render the bench after a successful promotion.
+                // Re-render the bench after the selected target changes.
                 document.dispatchEvent(new CustomEvent('bench-refresh'));
             } catch (err) {
-                console.error('[the-bench] promote failed', err);
+                console.error('[the-bench] judge target selection failed', err);
                 btn.disabled = false;
-                btn.textContent = 'promote';
+                btn.textContent = 'set active';
                 btn.classList.add('tb-promote-err');
                 setTimeout(() => btn.classList.remove('tb-promote-err'), 1800);
             }
