@@ -794,8 +794,10 @@ describe('Nerve Center API Routes', () => {
         windowHours: 24,
         totalRequests: 0,
         autoRoutedCount: 0,
-        avgDurationMs: 0,
-        avgClassificationMs: 0
+        avgDurationMs: null,
+        avgClassificationMs: null,
+        avgTotalForClassifiedMs: null,
+        classificationOverheadPct: null
       }));
       expect(res.body.data.taskDistribution).toEqual([]);
       expect(res.body.data.modelDistribution).toEqual([]);

@@ -5,7 +5,7 @@ const path = require('path');
 const vm = require('vm');
 
 const messagingPath = path.resolve(__dirname, '../../public/js/chat/chat-messaging.js');
-const source = fs.readFileSync(messagingPath, 'utf8');
+const source = fs.readFileSync(messagingPath, 'utf8').replace(/\r\n/g, '\n');
 
 function loadHistoryHelper() {
   const idStart = source.indexOf('function messageIdOf');

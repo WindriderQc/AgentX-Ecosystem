@@ -640,12 +640,22 @@ describe('reads and reporting', () => {
       runs: 1, candidates: 1, pending: 0, reviewed: 1,
       eligibleObservations: 1,
     }));
-    expect(res.body.data.quality.approvalPrecision).toBe(100);
+    expect(res.body.data.quality.approvalPrecision).toBeNull();
+    expect(res.body.data.quality.evidence).toEqual(expect.objectContaining({
+      state: 'partial',
+      missingRuntimes: expect.arrayContaining(['agentx', 'codex', 'external']),
+    }));
+    expect(res.body.data.quality.metrics.approvalPrecision).toEqual(expect.objectContaining({
+      value: null,
+      lastValue: 100,
+      denominator: 1,
+      state: 'partial',
+    }));
     expect(res.body.data.runtimes).toEqual(expect.arrayContaining([
       expect.objectContaining({ runtime: 'claude-code', health: 'healthy', eligible: 1 }),
     ]));
     expect(res.body.data.distributions.candidateTypes.preference).toBe(1);
-    expect(res.body.data.safeDigest).toContain('collectors healthy');
+    expect(res.body.data.safeDigest).not.toContain('collectors healthy');
     expect(JSON.stringify(res.body.data)).not.toContain('Use concise UI labels');
   });
 

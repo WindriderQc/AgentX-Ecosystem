@@ -33,6 +33,7 @@ describe('Dreaming Review insights read model', () => {
       currentErrors: 0, currentAdvisories: 1, health: 'healthy',
     }));
     expect(result.quality.evidence).toEqual(expect.objectContaining({ state: 'partial' }));
+    expect(result.safeDigest).toContain('1 collector(s) not observed');
   });
 
   test('an overdue reconciliation is attention without inventing a collector error', () => {

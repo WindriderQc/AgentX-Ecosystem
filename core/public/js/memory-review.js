@@ -147,12 +147,15 @@
         ? `${insight.health.overdue} overdue`
         : insight.health.stale
           ? `${insight.health.stale} stale collector${insight.health.stale === 1 ? '' : 's'}`
-          : 'Healthy';
+          : insight.health.missing
+            ? `${insight.health.missing} collector${insight.health.missing === 1 ? '' : 's'} not observed`
+            : 'Healthy';
     $('mrStatHealth').textContent = !latest ? 'Waiting' : healthLabel;
     $('mrStatHealth').classList.toggle('mr-stat-warning', insight.health.state === 'attention');
     $('mrStatHealth').title = insight.health.errors ? 'Current collector errors'
       : insight.health.overdue ? 'An unfinished cross-host reconciliation passed its recovery window'
         : insight.health.stale ? `${insight.health.staleRuntimes.map(label).join(', ')} ${insight.health.stale === 1 ? 'has' : 'have'} not contributed within the freshness window`
+        : insight.health.missing ? `${insight.health.missingRuntimes.map(label).join(', ')} ${insight.health.missing === 1 ? 'has' : 'have'} not supplied evidence in this window`
         : insight.health.advisories ? `${insight.health.advisories} non-blocking advisories` : 'No current collector errors';
   }
 
@@ -182,6 +185,9 @@
     } else if (health.stale) {
       tone = 'attention'; icon = 'fa-clock'; title = `${health.stale} collector${health.stale === 1 ? '' : 's'} ${health.stale === 1 ? 'is' : 'are'} stale`;
       text = `${health.staleRuntimes.map(label).join(', ')} ${health.stale === 1 ? 'has' : 'have'} not supplied evidence within the expected freshness window.`;
+    } else if (health.missing) {
+      tone = 'attention'; icon = 'fa-circle-minus'; title = 'Collector coverage is incomplete';
+      text = `${health.missingRuntimes.map(label).join(', ')} ${health.missing === 1 ? 'has' : 'have'} not supplied evidence, so quality metrics remain unknown.`;
     } else if (totals.pending) {
       tone = 'ready'; icon = 'fa-inbox'; title = `${totals.pending} memor${totals.pending === 1 ? 'y is' : 'ies are'} waiting for you`;
       text = 'Each proposal is evidence-backed and remains inert until you review it individually.';

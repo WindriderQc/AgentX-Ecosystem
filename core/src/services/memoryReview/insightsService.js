@@ -222,7 +222,7 @@ function summarizeRuns(runs, limit, now = new Date(), {
     distributions,
     rejectionReasons,
     safeDigest: latest
-      ? `Dreaming Review: ${totals.pending} awaiting review across ${totals.runs} recent runs; ${currentErrors ? `${currentErrors} collector error(s)` : overdue ? `${overdue} overdue reconciliation(s)` : staleRuntimes.length ? `${staleRuntimes.length} stale collector(s)` : 'collectors healthy'}; ${totals.applied} applied safely.`
+      ? `Dreaming Review: ${totals.pending} awaiting review across ${totals.runs} recent runs; ${currentErrors ? `${currentErrors} collector error(s)` : overdue ? `${overdue} overdue reconciliation(s)` : staleRuntimes.length ? `${staleRuntimes.length} stale collector(s)` : missingRuntimes.length ? `${missingRuntimes.length} collector(s) not observed` : 'collectors healthy'}; ${totals.applied} applied safely.`
       : 'Dreaming Review: no runs recorded yet.',
   };
 }

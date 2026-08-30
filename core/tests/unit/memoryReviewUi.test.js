@@ -57,6 +57,7 @@ describe('Dreaming Review UI contract', () => {
     expect(controller).toContain('No review candidates');
     expect(controller).toContain('Collector coverage is stale.');
     expect(controller).toContain('No measured denominator is available.');
+    expect(controller).toContain('Collector coverage is incomplete');
     expect(controller).toContain("const current = evidence.state === 'current' && evidence.value != null");
     expect(controller).toContain('friendlyRunTitle');
     expect(view).toContain('id="mrCandidateFilters"');
