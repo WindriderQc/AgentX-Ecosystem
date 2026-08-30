@@ -88,10 +88,9 @@
 
 .top-nav {
   position: relative;
-  background:
-    linear-gradient(180deg, rgba(22, 27, 38, 0.94), rgba(10, 14, 22, 0.94)),
-    rgba(13, 17, 23, 0.95);
-  backdrop-filter: blur(18px);
+  /* Keep the sticky chrome opaque. A translucent backdrop blur forces Chromium
+     to re-composite the page behind the nav during full-page capture. */
+  background: linear-gradient(180deg, #161b26, #0a0e16);
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
   box-sizing: border-box;
