@@ -24,11 +24,16 @@ describe('Dreaming Review insights read model', () => {
     ];
 
     const result = summarizeRuns(runs, 30, new Date('2026-08-12T03:45:00Z'));
-    expect(result.health).toEqual(expect.objectContaining({ state: 'healthy', errors: 0, advisories: 1, collecting: true }));
+    expect(result.health).toEqual(expect.objectContaining({
+      state: 'attention', errors: 0, advisories: 1, collecting: true,
+      missing: 1, missingRuntimes: ['external'],
+    }));
     expect(result.latest.runId).toBe('complete-new');
     expect(result.runtimes.find((runtime) => runtime.runtime === 'agentx')).toEqual(expect.objectContaining({
       currentErrors: 0, currentAdvisories: 1, health: 'healthy',
     }));
+    expect(result.quality.evidence).toEqual(expect.objectContaining({ state: 'partial' }));
+    expect(result.safeDigest).toContain('1 collector(s) not observed');
   });
 
   test('an overdue reconciliation is attention without inventing a collector error', () => {
@@ -59,6 +64,35 @@ describe('Dreaming Review insights read model', () => {
       health: 'stale', staleAfterMs: 48 * 60 * 60 * 1000,
     }));
     expect(result.safeDigest).toContain('1 stale collector(s)');
+    expect(result.quality.metrics.modelSkips).toEqual(expect.objectContaining({
+      value: null, lastValue: 1, denominator: 1, state: 'stale',
+    }));
+    expect(result.quality.metrics.filterRate).toEqual(expect.objectContaining({
+      value: null, denominator: 0, state: 'insufficient',
+    }));
+  });
+
+  test('publishes quality values only with fresh complete coverage and a real denominator', () => {
+    const submittedAt = new Date('2026-08-12T03:30:00Z');
+    const result = summarizeRuns([{
+      runId: 'current-complete', status: 'completed', createdAt: submittedAt,
+      collectors: [
+        { runtime: 'agentx', submittedAt, sourceEventsSeen: 4, eligibleObservations: 3, rejectedObservations: 1, errors: [], drift: [] },
+        { runtime: 'claude-code', submittedAt, sourceEventsSeen: 1, errors: [], drift: [] },
+        { runtime: 'codex', submittedAt, sourceEventsSeen: 1, errors: [], drift: [] },
+        { runtime: 'external', submittedAt, sourceEventsSeen: 1, errors: [], drift: [] },
+      ],
+      candidates: [
+        { status: 'approved', recurrence: { independentRuntimes: 2 }, conflicts: [], risk: {} },
+        { status: 'rejected', recurrence: { independentRuntimes: 1 }, conflicts: [], risk: {} },
+      ],
+      summary: { modelCalled: true },
+    }], 30, new Date('2026-08-12T04:00:00Z'));
+
+    expect(result.health).toEqual(expect.objectContaining({ state: 'healthy', missing: 0, stale: 0 }));
+    expect(result.quality.evidence).toEqual(expect.objectContaining({ state: 'current' }));
+    expect(result.quality.metrics.filterRate).toEqual(expect.objectContaining({ value: 25, denominator: 4, state: 'current' }));
+    expect(result.quality.metrics.approvalPrecision).toEqual(expect.objectContaining({ value: 50, denominator: 2, state: 'current' }));
   });
 
   test('safe digest and distributions never include candidate statements', () => {

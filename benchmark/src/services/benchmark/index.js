@@ -24,11 +24,11 @@ const {
     getActiveCategoryWeights,
     getCategoryScoresByModel,
     getLeaderboardEntryStats,
-    buildCategoryEvidenceView,
-    confidenceMargin
+    buildCategoryEvidenceView
 } = require('./generalistScore');
 const { getTopCategoryFromAverages } = require('./modelMetadata');
 const { getCurrentHostModelSnapshot, isModelAvailableForRow, serializeHostModelSnapshot } = require('./modelAvailability');
+const { resolveTrustedEvidenceCohort } = require('./trustedEvidenceCohort');
 const { judgeResult, judgeBatch, stopJudging, getJudgingStatus, stopAllJudging } = require('./judging');
 const { getEfficiencyMap } = require('./efficiencyMap');
 const { buildIdleCurrentTest } = require('./batchHelpers');
@@ -215,17 +215,35 @@ class BenchmarkService {
         }
         const trustedFilters = {
             confidenceWeighting: trustedView,
-            excludedIncompleteBatches: 0
+            exactIdentityRequired: trustedView,
+            singleCompatibleCohort: trustedView,
+            excludedIncompleteBatches: 0,
+            cohort: null
         };
         if (trustedView) {
-            const incompleteBatchIds = await BenchmarkBatch.distinct('_id', {
-                status: 'failed',
-                failure_reason: 'incomplete_cells'
-            });
+            const [incompleteBatchIds, cohortResolution] = await Promise.all([
+                BenchmarkBatch.distinct('_id', {
+                    status: 'failed',
+                    failure_reason: 'incomplete_cells'
+                }),
+                resolveTrustedEvidenceCohort(leaderboardMatch)
+            ]);
             trustedFilters.excludedIncompleteBatches = incompleteBatchIds.length;
-            if (incompleteBatchIds.length > 0) {
-                leaderboardMatch.batch_id = { $nin: incompleteBatchIds };
-            }
+            trustedFilters.cohort = {
+                selected: cohortResolution.selected,
+                candidateBatchCount: cohortResolution.candidateBatchCount,
+                eligibleBatchCount: cohortResolution.eligibleBatchCount,
+                excludedBatchCount: cohortResolution.excludedBatchCount,
+                exclusionReasons: cohortResolution.exclusionReasons,
+                freshnessDays: cohortResolution.freshnessDays
+            };
+            // A single completed batch is the comparison boundary. Its rows
+            // share one captured fixture suite and scorer generation, while
+            // every candidate still carries its own exact artifact/runtime ID.
+            // An empty $in intentionally yields an empty Trusted board when no
+            // such cohort exists; legacy evidence remains in Exploratory.
+            leaderboardMatch.batch_id = cohortResolution.selectedBatchObjectId
+                || { $in: [] };
         }
         const challengeFilterApplied = challengeScope !== 'all';
         const [generalistScores, categoryMap, availabilitySnapshot] = await Promise.all([
@@ -251,11 +269,6 @@ class BenchmarkService {
                 categoryWeights
             );
 
-            const margin = confidenceMargin(
-                data.avgWithinCategoryStdDev || 0,
-                totalTests
-            );
-
             const row = {
                 model,
                 host: host || null,
@@ -274,13 +287,17 @@ class BenchmarkService {
                 evidenceStatus: data.evidenceStatus || null,
                 consistencyBonus: data.consistencyBonus,
                 evidenceConfidence: data.evidenceConfidence ?? null,
+                evidenceConfidenceCoverage: data.evidenceConfidenceCoverage ?? null,
                 evidenceConfidenceTarget: data.evidenceConfidenceTarget ?? null,
                 evidenceConfidencePenalty: data.evidenceConfidencePenalty || 0,
                 avgWithinCategoryStdDev: data.avgWithinCategoryStdDev,
                 coverage: data.coverage,
                 testedCategories: data.testedCategories,
                 totalTests,
-                confidenceMargin: margin,
+                confidenceMargin: data.confidenceMargin ?? null,
+                confidenceMethod: data.confidenceMethod || null,
+                confidenceSampleSize: data.confidenceSampleSize || 0,
+                confidenceRepeatCount: data.confidenceRepeatCount || 0,
                 confidenceWeighted: data.confidenceWeighted || false,
                 categoryConfidence: data.categoryConfidence || null,
                 recommended_category: getTopCategoryFromAverages(categoryView.categoryAverages, model),
@@ -291,10 +308,13 @@ class BenchmarkService {
                 maxPromptLevel: stats.maxPromptLevel || null,
                 contextCounts: stats.contextCounts || {},
                 judgeModels: stats.judgeModels || [],
+                judgeTargets: stats.judgeTargets || [],
                 needsReviewCount: stats.needsReviewCount || 0,
                 lowConfidenceCount: stats.lowConfidenceCount || 0,
                 earliestTimestamp: stats.earliestTimestamp || null,
                 latestTimestamp: stats.latestTimestamp || null,
+                evidenceCompatibility: trustedView ? 'exact_compatible' : 'exploratory',
+                evidenceCohortId: trustedView ? trustedFilters.cohort?.selected?.evidenceFingerprint || null : null,
                 filtered: data.filtered || false,
                 filterReason: data.filterReason || null,
                 emptyRate: data.emptyRate || 0

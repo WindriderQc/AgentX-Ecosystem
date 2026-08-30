@@ -26,6 +26,12 @@ const {
 } = require('../../src/services/benchmark/judgeReadiness');
 const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
 
+function calibrationTargetKey(target) {
+    const host = String(target?.host || '').trim().replace(/\/+$/, '').toLowerCase();
+    const model = String(target?.model || '').trim().toLowerCase();
+    return `${host}@@${model}`;
+}
+
 // ============ Judge Validation Endpoints ============
 
 /**
@@ -362,6 +368,12 @@ router.get('/judge/ground-truth/gaps', async (req, res) => {
         let totalAllEntries = 0;
         let retroEntries = 0;
         let emptyCount = 0;
+        const targetPerCell = 5;
+        let cellsMeetingTarget = 0;
+        let hardEntries = 0;
+        let hardOccupiedCells = 0;
+        let hardCellsMeetingTarget = 0;
+        const hardGaps = [];
 
         // Coverage is measured against human-derived ground truth only.
         // retro-calibration rows are LLM-reference re-scores; counting them as
@@ -380,9 +392,24 @@ router.get('/judge/ground-truth/gaps', async (req, res) => {
                 totalAllEntries += allCount;
                 retroEntries += retro;
                 if (count === 0) emptyCount++;
+                if (count >= targetPerCell) cellsMeetingTarget++;
+                if (diff >= 4) {
+                    hardEntries += count;
+                    if (count > 0) hardOccupiedCells++;
+                    if (count >= targetPerCell) hardCellsMeetingTarget++;
+                    else hardGaps.push({
+                        category: cat,
+                        difficulty: diff,
+                        count,
+                        needed: targetPerCell - count
+                    });
+                }
                 grid.push({ category: cat, difficulty: diff, count, all_count: allCount, retro });
             }
         }
+
+        const totalCells = categories.length * difficulties.length;
+        const hardTotalCells = categories.length * 2;
 
         res.json({
             status: 'success',
@@ -391,9 +418,27 @@ router.get('/judge/ground-truth/gaps', async (req, res) => {
                 total_entries: totalEntries,
                 total_all_entries: totalAllEntries,
                 retro_entries: retroEntries,
-                total_cells: categories.length * difficulties.length,
+                total_cells: totalCells,
                 empty_cells: emptyCount,
-                coverage_pct: Math.round(((categories.length * difficulties.length - emptyCount) / (categories.length * difficulties.length)) * 100)
+                // Compatibility field: this measures merely whether a cell has
+                // at least one human entry. It is not calibration sufficiency.
+                coverage_pct: Math.round(((totalCells - emptyCount) / totalCells) * 100),
+                coverage_basis: 'occupied_cells',
+                target_per_cell: targetPerCell,
+                cells_meeting_target: cellsMeetingTarget,
+                target_coverage_pct: Math.round((cellsMeetingTarget / totalCells) * 100),
+                hard_scope: {
+                    levels: [4, 5],
+                    total_cells: hardTotalCells,
+                    entries: hardEntries,
+                    occupied_cells: hardOccupiedCells,
+                    empty_cells: hardTotalCells - hardOccupiedCells,
+                    cells_meeting_target: hardCellsMeetingTarget,
+                    target_coverage_pct: Math.round((hardCellsMeetingTarget / hardTotalCells) * 100),
+                    target_per_cell: targetPerCell,
+                    ready: hardCellsMeetingTarget === hardTotalCells,
+                    gaps: hardGaps
+                }
             }
         });
     } catch (err) {
@@ -490,8 +535,8 @@ router.delete('/judge/ground-truth/:id', async (req, res) => {
 
 /**
  * POST /api/benchmark/judge/matrix-calibrate
- * Run full calibration: score ground truth with reference + challenger judge,
- * build accuracy matrix, save to DB.
+ * Run a judge-agreement check: score curated corpus entries with a distinct
+ * reference + candidate judge, build an agreement matrix, and save it.
  */
 router.post('/judge/matrix-calibrate', async (req, res) => {
     try {
@@ -522,6 +567,13 @@ router.post('/judge/matrix-calibrate', async (req, res) => {
         if (!referenceReadiness.ready) {
             return res.status(503).json(judgeUnavailablePayload(referenceReadiness, 'Reference judging'));
         }
+        if (calibrationTargetKey(judgeReadiness.target) === calibrationTargetKey(referenceReadiness.target)) {
+            return res.status(400).json({
+                status: 'error',
+                code: 'CALIBRATION_TARGETS_IDENTICAL',
+                error: 'Judge and reference judge must be different host/model targets.'
+            });
+        }
 
         const threshold = pass_threshold !== undefined ? pass_threshold : 1.5;
 
@@ -538,15 +590,18 @@ router.post('/judge/matrix-calibrate', async (req, res) => {
         const matrix = buildAccuracyMatrix(referenceScores, challengerScores, threshold);
 
         const saved = await JudgeAccuracyMatrix.create({
-            judge_model,
-            judge_host,
-            reference_model,
-            reference_host,
+            judge_model: judgeReadiness.target.model,
+            judge_host: String(judgeReadiness.target.host || judge_host).trim().replace(/\/+$/, ''),
+            reference_model: referenceReadiness.target.model,
+            reference_host: String(referenceReadiness.target.host || reference_host).trim().replace(/\/+$/, ''),
             pass_threshold: threshold,
             ground_truth_count: entries.length,
             cells: matrix.cells,
             overall_avg_deviation: matrix.overall_avg_deviation,
-            pass_rate: matrix.pass_rate
+            pass_rate: matrix.pass_rate,
+            cell_pass_rate: matrix.cell_pass_rate,
+            scored_entry_count: matrix.scored_entry_count,
+            comparison_kind: 'reference_judge_agreement'
         });
 
         logger.info('Calibration complete', {
@@ -574,11 +629,18 @@ router.post('/judge/matrix-calibrate', async (req, res) => {
  */
 router.get('/judge/calibration-status', async (req, res) => {
     try {
-        const { judge_model } = req.query;
+        const { judge_model, judge_host } = req.query;
 
         let matrices;
         if (judge_model) {
-            const latest = await JudgeAccuracyMatrix.getLatest(judge_model);
+            if (!judge_host) {
+                return res.status(400).json({
+                    status: 'error',
+                    code: 'JUDGE_HOST_REQUIRED',
+                    error: 'judge_host is required when requesting one judge calibration target.'
+                });
+            }
+            const latest = await JudgeAccuracyMatrix.getLatest(judge_model, judge_host);
             matrices = latest ? [latest] : [];
         } else {
             // Aggregate to get the latest matrix per judge_model
@@ -586,7 +648,10 @@ router.get('/judge/calibration-status', async (req, res) => {
                 { $sort: { calibrated_at: -1 } },
                 {
                     $group: {
-                        _id: '$judge_model',
+                        _id: {
+                            judge_model: '$judge_model',
+                            judge_host: '$judge_host'
+                        },
                         doc: { $first: '$$ROOT' }
                     }
                 },
@@ -597,7 +662,15 @@ router.get('/judge/calibration-status', async (req, res) => {
 
         res.json({
             status: 'success',
-            data: { matrices }
+            data: {
+                matrices: matrices.map((matrix) => {
+                    const value = typeof matrix?.toObject === 'function' ? matrix.toObject() : matrix;
+                    return {
+                        ...value,
+                        comparison_kind: value?.comparison_kind || 'reference_judge_agreement'
+                    };
+                })
+            }
         });
     } catch (err) {
         logger.error('Failed to fetch calibration status', { error: err.message });

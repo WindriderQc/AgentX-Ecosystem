@@ -5,6 +5,7 @@
 
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
+const JudgeGroundTruth = require('../../../models/JudgeGroundTruth');
 const { calculateCompositeScore } = require('../qualityScorer');
 const { CATEGORY_COMPOSITE_PROFILES, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
 const { calculateAllGeneralistScores } = require('./generalistScore');
@@ -249,7 +250,21 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
         quality_score: { $ne: null }
     });
 
-    const [totalTests, successCount, fullPassCount, recentTests, modelStats, levelDistribution, failureStats, judgeStats, generalistScores] = await Promise.all([
+    const [
+        totalTests,
+        successCount,
+        fullPassCount,
+        recentTests,
+        modelStats,
+        levelDistribution,
+        failureStats,
+        judgeStats,
+        generalistScores,
+        needsReviewCount,
+        humanReviewedCount,
+        overrideCount,
+        groundTruthCount
+    ] = await Promise.all([
         BenchmarkResult.countDocuments(totalMatchQuery),
         BenchmarkResult.countDocuments(matchQuery),
         fullPassCountPromise,
@@ -379,7 +394,21 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
             }
         ]),
         // Calculate generalist scores (with coverage penalty) for all models
-        calculateAllGeneralistScores(matchQuery)
+        calculateAllGeneralistScores(matchQuery),
+        // Courthouse counts are global operational facts, not projections from
+        // leaderboard model aggregates. Keep them authoritative so a missing
+        // field can never be rendered as a reassuring zero.
+        BenchmarkResult.countDocuments({ needs_review: true }),
+        BenchmarkResult.countDocuments({
+            human_review_status: { $in: ['approved', 'overridden', 'rejected'] }
+        }),
+        BenchmarkResult.countDocuments({ human_review_status: 'overridden' }),
+        // Match the human-derived coverage contract: retro-calibration rows are
+        // model-generated reference scores and must not inflate Ground Truth.
+        JudgeGroundTruth.countDocuments({
+            active: true,
+            created_by: { $ne: 'retro-calibration' }
+        })
     ]);
 
     const failureByKey = new Map(
@@ -640,6 +669,10 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
     return {
         overview: {
             total_tests: totalTests,
+            needs_review_count: needsReviewCount,
+            human_reviewed_count: humanReviewedCount,
+            override_count: overrideCount,
+            ground_truth_count: groundTruthCount,
             successful: successCount,
             full_passed: fullPassCount,
             failed: totalTests - successCount,

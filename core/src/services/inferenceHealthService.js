@@ -21,6 +21,44 @@ const hostPrefService = require('./hostPreferenceService');
 const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
 
 const DEFAULT_DRIFT_WINDOW_MS = 15 * 60 * 1000; // 15 min
+function summarizeDriftRows(rows, windowMs = DEFAULT_DRIFT_WINDOW_MS, since = null) {
+  const byCallerSource = rows.map(r => ({
+    caller: r._id?.caller || null,
+    source: r._id?.source || null,
+    count: r.count,
+    sampleHost: r.sampleHost,
+    sampleModel: r.sampleModel
+  }));
+
+  // Host preference pins are an intentional deployment policy, not resolver
+  // drift. Missing source data is unknown and must not silently enter either
+  // the healthy numerator or the drift denominator.
+  const totals = byCallerSource.reduce((acc, row) => {
+    const source = row.source;
+    const count = Number(row.count) || 0;
+    if (source === 'n/a') acc.na += count;
+    else if (!source) acc.unknown += count;
+    else {
+      acc.total += count;
+      if (source === 'modelfile') acc.modelfile += count;
+      else if (source === 'caller') acc.caller += count;
+      else if (source === 'host_preference_pin') acc.pinned += count;
+      else acc.resolved += count;
+    }
+    return acc;
+  }, { total: 0, modelfile: 0, caller: 0, pinned: 0, resolved: 0, unknown: 0, na: 0 });
+
+  return {
+    windowMs,
+    ...(since ? { since } : {}),
+    byCallerSource,
+    totals,
+    hasSamples: totals.total > 0,
+    driftPct: totals.total > 0
+      ? Number(((totals.resolved / totals.total) * 100).toFixed(1))
+      : null
+  };
+}
 
 async function getDriftSummary(windowMs) {
   try {
@@ -40,46 +78,15 @@ async function getDriftSummary(windowMs) {
       { $limit: 50 }
     ]).option({ maxTimeMS: 5000 });
 
-    const byCallerSource = rows.map(r => ({
-      caller: r._id.caller,
-      source: r._id.source,
-      count: r.count,
-      sampleHost: r.sampleHost,
-      sampleModel: r.sampleModel
-    }));
-
-    // 'n/a' = embeddings / anything that legitimately has no num_ctx concept;
-    // they neither drift nor contribute to the drift denominator.
-    const totals = byCallerSource.reduce((acc, r) => {
-      if (r.source === 'n/a') {
-        acc.na += r.count;
-        return acc;
-      }
-      acc.total += r.count;
-      if (r.source === 'modelfile') acc.modelfile += r.count;
-      else if (r.source === 'caller') acc.caller += r.count;
-      else acc.resolved += r.count; // any non-resident override is drift evidence
-      return acc;
-    }, { total: 0, modelfile: 0, caller: 0, resolved: 0, na: 0 });
-
-    const driftPct = totals.total > 0
-      ? Number(((totals.resolved / totals.total) * 100).toFixed(1))
-      : 0;
-
-    return {
-      windowMs: windowMs || DEFAULT_DRIFT_WINDOW_MS,
-      since: since.toISOString(),
-      byCallerSource,
-      totals,
-      driftPct
-    };
+    return summarizeDriftRows(rows, windowMs || DEFAULT_DRIFT_WINDOW_MS, since.toISOString());
   } catch (err) {
     logger.warn('[inferenceHealth] drift aggregation failed', { error: err.message });
     return {
       windowMs: windowMs || DEFAULT_DRIFT_WINDOW_MS,
       byCallerSource: [],
-      totals: { total: 0, modelfile: 0, caller: 0, resolved: 0 },
-      driftPct: 0,
+      totals: { total: 0, modelfile: 0, caller: 0, pinned: 0, resolved: 0, unknown: 0, na: 0 },
+      hasSamples: false,
+      driftPct: null,
       error: err.message
     };
   }
@@ -181,6 +188,7 @@ async function getInferenceHealth(opts = {}) {
 module.exports = {
   getInferenceHealth,
   getDriftSummary,
+  summarizeDriftRows,
   getGateSnapshot,
   getWatchdogSnapshot,
   getJudgeDriftSnapshot

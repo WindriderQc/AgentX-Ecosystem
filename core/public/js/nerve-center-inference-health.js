@@ -166,8 +166,9 @@
         }
         const windowMin = Math.round((drift.windowMs || 0) / 60000);
         const t = drift.totals || {};
-        const pct = drift.driftPct || 0;
-        const driftTone = pct > 10 ? '#f87171' : pct > 2 ? '#fbbf24' : '#4ade80';
+        const pct = drift.driftPct;
+        const hasSamples = drift.hasSamples === true && Number.isFinite(pct);
+        const driftTone = !hasSamples ? '#94a3b8' : pct > 10 ? '#f87171' : pct > 2 ? '#fbbf24' : '#4ade80';
 
         const rows = (drift.byCallerSource || []).map(r => `
             <tr>
@@ -182,7 +183,7 @@
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                     <strong>num_ctx Drift <span class="nc-muted" style="font-weight:normal;font-size:11px;">(last ${windowMin} min)</span></strong>
                     <span style="color:${driftTone};font-size:12px;">
-                        ${pct.toFixed(1)}% drift · ${t.modelfile || 0} modelfile · ${t.caller || 0} caller · ${t.resolved || 0} resolved
+                        ${hasSamples ? `${pct.toFixed(1)}% drift` : '— drift · no measured calls'} · ${t.modelfile || 0} modelfile · ${t.caller || 0} caller · ${t.pinned || 0} pinned · ${t.resolved || 0} resolved${t.unknown ? ` · ${t.unknown} unknown` : ''}
                     </span>
                 </div>
                 ${rows ? `
@@ -196,7 +197,7 @@
                         <tbody>${rows}</tbody>
                     </table>` : '<div class="nc-muted" style="font-size:12px;">No inference calls in window.</div>'}
                 <div class="nc-muted" style="font-size:10.5px;margin-top:6px;">
-                    Low drift % is good. <span style="color:#4ade80">modelfile</span> = Ollama used Modelfile default (ideal). <span style="color:#a3e635">caller</span> = caller sent num_ctx explicitly (benchmark/probe — expected). Other values = registry resolver kicked in, watch for cascade risk.
+                    Low drift % is good only when the window has measured calls. <span style="color:#4ade80">modelfile</span> = resident default. <span style="color:#a3e635">caller</span> = explicit benchmark/probe value. <span style="color:#7cf0ff">host_preference_pin</span> = intentional host policy. Other known values indicate resolver fallback; missing sources remain unknown.
                 </div>
             </div>`;
     }

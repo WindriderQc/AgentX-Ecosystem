@@ -61,10 +61,11 @@ async function runCalibrationBatch(entries, judgeConfig) {
  * @param {Array} referenceScores - [{ entry: { category, difficulty }, score }]
  * @param {Array} challengerScores - same shape
  * @param {number} passThreshold - max avg deviation to pass (default 1.5)
- * @returns {Object} { cells, overall_avg_deviation, pass_rate }
+ * @returns {Object} entry-weighted deviation/pass rate plus cell summaries
  */
 function buildAccuracyMatrix(referenceScores, challengerScores, passThreshold = 1.5) {
     const cellMap = new Map();
+    const allDeviations = [];
 
     for (let i = 0; i < referenceScores.length; i++) {
         const ref = referenceScores[i];
@@ -81,7 +82,9 @@ function buildAccuracyMatrix(referenceScores, challengerScores, passThreshold = 
             });
         }
 
-        cellMap.get(key).deviations.push(Math.abs(ref.score - chal.score));
+        const deviation = Math.abs(ref.score - chal.score);
+        cellMap.get(key).deviations.push(deviation);
+        allDeviations.push(deviation);
     }
 
     const cells = [];
@@ -97,17 +100,22 @@ function buildAccuracyMatrix(referenceScores, challengerScores, passThreshold = 
         });
     }
 
-    const allDeviations = cells.map(c => c.avg_deviation);
     const overallAvg = allDeviations.length > 0
         ? Math.round((allDeviations.reduce((a, b) => a + b, 0) / allDeviations.length) * 100) / 100
         : 0;
-    const passCount = cells.filter(c => c.pass).length;
-    const passRate = cells.length > 0 ? Math.round((passCount / cells.length) * 100) : 0;
+    const entryPassCount = allDeviations.filter(deviation => deviation <= passThreshold).length;
+    const passRate = allDeviations.length > 0
+        ? Math.round((entryPassCount / allDeviations.length) * 100)
+        : 0;
+    const cellPassCount = cells.filter(c => c.pass).length;
+    const cellPassRate = cells.length > 0 ? Math.round((cellPassCount / cells.length) * 100) : 0;
 
     return {
         cells,
         overall_avg_deviation: overallAvg,
-        pass_rate: passRate
+        pass_rate: passRate,
+        cell_pass_rate: cellPassRate,
+        scored_entry_count: allDeviations.length
     };
 }
 

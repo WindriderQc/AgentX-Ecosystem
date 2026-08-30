@@ -10,6 +10,7 @@ const {
     buildCategoryEvidenceView,
     calculateGeneralistScoreFromCategories,
     confidenceMargin,
+    weightedConfidenceMargin,
     COVERAGE_PENALTY_MAX,
     DIFFICULTY_PENALTY_MAX,
     FULL_SCOPE_MIN_LEVEL,
@@ -333,7 +334,7 @@ describe('calculateGeneralistScoreFromCategories', () => {
 
             const result = calculateGeneralistScoreFromCategories(scores, TEST_WEIGHTS);
 
-            expect(result.avgWithinCategoryStdDev).toBe(0);
+            expect(result.avgWithinCategoryStdDev).toBeNull();
             expect(result.consistencyBonus).toBe(0);
             expect(result.consistencyBasis.coding).toBe('none');
         });
@@ -373,6 +374,27 @@ describe('calculateGeneralistScoreFromCategories', () => {
             expect(result.evidenceConfidencePenalty).toBe(0);
             expect(result.confidenceWeighted).toBe(true);
         });
+
+        it('keeps missing judge confidence unknown instead of inventing a fallback', () => {
+            const scores = {
+                coding: { avg: 8, count: 20, stddev: 1, attempted: true },
+                reasoning: { avg: 8, count: 20, stddev: 1, attempted: true },
+                math: { avg: 8, count: 20, stddev: 1, attempted: true }
+            };
+
+            const result = calculateGeneralistScoreFromCategories(scores, TEST_WEIGHTS, {
+                confidenceWeighting: true,
+                minConsistencyResults: 0
+            });
+
+            expect(result.evidenceConfidence).toBeNull();
+            expect(result.evidenceConfidenceCoverage).toBe(0);
+            expect(result.categoryConfidence).toEqual({
+                coding: null,
+                reasoning: null,
+                math: null
+            });
+        });
     });
 
     describe('edge cases', () => {
@@ -411,6 +433,33 @@ describe('confidenceMargin', () => {
         const small = confidenceMargin(15, 3);
         const large = confidenceMargin(15, 30);
         expect(small).toBeGreaterThan(large);
+    });
+});
+
+describe('weightedConfidenceMargin', () => {
+    it('combines category weights using independent prompt means while retaining repeat evidence', () => {
+        const result = weightedConfidenceMargin({
+            coding: {
+                avg: 8, count: 8, uncertainty_stddev: 1, uncertainty_count: 4, repeat_count: 8
+            },
+            reasoning: {
+                avg: 7, count: 6, uncertainty_stddev: 2, uncertainty_count: 3, repeat_count: 6
+            }
+        }, { coding: 0.75, reasoning: 0.25 }, 'quality_score');
+
+        expect(result.margin).toBeGreaterThan(0);
+        expect(result.sampleSize).toBe(7);
+        expect(result.repeatCount).toBe(14);
+        expect(result.method).toBe('weighted_category_prompt_means_t95');
+    });
+
+    it('returns unknown when any scored category lacks measurable fixture variance', () => {
+        const result = weightedConfidenceMargin({
+            coding: { avg: 8, count: 1, uncertainty_stddev: null, uncertainty_count: 1 }
+        }, { coding: 1 }, 'quality_score');
+
+        expect(result.margin).toBeNull();
+        expect(result.method).toBeNull();
     });
 });
 

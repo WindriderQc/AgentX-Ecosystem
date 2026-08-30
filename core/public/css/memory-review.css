@@ -80,6 +80,16 @@ kbd { display: inline-grid; min-width: 20px; height: 20px; place-items: center; 
 .mr-quality-metric span, .mr-quality-metric small { display: block; }
 .mr-quality-metric span { margin-top: 1px; color: rgba(245,247,253,.84); font-size: .69rem; }
 .mr-quality-metric small { margin-top: 3px; color: rgba(225,231,245,.57); font-size: .63rem; line-height: 1.3; }
+.mr-quality-metric.mr-metric-stale,
+.mr-quality-metric.mr-metric-partial,
+.mr-quality-metric.mr-metric-attention,
+.mr-quality-metric.mr-metric-insufficient,
+.mr-quality-metric.mr-metric-unavailable { border: 1px solid rgba(251,191,36,.22); }
+.mr-quality-metric.mr-metric-stale strong,
+.mr-quality-metric.mr-metric-partial strong,
+.mr-quality-metric.mr-metric-attention strong,
+.mr-quality-metric.mr-metric-insufficient strong,
+.mr-quality-metric.mr-metric-unavailable strong { color: rgba(225,231,245,.55); }
 .mr-atlas { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .mr-atlas h4 { margin: 0 0 7px; color: rgba(245,247,253,.74); font-size: .66rem; }
 .mr-atlas-row { display: grid; grid-template-columns: minmax(64px,1fr) 1.5fr 20px; gap: 6px; align-items: center; margin: 5px 0; color: rgba(225,231,245,.68); font-size: .64rem; }

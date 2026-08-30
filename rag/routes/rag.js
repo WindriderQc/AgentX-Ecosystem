@@ -574,16 +574,18 @@ async function handleStatus(req, res) {
       dependencies.qdrant = { healthy: false, error: err.message };
     }
 
-    const healthy = Object.values(dependencies).every((d) => d.healthy === true);
+    const serviceReady = dependencies.mongodb?.healthy === true
+      && dependencies.qdrant?.healthy === true;
+    const queryReady = serviceReady && dependencies.embedding?.healthy === true;
 
     // Fire-and-forget Buddy corpus-readiness surface event (surfaceScope:rag).
     // Ready = all deps healthy AND a non-empty corpus → intent:suggesting.
     // Otherwise (deps down or empty corpus) → intent:warning.
     const documentCount = Number(stats.documentCount) || 0;
     if (refreshRequested) {
-      if (healthy && documentCount > 0) {
+      if (queryReady && documentCount > 0) {
         buddyRagEvents.indexReady(`RAG index ready: ${documentCount} documents`);
-      } else if (!healthy) {
+      } else if (!queryReady) {
         buddyRagEvents.corpusNotReady('RAG corpus not ready: a dependency is unavailable');
       } else {
         buddyRagEvents.corpusNotReady('RAG corpus not ready: no documents ingested yet');
@@ -600,7 +602,12 @@ async function handleStatus(req, res) {
         ...sanitizePublicProjection(stats),
         cache: cacheStats,
         dependencies: sanitizePublicProjection(dependencies),
-        healthy
+        // Compatibility: `healthy` has historically meant full query
+        // readiness on this capability endpoint, not mere HTTP liveness.
+        healthy: queryReady,
+        serviceReady,
+        queryReady,
+        observedAt: new Date().toISOString()
       }
     });
   } catch (err) {

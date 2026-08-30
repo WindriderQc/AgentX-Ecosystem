@@ -472,7 +472,8 @@
 
     function buildRoutingAnalyticsSection(analytics) {
         const summary = analytics?.summary || {};
-        const totalRequests = summary.totalRequests || 0;
+        const totalRequests = summary.totalRequests ?? 0;
+        const percent = value => value == null ? '—' : `${value}%`;
 
         return `
             <h4 style="font-size:0.95rem;font-weight:700;margin:20px 0 10px;color:var(--text-bright);">Routing Analytics</h4>
@@ -483,9 +484,9 @@
                     <div class="nc-value-sub">${totalRequests} routed chat requests</div>
                 </div>
                 <div class="nc-host-card nc-td-lg">
-                    <div class="nc-label">Auto Routed</div>
-                    <div class="nc-value">${summary.autoRoutedPct || 0}%</div>
-                    <div class="nc-value-sub">${summary.autoRoutedCount || 0} classifier-driven requests</div>
+                    <div class="nc-label">Classifier Routed</div>
+                    <div class="nc-value">${percent(summary.autoRoutedPct)}</div>
+                    <div class="nc-value-sub">${summary.autoRoutedCount ?? 0} classifier-driven requests · explicit task modes bypass classification</div>
                 </div>
                 <div class="nc-host-card nc-td-lg">
                     <div class="nc-label">Avg Response</div>
@@ -495,7 +496,7 @@
                 <div class="nc-host-card nc-td-lg">
                     <div class="nc-label">Avg Classification</div>
                     <div class="nc-value">${formatMetricMs(summary.avgClassificationMs)}</div>
-                    <div class="nc-value-sub">${formatMetricMs(summary.avgTotalForClassifiedMs)} total · ${summary.classificationOverheadPct || 0}% overhead · ${summary.classificationSamples || 0} calls</div>
+                    <div class="nc-value-sub">${formatMetricMs(summary.avgTotalForClassifiedMs)} total · ${percent(summary.classificationOverheadPct)} overhead · ${summary.classificationSamples ?? 0} calls</div>
                 </div>
             </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:20px;">
@@ -552,7 +553,7 @@
             <div class="nc-collapsible nc-mb-16">
                 <div class="nc-collapsible-header" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;color:var(--muted);font-size:0.85rem;">
                     <i class="fas fa-chevron-right nc-collapse-icon nc-collapse-icon"></i>
-                    <span>How Auto-Routing Works</span>
+                    <span>How Routing Decisions Work</span>
                 </div>
                 <div class="nc-collapsible-body">
                     ${buildRoutingExplainer(config)}

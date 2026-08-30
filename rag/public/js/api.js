@@ -16,7 +16,8 @@
    */
   async function apiFetch(path, options) {
     var url = path.startsWith('/') ? path : API_BASE + '/' + path;
-    var res = await fetch(url, options);
+    var requestOptions = Object.assign({ cache: 'no-store' }, options || {});
+    var res = await fetch(url, requestOptions);
     var body = await res.json();
     if (body.ok === false) {
       var err = new Error(body.error || 'Request failed');

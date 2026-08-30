@@ -121,17 +121,6 @@ const CATEGORY_BIAS_CORRECTIONS = {
     translation: -0.62   // n=9 (was -0.80)
 };
 
-/**
- * CONFIDENCE WEIGHTING (opt-in, off by default)
- *
- * When enabled via scoring profile, each category's avg quality is multiplied
- * by its avg judge_confidence before contributing to the weighted composite.
- * Null/missing judge_confidence is treated as NULL_CONFIDENCE_FALLBACK to stay
- * conservative. The maintained regression contract lives in
- * tests/unit/benchmark/generalistScore*.test.js.
- */
-const NULL_CONFIDENCE_FALLBACK = 0.5;
-
 /** Threshold: models with more than 50% empty responses are filtered from leaderboard */
 const EMPTY_RESPONSE_FILTER_THRESHOLD = 0.5;
 
@@ -152,6 +141,5 @@ module.exports = {
     EVIDENCE_CONFIDENCE_TARGET,
     EVIDENCE_CONFIDENCE_PENALTY_MAX,
     CATEGORY_BIAS_CORRECTIONS,
-    NULL_CONFIDENCE_FALLBACK,
     EMPTY_RESPONSE_FILTER_THRESHOLD
 };

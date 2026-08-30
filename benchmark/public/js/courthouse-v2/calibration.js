@@ -1,5 +1,5 @@
-// calibration.js — Judge Calibration section for courthouse-v2
-// Renders a calibration heatmap (category × difficulty) + "Run Calibration" form.
+// calibration.js — Judge Agreement section for courthouse-v2
+// Renders an agreement heatmap (category × difficulty) + explicit run form.
 
 import { isJudgeReady, judgeBlockedReason } from './readiness-state.js';
 // Export: renderCalibration(container, { matrices, hosts })
@@ -63,7 +63,7 @@ function buildLookup(matrix) {
  */
 function renderCell(entry) {
     if (!entry) {
-        return `<td class="cal-cell cal-cell--empty" title="No ground truth data for this category/level combination. Review results in the queue and use &quot;Ground Truth&quot; to build coverage.">—</td>`;
+        return `<td class="cal-cell cal-cell--empty" title="No corpus entries were scored for this category/level combination in this agreement run.">—</td>`;
     }
     const dev = entry.deviation ?? entry.avg_deviation ?? null;
     const acc = entry.accuracy ?? entry.avg_accuracy ?? null;
@@ -73,7 +73,7 @@ function renderCell(entry) {
     const qualityLabel = dev != null
         ? (dev <= 0.5 ? 'Reliable' : dev <= 1.0 ? 'Acceptable' : dev <= 1.5 ? 'Watch' : 'Drifting')
         : 'Unknown';
-    const title = `Accuracy: ${accStr} | Deviation: ${devStr} — ${qualityLabel}. Green (≤0.5) = judge is reliable here. Red (>1.5) = judge is struggling in this area.`;
+    const title = `Reference-judge agreement: ${accStr} | Score deviation: ${devStr} — ${qualityLabel}. This does not measure direct agreement with human scores.`;
     return `<td class="cal-cell" style="background:${bg};color:${fg};" title="${escHtml(title)}">${devStr}</td>`;
 }
 
@@ -91,11 +91,11 @@ function calibrationOnboarding() {
     </div>`;
     return `
         <div class="cal-onboard" style="background:var(--r-bg-inner);border:1px solid var(--r-border);border-radius:8px;padding:0.7rem 0.85rem;margin:0.4rem 0;">
-            <div style="font-weight:700;color:var(--r-text);font-size:0.9rem;margin-bottom:0.3rem;">No calibration data yet</div>
-            <p style="color:#bbb;font-size:0.8rem;line-height:1.45;margin:0 0 0.5rem;">Calibration measures how closely the judge model agrees with human-verified ground truth, category by category and level by level. Until you build that ground truth, the heatmap stays empty and the leaderboard's <strong>Trusted</strong> view has nothing to weight against.</p>
-            ${step(1, 'Open the <strong>Review</strong> queue and mark verified results as ground truth — this is the reference the judge is graded on.')}
-            ${step(2, 'Run <strong>Calibration</strong> below (pick a judge + reference model) to score the judge against that ground truth.')}
-            ${step(3, 'The heatmap fills in, and the Leaderboard\'s <strong>Trusted</strong> view becomes meaningful.')}
+            <div style="font-weight:700;color:var(--r-text);font-size:0.9rem;margin-bottom:0.3rem;">No judge-agreement data yet</div>
+            <p style="color:#bbb;font-size:0.8rem;line-height:1.45;margin:0 0 0.5rem;">This matrix measures how closely a judge agrees with a distinct reference judge on reviewed corpus entries. It is not a direct human-score accuracy measurement and is not used to admit rows into the Leaderboard's <strong>Trusted</strong> evidence cohort.</p>
+            ${step(1, 'Open the <strong>Review</strong> queue and curate representative corpus entries.')}
+            ${step(2, 'Run the <strong>agreement check</strong> below with two distinct judge targets.')}
+            ${step(3, 'Inspect coverage and disagreement before using the judge operationally.')}
             <div style="margin-top:0.6rem;">
                 <button class="ha-btn primary" data-jump="review" title="Switch to the Review tab and jump to the review queue">→ Go to Review queue</button>
             </div>
@@ -115,7 +115,7 @@ function renderHeatmap(matrix) {
         return calibrationOnboarding();
     }
 
-    const headerCells = DIFFICULTIES.map(d => `<th class="cal-th" title="Difficulty Level ${d} — shows average score deviation between judge and ground truth for this level">L${d}</th>`).join('');
+    const headerCells = DIFFICULTIES.map(d => `<th class="cal-th" title="Difficulty Level ${d} — average score deviation between candidate and reference judge">L${d}</th>`).join('');
 
     const bodyRows = categories.map(cat => {
         const cells = DIFFICULTIES.map(d => {
@@ -141,7 +141,7 @@ function renderHeatmap(matrix) {
                 <span class="cal-legend-item" style="color:#84cc16;">● ≤1.0 ok</span>
                 <span class="cal-legend-item" style="color:var(--r-anomaly);">● ≤1.5 warn</span>
                 <span class="cal-legend-item" style="color:var(--r-error);">● &gt;1.5 bad</span>
-                <span class="cal-legend-note">Values = avg deviation from ground truth</span>
+                <span class="cal-legend-note">Values = avg candidate/reference-judge deviation</span>
             </div>
         </div>`;
 }
@@ -176,10 +176,10 @@ function renderStats(matrix) {
 
     return `
         <div class="cal-stats">
-            ${statCard('Pass Rate',      passStr,  'v-approved')}
-            ${statCard('Avg Deviation',  devStr,   'v-calib')}
-            ${statCard('Ground Truth',   gtStr,    'v-total')}
-            ${statCard('Last Calibrated', dateStr, 'v-review')}
+            ${statCard('Entry Pass Rate', passStr,  'v-approved')}
+            ${statCard('Avg Judge Δ',     devStr,   'v-calib')}
+            ${statCard('Corpus Entries',  gtStr,    'v-total')}
+            ${statCard('Last Checked',    dateStr,  'v-review')}
         </div>`;
 }
 
@@ -196,6 +196,32 @@ function hostOptions(hosts) {
         + hosts.map(h => `<option value="${escHtml(h.url)}">${escHtml(h.name)}</option>`).join('');
 }
 
+function renderMatrixProvenance(matrix) {
+    if (!matrix) return '';
+    const judge = matrix.judge_model || 'unknown judge';
+    const judgeHost = matrix.judge_host || 'unknown host';
+    const reference = matrix.reference_model || 'unknown reference judge';
+    const referenceHost = matrix.reference_host || 'unknown host';
+    return `<p class="cal-run-safety" role="note">
+        Agreement evidence: <strong>${escHtml(judge)}</strong> on ${escHtml(judgeHost)}
+        versus <strong>${escHtml(reference)}</strong> on ${escHtml(referenceHost)}.
+        This matrix is not a direct comparison with human scores.
+    </p>`;
+}
+
+function readinessCopy() {
+    return isJudgeReady()
+        ? 'Readiness is confirmed for at least one configured judge. Select two distinct targets for this agreement run.'
+        : `${judgeBlockedReason()} You may choose installed models explicitly below; the server will probe them again before starting.`;
+}
+
+function refreshReadinessCopy(root = document) {
+    const note = root?.querySelector?.('[data-cal-readiness-note]');
+    if (note) {
+        note.textContent = `${readinessCopy()} Agent X will not download or auto-select a model.`;
+    }
+}
+
 /**
  * Render the "Run Calibration" form.
  * @param {Array<{url:string, name:string}>} hosts
@@ -203,13 +229,10 @@ function hostOptions(hosts) {
  */
 function renderRunForm(hosts) {
     const opts = hostOptions(hosts);
-    const readinessNote = isJudgeReady()
-        ? 'Readiness is confirmed for at least one configured judge. Select both models explicitly for this calibration run.'
-        : `${judgeBlockedReason()} You may choose installed models explicitly below; the server will probe them again before starting.`;
     return `
         <div class="cal-run-form" id="cal-run-form">
-            <div class="cal-run-title">Run Calibration</div>
-            <p class="cal-run-safety" role="note">${escHtml(readinessNote)} Agent X will not download or auto-select a model.</p>
+            <div class="cal-run-title">Run Judge Agreement Check</div>
+            <p class="cal-run-safety" role="note" data-cal-readiness-note>${escHtml(readinessCopy())} Agent X will not download or auto-select a model.</p>
             <div class="cal-run-fields">
                 <label class="cal-field">
                     <span class="cal-field-label">Judge Host</span>
@@ -224,12 +247,12 @@ function renderRunForm(hosts) {
                     <select class="cal-select" id="cal-ref-host">${opts}</select>
                 </label>
                 <label class="cal-field">
-                    <span class="cal-field-label">Reference Model</span>
+                    <span class="cal-field-label">Reference Judge Model</span>
                     <select class="cal-select" id="cal-ref" disabled><option value="">Choose a host first</option></select>
                 </label>
             </div>
             <div class="cal-run-actions">
-                <button class="ha-btn primary" id="cal-run-btn">▶ Run Calibration</button>
+                <button class="ha-btn primary" id="cal-run-btn">▶ Run Agreement Check</button>
                 <span class="cal-run-status" id="cal-run-status"></span>
             </div>
         </div>`;
@@ -281,7 +304,7 @@ function wireRunButton(container, hosts) {
                 return;
             }
 
-            setStatus(status, 'Calibration complete — refreshing…', 'ok');
+            setStatus(status, 'Agreement check complete — refreshing…', 'ok');
 
             // Refresh section
             try {
@@ -364,12 +387,13 @@ export function renderCalibration(container, { matrices = [], hosts = [] } = {})
     container.innerHTML = `
         <div class="r-sec-head">
             <span class="r-sec-icon">🎯</span>
-            <span class="r-sec-title r-t-orange">Judge Calibration</span>
+            <span class="r-sec-title r-t-orange">Judge Agreement Matrix</span>
             <span class="r-sec-count">${matrices.length} matrix${matrices.length !== 1 ? 'es' : ''}</span>
             <span class="r-sec-toggle">▼</span>
         </div>
         <div class="r-sec-body cal-body">
             ${renderStats(latest)}
+            ${renderMatrixProvenance(latest)}
             ${renderHeatmap(latest)}
             ${renderRunForm(hosts)}
         </div>`;
@@ -396,6 +420,13 @@ export function renderCalibration(container, { matrices = [], hosts = [] } = {})
     // Reload when host selection changes
     judgeHostSel?.addEventListener('change', () => loadModelsForHost(judgeHostSel.value, judgeSel));
     refHostSel?.addEventListener('change',   () => loadModelsForHost(refHostSel.value,   refSel));
+}
+
+if (typeof document !== 'undefined') {
+    // The Bench and this panel load concurrently. Refresh the note whenever the
+    // authoritative server readiness arrives so the form cannot retain the
+    // bootstrap "no judge ready" placeholder beside a READY host card.
+    document.addEventListener('judge-readiness-changed', () => refreshReadinessCopy(document));
 }
 
 // ─── Utility ──────────────────────────────────────────────────────────────────

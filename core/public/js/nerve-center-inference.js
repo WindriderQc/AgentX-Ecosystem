@@ -184,15 +184,17 @@
     // ── Panel 2: Inference Activity Feed ───────────────────────────────
 
     function buildActivityStats(stats) {
-        const total = stats?.total ?? '--';
-        const latency = stats?.avgLatencyMs != null ? Math.round(stats.avgLatencyMs) : '--';
-        const errorRate = stats?.errorRate != null ? stats.errorRate.toFixed(1) : '--';
+        const windowStats = stats?.lastHour || stats || {};
+        const total = windowStats.totalCalls ?? windowStats.total ?? '--';
+        const latency = windowStats.avgLatencyMs != null ? Math.round(windowStats.avgLatencyMs) : '--';
+        const nonSuccessRate = windowStats.nonSuccessRate ?? windowStats.errorRate;
+        const nonSuccess = nonSuccessRate != null ? `${Number(nonSuccessRate).toFixed(1)}%` : '—';
 
         return `
             <div class="nc-inference-stats" style="display:flex;gap:24px;margin-bottom:12px">
                 <div><span class="nc-muted">Last hour:</span> <strong id="nc-inf-total">${shared.escapeHtml(String(total))}</strong> calls</div>
                 <div><span class="nc-muted">Avg latency:</span> <strong id="nc-inf-latency">${shared.escapeHtml(String(latency))}</strong>ms</div>
-                <div><span class="nc-muted">Error rate:</span> <strong id="nc-inf-errors">${shared.escapeHtml(String(errorRate))}</strong>%</div>
+                <div><span class="nc-muted">Non-success rate:</span> <strong id="nc-inf-errors">${shared.escapeHtml(nonSuccess)}</strong></div>
             </div>`;
     }
 
@@ -254,7 +256,7 @@
             _hostIdentityByUrl = new Map(hostRows.map(row => [row.host, row.hostIdentity]));
 
             if (!Array.isArray(buckets) || buckets.length === 0) {
-                container.innerHTML = '<div class="nc-muted nc-td-p12">No telemetry data available yet.</div>';
+                container.innerHTML = '<div class="nc-muted nc-td-p12">No inference records in the last 24 hours.</div>';
                 return;
             }
 
@@ -317,14 +319,14 @@
                     <div>
                         <h5 class="nc-section-heading">Host Summary</h5>
                         <table class="nc-table">
-                            <thead><tr><th>Host</th><th>Calls</th><th>Avg Latency</th><th>Error Rate</th><th>Tokens Out</th></tr></thead>
+                            <thead><tr><th>Host</th><th>Calls</th><th>Avg Latency</th><th>Non-success</th><th>Tokens Out</th></tr></thead>
                             <tbody>${buildHostSummaryRows(hostRows)}</tbody>
                         </table>
                     </div>
                     <div>
                         <h5 class="nc-section-heading">Model Summary</h5>
                         <table class="nc-table">
-                            <thead><tr><th>Model</th><th>Calls</th><th>Avg Latency</th><th>Error Rate</th><th>Hosts</th></tr></thead>
+                            <thead><tr><th>Model</th><th>Calls</th><th>Avg Latency</th><th>Non-success</th><th>Hosts</th></tr></thead>
                             <tbody>${buildModelSummaryRows(modelRows)}</tbody>
                         </table>
                     </div>
@@ -409,7 +411,7 @@
 
         } catch (err) {
             console.warn('[NerveCenter] Trends data unavailable', err);
-            container.innerHTML = '<div class="nc-muted nc-td-p12">No telemetry data available yet.</div>';
+            container.innerHTML = `<div class="nc-error nc-td-p12">Telemetry unavailable: ${shared.escapeHtml(err.message || 'request failed')}</div>`;
         }
     }
 
@@ -424,7 +426,7 @@
             const secondary = identitySecondary(identity);
             const calls = r.count ?? r.callCount ?? r.calls ?? '--';
             const avgLat = r.avgLatencyMs != null ? `${Math.round(r.avgLatencyMs)}ms` : '--';
-            const errRate = r.errorRate != null ? `${r.errorRate.toFixed(1)}%` : '--';
+            const errRate = (r.nonSuccessRate ?? r.errorRate) != null ? `${Number(r.nonSuccessRate ?? r.errorRate).toFixed(1)}%` : '--';
             const tokens = r.tokensOut ?? r.totalTokensOut ?? '--';
             return `<tr>
                 <td class="nc-td-sm">${label}${secondary ? `<div class="nc-muted" style="font-size:0.68rem;">${shared.escapeHtml(secondary)}</div>` : ''}</td>
@@ -444,7 +446,7 @@
             const model = r.model || r._id || '--';
             const calls = r.count ?? r.callCount ?? r.calls ?? '--';
             const avgLat = r.avgLatencyMs != null ? `${Math.round(r.avgLatencyMs)}ms` : '--';
-            const errRate = r.errorRate != null ? `${r.errorRate.toFixed(1)}%` : '--';
+            const errRate = (r.nonSuccessRate ?? r.errorRate) != null ? `${Number(r.nonSuccessRate ?? r.errorRate).toFixed(1)}%` : '--';
             const hosts = Array.isArray(r.hosts)
                 ? r.hosts.map(host => identityLabel(_hostIdentityByUrl.get(host), host)).join(', ')
                 : identityLabel(_hostIdentityByUrl.get(r.hosts), r.hosts);
@@ -625,9 +627,11 @@
             const totalEl = document.getElementById('nc-inf-total');
             const latencyEl = document.getElementById('nc-inf-latency');
             const errorsEl = document.getElementById('nc-inf-errors');
-            if (totalEl) totalEl.textContent = activity.stats?.total ?? '--';
-            if (latencyEl) latencyEl.textContent = activity.stats?.avgLatencyMs != null ? Math.round(activity.stats.avgLatencyMs) : '--';
-            if (errorsEl) errorsEl.textContent = activity.stats?.errorRate != null ? activity.stats.errorRate.toFixed(1) : '--';
+            const windowStats = activity.stats?.lastHour || activity.stats || {};
+            if (totalEl) totalEl.textContent = windowStats.totalCalls ?? windowStats.total ?? '--';
+            if (latencyEl) latencyEl.textContent = windowStats.avgLatencyMs != null ? Math.round(windowStats.avgLatencyMs) : '--';
+            const nonSuccessRate = windowStats.nonSuccessRate ?? windowStats.errorRate;
+            if (errorsEl) errorsEl.textContent = nonSuccessRate != null ? `${Number(nonSuccessRate).toFixed(1)}%` : '—';
 
             const table = document.getElementById('nc-inference-activity-table');
             if (table) {

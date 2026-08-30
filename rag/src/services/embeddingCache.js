@@ -17,6 +17,7 @@ class EmbeddingCache {
     this.hits = 0;
     this.misses = 0;
     this.evictions = 0;
+    this.observedSince = Date.now();
   }
 
   /**
@@ -84,6 +85,7 @@ class EmbeddingCache {
     this.hits = 0;
     this.misses = 0;
     this.evictions = 0;
+    this.observedSince = Date.now();
   }
 
   /**
@@ -98,6 +100,8 @@ class EmbeddingCache {
       misses: this.misses,
       evictions: this.evictions,
       hitRate: total > 0 ? +(this.hits / total).toFixed(4) : 0,
+      requests: total,
+      observedSince: new Date(this.observedSince).toISOString(),
     };
   }
 }

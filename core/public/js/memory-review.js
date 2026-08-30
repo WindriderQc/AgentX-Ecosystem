@@ -147,12 +147,15 @@
         ? `${insight.health.overdue} overdue`
         : insight.health.stale
           ? `${insight.health.stale} stale collector${insight.health.stale === 1 ? '' : 's'}`
-          : 'Healthy';
+          : insight.health.missing
+            ? `${insight.health.missing} collector${insight.health.missing === 1 ? '' : 's'} not observed`
+            : 'Healthy';
     $('mrStatHealth').textContent = !latest ? 'Waiting' : healthLabel;
     $('mrStatHealth').classList.toggle('mr-stat-warning', insight.health.state === 'attention');
     $('mrStatHealth').title = insight.health.errors ? 'Current collector errors'
       : insight.health.overdue ? 'An unfinished cross-host reconciliation passed its recovery window'
         : insight.health.stale ? `${insight.health.staleRuntimes.map(label).join(', ')} ${insight.health.stale === 1 ? 'has' : 'have'} not contributed within the freshness window`
+        : insight.health.missing ? `${insight.health.missingRuntimes.map(label).join(', ')} ${insight.health.missing === 1 ? 'has' : 'have'} not supplied evidence in this window`
         : insight.health.advisories ? `${insight.health.advisories} non-blocking advisories` : 'No current collector errors';
   }
 
@@ -182,6 +185,9 @@
     } else if (health.stale) {
       tone = 'attention'; icon = 'fa-clock'; title = `${health.stale} collector${health.stale === 1 ? '' : 's'} ${health.stale === 1 ? 'is' : 'are'} stale`;
       text = `${health.staleRuntimes.map(label).join(', ')} ${health.stale === 1 ? 'has' : 'have'} not supplied evidence within the expected freshness window.`;
+    } else if (health.missing) {
+      tone = 'attention'; icon = 'fa-circle-minus'; title = 'Collector coverage is incomplete';
+      text = `${health.missingRuntimes.map(label).join(', ')} ${health.missing === 1 ? 'has' : 'have'} not supplied evidence, so quality metrics remain unknown.`;
     } else if (totals.pending) {
       tone = 'ready'; icon = 'fa-inbox'; title = `${totals.pending} memor${totals.pending === 1 ? 'y is' : 'ies are'} waiting for you`;
       text = 'Each proposal is evidence-backed and remains inert until you review it individually.';
@@ -207,8 +213,26 @@
     ].join('');
   }
 
-  function metric(value, name, detail) {
-    return `<div class="mr-quality-metric"><strong>${esc(value)}</strong><span>${esc(name)}</span><small>${esc(detail)}</small></div>`;
+  function metric(metricEvidence, name, detail, { suffix = '', historicalValue = null } = {}) {
+    const evidence = metricEvidence || {};
+    const current = evidence.state === 'current' && evidence.value != null;
+    const value = current ? `${evidence.value}${suffix}` : '—';
+    const state = evidence.state || 'unavailable';
+    let evidenceDetail = detail;
+    if (!current) {
+      const lastValue = evidence.lastValue == null ? historicalValue : evidence.lastValue;
+      const measured = lastValue == null ? '' : ` Historical result: ${lastValue}${suffix}.`;
+      const lastSeen = evidence.observedAt ? ` Last evidence ${relativeDate(evidence.observedAt)}.` : '';
+      const reasons = {
+        stale: 'Collector coverage is stale.',
+        partial: 'Collector coverage is incomplete.',
+        attention: 'Collector or reconciliation evidence needs attention.',
+        insufficient: 'No measured denominator is available.',
+        unavailable: 'Evidence is unavailable.',
+      };
+      evidenceDetail = `${reasons[state] || reasons.unavailable}${lastSeen}${measured}`;
+    }
+    return `<div class="mr-quality-metric mr-metric-${esc(state)}"><strong>${esc(value)}</strong><span>${esc(name)}</span><small>${esc(evidenceDetail)}</small></div>`;
   }
 
   function distributionBars(values, emptyText) {
@@ -228,15 +252,14 @@
       <span>${runtime.eligible} ${runtime.eligible === 1 ? 'signal' : 'signals'} · ${runtime.filtered} filtered</span>
       <small>${runtime.lastSeen ? `Seen ${esc(relativeDate(runtime.lastSeen))}` : 'No recent contribution'}${runtime.currentAdvisories ? ` · ${runtime.currentAdvisories} ${runtime.currentAdvisories === 1 ? 'advisory' : 'advisories'}` : ''}</small>
     </div>`).join('');
-    const precision = insight.quality.approvalPrecision == null ? '—' : `${insight.quality.approvalPrecision}%`;
-    const filterRate = insight.quality.filterRate == null ? '—' : `${insight.quality.filterRate}%`;
+    const metrics = insight.quality.metrics || {};
     $('mrQualityGrid').innerHTML = [
-      metric(filterRate, 'Noise filtered', `${insight.totals.filteredObservations} items stopped before synthesis`),
-      metric(precision, 'Approval precision', insight.totals.reviewed ? `${insight.totals.reviewed} decisions measured` : 'Starts after your first decisions'),
-      metric(insight.totals.modelSkips, 'Review-model calls saved', 'Empty evidence windows stay deterministic'),
-      metric(insight.quality.crossRuntime, 'Cross-agent consensus', 'Candidates confirmed by multiple runtimes'),
-      metric(insight.quality.conflicts, 'Conflicts surfaced', 'Never resolved silently'),
-      metric(insight.quality.riskFlags, 'Risk flags', 'Privacy, governance, staleness, or injection'),
+      metric(metrics.filterRate, 'Noise filtered', `${insight.totals.filteredObservations} of ${metrics.filterRate?.denominator || 0} observations stopped before synthesis`, { suffix: '%', historicalValue: insight.quality.filterRate }),
+      metric(metrics.approvalPrecision, 'Approval precision', `${metrics.approvalPrecision?.denominator || 0} approve/reject decisions measured`, { suffix: '%', historicalValue: insight.quality.approvalPrecision }),
+      metric(metrics.modelSkips, 'Review-model calls saved', 'Empty evidence windows stay deterministic', { historicalValue: insight.totals.modelSkips }),
+      metric(metrics.crossRuntime, 'Cross-agent consensus', 'Candidates confirmed by multiple runtimes', { historicalValue: insight.quality.crossRuntime }),
+      metric(metrics.conflicts, 'Conflicts surfaced', 'Never resolved silently', { historicalValue: insight.quality.conflicts }),
+      metric(metrics.riskFlags, 'Risk flags', 'Privacy, governance, staleness, or injection', { historicalValue: insight.quality.riskFlags }),
     ].join('');
     $('mrAtlas').innerHTML = `<div><h4>Candidate types</h4>${distributionBars(insight.distributions.candidateTypes, 'The atlas will grow with the first trustworthy proposal.')}</div>
       <div><h4>Destinations</h4>${distributionBars(insight.distributions.targets, 'No semantic destination has been proposed yet.')}</div>`;

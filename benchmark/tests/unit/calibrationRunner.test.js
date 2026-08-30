@@ -54,6 +54,27 @@ describe('Calibration Runner', () => {
             const matrix = buildAccuracyMatrix(referenceScores, challengerScores, 1.5);
             expect(matrix.overall_avg_deviation).toBe(1.0);
             expect(matrix.pass_rate).toBe(100);
+            expect(matrix.cell_pass_rate).toBe(100);
+            expect(matrix.scored_entry_count).toBe(1);
+        });
+
+        it('weights overall deviation and pass rate by scored entries, not cells', () => {
+            const referenceScores = [
+                { entry: { category: 'coding', difficulty: 1 }, score: 8.0 },
+                { entry: { category: 'coding', difficulty: 1 }, score: 8.0 },
+                { entry: { category: 'creative', difficulty: 4 }, score: 8.0 }
+            ];
+            const challengerScores = [
+                { entry: { category: 'coding', difficulty: 1 }, score: 8.0 },
+                { entry: { category: 'coding', difficulty: 1 }, score: 8.0 },
+                { entry: { category: 'creative', difficulty: 4 }, score: 5.0 }
+            ];
+
+            const matrix = buildAccuracyMatrix(referenceScores, challengerScores, 1.5);
+            expect(matrix.overall_avg_deviation).toBe(1);
+            expect(matrix.pass_rate).toBe(67);
+            expect(matrix.cell_pass_rate).toBe(50);
+            expect(matrix.scored_entry_count).toBe(3);
         });
     });
 

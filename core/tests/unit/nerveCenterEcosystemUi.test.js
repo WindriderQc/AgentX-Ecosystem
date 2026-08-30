@@ -5,6 +5,8 @@ const vm = require('vm');
 const root = path.join(__dirname, '../..');
 const controllerSource = fs.readFileSync(path.join(root, 'public/js/nerve-center.js'), 'utf8');
 const routingSource = fs.readFileSync(path.join(root, 'public/js/nerve-center-routing.js'), 'utf8');
+const inferenceSource = fs.readFileSync(path.join(root, 'public/js/nerve-center-inference.js'), 'utf8');
+const inferenceHealthSource = fs.readFileSync(path.join(root, 'public/js/nerve-center-inference-health.js'), 'utf8');
 const viewSource = fs.readFileSync(path.join(root, 'views/pages/nerve-center.ejs'), 'utf8');
 
 function loadShared(fetchImpl) {
@@ -46,7 +48,7 @@ describe('Nerve Center ecosystem-v2 UI authority', () => {
     const cached = await shared.getEcosystemSnapshot();
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl).toHaveBeenCalledWith('/api/nerve-center/ecosystem', undefined);
+    expect(fetchImpl).toHaveBeenCalledWith('/api/nerve-center/ecosystem', { cache: 'no-store' });
     expect(first.schemaVersion).toBe(2);
     expect(second.generatedAt).toBe(first.generatedAt);
     expect(cached.generatedAt).toBe(first.generatedAt);
@@ -121,5 +123,18 @@ describe('Nerve Center ecosystem-v2 UI authority', () => {
     expect(conflict.title).toContain('1 contradictions (budget 0)');
     expect(viewSource).toContain('id="widgetEvidenceTrust"');
     expect(viewSource).toContain('Evidence Trust');
+  });
+
+  it('does not present policy, empty denominators, or timeouts as healthy classifier telemetry', () => {
+    expect(viewSource).toContain('Routing Policy');
+    expect(viewSource).toContain('Internal Calls Today');
+    expect(controllerSource).toContain("routing.isFailedOver ? 'FAILOVER' : 'NOMINAL'");
+    expect(controllerSource).toContain('not conversation count');
+    expect(routingSource).toContain('explicit task modes bypass classification');
+    expect(routingSource).toContain("value == null ? '—'");
+    expect(inferenceSource).toContain('Non-success rate:');
+    expect(inferenceSource).toContain('Telemetry unavailable:');
+    expect(inferenceHealthSource).toContain("drift.hasSamples === true");
+    expect(inferenceHealthSource).toContain('host_preference_pin');
   });
 });

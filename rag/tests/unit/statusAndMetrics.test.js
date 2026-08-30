@@ -130,6 +130,9 @@ describe('GET /api/rag/status — dependency health matrix', () => {
     // MongoDB readyState is 0 in test (not connected), so healthy = false
     expect(typeof res.body.data.healthy).toBe('boolean');
     expect(res.body.data.healthy).toBe(false); // mongo is disconnected in test
+    expect(res.body.data.serviceReady).toBe(false);
+    expect(res.body.data.queryReady).toBe(false);
+    expect(Number.isFinite(Date.parse(res.body.data.observedAt))).toBe(true);
   });
 
   it('preserves existing fields (documentCount, chunkCount, embeddingModel)', async () => {
@@ -193,6 +196,7 @@ describe('GET /api/rag/status — dependency health matrix', () => {
 
     expect(emb.healthy).toBe(false);
     expect(emb.error).toBe('Embedding connection test failed');
+    expect(res.body.data.queryReady).toBe(false);
   });
 
   it('reports qdrant health from vectorStore healthCheck', async () => {

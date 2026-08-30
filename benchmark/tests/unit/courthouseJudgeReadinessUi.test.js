@@ -73,6 +73,9 @@ describe('Courthouse judge readiness UI contracts', () => {
         expect(calibration).toContain('Select a configured host…');
         expect(calibration).toContain('Select an installed model…');
         expect(calibration).toContain('will not download or auto-select a model');
+        expect(calibration).toContain('data-cal-readiness-note');
+        expect(calibration).toContain("document.addEventListener('judge-readiness-changed'");
+        expect(calibration).toContain('does not measure direct agreement with human scores');
         expect(setup).toContain('Choose an installed judge model…');
         expect(setup).not.toContain('autoSelectJudge');
         expect(benchmarkRoster).toContain('readiness?.preferred_target?.model');
@@ -135,12 +138,14 @@ describe('Courthouse judge readiness UI contracts', () => {
         expect(index).toContain('Review evidence is unavailable. No empty-queue conclusion was inferred.');
         expect(index).toContain('showRecoverableState');
         expect(index).toContain('ch-retry-section');
-        expect(index).toContain('await Promise.allSettled([\n        benchTask,\n        reviewTask,');
+        expect(index).toMatch(/await Promise\.allSettled\(\[\s+benchTask,\s+reviewTask,/);
         expect(index).not.toContain('await loadReviewQueue();\n\n    // ── Test library');
         expect(bench).toContain("apiFetch('/api/benchmark/judge/readiness')");
         expect(bench).toContain('fallbackReadiness');
         expect(bench).toContain("href: '/setup?focus=judge'");
         expect(bench).toContain('dashboard counts');
+        expect(bench).toContain('Calibration evidence is historical.');
+        expect(bench).toContain('retired or unconfigured host');
         expect(ledger).toContain('ledger-retry');
     });
 });

@@ -6,6 +6,17 @@ const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation')
 
 const ragClient = getRagServiceClient();
 
+function finiteOrNull(value) {
+  const number = Number(value);
+  return value !== null && value !== undefined && Number.isFinite(number) ? number : null;
+}
+
+function booleanOrNull(value) {
+  if (value === true) return true;
+  if (value === false) return false;
+  return null;
+}
+
 function handleError(res, err, context) {
   logger.warn('RAG proxy request failed', {
     context,
@@ -25,7 +36,13 @@ function handleError(res, err, context) {
 router.get('/status', async (_req, res) => {
   try {
     const data = await ragClient.getStatus();
-    return res.json({ status: 'success', data });
+    return res.json({
+      status: 'success',
+      data: {
+        ...data,
+        observedAt: data?.observedAt || new Date().toISOString()
+      }
+    });
   } catch (err) {
     return handleError(res, err, 'status');
   }
@@ -34,8 +51,10 @@ router.get('/status', async (_req, res) => {
 router.get('/metrics', async (_req, res) => {
   try {
     const data = await ragClient.getStatus();
-    const totalDocuments = Number(data?.documentCount) || 0;
-    const totalChunks = Number(data?.chunkCount) || 0;
+    const totalDocuments = finiteOrNull(data?.documentCount);
+    const totalChunks = finiteOrNull(data?.chunkCount);
+    const healthy = booleanOrNull(data?.healthy);
+    const observedAt = data?.observedAt || new Date().toISOString();
 
     // The UI has always read stats.sourceBreakdown and this route never sent it,
     // so "Documents by Source" sat on "Loading..." forever. The RAG service has
@@ -49,33 +68,41 @@ router.get('/metrics', async (_req, res) => {
       if (docs.length) {
         sourceBreakdown = docs.reduce((acc, doc) => {
           const key = doc?.source || 'unknown';
-          acc[key] ||= { count: 0, chunks: 0 };
+          acc[key] ||= { count: 0, chunks: 0, chunksComplete: true };
           acc[key].count += 1;
-          acc[key].chunks += Number(doc?.chunkCount) || 0;
+          const chunkCount = finiteOrNull(doc?.chunkCount);
+          if (chunkCount === null) acc[key].chunksComplete = false;
+          else acc[key].chunks += chunkCount;
           return acc;
         }, {});
+        for (const entry of Object.values(sourceBreakdown)) {
+          if (!entry.chunksComplete) entry.chunks = null;
+          delete entry.chunksComplete;
+        }
       }
     } catch (breakdownErr) {
       logger.warn('RAG source breakdown unavailable', { error: breakdownErr.message });
     }
     return res.json({
       status: 'success',
-      // Explicit reachability flag. The UI previously read `healthy` off
-      // this body and it was never emitted, so the tile said Offline always.
-      healthy: true,
+      // Reachability and dependency health are distinct facts. A successful
+      // proxy request must never manufacture a healthy dependency state.
+      reachable: true,
+      healthy,
+      observedAt,
       stats: {
         totalDocuments,
         totalChunks,
-        avgChunksPerDoc: totalDocuments > 0
+        avgChunksPerDoc: totalDocuments !== null && totalDocuments > 0 && totalChunks !== null
           ? Math.round((totalChunks / totalDocuments) * 10) / 10
-          : 0,
+          : (totalDocuments === 0 && totalChunks !== null ? 0 : null),
         sourceBreakdown,
         // The RAG service records no ingest timestamps, so there is no oldest or
         // newest to report. Explicitly null so the UI says so rather than showing
         // a permanent placeholder that reads like a failed load.
         oldestDocument: null,
         newestDocument: null,
-        vectorDimension: Number(data?.vectorDimension) || 0,
+        vectorDimension: finiteOrNull(data?.vectorDimension),
         vectorStore: data?.vectorStore || null
       },
       data

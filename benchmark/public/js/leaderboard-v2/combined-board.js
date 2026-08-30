@@ -227,7 +227,7 @@ function speedoColumn(entry) {
 // Row card (3-line layout)
 // ---------------------------------------------------------------------------
 
-function renderRow(entry, index, championMap, readinessMap) {
+function renderRow(entry, index, championMap, readinessMap, { provisional = false } = {}) {
   const model = entry.model || '—';
   const readinessBadge = readinessMap ? getBadgeHtml(model, readinessMap) : '';
   const hostName = entry.hostName || shortHost(entry.host) || '—';
@@ -237,13 +237,14 @@ function renderRow(entry, index, championMap, readinessMap) {
     : '';
   const hostTtftLabel = entry.hostTtft != null ? ` · host TTFT ${formatMs(entry.hostTtft)}` : '';
 
-  const rank = index < 3
+  const canMedal = !provisional && entry.fullScopeEligible === true && index < 3;
+  const rank = canMedal
     ? `<span class="cb-medal ${RANK_CLASS[index]}">${MEDAL[index]}</span>`
-    : `<span class="cb-rank-num">#${index + 1}</span>`;
+    : `<span class="cb-rank-num">${provisional ? 'P' : '#'}${index + 1}</span>`;
 
   const score = entry.score ?? 0;
   const scoreCls = scoreClass(score);
-  const leaderCls = index === 0 ? ' cb-leader' : '';
+  const leaderCls = index === 0 && canMedal ? ' cb-leader' : '';
 
   const { best, watch } = categoryExtremes(entry);
   const watchTone = watch && watch.score < 6 ? 'bad' : 'watch';
@@ -287,10 +288,19 @@ function renderRow(entry, index, championMap, readinessMap) {
   const contexts = compactCounts(entry.contextCounts);
   const difficultyPenalty = Number(entry.difficultyPenalty || 0);
   const evidencePenalty = Number(entry.evidenceConfidencePenalty || 0);
-  const evidenceConfidence = entry.evidenceConfidence != null
+  const difficultyKnown = entry.difficultyCoverage != null
+    && Number.isFinite(Number(entry.difficultyCoverage));
+  const evidenceKnown = entry.evidenceConfidence != null
+    && Number.isFinite(Number(entry.evidenceConfidence));
+  const evidenceConfidence = evidenceKnown
     ? `${Math.round(Number(entry.evidenceConfidence) * 100)}%`
     : '—';
-  const difficultyCoverage = entry.difficultyCoverage != null ? `${entry.difficultyCoverage}%` : '—';
+  const evidenceClass = !evidenceKnown ? '' : evidencePenalty > 0 ? 'watch' : 'good';
+  const evidenceTitle = evidenceKnown
+    ? `Average judge evidence confidence${entry.evidenceConfidenceTarget != null ? `; target ${Math.round(Number(entry.evidenceConfidenceTarget) * 100)}%` : ''}`
+    : 'Judge-score provenance confidence is unknown. Legacy rows may still contain an LLM judge score while lacking modern scorer, artifact, or runtime identity.';
+  const difficultyCoverage = difficultyKnown ? `${entry.difficultyCoverage}%` : '—';
+  const difficultyClass = !difficultyKnown ? '' : difficultyPenalty > 0 ? 'bad' : 'good';
   const requiredLevels = (entry.requiredPromptLevels || []).map(l => `L${l}`).join(', ');
   const difficultyTitle = entry.fullScopeMinLevel
     ? `Required hard-level coverage: ${requiredLevels || `L${entry.fullScopeMinLevel}+`}`
@@ -302,7 +312,11 @@ function renderRow(entry, index, championMap, readinessMap) {
     ? '<span class="cb-unavailable-badge" title="This model is in the benchmark archive but is not currently present on its recorded Ollama host">Deleted</span>'
     : '';
   const reviewNeeded = entry.needsReviewCount ?? entry.reviewCount ?? 0;
-  const lowConfidence = entry.lowConfidenceCount ?? 0;
+  const lowConfidenceKnown = evidenceKnown
+    || (entry.evidenceConfidenceCoverage != null && Number(entry.evidenceConfidenceCoverage) > 0);
+  const lowConfidence = lowConfidenceKnown ? (entry.lowConfidenceCount ?? 0) : null;
+  const lowConfidenceLabel = lowConfidence === null ? '—' : String(lowConfidence);
+  const lowConfidenceClass = lowConfidence === null ? '' : lowConfidence > 0 ? 'watch' : 'good';
   const successRate = entry.successRate != null ? `${entry.successRate}%` : '—';
   const succColor = entry.successRate != null
     ? (entry.successRate >= 90 ? '#81c784' : entry.successRate >= 70 ? '#ffb74d' : '#ef5350')
@@ -344,13 +358,13 @@ function renderRow(entry, index, championMap, readinessMap) {
       <span class="cb-stat"><span class="cb-stat-l">Tests</span><span class="cb-stat-v">${tests}</span></span>
       <span class="cb-stat" title="Prompt level mix"><span class="cb-stat-l">Levels</span><span class="cb-stat-v">${levels}</span></span>
       <span class="cb-stat" title="Context sizes used"><span class="cb-stat-l">Ctx</span><span class="cb-stat-v">${contexts}</span></span>
-      <span class="cb-stat" title="${difficultyTitle}"><span class="cb-stat-l">Hard</span><span class="cb-stat-v ${difficultyPenalty > 0 ? 'bad' : 'good'}">${difficultyCoverage}${difficultyPenalty > 0 ? ` / -${difficultyPenalty.toFixed(1)}` : ''}</span></span>
-      <span class="cb-stat" title="Average judge evidence confidence${entry.evidenceConfidenceTarget != null ? `; target ${Math.round(Number(entry.evidenceConfidenceTarget) * 100)}%` : ''}"><span class="cb-stat-l">Evid</span><span class="cb-stat-v ${evidencePenalty > 0 ? 'watch' : 'good'}">${evidenceConfidence}${evidencePenalty > 0 ? ` / -${evidencePenalty.toFixed(1)}` : ''}</span></span>
+      <span class="cb-stat" title="${difficultyTitle}"><span class="cb-stat-l">Hard</span><span class="cb-stat-v ${difficultyClass}">${difficultyCoverage}${difficultyPenalty > 0 ? ` / -${difficultyPenalty.toFixed(1)}` : ''}</span></span>
+      <span class="cb-stat" title="${evidenceTitle}"><span class="cb-stat-l">Evid</span><span class="cb-stat-v ${evidenceClass}">${evidenceConfidence}${evidencePenalty > 0 ? ` / -${evidencePenalty.toFixed(1)}` : ''}</span></span>
       ${evidenceBadge}
-      <span class="cb-stat"><span class="cb-stat-l">Conf</span><span class="cb-stat-v ${confCls}">${confidence}</span></span>
+      <span class="cb-stat" title="${entry.confidenceMethod === 'weighted_category_prompt_means_t95' ? `Weighted 95% interval from ${entry.confidenceSampleSize || 0} independent prompt means; ${entry.confidenceRepeatCount || entry.testCount || 0} total attempts` : 'Uncertainty is unknown until each scored category has at least two independent prompt fixtures'}"><span class="cb-stat-l">Conf</span><span class="cb-stat-v ${confCls}">${confidence}</span></span>
       <span class="cb-stat"><span class="cb-stat-l">Cal</span><span class="cb-stat-v">${renderCalBadge(entry)}</span></span>
-      <span class="cb-stat" title="Rows flagged for manual review"><span class="cb-stat-l">Review</span><span class="cb-stat-v ${reviewNeeded > 0 ? 'watch' : 'good'}">${reviewNeeded}</span></span>
-      <span class="cb-stat" title="Rows with judge confidence below 0.70"><span class="cb-stat-l">LowConf</span><span class="cb-stat-v ${lowConfidence > 0 ? 'watch' : 'good'}">${lowConfidence}</span></span>
+      <span class="cb-stat" title="Rows flagged for manual review; this is not the human-reviewed count"><span class="cb-stat-l">Needs review</span><span class="cb-stat-v ${reviewNeeded > 0 ? 'watch' : 'good'}">${reviewNeeded}</span></span>
+      <span class="cb-stat" title="Rows with an observed judge confidence below 0.70"><span class="cb-stat-l">LowConf</span><span class="cb-stat-v ${lowConfidenceClass}">${lowConfidenceLabel}</span></span>
       <span class="cb-stat"><span class="cb-stat-l">Success</span><span class="cb-stat-v" style="color:${succColor}">${successRate}</span></span>
       <span class="cb-stat"><span class="cb-stat-l">Coeff</span><span class="cb-stat-v" style="color:${coeffColor}">${coeff}</span></span>
     </div>
@@ -398,13 +412,25 @@ function sortRankings(rankings, mode) {
   });
 }
 
-function renderRows(rankings, championMap, readinessMap) {
-  return rankings.map((e, i) => renderRow(e, i, championMap, readinessMap)).join('');
+function scopeKey(entry) {
+  const lanes = CATEGORY_ORDER.filter(category => categoryScore(entry, category) !== null).sort();
+  const levels = Object.entries(entry.promptLevelCounts || {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([level]) => Number(level))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  return `${lanes.join(',')}@@${levels.join(',')}`;
+}
+
+function renderRows(rankings, championMap, readinessMap, options = {}) {
+  return rankings.map((e, i) => renderRow(e, i, championMap, readinessMap, options)).join('');
 }
 
 export async function renderCombinedBoard(container, rankings) {
   const readinessMap = await getReadinessMap().catch(() => ({}));
-  const championMap = buildChampionMap(rankings);
+  const comparableScopes = new Set((rankings || []).map(scopeKey)).size <= 1;
+  const provisional = !(rankings || []).some(entry => entry.fullScopeEligible === true);
+  const championMap = comparableScopes ? buildChampionMap(rankings) : new Map();
 
   // Persist active triage on the container so re-renders preserve user choice.
   const active = container.dataset.triageMode || 'generalist';
@@ -420,8 +446,8 @@ export async function renderCombinedBoard(container, rankings) {
 
   const body = empty
     ? `<div class="r-empty">No rankings yet — launch a benchmark to populate the leaderboard.</div>`
-    : `${renderTriageChips(active)}<div class="cb-list" id="cb-list">
-        ${renderRows(sorted, championMap, readinessMap)}
+    : `${comparableScopes ? renderTriageChips(active) : '<div class="r-empty" role="note" style="text-align:left;">Scopes differ. Category champion badges and category re-ranking are disabled.</div>'}<div class="cb-list" id="cb-list">
+        ${renderRows(sorted, championMap, readinessMap, { provisional })}
       </div>`;
 
   container.innerHTML = `${head}<div class="r-sec-body">${body}</div>`;
@@ -445,7 +471,7 @@ export async function renderCombinedBoard(container, rankings) {
         c.setAttribute('aria-selected', on ? 'true' : 'false');
       });
       const reSorted = sortRankings(rankings, next);
-      list.innerHTML = renderRows(reSorted, championMap, readinessMap);
+      list.innerHTML = renderRows(reSorted, championMap, readinessMap, { provisional });
     });
   }
 

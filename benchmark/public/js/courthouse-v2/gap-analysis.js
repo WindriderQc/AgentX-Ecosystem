@@ -117,14 +117,32 @@ function statCard(label, value, valCls = '') {
 function renderStats(gapData) {
     const total    = gapData.total_entries ?? 0;
     const empty    = gapData.empty_cells   ?? 0;
-    const coverage = gapData.coverage_pct  ?? 0;
+    const occupied = gapData.coverage_pct  ?? 0;
+    const targetCoverage = gapData.target_coverage_pct ?? 0;
 
     return `
         <div class="ga-stats">
             ${statCard('Total Entries',  total.toLocaleString(),           'v-total')}
             ${statCard('Empty Cells',    empty.toLocaleString(),            empty === 0 ? 'v-approved' : 'v-review')}
-            ${statCard('Coverage',       Math.round(coverage) + '%',        coverage >= 80 ? 'v-approved' : coverage >= 50 ? 'v-override' : 'v-review')}
+            ${statCard('Occupied Cells', Math.round(occupied) + '%',        occupied >= 80 ? 'v-approved' : occupied >= 50 ? 'v-override' : 'v-review')}
+            ${statCard('Target Ready',   Math.round(targetCoverage) + '%',  targetCoverage === 100 ? 'v-approved' : 'v-review')}
         </div>`;
+}
+
+function renderHardScope(gapData) {
+    const hard = gapData.hard_scope;
+    if (!hard) {
+        return `<div class="cal-run-safety" role="alert">Hard L4–L5 coverage evidence is unavailable. Do not interpret the hard leaderboard as calibrated.</div>`;
+    }
+    if (hard.ready) {
+        return `<div class="cal-run-safety" role="status">Hard L4–L5 human coverage meets the ${hard.target_per_cell}-entry target in all ${hard.total_cells} category/level cells.</div>`;
+    }
+    const missing = Number(hard.total_cells || 0) - Number(hard.cells_meeting_target || 0);
+    return `<div class="cal-run-safety" role="alert">
+        <strong>Hard L4–L5 calibration coverage is not ready.</strong>
+        ${hard.cells_meeting_target || 0}/${hard.total_cells || 14} cells meet the ${hard.target_per_cell || 5}-entry human target; ${missing} remain missing or sparse.
+        Hard rankings remain exploratory until these cells are reviewed.
+    </div>`;
 }
 
 // ─── Legend ───────────────────────────────────────────────────────────────────
@@ -150,7 +168,9 @@ function renderLegend() {
  *   total_entries: number,
  *   total_cells:   number,
  *   empty_cells:   number,
- *   coverage_pct:  number,
+ *   coverage_pct:  number (occupied-cell compatibility metric),
+ *   target_coverage_pct: number,
+ *   hard_scope: { ready, cells_meeting_target, total_cells, target_per_cell }
  * }
  *
  * @param {HTMLElement} container - the #gap-analysis element
@@ -168,6 +188,7 @@ export function renderGapAnalysis(container, gapData = {}) {
         </div>
         <div class="r-sec-body ga-body">
             ${renderStats(gapData)}
+            ${renderHardScope(gapData)}
             ${renderGrid(grid)}
             ${renderLegend()}
         </div>`;

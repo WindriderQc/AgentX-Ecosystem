@@ -1,12 +1,12 @@
 // the-bench.js — Courthouse v2 top zone: host-grouped judge selector.
 // Replaces the legacy hero + judge-roster sections. One column per host;
-// each column shows its active (default) judge + promote-able candidates.
+// each column shows its active (default) judge + selectable candidates.
 //
 // Endpoints:
 //   GET /api/benchmark/judge-roster               — host panels + candidates
 //   GET /api/benchmark/judge/calibration-status   — pass rate, avg deviation
 //   GET /api/benchmark/dashboard                  — global stat strip
-//   PUT /api/benchmark/judge-defaults             — promote a judge
+//   PUT /api/benchmark/judge-defaults             — select one active judge target
 
 import { escHtml } from '../utils/format.js';
 import { apiFetch } from '../utils/api.js';
@@ -19,12 +19,29 @@ function hostBadge(name) {
 
 function calBadge(cal) {
     if (!cal) return `<span class="tb-cal tb-cal-none">uncalibrated</span>`;
-    const pr = cal.pass_rate ?? 0;
-    const dv = cal.avg_deviation ?? 0;
+    const passKnown = cal.pass_rate !== null && cal.pass_rate !== undefined
+        && Number.isFinite(Number(cal.pass_rate));
+    const deviationKnown = cal.avg_deviation !== null && cal.avg_deviation !== undefined
+        && Number.isFinite(Number(cal.avg_deviation));
+    if (!passKnown || !deviationKnown) {
+        return `<span class="tb-cal tb-cal-none" title="A calibration record exists, but its agreement measurements are unavailable">unknown agreement</span>`;
+    }
+    const pr = Number(cal.pass_rate);
+    const dv = Number(cal.avg_deviation);
+    const corpusCount = cal.ground_truth_count !== null && cal.ground_truth_count !== undefined
+        && Number.isFinite(Number(cal.ground_truth_count))
+        ? Number(cal.ground_truth_count).toLocaleString()
+        : 'unknown';
     const tone = pr >= 80 ? 'ok' : pr >= 50 ? 'warn' : 'bad';
-    return `<span class="tb-cal tb-cal-${tone}" title="pass ${pr.toFixed(0)}% · dev ${dv.toFixed(2)} · ${cal.ground_truth_count || 0} GT">
+    return `<span class="tb-cal tb-cal-${tone}" title="reference-judge agreement · entry pass ${pr.toFixed(0)}% · dev ${dv.toFixed(2)} · ${corpusCount} corpus entries">
               ${pr.toFixed(0)}% · Δ${dv.toFixed(2)}
             </span>`;
+}
+
+function calibrationKey(host, model) {
+    const normalizedHost = String(host || '').trim().replace(/\/+$/, '').toLowerCase();
+    const normalizedModel = String(model || '').trim().toLowerCase();
+    return `${normalizedHost}@@${normalizedModel}`;
 }
 
 function candidateRow(host, judge, isActive, cal) {
@@ -34,8 +51,9 @@ function candidateRow(host, judge, isActive, cal) {
     const btn = isActive
         ? `<span class="tb-active-pill">ACTIVE</span>`
         : `<button class="tb-promote"
+                   title="Set this model as the selected judge target for this host. Batches still use one selected judge target; this does not add load balancing or capacity."
                    data-host-url="${escHtml(host.hostUrl)}"
-                   data-judge="${name}">promote</button>`;
+                   data-judge="${name}">set active</button>`;
     return `
         <div class="tb-cand ${isActive ? 'tb-cand-active' : ''}">
             <div class="tb-cand-top">
@@ -67,7 +85,12 @@ function hostColumn(host, calMap, index) {
     const rows = host.evidenceUnavailable
         ? `<div class="tb-empty">Judge roster evidence is unavailable. Use Retry check to try again.</div>`
         : ordered.length
-        ? ordered.map(j => candidateRow(host, j, j.modelName === active, calMap[j.modelName])).join('')
+        ? ordered.map(j => candidateRow(
+            host,
+            j,
+            j.modelName === active,
+            calMap[calibrationKey(host.hostUrl, j.modelName)]
+        )).join('')
         : `<div class="tb-empty">No judge-capable models discovered on this host.</div>`;
 
     const header = host.judgeReady
@@ -137,13 +160,12 @@ function deriveDashboardCounts(dashboard) {
     }
     const d = dashboard?.data || {};
     const o = d.overview || {};
-    const ms = Array.isArray(d.model_stats) ? d.model_stats : [];
     return {
-        total:     o.total_tests          ?? ms.reduce((s, m) => s + (m.total_tests || 0), 0),
-        review:    o.needs_review_count   ?? ms.reduce((s, m) => s + (m.needs_review || 0), 0),
-        approved:  o.human_reviewed_count ?? ms.reduce((s, m) => s + (m.human_reviewed || 0), 0),
-        overrides: o.override_count       ?? ms.reduce((s, m) => s + (m.overrides || 0), 0),
-        gt:        o.ground_truth_count   ?? 0,
+        total:     o.total_tests          ?? null,
+        review:    o.needs_review_count   ?? null,
+        approved:  o.human_reviewed_count ?? null,
+        overrides: o.override_count       ?? null,
+        gt:        o.ground_truth_count   ?? null,
     };
 }
 
@@ -201,24 +223,51 @@ function unavailableEvidenceBanner(labels) {
     </div>`;
 }
 
+function calibrationEvidenceBanner(matrices = [], hostPanels = [], now = Date.now()) {
+    if (!matrices.length) return '';
+    const currentHosts = new Set(hostPanels.map(host => calibrationKey(host.hostUrl, '').split('@@')[0]));
+    const stale = matrices.filter(matrix => {
+        const calibratedAt = new Date(matrix.calibrated_at).getTime();
+        return Number.isFinite(calibratedAt) && now - calibratedAt > 30 * 24 * 60 * 60 * 1000;
+    });
+    const retiredHosts = [...new Set(matrices
+        .map(matrix => String(matrix.judge_host || '').trim().replace(/\/+$/, '').toLowerCase())
+        .filter(host => host && !currentHosts.has(host)))];
+    if (!stale.length && !retiredHosts.length) return '';
+
+    const details = [];
+    if (stale.length) {
+        const latest = stale
+            .map(matrix => new Date(matrix.calibrated_at))
+            .filter(date => Number.isFinite(date.getTime()))
+            .sort((left, right) => right - left)[0];
+        details.push(`agreement evidence is older than 30 days${latest ? ` (latest stale check: ${latest.toLocaleDateString()})` : ''}`);
+    }
+    if (retiredHosts.length) details.push(`it references retired or unconfigured host${retiredHosts.length === 1 ? '' : 's'}: ${retiredHosts.join(', ')}`);
+    return `<div class="tb-evidence-unavailable" role="note">
+        <strong>Calibration evidence is historical.</strong>
+        <span>${escHtml(details.join('; '))}. Re-run the agreement check on the current model+host target before relying on it.</span>
+    </div>`;
+}
+
 function attachPromoteHandlers(root) {
     root.querySelectorAll('.tb-promote').forEach(btn => {
         btn.addEventListener('click', async () => {
             const hostUrl = btn.dataset.hostUrl;
             const judgeModel = btn.dataset.judge;
             btn.disabled = true;
-            btn.textContent = 'promoting…';
+            btn.textContent = 'setting…';
             try {
                 await apiFetch('/api/benchmark/judge-defaults', {
                     method: 'PUT',
                     body: { hostUrl, judgeModel }
                 });
-                // Re-render the bench after a successful promotion.
+                // Re-render the bench after the selected target changes.
                 document.dispatchEvent(new CustomEvent('bench-refresh'));
             } catch (err) {
-                console.error('[the-bench] promote failed', err);
+                console.error('[the-bench] judge target selection failed', err);
                 btn.disabled = false;
-                btn.textContent = 'promote';
+                btn.textContent = 'set active';
                 btn.classList.add('tb-promote-err');
                 setTimeout(() => btn.classList.remove('tb-promote-err'), 1800);
             }
@@ -260,8 +309,9 @@ export async function renderBench(container, { dashboard } = {}) {
     });
     const calRes = evidence.calibration.ok ? evidence.calibration.value : null;
     const calMap = {};
-    for (const m of (calRes?.data?.matrices || [])) {
-        calMap[m.judge_model] = {
+    const matrices = calRes?.data?.matrices || [];
+    for (const m of matrices) {
+        calMap[calibrationKey(m.judge_host, m.judge_model)] = {
             pass_rate:           m.pass_rate,
             avg_deviation:       m.overall_avg_deviation,
             calibrated_at:       m.calibrated_at,
@@ -302,6 +352,7 @@ export async function renderBench(container, { dashboard } = {}) {
             </div>
             ${readinessBanner(readiness)}
             ${unavailableEvidenceBanner(unavailable)}
+            ${calibrationEvidenceBanner(matrices, hostPanels)}
             <div class="tb-columns">${columns}</div>
             <div class="tb-quick-links">
                 <a href="/leaderboard"       class="tb-link">Leaderboard →</a>
@@ -318,7 +369,7 @@ export async function renderBench(container, { dashboard } = {}) {
 
     // Expose review count for the tab badge
     const badge = document.getElementById('ch-tab-review-badge');
-    if (badge && counts.review > 0) badge.textContent = String(counts.review);
+    if (badge) badge.textContent = counts.review == null ? '—' : String(counts.review);
 
     return readiness;
 }

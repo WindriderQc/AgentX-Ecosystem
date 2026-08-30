@@ -23,6 +23,7 @@ describe('JudgeAccuracyMatrix', () => {
     it('should create a valid accuracy matrix', async () => {
         const matrix = new JudgeAccuracyMatrix(validMatrix);
         expect(matrix.validateSync()).toBeUndefined();
+        expect(matrix.comparison_kind).toBe('reference_judge_agreement');
         expect(matrix.judge_model).toBe('qwen2.5:7b-instruct-q5_K_M');
         expect(matrix.cells).toHaveLength(2);
         expect(matrix.pass_rate).toBe(50);

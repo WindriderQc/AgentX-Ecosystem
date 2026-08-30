@@ -15,7 +15,7 @@ export const fetchDashboard = (includeUnavailableModels = false) => {
 // axis param ∈ {'composite' (default), 'deterministic', 'subjective'} per task 0199.
 // Composite preserves the historical fetch shape; explicit axes opt into the
 // per-signal aggregation paths in src/services/benchmark/index.js.
-export const fetchGeneralistLeaderboard = (axis = 'composite', hostScope = 'current', challengeScope = 'advanced', includeUnavailableModels = false, trustScope = 'exploratory') => {
+export const fetchGeneralistLeaderboard = (axis = 'composite', hostScope = 'current', challengeScope = 'advanced', includeUnavailableModels = false, trustScope = 'trusted') => {
     const params = new URLSearchParams();
     if (axis && axis !== 'composite') params.set('axis', axis);
     if (hostScope) params.set('hostScope', hostScope);
@@ -25,6 +25,9 @@ export const fetchGeneralistLeaderboard = (axis = 'composite', hostScope = 'curr
     const qs = params.toString();
     return apiFetch(`${BASE}/generalist-leaderboard${qs ? `?${qs}` : ''}`);
 };
+
+export const fetchGroundTruthGaps = () =>
+    apiFetch(`${BASE}/judge/ground-truth/gaps`);
 
 export function fetchQualityBreakdown(model, host) {
     const params = new URLSearchParams({ model });

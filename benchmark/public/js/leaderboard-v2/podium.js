@@ -43,8 +43,8 @@ function hasFullScopeEvidence(entry) {
     return entry.fullScopeEligible === true || entry.evidenceStatus === 'full_scope';
 }
 
-function podiumTitle(entry, medalIdx) {
-    if (medalIdx === 1 && !hasFullScopeEvidence(entry)) return 'Partial leader';
+function podiumTitle(entry, medalIdx, opts = {}) {
+    if (opts.provisional) return `Evidence ${opts.provisionalRank || 1}`;
     return POD_TITLES[medalIdx];
 }
 
@@ -238,10 +238,12 @@ function podMeta(entry) {
     // confidenceMargin is emitted on the 0–100 category scale; the card score is 0–10.
     const margin = rawMargin != null ? rawMargin / 10 : null;
     const tests = entry.totalTests || 0;
+    const confidenceSamples = entry.confidenceSampleSize || 0;
+    const confidenceRepeats = entry.confidenceRepeatCount || tests;
     // Sample size and ±confidence are one story: n graded answers → how much the
     // score could swing. (Lane count is dropped — it just repeats the bar strip.)
     const confEl = margin != null
-        ? `<span class="pod-conf pod-conf-${confidenceTier(margin)}" title="95% confidence interval, computed from ${tests} graded answers — how much the overall score could swing across runs">
+        ? `<span class="pod-conf pod-conf-${confidenceTier(margin)}" title="Weighted 95% interval from ${confidenceSamples} independent prompt means across categories (${confidenceRepeats} total attempts)">
             ±${margin.toFixed(2)} <span class="pod-conf-word">${confidenceTier(margin)}</span>
         </span>`
         : '';
@@ -256,6 +258,7 @@ function podMeta(entry) {
 
 function podCard(entry, medalIdx, opts = {}) {
     const field = opts.field || { laneMax: {}, laneAvg: {}, genMax: null };
+    const provisional = opts.provisional === true;
     const scoreVal = entry.generalistScore != null ? entry.generalistScore / 10 : null;
     const color = scoreVal != null ? scoreColor(scoreVal) : '#888';
 
@@ -264,7 +267,7 @@ function podCard(entry, medalIdx, opts = {}) {
     if (hostDisplay) hostBits.push(`<span class="pod-host-bit"><span class="pod-host-ico">🖥️</span>${hostDisplay}</span>`);
     if (entry.host_available === false) hostBits.push(`<span class="pod-host-bit pod-host-gone">deleted model</span>`);
 
-    const accentColor = MEDAL_COLORS[medalIdx];
+    const accentColor = provisional ? color : MEDAL_COLORS[medalIdx];
     const posClass = MEDAL_LABELS[medalIdx].toLowerCase();
     const rank = medalIdx === 1 ? 1 : medalIdx === 0 ? 2 : 3;
     const sig = signature(entry);
@@ -276,8 +279,8 @@ function podCard(entry, medalIdx, opts = {}) {
     return `<div class="r-pod ${posClass}" style="--pod-accent:${accentColor};--pod-score:${color}">
         <div class="pod-accent-bar"></div>
         <div class="pod-header">
-            <div class="r-pod-medal" aria-label="${MEDAL_LABELS[medalIdx]}">${MEDALS[medalIdx]}</div>
-            <div class="r-pod-label">${podiumTitle(entry, medalIdx)}</div>
+            ${provisional ? '' : `<div class="r-pod-medal" aria-label="${MEDAL_LABELS[medalIdx]}">${MEDALS[medalIdx]}</div>`}
+            <div class="r-pod-label">${podiumTitle(entry, medalIdx, opts)}</div>
             ${sig ? `<div class="pod-signature" title="Derived from category profile">${sig}</div>` : ''}
         </div>
         <div class="pod-topline">
@@ -293,7 +296,7 @@ function podCard(entry, medalIdx, opts = {}) {
         ${laneChips(entry)}
         <div class="pod-div"></div>
         ${podMeta(entry)}
-        <div class="pod-stage" aria-label="Rank ${rank} pedestal"></div>
+        ${provisional ? '' : `<div class="pod-stage" aria-label="Rank ${rank} pedestal"></div>`}
     </div>`;
 }
 
@@ -324,7 +327,12 @@ function emptyState() {
  * Render the top-3 podium into container.
  */
 export function renderPodium(container, rankings, opts = {}) {
-    const top = (rankings || []).filter(r => !r.filtered).slice(0, 3);
+    const visible = (rankings || []).filter(r => !r.filtered);
+    const fullScope = visible.filter(hasFullScopeEvidence);
+    const provisional = fullScope.length === 0;
+    // Partial evidence remains inspectable, but it never receives a medal or
+    // displaces a full-scope model from the actual podium.
+    const top = (provisional ? visible : fullScope).slice(0, 3);
 
     if (top.length === 0) {
         container.innerHTML = emptyState();
@@ -332,25 +340,28 @@ export function renderPodium(container, rankings, opts = {}) {
     }
 
     const field = fieldStats(top);
-    const cardOpts = { ...opts, field };
+    const cardOpts = { ...opts, field, provisional };
 
     let order;
     if (top.length === 1) {
-        order = [{ entry: top[0], medalIdx: 1 }];
+        order = [{ entry: top[0], medalIdx: 1, provisionalRank: 1 }];
     } else if (top.length === 2) {
         order = [
-            { entry: top[0], medalIdx: 1 },
-            { entry: top[1], medalIdx: 0 }
+            { entry: top[0], medalIdx: 1, provisionalRank: 1 },
+            { entry: top[1], medalIdx: 0, provisionalRank: 2 }
         ];
     } else {
         order = [
-            { entry: top[1], medalIdx: 0 },
-            { entry: top[0], medalIdx: 1 },
-            { entry: top[2], medalIdx: 2 }
+            { entry: top[1], medalIdx: 0, provisionalRank: 2 },
+            { entry: top[0], medalIdx: 1, provisionalRank: 1 },
+            { entry: top[2], medalIdx: 2, provisionalRank: 3 }
         ];
     }
 
-    container.innerHTML = `<div class="r-podium">
-        ${order.map(({ entry, medalIdx }) => podCard(entry, medalIdx, cardOpts)).join('')}
-    </div>${podiumLegend()}`;
+    const provisionalHeader = provisional
+        ? `<div class="r-sec-head"><span class="r-sec-icon">◇</span><span class="r-sec-title r-t-cyan">Provisional evidence</span></div><p class="r-empty" style="margin:0 0 1rem;">No result covers the full required scope. These records are inspectable evidence, not medal positions or a champion.</p>`
+        : '';
+    container.innerHTML = `${provisionalHeader}<div class="r-podium${provisional ? ' r-podium-provisional' : ''}">
+        ${order.map(({ entry, medalIdx, provisionalRank }) => podCard(entry, medalIdx, { ...cardOpts, provisionalRank })).join('')}
+    </div>${provisional ? '' : podiumLegend()}`;
 }

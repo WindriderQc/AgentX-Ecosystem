@@ -37,7 +37,10 @@ function renderScore(score) {
 }
 
 function renderConfidence(confidence) {
-  const val = confidence ?? 0;
+  if (confidence == null || !Number.isFinite(Number(confidence))) {
+    return '<span class="g-evidence-val" title="Uncertainty is not measurable from the available independent fixtures">unknown</span>';
+  }
+  const val = Number(confidence);
   const cls = val <= 0.8 ? 'good' : val <= 1.4 ? 'watch' : 'bad';
   return `<span class="g-evidence-val ${cls}">±${val.toFixed(2)}</span>`;
 }
