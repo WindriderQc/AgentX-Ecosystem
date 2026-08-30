@@ -19,6 +19,11 @@ const {
 const { persistConversation } = require('./chat/conversationPersistence');
 const { prepareChatOrchestration } = require('./chat/chatOrchestrationPrelude');
 const {
+    finalizeRouteDecision,
+    ROUTE_OUTCOME_CODES,
+    ROUTE_OUTCOME_STAGES
+} = require('./routing/routeDecision');
+const {
     readOllamaErrorDetail,
     buildOllamaStatusError,
     wrapOllamaFetchError
@@ -152,6 +157,8 @@ const handleChatRequest = async ({
     let observabilityOutcome = null;
     let sanitized = {};
     let numCtxSource = null;
+    let inferenceDispatched = false;
+    const inferenceStartedAt = Date.now();
     try {
         sanitized = sanitizeOptions(options) || {};
         const hostPref = await hostPreferenceService.getByHost(resolvedHost);
@@ -197,6 +204,7 @@ const handleChatRequest = async ({
 
         let response;
         try {
+            inferenceDispatched = true;
             response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -232,6 +240,10 @@ const handleChatRequest = async ({
         if (warning) logger.warn('Response extraction warning', { model, warning });
     } catch (err) {
         logger.error('Model request failed', { model: effectiveModel, error: err.message });
+        const terminalStatus = err.code === 'OLLAMA_TIMEOUT' || err.name === 'AbortError'
+            ? 'timeout'
+            : 'error';
+        const durationMs = Date.now() - inferenceStartedAt;
         // Record failed inference before re-throwing
         recordInference({
             host: resolveTarget(effectiveTarget),
@@ -248,7 +260,17 @@ const handleChatRequest = async ({
             // RouteDecision v1 (task 0519): routeRequest builds this; the row
             // is where it becomes durable. Failed chats are the rows an
             // alerting surface most needs attributed.
-            routeDecision: routingInfo?.decision || null,
+            routeDecision: finalizeRouteDecision(routingInfo?.decision, {
+                status: terminalStatus,
+                durationMs,
+                reasonCode: inferenceDispatched
+                    ? (err.code || (terminalStatus === 'timeout' ? 'OLLAMA_TIMEOUT' : 'OLLAMA_UPSTREAM_ERROR'))
+                    : 'INFERENCE_PRE_DISPATCH_ERROR',
+                ...(!inferenceDispatched && {
+                    outcomeStage: ROUTE_OUTCOME_STAGES.SELECTION,
+                    outcomeCode: ROUTE_OUTCOME_CODES.PRE_DISPATCH_ERROR
+                })
+            }),
             observability: {
                 contract: inferenceContract,
                 outcome: observabilityOutcome,
@@ -256,11 +278,16 @@ const handleChatRequest = async ({
             },
             num_ctx: sanitized.num_ctx || null,
             num_ctx_source: numCtxSource,
-            status: err.name === 'AbortError' ? 'timeout' : 'error',
+            durationMs,
+            status: terminalStatus,
             error: err.message
         });
         throw err;
     }
+
+    const successDurationMs = stats?.performance?.totalDuration
+        ? Math.round(stats.performance.totalDuration / 1e6)
+        : Date.now() - inferenceStartedAt;
 
     // Record successful inference (fire-and-forget)
     recordInference({
@@ -276,7 +303,10 @@ const handleChatRequest = async ({
         routedHost: routingInfo?.host || null,
         routedHostUrl: routingInfo?.target || effectiveTarget || null,
         // RouteDecision v1 (task 0519): built by routeRequest, durable here.
-        routeDecision: routingInfo?.decision || null,
+        routeDecision: finalizeRouteDecision(routingInfo?.decision, {
+            status: 'success',
+            durationMs: successDurationMs
+        }),
         observability: {
             contract: inferenceContract,
             outcome: observabilityOutcome,
@@ -286,8 +316,7 @@ const handleChatRequest = async ({
         num_ctx_source: numCtxSource,
         tokensIn: stats?.usage?.promptTokens || 0,
         tokensOut: stats?.usage?.completionTokens || 0,
-        durationMs: stats?.performance?.totalDuration
-            ? Math.round(stats.performance.totalDuration / 1e6) : 0,
+        durationMs: successDurationMs,
         status: 'success'
     });
 

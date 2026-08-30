@@ -2,11 +2,18 @@
 
 const { normalizeOllamaResponse } = require('../../helpers/ollamaResponseHandler');
 const { hasQualifiedThinkingCapability } = require('../inferenceContractService');
+const { ROUTE_OUTCOME_CODES } = require('./routeDecision');
+
+const ROUTE_OUTCOME_HEADER = 'X-AgentX-Route-Outcome';
+
+function setRouteOutcomeHeader(res, outcomeCode) {
+  if (outcomeCode) res.set(ROUTE_OUTCOME_HEADER, String(outcomeCode));
+}
 
 function setInferenceResponseHeaders(res, context) {
   const {
     model, hostUrl, hostKey, routingSource, laneName, rawResponseRequested,
-    stream, thinkingPolicy, inferenceContract, taskType,
+    stream, thinkingPolicy, inferenceContract, taskType, routeOutcomeCode,
   } = context;
   res.set('X-Resolved-Model', model);
   res.set('X-Routed-Host', hostUrl);
@@ -24,6 +31,7 @@ function setInferenceResponseHeaders(res, context) {
   res.set('X-AgentX-Context-Truncated', String(inferenceContract.contextBudget.transformations.truncation.applied));
   res.set('X-AgentX-Context-Truncation-Risk', String(inferenceContract.contextBudget.transformations.upstreamTruncationRisk));
   res.set('X-AgentX-Capability-Qualification', inferenceContract.qualification.state);
+  setRouteOutcomeHeader(res, routeOutcomeCode || ROUTE_OUTCOME_CODES.ROUTE_SELECTED);
   if (thinkingPolicy.think !== undefined) res.set('X-AgentX-Think', String(thinkingPolicy.think));
   if (taskType) res.set('X-Routing-Task-Type', taskType);
 }
@@ -49,7 +57,9 @@ function classifyHttpRetryFailure(status, data, raw) {
 }
 
 module.exports = {
+  ROUTE_OUTCOME_HEADER,
   buildInferenceClientData,
   classifyHttpRetryFailure,
+  setRouteOutcomeHeader,
   setInferenceResponseHeaders,
 };

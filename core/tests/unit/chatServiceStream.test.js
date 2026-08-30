@@ -280,10 +280,46 @@ describe('chatServiceStream', () => {
     }));
     expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
       status: 'success',
-      routeDecision: decision,
+      routeDecision: expect.objectContaining({
+        outcome: expect.objectContaining({
+          stage: 'execution',
+          code: 'execution_succeeded'
+        })
+      }),
       observability: expect.objectContaining({
         contract: expect.objectContaining({ version: 'agentx.inference-contract.v1' }),
         outcome: expect.objectContaining({ visibleFinal: true, completed: true })
+      })
+    }));
+  });
+
+  it('records streaming upstream failures with a terminal error decision', async () => {
+    routeRequest.mockResolvedValue({
+      routed: true,
+      model: 'qwen3:14b',
+      target: 'http://192.0.2.66:11434',
+      host: 'primary',
+      taskType: 'analysis',
+      decision: { decisionVersion: 1, selected: { model: 'qwen3:14b', host: 'primary' } }
+    });
+    mockFetch.mockRejectedValue(new Error('connection refused'));
+    const onError = jest.fn();
+
+    await handleChatRequestStream({
+      userId: 'user-1',
+      model: 'qwen3:14b',
+      message: 'Analyze this',
+      onToken: jest.fn(),
+      onThinking: jest.fn(),
+      onComplete: jest.fn(),
+      onError
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      routeDecision: expect.objectContaining({
+        outcome: expect.objectContaining({ code: 'upstream_error' })
       })
     }));
   });

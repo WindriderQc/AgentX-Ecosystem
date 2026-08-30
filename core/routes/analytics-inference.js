@@ -25,6 +25,10 @@ const express = require('express');
 const router = express.Router();
 
 const InferenceLog = require('../models/InferenceLog');
+const {
+  projectInferenceLog,
+  projectInferenceLogs
+} = require('../src/services/routing/inferenceLogReadProjection');
 const envelope = require('../src/helpers/responseEnvelope');
 const logger = require('../config/logger');
 const { isCloudCall, modelProvider } = require('../src/services/budgetAccountingService');
@@ -140,7 +144,7 @@ router.get('/logs', async (req, res) => {
         from: req.query.from || null,
         to: req.query.to || null,
       },
-      items,
+      items: projectInferenceLogs(items),
       pagination: {
         page,
         pageSize,
@@ -243,7 +247,10 @@ router.get('/summary', async (req, res) => {
           ],
           topErrors: [
             { $match: { status: { $ne: 'success' } } },
-            { $group: { _id: { model: '$model', error: '$error' }, calls: { $sum: 1 } } },
+            // Legacy `error` values can contain an entire upstream body. Group
+            // by the closed status enum instead; the response keeps its
+            // existing `error` field but it is now a stable machine bucket.
+            { $group: { _id: { model: '$model', status: '$status' }, calls: { $sum: 1 } } },
             { $sort: { calls: -1 } },
             { $limit: 10 }
           ]
@@ -363,11 +370,17 @@ router.get('/summary', async (req, res) => {
         caller: r._id?.caller || 'unknown',
         calls: r.calls
       })),
-      topErrors: (facet?.topErrors || []).map((r) => ({
-        model: r._id?.model || 'unknown',
-        error: r._id?.error || 'unspecified',
-        calls: r.calls
-      })),
+      topErrors: (facet?.topErrors || []).map((r) => {
+        const projected = projectInferenceLog({
+          model: r._id?.model,
+          status: r._id?.status,
+        });
+        return {
+          model: projected?.model || 'unknown',
+          error: projected?.status || 'error',
+          calls: r.calls
+        };
+      }),
       currency: process.env.COST_CURRENCY || 'USD'
     });
   } catch (err) {

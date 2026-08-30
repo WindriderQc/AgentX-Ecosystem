@@ -19,7 +19,7 @@ describe('failoverStatusService', () => {
       host: 'http://primary:11434',
       routedHostUrl: 'http://secondary:11434',
       fallbackUsed: true,
-      fallbackReason: 'secondary unreachable',
+      fallbackReason: 'connection_failure',
       timestamp: new Date('2026-07-23T12:00:00.000Z')
     };
 
@@ -28,7 +28,7 @@ describe('failoverStatusService', () => {
     expect(state).toEqual(expect.objectContaining({
       currentHost: 'http://primary:11434',
       isFailedOver: true,
-      reason: 'secondary unreachable',
+      reason: 'connection_failure',
       failoverCount: 7,
       authority: 'inference_log',
       statePersisted: true
@@ -42,6 +42,23 @@ describe('failoverStatusService', () => {
       requestedHost: 'http://secondary:11434',
       fallbackUsed: true
     }));
+  });
+
+  test('does not expose legacy fallback prose through observed status', () => {
+    const secret = 'legacy upstream body secret@example.test';
+    const state = observedState(intent, {
+      _id: 'log-legacy',
+      caller: 'proxy',
+      model: 'model:1',
+      host: 'http://primary:11434',
+      fallbackUsed: true,
+      fallbackReason: secret,
+      timestamp: new Date('2026-07-23T12:00:00.000Z')
+    }, 1);
+
+    expect(JSON.stringify(state)).not.toContain(secret);
+    expect(state.reason).toBe('actual_route_fallback');
+    expect(state.observedRequest.fallbackReason).toBeNull();
   });
 
   test('reports recovery when the latest trusted route succeeds without fallback', () => {

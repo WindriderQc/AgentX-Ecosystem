@@ -8,6 +8,11 @@ const {
   buildInferenceClientData,
   setInferenceResponseHeaders,
 } = require('./inferenceResponsePresenter');
+const {
+  ROUTE_OUTCOME_CODES,
+  ROUTE_OUTCOME_STAGES,
+  fingerprintRuntimeOptions,
+} = require('./routeDecision');
 
 async function tryAndRespondDegraded(context) {
   const {
@@ -16,10 +21,16 @@ async function tryAndRespondDegraded(context) {
     useChat, gateRelease, prompt, messages, system,
     requestedThink, thinkingMode, lane, laneName, rawResponseRequested,
     stream, skipGate, routingSource, routingTrace, requestedModel,
-    dispatchAttemptRecord, buildRoutingDifference, timeoutMs, routeManaged,
+    dispatchAttemptRecord, observeRouteDecision, buildRoutingDifference, timeoutMs, routeManaged,
     signal,
   } = context;
-  if (signal?.aborted) return false;
+  if (signal?.aborted) {
+    return {
+      responded: false,
+      outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_REFUSED,
+      reasonCode: 'caller_disconnected',
+    };
+  }
 
   const degradedOutcome = await tryDegradedRetry({
     attemptState: {
@@ -56,7 +67,13 @@ async function tryAndRespondDegraded(context) {
     },
   });
 
-  if (signal?.aborted) return false;
+  if (signal?.aborted) {
+    return {
+      responded: false,
+      outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_REFUSED,
+      reasonCode: 'caller_disconnected',
+    };
+  }
 
   if (degradedOutcome?.retried) {
     const fallbackType = degradedOutcome.degraded.fallbackType || 'same_model';
@@ -87,9 +104,9 @@ async function tryAndRespondDegraded(context) {
         endpoint: `/api/${useChat ? 'chat' : 'generate'}`,
         url: `${degradedOutcome.hostUrl}/api/${useChat ? 'chat' : 'generate'}`,
         stream: false,
-        think: degradedOutcome.thinkingPolicy?.think ?? null,
-        keepAlive: degradedOutcome.payload?.keep_alive ?? null,
-        options: { ...(degradedOutcome.payload?.options || {}) },
+        thinkConfigured: degradedOutcome.thinkingPolicy?.think !== undefined,
+        keepAliveConfigured: degradedOutcome.payload?.keep_alive !== undefined,
+        optionsFingerprint: fingerprintRuntimeOptions(degradedOutcome.payload?.options),
       },
     };
     fallbackTrace.difference = buildRoutingDifference(fallbackTrace);
@@ -97,8 +114,20 @@ async function tryAndRespondDegraded(context) {
       || (!degradedOutcome.ok
         ? degradedOutcome.data?.error || `upstream_status_${degradedOutcome.status || 'unknown'}`
         : null);
+    const fallbackAttemptStatus = degradedOutcome.ok
+      ? 'success'
+      : degradedOutcome.isTimeout
+        ? 'timeout'
+        : 'error';
+    const fallbackAttemptReason = degradedOutcome.ok
+      ? degradedOutcome.degraded.degradedReason
+      : degradedOutcome.isTimeout
+        ? 'pre_response_timeout'
+        : Number.isInteger(degradedOutcome.status)
+          ? `upstream_http_${degradedOutcome.status}`
+          : 'connection_failure';
 
-    dispatchAttemptRecord({
+    const fallbackRouteDecision = dispatchAttemptRecord({
       hostUrl: degradedOutcome.hostUrl,
       attemptModel: degradedOutcome.model,
       attempt: (Number(telemetryContext.attempt) || 1) + 1,
@@ -108,13 +137,19 @@ async function tryAndRespondDegraded(context) {
       attemptOptions: degradedOutcome.payload?.options,
       attemptNumCtxSource: degradedOutcome.numCtxSource,
       durationMs: degradedOutcome.durationMs,
-      status: degradedOutcome.ok ? 'success' : 'error',
+      status: fallbackAttemptStatus,
       error: fallbackError,
       fallbackUsed: true,
       fallbackReason: degradedOutcome.degraded.degradedReason,
+      outcomeStage: ROUTE_OUTCOME_STAGES.FALLBACK,
+      outcomeCode: degradedOutcome.ok
+        ? ROUTE_OUTCOME_CODES.FALLBACK_SUCCEEDED
+        : ROUTE_OUTCOME_CODES.FALLBACK_FAILED,
+      outcomeReasonCode: fallbackAttemptReason,
     });
 
     if (degradedOutcome.ok) {
+      observeRouteDecision(fallbackRouteDecision);
       setInferenceResponseHeaders(res, {
         model: degradedOutcome.model,
         hostUrl: degradedOutcome.hostUrl,
@@ -126,6 +161,7 @@ async function tryAndRespondDegraded(context) {
         thinkingPolicy: degradedOutcome.thinkingPolicy,
         inferenceContract: degradedOutcome.contract,
         taskType,
+        routeOutcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_SUCCEEDED,
       });
       res.set('X-AgentX-Degraded', 'true');
       res.set('X-AgentX-Degraded-Reason', degradedOutcome.degraded.degradedReason);
@@ -156,18 +192,35 @@ async function tryAndRespondDegraded(context) {
           consumerContract,
         }
       );
-      return true;
+      return {
+        responded: true,
+        outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_SUCCEEDED,
+        reasonCode: degradedOutcome.degraded.degradedReason,
+        routeDecision: fallbackRouteDecision,
+      };
     }
+
+    return {
+      responded: false,
+      outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_FAILED,
+      reasonCode: fallbackAttemptReason,
+      routeDecision: fallbackRouteDecision,
+    };
   }
 
+  const refusalReason = degradedOutcome?.reason || 'fallback_disabled';
   if (degradedOutcome && !degradedOutcome.retried) {
     logger.debug('[InferenceProxy] degraded retry not attempted', {
-      reason: degradedOutcome.reason,
+      reason: refusalReason,
       taskType: taskType || null,
       model,
     });
   }
-  return false;
+  return {
+    responded: false,
+    outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_REFUSED,
+    reasonCode: refusalReason,
+  };
 }
 
 module.exports = { tryAndRespondDegraded };

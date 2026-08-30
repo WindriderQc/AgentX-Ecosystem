@@ -16,4 +16,17 @@ describe('Nerve Center failover UI', () => {
     expect(controller).not.toContain('manual_nerve_center');
     expect(routing).toContain('persisted actual routes');
   });
+
+  it('renders payload-free RouteDecision evidence instead of legacy text previews', () => {
+    expect(routing).toContain('RouteDecision v1');
+    expect(routing).toContain('Inference Shape / Params Fingerprint');
+    expect(routing).toContain('messageShape');
+    expect(routing).not.toContain('Prompt Preview');
+    expect(routing).not.toContain('Inference Text / Params Preview');
+    expect(routing).not.toContain('request?.preview');
+    expect(routing).not.toContain('prompt?.preview');
+    expect(routing).not.toContain('system?.preview');
+    expect(routing).toContain('keepAliveConfigured');
+    expect(routing).not.toContain('trace.ollama?.keepAlive ==');
+  });
 });

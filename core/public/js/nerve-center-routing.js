@@ -180,6 +180,10 @@
         return log?.routingTrace && typeof log.routingTrace === 'object' ? log.routingTrace : null;
     }
 
+    function getRouteDecision(log) {
+        return log?.routeDecision?.decisionVersion === 1 ? log.routeDecision : null;
+    }
+
     function getRecommendationSummary(log) {
         const trace = getRoutingTrace(log);
         if (!trace?.recommendation) return null;
@@ -195,30 +199,35 @@
 
     function getUsedSummary(log) {
         const trace = getRoutingTrace(log);
+        const decision = getRouteDecision(log);
         const selected = trace?.selected || {};
+        const actual = decision?.actual || decision?.selected || {};
         return {
-            model: selected.model || log.routedModel || log.model,
-            host: selected.hostKey || log.routedHost || log.hostKey,
-            hostUrl: selected.hostUrl || log.routedHostUrl || log.host,
-            source: selected.routingSource || ''
+            model: actual.model || selected.model || log.routedModel || log.model,
+            host: actual.host || selected.hostKey || log.routedHost || log.hostKey,
+            hostUrl: actual.hostUrl || selected.hostUrl || log.routedHostUrl || log.host,
+            source: decision?.selectionSource || selected.routingSource || ''
         };
     }
 
     function getDifferenceSummary(log) {
         const trace = getRoutingTrace(log);
+        const decision = getRouteDecision(log);
         if (!trace) {
             return {
-                label: 'Legacy',
-                color: '#94a3b8',
-                reason: 'No routing trace was stored for this older row.'
+                label: decision?.fallbackUsed ? 'Fallback' : (decision ? 'Selected' : 'Legacy'),
+                color: decision?.fallbackUsed ? '#f59e0b' : (decision ? '#4ade80' : '#94a3b8'),
+                reason: decision?.outcome?.reasonCode
+                    || decision?.outcome?.code
+                    || 'No routing trace was stored for this older row.'
             };
         }
         const diff = trace.difference || {};
         const reasons = Array.isArray(diff.reasons) ? diff.reasons : [];
         return {
-            label: diff.differsFromRecommendation ? 'Diff' : 'Match',
-            color: diff.differsFromRecommendation ? '#f59e0b' : '#4ade80',
-            reason: reasons[0] || '--'
+            label: decision?.fallbackUsed ? 'Fallback' : (diff.differsFromRecommendation ? 'Diff' : 'Match'),
+            color: decision?.fallbackUsed || diff.differsFromRecommendation ? '#f59e0b' : '#4ade80',
+            reason: decision?.outcome?.reasonCode || decision?.outcome?.code || reasons[0] || '--'
         };
     }
 
@@ -259,30 +268,42 @@
         `).join('');
     }
 
-    function buildRequestPreview(trace) {
-        const preview = trace?.request?.preview || {};
-        const messages = Array.isArray(preview.messages) ? preview.messages : [];
+    function buildRequestSummary(trace) {
+        // Historical rows may still contain `request.preview`; deliberately do
+        // not read it. New rows carry the payload-free `summary` contract.
+        const summary = trace?.request?.summary || {};
+        const rawShape = Array.isArray(summary.messageShape) ? summary.messageShape : [];
+        const messageShape = rawShape.map((entry) => ({
+            index: Number.isFinite(Number(entry?.index)) ? Number(entry.index) : null,
+            role: ['system', 'user', 'assistant', 'tool'].includes(entry?.role) ? entry.role : 'other',
+            chars: Number.isFinite(Number(entry?.chars)) ? Number(entry.chars) : 0,
+        }));
+        const promptChars = summary.promptChars ?? 0;
+        const systemChars = summary.systemChars ?? 0;
+        const messageCount = summary.messageCount ?? messageShape.length;
+        const optionsFingerprint = summary.optionsFingerprint
+            || trace?.ollama?.optionsFingerprint
+            || '--';
         return `
             ${buildKeyValueGrid([
                 { label: 'Caller', value: trace?.request?.callerDetail || '--' },
                 { label: 'Lane', value: trace?.lane?.name || trace?.request?.lane || '--' },
-                { label: 'Mode', value: preview.mode || '--' },
-                { label: 'Host Override', value: trace?.request?.hostOverride || '--' }
+                { label: 'Mode', value: summary.mode || '--' },
+                { label: 'Host Override', value: trace?.request?.hostOverride || '--' },
+                { label: 'Prompt chars', value: promptChars },
+                { label: 'System chars', value: systemChars },
+                { label: 'Messages', value: messageCount },
+                { label: 'Options fingerprint', value: optionsFingerprint }
             ])}
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:10px;">
-                <div class="nc-card-sm">
-                    <div class="nc-label">Prompt Preview</div>
-                    <pre style="margin:8px 0 0;white-space:pre-wrap;max-height:180px;overflow:auto;color:var(--text);font-size:0.76rem;">${shared.escapeHtml(preview.prompt?.preview || preview.system?.preview || '--')}</pre>
-                </div>
-                <div class="nc-card-sm">
-                    <div class="nc-label">Messages</div>
-                    <pre style="margin:8px 0 0;white-space:pre-wrap;max-height:180px;overflow:auto;color:var(--text);font-size:0.76rem;">${prettyJson(messages)}</pre>
-                </div>
+            <div class="nc-card-sm" style="margin-top:10px;">
+                <div class="nc-label">Message shape</div>
+                <pre style="margin:8px 0 0;white-space:pre-wrap;max-height:180px;overflow:auto;color:var(--text);font-size:0.76rem;">${prettyJson(messageShape)}</pre>
             </div>`;
     }
 
     function buildRoutingDetail(log) {
         const trace = getRoutingTrace(log);
+        const decision = getRouteDecision(log);
         const used = getUsedSummary(log);
         const recommendation = getRecommendationSummary(log);
         const diff = getDifferenceSummary(log);
@@ -295,13 +316,15 @@
                         ${routingStateBadge(diff)}
                     </div>
                     <div style="font-size:0.82rem;color:var(--muted);line-height:1.5;margin-bottom:12px;">
-                        This row was written before detailed route tracing was added. It still shows the actual persisted path.
+                        ${decision ? 'RouteDecision v1 records the payload-free actual path for this row.' : 'This row was written before detailed route tracing was added. It still shows the actual persisted path.'}
                     </div>
                     ${buildKeyValueGrid([
                         { label: 'Actual Host', value: formatHostLabel(used.host, used.hostUrl) },
                         { label: 'Actual Model', value: used.model },
                         { label: 'Task Type', value: log.taskType || '--' },
                         { label: 'Caller', value: log.callerDetail || log.caller || '--' },
+                        { label: 'Outcome', value: decision?.outcome?.code || '--' },
+                        { label: 'Selection source', value: decision?.selectionSource || '--' },
                         { label: 'Latency', value: log.durationMs != null ? `${log.durationMs}ms` : '--' },
                         { label: 'Status', value: log.status || '--' }
                     ])}
@@ -312,7 +335,15 @@
         const scheduler = rec.scheduler || {};
         const artifactResolution = trace.artifactResolution || {};
         const artifact = trace.inferenceContract?.artifact || {};
-        const reasons = Array.isArray(trace.difference?.reasons) ? trace.difference.reasons : [];
+        const decisionRejections = Array.isArray(decision?.rejections)
+            ? decision.rejections.map((entry) => `${entry.reason}: ${entry.model || entry.host || 'candidate'}`)
+            : [];
+        const reasons = [
+            decision?.outcome?.reasonCode,
+            decision?.outcome?.code,
+            ...decisionRejections,
+            ...(Array.isArray(trace.difference?.reasons) ? trace.difference.reasons : []),
+        ].filter(Boolean);
 
         return `
             <div class="nc-host-card nc-td-lg">
@@ -341,12 +372,18 @@
                     { label: 'Configured Task Model', value: trace.configured?.model || '--' },
                     { label: 'Scheduler Source', value: rec.source || '--' },
                     { label: 'Scheduler Reason', value: scheduler.reason || rec.reason || '--', weight: 500 },
+                    { label: 'Route outcome', value: decision?.outcome?.code || '--' },
+                    { label: 'Outcome stage', value: decision?.outcome?.stage || '--' },
+                    { label: 'Selection source', value: decision?.selectionSource || used.source || '--' },
+                    { label: 'Effective policy', value: decision?.policy?.effective || '--' },
+                    { label: 'Effective lane', value: decision?.policy?.lane || trace.lane?.name || '--' },
+                    { label: 'Policy downgraded', value: decision?.policy?.downgraded === true ? 'Yes' : 'No' },
                     { label: 'Artifact Resolution', value: artifactResolution.source || '--' },
                     { label: 'Exact Tag', value: artifactResolution.resolved || used.model || '--' },
                     { label: 'Artifact Digest', value: artifact.digest || '--' },
                     { label: 'Registry Qualified', value: artifact.registryQualified === true ? 'Yes' : (artifact.registryQualified === false ? 'No' : '--') },
                     { label: 'Ollama Endpoint', value: trace.ollama?.endpoint || '--' },
-                    { label: 'keep_alive', value: trace.ollama?.keepAlive == null ? '--' : trace.ollama.keepAlive }
+                    { label: 'keep_alive', value: trace.ollama?.keepAliveConfigured === true ? 'Configured' : 'Default' }
                 ])}
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:12px;">
                     <div>
@@ -354,8 +391,8 @@
                         ${buildScoredCandidates(scheduler.scored)}
                     </div>
                     <div>
-                        <div class="nc-label" style="margin-bottom:8px;">Inference Text / Params Preview</div>
-                        ${buildRequestPreview(trace)}
+                        <div class="nc-label" style="margin-bottom:8px;">Inference Shape / Params Fingerprint</div>
+                        ${buildRequestSummary(trace)}
                     </div>
                 </div>
             </div>`;
@@ -401,7 +438,7 @@
                 <tbody>${rows}</tbody>
             </table>
             <div id="routingLogDetail" style="margin-top:12px;">
-                <div class="nc-section-placeholder" style="padding:18px 12px;">Click a routing row to inspect the recommendation, final path, request preview, and scheduler candidates.</div>
+                <div class="nc-section-placeholder" style="padding:18px 12px;">Click a routing row to inspect the payload-free route decision, final path, request shape, and scheduler candidates.</div>
             </div>`;
     }
 

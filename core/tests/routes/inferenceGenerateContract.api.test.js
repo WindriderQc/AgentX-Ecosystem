@@ -25,6 +25,13 @@ const fetch = require('node-fetch');
 
 jest.mock('node-fetch');
 
+jest.mock('../../config/logger', () => ({
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+  debug: jest.fn(),
+}));
+
 jest.mock('../../src/services/modelRouter', () => ({
   getRoutingStatus: jest.fn(),
   classifyQuery: jest.fn(),
@@ -70,7 +77,14 @@ jest.mock('../../src/services/buddyEvents', () => ({ emit: jest.fn() }));
 jest.mock('../../src/services/alertService', () => ({ getAlertService: jest.fn(() => null) }));
 
 const hostGate = require('../../src/services/hostGate');
+const hostPreferenceService = require('../../src/services/hostPreferenceService');
+const logger = require('../../config/logger');
 const { recordInference } = require('../../src/services/modelRouter');
+const {
+  ensureTaskModelOverridesLoaded,
+  getAdvisoryModelForTask,
+  getModelForTask,
+} = require('../../src/services/modelRouterConfig');
 const apiRoutes = require('../../routes/api');
 
 /** Ollama answers normally for the exact requested model. */
@@ -131,6 +145,15 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       // both the new executor and the old path is invisible in a diff and
       // silently corrupts cost and usage analytics.
       expect(recordInference).toHaveBeenCalledTimes(1);
+      expect(logger.info).toHaveBeenCalledWith(
+        '[InferenceProxy] route outcome',
+        expect.objectContaining({
+          outcomeCode: 'execution_succeeded',
+          routeDecision: expect.objectContaining({
+            actual: expect.objectContaining({ model: 'test-model', host: 'primary' })
+          })
+        })
+      );
     });
 
     test('a failed request also records exactly one inference', async () => {
@@ -154,11 +177,57 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
     test('a request rejected before dispatch records nothing', async () => {
       // Validation failures never reached Ollama, so they are not inferences.
       // An extraction that records on every entry would invent traffic.
-      await request(app)
+      const response = await request(app)
         .post('/api/inference/generate')
         .send({ prompt: 'no model and no taskType' })
         .expect(400);
 
+      expect(response.headers['x-agentx-route-outcome']).toBe('request_target_required');
+      expect(recordInference).not.toHaveBeenCalled();
+    });
+
+    test('a route-policy rejection exposes one stable reason without inventing an inference', async () => {
+      const response = await request(app)
+        .post('/api/inference/generate')
+        .send({ model: 'test-model', prompt: 'hello', host: 'http://not-allowlisted.invalid:11434' })
+        .expect(400);
+
+      expect(response.headers['x-agentx-route-outcome']).toBe('host_override_rejected');
+      expect(recordInference).not.toHaveBeenCalled();
+    });
+
+    test('an internal pre-dispatch failure returns a stable outcome header without inventing an inference', async () => {
+      ensureTaskModelOverridesLoaded.mockRejectedValueOnce(new Error('router config unavailable'));
+
+      const response = await request(app)
+        .post('/api/inference/generate')
+        .send({ taskType: 'quick_chat', prompt: 'hello' })
+        .expect(500);
+
+      expect(response.body).toEqual({ status: 'error', message: 'router config unavailable' });
+      expect(response.headers['x-agentx-route-outcome']).toBe('pre_dispatch_error');
+      expect(recordInference).not.toHaveBeenCalled();
+    });
+
+    test('a benchmark-claim dependency error preserves the established response envelope', async () => {
+      hostPreferenceService.getByHost.mockRejectedValueOnce(new Error('claim store unavailable'));
+
+      const response = await request(app)
+        .post('/api/inference/generate')
+        .send({ model: 'test-model', prompt: 'hello' })
+        .expect(503);
+
+      expect(response.body).toEqual({
+        status: 'error',
+        code: 'BENCHMARK_CLAIM_ACTIVE',
+        message: 'claim store unavailable',
+        data: {
+          host: 'http://primary:11434',
+          batchId: null,
+          lane: 'automated',
+        },
+      });
+      expect(response.headers['x-agentx-route-outcome']).toBe('pre_dispatch_error');
       expect(recordInference).not.toHaveBeenCalled();
     });
 
@@ -317,7 +386,7 @@ describe('RouteDecision attribution is populated (0519)', () => {
     // alerting had an empty field to read. A shape assertion is not enough —
     // this asserts the field is actually present on the telemetry row.
     mockOllamaOk();
-    await request(app)
+    const response = await request(app)
       .post('/api/inference/generate')
       .send({ model: 'test-model', prompt: 'hello', callerDetail: 'nestor/panel/ask' })
       .expect(200);
@@ -330,7 +399,52 @@ describe('RouteDecision attribution is populated (0519)', () => {
       callerDetail: 'nestor/panel/ask',
     });
     expect(entry.routeDecision.selected.model).toBe('test-model');
+    expect(entry.routeDecision.selectionSource).toBe('model_router');
+    expect(entry.routeDecision.policy).toMatchObject({
+      requested: 'nestor',
+      effective: 'unknown',
+      lane: 'automated',
+      downgraded: true,
+    });
+    expect(entry.routeDecision.outcome).toEqual({
+      stage: 'execution',
+      code: 'execution_succeeded',
+      reasonCode: null,
+    });
     expect(entry.routeDecision.fallbackUsed).toBe(false);
+    expect(response.headers['x-agentx-route-outcome']).toBe('execution_succeeded');
+  });
+
+  test('task routing records the already-selected advisory source without changing the target', async () => {
+    getModelForTask.mockReturnValue({
+      model: 'task-model', host: 'primary', url: 'http://primary:11434'
+    });
+    getAdvisoryModelForTask.mockResolvedValue({
+      model: 'task-model',
+      host: 'primary',
+      url: 'http://primary:11434',
+      source: 'scheduler',
+      reason: 'model already loaded',
+      recommendation: null,
+    });
+    mockOllamaOk();
+
+    const response = await request(app)
+      .post('/api/inference/generate')
+      .send({ taskType: 'quick_chat', prompt: 'hello' })
+      .expect(200);
+
+    const entry = recordInference.mock.calls[0][0];
+    expect(entry.routeDecision).toMatchObject({
+      selectionSource: 'scheduler',
+      intent: { taskType: 'quick_chat', mode: 'explicit_task' },
+      selected: { model: 'task-model', host: 'primary', hostUrl: 'http://primary:11434' },
+      outcome: { stage: 'execution', code: 'execution_succeeded' },
+    });
+    expect(response.headers).toMatchObject({
+      'x-agentx-route-outcome': 'execution_succeeded',
+      'x-routing-source': 'scheduler',
+    });
   });
 
   test('a failed attempt is attributed too, not just successful ones', async () => {
@@ -345,22 +459,42 @@ describe('RouteDecision attribution is populated (0519)', () => {
       .post('/api/inference/generate')
       .send({ model: 'test-model', prompt: 'hello' });
 
-    // Failures are exactly the rows an alerting surface most needs attributed.
-    const entry = recordInference.mock.calls[0][0];
-    expect(entry.routeDecision?.decisionVersion).toBe(1);
-  });
+      // Failures are exactly the rows an alerting surface most needs attributed.
+      const entry = recordInference.mock.calls[0][0];
+      expect(entry.routeDecision?.decisionVersion).toBe(1);
+      expect(entry.routeDecision.outcome).toEqual(expect.objectContaining({
+        code: 'upstream_error', reasonCode: 'connection_failure'
+      }));
+    });
 
   test('the decision carries no prompt or response payload', async () => {
+    const secret = 'ROUTE_SECRET_FIXTURE_83af';
     mockOllamaOk();
     await request(app)
       .post('/api/inference/generate')
-      .send({ model: 'test-model', prompt: 'a secret question' })
+      .send({
+        model: 'test-model',
+        messages: [{ role: 'user', content: secret }],
+        system: secret,
+        keep_alive: secret,
+        options: { stop: [secret], temperature: 0.2 },
+      })
       .expect(200);
 
     // 30-day retention on inferencelogs — a leak here would quietly build a
     // transcript archive. buildRouteDecision enforces this, and persisting it
     // per request is exactly when that guarantee has to hold.
-    const serialized = JSON.stringify(recordInference.mock.calls[0][0].routeDecision);
-    expect(serialized).not.toContain('a secret question');
+    const entry = recordInference.mock.calls[0][0];
+    expect(JSON.stringify(entry.routeDecision)).not.toContain(secret);
+    expect(JSON.stringify(entry.routingTrace)).not.toContain(secret);
+    expect(entry.routingTrace.request.summary).toMatchObject({
+      mode: 'chat',
+      messageCount: 1,
+      messageShape: [{ index: 0, role: 'user', chars: secret.length }],
+    });
+    expect(entry.routingTrace.ollama).not.toHaveProperty('options');
+    expect(entry.routingTrace.ollama).not.toHaveProperty('think');
+    expect(entry.routingTrace.ollama).not.toHaveProperty('keepAlive');
+    expect(entry.routingTrace.ollama.optionsFingerprint).toMatch(/^[a-f0-9]{16}$/);
   });
 });

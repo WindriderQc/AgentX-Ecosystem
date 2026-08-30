@@ -89,7 +89,8 @@ function canonicalText(value) {
 }
 
 function isCancellation(log) {
-  return /\bcancel(?:ed|led|lation)\b/i.test(`${log.error || ''} ${log.fallbackReason || ''}`);
+  return log.cancelled === true
+    || /\bcancel(?:ed|led|lation)\b/i.test(`${log.error || ''} ${log.fallbackReason || ''}`);
 }
 
 function timestampMs(value) {
