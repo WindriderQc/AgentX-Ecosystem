@@ -48,7 +48,7 @@ describe('Nerve Center ecosystem-v2 UI authority', () => {
     const cached = await shared.getEcosystemSnapshot();
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl).toHaveBeenCalledWith('/api/nerve-center/ecosystem', undefined);
+    expect(fetchImpl).toHaveBeenCalledWith('/api/nerve-center/ecosystem', { cache: 'no-store' });
     expect(first.schemaVersion).toBe(2);
     expect(second.generatedAt).toBe(first.generatedAt);
     expect(cached.generatedAt).toBe(first.generatedAt);

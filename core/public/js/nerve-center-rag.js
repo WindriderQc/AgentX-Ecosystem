@@ -4,6 +4,9 @@
     if (!shared) return;
 
     let refreshTimer = null;
+    let lastObservedAt = null;
+
+    const metricText = value => value === null || value === undefined ? '—' : value;
 
     async function loadRag() {
         const body = document.getElementById('nc-rag-body');
@@ -20,10 +23,20 @@
             const docs = docsRes.data || {};
             const deps = status.dependencies || {};
             const cache = status.cache || {};
+            const qdrant = deps.qdrant || status.vectorStore || null;
+            const qdrantKnown = typeof qdrant?.healthy === 'boolean';
+            const qdrantHealthy = qdrant?.healthy === true;
+            const queryKnown = typeof status.queryReady === 'boolean'
+                || typeof status.healthy === 'boolean';
+            const queryReady = status.queryReady === true || (status.queryReady == null && status.healthy === true);
+            const observedAt = status.observedAt || statusRes.meta?.proxiedAt || null;
+            if (observedAt) lastObservedAt = observedAt;
+            const stateText = (known, healthy, ready = 'Ready') => known ? (healthy ? ready : 'Blocked') : 'Unknown';
+            const stateColor = (known, healthy) => !known ? '#fbbf24' : (healthy ? '#4ade80' : '#f87171');
 
             // Health strip
             let html = `
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:8px">
                     <div class="nc-host-card" style="padding:12px">
                         <div class="nc-muted" style="font-size:0.8em;text-transform:uppercase">Documents</div>
                         <div style="font-size:1.4em;font-weight:700;color:var(--text-bright)">${status.documentCount ?? '—'}</div>
@@ -34,31 +47,52 @@
                     </div>
                     <div class="nc-host-card" style="padding:12px">
                         <div class="nc-muted" style="font-size:0.8em;text-transform:uppercase">Vector Store</div>
-                        <div style="font-size:1.4em;font-weight:700;color:${status.healthy ? '#4ade80' : '#f87171'}">${status.healthy ? 'Healthy' : 'Unhealthy'}</div>
+                        <div style="font-size:1.4em;font-weight:700;color:${stateColor(qdrantKnown, qdrantHealthy)}">${stateText(qdrantKnown, qdrantHealthy, 'Healthy')}</div>
                     </div>
-                </div>`;
+                    <div class="nc-host-card" style="padding:12px">
+                        <div class="nc-muted" style="font-size:0.8em;text-transform:uppercase">Query Readiness</div>
+                        <div style="font-size:1.4em;font-weight:700;color:${stateColor(queryKnown, queryReady)}">${stateText(queryKnown, queryReady)}</div>
+                    </div>
+                </div>
+                <div class="nc-muted" style="font-size:0.75em;margin-bottom:16px">${observedAt ? `Live RAG evidence observed ${shared.timeAgo(observedAt)}` : 'Observation time unavailable — do not treat this as current evidence.'}</div>`;
+
+            if (!queryReady) {
+                html += `<div class="nc-error" role="alert" style="margin-bottom:16px">RAG query readiness is ${queryKnown ? 'blocked' : 'unknown'}. Dependency details below are authoritative for this observation.</div>`;
+            }
 
             // Dependencies
             html += `<h4 style="color:var(--text-bright);margin:0 0 8px"><i class="fa-solid fa-plug"></i> Dependencies</h4>`;
             html += `<table class="nc-table"><thead><tr><th>Service</th><th>Status</th><th>Detail</th></tr></thead><tbody>`;
             for (const [name, dep] of Object.entries(deps)) {
-                const healthy = dep.healthy !== false;
+                const known = typeof dep?.healthy === 'boolean';
+                const healthy = dep?.healthy === true;
+                const label = known ? (healthy ? 'healthy' : 'down') : 'unknown';
                 html += `<tr>
                     <td>${shared.escapeHtml(name)}</td>
-                    <td><span style="color:${healthy ? '#4ade80' : '#f87171'}">&bull; ${healthy ? 'healthy' : 'down'}</span></td>
-                    <td class="nc-muted">${shared.escapeHtml(dep.provider || dep.url || dep.error || '—')}</td>
+                    <td><span style="color:${stateColor(known, healthy)}">&bull; ${label}${dep?.stale ? ' · stale' : ''}</span></td>
+                    <td class="nc-muted">${shared.escapeHtml(dep?.provider || dep?.error || '—')}</td>
                 </tr>`;
             }
             html += `</tbody></table>`;
 
             // Cache stats
-            const hitRate = ((cache.hitRate || 0) * 100).toFixed(1);
+            const cacheEvidenceKnown = ['requests', 'hits', 'misses']
+                .some(key => Object.prototype.hasOwnProperty.call(cache, key));
+            const cacheRequests = cacheEvidenceKnown
+                ? Number(cache.requests ?? (Number(cache.hits || 0) + Number(cache.misses || 0)))
+                : null;
+            const hitRate = cacheRequests === null
+                ? '—'
+                : cacheRequests > 0
+                    ? `${((cache.hitRate || 0) * 100).toFixed(1)}%`
+                    : 'No requests';
+            const cacheWindow = cache.observedSince ? ` since ${shared.timeAgo(cache.observedSince)}` : '';
             html += `<h4 style="color:var(--text-bright);margin:16px 0 8px"><i class="fa-solid fa-database"></i> Embedding Cache</h4>`;
             html += `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-                <div><span class="nc-muted">Hit Rate</span><br><strong>${hitRate}%</strong></div>
-                <div><span class="nc-muted">Size</span><br><strong>${cache.size ?? 0} / ${cache.maxSize ?? '—'}</strong></div>
-                <div><span class="nc-muted">Hits / Misses</span><br><strong>${cache.hits ?? 0} / ${cache.misses ?? 0}</strong></div>
-                <div><span class="nc-muted">Evictions</span><br><strong>${cache.evictions ?? 0}</strong></div>
+                <div><span class="nc-muted">Hit Rate${cacheWindow}</span><br><strong>${hitRate}</strong></div>
+                <div><span class="nc-muted">Size</span><br><strong>${metricText(cache.size)} / ${metricText(cache.maxSize)}</strong></div>
+                <div><span class="nc-muted">Hits / Misses</span><br><strong>${metricText(cache.hits)} / ${metricText(cache.misses)}</strong></div>
+                <div><span class="nc-muted">Evictions</span><br><strong>${metricText(cache.evictions)}</strong></div>
             </div>`;
 
             // Recent documents
@@ -81,7 +115,8 @@
 
             body.innerHTML = html;
         } catch (err) {
-            shared.renderSectionError(body, 'RAG service unavailable');
+            const lastSeen = lastObservedAt ? ` · last seen ${shared.timeAgo(lastObservedAt)}` : '';
+            shared.renderSectionError(body, `RAG service unavailable${lastSeen}`);
         } finally {
             shared.finishSectionLoad(body);
         }

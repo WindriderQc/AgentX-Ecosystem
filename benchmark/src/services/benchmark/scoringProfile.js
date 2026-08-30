@@ -44,8 +44,8 @@ function buildDefaultProfile() {
             emptyResponseFilterThreshold: 0.5,
             // When true, each category's avg quality is multiplied by its
             // avg judge_confidence before being weighted into the composite.
-            // Results with null judge_confidence use the maintained
-            // NULL_CONFIDENCE_FALLBACK = 0.5 aggregation contract.
+            // Trusted cohort selection rejects rows whose confidence is
+            // unknown; exploratory scoring keeps unknown distinct from 0%.
             confidenceWeighting: false
         }
     };

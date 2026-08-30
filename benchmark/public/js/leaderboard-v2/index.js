@@ -5,6 +5,7 @@
 import {
     fetchDashboard,
     fetchGeneralistLeaderboard,
+    fetchGroundTruthGaps,
     fetchResults,
     fetchHosts
 } from './api.js';
@@ -37,6 +38,7 @@ function toGeneralistBoardEntry(entry, scoreAxis = 'composite') {
         minPromptLevel:  entry.minPromptLevel ?? null,
         maxPromptLevel:  entry.maxPromptLevel ?? null,
         contextCounts:   entry.contextCounts || {},
+        judgeTargets:    entry.judgeTargets || [],
         difficultyPenalty: entry.difficultyPenalty ?? 0,
         difficultyCoverage: entry.difficultyCoverage ?? null,
         host_available: entry.host_available !== false,
@@ -46,6 +48,7 @@ function toGeneralistBoardEntry(entry, scoreAxis = 'composite') {
         fullScopeEligible: entry.fullScopeEligible === true,
         evidenceStatus: entry.evidenceStatus || null,
         evidenceConfidence: entry.evidenceConfidence ?? null,
+        evidenceConfidenceCoverage: entry.evidenceConfidenceCoverage ?? null,
         evidenceConfidenceTarget: entry.evidenceConfidenceTarget ?? null,
         evidenceConfidencePenalty: entry.evidenceConfidencePenalty ?? 0,
         minConsistencyResults: entry.minConsistencyResults ?? 0,
@@ -55,7 +58,15 @@ function toGeneralistBoardEntry(entry, scoreAxis = 'composite') {
         categoryEvidence: entry.categoryEvidence || {},
         dimensions: buildCategoryDimensions(categoryScores),
         scoreAxis,
-        confidence:      entry.confidenceMargin != null ? entry.confidenceMargin : null,
+        // API margins are on the normalized 0-100 axis; every visible score on
+        // this board is 0-10, so the detailed row must use the same conversion
+        // as the podium.
+        confidence:      entry.confidenceMargin != null ? Number(entry.confidenceMargin) / 10 : null,
+        confidenceMethod: entry.confidenceMethod || null,
+        confidenceSampleSize: entry.confidenceSampleSize || 0,
+        confidenceRepeatCount: entry.confidenceRepeatCount || 0,
+        evidenceCompatibility: entry.evidenceCompatibility || 'exploratory',
+        evidenceCohortId: entry.evidenceCohortId || null,
         reviewCount:     entry.needsReviewCount || 0,
         trend:           null,
         filtered:        entry.filtered || false
@@ -168,7 +179,7 @@ function restoreShell(main, hosts = []) {
                         <button type="button" class="r-seg-btn" data-trust-scope="exploratory">Exploratory</button>
                         <button type="button" class="r-seg-btn" data-trust-scope="trusted">Trusted</button>
                     </div>
-                    <span id="trust-badge" class="r-trust-badge">Exploratory view</span>
+                    <span id="trust-badge" class="r-trust-badge trusted">Trusted view</span>
                 </div>
             </div>
             <div class="r-fgroup">
@@ -189,14 +200,13 @@ function restoreShell(main, hosts = []) {
 /**
  * When the Trusted view is selected but the board is empty or thin, the table
  * alone reads as "broken". Render an explanatory banner above the leaderboard
- * that names the missing prerequisite (calibration + ground truth) and links
- * into the Courthouse calibration workflow. UI/guidance only — does not change
- * what data is shown.
+ * that explains the actual confidence weighting and links to the Courthouse
+ * evidence view. UI/guidance only — does not change what data is shown.
  *
  * @param {HTMLElement} leaderboardEl - the #leaderboard section
  * @param {object} opts - { trusted:boolean, visibleCount:number, excluded:number }
  */
-function renderTrustBanner(leaderboardEl, { trusted, visibleCount, excluded } = {}) {
+function renderTrustBanner(leaderboardEl, { trusted, visibleCount, trustedFilters } = {}) {
     if (!leaderboardEl) return;
     // Remove any banner from a previous render so toggling is clean.
     const prior = document.getElementById('trust-onboard-banner');
@@ -205,11 +215,14 @@ function renderTrustBanner(leaderboardEl, { trusted, visibleCount, excluded } = 
     const THIN = 2; // a Trusted board with ≤2 models is effectively empty/thin
     if (!trusted || visibleCount > THIN) return;
 
+    const cohort = trustedFilters?.cohort || {};
+    const selected = cohort.selected || null;
+    const excluded = Number(cohort.excludedBatchCount || 0);
     const lead = visibleCount === 0
-        ? 'The <strong>Trusted</strong> view is empty.'
-        : `The <strong>Trusted</strong> view is showing only ${visibleCount} model${visibleCount === 1 ? '' : 's'}.`;
+        ? 'No compatible evidence cohort is available for <strong>Trusted</strong> ranking.'
+        : `The <strong>Trusted</strong> view is showing ${visibleCount} model${visibleCount === 1 ? '' : 's'} from one compatible evidence cohort.`;
     const excludedNote = excluded > 0
-        ? ` ${excluded} incomplete batch${excluded === 1 ? ' was' : 'es were'} excluded by trusted-view filtering.`
+        ? ` ${excluded} legacy, stale, or incompatible batch${excluded === 1 ? ' was' : 'es were'} excluded.`
         : '';
 
     const banner = document.createElement('div');
@@ -220,10 +233,30 @@ function renderTrustBanner(leaderboardEl, { trusted, visibleCount, excluded } = 
         <div style="font-size:1.3rem;line-height:1;">🎯</div>
         <div style="flex:1;min-width:0;">
             <div style="font-weight:700;color:var(--r-text,#eee);font-size:0.92rem;margin-bottom:0.25rem;">${lead}</div>
-            <p style="color:#bbb;font-size:0.82rem;line-height:1.45;margin:0 0 0.55rem;">Trusted ranking is confidence-weighted against a <strong>calibrated judge</strong>. Until you build ground truth in the Courthouse review queue and run a calibration, there is little for it to trust.${excludedNote} Switch to <strong>Exploratory</strong> to see the full historical board meanwhile.</p>
-            <a class="r-nav-btn r-primary" href="/courthouse?tab=calibration" style="text-decoration:none;display:inline-block;">Set up calibration →</a>
+            <p style="color:#bbb;font-size:0.82rem;line-height:1.45;margin:0 0 0.55rem;">Trusted compares only one recent completed campaign with an exact fixture digest, scorer identity, and per-candidate artifact/runtime fingerprints.${excludedNote} ${selected ? 'Judge confidence is known for every ranked row.' : 'Run a new exact-identity comparison to populate this view.'} Switch to <strong>Exploratory</strong> to inspect historical evidence without treating it as comparable.</p>
+            <a class="r-nav-btn r-primary" href="/" style="text-decoration:none;display:inline-block;">Run compatible evidence →</a>
         </div>`;
     leaderboardEl.parentNode?.insertBefore(banner, leaderboardEl);
+}
+
+function renderHardCoverageBanner(main, coverageResponse) {
+    if (!main || _challengeScope !== 'advanced' || _currentAxis === 'deterministic') return;
+    const filterBar = main.querySelector('#filter-bar');
+    if (!filterBar) return;
+    const coverage = coverageResponse?.data || coverageResponse || null;
+    const hard = coverage?.hard_scope || null;
+    if (hard?.ready === true) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'hard-coverage-banner';
+    banner.className = 'r-trust-banner';
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = 'background:rgba(239,83,80,0.07);border:1px solid rgba(239,83,80,0.45);border-radius:10px;padding:0.8rem 1rem;margin:0.75rem 0;';
+    const evidence = hard
+        ? `${hard.cells_meeting_target || 0}/${hard.total_cells || 14} category/level cells meet the ${hard.target_per_cell || 5}-entry human target.`
+        : 'Current L4–L5 human coverage could not be verified.';
+    banner.innerHTML = `<strong>Hard L4–L5 judge evidence is exploratory.</strong> ${evidence} The ranking remains visible, but its judge-scored component is not human-calibrated for this scope. <a href="/courthouse?tab=calibration">Inspect coverage →</a>`;
+    filterBar.insertAdjacentElement('afterend', banner);
 }
 
 // Module-level state — survives re-init() calls so chip clicks pick the right axis
@@ -236,12 +269,12 @@ let _currentAxis = 'composite';
 let _hostScope = 'all';
 let _selectedHost = null;
 let _challengeScope = 'advanced';
-let _trustScope = 'exploratory';
+let _trustScope = 'trusted';
 let _includeUnavailableModels = false;
 
 try {
     _includeUnavailableModels = localStorage.getItem('leaderboardIncludeUnavailableModels') === 'true';
-    _trustScope = localStorage.getItem('leaderboardTrustScope') === 'trusted' ? 'trusted' : 'exploratory';
+    _trustScope = localStorage.getItem('leaderboardTrustScope') === 'exploratory' ? 'exploratory' : 'trusted';
     const savedHostScope = localStorage.getItem('leaderboardHostScope');
     if (savedHostScope === 'current' || savedHostScope === 'all') _hostScope = savedHostScope;
     const savedHost = localStorage.getItem('leaderboardSelectedHost');
@@ -321,7 +354,7 @@ function wireAxisChip(main, leaderboardMeta = {}) {
         badge.textContent = trusted ? 'Trusted view' : 'Exploratory view';
         badge.className = `r-trust-badge ${trusted ? 'trusted' : 'exploratory'}`;
         badge.title = trusted
-            ? `Confidence-weighted ranking; ${excluded} failed incomplete batch${excluded === 1 ? '' : 'es'} excluded.`
+            ? `Exact compatible evidence cohort; ${excluded} failed incomplete batch${excluded === 1 ? '' : 'es'} excluded.`
             : 'Historical leaderboard without trusted-view filtering.';
     }
 
@@ -521,12 +554,13 @@ async function init() {
     showLoadingState(main);
 
     // --- Step 1: critical parallel fetch ---
-    let dashboardRes, generalistRes, hostsRes;
+    let dashboardRes, generalistRes, hostsRes, coverageRes;
     try {
-        [dashboardRes, generalistRes, hostsRes] = await Promise.all([
+        [dashboardRes, generalistRes, hostsRes, coverageRes] = await Promise.all([
             fetchDashboard(_includeUnavailableModels),
             fetchGeneralistLeaderboard(_currentAxis, _hostScope, _challengeScope, _includeUnavailableModels, _trustScope),
-            fetchHosts().catch(() => ({ hosts: [] }))
+            fetchHosts().catch(() => ({ hosts: [] })),
+            fetchGroundTruthGaps().catch(() => null)
         ]);
     } catch (err) {
         console.error('[leaderboard] initial fetch failed:', err);
@@ -556,6 +590,7 @@ async function init() {
     // Restore section containers (the Hosts selector renders from hostsList)
     restoreShell(main, Array.isArray(hostsList) ? hostsList : []);
     wireAxisChip(main, generalistRes?.data || {});
+    renderHardCoverageBanner(main, coverageRes);
 
     // Extract leaderboard array; when a single host is selected, narrow to it
     // (the server returns the whole configured fleet under 'current' scope).
@@ -673,7 +708,7 @@ async function init() {
         renderTrustBanner(leaderboardEl, {
             trusted: _trustScope === 'trusted',
             visibleCount: visibleRankings.length,
-            excluded: Number(generalistRes?.data?.trustedFilters?.excludedIncompleteBatches || 0)
+            trustedFilters: generalistRes?.data?.trustedFilters || null
         });
 
         // Enrich with performance metrics and judge calibration, then re-render.
@@ -685,11 +720,13 @@ async function init() {
 
                 try {
                     const calRes = await fetch('/api/benchmark/judge/calibration-status').then(r => r.json());
+                    const targetKey = (host, model) => `${String(host || '').trim().replace(/\/+$/, '').toLowerCase()}@@${String(model || '').trim().toLowerCase()}`;
                     const calibratedJudges = new Set(
-                        (calRes.data?.matrices || []).map(m => m.judge_model)
+                        (calRes.data?.matrices || []).map(m => targetKey(m.judge_host, m.judge_model))
                     );
                     for (const entry of visibleRankings) {
-                        entry.judgeCalibrated = calibratedJudges.has(entry.judgeModel || '');
+                        entry.judgeCalibrated = (entry.judgeTargets || [])
+                            .some(target => calibratedJudges.has(targetKey(target.host, target.model)));
                     }
                 } catch (_) {}
 

@@ -1,6 +1,7 @@
 /**
  * JudgeAccuracyMatrix Model
- * Stores calibration results: how well a judge scores vs. a reference judge
+ * Stores agreement results: how closely a judge scores vs. a distinct
+ * reference judge. This is not direct human-score accuracy evidence.
  */
 
 const mongoose = require('mongoose');
@@ -23,24 +24,35 @@ const JudgeAccuracyMatrixSchema = new mongoose.Schema({
     overall_avg_deviation: { type: Number, required: true },
     pass_threshold: { type: Number, default: 1.5 },
     pass_rate: { type: Number, default: 0 },
+    cell_pass_rate: { type: Number, default: null },
+    scored_entry_count: { type: Number, default: 0 },
+    comparison_kind: {
+        type: String,
+        enum: ['reference_judge_agreement'],
+        default: 'reference_judge_agreement'
+    },
     ground_truth_count: { type: Number, default: 0 }
 }, { timestamps: true });
 
-JudgeAccuracyMatrixSchema.index({ judge_model: 1, calibrated_at: -1 });
+JudgeAccuracyMatrixSchema.index({ judge_model: 1, judge_host: 1, calibrated_at: -1 });
 
 /**
  * Get the most recent accuracy matrix for a judge model
  */
-JudgeAccuracyMatrixSchema.statics.getLatest = function (judgeModel) {
-    return this.findOne({ judge_model: judgeModel })
+JudgeAccuracyMatrixSchema.statics.getLatest = function (judgeModel, judgeHost = null) {
+    const query = { judge_model: judgeModel };
+    if (judgeHost) query.judge_host = String(judgeHost).trim().replace(/\/+$/, '');
+    return this.findOne(query)
         .sort({ calibrated_at: -1 });
 };
 
 /**
  * Check if a judge has been calibrated (any matrix exists)
  */
-JudgeAccuracyMatrixSchema.statics.isCalibrated = async function (judgeModel) {
-    const count = await this.countDocuments({ judge_model: judgeModel });
+JudgeAccuracyMatrixSchema.statics.isCalibrated = async function (judgeModel, judgeHost = null) {
+    const query = { judge_model: judgeModel };
+    if (judgeHost) query.judge_host = String(judgeHost).trim().replace(/\/+$/, '');
+    const count = await this.countDocuments(query);
     return count > 0;
 };
 

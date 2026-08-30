@@ -29,7 +29,7 @@ const NerveCenter = (() => {
     let _ecosystemSnapshotGeneration = 0;
 
     function fetchJson(url, options) {
-        return fetch(url, options).then(async response => {
+        return fetch(url, { cache: 'no-store', ...(options || {}) }).then(async response => {
             const json = await response.json().catch(() => ({}));
             if (!response.ok) {
                 throw new Error(json.message || `Request failed (${response.status})`);

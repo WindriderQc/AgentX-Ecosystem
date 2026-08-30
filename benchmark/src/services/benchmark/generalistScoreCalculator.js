@@ -25,14 +25,14 @@ const {
     MIN_CONSISTENCY_RESULTS,
     MIN_QUALITY_FOR_BONUS,
     EVIDENCE_CONFIDENCE_TARGET,
-    EVIDENCE_CONFIDENCE_PENALTY_MAX,
-    NULL_CONFIDENCE_FALLBACK
+    EVIDENCE_CONFIDENCE_PENALTY_MAX
 } = require('./generalistScoreConstants');
 const {
     normalizeScoreTo100,
     applyBiasCorrection,
     clampNumber,
-    normalizeRequiredPromptLevels
+    normalizeRequiredPromptLevels,
+    weightedConfidenceMargin
 } = require('./generalistScoreNormalizers');
 
 /**
@@ -129,15 +129,20 @@ function calculateGeneralistScoreFromCategories(categoryScores, categoryWeights 
                 ? applyBiasCorrection(rawAvgScore, category)
                 : rawAvgScore;
 
-            // judge_confidence is 0..1; null is treated as NULL_CONFIDENCE_FALLBACK.
+            // Missing legacy confidence is unknown. It must never be rendered
+            // or aggregated as a real 0% (or an invented fallback value).
             const rawConfidence = categoryData.avg_confidence;
             const confidence = Number.isFinite(rawConfidence)
                 ? Math.max(0, Math.min(1, rawConfidence))
-                : NULL_CONFIDENCE_FALLBACK;
+                : null;
 
-            const contributionScore = confidenceWeighting ? avgScore * confidence : avgScore;
-            confidenceWeightedSum += confidence * weight;
-            confidenceWeightCovered += weight;
+            const contributionScore = confidenceWeighting
+                ? (confidence === null ? 0 : avgScore * confidence)
+                : avgScore;
+            if (confidence !== null) {
+                confidenceWeightedSum += confidence * weight;
+                confidenceWeightCovered += weight;
+            }
             const promptLevels = Array.isArray(categoryData.levels)
                 ? categoryData.levels
                     .map(Number)
@@ -156,7 +161,9 @@ function calculateGeneralistScoreFromCategories(categoryScores, categoryWeights 
             }
 
             categoryAverages[category] = avgScore;
-            if (categoryConfidence) categoryConfidence[category] = Math.round(confidence * 100) / 100;
+            if (categoryConfidence) {
+                categoryConfidence[category] = confidence === null ? null : Math.round(confidence * 100) / 100;
+            }
             weightedSum += contributionScore * weight;
             weightsCovered += weight;
 
@@ -204,7 +211,7 @@ function calculateGeneralistScoreFromCategories(categoryScores, categoryWeights 
 
     // Within-category consistency: average stddev across tested categories
     // Lower stddev = more consistent = bonus
-    let avgStdDev = 0;
+    let avgStdDev = null;
     let consistencyBonus = 0;
     if (categoryStdDevs.length > 0) {
         avgStdDev = categoryStdDevs.reduce((a, b) => a + b, 0) / categoryStdDevs.length;
@@ -239,6 +246,9 @@ function calculateGeneralistScoreFromCategories(categoryScores, categoryWeights 
     const avgEvidenceConfidence = confidenceWeightCovered > 0
         ? confidenceWeightedSum / confidenceWeightCovered
         : null;
+    const evidenceConfidenceCoverage = weightsCovered > 0
+        ? confidenceWeightCovered / weightsCovered
+        : null;
     let evidenceConfidencePenalty = 0;
     if (!confidenceWeighting
         && avgEvidenceConfidence !== null
@@ -250,6 +260,7 @@ function calculateGeneralistScoreFromCategories(categoryScores, categoryWeights 
     }
 
     const generalistScore = Math.max(0, normalizedQuality - coveragePenalty - difficultyPenalty - evidenceConfidencePenalty + consistencyBonus);
+    const uncertainty = weightedConfidenceMargin(categoryScores, categoryWeights, scoreField);
     const fullScopeEligible = coveragePercent === 100
         && (difficultyCoverage === null || difficultyCoverage === 100)
         && totalScoredResults >= minFullScopeResults;
@@ -271,9 +282,16 @@ function calculateGeneralistScoreFromCategories(categoryScores, categoryWeights 
         evidenceStatus: fullScopeEligible ? 'full_scope' : 'partial_scope',
         consistencyBonus,
         evidenceConfidence: avgEvidenceConfidence === null ? null : Math.round(avgEvidenceConfidence * 100) / 100,
+        evidenceConfidenceCoverage: evidenceConfidenceCoverage === null
+            ? null
+            : Math.round(evidenceConfidenceCoverage * 100) / 100,
         evidenceConfidenceTarget,
         evidenceConfidencePenalty,
-        avgWithinCategoryStdDev: Math.round(avgStdDev * 10) / 10,
+        avgWithinCategoryStdDev: avgStdDev === null ? null : Math.round(avgStdDev * 10) / 10,
+        confidenceMargin: uncertainty.margin,
+        confidenceMethod: uncertainty.method,
+        confidenceSampleSize: uncertainty.sampleSize,
+        confidenceRepeatCount: uncertainty.repeatCount,
         coverage: Math.round(coveragePercent),
         categoryAverages,
         categoryConfidence,

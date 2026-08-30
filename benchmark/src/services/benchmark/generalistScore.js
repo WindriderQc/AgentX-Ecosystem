@@ -58,7 +58,8 @@ const {
     normalizeScoreTo100,
     normalizeCategoryKey,
     buildCategoryEvidenceView,
-    confidenceMargin
+    confidenceMargin,
+    weightedConfidenceMargin
 } = require('./generalistScoreNormalizers');
 const { calculateGeneralistScoreFromCategories } = require('./generalistScoreCalculator');
 const {
@@ -94,5 +95,6 @@ module.exports = {
     getEmptyResponseRates,
     getLeaderboardEntryStats,
     calculateAllGeneralistScores,
-    confidenceMargin
+    confidenceMargin,
+    weightedConfidenceMargin
 };

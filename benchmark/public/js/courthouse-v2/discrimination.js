@@ -12,9 +12,16 @@ import { escHtml } from '../utils/format.js';
  * @param {number} passRate - 0–1 fraction
  * @returns {{ cls: string, label: string }}
  */
-function classify(passRate) {
-    if (passRate > 0.9) return { cls: 'disc-easy', label: 'too easy' };
-    if (passRate < 0.2) return { cls: 'disc-hard', label: 'too hard' };
+function classify(passRate, flag = null) {
+    if (flag === 'insufficient_data') {
+        return { cls: 'disc-ok', label: 'low sample' };
+    }
+    if (flag === 'too_easy' || (flag == null && passRate > 0.85)) {
+        return { cls: 'disc-easy', label: 'too easy' };
+    }
+    if (flag === 'too_hard' || (flag == null && passRate < 0.15)) {
+        return { cls: 'disc-hard', label: 'too hard' };
+    }
     return { cls: 'disc-ok', label: 'ok' };
 }
 
@@ -25,9 +32,10 @@ function classify(passRate) {
  * High pass rate → orange ("too easy"), low pass rate → red ("too hard"),
  * mid range → green.
  */
-function barGradient(passRate) {
-    if (passRate > 0.9) return 'var(--r-anomaly)';
-    if (passRate < 0.2) return 'var(--r-error)';
+function barGradient(passRate, flag = null) {
+    if (flag === 'insufficient_data') return 'var(--r-text-dim)';
+    if (flag === 'too_easy' || (flag == null && passRate > 0.85)) return 'var(--r-anomaly)';
+    if (flag === 'too_hard' || (flag == null && passRate < 0.15)) return 'var(--r-error)';
     return 'var(--r-good)';
 }
 
@@ -39,17 +47,28 @@ function renderRow(item) {
     const category = item.category || item.prompt_category || '';
     const passRate = item.pass_rate ?? item.passRate ?? 0;
     const pct = Math.max(0, Math.min(1, passRate));
-    const { cls, label } = classify(pct);
-    const fillColor = barGradient(pct);
+    const { cls, label } = classify(pct, item.flag);
+    const fillColor = barGradient(pct, item.flag);
     const displayPct = Math.round(pct * 100) + '%';
+    const sampleCount = Number(item.passed || 0) + Number(item.failed || 0);
+    const rawYesRate = item.raw_yes_rate == null
+        ? null
+        : `${Math.round(Number(item.raw_yes_rate) * 100)}% raw YES`;
+    const detail = [
+        `${displayPct} effective pass rate`,
+        `${sampleCount} scored answer${sampleCount === 1 ? '' : 's'}`,
+        rawYesRate,
+        item.sample_sufficient === false ? 'insufficient evidence' : null,
+        item.inverted ? 'inverted question' : null
+    ].filter(Boolean).join(' · ');
 
     return `<div class="disc-row">
-        <span class="disc-q" title="${escHtml(fullText)}">${escHtml(promptText)}</span>
+        <span class="disc-q" title="${escHtml(`${fullText} — ${detail}`)}">${escHtml(promptText)}</span>
         <span class="disc-cat">${escHtml(category)}</span>
         <div class="disc-bar">
             <div class="disc-fill" style="width:${Math.round(pct * 100)}%;background:${fillColor};"></div>
         </div>
-        <span class="disc-rate">${displayPct}</span>
+        <span class="disc-rate" title="${escHtml(detail)}">${displayPct}</span>
         <span class="disc-flag ${cls}">${label}</span>
     </div>`;
 }
@@ -97,7 +116,10 @@ export function renderDiscrimination(container, data) {
     // Separate flagged (too easy or too hard) from ok items
     const flagged = items.filter(item => {
         const rate = item.pass_rate ?? item.passRate ?? 0;
-        return rate > 0.9 || rate < 0.2;
+        return item.flag === 'too_easy'
+            || item.flag === 'too_hard'
+            || item.flag === 'insufficient_data'
+            || (item.flag == null && (rate > 0.85 || rate < 0.15));
     });
 
     let showAll = false;

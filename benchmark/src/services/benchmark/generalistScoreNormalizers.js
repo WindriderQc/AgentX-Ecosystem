@@ -151,6 +151,75 @@ function confidenceMargin(stddev, n) {
     return Math.round((t * stddev / Math.sqrt(n)) * 10) / 10;
 }
 
+function tCritical95(degreesOfFreedom) {
+    const df = Math.max(1, Math.floor(Number(degreesOfFreedom) || 1));
+    const table = [
+        12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+        2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+        2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042
+    ];
+    return df <= table.length ? table[df - 1] : (df <= 60 ? 2.0 : 1.96);
+}
+
+/**
+ * Weighted 95% uncertainty for the same covered-category mean used by UGRank.
+ *
+ * Each category contributes dispersion across independent prompt means. Repeat
+ * attempts are averaged inside each prompt before this value reaches the
+ * calculator, so repetitions improve a prompt estimate without pretending to
+ * be additional fixtures. The category contributions are combined using the
+ * configured weights and Welch-Satterthwaite effective degrees of freedom.
+ */
+function weightedConfidenceMargin(categoryScores, categoryWeights, scoreField = 'quality_score') {
+    const measured = [];
+    let coveredWeight = 0;
+    for (const [category, rawWeight] of Object.entries(categoryWeights || {})) {
+        const data = categoryScores?.[category];
+        const weight = Number(rawWeight) || 0;
+        const hasScore = !!(data && (Number(data.count) > 0 || Number(data.avg) > 0));
+        if (!hasScore || weight <= 0) continue;
+        measured.push({ data, weight });
+        coveredWeight += weight;
+    }
+    if (measured.length === 0 || coveredWeight <= 0) {
+        return { margin: null, sampleSize: 0, repeatCount: 0, method: null };
+    }
+
+    const scale = getScoreFieldScale(scoreField);
+    const components = [];
+    let sampleSize = 0;
+    let repeatCount = 0;
+    for (const { data, weight } of measured) {
+        const n = Number(data.uncertainty_count);
+        const stddev = Number(data.uncertainty_stddev);
+        if (!Number.isFinite(n) || n < 2 || !Number.isFinite(stddev)) {
+            return { margin: null, sampleSize: 0, repeatCount: 0, method: null };
+        }
+        const normalizedWeight = weight / coveredWeight;
+        const standardDeviation100 = stddev * scale;
+        const varianceComponent = (normalizedWeight ** 2) * (standardDeviation100 ** 2) / n;
+        components.push({ varianceComponent, degreesOfFreedom: n - 1 });
+        sampleSize += n;
+        repeatCount += Number(data.repeat_count || data.count || 0);
+    }
+
+    const variance = components.reduce((sum, item) => sum + item.varianceComponent, 0);
+    const denominator = components.reduce((sum, item) => (
+        sum + ((item.varianceComponent ** 2) / item.degreesOfFreedom)
+    ), 0);
+    const effectiveDf = variance === 0
+        ? components.reduce((sum, item) => sum + item.degreesOfFreedom, 0)
+        : (variance ** 2) / denominator;
+    const margin = tCritical95(effectiveDf) * Math.sqrt(variance);
+
+    return {
+        margin: Math.round(margin * 10) / 10,
+        sampleSize,
+        repeatCount,
+        method: 'weighted_category_prompt_means_t95'
+    };
+}
+
 module.exports = {
     applyBiasCorrection,
     normalizeQualityTo100,
@@ -161,5 +230,6 @@ module.exports = {
     normalizeRequiredPromptLevels,
     countByValue,
     buildCategoryEvidenceView,
-    confidenceMargin
+    confidenceMargin,
+    weightedConfidenceMargin
 };

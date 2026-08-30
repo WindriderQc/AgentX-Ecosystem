@@ -44,25 +44,11 @@ function actionBtn(label, sectionId, primary = false) {
 function deriveCounts(dashboard) {
     const d = dashboard?.data || {};
     const overview = d.overview || {};
-    const modelStats = Array.isArray(d.model_stats) ? d.model_stats : [];
-
-    const totalResults = overview.total_tests
-        ?? modelStats.reduce((s, m) => s + (m.total_tests || 0), 0);
-
-    // needs_review_count is included in some dashboard shapes
-    const needReview = overview.needs_review_count
-        ?? modelStats.reduce((s, m) => s + (m.needs_review || 0), 0);
-
-    // human_reviewed = results that have a human_score
-    const approved = overview.human_reviewed_count
-        ?? modelStats.reduce((s, m) => s + (m.human_reviewed || 0), 0);
-
-    // overrides = human_score that differs from quality_score
-    const overrides = overview.override_count
-        ?? modelStats.reduce((s, m) => s + (m.overrides || 0), 0);
-
-    // ground truth count from overview if available
-    const groundTruth = overview.ground_truth_count ?? 0;
+    const totalResults = overview.total_tests ?? null;
+    const needReview = overview.needs_review_count ?? null;
+    const approved = overview.human_reviewed_count ?? null;
+    const overrides = overview.override_count ?? null;
+    const groundTruth = overview.ground_truth_count ?? null;
 
     return { totalResults, needReview, approved, overrides, groundTruth };
 }
@@ -85,11 +71,11 @@ export function renderHero(container, dashboard) {
                     <div class="r-hero-sub">Review scores, calibrate judges, explore the test bank. Every result earns its place.</div>
                 </div>
                 <div class="r-hero-stats">
-                    ${statCard('Results', totalResults.toLocaleString(), 'v-total')}
-                    ${statCard('Need Review', needReview.toLocaleString(), 'v-review')}
-                    ${statCard('Approved', approved.toLocaleString(), 'v-approved')}
-                    ${statCard('Overrides', overrides.toLocaleString(), 'v-override')}
-                    ${statCard('Ground Truth', groundTruth.toLocaleString(), 'v-calib')}
+                    ${statCard('Results', formatCount(totalResults), 'v-total')}
+                    ${statCard('Need Review', formatCount(needReview), 'v-review')}
+                    ${statCard('Approved', formatCount(approved), 'v-approved')}
+                    ${statCard('Overrides', formatCount(overrides), 'v-override')}
+                    ${statCard('Ground Truth', formatCount(groundTruth), 'v-calib')}
                 </div>
             </div>
             <div class="hero-actions">
@@ -114,4 +100,8 @@ export function renderHero(container, dashboard) {
             }
         });
     });
+}
+
+function formatCount(value) {
+    return value == null ? '—' : Number(value).toLocaleString();
 }

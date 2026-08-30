@@ -1,9 +1,10 @@
 /**
  * Question Discrimination Tracker
  *
- * Computes per-question YES rates from decomposed judging results.
- * Questions with >85% YES rate contribute noise, not signal.
- * Questions with <15% YES rate may be too strict or poorly worded.
+ * Computes per-question effective pass rates from decomposed judging results.
+ * Raw YES rates are retained separately so inverted questions stay auditable.
+ * Questions with >85% pass rate contribute little ranking signal.
+ * Questions with <15% pass rate may be too strict or poorly worded.
  *
  * USED BY: routes/benchmark/judges.js (GET /question-discrimination)
  */
@@ -17,6 +18,9 @@ const BenchmarkResult = require('../../../models/BenchmarkResult');
 const HIGH_PASS_THRESHOLD = 0.85;
 /** Questions passing less than this rate may be too strict */
 const LOW_PASS_THRESHOLD = 0.15;
+/** Extremes below these evidence floors are observations, not discrimination findings. */
+const MIN_SAMPLE_SIZE = 5;
+const MIN_MODEL_COUNT = 2;
 
 /**
  * Compute per-question YES rates from decomposed results.
@@ -39,7 +43,9 @@ async function computeDiscriminationStats(filter = {}) {
         return { questions: [], flagged: [], stats: { totalResults: 0, totalQuestions: 0 } };
     }
 
-    // Accumulate per-question stats: { "category:dimension:questionText" → { yes, no, error, total } }
+    // Accumulate both the raw YES/NO answer and the effective scoring outcome.
+    // These differ for inverted questions: answering NO to "Are there
+    // contradictions?" is a pass even though its raw YES rate is zero.
     const questionStats = {};
 
     for (const result of results) {
@@ -65,6 +71,8 @@ async function computeDiscriminationStats(filter = {}) {
                         inverted: q.inverted || false,
                         yes: 0,
                         no: 0,
+                        passed: 0,
+                        failed: 0,
                         error: 0,
                         total: 0,
                         models: new Set()
@@ -78,20 +86,25 @@ async function computeDiscriminationStats(filter = {}) {
                 if (q.error) {
                     stat.error++;
                 } else if (q.contributed !== undefined) {
-                    // contributed=true means the question helped the score
-                    // For normal questions: contributed=true means YES
-                    // For inverted questions: contributed=true means NO (inverted YES)
-                    if (q.inverted) {
-                        if (q.contributed) stat.no++;  // inverted + contributed = answer was NO
-                        else stat.yes++;               // inverted + not contributed = answer was YES
-                    } else {
-                        if (q.contributed) stat.yes++;
-                        else stat.no++;
-                    }
+                    const contributed = q.contributed === true;
+                    if (contributed) stat.passed++;
+                    else stat.failed++;
+
+                    // New rows persist the raw answer. Reconstruct it for old
+                    // rows that only retained `contributed`.
+                    const rawAnswer = typeof q.answer === 'boolean'
+                        ? q.answer
+                        : (q.inverted ? !contributed : contributed);
+                    if (rawAnswer) stat.yes++;
+                    else stat.no++;
                 } else if (q.answer === true) {
                     stat.yes++;
+                    if (q.inverted) stat.failed++;
+                    else stat.passed++;
                 } else if (q.answer === false) {
                     stat.no++;
+                    if (q.inverted) stat.passed++;
+                    else stat.failed++;
                 } else {
                     stat.error++;
                 }
@@ -101,8 +114,21 @@ async function computeDiscriminationStats(filter = {}) {
 
     // Convert to array and compute rates
     const questions = Object.values(questionStats).map(stat => {
-        const validTotal = stat.yes + stat.no;
-        const passRate = validTotal > 0 ? stat.yes / validTotal : null;
+        const validTotal = stat.passed + stat.failed;
+        const rawAnswerTotal = stat.yes + stat.no;
+        const passRate = validTotal > 0 ? stat.passed / validTotal : null;
+        const rawYesRate = rawAnswerTotal > 0 ? stat.yes / rawAnswerTotal : null;
+        const sampleSufficient = validTotal >= MIN_SAMPLE_SIZE
+            && stat.models.size >= MIN_MODEL_COUNT;
+        const flag = passRate === null
+            ? 'no_data'
+            : !sampleSufficient
+                ? 'insufficient_data'
+                : passRate > HIGH_PASS_THRESHOLD
+                    ? 'too_easy'
+                    : passRate < LOW_PASS_THRESHOLD
+                        ? 'too_hard'
+                        : null;
 
         return {
             category: stat.category,
@@ -112,16 +138,18 @@ async function computeDiscriminationStats(filter = {}) {
             inverted: stat.inverted,
             yes: stat.yes,
             no: stat.no,
+            passed: stat.passed,
+            failed: stat.failed,
             error: stat.error,
             total: stat.total,
             model_count: stat.models.size,
+            sample_sufficient: sampleSufficient,
             pass_rate: passRate !== null ? Math.round(passRate * 1000) / 1000 : null,
-            discriminative: passRate !== null
+            raw_yes_rate: rawYesRate !== null ? Math.round(rawYesRate * 1000) / 1000 : null,
+            discriminative: sampleSufficient
                 ? (passRate <= HIGH_PASS_THRESHOLD && passRate >= LOW_PASS_THRESHOLD)
                 : null,
-            flag: passRate !== null
-                ? (passRate > HIGH_PASS_THRESHOLD ? 'too_easy' : (passRate < LOW_PASS_THRESHOLD ? 'too_hard' : null))
-                : 'no_data'
+            flag
         };
     });
 
@@ -145,7 +173,12 @@ async function computeDiscriminationStats(filter = {}) {
             totalResults: results.length,
             totalQuestions: questions.length,
             flaggedCount: flagged.length,
-            thresholds: { high: HIGH_PASS_THRESHOLD, low: LOW_PASS_THRESHOLD }
+            thresholds: {
+                high: HIGH_PASS_THRESHOLD,
+                low: LOW_PASS_THRESHOLD,
+                minSampleSize: MIN_SAMPLE_SIZE,
+                minModelCount: MIN_MODEL_COUNT
+            }
         }
     };
 }
@@ -191,5 +224,7 @@ module.exports = {
     computeDiscriminationStats,
     getDiscriminationSummary,
     HIGH_PASS_THRESHOLD,
-    LOW_PASS_THRESHOLD
+    LOW_PASS_THRESHOLD,
+    MIN_SAMPLE_SIZE,
+    MIN_MODEL_COUNT
 };

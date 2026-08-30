@@ -145,7 +145,10 @@ jest.mock('../../models/ModelRegistry', () => ({
   })
 }));
 
-const { buildIntelligenceSummary, getRoutingConfig, buildInferenceStats, buildRoutingAnalytics } = require('../../routes/nerve-center');
+const express = require('express');
+const request = require('supertest');
+const nerveCenterRouter = require('../../routes/nerve-center');
+const { buildIntelligenceSummary, getRoutingConfig, buildInferenceStats, buildRoutingAnalytics } = nerveCenterRouter;
 const { calculateMessageCost } = require('../../src/services/costCalculator');
 const { resetAllTaskModelOverrides, saveTaskModelOverride } = require('../../src/services/modelRouterConfig');
 
@@ -382,5 +385,73 @@ describe('Nerve Center Routes — Unit Tests', () => {
         })
       }));
     });
+  });
+});
+
+describe('Nerve Center RAG evidence proxy', () => {
+  const originalFetch = global.fetch;
+
+  function createApp() {
+    const app = express();
+    app.use(nerveCenterRouter);
+    return app;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    global.fetch = jest.fn();
+  });
+
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
+
+  it('returns fresh dependency evidence without caching a healthy projection', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        data: {
+          healthy: false,
+          queryReady: false,
+          observedAt: '2026-08-30T12:00:00.000Z',
+          dependencies: { qdrant: { healthy: false } }
+        }
+      })
+    });
+
+    const response = await request(createApp()).get('/rag/status').expect(200);
+
+    expect(response.headers['cache-control']).toContain('no-store');
+    expect(response.body).toMatchObject({
+      status: 'success',
+      data: {
+        queryReady: false,
+        dependencies: { qdrant: { healthy: false } }
+      },
+      meta: { source: 'rag.status.refresh' }
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/rag/status/refresh'),
+      expect.objectContaining({ method: 'POST' })
+    );
+  });
+
+  it('fails closed when upstream readiness evidence is unavailable', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: async () => ({ ok: false, error: 'connect private-host:6333' })
+    });
+
+    const response = await request(createApp()).get('/rag/status').expect(502);
+
+    expect(response.body).toEqual({
+      status: 'error',
+      code: 'RAG_STATUS_UNAVAILABLE',
+      message: 'RAG readiness evidence is unavailable.'
+    });
+    expect(JSON.stringify(response.body)).not.toContain('private-host');
   });
 });

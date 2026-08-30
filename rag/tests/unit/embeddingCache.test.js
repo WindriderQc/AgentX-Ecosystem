@@ -83,6 +83,17 @@ describe('EmbeddingCache', () => {
     expect(stats.hitRate).toBeCloseTo(2 / 3, 4);
     expect(stats.size).toBe(1);
     expect(stats.maxSize).toBe(3);
+    expect(stats.requests).toBe(3);
+    expect(Number.isFinite(Date.parse(stats.observedSince))).toBe(true);
+  });
+
+  test('reports an explicit zero-request observation window', () => {
+    const stats = cache.getStats();
+
+    expect(stats.requests).toBe(0);
+    expect(stats.hitRate).toBe(0);
+    expect(Number.isFinite(Date.parse(stats.observedSince))).toBe(true);
+    expect(Date.parse(stats.observedSince)).toBeLessThanOrEqual(Date.now());
   });
 
   test('LRU: recently accessed entries survive eviction', () => {

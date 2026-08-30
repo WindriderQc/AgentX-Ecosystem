@@ -58,7 +58,20 @@ describe('GET /judge/ground-truth/gaps', () => {
             retro_entries: 4,
             total_cells: 35,
             empty_cells: 34,
-            coverage_pct: 3
+            coverage_pct: 3,
+            coverage_basis: 'occupied_cells',
+            target_per_cell: 5,
+            cells_meeting_target: 0,
+            target_coverage_pct: 0,
+            hard_scope: {
+                levels: [4, 5],
+                total_cells: 14,
+                entries: 0,
+                occupied_cells: 0,
+                cells_meeting_target: 0,
+                target_coverage_pct: 0,
+                ready: false
+            }
         });
 
         expect(response.body.data.grid).toEqual(expect.arrayContaining([

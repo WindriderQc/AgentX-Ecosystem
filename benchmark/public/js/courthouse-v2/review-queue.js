@@ -10,50 +10,44 @@ import { escHtml } from '../utils/format.js';
 
 const FILTERS = [
     { id: 'all',       label: 'All' },
-    { id: 'anomaly',   label: 'Anomalies' },
     { id: 'low-conf',  label: 'Low Confidence' },
-    { id: 'diverge',   label: 'Judge Divergence' },
-    { id: 'high',      label: 'Unusually High' },
+    { id: 'diverge',   label: 'Divergence Flags' },
+    { id: 'high',      label: 'L4–L5 Score ≥9' },
+    { id: 'other',     label: 'Other Review' },
 ];
 
 // ─── Flag classification helpers ─────────────────────────────────────────────
 
 /**
- * Classify a result into a review flag type.
- * Returns one of: 'anomaly' | 'low-conf' | 'diverge' | 'high' | null
+ * Return every review signal carried by a result. Signals are deliberately
+ * non-exclusive: one row may be both low-confidence and divergent.
  */
-function classifyFlag(r) {
-    // Judge divergence: multi-judge disagreement flag
-    if (r.judge_divergence || r.multi_judge_divergence) return 'diverge';
+function classifyFlags(r) {
+    const flags = [];
+
+    // Authoritative server-side verdict based on the multi-judge threshold.
+    if (r.judge_divergent === true) flags.push('diverge');
 
     // Low confidence: judge_confidence below threshold (0.6 is the common cutoff)
     const conf = r.judge_confidence ?? r.confidence;
-    if (conf !== undefined && conf !== null && conf < 0.6) return 'low-conf';
-
-    // Anomaly flag: explicit anomaly field or needs_review with review_reason containing anomaly/outlier
-    if (r.is_anomaly || r.anomaly_flag) return 'anomaly';
-    const reason = (r.review_reason || '').toLowerCase();
-    if (reason.includes('anomaly') || reason.includes('outlier') || reason.includes('z-score')) {
-        return 'anomaly';
-    }
+    if (conf !== undefined && conf !== null && conf < 0.6) flags.push('low-conf');
 
     // Unusually high: quality_score > 9.0 on a hard prompt (L4+)
     const score = r.quality_score ?? r.composite_score;
     if (score !== null && score !== undefined && score >= 9.0 && (r.prompt_level || 0) >= 4) {
-        return 'high';
+        flags.push('high');
     }
 
-    // Fallback for any needs_review with a review_reason
-    if (r.needs_review) return 'anomaly';
+    if (flags.length === 0 && r.needs_review) flags.push('other');
 
-    return null;
+    return flags;
 }
 
 const FLAG_LABELS = {
-    anomaly:  'Anomaly',
     'low-conf': 'Low Conf',
     diverge:  'Diverge',
     high:     'High Score',
+    other:    'Review',
 };
 
 function flagChip(type) {
@@ -79,12 +73,7 @@ function scoreClass(score) {
 function getReviewCandidates(results) {
     return results.filter(r => {
         if (r.needs_review) return true;
-        if (r.is_anomaly || r.anomaly_flag || r.judge_divergence || r.multi_judge_divergence) return true;
-        const conf = r.judge_confidence ?? r.confidence;
-        if (conf !== undefined && conf !== null && conf < 0.6) return true;
-        const score = r.quality_score ?? r.composite_score;
-        if (score !== null && score !== undefined && score >= 9.0 && (r.prompt_level || 0) >= 4) return true;
-        return false;
+        return classifyFlags(r).some(flag => flag !== 'other');
     });
 }
 
@@ -92,15 +81,32 @@ function getReviewCandidates(results) {
 
 function applyFilter(candidates, filterId) {
     if (filterId === 'all') return candidates;
-    return candidates.filter(r => classifyFlag(r) === filterId);
+    return candidates.filter(r => classifyFlags(r).includes(filterId));
+}
+
+function hasSignalCoverage(candidates, filterId) {
+    if (filterId === 'all' || filterId === 'other') return true;
+    if (candidates.length === 0) return true;
+    const has = (row, key) => Object.prototype.hasOwnProperty.call(row, key);
+    if (filterId === 'diverge') return candidates.every(row => typeof row.judge_divergent === 'boolean');
+    if (filterId === 'low-conf') return candidates.every(row => has(row, 'judge_confidence') || has(row, 'confidence'));
+    if (filterId === 'high') {
+        return candidates.every(row =>
+            (has(row, 'quality_score') || has(row, 'composite_score')) && has(row, 'prompt_level')
+        );
+    }
+    return false;
 }
 
 // ─── Single item row ─────────────────────────────────────────────────────────
 
-function renderItem(r, readinessMap) {
+function renderItem(r, readinessMap, activeFilter = 'all') {
     const id = String(r._id || r.id || '');
     const level = r.prompt_level || 1;
-    const flag = classifyFlag(r) || 'anomaly';
+    const flags = classifyFlags(r);
+    const flag = activeFilter !== 'all' && flags.includes(activeFilter)
+        ? activeFilter
+        : (flags[0] || 'other');
     const rawPrompt = r.prompt_name || r.prompt || '';
     const promptText = rawPrompt.slice(0, 90);
     const model = (r.model || '').replace(/:latest$/, '');
@@ -126,6 +132,7 @@ function renderItem(r, readinessMap) {
     const accessibleLabel = [
         `Open review details for ${promptText || 'unnamed prompt'}`,
         model ? `model ${model}` : '',
+        flags.length ? `signals ${flags.map(item => FLAG_LABELS[item] || item).join(', ')}` : '',
         `confidence ${confDisplay}`,
         `score ${scoreDisplay}`
     ].filter(Boolean).join(', ');
@@ -167,13 +174,17 @@ export async function renderReviewQueue(container, results, onItemClick) {
     function buildHTML(filterId) {
         const filtered = applyFilter(candidates, filterId);
         const chips = FILTERS.map(f => {
-            const count = f.id === 'all' ? candidates.length : applyFilter(candidates, f.id).length;
+            const covered = hasSignalCoverage(candidates, f.id);
+            const count = covered
+                ? (f.id === 'all' ? candidates.length : applyFilter(candidates, f.id).length)
+                : '—';
             const active = f.id === filterId ? ' active' : '';
-            return `<button type="button" class="rq-chip${active}" data-filter="${f.id}">${f.label} <span class="rq-chip-count">(${count})</span></button>`;
+            const unavailable = covered ? '' : ' disabled aria-disabled="true" title="Signal unavailable in the returned evidence"';
+            return `<button type="button" class="rq-chip${active}" data-filter="${f.id}"${unavailable}>${f.label} <span class="rq-chip-count">(${count})</span></button>`;
         }).join('');
 
         const items = filtered.length > 0
-            ? filtered.map(r => renderItem(r, readinessMap)).join('')
+            ? filtered.map(r => renderItem(r, readinessMap, filterId)).join('')
             : renderEmpty(filterId);
 
         return `

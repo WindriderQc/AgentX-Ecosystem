@@ -28,6 +28,14 @@ function normalizeModelName(name) {
     return String(name || '').trim().replace(/:latest$/i, '');
 }
 
+function normalizeHostUrl(host) {
+    return String(host || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function judgeEvaluationKey(model, host) {
+    return `${normalizeModelName(model).toLowerCase()}@@${normalizeHostUrl(host)}`;
+}
+
 function isPotentialJudgeModel(modelName) {
     const n = String(modelName || '').toLowerCase().replace(/:latest$/i, '');
     if (!n) return false;
@@ -140,7 +148,7 @@ router.get('/judge-roster', async (req, res) => {
         const evalAgg = await BenchmarkResult.aggregate([
             { $match: { judge_model: { $exists: true, $ne: null } } },
             { $group: {
-                _id: '$judge_model',
+                _id: { model: '$judge_model', host: '$judge_host' },
                 count: { $sum: 1 },
                 avg_score: { $avg: '$quality_score' },
                 success_count: {
@@ -157,7 +165,7 @@ router.get('/judge-roster', async (req, res) => {
             } }
         ]);
         const liveEvalMap = new Map(evalAgg.map((entry) => [
-            normalizeModelName(entry._id),
+            judgeEvaluationKey(entry._id?.model, entry._id?.host),
             {
                 count: entry.count,
                 avgScore: entry.avg_score != null ? Math.round(entry.avg_score * 10) / 10 : null,
@@ -172,12 +180,24 @@ router.get('/judge-roster', async (req, res) => {
 
         const allJudges = discoveredNames.map((modelName) => {
             const availableOn = modelHostMap.get(modelName) || [];
-            const stats = liveEvalMap.get(modelName) || { count: 0, avgScore: null, successRate: null };
+            const perHost = availableOn.map((host) => ({
+                host: host.url,
+                ...(liveEvalMap.get(judgeEvaluationKey(modelName, host.url))
+                    || { count: 0, avgScore: null, successRate: null })
+            }));
+            const count = perHost.reduce((sum, stats) => sum + stats.count, 0);
+            const weightedScore = perHost.reduce((sum, stats) => (
+                sum + (stats.avgScore == null ? 0 : stats.avgScore * stats.count)
+            ), 0);
+            const weightedSuccess = perHost.reduce((sum, stats) => (
+                sum + (stats.successRate == null ? 0 : stats.successRate * stats.count)
+            ), 0);
             return {
                 modelName,
-                evalCount: stats.count,
-                avgScore: stats.avgScore,
-                successRate: stats.successRate,
+                evalCount: count,
+                avgScore: count > 0 ? Math.round((weightedScore / count) * 10) / 10 : null,
+                successRate: count > 0 ? Math.round((weightedSuccess / count) * 10) / 10 : null,
+                evaluationsByHost: perHost,
                 availableOn,
                 source: 'benchmark-discovery'
             };
@@ -192,7 +212,19 @@ router.get('/judge-roster', async (req, res) => {
             judgeReady: hostReadiness.ready,
             readinessReason: hostReadiness.reason,
             reachable: hostReadiness.reachable,
-            judges: allJudges.filter((judge) => judge.availableOn.some((entry) => entry.url === host.url))
+            judges: allJudges
+                .filter((judge) => judge.availableOn.some((entry) => entry.url === host.url))
+                .map((judge) => {
+                    const stats = liveEvalMap.get(judgeEvaluationKey(judge.modelName, host.url))
+                        || { count: 0, avgScore: null, successRate: null };
+                    return {
+                        ...judge,
+                        evalCount: stats.count,
+                        avgScore: stats.avgScore,
+                        successRate: stats.successRate,
+                        evidenceHost: host.url
+                    };
+                })
         }));
 
         res.json({
@@ -216,7 +248,8 @@ const { computeDiscriminationStats, getDiscriminationSummary } = require('../../
 
 /**
  * GET /api/benchmark/question-discrimination
- * Per-question YES rates from decomposed judging.
+ * Per-question effective pass rates from decomposed judging. Raw YES rates are
+ * returned separately for inverted-question diagnostics.
  * Query params: ?batch_id=...&summary=true&flagged_only=true
  */
 router.get('/question-discrimination', async (req, res) => {

@@ -2044,6 +2044,46 @@ describe('Benchmark System - Integration Tests', () => {
         });
     });
 
+    describe('GET /api/benchmark/results/needs-review', () => {
+        it('projects the evidence required for authoritative review-signal counts', async () => {
+            await BenchmarkResult.create({
+                model: 'review-signal-model',
+                host: 'http://localhost:11434',
+                prompt: 'Review this hard output',
+                prompt_name: 'review-signal-prompt',
+                prompt_level: 5,
+                prompt_category: 'reasoning',
+                response: 'Sample response',
+                latency: 300,
+                tokens: 30,
+                success: true,
+                quality_score: 9.5,
+                judge_confidence: 0.4,
+                judge_consensus: 'divergent_unresolved',
+                judge_divergence: 10,
+                judge_scores: [
+                    { judge_model: 'judge-a', quality_score: 0 },
+                    { judge_model: 'judge-b', quality_score: 10 }
+                ],
+                needs_review: true,
+                review_reason: 'Multi-judge divergence 10'
+            });
+
+            const response = await api.get('/api/benchmark/results/needs-review');
+
+            expect(response.status).toBe(200);
+            expect(response.body.data.results).toHaveLength(1);
+            expect(response.body.data.results[0]).toMatchObject({
+                needs_review: true,
+                judge_consensus: 'divergent_unresolved',
+                judge_divergence: 10,
+                judge_divergent: true,
+                judge_confidence: 0.4
+            });
+            expect(response.body.data.results[0].judge_scores).toHaveLength(2);
+        });
+    });
+
     describe('POST /api/benchmark/results/:id/human-review', () => {
         it('should persist human review score and reviewer', async () => {
             const result = await BenchmarkResult.create({
@@ -2583,6 +2623,76 @@ describe('Benchmark System - Integration Tests', () => {
             const models = response.body.data.leaderboard.map((row) => row.model);
             expect(models).toContain('clean-model');
             expect(models).not.toContain('rejected-model');
+        });
+
+        it('restricts Trusted to one recent exact-identity comparison cohort while legacy remains exploratory', async () => {
+            await BenchmarkPrompt.create([
+                { name: 'Trusted Coding', prompt: 'Write code', level: 4, category: 'coding' },
+                { name: 'Trusted Reasoning', prompt: 'Reason carefully', level: 5, category: 'reasoning' }
+            ]);
+            const batch = await BenchmarkBatch.create({
+                run_name: 'Trusted exact cohort',
+                host: 'http://trusted-host.test:11434',
+                models: ['trusted-a', 'trusted-b'],
+                levels: [4, 5],
+                prompt_ids: ['Trusted Coding', 'Trusted Reasoning'],
+                total_tests: 4,
+                completed: 4,
+                status: 'completed',
+                completed_at: new Date()
+            });
+            const fixtures = [
+                { prompt_name: 'Trusted Coding', prompt: 'Write code', prompt_category: 'coding', prompt_level: 4 },
+                { prompt_name: 'Trusted Reasoning', prompt: 'Reason carefully', prompt_category: 'reasoning', prompt_level: 5 }
+            ];
+            const exactRows = [];
+            for (const [index, model] of ['trusted-a', 'trusted-b'].entries()) {
+                for (const fixture of fixtures) {
+                    exactRows.push({
+                        ...fixture,
+                        model,
+                        model_digest: `sha256:${model}`,
+                        host: 'http://trusted-host.test:11434',
+                        batch_id: batch._id,
+                        quality_score: 8 - index,
+                        success: true,
+                        scorer_version: 'scorer-v3',
+                        judge_confidence: 0.9,
+                        judge_model: 'judge:14b',
+                        judge_host: 'http://judge-host.test:11434',
+                        execution_settings: {
+                            artifact_digest: `sha256:${model}`,
+                            inference_contract_fingerprint: `runtime-${model}`
+                        }
+                    });
+                }
+            }
+            await BenchmarkResult.create([
+                ...exactRows,
+                {
+                    model: 'legacy-high-score',
+                    host: 'http://legacy-host.test:11434',
+                    prompt: 'Legacy prompt',
+                    prompt_name: 'Legacy prompt',
+                    prompt_category: 'coding',
+                    prompt_level: 4,
+                    quality_score: 10,
+                    success: true
+                }
+            ]);
+
+            const trusted = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=trusted&includeUnavailableModels=true');
+            expect(trusted.status).toBe(200);
+            expect(trusted.body.data.leaderboard.map(row => row.model).sort()).toEqual(['trusted-a', 'trusted-b']);
+            expect(trusted.body.data.trustedFilters.cohort.selected).toMatchObject({
+                batchId: String(batch._id),
+                modelCount: 2,
+                scorerVersion: 'scorer-v3'
+            });
+            expect(trusted.body.data.leaderboard.every(row => row.evidenceCompatibility === 'exact_compatible')).toBe(true);
+
+            const exploratory = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true');
+            expect(exploratory.body.data.leaderboard.map(row => row.model)).toContain('legacy-high-score');
         });
     });
 

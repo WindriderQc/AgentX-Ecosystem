@@ -24,6 +24,7 @@ const {
     projectResultsExplorerEvidence,
     combineMongoFilters
 } = require('../../src/services/benchmark/resultsExplorerEvidence');
+const { DIVERGENCE_THRESHOLD } = require('../../src/services/benchmark/multiJudge');
 
 const ADVANCED_RESULTS_MAX_LIMIT = 5000;
 const ADVANCED_RESULTS_DEFAULT_LIMIT = 1000;
@@ -348,10 +349,14 @@ router.get('/results/needs-review', async (req, res) => {
                 scoring_method: 1,
                 judge_model: 1,
                 judge_confidence: 1,
+                judge_consensus: 1,
+                judge_divergence: 1,
+                judge_scores: 1,
                 deterministic_score: 1,
                 deterministic_pass: 1,
                 subjective_score: 1,
                 composite_formula: 1,
+                needs_review: 1,
                 review_reason: 1,
                 human_score: 1,
                 human_reviewed_at: 1,
@@ -378,6 +383,12 @@ router.get('/results/needs-review', async (req, res) => {
             data: {
                 results: results.map((result) => ({
                     ...result,
+                    // A stable boolean makes the review-queue counter
+                    // authoritative. The UI must not infer a reassuring zero
+                    // from an omitted numeric field.
+                    judge_divergent: Number.isFinite(Number(result.judge_divergence))
+                        ? Number(result.judge_divergence) > DIVERGENCE_THRESHOLD
+                        : ['divergent_unresolved', 'tiebreaker_resolved'].includes(result.judge_consensus),
                     evidence_mode: scoreEvidenceKind(result)
                 })),
                 stats: stats[0] || { total: 0, reviewed: 0, avg_confidence: null },

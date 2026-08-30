@@ -628,18 +628,21 @@ async function refreshRagMetrics() {
 
         // Update stats cards
         if (elements.ragTotalDocs) {
-            elements.ragTotalDocs.textContent = formatNumber(stats.totalDocuments || 0);
+            elements.ragTotalDocs.textContent = stats.totalDocuments == null ? '—' : formatNumber(stats.totalDocuments);
         }
         if (elements.ragTotalChunks) {
-            elements.ragTotalChunks.textContent = formatNumber(stats.totalChunks || 0);
+            elements.ragTotalChunks.textContent = stats.totalChunks == null ? '—' : formatNumber(stats.totalChunks);
         }
         if (elements.ragAvgChunks) {
-            elements.ragAvgChunks.textContent = stats.avgChunksPerDoc || '0';
+            elements.ragAvgChunks.textContent = stats.avgChunksPerDoc == null ? '—' : stats.avgChunksPerDoc;
         }
         if (elements.ragHealth) {
-            const healthIcon = data.healthy ? '✓' : '✗';
-            const healthColor = data.healthy ? 'var(--success)' : 'var(--danger)';
-            elements.ragHealth.innerHTML = `<span style="color: ${healthColor}">${healthIcon} ${data.healthy ? 'Healthy' : 'Offline'}</span>`;
+            const health = data.healthy === true
+                ? { icon: '✓', color: 'var(--success)', label: 'Healthy' }
+                : data.healthy === false
+                    ? { icon: '✗', color: 'var(--danger)', label: 'Unhealthy' }
+                    : { icon: '?', color: 'var(--warning)', label: 'Unknown' };
+            elements.ragHealth.innerHTML = `<span style="color: ${health.color}">${health.icon} ${health.label}</span>`;
         }
 
         // Update source breakdown table

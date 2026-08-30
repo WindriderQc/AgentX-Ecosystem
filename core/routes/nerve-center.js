@@ -713,29 +713,65 @@ router.get('/inference/activity', async (req, res) => {
 // ========================================
 
 const RAG_SERVICE_URL = (process.env.RAG_SERVICE_URL || 'http://localhost:3082').replace(/\/+$/, '');
+const RAG_EVIDENCE_TIMEOUT_MS = Math.min(
+  Math.max(Number(process.env.RAG_EVIDENCE_TIMEOUT_MS) || 5000, 500),
+  15000
+);
 
 router.get('/rag/status', async (_req, res) => {
+    res.set('Cache-Control', 'no-store');
     try {
         const operatorToken = String(process.env.AGENTX_OPERATOR_TOKEN || '').trim();
         const response = await fetch(`${RAG_SERVICE_URL}/api/rag/status/refresh`, {
           method: 'POST',
-          headers: operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {}
+          headers: operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {},
+          signal: AbortSignal.timeout(RAG_EVIDENCE_TIMEOUT_MS)
         });
         const data = await response.json();
-        res.json({ status: 'success', data: data.data || data });
+        const payload = data?.data || data;
+        if (!response.ok || data?.ok === false || !payload || typeof payload !== 'object') {
+          throw new Error(`RAG readiness probe failed with status ${response.status}`);
+        }
+        res.json({
+          status: 'success',
+          data: payload,
+          meta: { proxiedAt: new Date().toISOString(), source: 'rag.status.refresh' }
+        });
     } catch (err) {
-        res.json({ status: 'success', data: { healthy: false, error: err.message, dependencies: {} } });
+        logger.warn('[NerveCenter] RAG readiness evidence unavailable', { error: err.message });
+        res.status(502).json({
+          status: 'error',
+          code: 'RAG_STATUS_UNAVAILABLE',
+          message: 'RAG readiness evidence is unavailable.'
+        });
     }
 });
 
 router.get('/rag/documents', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
     try {
-        const limit = parseInt(req.query.limit) || 20;
-        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/documents?limit=${limit}`);
+        const requestedLimit = parseInt(req.query.limit, 10);
+        const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 20, 1), 100);
+        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/documents?limit=${limit}`, {
+          signal: AbortSignal.timeout(RAG_EVIDENCE_TIMEOUT_MS)
+        });
         const data = await response.json();
-        res.json({ status: 'success', data: data.data || data });
+        const payload = data?.data || data;
+        if (!response.ok || data?.ok === false || !payload || typeof payload !== 'object') {
+          throw new Error(`RAG document probe failed with status ${response.status}`);
+        }
+        res.json({
+          status: 'success',
+          data: payload,
+          meta: { proxiedAt: new Date().toISOString(), source: 'rag.documents' }
+        });
     } catch (err) {
-        res.json({ status: 'success', data: { documents: [], error: err.message } });
+        logger.warn('[NerveCenter] RAG document evidence unavailable', { error: err.message });
+        res.status(502).json({
+          status: 'error',
+          code: 'RAG_DOCUMENTS_UNAVAILABLE',
+          message: 'RAG document evidence is unavailable.'
+        });
     }
 });
 

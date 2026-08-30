@@ -13,7 +13,6 @@ const { GENERALIST_CATEGORY_WEIGHTS } = require('../../../config/categories');
 const { INFRA_ERROR_REGEX } = require('./errorClassifier');
 const {
     GENERALIST_AGGREGATION_OPTIONS,
-    NULL_CONFIDENCE_FALLBACK,
     EMPTY_RESPONSE_FILTER_THRESHOLD
 } = require('./generalistScoreConstants');
 const {
@@ -89,7 +88,7 @@ async function getActiveCategoryWeights() {
     }
 }
 
-async function getResidualStddevByModelCategory(successMatch, scoreFieldRef) {
+async function getCategoryDiagnosticsByModelCategory(successMatch, scoreFieldRef) {
     const rows = await BenchmarkResult.aggregate([
         { $match: successMatch },
         {
@@ -106,59 +105,96 @@ async function getResidualStddevByModelCategory(successMatch, scoreFieldRef) {
                     category: '$prompt_category',
                     prompt_name: '$prompt_name'
                 },
-                score: { $avg: scoreFieldRef }
+                score: { $avg: scoreFieldRef },
+                repeat_count: { $sum: 1 }
             }
         },
         {
-            $group: {
-                _id: {
-                    category: '$_id.category',
-                    prompt_name: '$_id.prompt_name'
-                },
-                prompt_mean: { $avg: '$score' },
-                model_count: { $sum: 1 },
-                rows: {
-                    $push: {
-                        model: '$_id.model',
-                        host: '$_id.host',
-                        score: '$score'
+            $facet: {
+                uncertainty: [
+                    {
+                        $group: {
+                            _id: {
+                                model: '$_id.model',
+                                host: '$_id.host',
+                                category: '$_id.category'
+                            },
+                            prompt_stddev: { $stdDevSamp: '$score' },
+                            prompt_count: { $sum: 1 },
+                            repeat_count: { $sum: '$repeat_count' }
+                        }
                     }
-                }
-            }
-        },
-        { $match: { model_count: { $gte: 2 } } },
-        { $unwind: '$rows' },
-        {
-            $project: {
-                model: '$rows.model',
-                host: '$rows.host',
-                category: '$_id.category',
-                residual: { $subtract: ['$rows.score', '$prompt_mean'] }
-            }
-        },
-        {
-            $group: {
-                _id: {
-                    model: '$model',
-                    host: '$host',
-                    category: '$category'
-                },
-                residual_stddev: { $stdDevPop: '$residual' },
-                residual_count: { $sum: 1 }
+                ],
+                residual: [
+                    {
+                        $group: {
+                            _id: {
+                                category: '$_id.category',
+                                prompt_name: '$_id.prompt_name'
+                            },
+                            prompt_mean: { $avg: '$score' },
+                            model_count: { $sum: 1 },
+                            rows: {
+                                $push: {
+                                    model: '$_id.model',
+                                    host: '$_id.host',
+                                    score: '$score'
+                                }
+                            }
+                        }
+                    },
+                    { $match: { model_count: { $gte: 2 } } },
+                    { $unwind: '$rows' },
+                    {
+                        $project: {
+                            model: '$rows.model',
+                            host: '$rows.host',
+                            category: '$_id.category',
+                            residual: { $subtract: ['$rows.score', '$prompt_mean'] }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: {
+                                model: '$model',
+                                host: '$host',
+                                category: '$category'
+                            },
+                            residual_stddev: { $stdDevPop: '$residual' },
+                            residual_count: { $sum: 1 }
+                        }
+                    }
+                ]
             }
         }
     ], GENERALIST_AGGREGATION_OPTIONS);
 
-    const map = new Map();
-    for (const row of rows) {
+    const diagnostics = new Map();
+    const result = rows[0] || {};
+    for (const row of result.uncertainty || []) {
         const key = `${row._id.model}@@${row._id.host}@@${normalizeCategoryKey(row._id.category)}`;
-        map.set(key, {
-            residual_stddev: row.residual_stddev || 0,
+        diagnostics.set(key, {
+            uncertainty_stddev: row.prompt_stddev ?? null,
+            uncertainty_count: row.prompt_count || 0,
+            repeat_count: row.repeat_count || 0
+        });
+    }
+    for (const row of result.residual || []) {
+        const key = `${row._id.model}@@${row._id.host}@@${normalizeCategoryKey(row._id.category)}`;
+        diagnostics.set(key, {
+            ...(diagnostics.get(key) || {}),
+            residual_stddev: row.residual_stddev ?? null,
             residual_count: row.residual_count || 0
         });
     }
-    return map;
+    return diagnostics;
 }
+
+/*
+ * The diagnostics aggregation above deliberately begins from per-prompt means:
+ * repeated attempts improve one fixture estimate instead of pretending to add
+ * independent fixtures. The residual facet remains the consistency basis.
+ */
 
 /**
  * Get category scores for all models from database
@@ -198,7 +234,7 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
         ]
     };
 
-    const [categoryStats, infraAttempts, residualStats] = await Promise.all([
+    const [categoryStats, infraAttempts, categoryDiagnostics] = await Promise.all([
         BenchmarkResult.aggregate([
             { $match: successMatch },
             {
@@ -227,9 +263,8 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
                             ]
                         }
                     },
-                    // Avg judge confidence — only over rows where confidence exists.
-                    // Null rows are folded back in at calculation time via
-                    // NULL_CONFIDENCE_FALLBACK so they drag down the effective weight.
+                    // Avg judge confidence only over rows where evidence exists.
+                    // Missing legacy values remain explicitly unknown.
                     avg_confidence: {
                         $avg: {
                             $cond: [
@@ -262,7 +297,7 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
                 }
             }
         ], GENERALIST_AGGREGATION_OPTIONS),
-        getResidualStddevByModelCategory(successMatch, scoreFieldRef)
+        getCategoryDiagnosticsByModelCategory(successMatch, scoreFieldRef)
     ]);
 
     // Group by model/host
@@ -278,29 +313,29 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
         }
 
         if (stat.avg_quality !== null) {
-            // Blend: rows with null judge_confidence use the maintained
-            // NULL_CONFIDENCE_FALLBACK; rows with evidence use their mean.
             const confCount = stat.confidence_count || 0;
             const nullCount = Math.max(0, (stat.count || 0) - confCount);
-            let avgConfidence = null;
-            if (confCount > 0 || nullCount > 0) {
-                const sumConf = confCount > 0 ? (stat.avg_confidence || 0) * confCount : 0;
-                const sumFallback = nullCount * NULL_CONFIDENCE_FALLBACK;
-                avgConfidence = (sumConf + sumFallback) / (confCount + nullCount);
-            }
+            const avgConfidence = confCount > 0 ? stat.avg_confidence : null;
             modelCategoryMap.get(key)[category] = {
                 avg: stat.avg_quality,
-                stddev: stat.stddev_quality || 0,
+                stddev: stat.stddev_quality ?? null,
                 avg_confidence: avgConfidence,
+                confidence_count: confCount,
+                unknown_confidence_count: nullCount,
                 count: stat.count,
                 levels: (stat.levels || []).filter((level) => level !== null && level !== undefined),
                 attempted: true
             };
-            const residualKey = `${key}@@${category}`;
-            const residual = residualStats.get(residualKey);
-            if (residual && residual.residual_count >= 2) {
-                modelCategoryMap.get(key)[category].residual_stddev = residual.residual_stddev;
-                modelCategoryMap.get(key)[category].residual_count = residual.residual_count;
+            const diagnosticsKey = `${key}@@${category}`;
+            const diagnostics = categoryDiagnostics.get(diagnosticsKey);
+            if (diagnostics) {
+                modelCategoryMap.get(key)[category].uncertainty_stddev = diagnostics.uncertainty_stddev;
+                modelCategoryMap.get(key)[category].uncertainty_count = diagnostics.uncertainty_count;
+                modelCategoryMap.get(key)[category].repeat_count = diagnostics.repeat_count;
+            }
+            if (diagnostics && diagnostics.residual_count >= 2) {
+                modelCategoryMap.get(key)[category].residual_stddev = diagnostics.residual_stddev;
+                modelCategoryMap.get(key)[category].residual_count = diagnostics.residual_count;
                 modelCategoryMap.get(key)[category].consistency_basis = 'prompt_residual';
             } else {
                 modelCategoryMap.get(key)[category].consistency_basis = 'none';
@@ -396,6 +431,7 @@ async function getLeaderboardEntryStats(matchQuery = {}) {
                 promptLevels: { $push: '$prompt_level' },
                 contexts: { $push: '$execution_settings.num_ctx' },
                 judgeModels: { $addToSet: '$judge_model' },
+                judgeTargets: { $addToSet: { model: '$judge_model', host: '$judge_host' } },
                 needsReviewCount: {
                     $sum: { $cond: [{ $eq: ['$needs_review', true] }, 1, 0] }
                 },
@@ -434,6 +470,7 @@ async function getLeaderboardEntryStats(matchQuery = {}) {
             maxPromptLevel: numericLevels.length ? Math.max(...numericLevels) : null,
             contextCounts: contexts,
             judgeModels: (row.judgeModels || []).filter(Boolean),
+            judgeTargets: (row.judgeTargets || []).filter((target) => target?.model && target?.host),
             needsReviewCount: row.needsReviewCount || 0,
             lowConfidenceCount: row.lowConfidenceCount || 0,
             earliestTimestamp: row.earliestTimestamp || null,
@@ -483,7 +520,11 @@ async function calculateAllGeneralistScores(
                 weightedSum: 0,
                 coveragePenalty: 0,
                 consistencyBonus: 0,
-                avgWithinCategoryStdDev: 0,
+                avgWithinCategoryStdDev: null,
+                confidenceMargin: null,
+                confidenceMethod: null,
+                confidenceSampleSize: 0,
+                confidenceRepeatCount: 0,
                 coverage: 0,
                 categoryAverages: {},
                 testedCategories: 0,
