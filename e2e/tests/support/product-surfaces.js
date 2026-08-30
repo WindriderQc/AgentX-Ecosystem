@@ -55,7 +55,12 @@ const criticalSurfaces = Object.freeze(registry.surfaces.filter((surface) => (
   surface.critical === true && surface.profiles.includes(profile)
 )));
 
+const allSurfaces = Object.freeze(registry.surfaces.filter((surface) => (
+  surface.profiles.includes(profile)
+)));
+
 module.exports = {
+  allSurfaces,
   allowedOrigins,
   budgetFor,
   criticalSurfaces,
