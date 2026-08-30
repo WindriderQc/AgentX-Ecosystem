@@ -1,14 +1,9 @@
 'use strict';
 
 const { test, expect } = require('@playwright/test');
-const { urlFor } = require('./support/product-surfaces');
+const { allSurfaces, urlFor } = require('./support/product-surfaces');
 
-const CAPTURE_SURFACES = [
-  { id: 'benchmark-leaderboard', service: 'benchmark', path: '/leaderboard' },
-  { id: 'benchmark-courthouse', service: 'benchmark', path: '/courthouse' },
-];
-
-for (const surface of CAPTURE_SURFACES) {
+for (const surface of allSurfaces) {
   test(`${surface.id} supports a bounded full-page capture`, async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'desktop-chromium', 'Exact desktop compositor regression gate');
     await page.setViewportSize({ width: 2008, height: 1423 });

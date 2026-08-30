@@ -16,6 +16,13 @@ in `config/product-surfaces.json` with Chromium at 1440 px and 375 px. It checks
 - no serious or critical WCAG 2.0/2.1/2.2 A/AA Axe violations; and
 - the Playground disclosure/dialog and Courthouse tab-list keyboard journeys.
 
+Every registered page for the selected profile also has a desktop compositor
+gate. The gate waits for the canonical readiness marker and local fonts, then
+requires a non-empty full-page screenshot to complete within five seconds.
+This deliberately includes non-critical pages: shared navigation, backgrounds,
+long tables, and extension-neutral layout changes can otherwise escape the
+critical-surface journeys while still making browser capture or printing hang.
+
 Release runs use no retries, so a flaky first attempt remains a failing gate.
 The checks do not require Ollama or seeded product data. Start the normal demo
 services first, then run:
