@@ -171,6 +171,7 @@
     "benchmark/routes/benchmark/cloudLanes.js#POST /cloud-lanes/attribute",
     "benchmark/routes/benchmark/cloudLanes.js#POST /cloud-lanes/compare",
     "benchmark/routes/benchmark/cloudLanes.js#POST /cloud-lanes/plan",
+    "benchmark/routes/benchmark/cloudLanes.js#POST /harness-campaigns",
     "benchmark/routes/benchmark/cloudLanes.js#POST /worker-evidence/compare",
     "benchmark/routes/benchmark/core.js#POST /batch",
     "benchmark/routes/benchmark/core.js#POST /batch/:id/rerun-invalid",

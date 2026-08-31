@@ -31,6 +31,12 @@ const CATEGORY_ORDER = Object.keys(CATEGORY_META);
 // Helpers
 // ---------------------------------------------------------------------------
 
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
+}
+
 function scoreClass(score) {
   if (score > 8) return 'h';
   if (score > 6) return 'm';
@@ -161,7 +167,7 @@ function compactCounts(counts, prefix = '') {
 }
 
 function playgroundUrl(entry) {
-  if (entry?.host_available === false || !entry?.model) return null;
+  if (entry?.executionTarget?.executionKind === 'harness' || entry?.host_available === false || !entry?.model) return null;
   const configuredCore = typeof document !== 'undefined' && typeof document.querySelector === 'function'
     ? document.querySelector('main[data-core-public-url]')?.dataset.corePublicUrl
     : null;
@@ -262,12 +268,12 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
   };
   const evidenceLabel = evidenceLabels[evidenceLevel] || evidenceLabels.inconclusive;
 
-  const canMedal = !provisional && entry.fullScopeEligible === true && index < 3;
+  const canMedal = entry.rankable !== false && !provisional && entry.fullScopeEligible === true && index < 3;
   const rank = canMedal
     ? `<span class="cb-medal ${RANK_CLASS[index]}">${MEDAL[index]}</span>`
-    : `<span class="cb-rank-num">${provisional ? 'P' : '#'}${index + 1}</span>`;
+    : `<span class="cb-rank-num">${entry.rankable === false ? '—' : `${provisional ? 'P' : '#'}${index + 1}`}</span>`;
 
-  const score = entry.score ?? 0;
+  const score = entry.score;
   const scoreCls = scoreClass(score);
   const leaderCls = index === 0 && canMedal ? ' cb-leader' : '';
 
@@ -336,6 +342,25 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
   const unavailableBadge = entry.host_available === false
     ? '<span class="cb-unavailable-badge" title="This model is in the benchmark archive but is not currently present on its recorded Ollama host">Deleted</span>'
     : '';
+  const nonComparableBadge = entry.rankable === false
+    ? `<span class="cb-unavailable-badge" title="Visible evidence only; excluded from rank${entry.filterReason ? `: ${esc(entry.filterReason)}` : ''}">UNRANKED</span>`
+    : '';
+  const harnessLabel = entry.harness?.name ? ` · ${entry.harness.name} ${entry.harness.version || ''}` : '';
+  const tierLabel = entry.tier === 'paid_cloud' ? 'paid cloud' : entry.tier === 'free_cloud' ? 'free cloud' : 'local';
+  const pricingLabel = entry.pricing?.kind && entry.pricing.kind !== 'free'
+    ? ` · manual estimate · ${entry.pricing.source || 'declared price'}`
+    : '';
+  const providerCost = Number(entry.providerCostNanodollars || 0);
+  const providerCostLabel = entry.tier === 'local'
+    ? '—'
+    : entry.pricing?.kind === 'free'
+      ? 'US$0 (declared)'
+      : `~US$${(providerCost / 1e9).toFixed(6)}`;
+  const providerCostTitle = entry.tier === 'local'
+    ? 'Local execution has no provider-price attribution'
+    : entry.pricing?.kind === 'free'
+      ? `Provider cost declared free by ${entry.pricing?.source || 'catalog'}`
+      : `Manual estimated provider cost for these rows; source: ${entry.pricing?.source || 'catalog snapshot'}`;
   const reviewNeeded = entry.needsReviewCount ?? entry.reviewCount ?? 0;
   const lowConfidenceKnown = evidenceKnown
     || (entry.evidenceConfidenceCoverage != null && Number(entry.evidenceConfidenceCoverage) > 0);
@@ -357,19 +382,19 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
       <div class="cb-rank">${rank}</div>
       <div class="cb-id">
         <div class="cb-model">
-          <span class="cb-model-name">${model}</span>${readinessBadge}${unavailableBadge}
+          <span class="cb-model-name">${model}</span>${readinessBadge}${unavailableBadge}${nonComparableBadge}
           <a href="/courthouse?model=${encodeURIComponent(model)}" class="cb-link" title="Review in Courthouse"><i class="fas fa-gavel"></i></a>
           <a href="/efficiency-map" class="cb-link" title="Efficiency Map"><i class="fas fa-chart-line"></i></a>
           ${useModelUrl ? `<a href="${useModelUrl}" class="cb-link cb-use-model" title="Open this exact model and host in Manual Chat; routing will not change automatically"><i class="fas fa-comment-dots"></i><span>Use in Chat</span></a><span class="cb-use-model-proof" data-evidence-level="${evidenceLevel}">${evidenceLabel}</span>` : ''}
         </div>
         <div class="cb-host">
-          <i class="fas fa-server cb-host-ico"></i><span class="cb-host-name">${hostName}</span>${judgeIcon}<span class="cb-host-meta">${hostTtftLabel}</span>
+          <i class="fas fa-${entry.tier === 'local' ? 'server' : 'cloud'} cb-host-ico"></i><span class="cb-host-name">${entry.provider || 'ollama'} · ${tierLabel}${harnessLabel}${pricingLabel}</span>${judgeIcon}<span class="cb-host-meta">${hostTtftLabel}</span>
         </div>
       </div>
       <div class="cb-score-block">
         ${renderTrend(entry.trend)}
-        <div class="cb-score ${scoreCls}">${score.toFixed(2)}</div>
-        <div class="cb-score-label">UGRank</div>
+        <div class="cb-score ${scoreCls}">${Number.isFinite(score) ? score.toFixed(2) : '—'}</div>
+        <div class="cb-score-label">${entry.rankable === false ? 'Unranked' : 'UGRank'}</div>
       </div>
     </div>
 
@@ -392,6 +417,7 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
       <span class="cb-stat" title="Rows flagged for manual review; this is not the human-reviewed count"><span class="cb-stat-l">Needs review</span><span class="cb-stat-v ${reviewNeeded > 0 ? 'watch' : 'good'}">${reviewNeeded}</span></span>
       <span class="cb-stat" title="Rows with an observed judge confidence below 0.70"><span class="cb-stat-l">LowConf</span><span class="cb-stat-v ${lowConfidenceClass}">${lowConfidenceLabel}</span></span>
       <span class="cb-stat"><span class="cb-stat-l">Success</span><span class="cb-stat-v" style="color:${succColor}">${successRate}</span></span>
+      <span class="cb-stat" title="${esc(providerCostTitle)}"><span class="cb-stat-l">Cost</span><span class="cb-stat-v">${esc(providerCostLabel)}</span></span>
       <span class="cb-stat"><span class="cb-stat-l">Coeff</span><span class="cb-stat-v" style="color:${coeffColor}">${coeff}</span></span>
     </div>
 
@@ -421,6 +447,7 @@ function renderTriageChips(active) {
 function sortRankings(rankings, mode) {
   if (mode === 'generalist' || !mode) {
     return [...rankings].sort((a, b) => {
+      if (a.rankable !== b.rankable) return a.rankable ? -1 : 1;
       if (a.fullScopeEligible !== b.fullScopeEligible) return a.fullScopeEligible ? -1 : 1;
       return (b.score ?? 0) - (a.score ?? 0);
     });

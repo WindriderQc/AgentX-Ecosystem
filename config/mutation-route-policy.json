@@ -251,6 +251,7 @@
       "POST /cloud-lanes/approval-check": "action-observation",
       "POST /cloud-lanes/attribute": "action-observation",
       "POST /cloud-lanes/compare": "action-observation",
+      "POST /harness-campaigns": "user-mutation",
       "POST /worker-evidence/compare": "action-observation"
     },
     "benchmark/routes/benchmark/core.js": {

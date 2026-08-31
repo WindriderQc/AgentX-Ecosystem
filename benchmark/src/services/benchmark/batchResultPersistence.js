@@ -45,7 +45,12 @@ async function persistSuccessfulResult({
     executionSettings = null,
     repeatIndex = 0,
     repeatTotal = 1,
-    repeatGroupId = null
+    repeatGroupId = null,
+    executionTarget = null,
+    executionReceipt = null,
+    providerUsage = null,
+    providerCost = null,
+    qualityCohortFingerprint = null
 }) {
     const scoringType = normalizeScoringCategory(prompt.scoring_type || prompt.category, DEFAULT_SCORING_CATEGORY);
     const visibleResponseBudget = !!(lengthHintApplied || answerContract?.applied);
@@ -85,12 +90,20 @@ async function persistSuccessfulResult({
     const emptyResponseExplanation = thinkingOnlyResponse
         ? 'Model produced hidden thinking but no visible final answer'
         : 'Model produced empty response';
-    const modelDigest = await getModelDigest(hostUrl, model);
+    const modelDigest = executionTarget?.executionKind === 'harness'
+        ? (executionReceipt?.identity?.model?.digest || null)
+        : await getModelDigest(hostUrl, model);
     const result = new BenchmarkResult({
         model,
         model_digest: modelDigest,
         host: hostUrl,
         judge_host: judgeHostUrl,
+        execution_target: executionTarget,
+        judge_target: judgeConfig.target || null,
+        execution_receipt: executionReceipt,
+        provider_usage: providerUsage,
+        provider_cost: providerCost,
+        quality_cohort_fingerprint: qualityCohortFingerprint,
         prompt: promptText,
         prompt_level: prompt.level,
         prompt_category: prompt.category,
@@ -230,7 +243,7 @@ async function persistSuccessfulResult({
     return result._id;
 }
 
-async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, flushBatchProgress, model, hostUrl, judgeHostUrl, prompt, err, errorDuration, currentBatch, pendingModelTimeline, repeatIndex = 0, repeatTotal = 1, repeatGroupId = null, executionSettings = null }) {
+async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, flushBatchProgress, model, hostUrl, judgeHostUrl, prompt, err, errorDuration, currentBatch, pendingModelTimeline, repeatIndex = 0, repeatTotal = 1, repeatGroupId = null, executionSettings = null, executionTarget = null, executionReceipt = null, providerUsage = null, providerCost = null, qualityCohortFingerprint = null }) {
     const classified = classifyBenchmarkError(err);
     const scoringType = normalizeScoringCategory(prompt.scoring_type || prompt.category, DEFAULT_SCORING_CATEGORY);
     const reviewReason = classified.infra
@@ -238,16 +251,25 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
         : null;
 
     try {
-        const modelDigest = await getModelDigest(hostUrl, model);
+        const modelDigest = executionTarget?.executionKind === 'harness'
+            ? (executionReceipt?.identity?.model?.digest || null)
+            : await getModelDigest(hostUrl, model);
         const result = new BenchmarkResult({
             model,
             model_digest: modelDigest,
             host: hostUrl,
+            execution_target: executionTarget,
+            judge_target: judgeConfig.target || null,
+            execution_receipt: executionReceipt,
+            provider_usage: providerUsage,
+            provider_cost: providerCost,
+            quality_cohort_fingerprint: qualityCohortFingerprint,
             prompt: prompt.prompt,
             prompt_level: prompt.level,
             prompt_category: prompt.category,
             prompt_name: prompt.name,
             error: err.message,
+            failure_classification: err.failureClassification || classified.type || 'unknown',
             infra_error: classified.infra,
             error_type: classified.type || 'unknown',
             error_http_status: classified.httpStatus,

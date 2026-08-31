@@ -571,6 +571,15 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
         scoring_time_ms: Date.now() - startTime,
         judge_prompt: evalPrompt,
         judge_raw_response: judgeResult.raw || null,
+        judge_target: judgeResult.execution_evidence?.target || null,
+        judge_receipt: judgeResult.execution_evidence?.receipt || null,
+        judge_provider_usage: judgeResult.execution_evidence?.usage || null,
+        judge_provider_cost: judgeResult.execution_evidence ? {
+            estimated: judgeResult.execution_evidence.target?.pricing?.estimated === true,
+            costNanodollars: judgeResult.execution_evidence.usage?.costNanodollars || 0,
+            pricing: judgeResult.execution_evidence.target?.pricing || null,
+            observedAt: new Date().toISOString()
+        } : null,
         truncation
     };
 

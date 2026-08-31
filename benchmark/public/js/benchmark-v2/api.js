@@ -45,7 +45,7 @@ export const startBatch = (config) => apiFetch(`${BASE}/batch`, { method: 'POST'
 export const stopBatch = (id) => apiFetch(`${BASE}/batch/${id}/stop`, { method: 'POST' });
 
 /** POST /api/benchmark/batch/:id/resume — resume a stopped/failed/interrupted batch */
-export const resumeBatch = (id) => apiFetch(`${BASE}/batch/${id}/resume`, { method: 'POST' });
+export const resumeBatch = (id, body = {}) => apiFetch(`${BASE}/batch/${id}/resume`, { method: 'POST', body });
 
 /** POST /api/benchmark/batch/:id/recover — mark a stuck running batch as stopped */
 export const recoverBatch = (id) => apiFetch(`${BASE}/batch/${id}/recover`, { method: 'POST' });
@@ -118,6 +118,13 @@ export const fetchPrompts = () => apiFetch(`${BASE}/prompts`);
 
 /** GET /api/benchmark/config — judge defaults and benchmark configuration */
 export const fetchConfig = () => apiFetch(`${BASE}/config`);
+
+/** GET /api/benchmark/targets — optional OpenClaw/Hermès cloud catalog */
+export const fetchBenchmarkTargets = () => apiFetch(`${BASE}/targets`);
+
+/** GET/POST native-agent campaigns; these never create model leaderboard rows. */
+export const fetchHarnessCampaigns = () => apiFetch(`${BASE}/harness-campaigns`);
+export const startHarnessCampaign = (config) => apiFetch(`${BASE}/harness-campaigns`, { method: 'POST', body: config });
 
 // ── Batches list ────────────────────────────────────────────────────────────
 

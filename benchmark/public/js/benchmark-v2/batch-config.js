@@ -14,7 +14,7 @@ import {
     SK_DEPTH, SK_JUDGE, SK_MODELS, SK_HOST, SK_THINK, SK_ADVANCED,
     _parseParamSize, _emptyMsg, _slug,
 } from './batch-config-constants.js';
-import { _buildModelChecklist } from './batch-config-models.js';
+import { _buildHarnessChecklist, _buildModelChecklist } from './batch-config-models.js';
 import {
     _loadAdvancedSettings,
     _buildAdvancedSettings,
@@ -62,6 +62,7 @@ let _lastBatch = null;
 let _currentHost = null;
 let _modelProfiles = [];
 let _benchmarkedModelSet = new Set();
+let _harnessTargetMap = new Map();
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -72,13 +73,14 @@ let _benchmarkedModelSet = new Set();
  * @param {Array}       opts.modelProfiles — ModelProfile[] with readiness maps
  * @param {Array}       opts.benchmarkedModels — base model names with successful benchmark history
  */
-export function renderBatchConfig(container, { host = null, modelProfiles = [], benchmarkedModels = [], prompts = [], config = {}, judgeRoster = null, lastBatch = null, onLaunch }) {
+export function renderBatchConfig(container, { host = null, modelProfiles = [], benchmarkedModels = [], prompts = [], config = {}, judgeRoster = null, harnessTargets = [], lastBatch = null, onLaunch }) {
     _lastBatch = lastBatch;
     _currentHost = host;
     _modelProfiles = modelProfiles;
     _benchmarkedModelSet = new Set((benchmarkedModels || []).map(normModel).filter(Boolean));
+    _harnessTargetMap = new Map((harnessTargets || []).map((target) => [target.id, target]));
     const onlineHosts = host ? [host] : [];
-    container.innerHTML = _buildForm(host, config, judgeRoster, onlineHosts);
+    container.innerHTML = _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets);
 
     if (host) _wireModelTools(container.querySelector('#bv2-model-checklist'), host);
     _wireDepthPersist(container);
@@ -181,7 +183,7 @@ function _benchmarkBadge(hasBenchmarkHistory) {
 
 // ── Form scaffold ─────────────────────────────────────────────────────────────
 
-function _buildForm(host, config, judgeRoster, onlineHosts) {
+function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = []) {
     const hostName = host?.displayName || host?.name || host?.hostname || 'No host selected';
     const modelCount = host?.models?.length || host?.modelCount || host?._modelCount || 0;
 
@@ -198,6 +200,7 @@ function _buildForm(host, config, judgeRoster, onlineHosts) {
       <div class="bf-field">
         <div id="bv2-model-checklist" class="model-checklist">
           ${host ? _buildModelChecklist(host) : _emptyMsg('Select a host above.')}
+          ${_buildHarnessChecklist(harnessTargets)}
         </div>
       </div>
 
@@ -213,6 +216,15 @@ function _buildForm(host, config, judgeRoster, onlineHosts) {
         <div class="bf-judge-col">
           <div id="bv2-judge-roster">
             ${buildJudgeRoster(judgeRoster, config, onlineHosts)}
+            <label class="bf-field-mini" style="margin-top:0.75rem;display:block;">
+              <span>Cloud judge <span style="color:var(--r-text-muted);font-size:0.65rem">optional; isolated targets only</span></span>
+              <select id="bv2-cloud-judge">
+                <option value="">Use selected Ollama judge</option>
+                ${(harnessTargets || []).filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.judge && target?.available !== false).map((target) =>
+                    `<option value="${esc(target.id)}">${esc(target.harness?.name || 'Harness')} · ${esc(target.provider)} · ${esc(target.label || target.model)} · ${target.tier === 'paid_cloud' ? 'paid' : 'free'}</option>`
+                ).join('')}
+              </select>
+            </label>
           </div>
         </div>
         <div class="bf-options-col">
@@ -690,7 +702,9 @@ async function _handleLaunch(container, host, onLaunch) {
 
     // 1. Execution host — from infrastructure selection, not a dropdown
     const execHostUrl = _currentHost?.hostUrl || _currentHost?.url || '';
-    if (!execHostUrl) {
+    const selectedCandidateCbs = Array.from(container.querySelectorAll('.bv2-model-cb:checked'));
+    const needsOllamaHost = selectedCandidateCbs.some((cb) => cb.dataset.executionKind !== 'harness');
+    if (!execHostUrl && needsOllamaHost) {
         const message = 'Select an execution host in the Infrastructure section above.';
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Launch blocked', message);
@@ -699,20 +713,22 @@ async function _handleLaunch(container, host, onLaunch) {
     }
 
     try {
+        if (execHostUrl && needsOllamaHost) {
         _publishLaunchStatus(
             container,
             'checking',
             'Checking profiler activity',
             'Confirming the selected host is not busy with profiling.'
         );
-        const profilingState = await fetchActiveProfilingState();
-        const activeProfiling = findProfilingForHost(_currentHost || execHostUrl, profilingState);
-        if (activeProfiling.length) {
-            const message = `${formatProfilingLockout(activeProfiling)}. Wait for profiling to finish or cancel it before launching a benchmark.`;
-            showErr(message);
-            _publishLaunchStatus(container, 'blocked', 'Launch blocked by profiler', message);
-            _resetLaunchButton();
-            return;
+            const profilingState = await fetchActiveProfilingState();
+            const activeProfiling = findProfilingForHost(_currentHost || execHostUrl, profilingState);
+            if (activeProfiling.length) {
+                const message = `${formatProfilingLockout(activeProfiling)}. Wait for profiling to finish or cancel it before launching a benchmark.`;
+                showErr(message);
+                _publishLaunchStatus(container, 'blocked', 'Launch blocked by profiler', message);
+                _resetLaunchButton();
+                return;
+            }
         }
     } catch (err) {
         const message = `Could not verify profiler activity: ${err.message}`;
@@ -723,7 +739,7 @@ async function _handleLaunch(container, host, onLaunch) {
     }
 
     // 2. Selected models
-    const modelCbs = Array.from(container.querySelectorAll('.bv2-model-cb:checked'));
+    const modelCbs = selectedCandidateCbs;
     if (!modelCbs.length) {
         const message = 'Select at least one model.';
         showErr(message);
@@ -731,10 +747,17 @@ async function _handleLaunch(container, host, onLaunch) {
         _resetLaunchButton();
         return;
     }
-    const models = modelCbs.map(cb => cb.value);
+    const localModelCbs = modelCbs.filter((cb) => cb.dataset.executionKind !== 'harness');
+    const cloudModelCbs = modelCbs.filter((cb) => cb.dataset.executionKind === 'harness');
+    const models = localModelCbs.map(cb => cb.value);
+    const targets = [
+        ...localModelCbs.map((cb) => ({ host: cb.dataset.host || execHostUrl, model: cb.value })),
+        ...cloudModelCbs.map((cb) => _harnessTargetMap.get(cb.dataset.targetId)).filter(Boolean)
+    ];
 
     // 3. Judge config (from roster or fallback)
     const judge = getSelectedJudge(container);
+    const cloudJudgeTarget = judge.targetId ? _harnessTargetMap.get(judge.targetId) : null;
     if (!judge.model) {
         const message = 'Select a judge model.';
         showErr(message);
@@ -742,7 +765,7 @@ async function _handleLaunch(container, host, onLaunch) {
         _resetLaunchButton();
         return;
     }
-    if (!judge.host)  {
+    if (!judge.host && !cloudJudgeTarget)  {
         const message = 'Select a judge host.';
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Launch blocked', message);
@@ -773,7 +796,12 @@ async function _handleLaunch(container, host, onLaunch) {
 
     let preflightResult;
     try {
-        const pfRes = await preflight({
+        const hasHarnessExecution = cloudModelCbs.length > 0 || !!cloudJudgeTarget;
+        const pfRes = hasHarnessExecution ? { data: {
+            ready: true,
+            issues: [],
+            checks: { harness_catalog: { ready: true, server_revalidates_before_each_cell: true } }
+        } } : await preflight({
             targets: models.map(model => ({ host: execHostUrl, model })),
             judge_config: {
                 model: judge.model,
@@ -833,14 +861,50 @@ async function _handleLaunch(container, host, onLaunch) {
 
     // 6. Build payload — merge advanced settings into judge_config and execution_config
     const think = container.querySelector('#bv2-think')?.value || 'auto';
+    const selectedPromptCount = LEVELS.reduce((sum, level) => sum + _estimateCount(level, depthConfig[level] || 'off'), 0);
+    const repeats = Math.max(1, Math.min(5, Number(advSettings.exec_repeats) || 1));
+    const paidCandidateTargets = targets.filter((target) => target?.tier === 'paid_cloud');
+    const callsPerCandidate = selectedPromptCount * repeats;
+    let maxCalls = paidCandidateTargets.length * callsPerCandidate;
+    const judgeAttempts = Math.max(1, Math.min(6, Number(advSettings.max_retries ?? 2) + 1));
+    if (cloudJudgeTarget?.tier === 'paid_cloud') maxCalls += targets.length * callsPerCandidate * judgeAttempts;
+    const paidUnits = [
+        ...paidCandidateTargets.map((target) => ({ target, calls: callsPerCandidate })),
+        ...(cloudJudgeTarget?.tier === 'paid_cloud' ? [{ target: cloudJudgeTarget, calls: targets.length * callsPerCandidate * judgeAttempts }] : [])
+    ];
+    const inputTokensPerCall = 32_000;
+    const outputTokensPerCall = Math.max(1, Number(advSettings.response_max_tokens) || 32_000);
+    const maxCostNanodollars = paidUnits.reduce((sum, { target, calls }) => {
+        const price = target.pricing || {};
+        return sum + calls * Number(price.callNanodollars || 0)
+            + calls * Math.ceil(inputTokensPerCall * Number(price.inputNanodollarsPerMillion || 0) / 1_000_000)
+            + calls * Math.ceil(outputTokensPerCall * Number(price.outputNanodollarsPerMillion || 0) / 1_000_000);
+    }, 0);
+    let paidApproval = null;
+    if (maxCalls > 0) {
+        const estimatedUsd = (maxCostNanodollars / 1e9).toFixed(6);
+        if (!window.confirm(`Paid cloud execution\n\nWorst-case manual estimate: US$${estimatedUsd}\nCalls: ${maxCalls}\nTokens: ${maxCalls * (inputTokensPerCall + outputTokensPerCall)}\n\nApprove this one batch?`)) {
+            _publishLaunchStatus(container, 'blocked', 'Paid execution not approved', 'No provider call was made.');
+            _resetLaunchButton();
+            return;
+        }
+        paidApproval = {
+            confirmed: true,
+            maxCalls,
+            maxTokens: maxCalls * (inputTokensPerCall + outputTokensPerCall),
+            maxCostNanodollars
+        };
+    }
     const batchConfig = {
-        host: execHostUrl,
+        host: execHostUrl || 'harness',
         models,
+        targets,
         levels,
         depth_config: depthConfig,
         judge_config: {
             model: judge.model,
             host: judge.host,
+            ...(cloudJudgeTarget ? { target: cloudJudgeTarget } : {}),
             temperature: advSettings.temperature,
             num_predict: advSettings.num_predict,
             num_ctx: advSettings.num_ctx,
@@ -871,8 +935,9 @@ async function _handleLaunch(container, host, onLaunch) {
             repeat_penalty: advSettings.exec_repeat_penalty,
             seed: (advSettings.exec_seed === '' || advSettings.exec_seed === undefined || advSettings.exec_seed === null)
                 ? null : Number(advSettings.exec_seed),
-            repeats: Math.max(1, Math.min(5, Number(advSettings.exec_repeats) || 1))
+            repeats
         },
+        paid_approval: paidApproval,
     };
 
     if (btn) { btn.textContent = 'Launching\u2026'; }
@@ -898,7 +963,8 @@ function _wirePersistenceUI(container, onlineHosts, config, judgeRoster, onLaunc
             });
             // Re-render
             renderBatchConfig(container.closest('#batch-config') || container, {
-                hosts: onlineHosts.concat([]), prompts: [], config, judgeRoster, lastBatch: _lastBatch,
+                host: _currentHost, prompts: [], config, judgeRoster,
+                harnessTargets: [..._harnessTargetMap.values()], lastBatch: _lastBatch,
                 onLaunch,
             });
         });
@@ -945,7 +1011,8 @@ function _wirePersistenceUI(container, onlineHosts, config, judgeRoster, onLaunc
                 if (data.advancedSettings) save(SK_ADVANCED, JSON.stringify(data.advancedSettings));
                 // Re-render
                 renderBatchConfig(container.closest('#batch-config') || container, {
-                    hosts: onlineHosts.concat([]), prompts: [], config, judgeRoster, lastBatch: _lastBatch,
+                    host: _currentHost, prompts: [], config, judgeRoster,
+                    harnessTargets: [..._harnessTargetMap.values()], lastBatch: _lastBatch,
                     onLaunch,
                 });
             } catch (err) {
@@ -1030,7 +1097,8 @@ function _wirePersistenceUI(container, onlineHosts, config, judgeRoster, onLaunc
                         useTemplate(tpl._id).catch(() => {});
                         close();
                         renderBatchConfig(container.closest('#batch-config') || container, {
-                            hosts: onlineHosts.concat([]), prompts: [], config, judgeRoster, lastBatch: _lastBatch,
+                            host: _currentHost, prompts: [], config, judgeRoster,
+                            harnessTargets: [..._harnessTargetMap.values()], lastBatch: _lastBatch,
                             onLaunch,
                         });
                         showToast(`Loaded "${tpl.name}"`, 'success');

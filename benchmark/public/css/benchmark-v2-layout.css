@@ -970,6 +970,15 @@
   transform: translateY(-1px);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
 }
+.mc-card.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.mc-card.is-disabled:hover {
+  border-color: var(--r-border);
+  transform: none;
+  box-shadow: none;
+}
 .mc-card.selected {
   border-color: var(--r-active);
   background:

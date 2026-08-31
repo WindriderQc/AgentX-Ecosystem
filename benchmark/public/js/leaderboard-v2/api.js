@@ -5,9 +5,10 @@ import { apiFetch } from '../utils/api.js';
 
 const BASE = '/api/benchmark';
 
-export const fetchDashboard = (includeUnavailableModels = false) => {
+export const fetchDashboard = (includeUnavailableModels = false, includeCloud = true) => {
     const params = new URLSearchParams();
     if (includeUnavailableModels) params.set('includeUnavailableModels', '1');
+    params.set('includeCloud', includeCloud ? 'true' : 'false');
     const qs = params.toString();
     return apiFetch(`${BASE}/dashboard${qs ? `?${qs}` : ''}`);
 };
@@ -15,13 +16,14 @@ export const fetchDashboard = (includeUnavailableModels = false) => {
 // axis param ∈ {'composite' (default), 'deterministic', 'subjective'} per task 0199.
 // Composite preserves the historical fetch shape; explicit axes opt into the
 // per-signal aggregation paths in src/services/benchmark/index.js.
-export const fetchGeneralistLeaderboard = (axis = 'composite', hostScope = 'current', challengeScope = 'advanced', includeUnavailableModels = false, trustScope = 'trusted') => {
+export const fetchGeneralistLeaderboard = (axis = 'composite', hostScope = 'current', challengeScope = 'advanced', includeUnavailableModels = false, trustScope = 'trusted', includeCloud = true) => {
     const params = new URLSearchParams();
     if (axis && axis !== 'composite') params.set('axis', axis);
     if (hostScope) params.set('hostScope', hostScope);
     if (challengeScope) params.set('challengeScope', challengeScope);
     if (trustScope) params.set('trustScope', trustScope);
     if (includeUnavailableModels) params.set('includeUnavailableModels', '1');
+    params.set('includeCloud', includeCloud ? 'true' : 'false');
     const qs = params.toString();
     return apiFetch(`${BASE}/generalist-leaderboard${qs ? `?${qs}` : ''}`);
 };

@@ -231,8 +231,14 @@ a deployment-owned authenticated integration.
 
 Separately operated execution harnesses can exchange provider-neutral,
 fingerprinted [worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md).
-Benchmark compares envelope-bound portable or native-ceiling evidence, but it
-does not run a harness or own its conversation and orchestration state.
+An advanced deployment may additionally enable the
+[Benchmark harness broker contract](docs/BENCHMARK_HARNESS_BROKER.md).
+Benchmark then sends bounded cells to an authenticated AIOps-owned
+OpenClaw/Hermès broker without receiving provider credentials or private
+runtime configuration. Exact `isolated_model` targets may be candidates or
+judges in a shared quality cohort; `native_agent` campaigns stay in the
+separate Harnesses view and never enter model ranks. The feature is disabled
+by default with `BENCHMARK_HARNESS_ENABLED=false`.
 
 ## Install and update
 
@@ -262,8 +268,9 @@ reads can be checked with the address-free
 [adapter-consumer conformance verifier](docs/ADAPTER_CONSUMER_CONFORMANCE.md).
 External execution harnesses can exchange provider-neutral, fingerprinted
 [worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md). Benchmark
-can compare imported portable or native-ceiling evidence, but AgentX does not
-run the harness or own its conversation/orchestration state.
+owns only the neutral target/envelope/receipt, scoring and comparison
+contracts. A separately deployed broker and its harnesses own provider calls,
+credentials, profiles, sessions, tools and orchestration state.
 Advanced operators may also install an absolute-path trusted
 extension in the full profile; Core owns only the generic loader and versioned
 contracts, never the extension source, secret, mount, or deployment. See
