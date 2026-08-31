@@ -275,6 +275,29 @@ async function gatherCostByModel(since) {
 // Daily digest summary composer
 // ---------------------------------------------------------------------------
 
+function composeBenchmarkStanding(benchmark) {
+  const leaderboard = normalizeWeeklyArrayPayload(
+    benchmark?.leaderboard,
+    ['leaderboard', 'top', 'items', 'results', 'data']
+  );
+  const trustVerdict = benchmark?.trustVerdict || null;
+  const top = leaderboard[0] || trustVerdict?.topObservation || null;
+  const model = top?.model || top?.name || null;
+  const score = top?.generalistScore ?? top?.avg_quality ?? top?.quality_score ?? top?.score ?? null;
+  const scoreText = Number.isFinite(Number(score)) ? ` (${Number(score).toFixed(1)})` : '';
+
+  if (trustVerdict?.state === 'exploratory' && model) {
+    return `Top exploratory observation: ${model}${scoreText}.`;
+  }
+  if (trustVerdict?.state === 'trusted' && model) {
+    return `No qualified winner. Top trusted observation: ${model}${scoreText}.`;
+  }
+  if (trustVerdict?.state === 'stale') {
+    return 'Benchmark evidence is stale. No qualified winner.';
+  }
+  return 'No qualified winner; benchmark evidence is inconclusive.';
+}
+
 /**
  * Builds a human-readable summary from all daily-digest sections.
  * @param {object} analytics
@@ -296,18 +319,13 @@ function composeDailyDigestSummary(analytics, performance, benchmark, rag) {
   }
 
   if (benchmark && benchmark.status !== 'unreachable') {
-    const topEntry = Array.isArray(benchmark.leaderboard) ? benchmark.leaderboard[0] : null;
-    const topModel = benchmark.top_model || benchmark.topModel || topEntry?.model || topEntry?.name || null;
-    const score = topEntry?.generalistScore ?? topEntry?.avg_quality ?? topEntry?.quality_score ?? topEntry?.score ?? null;
-    const topModelText = topModel
-      ? ` Top model: ${topModel}${Number.isFinite(Number(score)) ? ` (${Number(score).toFixed(1)})` : ''}.`
-      : '';
+    const standing = ` ${composeBenchmarkStanding(benchmark)}`;
     if (benchmark.batches != null) {
-      parts.push(`Benchmark: ${benchmark.batches} batch${benchmark.batches !== 1 ? 'es' : ''}.${topModelText}`);
+      parts.push(`Benchmark: ${benchmark.batches} batch${benchmark.batches !== 1 ? 'es' : ''}.${standing}`);
     } else if (benchmark.total_tests != null) {
-      parts.push(`Benchmark: ${benchmark.total_tests} test${benchmark.total_tests !== 1 ? 's' : ''}.${topModelText}`);
+      parts.push(`Benchmark: ${benchmark.total_tests} test${benchmark.total_tests !== 1 ? 's' : ''}.${standing}`);
     } else {
-      parts.push(`Benchmark: reachable.${topModelText}`);
+      parts.push(`Benchmark: reachable.${standing}`);
     }
   } else {
     parts.push('Benchmark: unreachable.');
@@ -345,17 +363,25 @@ router.get('/daily-digest', async (req, res) => {
   const analyticsFallback = { conversations: 0, messages: 0, cost_usd: 0, cost_by_model: [], error: 'unavailable' };
   const performanceFallback = { avg_latency_ms: 0, requests: 0, error_rate: 0, error: 'unavailable' };
 
-  const [analyticsBase, costByModel, performance, benchmarkRaw, ragStatusRaw, ragMetricsRaw] = await Promise.all([
+  const [analyticsBase, costByModel, performance, benchmarkRaw, leaderboardRaw, ragStatusRaw, ragMetricsRaw] = await Promise.all([
     safe(() => gatherAnalytics(since), analyticsFallback),
     safe(() => gatherCostByModel(since), []),
     safe(() => gatherPerformance(since), performanceFallback),
     safe(() => svc.fetchBenchmarkAnalyticsSummary(), null),
+    safe(() => svc.fetchBenchmarkLeaderboard({ trustScope: 'trusted' }), null),
     safe(() => svc.fetchRagStatus(), null),
     safe(() => svc.fetchRagMetrics(), null)
   ]);
 
   const analytics = { ...analyticsBase, cost_by_model: costByModel };
-  const benchmark = benchmarkRaw !== null ? benchmarkRaw : { status: 'unreachable' };
+  const benchmark = (benchmarkRaw !== null || leaderboardRaw !== null)
+    ? {
+        ...(benchmarkRaw || {}),
+        leaderboard: normalizeWeeklyArrayPayload(leaderboardRaw, ['leaderboard', 'top', 'items', 'results', 'data']),
+        trustVerdict: leaderboardRaw?.trustVerdict || null,
+        trustScope: leaderboardRaw?.trustScope || 'trusted'
+      }
+    : { status: 'unreachable', trustScope: 'trusted' };
   const rag = (ragStatusRaw !== null || ragMetricsRaw !== null)
     ? {
         ...(ragStatusRaw || {}),
@@ -463,11 +489,8 @@ function composeWeeklyReviewSummary(benchmark, costs, profiler, planning) {
   if (benchmark && benchmark.status !== 'unreachable') {
     const leaderboard = normalizeWeeklyArrayPayload(benchmark.leaderboard, ['leaderboard', 'top', 'items', 'results', 'data']);
     const trends = normalizeWeeklyTrendsPayload(benchmark.trends);
-    const topModel = leaderboard[0]
-      ? ` Top model: ${leaderboard[0].model || leaderboard[0].name || 'unknown'}.`
-      : '';
     const trendNote = trends ? ' Trends available.' : '';
-    parts.push(`Benchmark reachable.${topModel}${trendNote}`);
+    parts.push(`Benchmark reachable. ${composeBenchmarkStanding({ ...benchmark, leaderboard })}${trendNote}`);
   } else {
     parts.push('Benchmark: unreachable.');
   }
@@ -513,8 +536,8 @@ router.get('/weekly-review', async (req, res) => {
   const [costsRaw, trendsRaw, leaderboardRaw, recommendationsRaw, profilerRaw, planning] = await Promise.all([
     safe(() => gatherWeeklyCosts(since), { this_period_usd: 0, messages: 0 }),
     safe(() => svc.fetchBenchmarkTrends(), null),
-    safe(() => svc.fetchBenchmarkLeaderboard(), null),
-    safe(() => svc.fetchBenchmarkRecommendations(), null),
+    safe(() => svc.fetchBenchmarkLeaderboard({ trustScope: 'trusted' }), null),
+    safe(() => svc.fetchBenchmarkRecommendations({ trustScope: 'trusted' }), null),
     safe(() => svc.fetchProfilerDashboard(), null),
     safe(() => planningReviewService.buildWeeklyReview({ since }), {
       status: 'unreachable',
@@ -528,7 +551,9 @@ router.get('/weekly-review', async (req, res) => {
     : {
         trends: normalizeWeeklyTrendsPayload(trendsRaw),
         leaderboard: normalizeWeeklyArrayPayload(leaderboardRaw, ['leaderboard', 'top', 'items', 'results', 'data']),
-        recommendations: normalizeWeeklyArrayPayload(recommendationsRaw, ['recommendations', 'items', 'results', 'data'])
+        recommendations: normalizeWeeklyArrayPayload(recommendationsRaw, ['recommendations', 'items', 'results', 'data']),
+        trustVerdict: leaderboardRaw?.trustVerdict || null,
+        trustScope: leaderboardRaw?.trustScope || 'trusted'
       };
 
   const profiler = profilerRaw !== null ? profilerRaw : { status: 'unreachable' };

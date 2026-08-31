@@ -98,10 +98,17 @@ class BenchmarkServiceClient {
    * @param {boolean} [opts.skipCache]   - Force fresh fetch
    * @returns {Promise<Array>} recommendations array (may be empty)
    */
-  async getRecommendations(category, opts = {}) {
-    if (!category) return [];
+  async getRecommendationView(category, opts = {}) {
+    if (!category) return { category: null, trustVerdict: null, recommendations: [] };
+    const trustScope = String(opts.trustScope || '').trim().toLowerCase();
+    if (!['trusted', 'exploratory'].includes(trustScope)) {
+      throw new BenchmarkServiceClientError(
+        'trustScope must be explicitly set to trusted or exploratory',
+        { status: 400, code: 'TRUST_SCOPE_REQUIRED' }
+      );
+    }
 
-    const cacheKey = `rec:${category}:${opts.host || ''}:${opts.min_quality || ''}`;
+    const cacheKey = `rec:${trustScope}:${category}:${opts.host || ''}:${opts.min_quality || ''}`;
 
     // Serve from cache unless caller opts out
     if (!opts.skipCache) {
@@ -111,7 +118,7 @@ class BenchmarkServiceClient {
       }
     }
 
-    const query = { category };
+    const query = { category, trustScope };
     if (opts.host) query.host = opts.host;
     if (opts.min_quality != null) query.min_quality = String(opts.min_quality);
 
@@ -135,15 +142,56 @@ class BenchmarkServiceClient {
 
     if (json === null) {
       const stale = this._cache.get(cacheKey);
-      return stale ? stale.data : [];
+      if (!stale) return { category, trustScope, status: 'unreachable', trustVerdict: null, recommendations: [] };
+      return {
+        ...stale.data,
+        status: 'stale',
+        trustVerdict: stale.data?.trustVerdict ? {
+          ...stale.data.trustVerdict,
+          state: 'stale',
+          comparable: false,
+          qualified: false,
+          highConfidenceAllowed: false,
+          claim: 'no_qualified_winner',
+          qualifiedWinner: null,
+          reasons: [...new Set([...(stale.data.trustVerdict.reasons || []), 'stale_cache'])]
+        } : null,
+        recommendations: (stale.data?.recommendations || []).map((row) => ({
+          ...row,
+          confidence: 'low',
+          evidence_level: 'stale',
+          qualified: false
+        }))
+      };
     }
 
-    const recommendations = json?.data?.recommendations || [];
+    const upstreamData = json?.data || {};
+    const trustVerdict = upstreamData.trustVerdict || null;
+    const phase0Projection = !trustVerdict
+      || trustVerdict.contract === 'agentx.benchmark-consumer-trust/v1';
+    const view = {
+      category,
+      trustScope,
+      ...upstreamData,
+      recommendations: (upstreamData.recommendations || []).map((row) => ({
+        ...row,
+        confidence: phase0Projection && row.confidence === 'high'
+          ? (trustVerdict?.state === 'trusted' ? 'medium' : 'low')
+          : row.confidence,
+        evidence_level: trustVerdict?.state || row.evidence_level || 'inconclusive',
+        qualified: phase0Projection ? false : row.qualified === true
+      }))
+    };
 
     // Update cache
-    this._cache.set(cacheKey, { data: recommendations, ts: Date.now() });
+    this._cache.set(cacheKey, { data: view, ts: Date.now() });
 
-    return recommendations;
+    return view;
+  }
+
+  async getRecommendations(category, opts = {}) {
+    const view = await this.getRecommendationView(category, opts);
+    return view.recommendations || [];
   }
 
   /**
@@ -280,16 +328,24 @@ class BenchmarkServiceClient {
    * Useful for showing a summary of all categories at once.
    * @returns {Promise<Object>} { category: recommendations[] }
    */
-  async getAllCategoryRecommendations() {
+  async getAllCategoryRecommendations({ trustScope } = {}) {
+    if (!['trusted', 'exploratory'].includes(String(trustScope || '').toLowerCase())) {
+      throw new BenchmarkServiceClientError(
+        'trustScope must be explicitly set to trusted or exploratory',
+        { status: 400, code: 'TRUST_SCOPE_REQUIRED' }
+      );
+    }
     const categories = ['coding', 'reasoning', 'math', 'knowledge', 'instruction', 'creative', 'translation'];
     const result = {};
 
     const fetches = await Promise.allSettled(
-      categories.map(cat => this.getRecommendations(cat))
+      categories.map(cat => this.getRecommendationView(cat, { trustScope }))
     );
 
     fetches.forEach((res, i) => {
-      result[categories[i]] = res.status === 'fulfilled' ? res.value : [];
+      result[categories[i]] = res.status === 'fulfilled'
+        ? res.value
+        : { category: categories[i], trustScope, status: 'unavailable', trustVerdict: null, recommendations: [] };
     });
 
     return result;

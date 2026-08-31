@@ -1,8 +1,8 @@
 /**
  * Models Page — Benchmark Recommendations Widget
  *
- * Renders a "Benchmark Recommends" banner at the top of the models page,
- * showing top-rated models per category from the benchmark recommend API.
+ * Renders a Benchmark evidence panel at the top of the models page,
+ * showing scoped observations per category from the benchmark recommend API.
  * Data flows: benchmark service -> core proxy -> this widget.
  */
 
@@ -57,10 +57,21 @@
   }
 
   async function fetchRecommendations(category) {
-    const res = await fetch(`${PROXY_BASE}/recommend?category=${encodeURIComponent(category)}`);
+    const res = await fetch(`${PROXY_BASE}/recommend?category=${encodeURIComponent(category)}&trustScope=trusted`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    return json?.data?.recommendations || [];
+    return json?.data || { recommendations: [], trustVerdict: null };
+  }
+
+  function buildTrustNotice(trust) {
+    const state = trust?.state || 'inconclusive';
+    const labels = {
+      trusted: 'Trusted observation — no qualified winner',
+      exploratory: 'Exploratory observation',
+      stale: 'Stale evidence — no qualified winner',
+      inconclusive: 'Inconclusive evidence — no qualified winner'
+    };
+    return `<div class="rec-evidence-level" role="status" data-evidence-level="${safe(state)}">${safe(labels[state] || labels.inconclusive)}</div>`;
   }
 
   function buildChips(activeCategory, container) {
@@ -73,7 +84,7 @@
     }).join('');
   }
 
-  function buildRows(recs) {
+  function buildRows(recs, trustVerdict) {
     if (!recs || recs.length === 0) {
       return '<div class="rec-empty">No benchmark data for this category yet.</div>';
     }
@@ -81,7 +92,12 @@
       const score = typeof rec.quality_score === 'number' ? rec.quality_score : null;
       const color = score != null ? scoreColor(score) : '#888';
       const displayScore = score != null ? score.toFixed(1) : '--';
-      const conf = CONFIDENCE_MAP[rec.confidence] || CONFIDENCE_MAP.low;
+      const phase0Projection = !trustVerdict
+        || trustVerdict.contract === 'agentx.benchmark-consumer-trust/v1';
+      const assertedConfidence = !phase0Projection && trustVerdict?.highConfidenceAllowed === true
+        ? rec.confidence
+        : (rec.confidence === 'high' ? 'medium' : rec.confidence);
+      const conf = CONFIDENCE_MAP[assertedConfidence] || CONFIDENCE_MAP.low;
       const host = stripHost(rec.host);
       const model = safe(rec.model || '--');
       const count = rec.result_count != null ? rec.result_count : 0;
@@ -128,7 +144,7 @@
       <div class="rec-header">
         <div class="rec-title">
           <i class="fas fa-trophy" style="color:#f59e0b;"></i>
-          Benchmark Recommends
+          Benchmark Evidence
         </div>
         <a href="${benchmarkUrl}/leaderboard" class="rec-link">
           Full Leaderboard <i class="fas fa-external-link-alt"></i>
@@ -153,8 +169,8 @@
       bodyEl.innerHTML = '<div class="rec-empty">Loading...</div>';
 
       try {
-        const recs = await fetchRecommendations(category);
-        bodyEl.innerHTML = buildRows(recs);
+        const view = await fetchRecommendations(category);
+        bodyEl.innerHTML = buildTrustNotice(view.trustVerdict) + buildRows(view.recommendations, view.trustVerdict);
       } catch (err) {
         console.warn('[models-recommendations] fetch failed:', err);
         bodyEl.innerHTML = '<div class="rec-empty" style="color:#f87171;">Benchmark service unavailable.</div>';

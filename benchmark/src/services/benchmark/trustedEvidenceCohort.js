@@ -146,12 +146,22 @@ function candidateFixtureCompatibility(rows) {
     };
 }
 
-function assessTrustedCohort(group, batch, { asOf = new Date(), freshnessDays = freshnessDaysFromEnv() } = {}) {
+function assessTrustedCohort(group, batch, {
+    asOf = new Date(),
+    freshnessDays = freshnessDaysFromEnv(),
+    inventory = null
+} = {}) {
     const reasons = [];
     const completedAt = dateValue(batch?.completed_at || group?.latestTimestamp);
     const cutoff = new Date(asOf).getTime() - freshnessDays * 24 * 60 * 60 * 1000;
     if (batch?.status !== 'completed') reasons.push('batch_not_completed');
     if (completedAt === null || completedAt < cutoff) reasons.push('stale');
+    const plannedTests = Number(batch?.total_tests || 0);
+    const completedTests = Number(batch?.completed || 0);
+    const failedTests = Number(batch?.failed || 0);
+    if (plannedTests <= 0 || completedTests !== plannedTests || failedTests !== 0) {
+        reasons.push('batch_counts_incomplete');
+    }
 
     const fixture = fixtureIdentity(group?.fixtures);
     if (!fixture.complete) reasons.push('fixture_identity_missing');
@@ -177,20 +187,41 @@ function assessTrustedCohort(group, batch, { asOf = new Date(), freshnessDays = 
         reasons.push('confidence_unknown');
     }
 
+    // The trusted query deliberately filters failed, excluded and unscored
+    // rows. Without a second look at the same requested scope, those hidden
+    // rows could make a partial campaign look complete. The resolver supplies
+    // this bounded inventory; direct unit callers may omit it.
+    if (inventory) {
+        if (Number(inventory.excludedRows || 0) > 0) reasons.push('excluded_rows');
+        if (Number(inventory.failedRows || 0) > 0) reasons.push('incomplete_rows');
+        if (Number(inventory.unscoredRows || 0) > 0) reasons.push('unscored_rows');
+        if (Number(inventory.totalRows || 0) !== plannedTests) {
+            reasons.push('batch_result_count_mismatch');
+        }
+        if (Number(inventory.totalRows || 0) !== Number(group?.rowCount || 0)) {
+            reasons.push('partial_scope');
+        }
+    } else {
+        reasons.push('batch_inventory_missing');
+    }
+
     const judgeTargets = (group?.judgeTargets || [])
         .map((target) => ({
             model: normalizeText(target?.model).toLowerCase(),
             host: normalizeText(target?.host).replace(/\/+$/, '').toLowerCase()
         }))
-        .filter((target) => target.model || target.host)
+        .filter((target) => target.model && target.host)
         .sort((left, right) => `${left.model}@@${left.host}`.localeCompare(`${right.model}@@${right.host}`));
-    const scorerFingerprint = scorerVersions.length === 1
+    const judgeIdentityKnown = Number(group?.judgeKnownRows || 0) === Number(group?.rowCount || 0)
+        && judgeTargets.length === 1;
+    if (!judgeIdentityKnown) reasons.push('judge_identity_missing_or_mixed');
+    const scorerFingerprint = scorerVersions.length === 1 && judgeIdentityKnown
         ? fingerprint({ scorerVersion: scorerVersions[0], judgeTargets })
         : null;
 
     return {
         eligible: reasons.length === 0,
-        reasons,
+        reasons: [...new Set(reasons)],
         batchId: String(group?._id || batch?._id || ''),
         completedAt: completedAt === null ? null : new Date(completedAt).toISOString(),
         latestTimestamp: dateValue(group?.latestTimestamp),
@@ -262,6 +293,14 @@ async function resolveTrustedEvidenceCohort(matchQuery, options = {}) {
                 judgeTargets: {
                     $addToSet: { model: '$judge_model', host: '$judge_host' }
                 },
+                judgeKnownRows: {
+                    $sum: { $cond: [{ $and: [
+                        { $eq: [{ $type: '$judge_model' }, 'string'] },
+                        { $ne: ['$judge_model', ''] },
+                        { $eq: [{ $type: '$judge_host' }, 'string'] },
+                        { $ne: ['$judge_host', ''] }
+                    ] }, 1, 0] }
+                },
                 fixtures: {
                     $addToSet: {
                         name: '$prompt_name',
@@ -293,18 +332,54 @@ async function resolveTrustedEvidenceCohort(matchQuery, options = {}) {
     ], GENERALIST_AGGREGATION_OPTIONS);
 
     const batchIds = groups.map((group) => group._id).filter(Boolean);
-    const batches = batchIds.length > 0
-        ? await BenchmarkBatch.aggregate([
-            { $match: { _id: { $in: batchIds } } },
-            { $project: { status: 1, completed_at: 1 } }
-        ], GENERALIST_AGGREGATION_OPTIONS)
-        : [];
+    const scoreField = ['composite_score', 'quality_score', 'deterministic_score', 'subjective_score']
+        .find((field) => Object.prototype.hasOwnProperty.call(matchQuery || {}, field)) || null;
+    // Inventory the whole planned batch, not only the consumer's filtered
+    // slice. This makes a never-inserted planned cell visible through the
+    // batch counters and makes host/challenge/category slices fail closed as
+    // partial rather than masquerading as complete cohorts.
+    const scopeMatch = { batch_id: { $in: batchIds } };
+
+    const [batches, inventories] = batchIds.length > 0
+        ? await Promise.all([
+            BenchmarkBatch.aggregate([
+                { $match: { _id: { $in: batchIds } } },
+                { $project: { status: 1, completed_at: 1, total_tests: 1, completed: 1, failed: 1 } }
+            ], GENERALIST_AGGREGATION_OPTIONS),
+            BenchmarkResult.aggregate([
+                { $match: scopeMatch },
+                {
+                    $group: {
+                        _id: '$batch_id',
+                        totalRows: { $sum: 1 },
+                        excludedRows: {
+                            $sum: { $cond: [{ $eq: ['$excluded_from_leaderboard', true] }, 1, 0] }
+                        },
+                        failedRows: {
+                            $sum: { $cond: [{ $or: [
+                                { $ne: ['$success', true] },
+                                { $eq: ['$infra_error', true] }
+                            ] }, 1, 0] }
+                        },
+                        unscoredRows: scoreField
+                            ? { $sum: { $cond: [{ $eq: [`$${scoreField}`, null] }, 1, 0] } }
+                            : { $sum: 0 }
+                    }
+                }
+            ], GENERALIST_AGGREGATION_OPTIONS)
+        ])
+        : [[], []];
     const batchesById = new Map(batches.map((batch) => [String(batch._id), batch]));
+    const inventoriesById = new Map(inventories.map((row) => [String(row._id), row]));
     const freshnessDays = options.freshnessDays || freshnessDaysFromEnv();
     const assessed = groups.map((group) => assessTrustedCohort(
         group,
         batchesById.get(String(group._id)),
-        { asOf: options.asOf || new Date(), freshnessDays }
+        {
+            asOf: options.asOf || new Date(),
+            freshnessDays,
+            inventory: inventoriesById.get(String(group._id)) || null
+        }
     ));
     const selected = selectTrustedCohort(assessed);
     const selectedBatchObjectId = selected
@@ -326,6 +401,80 @@ async function resolveTrustedEvidenceCohort(matchQuery, options = {}) {
     };
 }
 
+/**
+ * Convert the one authoritative cohort resolution into a consumer-facing
+ * verdict. Phase 0 intentionally cannot mint a qualified winner: the exact
+ * human/judge qualification receipt is a later contract. Consumers still get
+ * the strongest honest observation and an explicit reason for the limit.
+ */
+function buildConsumerTrustVerdict({
+    trustScope,
+    cohortResolution = null,
+    rows = [],
+    scopeComplete = null,
+    comparisonSufficient = null
+} = {}) {
+    const requestedScope = trustScope === 'trusted' ? 'trusted' : 'exploratory';
+    const visibleRows = (rows || []).filter((row) => row && row.filtered !== true);
+    const top = visibleRows[0] || null;
+    const resolution = cohortResolution || {};
+    const exclusions = resolution.exclusionReasons || {};
+    const activeExclusionReasons = Object.entries(exclusions)
+        .filter(([, count]) => Number(count || 0) > 0)
+        .map(([reason]) => reason);
+    const allExcludedAreStale = Number(resolution.excludedBatchCount || 0) > 0
+        && Number(exclusions.stale || 0) === Number(resolution.excludedBatchCount || 0)
+        && activeExclusionReasons.length === 1
+        && activeExclusionReasons[0] === 'stale';
+
+    let state = 'exploratory';
+    const reasons = [];
+    if (requestedScope === 'exploratory') {
+        reasons.push('exploratory_scope');
+    } else if (!resolution.selected) {
+        state = allExcludedAreStale ? 'stale' : 'inconclusive';
+        reasons.push(...Object.keys(exclusions));
+        if (reasons.length === 0) reasons.push('no_compatible_cohort');
+    } else if (scopeComplete === false) {
+        state = 'inconclusive';
+        reasons.push('partial_scope');
+    } else if (comparisonSufficient === false) {
+        state = 'inconclusive';
+        reasons.push('insufficient_comparison');
+    } else {
+        state = 'trusted';
+    }
+
+    // Human certification of the exact judge/rubric/holdout and an immutable
+    // ranking receipt do not exist in Phase 0. Keep that absence visible and
+    // fail closed for winner/high-confidence language.
+    reasons.push('qualified_receipt_unavailable');
+
+    return {
+        contract: 'agentx.benchmark-consumer-trust/v1',
+        requestedScope,
+        state,
+        comparable: state === 'trusted',
+        qualified: false,
+        qualification: 'insufficient',
+        highConfidenceAllowed: false,
+        claim: top && state === 'exploratory'
+            ? 'top_exploratory_observation'
+            : 'no_qualified_winner',
+        reasons: [...new Set(reasons)],
+        topObservation: top ? {
+            model: top.model || null,
+            host: top.host || null,
+            score: top.generalistScore ?? top.quality_score ?? null
+        } : null,
+        qualifiedWinner: null,
+        cohort: resolution.selected ? {
+            evidenceFingerprint: resolution.selected.evidenceFingerprint || null,
+            completedAt: resolution.selected.completedAt || null
+        } : null
+    };
+}
+
 module.exports = {
     DEFAULT_TRUSTED_FRESHNESS_DAYS,
     canonicalize,
@@ -335,5 +484,6 @@ module.exports = {
     candidateFixtureCompatibility,
     assessTrustedCohort,
     selectTrustedCohort,
-    resolveTrustedEvidenceCohort
+    resolveTrustedEvidenceCohort,
+    buildConsumerTrustVerdict
 };

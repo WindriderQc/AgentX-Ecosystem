@@ -45,6 +45,17 @@ function getRagBaseUrl() {
   return sanitizeEnvUrl(process.env.RAG_SERVICE_URL, DEFAULT_RAG_URL);
 }
 
+function requireTrustScope(trustScope) {
+  const normalized = String(trustScope || '').trim().toLowerCase();
+  if (!['trusted', 'exploratory'].includes(normalized)) {
+    throw new ReportsServiceClientError(
+      'trustScope must be explicitly set to trusted or exploratory',
+      { status: 400, code: 'TRUST_SCOPE_REQUIRED' }
+    );
+  }
+  return normalized;
+}
+
 function unwrapServiceEnvelope(parsed) {
   if (!parsed || typeof parsed !== 'object') return parsed;
   if (parsed.status === 'success' && 'data' in parsed) return parsed.data;
@@ -93,13 +104,27 @@ class ReportsServiceClient {
   }
 
   /** GET /api/benchmark/generalist-leaderboard */
-  async fetchBenchmarkLeaderboard() {
-    return fetchJson(getBenchmarkBaseUrl(), '/api/benchmark/generalist-leaderboard');
+  async fetchBenchmarkLeaderboard({ trustScope } = {}) {
+    const scope = requireTrustScope(trustScope);
+    return fetchJson(
+      getBenchmarkBaseUrl(),
+      `/api/benchmark/generalist-leaderboard?axis=composite&hostScope=current&includeUnavailableModels=true&trustScope=${scope}`
+    );
   }
 
   /** GET /api/benchmark/recommend — returns top recommendations per category */
-  async fetchBenchmarkRecommendations() {
-    return fetchJson(getBenchmarkBaseUrl(), '/api/benchmark/recommend');
+  async fetchBenchmarkRecommendations({ trustScope } = {}) {
+    const scope = requireTrustScope(trustScope);
+    const categories = ['coding', 'reasoning', 'math', 'knowledge', 'instruction', 'creative', 'translation'];
+    const views = await Promise.all(categories.map((category) => fetchJson(
+      getBenchmarkBaseUrl(),
+      `/api/benchmark/recommend?category=${encodeURIComponent(category)}&trustScope=${scope}`
+    )));
+    return {
+      trustScope: scope,
+      categories: Object.fromEntries(categories.map((category, index) => [category, views[index]])),
+      recommendations: views.flatMap((view) => (view?.recommendations || []).slice(0, 1))
+    };
   }
 
   /** GET /api/profiler/dashboard */

@@ -73,8 +73,11 @@ describe('leaderboard evidence-honesty UI', () => {
 
     test('defaults the page to Trusted unless the user explicitly stored Exploratory', () => {
         const source = fs.readFileSync(path.join(PUBLIC_ROOT, 'index.js'), 'utf8');
+        const apiSource = fs.readFileSync(path.join(PUBLIC_ROOT, 'api.js'), 'utf8');
         expect(source).toContain("let _trustScope = 'trusted'");
         expect(source).toContain("=== 'exploratory' ? 'exploratory' : 'trusted'");
+        expect(apiSource).toContain("params.set('trustScope', trustScope)");
+        expect(apiSource).not.toContain("trustScope !== 'exploratory'");
     });
 
     test('renders missing category bars as unavailable, never measured zero', () => {
@@ -163,14 +166,14 @@ describe('leaderboard evidence-honesty UI', () => {
             categoryEvidence: { coding: 'scored', reasoning: 'untested' }
         }]);
 
-        expect(container.innerHTML).toContain('Provisional evidence');
+        expect(container.innerHTML).toContain('Evidence observations');
         expect(container.innerHTML).toContain('Evidence 1');
         expect(container.innerHTML).not.toContain('>Champion<');
         expect(container.innerHTML).not.toContain('aria-label="Gold"');
         expect(container.innerHTML).toContain('Reasoning: not tested');
     });
 
-    test('retains Champion for explicit full-scope evidence', () => {
+    test('ignores forged Phase 0 qualification fields even for full-scope evidence', () => {
         const { renderPodium } = loadBrowserModule('podium.js', 'renderPodium');
         const container = { innerHTML: '' };
 
@@ -181,10 +184,40 @@ describe('leaderboard evidence-honesty UI', () => {
             evidenceStatus: 'full_scope',
             totalTests: 50,
             categoryAverages: { coding: 88, reasoning: 87 }
-        }]);
+        }], {
+            trustVerdict: {
+                contract: 'agentx.benchmark-consumer-trust/v1',
+                qualified: true,
+                qualifiedWinner: { model: 'full-model', host: null },
+                state: 'trusted'
+            }
+        });
 
-        expect(container.innerHTML).toContain('>Champion<');
-        expect(container.innerHTML).not.toContain('Partial leader');
+        expect(container.innerHTML).toContain('No exact qualification receipt');
+        expect(container.innerHTML).toContain('Evidence 1');
+        expect(container.innerHTML).not.toContain('>Champion<');
+        expect(container.innerHTML).not.toContain('aria-label="Gold"');
+    });
+
+    test('does not award Champion to full-scope evidence without a qualification receipt', () => {
+        const { renderPodium } = loadBrowserModule('podium.js', 'renderPodium');
+        const container = { innerHTML: '' };
+
+        renderPodium(container, [{
+            model: 'trusted-observation',
+            generalistScore: 91,
+            fullScopeEligible: true,
+            evidenceStatus: 'full_scope',
+            totalTests: 87,
+            categoryAverages: { coding: 91, reasoning: 90 }
+        }], {
+            trustVerdict: { qualified: false, qualifiedWinner: null, state: 'trusted' }
+        });
+
+        expect(container.innerHTML).toContain('No exact qualification receipt');
+        expect(container.innerHTML).toContain('Evidence 1');
+        expect(container.innerHTML).not.toContain('>Champion<');
+        expect(container.innerHTML).not.toContain('aria-label="Gold"');
     });
 
     test('does not award a table medal when every row is provisional', async () => {

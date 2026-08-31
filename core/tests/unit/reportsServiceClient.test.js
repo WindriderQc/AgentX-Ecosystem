@@ -177,18 +177,32 @@ describe('ReportsServiceClient', () => {
 
     it('fetchBenchmarkLeaderboard returns null on ECONNREFUSED', async () => {
       mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
-      expect(await client.fetchBenchmarkLeaderboard()).toBeNull();
+      expect(await client.fetchBenchmarkLeaderboard({ trustScope: 'trusted' })).toBeNull();
     });
 
     it('fetchBenchmarkLeaderboard calls correct URL', async () => {
       mockFetch.mockResolvedValue({ ok: true, json: async () => ([]) });
-      await client.fetchBenchmarkLeaderboard();
+      await client.fetchBenchmarkLeaderboard({ trustScope: 'trusted' });
       expect(mockFetch.mock.calls[0][0]).toContain('/api/benchmark/generalist-leaderboard');
+      expect(mockFetch.mock.calls[0][0]).toContain('trustScope=trusted');
     });
 
-    it('fetchBenchmarkRecommendations returns null on ECONNREFUSED', async () => {
+    it('fetchBenchmarkRecommendations keeps every failed category explicitly unavailable', async () => {
       mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
-      expect(await client.fetchBenchmarkRecommendations()).toBeNull();
+      const result = await client.fetchBenchmarkRecommendations({ trustScope: 'trusted' });
+      expect(result.trustScope).toBe('trusted');
+      expect(result.recommendations).toEqual([]);
+      expect(result.categories.coding).toBeNull();
+    });
+
+    it('requires report consumers to choose a trust scope', async () => {
+      await expect(client.fetchBenchmarkLeaderboard()).rejects.toMatchObject({
+        code: 'TRUST_SCOPE_REQUIRED'
+      });
+      await expect(client.fetchBenchmarkRecommendations()).rejects.toMatchObject({
+        code: 'TRUST_SCOPE_REQUIRED'
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('fetchProfilerDashboard returns null on ECONNREFUSED', async () => {

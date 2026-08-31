@@ -20,7 +20,7 @@ export const fetchGeneralistLeaderboard = (axis = 'composite', hostScope = 'curr
     if (axis && axis !== 'composite') params.set('axis', axis);
     if (hostScope) params.set('hostScope', hostScope);
     if (challengeScope) params.set('challengeScope', challengeScope);
-    if (trustScope && trustScope !== 'exploratory') params.set('trustScope', trustScope);
+    if (trustScope) params.set('trustScope', trustScope);
     if (includeUnavailableModels) params.set('includeUnavailableModels', '1');
     const qs = params.toString();
     return apiFetch(`${BASE}/generalist-leaderboard${qs ? `?${qs}` : ''}`);

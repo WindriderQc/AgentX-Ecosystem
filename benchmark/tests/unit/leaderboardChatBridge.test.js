@@ -19,4 +19,12 @@ describe('Leaderboard to Chat bridge', () => {
     expect(source).toContain('entry?.host_available === false');
     expect(source).toContain('Use in Chat');
   });
+
+  test('keeps the action manual and shows the evidence level beside it', () => {
+    expect(source).toContain('routing will not change automatically');
+    expect(source).toContain('cb-use-model-proof');
+    expect(source).toContain('data-evidence-level');
+    expect(source).toContain('Exploratory evidence');
+    expect(source).not.toContain('fetch(useModelUrl');
+  });
 });

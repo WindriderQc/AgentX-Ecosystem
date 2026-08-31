@@ -23,7 +23,7 @@ import { showFatalError, showSectionError } from '../components/error-banner.js'
 // ---------------------------------------------------------------------------
 
 /** Convert generalist leaderboard entry to the shape expected by the boards. */
-function toGeneralistBoardEntry(entry, scoreAxis = 'composite') {
+function toGeneralistBoardEntry(entry, scoreAxis = 'composite', trustVerdict = null) {
     // generalistScore is 0-100 scale; board expects 0-10
     const score = entry.generalistScore != null ? entry.generalistScore / 10 : 0;
     const categoryScores = buildCategoryScores(entry.categoryAverages || {});
@@ -67,6 +67,8 @@ function toGeneralistBoardEntry(entry, scoreAxis = 'composite') {
         confidenceRepeatCount: entry.confidenceRepeatCount || 0,
         evidenceCompatibility: entry.evidenceCompatibility || 'exploratory',
         evidenceCohortId: entry.evidenceCohortId || null,
+        evidenceTrustVerdict: trustVerdict,
+        qualifiedWinnerEligible: false,
         reviewCount:     entry.needsReviewCount || 0,
         trend:           null,
         filtered:        entry.filtered || false
@@ -206,24 +208,31 @@ function restoreShell(main, hosts = []) {
  * @param {HTMLElement} leaderboardEl - the #leaderboard section
  * @param {object} opts - { trusted:boolean, visibleCount:number, excluded:number }
  */
-function renderTrustBanner(leaderboardEl, { trusted, visibleCount, trustedFilters } = {}) {
+function renderTrustBanner(leaderboardEl, { trusted, visibleCount, trustedFilters, trustVerdict } = {}) {
     if (!leaderboardEl) return;
     // Remove any banner from a previous render so toggling is clean.
     const prior = document.getElementById('trust-onboard-banner');
     if (prior) prior.remove();
 
-    const THIN = 2; // a Trusted board with ≤2 models is effectively empty/thin
-    if (!trusted || visibleCount > THIN) return;
-
     const cohort = trustedFilters?.cohort || {};
     const selected = cohort.selected || null;
     const excluded = Number(cohort.excludedBatchCount || 0);
-    const lead = visibleCount === 0
-        ? 'No compatible evidence cohort is available for <strong>Trusted</strong> ranking.'
-        : `The <strong>Trusted</strong> view is showing ${visibleCount} model${visibleCount === 1 ? '' : 's'} from one compatible evidence cohort.`;
+    const state = trustVerdict?.state || (trusted ? 'inconclusive' : 'exploratory');
+    const lead = state === 'exploratory'
+        ? '<strong>Exploratory observations</strong> — not a qualified winner.'
+        : state === 'stale'
+            ? '<strong>Stale evidence</strong> — no qualified winner.'
+            : state === 'trusted'
+                ? '<strong>Trusted cohort</strong> — no qualified winner without an exact qualification receipt.'
+                : '<strong>Inconclusive evidence</strong> — no qualified winner.';
     const excludedNote = excluded > 0
         ? ` ${excluded} legacy, stale, or incompatible batch${excluded === 1 ? ' was' : 'es were'} excluded.`
         : '';
+    const detail = state === 'exploratory'
+        ? `These ${visibleCount} observation${visibleCount === 1 ? ' is' : 's are'} historical evidence for inspection only. High-confidence and qualified-winner claims are disabled.`
+        : selected
+            ? `One exact compatible cohort is visible. Human qualification of the exact judge/rubric/holdout and an immutable ranking receipt are not present in Phase 0.`
+            : 'No recent, complete, compatible cohort satisfies the requested Trusted scope.';
 
     const banner = document.createElement('div');
     banner.id = 'trust-onboard-banner';
@@ -233,7 +242,7 @@ function renderTrustBanner(leaderboardEl, { trusted, visibleCount, trustedFilter
         <div style="font-size:1.3rem;line-height:1;">🎯</div>
         <div style="flex:1;min-width:0;">
             <div style="font-weight:700;color:var(--r-text,#eee);font-size:0.92rem;margin-bottom:0.25rem;">${lead}</div>
-            <p style="color:#bbb;font-size:0.82rem;line-height:1.45;margin:0 0 0.55rem;">Trusted compares only one recent completed campaign with an exact fixture digest, scorer identity, and per-candidate artifact/runtime fingerprints.${excludedNote} ${selected ? 'Judge confidence is known for every ranked row.' : 'Run a new exact-identity comparison to populate this view.'} Switch to <strong>Exploratory</strong> to inspect historical evidence without treating it as comparable.</p>
+            <p style="color:#bbb;font-size:0.82rem;line-height:1.45;margin:0 0 0.55rem;">${detail}${excludedNote} Switch scopes only to inspect evidence; no view changes routing.</p>
             <a class="r-nav-btn r-primary" href="/" style="text-decoration:none;display:inline-block;">Run compatible evidence →</a>
         </div>`;
     leaderboardEl.parentNode?.insertBefore(banner, leaderboardEl);
@@ -594,13 +603,18 @@ async function init() {
 
     // Extract leaderboard array; when a single host is selected, narrow to it
     // (the server returns the whole configured fleet under 'current' scope).
-    let rawRankings = generalistRes?.data?.leaderboard || [];
+    const trustVerdict = generalistRes?.data?.trustVerdict || null;
+    let rawRankings = (generalistRes?.data?.leaderboard || []).map((entry) => ({
+        ...entry,
+        evidenceTrustVerdict: trustVerdict,
+        qualifiedWinnerEligible: false
+    }));
     if (_selectedHost) {
         rawRankings = rawRankings.filter(e => (e.host || '') === _selectedHost);
     }
 
     // Build working copy enriched for generalist-board / category-map
-    const rankings = rawRankings.map(entry => toGeneralistBoardEntry(entry, _currentAxis));
+    const rankings = rawRankings.map(entry => toGeneralistBoardEntry(entry, _currentAxis, trustVerdict));
 
     // Resolve host IPs to friendly names
     for (const entry of rankings) {
@@ -664,13 +678,13 @@ async function init() {
     if (podiumEl) {
         try {
             // Render podium immediately with score data (perf loads async below)
-            renderPodium(podiumEl, rawRankings, { categoryWeights });
+            renderPodium(podiumEl, rawRankings, { categoryWeights, trustVerdict });
 
             // Enrich top-3 with performance metrics, then re-render
             const top3 = rawRankings.filter(r => !r.filtered).slice(0, 3);
             if (top3.length > 0) {
                 enrichWithPerfData(top3).then(() => {
-                    renderPodium(podiumEl, rawRankings, { categoryWeights });
+                    renderPodium(podiumEl, rawRankings, { categoryWeights, trustVerdict });
                 }).catch(err => {
                     console.warn('[podium] perf enrichment failed:', err);
                 });
@@ -708,7 +722,8 @@ async function init() {
         renderTrustBanner(leaderboardEl, {
             trusted: _trustScope === 'trusted',
             visibleCount: visibleRankings.length,
-            trustedFilters: generalistRes?.data?.trustedFilters || null
+            trustedFilters: generalistRes?.data?.trustedFilters || null,
+            trustVerdict
         });
 
         // Enrich with performance metrics and judge calibration, then re-render.

@@ -280,6 +280,11 @@ describe('Reports Routes', () => {
 
         // Cross-service mocks
         mockFetchBenchmarkSummary.mockResolvedValue({ batches: 2, top_model: 'qwen3' });
+        mockFetchBenchmarkLeaderboard.mockResolvedValue({
+          trustScope: 'trusted',
+          trustVerdict: { state: 'trusted', qualified: false, qualifiedWinner: null },
+          leaderboard: [{ model: 'qwen3', generalistScore: 84 }]
+        });
         mockFetchRagStatus.mockResolvedValue({ status: 'healthy', documents: 340 });
       });
 
@@ -319,7 +324,12 @@ describe('Reports Routes', () => {
       it('should include benchmark and rag sections from cross-service calls', async () => {
         const res = await request(app).get('/api/reports/daily-digest');
 
-        expect(res.body.data.benchmark).toEqual({ batches: 2, top_model: 'qwen3' });
+        expect(res.body.data.benchmark).toMatchObject({
+          batches: 2,
+          trustScope: 'trusted',
+          trustVerdict: { state: 'trusted', qualified: false },
+          leaderboard: [{ model: 'qwen3', generalistScore: 84 }]
+        });
         expect(res.body.data.rag).toEqual({ status: 'healthy', documents: 340 });
       });
 
@@ -328,6 +338,29 @@ describe('Reports Routes', () => {
 
         expect(typeof res.body.data.summary).toBe('string');
         expect(res.body.data.summary.length).toBeGreaterThan(0);
+        expect(res.body.data.summary).toContain('No qualified winner');
+        expect(res.body.data.summary).not.toContain('Top model');
+        expect(mockFetchBenchmarkLeaderboard).toHaveBeenCalledWith({ trustScope: 'trusted' });
+      });
+
+      it('never promotes forged Phase 0 qualification fields into a report winner', async () => {
+        mockFetchBenchmarkLeaderboard.mockResolvedValueOnce({
+          trustScope: 'trusted',
+          trustVerdict: {
+            contract: 'agentx.benchmark-consumer-trust/v1',
+            state: 'trusted',
+            qualified: true,
+            highConfidenceAllowed: true,
+            qualifiedWinner: { model: 'qwen3', host: null }
+          },
+          leaderboard: [{ model: 'qwen3', generalistScore: 99 }]
+        });
+
+        const res = await request(app).get('/api/reports/daily-digest');
+
+        expect(res.body.data.summary).toContain('No qualified winner');
+        expect(res.body.data.summary).not.toContain('Qualified winner:');
+        expect(res.body.data.summary).not.toContain('Top model');
       });
 
       it('should accept custom period via query param', async () => {
@@ -350,6 +383,7 @@ describe('Reports Routes', () => {
 
         // Both cross-service calls return null (unreachable)
         mockFetchBenchmarkSummary.mockResolvedValue(null);
+        mockFetchBenchmarkLeaderboard.mockResolvedValue(null);
         mockFetchRagStatus.mockResolvedValue(null);
       });
 
@@ -358,7 +392,7 @@ describe('Reports Routes', () => {
 
         expect(res.status).toBe(200);
         expect(res.body.status).toBe('success');
-        expect(res.body.data.benchmark).toEqual({ status: 'unreachable' });
+        expect(res.body.data.benchmark).toEqual({ status: 'unreachable', trustScope: 'trusted' });
         expect(res.body.data.rag).toEqual({ status: 'unreachable' });
       });
 
@@ -422,6 +456,8 @@ describe('Reports Routes', () => {
         expect(typeof res.body.data.summary).toBe('string');
         expect(res.body.data.summary.length).toBeGreaterThan(0);
         expect(res.body.data.summary).toContain('Planning: 2 active');
+        expect(mockFetchBenchmarkLeaderboard).toHaveBeenCalledWith({ trustScope: 'trusted' });
+        expect(mockFetchBenchmarkRecommendations).toHaveBeenCalledWith({ trustScope: 'trusted' });
       });
 
       it('should normalize wrapped benchmark leaderboard and trends payloads', async () => {
@@ -434,6 +470,8 @@ describe('Reports Routes', () => {
             { model: 'gemma4', score: 91.2 },
             { model: 'qwen3', score: 89.8 }
           ],
+          trustScope: 'exploratory',
+          trustVerdict: { state: 'exploratory', qualified: false, qualifiedWinner: null },
           benchmarkedModels: ['gemma4', 'qwen3']
         });
         mockFetchBenchmarkRecommendations.mockResolvedValue({
@@ -457,7 +495,8 @@ describe('Reports Routes', () => {
         expect(res.body.data.benchmark.recommendations).toEqual([
           { model: 'gemma4', reason: 'stable top performer' }
         ]);
-        expect(res.body.data.summary).toContain('Top model: gemma4');
+        expect(res.body.data.summary).toContain('Top exploratory observation: gemma4');
+        expect(res.body.data.summary).not.toContain('Top model');
       });
     });
 
