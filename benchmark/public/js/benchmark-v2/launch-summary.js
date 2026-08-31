@@ -182,7 +182,10 @@ function _updateSummary(container, deps) {
         ? Array.from($batchConfig.querySelectorAll('.bv2-model-cb:checked'))
         : [];
     const modelNames = modelCbs.map(cb => cb.value);
-    const localModelCount = modelCbs.filter(cb => cb.dataset.executionKind !== 'harness').length;
+    const localModelNames = modelCbs
+        .filter(cb => cb.dataset.executionKind !== 'harness')
+        .map(cb => cb.value);
+    const localModelCount = localModelNames.length;
     const cloudModelCount = modelCbs.length - localModelCount;
 
     // Execution target
@@ -196,7 +199,10 @@ function _updateSummary(container, deps) {
             const tps = host.baseline?.tokensPerSec
                 ? `${Number(host.baseline.tokensPerSec).toFixed(1)} tok/s` : '';
             hostCol.innerHTML = `<strong>${esc(name)}</strong><br>`
-                + `<span class="ls-dim">${esc(gpu)}${tps ? ` \u00B7 ${tps}` : ''}</span>`;
+                + `<span class="ls-dim">${esc(gpu)}${tps ? ` \u00B7 ${tps}` : ''}</span>`
+                + (cloudModelCount > 0
+                    ? `<br><span class="ls-dim">+ ${cloudModelCount} isolated cloud target${cloudModelCount === 1 ? '' : 's'}</span>`
+                    : '');
         } else if (executionTargetReady) {
             hostCol.innerHTML = '<strong>Cloud harnesses</strong><br>'
                 + `<span class="ls-dim">${cloudModelCount} isolated target${cloudModelCount === 1 ? '' : 's'}</span>`;
@@ -265,8 +271,8 @@ function _updateSummary(container, deps) {
         const profileMap = new Map(
             (modelProfiles || []).map(p => [normModel(p.modelName || p.name), p])
         );
-        const unprofiled = modelNames.filter(m => {
-            // modelNames hold the raw Ollama tag (may include `slekrem/`-style
+        const unprofiled = localModelNames.filter(m => {
+            // localModelNames hold the raw Ollama tag (may include `slekrem/`-style
             // namespace); profileMap is keyed by the normalized form.
             const profile = profileMap.get(normModel(m));
             const readiness = profile?.readiness instanceof Map
@@ -306,9 +312,11 @@ function _updateSummary(container, deps) {
             container,
             ready,
             ready
-                ? (host
-                    ? 'Preflight will check host reachability, selected models, judge availability, prompts, and active batch locks before launch.'
-                    : 'Preflight will revalidate the attested harness targets, judge, prompt contract, and active batch locks before launch.')
+                ? (host && cloudModelCount > 0
+                    ? 'Preflight will check host reachability and revalidate the attested harness targets, selected models, judge, prompts, and active batch locks before launch.'
+                    : host
+                        ? 'Preflight will check host reachability, selected models, judge availability, prompts, and active batch locks before launch.'
+                        : 'Preflight will revalidate the attested harness targets, judge, prompt contract, and active batch locks before launch.')
                 : blockedReason
         );
     }

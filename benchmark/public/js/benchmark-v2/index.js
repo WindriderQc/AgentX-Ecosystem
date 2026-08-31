@@ -221,8 +221,9 @@ function _getWorkflowState() {
     else if (promptCount <= 0) blockedReason = 'Enable at least one test level';
 
     const executionTargetReady = !!host || (localModelCount === 0 && cloudModelCount > 0);
+    const selectedHostLabel = host?.displayName || host?.name || host?.hostname || 'Selected host';
     const executionTargetLabel = host
-        ? (host?.displayName || host?.name || host?.hostname || 'Selected host')
+        ? `${selectedHostLabel}${cloudModelCount > 0 ? ` + ${cloudModelCount} cloud` : ''}`
         : executionTargetReady
             ? 'Cloud harnesses'
             : localModelCount > 0

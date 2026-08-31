@@ -78,4 +78,19 @@ describe('cloud benchmark UI contracts', () => {
     expect(config).toContain('Math.ceil(testCount * 30 / 60)');
     expect(summary).toContain('Math.ceil(testCount * 30 / 60)');
   });
+
+  test('mixed local and cloud selections expose both targets without profiling cloud ids', () => {
+    const page = read('public/js/benchmark-v2/index.js');
+    const summary = read('public/js/benchmark-v2/launch-summary.js');
+    expect(page).toContain('` + ${cloudModelCount} cloud`');
+    expect(summary).toContain('isolated cloud target');
+    expect(summary).toContain('const unprofiled = localModelNames.filter');
+    expect(summary).toContain('check host reachability and revalidate the attested harness targets');
+  });
+
+  test('local selection summary ignores stale cloud target ids', () => {
+    const models = read('public/js/benchmark-v2/batch-config-models.js');
+    expect(models).toContain('saved.has(raw) || saved.has(normalized)');
+    expect(models).not.toContain('saved.size');
+  });
 });
