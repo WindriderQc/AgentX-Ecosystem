@@ -3,7 +3,7 @@
  */
 import {
   describePendingRuntimeChange, getHostChatState, getHostPinnedModels, getHostRunningModels, getRagOptions,
-  isRouterMode, modelsEquivalent, readOptions, selectedHostPreference, sessionTaskType, targetHost,
+  isAutoRoutingMode, isRouterMode, modelsEquivalent, readOptions, selectedHostPreference, sessionTaskType, targetHost,
   readProfileInputs, updateConfigSummary
 } from './chat-config.js';
 import { fetchWithDeadline } from './chat-network.js';
@@ -741,9 +741,8 @@ function buildPayload(
   const ragOpts = getRagOptions(elements);
   const routerMode = isRouterMode(elements, state);
   const forceThinking = elements.thinkingToggle?.checked === true;
-  // Server-routed session modes send a FIXED task type for the whole
-  // conversation (deterministic routing, autoRouted: false) instead of
-  // per-message auto-classification. Manual mode sends the explicit model+host.
+  // Standard classifies each turn. Quick/Deep use fixed task lanes and Manual
+  // sends the explicit model+host.
   const taskType = routerMode ? sessionTaskType(elements, state) : null;
   const rawOptions = {
     ...readOptions(elements),
@@ -759,7 +758,7 @@ function buildPayload(
   return {
     target: routerMode ? undefined : targetHost(elements, defaults),
     model: routerMode ? 'auto' : elements.modelSelect.value,
-    autoRoute: false,
+    autoRoute: isAutoRoutingMode(elements, state),
     taskType: taskType || undefined,
     system: elements.systemPrompt.value.trim(),
     promptVersion: elements.promptSelect?.dataset.promptVersion
@@ -800,6 +799,105 @@ function markSelectedManualModelLoaded(elements, state, defaults, model) {
   };
 }
 
+function safeChatFailureMessage(value) {
+  const normalized = String(value || 'The chat request could not be completed.')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, '[redacted credential]')
+    .replace(/\b(?:api[_-]?key|token|secret)\s*[:=]\s*[^\s,;]+/gi, '[redacted credential]')
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[service endpoint]')
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, '[service host]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.slice(0, 600) || 'The chat request could not be completed.';
+}
+
+export function chatFailureDetails(error) {
+  const code = String(error?.code || '').trim().toUpperCase();
+  const message = safeChatFailureMessage(error?.message);
+  const normalized = `${code} ${message}`.toLowerCase();
+  let guidance = 'Retry the turn. If it fails again, open Nerve Center and choose a ready host/model.';
+  let status = 'Response failed';
+  let tone = 'error';
+
+  if (normalized.includes('public_exposure_guard')
+      || normalized.includes('cross_site_mutation_forbidden')
+      || normalized.includes('trusted operator path')) {
+    guidance = 'Open Agent X from its HTTPS portal, then retry. Direct service addresses are read-only for browser mutations.';
+    status = 'Secure portal required';
+  } else if (/model unavailable|model .*not found|source_user_message_not_found/.test(normalized)) {
+    guidance = 'Take the controls and choose a model that is installed on a ready host.';
+    status = 'Model route needs attention';
+    tone = 'warning';
+  } else if (/restoring|swapping|benchmarking|warming/.test(normalized)) {
+    guidance = 'The selected host is changing models. Choose a ready Manual host or retry after restoration completes.';
+    status = 'Host is not ready';
+    tone = 'warning';
+  } else if (/timeout|timed out|stream ended before completion/.test(normalized)) {
+    guidance = 'Retry with Quick mode or a ready Manual host. The incomplete attempt remains in history.';
+    status = 'Response timed out';
+    tone = 'warning';
+  } else if (/no readable stream|streaming not supported/.test(normalized)) {
+    guidance = 'Turn streaming off and retry; this browser or proxy did not provide a readable stream.';
+    status = 'Streaming unavailable';
+    tone = 'warning';
+  }
+
+  return { code: code || null, message, guidance, status, tone };
+}
+
+function outcomeAttemptId(sourceUserMessageId) {
+  const randomPart = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `terminal:${String(sourceUserMessageId || 'turn').slice(0, 80)}:${randomPart}`.slice(0, 160);
+}
+
+async function errorFromResponse(response, fallbackMessage) {
+  const raw = await response.text().catch(() => '');
+  let parsed = null;
+  try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
+  const error = new Error(parsed?.message || parsed?.error || raw || fallbackMessage || `Request failed (${response.status})`);
+  error.code = parsed?.code || null;
+  error.statusCode = response.status;
+  return error;
+}
+
+async function persistTerminalTurn(ctx, {
+  clientTurnId,
+  sourceUserMessageId = null,
+  userMessage,
+  assistantContent,
+  outcome,
+  model,
+  error = null
+}) {
+  const { state, helpers } = ctx;
+  const response = await fetch('/api/history/turn-outcome', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      conversationId: state.conversationId,
+      clientTurnId,
+      sourceUserMessageId,
+      userMessage,
+      assistantContent,
+      outcome,
+      model: model || 'unknown',
+      errorCode: error?.code || null,
+      errorMessage: error?.message || null
+    })
+  });
+  if (!response.ok) throw await errorFromResponse(response, 'Failed to preserve the chat turn.');
+  const envelope = await response.json();
+  if (envelope.status !== 'success' || !envelope.data?.conversationId) {
+    throw new Error('The history service returned no conversation receipt.');
+  }
+  state.conversationId = envelope.data.conversationId;
+  await helpers.loadHistoryList();
+  await helpers.loadConversation(state.conversationId, true);
+  return envelope.data;
+}
+
 export async function sendMessageStreamFetch(
   ctx,
   msgInput,
@@ -818,6 +916,7 @@ export async function sendMessageStreamFetch(
     currentUserMessageId,
     turnAction
   );
+  const terminalAttemptId = outcomeAttemptId(currentUserMessageId);
 
   const assistantMessageDiv = document.createElement('div');
   assistantMessageDiv.className = 'message assistant';
@@ -932,7 +1031,10 @@ export async function sendMessageStreamFetch(
     }
     if (eventName === 'error') {
       const data = typeof rawData === 'string' ? safeParseJson(rawData, {}) : rawData;
-      throw new Error(data.message || 'Streaming failed.');
+      const error = new Error(data.message || 'Streaming failed.');
+      error.code = data.code || null;
+      error.statusCode = data.statusCode || null;
+      throw error;
     }
   };
 
@@ -969,8 +1071,7 @@ export async function sendMessageStreamFetch(
       signal: abortController.signal
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(text || `Streaming failed (${res.status})`);
+      throw await errorFromResponse(res, `Streaming failed (${res.status})`);
     }
     if (!res.body || typeof res.body.getReader !== 'function') {
       throw new Error('Streaming not supported by this browser/proxy (no readable stream).');
@@ -997,40 +1098,69 @@ export async function sendMessageStreamFetch(
     if (err.name === 'AbortError') {
       if (elements.chatWindow.contains(assistantMessageDiv)) elements.chatWindow.removeChild(assistantMessageDiv);
       if (!doneReceived) {
+        const stoppedContent = fullContent
+          ? `${fullContent}\n\n_Response stopped by you._`
+          : '\u23f9\ufe0f Response stopped by you.';
         helpers.appendMessage(
           {
             role: 'assistant',
-            content: fullContent || '(stopped)',
+            content: stoppedContent,
             createdAt: new Date().toISOString(),
             thinking: thinkingContent || null,
-            retryUserMessageId: currentUserMessageId
+            retryUserMessageId: currentUserMessageId,
+            metadata: { outcome: 'stopped', retryable: true }
           },
-          { persist: false, announcement: 'Response stopped.' }
+          { announcement: 'Response stopped. Saving this turn.' }
         );
+        try {
+          await persistTerminalTurn(ctx, {
+            clientTurnId: terminalAttemptId,
+            sourceUserMessageId: turnAction?.kind === 'retry' ? turnAction.sourceUserMessageId : null,
+            userMessage: message,
+            assistantContent: stoppedContent,
+            outcome: 'stopped',
+            model: payload.model
+          });
+          helpers.setFeedback('Streaming stopped. The turn was saved in history.', 'warning');
+        } catch (persistError) {
+          console.error('Failed to preserve stopped turn:', persistError);
+          helpers.setFeedback('Streaming stopped. This turn is visible here but could not be saved; keep this page open and retry.', 'error');
+        }
       }
-      if (!doneReceived) helpers.setFeedback('Streaming stopped.', 'warning');
       return;
     }
     console.error('Fetch streaming error:', err);
     if (elements.chatWindow.contains(assistantMessageDiv)) elements.chatWindow.removeChild(assistantMessageDiv);
+    const failure = chatFailureDetails(err);
+    const failedContent = `\u26a0\ufe0f ${failure.message}\n\n${failure.guidance}`;
     helpers.appendMessage(
       {
         role: 'assistant',
-        content: `\u26a0\ufe0f ${err.message || 'Streaming failed.'}`,
+        content: failedContent,
         createdAt: new Date().toISOString(),
-        retryUserMessageId: currentUserMessageId
+        retryUserMessageId: currentUserMessageId,
+        metadata: { outcome: 'failed', retryable: true, error: { code: failure.code, message: failure.message } }
       },
-      { persist: false, announcement: 'Response failed. Review the status message.' }
+      { announcement: 'Response failed. Recovery guidance is shown.' }
     );
-    const routeSetupError = /model unavailable|model .*not found/i.test(err.message || '');
-    helpers.setStatus(routeSetupError ? 'Model route needs attention' : 'Response blocked', routeSetupError ? 'warning' : 'error');
+    helpers.setStatus(failure.status, failure.tone);
     const statusHelp = document.getElementById('chatStatusHelp');
-    if (statusHelp) {
-      statusHelp.textContent = routeSetupError
-        ? 'Take the controls to choose one of the installed models.'
-        : 'Review the error below, then try again.';
+    if (statusHelp) statusHelp.textContent = failure.guidance;
+    try {
+      await persistTerminalTurn(ctx, {
+        clientTurnId: terminalAttemptId,
+        sourceUserMessageId: turnAction?.kind === 'retry' ? turnAction.sourceUserMessageId : null,
+        userMessage: message,
+        assistantContent: failedContent,
+        outcome: 'failed',
+        model: payload.model,
+        error: failure
+      });
+      helpers.setFeedback(`${failure.message} The failed turn was saved in history.`, failure.tone);
+    } catch (persistError) {
+      console.error('Failed to preserve failed turn:', persistError);
+      helpers.setFeedback(`${failure.message} This turn is visible here but could not be saved; keep this page open and retry.`, 'error');
     }
-    helpers.setFeedback(err.message, 'error');
   } finally {
     if (state.streamAbortController === requestAbortController) {
       state.streamAbortController = null;
@@ -1118,6 +1248,7 @@ export async function sendMessage(ctx, turnAction = null) {
     helpers.setFeedback('The selected turn has no stable message identity. Reload the conversation and try again.', 'error');
     return;
   }
+  const terminalAttemptId = outcomeAttemptId(currentUserMessageId);
   if (!isRetry) helpers.appendMessage(userMessage);
   if (!actionKind) {
     elements.messageInput.value = '';
@@ -1149,8 +1280,13 @@ export async function sendMessage(ctx, turnAction = null) {
       body: JSON.stringify(payload),
       credentials: 'include'
     });
+    if (!res.ok) throw await errorFromResponse(res, `Chat failed (${res.status})`);
     const data = await res.json();
-    if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Chat failed');
+    if (data.status !== 'success') {
+      const error = new Error(data.message || 'Chat failed');
+      error.code = data.code || null;
+      throw error;
+    }
 
     state.profile = data.data?.profile || state.profile;
     state.conversationId = data.data?.conversationId || state.conversationId;
@@ -1197,17 +1333,36 @@ export async function sendMessage(ctx, turnAction = null) {
     if (window.checkSetupProgress) setTimeout(() => window.checkSetupProgress(), 500);
   } catch (err) {
     console.error(err);
+    const failure = chatFailureDetails(err);
+    const failedContent = `\u26a0\ufe0f ${failure.message}\n\n${failure.guidance}`;
     helpers.appendMessage(
       {
         role: 'assistant',
-        content: `\u26a0\ufe0f ${err.message || 'Request failed.'}`,
+        content: failedContent,
         createdAt: new Date().toISOString(),
-        retryUserMessageId: currentUserMessageId
+        retryUserMessageId: currentUserMessageId,
+        metadata: { outcome: 'failed', retryable: true, error: { code: failure.code, message: failure.message } }
       },
-      { persist: false, announcement: 'Response failed. Review the status message.' }
+      { announcement: 'Response failed. Recovery guidance is shown.' }
     );
-    helpers.setFeedback(err.message, 'error');
-    helpers.setStatus('Check host/model.', 'error');
+    helpers.setStatus(failure.status, failure.tone);
+    const statusHelp = document.getElementById('chatStatusHelp');
+    if (statusHelp) statusHelp.textContent = failure.guidance;
+    try {
+      await persistTerminalTurn(ctx, {
+        clientTurnId: terminalAttemptId,
+        sourceUserMessageId: requestTurnAction?.kind === 'retry' ? requestTurnAction.sourceUserMessageId : null,
+        userMessage: message,
+        assistantContent: failedContent,
+        outcome: 'failed',
+        model: payload.model,
+        error: failure
+      });
+      helpers.setFeedback(`${failure.message} The failed turn was saved in history.`, failure.tone);
+    } catch (persistError) {
+      console.error('Failed to preserve failed turn:', persistError);
+      helpers.setFeedback(`${failure.message} This turn is visible here but could not be saved; keep this page open and retry.`, 'error');
+    }
   } finally {
     state.sending = false;
     elements.sendBtn.textContent = 'Send';

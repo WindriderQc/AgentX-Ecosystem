@@ -67,7 +67,7 @@ describe('Playground accessibility contract', () => {
     expect(html).toContain('id="chatWindow" role="region" aria-label="Conversation transcript"');
     expect(html).toContain('id="chatAnnouncements" role="status" aria-live="polite" aria-atomic="true"');
     expect(messaging).toContain("{ announcement: 'Assistant response complete.' }");
-    expect(messaging).toContain("announcement: 'Response failed. Review the status message.'");
+    expect(messaging).toContain("announcement: 'Response failed. Recovery guidance is shown.'");
     expect(messaging).not.toMatch(/eventName === 'token'[\s\S]{0,500}chatAnnouncements/);
   });
 

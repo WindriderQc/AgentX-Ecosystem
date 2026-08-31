@@ -160,6 +160,22 @@ function compactCounts(counts, prefix = '') {
     .join(' ');
 }
 
+function playgroundUrl(entry) {
+  if (entry?.host_available === false || !entry?.model) return null;
+  const configuredCore = typeof document !== 'undefined' && typeof document.querySelector === 'function'
+    ? document.querySelector('main[data-core-public-url]')?.dataset.corePublicUrl
+    : null;
+  if (!configuredCore) return null;
+  try {
+    const url = new URL('/playground', configuredCore);
+    url.searchParams.set('model', entry.model);
+    if (entry.host) url.searchParams.set('host', entry.host);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Category bars (no dots — leaner version)
 // ---------------------------------------------------------------------------
@@ -236,6 +252,7 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
     ? `<span class="cb-judge" title="Judge: ${judgeModel}"><i class="fas fa-gavel"></i></span>`
     : '';
   const hostTtftLabel = entry.hostTtft != null ? ` · host TTFT ${formatMs(entry.hostTtft)}` : '';
+  const useModelUrl = playgroundUrl(entry);
 
   const canMedal = !provisional && entry.fullScopeEligible === true && index < 3;
   const rank = canMedal
@@ -335,6 +352,7 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
           <span class="cb-model-name">${model}</span>${readinessBadge}${unavailableBadge}
           <a href="/courthouse?model=${encodeURIComponent(model)}" class="cb-link" title="Review in Courthouse"><i class="fas fa-gavel"></i></a>
           <a href="/efficiency-map" class="cb-link" title="Efficiency Map"><i class="fas fa-chart-line"></i></a>
+          ${useModelUrl ? `<a href="${useModelUrl}" class="cb-link cb-use-model" title="Open this exact model and host in Manual Chat"><i class="fas fa-comment-dots"></i><span>Use in Chat</span></a>` : ''}
         </div>
         <div class="cb-host">
           <i class="fas fa-server cb-host-ico"></i><span class="cb-host-name">${hostName}</span>${judgeIcon}<span class="cb-host-meta">${hostTtftLabel}</span>

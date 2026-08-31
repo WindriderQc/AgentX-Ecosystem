@@ -370,9 +370,13 @@ describe('Nerve Center API Routes', () => {
         readOnly: true
       }));
       expect(res.body.data.health).toEqual(expect.objectContaining({
-        status: 'ok',
+        status: 'degraded',
         configuredHosts: 3,
         onlineHosts: 3
+      }));
+      expect(res.body.data.operationalAttention).toEqual(expect.objectContaining({
+        status: 'attention',
+        activeAlertCount: 1
       }));
       expect(res.body.data.cluster).toHaveLength(3);
       expect(res.body.data.routing).toHaveProperty('authority', 'inference_log');
@@ -383,7 +387,7 @@ describe('Nerve Center API Routes', () => {
       expect(res.body.data.evidenceTrust).toEqual(expect.objectContaining({
         schemaVersion: 1,
         status: 'verified',
-        operationalStatus: 'ok',
+        operationalStatus: 'degraded',
         contradictionBudget: expect.objectContaining({
           allowed: 0,
           observed: 0,

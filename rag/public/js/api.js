@@ -30,9 +30,19 @@
   }
 
   /**
-   * POST /api/rag/status/refresh — actively refresh dependency health.
+   * GET /api/rag/status — read the latest dependency evidence without mutation.
+   * Dashboard polling must stay observational so it works through the public
+   * read-only surface without weakening the mutation guard.
    */
   async function getStatus() {
+    return apiFetch('/api/rag/status');
+  }
+
+  /**
+   * POST /api/rag/status/refresh — actively refresh dependency health.
+   * Reserved for authenticated operator workflows.
+   */
+  async function refreshStatus() {
     return apiFetch('/api/rag/status/refresh', { method: 'POST' });
   }
 
@@ -177,6 +187,7 @@
     API_BASE: API_BASE,
     apiFetch: apiFetch,
     getStatus: getStatus,
+    refreshStatus: refreshStatus,
     getHealth: getHealth,
     getDocuments: getDocuments,
     getDocument: getDocument,

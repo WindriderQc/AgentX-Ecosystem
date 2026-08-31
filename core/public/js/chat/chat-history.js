@@ -227,6 +227,8 @@ export async function loadConversation(id, state, elements, helpers, preserveMod
         stats: msg.stats,
         cost: msg.cost,
         metadata: msg.metadata || null,
+        retryUserMessageId: msg.metadata?.retryable === true ? msg.metadata?.sourceUserMessageId || null : null,
+        sourceUserMessageId: msg.metadata?.sourceUserMessageId || null,
         routingInfo: msg.metadata?.routingInfo || msg.stats?.meta?.routingInfo || null,
         ragSources: msg.ragSources,
         webSearchResults: msg.metadata?.webSearchResults || null
