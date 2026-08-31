@@ -30,6 +30,7 @@ const { judgeResult } = require('./judging');
 const { resolveJudgeHost } = require('./judgeHostResolution');
 const { normalizeJudgeNumCtx } = require('../scoring/judgeRuntimeConfig');
 const { classifyBenchmarkError } = require('./errorClassifier');
+const { resolveHarnessTarget } = require('./harnessBrokerClient');
 
 function createJudgeOrchestrator({
     batchId,
@@ -102,6 +103,13 @@ function createJudgeOrchestrator({
 
     // ── Per-host judge target resolution + warmup ──────────
     async function resolveJudgeTargetForHost(hostUrl) {
+        if (judgeConfig.target?.executionKind === 'harness') {
+            const currentTarget = await resolveHarnessTarget(judgeConfig.target, { force: true });
+            judgeConfig.target = currentTarget;
+            judgeConfig.host = `harness:${currentTarget.harness.name}`;
+            judgeConfig.model = currentTarget.model;
+            return judgeConfig.host;
+        }
         const { judgeHost: judgeHostUrl, resolution: judgeHostResolution } = resolveJudgeHost(hostUrl, judgeConfig);
         if (judgeHostResolution === 'explicit') {
             logger.info('Using explicit judge host override', { judgeHost: judgeHostUrl, execHost: hostUrl });
@@ -301,7 +309,7 @@ function createJudgeOrchestrator({
             const { judgeHostUrl, model, prompt, resultId } = deferredTask;
             const warmupKey = `${judgeHostUrl}::${judgeModel}`;
 
-            if (!warmedJudgeHosts.has(warmupKey)) {
+            if (judgeConfig.target?.executionKind !== 'harness' && !warmedJudgeHosts.has(warmupKey)) {
                 const judgeNumCtx = await resolveJudgeNumCtx(judgeModel, judgeHostUrl, judgeConfig);
                 await _setPhase('judge_warmup', `Warming judge ${judgeModel} on ${judgeHostUrl} (deferred phase)…`);
                 await BenchmarkBatch.findOneAndUpdate({ _id: batchId }, {

@@ -432,6 +432,52 @@ async function getLeaderboardEntryStats(matchQuery = {}) {
                 contexts: { $push: '$execution_settings.num_ctx' },
                 judgeModels: { $addToSet: '$judge_model' },
                 judgeTargets: { $addToSet: { model: '$judge_model', host: '$judge_host' } },
+                executionTarget: { $first: '$execution_target' },
+                executionTargetFingerprints: { $addToSet: '$execution_target.fingerprint' },
+                judgeTargetFingerprints: { $addToSet: '$judge_target.fingerprint' },
+                harnessRows: {
+                    $sum: { $cond: [{ $eq: ['$execution_target.executionKind', 'harness'] }, 1, 0] }
+                },
+                completeHarnessRows: {
+                    $sum: {
+                        $cond: [{
+                            $and: [
+                                { $eq: ['$execution_target.executionKind', 'harness'] },
+                                { $eq: ['$execution_target.mode', 'isolated_model'] },
+                                { $eq: ['$execution_target.available', true] },
+                                { $eq: ['$execution_receipt.schema', 'agentx.worker-receipt/v1'] },
+                                { $eq: ['$execution_receipt.executionProfile', 'portable'] },
+                                { $eq: ['$execution_receipt.finalState', 'succeeded'] },
+                                { $eq: ['$execution_receipt.result.contractSatisfied', true] },
+                                { $eq: [{ $type: '$execution_receipt.fingerprint' }, 'string'] },
+                                { $eq: [{ $type: '$execution_target.fingerprint' }, 'string'] },
+                                { $eq: [{ $type: '$execution_target.catalogFingerprint' }, 'string'] }
+                            ]
+                        }, 1, 0]
+                    }
+                },
+                harnessJudgeRows: {
+                    $sum: { $cond: [{ $eq: ['$judge_target.executionKind', 'harness'] }, 1, 0] }
+                },
+                completeHarnessJudgeRows: {
+                    $sum: {
+                        $cond: [{
+                            $and: [
+                                { $eq: ['$judge_target.executionKind', 'harness'] },
+                                { $eq: ['$judge_target.mode', 'isolated_model'] },
+                                { $eq: ['$judge_receipt.schema', 'agentx.worker-receipt/v1'] },
+                                { $eq: ['$judge_receipt.executionProfile', 'portable'] },
+                                { $eq: ['$judge_receipt.finalState', 'succeeded'] },
+                                { $eq: ['$judge_receipt.result.contractSatisfied', true] },
+                                { $eq: [{ $type: '$judge_receipt.fingerprint' }, 'string'] },
+                                { $eq: [{ $type: '$judge_target.fingerprint' }, 'string'] },
+                                { $eq: [{ $type: '$judge_target.catalogFingerprint' }, 'string'] }
+                            ]
+                        }, 1, 0]
+                    }
+                },
+                qualityCohortFingerprint: { $first: '$quality_cohort_fingerprint' },
+                providerCostNanodollars: { $sum: { $ifNull: ['$provider_cost.costNanodollars', 0] } },
                 needsReviewCount: {
                     $sum: { $cond: [{ $eq: ['$needs_review', true] }, 1, 0] }
                 },
@@ -463,6 +509,33 @@ async function getLeaderboardEntryStats(matchQuery = {}) {
             .filter((level) => Number.isFinite(level));
         const contexts = countByValue(row.contexts);
         const promptLevelCounts = countByValue(numericLevels);
+        const executionTargetFingerprints = (row.executionTargetFingerprints || []).filter(Boolean);
+        const judgeTargetFingerprints = (row.judgeTargetFingerprints || []).filter(Boolean);
+        const harnessRows = Number(row.harnessRows || 0);
+        const harnessJudgeRows = Number(row.harnessJudgeRows || 0);
+        const executionProofComplete = harnessRows === 0 || (
+            harnessRows === Number(row.totalRows || 0)
+            && Number(row.completeHarnessRows || 0) === harnessRows
+            && executionTargetFingerprints.length === 1
+        );
+        const judgeProofComplete = harnessJudgeRows === 0 || (
+            harnessJudgeRows === Number(row.totalRows || 0)
+            && Number(row.completeHarnessJudgeRows || 0) === harnessJudgeRows
+            && judgeTargetFingerprints.length === 1
+        );
+        const proofReason = !executionProofComplete
+            ? (harnessRows !== Number(row.totalRows || 0)
+                ? 'mixed_execution_lanes'
+                : executionTargetFingerprints.length !== 1
+                    ? 'mixed_execution_target'
+                    : 'incomplete_harness_execution_receipt')
+            : !judgeProofComplete
+                ? (harnessJudgeRows !== Number(row.totalRows || 0)
+                    ? 'mixed_judge_lanes'
+                    : judgeTargetFingerprints.length !== 1
+                        ? 'mixed_judge_target'
+                        : 'incomplete_harness_judge_receipt')
+                : null;
         byEntry.set(key, {
             totalRows: row.totalRows || 0,
             promptLevelCounts,
@@ -471,6 +544,19 @@ async function getLeaderboardEntryStats(matchQuery = {}) {
             contextCounts: contexts,
             judgeModels: (row.judgeModels || []).filter(Boolean),
             judgeTargets: (row.judgeTargets || []).filter((target) => target?.model && target?.host),
+            executionTarget: row.executionTarget || null,
+            harnessEvidence: {
+                rankable: executionProofComplete && judgeProofComplete,
+                reason: proofReason,
+                executionRows: harnessRows,
+                completeExecutionRows: Number(row.completeHarnessRows || 0),
+                judgeRows: harnessJudgeRows,
+                completeJudgeRows: Number(row.completeHarnessJudgeRows || 0),
+                executionTargetFingerprints,
+                judgeTargetFingerprints
+            },
+            qualityCohortFingerprint: row.qualityCohortFingerprint || null,
+            providerCostNanodollars: row.providerCostNanodollars || 0,
             needsReviewCount: row.needsReviewCount || 0,
             lowConfidenceCount: row.lowConfidenceCount || 0,
             earliestTimestamp: row.earliestTimestamp || null,

@@ -37,7 +37,9 @@ function resolveJudgeConfig(overrides = {}, { resultDefaults = null } = {}) {
     }
 
     // Post-merge normalization
-    resolved.host = normalizeJudgeHost(resolved.host);
+    resolved.host = resolved.target?.executionKind === 'harness'
+        ? `harness:${resolved.target.harness.name}`
+        : normalizeJudgeHost(resolved.host);
 
     return resolved;
 }

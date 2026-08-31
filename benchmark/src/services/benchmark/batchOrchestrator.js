@@ -47,6 +47,8 @@ const {
 } = require('./inferenceContractSnapshot');
 const { createResumeRevalidation, RESUME_CODES } = require('./resumeRevalidation');
 const { checkBatchPreflight, executionModelsFromHostGroups, preflightCounts, runBatchPreflight } = require('./batchPreflightLifecycle');
+const { executionHost, normalizeBatchTargets } = require('../../../../shared/benchmarkTargetContract');
+const { executeHarnessTarget, resolveHarnessTarget } = require('./harnessBrokerClient');
 
 // A throughput batch can have one in-flight Core request per host. Keep the
 // controllers grouped by the exact batch id so the stop route can interrupt
@@ -121,6 +123,10 @@ async function runBatchOrchestrator({
     batchId,
     defaultHost,
     models,
+    targets = null,
+    spendGrant = null,
+    qualityCohortFingerprint = null,
+    batchContractFingerprint = null,
     prompts,
     judgeConfig,
     executionConfig,
@@ -141,6 +147,16 @@ async function runBatchOrchestrator({
     const batchCancellationController = new AbortController();
     let unregisterBatchCancellation = () => false;
     let orchestrationCompleted = false;
+    const normalizedTargets = normalizeBatchTargets({ host: defaultHost, models, targets });
+    const localTargets = normalizedTargets.filter((target) => target.executionKind === 'ollama');
+    const harnessTargets = normalizedTargets.filter((target) => target.executionKind === 'harness');
+    const localTargetByKey = new Map(localTargets.map((target) => [`${target.host}\0${target.model}`, target]));
+    judgeConfig = {
+        ...(judgeConfig || {}),
+        batch_id: String(batchId),
+        batch_contract_fingerprint: batchContractFingerprint,
+        spend_grant: spendGrant || null
+    };
     const judgeQueue = new ConcurrencyQueue(executionMode === 'latency' ? 1 : (judgeConfig.concurrency || 2));
     const shouldPersistCurrentTest = createCurrentTestPersistenceStrategy(executionMode);
     const judge = createJudgeOrchestrator({
@@ -153,7 +169,7 @@ async function runBatchOrchestrator({
         cancelSignal: batchCancellationController.signal,
         // Sizes the multi-judge escalation budget for the live pipeline —
         // the same role pendingResults.length plays for standalone re-judges.
-        expectedJudgeCount: (models?.length || 0) * (prompts?.length || 0)
+        expectedJudgeCount: normalizedTargets.length * (prompts?.length || 0)
     });
     const {
         resolveJudgeTargetForHost,
@@ -170,7 +186,16 @@ async function runBatchOrchestrator({
     const completedPairs = new Set(batchDoc?.checkpoint?.completed_pairs || []);
     const isResuming = completedPairs.size > 0;
     const lastCheckpointModel = batchDoc?.checkpoint?.last_model || null;
-    const requestedHostGroups = Object.entries(groupModelsByHost(defaultHost, models));
+    // Preserve the legacy host/model grouping contract exactly when callers
+    // have not opted into BenchmarkTarget v1. Explicit targets are grouped by
+    // their own frozen host identity instead.
+    const localHostMap = Array.isArray(targets) && targets.length > 0
+        ? localTargets.reduce((groups, target) => {
+            (groups[target.host] ||= []).push(target.model);
+            return groups;
+        }, {})
+        : groupModelsByHost(defaultHost, models);
+    const requestedHostGroups = Object.entries(localHostMap);
     let executionHostGroups = requestedHostGroups;
     let inferenceContractCampaign = null;
     const resumeRevalidation = isResuming ? createResumeRevalidation({
@@ -247,7 +272,8 @@ async function runBatchOrchestrator({
         pendingModelTimeline,
         repeatIndex = 0,
         repeatTotal = 1,
-        repeatGroupId = null
+        repeatGroupId = null,
+        executionTarget = null
     }) => {
         const start = Date.now();
         const think = modelExecConfig.think === true;
@@ -548,7 +574,9 @@ async function runBatchOrchestrator({
                 },
                 repeatIndex,
                 repeatTotal,
-                repeatGroupId
+                repeatGroupId,
+                executionTarget,
+                qualityCohortFingerprint
             });
 
             if (!hasEmptyResponse) {
@@ -595,7 +623,9 @@ async function runBatchOrchestrator({
                     inference_contract_fingerprint: modelExecConfig.inference_contract_fingerprint || null,
                     inference_contract_request_fingerprint: modelExecConfig.inference_contract_request_fingerprint || null,
                     artifact_digest: modelExecConfig.artifact_digest || null
-                }
+                },
+                executionTarget,
+                qualityCohortFingerprint
             });
             if (classified.infra) return { infraError: true };
         }
@@ -606,6 +636,177 @@ async function runBatchOrchestrator({
             return { infraError: false, stopped: true, cancelled: true };
         }
         return { infraError: false };
+    };
+
+    const runHarnessTarget = async (selectedTarget) => {
+        const target = await resolveHarnessTarget(selectedTarget, { force: true });
+        const hostUrl = executionHost(target);
+        const judgeHostUrl = await resolveJudgeTargetForHost(hostUrl);
+        const currentBatch = await loadCurrentBatch(target.model);
+        if (!currentBatch) return { stopped: true, cancelled: false };
+        const pendingModelTimeline = [];
+        const repeats = Math.max(1, Math.min(5, Number(executionConfig.repeats) || 1));
+
+        try {
+            for (const prompt of prompts) {
+                const repeatGroupId = `${batchId}:${target.id}:${prompt.name || prompt._id}`;
+                for (let repeatIndex = 0; repeatIndex < repeats; repeatIndex++) {
+                    const pairKey = `${target.id}::${prompt.name}::r${repeatIndex}`;
+                    if (completedPairs.has(pairKey)) continue;
+                    if (await shouldStopBatch(target.model, { force: true })) {
+                        return { stopped: true, cancelled: batchCancellationController.signal.aborted };
+                    }
+
+                    if (!executionState.testsStarted) {
+                        executionState.testsStarted = true;
+                        await recordBatchTimelineEvent('tests_start', { success: true });
+                        await setBatchPhase('executing', null);
+                    }
+
+                    const startedAt = Date.now();
+                    const numPredict = executionConfig.response_max_tokens || 32000;
+                    const promptHints = buildPromptHints(
+                        prompt.prompt,
+                        prompt.expected_tokens || null,
+                        numPredict,
+                        executionConfig
+                    );
+                    const controller = new AbortController();
+                    const unregisterController = registerActiveBatchController(batchId, controller);
+                    const timeoutId = setTimeout(
+                        () => controller.abort(),
+                        executionConfig.per_test_timeout_ms || 600000
+                    );
+                    let execution = null;
+                    try {
+                        pendingModelTimeline.push({
+                            timestamp: new Date(), event: 'test_start', model: target.model,
+                            host: hostUrl, prompt_id: prompt._id ? prompt._id.toString() : null,
+                            prompt_level: prompt.level, success: null
+                        });
+                        execution = await executeHarnessTarget({
+                            batchId,
+                            batchFingerprint: batchContractFingerprint,
+                            cellId: `${target.id}:${prompt._id || prompt.name}:${repeatIndex}`,
+                            target,
+                            promptText: promptHints.promptText,
+                            parameters: {
+                                temperature: executionConfig.temperature,
+                                topP: executionConfig.top_p,
+                                seed: executionConfig.seed,
+                                maxTokens: numPredict,
+                                timeoutMs: executionConfig.per_test_timeout_ms || 600000
+                            },
+                            spendGrant,
+                            role: 'candidate',
+                            signal: controller.signal
+                        });
+                        const usage = execution.receipt.usage;
+                        const cleanedResponse = execution.output;
+                        const resultId = await persistSuccessfulResult({
+                            batchId,
+                            judgeConfig,
+                            queueBatchProgress,
+                            flushBatchProgress,
+                            model: target.model,
+                            hostUrl,
+                            judgeHostUrl,
+                            prompt,
+                            promptText: promptHints.promptText,
+                            latency: usage.durationMs || (Date.now() - startedAt),
+                            tokens: usage.outputTokens,
+                            tokensPerSec: usage.durationMs > 0 ? usage.outputTokens / (usage.durationMs / 1000) : null,
+                            timeToFirstTokenMs: null,
+                            cleanedResponse,
+                            extractedThinking: execution.thinking || '',
+                            hasEmptyResponse: cleanedResponse.trim().length === 0,
+                            responseTruncated: execution.finishReason === 'length',
+                            doneReason: execution.finishReason,
+                            numPredict,
+                            hintApplied: promptHints.applied,
+                            hintText: promptHints.hintText,
+                            answerContract: promptHints.answerContract,
+                            lengthHintApplied: promptHints.lengthHintApplied,
+                            hardwareSnapshot: null,
+                            modelWarmupData: null,
+                            performanceBaseline: null,
+                            currentBatch,
+                            pendingModelTimeline,
+                            inputTruncated: false,
+                            promptEvalCount: usage.inputTokens,
+                            inputBudget: executionConfig.input_token_ceiling || null,
+                            executionSettings: {
+                                sampling_profile: 'harness-isolated',
+                                sampling_source: 'benchmark_target_v1',
+                                num_ctx: target.contextWindow,
+                                num_ctx_source: 'target_catalog',
+                                think: false,
+                                think_mode: 'off',
+                                temperature: executionConfig.temperature ?? null,
+                                top_p: executionConfig.top_p ?? null,
+                                seed: executionConfig.seed ?? null,
+                                rankable_mode: target.mode === 'isolated_model',
+                                inference_contract_fingerprint: target.profile.fingerprint,
+                                artifact_digest: execution.receipt.identity.model.digest || null
+                            },
+                            repeatIndex,
+                            repeatTotal: repeats,
+                            repeatGroupId: repeats > 1 ? repeatGroupId : null,
+                            executionTarget: target,
+                            executionReceipt: execution.publicReceipt,
+                            providerUsage: usage,
+                            providerCost: {
+                                estimated: target.pricing?.estimated === true,
+                                costNanodollars: usage.costNanodollars,
+                                pricing: target.pricing,
+                                observedAt: new Date().toISOString()
+                            },
+                            qualityCohortFingerprint
+                        });
+                        if (cleanedResponse.trim()) {
+                            if (judgeHostUrl === hostUrl) deferJudgeTask({ hostUrl, judgeHostUrl, model: target.model, prompt, resultId });
+                            else await enqueueJudgeTask(target.model, prompt, judgeHostUrl, resultId);
+                        }
+                    } catch (error) {
+                        if (wasControllerStoppedByUser(controller) || batchCancellationController.signal.aborted) {
+                            return { stopped: true, cancelled: true };
+                        }
+                        await persistFailedResult({
+                            batchId, judgeConfig, queueBatchProgress, flushBatchProgress,
+                            model: target.model, hostUrl, judgeHostUrl, prompt, err: error,
+                            errorDuration: Date.now() - startedAt, currentBatch, pendingModelTimeline,
+                            repeatIndex, repeatTotal: repeats,
+                            repeatGroupId: repeats > 1 ? repeatGroupId : null,
+                            executionSettings: {
+                                sampling_profile: 'harness-isolated', sampling_source: 'benchmark_target_v1',
+                                think: false, think_mode: 'off', rankable_mode: target.mode === 'isolated_model',
+                                inference_contract_fingerprint: target.profile.fingerprint
+                            },
+                            executionTarget: target,
+                            executionReceipt: execution?.publicReceipt || null,
+                            providerUsage: execution?.receipt?.usage || null,
+                            qualityCohortFingerprint
+                        });
+                    } finally {
+                        clearTimeout(timeoutId);
+                        unregisterController();
+                    }
+
+                    completedPairs.add(pairKey);
+                    await BenchmarkBatch.updateOne({ _id: batchId }, {
+                        $addToSet: { 'checkpoint.completed_pairs': pairKey },
+                        $set: {
+                            'checkpoint.last_model': target.id,
+                            'checkpoint.last_prompt': prompt.name,
+                            'checkpoint.updated_at': new Date()
+                        }
+                    }).catch(() => {});
+                }
+            }
+            return { stopped: false, cancelled: false };
+        } finally {
+            await flushModelTimeline(pendingModelTimeline);
+        }
     };
 
     const runModelPromptLoop = async (hostUrl, judgeHostUrl, model) => {
@@ -732,7 +933,8 @@ async function runBatchOrchestrator({
                         pendingModelTimeline,
                         repeatIndex,
                         repeatTotal: repeats,
-                        repeatGroupId: repeats > 1 ? repeatGroupId : null
+                        repeatGroupId: repeats > 1 ? repeatGroupId : null,
+                        executionTarget: localTargetByKey.get(`${hostUrl}\0${model}`) || null
                     });
 
                     if (execResult?.stopped || batchCancellationController.signal.aborted) {
@@ -895,7 +1097,7 @@ async function runBatchOrchestrator({
     };
 
 
-    if (isResuming) {
+    if (isResuming && requestedHostGroups.length > 0) {
         await setBatchPhase('contract', `Resuming: verifying frozen campaign snapshot for ${lastCheckpointModel || 'next model'}…`);
         inferenceContractCampaign = await resumeRevalidation.loadFrozenCampaign({
             hostGroups: requestedHostGroups,
@@ -922,10 +1124,12 @@ async function runBatchOrchestrator({
     const judgeSourceHosts = hostUrls.length > 0
         ? hostUrls
         : requestedHostGroups.map(([url]) => url);
-    const judgeHostUrls = judgeSourceHosts.map(url => {
-        const { judgeHost } = resolveJudgeHost(url, judgeConfig);
-        return judgeHost;
-    }).filter(Boolean);
+    const judgeHostUrls = judgeConfig.target?.executionKind === 'harness'
+        ? []
+        : [...new Set([
+            ...judgeSourceHosts.map(url => resolveJudgeHost(url, judgeConfig).judgeHost),
+            ...(judgeSourceHosts.length === 0 && judgeConfig.host ? [judgeConfig.host] : [])
+        ].filter(Boolean))];
     const allAffectedHosts = [...new Set([...hostUrls, ...judgeHostUrls])];
 
     // Server-side profiling guard: refuse to start while a profiler run or
@@ -1032,7 +1236,7 @@ async function runBatchOrchestrator({
                 );
             }
         }
-        if (isResuming) await resumeRevalidation.recordReady(executionHostGroups);
+        if (isResuming && requestedHostGroups.length > 0) await resumeRevalidation.recordReady(executionHostGroups);
         await runBatchPreflight({
             preflightResult,
             batchId,
@@ -1041,7 +1245,7 @@ async function runBatchOrchestrator({
             recordBatchTimelineEvent
         });
 
-        if (!isResuming) {
+        if (!isResuming && requestedHostGroups.length > 0) {
             await setBatchPhase('contract', 'Freezing deployed artifact and inference budgets for this campaign…');
             inferenceContractCampaign = await loadOrResolveCampaignInferenceContracts({
                 batchId,
@@ -1052,16 +1256,18 @@ async function runBatchOrchestrator({
         }
         const hostTasks = executionHostGroups
             .map(([hostUrl, hostModels]) => async () => runHostBatch(hostUrl, hostModels));
+        const harnessTasks = harnessTargets.map((target) => async () => runHarnessTarget(target));
+        const executionTasks = [...hostTasks, ...harnessTasks];
 
         const hostOutcomes = [];
         if (executionMode === 'latency') {
-            for (const task of hostTasks) {
+            for (const task of executionTasks) {
                 const outcome = await task();
                 hostOutcomes.push(outcome);
                 if (outcome?.stopped) break;
             }
         } else {
-            hostOutcomes.push(...await Promise.all(hostTasks.map((task) => task())));
+            hostOutcomes.push(...await Promise.all(executionTasks.map((task) => task())));
         }
 
         await flushBatchProgress(true);

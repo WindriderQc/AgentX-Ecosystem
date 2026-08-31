@@ -9,6 +9,7 @@ const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const BenchmarkTimelineEntry = require('../../../models/BenchmarkTimelineEntry');
 const { JUDGE_CONFIG } = require('../qualityScorer');
+const { SCORER_VERSION } = require('../scoring/scorerVersion');
 const { normalizeExecutionConfig } = require('./config');
 const { seedPrompts } = require('./init');
 
@@ -22,6 +23,14 @@ const {
     setBatchPhase: _setBatchPhase
 } = require('./batchHelpers');
 const { emitBuddyEvent } = require('../../clients/buddyEventClient');
+const {
+    buildOllamaTarget,
+    buildQualityCohortFingerprint,
+    normalizeBatchTargets,
+    normalizeBenchmarkTarget
+} = require('../../../../shared/benchmarkTargetContract');
+const { createSpendGrant } = require('./harnessBrokerClient');
+const { fingerprint } = require('../../../../shared/workerContract');
 
 let activeBatchId = null;
 let activeHeartbeatInterval = null;
@@ -45,6 +54,7 @@ function clearActiveBatch() {
 async function startBatch({
     host,
     models,
+    targets = null,
     levels,
     prompt_ids = null,
     run_name,
@@ -53,12 +63,30 @@ async function startBatch({
     tags = [],
     description = '',
     execution_mode = 'latency',
-    depth_config = null
+    depth_config = null,
+    paid_approval = null,
+    campaign_kind = 'model'
 }) {
-    if (!host || !models || !Array.isArray(models) || !levels || !Array.isArray(levels)) {
-        throw new Error('host, models (array), and levels (array) are required');
+    if (!levels || !Array.isArray(levels)) {
+        throw new Error('levels (array) are required');
     }
+    const normalizedTargets = normalizeBatchTargets({ host, models, targets });
+    if (campaign_kind === 'model' && normalizedTargets.some((target) => target.mode === 'native_agent')) {
+        throw new Error('native_agent targets require campaign_kind native_agent');
+    }
+    if (campaign_kind === 'native_agent' && normalizedTargets.some((target) => target.mode !== 'native_agent')) {
+        throw new Error('native_agent campaigns accept only native_agent targets');
+    }
+    const defaultHost = normalizedTargets.find((target) => target.executionKind === 'ollama')?.host || 'harness';
+    const displayModels = normalizedTargets.map((target) => target.model);
     judge_config = { ...(judge_config || {}), think: false };
+    const judgeTarget = judge_config.target
+        ? normalizeBenchmarkTarget(judge_config.target, { allowMissingCatalogFingerprint: judge_config.target.executionKind === 'ollama' })
+        : buildOllamaTarget(judge_config.host || defaultHost, judge_config.model || JUDGE_CONFIG.model);
+    if (judgeTarget.mode === 'native_agent' || !judgeTarget.capabilities.judge) {
+        throw new Error('Only direct_model or isolated_model targets may be used as judge');
+    }
+    judge_config = { ...judge_config, target: judgeTarget, host: judgeTarget.host || `harness:${judgeTarget.harness.name}`, model: judgeTarget.model };
 
     await seedPrompts();
 
@@ -92,16 +120,35 @@ async function startBatch({
     }
 
     const { plan, normalizedExecutionConfig } = buildExecutionPlan(
-        host,
-        models,
+        defaultHost,
+        displayModels,
         selectedPrompts,
         { judge_config, execution_config }
     );
+    plan.targets = normalizedTargets;
 
     const repeats = Math.max(1, Math.min(5, Number(normalizedExecutionConfig.repeats) || 1));
+    const qualityCohortFingerprint = buildQualityCohortFingerprint({
+        prompts: selectedPrompts,
+        scorerVersion: SCORER_VERSION,
+        judgeTarget,
+        executionConfig: normalizedExecutionConfig,
+        profileContract: campaign_kind === 'native_agent' ? 'native-agent-v1' : 'isolated-model-v1'
+    });
+    const batchContractFingerprint = fingerprint({
+        schema: 'agentx.benchmark-batch-contract/v1',
+        qualityCohortFingerprint,
+        targetFingerprints: normalizedTargets.map((target) => target.fingerprint).sort(),
+        repeats,
+        campaignKind: campaign_kind,
+        executionMode: execution_mode || 'latency'
+    });
+    plan.batch_contract_fingerprint = batchContractFingerprint;
     const batch = new BenchmarkBatch({
-        host,
-        models,
+        host: defaultHost,
+        models: displayModels,
+        targets: normalizedTargets,
+        campaign_kind,
         levels,
         prompt_ids: explicitPromptIds,
         judge_config,
@@ -109,21 +156,40 @@ async function startBatch({
         depth_config: (depth_config && typeof depth_config === 'object') ? depth_config : null,
         run_name: run_name || description || `Batch ${new Date().toLocaleString()}`,
         active_slot: 'benchmark_singleton',
-        total_tests: models.length * selectedPrompts.length * repeats,
+        total_tests: normalizedTargets.length * selectedPrompts.length * repeats,
         plan,
         status: 'running',
         started_at: new Date(),
         tags: Array.isArray(tags) ? tags : [],
         description: typeof description === 'string' ? description : '',
-        execution_mode: execution_mode || 'latency'
+        execution_mode: execution_mode || 'latency',
+        quality_cohort_fingerprint: qualityCohortFingerprint,
+        batch_contract_fingerprint: batchContractFingerprint
     });
+
+    const spendGrant = await createSpendGrant({
+        batchId: batch._id.toString(),
+        batchFingerprint: batchContractFingerprint,
+        targets: normalizedTargets,
+        judgeTarget,
+        judgeConfig: judge_config,
+        promptCount: selectedPrompts.length,
+        repeats,
+        executionConfig: normalizedExecutionConfig,
+        approval: paid_approval
+    });
+    batch.spend_grant = spendGrant;
 
     batch.captureSystemSnapshot();
     await batch.save();
     const batchId = batch._id.toString();
 
     if (process.env.NODE_ENV !== 'test') {
-        executeBatch(batchId, host, models, selectedPrompts, {
+        executeBatch(batchId, defaultHost, displayModels, selectedPrompts, {
+            targets: normalizedTargets,
+            spend_grant: spendGrant,
+            quality_cohort_fingerprint: qualityCohortFingerprint,
+            batch_contract_fingerprint: batchContractFingerprint,
             judge_config,
             execution_config: normalizedExecutionConfig,
             execution_mode
@@ -361,6 +427,10 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             batchId,
             defaultHost,
             models,
+            targets: options.targets || batch.targets || [],
+            spendGrant: options.spend_grant || batch.spend_grant || null,
+            qualityCohortFingerprint: options.quality_cohort_fingerprint || batch.quality_cohort_fingerprint || null,
+            batchContractFingerprint: options.batch_contract_fingerprint || batch.batch_contract_fingerprint || null,
             prompts,
             judgeConfig,
             executionConfig,
@@ -604,7 +674,7 @@ async function stopBatch(batchId) {
  * Re-uses the original batch config; the orchestrator skips completed pairs.
  */
 async function resumeBatch(batchId, options = {}) {
-    const batch = await BenchmarkBatch.findById(batchId);
+    const batch = await BenchmarkBatch.findById(batchId).select('+spend_grant');
     if (!batch) throw new Error('Batch not found');
     if (!['stopped', 'failed', 'interrupted'].includes(batch.status)) {
         throw new Error(`Cannot resume batch in status "${batch.status}"`);
@@ -624,18 +694,13 @@ async function resumeBatch(batchId, options = {}) {
         throw new Error('Cannot resume batch with no remaining work');
     }
 
-    // Reset to running
+    // Rebind the judge before calculating any renewed spend ceiling.
     if (options.judgeConfig && typeof options.judgeConfig === 'object') {
         batch.judge_config = {
             ...(batch.judge_config || {}),
             ...options.judgeConfig
         };
     }
-    batch.status = 'running';
-    batch.active_slot = 'benchmark_singleton';
-    batch.execution_started_at = null;
-    batch.execution_pid = null;
-    await batch.save();
 
     const explicitPromptIds = Array.isArray(batch.prompt_ids)
         ? batch.prompt_ids.map(id => String(id)).filter(Boolean)
@@ -653,8 +718,52 @@ async function resumeBatch(batchId, options = {}) {
         selectedPrompts.sort((a, b) => (a.level || 0) - (b.level || 0));
     }
 
+    const normalizedTargets = normalizeBatchTargets({
+        host: batch.host,
+        models: batch.models,
+        targets: batch.targets
+    });
+    const judgeTarget = normalizeBenchmarkTarget(batch.judge_config.target, {
+        allowMissingCatalogFingerprint: batch.judge_config.target.executionKind === 'ollama'
+    });
+    const repeats = Math.max(1, Math.min(5, Number(batch.execution_config?.repeats) || 1));
+    const batchContractFingerprint = batch.batch_contract_fingerprint || fingerprint({
+        schema: 'agentx.benchmark-batch-contract/v1',
+        qualityCohortFingerprint: batch.quality_cohort_fingerprint || null,
+        targetFingerprints: normalizedTargets.map((target) => target.fingerprint).sort(),
+        repeats,
+        campaignKind: batch.campaign_kind || 'model',
+        executionMode: batch.execution_mode || 'latency'
+    });
+    const renewedSpendGrant = await createSpendGrant({
+        batchId,
+        batchFingerprint: batchContractFingerprint,
+        targets: normalizedTargets,
+        judgeTarget,
+        judgeConfig: batch.judge_config,
+        promptCount: selectedPrompts.length,
+        repeats,
+        executionConfig: batch.execution_config || {},
+        approval: options.paidApproval || null
+    });
+
+    // Commit the resumed state only after any paid plan has been explicitly
+    // approved and signed. A refusal therefore happens before the first call
+    // and leaves the stopped batch resumable.
+    batch.spend_grant = renewedSpendGrant;
+    batch.batch_contract_fingerprint = batchContractFingerprint;
+    batch.status = 'running';
+    batch.active_slot = 'benchmark_singleton';
+    batch.execution_started_at = null;
+    batch.execution_pid = null;
+    await batch.save();
+
     if (process.env.NODE_ENV !== 'test') {
         executeBatch(batchId, batch.host, batch.models, selectedPrompts, {
+            targets: normalizedTargets,
+            spend_grant: renewedSpendGrant,
+            quality_cohort_fingerprint: batch.quality_cohort_fingerprint || null,
+            batch_contract_fingerprint: batchContractFingerprint,
             judge_config: batch.judge_config || {},
             execution_config: batch.execution_config || {},
             execution_mode: batch.execution_mode || 'latency'

@@ -201,7 +201,7 @@ async function getSummary() {
 /**
  * Get dashboard data with model statistics
  */
-async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory, tag, includeUnavailableModels = false } = {}) {
+async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory, tag, includeUnavailableModels = false, includeCloud = true } = {}) {
     // Build match query for filtering.
     // Defense in depth per scoring-contract-v1 §2.7 (0117): infra-failed rows never surface
     // in a leaderboard, even though success:true already excludes them.
@@ -210,6 +210,15 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
         infra_error: { $ne: true },
         excluded_from_leaderboard: { $ne: true }
     };
+    if (!includeCloud) {
+        matchQuery.$and = [{
+            $or: [
+                { 'execution_target.tier': 'local' },
+                { execution_target: null },
+                { execution_target: { $exists: false } }
+            ]
+        }];
+    }
 
     // Filter by prompt category
     if (promptCategory) {

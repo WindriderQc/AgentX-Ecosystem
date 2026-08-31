@@ -25,7 +25,7 @@ import { showFatalError, showSectionError } from '../components/error-banner.js'
 /** Convert generalist leaderboard entry to the shape expected by the boards. */
 function toGeneralistBoardEntry(entry, scoreAxis = 'composite', trustVerdict = null) {
     // generalistScore is 0-100 scale; board expects 0-10
-    const score = entry.generalistScore != null ? entry.generalistScore / 10 : 0;
+    const score = entry.generalistScore != null ? entry.generalistScore / 10 : null;
     const categoryScores = buildCategoryScores(entry.categoryAverages || {});
     return {
         model:           entry.model,
@@ -71,7 +71,17 @@ function toGeneralistBoardEntry(entry, scoreAxis = 'composite', trustVerdict = n
         qualifiedWinnerEligible: false,
         reviewCount:     entry.needsReviewCount || 0,
         trend:           null,
-        filtered:        entry.filtered || false
+        filtered:        entry.filtered || false,
+        rankable:        entry.rankable !== false,
+        filterReason:    entry.filterReason || null,
+        harnessEvidence: entry.harnessEvidence || null,
+        executionTarget: entry.executionTarget || null,
+        provider:        entry.provider || 'ollama',
+        tier:            entry.tier || 'local',
+        harness:         entry.harness || null,
+        pricing:         entry.pricing || null,
+        providerCostNanodollars: entry.providerCostNanodollars || 0,
+        qualityCohortFingerprint: entry.qualityCohortFingerprint || null
     };
 }
 
@@ -158,6 +168,7 @@ function restoreShell(main, hosts = []) {
                 <span class="r-fgroup-label"><i class="fas fa-arrow-down-wide-short" aria-hidden="true"></i> Rank by</span>
                 <div class="r-seg">
                     <button type="button" class="r-seg-btn" data-axis="composite" title="Blended deterministic + judge score">Composite</button>
+                    <button type="button" class="r-seg-btn" data-axis="quality" title="Common quality score; required when cloud models are shown">Quality</button>
                     <button type="button" class="r-seg-btn" data-axis="deterministic" title="Rule-based deterministic scoring only">Deterministic</button>
                     <button type="button" class="r-seg-btn" data-axis="subjective" title="Judge-model scoring only">Judge</button>
                 </div>
@@ -165,6 +176,13 @@ function restoreShell(main, hosts = []) {
             <div class="r-fgroup r-fgroup-hosts">
                 <span class="r-fgroup-label"><i class="fas fa-server" aria-hidden="true"></i> Hosts</span>
                 <div class="r-host-select">${hostSelectOptionsHtml(hosts)}</div>
+            </div>
+            <div class="r-fgroup">
+                <span class="r-fgroup-label"><i class="fas fa-cloud" aria-hidden="true"></i> Sources</span>
+                <label class="r-archive-toggle" title="Include OpenClaw and Hermès cloud-model evidence in server-side ranks, charts and exports">
+                    <input type="checkbox" id="include-cloud-models">
+                    <span>Cloud models</span>
+                </label>
             </div>
             <div class="r-fgroup">
                 <span class="r-fgroup-label"><i class="fas fa-gauge-high" aria-hidden="true"></i> Difficulty</span>
@@ -280,9 +298,11 @@ let _selectedHost = null;
 let _challengeScope = 'advanced';
 let _trustScope = 'trusted';
 let _includeUnavailableModels = false;
+let _includeCloud = true;
 
 try {
     _includeUnavailableModels = localStorage.getItem('leaderboardIncludeUnavailableModels') === 'true';
+    _includeCloud = localStorage.getItem('leaderboardIncludeCloud') !== 'false';
     _trustScope = localStorage.getItem('leaderboardTrustScope') === 'exploratory' ? 'exploratory' : 'trusted';
     const savedHostScope = localStorage.getItem('leaderboardHostScope');
     if (savedHostScope === 'current' || savedHostScope === 'all') _hostScope = savedHostScope;
@@ -296,6 +316,10 @@ function wireAxisChip(main, leaderboardMeta = {}) {
 
     // Rank-by (score axis)
     bar.querySelectorAll('[data-axis]').forEach(btn => {
+        if (_includeCloud && btn.dataset.axis === 'composite') {
+            btn.disabled = true;
+            btn.title = 'Composite quality + latency is available only when Cloud models is unchecked';
+        }
         if (btn.dataset.axis === _currentAxis) btn.classList.add('is-active');
         btn.addEventListener('click', () => {
             if (btn.dataset.axis === _currentAxis) return;
@@ -303,6 +327,17 @@ function wireAxisChip(main, leaderboardMeta = {}) {
             init();
         });
     });
+
+    const cloudToggle = bar.querySelector('#include-cloud-models');
+    if (cloudToggle) {
+        cloudToggle.checked = _includeCloud;
+        cloudToggle.addEventListener('change', () => {
+            _includeCloud = cloudToggle.checked;
+            if (_includeCloud && _currentAxis === 'composite') _currentAxis = 'quality';
+            try { localStorage.setItem('leaderboardIncludeCloud', String(_includeCloud)); } catch (_) {}
+            init();
+        });
+    }
 
     // Hosts — one selector: All hosts / a single host / All history.
     const applyHostChoice = (scope, host) => {
@@ -383,7 +418,7 @@ function wireAxisChip(main, leaderboardMeta = {}) {
     // one readable sentence so users always know what the board is showing.
     const summaryEl = bar.querySelector('#view-summary');
     if (summaryEl) {
-        const axisLabel = { composite: 'Composite', deterministic: 'Deterministic', subjective: 'Judge' }[_currentAxis] || 'Composite';
+        const axisLabel = { composite: 'Composite', quality: 'Quality', deterministic: 'Deterministic', subjective: 'Judge' }[_currentAxis] || 'Quality';
         const hostLabel = _hostScope === 'all'
             ? 'all hosts ever benchmarked'
             : _selectedHost
@@ -398,7 +433,8 @@ function wireAxisChip(main, leaderboardMeta = {}) {
         const archiveNote = _includeUnavailableModels
             ? ' <span class="r-vs-dot">·</span> including deleted models'
             : '';
-        summaryEl.innerHTML = `<i class="fas fa-eye" aria-hidden="true"></i> <span class="r-vs-text">Showing the <b>${axisLabel}</b> ranking across <b>${hostLabel}</b>, scored on <b>${diffLabel}</b>, in <b>${trustLabel}</b> trust mode${archiveNote}.</span>`;
+        const cloudNote = _includeCloud ? ' <span class="r-vs-dot">·</span> cloud included' : ' <span class="r-vs-dot">·</span> local only';
+        summaryEl.innerHTML = `<i class="fas fa-eye" aria-hidden="true"></i> <span class="r-vs-text">Showing the <b>${axisLabel}</b> ranking across <b>${hostLabel}</b>, scored on <b>${diffLabel}</b>, in <b>${trustLabel}</b> trust mode${cloudNote}${archiveNote}.</span>`;
     }
 }
 
@@ -502,7 +538,9 @@ async function enrichWithPerfData(rankings) {
 function buildCsvFromRankings(rankings) {
     const CATS = ['coding', 'reasoning', 'math', 'knowledge', 'instruction', 'creative', 'translation'];
     const headers = [
-        'rank', 'model', 'host', 'score', 'qualityScore', 'performanceCoeff',
+        'rank', 'rankable', 'model', 'host', 'provider', 'tier', 'harness', 'harnessVersion',
+        'pricingKind', 'pricingSource', 'pricingEffectiveAt', 'providerCostUsd', 'qualityCohortFingerprint',
+        'score', 'qualityScore', 'performanceCoeff',
         'testCount', 'confidence', 'needsReviewCount', 'lowConfidenceCount', 'successRate', 'tokPerSec', 'avgLatency', 'p95Latency', 'benchmarkTtft', 'hostTtft',
         ...CATS
     ];
@@ -518,9 +556,19 @@ function buildCsvFromRankings(rankings) {
     const rows = rankings
         .filter(e => !e.filtered)
         .map((e, i) => [
-            i + 1,
+            e.rankable === false ? '' : i + 1,
+            e.rankable !== false,
             e.model || '',
             e.host || '',
+            e.provider || 'ollama',
+            e.tier || 'local',
+            e.harness?.name || '',
+            e.harness?.version || '',
+            e.pricing?.kind || '',
+            e.pricing?.source || '',
+            e.pricing?.effectiveAt || '',
+            e.tier === 'local' ? '' : Number(e.providerCostNanodollars || 0) / 1e9,
+            e.qualityCohortFingerprint || '',
             e.score != null       ? e.score.toFixed(3)       : '',
             e.qualityScore != null ? e.qualityScore.toFixed(3) : '',
             e.performanceCoeff != null ? e.performanceCoeff.toFixed(3) : '',
@@ -561,13 +609,14 @@ async function init() {
     if (!main) return;
 
     showLoadingState(main);
+    if (_includeCloud && _currentAxis === 'composite') _currentAxis = 'quality';
 
     // --- Step 1: critical parallel fetch ---
     let dashboardRes, generalistRes, hostsRes, coverageRes;
     try {
         [dashboardRes, generalistRes, hostsRes, coverageRes] = await Promise.all([
-            fetchDashboard(_includeUnavailableModels),
-            fetchGeneralistLeaderboard(_currentAxis, _hostScope, _challengeScope, _includeUnavailableModels, _trustScope),
+            fetchDashboard(_includeUnavailableModels, _includeCloud),
+            fetchGeneralistLeaderboard(_currentAxis, _hostScope, _challengeScope, _includeUnavailableModels, _trustScope, _includeCloud),
             fetchHosts().catch(() => ({ hosts: [] })),
             fetchGroundTruthGaps().catch(() => null)
         ]);
@@ -678,13 +727,21 @@ async function init() {
     if (podiumEl) {
         try {
             // Render podium immediately with score data (perf loads async below)
-            renderPodium(podiumEl, rawRankings, { categoryWeights, trustVerdict });
+            renderPodium(
+                podiumEl,
+                rawRankings.filter(r => r.rankable !== false),
+                { categoryWeights, trustVerdict }
+            );
 
             // Enrich top-3 with performance metrics, then re-render
-            const top3 = rawRankings.filter(r => !r.filtered).slice(0, 3);
+            const top3 = rawRankings.filter(r => !r.filtered && r.rankable !== false).slice(0, 3);
             if (top3.length > 0) {
                 enrichWithPerfData(top3).then(() => {
-                    renderPodium(podiumEl, rawRankings, { categoryWeights, trustVerdict });
+                    renderPodium(
+                        podiumEl,
+                        rawRankings.filter(r => r.rankable !== false),
+                        { categoryWeights, trustVerdict }
+                    );
                 }).catch(err => {
                     console.warn('[podium] perf enrichment failed:', err);
                 });
@@ -758,7 +815,7 @@ async function init() {
     const categoryMapEl = main.querySelector('#category-map');
     if (categoryMapEl) {
         try {
-            renderCategoryMap(categoryMapEl, rankings.filter(e => !e.filtered));
+            renderCategoryMap(categoryMapEl, rankings.filter(e => !e.filtered && e.rankable !== false));
         } catch (err) {
             console.warn('[category-map] render failed:', err);
             showSectionError(categoryMapEl, 'Could not render category map.');

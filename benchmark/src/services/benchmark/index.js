@@ -9,6 +9,7 @@
 
 const logger = require('../../../config/logger');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
+const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkTimelineEntry = require('../../../models/BenchmarkTimelineEntry');
 const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
 
@@ -163,19 +164,27 @@ class BenchmarkService {
     //   deterministic → deterministic_score (0-10 scale)
     //   subjective    → subjective_score (0-10 scale)
     async getGeneralistLeaderboard(options = {}) {
-        const axis = options.axis === 'deterministic' ? 'deterministic'
+        const requestedAxis = options.axis === 'deterministic' ? 'deterministic'
             : options.axis === 'subjective' ? 'subjective'
             : options.axis === 'quality' ? 'quality'
             : 'composite';
+        const includeCloud = options.includeCloud !== false;
+        // The latency-aware composite mixes hardware-local latency with WAN and
+        // provider queueing. It is intentionally available only on the
+        // local-only board.
+        const axis = includeCloud && requestedAxis === 'composite' ? 'quality' : requestedAxis;
         const hostScope = options.hostScope === 'primary' ? 'primary'
             : options.hostScope === 'current' ? 'current'
             : 'all';
         const challengeScope = options.challengeScope === 'advanced' ? 'advanced'
             : options.challengeScope === 'foundation' ? 'foundation'
             : 'all';
-        const trustScope = options.trustScope === TRUST_SCOPE_TRUSTED
-            ? TRUST_SCOPE_TRUSTED
-            : TRUST_SCOPE_EXPLORATORY;
+        if (![TRUST_SCOPE_TRUSTED, TRUST_SCOPE_EXPLORATORY].includes(options.trustScope)) {
+            const error = new Error('trustScope must be explicitly set to trusted or exploratory');
+            error.code = 'TRUST_SCOPE_REQUIRED';
+            throw error;
+        }
+        const trustScope = options.trustScope;
         const trustedView = trustScope === TRUST_SCOPE_TRUSTED;
         const includeUnavailableModels = options.includeUnavailableModels === true;
         const scoreField = axis === 'deterministic' ? 'deterministic_score'
@@ -199,6 +208,18 @@ class BenchmarkService {
             // explicit guard removes that implicit assumption.
             [scoreField]: { $ne: null }
         };
+        const addMatchClause = (clause) => {
+            leaderboardMatch.$and = [...(leaderboardMatch.$and || []), clause];
+        };
+        if (!includeCloud) {
+            addMatchClause({
+                $or: [
+                    { 'execution_target.tier': 'local' },
+                    { execution_target: null },
+                    { execution_target: { $exists: false } }
+                ]
+            });
+        }
         const configuredHosts = getConfiguredHosts()
             .map((host) => ({ name: host.name, url: host.url }))
             .filter((host) => host.url);
@@ -209,7 +230,16 @@ class BenchmarkService {
         if (hostScope === 'primary' && primaryHostUrl) {
             leaderboardMatch.host = primaryHostUrl;
         } else if (hostFilterApplied) {
-            leaderboardMatch.host = { $in: configuredHostUrls };
+            if (includeCloud) {
+                addMatchClause({
+                    $or: [
+                        { host: { $in: configuredHostUrls } },
+                        { 'execution_target.tier': { $in: ['free_cloud', 'paid_cloud'] } }
+                    ]
+                });
+            } else {
+                leaderboardMatch.host = { $in: configuredHostUrls };
+            }
         }
         if (challengeScope === 'advanced') {
             leaderboardMatch.prompt_level = { $gte: 4, $lte: 5 };
@@ -224,6 +254,8 @@ class BenchmarkService {
             cohort: null
         };
         let cohortResolution = null;
+        let selectedQualityCohortFingerprint = null;
+        let nonComparableRows = [];
         if (trustedView) {
             const [incompleteBatchIds, resolvedCohort] = await Promise.all([
                 BenchmarkBatch.distinct('_id', {
@@ -250,6 +282,48 @@ class BenchmarkService {
             leaderboardMatch.batch_id = resolvedCohort.selectedBatchObjectId
                 || { $in: [] };
         }
+        if (includeCloud) {
+            // Rank only one exact quality cohort. Historical rows without the
+            // additive fingerprint stay visible below as non-comparable; they
+            // are never silently treated as proof-equivalent.
+            const cohortBaseMatch = { ...leaderboardMatch };
+            const latestComparable = await BenchmarkResult.findOne({
+                ...cohortBaseMatch,
+                quality_cohort_fingerprint: { $type: 'string', $ne: '' }
+            }).sort({ timestamp: -1 }).select('quality_cohort_fingerprint').lean();
+            selectedQualityCohortFingerprint = latestComparable?.quality_cohort_fingerprint || null;
+            leaderboardMatch.quality_cohort_fingerprint = selectedQualityCohortFingerprint || { $in: [] };
+            nonComparableRows = await BenchmarkResult.aggregate([
+                {
+                    $match: selectedQualityCohortFingerprint
+                        ? {
+                            ...cohortBaseMatch,
+                            $and: [
+                                ...(cohortBaseMatch.$and || []),
+                                {
+                                $or: [
+                                    { quality_cohort_fingerprint: { $ne: selectedQualityCohortFingerprint } },
+                                    { quality_cohort_fingerprint: null },
+                                    { quality_cohort_fingerprint: { $exists: false } }
+                                ]
+                                }
+                            ]
+                        }
+                        : cohortBaseMatch
+                },
+                { $sort: { timestamp: -1 } },
+                {
+                    $group: {
+                        _id: { model: '$model', host: '$host', cohort: '$quality_cohort_fingerprint' },
+                        target: { $first: '$execution_target' },
+                        latestTimestamp: { $first: '$timestamp' },
+                        totalTests: { $sum: 1 },
+                        providerCostNanodollars: { $sum: { $ifNull: ['$provider_cost.costNanodollars', 0] } }
+                    }
+                },
+                { $limit: 200 }
+            ]);
+        }
         const challengeFilterApplied = challengeScope !== 'all';
         const [generalistScores, categoryMap, availabilitySnapshot] = await Promise.all([
             calculateAllGeneralistScores(leaderboardMatch, {
@@ -268,6 +342,7 @@ class BenchmarkService {
             const catScores = categoryMap.get(key) || {};
             const totalTests = Object.values(catScores).reduce((sum, c) => sum + (c.count || 0), 0);
             const stats = entryStats.get(key) || {};
+            const harnessEvidence = stats.harnessEvidence || { rankable: true, reason: null };
             const categoryView = buildCategoryEvidenceView(
                 catScores,
                 data.categoryAverages,
@@ -277,7 +352,18 @@ class BenchmarkService {
             const row = {
                 model,
                 host: host || null,
-                host_available: isModelAvailableForRow({ model, host: host || null }, availabilitySnapshot),
+                host_available: stats.executionTarget?.executionKind === 'harness'
+                    ? stats.executionTarget.available !== false
+                    : isModelAvailableForRow({ model, host: host || null }, availabilitySnapshot),
+                executionTarget: stats.executionTarget || null,
+                provider: stats.executionTarget?.provider || 'ollama',
+                tier: stats.executionTarget?.tier || 'local',
+                harness: stats.executionTarget?.harness || null,
+                pricing: stats.executionTarget?.pricing || null,
+                providerCostNanodollars: stats.providerCostNanodollars || 0,
+                qualityCohortFingerprint: stats.qualityCohortFingerprint || selectedQualityCohortFingerprint,
+                rankable: harnessEvidence.rankable !== false,
+                harnessEvidence,
                 generalistScore: data.generalistScore,
                 weightedSum: data.weightedSum,
                 coveragePenalty: data.coveragePenalty,
@@ -318,10 +404,12 @@ class BenchmarkService {
                 lowConfidenceCount: stats.lowConfidenceCount || 0,
                 earliestTimestamp: stats.earliestTimestamp || null,
                 latestTimestamp: stats.latestTimestamp || null,
-                evidenceCompatibility: trustedView ? 'exact_compatible' : 'exploratory',
+                evidenceCompatibility: harnessEvidence.rankable === false
+                    ? 'incomplete_harness_evidence'
+                    : trustedView ? 'exact_compatible' : 'exploratory',
                 evidenceCohortId: trustedView ? trustedFilters.cohort?.selected?.evidenceFingerprint || null : null,
                 filtered: data.filtered || false,
-                filterReason: data.filterReason || null,
+                filterReason: data.filterReason || harnessEvidence.reason || null,
                 emptyRate: data.emptyRate || 0
             };
 
@@ -330,12 +418,45 @@ class BenchmarkService {
             }
         }
 
+        for (const item of nonComparableRows) {
+            const target = item.target || null;
+            const row = {
+                model: item._id.model,
+                host: item._id.host || null,
+                host_available: target?.executionKind === 'harness'
+                    ? target.available !== false
+                    : isModelAvailableForRow({ model: item._id.model, host: item._id.host || null }, availabilitySnapshot),
+                executionTarget: target,
+                provider: target?.provider || 'ollama',
+                tier: target?.tier || 'local',
+                harness: target?.harness || null,
+                pricing: target?.pricing || null,
+                providerCostNanodollars: item.providerCostNanodollars || 0,
+                qualityCohortFingerprint: item._id.cohort || null,
+                rankable: false,
+                generalistScore: null,
+                totalTests: item.totalTests || 0,
+                evidenceStatus: 'non_comparable_cohort',
+                evidenceCompatibility: 'non_comparable',
+                filterReason: 'quality_cohort_fingerprint_mismatch',
+                latestTimestamp: item.latestTimestamp || null,
+                categoryAverages: {},
+                categoryEvidence: {},
+                testedCategories: 0,
+                coverage: 0,
+                fullScopeEligible: false,
+                filtered: false
+            };
+            if (includeUnavailableModels || row.host_available) leaderboard.push(row);
+        }
+
         // Full-scope rows rank ahead of partial evidence. Partial rows remain
         // visible/auditable, but they no longer masquerade as comparable
         // leaders just because a narrow hard-level slice scored well.
         leaderboard.sort((a, b) => {
+            if (a.rankable !== b.rankable) return a.rankable ? -1 : 1;
             if (a.fullScopeEligible !== b.fullScopeEligible) return a.fullScopeEligible ? -1 : 1;
-            return b.generalistScore - a.generalistScore;
+            return (b.generalistScore ?? -Infinity) - (a.generalistScore ?? -Infinity);
         });
 
         const confidenceWeighted = leaderboard.some(e => e.confidenceWeighted);
@@ -362,6 +483,9 @@ class BenchmarkService {
             configuredHosts,
             primaryHostUrl,
             includeUnavailableModels,
+            includeCloud,
+            requestedAxis,
+            selectedQualityCohortFingerprint,
             hostModelSnapshot: serializeHostModelSnapshot(availabilitySnapshot),
             challengeScope,
             challengeFilterApplied,

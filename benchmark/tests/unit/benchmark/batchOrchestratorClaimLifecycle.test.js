@@ -120,6 +120,13 @@ jest.mock('../../../src/services/benchmark/batchResultPersistence', () => ({
     persistFailedResult: (...args) => mockPersistFailedResult(...args)
 }));
 
+const mockExecuteHarnessTarget = jest.fn();
+const mockResolveHarnessTarget = jest.fn();
+jest.mock('../../../src/services/benchmark/harnessBrokerClient', () => ({
+    executeHarnessTarget: (...args) => mockExecuteHarnessTarget(...args),
+    resolveHarnessTarget: (...args) => mockResolveHarnessTarget(...args)
+}));
+
 jest.mock('../../../src/services/benchmark/errorClassifier', () => ({
     classifyBenchmarkError: jest.fn(() => ({ infra: false }))
 }));
@@ -280,6 +287,15 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         mockCreateCurrentTestPersistenceStrategy.mockReturnValue(() => false);
         mockPersistSuccessfulResult.mockResolvedValue('result-1');
         mockPersistFailedResult.mockResolvedValue(undefined);
+        mockResolveHarnessTarget.mockImplementation(async (target) => target);
+        mockExecuteHarnessTarget.mockResolvedValue({
+            output: 'cloud answer', thinking: null, finishReason: 'stop',
+            publicReceipt: { fingerprint: 'r'.repeat(64) },
+            receipt: {
+                usage: { durationMs: 20, inputTokens: 4, outputTokens: 3, totalTokens: 7, costNanodollars: 0 },
+                identity: { model: { digest: null } }
+            }
+        });
         mockJudgeResult.mockResolvedValue({ quality_score: 8 });
         mockBenchmarkFetch.mockResolvedValue({
             ok: true,
@@ -1357,5 +1373,39 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         expect(mockPersistSuccessfulResult).not.toHaveBeenCalled();
         expect(mockPersistFailedResult).toHaveBeenCalledTimes(1);
         expect(getActiveBatchRequestCount('batch-timeout-body')).toBe(0);
+    });
+
+    it('runs a mixed Ollama and harness batch while claiming only local hosts', async () => {
+        const { buildOllamaTarget, normalizeBenchmarkTarget } = require('../../../../shared/benchmarkTargetContract');
+        const local = buildOllamaTarget('http://exec:11434', 'model-local');
+        const cloud = normalizeBenchmarkTarget({
+            id: 'openclaw-cloud', label: 'Cloud model', executionKind: 'harness', mode: 'isolated_model', tier: 'free_cloud',
+            provider: 'openrouter', model: 'vendor/model', modelVersion: 'v1',
+            harness: { name: 'openclaw', version: '2026.8.1' }, adapter: { name: 'openclaw-benchmark', version: '1.0.0' },
+            profile: { id: 'isolated', version: '1', fingerprint: '1'.repeat(64) },
+            api: { name: 'openclaw-agent-cli', version: '2026.8.1' }, contextWindow: 128000,
+            capabilities: { candidate: true, judge: true },
+            pricing: { kind: 'free', currency: 'USD', source: 'fixture', effectiveAt: null, inputNanodollarsPerMillion: 0, outputNanodollarsPerMillion: 0, callNanodollars: 0 },
+            available: true, observedAt: '2026-08-31T00:00:00.000Z', catalogFingerprint: 'a'.repeat(64)
+        });
+        mockResolveJudgeHost.mockReturnValue({ judgeHost: 'http://exec:11434', resolution: 'explicit' });
+
+        await expect(runBatchOrchestrator({
+            batchId: 'batch-mixed', defaultHost: local.host, models: [local.model, cloud.model], targets: [local, cloud],
+            prompts: [{ _id: 'prompt-1', name: 'Prompt 1', prompt: 'Say hello', level: 1, category: 'reasoning' }],
+            judgeConfig: { host: local.host, model: 'judge-1', concurrency: 2 },
+            executionConfig: { per_test_timeout_ms: 60_000, judge_drain_timeout_ms: 120_000, judge_stall_timeout_ms: 30_000 },
+            executionMode: 'throughput', recordBatchTimelineEvent: jest.fn(() => Promise.resolve()),
+            queueBatchProgress: jest.fn(), flushBatchProgress: jest.fn(() => Promise.resolve()),
+            setBatchPhase: jest.fn(() => Promise.resolve()), handleGracefulStop: jest.fn(),
+            qualityCohortFingerprint: 'c'.repeat(64), batchContractFingerprint: 'd'.repeat(64)
+        })).resolves.toEqual({ stopped: false, cancelled: false });
+
+        expect(mockBenchmarkFetch).toHaveBeenCalledTimes(1);
+        expect(mockExecuteHarnessTarget).toHaveBeenCalledTimes(1);
+        expect(mockPersistSuccessfulResult).toHaveBeenCalledTimes(2);
+        expect(mockPersistSuccessfulResult.mock.calls.map(([args]) => args.executionTarget.executionKind).sort())
+            .toEqual(['harness', 'ollama']);
+        expect(mockClaimHostForBenchmark.mock.calls.flatMap(([hosts]) => hosts)).not.toContain('harness:openclaw');
     });
 });

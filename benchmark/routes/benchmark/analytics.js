@@ -49,13 +49,15 @@ router.get('/dashboard', async (req, res) => {
         const { sort, modelCategory, promptCategory, tag } = req.query;
         const sortBy = sort || 'latency';
         const includeUnavailableModels = parseBool(req.query.includeUnavailableModels);
+        const includeCloud = String(req.query.includeCloud ?? 'true').toLowerCase() !== 'false';
 
         const dashboard = await benchmarkService.getDashboard({
             sortBy,
             modelCategory,
             promptCategory,
             tag,
-            includeUnavailableModels
+            includeUnavailableModels,
+            includeCloud
         });
 
         res.json({
@@ -236,12 +238,14 @@ router.get('/generalist-leaderboard', async (req, res) => {
         }
         const trustScope = trustScopeRaw;
         const includeUnavailableModels = parseBool(req.query.includeUnavailableModels);
+        const includeCloud = String(req.query.includeCloud ?? 'true').toLowerCase() !== 'false';
         const data = await benchmarkService.getGeneralistLeaderboard({
             axis,
             hostScope,
             challengeScope,
             trustScope,
-            includeUnavailableModels
+            includeUnavailableModels,
+            includeCloud
         });
 
         res.json({

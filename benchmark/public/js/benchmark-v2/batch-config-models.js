@@ -115,6 +115,7 @@ export function _buildModelChecklist(host) {
             html += `<label class="mc-card${checked ? ' selected' : ''}${isEmbedding ? ' mc-embedding' : ''}" data-model="${esc(value)}" data-model-norm="${esc(m)}" data-tier="${tier}" style="background:${tc.bg};border-color:${tc.border}">
               <input type="checkbox" class="bv2-model-cb" id="${esc(id)}"
                 value="${esc(value)}" data-host="${esc(host.url || '')}"
+                data-execution-kind="ollama"
                 data-host-name="${esc(hostName)}" ${checked} ${disabled}>
               <div class="mc-card-body">
                 <span class="mc-card-name" title="${esc(value)}">${esc(m)}${isEmbedding ? ' <span class="ax-readiness ax-warn">EMBEDDING</span>' : ''}</span>
@@ -136,4 +137,54 @@ export function _buildModelChecklist(host) {
     html += `<div class="mc-summary">${checkedCount} of ${totalModels} models selected</div>`;
 
     return html;
+}
+
+function priceLabel(target) {
+    const pricing = target?.pricing;
+    if (!pricing || pricing.kind === 'free') return 'free';
+    if (pricing.kind === 'manual_per_call') {
+        return `manual ~US$${(Number(pricing.callNanodollars || 0) / 1e9).toFixed(6)}/call`;
+    }
+    const input = Number(pricing.inputNanodollarsPerMillion || 0) / 1e9;
+    const output = Number(pricing.outputNanodollarsPerMillion || 0) / 1e9;
+    return `manual ~US$${input.toFixed(4)}/${output.toFixed(4)} per 1M in/out`;
+}
+
+export function _buildHarnessChecklist(targets = []) {
+    const candidates = (Array.isArray(targets) ? targets : [])
+        .filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate);
+    if (!candidates.length) {
+        return '<div class="mc-tier-group"><div class="mc-tier-header"><span class="mc-tier-label">Cloud harnesses</span></div><div class="mc-preset-tooltip">Cloud Benchmark is disabled or no isolated target is currently attested.</div></div>';
+    }
+    const groups = new Map();
+    for (const target of candidates) {
+        const label = target.harness?.name || 'Harness';
+        const group = groups.get(label) || [];
+        group.push(target);
+        groups.set(label, group);
+    }
+    return [...groups.entries()].map(([harness, entries]) => `
+      <div class="mc-tier-group" data-harness="${esc(harness)}">
+        <div class="mc-tier-header">
+          <span class="mc-tier-label" style="color:var(--r-active)">☁ ${esc(harness)} Cloud</span>
+          <span class="mc-tier-count">— ${entries.length} target${entries.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="mc-tier-cards">
+          ${entries.map((target) => `
+            <label class="mc-card${target.available === false ? ' is-disabled' : ''}" data-model="${esc(target.model)}" data-tier="cloud">
+              <input type="checkbox" class="bv2-model-cb" value="${esc(target.id)}"
+                data-target-id="${esc(target.id)}" data-execution-kind="harness" ${target.available === false ? 'disabled' : ''}>
+              <div class="mc-card-body">
+                <span class="mc-card-name">${esc(target.label || target.model)}</span>
+                <div class="mc-card-meta">
+                  <span class="mc-badge">${esc(target.provider)}</span>
+                  <span class="mc-badge">${esc(target.tier === 'paid_cloud' ? 'PAID' : 'FREE')}</span>
+                  ${target.available === false ? '<span class="mc-badge">UNAVAILABLE</span>' : ''}
+                  <span class="mc-badge">${esc(target.harness?.version || '')}</span>
+                  <span class="mc-badge mc-badge-dim">${esc(priceLabel(target))}</span>
+                </div>
+              </div>
+            </label>`).join('')}
+        </div>
+      </div>`).join('');
 }
