@@ -12,6 +12,17 @@ const SCHEMA_VERSION = 1;
 const RUNTIMES = ['agentx', 'claude-code', 'codex', 'external'];
 const RECONCILIATION_GRACE_MINUTES = 120;
 
+// Older private compositions could persist their adapter-local runtime name
+// before the public boundary was narrowed to the generic `external` owner.
+// New API writes are still validated strictly against RUNTIMES; this read-side
+// normalization exists only so durable historical rows cannot reintroduce
+// retired private runtime categories into current Product health.
+function publicRuntime(runtime) {
+  const value = String(runtime || '').trim();
+  if (!value) return null;
+  return RUNTIMES.includes(value) ? value : 'external';
+}
+
 const TRUST_ELIGIBLE = [
   'explicit_owner_instruction',
   'explicit_memory_request',
@@ -130,8 +141,8 @@ function reconciliationStatus(run, now = new Date()) {
   const status = String(run?.status || '');
   const active = ['collecting', 'synthesizing'].includes(status);
   const contributedRuntimes = [...new Set((run?.collectors || [])
-    .map((collector) => collector.runtime)
-    .filter((runtime) => RUNTIMES.includes(runtime)))];
+    .map((collector) => publicRuntime(collector.runtime))
+    .filter(Boolean))];
   const missingRuntimes = RUNTIMES.filter((runtime) => !contributedRuntimes.includes(runtime));
   const createdAt = run?.createdAt ? new Date(run.createdAt) : null;
   const nowAt = new Date(now);
@@ -312,6 +323,7 @@ function validateCandidateInput(input, index, knownObservationIds) {
 module.exports = {
   SCHEMA_VERSION,
   RUNTIMES,
+  publicRuntime,
   RECONCILIATION_GRACE_MINUTES,
   TRUST_ELIGIBLE,
   TRUST_INELIGIBLE,
