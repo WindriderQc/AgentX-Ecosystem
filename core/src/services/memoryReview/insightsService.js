@@ -23,16 +23,29 @@ function countCandidateRisk(candidate) {
 function latestRuntimeState(runs) {
   const latest = {};
   for (const run of runs) {
+    const runContributions = {};
     for (const collector of run.collectors || []) {
-      if (!latest[collector.runtime]) {
-        latest[collector.runtime] = {
+      const runtime = policy.publicRuntime(collector.runtime);
+      if (!runtime) continue;
+      if (!runContributions[runtime]) {
+        runContributions[runtime] = {
           runId: run.runId,
           runStatus: run.status,
           at: collector.submittedAt || run.createdAt,
-          errors: [...(collector.errors || [])],
-          advisories: [...(collector.drift || [])],
+          errors: [],
+          advisories: [],
         };
       }
+      const contribution = runContributions[runtime];
+      const submittedAt = collector.submittedAt || run.createdAt;
+      if (new Date(submittedAt || 0) > new Date(contribution.at || 0)) {
+        contribution.at = submittedAt;
+      }
+      contribution.errors.push(...(collector.errors || []));
+      contribution.advisories.push(...(collector.drift || []));
+    }
+    for (const [runtime, contribution] of Object.entries(runContributions)) {
+      if (!latest[runtime]) latest[runtime] = contribution;
     }
   }
   return latest;
@@ -81,9 +94,9 @@ function summarizeRuns(runs, limit, now = new Date(), {
     else if (run.summary?.noEligibleObservations) totals.modelSkips += 1;
 
     for (const collector of run.collectors || []) {
-      const runtime = runtimes[collector.runtime] || (runtimes[collector.runtime] = {
-        runtime: collector.runtime, runs: 0, sourceFiles: 0, sourceEvents: 0, eligible: 0, filtered: 0,
-      });
+      const runtimeKey = policy.publicRuntime(collector.runtime);
+      if (!runtimeKey) continue;
+      const runtime = runtimes[runtimeKey];
       runtime.runs += 1;
       runtime.sourceFiles += collector.sourceFilesSeen || 0;
       runtime.sourceEvents += collector.sourceEventsSeen || 0;

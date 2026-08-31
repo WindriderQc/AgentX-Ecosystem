@@ -72,6 +72,53 @@ describe('Dreaming Review insights read model', () => {
     }));
   });
 
+  test('folds durable pre-boundary runtime names into external health', () => {
+    const now = new Date('2026-08-31T04:00:00Z');
+    const result = summarizeRuns([
+      {
+        runId: 'current-public-boundary', status: 'completed', createdAt: new Date('2026-08-30T07:30:00Z'),
+        collectors: [{
+          runtime: 'external', submittedAt: new Date('2026-08-30T07:30:01Z'),
+          errors: [], drift: [],
+        }], candidates: [], summary: { noEligibleObservations: true },
+      },
+      {
+        runId: 'legacy-private-boundary', status: 'completed', createdAt: new Date('2026-08-17T07:30:00Z'),
+        collectors: [
+          { runtime: 'openclaw', submittedAt: new Date('2026-08-17T07:30:01Z'), errors: [], drift: [] },
+          { runtime: 'hermes', submittedAt: new Date('2026-08-17T07:30:02Z'), errors: [], drift: [] },
+        ], candidates: [], summary: { noEligibleObservations: true },
+      },
+    ], 30, now);
+
+    expect(result.runtimes.map((runtime) => runtime.runtime)).toEqual([
+      'agentx', 'claude-code', 'codex', 'external',
+    ]);
+    expect(result.runtimes.find((runtime) => runtime.runtime === 'external')).toEqual(expect.objectContaining({
+      health: 'healthy', lastRunId: 'current-public-boundary', runs: 3,
+    }));
+    expect(result.health.staleRuntimes).toEqual([]);
+    expect(result.safeDigest).not.toContain('stale collector');
+  });
+
+  test('aggregates historical private collectors into one external reconciliation contribution', () => {
+    const result = summarizeRuns([{
+      runId: 'legacy-active', status: 'collecting', createdAt: new Date('2026-08-12T03:15:00Z'),
+      collectors: [
+        { runtime: 'openclaw', errors: ['collector failure'], drift: [] },
+        { runtime: 'hermes', errors: [], drift: ['legacy advisory'] },
+      ], candidates: [], summary: {},
+    }], 30, new Date('2026-08-12T03:30:00Z'));
+
+    expect(result.health.activeRun.reconciliation).toEqual(expect.objectContaining({
+      contributedRuntimes: ['external'],
+      missingRuntimes: ['agentx', 'claude-code', 'codex'],
+    }));
+    expect(result.runtimes.find((runtime) => runtime.runtime === 'external')).toEqual(expect.objectContaining({
+      currentErrors: 1, currentAdvisories: 1,
+    }));
+  });
+
   test('publishes quality values only with fresh complete coverage and a real denominator', () => {
     const submittedAt = new Date('2026-08-12T03:30:00Z');
     const result = summarizeRuns([{
