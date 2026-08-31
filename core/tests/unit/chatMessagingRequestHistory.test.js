@@ -6,6 +6,10 @@ const vm = require('vm');
 
 const messagingPath = path.resolve(__dirname, '../../public/js/chat/chat-messaging.js');
 const source = fs.readFileSync(messagingPath, 'utf8').replace(/\r\n/g, '\n');
+const mainSource = fs.readFileSync(
+  path.resolve(__dirname, '../../public/js/chat/chat-main.js'),
+  'utf8'
+).replace(/\r\n/g, '\n');
 
 function loadHistoryHelper() {
   const idStart = source.indexOf('function messageIdOf');
@@ -23,8 +27,23 @@ function loadHistoryHelper() {
   return context.historyBeforeCurrentTurn;
 }
 
+function loadSendButtonHelpers() {
+  const start = source.indexOf('export function handleSendButtonAction');
+  const end = source.indexOf('\n\n/**', start);
+  if (start < 0 || end < 0) throw new Error('send button helpers source not found');
+  const helperSource = source.slice(start, end).replace(/export function/g, 'function');
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(
+    `${helperSource}\nthis.handleSendButtonAction = handleSendButtonAction;\nthis.isUserRequestedStreamStop = isUserRequestedStreamStop;`,
+    context
+  );
+  return context;
+}
+
 describe('Playground request history contract', () => {
   const historyBeforeCurrentTurn = loadHistoryHelper();
+  const { handleSendButtonAction, isUserRequestedStreamStop } = loadSendButtonHelpers();
 
   test('excludes only the exact current user turn already persisted by the UI', () => {
     const history = [
@@ -86,5 +105,54 @@ describe('Playground request history contract', () => {
     expect(source).toContain("elements.sendBtn.textContent = 'Stopping\\u2026';");
     expect(source).toContain('if (state.streamAbortController === requestAbortController)');
     expect(source).not.toMatch(/activeController\.abort\(\);[\s\S]{0,120}state\.sending = false/);
+  });
+
+  test('uses one stable click handler for consecutive sends', () => {
+    let sendCount = 0;
+    const ctx = {
+      elements: { sendBtn: {}, feedback: {} },
+      state: { streamAbortController: null, streamStopRequestedController: null },
+      helpers: {
+        sendMessage: () => { sendCount += 1; },
+        setFeedback: jest.fn()
+      }
+    };
+
+    expect(handleSendButtonAction(ctx)).toBe('send');
+    expect(handleSendButtonAction(ctx)).toBe('send');
+    expect(sendCount).toBe(2);
+    expect(mainSource).toContain("sendBtn.addEventListener('click', () => handleSendButtonAction");
+    expect(source).not.toContain('sendBtn.onclick');
+  });
+
+  test('stops only the active stream and records explicit user intent', () => {
+    const controller = { abort: jest.fn() };
+    const ctx = {
+      elements: { sendBtn: { disabled: false, textContent: 'Stop' } },
+      state: { streamAbortController: controller, streamStopRequestedController: null },
+      helpers: { sendMessage: jest.fn(), setFeedback: jest.fn() }
+    };
+
+    expect(handleSendButtonAction(ctx)).toBe('stop');
+    expect(controller.abort).toHaveBeenCalledTimes(1);
+    expect(ctx.helpers.sendMessage).not.toHaveBeenCalled();
+    expect(ctx.state.streamStopRequestedController).toBe(controller);
+    expect(ctx.elements.sendBtn.disabled).toBe(true);
+  });
+
+  test('does not mislabel an unrelated AbortError as a user stop', () => {
+    const activeController = {};
+    const unrelatedController = {};
+    const abortError = { name: 'AbortError' };
+
+    expect(isUserRequestedStreamStop(abortError, {
+      streamStopRequestedController: activeController
+    }, activeController)).toBe(true);
+    expect(isUserRequestedStreamStop(abortError, {
+      streamStopRequestedController: unrelatedController
+    }, activeController)).toBe(false);
+    expect(isUserRequestedStreamStop(new Error('network failure'), {
+      streamStopRequestedController: activeController
+    }, activeController)).toBe(false);
   });
 });

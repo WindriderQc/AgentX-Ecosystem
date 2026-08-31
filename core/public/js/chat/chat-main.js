@@ -15,7 +15,7 @@ import {
   renderMessage, appendMessage as _appendMessage,
   sendMessage as _sendMessage, sendMessageStreamFetch, fetchModels as _fetchModels,
   setStatus as _setStatus, setFeedback as _setFeedback, sanitizeHTML,
-  cancelModelWarmup
+  cancelModelWarmup, handleSendButtonAction
 } from './chat-messaging.js';
 import {
   loadHistoryList as _loadHistoryList, loadConversation as _loadConversation
@@ -120,6 +120,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showStats: true,
     eventSource: null,
     streamAbortController: null,
+    streamStopRequestedController: null,
     config: null,
     ollamaHosts: [],
     ollamaHostsLoaded: false,
@@ -597,7 +598,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.open('/council?question=' + encodeURIComponent(text), '_blank');
       });
     }
-    elements.sendBtn.addEventListener('click', () => helpers.sendMessage());
+    elements.sendBtn.addEventListener('click', () => handleSendButtonAction({ elements, state, helpers }));
     elements.clearBtn.addEventListener('click', clearChat);
     elements.refreshModels.addEventListener('click', async () => {
       await loadHostPreferences(state);

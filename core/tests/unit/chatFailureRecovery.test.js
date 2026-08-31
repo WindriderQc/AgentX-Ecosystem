@@ -35,6 +35,17 @@ describe('Playground failure recovery', () => {
     }));
   });
 
+  test('reports a technical stream abort as interrupted rather than user-stopped', () => {
+    expect(chatFailureDetails({
+      code: 'STREAM_INTERRUPTED',
+      message: 'The response stream was interrupted before completion.'
+    })).toEqual(expect.objectContaining({
+      status: 'Response interrupted',
+      tone: 'warning',
+      guidance: expect.stringContaining('Retry the turn')
+    }));
+  });
+
   test('redacts deployment endpoints and credentials from durable failure text', () => {
     const result = chatFailureDetails({
       message: 'fetch http://192.168.2.99:11434 failed token=super-secret'
