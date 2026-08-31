@@ -20,8 +20,11 @@ const DECISION_OUTCOMES = Object.freeze(['winner', 'equivalence_set', 'inconclus
 const FRESHNESS_STATUSES = Object.freeze(['fresh', 'stale', 'expired']);
 const RATIFICATION_STATUSES = Object.freeze(['unratified', 'ratified', 'revoked']);
 const JUDGE_QUALIFICATION_STATUSES = Object.freeze(['qualified', 'unqualified', 'expired']);
-const STATISTICAL_METHODS = Object.freeze(['paired-prompt-t-v1', 'paired-bootstrap-v1', 'paired-permutation-v1']);
-const MULTIPLICITY_CORRECTIONS = Object.freeze(['bonferroni', 'holm-bonferroni', 'none']);
+// v1 has one integrated estimand and one family-wise correction. Expanding
+// these independently would allow a caller to mint a structurally valid
+// winner that the Product statistics engine never computed.
+const STATISTICAL_METHODS = Object.freeze(['paired-prompt-t-v1']);
+const MULTIPLICITY_CORRECTIONS = Object.freeze(['bonferroni']);
 
 const RECEIPT_KEYS = Object.freeze([
   'schema',
@@ -603,6 +606,21 @@ function deriveBenchmarkQualification(receipt, ratification = null, options = {}
   if (receipt?.axes?.decisionOutcome !== 'winner') reasons.push('no_statistical_winner');
   if (receipt?.axes?.freshnessStatus !== 'fresh') reasons.push('evidence_not_fresh');
   if (receipt?.judge?.qualificationStatus !== 'qualified') reasons.push('judge_not_qualified');
+
+  // The receipt only binds the opaque identity of a judge qualification. Its
+  // status, holdout, corpus and validity are claims until a consumer verifies
+  // the separate qualification attestation against its current trust root.
+  if (typeof options.verifyJudgeQualification !== 'function') {
+    reasons.push('judge_qualification_not_verified');
+  } else {
+    try {
+      if (options.verifyJudgeQualification(receipt?.judge, receipt) !== true) {
+        reasons.push('judge_qualification_not_verified');
+      }
+    } catch (_error) {
+      reasons.push('judge_qualification_not_verified');
+    }
+  }
 
   const now = options.now === undefined ? new Date() : new Date(options.now);
   if (!Number.isFinite(now.getTime())) {

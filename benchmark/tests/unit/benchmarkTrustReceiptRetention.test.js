@@ -1,6 +1,9 @@
 'use strict';
 
 jest.mock('../../config/logger', () => ({ info: jest.fn() }));
+jest.mock('../../src/services/benchmark/benchmarkTrustEvidenceLock', () => ({
+    withBenchmarkTrustEvidenceLock: jest.fn(async (_operation, task) => task())
+}));
 jest.mock('../../models/BenchmarkResult', () => ({
     aggregate: jest.fn(),
     countDocuments: jest.fn(),
@@ -61,6 +64,7 @@ function mockReceiptedSourceIds(sourceIds = []) {
 beforeEach(() => {
     jest.clearAllMocks();
     BenchmarkResult.deleteMany.mockResolvedValue({ deletedCount: 0 });
+    BenchmarkResult.distinct.mockImplementation(async () => []);
     BenchmarkBatch.updateMany.mockResolvedValue({ modifiedCount: 0 });
     BenchmarkTimelineEntry.deleteMany.mockResolvedValue({ deletedCount: 0 });
     mockReceiptedSourceIds();
@@ -169,6 +173,26 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         });
     });
 
+    test('archive preserves a sealed batch even when crash recovery has not produced a receipt', async () => {
+        mockBatchFind({
+            stale: [staleBatch('batch-sealed')],
+            trustLinks: [{ _id: 'batch-sealed', trust_evidence_sealed: true }]
+        });
+        BenchmarkResult.countDocuments.mockResolvedValue(6);
+
+        const result = await archiveOldResults(90, false);
+
+        expect(result).toMatchObject({
+            batchesProcessed: 0,
+            resultsDeleted: 0,
+            protectedBatches: 1,
+            protectedResults: 6
+        });
+        expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
+        expect(BenchmarkTimelineEntry.deleteMany).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateMany).not.toHaveBeenCalled();
+    });
+
     test.each([
         ['dry-run', true],
         ['apply', false]
@@ -212,6 +236,26 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         }
     });
 
+    test('prune preserves excess batches left sealed without a receipt', async () => {
+        BenchmarkBatch.aggregate.mockResolvedValue([{
+            _id: 'model-a',
+            batches: [{ batchId: 'batch-latest' }, { batchId: 'batch-sealed' }],
+            count: 2
+        }]);
+        mockBatchFind({ trustLinks: [{ _id: 'batch-sealed', trust_evidence_sealed: true }] });
+        BenchmarkResult.countDocuments.mockResolvedValue(2);
+
+        const result = await pruneExcessBatches(1, false);
+
+        expect(result).toMatchObject({
+            modelsProcessed: 0,
+            modelsProtected: 1,
+            protectedBatches: 1,
+            protectedResults: 2
+        });
+        expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
+    });
+
     test.each([
         ['dry-run', true],
         ['apply', false]
@@ -222,7 +266,9 @@ describe('BenchmarkTrustReceipt retention protection', () => {
             empty: 6,
             emptyRate: 1
         }]);
-        BenchmarkResult.distinct.mockResolvedValue(['batch-open', 'batch-receipted']);
+        BenchmarkResult.distinct.mockImplementation(async (_field, filter) => (
+            filter?.trust_evidence_sealed === true ? [] : ['batch-open', 'batch-receipted']
+        ));
         mockBatchFind({
             trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
         });
@@ -256,6 +302,33 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         }
     });
 
+    test('dead-model purge preserves results in a sealed batch without a receipt', async () => {
+        BenchmarkResult.aggregate.mockResolvedValue([{
+            _id: { model: 'dead-model', host: 'host-a' },
+            total: 4,
+            empty: 4,
+            emptyRate: 1
+        }]);
+        BenchmarkResult.distinct.mockImplementation(async (_field, filter) => (
+            filter?.trust_evidence_sealed === true ? [] : ['batch-sealed']
+        ));
+        mockBatchFind({ trustLinks: [{ _id: 'batch-sealed', trust_evidence_sealed: true }] });
+        BenchmarkResult.countDocuments.mockImplementation(async ({ batch_id: batchFilter }) => (
+            batchFilter?.$in ? 4 : 0
+        ));
+
+        const result = await purgeDeadModels(false);
+
+        expect(result).toMatchObject({
+            modelsDeleted: 0,
+            resultsDeleted: 0,
+            modelsProtected: 1,
+            protectedBatches: 1,
+            protectedResults: 4
+        });
+        expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
+    });
+
     test('a fully protected dead model is visible but never counted or submitted for deletion', async () => {
         BenchmarkResult.aggregate.mockResolvedValue([{
             _id: { model: 'protected-model', host: 'host-a' },
@@ -263,7 +336,9 @@ describe('BenchmarkTrustReceipt retention protection', () => {
             empty: 5,
             emptyRate: 1
         }]);
-        BenchmarkResult.distinct.mockResolvedValue(['batch-receipted']);
+        BenchmarkResult.distinct.mockImplementation(async (_field, filter) => (
+            filter?.trust_evidence_sealed === true ? [] : ['batch-receipted']
+        ));
         mockBatchFind({
             trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
         });

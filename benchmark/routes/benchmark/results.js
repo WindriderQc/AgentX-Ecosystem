@@ -582,7 +582,7 @@ router.post('/results/:id/human-review', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to submit human review', { error: err.message, id: req.params.id });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -647,10 +647,10 @@ router.post('/results/:id/rejudge', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to rejudge result', { error: err.message, id: req.params.id });
-        const statusCode = err.message.includes('not found') ? 404
+        const statusCode = err.statusCode || (err.message.includes('not found') ? 404
             : err.message.includes('Cannot judge') || err.message.includes('No response') ? 400
-            : 500;
-        res.status(statusCode).json({ status: 'error', error: err.message });
+            : 500);
+        res.status(statusCode).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -671,7 +671,7 @@ router.delete('/results', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to clear results', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -692,7 +692,7 @@ router.delete('/results/failed', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to clear failed results', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 

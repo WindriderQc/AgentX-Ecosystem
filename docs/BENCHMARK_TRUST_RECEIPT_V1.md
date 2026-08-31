@@ -50,10 +50,12 @@ field. `deriveBenchmarkQualification()` returns a qualified winner only when:
 1. the receipt is structurally valid and its content identity matches;
 2. evidence is complete and the paired statistical decision is `winner`;
 3. both receipt and judge qualification are fresh at verification time;
-4. the judge qualification is `qualified`;
+4. the judge qualification is `qualified` and a mandatory consumer-supplied
+   verifier confirms its exact qualification receipt, judge identity, rubric,
+   corpus, sealed holdout, validity and current revocation state;
 5. a valid, separate `agentx.benchmark-trust-ratification/v1` attestation binds
    that exact `receiptId` and confirms `ratified`; and
-6. an AIOps/human verifier confirms the attestation authority against its live
+6. an AIOps/human verifier confirms the ratification authority against its live
    trust root and current revocation state. Product has no permissive default.
 
 An equivalence set or inconclusive result is a valid and useful receipt, but it
@@ -71,11 +73,13 @@ used by storage and retention to protect the exact referenced result batch; it
 is not a private Mongo identifier.
 The statistical preregistration binds an explicit `repeatCount` and immutable
 analysis-plan fingerprint. A separate ranking-policy fingerprint freezes the
-policy that interprets those statistics. The integrated v1 path uses
+policy that interprets those statistics. The only statistical
+method/correction accepted by v1 is
 `paired-prompt-t-v1`: repeats are averaged within prompt, paired Student-t
 intervals use prompt as the independent unit, and `bonferroni` covers every
-candidate pair. A campaign must declare the exact method/correction and cannot
-mix estimands. `expectedResultCount` must equal candidates times prompts times
+candidate pair. Bootstrap, permutation, Holm and uncorrected (`none`) claims
+require a future schema version and cannot be mixed into a v1 receipt.
+`expectedResultCount` must equal candidates times prompts times
 repeats. Complete evidence requires every preregistered cell and zero exclusions;
 otherwise a winner is structurally impossible. A compact cell inventory binds
 its artifact fingerprint, exact cell count, and minimum/maximum repeat
@@ -89,11 +93,15 @@ non-finite numbers, bad fingerprints and contradictory decisions fail closed.
 
 1. A harness freezes inputs and produces the complete evidence artifacts.
 2. Product code builds and validates the immutable receipt.
-3. AIOps independently verifies the receipt and its freshness.
-4. A human reviewer issues the separate ratification attestation for the exact
+3. Before persistence, an explicit source-evidence verifier recomputes the
+   inventory and fingerprints against a terminal source batch. Product then
+   seals those exact result rows against update or deletion.
+4. AIOps independently verifies the receipt, judge qualification and freshness.
+5. A human reviewer issues the separate ratification attestation for the exact
    `receiptId`, or later issues a revocation.
-5. A consumer derives the qualification state at read time. Promotion remains
+6. A consumer derives the qualification state at read time. Promotion remains
    a separate guarded AIOps action.
 
-The v1 foundation intentionally provides no persistence, API endpoint,
-campaign runner integration, routing integration, or promotion behavior.
+The integrated foundation provides append-only persistence and bounded read
+endpoints only. It intentionally provides no HTTP issuance, campaign runner,
+ratification, routing, or promotion behavior.

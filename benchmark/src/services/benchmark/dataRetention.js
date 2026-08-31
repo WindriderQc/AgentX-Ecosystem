@@ -16,6 +16,7 @@ const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const BenchmarkTimelineEntry = require('../../../models/BenchmarkTimelineEntry');
 const BenchmarkTrustReceipt = require('../../../models/BenchmarkTrustReceipt');
+const { withBenchmarkTrustEvidenceLock } = require('./benchmarkTrustEvidenceLock');
 
 const DEFAULT_RETENTION_DAYS = 90;
 const DEFAULT_KEEP_BATCHES = 3;
@@ -35,12 +36,18 @@ async function getProtectedBatches(batchIds) {
     const candidates = normalizedBatchIds(batchIds);
     if (candidates.length === 0) return emptyProtection();
 
-    const linkedBatches = await BenchmarkBatch.find({
-        _id: { $in: candidates },
-        trust_batch_id: { $type: 'string' }
-    }).select('_id trust_batch_id').lean();
-    const candidateSourceIds = linkedBatches.map(batch => batch.trust_batch_id);
-    if (candidateSourceIds.length === 0) return emptyProtection();
+    const [linkedBatches, sealedResultBatchIds] = await Promise.all([
+        BenchmarkBatch.find({
+            _id: { $in: candidates }
+        }).select('_id trust_batch_id trust_evidence_sealed').lean(),
+        BenchmarkResult.distinct('batch_id', {
+            batch_id: { $in: candidates },
+            trust_evidence_sealed: true
+        })
+    ]);
+    const candidateSourceIds = linkedBatches
+        .map(batch => batch.trust_batch_id)
+        .filter(sourceBatchId => typeof sourceBatchId === 'string');
 
     // Retention is an infrequent destructive operation, so verify the complete
     // append-only ledger before trusting any indexed projection. Querying by
@@ -52,16 +59,26 @@ async function getProtectedBatches(batchIds) {
         .map(record => BenchmarkTrustReceipt.verifyStoredRecord(record).execution.sourceBatchId)
         .filter(sourceBatchId => candidateSourceIdSet.has(sourceBatchId)));
     const protectedLinks = linkedBatches.filter(batch => receiptedSourceIds.has(batch.trust_batch_id));
+    const protectedBatchIds = new Set([
+        ...protectedLinks.map(batch => String(batch._id)),
+        ...linkedBatches
+            .filter(batch => batch.trust_evidence_sealed === true)
+            .map(batch => String(batch._id)),
+        ...normalizedBatchIds(sealedResultBatchIds)
+    ]);
     return {
-        batchIds: new Set(protectedLinks.map(batch => String(batch._id))),
-        sourceBatchIds: new Set(protectedLinks.map(batch => batch.trust_batch_id))
+        batchIds: protectedBatchIds,
+        sourceBatchIds: new Set(linkedBatches
+            .filter(batch => protectedBatchIds.has(String(batch._id)))
+            .map(batch => batch.trust_batch_id)
+            .filter(sourceBatchId => typeof sourceBatchId === 'string'))
     };
 }
 
 function protectionSummary(protection, protectedResults = 0) {
     const sourceIds = [...protection.sourceBatchIds].sort();
     return {
-        protectedBatches: sourceIds.length,
+        protectedBatches: protection.batchIds.size,
         protectedResults,
         protectedSourceBatchIds: sourceIds
     };
@@ -89,7 +106,7 @@ async function getStaleBatches(retentionDays = DEFAULT_RETENTION_DAYS) {
  * @param {boolean} dryRun - If true, don't actually delete
  * @returns {Object} { batchesProcessed, resultsDeleted }
  */
-async function archiveOldResults(retentionDays = DEFAULT_RETENTION_DAYS, dryRun = false) {
+async function archiveOldResultsUnlocked(retentionDays = DEFAULT_RETENTION_DAYS, dryRun = false) {
     const staleBatches = await getStaleBatches(retentionDays);
 
     if (staleBatches.length === 0) {
@@ -178,6 +195,14 @@ async function archiveOldResults(retentionDays = DEFAULT_RETENTION_DAYS, dryRun 
     };
 }
 
+async function archiveOldResults(retentionDays = DEFAULT_RETENTION_DAYS, dryRun = false) {
+    if (dryRun) return archiveOldResultsUnlocked(retentionDays, true);
+    return withBenchmarkTrustEvidenceLock(
+        'archive-old-benchmark-results',
+        () => archiveOldResultsUnlocked(retentionDays, false)
+    );
+}
+
 /**
  * Identify models with excessive batches and find which results to prune.
  * Keeps only the latest N batches per model.
@@ -185,7 +210,7 @@ async function archiveOldResults(retentionDays = DEFAULT_RETENTION_DAYS, dryRun 
  * @param {boolean} dryRun - If true, don't actually delete
  * @returns {Object} { modelsProcessed, resultsDeleted }
  */
-async function pruneExcessBatches(keepBatches = DEFAULT_KEEP_BATCHES, dryRun = false) {
+async function pruneExcessBatchesUnlocked(keepBatches = DEFAULT_KEEP_BATCHES, dryRun = false) {
     // Get all completed batches grouped by model
     const batchesByModel = await BenchmarkBatch.aggregate([
         { $match: { status: 'completed' } },
@@ -272,12 +297,20 @@ async function pruneExcessBatches(keepBatches = DEFAULT_KEEP_BATCHES, dryRun = f
     };
 }
 
+async function pruneExcessBatches(keepBatches = DEFAULT_KEEP_BATCHES, dryRun = false) {
+    if (dryRun) return pruneExcessBatchesUnlocked(keepBatches, true);
+    return withBenchmarkTrustEvidenceLock(
+        'prune-excess-benchmark-results',
+        () => pruneExcessBatchesUnlocked(keepBatches, false)
+    );
+}
+
 /**
  * Purge all results from dead/filtered models (100% empty responses).
  * @param {boolean} dryRun - If true, count but don't delete
  * @returns {Object} { modelsDeleted, resultsDeleted }
  */
-async function purgeDeadModels(dryRun = false) {
+async function purgeDeadModelsUnlocked(dryRun = false) {
     // Find models with 100% empty responses
     const emptyModels = await BenchmarkResult.aggregate([
         { $match: { success: true } },
@@ -377,6 +410,14 @@ async function purgeDeadModels(dryRun = false) {
         ...protectionSummary(protectionState, totalProtected),
         dryRun: !!dryRun
     };
+}
+
+async function purgeDeadModels(dryRun = false) {
+    if (dryRun) return purgeDeadModelsUnlocked(true);
+    return withBenchmarkTrustEvidenceLock(
+        'purge-dead-benchmark-results',
+        () => purgeDeadModelsUnlocked(false)
+    );
 }
 
 /**

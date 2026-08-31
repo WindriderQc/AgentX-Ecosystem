@@ -285,9 +285,16 @@ describe('loadQualifiedHumanGroundTruth', () => {
         expect(JudgeGroundTruth.find).toHaveBeenCalledWith({
             active: true,
             category: 'math',
-            provenance_class: {
-                $in: ['independent_human_score', 'adjudicated_human_score']
-            }
+            $or: [
+                {
+                    provenance_class: 'independent_human_score',
+                    review_protocol: { $in: ['blind_independent', 'blind_double_review'] }
+                },
+                {
+                    provenance_class: 'adjudicated_human_score',
+                    review_protocol: 'adjudicated'
+                }
+            ]
         });
         expect(out).toEqual(docs);
     });
@@ -356,10 +363,10 @@ describe('loadUnionedGoldset (0129)', () => {
 });
 
 describe('getCoverageStats', () => {
-    test('returns coverage matrix with trusted (non-retro) totals', async () => {
+    test('returns coverage matrix with qualified-human totals', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'coding', difficulty: 1 }, count: 3, retro_count: 1, seed_count: 2 },
-            { _id: { category: 'coding', difficulty: 2 }, count: 6, retro_count: 4, seed_count: 2 }
+            { _id: { category: 'coding', difficulty: 1 }, count: 3, retro_count: 1, seed_count: 2, qualified_human_count: 2 },
+            { _id: { category: 'coding', difficulty: 2 }, count: 6, retro_count: 4, seed_count: 2, qualified_human_count: 2 }
         ]);
 
         const coverage = await getCoverageStats();
@@ -385,7 +392,7 @@ describe('getCoverageStats', () => {
 
     test('retro-only inflation does not satisfy coverage target', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'coding', difficulty: 1 }, count: 6, retro_count: 6, seed_count: 0 }
+            { _id: { category: 'coding', difficulty: 1 }, count: 6, retro_count: 6, seed_count: 0, qualified_human_count: 0 }
         ]);
 
         const coverage = await getCoverageStats();
@@ -403,9 +410,9 @@ describe('getCoverageStats', () => {
         expect(coverage.coverage_percent).toBe(0);
     });
 
-    test('mixed trusted and retro rows count only trusted toward target', async () => {
+    test('mixed qualified and retro rows count only qualified humans toward target', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'math', difficulty: 3 }, count: 6, retro_count: 3, seed_count: 3 }
+            { _id: { category: 'math', difficulty: 3 }, count: 6, retro_count: 3, seed_count: 3, qualified_human_count: 3 }
         ]);
 
         const coverage = await getCoverageStats();
@@ -419,9 +426,9 @@ describe('getCoverageStats', () => {
         expect(coverage.by_category_all).toEqual({ math: 6 });
     });
 
-    test('trusted cell that legitimately meets target', async () => {
+    test('qualified-human cell that legitimately meets target', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'coding', difficulty: 1 }, count: 5, retro_count: 0, seed_count: 5 }
+            { _id: { category: 'coding', difficulty: 1 }, count: 5, retro_count: 0, seed_count: 5, qualified_human_count: 5 }
         ]);
 
         const coverage = await getCoverageStats();
@@ -440,8 +447,8 @@ describe('getCoverageStats', () => {
 
     test('separates human-derived from retro-calibration coverage', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'coding', difficulty: 1 }, count: 8, retro_count: 2, seed_count: 3 },
-            { _id: { category: 'math', difficulty: 3 }, count: 5, retro_count: 5, seed_count: 0 }
+            { _id: { category: 'coding', difficulty: 1 }, count: 8, retro_count: 2, seed_count: 3, qualified_human_count: 6 },
+            { _id: { category: 'math', difficulty: 3 }, count: 5, retro_count: 5, seed_count: 0, qualified_human_count: 0 }
         ]);
 
         const coverage = await getCoverageStats();
@@ -464,5 +471,17 @@ describe('getCoverageStats', () => {
         expect(mathCell.human).toBe(0);
         expect(mathCell.meets_target).toBe(false);
         expect(mathCell.meets_target_with_retro).toBe(true);
+    });
+
+    test('coverage aggregation encodes the same provenance/protocol pairs as the qualified loader', async () => {
+        JudgeGroundTruth.aggregate.mockResolvedValue([]);
+        await getCoverageStats();
+        const pipeline = JSON.stringify(JudgeGroundTruth.aggregate.mock.calls[0][0]);
+        expect(pipeline).toContain('independent_human_score');
+        expect(pipeline).toContain('blind_independent');
+        expect(pipeline).toContain('blind_double_review');
+        expect(pipeline).toContain('adjudicated_human_score');
+        expect(pipeline).toContain('adjudicated');
+        expect(pipeline).not.toContain('judge_visible_single_review');
     });
 });

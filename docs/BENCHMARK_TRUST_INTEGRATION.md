@@ -44,6 +44,24 @@ payload. A unique `receiptId` arbitrates concurrent writers; a duplicate is
 idempotent only when the existing canonical payload verifies exactly. Model
 updates, replacements, deletes, document deletes, and bulk writes are blocked.
 
+Storage also requires a terminal source batch, an exact full source inventory
+equal to `expectedResultCount`,
+and an explicit `verifySourceEvidence` callback. That verifier must recompute
+the cell inventory, candidate result-set fingerprints and all other bound
+source fingerprints; returning anything except literal `true` fails closed.
+Complete evidence additionally requires a `completed` batch. On acceptance,
+the source batch and every exact source result are marked
+`trust_evidence_sealed`; subsequent model updates, replacements, deletes,
+document saves/deletes and bulk writes fail
+with the batch/result sealed-evidence error. New result saves and `insertMany`
+share the evidence mutex and reject sealed target batches; query upserts,
+update pipelines, replacements, and any attempt to change an existing result's
+`batch_id` are rejected. Corrections or human rejudging must create a new batch
+and therefore a new receipt identity.
+The source verifier runs after sealing, before receipt insertion. Mutations
+that finish first are therefore included in verification; mutations that race
+after the seal cannot match the model's mandatory unsealed predicate.
+
 Only bounded reads are registered:
 
 - `GET /api/benchmark/trust-receipts/:receiptId`
@@ -52,10 +70,14 @@ Only bounded reads are registered:
 There is deliberately no HTTP issuance, ratification, revocation, promotion,
 or routing endpoint in this change.
 
-Before any automated issuer is added, it must serialize receipt insertion with
-destructive retention. The present foundation has no issuance route, so that
-cross-collection race is not reachable through the Product API; it must not be
-made reachable without a standalone-Mongo-safe lock or equivalent protocol.
+Receipt insertion and every destructive cleanup path share the standalone-
+Mongo-safe `benchmark-trust-evidence-mutation-v1` mutex. The store holds it
+while it verifies, seals and inserts; archive, prune, purge, global/failed clear
+and reset hold it from protection discovery through deletion. If cleanup wins,
+later issuance observes the missing inventory and fails. If issuance wins,
+later cleanup sees the receipt/seal and preserves the evidence. The mutex has
+no automatic stale expiry: a process crash leaves mutation blocked until a
+human verifies that no owner is active and performs explicit recovery.
 
 ## Statistical gate
 
@@ -82,8 +104,13 @@ artifact.
 Courthouse approve and override actions remain useful review evidence, but the
 current judge-visible, single-review flow is explicitly classified as either
 `endorsed_judge_score` or `human_override_visible_judge`. Neither is eligible
-as independent human ground truth. Only `independent_human_score` and
-`adjudicated_human_score` enter the qualified-human loader.
+as independent human ground truth. Only `independent_human_score` paired with
+`blind_independent` or `blind_double_review`, and `adjudicated_human_score`
+paired with `adjudicated`, enter the qualified-human loader. The model rejects
+contradictory qualified provenance/protocol pairs before persistence. Those two
+fields are one atomic evidence claim: query updates must write a complete valid
+pair together, while update pipelines and provenance-bearing `$setOnInsert`
+operations are rejected.
 
 Judge drift consumes only that qualified-human loader. Missing samples or an
 incomplete/missing baseline remain explicit `insufficient_data` or
@@ -99,16 +126,24 @@ Archive, prune, and dead-model purge resolve receipted opaque batch ids back to
 their internal Mongo batches before deleting results. Receipted results,
 timelines, embedded evidence arrays, and batch descriptions are preserved.
 Dry-runs separate protected counts and expose only opaque source-batch ids.
-A global reset fails with HTTP 409 while any append-only receipt exists.
+A global reset fails with HTTP 409 while any append-only receipt or any sealed
+batch/result marker exists. Archive, prune, purge, and clear also treat sealed
+markers as protected even when an interrupted issuance has not inserted its
+receipt; this preserves partially sealed crash-recovery state for manual review.
 The result-wide and failed-result cleanup paths also resolve and verify every
 stored receipt before deletion, then exclude all linked batches. A tampered
 payload or indexed projection aborts cleanup before any result is removed. The
 destructive retention guard verifies the complete append-only receipt ledger;
 it never selects receipts through an unverified index projection first.
+The same lock serializes reset and retention with receipt creation, while the
+sealed-result model guard prevents score, exclusion or review mutations from
+rewriting already receipted evidence.
 
-The Mongo integration test proves this mapping with two real batches: the
-unreceipted batch is archived while the receipted batch's result, timeline, and
-metadata remain intact.
+The Mongo integration tests prove this mapping with real batches, reject
+pending or count-mismatched sources, reject an absent/negative fingerprint
+verifier, preserve receipted rows through cleanup, block score/exclusion/delete
+rewrites, reject post-receipt insert/upsert/reparent attempts, preserve partially
+sealed states, and exercise concurrent issuance versus global cleanup.
 
 ## Required order and stop conditions
 
@@ -128,8 +163,10 @@ metadata remain intact.
 Stop immediately on an unqualified or expired judge, incomplete cell matrix,
 repeat-index mismatch, missing source-batch mapping, noncanonical receipt,
 failed Windows/Linux gate, missing independent human provenance, or failed
-ratification verification. No receipt or statistical winner alone authorizes
-routing or deployment.
+judge/ratification/source-evidence verification. Also stop on a partially
+sealed inventory or an existing trust-evidence mutation lock whose owner cannot
+be proven inactive. No receipt or statistical winner alone authorizes routing
+or deployment.
 
 ## Rollback
 

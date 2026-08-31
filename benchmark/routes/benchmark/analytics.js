@@ -17,6 +17,7 @@ const { requireExactConfirmation } = require('../../src/helpers/exactConfirmatio
 const BenchmarkResult = require('../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const BenchmarkTrustReceipt = require('../../models/BenchmarkTrustReceipt');
+const { withBenchmarkTrustEvidenceLock } = require('../../src/services/benchmark/benchmarkTrustEvidenceLock');
 
 function parseBool(value) {
     return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
@@ -706,7 +707,7 @@ router.post('/retention/archive', async (req, res) => {
         res.json({ status: 'success', data: result });
     } catch (err) {
         logger.error('Failed to archive old results', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -728,7 +729,7 @@ router.post('/retention/prune', async (req, res) => {
         res.json({ status: 'success', data: result });
     } catch (err) {
         logger.error('Failed to prune excess batches', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -749,7 +750,7 @@ router.post('/retention/purge-dead', async (req, res) => {
         res.json({ status: 'success', data: result });
     } catch (err) {
         logger.error('Failed to purge dead models', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -768,36 +769,59 @@ router.post('/retention/reset-all', async (req, res) => {
             });
         }
 
-        const protectedReceiptCount = await BenchmarkTrustReceipt.countDocuments({});
-        if (protectedReceiptCount > 0) {
+        const outcome = await withBenchmarkTrustEvidenceLock('reset-all-benchmark-evidence', async () => {
+            const [protectedReceiptCount, sealedResultCount, sealedBatchCount] = await Promise.all([
+                BenchmarkTrustReceipt.countDocuments({}),
+                BenchmarkResult.countDocuments({ trust_evidence_sealed: true }),
+                BenchmarkBatch.countDocuments({ trust_evidence_sealed: true })
+            ]);
+            if (protectedReceiptCount > 0 || sealedResultCount > 0 || sealedBatchCount > 0) {
+                return {
+                    blocked: true,
+                    protectedReceiptCount,
+                    sealedResultCount,
+                    sealedBatchCount
+                };
+            }
+
+            const [results, batches] = await Promise.all([
+                BenchmarkResult.deleteMany({}),
+                BenchmarkBatch.deleteMany({})
+            ]);
+
+            return {
+                blocked: false,
+                resultsDeleted: results.deletedCount,
+                batchesDeleted: batches.deletedCount
+            };
+        });
+
+        if (outcome.blocked) {
             return res.status(409).json({
                 status: 'error',
-                code: 'BENCHMARK_TRUST_RECEIPTS_PROTECT_EVIDENCE',
-                error: 'Reset is blocked while append-only benchmark trust receipts reference benchmark evidence',
-                protected_receipts: protectedReceiptCount
+                code: 'BENCHMARK_TRUST_EVIDENCE_PROTECTS_RESET',
+                error: 'Reset is blocked while receipts or sealed benchmark evidence require preservation or manual recovery',
+                protected_receipts: outcome.protectedReceiptCount,
+                sealed_results: outcome.sealedResultCount,
+                sealed_batches: outcome.sealedBatchCount
             });
         }
 
-        const [results, batches] = await Promise.all([
-            BenchmarkResult.deleteMany({}),
-            BenchmarkBatch.deleteMany({})
-        ]);
-
         logger.warn('Benchmark data reset', {
-            results_deleted: results.deletedCount,
-            batches_deleted: batches.deletedCount
+            results_deleted: outcome.resultsDeleted,
+            batches_deleted: outcome.batchesDeleted
         });
 
-        res.json({
-            status: 'success',
-            data: {
-                results_deleted: results.deletedCount,
-                batches_deleted: batches.deletedCount
-            }
-        });
+        return res.json({
+                status: 'success',
+                data: {
+                    results_deleted: outcome.resultsDeleted,
+                    batches_deleted: outcome.batchesDeleted
+                }
+            });
     } catch (err) {
         logger.error('Failed to reset benchmark data', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 

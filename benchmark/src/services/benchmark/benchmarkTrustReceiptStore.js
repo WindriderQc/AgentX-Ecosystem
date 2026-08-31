@@ -2,11 +2,14 @@
 
 const BenchmarkTrustReceipt = require('../../../models/BenchmarkTrustReceipt');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
+const BenchmarkResult = require('../../../models/BenchmarkResult');
+const { withBenchmarkTrustEvidenceLock } = require('./benchmarkTrustEvidenceLock');
 
 const RECEIPT_ID_PATTERN = /^[0-9a-f]{64}$/;
 const SOURCE_BATCH_ID_PATTERN = /^batch_[0-9a-f]{32}$/;
 const MAX_BATCH_READ_LIMIT = 100;
 const DEFAULT_BATCH_READ_LIMIT = 20;
+const TERMINAL_BATCH_STATUSES = new Set(['completed', 'failed', 'stopped', 'interrupted']);
 
 function storeError(code, message, statusCode = 400, cause = null) {
     const error = new Error(message);
@@ -58,49 +61,213 @@ function requireReadLimit(limit) {
  * is intact and byte-for-byte canonical-equivalent. No upsert or update path
  * exists for this collection.
  */
-async function storeBenchmarkTrustReceipt(rawReceipt) {
+async function storeBenchmarkTrustReceipt(rawReceipt, { verifySourceEvidence } = {}) {
     const record = BenchmarkTrustReceipt.buildStoredRecord(rawReceipt);
-    const linkedBatchExists = await BenchmarkBatch.exists({
-        trust_batch_id: record.sourceBatchId
-    });
-    if (!linkedBatchExists) {
-        throw storeError(
-            'BENCHMARK_TRUST_SOURCE_BATCH_NOT_FOUND',
-            'receipt sourceBatchId is not linked to a durable Benchmark batch',
-            409
-        );
-    }
-    await BenchmarkTrustReceipt.init();
-
-    try {
-        const created = await BenchmarkTrustReceipt.create(record);
-        return {
-            created: true,
-            receipt: BenchmarkTrustReceipt.verifyStoredRecord(created)
-        };
-    } catch (error) {
-        if (!isDuplicateKey(error)) throw error;
-
-        const existing = await BenchmarkTrustReceipt.findOne({ receiptId: record.receiptId }).lean();
-        if (!existing) {
+    return withBenchmarkTrustEvidenceLock('store-benchmark-trust-receipt', async () => {
+        const linkedBatch = await BenchmarkBatch.findOne({
+            trust_batch_id: record.sourceBatchId
+        }).select('_id status trust_evidence_sealed').lean();
+        if (!linkedBatch) {
             throw storeError(
-                'BENCHMARK_TRUST_RECEIPT_CONFLICT',
-                'receiptId collided but the existing receipt could not be read',
-                409,
-                error
-            );
-        }
-
-        const verifiedExisting = BenchmarkTrustReceipt.verifyStoredRecord(existing);
-        if (existing.canonicalPayload !== record.canonicalPayload) {
-            throw storeError(
-                'BENCHMARK_TRUST_RECEIPT_CONFLICT',
-                'receiptId already exists with different canonical content',
+                'BENCHMARK_TRUST_SOURCE_BATCH_NOT_FOUND',
+                'receipt sourceBatchId is not linked to a durable Benchmark batch',
                 409
             );
         }
-        return { created: false, receipt: verifiedExisting };
-    }
+        if (!TERMINAL_BATCH_STATUSES.has(linkedBatch.status)) {
+            throw storeError(
+                'BENCHMARK_TRUST_SOURCE_BATCH_NOT_TERMINAL',
+                'receipt source batch must be terminal before evidence can be sealed',
+                409
+            );
+        }
+        if (
+            record.payload.axes.evidenceStatus === 'complete'
+            && linkedBatch.status !== 'completed'
+        ) {
+            throw storeError(
+                'BENCHMARK_TRUST_COMPLETE_SOURCE_BATCH_NOT_COMPLETED',
+                'complete receipt evidence requires a completed source batch',
+                409
+            );
+        }
+
+        const sourceResultCount = await BenchmarkResult.countDocuments({ batch_id: linkedBatch._id });
+        // Excluded rows remain bound evidence. The durable source must retain
+        // the complete preregistered inventory, not only decision-included rows.
+        const expectedResultCount = record.payload.execution.expectedResultCount;
+        if (sourceResultCount !== expectedResultCount) {
+            throw storeError(
+                'BENCHMARK_TRUST_SOURCE_RESULTS_MISMATCH',
+                'receipt source batch does not contain the exact declared complete result inventory',
+                409
+            );
+        }
+        if (typeof verifySourceEvidence !== 'function') {
+            throw storeError(
+                'BENCHMARK_TRUST_SOURCE_EVIDENCE_NOT_VERIFIED',
+                'receipt source inventory and fingerprints require an explicit verifier',
+                409
+            );
+        }
+        await BenchmarkTrustReceipt.init();
+
+        const sealedResultCount = await BenchmarkResult.countDocuments({
+            batch_id: linkedBatch._id,
+            trust_evidence_sealed: true
+        });
+        if (sealedResultCount !== 0 && sealedResultCount !== sourceResultCount) {
+            throw storeError(
+                'BENCHMARK_TRUST_SOURCE_EVIDENCE_PARTIALLY_SEALED',
+                'receipt source batch has a partially sealed result inventory',
+                409
+            );
+        }
+        const batchAlreadySealed = linkedBatch.trust_evidence_sealed === true;
+        if (batchAlreadySealed !== (sealedResultCount === sourceResultCount)) {
+            throw storeError(
+                'BENCHMARK_TRUST_SOURCE_EVIDENCE_PARTIALLY_SEALED',
+                'receipt source batch and result inventory disagree on seal state',
+                409
+            );
+        }
+        let sealedByThisCall = false;
+        if (!batchAlreadySealed) {
+            const batchSealResult = await BenchmarkBatch.collection.updateOne(
+                {
+                    _id: linkedBatch._id,
+                    status: linkedBatch.status,
+                    trust_batch_id: record.sourceBatchId,
+                    trust_evidence_sealed: { $ne: true }
+                },
+                { $set: { trust_evidence_sealed: true } }
+            );
+            if (batchSealResult.matchedCount !== 1) {
+                throw storeError(
+                    'BENCHMARK_TRUST_SOURCE_EVIDENCE_SEAL_MISMATCH',
+                    'receipt source batch changed while it was being sealed',
+                    409
+                );
+            }
+            const sealResult = await BenchmarkResult.collection.updateMany(
+                { batch_id: linkedBatch._id },
+                { $set: { trust_evidence_sealed: true } }
+            );
+            if (sealResult.matchedCount !== sourceResultCount) {
+                await BenchmarkBatch.collection.updateOne(
+                    { _id: linkedBatch._id, trust_evidence_sealed: true },
+                    { $set: { trust_evidence_sealed: false } }
+                );
+                await BenchmarkResult.collection.updateMany(
+                    { batch_id: linkedBatch._id, trust_evidence_sealed: true },
+                    { $set: { trust_evidence_sealed: false } }
+                );
+                throw storeError(
+                    'BENCHMARK_TRUST_SOURCE_EVIDENCE_SEAL_MISMATCH',
+                    'receipt source result inventory changed while it was being sealed',
+                    409
+                );
+            }
+            sealedByThisCall = true;
+        }
+
+        async function rollbackSealIfUnreferenced() {
+            if (!sealedByThisCall) return;
+            const sourceReceiptCount = await BenchmarkTrustReceipt.countDocuments({
+                sourceBatchId: record.sourceBatchId
+            });
+            if (sourceReceiptCount === 0) {
+                await BenchmarkBatch.collection.updateOne(
+                    { _id: linkedBatch._id, trust_evidence_sealed: true },
+                    { $set: { trust_evidence_sealed: false } }
+                );
+                await BenchmarkResult.collection.updateMany(
+                    { batch_id: linkedBatch._id, trust_evidence_sealed: true },
+                    { $set: { trust_evidence_sealed: false } }
+                );
+            }
+        }
+
+        // Verify only after sealing. Query mutations carry a fail-closed
+        // `trust_evidence_sealed != true` predicate, so an update that wins
+        // before the seal is observed here and an update that loses cannot
+        // match after it. This closes verifier-to-insert TOCTOU.
+        const finalResultCount = await BenchmarkResult.countDocuments({ batch_id: linkedBatch._id });
+        const finalSealedCount = await BenchmarkResult.countDocuments({
+            batch_id: linkedBatch._id,
+            trust_evidence_sealed: true
+        });
+        const finalBatchSealed = await BenchmarkBatch.exists({
+            _id: linkedBatch._id,
+            status: linkedBatch.status,
+            trust_batch_id: record.sourceBatchId,
+            trust_evidence_sealed: true
+        });
+        if (
+            !finalBatchSealed
+            || finalResultCount !== sourceResultCount
+            || finalSealedCount !== sourceResultCount
+        ) {
+            await rollbackSealIfUnreferenced();
+            throw storeError(
+                'BENCHMARK_TRUST_SOURCE_EVIDENCE_SEAL_MISMATCH',
+                'receipt source result inventory changed while it was being sealed',
+                409
+            );
+        }
+
+        let sourceEvidenceVerified = false;
+        try {
+            sourceEvidenceVerified = await verifySourceEvidence({
+                receipt: record.payload,
+                batch: { ...linkedBatch, trust_evidence_sealed: true },
+                sourceResultCount: finalResultCount
+            }) === true;
+        } catch (_error) {
+            sourceEvidenceVerified = false;
+        }
+        if (!sourceEvidenceVerified) {
+            await rollbackSealIfUnreferenced();
+            throw storeError(
+                'BENCHMARK_TRUST_SOURCE_EVIDENCE_NOT_VERIFIED',
+                'receipt source inventory and fingerprints were not verified',
+                409
+            );
+        }
+
+        try {
+            const created = await BenchmarkTrustReceipt.create(record);
+            return {
+                created: true,
+                receipt: BenchmarkTrustReceipt.verifyStoredRecord(created)
+            };
+        } catch (error) {
+            if (!isDuplicateKey(error)) {
+                await rollbackSealIfUnreferenced();
+                throw error;
+            }
+
+            const existing = await BenchmarkTrustReceipt.findOne({ receiptId: record.receiptId }).lean();
+            if (!existing) {
+                throw storeError(
+                    'BENCHMARK_TRUST_RECEIPT_CONFLICT',
+                    'receiptId collided but the existing receipt could not be read',
+                    409,
+                    error
+                );
+            }
+
+            const verifiedExisting = BenchmarkTrustReceipt.verifyStoredRecord(existing);
+            if (existing.canonicalPayload !== record.canonicalPayload) {
+                throw storeError(
+                    'BENCHMARK_TRUST_RECEIPT_CONFLICT',
+                    'receiptId already exists with different canonical content',
+                    409
+                );
+            }
+            return { created: false, receipt: verifiedExisting };
+        }
+    });
 }
 
 async function getBenchmarkTrustReceiptById(receiptId) {

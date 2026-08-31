@@ -309,6 +309,14 @@ const BenchmarkBatchSchema = new mongoose.Schema({
     description: {
         type: String,
         default: ''
+    },
+    // Set only by the trust-receipt store after terminal source verification.
+    // A sealed batch is immutable evidence; corrections require a new batch.
+    trust_evidence_sealed: {
+        type: Boolean,
+        default: false,
+        immutable: true,
+        index: true
     }
 }, {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
@@ -318,6 +326,7 @@ const BenchmarkBatchSchema = new mongoose.Schema({
 BenchmarkBatchSchema.index({ status: 1, created_at: -1 });
 BenchmarkBatchSchema.index({ execution_started_at: 1 });
 BenchmarkBatchSchema.index({ 'models': 1 });
+BenchmarkBatchSchema.index({ trust_batch_id: 1, trust_evidence_sealed: 1 });
 BenchmarkBatchSchema.index(
     { trust_batch_id: 1 },
     {
@@ -792,4 +801,68 @@ BenchmarkBatchSchema.methods.captureSystemSnapshot = function() {
     return this;
 };
 
-module.exports = mongoose.model('BenchmarkBatch', BenchmarkBatchSchema);
+function protectedBatchEvidenceError(operation) {
+    const error = new Error(`Benchmark batch evidence is sealed by an append-only trust receipt; ${operation} is forbidden`);
+    error.code = 'BENCHMARK_TRUST_BATCH_EVIDENCE_SEALED';
+    error.statusCode = 409;
+    return error;
+}
+
+for (const operation of [
+    'updateOne',
+    'updateMany',
+    'replaceOne',
+    'findOneAndUpdate',
+    'findOneAndReplace',
+    'deleteOne',
+    'deleteMany',
+    'findOneAndDelete',
+    'findOneAndRemove'
+]) {
+    BenchmarkBatchSchema.pre(operation, async function blockSealedBatchQueryMutation() {
+        const update = this.getUpdate() || {};
+        if (['replaceOne', 'findOneAndReplace'].includes(operation)) {
+            throw protectedBatchEvidenceError(operation);
+        }
+        const touchesTrustBatchId = JSON.stringify(update).includes('"trust_batch_id"');
+        if (touchesTrustBatchId) {
+            throw protectedBatchEvidenceError(`${operation} changing trust_batch_id`);
+        }
+        const originalFilter = this.getFilter() || {};
+        const sealedMatch = await this.model.exists({
+            $and: [originalFilter, { trust_evidence_sealed: true }]
+        });
+        if (sealedMatch) throw protectedBatchEvidenceError(operation);
+        this.setQuery({
+            $and: [originalFilter, { trust_evidence_sealed: { $ne: true } }]
+        });
+    });
+}
+
+BenchmarkBatchSchema.pre('save', async function serializeBatchDocumentSave() {
+    if (this.isNew) return;
+    this.$where = {
+        ...(this.$where || {}),
+        trust_evidence_sealed: { $ne: true }
+    };
+    const sealed = await this.constructor.exists({
+        _id: this._id,
+        trust_evidence_sealed: true
+    });
+    if (sealed) throw protectedBatchEvidenceError('document.save');
+});
+
+BenchmarkBatchSchema.pre('deleteOne', { document: true, query: false }, function blockBatchDocumentDelete() {
+    throw protectedBatchEvidenceError('document.deleteOne');
+});
+
+const BenchmarkBatch = mongoose.models.BenchmarkBatch
+    || mongoose.model('BenchmarkBatch', BenchmarkBatchSchema);
+
+BenchmarkBatch.bulkWrite = async function blockedBenchmarkBatchBulkWrite() {
+    throw protectedBatchEvidenceError('bulkWrite');
+};
+
+BenchmarkBatch.PROTECTED_EVIDENCE_ERROR_CODE = 'BENCHMARK_TRUST_BATCH_EVIDENCE_SEALED';
+
+module.exports = BenchmarkBatch;

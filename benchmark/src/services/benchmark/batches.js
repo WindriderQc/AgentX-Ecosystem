@@ -10,6 +10,7 @@ const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const { JUDGE_CONFIG } = require('../qualityScorer');
 const { deriveTerminalBatchOutcome } = require('./batchHelpers');
 const { getProtectedBatches } = require('./dataRetention');
+const { withBenchmarkTrustEvidenceLock } = require('./benchmarkTrustEvidenceLock');
 
 /**
  * Compute percentile/summary stats from a raw array of numbers.
@@ -651,7 +652,7 @@ async function getBatchStatsByTag() {
 /**
  * Clear all results (for testing)
  */
-async function clearResults() {
+async function clearResultsUnlocked() {
     const candidateBatchIds = await BenchmarkResult.distinct('batch_id');
     const protection = await getProtectedBatches(candidateBatchIds);
     const protectedIds = [...protection.batchIds];
@@ -669,10 +670,14 @@ async function clearResults() {
     return count;
 }
 
+async function clearResults() {
+    return withBenchmarkTrustEvidenceLock('clear-all-benchmark-results', clearResultsUnlocked);
+}
+
 /**
  * Clear failed results only (for cleanup)
  */
-async function clearFailedResults() {
+async function clearFailedResultsUnlocked() {
     const candidateBatchIds = await BenchmarkResult.distinct('batch_id', { success: false });
     const protection = await getProtectedBatches(candidateBatchIds);
     const protectedIds = [...protection.batchIds];
@@ -688,6 +693,10 @@ async function clearFailedResults() {
         protectedSourceBatchIds: [...protection.sourceBatchIds].sort()
     });
     return count;
+}
+
+async function clearFailedResults() {
+    return withBenchmarkTrustEvidenceLock('clear-failed-benchmark-results', clearFailedResultsUnlocked);
 }
 
 /**

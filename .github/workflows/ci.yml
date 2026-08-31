@@ -82,6 +82,7 @@ jobs:
           tests/unit/benchmarkTrustReceiptResetGuard.test.js
           tests/unit/benchmarkTrustReceiptRoutes.test.js
           tests/unit/calibrationBaselineIndexes.test.js
+          tests/unit/judgeGroundTruthProvenance.test.js
           tests/unit/judgeDriftService.test.js
           tests/unit/retroCalibration.test.js
         working-directory: benchmark

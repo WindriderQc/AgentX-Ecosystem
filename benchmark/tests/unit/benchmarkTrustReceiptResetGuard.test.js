@@ -9,8 +9,11 @@ jest.mock('../../src/services/benchmark/ceilingDetection', () => ({}));
 jest.mock('../../src/services/benchmark/generalistScore', () => ({}));
 jest.mock('../../src/services/benchmark/regressionDetector', () => ({}));
 jest.mock('../../src/services/benchmark/dataRetention', () => ({}));
-jest.mock('../../models/BenchmarkResult', () => ({ deleteMany: jest.fn() }));
-jest.mock('../../models/BenchmarkBatch', () => ({ deleteMany: jest.fn() }));
+jest.mock('../../src/services/benchmark/benchmarkTrustEvidenceLock', () => ({
+    withBenchmarkTrustEvidenceLock: jest.fn(async (_operation, task) => task())
+}));
+jest.mock('../../models/BenchmarkResult', () => ({ deleteMany: jest.fn(), countDocuments: jest.fn() }));
+jest.mock('../../models/BenchmarkBatch', () => ({ deleteMany: jest.fn(), countDocuments: jest.fn() }));
 jest.mock('../../models/BenchmarkTrustReceipt', () => ({ countDocuments: jest.fn() }));
 
 const BenchmarkResult = require('../../models/BenchmarkResult');
@@ -44,6 +47,8 @@ describe('Benchmark trust receipt reset guard', () => {
         jest.clearAllMocks();
         BenchmarkResult.deleteMany.mockResolvedValue({ deletedCount: 7 });
         BenchmarkBatch.deleteMany.mockResolvedValue({ deletedCount: 2 });
+        BenchmarkResult.countDocuments.mockResolvedValue(0);
+        BenchmarkBatch.countDocuments.mockResolvedValue(0);
     });
 
     test('blocks reset before any evidence is deleted when receipts exist', async () => {
@@ -55,9 +60,33 @@ describe('Benchmark trust receipt reset guard', () => {
         expect(response.statusCode).toBe(409);
         expect(response.body).toEqual({
             status: 'error',
-            code: 'BENCHMARK_TRUST_RECEIPTS_PROTECT_EVIDENCE',
-            error: 'Reset is blocked while append-only benchmark trust receipts reference benchmark evidence',
-            protected_receipts: 3
+            code: 'BENCHMARK_TRUST_EVIDENCE_PROTECTS_RESET',
+            error: 'Reset is blocked while receipts or sealed benchmark evidence require preservation or manual recovery',
+            protected_receipts: 3,
+            sealed_results: 0,
+            sealed_batches: 0
+        });
+        expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.deleteMany).not.toHaveBeenCalled();
+    });
+
+    test.each([
+        ['sealed results', 2, 0],
+        ['sealed batches', 0, 1]
+    ])('blocks reset before deletion when crash recovery left %s', async (_label, resultCount, batchCount) => {
+        BenchmarkTrustReceipt.countDocuments.mockResolvedValue(0);
+        BenchmarkResult.countDocuments.mockResolvedValue(resultCount);
+        BenchmarkBatch.countDocuments.mockResolvedValue(batchCount);
+        const response = createResponse();
+
+        await getResetHandler()({ body: { confirm: 'RESET' } }, response);
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body).toMatchObject({
+            code: 'BENCHMARK_TRUST_EVIDENCE_PROTECTS_RESET',
+            protected_receipts: 0,
+            sealed_results: resultCount,
+            sealed_batches: batchCount
         });
         expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
         expect(BenchmarkBatch.deleteMany).not.toHaveBeenCalled();

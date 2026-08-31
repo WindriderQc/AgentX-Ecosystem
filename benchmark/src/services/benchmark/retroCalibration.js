@@ -17,9 +17,15 @@ const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scori
 // when unioning with the static config goldset for calibration.
 const HUMAN_SOURCE_TAG = 'courthouse-review';
 const SPRINT_SOURCE_PREFIX = 'human-validation-sprint-';
-const QUALIFIED_HUMAN_PROVENANCE = Object.freeze([
-    'independent_human_score',
-    'adjudicated_human_score'
+const QUALIFIED_HUMAN_REVIEW_LANES = Object.freeze([
+    Object.freeze({
+        provenance_class: 'independent_human_score',
+        review_protocol: { $in: ['blind_independent', 'blind_double_review'] }
+    }),
+    Object.freeze({
+        provenance_class: 'adjudicated_human_score',
+        review_protocol: 'adjudicated'
+    })
 ]);
 
 const SCORE_BUCKETS = [
@@ -238,6 +244,30 @@ async function getCoverageStats() {
                 },
                 seed_count: {
                     $sum: { $cond: [{ $eq: ['$created_by', 'seed-script'] }, 1, 0] }
+                },
+                qualified_human_count: {
+                    $sum: {
+                        $cond: [
+                            {
+                                $or: [
+                                    {
+                                        $and: [
+                                            { $eq: ['$provenance_class', 'independent_human_score'] },
+                                            { $in: ['$review_protocol', ['blind_independent', 'blind_double_review']] }
+                                        ]
+                                    },
+                                    {
+                                        $and: [
+                                            { $eq: ['$provenance_class', 'adjudicated_human_score'] },
+                                            { $eq: ['$review_protocol', 'adjudicated'] }
+                                        ]
+                                    }
+                                ]
+                            },
+                            1,
+                            0
+                        ]
+                    }
                 }
             }
         },
@@ -247,25 +277,26 @@ async function getCoverageStats() {
     const allByCategory = {};
     const humanByCategory = {};
     let humanEntries = 0;
+    let retroEntries = 0;
     let totalAllEntries = 0;
     const targetPerCell = 5;
     let cellsMeetingTarget = 0;
     let cellsMeetingTargetWithRetro = 0;
     const totalCells = CATEGORIES.length * 5; // 7 categories x 5 difficulty levels
 
-    // Retro-calibration rows are LLM-reference re-scores, not human labels.
-    // Counting them toward the calibration target would let the judge be
-    // validated against itself, so `meets_target` and `coverage_percent` are
-    // computed from human-derived rows only; the *_with_retro fields keep the
-    // combined view visible without conflating the two.
+    // Only provenance/protocol pairs accepted by the qualified-human loader
+    // count toward judge qualification. Judge-visible endorsements, legacy
+    // rows and retro-calibration re-scores remain visible in all_count but
+    // cannot inflate meets_target or coverage_percent.
     for (const row of coverage) {
         const cat = row._id.category;
-        const humanCount = row.count - row.retro_count;
+        const humanCount = Number(row.qualified_human_count) || 0;
         if (!allByCategory[cat]) allByCategory[cat] = 0;
         if (!humanByCategory[cat]) humanByCategory[cat] = 0;
         allByCategory[cat] += row.count;
         humanByCategory[cat] += humanCount;
         humanEntries += humanCount;
+        retroEntries += Number(row.retro_count) || 0;
         totalAllEntries += row.count;
         if (humanCount >= targetPerCell) cellsMeetingTarget++;
         if (row.count >= targetPerCell) cellsMeetingTargetWithRetro++;
@@ -273,7 +304,7 @@ async function getCoverageStats() {
 
     return {
         cells: coverage.map(r => {
-            const humanCount = r.count - r.retro_count;
+            const humanCount = Number(r.qualified_human_count) || 0;
             return {
                 category: r._id.category,
                 difficulty: r._id.difficulty,
@@ -283,6 +314,7 @@ async function getCoverageStats() {
                 all_count: r.count,
                 human: humanCount,
                 retro: r.retro_count,
+                unqualified_or_other: r.count - humanCount - r.retro_count,
                 seed: r.seed_count,
                 meets_target: humanCount >= targetPerCell,
                 meets_target_with_retro: r.count >= targetPerCell
@@ -294,7 +326,8 @@ async function getCoverageStats() {
         total_entries: humanEntries,
         total_all_entries: totalAllEntries,
         human_entries: humanEntries,
-        retro_entries: totalAllEntries - humanEntries,
+        retro_entries: retroEntries,
+        unqualified_or_other_entries: totalAllEntries - humanEntries - retroEntries,
         cells_meeting_target: cellsMeetingTarget,
         cells_meeting_target_with_retro: cellsMeetingTargetWithRetro,
         total_cells: totalCells,
@@ -375,7 +408,12 @@ async function loadHumanReviewGroundTruth(options = {}) {
 async function loadQualifiedHumanGroundTruth(options = {}) {
     const query = {
         active: true,
-        provenance_class: { $in: [...QUALIFIED_HUMAN_PROVENANCE] }
+        $or: QUALIFIED_HUMAN_REVIEW_LANES.map(lane => ({
+            ...lane,
+            review_protocol: typeof lane.review_protocol === 'object'
+                ? { $in: [...lane.review_protocol.$in] }
+                : lane.review_protocol
+        }))
     };
     if (options.category) query.category = options.category;
 
@@ -441,7 +479,7 @@ module.exports = {
     loadUnionedGoldset,
     HUMAN_SOURCE_TAG,
     SPRINT_SOURCE_PREFIX,
-    QUALIFIED_HUMAN_PROVENANCE,
+    QUALIFIED_HUMAN_REVIEW_LANES,
     SCORE_BUCKETS,
     CATEGORIES
 };

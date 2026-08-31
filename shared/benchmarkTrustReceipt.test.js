@@ -120,7 +120,11 @@ function ratificationFixture(receipt, overrides = {}) {
 }
 
 function qualificationOptions(now = '2026-09-01T00:00:00.000Z') {
-  return { now, verifyRatification: () => true };
+  return {
+    now,
+    verifyJudgeQualification: () => true,
+    verifyRatification: () => true,
+  };
 }
 
 test('builds a strict content-addressed v1 receipt and derives no caller-owned qualification field', () => {
@@ -245,6 +249,16 @@ test('binds repeatCount and rejects an unbalanced preregistered inventory', () =
   assert.throws(() => buildBenchmarkTrustReceipt(impossibleRange), /cannot exceed maximumRepeatCount/);
 });
 
+test('v1 rejects statistical methods or corrections the integrated engine does not compute', () => {
+  const uncorrectedWinner = bodyFixture();
+  uncorrectedWinner.statistics.multiplicityCorrection = 'none';
+  assert.throws(() => buildBenchmarkTrustReceipt(uncorrectedWinner), /multiplicityCorrection must be one of bonferroni/);
+
+  const unsupportedMethod = bodyFixture();
+  unsupportedMethod.statistics.method = 'paired-bootstrap-v1';
+  assert.throws(() => buildBenchmarkTrustReceipt(unsupportedMethod), /method must be one of paired-prompt-t-v1/);
+});
+
 test('qualifies only complete, decisive, fresh, ratified evidence with a current judge', () => {
   const receipt = buildBenchmarkTrustReceipt(bodyFixture());
   const result = deriveBenchmarkQualification(
@@ -264,7 +278,17 @@ test('qualifies only complete, decisive, fresh, ratified evidence with a current
   });
   assert.equal(unverified.qualified, false);
   assert.equal(unverified.ratificationStatus, 'unratified');
+  assert.ok(unverified.reasons.includes('judge_qualification_not_verified'));
   assert.ok(unverified.reasons.includes('ratification_not_verified'));
+
+  const unverifiedJudge = deriveBenchmarkQualification(receipt, ratificationFixture(receipt), {
+    now: '2026-09-01T00:00:00.000Z',
+    verifyJudgeQualification: () => false,
+    verifyRatification: () => true,
+  });
+  assert.equal(unverifiedJudge.qualified, false);
+  assert.equal(unverifiedJudge.ratificationStatus, 'ratified');
+  assert.deepEqual(unverifiedJudge.reasons, ['judge_qualification_not_verified']);
 });
 
 test('keeps inconclusive and equivalence outcomes honest and unqualified', () => {
