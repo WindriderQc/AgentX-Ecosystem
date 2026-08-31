@@ -66,6 +66,7 @@ function renderTiles(d) {
   setText('infTokensIn', compact(t.tokensIn));
   setText('infErrorRate', `${(t.errorRate ?? 0).toFixed(2)}%`);
   setText('infErrors', compact(t.errors));
+  setText('infCancellations', compact(t.cancellations));
   setText('infHours', `${(t.inferenceHours ?? 0).toFixed(1)}h`);
   setText('infTokPerSec', (t.tokensOutPerSecond ?? 0).toFixed(1));
 
@@ -117,10 +118,10 @@ function renderDimensionBreakdowns(d) {
     ${dimensions.map(([title, rows, key]) => `<div>
       <h3 style="font-size:13px;margin:0 0 6px;">${title}</h3>
       <table style="width:100%;border-collapse:collapse;font-size:12px;"><tbody>
-        ${(rows.length ? rows.slice(0, 12) : [{ [key]: 'no data', calls: 0, errorRate: 0 }]).map(row => `<tr>
+        ${(rows.length ? rows.slice(0, 12) : [{ [key]: 'no data', calls: 0, errorRate: 0, cancellationRate: 0 }]).map(row => `<tr>
           <td style="${cell}">${escapeHtml(String(row[key] ?? 'unknown').replace(/_/g, ' '))}</td>
           <td style="${cell}text-align:right;">${compact(row.calls)}</td>
-          <td style="${cell}text-align:right;color:var(--muted);">${(row.errorRate || 0).toFixed(1)}% err</td>
+          <td style="${cell}text-align:right;color:var(--muted);">${(row.errorRate || 0).toFixed(1)}% err · ${(row.cancellationRate || 0).toFixed(1)}% cancel</td>
         </tr>`).join('')}
       </tbody></table>
     </div>`).join('')}
@@ -145,7 +146,7 @@ function renderModelTable(d) {
     return `<tr>
       <td style="${cell}text-align:left;">${model}${m.isCloud ? ' <span style="font-size:11px;color:var(--muted);">cloud</span>' : ''}</td>
       <td style="${cell}text-align:right;">${compact(m.calls)}</td>
-      <td style="${cell}text-align:right;color:${errColor};">${m.errorRate.toFixed(1)}%</td>
+      <td style="${cell}text-align:right;color:${errColor};">${m.errorRate.toFixed(1)}% err<br><span style="color:var(--muted);">${(m.cancellationRate || 0).toFixed(1)}% cancel</span></td>
       <td style="${cell}text-align:right;">${compact(m.tokensOut)}</td>
       <td style="${cell}text-align:right;">${ms(m.avgLatencyMs)}</td>
       <td style="${cell}text-align:right;">${m.tokensOutPerSecond.toFixed(1)}</td>

@@ -93,10 +93,10 @@
                             <div class="value" id="infTokensOut">—</div>
                             <div class="sub"><span id="infTokensIn">—</span> prompt tokens in</div>
                         </div>
-                        <a class="stat-card" id="infErrorLink" href="/api/analytics/inference/logs?status=error%2Ctimeout" target="_blank" rel="noopener" data-tooltip="Share of calls that returned error or timeout status. Open the filtered inference log rows.">
-                            <div class="label">Error Rate</div>
+                        <a class="stat-card" id="infErrorLink" href="/api/analytics/inference/logs?status=error%2Ctimeout" target="_blank" rel="noopener" data-tooltip="Share of calls with an operational error or timeout, excluding caller cancellations. Open all non-success inference log rows.">
+                            <div class="label">Operational Error Rate</div>
                             <div class="value" id="infErrorRate">—</div>
-                            <div class="sub"><span id="infErrors">—</span> failed calls · inspect</div>
+                            <div class="sub"><span id="infErrors">—</span> errors · <span id="infCancellations">—</span> canceled · inspect</div>
                         </a>
                         <div class="stat-card" data-tooltip="Total wall-clock time the fleet spent generating. This is the real cost of local inference — GPU hours, not dollars.">
                             <div class="label">Inference Time</div>
@@ -185,7 +185,7 @@
                                 <tr>
                                     <th style="padding: 8px; text-align: left; border-bottom: 1px solid var(--panel-border); font-weight: 600;">Model</th>
                                     <th style="padding: 8px; text-align: right; border-bottom: 1px solid var(--panel-border); font-weight: 600;">Calls</th>
-                                    <th style="padding: 8px; text-align: right; border-bottom: 1px solid var(--panel-border); font-weight: 600;" data-tooltip="Share of this model's calls that failed">Errors</th>
+                                    <th style="padding: 8px; text-align: right; border-bottom: 1px solid var(--panel-border); font-weight: 600;" data-tooltip="Operational errors and caller cancellations are shown separately">Outcomes</th>
                                     <th style="padding: 8px; text-align: right; border-bottom: 1px solid var(--panel-border); font-weight: 600;">Tokens Out</th>
                                     <th style="padding: 8px; text-align: right; border-bottom: 1px solid var(--panel-border); font-weight: 600;" data-tooltip="Mean call duration for this model">Avg Latency</th>
                                     <th style="padding: 8px; text-align: right; border-bottom: 1px solid var(--panel-border); font-weight: 600;" data-tooltip="Generation throughput: completion tokens divided by time spent. The number that says whether a model earns its VRAM.">Tok/s</th>

@@ -226,6 +226,8 @@ describe('simple-to-expert UX contract', () => {
     expect(simpleDepth).not.toMatch(/Fallback Rate|Cost\/1K Tokens|Federated Cost|Model Activity/);
     expect(html).toContain('<strong>Take the controls</strong>');
     expect(html).toContain('Activity workbench');
+    expect(html).toContain('Operational Error Rate');
+    expect(html).toContain('id="infCancellations"');
     expect(html).toContain('id="infModelTableBody"');
     expect(html).toContain('id="federatedSection"');
   });
