@@ -65,6 +65,48 @@ describe('inference analytics summary', () => {
     expect(res.body.data.source).toBe('inferencelogs');
   });
 
+  test('separates caller cancellations from inference errors without hiding non-successes', async () => {
+    InferenceLog.aggregate.mockResolvedValue(facet({
+      totals: [{
+        calls: 100, errors: 2, cancellations: 3, nonSuccesses: 5,
+        tokensIn: 1000, tokensOut: 500, durationMs: 50000, fallbacks: 0
+      }],
+      byCallerDetail: [{
+        _id: 'nestor/voix-native/chat', calls: 20, errors: 1,
+        cancellations: 4, nonSuccesses: 5, durationMs: 20000
+      }]
+    }));
+
+    const res = await request(server).get('/api/analytics/inference/summary?window=7d');
+
+    expect(res.body.data.totals).toMatchObject({
+      calls: 100,
+      errors: 2,
+      errorRate: 2,
+      cancellations: 3,
+      cancellationRate: 3,
+      nonSuccesses: 5,
+      nonSuccessRate: 5,
+    });
+    expect(res.body.data.byCallerDetail[0]).toMatchObject({
+      callerDetail: 'nestor/voix-native/chat',
+      errors: 1,
+      errorRate: 5,
+      cancellations: 4,
+      cancellationRate: 20,
+      nonSuccesses: 5,
+      nonSuccessRate: 25,
+    });
+    expect(res.body.data.statusSemantics.errors).toMatch(/excluding caller cancellation/i);
+
+    const pipeline = InferenceLog.aggregate.mock.calls[0][0];
+    expect(pipeline.find((stage) => stage.$set)?.$set?._analyticsCancelled).toBeDefined();
+    const topErrors = pipeline.find((stage) => stage.$facet)?.$facet?.topErrors;
+    expect(topErrors[0]).toEqual({
+      $match: { status: { $ne: 'success' }, _analyticsCancelled: { $ne: true } }
+    });
+  });
+
   test('falls back to a 7d window for an unknown window key', async () => {
     InferenceLog.aggregate.mockResolvedValue(facet());
     const res = await request(server).get('/api/analytics/inference/summary?window=nonsense');
