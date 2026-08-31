@@ -63,6 +63,7 @@ let _currentHost = null;
 let _modelProfiles = [];
 let _benchmarkedModelSet = new Set();
 let _harnessTargetMap = new Map();
+let _harnessCatalogEnabled = false;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -73,14 +74,15 @@ let _harnessTargetMap = new Map();
  * @param {Array}       opts.modelProfiles — ModelProfile[] with readiness maps
  * @param {Array}       opts.benchmarkedModels — base model names with successful benchmark history
  */
-export function renderBatchConfig(container, { host = null, modelProfiles = [], benchmarkedModels = [], prompts = [], config = {}, judgeRoster = null, harnessTargets = [], lastBatch = null, onLaunch }) {
+export function renderBatchConfig(container, { host = null, modelProfiles = [], benchmarkedModels = [], prompts = [], config = {}, judgeRoster = null, harnessTargets = [], harnessCatalogEnabled = false, lastBatch = null, onLaunch }) {
     _lastBatch = lastBatch;
     _currentHost = host;
     _modelProfiles = modelProfiles;
     _benchmarkedModelSet = new Set((benchmarkedModels || []).map(normModel).filter(Boolean));
     _harnessTargetMap = new Map((harnessTargets || []).map((target) => [target.id, target]));
+    _harnessCatalogEnabled = harnessCatalogEnabled === true;
     const onlineHosts = host ? [host] : [];
-    container.innerHTML = _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets);
+    container.innerHTML = _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets, _harnessCatalogEnabled);
 
     if (host) _wireModelTools(container.querySelector('#bv2-model-checklist'), host);
     _wireDepthPersist(container);
@@ -183,9 +185,20 @@ function _benchmarkBadge(hasBenchmarkHistory) {
 
 // ── Form scaffold ─────────────────────────────────────────────────────────────
 
-function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = []) {
+function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [], harnessCatalogEnabled = false) {
     const hostName = host?.displayName || host?.name || host?.hostname || 'No host selected';
     const modelCount = host?.models?.length || host?.modelCount || host?._modelCount || 0;
+    const cloudCandidates = (harnessTargets || []).filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate && target?.available !== false);
+    const cloudCandidateCount = cloudCandidates.length;
+    const modelAvailability = host
+        ? `on <strong style="color:var(--r-active)">${esc(hostName)}</strong> \u2014 ${modelCount} local${cloudCandidateCount ? ` + ${cloudCandidateCount} cloud` : ''} available`
+        : cloudCandidateCount
+            ? `via <strong style="color:var(--r-active)">Cloud harnesses</strong> \u2014 ${cloudCandidateCount} available`
+            : 'no execution target available';
+    const cloudJudges = (harnessTargets || []).filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.judge && target?.available !== false);
+    const cloudJudgeFallback = harnessCatalogEnabled
+        ? 'No attested isolated cloud judge available — use Ollama judge'
+        : 'Cloud judges disabled in this environment — use Ollama judge';
 
     return `
     <form id="bv2-batch-form" class="batch-form" novalidate>
@@ -194,13 +207,13 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [])
       <div class="bf-section-header">
         <span class="bf-section-num">\u2461</span>
         <span class="bf-section-title">Models</span>
-        <span class="bf-section-context">on <strong style="color:var(--r-active)">${esc(hostName)}</strong> \u2014 ${modelCount} available</span>
+        <span class="bf-section-context">${modelAvailability}</span>
       </div>
 
       <div class="bf-field">
         <div id="bv2-model-checklist" class="model-checklist">
-          ${host ? _buildModelChecklist(host) : _emptyMsg('Select a host above.')}
-          ${_buildHarnessChecklist(harnessTargets)}
+          ${host ? _buildModelChecklist(host) : cloudCandidateCount ? '' : _emptyMsg('Select an execution host above.')}
+          ${_buildHarnessChecklist(harnessTargets, harnessCatalogEnabled)}
         </div>
       </div>
 
@@ -218,9 +231,9 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [])
             ${buildJudgeRoster(judgeRoster, config, onlineHosts)}
             <label class="bf-field-mini" style="margin-top:0.75rem;display:block;">
               <span>Cloud judge <span style="color:var(--r-text-muted);font-size:0.65rem">optional; isolated targets only</span></span>
-              <select id="bv2-cloud-judge">
-                <option value="">Use selected Ollama judge</option>
-                ${(harnessTargets || []).filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.judge && target?.available !== false).map((target) =>
+              <select id="bv2-cloud-judge" ${cloudJudges.length ? '' : 'disabled'}>
+                <option value="">${cloudJudges.length ? 'Use selected Ollama judge' : cloudJudgeFallback}</option>
+                ${cloudJudges.map((target) =>
                     `<option value="${esc(target.id)}">${esc(target.harness?.name || 'Harness')} · ${esc(target.provider)} · ${esc(target.label || target.model)} · ${target.tier === 'paid_cloud' ? 'paid' : 'free'}</option>`
                 ).join('')}
               </select>
@@ -583,7 +596,7 @@ function _updateDepthSummary(container, cfg) {
     const total = LEVELS.reduce((s, l) => s + _estimateCount(l, cfg[l] || 'off'), 0);
     const modelsChecked = container.querySelectorAll('.bv2-model-cb:checked').length;
     const testCount = total * modelsChecked;
-    const estMin = Math.ceil(testCount * 0.5 / 60); // rough ~30s/test heuristic
+    const estMin = Math.ceil(testCount * 30 / 60); // rough ~30s/test heuristic
     const timeStr = estMin > 0 ? ` \u00B7 est. ~${estMin}min` : '';
     el.innerHTML = `<span class="dm-summary-levels">${activeLevels.length} level${activeLevels.length !== 1 ? 's' : ''} active</span> \u00B7 ~${total} prompts \u00D7 ${modelsChecked} model${modelsChecked !== 1 ? 's' : ''} = <span class="dm-summary-tests">~${testCount} tests</span>${timeStr}`;
 }
@@ -964,7 +977,7 @@ function _wirePersistenceUI(container, onlineHosts, config, judgeRoster, onLaunc
             // Re-render
             renderBatchConfig(container.closest('#batch-config') || container, {
                 host: _currentHost, prompts: [], config, judgeRoster,
-                harnessTargets: [..._harnessTargetMap.values()], lastBatch: _lastBatch,
+                harnessTargets: [..._harnessTargetMap.values()], harnessCatalogEnabled: _harnessCatalogEnabled, lastBatch: _lastBatch,
                 onLaunch,
             });
         });
@@ -1012,7 +1025,7 @@ function _wirePersistenceUI(container, onlineHosts, config, judgeRoster, onLaunc
                 // Re-render
                 renderBatchConfig(container.closest('#batch-config') || container, {
                     host: _currentHost, prompts: [], config, judgeRoster,
-                    harnessTargets: [..._harnessTargetMap.values()], lastBatch: _lastBatch,
+                    harnessTargets: [..._harnessTargetMap.values()], harnessCatalogEnabled: _harnessCatalogEnabled, lastBatch: _lastBatch,
                     onLaunch,
                 });
             } catch (err) {
@@ -1098,7 +1111,7 @@ function _wirePersistenceUI(container, onlineHosts, config, judgeRoster, onLaunc
                         close();
                         renderBatchConfig(container.closest('#batch-config') || container, {
                             host: _currentHost, prompts: [], config, judgeRoster,
-                            harnessTargets: [..._harnessTargetMap.values()], lastBatch: _lastBatch,
+                            harnessTargets: [..._harnessTargetMap.values()], harnessCatalogEnabled: _harnessCatalogEnabled, lastBatch: _lastBatch,
                             onLaunch,
                         });
                         showToast(`Loaded "${tpl.name}"`, 'success');
