@@ -2297,7 +2297,59 @@ describe('Benchmark System - Integration Tests', () => {
         });
     });
 
+    describe('GET /api/benchmark/recommend trust boundary', () => {
+        it('rejects a recommendation consumer with no explicit trust scope', async () => {
+            const response = await api.get('/api/benchmark/recommend?category=coding');
+
+            expect(response.status).toBe(400);
+            expect(response.body).toMatchObject({
+                status: 'error',
+                code: 'TRUST_SCOPE_REQUIRED'
+            });
+        });
+
+        it('keeps a high-volume exploratory recommendation low and unqualified', async () => {
+            await BenchmarkResult.insertMany(Array.from({ length: 12 }, (_, index) => ({
+                model: 'exploratory-model',
+                host: 'http://localhost:11434',
+                prompt: `Exploratory prompt ${index}`,
+                prompt_name: `Exploratory prompt ${index}`,
+                prompt_category: 'coding',
+                prompt_level: 3,
+                quality_score: 9,
+                judge_model: 'model-only-judge',
+                success: true
+            })));
+
+            const response = await api.get('/api/benchmark/recommend?category=coding&trustScope=exploratory');
+
+            expect(response.status).toBe(200);
+            expect(response.body.data.trustVerdict).toMatchObject({
+                contract: 'agentx.benchmark-consumer-trust/v1',
+                state: 'exploratory',
+                qualified: false,
+                highConfidenceAllowed: false,
+                qualifiedWinner: null
+            });
+            expect(response.body.data.recommendations[0]).toMatchObject({
+                confidence: 'low',
+                evidence_level: 'exploratory',
+                qualified: false
+            });
+        });
+    });
+
     describe('GET /api/benchmark/generalist-leaderboard', () => {
+        it('rejects consumers that do not explicitly choose a trust scope', async () => {
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality');
+
+            expect(response.status).toBe(400);
+            expect(response.body).toMatchObject({
+                status: 'error',
+                code: 'TRUST_SCOPE_REQUIRED'
+            });
+        });
+
         it('should return generalist leaderboard data from benchmark results', async () => {
             await BenchmarkPrompt.create([
                 {
@@ -2337,7 +2389,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -2348,6 +2400,14 @@ describe('Benchmark System - Integration Tests', () => {
             expect(response.body.data.categoryWeights).not.toHaveProperty('refactoring');
             expect(response.body.data.leaderboard.length).toBeGreaterThan(0);
             expect(response.body.data.leaderboard[0]).toHaveProperty('generalistScore');
+            expect(response.body.data.trustVerdict).toMatchObject({
+                contract: 'agentx.benchmark-consumer-trust/v1',
+                state: 'exploratory',
+                qualified: false,
+                highConfidenceAllowed: false,
+                claim: 'top_exploratory_observation',
+                qualifiedWinner: null
+            });
         });
 
         it('exposes untested categories as unavailable while preserving coverage penalties', async () => {
@@ -2377,7 +2437,7 @@ describe('Benchmark System - Integration Tests', () => {
             });
 
             const response = await api
-                .get('/api/benchmark/generalist-leaderboard?axis=quality&challengeScope=all&includeUnavailableModels=true');
+                .get('/api/benchmark/generalist-leaderboard?axis=quality&challengeScope=all&trustScope=exploratory&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             const row = response.body.data.leaderboard.find(
@@ -2447,7 +2507,7 @@ describe('Benchmark System - Integration Tests', () => {
                 ]);
 
                 const currentResponse = await api
-                    .get('/api/benchmark/generalist-leaderboard?axis=quality&hostScope=current&includeUnavailableModels=true');
+                    .get('/api/benchmark/generalist-leaderboard?axis=quality&hostScope=current&trustScope=exploratory&includeUnavailableModels=true');
 
                 expect(currentResponse.status).toBe(200);
                 expect(currentResponse.body.data.hostScope).toBe('current');
@@ -2463,7 +2523,7 @@ describe('Benchmark System - Integration Tests', () => {
                 expect(currentModels).not.toContain('retired-host-model');
 
                 const allResponse = await api
-                    .get('/api/benchmark/generalist-leaderboard?axis=quality&hostScope=all&includeUnavailableModels=true');
+                    .get('/api/benchmark/generalist-leaderboard?axis=quality&hostScope=all&trustScope=exploratory&includeUnavailableModels=true');
                 const allModels = allResponse.body.data.leaderboard.map((row) => row.model);
                 expect(allResponse.body.data.hostScope).toBe('all');
                 expect(allResponse.body.data.hostFilterApplied).toBe(false);
@@ -2522,7 +2582,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -2569,7 +2629,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -2615,7 +2675,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&includeUnavailableModels=true');
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true');
 
             expect(response.status).toBe(200);
             expect(response.body.status).toBe('success');
@@ -2690,9 +2750,23 @@ describe('Benchmark System - Integration Tests', () => {
                 scorerVersion: 'scorer-v3'
             });
             expect(trusted.body.data.leaderboard.every(row => row.evidenceCompatibility === 'exact_compatible')).toBe(true);
+            expect(trusted.body.data.trustVerdict).toMatchObject({
+                contract: 'agentx.benchmark-consumer-trust/v1',
+                state: 'inconclusive',
+                qualified: false,
+                highConfidenceAllowed: false,
+                claim: 'no_qualified_winner',
+                qualifiedWinner: null
+            });
+            expect(trusted.body.data.trustVerdict.reasons).toEqual(expect.arrayContaining([
+                'partial_scope',
+                'qualified_receipt_unavailable'
+            ]));
 
             const exploratory = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true');
             expect(exploratory.body.data.leaderboard.map(row => row.model)).toContain('legacy-high-score');
+            expect(exploratory.body.data.trustVerdict.state).toBe('exploratory');
+            expect(exploratory.body.data.trustVerdict.qualified).toBe(false);
         });
     });
 

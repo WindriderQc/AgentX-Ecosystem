@@ -81,16 +81,35 @@ describe('BenchmarkServiceClient', () => {
 
       mockFetch.mockResolvedValue({
         ok: true,
-        json: async () => ({ status: 'success', data: { category: 'coding', recommendations: mockRecs } })
+        json: async () => ({
+          status: 'success',
+          data: {
+            category: 'coding',
+            trustVerdict: {
+              contract: 'agentx.benchmark-consumer-trust/v1',
+              state: 'trusted',
+              qualified: false,
+              highConfidenceAllowed: false,
+              qualifiedWinner: null
+            },
+            recommendations: mockRecs
+          }
+        })
       });
 
-      const result = await client.getRecommendations('coding');
+      const result = await client.getRecommendations('coding', { trustScope: 'trusted' });
 
       expect(result).toHaveLength(2);
       expect(result[0].model).toBe('qwen3:14b');
       expect(result[0].quality_score).toBe(8.4);
+      expect(result[0]).toMatchObject({
+        confidence: 'medium',
+        evidence_level: 'trusted',
+        qualified: false
+      });
       expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(mockFetch.mock.calls[0][0]).toContain('/api/benchmark/recommend?category=coding');
+      expect(new URL(mockFetch.mock.calls[0][0]).searchParams.get('trustScope')).toBe('trusted');
     });
 
     it('should return empty array for empty category', async () => {
@@ -105,8 +124,8 @@ describe('BenchmarkServiceClient', () => {
         json: async () => ({ status: 'success', data: { category: 'coding', recommendations: [{ model: 'a' }] } })
       });
 
-      const first = await client.getRecommendations('coding');
-      const second = await client.getRecommendations('coding');
+      const first = await client.getRecommendations('coding', { trustScope: 'trusted' });
+      const second = await client.getRecommendations('coding', { trustScope: 'trusted' });
 
       expect(first).toEqual(second);
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -118,8 +137,8 @@ describe('BenchmarkServiceClient', () => {
         json: async () => ({ status: 'success', data: { category: 'coding', recommendations: [{ model: 'a' }] } })
       });
 
-      await client.getRecommendations('coding');
-      await client.getRecommendations('coding', { skipCache: true });
+      await client.getRecommendations('coding', { trustScope: 'trusted' });
+      await client.getRecommendations('coding', { trustScope: 'trusted', skipCache: true });
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
@@ -130,20 +149,58 @@ describe('BenchmarkServiceClient', () => {
         ok: true,
         json: async () => ({ status: 'success', data: { category: 'math', recommendations: [{ model: 'cached' }] } })
       });
-      await client.getRecommendations('math', { skipCache: true });
+      await client.getRecommendations('math', { trustScope: 'trusted', skipCache: true });
 
       // Now simulate network failure
       mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
-      const result = await client.getRecommendations('math', { skipCache: true });
+      const result = await client.getRecommendations('math', { trustScope: 'trusted', skipCache: true });
 
       expect(result).toHaveLength(1);
       expect(result[0].model).toBe('cached');
     });
 
+    it('downgrades a stale cached verdict and every recommendation claim', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          data: {
+            category: 'math',
+            trustVerdict: {
+              contract: 'agentx.benchmark-consumer-trust/v1',
+              state: 'trusted',
+              qualified: false,
+              highConfidenceAllowed: false,
+              qualifiedWinner: null,
+              reasons: ['qualified_receipt_unavailable']
+            },
+            recommendations: [{ model: 'cached', confidence: 'medium', evidence_level: 'trusted' }]
+          }
+        })
+      });
+      await client.getRecommendationView('math', { trustScope: 'trusted', skipCache: true });
+
+      mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      const stale = await client.getRecommendationView('math', { trustScope: 'trusted', skipCache: true });
+
+      expect(stale.trustVerdict).toMatchObject({
+        state: 'stale',
+        qualified: false,
+        highConfidenceAllowed: false,
+        qualifiedWinner: null
+      });
+      expect(stale.trustVerdict.reasons).toContain('stale_cache');
+      expect(stale.recommendations[0]).toMatchObject({
+        confidence: 'low',
+        evidence_level: 'stale',
+        qualified: false
+      });
+    });
+
     it('should return empty array when benchmark is unreachable and no cache', async () => {
       mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
 
-      const result = await client.getRecommendations('coding');
+      const result = await client.getRecommendations('coding', { trustScope: 'trusted' });
       expect(result).toEqual([]);
     });
 
@@ -153,11 +210,11 @@ describe('BenchmarkServiceClient', () => {
         ok: true,
         json: async () => ({ status: 'success', data: { category: 'coding', recommendations: [{ model: 'stale' }] } })
       });
-      await client.getRecommendations('coding', { skipCache: true });
+      await client.getRecommendations('coding', { trustScope: 'trusted', skipCache: true });
 
       // Simulate 500 error
       mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
-      const result = await client.getRecommendations('coding', { skipCache: true });
+      const result = await client.getRecommendations('coding', { trustScope: 'trusted', skipCache: true });
 
       expect(result).toHaveLength(1);
       expect(result[0].model).toBe('stale');
@@ -169,11 +226,20 @@ describe('BenchmarkServiceClient', () => {
         json: async () => ({ status: 'success', data: { category: 'coding', recommendations: [] } })
       });
 
-      await client.getRecommendations('coding', { host: '192.0.2.66', min_quality: 7.5 });
+      await client.getRecommendations('coding', { trustScope: 'exploratory', host: '192.0.2.66', min_quality: 7.5 });
 
       const url = mockFetch.mock.calls[0][0];
       expect(url).toContain('host=192.0.2.66');
       expect(url).toContain('min_quality=7.5');
+      expect(url).toContain('trustScope=exploratory');
+    });
+
+    it('rejects a consumer that omits its trust scope', async () => {
+      await expect(client.getRecommendations('coding')).rejects.toMatchObject({
+        code: 'TRUST_SCOPE_REQUIRED',
+        status: 400
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 
@@ -184,21 +250,21 @@ describe('BenchmarkServiceClient', () => {
         json: async () => ({ status: 'success', data: { recommendations: [{ model: 'test' }] } })
       });
 
-      const result = await client.getAllCategoryRecommendations();
+      const result = await client.getAllCategoryRecommendations({ trustScope: 'trusted' });
 
       expect(Object.keys(result)).toHaveLength(7);
-      expect(result.coding).toHaveLength(1);
-      expect(result.reasoning).toHaveLength(1);
-      expect(result.translation).toHaveLength(1);
+      expect(result.coding.recommendations).toHaveLength(1);
+      expect(result.reasoning.recommendations).toHaveLength(1);
+      expect(result.translation.recommendations).toHaveLength(1);
     });
 
     it('should return empty arrays for failed categories', async () => {
       mockFetch.mockRejectedValue(new Error('offline'));
 
-      const result = await client.getAllCategoryRecommendations();
+      const result = await client.getAllCategoryRecommendations({ trustScope: 'trusted' });
 
       expect(Object.keys(result)).toHaveLength(7);
-      expect(result.coding).toEqual([]);
+      expect(result.coding).toMatchObject({ status: 'unreachable', recommendations: [] });
     });
   });
 
@@ -360,9 +426,9 @@ describe('BenchmarkServiceClient', () => {
         json: async () => ({ status: 'success', data: { category: 'coding', recommendations: [{ model: 'a' }] } })
       });
 
-      await client.getRecommendations('coding');
+      await client.getRecommendations('coding', { trustScope: 'trusted' });
       client.clearCache();
-      await client.getRecommendations('coding');
+      await client.getRecommendations('coding', { trustScope: 'trusted' });
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });

@@ -329,7 +329,10 @@ function emptyState() {
 export function renderPodium(container, rankings, opts = {}) {
     const visible = (rankings || []).filter(r => !r.filtered);
     const fullScope = visible.filter(hasFullScopeEvidence);
-    const provisional = fullScope.length === 0;
+    // Phase 0 exposes observations only. Its consumer trust projection cannot
+    // mint the later immutable qualification receipt, even if a caller forges
+    // qualified-looking fields in the browser payload.
+    const provisional = true;
     // Partial evidence remains inspectable, but it never receives a medal or
     // displaces a full-scope model from the actual podium.
     const top = (provisional ? visible : fullScope).slice(0, 3);
@@ -358,8 +361,16 @@ export function renderPodium(container, rankings, opts = {}) {
         ];
     }
 
+    const trustState = opts.trustVerdict?.state || 'inconclusive';
+    const provisionalMessage = fullScope.length === 0
+        ? 'No result covers the full required scope. These records are inspectable evidence, not medal positions or a champion.'
+        : trustState === 'exploratory'
+            ? 'Top exploratory observations are inspectable evidence, not medal positions or a qualified winner.'
+            : trustState === 'stale'
+                ? 'This evidence is stale. It cannot produce medal positions or a qualified winner.'
+                : 'No exact qualification receipt is present. These observations are not medal positions or a qualified winner.';
     const provisionalHeader = provisional
-        ? `<div class="r-sec-head"><span class="r-sec-icon">◇</span><span class="r-sec-title r-t-cyan">Provisional evidence</span></div><p class="r-empty" style="margin:0 0 1rem;">No result covers the full required scope. These records are inspectable evidence, not medal positions or a champion.</p>`
+        ? `<div class="r-sec-head"><span class="r-sec-icon">◇</span><span class="r-sec-title r-t-cyan">Evidence observations</span></div><p class="r-empty" style="margin:0 0 1rem;">${provisionalMessage}</p>`
         : '';
     container.innerHTML = `${provisionalHeader}<div class="r-podium${provisional ? ' r-podium-provisional' : ''}">
         ${order.map(({ entry, medalIdx, provisionalRank }) => podCard(entry, medalIdx, { ...cardOpts, provisionalRank })).join('')}

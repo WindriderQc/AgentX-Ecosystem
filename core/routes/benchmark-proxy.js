@@ -27,6 +27,7 @@ const VALID_CATEGORIES = new Set([
  */
 router.get('/recommend', async (req, res) => {
   const { category, host, min_quality } = req.query;
+  const trustScope = String(req.query.trustScope || '').trim().toLowerCase();
 
   if (!category) {
     return res.status(400).json({ status: 'error', message: 'category query parameter is required' });
@@ -38,18 +39,27 @@ router.get('/recommend', async (req, res) => {
       message: `Invalid category. Valid: ${[...VALID_CATEGORIES].join(', ')}`
     });
   }
+  if (!['trusted', 'exploratory'].includes(trustScope)) {
+    return res.status(400).json({
+      status: 'error',
+      code: 'TRUST_SCOPE_REQUIRED',
+      message: 'trustScope must be explicitly set to trusted or exploratory'
+    });
+  }
 
   try {
     const client = getBenchmarkServiceClient();
-    const recommendations = await client.getRecommendations(category, { host, min_quality });
+    const view = await client.getRecommendationView(category, {
+      host,
+      min_quality,
+      trustScope
+    });
 
     res.json({
       status: 'success',
       data: {
-        category,
-        recommendations,
-        source: 'benchmark',
-        cached: true // client handles caching transparently
+        ...view,
+        source: 'benchmark'
       }
     });
   } catch (err) {
@@ -63,14 +73,23 @@ router.get('/recommend', async (req, res) => {
  * Return top recommendations for every category (summary view).
  */
 router.get('/recommend/all', async (req, res) => {
+  const trustScope = String(req.query.trustScope || '').trim().toLowerCase();
+  if (!['trusted', 'exploratory'].includes(trustScope)) {
+    return res.status(400).json({
+      status: 'error',
+      code: 'TRUST_SCOPE_REQUIRED',
+      message: 'trustScope must be explicitly set to trusted or exploratory'
+    });
+  }
   try {
     const client = getBenchmarkServiceClient();
-    const allRecs = await client.getAllCategoryRecommendations();
+    const allRecs = await client.getAllCategoryRecommendations({ trustScope });
 
     res.json({
       status: 'success',
       data: {
         categories: allRecs,
+        trustScope,
         source: 'benchmark'
       }
     });

@@ -28,7 +28,10 @@ const {
 } = require('./generalistScore');
 const { getTopCategoryFromAverages } = require('./modelMetadata');
 const { getCurrentHostModelSnapshot, isModelAvailableForRow, serializeHostModelSnapshot } = require('./modelAvailability');
-const { resolveTrustedEvidenceCohort } = require('./trustedEvidenceCohort');
+const {
+    resolveTrustedEvidenceCohort,
+    buildConsumerTrustVerdict
+} = require('./trustedEvidenceCohort');
 const { judgeResult, judgeBatch, stopJudging, getJudgingStatus, stopAllJudging } = require('./judging');
 const { getEfficiencyMap } = require('./efficiencyMap');
 const { buildIdleCurrentTest } = require('./batchHelpers');
@@ -220,29 +223,31 @@ class BenchmarkService {
             excludedIncompleteBatches: 0,
             cohort: null
         };
+        let cohortResolution = null;
         if (trustedView) {
-            const [incompleteBatchIds, cohortResolution] = await Promise.all([
+            const [incompleteBatchIds, resolvedCohort] = await Promise.all([
                 BenchmarkBatch.distinct('_id', {
                     status: 'failed',
                     failure_reason: 'incomplete_cells'
                 }),
                 resolveTrustedEvidenceCohort(leaderboardMatch)
             ]);
+            cohortResolution = resolvedCohort;
             trustedFilters.excludedIncompleteBatches = incompleteBatchIds.length;
             trustedFilters.cohort = {
-                selected: cohortResolution.selected,
-                candidateBatchCount: cohortResolution.candidateBatchCount,
-                eligibleBatchCount: cohortResolution.eligibleBatchCount,
-                excludedBatchCount: cohortResolution.excludedBatchCount,
-                exclusionReasons: cohortResolution.exclusionReasons,
-                freshnessDays: cohortResolution.freshnessDays
+                selected: resolvedCohort.selected,
+                candidateBatchCount: resolvedCohort.candidateBatchCount,
+                eligibleBatchCount: resolvedCohort.eligibleBatchCount,
+                excludedBatchCount: resolvedCohort.excludedBatchCount,
+                exclusionReasons: resolvedCohort.exclusionReasons,
+                freshnessDays: resolvedCohort.freshnessDays
             };
             // A single completed batch is the comparison boundary. Its rows
             // share one captured fixture suite and scorer generation, while
             // every candidate still carries its own exact artifact/runtime ID.
             // An empty $in intentionally yields an empty Trusted board when no
             // such cohort exists; legacy evidence remains in Exploratory.
-            leaderboardMatch.batch_id = cohortResolution.selectedBatchObjectId
+            leaderboardMatch.batch_id = resolvedCohort.selectedBatchObjectId
                 || { $in: [] };
         }
         const challengeFilterApplied = challengeScope !== 'all';
@@ -334,6 +339,18 @@ class BenchmarkService {
         });
 
         const confidenceWeighted = leaderboard.some(e => e.confidenceWeighted);
+        const trustVerdict = buildConsumerTrustVerdict({
+            trustScope,
+            cohortResolution,
+            rows: leaderboard,
+            scopeComplete: trustedView
+                ? leaderboard.length >= 2 && leaderboard.every((row) => row.fullScopeEligible === true)
+                : null
+        });
+        for (const row of leaderboard) {
+            row.evidenceTrustState = trustVerdict.state;
+            row.qualifiedWinnerEligible = false;
+        }
 
         return {
             leaderboard,
@@ -350,6 +367,7 @@ class BenchmarkService {
             challengeFilterApplied,
             trustScope,
             trusted: trustedView,
+            trustVerdict,
             trustedFilters,
             challengeLevelRange: challengeScope === 'advanced'
                 ? { min: 4, max: 5 }

@@ -2,12 +2,12 @@ jest.mock('../../config/logger', () => ({
   info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn()
 }));
 
-const mockGetRecommendations = jest.fn();
+const mockGetRecommendationView = jest.fn();
 const mockGetAllCategoryRecommendations = jest.fn();
 
 jest.mock('../../src/services/benchmarkServiceClient', () => ({
   getBenchmarkServiceClient: () => ({
-    getRecommendations: mockGetRecommendations,
+    getRecommendationView: mockGetRecommendationView,
     getAllCategoryRecommendations: mockGetAllCategoryRecommendations
   })
 }));
@@ -29,7 +29,7 @@ describe('Benchmark Proxy Routes', () => {
 
   beforeEach(() => {
     app = buildApp();
-    mockGetRecommendations.mockReset();
+    mockGetRecommendationView.mockReset();
     mockGetAllCategoryRecommendations.mockReset();
     originalFetch = global.fetch;
     global.fetch = jest.fn();
@@ -52,11 +52,22 @@ describe('Benchmark Proxy Routes', () => {
       expect(res.body.message).toMatch(/Invalid category/);
     });
 
-    it('should return recommendations for valid category', async () => {
-      const mockRecs = [{ model: 'qwen3:14b', quality_score: 8.4, confidence: 'high' }];
-      mockGetRecommendations.mockResolvedValue(mockRecs);
-
+    it('should reject a recommendation consumer with no explicit trust scope', async () => {
       const res = await request(app).get('/api/benchmark-proxy/recommend?category=coding');
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('TRUST_SCOPE_REQUIRED');
+    });
+
+    it('should return recommendations for valid category', async () => {
+      const mockRecs = [{ model: 'qwen3:14b', quality_score: 8.4, confidence: 'medium' }];
+      mockGetRecommendationView.mockResolvedValue({
+        category: 'coding',
+        trustScope: 'trusted',
+        trustVerdict: { state: 'trusted', qualified: false },
+        recommendations: mockRecs
+      });
+
+      const res = await request(app).get('/api/benchmark-proxy/recommend?category=coding&trustScope=trusted');
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
@@ -66,20 +77,21 @@ describe('Benchmark Proxy Routes', () => {
     });
 
     it('should forward host and min_quality params', async () => {
-      mockGetRecommendations.mockResolvedValue([]);
+      mockGetRecommendationView.mockResolvedValue({ recommendations: [] });
 
-      await request(app).get('/api/benchmark-proxy/recommend?category=coding&host=192.0.2.66&min_quality=7');
+      await request(app).get('/api/benchmark-proxy/recommend?category=coding&trustScope=exploratory&host=192.0.2.66&min_quality=7');
 
-      expect(mockGetRecommendations).toHaveBeenCalledWith('coding', {
+      expect(mockGetRecommendationView).toHaveBeenCalledWith('coding', {
         host: '192.0.2.66',
-        min_quality: '7'
+        min_quality: '7',
+        trustScope: 'exploratory'
       });
     });
 
     it('should return 502 when service client throws', async () => {
-      mockGetRecommendations.mockRejectedValue(new Error('unexpected'));
+      mockGetRecommendationView.mockRejectedValue(new Error('unexpected'));
 
-      const res = await request(app).get('/api/benchmark-proxy/recommend?category=math');
+      const res = await request(app).get('/api/benchmark-proxy/recommend?category=math&trustScope=trusted');
 
       expect(res.status).toBe(502);
       expect(res.body.message).toMatch(/unavailable/i);
@@ -99,18 +111,19 @@ describe('Benchmark Proxy Routes', () => {
       };
       mockGetAllCategoryRecommendations.mockResolvedValue(mockAll);
 
-      const res = await request(app).get('/api/benchmark-proxy/recommend/all');
+      const res = await request(app).get('/api/benchmark-proxy/recommend/all?trustScope=trusted');
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.data.categories).toEqual(mockAll);
       expect(res.body.data.source).toBe('benchmark');
+      expect(mockGetAllCategoryRecommendations).toHaveBeenCalledWith({ trustScope: 'trusted' });
     });
 
     it('should return 502 on error', async () => {
       mockGetAllCategoryRecommendations.mockRejectedValue(new Error('fail'));
 
-      const res = await request(app).get('/api/benchmark-proxy/recommend/all');
+      const res = await request(app).get('/api/benchmark-proxy/recommend/all?trustScope=trusted');
 
       expect(res.status).toBe(502);
     });

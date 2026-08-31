@@ -223,10 +223,18 @@ router.get('/generalist-leaderboard', async (req, res) => {
         const challengeScope = ['advanced', 'foundation'].includes(challengeScopeRaw)
             ? challengeScopeRaw
             : 'all';
-        // ?trustScope=trusted applies confidence-weighted scoring and hides
-        // batches that terminalized as failed/incomplete_cells.
-        const trustScopeRaw = String(req.query.trustScope || req.query.trust || 'exploratory').toLowerCase();
-        const trustScope = trustScopeRaw === 'trusted' ? 'trusted' : 'exploratory';
+        // Trust scope is a required consumer decision. Silent exploratory
+        // fallback let report and recommendation callers turn archive data
+        // into authoritative-looking winners.
+        const trustScopeRaw = String(req.query.trustScope || req.query.trust || '').toLowerCase();
+        if (!['trusted', 'exploratory'].includes(trustScopeRaw)) {
+            return res.status(400).json({
+                status: 'error',
+                code: 'TRUST_SCOPE_REQUIRED',
+                error: 'trustScope must be explicitly set to trusted or exploratory'
+            });
+        }
+        const trustScope = trustScopeRaw;
         const includeUnavailableModels = parseBool(req.query.includeUnavailableModels);
         const data = await benchmarkService.getGeneralistLeaderboard({
             axis,

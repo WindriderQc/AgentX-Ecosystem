@@ -253,6 +253,14 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
     : '';
   const hostTtftLabel = entry.hostTtft != null ? ` · host TTFT ${formatMs(entry.hostTtft)}` : '';
   const useModelUrl = playgroundUrl(entry);
+  const evidenceLevel = entry.evidenceTrustVerdict?.state || entry.evidenceTrustState || 'inconclusive';
+  const evidenceLabels = {
+    trusted: 'Trusted evidence',
+    exploratory: 'Exploratory evidence',
+    stale: 'Stale evidence',
+    inconclusive: 'Inconclusive evidence'
+  };
+  const evidenceLabel = evidenceLabels[evidenceLevel] || evidenceLabels.inconclusive;
 
   const canMedal = !provisional && entry.fullScopeEligible === true && index < 3;
   const rank = canMedal
@@ -352,7 +360,7 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
           <span class="cb-model-name">${model}</span>${readinessBadge}${unavailableBadge}
           <a href="/courthouse?model=${encodeURIComponent(model)}" class="cb-link" title="Review in Courthouse"><i class="fas fa-gavel"></i></a>
           <a href="/efficiency-map" class="cb-link" title="Efficiency Map"><i class="fas fa-chart-line"></i></a>
-          ${useModelUrl ? `<a href="${useModelUrl}" class="cb-link cb-use-model" title="Open this exact model and host in Manual Chat"><i class="fas fa-comment-dots"></i><span>Use in Chat</span></a>` : ''}
+          ${useModelUrl ? `<a href="${useModelUrl}" class="cb-link cb-use-model" title="Open this exact model and host in Manual Chat; routing will not change automatically"><i class="fas fa-comment-dots"></i><span>Use in Chat</span></a><span class="cb-use-model-proof" data-evidence-level="${evidenceLevel}">${evidenceLabel}</span>` : ''}
         </div>
         <div class="cb-host">
           <i class="fas fa-server cb-host-ico"></i><span class="cb-host-name">${hostName}</span>${judgeIcon}<span class="cb-host-meta">${hostTtftLabel}</span>
@@ -445,17 +453,21 @@ function renderRows(rankings, championMap, readinessMap, options = {}) {
 }
 
 export async function renderCombinedBoard(container, rankings) {
-  const readinessMap = await getReadinessMap().catch(() => ({}));
-  const comparableScopes = new Set((rankings || []).map(scopeKey)).size <= 1;
-  const provisional = !(rankings || []).some(entry => entry.fullScopeEligible === true);
-  const championMap = comparableScopes ? buildChampionMap(rankings) : new Map();
+    const readinessMap = await getReadinessMap().catch(() => ({}));
+    const comparableScopes = new Set((rankings || []).map(scopeKey)).size <= 1;
+    const trustVerdict = (rankings || []).find((entry) => entry.evidenceTrustVerdict)?.evidenceTrustVerdict || null;
+    const provisional = true;
+    const championMap = new Map();
 
   // Persist active triage on the container so re-renders preserve user choice.
   const active = container.dataset.triageMode || 'generalist';
 
+  const title = trustVerdict?.state === 'exploratory'
+    ? 'Exploratory observations'
+    : 'Evidence observations — no qualified winner';
   const head = `<div class="r-sec-head">
     <span class="r-sec-icon">🏁</span>
-    <span class="r-sec-title r-t-cyan">Model Leaderboard</span>
+    <span class="r-sec-title r-t-cyan">${title}</span>
     <span class="r-sec-toggle">▼</span>
   </div>`;
 
@@ -464,7 +476,7 @@ export async function renderCombinedBoard(container, rankings) {
 
   const body = empty
     ? `<div class="r-empty">No rankings yet — launch a benchmark to populate the leaderboard.</div>`
-    : `${comparableScopes ? renderTriageChips(active) : '<div class="r-empty" role="note" style="text-align:left;">Scopes differ. Category champion badges and category re-ranking are disabled.</div>'}<div class="cb-list" id="cb-list">
+    : `${comparableScopes ? renderTriageChips(active) : '<div class="r-empty" role="note" style="text-align:left;">Scopes differ. Category comparison badges and category re-ranking are disabled.</div>'}<div class="cb-list" id="cb-list">
         ${renderRows(sorted, championMap, readinessMap, { provisional })}
       </div>`;
 

@@ -1103,6 +1103,15 @@
     padding: 20px 24px;
     border-left: 3px solid #f59e0b;
 }
+
+.rec-evidence-level {
+  margin: 0.35rem 0 0.75rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--border-color, #64748b) 55%, transparent);
+  border-radius: 0.45rem;
+  color: var(--text-secondary, #cbd5e1);
+  font-size: 0.78rem;
+}
 .rec-header {
     display: flex;
     justify-content: space-between;
