@@ -17,6 +17,10 @@ const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scori
 // when unioning with the static config goldset for calibration.
 const HUMAN_SOURCE_TAG = 'courthouse-review';
 const SPRINT_SOURCE_PREFIX = 'human-validation-sprint-';
+const QUALIFIED_HUMAN_PROVENANCE = Object.freeze([
+    'independent_human_score',
+    'adjudicated_human_score'
+]);
 
 const SCORE_BUCKETS = [
     { label: '0-2', min: 0, max: 2 },
@@ -364,6 +368,24 @@ async function loadHumanReviewGroundTruth(options = {}) {
 }
 
 /**
+ * Load only entries whose provenance contract proves that the score was
+ * authored independently of the production judge or was adjudicated from
+ * independent reviews. Historical source tags are intentionally insufficient.
+ */
+async function loadQualifiedHumanGroundTruth(options = {}) {
+    const query = {
+        active: true,
+        provenance_class: { $in: [...QUALIFIED_HUMAN_PROVENANCE] }
+    };
+    if (options.category) query.category = options.category;
+
+    let q = JudgeGroundTruth.find(query);
+    if (options.limit) q = q.limit(options.limit);
+    q = q.sort({ reviewed_at: -1, createdAt: -1 });
+    return q.lean();
+}
+
+/**
  * 0129 — Union the config goldset and human-derived ground truth. Dedupe by
  * `name` (stable identifier across both sources). If a config goldset entry
  * shares a name with a human-review entry, the human-review wins (more recent
@@ -415,9 +437,11 @@ module.exports = {
     getCoverageStats,
     loadConfigGoldset,
     loadHumanReviewGroundTruth,
+    loadQualifiedHumanGroundTruth,
     loadUnionedGoldset,
     HUMAN_SOURCE_TAG,
     SPRINT_SOURCE_PREFIX,
+    QUALIFIED_HUMAN_PROVENANCE,
     SCORE_BUCKETS,
     CATEGORIES
 };

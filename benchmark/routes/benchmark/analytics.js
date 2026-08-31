@@ -16,6 +16,7 @@ const { validateObjectId } = require('../../src/helpers/objectIdValidator');
 const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
 const BenchmarkResult = require('../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
+const BenchmarkTrustReceipt = require('../../models/BenchmarkTrustReceipt');
 
 function parseBool(value) {
     return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
@@ -764,6 +765,16 @@ router.post('/retention/reset-all', async (req, res) => {
             return res.status(400).json({
                 status: 'error',
                 error: 'Send { confirm: "RESET" } to confirm deletion of all data'
+            });
+        }
+
+        const protectedReceiptCount = await BenchmarkTrustReceipt.countDocuments({});
+        if (protectedReceiptCount > 0) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_RECEIPTS_PROTECT_EVIDENCE',
+                error: 'Reset is blocked while append-only benchmark trust receipts reference benchmark evidence',
+                protected_receipts: protectedReceiptCount
             });
         }
 

@@ -11,6 +11,10 @@ const {
     deriveTerminalBatchOutcome,
     deriveTerminalJudgeStatus
 } = require('../src/services/benchmark/batchHelpers');
+const {
+    TRUST_BATCH_ID_PATTERN,
+    createTrustBatchId
+} = require('../src/services/benchmark/trustBatchIdentity');
 
 const BenchmarkBatchSchema = new mongoose.Schema({
     // Configuration
@@ -53,6 +57,15 @@ const BenchmarkBatchSchema = new mongoose.Schema({
     execution_config: {
         type: Object,
         default: {}
+    },
+    // Portable receipts bind this opaque immutable identifier, never the
+    // MongoDB primary key. Legacy batches receive one only through an explicit
+    // migration; every newly created batch gets one at construction time.
+    trust_batch_id: {
+        type: String,
+        immutable: true,
+        default: createTrustBatchId,
+        match: TRUST_BATCH_ID_PATTERN
     },
     // Immutable campaign-level inference contract. Resolved once after the
     // benchmark host claim/preflight and reused across every attempt/resume.
@@ -305,6 +318,14 @@ const BenchmarkBatchSchema = new mongoose.Schema({
 BenchmarkBatchSchema.index({ status: 1, created_at: -1 });
 BenchmarkBatchSchema.index({ execution_started_at: 1 });
 BenchmarkBatchSchema.index({ 'models': 1 });
+BenchmarkBatchSchema.index(
+    { trust_batch_id: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { trust_batch_id: { $type: 'string' } },
+        name: 'uniq_benchmark_batch_trust_batch_id'
+    }
+);
 BenchmarkBatchSchema.index(
     { active_slot: 1 },
     {

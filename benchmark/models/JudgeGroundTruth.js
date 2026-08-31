@@ -77,6 +77,35 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
         index: true
     },
 
+    // Qualification provenance is deliberately separate from the historical
+    // `source` label. A Courthouse row can be human-approved while its score
+    // still comes directly from the judge; source alone must never certify an
+    // independent human label.
+    provenance_class: {
+        type: String,
+        enum: [
+            'endorsed_judge_score',
+            'human_override_visible_judge',
+            'independent_human_score',
+            'adjudicated_human_score',
+            'legacy_unverified'
+        ],
+        default: 'legacy_unverified',
+        index: true
+    },
+
+    review_protocol: {
+        type: String,
+        enum: [
+            'judge_visible_single_review',
+            'blind_independent',
+            'blind_double_review',
+            'adjudicated',
+            'legacy_unknown'
+        ],
+        default: 'legacy_unknown'
+    },
+
     // 0129 — reviewer user id (for courthouse-review entries)
     reviewer: {
         type: String,
@@ -156,6 +185,7 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
 // Index for efficient validation queries
 JudgeGroundTruthSchema.index({ category: 1, active: 1 });
 JudgeGroundTruthSchema.index({ difficulty: 1, active: 1 });
+JudgeGroundTruthSchema.index({ provenance_class: 1, active: 1, category: 1 });
 JudgeGroundTruthSchema.index({ 'validation_stats.avg_deviation': 1 });
 
 /**

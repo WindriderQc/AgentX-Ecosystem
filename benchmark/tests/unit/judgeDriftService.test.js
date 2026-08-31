@@ -252,20 +252,37 @@ describe('computeDrift', () => {
 });
 
 describe('ratifyBaseline', () => {
-    test('marks prior baselines inactive and upserts new one as active', async () => {
-        CalibrationBaseline.findOneAndUpdate.mockResolvedValue({
-            label: 'new', active: true
-        });
+    test('materializes the target, releases other baselines, and claims the unique active slot', async () => {
+        CalibrationBaseline.findOneAndUpdate
+            .mockResolvedValueOnce({ _id: 'target-id', label: 'new', active: false })
+            .mockResolvedValueOnce({ _id: 'target-id', label: 'new', active: true, active_slot: 'active' });
         const doc = await ratifyBaseline({
             label: 'new',
             categories: [{ category: 'coding', rho: 0.9, sample_size: 30 }],
             overall_rho: 0.9
         });
         expect(CalibrationBaseline.updateMany).toHaveBeenCalledWith(
-            { active: true }, { $set: { active: false } }
+            { _id: { $ne: 'target-id' }, active: true },
+            { $set: { active: false }, $unset: { active_slot: '' } }
         );
-        expect(CalibrationBaseline.findOneAndUpdate).toHaveBeenCalled();
+        expect(CalibrationBaseline.findOneAndUpdate).toHaveBeenNthCalledWith(
+            2,
+            { _id: 'target-id' },
+            { $set: { active: true, active_slot: 'active' } },
+            { new: true }
+        );
         expect(doc.label).toBe('new');
+    });
+
+    test('fails closed when another baseline wins the unique active slot', async () => {
+        CalibrationBaseline.findOneAndUpdate
+            .mockResolvedValueOnce({ _id: 'target-id', label: 'new', active: false })
+            .mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: 11000 }));
+
+        await expect(ratifyBaseline({
+            label: 'new',
+            categories: []
+        })).rejects.toMatchObject({ code: 'CALIBRATION_BASELINE_CONFLICT' });
     });
 
     test('rejects missing label', async () => {

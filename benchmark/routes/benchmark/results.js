@@ -515,6 +515,13 @@ router.post('/results/:id/human-review', async (req, res) => {
                     : `Courthouse ${effectiveAction} by ${updateFields.human_reviewer}`;
                 const evidenceKind = scoreEvidenceKind(updated);
                 const hasJudgeEvidence = evidenceKind === 'judge_scored' || evidenceKind === 'hybrid';
+                // The current Courthouse UI is judge-visible. Approval copies
+                // the judge score and override is still a single visible
+                // review; neither may be relabelled as independent human
+                // ground truth for Benchmark Trust qualification.
+                const provenanceClass = effectiveAction === 'approve'
+                    ? 'endorsed_judge_score'
+                    : 'human_override_visible_judge';
                 const gtDoc = await JudgeGroundTruth.findOneAndUpdate(
                     { name: gtName },
                     {
@@ -531,6 +538,8 @@ router.post('/results/:id/human-review', async (req, res) => {
                             expert_rationale: rationaleBase,
                             created_by: 'courthouse-review',
                             source: 'courthouse-review',
+                            provenance_class: provenanceClass,
+                            review_protocol: 'judge_visible_single_review',
                             reviewer: updateFields.human_reviewer,
                             reviewed_at: updateFields.human_reviewed_at,
                             source_result_id: updated._id,

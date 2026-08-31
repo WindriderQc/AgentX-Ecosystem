@@ -198,9 +198,12 @@ async function ratifyBaseline(input) {
     if (!input.label) throw new Error('label required');
     if (!Array.isArray(input.categories)) throw new Error('categories[] required');
 
-    await CalibrationBaseline.updateMany({ active: true }, { $set: { active: false } });
-
-    const doc = await CalibrationBaseline.findOneAndUpdate(
+    // Materialize the target before releasing the current slot. The
+    // constant-valued unique partial index on active_slot guarantees that two
+    // concurrent ratifications can never leave two active baselines. MongoDB
+    // standalone deployments do not support the multi-document transaction
+    // this would otherwise require, so a race loser fails closed.
+    const target = await CalibrationBaseline.findOneAndUpdate(
         { label: input.label },
         {
             $set: {
@@ -209,12 +212,33 @@ async function ratifyBaseline(input) {
                 overall_rho: input.overall_rho ?? null,
                 overall_sample_size: input.overall_sample_size || 0,
                 categories: input.categories,
-                notes: input.notes || null,
-                active: true
-            }
+                notes: input.notes || null
+            },
+            $setOnInsert: { active: false }
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+
+    await CalibrationBaseline.updateMany(
+        { _id: { $ne: target._id }, active: true },
+        { $set: { active: false }, $unset: { active_slot: '' } }
+    );
+
+    let doc;
+    try {
+        doc = await CalibrationBaseline.findOneAndUpdate(
+            { _id: target._id },
+            { $set: { active: true, active_slot: 'active' } },
+            { new: true }
+        );
+    } catch (err) {
+        if (err?.code === 11000) {
+            const conflict = new Error('another calibration baseline won concurrent ratification');
+            conflict.code = 'CALIBRATION_BASELINE_CONFLICT';
+            throw conflict;
+        }
+        throw err;
+    }
     logger.info('Calibration baseline ratified', { label: doc.label });
     return doc;
 }

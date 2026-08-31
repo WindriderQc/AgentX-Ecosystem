@@ -39,6 +39,7 @@ const {
     getCoverageStats,
     loadConfigGoldset,
     loadHumanReviewGroundTruth,
+    loadQualifiedHumanGroundTruth,
     loadUnionedGoldset,
     SCORE_BUCKETS,
     CATEGORIES
@@ -266,6 +267,29 @@ describe('loadHumanReviewGroundTruth (0129)', () => {
             { source: { $regex: '^human-validation-sprint-' } }
         ]));
         expect(out).toHaveLength(1);
+    });
+});
+
+describe('loadQualifiedHumanGroundTruth', () => {
+    test('requires explicit independent or adjudicated provenance', async () => {
+        const docs = [{ name: 'qualified-human-1', provenance_class: 'independent_human_score' }];
+        const chain = {
+            limit: jest.fn().mockReturnThis(),
+            sort: jest.fn().mockReturnThis(),
+            lean: jest.fn().mockResolvedValue(docs)
+        };
+        JudgeGroundTruth.find.mockReturnValue(chain);
+
+        const out = await loadQualifiedHumanGroundTruth({ category: 'math' });
+
+        expect(JudgeGroundTruth.find).toHaveBeenCalledWith({
+            active: true,
+            category: 'math',
+            provenance_class: {
+                $in: ['independent_human_score', 'adjudicated_human_score']
+            }
+        });
+        expect(out).toEqual(docs);
     });
 });
 

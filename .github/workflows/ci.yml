@@ -48,6 +48,44 @@ jobs:
         run: npm test -- --runInBand
         working-directory: benchmark
 
+  benchmark-trust-portability:
+    name: Benchmark trust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      MONGOMS_VERSION: '7.0.24'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: benchmark/package-lock.json
+      - run: npm ci
+        working-directory: benchmark
+      - name: Validate the portable receipt contract
+        run: node --test shared/benchmarkTrustReceipt.test.js
+      - name: Validate the isolated Mongo receipt lifecycle
+        run: npm test -- --runInBand tests/integration/benchmarkTrustReceiptStore.test.js
+        working-directory: benchmark
+      - name: Validate statistics and read-only consumers
+        run: >-
+          npm test -- --runInBand
+          tests/unit/benchmark/benchmarkTrustStatistics.test.js
+          tests/unit/benchmarkTrustBatchId.test.js
+          tests/unit/benchmarkTrustBatchMigration.test.js
+          tests/unit/benchmarkTrustReceiptRetention.test.js
+          tests/unit/benchmarkTrustReceiptResetGuard.test.js
+          tests/unit/benchmarkTrustReceiptRoutes.test.js
+          tests/unit/calibrationBaselineIndexes.test.js
+          tests/unit/judgeDriftService.test.js
+          tests/unit/retroCalibration.test.js
+        working-directory: benchmark
+
   rag-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -772,6 +810,8 @@ jobs:
         run: |
           docker run --rm --entrypoint test agentx-benchmark:ci \
             -f /app/scripts/migrate-exact-artifact-profile-indexes.js
+          docker run --rm --entrypoint test agentx-benchmark:ci \
+            -f /app/scripts/migrate-benchmark-trust-batch-ids.js
           docker run --rm --entrypoint test agentx-benchmark:ci \
             -f /app/scripts/cloud-lane-campaign.js
           docker run --rm --entrypoint node agentx-benchmark:ci \
