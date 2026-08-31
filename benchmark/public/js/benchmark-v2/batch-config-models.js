@@ -133,7 +133,11 @@ export function _buildModelChecklist(host) {
 
     // Summary
     const totalModels = models.length;
-    const checkedCount = saved === null ? totalModels : saved.size;
+    const checkedCount = models.filter((raw) => {
+        const normalized = normModel(raw);
+        if (/embed|nomic|bert|bge|diagnostic/i.test(normalized)) return false;
+        return saved === null || saved.has(raw) || saved.has(normalized);
+    }).length;
     html += `<div class="mc-summary">${checkedCount} of ${totalModels} models selected</div>`;
 
     return html;
