@@ -156,6 +156,29 @@ export function setFeedback(elements, text, tone = 'muted') {
   elements.feedback.style.color = tone === 'success' ? '#9ff6ff' : tone === 'error' ? '#ffb3b8' : tone === 'warning' ? '#ffd166' : 'var(--muted)';
 }
 
+export function handleSendButtonAction({ elements, state, helpers }) {
+  const activeController = state.streamAbortController;
+  if (!activeController) {
+    void helpers.sendMessage();
+    return 'send';
+  }
+
+  state.streamStopRequestedController = activeController;
+  activeController.abort();
+  // The active attempt owns `state.sending` and the controller until its
+  // finally block settles. This prevents a late old attempt from clearing a
+  // newer request that the user launched during an abort race.
+  elements.sendBtn.disabled = true;
+  elements.sendBtn.textContent = 'Stopping\u2026';
+  helpers.setFeedback('Stopping stream\u2026', 'warning');
+  return 'stop';
+}
+
+export function isUserRequestedStreamStop(error, state, requestAbortController) {
+  return error?.name === 'AbortError'
+    && state.streamStopRequestedController === requestAbortController;
+}
+
 /**
  * Show a modal dialog (replaces browser confirm/alert for structured content)
  */
@@ -836,6 +859,10 @@ export function chatFailureDetails(error) {
     guidance = 'Retry with Quick mode or a ready Manual host. The incomplete attempt remains in history.';
     status = 'Response timed out';
     tone = 'warning';
+  } else if (/stream_interrupted|response stream was interrupted/.test(normalized)) {
+    guidance = 'Retry the turn. The interrupted attempt remains in history.';
+    status = 'Response interrupted';
+    tone = 'warning';
   } else if (/no readable stream|streaming not supported/.test(normalized)) {
     guidance = 'Turn streaming off and retry; this browser or proxy did not provide a readable stream.';
     status = 'Streaming unavailable';
@@ -936,17 +963,6 @@ export async function sendMessageStreamFetch(
   elements.chatWindow.scrollTop = elements.chatWindow.scrollHeight;
 
   elements.sendBtn.textContent = 'Stop';
-  elements.sendBtn.onclick = () => {
-    const activeController = state.streamAbortController;
-    if (!activeController) return;
-    activeController.abort();
-    // The active attempt owns `state.sending` and the controller until its
-    // finally block settles. This prevents a late old attempt from clearing a
-    // newer request that the user launched during an abort race.
-    elements.sendBtn.disabled = true;
-    elements.sendBtn.textContent = 'Stopping\u2026';
-    helpers.setFeedback('Stopping stream\u2026', 'warning');
-  };
 
   let fullContent = '';
   let thinkingContent = '';
@@ -1062,6 +1078,7 @@ export async function sendMessageStreamFetch(
   try {
     const abortController = new AbortController();
     requestAbortController = abortController;
+    state.streamStopRequestedController = null;
     state.streamAbortController = abortController;
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
@@ -1095,7 +1112,7 @@ export async function sendMessageStreamFetch(
       throw new Error('The response stream ended before completion.');
     }
   } catch (err) {
-    if (err.name === 'AbortError') {
+    if (isUserRequestedStreamStop(err, state, requestAbortController)) {
       if (elements.chatWindow.contains(assistantMessageDiv)) elements.chatWindow.removeChild(assistantMessageDiv);
       if (!doneReceived) {
         const stoppedContent = fullContent
@@ -1129,9 +1146,12 @@ export async function sendMessageStreamFetch(
       }
       return;
     }
-    console.error('Fetch streaming error:', err);
+    const streamError = err?.name === 'AbortError'
+      ? Object.assign(new Error('The response stream was interrupted before completion.'), { code: 'STREAM_INTERRUPTED' })
+      : err;
+    console.error('Fetch streaming error:', streamError);
     if (elements.chatWindow.contains(assistantMessageDiv)) elements.chatWindow.removeChild(assistantMessageDiv);
-    const failure = chatFailureDetails(err);
+    const failure = chatFailureDetails(streamError);
     const failedContent = `\u26a0\ufe0f ${failure.message}\n\n${failure.guidance}`;
     helpers.appendMessage(
       {
@@ -1164,10 +1184,12 @@ export async function sendMessageStreamFetch(
   } finally {
     if (state.streamAbortController === requestAbortController) {
       state.streamAbortController = null;
+      if (state.streamStopRequestedController === requestAbortController) {
+        state.streamStopRequestedController = null;
+      }
       state.sending = false;
       elements.sendBtn.disabled = false;
       elements.sendBtn.textContent = 'Send';
-      elements.sendBtn.onclick = () => helpers.sendMessage();
       helpers.applyChatAvailability?.();
     }
   }
