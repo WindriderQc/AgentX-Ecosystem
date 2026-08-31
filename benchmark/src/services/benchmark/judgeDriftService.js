@@ -19,7 +19,7 @@ const CalibrationBaseline = require('../../../models/CalibrationBaseline');
 const {
     calculatePearsonCorrelation
 } = require('../judgeValidationHelpers');
-const { CATEGORIES, loadUnionedGoldset } = require('./retroCalibration');
+const { CATEGORIES, loadQualifiedHumanGroundTruth } = require('./retroCalibration');
 
 const DRIFT_THRESHOLDS = {
     drop_pp: 0.15,              // drop of 15 percentage points
@@ -70,7 +70,8 @@ function classifyDrift(current_rho, baseline_rho, sample_size) {
 }
 
 /**
- * Pull the latest N (default 30) courthouse/sprint reviews per category.
+ * Pull the latest N (default 30) independently authored or adjudicated human
+ * reviews per category. Historical source labels alone are not qualification.
  * Returns pairs suitable for Pearson computation.
  *
  * @param {number} perCategory - default 30
@@ -80,8 +81,8 @@ function classifyDrift(current_rho, baseline_rho, sample_size) {
 async function gatherReviewSample(perCategory = 30, categories = CATEGORIES) {
     const result = {};
     for (const cat of categories) {
-        const unioned = await loadUnionedGoldset({ category: cat });
-        const scored = unioned
+        const qualifiedHuman = await loadQualifiedHumanGroundTruth({ category: cat });
+        const scored = qualifiedHuman
             .filter(d => d.expert_scores?.overall !== null
                 && d.expert_scores?.overall !== undefined
                 && d.judge_score_at_review !== null
@@ -97,10 +98,10 @@ async function gatherReviewSample(perCategory = 30, categories = CATEGORIES) {
             judge: scored.map(d => d.judge_score_at_review),
             human: scored.map(d => d.expert_scores?.overall),
             entries: scored,
-            unioned_count: unioned.length,
+            qualified_human_count: qualifiedHuman.length,
             scored_count: scored.length,
-            unscored_count: Math.max(0, unioned.length - scored.length),
-            sample_source: 'unioned_goldset_scored_rows'
+            unscored_qualified_human_count: Math.max(0, qualifiedHuman.length - scored.length),
+            sample_source: 'qualified_human_ground_truth'
         };
     }
     return result;
@@ -144,8 +145,8 @@ async function computeDrift(options = {}) {
         rows.push({
             category: cat,
             sample_size: n,
-            unioned_goldset_size: pair.unioned_count || n,
-            unscored_goldset_size: pair.unscored_count || 0,
+            qualified_human_source_size: pair.qualified_human_count || n,
+            unscored_qualified_human_size: pair.unscored_qualified_human_count || 0,
             sample_source: pair.sample_source || 'unknown',
             current_rho,
             baseline_rho,
@@ -160,10 +161,13 @@ async function computeDrift(options = {}) {
         }
     }
 
-    // Overall status label: ok | warning | alert (collapse insufficient/no_baseline)
+    // Missing evidence is an explicit non-OK state. It must never be rendered
+    // as healthy drift simply because no comparison could be made.
     let overall_status = 'ok';
     if (rows.some(r => r.status === 'alert')) overall_status = 'alert';
     else if (rows.some(r => r.status === 'warning')) overall_status = 'warning';
+    else if (rows.some(r => r.status === 'insufficient_data')) overall_status = 'insufficient_data';
+    else if (rows.some(r => r.status === 'no_baseline')) overall_status = 'no_baseline';
 
     const payload = {
         computed_at: new Date().toISOString(),

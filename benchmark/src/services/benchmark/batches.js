@@ -9,6 +9,7 @@ const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const { JUDGE_CONFIG } = require('../qualityScorer');
 const { deriveTerminalBatchOutcome } = require('./batchHelpers');
+const { getProtectedBatches } = require('./dataRetention');
 
 /**
  * Compute percentile/summary stats from a raw array of numbers.
@@ -651,10 +652,20 @@ async function getBatchStatsByTag() {
  * Clear all results (for testing)
  */
 async function clearResults() {
-    const count = await BenchmarkResult.countDocuments();
-    await BenchmarkResult.deleteMany({});
+    const candidateBatchIds = await BenchmarkResult.distinct('batch_id');
+    const protection = await getProtectedBatches(candidateBatchIds);
+    const protectedIds = [...protection.batchIds];
+    const filter = protectedIds.length > 0
+        ? { batch_id: { $nin: protectedIds } }
+        : {};
+    const count = await BenchmarkResult.countDocuments(filter);
+    await BenchmarkResult.deleteMany(filter);
 
-    logger.info('Benchmark results cleared', { count });
+    logger.info('Benchmark results cleared', {
+        count,
+        protectedBatches: protectedIds.length,
+        protectedSourceBatchIds: [...protection.sourceBatchIds].sort()
+    });
     return count;
 }
 
@@ -662,10 +673,20 @@ async function clearResults() {
  * Clear failed results only (for cleanup)
  */
 async function clearFailedResults() {
-    const count = await BenchmarkResult.countDocuments({ success: false });
-    await BenchmarkResult.deleteMany({ success: false });
+    const candidateBatchIds = await BenchmarkResult.distinct('batch_id', { success: false });
+    const protection = await getProtectedBatches(candidateBatchIds);
+    const protectedIds = [...protection.batchIds];
+    const filter = protectedIds.length > 0
+        ? { success: false, batch_id: { $nin: protectedIds } }
+        : { success: false };
+    const count = await BenchmarkResult.countDocuments(filter);
+    await BenchmarkResult.deleteMany(filter);
 
-    logger.info('Benchmark failed results cleared', { count });
+    logger.info('Benchmark failed results cleared', {
+        count,
+        protectedBatches: protectedIds.length,
+        protectedSourceBatchIds: [...protection.sourceBatchIds].sort()
+    });
     return count;
 }
 

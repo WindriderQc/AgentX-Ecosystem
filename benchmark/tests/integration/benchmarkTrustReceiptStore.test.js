@@ -21,6 +21,7 @@ const {
     listBenchmarkTrustReceiptsBySourceBatch
 } = require('../../src/services/benchmark/benchmarkTrustReceiptStore');
 const { archiveOldResults } = require('../../src/services/benchmark/dataRetention');
+const { clearResults, clearFailedResults } = require('../../src/services/benchmark/batches');
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const sourceBatchId = (character = 'd') => `batch_${character.repeat(32)}`;
@@ -346,5 +347,58 @@ describe('BenchmarkTrustReceipt append-only store', () => {
         ]);
         expect(protectedAfter.description).toBe('protected');
         expect(openAfter.description).toBe('open [archived]');
+    });
+
+    test('global and failed-result cleanup preserve exactly receipted batches', async () => {
+        const protectedSourceId = sourceBatchId('d');
+        const protectedBatch = await createLinkedBatch(protectedSourceId, {
+            run_name: 'protected-cleanup'
+        });
+        const openBatch = await createLinkedBatch(sourceBatchId('e'), {
+            run_name: 'open-cleanup'
+        });
+        await storeBenchmarkTrustReceipt(buildBenchmarkTrustReceipt(bodyFixture({
+            sourceId: protectedSourceId
+        })));
+        await BenchmarkResult.collection.insertMany([
+            { batch_id: protectedBatch._id, model: 'protected', success: false },
+            { batch_id: openBatch._id, model: 'open', success: false }
+        ]);
+
+        await expect(clearFailedResults()).resolves.toBe(1);
+        await expect(BenchmarkResult.countDocuments({ batch_id: protectedBatch._id })).resolves.toBe(1);
+        await expect(BenchmarkResult.countDocuments({ batch_id: openBatch._id })).resolves.toBe(0);
+
+        await BenchmarkResult.collection.insertOne({
+            batch_id: openBatch._id,
+            model: 'open-success',
+            success: true
+        });
+        await expect(clearResults()).resolves.toBe(1);
+        await expect(BenchmarkResult.countDocuments({ batch_id: protectedBatch._id })).resolves.toBe(1);
+        await expect(BenchmarkResult.countDocuments({ batch_id: openBatch._id })).resolves.toBe(0);
+    });
+
+    test('global cleanup fails closed when a receipt is hidden by a tampered source projection', async () => {
+        const protectedSourceId = sourceBatchId('d');
+        const protectedBatch = await createLinkedBatch(protectedSourceId, {
+            run_name: 'tampered-cleanup'
+        });
+        const receipt = buildBenchmarkTrustReceipt(bodyFixture({ sourceId: protectedSourceId }));
+        await storeBenchmarkTrustReceipt(receipt);
+        await BenchmarkResult.collection.insertOne({
+            batch_id: protectedBatch._id,
+            model: 'protected',
+            success: false
+        });
+        await BenchmarkTrustReceipt.collection.updateOne(
+            { receiptId: receipt.receiptId },
+            { $set: { sourceBatchId: sourceBatchId('f') } }
+        );
+
+        const tampered = { code: BenchmarkTrustReceipt.TAMPER_ERROR_CODE };
+        await expect(clearFailedResults()).rejects.toMatchObject(tampered);
+        await expect(clearResults()).rejects.toMatchObject(tampered);
+        await expect(BenchmarkResult.countDocuments({ batch_id: protectedBatch._id })).resolves.toBe(1);
     });
 });

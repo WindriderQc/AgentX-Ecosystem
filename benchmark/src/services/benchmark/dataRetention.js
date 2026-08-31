@@ -42,9 +42,15 @@ async function getProtectedBatches(batchIds) {
     const candidateSourceIds = linkedBatches.map(batch => batch.trust_batch_id);
     if (candidateSourceIds.length === 0) return emptyProtection();
 
-    const receiptedSourceIds = new Set(await BenchmarkTrustReceipt.distinct('sourceBatchId', {
-        sourceBatchId: { $in: candidateSourceIds }
-    }));
+    // Retention is an infrequent destructive operation, so verify the complete
+    // append-only ledger before trusting any indexed projection. Querying by
+    // sourceBatchId first would let a tampered projection hide the very receipt
+    // that should protect its linked batch.
+    const storedReceipts = await BenchmarkTrustReceipt.find({}).lean();
+    const candidateSourceIdSet = new Set(candidateSourceIds);
+    const receiptedSourceIds = new Set(storedReceipts
+        .map(record => BenchmarkTrustReceipt.verifyStoredRecord(record).execution.sourceBatchId)
+        .filter(sourceBatchId => candidateSourceIdSet.has(sourceBatchId)));
     const protectedLinks = linkedBatches.filter(batch => receiptedSourceIds.has(batch.trust_batch_id));
     return {
         batchIds: new Set(protectedLinks.map(batch => String(batch._id))),
@@ -420,6 +426,7 @@ async function getRetentionStats() {
 module.exports = {
     DEFAULT_RETENTION_DAYS,
     DEFAULT_KEEP_BATCHES,
+    getProtectedBatches,
     getStaleBatches,
     archiveOldResults,
     pruneExcessBatches,

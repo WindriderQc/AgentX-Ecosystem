@@ -11,6 +11,8 @@ function preregistration(overrides = {}) {
         mde: 1,
         equivalenceMargin: 0.25,
         repeatCount: 1,
+        candidateIds: ['a', 'b'],
+        promptIds: ['p1', 'p2'],
         ...overrides
     };
 }
@@ -91,8 +93,30 @@ describe('Benchmark Trust statistical decision', () => {
         expect(result.reasons).toEqual(expect.arrayContaining(['invalid_rows', 'incomplete_matrix']));
     });
 
+    test('cannot derive a decision from an observed population that was not preregistered', () => {
+        const result = evaluateBenchmarkTrustStatistics({
+            rows: rowsFor({ a: { p1: 9, p2: 10 }, b: { p1: 1, p2: 2 } }),
+            preregistration: {
+                alpha: 0.05,
+                mde: 1,
+                equivalenceMargin: 0.25,
+                repeatCount: 1
+            }
+        });
+
+        expect(result.eligibleForDecision).toBe(false);
+        expect(result.decision.outcome).toBe('inconclusive');
+        expect(result.reasons).toEqual(expect.arrayContaining([
+            'candidate_scope_missing',
+            'prompt_scope_missing'
+        ]));
+    });
+
     test('returns not_evaluated for zero candidates', () => {
-        const result = evaluateBenchmarkTrustStatistics({ rows: [], preregistration: preregistration() });
+        const result = evaluateBenchmarkTrustStatistics({
+            rows: [],
+            preregistration: preregistration({ candidateIds: [], promptIds: [] })
+        });
 
         expect(result.decision).toMatchObject({
             outcome: 'not_evaluated',
@@ -106,7 +130,7 @@ describe('Benchmark Trust statistical decision', () => {
     test('returns not_evaluated for one candidate even with multiple prompts', () => {
         const result = evaluateBenchmarkTrustStatistics({
             rows: rowsFor({ only: { p1: 3, p2: 4 } }),
-            preregistration: preregistration()
+            preregistration: preregistration({ candidateIds: ['only'] })
         });
 
         expect(result.decision.outcome).toBe('not_evaluated');
@@ -116,7 +140,7 @@ describe('Benchmark Trust statistical decision', () => {
     test('does not estimate uncertainty from a single independent prompt', () => {
         const result = evaluateBenchmarkTrustStatistics({
             rows: rowsFor({ a: { p1: [8, 10, 9] }, b: { p1: [4, 5, 6] } }),
-            preregistration: preregistration({ repeatCount: 3 })
+            preregistration: preregistration({ repeatCount: 3, promptIds: ['p1'] })
         });
         const pair = comparison(result, 'a', 'b');
 
@@ -249,7 +273,11 @@ describe('Benchmark Trust statistical decision', () => {
                 b: { p1: 7, p2: 8, p3: 9 },
                 c: { p1: 5, p2: 6, p3: 7 }
             }),
-            preregistration: preregistration({ mde: 2 })
+            preregistration: preregistration({
+                mde: 2,
+                candidateIds: ['a', 'b', 'c'],
+                promptIds: ['p1', 'p2', 'p3']
+            })
         });
 
         expect(result.method).toMatchObject({ familySize: 3, adjustedAlpha: 0.05 / 3 });
@@ -302,7 +330,12 @@ describe('Benchmark Trust statistical decision', () => {
                 b: { p1: 10, p2: 9, p3: 11 },
                 c: { p1: 6, p2: 5, p3: 7 }
             }),
-            preregistration: preregistration({ mde: 1, equivalenceMargin: 0 })
+            preregistration: preregistration({
+                mde: 1,
+                equivalenceMargin: 0,
+                candidateIds: ['a', 'b', 'c'],
+                promptIds: ['p1', 'p2', 'p3']
+            })
         });
 
         expect(result.decision).toMatchObject({
@@ -331,11 +364,14 @@ describe('Benchmark Trust statistical decision', () => {
         };
         const two = evaluateBenchmarkTrustStatistics({
             rows: rowsFor(common),
-            preregistration: preregistration()
+            preregistration: preregistration({ promptIds: ['p1', 'p2', 'p3', 'p4', 'p5'] })
         });
         const three = evaluateBenchmarkTrustStatistics({
             rows: rowsFor({ ...common, c: { p1: 1, p2: 2, p3: 3, p4: 4, p5: 5 } }),
-            preregistration: preregistration()
+            preregistration: preregistration({
+                candidateIds: ['a', 'b', 'c'],
+                promptIds: ['p1', 'p2', 'p3', 'p4', 'p5']
+            })
         });
         const twoPair = comparison(two, 'a', 'b');
         const threePair = comparison(three, 'a', 'b');
@@ -352,7 +388,12 @@ describe('Benchmark Trust statistical decision', () => {
             a: { p2: [5, 7, 6], p1: [4, 6, 5] },
             m: { p2: [2, 4, 3], p1: [1, 3, 2] }
         });
-        const policy = preregistration({ mde: 1, equivalenceMargin: 0.1, repeatCount: 3 });
+        const policy = preregistration({
+            mde: 1,
+            equivalenceMargin: 0.1,
+            repeatCount: 3,
+            candidateIds: ['a', 'm', 'z']
+        });
 
         expect(evaluateBenchmarkTrustStatistics({ rows, preregistration: policy }))
             .toEqual(evaluateBenchmarkTrustStatistics({ rows: [...rows].reverse(), preregistration: policy }));
@@ -366,7 +407,10 @@ describe('Benchmark Trust statistical decision', () => {
                 [candidateA]: { p1: 5, p2: 6 },
                 [candidateB]: { p1: 2, p2: 3 }
             }),
-            preregistration: preregistration({ mde: 0.25 })
+            preregistration: preregistration({
+                mde: 0.25,
+                candidateIds: [candidateA, candidateB]
+            })
         });
 
         const projection = buildBenchmarkTrustStatisticsReceiptFields(result, {
@@ -399,7 +443,10 @@ describe('Benchmark Trust statistical decision', () => {
                 [candidateA]: { p1: 5, p2: 6 },
                 [candidateB]: { p1: 2, p2: 3 }
             }),
-            preregistration: preregistration({ alpha: 0.05001 })
+            preregistration: preregistration({
+                alpha: 0.05001,
+                candidateIds: [candidateA, candidateB]
+            })
         });
         expect(() => buildBenchmarkTrustStatisticsReceiptFields(invalidScale, {
             analysisPlanFingerprint: 'a'.repeat(64),
@@ -411,7 +458,7 @@ describe('Benchmark Trust statistical decision', () => {
                 [candidateA]: { p1: 5, p2: 6 },
                 [candidateB]: { p1: 2, p2: 3 }
             }),
-            preregistration: preregistration()
+            preregistration: preregistration({ candidateIds: [candidateA, candidateB] })
         });
         expect(() => buildBenchmarkTrustStatisticsReceiptFields(valid, {
             analysisPlanFingerprint: 'not-a-fingerprint',

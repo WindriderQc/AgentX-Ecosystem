@@ -17,7 +17,7 @@ jest.mock('../../models/JudgeGroundTruth', () => ({
 
 jest.mock('../../src/services/benchmark/retroCalibration', () => ({
     CATEGORIES: ['coding', 'reasoning', 'math', 'knowledge', 'instruction', 'creative', 'translation'],
-    loadUnionedGoldset: jest.fn()
+    loadQualifiedHumanGroundTruth: jest.fn()
 }));
 
 jest.mock('../../models/CalibrationBaseline', () => {
@@ -30,7 +30,7 @@ jest.mock('../../models/CalibrationBaseline', () => {
 
 const JudgeGroundTruth = require('../../models/JudgeGroundTruth');
 const CalibrationBaseline = require('../../models/CalibrationBaseline');
-const { loadUnionedGoldset } = require('../../src/services/benchmark/retroCalibration');
+const { loadQualifiedHumanGroundTruth } = require('../../src/services/benchmark/retroCalibration');
 const {
     classifyDrift,
     gatherReviewSample,
@@ -108,16 +108,16 @@ describe('classifyDrift', () => {
 });
 
 describe('gatherReviewSample', () => {
-    test('loads the unioned goldset per category', async () => {
-        loadUnionedGoldset.mockResolvedValue([]);
+    test('loads only qualified human ground truth per category', async () => {
+        loadQualifiedHumanGroundTruth.mockResolvedValue([]);
         await gatherReviewSample(10, ['coding', 'reasoning']);
-        expect(loadUnionedGoldset).toHaveBeenCalledTimes(2);
-        expect(loadUnionedGoldset).toHaveBeenNthCalledWith(1, { category: 'coding' });
-        expect(loadUnionedGoldset).toHaveBeenNthCalledWith(2, { category: 'reasoning' });
+        expect(loadQualifiedHumanGroundTruth).toHaveBeenCalledTimes(2);
+        expect(loadQualifiedHumanGroundTruth).toHaveBeenNthCalledWith(1, { category: 'coding' });
+        expect(loadQualifiedHumanGroundTruth).toHaveBeenNthCalledWith(2, { category: 'reasoning' });
     });
 
     test('returns judge/human arrays for correlation', async () => {
-        loadUnionedGoldset.mockResolvedValue([
+        loadQualifiedHumanGroundTruth.mockResolvedValue([
             { judge_score_at_review: 7, expert_scores: { overall: 8 } },
             { judge_score_at_review: 6, expert_scores: { overall: 5 } }
         ]);
@@ -127,19 +127,19 @@ describe('gatherReviewSample', () => {
     });
 
     test('reports unioned rows that do not have current judge stamps', async () => {
-        loadUnionedGoldset.mockResolvedValue([
+        loadQualifiedHumanGroundTruth.mockResolvedValue([
             { judge_score_at_review: 7, expert_scores: { overall: 8 } },
             { source: 'config-goldset', expert_scores: { overall: 5 } }
         ]);
 
         const out = await gatherReviewSample(5, ['coding']);
         expect(out.coding.scored_count).toBe(1);
-        expect(out.coding.unscored_count).toBe(1);
-        expect(out.coding.sample_source).toBe('unioned_goldset_scored_rows');
+        expect(out.coding.unscored_qualified_human_count).toBe(1);
+        expect(out.coding.sample_source).toBe('qualified_human_ground_truth');
     });
 
     test('counts materialized config-goldset rows as scored rows', async () => {
-        loadUnionedGoldset.mockResolvedValue([
+        loadQualifiedHumanGroundTruth.mockResolvedValue([
             {
                 name: 'config-goldset-cal-bad-02',
                 source: 'human-validation-sprint-2026-07-02-config-goldset',
@@ -156,13 +156,13 @@ describe('gatherReviewSample', () => {
 
         const out = await gatherReviewSample(5, ['math']);
         expect(out.math.scored_count).toBe(2);
-        expect(out.math.unscored_count).toBe(0);
+        expect(out.math.unscored_qualified_human_count).toBe(0);
         expect(out.math.judge).toEqual([2, 7]);
         expect(out.math.human).toEqual([2, 8]);
     });
 
-    test('unscored_goldset_size drops when config anchors are Mongo-backed', async () => {
-        loadUnionedGoldset
+    test('unscored qualified-human count drops when a qualified row gains a judge stamp', async () => {
+        loadQualifiedHumanGroundTruth
             .mockResolvedValueOnce([
                 {
                     name: 'config-goldset-cal-bad-02',
@@ -182,9 +182,9 @@ describe('gatherReviewSample', () => {
         const before = await gatherReviewSample(5, ['math']);
         const after = await gatherReviewSample(5, ['math']);
 
-        expect(before.math.unscored_count).toBe(1);
+        expect(before.math.unscored_qualified_human_count).toBe(1);
         expect(before.math.scored_count).toBe(0);
-        expect(after.math.unscored_count).toBe(0);
+        expect(after.math.unscored_qualified_human_count).toBe(0);
         expect(after.math.scored_count).toBe(1);
     });
 });
@@ -200,7 +200,7 @@ describe('computeDrift', () => {
             { judge_score_at_review: 4, expert_scores: { overall: 4 } },
             { judge_score_at_review: 7, expert_scores: { overall: 7 } }
         ];
-        loadUnionedGoldset.mockResolvedValue(pairs);
+        loadQualifiedHumanGroundTruth.mockResolvedValue(pairs);
         CalibrationBaseline.getActive.mockResolvedValue({
             label: 'test-baseline',
             overall_rho: 0.9,
@@ -211,7 +211,7 @@ describe('computeDrift', () => {
         });
 
         const out = await computeDrift({ perCategory: 10 });
-        expect(out.overall_status).toBe('ok');
+        expect(out.overall_status).toBe('no_baseline');
         expect(out.baseline_label).toBe('test-baseline');
         expect(out.categories).toHaveLength(7); // 7 categories
         const coding = out.categories.find(c => c.category === 'coding');
@@ -229,7 +229,7 @@ describe('computeDrift', () => {
             { judge_score_at_review: 7, expert_scores: { overall: 3 } },
             { judge_score_at_review: 9, expert_scores: { overall: 2 } }
         ];
-        loadUnionedGoldset.mockResolvedValue(pairs);
+        loadQualifiedHumanGroundTruth.mockResolvedValue(pairs);
         CalibrationBaseline.getActive.mockResolvedValue({
             label: 'test-baseline',
             categories: [{ category: 'coding', rho: 0.90, sample_size: 30 }]
@@ -243,11 +243,11 @@ describe('computeDrift', () => {
     });
 
     test('handles missing baseline gracefully', async () => {
-        loadUnionedGoldset.mockResolvedValue([]);
+        loadQualifiedHumanGroundTruth.mockResolvedValue([]);
         CalibrationBaseline.getActive.mockResolvedValue(null);
         const out = await computeDrift({ perCategory: 10 });
         expect(out.baseline_label).toBeNull();
-        expect(out.overall_status).toBe('ok');
+        expect(out.overall_status).toBe('insufficient_data');
     });
 });
 

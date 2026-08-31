@@ -64,6 +64,10 @@ candidate-prompt cell. Every row must carry a unique `repeatIndex` from zero
 through the preregistered `repeatCount - 1`; duplicate, missing, extra, or
 invalid repeats fail the whole interval family closed.
 
+Both `candidateIds` and `promptIds` are mandatory preregistration fields. The
+statistics service never infers a decision-eligible universe from observed
+rows; a missing universe produces an explicit inconclusive result.
+
 The v1 decision uses paired prompt differences, two-sided Student-t intervals,
 and a Bonferroni family over every unordered candidate pair. A winner exists
 only when one candidate's simultaneous lower bound is strictly greater than
@@ -81,6 +85,10 @@ current judge-visible, single-review flow is explicitly classified as either
 as independent human ground truth. Only `independent_human_score` and
 `adjudicated_human_score` enter the qualified-human loader.
 
+Judge drift consumes only that qualified-human loader. Missing samples or an
+incomplete/missing baseline remain explicit `insufficient_data` or
+`no_baseline` states and are never collapsed to `ok`.
+
 The active calibration baseline is protected by a unique Mongo slot so two
 concurrent ratifications cannot leave two active baselines on a standalone
 Mongo deployment. This does not qualify a judge by itself.
@@ -92,6 +100,11 @@ their internal Mongo batches before deleting results. Receipted results,
 timelines, embedded evidence arrays, and batch descriptions are preserved.
 Dry-runs separate protected counts and expose only opaque source-batch ids.
 A global reset fails with HTTP 409 while any append-only receipt exists.
+The result-wide and failed-result cleanup paths also resolve and verify every
+stored receipt before deletion, then exclude all linked batches. A tampered
+payload or indexed projection aborts cleanup before any result is removed. The
+destructive retention guard verifies the complete append-only receipt ledger;
+it never selects receipts through an unverified index projection first.
 
 The Mongo integration test proves this mapping with two real batches: the
 unreceipted batch is archived while the receipted batch's result, timeline, and

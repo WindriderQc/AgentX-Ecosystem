@@ -17,7 +17,8 @@ jest.mock('../../models/BenchmarkTimelineEntry', () => ({
     deleteMany: jest.fn()
 }));
 jest.mock('../../models/BenchmarkTrustReceipt', () => ({
-    distinct: jest.fn()
+    find: jest.fn(),
+    verifyStoredRecord: jest.fn()
 }));
 
 const BenchmarkResult = require('../../models/BenchmarkResult');
@@ -51,22 +52,73 @@ function mockBatchFind({ stale = [], trustLinks = [] } = {}) {
     ));
 }
 
+function mockReceiptedSourceIds(sourceIds = []) {
+    BenchmarkTrustReceipt.find.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(sourceIds.map(sourceBatchId => ({ sourceBatchId })))
+    });
+}
+
 beforeEach(() => {
     jest.clearAllMocks();
     BenchmarkResult.deleteMany.mockResolvedValue({ deletedCount: 0 });
     BenchmarkBatch.updateMany.mockResolvedValue({ modifiedCount: 0 });
     BenchmarkTimelineEntry.deleteMany.mockResolvedValue({ deletedCount: 0 });
-    BenchmarkTrustReceipt.distinct.mockResolvedValue([]);
+    mockReceiptedSourceIds();
+    BenchmarkTrustReceipt.verifyStoredRecord.mockImplementation(record => ({
+        execution: { sourceBatchId: record.sourceBatchId }
+    }));
     mockBatchFind();
 });
 
 describe('BenchmarkTrustReceipt retention protection', () => {
+    test('fails closed before deletion when a stored receipt projection is tampered', async () => {
+        mockBatchFind({
+            stale: [staleBatch('batch-receipted')],
+            trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
+        });
+        mockReceiptedSourceIds([RECEIPTED_SOURCE_ID]);
+        BenchmarkTrustReceipt.verifyStoredRecord.mockImplementation(() => {
+            const error = new Error('tampered receipt projection');
+            error.code = 'BENCHMARK_TRUST_RECEIPT_TAMPERED';
+            throw error;
+        });
+
+        await expect(archiveOldResults(90, false)).rejects.toMatchObject({
+            code: 'BENCHMARK_TRUST_RECEIPT_TAMPERED'
+        });
+        expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
+        expect(BenchmarkTimelineEntry.deleteMany).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateMany).not.toHaveBeenCalled();
+        expect(BenchmarkTrustReceipt.find).toHaveBeenCalledWith({});
+    });
+
+    test('cannot hide a tampered receipt from retention by changing its indexed source projection', async () => {
+        mockBatchFind({
+            stale: [staleBatch('batch-receipted')],
+            trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
+        });
+        mockReceiptedSourceIds(['batch_ffffffffffffffffffffffffffffffff']);
+        BenchmarkTrustReceipt.verifyStoredRecord.mockImplementation(() => {
+            const error = new Error('indexed projection does not match payload');
+            error.code = 'BENCHMARK_TRUST_RECEIPT_TAMPERED';
+            throw error;
+        });
+
+        await expect(archiveOldResults(90, false)).rejects.toMatchObject({
+            code: 'BENCHMARK_TRUST_RECEIPT_TAMPERED'
+        });
+        expect(BenchmarkTrustReceipt.find).toHaveBeenCalledWith({});
+        expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
+        expect(BenchmarkTimelineEntry.deleteMany).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateMany).not.toHaveBeenCalled();
+    });
+
     test('archive dry-run exposes protected evidence without counting it as archivable', async () => {
         mockBatchFind({
             stale: [staleBatch('batch-open'), staleBatch('batch-receipted')],
             trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
         });
-        BenchmarkTrustReceipt.distinct.mockResolvedValue([RECEIPTED_SOURCE_ID]);
+        mockReceiptedSourceIds([RECEIPTED_SOURCE_ID]);
         BenchmarkResult.countDocuments.mockImplementation(async ({ batch_id: batchFilter }) => (
             batchFilter.$in.includes('batch-receipted') ? 7 : 4
         ));
@@ -91,7 +143,7 @@ describe('BenchmarkTrustReceipt retention protection', () => {
             stale: [staleBatch('batch-open'), staleBatch('batch-receipted')],
             trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
         });
-        BenchmarkTrustReceipt.distinct.mockResolvedValue([RECEIPTED_SOURCE_ID]);
+        mockReceiptedSourceIds([RECEIPTED_SOURCE_ID]);
         BenchmarkResult.countDocuments.mockImplementation(async ({ batch_id: batchFilter }) => (
             batchFilter.$in.includes('batch-receipted') ? 7 : 4
         ));
@@ -133,7 +185,7 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         mockBatchFind({
             trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
         });
-        BenchmarkTrustReceipt.distinct.mockResolvedValue([RECEIPTED_SOURCE_ID]);
+        mockReceiptedSourceIds([RECEIPTED_SOURCE_ID]);
         BenchmarkResult.countDocuments.mockImplementation(async ({ batch_id: batchFilter }) => (
             batchFilter.$in.includes('batch-receipted') ? 2 : 3
         ));
@@ -174,7 +226,7 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         mockBatchFind({
             trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
         });
-        BenchmarkTrustReceipt.distinct.mockResolvedValue([RECEIPTED_SOURCE_ID]);
+        mockReceiptedSourceIds([RECEIPTED_SOURCE_ID]);
         BenchmarkResult.countDocuments.mockImplementation(async ({ batch_id: batchFilter }) => (
             batchFilter.$in ? 2 : 4
         ));
@@ -215,7 +267,7 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         mockBatchFind({
             trustLinks: [{ _id: 'batch-receipted', trust_batch_id: RECEIPTED_SOURCE_ID }]
         });
-        BenchmarkTrustReceipt.distinct.mockResolvedValue([RECEIPTED_SOURCE_ID]);
+        mockReceiptedSourceIds([RECEIPTED_SOURCE_ID]);
         BenchmarkResult.countDocuments.mockImplementation(async ({ batch_id: batchFilter }) => (
             batchFilter.$in ? 5 : 0
         ));

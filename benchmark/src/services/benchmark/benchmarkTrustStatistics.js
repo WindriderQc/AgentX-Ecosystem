@@ -186,7 +186,10 @@ function validatePreregistration(preregistration) {
     }
 
     function declaredIds(field, label) {
-        if (source[field] === undefined) return { supplied: false, values: [] };
+        if (source[field] === undefined) {
+            reasons.push(`${label}_scope_missing`);
+            return { supplied: false, values: [] };
+        }
         if (!Array.isArray(source[field])) {
             reasons.push(`${label}_scope_invalid`);
             return { supplied: true, values: [] };
