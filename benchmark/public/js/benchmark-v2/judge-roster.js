@@ -51,6 +51,12 @@ export function buildJudgeRoster(judgeRoster, config, onlineHosts) {
  * Wire click-to-select on judge hosts and judge model overrides.
  */
 export function wireJudgeRoster(container) {
+    const cloudJudge = container.querySelector('#bv2-cloud-judge');
+    if (cloudJudge) {
+        cloudJudge.addEventListener('change', () => {
+            container.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
+        });
+    }
     const hostCards = container.querySelectorAll('.jhc-card');
     if (!hostCards.length) {
         const modelSelect = container.querySelector('#bv2-judge-model');
@@ -88,6 +94,15 @@ export function wireJudgeRoster(container) {
  * Returns { model, host } — multiJudge is read separately from batch-config.
  */
 export function getSelectedJudge(container) {
+    const cloudTargetId = container.querySelector('#bv2-cloud-judge')?.value || '';
+    if (cloudTargetId) {
+        const option = container.querySelector(`#bv2-cloud-judge option[value="${CSS.escape(cloudTargetId)}"]`);
+        return {
+            model: option?.textContent?.split(' · ')[2]?.trim() || cloudTargetId,
+            host: 'harness',
+            targetId: cloudTargetId
+        };
+    }
     const activePanel = container.querySelector('.jhc-host-panel.is-active');
     const activeHost = container.querySelector('.jhc-card.hs-selected')?.dataset.host || '';
     const selectedPill = activePanel?.querySelector('.jhc-judge-pill.jhc-selected');

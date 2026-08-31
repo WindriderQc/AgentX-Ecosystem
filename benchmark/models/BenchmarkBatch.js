@@ -24,7 +24,8 @@ const BenchmarkBatchSchema = new mongoose.Schema({
     },
     host: {
         type: String,
-        required: true
+        required: true,
+        default: 'harness'
     },
     models: {
         type: [String],
@@ -35,6 +36,34 @@ const BenchmarkBatchSchema = new mongoose.Schema({
             },
             message: 'At least one model is required'
         }
+    },
+    // Provider-neutral execution targets. Legacy batches omit this field and
+    // continue to use host + models; new launches persist the normalized
+    // BenchmarkTarget v1 objects selected from Ollama or the optional broker.
+    targets: {
+        type: [mongoose.Schema.Types.Mixed],
+        default: []
+    },
+    campaign_kind: {
+        type: String,
+        enum: ['model', 'native_agent'],
+        default: 'model',
+        index: true
+    },
+    spend_grant: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null,
+        select: false
+    },
+    quality_cohort_fingerprint: {
+        type: String,
+        default: null,
+        index: true
+    },
+    batch_contract_fingerprint: {
+        type: String,
+        default: null,
+        index: true
     },
     levels: {
         type: [Number],

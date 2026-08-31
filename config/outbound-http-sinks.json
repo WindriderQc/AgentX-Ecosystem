@@ -50,6 +50,13 @@
       "target": { "kind": "sink", "id": "benchmark.transport.peer-verified-node-fetch" }
     },
     {
+      "id": "benchmark.harness-broker.executor",
+      "service": "benchmark",
+      "source": "benchmark/src/services/benchmark/harnessBrokerClient.js",
+      "transportAdapterExpression": "createNodeFetchPeerTransport()",
+      "target": { "kind": "sink", "id": "benchmark.transport.peer-verified-node-fetch" }
+    },
+    {
       "id": "benchmark.host-test.executor",
       "service": "benchmark",
       "source": "benchmark/src/services/hostTestService.js",
@@ -242,6 +249,54 @@
       "deadlineMs": 2000,
       "maxRequestBytes": 0,
       "maxResponseBytes": 65536,
+      "enforcementStatus": "enforced"
+    },
+    {
+      "id": "benchmark.harness-broker.targets",
+      "service": "benchmark",
+      "registrationSource": "benchmark/src/services/benchmark/harnessBrokerClient.js",
+      "delegateId": "benchmark.harness-broker.executor",
+      "policyId": "configured.harness-broker",
+      "authoritySource": "configured",
+      "method": "GET",
+      "pathPattern": "^/v1/benchmark/targets$",
+      "allowSearch": false,
+      "responseMode": "json",
+      "deadlineMs": 15000,
+      "maxRequestBytes": 0,
+      "maxResponseBytes": 1000000,
+      "enforcementStatus": "enforced"
+    },
+    {
+      "id": "benchmark.harness-broker.execute",
+      "service": "benchmark",
+      "registrationSource": "benchmark/src/services/benchmark/harnessBrokerClient.js",
+      "delegateId": "benchmark.harness-broker.executor",
+      "policyId": "configured.harness-broker",
+      "authoritySource": "configured",
+      "method": "POST",
+      "pathPattern": "^/v1/benchmark/execute$",
+      "allowSearch": false,
+      "responseMode": "json",
+      "deadlineMs": 604800000,
+      "maxRequestBytes": 4000000,
+      "maxResponseBytes": 4000000,
+      "enforcementStatus": "enforced"
+    },
+    {
+      "id": "benchmark.harness-broker.spend-grants",
+      "service": "benchmark",
+      "registrationSource": "benchmark/src/services/benchmark/harnessBrokerClient.js",
+      "delegateId": "benchmark.harness-broker.executor",
+      "policyId": "configured.harness-broker",
+      "authoritySource": "configured",
+      "method": "POST",
+      "pathPattern": "^/v1/benchmark/spend-grants$",
+      "allowSearch": false,
+      "responseMode": "json",
+      "deadlineMs": 15000,
+      "maxRequestBytes": 1000000,
+      "maxResponseBytes": 100000,
       "enforcementStatus": "enforced"
     },
     {
@@ -862,6 +917,14 @@
       "bodyBoundExpectation": "bounded",
       "payloadSensitivity": ["operational-metadata"]
     },
+    "configured.harness-broker": {
+      "purpose": "Discover approved Benchmark targets, mint bounded spend grants, and execute one isolated model cell through the configured harness broker.",
+      "targetAuthoritySource": "configured",
+      "redirectExpectation": "manual-no-cross-authority",
+      "deadlineExpectation": "full-response-lifecycle",
+      "bodyBoundExpectation": "bounded",
+      "payloadSensitivity": ["credentials", "model-input", "model-output", "operational-metadata"]
+    },
     "configured.ollama-inference": {
       "purpose": "Submit a bounded non-streaming model request to an Ollama authority selected from product configuration.",
       "targetAuthoritySource": "configured",
@@ -1061,7 +1124,7 @@
     { "id": "core.web-search.query", "service": "core", "source": "core/src/services/webSearch.js", "line": 51, "column": 23, "constructor": "fetch", "policyId": "configured.search-provider" },
 
     { "id": "benchmark.server.core-models", "service": "benchmark", "source": "benchmark/server.js", "line": 99, "column": 28, "constructor": "fetch", "policyId": "configured.product-observation" },
-    { "id": "benchmark.server.validate-judge-tags", "service": "benchmark", "source": "benchmark/server.js", "line": 353, "column": 26, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
+    { "id": "benchmark.server.validate-judge-tags", "service": "benchmark", "source": "benchmark/server.js", "line": 370, "column": 26, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.setup.tags", "service": "benchmark", "source": "benchmark/routes/setup.js", "line": 54, "column": 28, "constructor": "fetchImpl", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.buddy-event.deliver", "service": "benchmark", "source": "benchmark/src/clients/buddyEventClient.js", "line": 33, "column": 3, "constructor": "fetch", "policyId": "configured.product-telemetry" },
     { "id": "benchmark.transport.peer-verified-node-fetch", "service": "benchmark", "source": "benchmark/src/helpers/outboundHttpTransport.js", "line": 243, "column": 30, "constructor": "fetchImpl", "policyId": "delegated.benchmark-transport" },
@@ -1071,7 +1134,7 @@
     { "id": "benchmark.reference.key-point", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 116, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
     { "id": "benchmark.reference.contradiction", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 175, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
     { "id": "benchmark.reference.similarity", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 237, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
-    { "id": "benchmark.batch.execute", "service": "benchmark", "source": "benchmark/src/services/benchmark/batchOrchestrator.js", "line": 346, "column": 34, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.batch.execute", "service": "benchmark", "source": "benchmark/src/services/benchmark/batchOrchestrator.js", "line": 372, "column": 34, "constructor": "fetch", "policyId": "configured.product-inference" },
     { "id": "benchmark.cloud-lane.transport", "service": "benchmark", "source": "benchmark/src/services/benchmark/cloudLaneTransports.js", "line": 32, "column": 22, "constructor": "fetchImpl", "policyId": "request-admitted.cloud-inference" },
     { "id": "benchmark.dedication.ps", "service": "benchmark", "source": "benchmark/src/services/benchmark/dedicationLifecycle.js", "line": 25, "column": 27, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.dedication.generate", "service": "benchmark", "source": "benchmark/src/services/benchmark/dedicationLifecycle.js", "line": 37, "column": 23, "constructor": "fetch", "policyId": "request-admitted.ollama-lifecycle" },
@@ -1084,7 +1147,7 @@
     { "id": "benchmark.judge-validator.show", "service": "benchmark", "source": "benchmark/src/services/benchmark/judgeModelValidator.js", "line": 211, "column": 25, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.preflight.tags", "service": "benchmark", "source": "benchmark/src/services/benchmark/preflight.js", "line": 284, "column": 32, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.test-execution.generate", "service": "benchmark", "source": "benchmark/src/services/benchmark/testExecution.js", "line": 43, "column": 32, "constructor": "fetch", "policyId": "configured.product-inference" },
-    { "id": "benchmark.judge-call.generate", "service": "benchmark", "source": "benchmark/src/services/scoring/judgeCall.js", "line": 343, "column": 32, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.judge-call.generate", "service": "benchmark", "source": "benchmark/src/services/scoring/judgeCall.js", "line": 375, "column": 36, "constructor": "fetch", "policyId": "configured.product-inference" },
 
     { "id": "rag.core-outbound.execute", "service": "rag", "source": "rag/src/clients/coreOutboundClient.js", "line": 279, "column": 30, "constructor": "fetchImpl", "policyId": "configured.qdrant-data" }
   ]

@@ -13,6 +13,7 @@ import {
     fetchProfilerDashboard,
     fetchPrompts,
     fetchConfig,
+    fetchBenchmarkTargets,
     fetchBatches,
     fetchJudgeRoster,
     startBatch,
@@ -207,12 +208,14 @@ function _estimateSelectedPromptCount() {
 function _getWorkflowState() {
     const host = $infrastructure ? getSelectedHost($infrastructure) : null;
     const modelCount = $batchConfig ? $batchConfig.querySelectorAll('.bv2-model-cb:checked').length : 0;
+    const localModelCount = $batchConfig ? $batchConfig.querySelectorAll('.bv2-model-cb:checked:not([data-execution-kind="harness"])').length : 0;
+    const cloudModelCount = modelCount - localModelCount;
     const judge = $batchConfig ? getSelectedJudge($batchConfig) : {};
     const promptCount = _estimateSelectedPromptCount();
     const testCount = modelCount * promptCount;
 
     let blockedReason = '';
-    if (!host) blockedReason = 'Select an execution host';
+    if (!host && localModelCount > 0) blockedReason = 'Select an execution host';
     else if (modelCount === 0) blockedReason = 'Select at least one profiled model';
     else if (!judge.model) blockedReason = 'Choose a judge model';
     else if (promptCount <= 0) blockedReason = 'Enable at least one test level';
@@ -220,12 +223,14 @@ function _getWorkflowState() {
     return {
         host,
         modelCount,
+        localModelCount,
+        cloudModelCount,
         judge,
         promptCount,
         testCount,
         ready: !blockedReason,
         blockedReason,
-        hostName: host?.displayName || host?.name || host?.hostname || '',
+        hostName: host?.displayName || host?.name || host?.hostname || (cloudModelCount > 0 ? 'Cloud harnesses' : ''),
     };
 }
 
@@ -361,8 +366,8 @@ function _updateWorkflowGuide() {
     _setWorkflowStep('host', state.host ? 'done' : 'current', state.host ? state.hostName : 'Select execution target');
     _setWorkflowStep(
         'models',
-        !state.host ? 'locked' : state.modelCount > 0 ? 'done' : 'current',
-        !state.host ? 'Waiting for host' : state.modelCount > 0 ? `${state.modelCount} selected` : 'Pick contenders'
+        (!state.host && state.cloudModelCount === 0) ? 'locked' : state.modelCount > 0 ? 'done' : 'current',
+        (!state.host && state.cloudModelCount === 0) ? 'Waiting for host or cloud target' : state.modelCount > 0 ? `${state.modelCount} selected` : 'Pick contenders'
     );
     _setWorkflowStep(
         'tests',
@@ -631,13 +636,14 @@ async function _onHostChanged(host) {
 async function _renderBatchConfigForHost(host) {
     if (!$batchConfig) return;
 
-    let prompts = [], config = {}, judgeRoster = null, lastBatch = null;
+    let prompts = [], config = {}, judgeRoster = null, lastBatch = null, harnessTargets = [];
     try {
-        const [promptsRes, configRes, rosterRes, batchesRes] = await Promise.all([
+        const [promptsRes, configRes, rosterRes, batchesRes, targetsRes] = await Promise.all([
             fetchPrompts(),
             fetchConfig(),
             fetchJudgeRoster().catch(() => null),
             fetchBatches({ status: 'completed', limit: 1 }).catch(() => null),
+            fetchBenchmarkTargets().catch(() => null),
         ]);
         prompts = promptsRes?.data?.prompts || promptsRes?.data || [];
         const rawCfg = configRes?.data || {};
@@ -646,6 +652,7 @@ async function _renderBatchConfigForHost(host) {
         judgeRoster = rosterRes?.data || null;
         const batches = batchesRes?.data?.batches || [];
         lastBatch = batches[0] || null;
+        harnessTargets = targetsRes?.data?.targets || targetsRes?.targets || [];
     } catch (err) {
         console.warn('[bv2] fetchPrompts/fetchConfig failed:', err.message);
     }
@@ -659,6 +666,7 @@ async function _renderBatchConfigForHost(host) {
             config,
             judgeRoster,
             lastBatch,
+            harnessTargets,
             onLaunch: _handleLaunch,
         });
         _updateWorkflowGuide();
@@ -941,7 +949,47 @@ async function _handleResume(batch) {
     }
 
     try {
-        await resumeBatch(batchId);
+        const targets = Array.isArray(batch.targets) ? batch.targets : [];
+        const paidCandidates = targets.filter(target => target?.tier === 'paid_cloud');
+        const paidJudge = batch.judge_config?.target?.tier === 'paid_cloud'
+            ? batch.judge_config.target
+            : null;
+        let paidApproval = null;
+        if (paidCandidates.length > 0 || paidJudge) {
+            const repeats = Math.max(1, Math.min(5, Number(batch.execution_config?.repeats) || 1));
+            const promptCount = Math.max(1, Math.ceil(Number(batch.total_tests || 0) / Math.max(1, targets.length * repeats)));
+            const callsPerTarget = promptCount * repeats;
+            const judgeAttempts = Math.max(1, Math.min(6, Number(batch.judge_config?.max_retries ?? 2) + 1));
+            const units = [
+                ...paidCandidates.map(target => ({ target, calls: callsPerTarget })),
+                ...(paidJudge ? [{ target: paidJudge, calls: targets.length * callsPerTarget * judgeAttempts }] : [])
+            ];
+            const inputTokens = Math.max(1, Number(batch.execution_config?.input_token_ceiling) || 32_000);
+            const outputTokens = Math.max(1, Number(batch.execution_config?.response_max_tokens) || 32_000);
+            const maxCalls = units.reduce((sum, unit) => sum + unit.calls, 0);
+            const maxCostNanodollars = units.reduce((sum, { target, calls }) => {
+                const price = target.pricing || {};
+                const perCall = Number(price.callNanodollars || 0)
+                    + Math.ceil(inputTokens * Number(price.inputNanodollarsPerMillion || 0) / 1_000_000)
+                    + Math.ceil(outputTokens * Number(price.outputNanodollarsPerMillion || 0) / 1_000_000);
+                return sum + calls * perCall;
+            }, 0);
+            if (!window.confirm(`Resume paid cloud benchmark\n\nNew one-batch ceiling (manual estimate): US$${(maxCostNanodollars / 1e9).toFixed(6)}\nCalls: ${maxCalls}\nTokens: ${maxCalls * (inputTokens + outputTokens)}\n\nApprove before any provider call?`)) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '\u25B6 Resume Batch';
+                    btn.style.opacity = '';
+                }
+                return;
+            }
+            paidApproval = {
+                confirmed: true,
+                maxCalls,
+                maxTokens: maxCalls * (inputTokens + outputTokens),
+                maxCostNanodollars
+            };
+        }
+        await resumeBatch(batchId, { paid_approval: paidApproval });
         // Fetch the refreshed batch to get running state
         const res = await fetchBatchProgress(batchId);
         const liveBatch = res?.data || res;

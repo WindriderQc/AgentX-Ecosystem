@@ -655,7 +655,20 @@ async function runPreflight(options = {}) {
         checkOrphanedBatches(),
         checkDedication(uniqueTargets)
     ]);
-    const judgeResult = await checkJudgeConfiguration(judgeConfig);
+    const judgeResult = judgeConfig?.target?.executionKind === 'harness'
+        ? {
+            ok: judgeConfig.target.mode === 'isolated_model'
+                && judgeConfig.target.capabilities?.judge === true
+                && judgeConfig.target.available !== false,
+            blockers: judgeConfig.target.mode === 'isolated_model'
+                && judgeConfig.target.capabilities?.judge === true
+                && judgeConfig.target.available !== false
+                ? []
+                : ['Harness judge is not an available isolated-model target'],
+            target: judgeConfig.target,
+            source: 'benchmark-target-v1'
+        }
+        : await checkJudgeConfiguration(judgeConfig);
 
     checks.hosts = hostResults;
     checks.judge = judgeResult;

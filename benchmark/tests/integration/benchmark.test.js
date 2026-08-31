@@ -2445,7 +2445,7 @@ describe('Benchmark System - Integration Tests', () => {
             });
 
             const response = await api
-                .get('/api/benchmark/generalist-leaderboard?axis=quality&challengeScope=all&trustScope=exploratory&includeUnavailableModels=true');
+                .get('/api/benchmark/generalist-leaderboard?axis=quality&challengeScope=all&trustScope=exploratory&includeUnavailableModels=true&includeCloud=false');
 
             expect(response.status).toBe(200);
             const row = response.body.data.leaderboard.find(
@@ -2461,6 +2461,106 @@ describe('Benchmark System - Integration Tests', () => {
             expect(row.coveragePenalty).toBeGreaterThan(0);
             expect(row.fullScopeEligible).toBe(false);
             expect(row.evidenceStatus).toBe('partial_scope');
+        });
+
+        it('keeps incomplete or mixed harness evidence visible but unranked and unqualified', async () => {
+            await BenchmarkPrompt.create({
+                name: 'Cloud proof prompt',
+                prompt: 'Explain the proof boundary',
+                level: 4,
+                category: 'reasoning'
+            });
+            const cohort = 'f'.repeat(64);
+            const cloudTarget = {
+                executionKind: 'harness',
+                mode: 'isolated_model',
+                tier: 'free_cloud',
+                provider: 'test-provider',
+                model: 'test-cloud-model',
+                available: true,
+                fingerprint: 'a'.repeat(64),
+                catalogFingerprint: 'b'.repeat(64),
+                harness: { name: 'test-harness', version: '1.0.0' }
+            };
+            const completeReceipt = {
+                schema: 'agentx.worker-receipt/v1',
+                schemaVersion: 1,
+                executionProfile: 'portable',
+                finalState: 'succeeded',
+                result: { contractSatisfied: true },
+                fingerprint: 'c'.repeat(64)
+            };
+            const base = {
+                host: 'harness:test-harness',
+                prompt: 'Explain the proof boundary',
+                prompt_name: 'Cloud proof prompt',
+                prompt_category: 'reasoning',
+                prompt_level: 4,
+                quality_score: 8,
+                quality_cohort_fingerprint: cohort,
+                success: true
+            };
+            await BenchmarkResult.create([
+                {
+                    ...base,
+                    model: 'complete-cloud-model',
+                    execution_target: cloudTarget,
+                    execution_receipt: completeReceipt
+                },
+                {
+                    ...base,
+                    model: 'incomplete-cloud-model',
+                    execution_target: { ...cloudTarget, model: 'incomplete-cloud-model' },
+                    execution_receipt: null
+                },
+                {
+                    ...base,
+                    model: 'mixed-cloud-model',
+                    execution_target: { ...cloudTarget, model: 'mixed-cloud-model' },
+                    execution_receipt: completeReceipt
+                },
+                {
+                    ...base,
+                    model: 'mixed-cloud-model',
+                    execution_target: {
+                        ...cloudTarget,
+                        model: 'mixed-cloud-model',
+                        fingerprint: 'd'.repeat(64)
+                    },
+                    execution_receipt: completeReceipt
+                }
+            ]);
+
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true&includeCloud=true');
+
+            expect(response.status).toBe(200);
+            const complete = response.body.data.leaderboard.find((row) => row.model === 'complete-cloud-model');
+            const incomplete = response.body.data.leaderboard.find((row) => row.model === 'incomplete-cloud-model');
+            const mixed = response.body.data.leaderboard.find((row) => row.model === 'mixed-cloud-model');
+            expect(complete).toMatchObject({
+                rankable: true,
+                harnessEvidence: { rankable: true, executionRows: 1, completeExecutionRows: 1 }
+            });
+            expect(incomplete).toMatchObject({
+                rankable: false,
+                evidenceCompatibility: 'incomplete_harness_evidence',
+                filterReason: 'incomplete_harness_execution_receipt',
+                harnessEvidence: { rankable: false, executionRows: 1, completeExecutionRows: 0 }
+            });
+            expect(mixed).toMatchObject({
+                rankable: false,
+                evidenceCompatibility: 'incomplete_harness_evidence',
+                filterReason: 'mixed_execution_target',
+                harnessEvidence: { rankable: false, executionRows: 2, completeExecutionRows: 2 }
+            });
+            expect(response.body.data.leaderboard.indexOf(complete)).toBeLessThan(
+                response.body.data.leaderboard.indexOf(incomplete)
+            );
+            expect(response.body.data.trustVerdict).toMatchObject({
+                qualified: false,
+                highConfidenceAllowed: false,
+                qualifiedWinner: null
+            });
         });
 
         it('can scope the generalist leaderboard to currently configured hosts', async () => {
@@ -2749,7 +2849,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const trusted = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=trusted&includeUnavailableModels=true');
+            const trusted = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=trusted&includeUnavailableModels=true&includeCloud=false');
             expect(trusted.status).toBe(200);
             expect(trusted.body.data.leaderboard.map(row => row.model).sort()).toEqual(['trusted-a', 'trusted-b']);
             expect(trusted.body.data.trustedFilters.cohort.selected).toMatchObject({
@@ -2771,7 +2871,7 @@ describe('Benchmark System - Integration Tests', () => {
                 'qualified_receipt_unavailable'
             ]));
 
-            const exploratory = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true');
+            const exploratory = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true&includeCloud=false');
             expect(exploratory.body.data.leaderboard.map(row => row.model)).toContain('legacy-high-score');
             expect(exploratory.body.data.trustVerdict.state).toBe('exploratory');
             expect(exploratory.body.data.trustVerdict.qualified).toBe(false);

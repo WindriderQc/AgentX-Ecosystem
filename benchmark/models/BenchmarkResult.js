@@ -37,6 +37,51 @@ const BenchmarkResultSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // Additive provider-neutral execution evidence. Legacy rows intentionally
+    // leave these fields null; readers may project them as local Ollama but
+    // must not invent a comparable cloud contract fingerprint.
+    execution_target: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    judge_target: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    execution_receipt: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    judge_receipt: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    provider_usage: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    provider_cost: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    failure_classification: {
+        type: String,
+        default: null,
+        index: true
+    },
+    judge_provider_usage: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    judge_provider_cost: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    quality_cohort_fingerprint: {
+        type: String,
+        default: null,
+        index: true
+    },
     prompt: {
         type: String,
         required: true
@@ -586,6 +631,8 @@ BenchmarkResultSchema.index({ model: 1, prompt_level: 1 });
 BenchmarkResultSchema.index({ model: 1, prompt_category: 1 });
 BenchmarkResultSchema.index({ batch_id: 1, timestamp: -1 });
 BenchmarkResultSchema.index({ batch_id: 1, trust_evidence_sealed: 1 });
+BenchmarkResultSchema.index({ 'execution_target.id': 1, quality_cohort_fingerprint: 1, success: 1 }, { sparse: true });
+BenchmarkResultSchema.index({ 'execution_target.tier': 1, quality_cohort_fingerprint: 1, success: 1 }, { sparse: true });
 BenchmarkResultSchema.index({ quality_score: 1 });
 BenchmarkResultSchema.index({ composite_score: 1 });
 BenchmarkResultSchema.index(
