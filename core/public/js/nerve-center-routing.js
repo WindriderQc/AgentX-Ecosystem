@@ -486,7 +486,7 @@
                 <div class="nc-host-card nc-td-lg">
                     <div class="nc-label">Classifier Routed</div>
                     <div class="nc-value">${percent(summary.autoRoutedPct)}</div>
-                    <div class="nc-value-sub">${summary.autoRoutedCount ?? 0} classifier-driven requests · explicit task modes bypass classification</div>
+                    <div class="nc-value-sub">${summary.autoRoutedCount ?? 0} classifier-driven requests · Standard classifies each turn; Quick, Deep, and Manual stay explicit</div>
                 </div>
                 <div class="nc-host-card nc-td-lg">
                     <div class="nc-label">Avg Response</div>

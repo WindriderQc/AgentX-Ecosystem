@@ -10,6 +10,10 @@ const {
 } = require('../src/services/conversationSurfacePolicy');
 const logger = require('../config/logger');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
+const {
+    TurnOutcomeError,
+    persistTurnOutcome
+} = require('../src/services/chat/turnOutcomePersistence');
 
 function publicId(value) {
     if (value === null || value === undefined) return null;
@@ -98,6 +102,29 @@ router.post('/', async (req, res) => {
     } catch (err) {
         logger.error('Failed to save conversation:', err);
         res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+/**
+ * DURABLE TERMINAL OUTCOME: preserve a user turn and its stopped/failed
+ * assistant attempt when inference never reaches the normal success receipt.
+ * POST /api/history/turn-outcome
+ */
+router.post('/turn-outcome', async (req, res) => {
+    try {
+        const data = await persistTurnOutcome({
+            userId: getUserId(res),
+            ...req.body
+        });
+        res.json({ status: 'success', data });
+    } catch (err) {
+        const expected = err instanceof TurnOutcomeError;
+        if (!expected) logger.error('Failed to persist terminal chat outcome:', err);
+        res.status(expected ? err.statusCode : 500).json({
+            status: 'error',
+            code: expected ? err.code : 'TURN_OUTCOME_PERSIST_FAILED',
+            message: expected ? err.message : 'Failed to preserve the chat turn'
+        });
     }
 });
 

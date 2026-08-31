@@ -2,6 +2,7 @@
 
 const {
   buildEcosystemSnapshot,
+  summarizeOperationalAttention,
   summarizeCluster
 } = require('../../src/services/ecosystemSnapshotService');
 
@@ -64,6 +65,14 @@ describe('ecosystemSnapshotService', () => {
         offlineHosts: 0,
         observedModels: 2
       },
+      operationalAttention: {
+        status: 'nominal',
+        issueCount: 0,
+        criticalCount: 0,
+        activeAlertCount: 0,
+        preferenceStatuses: {},
+        issues: []
+      },
       cluster: intelligence.cluster,
       routing: intelligence.routing,
       routingConfig,
@@ -95,6 +104,57 @@ describe('ecosystemSnapshotService', () => {
       offlineHosts: 1,
       observedModels: 1
     });
+  });
+
+  it('surfaces a restoring host default even when hosts and services are healthy', async () => {
+    const restoringPreference = {
+      hostKey: 'primary',
+      displayName: 'UGalien',
+      status: 'restoring',
+      pinnedModels: [{ model: 'model-a' }]
+    };
+    const snapshot = await buildEcosystemSnapshot({
+      buildIntelligence: async () => ({
+        ...intelligence,
+        hostPreferences: [restoringPreference]
+      }),
+      buildRoutingConfig: async () => routingConfig,
+      buildServiceStatus: async () => serviceStatus,
+      now: () => new Date('2026-08-20T03:00:00.000Z')
+    });
+
+    expect(snapshot.health.status).toBe('degraded');
+    expect(snapshot.operationalAttention).toEqual(expect.objectContaining({
+      status: 'attention',
+      issueCount: 1,
+      preferenceStatuses: { restoring: 1 }
+    }));
+    expect(snapshot.operationalAttention.issues[0]).toEqual(expect.objectContaining({
+      code: 'host_preference_transition',
+      status: 'restoring',
+      hostKey: 'primary'
+    }));
+    expect(snapshot.evidenceTrust).toEqual(expect.objectContaining({
+      status: 'verified',
+      operationalStatus: 'degraded'
+    }));
+  });
+
+  it('summarizes failover and active alerts without calling them contradictory evidence', () => {
+    const attention = summarizeOperationalAttention({
+      clusterHealth: { offlineHosts: 0 },
+      serviceHealth: { status: 'ok', down: 0, degraded: 0 },
+      routing: { isFailedOver: true },
+      hostPreferences: [],
+      alertSummary: { activeCount: 1 }
+    });
+
+    expect(attention).toEqual(expect.objectContaining({
+      status: 'attention',
+      issueCount: 2,
+      activeAlertCount: 1
+    }));
+    expect(attention.issues.map(issue => issue.code)).toEqual(['active_alerts', 'routing_failover']);
   });
 
   it('marks the unified health summary degraded when a product service is degraded', async () => {

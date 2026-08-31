@@ -51,6 +51,56 @@ function resolveHostName(target) {
   }
 }
 
+async function assessModelParticipantReadiness(agent) {
+  const target = getTargetForModel(agent.model);
+  if (!target) {
+    return { ready: false, target: null, hostName: 'unknown', error: `No host found for model ${agent.model}` };
+  }
+
+  const hostName = resolveHostName(target);
+  try {
+    const preference = await hostPreferenceService.getByHost(target);
+    const status = String(preference?.status || '').toLowerCase();
+    const claimed = Boolean(preference?.benchmarkClaim?.batchId);
+    if (claimed || ['benchmarking', 'restoring', 'swapping', 'offline'].includes(status)) {
+      const reason = claimed ? 'reserved for benchmark/judge work' : status;
+      return {
+        ready: false,
+        target,
+        hostName,
+        error: `${preference?.displayName || hostName} is ${reason}; Council did not start this participant`
+      };
+    }
+  } catch (err) {
+    logger.warn('Council host-preference readiness evidence unavailable; continuing with direct probe', {
+      model: agent.model,
+      target,
+      error: err.message
+    });
+  }
+  return { ready: true, target, hostName, error: null };
+}
+
+function isSystemicParticipantFailure(result) {
+  const error = String(result?.error || '').toLowerCase();
+  return Boolean(error) && (
+    error.includes('timeout after')
+    || error.includes('no host found')
+    || error.includes('council did not start this participant')
+    || error.includes('econnrefused')
+    || error.includes('connection refused')
+    || error.includes('fetch failed')
+    || error.includes('socket hang up')
+    || error.includes('stream ended before')
+  );
+}
+
+function participantRouteKey(agent) {
+  const runtime = String(agent.runtime || 'model').toLowerCase();
+  if (runtime !== 'model') return `${runtime}:${agent.runtimeConfig?.sessionKey || agent.agentId}`;
+  return `model:${getTargetForModel(agent.model) || 'unrouted'}`;
+}
+
 async function buildPinnedAgentPayload(agent, messages, target, streamEnabled = false) {
   let runtimeOptions = {
     options: { num_predict: -1 },
@@ -82,15 +132,15 @@ async function buildPinnedAgentPayload(agent, messages, target, streamEnabled = 
 // ─── single-shot agent call (non-streaming path) ─────────────────────────
 async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const startedAt = new Date();
-  const target = getTargetForModel(agent.model);
-  const hostName = resolveHostName(target);
+  const readiness = await assessModelParticipantReadiness(agent);
+  const { target, hostName } = readiness;
 
-  if (!target) {
+  if (!readiness.ready) {
     return {
       response: '', thinking: null,
       stats: { tokensPerSecond: null, latencyMs: null },
-      error: `No host found for model ${agent.model}`,
-      target: null, hostName: 'unknown', startedAt, completedAt: new Date()
+      error: readiness.error,
+      target, hostName, startedAt, completedAt: new Date()
     };
   }
 
@@ -107,7 +157,6 @@ async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
       signal: controller.signal
     });
     const res = await fetch(url, fetchOpts);
-    clearTimeout(timer);
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -115,6 +164,7 @@ async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
     }
 
     const data = await res.json();
+    clearTimeout(timer);
     const parsed = extractResponse(data, agent.model);
     const completedAt = new Date();
     return {
@@ -147,15 +197,15 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
   if (!emitter) return callAgent(agent, messages, timeoutMs);
 
   const startedAt = new Date();
-  const target = getTargetForModel(agent.model);
-  const hostName = resolveHostName(target);
+  const readiness = await assessModelParticipantReadiness(agent);
+  const { target, hostName } = readiness;
 
-  if (!target) {
+  if (!readiness.ready) {
     return {
       response: '', thinking: null,
       stats: { tokensPerSecond: null, latencyMs: null },
-      error: `No host found for model ${agent.model}`,
-      target: null, hostName: 'unknown', startedAt, completedAt: new Date()
+      error: readiness.error,
+      target, hostName, startedAt, completedAt: new Date()
     };
   }
 
@@ -172,7 +222,6 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
       signal: controller.signal
     });
     const res = await fetch(url, fetchOpts);
-    clearTimeout(timer);
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -209,6 +258,10 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
       reader.on('end', resolve);
       reader.on('error', reject);
     });
+    if (finalData?.done !== true) {
+      throw new Error('Ollama stream ended before its terminal record');
+    }
+    clearTimeout(timer);
 
     const completedAt = new Date();
     const latencyMs = completedAt - startedAt;
@@ -284,10 +337,13 @@ async function recordAppliedInterjections(roundtableDoc, interjections, round, e
 }
 
 // ─── one round (all agents in order) ─────────────────────────────────────
-async function executeRound(roundtableDoc, roundNum, agents, buildMessages, timeoutMs, emitter) {
+async function executeRound(roundtableDoc, roundNum, agents, buildMessages, timeoutMs, emitter, options = {}) {
   const results = {};
+  const failedRoutes = new Map();
+  const participantCaller = options.callParticipantImpl || callParticipant;
 
   for (const agent of agents) {
+    const routeKey = participantRouteKey(agent);
     const messages = buildMessages(agent);
 
     let webSearchResults = [];
@@ -310,14 +366,32 @@ async function executeRound(roundtableDoc, roundNum, agents, buildMessages, time
       role: agent.role, model: agent.model, runtime
     });
 
-    const result = await callParticipant(
-      { ...agent, _round: roundNum },
-      messages,
-      timeoutMs,
-      emitter,
-      'turn',
-      { roundtableId: String(roundtableDoc._id), round: roundNum }
-    );
+    const priorFailure = failedRoutes.get(routeKey);
+    const result = priorFailure
+      ? {
+          response: '',
+          thinking: null,
+          stats: { tokensPerSecond: null, latencyMs: 0 },
+          error: `Skipped after shared route failure: ${priorFailure}`,
+          target: null,
+          hostName: null,
+          runtime,
+          runtimeRef: null,
+          startedAt: new Date(),
+          completedAt: new Date()
+        }
+      : await participantCaller(
+          { ...agent, _round: roundNum },
+          messages,
+          timeoutMs,
+          emitter,
+          'turn',
+          { roundtableId: String(roundtableDoc._id), round: roundNum }
+        );
+
+    if (!priorFailure && isSystemicParticipantFailure(result)) {
+      failedRoutes.set(routeKey, result.error);
+    }
 
     if (emitter) emitter.emit('chunk', { type: 'turn-done', agentId: agent.agentId, round: roundNum, stats: result.stats, error: result.error });
 
@@ -378,6 +452,9 @@ async function runRoundtable(roundtableId, emitter) {
     ], r1Interjections), DEFAULT_TIMEOUT_MS, emitter);
     await recordAppliedInterjections(doc, r1Interjections, 1, emitter);
     if (emitter) emitter.emit('chunk', { type: 'round-done', round: 1 });
+    if (!Object.values(r1Results).some(result => String(result?.response || '').trim())) {
+      throw new Error('Council stopped: no panelist returned a response. Review host readiness and retry.');
+    }
 
     // Rounds 2..N — rebuttals
     if (doc.rounds >= 2) {
@@ -438,6 +515,10 @@ async function runRoundtable(roundtableId, emitter) {
 
     doc = await Roundtable.findById(roundtableId);
     if (doc.status !== 'running') return;
+
+    if (synthResult.error || !String(synthResult.response || '').trim()) {
+      throw new Error(`Council synthesis failed: ${synthResult.error || 'no response returned'}`);
+    }
 
     const totalDurationMs = Date.now() - startTime;
     const decisionStatus = doc.governance?.requireApproval ? 'awaiting_approval' : 'advisory';
@@ -577,6 +658,9 @@ async function listRoundtables({ limit = 20, skip = 0 } = {}) {
 module.exports = {
   callAgent,
   buildPinnedAgentPayload,
+  assessModelParticipantReadiness,
+  isSystemicParticipantFailure,
+  participantRouteKey,
   callAgentStreaming,
   buildSynthesisRequest,
   executeRound,

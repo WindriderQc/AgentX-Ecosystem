@@ -19,17 +19,14 @@ function normalizeNumPredictForInput(value) {
   return parsed;
 }
 
-// Session chat modes. The first three are server-routed by a FIXED task type
-// (one model for the whole conversation — no per-message classification);
-// 'manual' uses the explicitly selected host + model. The legacy per-message
-// 'router' (auto-classify) mode was retired in settings v8 and migrates to
-// 'standard'.
+// Session chat modes. Quick and Deep use fixed server-owned task lanes,
+// Standard classifies each turn, and Manual uses an explicitly selected host
+// and model.
 export const ROUTING_MODES = ['quick', 'standard', 'deep', 'manual'];
 
-// Mode → router task type. 'manual' has no task type (explicit model+host).
+// Fixed mode → router task type. Standard and Manual intentionally have none.
 export const SESSION_MODE_TASK = {
   quick: 'quick_chat',
-  standard: 'general_chat',
   deep: 'deep_reasoning',
 };
 
@@ -52,8 +49,12 @@ export function isRouterMode(elements, state) {
   return routingMode(elements, state) !== 'manual';
 }
 
-// The fixed task type sent for the whole session in server-routed modes;
-// null in manual mode. Drives deterministic routing (autoRouted: false).
+export function isAutoRoutingMode(elements, state) {
+  return routingMode(elements, state) === 'standard';
+}
+
+// The fixed task type sent by Quick/Deep. Standard returns null because the
+// server classifier owns each turn; Manual returns null because it is explicit.
 export function sessionTaskType(elements, state) {
   return SESSION_MODE_TASK[routingMode(elements, state)] || null;
 }
@@ -143,7 +144,9 @@ export function getHostChatState(elements, state, defaults) {
       mode: 'router',
       unavailableKind: hasInstalledModel ? null : 'model setup',
       reason: hasInstalledModel
-        ? `${routingModeLabel(routingMode(elements, state))} mode uses one server-selected model for the whole session.`
+        ? (isAutoRoutingMode(elements, state)
+            ? 'Standard mode classifies each turn and selects an eligible server-owned route.'
+            : `${routingModeLabel(routingMode(elements, state))} mode uses its fixed server-owned task lane.`)
         : 'Install at least one model in the connected Ollama runtime to start a conversation.'
     };
   }
@@ -335,9 +338,7 @@ function migrateLegacySettings(parsed, defaults) {
   }
 
   if (savedVersion < 8) {
-    // Per-message Core Router (auto-classify per turn) retired in favor of
-    // session-fixed modes. Map the old 'router' choice to the closest stable
-    // lane (Standard → general_chat → default chat model). 'manual' is kept.
+    // The old 'router' choice is now the Standard per-turn classifier.
     if (migrated.routingMode === 'router') migrated.routingMode = 'standard';
   }
 
@@ -751,7 +752,9 @@ export function updateRoutingModeUi(elements, state, defaults) {
     routingHint.textContent = routerMode
       ? routeNeedsAttention
         ? hostState.reason
-        : `${modeLabel} mode uses one server-selected model for the whole session — no per-message switching.`
+        : isAutoRoutingMode(elements, state)
+          ? 'Standard mode classifies this turn and selects an eligible host/model.'
+          : `${modeLabel} mode uses its fixed server-owned task lane.`
       : hostState.reason || 'Use the configured host and its pinned or loaded model.';
   }
 
@@ -767,7 +770,7 @@ export function updateRoutingModeUi(elements, state, defaults) {
   const modelHint = document.getElementById('modelSelectHint');
       if (modelHint) {
         modelHint.textContent = routerMode
-          ? `Ignored in ${modeLabel} mode. The server picks the model for this mode's task.`
+          ? `Ignored in ${modeLabel} mode. ${isAutoRoutingMode(elements, state) ? 'The classifier picks an eligible model for each turn.' : "The server picks the model for this mode's fixed task lane."}`
           : hostUnavailable || hostState.requiresModel
             ? hostState.reason || 'Model selection is disabled until the host is available for chat.'
             : 'Model selection prefers the currently loaded model, then the primary pinned model.';

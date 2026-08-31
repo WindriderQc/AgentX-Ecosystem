@@ -521,6 +521,42 @@ const NerveCenter = (() => {
         };
     }
 
+    function operationalAttentionWidget(operationalAttention, detectorCoverage, snapshotAge) {
+        if (!operationalAttention || typeof operationalAttention !== 'object') {
+            return { value: 'ERROR', state: 'critical', title: 'Operational-attention evidence is unavailable.' };
+        }
+
+        const issueCount = Number(operationalAttention.issueCount);
+        const criticalCount = Number(operationalAttention.criticalCount);
+        const activeAlertCount = Number(operationalAttention.activeAlertCount);
+        if (!Number.isFinite(issueCount) || issueCount < 0 || !Number.isFinite(criticalCount) || criticalCount < 0) {
+            return { value: 'ERROR', state: 'critical', title: 'Operational-attention counts are invalid.' };
+        }
+
+        const issues = Array.isArray(operationalAttention.issues)
+            ? operationalAttention.issues.filter(issue => issue && issue.message)
+            : [];
+        const disabledValue = Number(detectorCoverage?.disabled);
+        const disabled = Number.isFinite(disabledValue) ? disabledValue : null;
+        const detectorDetail = detectorCoverage
+            ? `${detectorCoverage.active || 0} active detectors · ${disabled || 0} disabled · ${detectorCoverage.retired_by_design || 0} retired by design`
+            : 'Detector coverage unavailable';
+        const alertDetail = Number.isFinite(activeAlertCount)
+            ? `${activeAlertCount} persisted active alert${activeAlertCount === 1 ? '' : 's'}`
+            : 'Active-alert count unavailable';
+        const issueDetail = issues.length > 0
+            ? issues.map(issue => issue.message).join(' · ')
+            : 'No live operational condition requires attention';
+
+        return {
+            value: disabled !== null && disabled > 0 ? `${issueCount} · ${disabled} OFF` : String(issueCount),
+            state: criticalCount > 0
+                ? 'critical'
+                : (issueCount > 0 || (disabled !== null && disabled > 0) || !detectorCoverage ? 'attention' : 'nominal'),
+            title: `${issueDetail} · ${alertDetail} · ${detectorDetail} · snapshot observed ${snapshotAge}`
+        };
+    }
+
     function markEcosystemSummaryUnavailable(error) {
         const message = `Ecosystem snapshot unavailable: ${error?.message || 'unknown error'}`;
         [
@@ -548,7 +584,15 @@ const NerveCenter = (() => {
 
         if (ecosystemResult.status === 'fulfilled') {
             const snapshot = ecosystemResult.value;
-            const { health, routing, hostPreferences, alertSummary, serviceHealth, identityConsistency, evidenceTrust } = snapshot;
+            const {
+                health,
+                routing,
+                hostPreferences,
+                serviceHealth,
+                identityConsistency,
+                evidenceTrust,
+                operationalAttention
+            } = snapshot;
             const snapshotAge = snapshot.generatedAt ? timeAgo(snapshot.generatedAt) : 'unknown';
 
             updateWidget('widgetHostsOnline', () => {
@@ -560,6 +604,7 @@ const NerveCenter = (() => {
                 let state = 'nominal';
                 if (online === 0) state = 'critical';
                 else if (online < total) state = 'attention';
+                else if (operationalAttention?.issues?.some(issue => String(issue?.code || '').startsWith('host_'))) state = 'attention';
                 return { value: `${online}/${total}`, state, title: `Ecosystem snapshot observed ${snapshotAge}.` };
             });
 
@@ -581,42 +626,29 @@ const NerveCenter = (() => {
             updateWidget('widgetHostPrefs', () => {
                 const prefs = Array.isArray(hostPreferences) ? hostPreferences : [];
                 if (prefs.length === 0) return { value: '—', state: 'attention', title: 'No host-default evidence is present in the ecosystem snapshot.' };
-                const allReady = prefs.every(p => Array.isArray(p.pinnedModels) && p.pinnedModels.length > 0);
+                const allReady = prefs.every(p => (
+                    Array.isArray(p.pinnedModels)
+                    && p.pinnedModels.length > 0
+                    && String(p.status || '').toLowerCase() === 'ready'
+                ));
+                const transient = prefs.filter(p => ['restoring', 'swapping', 'benchmarking'].includes(String(p.status || '').toLowerCase()));
                 return {
-                    value: allReady ? 'Configured' : 'Partial',
+                    value: transient.length > 0
+                        ? `${transient.length} ${String(transient[0].status).toUpperCase()}`
+                        : (allReady ? 'Ready' : 'Partial'),
                     state: allReady ? 'nominal' : 'attention',
-                    title: `${prefs.length} host-default record${prefs.length === 1 ? '' : 's'} observed ${snapshotAge}.`
+                    title: `${prefs.length} host-default record${prefs.length === 1 ? '' : 's'} observed ${snapshotAge}. ${prefs.map(p => `${p.displayName || p.hostKey || 'host'}: ${p.status || 'unknown'}`).join(' · ')}`
                 };
             });
 
-            updateWidget('widgetAlerts', () => {
-                const reportedCount = Number(alertSummary?.activeCount);
-                if (!Number.isFinite(reportedCount) || reportedCount < 0) {
-                    return { value: 'ERROR', state: 'critical', title: 'Active-alert count evidence is unavailable in the ecosystem snapshot.' };
-                }
-                const count = reportedCount;
-                const disabledValue = Number(detectorCoverage?.disabled);
-                const disabled = Number.isFinite(disabledValue) ? disabledValue : null;
-                let state = 'nominal';
-                if (count >= 3) state = 'critical';
-                else if (count > 0 || (disabled !== null && disabled > 0) || !detectorCoverage) state = 'attention';
-                const detectorDetail = detectorCoverage
-                    ? `${detectorCoverage.active || 0} active detectors · ${disabled || 0} disabled · ${detectorCoverage.retired_by_design || 0} retired by design`
-                    : 'Detector coverage unavailable';
-                const observedAt = alertSummary?.observedAt ? ` · alerts observed ${timeAgo(alertSummary.observedAt)}` : '';
-                return {
-                    value: disabled !== null && disabled > 0 ? `${count} · ${disabled} OFF` : String(count),
-                    state,
-                    title: `${detectorDetail}${observedAt}`
-                };
-            });
+            updateWidget('widgetAlerts', () => operationalAttentionWidget(operationalAttention, detectorCoverage, snapshotAge));
 
             updateWidget('widgetRoutingMode', () => {
                 if (!routing) return { value: 'ERROR', state: 'critical', title: 'Routing evidence is unavailable in the ecosystem snapshot.' };
                 return {
                     value: routing.isFailedOver ? 'FAILOVER' : 'NOMINAL',
-                    state: routing.isFailedOver ? 'attention' : 'nominal',
-                    title: `Failover policy state. Classifier use is recorded per request and is not implied here. Routing authority: ${routing.authority || 'unavailable'} · snapshot observed ${snapshotAge}.`
+                    state: routing.isFailedOver || operationalAttention?.status !== 'nominal' ? 'attention' : 'nominal',
+                    title: `Failover policy state, separate from the ${operationalAttention?.status || 'unknown'} operational-attention state. Classifier use is recorded per request and is not implied here. Routing authority: ${routing.authority || 'unavailable'} · snapshot observed ${snapshotAge}.`
                 };
             });
 
@@ -716,7 +748,8 @@ const NerveCenter = (() => {
         getEcosystemSnapshot,
         invalidateEcosystemSnapshot,
         serviceBuildWidget,
-        evidenceTrustWidget
+        evidenceTrustWidget,
+        operationalAttentionWidget
     };
 
     return {

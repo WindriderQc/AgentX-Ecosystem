@@ -125,12 +125,33 @@ describe('Nerve Center ecosystem-v2 UI authority', () => {
     expect(viewSource).toContain('Evidence Trust');
   });
 
+  it('renders restoring defaults as operational attention even with zero persisted alerts', () => {
+    const shared = loadShared(jest.fn());
+    const attention = shared.operationalAttentionWidget({
+      status: 'attention',
+      issueCount: 1,
+      criticalCount: 0,
+      activeAlertCount: 0,
+      issues: [{ code: 'host_preference_transition', message: 'UGalien default is restoring' }]
+    }, {
+      active: 4,
+      disabled: 0,
+      retired_by_design: 1
+    }, 'just now');
+
+    expect(attention).toMatchObject({ value: '1', state: 'attention' });
+    expect(attention.title).toContain('UGalien default is restoring');
+    expect(attention.title).toContain('0 persisted active alerts');
+    expect(viewSource).toContain('Operational Attention');
+    expect(controllerSource).toContain("String(p.status || '').toLowerCase() === 'ready'");
+  });
+
   it('does not present policy, empty denominators, or timeouts as healthy classifier telemetry', () => {
     expect(viewSource).toContain('Routing Policy');
     expect(viewSource).toContain('Internal Calls Today');
     expect(controllerSource).toContain("routing.isFailedOver ? 'FAILOVER' : 'NOMINAL'");
     expect(controllerSource).toContain('not conversation count');
-    expect(routingSource).toContain('explicit task modes bypass classification');
+    expect(routingSource).toContain('Standard classifies each turn; Quick, Deep, and Manual stay explicit');
     expect(routingSource).toContain("value == null ? '—'");
     expect(inferenceSource).toContain('Non-success rate:');
     expect(inferenceSource).toContain('Telemetry unavailable:');

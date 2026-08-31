@@ -1739,6 +1739,22 @@ tr:hover .gen-courthouse-link { opacity: 0.7; }
 }
 .cb-row:hover .cb-link { opacity: 0.75; }
 .cb-link:hover { opacity: 1; color: var(--r-warn, #d29922); }
+.cb-link.cb-use-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  opacity: 1;
+  padding: 0.18rem 0.42rem;
+  border: 1px solid color-mix(in srgb, var(--r-cyan, #4dd0e1) 42%, transparent);
+  border-radius: 999px;
+  color: var(--r-cyan, #4dd0e1);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.cb-link.cb-use-model:hover {
+  border-color: var(--r-cyan, #4dd0e1);
+  color: #fff;
+}
 
 .cb-host {
   display: flex;

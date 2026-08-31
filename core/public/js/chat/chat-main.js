@@ -9,7 +9,7 @@ import {
   checkRagAvailability, loadServerConfig, loadOllamaHosts, targetHost,
   initDevModeToggle, isRouterMode, updateRoutingModeUi,
   loadHostPreferences, loadRoutingStatus, getHostChatState, describePendingRuntimeChange,
-  routingMode, routingModeLabel, sessionTaskType
+  isAutoRoutingMode, routingMode, routingModeLabel, sessionTaskType
 } from './chat-config.js';
 import {
   renderMessage, appendMessage as _appendMessage,
@@ -430,7 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
         model: routerActive ? (state.lastRoutedModel || `${modeLabel} mode`) : (elements.modelSelect.value || hostState.primaryPin || '---'),
         host: routerActive ? 'server-routed' : currentHostLabel(),
         hostHealth: blocked ? 'unavailable' : 'healthy',
-        routeReason: routerActive ? (sessionTaskType(elements, state) || 'session') : (hostState.selectedBasis || 'direct'),
+        routeReason: routerActive ? (sessionTaskType(elements, state) || (isAutoRoutingMode(elements, state) ? 'classifier' : 'session')) : (hostState.selectedBasis || 'direct'),
       });
     }
 
@@ -514,7 +514,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ChatIntelligence.updateStatusBar({
         model: hostState.mode === 'router' ? `${modeLabel} mode` : (elements.modelSelect.value || hostState.primaryPin || '---'),
         host: hostState.mode === 'router' ? 'server-routed' : currentHostLabel(),
-        routeReason: hostState.mode === 'router' ? (sessionTaskType(elements, state) || 'session') : (hostState.selectedBasis || 'direct'),
+        routeReason: hostState.mode === 'router' ? (sessionTaskType(elements, state) || (isAutoRoutingMode(elements, state) ? 'classifier' : 'session')) : (hostState.selectedBasis || 'direct'),
       });
     }
     announcePendingRuntimeChange();
@@ -856,7 +856,7 @@ document.addEventListener('DOMContentLoaded', () => {
         model: routerActive ? (state.lastRoutedModel || `${modeLabel} mode`) : (elements.modelSelect.value || hostState.primaryPin || '---'),
         host: routerActive ? 'server-routed' : currentHostLabel(),
         hostHealth: hostState.available && !hostState.requiresModel ? 'healthy' : 'unavailable',
-        routeReason: routerActive ? (sessionTaskType(elements, state) || 'session') : (hostState.selectedBasis || 'direct'),
+        routeReason: routerActive ? (sessionTaskType(elements, state) || (isAutoRoutingMode(elements, state) ? 'classifier' : 'session')) : (hostState.selectedBasis || 'direct'),
       });
     }
 

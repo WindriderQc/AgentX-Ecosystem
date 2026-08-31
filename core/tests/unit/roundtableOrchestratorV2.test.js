@@ -20,7 +20,9 @@ const {
   createRoundtable,
   buildSynthesisRequest,
   buildPinnedAgentPayload,
-  executeRound
+  executeRound,
+  assessModelParticipantReadiness,
+  isSystemicParticipantFailure
 } = require('../../src/services/roundtable/orchestrator');
 
 describe('Roundtable v2 orchestrator', () => {
@@ -140,5 +142,52 @@ describe('Roundtable v2 orchestrator', () => {
         runtimeRef: 'roundtable-rt-1'
       }) } }
     );
+  });
+
+  test('fails readiness immediately while a model host is restoring', async () => {
+    hostPreferenceService.getByHost.mockResolvedValue({
+      displayName: 'UGalien',
+      status: 'restoring',
+      pinnedModels: [{ model: 'runtime/model-a' }]
+    });
+
+    await expect(assessModelParticipantReadiness({ model: 'runtime/model-a' })).resolves.toEqual(expect.objectContaining({
+      ready: false,
+      error: expect.stringContaining('UGalien is restoring')
+    }));
+  });
+
+  test('skips later panelists on the same route after a systemic failure', async () => {
+    const participant = jest.fn().mockResolvedValue({
+      response: '',
+      error: 'Timeout after 5000ms',
+      stats: { tokensPerSecond: null, latencyMs: 5000 },
+      target: 'http://primary:11434',
+      hostName: 'primary',
+      startedAt: new Date(),
+      completedAt: new Date()
+    });
+    const agents = [
+      { agentId: 'one', role: 'One', runtime: 'model', model: 'runtime/model-a', enableWebSearch: false },
+      { agentId: 'two', role: 'Two', runtime: 'model', model: 'runtime/model-a', enableWebSearch: false }
+    ];
+
+    const results = await executeRound(
+      { _id: 'rt-circuit' }, 1, agents,
+      () => [{ role: 'user', content: 'Discuss.' }],
+      5000, null,
+      { callParticipantImpl: participant }
+    );
+
+    expect(participant).toHaveBeenCalledTimes(1);
+    expect(results.two.error).toContain('Skipped after shared route failure');
+    expect(Roundtable.updateOne).toHaveBeenCalledTimes(4);
+    expect(isSystemicParticipantFailure(results.one)).toBe(true);
+  });
+
+  test('treats a stream without a terminal record as a shared route failure', () => {
+    expect(isSystemicParticipantFailure({
+      error: 'Ollama stream ended before its terminal record'
+    })).toBe(true);
   });
 });

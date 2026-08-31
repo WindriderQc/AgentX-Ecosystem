@@ -23,9 +23,9 @@ describe('Nerve Center alerts UI', () => {
   });
 
   it('uses the uncapped active snapshot count in the overview widget', () => {
-    expect(summarySource).toMatch(/const\s+\{[^}]*\balertSummary\b[^}]*\}\s*=\s*snapshot;/);
+    expect(summarySource).toMatch(/const\s+\{[^}]*\boperationalAttention\b[^}]*\}\s*=\s*snapshot;/);
     expect(summarySource).toContain("const ECOSYSTEM_SNAPSHOT_URL = '/api/nerve-center/ecosystem'");
-    expect(summarySource).toContain('Number(alertSummary?.activeCount)');
+    expect(summarySource).toContain('Number(operationalAttention.activeAlertCount)');
     expect(summarySource).not.toContain('(Array.isArray(alerts) ? alerts.length : 0)');
   });
 

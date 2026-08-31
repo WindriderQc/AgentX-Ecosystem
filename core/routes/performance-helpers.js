@@ -27,6 +27,12 @@ function calculateSystemHealth(metrics, baseline) {
     return 'unhealthy';
   }
 
+  // The dashboard already renders >1% as an amber error rate. Its headline
+  // must use the same threshold instead of claiming Healthy above it.
+  if (metrics.error_rate > 1) {
+    return 'degraded';
+  }
+
   // Check against baseline if available
   if (baseline) {
     if (metrics.avg_p95 > baseline.metrics.p95_latency * 1.5) {

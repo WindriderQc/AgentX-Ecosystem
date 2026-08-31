@@ -81,6 +81,7 @@ async function observeProject(browser, targetUrl, project) {
   const failedResources = [];
   let ingestAttempts = 0;
   let deleteAttempts = 0;
+  let statusReads = 0;
   let documentPresent = false;
 
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -97,7 +98,8 @@ async function observeProject(browser, targetUrl, project) {
     if (method === 'GET' && pathname === '/api/models/all') {
       return json(route, 200, { status: 'success', data: { models: [] } });
     }
-    if (method === 'POST' && pathname === '/api/rag/status/refresh') {
+    if (method === 'GET' && pathname === '/api/rag/status') {
+      statusReads += 1;
       return json(route, 200, {
         ok: true,
         data: {
@@ -217,8 +219,10 @@ async function observeProject(browser, targetUrl, project) {
       outcome: 'pass',
     });
 
-    await sourceLink.click();
-    await page.waitForURL(/\/documents\?/);
+    await Promise.all([
+      page.waitForURL(/\/documents\?/),
+      sourceLink.click(),
+    ]);
     await page.locator(`tr.doc-row[data-id="${documentId}"]`).waitFor({ state: 'visible' });
     const sourceTrigger = page.locator('.source-expand');
     await page.waitForFunction(() => document.querySelector('.source-expand')?.getAttribute('aria-expanded') === 'true');
@@ -283,6 +287,7 @@ async function observeProject(browser, targetUrl, project) {
     });
 
     assert.deepEqual(unexpectedApi, []);
+    assert.ok(statusReads >= 1, 'the dashboard must obtain RAG health through the read-only status route');
     assert.deepEqual(pageErrors, []);
     assert.deepEqual(failedResources, []);
     return { project: project.name, viewport: project.viewport, phases };

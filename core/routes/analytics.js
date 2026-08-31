@@ -9,6 +9,12 @@ const router = express.Router();
 const Conversation = require('../models/Conversation');
 const Feedback = require('../models/Feedback');
 const logger = require('../config/logger');
+const {
+  activeMessageCostExpression,
+  activeMessagesExpression,
+  activityDayPipeline,
+  conversationActivityFilter
+} = require('../src/services/conversationActivityAnalytics');
 
 /**
  * GET /api/analytics/usage
@@ -27,16 +33,16 @@ router.get('/usage', async (req, res) => {
     const toDate = to ? new Date(to) : new Date();
     const fromDate = from ? new Date(from) : new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    const dateFilter = {
-      createdAt: { $gte: fromDate, $lte: toDate }
-    };
+    const dateFilter = conversationActivityFilter(fromDate, toDate);
+    const activeMessages = activeMessagesExpression(fromDate, toDate);
+    const activeMessageCost = activeMessageCostExpression();
 
     // Total counts
     const totalConversations = await Conversation.countDocuments(dateFilter);
 
     const messageAgg = await Conversation.aggregate([
       { $match: dateFilter },
-      { $project: { messageCount: { $size: '$messages' } } },
+      { $project: { messageCount: { $size: activeMessages } } },
       { $group: { _id: null, total: { $sum: '$messageCount' } } }
     ]);
     const totalMessages = messageAgg.length > 0 ? messageAgg[0].total : 0;
@@ -46,11 +52,17 @@ router.get('/usage', async (req, res) => {
     if (groupBy === 'model') {
       breakdown = await Conversation.aggregate([
         { $match: dateFilter },
+        { $project: {
+            model: 1,
+            activeMessages,
+            totalCost: 1
+          }
+        },
         { $group: {
             _id: '$model',
             conversations: { $sum: 1 },
-            messages: { $sum: { $size: '$messages' } },
-            totalCost: { $sum: { $ifNull: ['$totalCost.sum', 0] } }
+            messages: { $sum: { $size: '$activeMessages' } },
+            totalCost: { $sum: activeMessageCost }
           }
         },
         { $project: {
@@ -73,11 +85,18 @@ router.get('/usage', async (req, res) => {
     } else if (groupBy === 'promptVersion') {
       breakdown = await Conversation.aggregate([
         { $match: dateFilter },
+        { $project: {
+            promptName: 1,
+            promptVersion: 1,
+            activeMessages,
+            totalCost: 1
+          }
+        },
         { $group: {
             _id: { name: '$promptName', version: '$promptVersion' },
             conversations: { $sum: 1 },
-            messages: { $sum: { $size: '$messages' } },
-            totalCost: { $sum: { $ifNull: ['$totalCost.sum', 0] } }
+            messages: { $sum: { $size: '$activeMessages' } },
+            totalCost: { $sum: activeMessageCost }
           }
         },
         { $project: {
@@ -99,34 +118,7 @@ router.get('/usage', async (req, res) => {
         { $sort: { promptVersion: -1 } }
       ]);
     } else if (groupBy === 'day') {
-      breakdown = await Conversation.aggregate([
-        { $match: dateFilter },
-        { $group: {
-            _id: {
-              $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
-            },
-            conversations: { $sum: 1 },
-            messages: { $sum: { $size: '$messages' } },
-            totalCost: { $sum: { $ifNull: ['$totalCost.sum', 0] } }
-          }
-        },
-        { $project: {
-            _id: 0,
-            date: '$_id',
-            conversations: 1,
-            messages: 1,
-            totalCost: 1,
-            avgCostPerConversation: {
-              $cond: [
-                { $gt: ['$conversations', 0] },
-                { $divide: ['$totalCost', '$conversations'] },
-                0
-              ]
-            }
-          }
-        },
-        { $sort: { date: 1 } }
-      ]);
+      breakdown = await Conversation.aggregate(activityDayPipeline(fromDate, toDate));
     }
 
     res.json({
@@ -135,6 +127,7 @@ router.get('/usage', async (req, res) => {
         from: fromDate.toISOString(),
         to: toDate.toISOString(),
         currency: process.env.COST_CURRENCY || 'USD',
+        basis: 'message_observed_at',
         totalConversations,
         totalMessages,
         breakdown
