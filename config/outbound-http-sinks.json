@@ -1017,7 +1017,7 @@
   },
   "sinks": [
     { "id": "core.server.ollama-tags", "service": "core", "source": "core/server.js", "line": 73, "column": 28, "constructor": "fetch", "policyId": "configured.ollama-observation" },
-    { "id": "core.benchmark-proxy.request", "service": "core", "source": "core/routes/benchmark-proxy.js", "line": 95, "column": 28, "constructor": "fetch", "policyId": "configured.product-transport" },
+    { "id": "core.benchmark-proxy.request", "service": "core", "source": "core/routes/benchmark-proxy.js", "line": 114, "column": 28, "constructor": "fetch", "policyId": "configured.product-transport" },
     { "id": "core.inference.list-models", "service": "core", "source": "core/routes/inference.js", "line": 245, "column": 32, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "core.inference.embed-probe", "service": "core", "source": "core/routes/inference.js", "line": 280, "column": 29, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "core.inference.embed", "service": "core", "source": "core/routes/inference.js", "line": 488, "column": 34, "constructor": "fetch", "policyId": "request-admitted.ollama-inference" },
