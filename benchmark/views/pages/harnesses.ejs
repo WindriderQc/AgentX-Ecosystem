@@ -10,10 +10,11 @@
 
   <section class="harness-card" aria-labelledby="native-run-title">
     <h2 id="native-run-title">New native-agent campaign</h2>
-    <label>Harness target<select id="harness-target"><option value="">Loading catalog…</option></select></label>
-    <label>Task<textarea id="harness-prompt" rows="8" maxlength="200000" placeholder="Describe the bounded task. Do not paste credentials, secrets, private URLs or personal data."></textarea></label>
-    <label class="harness-confirm"><input type="checkbox" id="harness-confirm"> I confirm this task contains no credentials, secrets or private URLs.</label>
-    <button type="button" id="harness-run" class="r-nav-btn r-primary">Run in disposable workspace</button>
+    <p id="harness-availability" class="harness-availability" role="status" aria-live="polite">Checking harness availability…</p>
+    <label>Harness target<select id="harness-target" disabled><option value="">Loading catalog…</option></select></label>
+    <label>Task<textarea id="harness-prompt" rows="8" maxlength="200000" placeholder="Describe the bounded task. Do not paste credentials, secrets, private URLs or personal data." disabled></textarea></label>
+    <label class="harness-confirm"><input type="checkbox" id="harness-confirm" disabled> I confirm this task contains no credentials, secrets or private URLs.</label>
+    <button type="button" id="harness-run" class="r-nav-btn r-primary" disabled>Run in disposable workspace</button>
     <div id="harness-status" role="status" aria-live="polite"></div>
     <pre id="harness-output" hidden></pre>
   </section>

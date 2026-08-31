@@ -150,11 +150,14 @@ function priceLabel(target) {
     return `manual ~US$${input.toFixed(4)}/${output.toFixed(4)} per 1M in/out`;
 }
 
-export function _buildHarnessChecklist(targets = []) {
+export function _buildHarnessChecklist(targets = [], catalogEnabled = false) {
     const candidates = (Array.isArray(targets) ? targets : [])
         .filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate);
     if (!candidates.length) {
-        return '<div class="mc-tier-group"><div class="mc-tier-header"><span class="mc-tier-label">Cloud harnesses</span></div><div class="mc-preset-tooltip">Cloud Benchmark is disabled or no isolated target is currently attested.</div></div>';
+        const message = catalogEnabled
+            ? 'The harness broker is enabled, but no isolated cloud candidate is currently attested.'
+            : 'Cloud Benchmark is disabled in this environment.';
+        return `<div class="mc-tier-group"><div class="mc-tier-header"><span class="mc-tier-label">Cloud harnesses</span></div><div class="mc-preset-tooltip">${message}</div></div>`;
     }
     const groups = new Map();
     for (const target of candidates) {
