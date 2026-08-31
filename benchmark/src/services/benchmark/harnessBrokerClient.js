@@ -1,7 +1,8 @@
 'use strict';
 
-const { getFetchOptions } = require('../../helpers/httpAgent');
-const { benchmarkFetch: fetch } = require('./http');
+const nodeFetch = require('node-fetch');
+const { createNodeFetchPeerTransport } = require('../../helpers/outboundHttpTransport');
+const { createOutboundHttpExecutor } = require('../../../../shared/outboundHttpExecutor');
 const {
   HARNESS_EXECUTION_SCHEMA,
   normalizeBenchmarkTarget,
@@ -12,7 +13,30 @@ const { fingerprint, normalizeWorkerEnvelope } = require('../../../../shared/wor
 const CATALOG_TTL_MS = 15_000;
 const MAX_CATALOG_BYTES = 1_000_000;
 const MAX_EXECUTION_BYTES = 4_000_000;
+const MAX_GRANT_BYTES = 100_000;
+const MAX_EXECUTION_TIMEOUT_MS = 604_800_000;
 let catalogCache = null;
+
+const BROKER_OPERATIONS = Object.freeze({
+  TARGETS: 'benchmark.harness-broker.targets',
+  EXECUTE: 'benchmark.harness-broker.execute',
+  SPEND_GRANTS: 'benchmark.harness-broker.spend-grants',
+});
+
+const BROKER_OPERATION_SPECS = Object.freeze({
+  [BROKER_OPERATIONS.TARGETS]: Object.freeze({
+    method: 'GET', path: '/v1/benchmark/targets', deadlineMs: 15_000,
+    maxRequestBytes: 0, maxResponseBytes: MAX_CATALOG_BYTES,
+  }),
+  [BROKER_OPERATIONS.EXECUTE]: Object.freeze({
+    method: 'POST', path: '/v1/benchmark/execute', deadlineMs: MAX_EXECUTION_TIMEOUT_MS,
+    maxRequestBytes: MAX_EXECUTION_BYTES, maxResponseBytes: MAX_EXECUTION_BYTES,
+  }),
+  [BROKER_OPERATIONS.SPEND_GRANTS]: Object.freeze({
+    method: 'POST', path: '/v1/benchmark/spend-grants', deadlineMs: 15_000,
+    maxRequestBytes: 1_000_000, maxResponseBytes: MAX_GRANT_BYTES,
+  }),
+});
 
 function brokerError(code, message, statusCode = 500) {
   const error = new Error(message);
@@ -55,6 +79,40 @@ function brokerHeaders(extra = {}) {
   return { ...extra, Authorization: `Bearer ${token}` };
 }
 
+function brokerOperation(path, method) {
+  const normalizedMethod = String(method || 'GET').toUpperCase();
+  const matches = Object.entries(BROKER_OPERATION_SPECS)
+    .filter(([, spec]) => spec.method === normalizedMethod && spec.path === path);
+  if (matches.length !== 1) {
+    throw brokerError('HARNESS_BROKER_OPERATION_UNKNOWN', 'Harness broker operation is not registered', 500);
+  }
+  return matches[0][0];
+}
+
+const brokerExecutor = createOutboundHttpExecutor({
+  operations: Object.fromEntries(Object.entries(BROKER_OPERATION_SPECS).map(([operationId, spec]) => [
+    operationId,
+    Object.freeze({
+      authoritySource: 'configured',
+      deadlineMs: spec.deadlineMs,
+      maxRequestBytes: spec.maxRequestBytes,
+      maxResponseBytes: spec.maxResponseBytes,
+    }),
+  ])),
+  authorityAdapter: ({ sinkId, target }) => {
+    const spec = BROKER_OPERATION_SPECS[sinkId];
+    const requested = new URL(target);
+    const expectedOrigin = brokerBaseUrl();
+    if (!spec || !expectedOrigin || requested.origin !== expectedOrigin
+      || requested.pathname !== spec.path || requested.search) {
+      throw brokerError('HARNESS_BROKER_TARGET_REJECTED', 'Harness broker target is not registered', 503);
+    }
+    return { expectedOrigin };
+  },
+  fetchImpl: nodeFetch,
+  transportAdapter: createNodeFetchPeerTransport(),
+});
+
 async function boundedJson(response, maxBytes) {
   const raw = await response.text();
   if (Buffer.byteLength(raw, 'utf8') > maxBytes) throw brokerError('HARNESS_BROKER_RESPONSE_TOO_LARGE', 'Harness broker response exceeded its byte limit', 502);
@@ -67,14 +125,19 @@ async function brokerRequest(path, { method = 'GET', body = null, signal = null,
   const base = brokerBaseUrl();
   if (!base) throw brokerError('HARNESS_BROKER_DISABLED', 'Harness broker is disabled', 503);
   const url = `${base}${path}`;
-  const options = getFetchOptions(url, {
-    method,
+  const normalizedMethod = String(method || 'GET').toUpperCase();
+  const operationId = brokerOperation(path, normalizedMethod);
+  const options = {
+    method: normalizedMethod,
     headers: brokerHeaders(body == null ? {} : { 'Content-Type': 'application/json' }),
     ...(body == null ? {} : { body: JSON.stringify(body) }),
     ...(signal ? { signal } : {}),
-  });
+  };
   let response;
-  try { response = await fetch(url, options); } catch (error) {
+  try {
+    const admission = await brokerExecutor.admitTarget(operationId, url, { signal });
+    response = await brokerExecutor.request(admission, options);
+  } catch (error) {
     if (signal?.aborted) throw error;
     const wrapped = brokerError(
       'HARNESS_BROKER_UNAVAILABLE',
@@ -299,7 +362,7 @@ async function createSpendGrant(options) {
   const request = buildSpendPlan(options);
   if (!request) return null;
   const grant = await brokerRequest('/v1/benchmark/spend-grants', {
-    method: 'POST', body: request, maxBytes: 100_000,
+    method: 'POST', body: request, maxBytes: MAX_GRANT_BYTES,
   });
   const expected = request.approval;
   if (grant?.schema !== 'agentx.spend-grant/v1'

@@ -1,9 +1,16 @@
 'use strict';
 
 const mockBenchmarkFetch = jest.fn();
-jest.mock('../../src/services/benchmark/http', () => ({
-  benchmarkFetch: (...args) => mockBenchmarkFetch(...args),
-}));
+jest.mock('node-fetch', () => (...args) => mockBenchmarkFetch(...args));
+jest.mock('../../src/helpers/outboundHttpTransport', () => {
+  const { CONNECT_TIME_PEER_VERIFICATION } = jest.requireActual('../../../shared/outboundHttpExecutor');
+  return {
+    createNodeFetchPeerTransport: () => async ({ fetchImpl, init, target }) => ({
+      response: await fetchImpl(target, init),
+      peerVerification: CONNECT_TIME_PEER_VERIFICATION,
+    }),
+  };
+});
 
 const {
   clearHarnessCatalogCache,
@@ -16,6 +23,22 @@ const { normalizeBenchmarkTarget } = require('../../../shared/benchmarkTargetCon
 const { fingerprint, normalizeWorkerReceipt } = require('../../../shared/workerContract');
 
 const HEX = (character) => character.repeat(64);
+
+function jsonResponse(status, payload) {
+  const raw = Buffer.from(JSON.stringify(payload), 'utf8');
+  return {
+    status,
+    redirected: false,
+    url: '',
+    headers: {
+      get: (name) => String(name).toLowerCase() === 'content-type' ? 'application/json' : null,
+    },
+    body: {
+      async *[Symbol.asyncIterator]() { yield raw; },
+      destroy: jest.fn(),
+    },
+  };
+}
 
 function target(overrides = {}) {
   return normalizeBenchmarkTarget({
@@ -83,15 +106,14 @@ describe('harness broker client', () => {
     clearHarnessCatalogCache();
     mockBenchmarkFetch.mockReset();
     mockBenchmarkFetch.mockImplementation(async (url, options = {}) => {
-      expect(options.headers.Authorization).toBe('Bearer product-service-token');
+      const authorization = Object.entries(options.headers || {})
+        .find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+      expect(authorization).toBe('Bearer product-service-token');
       if (options.method !== 'POST' && url.endsWith('/v1/benchmark/targets')) {
-        return {
-          ok: true, status: 200,
-          text: async () => JSON.stringify({ status: 'success', data: {
+        return jsonResponse(200, { status: 'success', data: {
             targets: [currentTarget], observedAt: new Date().toISOString(),
             expiresAt: catalogExpiresAt, broker: { name: 'fixture', version: '1' }
-          } })
-        };
+          } });
       }
       if (options.method === 'POST' && url.endsWith('/v1/benchmark/execute')) {
         const request = JSON.parse(options.body);
@@ -106,23 +128,20 @@ describe('harness broker client', () => {
                 receipt: receiptFor(request, output),
               };
             })();
-        return { ok: true, status: 200, text: async () => JSON.stringify({ status: 'success', data }) };
+        return jsonResponse(200, { status: 'success', data });
       }
       if (options.method === 'POST' && url.endsWith('/v1/benchmark/spend-grants')) {
         const request = JSON.parse(options.body);
         grantRequests.push(request);
         const targetFingerprints = [...new Set(request.units.map((unit) => unit.targetFingerprint))].sort();
-        return {
-          ok: true, status: 201,
-          text: async () => JSON.stringify({ status: 'success', data: {
+        return jsonResponse(201, { status: 'success', data: {
             schema: 'agentx.spend-grant/v1', schemaVersion: 1, grantId: 'grant-fixture',
             batchId: request.batchId, batchFingerprint: request.batchFingerprint,
             targetFingerprints, planFingerprint: HEX('d'),
             ...request.approval, expiresAt: new Date(Date.now() + 60_000).toISOString(), signature: HEX('e'),
-          } })
-        };
+          } });
       }
-      return { ok: false, status: 404, text: async () => JSON.stringify({ status: 'error', error: 'not found' }) };
+      return jsonResponse(404, { status: 'error', error: 'not found' });
     });
   });
 
