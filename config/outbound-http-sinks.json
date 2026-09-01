@@ -1089,7 +1089,7 @@
     { "id": "core.nerve-center.rag-documents", "service": "core", "source": "core/routes/nerve-center.js", "line": 755, "column": 32, "constructor": "fetch", "policyId": "configured.product-observation" },
     { "id": "core.ollama-hosts.proxy", "service": "core", "source": "core/routes/ollama-hosts.js", "line": 13, "column": 28, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "core.ollama-hosts.tags", "service": "core", "source": "core/routes/ollama-hosts.js", "line": 199, "column": 32, "constructor": "fetch", "policyId": "configured.ollama-observation" },
-    { "id": "core.trusted-runtime.forward", "service": "core", "source": "core/src/extensions/trustedRuntimeServices.js", "line": 605, "column": 28, "constructor": "deps.fetch", "policyId": "request-admitted.extension" },
+    { "id": "core.trusted-runtime.forward", "service": "core", "source": "core/src/extensions/trustedRuntimeServices.js", "line": 671, "column": 28, "constructor": "deps.fetch", "policyId": "request-admitted.extension" },
     { "id": "core.cross-service.request", "service": "core", "source": "core/src/helpers/crossServiceClient.js", "line": 168, "column": 22, "constructor": "fetch", "policyId": "configured.product-transport" },
     { "id": "core.prompt-analysis.generate", "service": "core", "source": "core/src/helpers/promptAnalysis.js", "line": 216, "column": 28, "constructor": "fetch", "policyId": "configured.ollama-inference" },
     { "id": "core.artifact-identity.tags", "service": "core", "source": "core/src/services/artifactIdentityService.js", "line": 35, "column": 28, "constructor": "fetchImpl", "policyId": "configured.ollama-observation" },
