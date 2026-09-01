@@ -673,6 +673,44 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
       .toContain('cost_budget_exceeded');
   });
 
+  test('forces a budgeted automated success without cost evidence into blocked', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0713',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-4', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-4', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0713', status: 'blocked' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0713/feedback')
+      .send({
+        status: 'done',
+        by: 'guarded-dispatch',
+        leaseAssignee: 'worker-a',
+        leaseId: 'lease-4',
+        text: 'verified but cost receipt missing',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: {},
+          usage: { durationMs: 1000 },
+          failureCodes: [],
+        },
+      })
+      .expect(200);
+
+    const evidence = PipelineTask.findOneAndUpdate.mock.calls[0][1]
+      .$set['automationAttempts.$[attempt].evidence'];
+    expect(PipelineTask.findOneAndUpdate.mock.calls[0][1].$set.status).toBe('blocked');
+    expect(evidence.usage.costNanodollars).toBeNull();
+    expect(evidence.failureCodes).toContain('cost_evidence_required');
+  });
+
   test('rejects a worker cost amount without its complete nature and provenance', async () => {
     PipelineTask.findOne.mockResolvedValue({
       pipelineId: '0712',
