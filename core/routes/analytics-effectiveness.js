@@ -21,6 +21,7 @@ router.get('/effectiveness', async (req, res) => {
       from: req.query.from,
       to: req.query.to,
       runtime,
+      consumerContract: req.query.consumerContract,
     });
     return res.json(snapshot);
   } catch (error) {

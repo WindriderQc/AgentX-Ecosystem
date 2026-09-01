@@ -27,7 +27,7 @@ describe('analytics effectiveness API', () => {
     expect(response.status).toBe(200);
     expect(response.body.summary.productiveOutcomes).toBe(3);
     expect(service.readEffectivenessSnapshot).toHaveBeenCalledWith({
-      window: '7d', from: undefined, to: undefined, runtime: 'external',
+      window: '7d', from: undefined, to: undefined, runtime: 'external', consumerContract: undefined,
     });
   });
 
@@ -42,7 +42,7 @@ describe('analytics effectiveness API', () => {
       },
     });
     const response = await request(app()).get(
-      '/api/analytics/effectiveness?from=2026-08-30T00%3A00%3A00-04%3A00&to=2026-08-31T00%3A00%3A00-04%3A00&runtime=external'
+      '/api/analytics/effectiveness?from=2026-08-30T00%3A00%3A00-04%3A00&to=2026-08-31T00%3A00%3A00-04%3A00&runtime=external&consumerContract=openclaw-pipeline-runtime-v1'
     );
     expect(response.status).toBe(200);
     expect(service.readEffectivenessSnapshot).toHaveBeenCalledWith({
@@ -50,6 +50,7 @@ describe('analytics effectiveness API', () => {
       from: '2026-08-30T00:00:00-04:00',
       to: '2026-08-31T00:00:00-04:00',
       runtime: 'external',
+      consumerContract: 'openclaw-pipeline-runtime-v1',
     });
   });
 

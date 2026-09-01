@@ -96,10 +96,19 @@ function buildLogQuery(query = {}) {
 
   const from = parseDateFilter(query.from, 'from');
   const to = parseDateFilter(query.to, 'to');
+  const endExclusive = query.endExclusive == null || query.endExclusive === ''
+    ? false
+    : String(query.endExclusive).toLowerCase() === 'true';
+  if (query.endExclusive != null && query.endExclusive !== ''
+      && !['true', 'false'].includes(String(query.endExclusive).toLowerCase())) {
+    const error = new Error('endExclusive must be true or false');
+    error.statusCode = 400;
+    throw error;
+  }
   if (from || to) {
     filter.timestamp = {};
     if (from) filter.timestamp.$gte = from;
-    if (to) filter.timestamp.$lte = to;
+    if (to) filter.timestamp[endExclusive ? '$lt' : '$lte'] = to;
   }
   if (from && to && from > to) {
     const error = new Error('from must be earlier than or equal to to');
@@ -144,6 +153,7 @@ router.get('/logs', async (req, res) => {
         host: req.query.host || null,
         from: req.query.from || null,
         to: req.query.to || null,
+        endExclusive: String(req.query.endExclusive || '').toLowerCase() === 'true',
       },
       items: projectInferenceLogs(items),
       pagination: {
