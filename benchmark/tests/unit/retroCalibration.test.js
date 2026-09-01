@@ -271,7 +271,8 @@ describe('loadHumanReviewGroundTruth (0129)', () => {
 });
 
 describe('loadQualifiedHumanGroundTruth', () => {
-    test('requires explicit independent or adjudicated provenance', async () => {
+    test('requires qualified provenance and the exact judge identity, excluding unbound legacy rows', async () => {
+        const judgeIdentityFingerprint = 'a'.repeat(64);
         const docs = [{ name: 'qualified-human-1', provenance_class: 'independent_human_score' }];
         const chain = {
             limit: jest.fn().mockReturnThis(),
@@ -280,11 +281,15 @@ describe('loadQualifiedHumanGroundTruth', () => {
         };
         JudgeGroundTruth.find.mockReturnValue(chain);
 
-        const out = await loadQualifiedHumanGroundTruth({ category: 'math' });
+        const out = await loadQualifiedHumanGroundTruth({
+            category: 'math',
+            judge_identity_fingerprint: judgeIdentityFingerprint
+        });
 
         expect(JudgeGroundTruth.find).toHaveBeenCalledWith({
             active: true,
             category: 'math',
+            judge_identity_fingerprint: judgeIdentityFingerprint,
             $or: [
                 {
                     provenance_class: 'independent_human_score',

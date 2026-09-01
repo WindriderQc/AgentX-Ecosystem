@@ -95,7 +95,7 @@ async function getStaleBatches(retentionDays = DEFAULT_RETENTION_DAYS) {
     const staleBatches = await BenchmarkBatch.find({
         status: { $in: ['completed', 'failed', 'stopped', 'interrupted'] },
         completed_at: { $lt: cutoff }
-    }).select('_id run_name completed_at status total_tests').lean();
+    }).select('_id run_name description completed_at status total_tests').lean();
 
     return staleBatches;
 }
@@ -164,21 +164,20 @@ async function archiveOldResultsUnlocked(retentionDays = DEFAULT_RETENTION_DAYS,
 
         // Compact only unreferenced archived batches. A receipt protects both
         // the external results and the batch-local evidence arrays it binds.
-        await BenchmarkBatch.updateMany(
-            { _id: { $in: staleBatchObjectIds } },
-            [
-                {
-                    $set: {
-                        timeline: [],
-                        results: [],
-                        // Append [archived] to each batch's own description (pipeline update)
-                        description: {
-                            $concat: [{ $ifNull: ['$description', ''] }, ' [archived]']
-                        }
-                    }
+        // BenchmarkBatch rejects every update pipeline so no computed field
+        // expression can dynamically reach trust source context. The stale
+        // rows were read under the shared evidence lock, so compact them with
+        // explicit classic updates instead.
+        await Promise.all(deletableBatches.map(batch => BenchmarkBatch.updateOne(
+            { _id: batch._id },
+            {
+                $set: {
+                    timeline: [],
+                    results: [],
+                    description: `${batch.description || ''} [archived]`
                 }
-            ]
-        );
+            }
+        )));
     }
 
     logger.info('Archived old batch results', {

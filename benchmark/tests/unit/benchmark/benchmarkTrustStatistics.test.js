@@ -1,20 +1,43 @@
 const {
+    POWER_ANALYSIS_SCHEMA,
     STATISTICS_METHOD,
+    buildBenchmarkTrustPowerAnalysisFields,
     studentTQuantile,
     evaluateBenchmarkTrustStatistics,
     buildBenchmarkTrustStatisticsReceiptFields
 } = require('../../../src/services/benchmark/benchmarkTrustStatistics');
 
 function preregistration(overrides = {}) {
-    return {
+    const defaults = {
         alpha: 0.05,
         mde: 1,
         equivalenceMargin: 0.25,
         repeatCount: 1,
         candidateIds: ['a', 'b'],
-        promptIds: ['p1', 'p2'],
-        ...overrides
+        promptIds: ['p1', 'p2', 'p3'],
+        targetPowerBasisPoints: 8000,
+        assumedMaxPairedStdDevMicros: 50000
     };
+    const policy = { ...defaults, ...overrides };
+    const powerFields = buildBenchmarkTrustPowerAnalysisFields({
+        alpha: typeof policy.alpha === 'number' && policy.alpha > 0 && policy.alpha < 1
+            ? policy.alpha
+            : defaults.alpha,
+        mde: typeof policy.mde === 'number' && policy.mde > 0 ? policy.mde : defaults.mde,
+        candidateIds: Array.isArray(policy.candidateIds) && policy.candidateIds.length >= 2
+            ? policy.candidateIds
+            : defaults.candidateIds,
+        targetPowerBasisPoints: Number.isSafeInteger(policy.targetPowerBasisPoints)
+            && policy.targetPowerBasisPoints >= 8000
+            && policy.targetPowerBasisPoints <= 9999
+            ? policy.targetPowerBasisPoints
+            : defaults.targetPowerBasisPoints,
+        assumedMaxPairedStdDevMicros: Number.isSafeInteger(policy.assumedMaxPairedStdDevMicros)
+            && policy.assumedMaxPairedStdDevMicros > 0
+            ? policy.assumedMaxPairedStdDevMicros
+            : defaults.assumedMaxPairedStdDevMicros
+    });
+    return { ...policy, ...powerFields, ...overrides };
 }
 
 function rowsFor(candidateScores) {
@@ -52,6 +75,8 @@ describe('Benchmark Trust statistical decision', () => {
             adjustedAlpha: 0.05
         });
         expect(result.method.version).toBe('agentx.benchmark-trust-statistics/paired-prompt-bonferroni-t/v1');
+        expect(result.method.powerAnalysis).toBe('student-t-critical-normal-shift-bound-v1');
+        expect(POWER_ANALYSIS_SCHEMA).toBe('agentx.benchmark-trust-power-analysis/student-t-critical-normal-shift-bound/v1');
         expect(result).not.toHaveProperty('inputFingerprint');
     });
 
@@ -149,13 +174,112 @@ describe('Benchmark Trust statistical decision', () => {
         expect(pair).toMatchObject({ n: 1, effect: 4, lower: null, upper: null });
     });
 
+    test('enforces the versioned preregistered power bound and its exact fingerprint', () => {
+        const fields = buildBenchmarkTrustPowerAnalysisFields({
+            alpha: 0.05,
+            mde: 0.25,
+            candidateIds: ['a', 'b'],
+            targetPowerBasisPoints: 8000,
+            assumedMaxPairedStdDevMicros: 50000
+        });
+        expect(fields).toMatchObject({
+            requiredIndependentPromptCount: 3,
+            targetPowerBasisPoints: 8000,
+            assumedMaxPairedStdDevMicros: 50000
+        });
+        expect(fields.powerAnalysisFingerprint).toMatch(/^[0-9a-f]{64}$/);
+
+        const largerVariance = buildBenchmarkTrustPowerAnalysisFields({
+            alpha: 0.05,
+            mde: 0.25,
+            candidateIds: ['a', 'b'],
+            targetPowerBasisPoints: 8000,
+            assumedMaxPairedStdDevMicros: 1_000_000
+        });
+        const largerFamily = buildBenchmarkTrustPowerAnalysisFields({
+            alpha: 0.05,
+            mde: 0.25,
+            candidateIds: ['a', 'b', 'c'],
+            targetPowerBasisPoints: 8000,
+            assumedMaxPairedStdDevMicros: 1_000_000
+        });
+        expect(largerVariance.requiredIndependentPromptCount).toBeGreaterThan(3);
+        expect(largerFamily.requiredIndependentPromptCount)
+            .toBeGreaterThanOrEqual(largerVariance.requiredIndependentPromptCount);
+        expect(largerFamily.powerAnalysisFingerprint).not.toBe(largerVariance.powerAnalysisFingerprint);
+
+        const underpowered = evaluateBenchmarkTrustStatistics({
+            rows: rowsFor({ a: { p1: 5, p2: 6 }, b: { p1: 2, p2: 3 } }),
+            preregistration: preregistration({ mde: 0.25, promptIds: ['p1', 'p2'] })
+        });
+        expect(underpowered.eligibleForDecision).toBe(false);
+        expect(underpowered.decision.outcome).toBe('inconclusive');
+        expect(underpowered.reasons).toContain('underpowered_prompt_count');
+
+        const portableA = `candidate_${'a'.repeat(32)}`;
+        const portableB = `candidate_${'b'.repeat(32)}`;
+        const underpoweredPolicy = preregistration({
+            mde: 0.25,
+            candidateIds: [portableA, portableB],
+            promptIds: ['p1', 'p2']
+        });
+        const underpoweredProjection = buildBenchmarkTrustStatisticsReceiptFields({
+            rows: rowsFor({
+                [portableA]: { p1: 5, p2: 6 },
+                [portableB]: { p1: 2, p2: 3 }
+            }),
+            preregistration: underpoweredPolicy
+        }, {
+            analysisPlanFingerprint: 'a'.repeat(64),
+            rankingPolicyFingerprint: 'b'.repeat(64)
+        });
+        expect(underpoweredProjection).toMatchObject({
+            winnerCandidateId: null,
+            equivalenceCandidateIds: [],
+            preregistration: { requiredIndependentPromptCount: 3 }
+        });
+
+        const falsifiedRequiredCount = evaluateBenchmarkTrustStatistics({
+            rows: rowsFor({ a: { p1: 5, p2: 6, p3: 7 }, b: { p1: 2, p2: 3, p3: 4 } }),
+            preregistration: preregistration({
+                mde: 0.25,
+                requiredIndependentPromptCount: 4
+            })
+        });
+        expect(falsifiedRequiredCount.eligibleForDecision).toBe(false);
+        expect(falsifiedRequiredCount.reasons).toContain('required_prompt_count_mismatch');
+    });
+
+    test('withholds point intervals and decisions for degenerate paired variance', () => {
+        const result = evaluateBenchmarkTrustStatistics({
+            rows: rowsFor({
+                a: { p1: 5, p2: 6, p3: 7 },
+                b: { p1: 2, p2: 3, p3: 4 }
+            }),
+            preregistration: preregistration({ mde: 0.25 })
+        });
+        const pair = comparison(result, 'a', 'b');
+
+        expect(result.eligibleForDecision).toBe(false);
+        expect(result.decision.outcome).toBe('inconclusive');
+        expect(result.reasons).toContain('degenerate_paired_variance');
+        expect(pair).toMatchObject({
+            n: 3,
+            standardError: null,
+            lower: null,
+            upper: null,
+            complete: false,
+            strictSuperiority: false
+        });
+    });
+
     test('fails closed when repetitions are imbalanced against the preregistered count', () => {
         const result = evaluateBenchmarkTrustStatistics({
             rows: rowsFor({
                 a: { p1: [8, 10], p2: 6 },
                 b: { p1: 7, p2: [3, 5, 7] }
             }),
-            preregistration: preregistration({ mde: 0, repeatCount: 2 })
+            preregistration: preregistration({ mde: 0, repeatCount: 2, promptIds: ['p1', 'p2'] })
         });
         const pair = comparison(result, 'a', 'b');
         const a = result.candidateSummaries.find(row => row.candidateId === 'a');
@@ -185,7 +309,7 @@ describe('Benchmark Trust statistical decision', () => {
 
         const result = evaluateBenchmarkTrustStatistics({
             rows,
-            preregistration: preregistration({ repeatCount: 2 })
+            preregistration: preregistration({ repeatCount: 2, promptIds: ['p1', 'p2'] })
         });
 
         expect(result.matrix.repeatCountMismatches).toEqual([]);
@@ -205,8 +329,8 @@ describe('Benchmark Trust statistical decision', () => {
     test('aggregates balanced repetitions without promoting attempts to independent n', () => {
         const result = evaluateBenchmarkTrustStatistics({
             rows: rowsFor({
-                a: { p1: [8, 10, 9], p2: [5, 6, 7] },
-                b: { p1: [6, 7, 8], p2: [3, 4, 5] }
+                a: { p1: [8, 9, 10], p2: [5, 6, 7], p3: [7, 8, 9] },
+                b: { p1: [6.9, 7, 7.1], p2: [3.8, 3.9, 4], p3: [6, 6.1, 6.2] }
             }),
             preregistration: preregistration({ mde: 1, repeatCount: 3 })
         });
@@ -214,10 +338,12 @@ describe('Benchmark Trust statistical decision', () => {
 
         expect(result.matrix).toMatchObject({ complete: true, repeatCountMismatches: [] });
         expect(result.candidateSummaries).toEqual(expect.arrayContaining([
-            expect.objectContaining({ candidateId: 'a', overallMean: 7.5, totalRows: 6, repetitionsBalanced: true }),
-            expect.objectContaining({ candidateId: 'b', overallMean: 5.5, totalRows: 6, repetitionsBalanced: true })
+            expect.objectContaining({ candidateId: 'a', totalRows: 9, repetitionsBalanced: true }),
+            expect.objectContaining({ candidateId: 'b', totalRows: 9, repetitionsBalanced: true })
         ]));
-        expect(pair).toMatchObject({ n: 2, effect: 2, lower: 2, upper: 2 });
+        expect(pair.n).toBe(3);
+        expect(pair.effect).toBeCloseTo(2, 12);
+        expect(pair.lower).toBeGreaterThan(1);
         expect(result.decision).toMatchObject({ outcome: 'winner', winner: 'a' });
     });
 
@@ -270,8 +396,8 @@ describe('Benchmark Trust statistical decision', () => {
         const result = evaluateBenchmarkTrustStatistics({
             rows: rowsFor({
                 a: { p1: 10, p2: 11, p3: 12 },
-                b: { p1: 7, p2: 8, p3: 9 },
-                c: { p1: 5, p2: 6, p3: 7 }
+                b: { p1: 7.1, p2: 8, p3: 8.9 },
+                c: { p1: 5.2, p2: 6, p3: 6.8 }
             }),
             preregistration: preregistration({
                 mde: 2,
@@ -288,34 +414,52 @@ describe('Benchmark Trust statistical decision', () => {
             winner: 'a',
             equivalenceSet: []
         });
-        expect(comparison(result, 'a', 'b').lower).toBe(3);
-        expect(comparison(result, 'a', 'c').lower).toBe(5);
+        expect(comparison(result, 'a', 'b').lower).toBeGreaterThan(2);
+        expect(comparison(result, 'a', 'c').lower).toBeGreaterThan(2);
     });
 
     test('requires a strict lower-bound inequality at the MDE boundary', () => {
+        const rows = rowsFor({
+            a: { p1: 5, p2: 6.1, p3: 6.9 },
+            b: { p1: 3, p2: 4, p3: 5 }
+        });
+        const probe = evaluateBenchmarkTrustStatistics({
+            rows,
+            preregistration: preregistration({ mde: 1, equivalenceMargin: 0.5 })
+        });
+        const boundary = comparison(probe, 'a', 'b').lower;
         const result = evaluateBenchmarkTrustStatistics({
-            rows: rowsFor({ a: { p1: 5, p2: 6 }, b: { p1: 3, p2: 4 } }),
-            preregistration: preregistration({ mde: 2, equivalenceMargin: 0.5 })
+            rows,
+            preregistration: preregistration({ mde: boundary, equivalenceMargin: 0.5 })
         });
         const pair = comparison(result, 'a', 'b');
 
-        expect(pair).toMatchObject({ effect: 2, lower: 2, upper: 2, strictSuperiority: false });
+        expect(pair.lower).toBeCloseTo(boundary, 12);
+        expect(pair.strictSuperiority).toBe(false);
         expect(result.decision.outcome).toBe('inconclusive');
         expect(result.decision.winner).toBeNull();
     });
 
     test('treats equality at both equivalence bounds as equivalent', () => {
+        const rows = rowsFor({
+            a: { p1: 5.49, p2: 6.5, p3: 7.51 },
+            b: { p1: 5, p2: 6, p3: 7 }
+        });
+        const probe = evaluateBenchmarkTrustStatistics({
+            rows,
+            preregistration: preregistration({ mde: 1, equivalenceMargin: 1 })
+        });
+        const boundary = comparison(probe, 'a', 'b').upper;
         const result = evaluateBenchmarkTrustStatistics({
-            rows: rowsFor({ a: { p1: 5.5, p2: 6.5 }, b: { p1: 5, p2: 6 } }),
-            preregistration: preregistration({ mde: 1, equivalenceMargin: 0.5 })
+            rows,
+            preregistration: preregistration({ mde: 1, equivalenceMargin: boundary })
         });
 
         expect(comparison(result, 'a', 'b')).toMatchObject({
-            lower: 0.5,
-            upper: 0.5,
             equivalent: true,
             strictSuperiority: false
         });
+        expect(comparison(result, 'a', 'b').upper).toBeCloseTo(boundary, 12);
         expect(result.decision).toMatchObject({
             outcome: 'equivalence_set',
             winner: null,
@@ -327,12 +471,12 @@ describe('Benchmark Trust statistical decision', () => {
         const result = evaluateBenchmarkTrustStatistics({
             rows: rowsFor({
                 a: { p1: 10, p2: 9, p3: 11 },
-                b: { p1: 10, p2: 9, p3: 11 },
-                c: { p1: 6, p2: 5, p3: 7 }
+                b: { p1: 9.99, p2: 9.01, p3: 11 },
+                c: { p1: 6, p2: 5.1, p3: 6.9 }
             }),
             preregistration: preregistration({
                 mde: 1,
-                equivalenceMargin: 0,
+                equivalenceMargin: 0.1,
                 candidateIds: ['a', 'b', 'c'],
                 promptIds: ['p1', 'p2', 'p3']
             })
@@ -349,7 +493,7 @@ describe('Benchmark Trust statistical decision', () => {
 
     test('returns inconclusive when evidence proves neither superiority nor equivalence', () => {
         const result = evaluateBenchmarkTrustStatistics({
-            rows: rowsFor({ a: { p1: 6, p2: 7 }, b: { p1: 5, p2: 6 } }),
+            rows: rowsFor({ a: { p1: 6, p2: 7.1, p3: 7.9 }, b: { p1: 5, p2: 6, p3: 7 } }),
             preregistration: preregistration({ mde: 2, equivalenceMargin: 0.5 })
         });
 
@@ -384,9 +528,9 @@ describe('Benchmark Trust statistical decision', () => {
 
     test('is deterministic under row reordering, including repeated attempts', () => {
         const rows = rowsFor({
-            z: { p2: [9, 7, 8], p1: [8, 6, 10] },
-            a: { p2: [5, 7, 6], p1: [4, 6, 5] },
-            m: { p2: [2, 4, 3], p1: [1, 3, 2] }
+            z: { p3: [10, 8, 9], p2: [9, 7, 8], p1: [8, 6, 10] },
+            a: { p3: [6, 8, 7], p2: [5, 7, 6], p1: [4, 6, 5] },
+            m: { p3: [3, 5, 4], p2: [2, 4, 3], p1: [1, 3, 2] }
         });
         const policy = preregistration({
             mde: 1,
@@ -402,18 +546,16 @@ describe('Benchmark Trust statistical decision', () => {
     test('projects the decision into the exact v1 receipt statistical contract', () => {
         const candidateA = `candidate_${'a'.repeat(32)}`;
         const candidateB = `candidate_${'b'.repeat(32)}`;
-        const result = evaluateBenchmarkTrustStatistics({
-            rows: rowsFor({
-                [candidateA]: { p1: 5, p2: 6 },
-                [candidateB]: { p1: 2, p2: 3 }
-            }),
-            preregistration: preregistration({
-                mde: 0.25,
-                candidateIds: [candidateA, candidateB]
-            })
+        const rows = rowsFor({
+            [candidateA]: { p1: 5, p2: 6.1, p3: 6.9 },
+            [candidateB]: { p1: 2, p2: 3, p3: 4 }
+        });
+        const policy = preregistration({
+            mde: 0.25,
+            candidateIds: [candidateA, candidateB]
         });
 
-        const projection = buildBenchmarkTrustStatisticsReceiptFields(result, {
+        const projection = buildBenchmarkTrustStatisticsReceiptFields({ rows, preregistration: policy }, {
             analysisPlanFingerprint: 'a'.repeat(64),
             rankingPolicyFingerprint: 'b'.repeat(64)
         });
@@ -426,6 +568,10 @@ describe('Benchmark Trust statistical decision', () => {
             minimumEffectMicros: 250000,
             preregistration: {
                 repeatCount: 1,
+                requiredIndependentPromptCount: 3,
+                targetPowerBasisPoints: 8000,
+                assumedMaxPairedStdDevMicros: 50000,
+                powerAnalysisFingerprint: policy.powerAnalysisFingerprint,
                 analysisPlanFingerprint: 'a'.repeat(64)
             },
             rankingPolicyFingerprint: 'b'.repeat(64),
@@ -438,32 +584,60 @@ describe('Benchmark Trust statistical decision', () => {
     test('refuses unrepresentable policy numbers or caller-supplied non-fingerprints', () => {
         const candidateA = `candidate_${'a'.repeat(32)}`;
         const candidateB = `candidate_${'b'.repeat(32)}`;
-        const invalidScale = evaluateBenchmarkTrustStatistics({
-            rows: rowsFor({
-                [candidateA]: { p1: 5, p2: 6 },
-                [candidateB]: { p1: 2, p2: 3 }
-            }),
+        const rows = rowsFor({
+            [candidateA]: { p1: 5, p2: 6.1, p3: 6.9 },
+            [candidateB]: { p1: 2, p2: 3, p3: 4 }
+        });
+        const invalidScale = {
+            rows,
             preregistration: preregistration({
                 alpha: 0.05001,
                 candidateIds: [candidateA, candidateB]
             })
-        });
+        };
         expect(() => buildBenchmarkTrustStatisticsReceiptFields(invalidScale, {
             analysisPlanFingerprint: 'a'.repeat(64),
             rankingPolicyFingerprint: 'b'.repeat(64)
         })).toThrow(/receipt scale/);
 
-        const valid = evaluateBenchmarkTrustStatistics({
-            rows: rowsFor({
-                [candidateA]: { p1: 5, p2: 6 },
-                [candidateB]: { p1: 2, p2: 3 }
-            }),
+        const valid = {
+            rows,
             preregistration: preregistration({ candidateIds: [candidateA, candidateB] })
-        });
+        };
         expect(() => buildBenchmarkTrustStatisticsReceiptFields(valid, {
             analysisPlanFingerprint: 'not-a-fingerprint',
             rankingPolicyFingerprint: 'b'.repeat(64)
         })).toThrow(/analysisPlanFingerprint/);
+    });
+
+    test('never projects a caller-supplied or mutated evaluation object', () => {
+        const candidateA = `candidate_${'a'.repeat(32)}`;
+        const candidateB = `candidate_${'b'.repeat(32)}`;
+        const forged = {
+            method: { name: STATISTICS_METHOD.name, multiplicity: STATISTICS_METHOD.multiplicity },
+            preregistration: preregistration({ candidateIds: [candidateA, candidateB] }),
+            candidateSummaries: [{ candidateId: candidateA }, { candidateId: candidateB }],
+            decision: { outcome: 'winner', winner: candidateA, equivalenceSet: [] }
+        };
+
+        expect(() => buildBenchmarkTrustStatisticsReceiptFields(forged, {
+            analysisPlanFingerprint: 'a'.repeat(64),
+            rankingPolicyFingerprint: 'b'.repeat(64)
+        })).toThrow(/raw rows/);
+
+        const rows = rowsFor({
+            [candidateA]: { p1: 5, p2: 6.1, p3: 6.9 },
+            [candidateB]: { p1: 2, p2: 3, p3: 4 }
+        });
+        const genuine = evaluateBenchmarkTrustStatistics({
+            rows,
+            preregistration: preregistration({ candidateIds: [candidateA, candidateB] })
+        });
+        genuine.decision.winner = candidateB;
+        expect(() => buildBenchmarkTrustStatisticsReceiptFields(genuine, {
+            analysisPlanFingerprint: 'a'.repeat(64),
+            rankingPolicyFingerprint: 'b'.repeat(64)
+        })).toThrow(/raw rows/);
     });
 
     test('fails closed on undeclared candidates or prompts in a preregistered scope', () => {

@@ -6,6 +6,10 @@ v0.1.1.
 
 ## Product trust and experience
 
+- Inference analytics now groups consumer traffic by the server-attested
+  `consumerContract` field and no longer returns caller-controlled
+  `callerDetail` aggregate values. The external-consumer route supplies its
+  own bounded contract label so attribution never depends on a body claim.
 - Product health now carries version, profile, revision, and observation time;
   the full-profile ecosystem snapshot reconciles readiness, freshness,
   identity consistency, source coverage, and a zero-contradiction budget.

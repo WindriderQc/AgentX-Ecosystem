@@ -7,7 +7,6 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../../config/logger');
 const BenchmarkResult = require('../../models/BenchmarkResult');
-const JudgeAccuracyMatrix = require('../../models/JudgeAccuracyMatrix');
 const {
     resolveTrustedEvidenceCohort,
     buildConsumerTrustVerdict
@@ -18,31 +17,21 @@ const {
  * Exported for unit testing.
  *
  * @param {Array}  results          - Aggregated {model, host, avg_quality, count, judge_model}
- * @param {Set}    calibratedJudges - Set of judge_model strings that have calibrated matrices
  * @param {Object} trustVerdict - Consumer-facing verdict from the cohort authority
  * @returns {Array} Sorted recommendation objects
  */
-function buildRecommendations(results, calibratedJudges, trustVerdict = {}) {
+function buildRecommendations(results, trustVerdict = {}) {
     return results
         .map(r => {
             const count = r.count || 0;
-            const judgeCalibrated = calibratedJudges.has(r.judge_model || '');
-            let confidence = 'low';
-            let confidenceBasis = 'unqualified_or_insufficient_evidence';
-            if (trustVerdict.state === 'trusted' && (count >= 5 || judgeCalibrated)) {
-                confidence = 'medium';
-                confidenceBasis = judgeCalibrated
-                    ? 'trusted_cohort_with_model_only_calibration'
-                    : 'trusted_cohort_sample_size';
-            }
 
             return {
                 model: r.model,
                 host: r.host,
                 quality_score: Math.round((r.avg_quality || 0) * 10) / 10,
                 result_count: count,
-                confidence,
-                confidence_basis: confidenceBasis,
+                confidence: 'low',
+                confidence_basis: 'unqualified_observation',
                 evidence_level: trustVerdict.state || 'inconclusive',
                 qualified: false
             };
@@ -125,9 +114,6 @@ router.get('/', async (req, res) => {
             { $limit: 20 }
         ]);
 
-        const matrices = await JudgeAccuracyMatrix.find({}).select('judge_model').lean();
-        const calibratedJudges = new Set(matrices.map(m => m.judge_model));
-
         const trustVerdict = buildConsumerTrustVerdict({
             trustScope,
             cohortResolution,
@@ -138,7 +124,7 @@ router.get('/', async (req, res) => {
             })),
             comparisonSufficient: trustScope === 'trusted' ? results.length >= 2 : null
         });
-        const recommendations = buildRecommendations(results, calibratedJudges, trustVerdict);
+        const recommendations = buildRecommendations(results, trustVerdict);
 
         res.json({
             status: 'success',

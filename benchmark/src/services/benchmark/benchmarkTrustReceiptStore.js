@@ -4,6 +4,7 @@ const BenchmarkTrustReceipt = require('../../../models/BenchmarkTrustReceipt');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const { withBenchmarkTrustEvidenceLock } = require('./benchmarkTrustEvidenceLock');
+const { verifyBenchmarkTrustSourceEvidence } = require('./benchmarkTrustSourceEvidence');
 
 const RECEIPT_ID_PATTERN = /^[0-9a-f]{64}$/;
 const SOURCE_BATCH_ID_PATTERN = /^batch_[0-9a-f]{32}$/;
@@ -61,12 +62,27 @@ function requireReadLimit(limit) {
  * is intact and byte-for-byte canonical-equivalent. No upsert or update path
  * exists for this collection.
  */
-async function storeBenchmarkTrustReceipt(rawReceipt, { verifySourceEvidence } = {}) {
+async function storeBenchmarkTrustReceipt(rawReceipt, options = {}) {
     const record = BenchmarkTrustReceipt.buildStoredRecord(rawReceipt);
+    if (Object.prototype.hasOwnProperty.call(options || {}, 'verifySourceEvidence')) {
+        throw storeError(
+            'BENCHMARK_TRUST_LEGACY_SOURCE_VERIFIER_FORBIDDEN',
+            'caller-supplied source verification cannot replace Product canonical verification',
+            409
+        );
+    }
+    const verifyExternalSourceEvidence = options?.verifyExternalSourceEvidence;
+    if (verifyExternalSourceEvidence != null && typeof verifyExternalSourceEvidence !== 'function') {
+        throw storeError(
+            'BENCHMARK_TRUST_EXTERNAL_SOURCE_VERIFIER_INVALID',
+            'verifyExternalSourceEvidence must be a function when supplied',
+            409
+        );
+    }
     return withBenchmarkTrustEvidenceLock('store-benchmark-trust-receipt', async () => {
         const linkedBatch = await BenchmarkBatch.findOne({
             trust_batch_id: record.sourceBatchId
-        }).select('_id status trust_evidence_sealed').lean();
+        }).select('_id status started_at execution_started_at completed_at updated_at trust_evidence_sealed trust_batch_id +trust_evidence_context +trust_evidence_committed_at +trust_evidence_finalized_at').lean();
         if (!linkedBatch) {
             throw storeError(
                 'BENCHMARK_TRUST_SOURCE_BATCH_NOT_FOUND',
@@ -103,13 +119,6 @@ async function storeBenchmarkTrustReceipt(rawReceipt, { verifySourceEvidence } =
                 409
             );
         }
-        if (typeof verifySourceEvidence !== 'function') {
-            throw storeError(
-                'BENCHMARK_TRUST_SOURCE_EVIDENCE_NOT_VERIFIED',
-                'receipt source inventory and fingerprints require an explicit verifier',
-                409
-            );
-        }
         await BenchmarkTrustReceipt.init();
 
         const sealedResultCount = await BenchmarkResult.countDocuments({
@@ -138,6 +147,11 @@ async function storeBenchmarkTrustReceipt(rawReceipt, { verifySourceEvidence } =
                     _id: linkedBatch._id,
                     status: linkedBatch.status,
                     trust_batch_id: record.sourceBatchId,
+                    started_at: linkedBatch.started_at ?? null,
+                    execution_started_at: linkedBatch.execution_started_at ?? null,
+                    completed_at: linkedBatch.completed_at ?? null,
+                    updated_at: linkedBatch.updated_at ?? null,
+                    trust_evidence_finalized_at: linkedBatch.trust_evidence_finalized_at ?? null,
                     trust_evidence_sealed: { $ne: true }
                 },
                 { $set: { trust_evidence_sealed: true } }
@@ -201,6 +215,11 @@ async function storeBenchmarkTrustReceipt(rawReceipt, { verifySourceEvidence } =
             _id: linkedBatch._id,
             status: linkedBatch.status,
             trust_batch_id: record.sourceBatchId,
+            started_at: linkedBatch.started_at ?? null,
+            execution_started_at: linkedBatch.execution_started_at ?? null,
+            completed_at: linkedBatch.completed_at ?? null,
+            updated_at: linkedBatch.updated_at ?? null,
+            trust_evidence_finalized_at: linkedBatch.trust_evidence_finalized_at ?? null,
             trust_evidence_sealed: true
         });
         if (
@@ -216,23 +235,40 @@ async function storeBenchmarkTrustReceipt(rawReceipt, { verifySourceEvidence } =
             );
         }
 
-        let sourceEvidenceVerified = false;
+        let canonicalEvidence;
         try {
-            sourceEvidenceVerified = await verifySourceEvidence({
+            canonicalEvidence = await verifyBenchmarkTrustSourceEvidence({
                 receipt: record.payload,
                 batch: { ...linkedBatch, trust_evidence_sealed: true },
-                sourceResultCount: finalResultCount
-            }) === true;
-        } catch (_error) {
-            sourceEvidenceVerified = false;
-        }
-        if (!sourceEvidenceVerified) {
+                now: new Date()
+            });
+        } catch (error) {
             await rollbackSealIfUnreferenced();
-            throw storeError(
-                'BENCHMARK_TRUST_SOURCE_EVIDENCE_NOT_VERIFIED',
-                'receipt source inventory and fingerprints were not verified',
-                409
-            );
+            throw error;
+        }
+
+        // Environment-specific verification may strengthen Product evidence,
+        // but it can never replace the canonical Mongo/context recomputation.
+        if (verifyExternalSourceEvidence) {
+            let externalVerified = false;
+            try {
+                externalVerified = await verifyExternalSourceEvidence({
+                    receipt: record.payload,
+                    batch: { ...linkedBatch, trust_evidence_sealed: true },
+                    sourceResultCount: finalResultCount,
+                    canonicalEvidence
+                }) === true;
+            } catch (_error) {
+                externalVerified = false;
+            }
+            if (!externalVerified) {
+                await rollbackSealIfUnreferenced();
+                throw storeError(
+                    'BENCHMARK_TRUST_EXTERNAL_SOURCE_EVIDENCE_NOT_VERIFIED',
+                    'external source evidence verification failed after canonical verification',
+                    409
+                );
+            }
         }
 
         try {

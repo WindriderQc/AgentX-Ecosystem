@@ -71,10 +71,14 @@ the statistical method, alpha, multiplicity correction, minimum effect and
 decision artifact. The opaque `sourceBatchId` is the durable Product mapping
 used by storage and retention to protect the exact referenced result batch; it
 is not a private Mongo identifier.
-The statistical preregistration binds an explicit `repeatCount` and immutable
-analysis-plan fingerprint. A separate ranking-policy fingerprint freezes the
-policy that interprets those statistics. The only statistical
-method/correction accepted by v1 is
+The statistical preregistration binds an explicit `repeatCount`, the required
+independent-prompt count, target power, the conservative maximum paired
+standard deviation, and immutable power-analysis and analysis-plan
+fingerprints. Product recomputes the required prompt count from those inputs;
+an undersized prompt universe, a forged power fingerprint, or zero/non-finite
+observed paired variance can produce only an inconclusive decision. A separate
+ranking-policy fingerprint freezes the policy that interprets those
+statistics. The only statistical method/correction accepted by v1 is
 `paired-prompt-t-v1`: repeats are averaged within prompt, paired Student-t
 intervals use prompt as the independent unit, and `bonferroni` covers every
 candidate pair. Bootstrap, permutation, Holm and uncorrected (`none`) claims
@@ -85,23 +89,40 @@ otherwise a winner is structurally impossible. A compact cell inventory binds
 its artifact fingerprint, exact cell count, and minimum/maximum repeat
 cardinality so a missing cell cannot be hidden by a duplicate elsewhere.
 
+Every stored score is also bound to a normalized, content-addressed
+`agentx.worker-receipt/v1`. Product recomputes its result fingerprint from the
+exact candidate, prompt, repeat, response, score, rubric, and judge identity,
+so a minimal receipt, a modified receipt, or reuse across rows fails closed.
+This proves content integrity and row binding; issuer authority still comes
+from the separately verified judge qualification attestation.
+
 Excluded results require a manifest fingerprint and remain part of the full
 inventory. Unknown schema versions, unknown keys, duplicate candidates,
 non-finite numbers, bad fingerprints and contradictory decisions fail closed.
 
 ## Integration sequence
 
-1. A harness freezes inputs and produces the complete evidence artifacts.
-2. Product code builds and validates the immutable receipt.
-3. Before persistence, an explicit source-evidence verifier recomputes the
-   inventory and fingerprints against a terminal source batch. Product then
-   seals those exact result rows against update or deletion.
-4. AIOps independently verifies the receipt, judge qualification and freshness.
-5. A human reviewer issues the separate ratification attestation for the exact
+1. Before execution, Product server code commits a strict source context to a
+   pending, empty batch. The server-owned commit timestamp proves precedence;
+   caller-authored or post-start timestamps are not accepted.
+2. A harness executes that context and persists the opaque preregistered
+   candidate and prompt identities on every result row.
+3. Product code builds and validates the immutable receipt from raw rows, not
+   from a caller-supplied statistical evaluation.
+4. Before persistence, the mandatory Product source verifier reloads the
+   sealed Mongo rows and recomputes identities, inventory, exclusions,
+   fingerprints, statistics and decision against the terminal source batch.
+   A deployment-specific verifier may only add another check; it cannot replace
+   Product verification. Product then keeps those exact rows immutable.
+5. AIOps independently verifies the receipt, judge qualification and freshness.
+6. A human reviewer issues the separate ratification attestation for the exact
    `receiptId`, or later issues a revocation.
-6. A consumer derives the qualification state at read time. Promotion remains
+7. A consumer derives the qualification state at read time. Promotion remains
    a separate guarded AIOps action.
 
 The integrated foundation provides append-only persistence and bounded read
 endpoints only. It intentionally provides no HTTP issuance, campaign runner,
-ratification, routing, or promotion behavior.
+ratification, routing, or promotion behavior. The general Benchmark runtime
+does not yet populate the strict source context or opaque result identities;
+legacy and ordinary batches therefore remain deliberately ineligible for
+receipt issuance instead of receiving inferred evidence.

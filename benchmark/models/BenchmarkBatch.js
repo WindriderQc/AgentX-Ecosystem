@@ -102,6 +102,31 @@ const BenchmarkBatchSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.Mixed,
         default: null
     },
+    // Product-owned, private source context for BenchmarkTrustReceipt issuance.
+    // It is written only when a future campaign launcher can freeze every
+    // identity and policy before execution. Legacy batches intentionally keep
+    // this null and are therefore not eligible for trust-receipt issuance.
+    trust_evidence_context: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null,
+        select: false
+    },
+    // Set only by commitTrustEvidenceContext() while the batch is still
+    // pending and empty. This server timestamp, not any caller-supplied date,
+    // proves that preregistration preceded execution.
+    trust_evidence_committed_at: {
+        type: Date,
+        default: null,
+        select: false
+    },
+    // Set by finalizeTrustEvidenceBatch() in the same server-owned transition
+    // as completed_at. Its presence closes every later model mutation path.
+    trust_evidence_finalized_at: {
+        type: Date,
+        default: null,
+        immutable: true,
+        select: false
+    },
     execution_mode: {
         type: String,
         enum: ['latency', 'throughput'],
@@ -339,7 +364,8 @@ const BenchmarkBatchSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
-    // Set only by the trust-receipt store after terminal source verification.
+    // Set only by the Product Trust finalizer (or the receipt store's
+    // fail-closed compatibility seal path) through raw internal CAS writes.
     // A sealed batch is immutable evidence; corrections require a new batch.
     trust_evidence_sealed: {
         type: Boolean,
@@ -837,6 +863,29 @@ function protectedBatchEvidenceError(operation) {
     return error;
 }
 
+function protectedBatchContextError(operation) {
+    const error = new Error(`Benchmark trust source context is immutable and server-committed; ${operation} is forbidden`);
+    error.code = 'BENCHMARK_TRUST_SOURCE_CONTEXT_IMMUTABLE';
+    error.statusCode = 409;
+    return error;
+}
+
+const TRUST_TERMINAL_BATCH_STATUSES = new Set(['completed', 'failed', 'stopped', 'interrupted']);
+
+function aggregateContainsWriteStage(value) {
+    if (Array.isArray(value)) return value.some(aggregateContainsWriteStage);
+    if (!value || typeof value !== 'object') return false;
+    return Object.entries(value).some(([key, entry]) => (
+        key === '$merge' || key === '$out' || aggregateContainsWriteStage(entry)
+    ));
+}
+
+BenchmarkBatchSchema.pre('aggregate', function blockBatchAggregateWrites() {
+    if (aggregateContainsWriteStage(this.pipeline())) {
+        throw protectedBatchEvidenceError('aggregate write stage');
+    }
+});
+
 for (const operation of [
     'updateOne',
     'updateMany',
@@ -849,36 +898,138 @@ for (const operation of [
     'findOneAndRemove'
 ]) {
     BenchmarkBatchSchema.pre(operation, async function blockSealedBatchQueryMutation() {
+        if (this.getOptions()?.upsert === true) {
+            throw protectedBatchContextError(`${operation} with upsert`);
+        }
         const update = this.getUpdate() || {};
+        if (Array.isArray(update)) {
+            throw protectedBatchEvidenceError(`${operation} with update pipeline`);
+        }
         if (['replaceOne', 'findOneAndReplace'].includes(operation)) {
             throw protectedBatchEvidenceError(operation);
         }
-        const touchesTrustBatchId = JSON.stringify(update).includes('"trust_batch_id"');
+        const pathMatches = (path, roots) => {
+            if (typeof path !== 'string') return false;
+            const normalized = path.startsWith('$') ? path.slice(1) : path;
+            return roots.some(root => normalized === root || normalized.startsWith(`${root}.`));
+        };
+        const operators = Object.entries(update)
+            .filter(([key, value]) => key.startsWith('$') && value && typeof value === 'object')
+            .map(([, value]) => value);
+        const directPaths = Object.keys(update).filter(key => !key.startsWith('$'));
+        const operatorPaths = operators.flatMap(value => Object.keys(value));
+        const renameTargets = Object.entries(update.$rename || {}).flatMap(([from, to]) => [from, to]);
+        const touchedPaths = [...directPaths, ...operatorPaths, ...renameTargets];
+        const touchesTrustBatchId = touchedPaths.some(path => pathMatches(path, ['trust_batch_id']));
+        const touchesTrustSeal = touchedPaths.some(path => pathMatches(path, ['trust_evidence_sealed']));
+        const touchesTrustContext = touchedPaths.some(path => (
+            path === 'trust_evidence_context'
+            || path.startsWith('trust_evidence_context.')
+            || path === 'trust_evidence_committed_at'
+            || path.startsWith('trust_evidence_committed_at.')
+            || path === 'trust_evidence_finalized_at'
+            || path.startsWith('trust_evidence_finalized_at.')
+        ));
         if (touchesTrustBatchId) {
             throw protectedBatchEvidenceError(`${operation} changing trust_batch_id`);
         }
+        if (touchesTrustSeal) {
+            throw protectedBatchEvidenceError(`${operation} changing server evidence seal`);
+        }
+        if (touchesTrustContext) {
+            throw protectedBatchContextError(`${operation} changing trust source context`);
+        }
         const originalFilter = this.getFilter() || {};
+        const isDeleteOperation = operation.startsWith('delete')
+            || operation.includes('Delete')
+            || operation.includes('Remove');
+        if (isDeleteOperation) {
+            const trustContextMatch = await this.model.exists({
+                $and: [originalFilter, { trust_evidence_context: { $ne: null } }]
+            });
+            if (trustContextMatch) {
+                throw protectedBatchContextError(`${operation} committed Trust batch`);
+            }
+        }
+        const requestedStatus = update.$set?.status ?? update.status;
+        const touchesStatus = touchedPaths.some(path => pathMatches(path, ['status']));
+        const touchesCompletedAt = touchedPaths.some(path => pathMatches(path, ['completed_at']));
+        const statusUsesUnsafeOperator = Object.entries(update).some(([operator, value]) => (
+            operator.startsWith('$')
+            && operator !== '$set'
+            && value && typeof value === 'object'
+            && Object.keys(value).some(path => pathMatches(path, ['status']))
+        ));
+        if (TRUST_TERMINAL_BATCH_STATUSES.has(requestedStatus)
+            || touchesCompletedAt
+            || statusUsesUnsafeOperator
+            || (touchesStatus && requestedStatus == null)) {
+            const trustContextMatch = await this.model.exists({
+                $and: [originalFilter, { trust_evidence_context: { $ne: null } }]
+            });
+            if (trustContextMatch) {
+                throw protectedBatchContextError(`${operation} terminal transition outside Trust finalizer`);
+            }
+        }
         const sealedMatch = await this.model.exists({
             $and: [originalFilter, { trust_evidence_sealed: true }]
         });
         if (sealedMatch) throw protectedBatchEvidenceError(operation);
+        const finalizedMatch = await this.model.exists({
+            $and: [originalFilter, { trust_evidence_finalized_at: { $ne: null } }]
+        });
+        if (finalizedMatch) throw protectedBatchEvidenceError(`${operation} after Trust finalization`);
         this.setQuery({
-            $and: [originalFilter, { trust_evidence_sealed: { $ne: true } }]
+            $and: [
+                originalFilter,
+                { trust_evidence_sealed: { $ne: true } },
+                { trust_evidence_finalized_at: null }
+            ]
         });
     });
 }
 
 BenchmarkBatchSchema.pre('save', async function serializeBatchDocumentSave() {
-    if (this.isNew) return;
+    if (this.isNew) {
+        if (this.trust_evidence_context != null
+            || this.trust_evidence_committed_at != null
+            || this.trust_evidence_finalized_at != null
+            || this.trust_evidence_sealed === true) {
+            throw protectedBatchContextError('document creation with caller-supplied trust source context');
+        }
+        return;
+    }
+    if (this.isModified('trust_evidence_context')
+        || this.isModified('trust_evidence_committed_at')
+        || this.isModified('trust_evidence_finalized_at')
+        || this.isModified('trust_evidence_sealed')) {
+        throw protectedBatchContextError('document.save changing trust source context');
+    }
+    if ((this.isModified('status') && TRUST_TERMINAL_BATCH_STATUSES.has(this.status))
+        || this.isModified('completed_at')) {
+        const trustContextMatch = await this.constructor.exists({
+            _id: this._id,
+            trust_evidence_context: { $ne: null }
+        });
+        if (trustContextMatch) {
+            throw protectedBatchContextError('document.save terminal transition outside Trust finalizer');
+        }
+    }
     this.$where = {
         ...(this.$where || {}),
-        trust_evidence_sealed: { $ne: true }
+        trust_evidence_sealed: { $ne: true },
+        trust_evidence_finalized_at: null
     };
     const sealed = await this.constructor.exists({
         _id: this._id,
         trust_evidence_sealed: true
     });
     if (sealed) throw protectedBatchEvidenceError('document.save');
+    const finalized = await this.constructor.exists({
+        _id: this._id,
+        trust_evidence_finalized_at: { $ne: null }
+    });
+    if (finalized) throw protectedBatchEvidenceError('document.save after Trust finalization');
 });
 
 BenchmarkBatchSchema.pre('deleteOne', { document: true, query: false }, function blockBatchDocumentDelete() {
@@ -888,10 +1039,146 @@ BenchmarkBatchSchema.pre('deleteOne', { document: true, query: false }, function
 const BenchmarkBatch = mongoose.models.BenchmarkBatch
     || mongoose.model('BenchmarkBatch', BenchmarkBatchSchema);
 
+BenchmarkBatch.commitTrustEvidenceContext = async function commitTrustEvidenceContext(batchId, rawContext) {
+    const { withBenchmarkTrustEvidenceLock } = require('../src/services/benchmark/benchmarkTrustEvidenceLock');
+    const { normalizeSourceContext } = require('../src/services/benchmark/benchmarkTrustSourceEvidence');
+    const BenchmarkResult = require('./BenchmarkResult');
+    const context = normalizeSourceContext(rawContext);
+
+    return withBenchmarkTrustEvidenceLock('commit-benchmark-trust-source-context', async () => {
+        const batch = await this.findById(batchId)
+            .select('_id status started_at execution_started_at trust_batch_id trust_evidence_sealed +trust_evidence_context +trust_evidence_committed_at +trust_evidence_finalized_at')
+            .lean();
+        if (!batch || String(batch.trust_batch_id || '') !== context.sourceBatchId) {
+            throw protectedBatchContextError('commit for a different or missing source batch');
+        }
+        if (batch.status !== 'pending' || batch.started_at != null || batch.execution_started_at != null) {
+            throw protectedBatchContextError('commit after batch start');
+        }
+        if (batch.trust_evidence_context != null || batch.trust_evidence_committed_at != null) {
+            throw protectedBatchContextError('second context commit');
+        }
+        if (batch.trust_evidence_sealed === true
+            || batch.trust_evidence_finalized_at != null
+            || await BenchmarkResult.exists({ batch_id: batch._id })) {
+            throw protectedBatchContextError('commit after result evidence exists');
+        }
+
+        const committedAt = new Date();
+        const update = await this.collection.updateOne(
+            {
+                _id: batch._id,
+                status: 'pending',
+                started_at: null,
+                execution_started_at: null,
+                trust_evidence_sealed: { $ne: true },
+                trust_evidence_finalized_at: null,
+                trust_evidence_context: null,
+                trust_evidence_committed_at: null
+            },
+            {
+                $set: {
+                    trust_evidence_context: context,
+                    trust_evidence_committed_at: committedAt
+                }
+            }
+        );
+        if (update.matchedCount !== 1) {
+            throw protectedBatchContextError('context commit lost an ordering race');
+        }
+        return { context, committedAt };
+    }, { waitMs: 30_000 });
+};
+
+BenchmarkBatch.finalizeTrustEvidenceBatch = async function finalizeTrustEvidenceBatch(batchId, options = {}) {
+    const { withBenchmarkTrustEvidenceLock } = require('../src/services/benchmark/benchmarkTrustEvidenceLock');
+    const BenchmarkResult = require('./BenchmarkResult');
+    const terminalStatus = options.status || 'completed';
+    if (!TRUST_TERMINAL_BATCH_STATUSES.has(terminalStatus)) {
+        throw protectedBatchContextError('Trust finalizer with non-terminal status');
+    }
+    return withBenchmarkTrustEvidenceLock('finalize-benchmark-trust-source-batch', async () => {
+        const batch = await this.findById(batchId)
+            .select('_id status started_at execution_started_at trust_evidence_sealed +trust_evidence_context +trust_evidence_finalized_at')
+            .lean();
+        if (!batch?.trust_evidence_context) {
+            throw protectedBatchContextError('Trust finalizer without committed context');
+        }
+        if (TRUST_TERMINAL_BATCH_STATUSES.has(batch.status)
+            || batch.trust_evidence_sealed === true
+            || batch.trust_evidence_finalized_at != null) {
+            throw protectedBatchContextError('Trust finalizer after terminal or sealed state');
+        }
+        if (batch.started_at == null || batch.execution_started_at == null) {
+            throw protectedBatchContextError('Trust finalizer before execution start');
+        }
+        const alreadyFinalizedResultCount = await BenchmarkResult.countDocuments({
+            batch_id: batch._id,
+            trust_evidence_sealed: true
+        });
+        if (alreadyFinalizedResultCount !== 0) {
+            throw protectedBatchContextError('Trust finalizer found a partial finalized result inventory');
+        }
+        const resultFinalization = await BenchmarkResult.collection.updateMany(
+            {
+                batch_id: batch._id,
+                trust_evidence_sealed: { $ne: true }
+            },
+            { $set: { trust_evidence_sealed: true } }
+        );
+        const [resultCount, succeededCount] = await Promise.all([
+            BenchmarkResult.countDocuments({ batch_id: batch._id }),
+            BenchmarkResult.countDocuments({ batch_id: batch._id, success: true })
+        ]);
+        if (resultFinalization.matchedCount !== resultCount) {
+            throw protectedBatchContextError('Trust finalizer lost a result mutation race');
+        }
+        const completedAt = new Date();
+        const update = await this.collection.updateOne(
+            {
+                _id: batch._id,
+                trust_evidence_sealed: { $ne: true },
+                trust_evidence_finalized_at: null,
+                trust_evidence_context: { $ne: null }
+            },
+            {
+                $set: {
+                    status: terminalStatus,
+                    completed_at: completedAt,
+                    completed: succeededCount,
+                    failed: resultCount - succeededCount,
+                    active_slot: null,
+                    trust_evidence_sealed: true,
+                    trust_evidence_finalized_at: completedAt,
+                    updated_at: completedAt
+                }
+            }
+        );
+        if (update.matchedCount !== 1) {
+            throw protectedBatchContextError('Trust finalizer lost a state transition race');
+        }
+        return this.findById(batch._id)
+            .select('+trust_evidence_context +trust_evidence_committed_at +trust_evidence_finalized_at');
+    }, { waitMs: 30_000 });
+};
+
 BenchmarkBatch.bulkWrite = async function blockedBenchmarkBatchBulkWrite() {
     throw protectedBatchEvidenceError('bulkWrite');
 };
 
+const unguardedBenchmarkBatchInsertMany = BenchmarkBatch.insertMany.bind(BenchmarkBatch);
+BenchmarkBatch.insertMany = async function guardedBenchmarkBatchInsertMany(documents, options) {
+    const rows = Array.isArray(documents) ? documents : [documents];
+    if (rows.some(row => row?.trust_evidence_context != null
+        || row?.trust_evidence_committed_at != null
+        || row?.trust_evidence_finalized_at != null
+        || row?.trust_evidence_sealed === true)) {
+        throw protectedBatchContextError('insertMany with caller-supplied trust source context');
+    }
+    return unguardedBenchmarkBatchInsertMany(documents, options);
+};
+
 BenchmarkBatch.PROTECTED_EVIDENCE_ERROR_CODE = 'BENCHMARK_TRUST_BATCH_EVIDENCE_SEALED';
+BenchmarkBatch.PROTECTED_CONTEXT_ERROR_CODE = 'BENCHMARK_TRUST_SOURCE_CONTEXT_IMMUTABLE';
 
 module.exports = BenchmarkBatch;

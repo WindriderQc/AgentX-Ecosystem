@@ -81,12 +81,9 @@ async function backfillBenchmarkTrustBatchIds({
     };
     if (dryRun) return summary;
 
-    const cursor = collection.find(MISSING_FILTER, { projection: { _id: 1 } });
-    for await (const row of cursor) {
-        const outcome = await assignOneTrustBatchId(collection, row._id, createId);
-        if (outcome === 'assigned') summary.assignedCount += 1;
-        else summary.skippedCount += 1;
-    }
+    // Install the uniqueness guard before assigning any value. Missing values
+    // are outside the partial index, so this is safe for legacy rows and makes
+    // the E11000 retry in assignOneTrustBatchId effective on the first apply.
     await collection.createIndex(
         { trust_batch_id: 1 },
         {
@@ -95,6 +92,13 @@ async function backfillBenchmarkTrustBatchIds({
             name: INDEX_NAME
         }
     );
+
+    const cursor = collection.find(MISSING_FILTER, { projection: { _id: 1 } });
+    for await (const row of cursor) {
+        const outcome = await assignOneTrustBatchId(collection, row._id, createId);
+        if (outcome === 'assigned') summary.assignedCount += 1;
+        else summary.skippedCount += 1;
+    }
     return summary;
 }
 

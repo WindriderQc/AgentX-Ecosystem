@@ -247,6 +247,19 @@ describe('leaderboard evidence-honesty UI', () => {
         expect(container.innerHTML).not.toContain('🥇');
     });
 
+    test('keeps the legacy generalist table fail-closed if it is reactivated', () => {
+        const source = fs.readFileSync(path.join(PUBLIC_ROOT, 'generalist-board.js'), 'utf8');
+
+        expect(source).toContain('Quality observations');
+        expect(source).toContain('<th>Position</th>');
+        expect(source).toContain('not a receipt-qualified comparison or promotion decision');
+        expect(source).toContain('not Trust qualification');
+        expect(source).not.toContain('stays apples-to-apples');
+        expect(source).not.toContain('style="color:var(--r-good)">✓');
+        expect(source).not.toContain('🥇');
+        expect(source).not.toContain('Best in ${label}');
+    });
+
     test('labels the simple category mean and disables comparative highlights across different scopes', () => {
         const { renderCategoryMap } = loadBrowserModule(
             'category-map.js',

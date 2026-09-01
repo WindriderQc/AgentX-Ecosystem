@@ -37,6 +37,10 @@ async function init() {
     // Restore shell
     main.innerHTML = `
         <section id="hero"></section>
+        <div class="eff-evidence-note" role="status">
+            <i class="fas fa-shield-halved"></i>
+            Efficiency values are measured observations only. Without a verified Benchmark Trust receipt and ratification, they are not medals, winners, or promotion authority.
+        </div>
         ${unrankedCount > 0 ? `
             <div class="eff-evidence-note" role="status">
                 <i class="fas fa-circle-info"></i>
@@ -54,7 +58,7 @@ async function init() {
         <div id="rankings" class="r-section">
             <div class="r-sec-head">
                 <span class="r-sec-icon"><i class="fas fa-ranking-star"></i></span>
-                <span class="r-sec-title r-t-green">Rankings</span>
+                <span class="r-sec-title r-t-green">Measured observations</span>
                 <span class="r-sec-count">${entries.length} measured combos</span>
             </div>
             <div id="rankings-body"></div>

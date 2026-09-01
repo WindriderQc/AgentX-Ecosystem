@@ -107,7 +107,7 @@ function renderDimensionBreakdowns(d) {
   if (!container) return;
   const dimensions = [
     ['Caller', d.byCaller || [], 'caller'],
-    ['Caller Detail', d.byCallerDetail || [], 'callerDetail'],
+    ['Consumer Contract', d.byConsumerContract || [], 'consumerContract'],
     ['Task Type', d.byTaskType || [], 'taskType'],
     ['Fallback Used', d.byFallbackUsed || [], 'fallbackUsed'],
     ['Degraded', d.byDegraded || [], 'degraded'],
