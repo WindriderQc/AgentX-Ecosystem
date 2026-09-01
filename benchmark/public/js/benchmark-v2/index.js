@@ -220,6 +220,16 @@ function _getWorkflowState() {
     else if (!judge.model) blockedReason = 'Choose a judge model';
     else if (promptCount <= 0) blockedReason = 'Enable at least one test level';
 
+    const executionTargetReady = !!host || (localModelCount === 0 && cloudModelCount > 0);
+    const selectedHostLabel = host?.displayName || host?.name || host?.hostname || 'Selected host';
+    const executionTargetLabel = host
+        ? `${selectedHostLabel}${cloudModelCount > 0 ? ` + ${cloudModelCount} cloud` : ''}`
+        : executionTargetReady
+            ? 'Cloud harnesses'
+            : localModelCount > 0
+                ? 'Select host for local models'
+                : 'Select execution target';
+
     return {
         host,
         modelCount,
@@ -230,6 +240,8 @@ function _getWorkflowState() {
         testCount,
         ready: !blockedReason,
         blockedReason,
+        executionTargetReady,
+        executionTargetLabel,
         hostName: host?.displayName || host?.name || host?.hostname || (cloudModelCount > 0 ? 'Cloud harnesses' : ''),
     };
 }
@@ -363,16 +375,20 @@ function _updateWorkflowGuide() {
         return;
     }
 
-    _setWorkflowStep('host', state.host ? 'done' : 'current', state.host ? state.hostName : 'Select execution target');
+    _setWorkflowStep(
+        'host',
+        state.executionTargetReady ? 'done' : 'current',
+        state.executionTargetLabel
+    );
     _setWorkflowStep(
         'models',
-        (!state.host && state.cloudModelCount === 0) ? 'locked' : state.modelCount > 0 ? 'done' : 'current',
-        (!state.host && state.cloudModelCount === 0) ? 'Waiting for host or cloud target' : state.modelCount > 0 ? `${state.modelCount} selected` : 'Pick contenders'
+        !state.executionTargetReady ? 'locked' : state.modelCount > 0 ? 'done' : 'current',
+        !state.executionTargetReady ? 'Waiting for host or cloud target' : state.modelCount > 0 ? `${state.modelCount} selected` : 'Pick contenders'
     );
     _setWorkflowStep(
         'tests',
-        !state.host || state.modelCount === 0 ? 'locked' : state.judge.model && state.promptCount > 0 ? 'done' : 'current',
-        !state.host || state.modelCount === 0 ? 'Waiting for models' : state.judge.model ? `${state.promptCount} prompts` : 'Choose judge'
+        !state.executionTargetReady || state.modelCount === 0 ? 'locked' : state.judge.model && state.promptCount > 0 ? 'done' : 'current',
+        !state.executionTargetReady || state.modelCount === 0 ? 'Waiting for models' : state.judge.model ? `${state.promptCount} prompts` : 'Choose judge'
     );
     _setWorkflowStep(
         'launch',
@@ -636,7 +652,7 @@ async function _onHostChanged(host) {
 async function _renderBatchConfigForHost(host) {
     if (!$batchConfig) return;
 
-    let prompts = [], config = {}, judgeRoster = null, lastBatch = null, harnessTargets = [];
+    let prompts = [], config = {}, judgeRoster = null, lastBatch = null, harnessTargets = [], harnessCatalogEnabled = false;
     try {
         const [promptsRes, configRes, rosterRes, batchesRes, targetsRes] = await Promise.all([
             fetchPrompts(),
@@ -653,6 +669,7 @@ async function _renderBatchConfigForHost(host) {
         const batches = batchesRes?.data?.batches || [];
         lastBatch = batches[0] || null;
         harnessTargets = targetsRes?.data?.targets || targetsRes?.targets || [];
+        harnessCatalogEnabled = (targetsRes?.data?.enabled ?? targetsRes?.enabled) === true;
     } catch (err) {
         console.warn('[bv2] fetchPrompts/fetchConfig failed:', err.message);
     }
@@ -667,6 +684,7 @@ async function _renderBatchConfigForHost(host) {
             judgeRoster,
             lastBatch,
             harnessTargets,
+            harnessCatalogEnabled,
             onLaunch: _handleLaunch,
         });
         _updateWorkflowGuide();

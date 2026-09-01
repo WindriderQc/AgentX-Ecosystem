@@ -3,6 +3,24 @@ import { esc } from '../benchmark-v2/helpers.js';
 
 let targets = [];
 
+function setCampaignAvailability({ enabled, message }) {
+  const select = document.querySelector('#harness-target');
+  const prompt = document.querySelector('#harness-prompt');
+  const confirm = document.querySelector('#harness-confirm');
+  const run = document.querySelector('#harness-run');
+  const availability = document.querySelector('#harness-availability');
+  const canRun = enabled === true && targets.length > 0;
+
+  if (select) select.disabled = !canRun;
+  if (prompt) prompt.disabled = !canRun;
+  if (confirm) confirm.disabled = !canRun;
+  if (run) run.disabled = !canRun;
+  if (availability) {
+    availability.dataset.state = canRun ? 'available' : 'unavailable';
+    availability.textContent = message;
+  }
+}
+
 function costApproval(target, prompt) {
   if (target.tier !== 'paid_cloud') return null;
   const pricing = target.pricing || {};
@@ -27,11 +45,27 @@ function renderCampaigns(rows) {
 }
 
 async function refresh() {
-  const [catalogRes, campaignsRes] = await Promise.all([fetchBenchmarkTargets(), fetchHarnessCampaigns()]);
-  targets = (catalogRes?.data?.targets || []).filter(target => target.mode === 'native_agent' && target.available !== false);
+  const [catalogResult, campaignsResult] = await Promise.allSettled([fetchBenchmarkTargets(), fetchHarnessCampaigns()]);
+  const catalog = catalogResult.status === 'fulfilled' ? catalogResult.value?.data : null;
+  targets = (catalog?.targets || []).filter(target => target.mode === 'native_agent' && target.available !== false);
   const select = document.querySelector('#harness-target');
   select.innerHTML = targets.length ? targets.map(target => `<option value="${esc(target.id)}">${esc(target.harness?.name || 'Harness')} · ${esc(target.provider)} · ${esc(target.label || target.model)} · ${target.tier === 'paid_cloud' ? 'paid' : 'free'}</option>`).join('') : '<option value="">No native-agent target available</option>';
-  renderCampaigns(campaignsRes?.data?.campaigns || []);
+  if (catalogResult.status === 'rejected') {
+    setCampaignAvailability({ enabled: false, message: `Harness catalog unavailable: ${catalogResult.reason?.message || 'unknown error'}. No provider call is possible.` });
+  } else if (catalog?.enabled !== true) {
+    setCampaignAvailability({ enabled: false, message: 'Cloud harnesses are disabled in this environment. No provider call is possible.' });
+  } else if (!targets.length) {
+    setCampaignAvailability({ enabled: false, message: 'The harness broker is enabled, but no attested native-agent target is currently available.' });
+  } else {
+    setCampaignAvailability({ enabled: true, message: `${targets.length} attested native-agent target${targets.length === 1 ? '' : 's'} available.` });
+  }
+
+  if (campaignsResult.status === 'fulfilled') {
+    renderCampaigns(campaignsResult.value?.data?.campaigns || []);
+  } else {
+    const campaigns = document.querySelector('#harness-campaigns');
+    if (campaigns) campaigns.innerHTML = `<p class="harness-note">Campaign evidence unavailable: ${esc(campaignsResult.reason?.message || 'unknown error')}</p>`;
+  }
 }
 
 document.querySelector('#harness-run')?.addEventListener('click', async () => {
@@ -54,4 +88,7 @@ document.querySelector('#harness-run')?.addEventListener('click', async () => {
   } catch (error) { status.textContent = `Campaign failed: ${error.message}`; }
 });
 
-refresh().catch(error => { document.querySelector('#harness-status').textContent = `Catalog unavailable: ${error.message}`; });
+refresh().catch(error => {
+  targets = [];
+  setCampaignAvailability({ enabled: false, message: `Harness UI unavailable: ${error.message}. No provider call is possible.` });
+});

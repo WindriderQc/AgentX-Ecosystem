@@ -133,7 +133,11 @@ export function _buildModelChecklist(host) {
 
     // Summary
     const totalModels = models.length;
-    const checkedCount = saved === null ? totalModels : saved.size;
+    const checkedCount = models.filter((raw) => {
+        const normalized = normModel(raw);
+        if (/embed|nomic|bert|bge|diagnostic/i.test(normalized)) return false;
+        return saved === null || saved.has(raw) || saved.has(normalized);
+    }).length;
     html += `<div class="mc-summary">${checkedCount} of ${totalModels} models selected</div>`;
 
     return html;
@@ -150,11 +154,14 @@ function priceLabel(target) {
     return `manual ~US$${input.toFixed(4)}/${output.toFixed(4)} per 1M in/out`;
 }
 
-export function _buildHarnessChecklist(targets = []) {
+export function _buildHarnessChecklist(targets = [], catalogEnabled = false) {
     const candidates = (Array.isArray(targets) ? targets : [])
         .filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate);
     if (!candidates.length) {
-        return '<div class="mc-tier-group"><div class="mc-tier-header"><span class="mc-tier-label">Cloud harnesses</span></div><div class="mc-preset-tooltip">Cloud Benchmark is disabled or no isolated target is currently attested.</div></div>';
+        const message = catalogEnabled
+            ? 'The harness broker is enabled, but no isolated cloud candidate is currently attested.'
+            : 'Cloud Benchmark is disabled in this environment.';
+        return `<div class="mc-tier-group"><div class="mc-tier-header"><span class="mc-tier-label">Cloud harnesses</span></div><div class="mc-preset-tooltip">${message}</div></div>`;
     }
     const groups = new Map();
     for (const target of candidates) {
