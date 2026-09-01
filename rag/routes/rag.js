@@ -577,6 +577,7 @@ async function handleStatus(req, res) {
     const serviceReady = dependencies.mongodb?.healthy === true
       && dependencies.qdrant?.healthy === true;
     const queryReady = serviceReady && dependencies.embedding?.healthy === true;
+    const status = queryReady ? 'green' : (serviceReady ? 'degraded' : 'red');
 
     // Fire-and-forget Buddy corpus-readiness surface event (surfaceScope:rag).
     // Ready = all deps healthy AND a non-empty corpus → intent:suggesting.
@@ -600,6 +601,9 @@ async function handleStatus(req, res) {
       ok: true,
       data: {
         ...sanitizePublicProjection(stats),
+        // Vector-store adapters may expose their own green status in stats.
+        // Capability status must instead follow end-to-end query readiness.
+        status,
         cache: cacheStats,
         dependencies: sanitizePublicProjection(dependencies),
         // Compatibility: `healthy` has historically meant full query

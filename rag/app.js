@@ -17,6 +17,10 @@ const {
 } = require('./src/clients/coreOutboundClient');
 
 const SERVICE_VERSION = require('./package.json').version || '0.0.0';
+const RAG_SAME_ORIGIN_ACTION_OBSERVATIONS = Object.freeze([
+  Object.freeze({ method: 'POST', path: '/api/rag/status/refresh' }),
+  Object.freeze({ method: 'POST', path: '/api/rag/search' }),
+]);
 
 const app = express();
 app.locals.publicUrls = getPublicUrls();
@@ -32,6 +36,7 @@ app.use(createApiHostGuard({
   serviceHosts: ['rag', 'agentx-rag'],
   publicUrlEnv: ['RAG_PUBLIC_URL'],
   protectMutations: true,
+  sameOriginActionObservationRoutes: RAG_SAME_ORIGIN_ACTION_OBSERVATIONS,
 }));
 
 // EJS templating — shared layouts from core, local pages
@@ -269,3 +274,4 @@ app.use((err, req, res, next) => {
 
 module.exports = app;
 module.exports.checkVectorStoreHealth = checkVectorStoreHealth;
+module.exports.RAG_SAME_ORIGIN_ACTION_OBSERVATIONS = RAG_SAME_ORIGIN_ACTION_OBSERVATIONS;

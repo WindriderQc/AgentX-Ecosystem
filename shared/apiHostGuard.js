@@ -93,12 +93,7 @@ function configuredOrigins(publicUrlEnv, env) {
   }).filter(Boolean));
 }
 
-function sameOriginMutationAllowed(
-  req,
-  allowedHosts,
-  allowedOrigins,
-  { trustLoopbackProxyUi = false, trustedProxyAddresses = new Set() } = {}
-) {
+function sameOriginRequestAllowed(req, allowedHosts, allowedOrigins = new Set(), { exact = false } = {}) {
   const fetchSite = String(req.get?.('sec-fetch-site') || '').trim().toLowerCase();
   if (fetchSite && fetchSite !== 'same-origin') return false;
 
@@ -107,32 +102,60 @@ function sameOriginMutationAllowed(
   const hostname = normalizeHostname(rawHost);
   if (!origin || !rawHost || !allowedHosts.has(hostname)) return false;
 
+  try {
+    const parsedOrigin = new URL(origin);
+    if (normalizeHostname(parsedOrigin.hostname) !== hostname) return false;
+    const connectionOrigin = new URL(`${req.protocol || 'http'}://${rawHost}`).origin;
+    return parsedOrigin.origin === connectionOrigin
+      || (!exact && allowedOrigins.has(parsedOrigin.origin));
+  } catch {
+    return false;
+  }
+}
+
+function exactSameOriginRequestAllowed(req, allowedHosts) {
+  return sameOriginRequestAllowed(req, allowedHosts, new Set(), { exact: true });
+}
+
+function sameOriginMutationAllowed(
+  req,
+  allowedHosts,
+  allowedOrigins,
+  { trustLoopbackProxyUi = false, trustedProxyAddresses = new Set() } = {}
+) {
+  if (!sameOriginRequestAllowed(req, allowedHosts, allowedOrigins)) return false;
+
   // Same-origin headers are a browser CSRF signal, not machine identity. Only
   // the local UI boundary may rely on them without a credential. Remote/LAN
   // deployments must use the operator-token path.
+  const rawHost = String(req.get?.('host') || '').split(',')[0].trim();
+  const hostname = normalizeHostname(rawHost);
   const remoteAddress = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '';
   const localTarget = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
   const normalizedRemoteAddress = normalizeRemoteAddress(remoteAddress);
   if (!isLoopbackAddress(normalizedRemoteAddress)
     && !trustedProxyAddresses.has(normalizedRemoteAddress)
     && !(trustLoopbackProxyUi && localTarget)) return false;
+  return true;
+}
 
-  try {
-    const parsedOrigin = new URL(origin);
-    if (normalizeHostname(parsedOrigin.hostname) !== hostname) return false;
-    const connectionOrigin = new URL(`${req.protocol || 'http'}://${rawHost}`).origin;
-    return parsedOrigin.origin === connectionOrigin || allowedOrigins.has(parsedOrigin.origin);
-  } catch {
-    return false;
-  }
+function normalizeActionObservationRoutes(routes = []) {
+  return new Set(routes.flatMap((route) => {
+    const method = String(route?.method || '').trim().toUpperCase();
+    const pathname = String(route?.path || '').trim().toLowerCase();
+    if (!method || !pathname.startsWith('/api/')) return [];
+    return [`${method} ${pathname}`];
+  }));
 }
 
 function createApiHostGuard({
   serviceHosts = [],
   publicUrlEnv = [],
   protectMutations = false,
+  sameOriginActionObservationRoutes = [],
   env = process.env,
 } = {}) {
+  const actionObservationRoutes = normalizeActionObservationRoutes(sameOriginActionObservationRoutes);
   return function apiHostGuard(req, res, next) {
     // Express routes are case-insensitive unless configured otherwise. Match
     // that behavior here so `/API/...` cannot bypass a guard mounted for
@@ -160,17 +183,26 @@ function createApiHostGuard({
       });
     }
 
-    const isMutation = !SAFE_METHODS.has(String(req.method || 'GET').toUpperCase());
+    const method = String(req.method || 'GET').toUpperCase();
+    const isMutation = !SAFE_METHODS.has(method);
     if (!protectMutations || !isMutation) return next();
 
     const browserRequest = hasBrowserRequestSignals(req);
     if (browserRequest) {
+      const allowedOrigins = configuredOrigins(publicUrlEnv, env);
+      const actionObservation = actionObservationRoutes.has(`${method} ${pathname}`);
+      if (actionObservation && exactSameOriginRequestAllowed(
+        req,
+        allowedHosts
+      )) {
+        return next();
+      }
       const trustLoopbackProxyUi = String(env.AGENTX_TRUST_LOOPBACK_PROXY_UI || '')
         .trim().toLowerCase() === 'true';
       if (sameOriginMutationAllowed(
         req,
         allowedHosts,
-        configuredOrigins(publicUrlEnv, env),
+        allowedOrigins,
         {
           trustLoopbackProxyUi,
           trustedProxyAddresses: configuredTrustedUiProxyAddresses(env),
@@ -208,6 +240,7 @@ function createApiHostGuard({
 module.exports = {
   configuredTrustedUiProxyAddresses,
   createApiHostGuard,
+  exactSameOriginRequestAllowed,
   hasBrowserRequestSignals,
   isLoopbackAddress,
   normalizeHostname,
