@@ -56,7 +56,7 @@ const round = (n, d = 2) => {
 
 const rate = (part, total) => (total > 0 ? round((part / total) * 100) : 0);
 
-const LOG_FILTER_FIELDS = ['caller', 'callerDetail', 'taskType', 'model', 'host'];
+const LOG_FILTER_FIELDS = ['caller', 'callerDetail', 'consumerContract', 'taskType', 'model', 'host'];
 const LOG_STATUSES = new Set(['success', 'error', 'timeout']);
 
 function boundedText(value, max = 200) {
@@ -138,6 +138,7 @@ router.get('/logs', async (req, res) => {
         status: req.query.status || null,
         caller: req.query.caller || null,
         callerDetail: req.query.callerDetail || null,
+        consumerContract: req.query.consumerContract || null,
         taskType: req.query.taskType || null,
         model: req.query.model || null,
         host: req.query.host || null,
@@ -218,7 +219,10 @@ router.get('/summary', async (req, res) => {
             { $limit: 40 }
           ],
           byCaller: [{ $group: { _id: '$caller', ...groupMetrics } }, { $sort: { calls: -1 } }],
-          byCallerDetail: [{ $group: { _id: { $ifNull: ['$callerDetail', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
+          // callerDetail is caller-controlled legacy text and may contain a
+          // token-shaped payload. Aggregate only the server-attested contract
+          // label at this public/operator boundary.
+          byConsumerContract: [{ $group: { _id: { $ifNull: ['$consumerContract', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
           byTaskType: [{ $group: { _id: { $ifNull: ['$taskType', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
           byFallbackUsed: [{ $group: { _id: '$fallbackUsed', ...groupMetrics } }, { $sort: { calls: -1 } }],
           byDegraded: [{ $group: { _id: { $ifNull: ['$routeDecision.degraded', false] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
@@ -357,7 +361,10 @@ router.get('/summary', async (req, res) => {
       },
       byModel,
       byCaller: (facet?.byCaller || []).map((r) => shape(r, 'caller')),
-      byCallerDetail: (facet?.byCallerDetail || []).map((r) => shape(r, 'callerDetail')),
+      byConsumerContract: (facet?.byConsumerContract || []).map((r) => {
+        const projected = projectInferenceLog({ consumerContract: r._id });
+        return shape({ ...r, _id: projected?.consumerContract || 'unknown' }, 'consumerContract');
+      }),
       byTaskType: (facet?.byTaskType || []).map((r) => shape(r, 'taskType')),
       byFallbackUsed: (facet?.byFallbackUsed || []).map((r) => shape(r, 'fallbackUsed')),
       byDegraded: (facet?.byDegraded || []).map((r) => shape(r, 'degraded')),
