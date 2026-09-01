@@ -95,6 +95,14 @@ token, loopback, or same-origin policy. All extension routes also remain behind
 the Core profile guard, public-exposure guard, JSON bounds, sanitization, and
 general API limiter.
 
+One separately operated Ollama-compatible runtime bridge may use the dedicated
+`AGENTX_RUNTIME_BRIDGE_TOKEN` boundary on `/api/openclaw-ollama` and its child
+paths. Core admits that token nowhere else, accepts it as either a bearer token
+or `X-AgentX-Runtime-Token`, and fails closed when it is absent or wrong. The
+mounted bridge must validate the same credential again; Product admission is
+not a substitute for route-local authorization. The credential is supplied by
+the deployment outside source control and is never part of the Product image.
+
 Paths must be absolute and are resolved before loading. Invalid manifests,
 duplicate real paths, duplicate IDs, duplicate capability ownership, or
 asynchronous registration fail startup. Registration occurs after Core's

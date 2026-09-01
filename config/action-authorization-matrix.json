@@ -21,9 +21,10 @@
       "uncredentialedLocalMachine": "admitted-local-or-configured-internal",
       "evidence": [
         "core-boundary-mount",
-        "core-boundary-authorities"
+        "core-boundary-authorities",
+        "core-runtime-bridge-boundary-scope"
       ],
-      "limitation": "publicExposureGuard admits operator tokens, exact local same-origin UI, headerless loopback, and explicitly enabled product-internal hosts; scoped tokens are path-limited but do not replace route-local validation."
+      "limitation": "publicExposureGuard admits operator tokens, exact local same-origin UI, headerless loopback, explicitly enabled product-internal hosts, and purpose-scoped credentials only on their declared path families; scoped tokens do not replace route-local validation."
     },
     "benchmark": {
       "sameOriginBrowser": "admitted-local-only",
@@ -920,6 +921,16 @@
         "environmentVariable: 'AGENTX_SCHEDULE_TOKEN'",
         "environmentVariable: 'AGENTX_PIPELINE_TOKEN'",
         "environmentVariable: 'AGENTX_ALERT_DELIVERY_TOKEN'"
+      ]
+    },
+    "core-runtime-bridge-boundary-scope": {
+      "file": "core/src/middleware/publicExposureGuard.js",
+      "contains": [
+        "const RUNTIME_BRIDGE_PATH_PREFIX = '/api/openclaw-ollama';",
+        "function runtimeBridgeCredentialPath(pathname)",
+        "process.env.AGENTX_RUNTIME_BRIDGE_TOKEN",
+        "req.get?.('x-agentx-runtime-token')",
+        "if (runtimeBridgeCredentialAllowed(req)) return true;"
       ]
     },
     "benchmark-boundary-mount": {

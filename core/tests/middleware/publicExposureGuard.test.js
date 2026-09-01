@@ -2,7 +2,8 @@ const express = require('express');
 const request = require('supertest');
 const {
   benchmarkCredentialPath,
-  publicExposureGuard
+  publicExposureGuard,
+  runtimeBridgeCredentialPath,
 } = require('../../src/middleware/publicExposureGuard');
 
 function buildApp() {
@@ -38,6 +39,9 @@ function buildApp() {
   app.post('/api/pipeline/tasks/task-1/status', (_req, res) => res.json({ ok: true }));
   app.post('/api/todos', (_req, res) => res.json({ ok: true }));
   app.post('/api/alerts/alert-1/delivery-status', (_req, res) => res.json({ ok: true }));
+  app.get('/api/openclaw-ollama/api/tags', (_req, res) => res.json({ models: [] }));
+  app.post('/api/openclaw-ollama/api/chat', (_req, res) => res.json({ done: true }));
+  app.get('/api/openclaw-ollama-evil/api/tags', (_req, res) => res.json({ unsafe: true }));
   app.post('/mcp', (_req, res) => res.json({ jsonrpc: '2.0', result: {} }));
   return app;
 }
@@ -58,6 +62,7 @@ describe('publicExposureGuard', () => {
   const savedScheduleToken = process.env.AGENTX_SCHEDULE_TOKEN;
   const savedPipelineToken = process.env.AGENTX_PIPELINE_TOKEN;
   const savedAlertDeliveryToken = process.env.AGENTX_ALERT_DELIVERY_TOKEN;
+  const savedRuntimeBridgeToken = process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
   const savedInternalHostTrust = process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
   const savedLoopbackProxyUiTrust = process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
 
@@ -79,6 +84,7 @@ describe('publicExposureGuard', () => {
     delete process.env.AGENTX_SCHEDULE_TOKEN;
     delete process.env.AGENTX_PIPELINE_TOKEN;
     delete process.env.AGENTX_ALERT_DELIVERY_TOKEN;
+    delete process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
     delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
     delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
     app = buildApp();
@@ -115,6 +121,8 @@ describe('publicExposureGuard', () => {
     else process.env.AGENTX_PIPELINE_TOKEN = savedPipelineToken;
     if (savedAlertDeliveryToken === undefined) delete process.env.AGENTX_ALERT_DELIVERY_TOKEN;
     else process.env.AGENTX_ALERT_DELIVERY_TOKEN = savedAlertDeliveryToken;
+    if (savedRuntimeBridgeToken === undefined) delete process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
+    else process.env.AGENTX_RUNTIME_BRIDGE_TOKEN = savedRuntimeBridgeToken;
     if (savedInternalHostTrust === undefined) delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
     else process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS = savedInternalHostTrust;
     if (savedLoopbackProxyUiTrust === undefined) delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
@@ -200,6 +208,48 @@ describe('publicExposureGuard', () => {
       .set('X-AgentX-Consumer-Token', 'consumer-token')
       .send({})
       .expect(403);
+  });
+
+  it('admits the dedicated runtime token only on the exact OpenClaw proxy family', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
+    process.env.AGENTX_RUNTIME_BRIDGE_TOKEN = 'runtime-bridge-token-1234';
+    app.locals.forcedIp = '192.0.2.10';
+
+    await request(app)
+      .get('/api/openclaw-ollama/api/tags')
+      .set('Host', 'agentx.example.test')
+      .expect(403);
+    await request(app)
+      .get('/api/openclaw-ollama/api/tags')
+      .set('Host', 'agentx.example.test')
+      .set('Authorization', 'Bearer wrong-token')
+      .expect(403);
+    await request(app)
+      .get('/api/openclaw-ollama/api/tags')
+      .set('Host', 'agentx.example.test')
+      .set('Authorization', 'Bearer runtime-bridge-token-1234')
+      .expect(200);
+    await request(app)
+      .post('/api/openclaw-ollama/api/chat')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Runtime-Token', 'runtime-bridge-token-1234')
+      .send({ model: 'qualified-model', messages: [] })
+      .expect(200);
+
+    for (const path of [
+      '/api/nerve-center/status',
+      '/api/openclaw-ollama-evil/api/tags',
+    ]) {
+      await request(app)
+        .get(path)
+        .set('Host', 'agentx.example.test')
+        .set('Authorization', 'Bearer runtime-bridge-token-1234')
+        .expect(403);
+    }
+
+    expect(runtimeBridgeCredentialPath('/api/openclaw-ollama')).toBe(true);
+    expect(runtimeBridgeCredentialPath('/API/OPENCLAW-OLLAMA/api/tags?refresh=true')).toBe(true);
+    expect(runtimeBridgeCredentialPath('/api/openclaw-ollama-evil/api/tags')).toBe(false);
   });
 
   it('allows default loopback-host API requests from loopback', async () => {
