@@ -92,6 +92,11 @@ describe('external consumer v1 routes', () => {
         taskType: 'general_chat',
         messages: [{ role: 'user', content: 'Hi' }],
         callerDetail: 'benchmark/profiler',
+        workItemId: 'pipeline:must-not-be-trusted',
+        correlationId: 'caller-controlled',
+        runtime: 'codex',
+        attempt: 99,
+        attribution: { workItemId: 'pipeline:also-untrusted', runtime: 'codex' },
         persist: false,
       })
       .expect(200);
@@ -104,6 +109,11 @@ describe('external consumer v1 routes', () => {
       })
     );
     expect(runtimeServices.inference.execute.mock.calls[0][0]).not.toHaveProperty('persist');
+    expect(runtimeServices.inference.execute.mock.calls[0][0]).not.toHaveProperty('workItemId');
+    expect(runtimeServices.inference.execute.mock.calls[0][0]).not.toHaveProperty('correlationId');
+    expect(runtimeServices.inference.execute.mock.calls[0][0]).not.toHaveProperty('runtime');
+    expect(runtimeServices.inference.execute.mock.calls[0][0]).not.toHaveProperty('attempt');
+    expect(runtimeServices.inference.execute.mock.calls[0][1]).not.toHaveProperty('attribution');
     expect(response.body.data).toMatchObject({
       text: 'hello',
       route: { model: 'exact:model', hostKey: 'primary', routingSource: 'task_router' },

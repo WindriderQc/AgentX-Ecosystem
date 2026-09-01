@@ -133,6 +133,66 @@ describe('trusted runtime services', () => {
     }));
   });
 
+  test('records only validated server-side work attribution', async () => {
+    const deps = inferenceDeps();
+
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat',
+      model: 'model-a',
+      messages: [{ role: 'user', content: 'hello' }],
+      callerDetail: 'openclaw-runtime-bridge',
+    }, {
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      attribution: {
+        workItemId: '0401',
+        correlationId: 'lease:7f8e9d',
+        runtime: 'external',
+        attempt: 2,
+      },
+    });
+
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      workItemId: '0401',
+      correlationId: 'lease:7f8e9d',
+      runtime: 'external',
+      attempt: 2,
+    }));
+    expect(result.metadata).not.toHaveProperty('attribution');
+  });
+
+  test.each([
+    ['non-object', 'pipeline:0401'],
+    ['unknown field', { workItemId: 'pipeline:0401', runtime: 'external', prompt: 'private' }],
+    ['missing identifiers', { runtime: 'external' }],
+    ['invalid identifier', { workItemId: 'pipeline 0401', runtime: 'external' }],
+    ['invalid runtime', { workItemId: 'pipeline:0401', runtime: 'openclaw' }],
+    ['invalid attempt', { workItemId: 'pipeline:0401', runtime: 'external', attempt: 0 }],
+  ])('rejects invalid server attribution: %s', async (_label, attribution) => {
+    const deps = inferenceDeps();
+
+    await expect(executeRoutedInference(deps, {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    }, {
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      attribution,
+    })).rejects.toMatchObject({ code: 'INFERENCE_ATTRIBUTION_INVALID', statusCode: 400 });
+    expect(deps.fetch).not.toHaveBeenCalled();
+  });
+
+  test('requires server-attested consumer identity for work attribution', async () => {
+    const deps = inferenceDeps();
+
+    await expect(executeRoutedInference(deps, {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    }, {
+      attribution: { workItemId: 'pipeline:0401', runtime: 'external' },
+    })).rejects.toMatchObject({
+      code: 'INFERENCE_ATTRIBUTION_CONTRACT_REQUIRED', statusCode: 400
+    });
+    expect(deps.fetch).not.toHaveBeenCalled();
+  });
+
   test('relays streaming bytes unchanged and records split final usage metadata', async () => {
     const upstream = new PassThrough();
     const deps = inferenceDeps({
@@ -143,6 +203,9 @@ describe('trusted runtime services', () => {
       model: 'model-a',
       messages: [{ role: 'user', content: 'hello' }],
       stream: true
+    }, {
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      attribution: { workItemId: '0401', runtime: 'external' },
     });
     const expected = [
       `${JSON.stringify({ message: { content: 'hé' }, done: false })}\n`,
@@ -162,7 +225,9 @@ describe('trusted runtime services', () => {
 
     expect(Buffer.concat(received).toString('utf8')).toBe(expected.join(''));
     expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'success', tokensIn: 10, tokensOut: 4
+      status: 'success', tokensIn: 10, tokensOut: 4,
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      workItemId: '0401', runtime: 'external', attempt: 1,
     }));
   });
 
