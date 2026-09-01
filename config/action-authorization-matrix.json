@@ -928,8 +928,8 @@
       "contains": [
         "const RUNTIME_BRIDGE_PATH_PREFIX = '/api/openclaw-ollama';",
         "function runtimeBridgeCredentialPath(pathname)",
-        "process.env.AGENTX_RUNTIME_BRIDGE_TOKEN",
-        "req.get?.('x-agentx-runtime-token')",
+        "process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN",
+        "req.get?.('x-agentx-openclaw-token')",
         "if (runtimeBridgeCredentialAllowed(req)) return true;"
       ]
     },

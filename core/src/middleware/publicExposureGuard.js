@@ -122,8 +122,8 @@ function runtimeBridgeCredentialAllowed(req) {
   const bearer = authorization.toLowerCase().startsWith('bearer ')
     ? authorization.slice(7).trim()
     : '';
-  const presented = bearer || String(req.get?.('x-agentx-runtime-token') || '').trim();
-  return tokensMatch(process.env.AGENTX_RUNTIME_BRIDGE_TOKEN, presented);
+  const presented = bearer || String(req.get?.('x-agentx-openclaw-token') || '').trim();
+  return tokensMatch(process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN, presented);
 }
 
 function workflowMachineCredential(pathname, method) {

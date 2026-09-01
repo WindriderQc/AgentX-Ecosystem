@@ -62,7 +62,7 @@ describe('publicExposureGuard', () => {
   const savedScheduleToken = process.env.AGENTX_SCHEDULE_TOKEN;
   const savedPipelineToken = process.env.AGENTX_PIPELINE_TOKEN;
   const savedAlertDeliveryToken = process.env.AGENTX_ALERT_DELIVERY_TOKEN;
-  const savedRuntimeBridgeToken = process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
+  const savedOpenClawBridgeToken = process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
   const savedInternalHostTrust = process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
   const savedLoopbackProxyUiTrust = process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
 
@@ -84,7 +84,7 @@ describe('publicExposureGuard', () => {
     delete process.env.AGENTX_SCHEDULE_TOKEN;
     delete process.env.AGENTX_PIPELINE_TOKEN;
     delete process.env.AGENTX_ALERT_DELIVERY_TOKEN;
-    delete process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
+    delete process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
     delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
     delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
     app = buildApp();
@@ -121,8 +121,8 @@ describe('publicExposureGuard', () => {
     else process.env.AGENTX_PIPELINE_TOKEN = savedPipelineToken;
     if (savedAlertDeliveryToken === undefined) delete process.env.AGENTX_ALERT_DELIVERY_TOKEN;
     else process.env.AGENTX_ALERT_DELIVERY_TOKEN = savedAlertDeliveryToken;
-    if (savedRuntimeBridgeToken === undefined) delete process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
-    else process.env.AGENTX_RUNTIME_BRIDGE_TOKEN = savedRuntimeBridgeToken;
+    if (savedOpenClawBridgeToken === undefined) delete process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
+    else process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN = savedOpenClawBridgeToken;
     if (savedInternalHostTrust === undefined) delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
     else process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS = savedInternalHostTrust;
     if (savedLoopbackProxyUiTrust === undefined) delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
@@ -212,7 +212,7 @@ describe('publicExposureGuard', () => {
 
   it('admits the dedicated runtime token only on the exact OpenClaw proxy family', async () => {
     process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
-    process.env.AGENTX_RUNTIME_BRIDGE_TOKEN = 'runtime-bridge-token-1234';
+    process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN = 'openclaw-bridge-token-1234';
     app.locals.forcedIp = '192.0.2.10';
 
     await request(app)
@@ -227,12 +227,12 @@ describe('publicExposureGuard', () => {
     await request(app)
       .get('/api/openclaw-ollama/api/tags')
       .set('Host', 'agentx.example.test')
-      .set('Authorization', 'Bearer runtime-bridge-token-1234')
+      .set('Authorization', 'Bearer openclaw-bridge-token-1234')
       .expect(200);
     await request(app)
       .post('/api/openclaw-ollama/api/chat')
       .set('Host', 'agentx.example.test')
-      .set('X-AgentX-Runtime-Token', 'runtime-bridge-token-1234')
+      .set('X-AgentX-OpenClaw-Token', 'openclaw-bridge-token-1234')
       .send({ model: 'qualified-model', messages: [] })
       .expect(200);
 
@@ -243,7 +243,7 @@ describe('publicExposureGuard', () => {
       await request(app)
         .get(path)
         .set('Host', 'agentx.example.test')
-        .set('Authorization', 'Bearer runtime-bridge-token-1234')
+        .set('Authorization', 'Bearer openclaw-bridge-token-1234')
         .expect(403);
     }
 
