@@ -247,7 +247,8 @@ describe('inference analytics summary', () => {
       .get('/api/analytics/inference/logs')
       .query({
         status: 'error,timeout', caller: 'proxy', callerDetail: 'hermes-runtime-bridge',
-        consumerContract: 'hermes-runtime-v1', taskType: 'analysis',
+        consumerContract: 'hermes-runtime-v1', runtime: 'external',
+        workItemId: '0582', correlationId: 'lease-0582', taskType: 'analysis',
         model: 'model:1', host: 'http://primary:11434',
         from: '2026-08-20T00:00:00.000Z', to: '2026-08-21T00:00:00.000Z',
         page: 2, pageSize: 500,
@@ -260,6 +261,9 @@ describe('inference analytics summary', () => {
       caller: 'proxy',
       callerDetail: 'hermes-runtime-bridge',
       consumerContract: 'hermes-runtime-v1',
+      runtime: 'external',
+      workItemId: '0582',
+      correlationId: 'lease-0582',
       taskType: 'analysis',
       model: 'model:1',
       host: 'http://primary:11434',
