@@ -961,7 +961,15 @@ async function _handleLaunch(container, host, onLaunch) {
         `${models.length} model${models.length === 1 ? '' : 's'} across ${levels.length} active level${levels.length === 1 ? '' : 's'}.`
     );
 
-    if (typeof onLaunch === 'function') onLaunch(batchConfig);
+    if (typeof onLaunch === 'function') {
+        try {
+            await onLaunch(batchConfig);
+        } finally {
+            // A failed start leaves the form in place. Restore the primary
+            // action so the operator can adjust the inputs and retry.
+            _resetLaunchButton();
+        }
+    }
 }
 
 // ── Persistence UI (export / import / reset) ─────────────────────────────────
