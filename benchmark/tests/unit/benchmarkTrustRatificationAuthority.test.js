@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { fingerprint } = require('../../../shared/workerContract');
+const HISTORICAL_V1_RECEIPT = require('../../../shared/fixtures/benchmark-trust-receipt-v1-a51fcd1.json');
 const {
     BENCHMARK_TRUST_RATIFICATION_ATTESTATION_SCHEMA,
     BENCHMARK_TRUST_RATIFICATION_SCHEMA,
@@ -34,7 +35,7 @@ function attestationBody(overrides = {}) {
         nonce: 'benchmark-ratification-nonce-000000001',
         ratification: {
             schema: BENCHMARK_TRUST_RATIFICATION_SCHEMA,
-            receiptId: '1'.repeat(64),
+            receiptId: HISTORICAL_V1_RECEIPT.receiptId,
             status: 'ratified',
             ratifiedAt: '2026-09-01T11:00:00.000Z',
             authorityFingerprint: computeBenchmarkTrustRatificationAuthorityFingerprint(issuer),
@@ -107,19 +108,31 @@ test('binds the verified decision atomically to the exact ratification and recei
     expect(verifyBenchmarkTrustRatificationForReceipt(
         attestation,
         attestation.ratification,
-        { receiptId: attestation.ratification.receiptId },
+        HISTORICAL_V1_RECEIPT,
         options
     )).toBe(true);
     expect(verifyBenchmarkTrustRatificationForReceipt(
         attestation,
         { ...attestation.ratification, status: 'revoked' },
-        { receiptId: attestation.ratification.receiptId },
+        HISTORICAL_V1_RECEIPT,
         options
     )).toBe(false);
     expect(verifyBenchmarkTrustRatificationForReceipt(
         attestation,
         attestation.ratification,
         { receiptId: '3'.repeat(64) },
+        options
+    )).toBe(false);
+    expect(verifyBenchmarkTrustRatificationForReceipt(
+        attestation,
+        attestation.ratification,
+        { receiptId: attestation.ratification.receiptId },
+        options
+    )).toBe(false);
+    expect(verifyBenchmarkTrustRatificationForReceipt(
+        attestation,
+        attestation.ratification,
+        { ...HISTORICAL_V1_RECEIPT, createdAt: '2026-09-01T00:00:00.000Z' },
         options
     )).toBe(false);
 });

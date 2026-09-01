@@ -7,6 +7,9 @@ const {
     normalizeBenchmarkTrustRatificationAttestation,
     verifyBenchmarkTrustRatificationAttestation
 } = require('../../../../shared/benchmarkTrustRatificationAttestation');
+const {
+    validateBenchmarkTrustReceipt
+} = require('../../../../shared/benchmarkTrustReceipt');
 
 const TRUST_ROOTS_ENV = 'BENCHMARK_TRUST_RATIFICATION_TRUST_ROOTS_JSON';
 const REVOCATIONS_ENV = 'BENCHMARK_TRUST_RATIFICATION_REVOCATIONS_JSON';
@@ -318,12 +321,15 @@ function verifyBenchmarkTrustRatificationForReceipt(
     options = {}
 ) {
     const attestation = verifyBenchmarkTrustRatificationAuthority(rawAttestation, options);
-    if (!isPlainObject(ratification)
-        || !isPlainObject(receipt)
-        || receipt.receiptId !== attestation.ratification.receiptId) {
+    if (!isPlainObject(ratification) || !isPlainObject(receipt)) {
         return false;
     }
     try {
+        const receiptSnapshot = JSON.parse(stableSerialize(receipt));
+        if (!validateBenchmarkTrustReceipt(receiptSnapshot).valid
+            || receiptSnapshot.receiptId !== attestation.ratification.receiptId) {
+            return false;
+        }
         return stableSerialize(ratification) === stableSerialize(attestation.ratification);
     } catch (_error) {
         return false;
