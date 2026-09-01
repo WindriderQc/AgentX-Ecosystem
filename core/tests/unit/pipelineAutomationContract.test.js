@@ -120,8 +120,35 @@ describe('pipeline automation contract', () => {
     expect(evidence).toMatchObject({
       verification: { status: 'passed', durationMs: 1200, testsPassed: 18, testsFailed: null },
       changes: { filesChanged: 2, bytesChanged: 4096 },
-      usage: { durationMs: 65000, costNanodollars: null },
+      usage: {
+        durationMs: 65000,
+        costNanodollars: null,
+        costKind: null,
+        costSource: null,
+        costEvidenceFingerprint: null,
+      },
       workerReceiptFingerprint: null,
+    });
+  });
+
+  test('normalizes bounded cost provenance without exposing raw billing data', () => {
+    const evidence = normalizePipelineAutomationEvidence({
+      schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
+      verification: { status: 'passed' },
+      changes: {},
+      usage: {
+        costNanodollars: 125971320,
+        costKind: 'session-estimate',
+        costSource: 'openclaw-session-usage/v1',
+        costEvidenceFingerprint: 'a'.repeat(64),
+      },
+    });
+
+    expect(evidence.usage).toMatchObject({
+      costNanodollars: 125971320,
+      costKind: 'session-estimate',
+      costSource: 'openclaw-session-usage/v1',
+      costEvidenceFingerprint: 'a'.repeat(64),
     });
   });
 
@@ -144,5 +171,27 @@ describe('pipeline automation contract', () => {
       ...base,
       workerReceiptFingerprint: 'not-a-digest',
     })).toThrow(/SHA-256/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      usage: { costNanodollars: 0 },
+    })).toThrow(/must provide costNanodollars, costKind, costSource, and costEvidenceFingerprint together/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      usage: {
+        costNanodollars: 0,
+        costKind: 'total-compute-cost',
+        costSource: 'unsupported/v1',
+        costEvidenceFingerprint: 'a'.repeat(64),
+      },
+    })).toThrow(/costKind is not supported/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      usage: {
+        costNanodollars: 0,
+        costKind: 'provider-spend',
+        costSource: 'fake/v1',
+        costEvidenceFingerprint: 'a'.repeat(64),
+      },
+    })).toThrow(/costSource is not allowed for costKind/);
   });
 });

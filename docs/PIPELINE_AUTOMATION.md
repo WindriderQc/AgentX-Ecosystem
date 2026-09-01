@@ -85,10 +85,26 @@ retaining the attempt count and bounded attempt history.
 A lease-bound terminal feedback call may include an
 `agentx.pipeline-automation-evidence/v1` receipt. It carries only bounded
 verification status and duration, changed file/byte counts, observed execution
-duration and cost, normalized failure codes, and an optional generic
-WorkerReceipt fingerprint. It never carries prompts, transcripts, file paths,
-tool payloads, hostnames, or credentials. Partial evidence is valid: every
-unobserved metric remains `null`, never zero.
+duration and an atomic cost-evidence quartet: integer nanodollars, a supported
+cost kind (`provider-spend` or `session-estimate`), kind-matched allowlisted
+source, and SHA-256 evidence fingerprint. All four cost fields are present or
+all four are `null`; arbitrary sources and mismatched kind/source pairs fail closed.
+The receipt also carries normalized failure codes and an optional generic WorkerReceipt
+fingerprint. It never carries prompts, transcripts, file paths, tool payloads,
+hostnames, provider credentials, or raw billing records. Partial evidence is
+valid: every unobserved metric remains `null`, never zero.
+
+An operator may reconcile a completed attempt whose cost was initially unknown
+through `POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost`. The
+operation is write-once and requires an exact integer nanodollar value, supported
+cost kind, bounded source, SHA-256 evidence fingerprint, and reviewer identity. It cannot overwrite
+or contradict an existing cost and records a feedback audit entry.
+
+The scorecard never treats local inference as free compute. A locally routed
+attempt may prove external provider spend of zero while local compute remains
+unpriced. Historical OpenClaw session amounts are labeled billing-unverified
+session estimates. Mixed kinds are shown separately and are never summed into a
+single authoritative total.
 
 Human confirmation or re-queue records the review decision and timestamp on
 the exact attempt. `GET /api/pipeline/performance?window=7d|30d|90d` aggregates

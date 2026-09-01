@@ -191,6 +191,25 @@
     return dollars < 0.01 && dollars > 0 ? '<$0.01' : `$${dollars.toFixed(2)}`;
   }
 
+  function costEvidencePresentation(usage = {}) {
+    const amount = costLabel(usage.costNanodollars);
+    if (amount === 'Unknown') return { amount, detail: 'No authoritative cost evidence' };
+    if (usage.costKind === 'provider-spend') {
+      const local = usage.costSource === 'openclaw-local-provider-spend/v1';
+      return {
+        amount: `${amount} provider spend`,
+        detail: local ? 'Local compute unpriced' : 'Provider spend receipt',
+      };
+    }
+    if (usage.costKind === 'session-estimate') {
+      return {
+        amount: `${amount} session estimate`,
+        detail: 'Billing unverified · OpenClaw session receipt',
+      };
+    }
+    return { amount: 'Unknown', detail: 'Cost nature or provenance missing' };
+  }
+
   function dueCell(task) {
     if (task.status === 'done' || !task.dueAt) return '<span class="pipeline-subtle">--</span>';
     const date = new Date(task.dueAt);
@@ -729,13 +748,25 @@
       'pipelineTeamInterventionsDetail',
       `${Number(performance.counts?.requeued) || 0} requeued · ${Number(performance.counts?.rejected) || 0} rejected`
     );
+    const providerSpend = performance.usage?.observedProviderSpendNanodollars;
+    const sessionEstimate = performance.usage?.observedSessionEstimateNanodollars;
+    const localComputeObserved = attempts.some((attempt) => (
+      attempt.usage?.costSource === 'openclaw-local-provider-spend/v1'
+    ));
+    const costHeadline = providerSpend != null && sessionEstimate != null
+      ? 'Mixed evidence'
+      : (providerSpend != null
+        ? `${costLabel(providerSpend)} provider spend`
+        : (sessionEstimate != null ? `${costLabel(sessionEstimate)} session est.` : 'Unknown'));
+    const costDetails = [`${costKnown}/${total} evidenced`];
+    if (providerSpend != null) costDetails.push(`${costLabel(providerSpend)} provider spend`);
+    if (sessionEstimate != null) costDetails.push(`${costLabel(sessionEstimate)} session estimate, billing unverified`);
+    if (localComputeObserved) costDetails.push('local compute unpriced');
     teamMetric(
       'pipelineTeamCost',
-      costLabel(performance.usage?.totalCostNanodollars),
+      costHeadline,
       'pipelineTeamCostDetail',
-      total === 0
-        ? 'No attempt to measure yet'
-        : `${costKnown}/${total} measured${performance.usage?.observedCostNanodollars == null ? '' : ` · ${costLabel(performance.usage.observedCostNanodollars)} observed`}`
+      total === 0 ? 'No attempt to measure yet' : costDetails.join(' · ')
     );
     teamMetric(
       'pipelineTeamCoverage',
@@ -758,6 +789,7 @@
       const change = files == null || bytes == null
         ? 'Unknown'
         : `${files} file${files === 1 ? '' : 's'} · ${Number(bytes).toLocaleString()} B`;
+      const costEvidence = costEvidencePresentation(attempt.usage);
       return `
         <tr data-pipeline-task="${escapeHtml(attempt.pipelineId)}" tabindex="0" aria-label="Open task ${escapeHtml(attempt.pipelineId)} attempt ${escapeHtml(attempt.attempt)}">
           <td><strong class="pipeline-id">${escapeHtml(attempt.pipelineId)}</strong><span class="pipeline-team-subtle">Attempt ${escapeHtml(attempt.attempt)}</span></td>
@@ -766,7 +798,7 @@
           <td>${escapeHtml(formatStatus(verification))}</td>
           <td>${escapeHtml(change)}</td>
           <td>${escapeHtml(durationLabel(attempt.usage?.durationMs))}</td>
-          <td>${escapeHtml(costLabel(attempt.usage?.costNanodollars))}</td>
+          <td>${escapeHtml(costEvidence.amount)}<span class="pipeline-team-subtle">${escapeHtml(costEvidence.detail)}</span></td>
         </tr>`;
     }).join('');
   }

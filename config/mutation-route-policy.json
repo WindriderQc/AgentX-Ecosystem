@@ -171,6 +171,7 @@
     "core/routes/pipeline.js": {
       "POST /leantime-sync": "action-observation",
       "POST /tasks": "user-mutation",
+      "POST /tasks/:id/automation-attempts/:attempt/cost": "user-mutation",
       "POST /tasks/:id/claim": "scoped-machine-call",
       "POST /tasks/:id/status": "scoped-machine-call",
       "POST /tasks/:id/feedback": "scoped-machine-call",

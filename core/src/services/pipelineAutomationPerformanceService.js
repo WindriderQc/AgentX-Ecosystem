@@ -1,6 +1,10 @@
 'use strict';
 
 const PERFORMANCE_SCHEMA = 'agentx.pipeline-automation-performance/v1';
+const COST_SOURCES_BY_KIND = Object.freeze({
+  'provider-spend': 'openclaw-local-provider-spend/v1',
+  'session-estimate': 'openclaw-session-usage/v1',
+});
 
 function timestamp(value) {
   const date = value ? new Date(value) : null;
@@ -62,6 +66,19 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
       const usage = evidence?.usage || {};
       const outcome = reviewOutcome(attempt);
       const costNanodollars = observedInteger(usage.costNanodollars);
+      const costKind = ['provider-spend', 'session-estimate'].includes(usage.costKind)
+        ? usage.costKind
+        : null;
+      const costSource = typeof usage.costSource === 'string' && usage.costSource
+        ? usage.costSource
+        : null;
+      const costEvidenceFingerprint = /^[a-f0-9]{64}$/.test(String(usage.costEvidenceFingerprint || ''))
+        ? usage.costEvidenceFingerprint
+        : null;
+      const costEvidenceComplete = costNanodollars != null
+        && costKind != null
+        && costSource === COST_SOURCES_BY_KIND[costKind]
+        && costEvidenceFingerprint != null;
       const filesChanged = observedInteger(changes.filesChanged);
       const bytesChanged = observedInteger(changes.bytesChanged);
       const executionMs = elapsed(acquiredAt, completedAt);
@@ -69,6 +86,7 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
       if (!['passed', 'failed'].includes(verification.status)) unknown.push('verification');
       if (filesChanged == null || bytesChanged == null) unknown.push('change');
       if (costNanodollars == null) unknown.push('cost');
+      else if (!costEvidenceComplete) unknown.push('cost_provenance');
       if (outcome === 'pending') unknown.push('review');
 
       rows.push({
@@ -92,6 +110,10 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
         usage: {
           durationMs: observedInteger(usage.durationMs) ?? executionMs,
           costNanodollars,
+          costKind,
+          costSource,
+          costEvidenceFingerprint,
+          costEvidenceComplete,
         },
         failureCodes: Array.isArray(evidence?.failureCodes) ? evidence.failureCodes.slice(0, 32) : [],
         workerReceiptFingerprint: evidence?.workerReceiptFingerprint || null,
@@ -115,12 +137,25 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
   const firstPassAccepted = rows.filter((row) => row.reviewOutcome === 'accepted' && row.attempt === 1).length;
   const verificationPassed = rows.filter((row) => row.verification.status === 'passed').length;
   const verificationFailed = rows.filter((row) => row.verification.status === 'failed').length;
-  const knownCosts = rows.filter((row) => row.usage.costNanodollars != null);
+  const knownCosts = rows.filter((row) => row.usage.costEvidenceComplete);
+  const providerSpendCosts = knownCosts.filter((row) => row.usage.costKind === 'provider-spend');
+  const sessionEstimateCosts = knownCosts.filter((row) => row.usage.costKind === 'session-estimate');
   const knownChanges = rows.filter((row) => row.changes.filesChanged != null && row.changes.bytesChanged != null);
   const safetyBlocks = rows.filter((row) => row.failureCodes.some((code) => (
     /policy|scope|secret|protected|violation/i.test(code)
   ))).length;
-  const observedCostNanodollars = knownCosts.reduce((sum, row) => sum + row.usage.costNanodollars, 0);
+  const observedProviderSpendNanodollars = providerSpendCosts.reduce(
+    (sum, row) => sum + row.usage.costNanodollars,
+    0
+  );
+  const observedSessionEstimateNanodollars = sessionEstimateCosts.reduce(
+    (sum, row) => sum + row.usage.costNanodollars,
+    0
+  );
+  const observedCostKinds = new Set(knownCosts.map((row) => row.usage.costKind));
+  const costAggregateKind = observedCostKinds.size === 1 ? [...observedCostKinds][0] : (
+    observedCostKinds.size > 1 ? 'mixed' : null
+  );
   const uniqueTasks = new Set(rows.map((row) => row.pipelineId));
 
   return {
@@ -163,9 +198,19 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
       cycleMs: distribution(rows.map((row) => row.timing.cycleMs)),
     },
     usage: {
-      observedCostNanodollars: knownCosts.length ? observedCostNanodollars : null,
-      totalCostNanodollars: rows.length > 0 && knownCosts.length === rows.length
-        ? observedCostNanodollars
+      costAggregateKind,
+      observedCostNanodollars: providerSpendCosts.length
+        ? observedProviderSpendNanodollars
+        : null,
+      totalCostNanodollars: rows.length > 0
+        && providerSpendCosts.length === rows.length
+        ? observedProviderSpendNanodollars
+        : null,
+      observedProviderSpendNanodollars: providerSpendCosts.length
+        ? observedProviderSpendNanodollars
+        : null,
+      observedSessionEstimateNanodollars: sessionEstimateCosts.length
+        ? observedSessionEstimateNanodollars
         : null,
       filesChanged: knownChanges.length
         ? knownChanges.reduce((sum, row) => sum + row.changes.filesChanged, 0)
@@ -179,6 +224,8 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
       verification: verificationPassed + verificationFailed,
       changes: knownChanges.length,
       cost: knownCosts.length,
+      providerSpend: providerSpendCosts.length,
+      sessionEstimate: sessionEstimateCosts.length,
       review: decided,
       total: rows.length,
     },

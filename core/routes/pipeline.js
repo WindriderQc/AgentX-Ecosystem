@@ -16,6 +16,7 @@ const {
   releaseAutomationSlot,
 } = require('../src/services/pipelineTaskService');
 const {
+  PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
   normalizePipelineAutomationEvidence,
 } = require('../../shared/pipelineAutomationContract');
 const {
@@ -217,6 +218,133 @@ router.get('/tasks/:id', async (req, res) => {
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
 
+// Reconcile one previously unknown completed-attempt cost from a bounded
+// operator-reviewed provider/runtime receipt. This is write-once: an existing
+// cost may be confirmed idempotently but never replaced or contradicted.
+router.post(
+  '/tasks/:id/automation-attempts/:attempt/cost',
+  requirePipelineWorkerAccess,
+  async (req, res) => {
+    if (req.pipelineAuthority !== PIPELINE_AUTHORITY.OPERATOR) {
+      return envelope.error(
+        res,
+        403,
+        'Attempt cost reconciliation requires the operator token.',
+        'PIPELINE_COST_RECONCILIATION_REQUIRES_OPERATOR'
+      );
+    }
+    const attemptNumber = Number(req.params.attempt);
+    const body = req.body || {};
+    const by = String(body.by || '').trim();
+    if (!Number.isInteger(attemptNumber) || attemptNumber < 1 || attemptNumber > 10) {
+      return envelope.error(res, 400, 'attempt must be an integer from 1 through 10', 'INVALID_ATTEMPT');
+    }
+    if (!by || by.length > 160) {
+      return envelope.error(res, 400, 'by is required and must be at most 160 characters', 'INVALID_RECONCILER');
+    }
+    try {
+      const current = await PipelineTask.findOne({ pipelineId: req.params.id });
+      if (!current) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
+      const attempts = Array.isArray(current.automationAttempts) ? current.automationAttempts : [];
+      const attempt = attempts.find((item) => Number(item?.attempt) === attemptNumber);
+      if (!attempt) return envelope.error(res, 404, 'Automation attempt not found', 'ATTEMPT_NOT_FOUND');
+      if (!attempt.completedAt || attempt.finalState === 'active') {
+        return envelope.error(res, 409, 'Only a completed automation attempt may be reconciled', 'ATTEMPT_NOT_COMPLETED');
+      }
+
+      const existing = attempt.evidence?.toObject
+        ? attempt.evidence.toObject({ depopulate: true })
+        : (attempt.evidence || null);
+      const normalized = normalizePipelineAutomationEvidence({
+        schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
+        verification: existing?.verification || { status: 'unknown' },
+        changes: existing?.changes || {},
+        usage: {
+          ...(existing?.usage || {}),
+          costNanodollars: body.costNanodollars,
+          costKind: body.costKind,
+          costSource: body.costSource,
+          costEvidenceFingerprint: body.costEvidenceFingerprint,
+        },
+        failureCodes: existing?.failureCodes || [],
+        workerReceiptFingerprint: existing?.workerReceiptFingerprint || null,
+        source: existing?.source || 'cost-reconciliation/v1',
+      });
+      if (normalized.usage.costNanodollars == null
+        || !normalized.usage.costKind
+        || !normalized.usage.costSource
+        || !normalized.usage.costEvidenceFingerprint) {
+        return envelope.error(
+          res,
+          400,
+          'costNanodollars, costKind, costSource, and costEvidenceFingerprint are required',
+          'INCOMPLETE_COST_EVIDENCE'
+        );
+      }
+
+      const priorUsage = existing?.usage || {};
+      if (priorUsage.costNanodollars != null) {
+        const idempotent = Number(priorUsage.costNanodollars) === normalized.usage.costNanodollars
+          && String(priorUsage.costKind || '') === normalized.usage.costKind
+          && String(priorUsage.costSource || '') === normalized.usage.costSource
+          && String(priorUsage.costEvidenceFingerprint || '') === normalized.usage.costEvidenceFingerprint;
+        if (!idempotent) {
+          return envelope.error(
+            res,
+            409,
+            'Existing attempt cost evidence cannot be replaced or contradicted',
+            'COST_EVIDENCE_CONFLICT'
+          );
+        }
+        return envelope.success(res, {
+          task: current,
+          costReconciliation: { attempt: attemptNumber, reconciled: false, idempotent: true },
+        });
+      }
+
+      const audit = {
+        by,
+        at: new Date(),
+        text: `Reconciled automation attempt ${attemptNumber} ${normalized.usage.costKind} as ${normalized.usage.costNanodollars} nanodollars from ${normalized.usage.costSource}.`,
+      };
+      const task = await PipelineTask.findOneAndUpdate(
+        {
+          pipelineId: req.params.id,
+          automationAttempts: {
+            $elemMatch: {
+              attempt: attemptNumber,
+              completedAt: { $ne: null },
+              'evidence.usage.costNanodollars': null,
+            },
+          },
+        },
+        {
+          $set: { 'automationAttempts.$[attempt].evidence': normalized },
+          $push: { feedback: audit },
+        },
+        { new: true, arrayFilters: [{ 'attempt.attempt': attemptNumber }] }
+      );
+      if (!task) {
+        return envelope.error(res, 409, 'Attempt cost evidence changed before reconciliation', 'COST_EVIDENCE_CONFLICT');
+      }
+      return envelope.success(res, {
+        task,
+        costReconciliation: {
+          attempt: attemptNumber,
+          reconciled: true,
+          idempotent: false,
+          costNanodollars: normalized.usage.costNanodollars,
+          costKind: normalized.usage.costKind,
+          costSource: normalized.usage.costSource,
+          costEvidenceFingerprint: normalized.usage.costEvidenceFingerprint,
+        },
+      });
+    } catch (err) {
+      return envelope.error(res, err.status || 400, err.message, err.code || 'COST_RECONCILIATION_ERROR');
+    }
+  }
+);
+
 // Atomically claim a task — kills the multi-agent race. POST .../tasks/:id/claim { assignee }
 router.post('/tasks/:id/claim', requirePipelineWorkerAccess, async (req, res) => {
   const body = req.body || {};
@@ -348,7 +476,6 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
   if (!text) return envelope.error(res, 400, 'feedback text is required', 'EMPTY_FEEDBACK');
   const entry = { by: String(b.by || b.assignee || 'agent').trim() || 'agent', text, at: new Date() };
   const update = { $push: { feedback: entry } };
-  if (FEEDBACK_STATUS[b.status]) update.$set = { status: FEEDBACK_STATUS[b.status] };
   try {
     const current = await PipelineTask.findOne({ pipelineId: req.params.id });
     if (!current) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
@@ -378,6 +505,47 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
       );
     }
 
+    let terminalVerdict = b.status;
+    let normalizedEvidence = null;
+    if (b.attemptEvidence) {
+      try {
+        normalizedEvidence = normalizePipelineAutomationEvidence(b.attemptEvidence);
+      } catch (err) {
+        return envelope.error(res, err.status || 400, err.message, err.code || 'INVALID_AUTOMATION_EVIDENCE');
+      }
+    }
+    const rawAllowedCost = current.automation?.budgets?.maxCostNanodollars;
+    const allowedCost = Number(rawAllowedCost);
+    if (lease && b.status === 'done') {
+      if (!normalizedEvidence) {
+        normalizedEvidence = normalizePipelineAutomationEvidence({
+          schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
+          verification: { status: 'unknown' },
+          changes: {},
+          usage: {},
+          failureCodes: [],
+          source: 'core-cost-gate/v1',
+        });
+      }
+      const observedCost = normalizedEvidence.usage.costNanodollars;
+      const costBudgetValid = rawAllowedCost != null
+        && Number.isSafeInteger(allowedCost)
+        && allowedCost >= 0;
+      const costFailure = !costBudgetValid
+        ? 'cost_budget_invalid'
+        : (observedCost == null
+          ? 'cost_evidence_required'
+          : (observedCost > allowedCost ? 'cost_budget_exceeded' : null));
+      if (costFailure) {
+        terminalVerdict = 'blocked';
+        normalizedEvidence.failureCodes = Array.from(new Set([
+          ...normalizedEvidence.failureCodes,
+          costFailure,
+        ])).sort();
+      }
+    }
+    if (FEEDBACK_STATUS[terminalVerdict]) update.$set = { status: FEEDBACK_STATUS[terminalVerdict] };
+
     const query = { pipelineId: req.params.id };
     const options = { new: true };
     if (lease) {
@@ -385,18 +553,10 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
       query.assignee = lease.assignee;
       query['automationLease.leaseId'] = lease.leaseId;
       query['automationLease.expiresAt'] = { $gt: entry.at };
-      if (b.status === 'done' || b.status === 'blocked') {
-        update.$set['automationAttempts.$[attempt].finalState'] = FEEDBACK_STATUS[b.status];
+      if (terminalVerdict === 'done' || terminalVerdict === 'blocked') {
+        update.$set['automationAttempts.$[attempt].finalState'] = FEEDBACK_STATUS[terminalVerdict];
         update.$set['automationAttempts.$[attempt].completedAt'] = entry.at;
-        if (b.attemptEvidence) {
-          try {
-            update.$set['automationAttempts.$[attempt].evidence'] = normalizePipelineAutomationEvidence(
-              b.attemptEvidence
-            );
-          } catch (err) {
-            return envelope.error(res, err.status || 400, err.message, err.code || 'INVALID_AUTOMATION_EVIDENCE');
-          }
-        }
+        if (normalizedEvidence) update.$set['automationAttempts.$[attempt].evidence'] = normalizedEvidence;
         update.$unset = { automationLease: 1 };
         options.arrayFilters = [{ 'attempt.leaseId': lease.leaseId }];
       }
@@ -407,7 +567,7 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
       return envelope.error(res, 409, 'automation lease changed before feedback was recorded', 'TASK_LEASE_MISMATCH');
     }
     if (!task) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
-    if (lease && (b.status === 'done' || b.status === 'blocked')) {
+    if (lease && (terminalVerdict === 'done' || terminalVerdict === 'blocked')) {
       await releaseAutomationSlot({
         leaseId: lease.leaseId,
         pipelineId: current.pipelineId,

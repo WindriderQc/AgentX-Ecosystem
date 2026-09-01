@@ -339,6 +339,7 @@
     "core/routes/performance-data.js#POST /load-tests",
     "core/routes/pipeline.js#POST /leantime-sync",
     "core/routes/pipeline.js#POST /tasks",
+    "core/routes/pipeline.js#POST /tasks/:id/automation-attempts/:attempt/cost",
     "core/routes/pipeline.js#POST /tasks/:id/claim",
     "core/routes/pipeline.js#POST /tasks/:id/feedback",
     "core/routes/pipeline.js#POST /tasks/:id/heartbeat",
@@ -753,6 +754,12 @@
       "note": "Deleting a performance baseline requires DELETE PERFORMANCE BASELINE <id>.",
       "evidence": ["core-baseline-typed-confirmation"]
     },
+    "core/routes/pipeline.js#POST /tasks/:id/automation-attempts/:attempt/cost": {
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Completed-attempt cost reconciliation revalidates operator authority before lookup or mutation and rejects worker or same-origin UI authority.",
+      "evidence": ["core-pipeline-cost-reconciliation-operator-gate"]
+    },
     "core/routes/pipeline.js#POST /tasks/:id/claim": {
       "scopedMachineCredential": "validated-at-route",
       "routeLocalValidator": "enforced",
@@ -1135,6 +1142,14 @@
         "router.post('/schedule/sync', requireScheduleMachineAccess",
         "router.post('/schedule/claim', requireScheduleMachineAccess",
         "router.delete('/schedule/claim/:claimId', requireScheduleMachineAccess"
+      ]
+    },
+    "core-pipeline-cost-reconciliation-operator-gate": {
+      "file": "core/routes/pipeline.js",
+      "contains": [
+        "'/tasks/:id/automation-attempts/:attempt/cost'",
+        "if (req.pipelineAuthority !== PIPELINE_AUTHORITY.OPERATOR)",
+        "'PIPELINE_COST_RECONCILIATION_REQUIRES_OPERATOR'"
       ]
     },
     "core-pipeline-worker-validator": {
