@@ -22,6 +22,7 @@ describe('pipeline automation evidence model', () => {
           },
           changes: { filesChanged: 3, bytesChanged: null },
           usage: { durationMs: 4500, costNanodollars: null },
+          failureCodes: [],
         },
       }],
     });
@@ -30,6 +31,7 @@ describe('pipeline automation evidence model', () => {
     const evidence = task.toObject().automationAttempts[0].evidence;
     expect(evidence.usage.costNanodollars).toBeNull();
     expect(evidence.verification.testsPassed).toBeNull();
+    expect(evidence.failureCodes).toEqual([]);
   });
 
   test('indexes the attempt timestamp used by performance windows', () => {

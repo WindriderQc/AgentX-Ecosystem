@@ -58,7 +58,19 @@ const AutomationAttemptEvidenceSchema = new mongoose.Schema({
     durationMs: { type: Number, min: 0, default: null },
     costNanodollars: { type: Number, min: 0, default: null },
   },
-  failureCodes: { type: [String], default: undefined },
+  // This subdocument must retain the public field named `schema`. Mongoose's
+  // primitive-array caster collides with that field name while validating an
+  // explicit `failureCodes: []`, so preserve the already-normalized contract
+  // value as Mixed and validate its exact safe shape here.
+  failureCodes: {
+    type: mongoose.Schema.Types.Mixed,
+    default: () => [],
+    validate: {
+      validator: (value) => Array.isArray(value)
+        && value.every((code) => typeof code === 'string'),
+      message: 'failureCodes must be an array of strings',
+    },
+  },
   workerReceiptFingerprint: { type: String, default: null },
   source: { type: String, default: null },
 }, { _id: false });
