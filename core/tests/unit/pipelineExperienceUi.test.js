@@ -54,4 +54,23 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain("? 'Mixed evidence'");
     expect(script).toContain('data-pipeline-task=');
   });
+
+  test('offers an explicit operator-only one-shot launch without implying a scheduler', () => {
+    for (const id of [
+      'pipelineTeamLaunchForm',
+      'pipelineTeamLaunchTask',
+      'pipelineTeamLaunchConfirm',
+      'pipelineTeamLaunchButton',
+      'pipelineTeamLaunchState',
+    ]) {
+      expect(view).toContain(`id="${id}"`);
+    }
+    expect(view).toContain('Starts one bounded local worker');
+    expect(view).toContain('scheduling, merge, and deploy stay off');
+    expect(script).toContain('/api/runtime-bridges/coding-dispatch/status');
+    expect(script).toContain('/api/runtime-bridges/coding-dispatch/runs');
+    expect(script).toContain('provider spend ceiling $0');
+    expect(script).toContain("task.automation?.mode !== 'review_only'");
+    expect(script).toContain('JSON.stringify({ pipelineId, confirm: true })');
+  });
 });

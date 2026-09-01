@@ -24,6 +24,9 @@
     performance: null,
     performanceError: null,
     performanceWindow: '30d',
+    dispatchControl: null,
+    dispatchControlError: null,
+    dispatchLaunching: false,
     loading: false,
     context: readContext(),
     filters: { status: null, search: '', service: '', lane: '' },
@@ -279,6 +282,9 @@
         priority: task.priority,
         risk: task.risk || '',
         dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : [],
+        notBefore: task.notBefore || null,
+        automation: task.automation && typeof task.automation === 'object' ? task.automation : null,
+        automationAttemptCount: Number(task.automationAttemptCount) || 0,
         dueAt: task.dueAt || null,
         createdAt: task.createdAt || null,
         updatedAt: task.updatedAt || task.createdAt || null
@@ -299,6 +305,101 @@
       throw new Error(body.message || body.error || `HTTP ${response.status}`);
     }
     return body;
+  }
+
+  function genericDispatchCandidates() {
+    const byId = new Map(state.tasks.map((task) => [String(task.pipelineId), task]));
+    return state.tasks.filter((task) => {
+      if (task.status !== 'queued' || task.assignee || String(task.risk).toLowerCase() !== 'low') return false;
+      if (task.automation?.mode !== 'review_only') return false;
+      if (unmetDependencies(task, byId).length) return false;
+      const notBefore = task.notBefore ? new Date(task.notBefore) : null;
+      if (notBefore && !Number.isNaN(notBefore.getTime()) && notBefore.getTime() > Date.now()) return false;
+      const maxAttempts = Number(task.automation?.budgets?.maxAttempts);
+      return !Number.isFinite(maxAttempts) || task.automationAttemptCount < maxAttempts;
+    });
+  }
+
+  function renderDispatchControl() {
+    const stateEl = $('pipelineTeamLaunchState');
+    const detail = $('pipelineTeamLaunchDetail');
+    const select = $('pipelineTeamLaunchTask');
+    const confirm = $('pipelineTeamLaunchConfirm');
+    const button = $('pipelineTeamLaunchButton');
+    if (!stateEl || !detail || !select || !confirm || !button) return;
+
+    const candidates = genericDispatchCandidates();
+    const selected = select.value;
+    select.innerHTML = candidates.length
+      ? `<option value="">Choose a task&hellip;</option>${candidates.map((task) => (
+        `<option value="${escapeHtml(task.pipelineId)}">${escapeHtml(task.pipelineId)} · ${escapeHtml(task.title || 'Untitled task')}</option>`
+      )).join('')}`
+      : '<option value="">No declared candidate is ready</option>';
+    if (candidates.some((task) => task.pipelineId === selected)) select.value = selected;
+
+    if (state.dispatchControlError) {
+      stateEl.dataset.tone = 'unavailable';
+      stateEl.textContent = `One-shot control unavailable: ${state.dispatchControlError}`;
+    } else if (!state.dispatchControl) {
+      stateEl.dataset.tone = 'loading';
+      stateEl.textContent = 'Checking the operator one-shot control…';
+    } else if (state.dispatchControl.available !== true) {
+      stateEl.dataset.tone = 'unavailable';
+      stateEl.textContent = 'One-shot control is installed but its host target is unavailable.';
+    } else {
+      stateEl.dataset.tone = 'ready';
+      stateEl.textContent = 'Ready · one local worker · no persistent scheduler · provider spend ceiling $0';
+    }
+
+    const ready = state.dispatchControl?.available === true && !state.dispatchLaunching;
+    select.disabled = !ready || candidates.length === 0;
+    confirm.disabled = !ready || !select.value;
+    button.disabled = !ready || !select.value || !confirm.checked;
+    if (state.dispatchLaunching) {
+      button.innerHTML = '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i><span>Starting</span>';
+      detail.textContent = 'The host is accepting this exact one-shot run. No second task will be started.';
+    } else {
+      button.innerHTML = '<i class="fas fa-play" aria-hidden="true"></i><span>Run one task</span>';
+      detail.textContent = candidates.length
+        ? 'AIOps revalidates scope, dependencies, locks, budgets, and the zero-provider-spend policy before claiming anything.'
+        : 'No queued low-risk review-only task currently passes the visible generic prerequisites.';
+    }
+  }
+
+  async function loadDispatchControlStatus() {
+    state.dispatchControlError = null;
+    try {
+      const payload = await fetchJson('/api/runtime-bridges/coding-dispatch/status');
+      state.dispatchControl = payload?.data || null;
+      if (!state.dispatchControl) throw new Error('status response is missing data');
+    } catch (error) {
+      state.dispatchControl = null;
+      state.dispatchControlError = String(error.message || error);
+    }
+    renderDispatchControl();
+  }
+
+  async function launchOneTask() {
+    const select = $('pipelineTeamLaunchTask');
+    const confirm = $('pipelineTeamLaunchConfirm');
+    const pipelineId = String(select?.value || '');
+    if (!/^\d{4}$/.test(pipelineId) || confirm?.checked !== true) return;
+    state.dispatchLaunching = true;
+    renderDispatchControl();
+    try {
+      await fetchJson('/api/runtime-bridges/coding-dispatch/runs', {
+        method: 'POST',
+        body: JSON.stringify({ pipelineId, confirm: true })
+      });
+      toast('success', `Task ${pipelineId} was accepted for one bounded local run.`);
+      confirm.checked = false;
+      window.setTimeout(() => loadTasks({ silent: true }), 1500);
+    } catch (error) {
+      toast('error', error.message || String(error));
+    } finally {
+      state.dispatchLaunching = false;
+      renderDispatchControl();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1034,6 +1135,7 @@
     renderAttention();
     renderRecentlyDone();
     renderTeamPerformance();
+    renderDispatchControl();
   }
 
   async function loadTasks(options) {
@@ -1105,6 +1207,19 @@
         loadTeamPerformance();
       });
     }
+
+    const launchSelect = $('pipelineTeamLaunchTask');
+    const launchConfirm = $('pipelineTeamLaunchConfirm');
+    const launchForm = $('pipelineTeamLaunchForm');
+    if (launchSelect) launchSelect.addEventListener('change', () => {
+      if (launchConfirm) launchConfirm.checked = false;
+      renderDispatchControl();
+    });
+    if (launchConfirm) launchConfirm.addEventListener('change', renderDispatchControl);
+    if (launchForm) launchForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      launchOneTask();
+    });
 
     document.querySelectorAll('.pipeline-metric[data-status-filter]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1184,6 +1299,7 @@
     });
 
     if (readStorage(STORAGE_AUTO) === '1') setAutoRefresh(true);
+    loadDispatchControlStatus();
     loadTasks();
   });
 })();
