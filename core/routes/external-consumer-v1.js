@@ -15,6 +15,11 @@ const {
   sanitizeRoutingSnapshot,
 } = require('../src/services/externalConsumerContract');
 
+// This value is supplied by the server-owned route, never by the request
+// body. Individual external consumer names remain caller-controlled metadata
+// and are deliberately redacted from public inference-log projections.
+const TELEMETRY_CONSUMER_CONTRACT = 'external-consumer-v1';
+
 function sendError(res, error) {
   const statusCode = Number(error.statusCode) || 500;
   if (statusCode >= 500) logger.error('[ExternalConsumerV1] request failed', { error: error.message });
@@ -240,6 +245,7 @@ function createExternalConsumerV1Routes({ runtimeServices, systemHealth } = {}) 
       const request = normalizeInferenceRequest(req.body);
       const result = await runtimeServices.inference.execute(request.runtimeRequest, {
         signal: disconnect.signal,
+        consumerContract: TELEMETRY_CONSUMER_CONTRACT,
       });
       const route = setRouteHeaders(res, result.metadata);
 
