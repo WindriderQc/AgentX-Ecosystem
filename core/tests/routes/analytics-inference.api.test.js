@@ -276,6 +276,18 @@ describe('inference analytics summary', () => {
     }));
   });
 
+  test('supports an explicit half-open interval without changing legacy inclusive queries', () => {
+    expect(router.buildLogQuery({
+      from: '2026-08-20T00:00:00.000Z',
+      to: '2026-08-21T00:00:00.000Z',
+      endExclusive: 'true',
+    }).timestamp).toEqual({
+      $gte: new Date('2026-08-20T00:00:00.000Z'),
+      $lt: new Date('2026-08-21T00:00:00.000Z'),
+    });
+    expect(() => router.buildLogQuery({ endExclusive: 'sometimes' })).toThrow(/true or false/);
+  });
+
   test('summary never groups or returns legacy upstream error bodies', async () => {
     const secret = 'LEGACY_SUMMARY_SECRET secret@example.test /private/path sk-token';
     InferenceLog.aggregate.mockResolvedValue(facet({

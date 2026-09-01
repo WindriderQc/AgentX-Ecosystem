@@ -22,6 +22,10 @@ const WINDOW_MS = {
   '14d': 14 * 24 * 60 * 60 * 1000,
   '30d': 30 * 24 * 60 * 60 * 1000,
 };
+const MAX_EXACT_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
+const QUERY_LIMITS = Object.freeze({ outcomes: 5000, pipelineTasks: 5000, inferenceLogs: 50_000 });
+const CONSUMER_CONTRACT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
+const EXPLICIT_OFFSET_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))$/i;
 
 function finiteNonNegative(value, fallback = 0) {
   const parsed = Number(value);
@@ -43,6 +47,69 @@ function normalizeWindow(value, now = Date.now()) {
   if (key === 'all') return { key, from: new Date(0), to: new Date(now) };
   const ms = WINDOW_MS[key] || WINDOW_MS['7d'];
   return { key: WINDOW_MS[key] ? key : '7d', from: new Date(now - ms), to: new Date(now) };
+}
+
+function invalidExactWindow(message) {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = 'INVALID_EFFECTIVENESS_WINDOW';
+  return error;
+}
+
+function exactTimestamp(value, name) {
+  const text = String(value || '').trim();
+  const match = EXPLICIT_OFFSET_TIMESTAMP.exec(text);
+  if (!match) {
+    throw invalidExactWindow(`${name} must be an ISO-8601 timestamp with an explicit offset`);
+  }
+  const [, rawYear, rawMonth, rawDay, rawHour, rawMinute, rawSecond,
+    _fraction, zone, _sign, rawOffsetHour, rawOffsetMinute] = match;
+  const year = Number(rawYear);
+  const month = Number(rawMonth);
+  const day = Number(rawDay);
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  const second = Number(rawSecond);
+  const offsetHour = zone.toUpperCase() === 'Z' ? 0 : Number(rawOffsetHour);
+  const offsetMinute = zone.toUpperCase() === 'Z' ? 0 : Number(rawOffsetMinute);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (year < 1970 || month < 1 || month > 12 || day < 1 || day > daysInMonth
+      || hour > 23 || minute > 59 || second > 59
+      || offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
+    throw invalidExactWindow(`${name} must be an ISO-8601 timestamp with an explicit offset`);
+  }
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    throw invalidExactWindow(`${name} must be an ISO-8601 timestamp with an explicit offset`);
+  }
+  return parsed;
+}
+
+function normalizeExactWindow(from, to, now = Date.now()) {
+  if (from == null || to == null) {
+    throw invalidExactWindow('from and to must be supplied together');
+  }
+  const exactFrom = exactTimestamp(from, 'from');
+  const exactTo = exactTimestamp(to, 'to');
+  const durationMs = exactTo.getTime() - exactFrom.getTime();
+  if (durationMs <= 0 || durationMs > MAX_EXACT_WINDOW_MS) {
+    throw invalidExactWindow('exact effectiveness window must be increasing and no longer than 31 days');
+  }
+  if (exactTo.getTime() > Number(now)) {
+    throw invalidExactWindow('exact effectiveness window must not end in the future');
+  }
+  return { key: 'exact', from: exactFrom, to: exactTo, endExclusive: true };
+}
+
+function normalizeConsumerContract(value) {
+  if (value == null || value === '') return null;
+  const consumerContract = String(value).trim();
+  if (!CONSUMER_CONTRACT_ID.test(consumerContract)) {
+    const error = invalidExactWindow('consumerContract must be a bounded server-attested contract ID');
+    error.code = 'INVALID_EFFECTIVENESS_COHORT';
+    throw error;
+  }
+  return consumerContract;
 }
 
 function rejectSensitivePayload(input) {
@@ -224,7 +291,9 @@ function signalFor(summary) {
   return { signal: 'needs-attention', confidence: summary.reportedOutcomes >= 10 ? 'high' : 'medium', message: 'Attributed work shows material failure, rework, or abandoned outcomes.' };
 }
 
-function buildEffectivenessSnapshot({ outcomes = [], pipelineTasks = [], inferenceLogs = [], window }) {
+function buildEffectivenessSnapshot({
+  outcomes = [], pipelineTasks = [], inferenceLogs = [], window, collection = null, cohort = null,
+}) {
   const explicit = outcomes.map((row) => ({ ...row, completedAt: new Date(row.completedAt) }));
   const explicitWorkItems = new Set(explicit.map((row) => boundedIdentifier(row.workItemId)).filter(Boolean));
   const combined = [...explicit, ...derivePipelineOutcomes(pipelineTasks, explicitWorkItems)];
@@ -346,6 +415,7 @@ function buildEffectivenessSnapshot({ outcomes = [], pipelineTasks = [], inferen
     reportedOutcomes: combined.length,
     verifiedOutcomes,
     productiveOutcomes,
+    attributedOutcomes,
     verificationRatePct: percentage(verifiedOutcomes, combined.length),
     productivityRatePct: percentage(productiveOutcomes, combined.length),
     attributionCoveragePct: percentage(attributedOutcomes, combined.length),
@@ -388,7 +458,18 @@ function buildEffectivenessSnapshot({ outcomes = [], pipelineTasks = [], inferen
   return {
     ok: true,
     asOf: new Date().toISOString(),
-    window: { key: window.key, from: window.from.toISOString(), to: window.to.toISOString() },
+    window: {
+      key: window.key,
+      from: window.from.toISOString(),
+      to: window.to.toISOString(),
+      ...(window.endExclusive === true && { endExclusive: true }),
+    },
+    collection: collection || {
+      complete: true,
+      truncated: { outcomes: false, pipelineTasks: false, inferenceLogs: false },
+      limits: { ...QUERY_LIMITS },
+    },
+    ...(cohort && { cohort }),
     signal,
     summary,
     waste: {
@@ -427,26 +508,73 @@ function buildEffectivenessSnapshot({ outcomes = [], pipelineTasks = [], inferen
   };
 }
 
-async function readEffectivenessSnapshot({ window: rawWindow = '7d', runtime = null } = {}) {
-  const window = normalizeWindow(rawWindow);
-  const outcomeQuery = { completedAt: { $gte: window.from, $lte: window.to } };
-  const logQuery = { timestamp: { $gte: window.from, $lte: window.to } };
+async function readEffectivenessSnapshot({
+  window: rawWindow = null, from = null, to = null, runtime = null,
+  consumerContract: rawConsumerContract = null, now = Date.now(),
+} = {}) {
+  const exactRequested = from != null || to != null;
+  const rollingRequested = rawWindow != null && String(rawWindow).trim() !== '';
+  if (exactRequested && rollingRequested) {
+    throw invalidExactWindow('window cannot be combined with from and to');
+  }
+  const window = exactRequested
+    ? normalizeExactWindow(from, to, now)
+    : normalizeWindow(rawWindow || '7d', now);
+  const consumerContract = normalizeConsumerContract(rawConsumerContract);
+  const boundedRange = window.endExclusive
+    ? { $gte: window.from, $lt: window.to }
+    : { $gte: window.from, $lte: window.to };
+  const outcomeQuery = { completedAt: boundedRange };
+  const logQuery = { timestamp: boundedRange };
+  const taskQuery = { status: { $in: ['done', 'review', 'blocked'] }, updatedAt: boundedRange };
   if (runtime && RUNTIMES.has(runtime)) {
     outcomeQuery.runtime = runtime;
   }
-  const [outcomes, pipelineTasks, inferenceLogs] = await Promise.all([
-    LlmOutcome.find(outcomeQuery).sort({ completedAt: -1 }).limit(5000).lean(),
-    PipelineTask.find({ status: { $in: ['done', 'review', 'blocked'] }, updatedAt: { $gte: window.from, $lte: window.to } })
+  if (consumerContract) logQuery.consumerContract = consumerContract;
+  const readOutcomes = () => LlmOutcome.find(outcomeQuery)
+    .sort({ completedAt: -1 }).limit(QUERY_LIMITS.outcomes + 1).lean();
+  const readTasks = () => PipelineTask.find(taskQuery)
       .select('pipelineId status assignee createdAt updatedAt')
       .sort({ updatedAt: -1 })
-      .limit(5000)
-      .lean(),
-    InferenceLog.find(logQuery)
+      .limit(QUERY_LIMITS.pipelineTasks + 1)
+      .lean();
+  const readLogs = () => InferenceLog.find(logQuery)
       .select('_id runtime caller workItemId correlationId callerDetail tokensIn tokensOut durationMs status fallbackUsed timestamp')
       .sort({ timestamp: -1 })
-      .limit(50_000)
-      .lean(),
-  ]);
+      .limit(QUERY_LIMITS.inferenceLogs + 1)
+      .lean();
+  let outcomeRows;
+  let pipelineTaskRows;
+  let inferenceLogRows;
+  if (consumerContract) {
+    inferenceLogRows = await readLogs();
+    if (inferenceLogRows.length > QUERY_LIMITS.inferenceLogs) {
+      outcomeRows = [];
+      pipelineTaskRows = [];
+    } else {
+      const workItemIds = [...new Set(inferenceLogRows.map((log) => boundedIdentifier(log.workItemId)).filter(Boolean))];
+      const correlationIds = [...new Set(inferenceLogRows.map((log) => boundedIdentifier(log.correlationId)).filter(Boolean))];
+      const linkage = [];
+      if (workItemIds.length) linkage.push({ workItemId: { $in: workItemIds } });
+      if (correlationIds.length) linkage.push({ correlationId: { $in: correlationIds } });
+      if (linkage.length) outcomeQuery.$or = linkage;
+      else outcomeQuery.outcomeId = { $in: [] };
+      taskQuery.pipelineId = { $in: workItemIds };
+      [outcomeRows, pipelineTaskRows] = await Promise.all([readOutcomes(), readTasks()]);
+    }
+  } else {
+    [outcomeRows, pipelineTaskRows, inferenceLogRows] = await Promise.all([
+      readOutcomes(), readTasks(), readLogs(),
+    ]);
+  }
+  const truncated = {
+    outcomes: outcomeRows.length > QUERY_LIMITS.outcomes,
+    pipelineTasks: pipelineTaskRows.length > QUERY_LIMITS.pipelineTasks,
+    inferenceLogs: inferenceLogRows.length > QUERY_LIMITS.inferenceLogs,
+  };
+  const outcomes = outcomeRows.slice(0, QUERY_LIMITS.outcomes);
+  const pipelineTasks = pipelineTaskRows.slice(0, QUERY_LIMITS.pipelineTasks);
+  const inferenceLogs = inferenceLogRows.slice(0, QUERY_LIMITS.inferenceLogs);
   const filteredPipelineTasks = runtime
     ? pipelineTasks.filter((task) => pipelineRuntime(task.assignee) === runtime)
     : pipelineTasks;
@@ -458,6 +586,12 @@ async function readEffectivenessSnapshot({ window: rawWindow = '7d', runtime = n
     pipelineTasks: filteredPipelineTasks,
     inferenceLogs: filteredInferenceLogs,
     window,
+    collection: {
+      complete: !Object.values(truncated).some(Boolean),
+      truncated,
+      limits: { ...QUERY_LIMITS },
+    },
+    ...(consumerContract && { cohort: { consumerContract, authority: 'server-attested-inference-log' } }),
   });
 }
 
@@ -465,6 +599,8 @@ module.exports = {
   buildEffectivenessSnapshot,
   derivePipelineOutcomes,
   normalizeOutcomeInput,
+  normalizeExactWindow,
+  normalizeConsumerContract,
   normalizeWindow,
   pipelineRuntime,
   readEffectivenessSnapshot,
