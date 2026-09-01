@@ -108,6 +108,33 @@
       <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
       <span>Loading autonomous attempt evidence&hellip;</span>
     </div>
+    <div class="pipeline-team-launch" aria-labelledby="pipelineTeamLaunchTitle">
+      <div class="pipeline-team-launch-copy">
+        <div>
+          <strong id="pipelineTeamLaunchTitle"><i class="fas fa-play" aria-hidden="true"></i> Run one task</strong>
+          <span id="pipelineTeamLaunchState" data-tone="loading" aria-live="polite">Checking the operator one-shot control&hellip;</span>
+        </div>
+        <p>Starts one bounded local worker. It stops at review or blocked; scheduling, merge, and deploy stay off.</p>
+      </div>
+      <form id="pipelineTeamLaunchForm" class="pipeline-team-launch-form">
+        <label class="pipeline-team-launch-task">
+          <span>Queued candidate</span>
+          <select id="pipelineTeamLaunchTask" aria-label="Choose one queued coding candidate" disabled>
+            <option value="">No candidate loaded</option>
+          </select>
+        </label>
+        <label class="pipeline-team-launch-confirm">
+          <input id="pipelineTeamLaunchConfirm" type="checkbox" disabled>
+          <span>I confirm this one local run</span>
+        </label>
+        <button id="pipelineTeamLaunchButton" class="pipeline-btn primary compact" type="submit" disabled>
+          <i class="fas fa-play" aria-hidden="true"></i><span>Run one task</span>
+        </button>
+      </form>
+      <p id="pipelineTeamLaunchDetail" class="pipeline-team-launch-detail" aria-live="polite">
+        AIOps revalidates scope, dependencies, locks, budgets, and the zero-provider-spend policy before claiming anything.
+      </p>
+    </div>
     <div class="pipeline-team-metrics" aria-label="Coding Team scorecard">
       <article><span>Accepted</span><strong id="pipelineTeamAccepted">--</strong><small id="pipelineTeamAcceptedDetail">Human-confirmed delivery</small></article>
       <article><span>First pass</span><strong id="pipelineTeamFirstPass">--</strong><small id="pipelineTeamFirstPassDetail">Share of accepted attempts</small></article>

@@ -418,6 +418,95 @@
 .pipeline-team-state[data-tone="unavailable"] { color: #fecaca; }
 .pipeline-team-state[data-tone="unavailable"] i { color: #f87171; }
 
+.pipeline-team-launch {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) minmax(420px, 1.4fr);
+  gap: 12px 20px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(110deg, rgba(34, 197, 94, 0.08), rgba(103, 232, 249, 0.035));
+}
+
+.pipeline-team-launch-copy {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+
+.pipeline-team-launch-copy > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.pipeline-team-launch-copy strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #f8fafc;
+}
+
+.pipeline-team-launch-copy strong i { color: #4ade80; }
+
+.pipeline-team-launch-copy span {
+  color: #94a3b8;
+  font-size: 0.77rem;
+}
+
+.pipeline-team-launch-copy span[data-tone="ready"] { color: #86efac; }
+.pipeline-team-launch-copy span[data-tone="unavailable"] { color: #fecaca; }
+
+.pipeline-team-launch-copy p,
+.pipeline-team-launch-detail {
+  margin: 0;
+  color: #8291a8;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.pipeline-team-launch-form {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.pipeline-team-launch-task {
+  display: grid;
+  flex: 1 1 260px;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pipeline-team-launch-task select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  background: #111827;
+  color: #e2e8f0;
+  padding: 0 10px;
+}
+
+.pipeline-team-launch-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  color: #cbd5e1;
+  font-size: 0.75rem;
+}
+
+.pipeline-team-launch-confirm input { accent-color: #22c55e; }
+
+.pipeline-team-launch-detail {
+  grid-column: 1 / -1;
+}
+
 .pipeline-team-metrics {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1330,6 +1419,10 @@ body.pipeline-drawer-open {
   .pipeline-team-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .pipeline-team-launch {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1361,6 +1454,19 @@ body.pipeline-drawer-open {
 
   .pipeline-team-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pipeline-team-launch-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pipeline-team-launch-task {
+    flex-basis: auto;
+  }
+
+  .pipeline-team-launch-form .pipeline-btn {
+    justify-content: center;
   }
 
   .pipeline-metric {
