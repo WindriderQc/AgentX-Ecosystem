@@ -215,6 +215,7 @@
     },
     "core/routes/rag.js": {
       "POST /search": "action-observation",
+      "POST /status/refresh": "action-observation",
       "POST /documents": "user-mutation",
       "POST /ingest": "user-mutation",
       "DELETE /documents/:documentId": "destructive-mutation"

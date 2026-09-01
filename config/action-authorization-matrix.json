@@ -371,6 +371,7 @@
     "core/routes/rag.js#POST /documents",
     "core/routes/rag.js#POST /ingest",
     "core/routes/rag.js#POST /search",
+    "core/routes/rag.js#POST /status/refresh",
     "core/routes/roundtable.js#DELETE /:id",
     "core/routes/roundtable.js#POST /",
     "core/routes/roundtable.js#POST /:id/decision",
