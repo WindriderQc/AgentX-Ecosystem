@@ -514,8 +514,9 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
         return envelope.error(res, err.status || 400, err.message, err.code || 'INVALID_AUTOMATION_EVIDENCE');
       }
     }
-    const allowedCost = Number(current.automation?.budgets?.maxCostNanodollars);
-    if (lease && b.status === 'done' && Number.isSafeInteger(allowedCost) && allowedCost >= 0) {
+    const rawAllowedCost = current.automation?.budgets?.maxCostNanodollars;
+    const allowedCost = Number(rawAllowedCost);
+    if (lease && b.status === 'done') {
       if (!normalizedEvidence) {
         normalizedEvidence = normalizePipelineAutomationEvidence({
           schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
@@ -527,9 +528,14 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
         });
       }
       const observedCost = normalizedEvidence.usage.costNanodollars;
-      const costFailure = observedCost == null
-        ? 'cost_evidence_required'
-        : (observedCost > allowedCost ? 'cost_budget_exceeded' : null);
+      const costBudgetValid = rawAllowedCost != null
+        && Number.isSafeInteger(allowedCost)
+        && allowedCost >= 0;
+      const costFailure = !costBudgetValid
+        ? 'cost_budget_invalid'
+        : (observedCost == null
+          ? 'cost_evidence_required'
+          : (observedCost > allowedCost ? 'cost_budget_exceeded' : null));
       if (costFailure) {
         terminalVerdict = 'blocked';
         normalizedEvidence.failureCodes = Array.from(new Set([

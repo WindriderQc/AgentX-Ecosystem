@@ -542,6 +542,7 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
       pipelineId: '0710',
       status: 'in_progress',
       assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
       automationLease: { leaseId: 'lease-1', assignee: 'worker-a' },
     });
     pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
@@ -561,7 +562,13 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
           schema: 'agentx.pipeline-automation-evidence/v1',
           verification: { status: 'passed', durationMs: 1200, testsPassed: 12, testsFailed: 0 },
           changes: { filesChanged: 2, bytesChanged: 900 },
-          usage: { durationMs: 45000 },
+          usage: {
+            durationMs: 45000,
+            costNanodollars: 0,
+            costKind: 'provider-spend',
+            costSource: 'openclaw-local-provider-spend/v1',
+            costEvidenceFingerprint: 'a'.repeat(64),
+          },
           failureCodes: [],
           source: 'clawdx-guarded/v1',
         },
@@ -587,10 +594,10 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
             changes: { filesChanged: 2, bytesChanged: 900 },
             usage: {
               durationMs: 45000,
-              costNanodollars: null,
-              costKind: null,
-              costSource: null,
-              costEvidenceFingerprint: null,
+              costNanodollars: 0,
+              costKind: 'provider-spend',
+              costSource: 'openclaw-local-provider-spend/v1',
+              costEvidenceFingerprint: 'a'.repeat(64),
             },
             failureCodes: [],
             workerReceiptFingerprint: null,
@@ -709,6 +716,66 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
     expect(PipelineTask.findOneAndUpdate.mock.calls[0][1].$set.status).toBe('blocked');
     expect(evidence.usage.costNanodollars).toBeNull();
     expect(evidence.failureCodes).toContain('cost_evidence_required');
+  });
+
+  test('blocks a budgeted automated success when attemptEvidence is omitted entirely', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0714', status: 'in_progress', assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-5', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-5', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0714', status: 'blocked' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0714/feedback')
+      .send({
+        status: 'done', by: 'guarded-dispatch', leaseAssignee: 'worker-a',
+        leaseId: 'lease-5', text: 'receipt omitted',
+      })
+      .expect(200);
+
+    const update = PipelineTask.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set.status).toBe('blocked');
+    expect(update.$set['automationAttempts.$[attempt].evidence'].failureCodes)
+      .toContain('cost_evidence_required');
+  });
+
+  test('blocks automated success when its persisted cost budget is absent', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0715', status: 'in_progress', assignee: 'worker-a',
+      automation: { budgets: {} },
+      automationLease: { leaseId: 'lease-6', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-6', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0715', status: 'blocked' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0715/feedback')
+      .send({
+        status: 'done', by: 'guarded-dispatch', leaseAssignee: 'worker-a',
+        leaseId: 'lease-6', text: 'invalid budget',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' }, changes: {}, failureCodes: [],
+          usage: {
+            costNanodollars: 0,
+            costKind: 'provider-spend',
+            costSource: 'openclaw-local-provider-spend/v1',
+            costEvidenceFingerprint: 'f'.repeat(64),
+          },
+        },
+      })
+      .expect(200);
+
+    const update = PipelineTask.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set.status).toBe('blocked');
+    expect(update.$set['automationAttempts.$[attempt].evidence'].failureCodes)
+      .toContain('cost_budget_invalid');
   });
 
   test('rejects a worker cost amount without its complete nature and provenance', async () => {
