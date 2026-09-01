@@ -325,6 +325,14 @@ describe('repoQualificationRunner.runQualification (offline dry-run)', () => {
 });
 
 describe('repo-coding-qualification.js CLI (--dry-run smoke test)', () => {
+  test('the canonical Benchmark image packages the runner and its offline dependencies', () => {
+    const dockerfilePath = path.resolve(__dirname, '..', '..', '..', '..', 'docker', 'benchmark.Dockerfile');
+    const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
+    expect(dockerfile).toContain('apt-get install -y --no-install-recommends ca-certificates git');
+    expect(dockerfile).toContain('COPY scripts/bounded-response.js /scripts/bounded-response.js');
+    expect(dockerfile).toContain("! -name 'repo-coding-qualification.js'");
+  });
+
   test('bounds the live Core claim response and rejects redirects', async () => {
     const payload = Buffer.from(JSON.stringify({ data: { claims: [] } }));
     const fetchImpl = jest.fn(async () => ({
