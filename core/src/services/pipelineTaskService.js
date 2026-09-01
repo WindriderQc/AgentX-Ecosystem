@@ -2,12 +2,19 @@
  * Product-owned Mongo task queue. Environment-specific boards may consume the
  * bounded /api/pipeline contract from a separately deployed adapter.
  */
+const crypto = require('crypto');
 const PipelineTask = require('../../models/PipelineTask');
+const PipelineAutomationSlot = require('../../models/PipelineAutomationSlot');
 const Counter = require('../../models/Counter');
 const { validateRequest, renderTodo } = require('./todoAuthoringService');
+const {
+  normalizePipelineAutomationIntent,
+  automationAdmissionReasons,
+} = require('../../../shared/pipelineAutomationContract');
 
 const VALID_RISKS = new Set(['', 'low', 'medium', 'high', 'critical']);
 const PIPELINE_ID_RE = /^\d{3,4}$/;
+const AUTOMATION_SLOT_ID = 'coding-dispatcher-v1';
 
 function pipelineInputError(message, code = 'INVALID_TASK_METADATA') {
   const err = new Error(message);
@@ -71,6 +78,10 @@ function normalizeTaskRoutingMetadata(input = {}) {
       throw pipelineInputError(`risk must be one of ${[...VALID_RISKS].join('|')}`, 'INVALID_TASK_RISK');
     }
     metadata.risk = risk;
+  }
+
+  if (input.automation !== undefined && input.automation !== null) {
+    metadata.automation = normalizePipelineAutomationIntent(input.automation);
   }
 
   return metadata;
@@ -182,10 +193,186 @@ async function findNextEligibleTask(params = {}, now = new Date()) {
   const candidates = await PipelineTask.find(buildEligibleQueueQuery(params, now)).lean();
   candidates.sort(compareEligibleTasks);
   const dependencyStatuses = await loadDependencyStatuses(candidates);
-  return candidates.find((task) => dependenciesAreDone(task, dependencyStatuses)) || null;
+  const automationRequested = ['1', 'true', 'yes', 'on', 'review_only']
+    .includes(String(params.automation || '').toLowerCase());
+  return candidates.find((task) => {
+    if (!dependenciesAreDone(task, dependencyStatuses)) return false;
+    if (!automationRequested) return true;
+    return automationAdmissionReasons(task, { dependencyStatuses, now }).length === 0;
+  }) || null;
 }
 
-async function claimEligibleTask(pipelineId, assignee, now = new Date()) {
+function pipelineConflict(message, code) {
+  const err = new Error(message);
+  err.status = 409;
+  err.code = code;
+  return err;
+}
+
+async function acquireAutomationSlot({ leaseId, pipelineId, assignee, lockKeys, now, expiresAt }) {
+  try {
+    const slot = await PipelineAutomationSlot.findOneAndUpdate(
+      {
+        _id: AUTOMATION_SLOT_ID,
+        $or: [
+          { leaseId: null },
+          { leaseId: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $exists: false } },
+          { expiresAt: { $lte: now } },
+        ],
+      },
+      {
+        $set: {
+          leaseId,
+          pipelineId,
+          assignee,
+          lockKeys,
+          acquiredAt: now,
+          heartbeatAt: now,
+          expiresAt,
+        },
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    if (!slot || slot.leaseId !== leaseId) {
+      throw pipelineConflict('the autonomous coding slot is already occupied', 'AUTOMATION_SLOT_OCCUPIED');
+    }
+    return slot;
+  } catch (err) {
+    if (err?.code === 11000) {
+      throw pipelineConflict('the autonomous coding slot is already occupied', 'AUTOMATION_SLOT_OCCUPIED');
+    }
+    throw err;
+  }
+}
+
+async function extendAutomationSlot({ leaseId, pipelineId, assignee, now, expiresAt }) {
+  const slot = await PipelineAutomationSlot.findOneAndUpdate(
+    {
+      _id: AUTOMATION_SLOT_ID,
+      leaseId,
+      pipelineId,
+      assignee,
+      expiresAt: { $gt: now },
+    },
+    { $set: { heartbeatAt: now, expiresAt } },
+    { new: true }
+  );
+  if (!slot) {
+    throw pipelineConflict('the autonomous coding slot is missing, expired, or reassigned', 'AUTOMATION_SLOT_MISMATCH');
+  }
+  return slot;
+}
+
+async function releaseAutomationSlot({ leaseId, pipelineId, assignee } = {}) {
+  if (!leaseId) return false;
+  const result = await PipelineAutomationSlot.updateOne(
+    {
+      _id: AUTOMATION_SLOT_ID,
+      leaseId,
+      ...(pipelineId ? { pipelineId } : {}),
+      ...(assignee ? { assignee } : {}),
+    },
+    {
+      $set: {
+        leaseId: null,
+        pipelineId: null,
+        assignee: null,
+        lockKeys: [],
+        acquiredAt: null,
+        heartbeatAt: null,
+        expiresAt: null,
+      },
+    }
+  );
+  return result.modifiedCount === 1;
+}
+
+function assertLeaseMutationAllowed(task, { assignee, leaseId, now = new Date() } = {}) {
+  const lease = task?.automationLease;
+  if (!lease?.leaseId) return null;
+  if (task.status !== 'in_progress') {
+    throw pipelineConflict('automation lease is no longer active', 'TASK_LEASE_INACTIVE');
+  }
+  const normalizedLeaseId = String(leaseId || '').trim();
+  const normalizedAssignee = String(assignee || '').trim();
+  if (!normalizedLeaseId || normalizedLeaseId !== String(lease.leaseId)) {
+    throw pipelineConflict('automation lease identity is missing or stale', 'TASK_LEASE_MISMATCH');
+  }
+  if (!normalizedAssignee || normalizedAssignee !== String(lease.assignee || task.assignee || '')) {
+    throw pipelineConflict('automation lease assignee does not match the active claim', 'TASK_LEASE_ASSIGNEE_MISMATCH');
+  }
+  if (!lease.expiresAt || new Date(lease.expiresAt).getTime() <= now.getTime()) {
+    throw pipelineConflict('automation lease has expired', 'TASK_LEASE_EXPIRED');
+  }
+  return {
+    leaseId: normalizedLeaseId,
+    assignee: normalizedAssignee,
+    attempt: Number(lease.attempt),
+    durationMs: Number(lease.durationMs),
+  };
+}
+
+async function heartbeatClaim(pipelineId, identity = {}, now = new Date()) {
+  const current = await PipelineTask.findOne({ pipelineId }).lean();
+  if (!current) {
+    const err = new Error('Task not found');
+    err.status = 404;
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+  const lease = assertLeaseMutationAllowed(current, { ...identity, now });
+  if (!lease) {
+    return PipelineTask.findOneAndUpdate(
+      { pipelineId },
+      { $set: { heartbeatAt: now } },
+      { new: true }
+    );
+  }
+
+  const expiresAt = new Date(now.getTime() + lease.durationMs);
+  await extendAutomationSlot({
+    leaseId: lease.leaseId,
+    pipelineId,
+    assignee: lease.assignee,
+    now,
+    expiresAt,
+  });
+  const task = await PipelineTask.findOneAndUpdate(
+    {
+      pipelineId,
+      status: 'in_progress',
+      assignee: lease.assignee,
+      'automationLease.leaseId': lease.leaseId,
+      'automationLease.expiresAt': { $gt: now },
+    },
+    {
+      $set: {
+        heartbeatAt: now,
+        'automationLease.heartbeatAt': now,
+        'automationLease.expiresAt': expiresAt,
+        'automationAttempts.$[attempt].heartbeatAt': now,
+        'automationAttempts.$[attempt].expiresAt': expiresAt,
+      },
+    },
+    {
+      new: true,
+      arrayFilters: [{ 'attempt.leaseId': lease.leaseId }],
+    }
+  );
+  if (!task) {
+    await releaseAutomationSlot({
+      leaseId: lease.leaseId,
+      pipelineId,
+      assignee: lease.assignee,
+    });
+    throw pipelineConflict('automation lease changed before heartbeat was recorded', 'TASK_LEASE_MISMATCH');
+  }
+  return task;
+}
+
+async function claimEligibleTask(pipelineId, assignee, now = new Date(), options = {}) {
   const current = await PipelineTask.findOne({ pipelineId }).lean();
   if (!current) {
     const err = new Error('Task not found');
@@ -214,21 +401,116 @@ async function claimEligibleTask(pipelineId, assignee, now = new Date()) {
     throw err;
   }
 
-  const task = await PipelineTask.findOneAndUpdate(
-    {
+  if (options.automated) {
+    const reasons = automationAdmissionReasons(current, {
+      dependencyStatuses,
+      now,
+      activeLockKeys: options.activeLockKeys,
+      protectedPathPrefixes: options.protectedPathPrefixes,
+    });
+    if (reasons.length) {
+      const err = new Error(`Task is not eligible for autonomous dispatch: ${reasons.map((reason) => reason.code).join(', ')}`);
+      err.status = 409;
+      err.code = 'AUTOMATION_INELIGIBLE';
+      err.reasons = reasons;
+      throw err;
+    }
+  }
+
+  let automatedUpdate = null;
+  if (options.automated) {
+    const automation = normalizePipelineAutomationIntent(current.automation);
+    const requestedDuration = Number(options.leaseDurationMs || Math.min(900_000, automation.budgets.maxDurationMs));
+    if (!Number.isSafeInteger(requestedDuration) || requestedDuration < 10_000 || requestedDuration > automation.budgets.maxDurationMs) {
+      throw pipelineInputError(
+        'leaseDurationMs must be an integer from 10000 through automation.budgets.maxDurationMs',
+        'INVALID_LEASE_DURATION'
+      );
+    }
+    const attempt = Number(current.automationAttemptCount || 0) + 1;
+    const leaseId = crypto.randomUUID();
+    const expiresAt = new Date(now.getTime() + requestedDuration);
+    const lease = {
+      leaseId,
+      assignee,
+      acquiredAt: now,
+      heartbeatAt: now,
+      expiresAt,
+      durationMs: requestedDuration,
+      attempt,
+    };
+    automatedUpdate = {
+      attempt,
+      expectedAttemptCount: attempt - 1,
+      lease,
+      update: {
+        $set: { assignee, status: 'in_progress', heartbeatAt: now, automationLease: lease },
+        $inc: { automationAttemptCount: 1 },
+        $push: { automationAttempts: { ...lease, finalState: 'active' } },
+      },
+    };
+  }
+
+  const claimQuery = {
+    pipelineId,
+    assignee: null,
+    status: 'queued',
+    $or: [
+      { notBefore: null },
+      { notBefore: { $exists: false } },
+      { notBefore: { $lte: now } },
+    ],
+  };
+  if (automatedUpdate) {
+    claimQuery['automation.mode'] = 'review_only';
+    if (automatedUpdate.expectedAttemptCount === 0) {
+      claimQuery.$and = [{
+        $or: [
+          { automationAttemptCount: 0 },
+          { automationAttemptCount: { $exists: false } },
+        ],
+      }];
+    } else {
+      claimQuery.automationAttemptCount = automatedUpdate.expectedAttemptCount;
+    }
+  }
+
+  if (automatedUpdate) {
+    await acquireAutomationSlot({
+      leaseId: automatedUpdate.lease.leaseId,
       pipelineId,
-      assignee: null,
-      status: 'queued',
-      $or: [
-        { notBefore: null },
-        { notBefore: { $exists: false } },
-        { notBefore: { $lte: now } },
-      ],
-    },
-    { $set: { assignee, status: 'in_progress', heartbeatAt: now } },
-    { new: true },
-  );
+      assignee,
+      lockKeys: current.automation.lockKeys,
+      now,
+      expiresAt: automatedUpdate.lease.expiresAt,
+    });
+  }
+
+  let task;
+  try {
+    task = await PipelineTask.findOneAndUpdate(
+      claimQuery,
+      automatedUpdate?.update || { $set: { assignee, status: 'in_progress', heartbeatAt: now } },
+      { new: true },
+    );
+  } catch (err) {
+    if (automatedUpdate) {
+      await releaseAutomationSlot({
+        leaseId: automatedUpdate.lease.leaseId,
+        pipelineId,
+        assignee,
+      });
+    }
+    throw err;
+  }
   if (!task) {
+    if (automatedUpdate) {
+      await releaseAutomationSlot({
+        leaseId: automatedUpdate.lease.leaseId,
+        pipelineId,
+        assignee,
+      });
+    }
     const err = new Error('Task not available (eligibility changed or another worker claimed it)');
     err.status = 409;
     err.code = 'TASK_UNAVAILABLE';
@@ -314,4 +596,7 @@ module.exports = {
   compareEligibleTasks,
   findNextEligibleTask,
   claimEligibleTask,
+  assertLeaseMutationAllowed,
+  heartbeatClaim,
+  releaseAutomationSlot,
 };

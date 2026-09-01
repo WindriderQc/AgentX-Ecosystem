@@ -11,7 +11,16 @@ const {
   createTaskInMongo,
   findNextEligibleTask,
   claimEligibleTask,
+  assertLeaseMutationAllowed,
+  heartbeatClaim,
+  releaseAutomationSlot,
 } = require('../src/services/pipelineTaskService');
+const {
+  normalizePipelineAutomationEvidence,
+} = require('../../shared/pipelineAutomationContract');
+const {
+  buildPipelineAutomationPerformance,
+} = require('../src/services/pipelineAutomationPerformanceService');
 const STATUSES = ['queued', 'in_progress', 'review', 'blocked', 'done'];
 
 // A worker's feedback verdict maps to a task status. "done" goes to REVIEW (the
@@ -41,6 +50,7 @@ router.post('/tasks', async (req, res) => {
 const SUMMARY_FIELDS = [
   'pipelineId', 'title', 'service', 'status', 'assignee', 'heartbeatAt',
   'epic', 'source', 'priority', 'dependsOn', 'notBefore', 'dueAt', 'risk',
+  'automation', 'automationAttemptCount',
   'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt'
 ].join(' ');
 
@@ -118,6 +128,11 @@ function feedbackTextFromBody(body = {}) {
   return String(body.text ?? body.summary ?? '').trim().slice(0, 5000);
 }
 
+function performanceWindow(value) {
+  const match = String(value || '30d').trim().match(/^(7|30|90)d$/);
+  return match ? Number(match[1]) : null;
+}
+
 // List tasks (queryable). GET /api/pipeline/tasks?status=&assignee=&limit=&view=summary
 router.get('/tasks', async (req, res) => {
   try {
@@ -137,6 +152,26 @@ router.get('/tasks', async (req, res) => {
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
 
+// Privacy-safe team performance over persisted autonomous attempts. Missing
+// evidence remains null and is reported through coverage rather than becoming
+// a false zero. GET /api/pipeline/performance?window=7d|30d|90d
+router.get('/performance', async (req, res) => {
+  const windowDays = performanceWindow(req.query.window);
+  if (!windowDays) {
+    return envelope.error(res, 400, 'window must be one of 7d, 30d, or 90d', 'INVALID_PERFORMANCE_WINDOW');
+  }
+  try {
+    const now = new Date();
+    const from = new Date(now.getTime() - windowDays * 86_400_000);
+    const tasks = await PipelineTask.find({
+      'automationAttempts.acquiredAt': { $gte: from, $lte: now },
+    }).select('pipelineId createdAt automation automationAttempts').lean();
+    return envelope.success(res, {
+      performance: buildPipelineAutomationPerformance(tasks, { now, windowDays }),
+    });
+  } catch (err) { return envelope.error(res, 500, err.message); }
+});
+
 // Next queued task for an agent to pick up.
 router.get('/tasks/next', requirePipelineWorkerAccess, async (req, res) => {
   try {
@@ -147,6 +182,28 @@ router.get('/tasks/next', requirePipelineWorkerAccess, async (req, res) => {
       pipelineId: task?.pipelineId || null
     });
   } catch (err) { return envelope.error(res, 500, err.message); }
+});
+
+// Bounded exact-task read for a guarded worker. It deliberately excludes the
+// personal/idea-drop lanes and never changes eligibility or claim state.
+// Registered before /tasks/:id so the literal worker suffix keeps priority.
+router.get('/tasks/:id/worker', requirePipelineWorkerAccess, async (req, res) => {
+  try {
+    const agent = String(req.query.agent || '').trim();
+    const task = await PipelineTask.findOne({
+      pipelineId: req.params.id,
+      service: { $ne: 'personal' },
+      source: { $ne: 'idea-drop' },
+      $or: [
+        { status: 'queued', assignee: null },
+        ...(agent ? [{ status: { $in: ['in_progress', 'review', 'blocked'] }, assignee: agent }] : []),
+      ],
+    }).lean();
+    if (!task) {
+      return envelope.error(res, 404, 'Task is unavailable to this worker identity', 'WORKER_TASK_UNAVAILABLE');
+    }
+    return envelope.success(res, { task });
+  } catch (err) { return envelope.error(res, err.status || 500, err.message, err.code); }
 });
 
 // Full task detail (spec + feedback audit trail) for the human Pipeline UI.
@@ -162,9 +219,15 @@ router.get('/tasks/:id', async (req, res) => {
 
 // Atomically claim a task — kills the multi-agent race. POST .../tasks/:id/claim { assignee }
 router.post('/tasks/:id/claim', requirePipelineWorkerAccess, async (req, res) => {
-  const assignee = (req.body && req.body.assignee) || 'unknown-agent';
+  const body = req.body || {};
+  const assignee = body.assignee || 'unknown-agent';
   try {
-    const task = await claimEligibleTask(req.params.id, assignee);
+    const task = body.automated === true
+      ? await claimEligibleTask(req.params.id, assignee, new Date(), {
+        automated: true,
+        leaseDurationMs: body.leaseDurationMs,
+      })
+      : await claimEligibleTask(req.params.id, assignee);
     return envelope.success(res, { task });
   } catch (err) { return envelope.error(res, err.status || 500, err.message, err.code); }
 });
@@ -197,6 +260,47 @@ router.post('/tasks/:id/status', requirePipelineStatusAccess, async (req, res) =
       update.$set.heartbeatAt = null;
     }
 
+    let workerLease = null;
+    if (current.automationLease?.leaseId && req.pipelineAuthority === PIPELINE_AUTHORITY.WORKER) {
+      try {
+        workerLease = assertLeaseMutationAllowed(current, {
+          assignee: b.leaseAssignee || b.assignee || b.by,
+          leaseId: b.leaseId,
+        });
+      } catch (err) {
+        return envelope.error(res, 409, err.message, err.code);
+      }
+    }
+
+    const terminalAutomationLease = current.automationLease?.leaseId && status !== 'in_progress'
+      ? {
+        leaseId: String(current.automationLease.leaseId),
+        pipelineId: current.pipelineId,
+        assignee: String(current.automationLease.assignee || current.assignee || ''),
+      }
+      : null;
+    if (terminalAutomationLease) {
+      update.$set['automationAttempts.$[attempt].finalState'] = status === 'queued' ? 'released' : status;
+      update.$set['automationAttempts.$[attempt].completedAt'] = new Date();
+      update.$unset = { automationLease: 1 };
+    }
+
+    const latestAttempt = Array.isArray(current.automationAttempts)
+      ? current.automationAttempts.slice().reverse().find((attempt) => attempt?.leaseId)
+      : null;
+    const reviewOutcome = !terminalAutomationLease && latestAttempt
+      ? (
+        status === 'done' && current.status === 'review' ? 'accepted'
+          : status === 'queued' && ['review', 'blocked'].includes(current.status) ? 'requeued'
+            : status === 'blocked' && current.status === 'review' ? 'rejected'
+              : null
+      )
+      : null;
+    if (reviewOutcome) {
+      update.$set['automationAttempts.$[reviewAttempt].reviewOutcome'] = reviewOutcome;
+      update.$set['automationAttempts.$[reviewAttempt].reviewedAt'] = new Date();
+    }
+
     if (status === 'done' && current.status !== 'done') {
       const by = String(b.by || '').trim();
       const operator = req.pipelineAuthority === PIPELINE_AUTHORITY.OPERATOR;
@@ -214,8 +318,25 @@ router.post('/tasks/:id/status', requirePipelineStatusAccess, async (req, res) =
       update.$push = { feedback: { by: by || 'operator', text: `Confirmed review -> done${by ? ` by ${by}` : ' (operator override)'}.`, at: new Date() } };
     }
 
-    const task = await PipelineTask.findOneAndUpdate({ pipelineId: req.params.id }, update, { new: true });
+    const mutationQuery = { pipelineId: req.params.id };
+    if (workerLease) {
+      mutationQuery.status = 'in_progress';
+      mutationQuery.assignee = workerLease.assignee;
+      mutationQuery['automationLease.leaseId'] = workerLease.leaseId;
+      mutationQuery['automationLease.expiresAt'] = { $gt: new Date() };
+    }
+    const options = { new: true };
+    if (terminalAutomationLease) {
+      options.arrayFilters = [{ 'attempt.leaseId': current.automationLease.leaseId }];
+    } else if (reviewOutcome) {
+      options.arrayFilters = [{ 'reviewAttempt.leaseId': latestAttempt.leaseId }];
+    }
+    const task = await PipelineTask.findOneAndUpdate(mutationQuery, update, options);
+    if (!task && workerLease) {
+      return envelope.error(res, 409, 'automation lease changed before status was recorded', 'TASK_LEASE_MISMATCH');
+    }
     if (!task) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
+    if (terminalAutomationLease) await releaseAutomationSlot(terminalAutomationLease);
     return envelope.success(res, { task });
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
@@ -229,8 +350,70 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
   const update = { $push: { feedback: entry } };
   if (FEEDBACK_STATUS[b.status]) update.$set = { status: FEEDBACK_STATUS[b.status] };
   try {
-    const task = await PipelineTask.findOneAndUpdate({ pipelineId: req.params.id }, update, { new: true });
+    const current = await PipelineTask.findOne({ pipelineId: req.params.id });
+    if (!current) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
+    let lease = null;
+    try {
+      lease = assertLeaseMutationAllowed(current, {
+        assignee: b.leaseAssignee || b.assignee || b.by,
+        leaseId: b.leaseId,
+      });
+    } catch (err) {
+      return envelope.error(res, 409, err.message, err.code);
+    }
+    if (b.attemptEvidence && !lease) {
+      return envelope.error(
+        res,
+        400,
+        'attemptEvidence requires an active automation lease',
+        'AUTOMATION_EVIDENCE_REQUIRES_LEASE'
+      );
+    }
+    if (b.attemptEvidence && !['done', 'blocked'].includes(b.status)) {
+      return envelope.error(
+        res,
+        400,
+        'attemptEvidence may be recorded only with a terminal worker verdict',
+        'AUTOMATION_EVIDENCE_REQUIRES_TERMINAL_VERDICT'
+      );
+    }
+
+    const query = { pipelineId: req.params.id };
+    const options = { new: true };
+    if (lease) {
+      query.status = 'in_progress';
+      query.assignee = lease.assignee;
+      query['automationLease.leaseId'] = lease.leaseId;
+      query['automationLease.expiresAt'] = { $gt: entry.at };
+      if (b.status === 'done' || b.status === 'blocked') {
+        update.$set['automationAttempts.$[attempt].finalState'] = FEEDBACK_STATUS[b.status];
+        update.$set['automationAttempts.$[attempt].completedAt'] = entry.at;
+        if (b.attemptEvidence) {
+          try {
+            update.$set['automationAttempts.$[attempt].evidence'] = normalizePipelineAutomationEvidence(
+              b.attemptEvidence
+            );
+          } catch (err) {
+            return envelope.error(res, err.status || 400, err.message, err.code || 'INVALID_AUTOMATION_EVIDENCE');
+          }
+        }
+        update.$unset = { automationLease: 1 };
+        options.arrayFilters = [{ 'attempt.leaseId': lease.leaseId }];
+      }
+    }
+
+    const task = await PipelineTask.findOneAndUpdate(query, update, options);
+    if (!task && lease) {
+      return envelope.error(res, 409, 'automation lease changed before feedback was recorded', 'TASK_LEASE_MISMATCH');
+    }
     if (!task) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
+    if (lease && (b.status === 'done' || b.status === 'blocked')) {
+      await releaseAutomationSlot({
+        leaseId: lease.leaseId,
+        pipelineId: current.pipelineId,
+        assignee: lease.assignee,
+      });
+    }
     return envelope.success(res, { task });
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
@@ -238,12 +421,14 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
 // Heartbeat a claimed task. POST .../tasks/:id/heartbeat
 router.post('/tasks/:id/heartbeat', requirePipelineWorkerAccess, async (req, res) => {
   try {
-    const task = await PipelineTask.findOneAndUpdate(
-      { pipelineId: req.params.id }, { $set: { heartbeatAt: new Date() } }, { new: true },
-    );
+    const body = req.body || {};
+    const task = await heartbeatClaim(req.params.id, {
+      assignee: body.leaseAssignee || body.assignee,
+      leaseId: body.leaseId,
+    });
     if (!task) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
     return envelope.success(res, { pipelineId: task.pipelineId, heartbeatAt: task.heartbeatAt });
-  } catch (err) { return envelope.error(res, 500, err.message); }
+  } catch (err) { return envelope.error(res, err.status || 500, err.message, err.code); }
 });
 
 module.exports = router;

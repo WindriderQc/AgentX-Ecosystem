@@ -21,6 +21,9 @@
     tasks: [],
     summary: null,
     evidence: null,
+    performance: null,
+    performanceError: null,
+    performanceWindow: '30d',
     loading: false,
     context: readContext(),
     filters: { status: null, search: '', service: '', lane: '' },
@@ -159,6 +162,33 @@
     const hours = Math.floor(abs / 60);
     if (hours < 48) return `${hours}h ${suffix}`;
     return `${Math.floor(hours / 24)}d ${suffix}`;
+  }
+
+  function durationLabel(value) {
+    if (value == null || value === '') return 'Unknown';
+    const milliseconds = Number(value);
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) return 'Unknown';
+    const seconds = Math.round(milliseconds / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) return `${hours}h`;
+    return `${Math.round(hours / 24)}d`;
+  }
+
+  function percentLabel(value) {
+    if (value == null || value === '') return 'Unknown';
+    const ratio = Number(value);
+    return Number.isFinite(ratio) ? `${Math.round(ratio * 100)}%` : 'Unknown';
+  }
+
+  function costLabel(value) {
+    if (value == null || value === '') return 'Unknown';
+    const nanodollars = Number(value);
+    if (!Number.isFinite(nanodollars) || nanodollars < 0) return 'Unknown';
+    const dollars = nanodollars / 1_000_000_000;
+    return dollars < 0.01 && dollars > 0 ? '<$0.01' : `$${dollars.toFixed(2)}`;
   }
 
   function dueCell(task) {
@@ -631,6 +661,129 @@
     `).join('');
   }
 
+  function teamMetric(id, value, detailId, detail) {
+    const valueEl = $(id);
+    const detailEl = $(detailId);
+    if (valueEl) valueEl.textContent = value;
+    if (detailEl) detailEl.textContent = detail;
+  }
+
+  function attemptOutcome(attempt) {
+    if (attempt.reviewOutcome && attempt.reviewOutcome !== 'pending') return attempt.reviewOutcome;
+    return attempt.finalState || 'active';
+  }
+
+  function renderTeamPerformance() {
+    const stateEl = $('pipelineTeamState');
+    const rowsEl = $('pipelineTeamAttemptRows');
+    const metaEl = $('pipelineTeamAttemptMeta');
+    const performance = state.performance;
+    if (state.performanceError) {
+      if (stateEl) {
+        stateEl.dataset.tone = 'unavailable';
+        stateEl.innerHTML = `<i class="fas fa-circle-exclamation" aria-hidden="true"></i><span>Performance unavailable: ${escapeHtml(state.performanceError)}</span>`;
+      }
+      if (rowsEl) rowsEl.innerHTML = '<tr><td colspan="7" class="pipeline-error">Attempt evidence could not be loaded.</td></tr>';
+      return;
+    }
+    if (!performance) return;
+
+    const total = Number(performance.coverage?.total) || 0;
+    const evidence = Number(performance.coverage?.attemptEvidence) || 0;
+    const costKnown = Number(performance.coverage?.cost) || 0;
+    const accepted = Number(performance.counts?.accepted) || 0;
+    const interventions = Number(performance.autonomy?.correctiveHumanInterventions) || 0;
+    const attempts = Array.isArray(performance.attempts) ? performance.attempts : [];
+    if (stateEl) {
+      const tone = performance.state === 'observed' ? 'healthy' : (performance.state === 'no_data' ? 'empty' : 'partial');
+      const label = performance.state === 'no_data'
+        ? 'No autonomous attempts in this window.'
+        : `${total} autonomous attempt${total === 1 ? '' : 's'} · ${evidence}/${total} structured receipt${evidence === 1 ? '' : 's'} · missing fields remain unknown.`;
+      stateEl.dataset.tone = tone;
+      stateEl.innerHTML = `<i class="fas ${tone === 'healthy' ? 'fa-circle-check' : tone === 'empty' ? 'fa-circle-minus' : 'fa-circle-half-stroke'}" aria-hidden="true"></i><span>${escapeHtml(label)}</span>`;
+    }
+
+    teamMetric(
+      'pipelineTeamAccepted',
+      String(accepted),
+      'pipelineTeamAcceptedDetail',
+      `${Number(performance.counts?.awaitingReview) || 0} awaiting review · ${Number(performance.counts?.blocked) || 0} blocked`
+    );
+    teamMetric(
+      'pipelineTeamFirstPass',
+      percentLabel(performance.quality?.firstPassShare),
+      'pipelineTeamFirstPassDetail',
+      performance.quality?.firstPassShare == null
+        ? 'No accepted attempt to measure yet'
+        : `${Number(performance.quality?.firstPassAccepted) || 0} accepted on attempt 1`
+    );
+    teamMetric(
+      'pipelineTeamCycle',
+      durationLabel(performance.timing?.cycleMs?.p50),
+      'pipelineTeamCycleDetail',
+      `${Number(performance.timing?.cycleMs?.observed) || 0}/${total} observed · p95 ${durationLabel(performance.timing?.cycleMs?.p95)}`
+    );
+    teamMetric(
+      'pipelineTeamInterventions',
+      String(interventions),
+      'pipelineTeamInterventionsDetail',
+      `${Number(performance.counts?.requeued) || 0} requeued · ${Number(performance.counts?.rejected) || 0} rejected`
+    );
+    teamMetric(
+      'pipelineTeamCost',
+      costLabel(performance.usage?.totalCostNanodollars),
+      'pipelineTeamCostDetail',
+      total === 0
+        ? 'No attempt to measure yet'
+        : `${costKnown}/${total} measured${performance.usage?.observedCostNanodollars == null ? '' : ` · ${costLabel(performance.usage.observedCostNanodollars)} observed`}`
+    );
+    teamMetric(
+      'pipelineTeamCoverage',
+      total ? `${Math.round((evidence / total) * 100)}%` : '--',
+      'pipelineTeamCoverageDetail',
+      `${evidence}/${total} receipts · verification ${Number(performance.coverage?.verification) || 0}/${total}`
+    );
+
+    if (metaEl) metaEl.textContent = `${attempts.length} shown · ${performance.window?.days || '--'} day window`;
+    if (!rowsEl) return;
+    if (!attempts.length) {
+      rowsEl.innerHTML = '<tr><td colspan="7" class="pipeline-empty">No autonomous attempt evidence in this window.</td></tr>';
+      return;
+    }
+    rowsEl.innerHTML = attempts.map((attempt) => {
+      const outcome = attemptOutcome(attempt);
+      const verification = attempt.verification?.status || 'unknown';
+      const files = attempt.changes?.filesChanged;
+      const bytes = attempt.changes?.bytesChanged;
+      const change = files == null || bytes == null
+        ? 'Unknown'
+        : `${files} file${files === 1 ? '' : 's'} · ${Number(bytes).toLocaleString()} B`;
+      return `
+        <tr data-pipeline-task="${escapeHtml(attempt.pipelineId)}" tabindex="0" aria-label="Open task ${escapeHtml(attempt.pipelineId)} attempt ${escapeHtml(attempt.attempt)}">
+          <td><strong class="pipeline-id">${escapeHtml(attempt.pipelineId)}</strong><span class="pipeline-team-subtle">Attempt ${escapeHtml(attempt.attempt)}</span></td>
+          <td>${escapeHtml(attempt.assignee || 'unknown')}</td>
+          <td><span class="pipeline-team-outcome outcome-${escapeHtml(outcome)}">${escapeHtml(formatStatus(outcome))}</span></td>
+          <td>${escapeHtml(formatStatus(verification))}</td>
+          <td>${escapeHtml(change)}</td>
+          <td>${escapeHtml(durationLabel(attempt.usage?.durationMs))}</td>
+          <td>${escapeHtml(costLabel(attempt.usage?.costNanodollars))}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  async function loadTeamPerformance() {
+    state.performanceError = null;
+    try {
+      const payload = await fetchJson(`/api/pipeline/performance?window=${encodeURIComponent(state.performanceWindow)}`);
+      state.performance = payload?.data?.performance || null;
+      if (!state.performance) throw new Error('performance response is missing data.performance');
+    } catch (error) {
+      state.performance = null;
+      state.performanceError = String(error.message || error);
+    }
+    renderTeamPerformance();
+  }
+
   // ---------------------------------------------------------------------------
   // Task dossier drawer
   // ---------------------------------------------------------------------------
@@ -848,11 +1001,13 @@
     renderOpenWork();
     renderAttention();
     renderRecentlyDone();
+    renderTeamPerformance();
   }
 
   async function loadTasks(options) {
     const silent = options && options.silent;
     if (!silent) setLoading(true);
+    const performanceLoad = loadTeamPerformance();
     try {
       const payload = await fetchJson('/api/pipeline/tasks?limit=1000&view=summary&includeDone=true');
       const normalized = normalizePayload(payload);
@@ -863,6 +1018,7 @@
     } catch (error) {
       renderError(error);
     } finally {
+      await performanceLoad;
       if (!silent) setLoading(false);
     }
   }
@@ -906,6 +1062,15 @@
     if (autoBtn) {
       autoBtn.addEventListener('click', () => {
         setAutoRefresh(autoBtn.getAttribute('aria-pressed') !== 'true');
+      });
+    }
+
+    const teamWindow = $('pipelineTeamWindow');
+    if (teamWindow) {
+      teamWindow.value = state.performanceWindow;
+      teamWindow.addEventListener('change', () => {
+        state.performanceWindow = teamWindow.value;
+        loadTeamPerformance();
       });
     }
 

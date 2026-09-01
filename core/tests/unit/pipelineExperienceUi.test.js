@@ -31,4 +31,23 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain("evidence?.authority !== 'core.pipeline'");
     expect(script).toMatch(/exact full-scope totals/);
   });
+
+  test('shows an evidence-honest Coding Team scorecard and recent attempt timeline', () => {
+    for (const id of [
+      'pipelineTeamWindow',
+      'pipelineTeamAccepted',
+      'pipelineTeamFirstPass',
+      'pipelineTeamCycle',
+      'pipelineTeamInterventions',
+      'pipelineTeamCost',
+      'pipelineTeamCoverage',
+      'pipelineTeamAttemptRows',
+    ]) {
+      expect(view).toContain(`id="${id}"`);
+    }
+    expect(script).toContain('/api/pipeline/performance?window=');
+    expect(script).toContain("return 'Unknown'");
+    expect(script).toContain('missing fields remain unknown');
+    expect(script).toContain('data-pipeline-task=');
+  });
 });

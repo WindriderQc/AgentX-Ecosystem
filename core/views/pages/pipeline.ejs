@@ -89,6 +89,59 @@
     Loading count scope and observation evidence&hellip;
   </p>
 
+  <section class="pipeline-panel pipeline-team" aria-labelledby="pipelineTeamTitle">
+    <div class="pipeline-panel-header pipeline-team-header">
+      <div>
+        <h2 id="pipelineTeamTitle"><i class="fas fa-people-group"></i> Coding Team</h2>
+        <p>Autonomous attempt performance from the canonical task history. Missing evidence stays unknown.</p>
+      </div>
+      <label class="pipeline-select">
+        <span>Window</span>
+        <select id="pipelineTeamWindow" aria-label="Coding Team performance window">
+          <option value="7d">7 days</option>
+          <option value="30d" selected>30 days</option>
+          <option value="90d">90 days</option>
+        </select>
+      </label>
+    </div>
+    <div id="pipelineTeamState" class="pipeline-team-state" data-tone="loading" aria-live="polite">
+      <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
+      <span>Loading autonomous attempt evidence&hellip;</span>
+    </div>
+    <div class="pipeline-team-metrics" aria-label="Coding Team scorecard">
+      <article><span>Accepted</span><strong id="pipelineTeamAccepted">--</strong><small id="pipelineTeamAcceptedDetail">Human-confirmed delivery</small></article>
+      <article><span>First pass</span><strong id="pipelineTeamFirstPass">--</strong><small id="pipelineTeamFirstPassDetail">Share of accepted attempts</small></article>
+      <article><span>Median cycle</span><strong id="pipelineTeamCycle">--</strong><small id="pipelineTeamCycleDetail">Queue to human decision</small></article>
+      <article><span>Corrections</span><strong id="pipelineTeamInterventions">--</strong><small id="pipelineTeamInterventionsDetail">Requeues and rejections</small></article>
+      <article><span>Observed cost</span><strong id="pipelineTeamCost">--</strong><small id="pipelineTeamCostDetail">Unknown until fully measured</small></article>
+      <article><span>Evidence</span><strong id="pipelineTeamCoverage">--</strong><small id="pipelineTeamCoverageDetail">Structured attempt receipts</small></article>
+    </div>
+    <div class="pipeline-team-attempts">
+      <div class="pipeline-team-attempts-head">
+        <strong>Recent attempts</strong>
+        <span id="pipelineTeamAttemptMeta">--</span>
+      </div>
+      <div class="pipeline-table-wrap">
+        <table class="pipeline-table pipeline-team-table">
+          <thead>
+            <tr>
+              <th scope="col">Task</th>
+              <th scope="col">Worker</th>
+              <th scope="col">Outcome</th>
+              <th scope="col">Verification</th>
+              <th scope="col">Change</th>
+              <th scope="col">Execution</th>
+              <th scope="col">Cost</th>
+            </tr>
+          </thead>
+          <tbody id="pipelineTeamAttemptRows">
+            <tr><td colspan="7" class="pipeline-empty">Loading attempt evidence&hellip;</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
   <section class="pipeline-panel pipeline-workbench" aria-label="Pipeline work table">
     <div class="pipeline-toolbar">
       <div class="pipeline-search">
@@ -173,16 +226,17 @@
     cockpitGuide: {
       id: 'pipelineGuide',
       title: 'Read the queue, then act with the audited contract',
-      summary: 'Pipeline is the human view of the product-owned task queue. Agents and external boards consume the same bounded HTTP API — nothing here bypasses it.',
+      summary: 'Pipeline is the human view of the product-owned task queue and its privacy-safe autonomous-attempt scorecard. Agents and external boards consume the same bounded HTTP API — nothing here bypasses it.',
       sections: [
         { title: 'Read the counts', body: 'The five status cards are global truth. Select one to focus the work table on that stage; select it again to release the filter.' },
+        { title: 'Measure the coding team', body: 'Coding Team joins queue, lease, verifier, change, cost, and human-review evidence. Coverage is always visible and missing metrics stay unknown rather than becoming zero.' },
         { title: 'Find the work', body: 'Search matches id, title, owner, epic, and source. Service and lane/source filters narrow the loaded rows; urgency sort surfaces blocked and overdue work first.' },
         { title: 'Open the dossier', body: 'Select any row for the full task: specification, priority, risk, dependencies, and the complete feedback audit trail.' },
         { title: 'Confirm like an overseer', body: 'A task in review can be confirmed done from its dossier — but only by an identity different from the worker. The gate is enforced server-side and every confirmation is audited.' },
         { title: 'Unstick what is stuck', body: 'Re-queue releases a task back to the queue (clearing its worker and heartbeat), and notes land in the same audit trail agents read.' },
         { title: 'Trust the heartbeat', body: 'In-progress work should heartbeat regularly. A silent hour marks it stale in Activity and raises it under Needs attention.' }
       ],
-      note: { title: 'One bounded contract', body: 'This page reads and writes only /api/pipeline/tasks — the same audited API used by workers, overseers, and separately deployed boards. There is no privileged side channel.' },
+      note: { title: 'One bounded contract', body: 'This page reads and writes /api/pipeline/tasks and reads its aggregate /api/pipeline/performance projection — the same audited Mongo authority used by workers, overseers, and separately deployed boards. There is no privileged side channel.' },
       links: [
         { href: '/agent-ops', icon: 'fa-circle-nodes', label: 'Agent Ops', detail: 'Who does what, and is it running' },
         { href: '/planning', icon: 'fa-diagram-project', label: 'Planning', detail: 'Workstreams and outcomes' },
