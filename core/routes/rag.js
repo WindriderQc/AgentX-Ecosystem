@@ -48,6 +48,21 @@ router.get('/status', async (_req, res) => {
   }
 });
 
+router.post('/status/refresh', async (_req, res) => {
+  try {
+    const data = await ragClient.refreshStatus();
+    return res.json({
+      status: 'success',
+      data: {
+        ...data,
+        observedAt: data?.observedAt || new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    return handleError(res, err, 'status.refresh');
+  }
+});
+
 router.get('/metrics', async (_req, res) => {
   try {
     const data = await ragClient.getStatus();
