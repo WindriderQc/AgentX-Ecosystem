@@ -84,6 +84,10 @@ function bodyFixture(overrides = {}) {
       minimumEffectMicros: 25000,
       preregistration: {
         repeatCount: 2,
+        requiredIndependentPromptCount: 10,
+        targetPowerBasisPoints: 8000,
+        assumedMaxPairedStdDevMicros: 25000,
+        powerAnalysisFingerprint: '90e1cbc6b75f21a7579d7c49a392cacf28fa827b064c6ab7b93bea1435919a27',
         analysisPlanFingerprint: '1'.repeat(64),
       },
       rankingPolicyFingerprint: '2'.repeat(64),
@@ -130,7 +134,7 @@ function qualificationOptions(now = '2026-09-01T00:00:00.000Z') {
 test('builds a strict content-addressed v1 receipt and derives no caller-owned qualification field', () => {
   const receipt = buildBenchmarkTrustReceipt(bodyFixture());
   assert.equal(validateBenchmarkTrustReceipt(receipt).valid, true);
-  assert.equal(receipt.receiptId, '7f956c3ef9c72f0f2a0f0789c45fdc8530d077d3f6ac664baed3de37d27749bf');
+  assert.equal(receipt.receiptId, '7ed78ea7365cdb613e2bde5848258cc2ea60812169bb49699ad30e454353757b');
   assert.equal(Object.prototype.hasOwnProperty.call(receipt, 'qualified'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(receipt, 'qualifiedWinner'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(receipt.axes, 'ratificationStatus'), false);
@@ -221,7 +225,7 @@ test('rejects contradictory winner, evidence, judge, and exclusion claims', () =
   assert.throws(() => buildBenchmarkTrustReceipt(missingExclusionInventory), /complete evidence requires every preregistered/);
 });
 
-test('binds repeatCount and rejects an unbalanced preregistered inventory', () => {
+test('binds repeat and powered prompt counts and rejects an unbalanced preregistered inventory', () => {
   const missingRepeatCount = bodyFixture();
   delete missingRepeatCount.statistics.preregistration.repeatCount;
   assert.throws(() => buildBenchmarkTrustReceipt(missingRepeatCount), /missing keys: repeatCount/);
@@ -229,6 +233,26 @@ test('binds repeatCount and rejects an unbalanced preregistered inventory', () =
   const invalidRepeatCount = bodyFixture();
   invalidRepeatCount.statistics.preregistration.repeatCount = 0;
   assert.throws(() => buildBenchmarkTrustReceipt(invalidRepeatCount), /repeatCount must be a positive/);
+
+  const missingPowerFields = bodyFixture();
+  delete missingPowerFields.statistics.preregistration.powerAnalysisFingerprint;
+  assert.throws(() => buildBenchmarkTrustReceipt(missingPowerFields), /missing keys: powerAnalysisFingerprint/);
+
+  const underpowered = bodyFixture();
+  underpowered.statistics.preregistration.requiredIndependentPromptCount = 26;
+  assert.throws(() => buildBenchmarkTrustReceipt(underpowered), /underpowered prompt count cannot declare a winner/);
+
+  const invalidPower = bodyFixture();
+  invalidPower.statistics.preregistration.targetPowerBasisPoints = 7999;
+  invalidPower.statistics.preregistration.assumedMaxPairedStdDevMicros = 0;
+  assert.throws(
+    () => buildBenchmarkTrustReceipt(invalidPower),
+    /targetPowerBasisPoints must be an integer from 8000 through 9999.*assumedMaxPairedStdDevMicros must be a positive/s
+  );
+
+  const zeroMinimumEffect = bodyFixture();
+  zeroMinimumEffect.statistics.minimumEffectMicros = 0;
+  assert.throws(() => buildBenchmarkTrustReceipt(zeroMinimumEffect), /minimumEffectMicros must be a positive/);
 
   const unbalanced = bodyFixture();
   unbalanced.execution.expectedResultCount = 98;

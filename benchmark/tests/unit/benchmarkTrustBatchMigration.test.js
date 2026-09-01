@@ -70,6 +70,21 @@ describe('Benchmark trust batch id migration', () => {
                 name: INDEX_NAME
             }
         );
+        expect(collection.createIndex.mock.invocationCallOrder[0])
+            .toBeLessThan(collection.updateOne.mock.invocationCallOrder[0]);
+    });
+
+    test('fails before assigning any ids when the unique index cannot be installed', async () => {
+        const collection = collectionFixture({
+            pending: [{ _id: 'hidden-a' }, { _id: 'hidden-b' }]
+        });
+        collection.createIndex.mockRejectedValueOnce(
+            Object.assign(new Error('existing duplicate key'), { code: 11000 })
+        );
+
+        await expect(backfillBenchmarkTrustBatchIds({ collection }))
+            .rejects.toMatchObject({ code: 11000 });
+        expect(collection.updateOne).not.toHaveBeenCalled();
     });
 
     test('retries a random collision and never overwrites a concurrently migrated batch', async () => {

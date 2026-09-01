@@ -44,23 +44,70 @@ payload. A unique `receiptId` arbitrates concurrent writers; a duplicate is
 idempotent only when the existing canonical payload verifies exactly. Model
 updates, replacements, deletes, document deletes, and bulk writes are blocked.
 
-Storage also requires a terminal source batch, an exact full source inventory
-equal to `expectedResultCount`,
-and an explicit `verifySourceEvidence` callback. That verifier must recompute
-the cell inventory, candidate result-set fingerprints and all other bound
-source fingerprints; returning anything except literal `true` fails closed.
-Complete evidence additionally requires a `completed` batch. On acceptance,
-the source batch and every exact source result are marked
-`trust_evidence_sealed`; subsequent model updates, replacements, deletes,
-document saves/deletes and bulk writes fail
+Storage also requires a terminal source batch and an exact full source
+inventory equal to `expectedResultCount`. Product's canonical source verifier
+loads the sealed Mongo rows itself and recomputes the frozen candidate/prompt
+universe, repeats, exclusions, result-set and cell fingerprints, judge/score
+binding, statistical projection, decision, and server-derived freshness. A
+caller cannot replace this verifier. An optional
+`verifyExternalSourceEvidence` callback may add an environment-specific gate,
+but it is evaluated only after canonical verification and must return literal
+`true`; it is an additional AND, never an approval override.
+Execution and score bindings are not adjacent opaque claims. Before execution,
+the source context freezes each candidate Worker identity, tools, policies,
+execution profile and complete envelope-set fingerprint, plus the exact judge
+identity, rubric/policy, target, tools, execution profile, scoring
+method/version, score-envelope fingerprint, and prompt fingerprints. Every row
+must carry two complete, self-fingerprinted `agentx.worker-receipt/v1`
+documents. The execution receipt is bound to that row's candidate, prompt,
+repeat, response and success result. The judge receipt is bound to the same
+row's response and score plus the frozen rubric and judge identity. Candidate
+envelope sets are recomputed across the exact preregistered rows. A minimal or
+modified receipt, a receipt with a different envelope, or reuse of one row's
+receipt for another row fails closed.
+WorkerReceipt v1 is content-addressed integrity evidence, not an issuer
+signature. A consumer must still verify the separate judge qualification
+attestation against its current trust root; Product does not infer issuer
+authority from a self-consistent WorkerReceipt.
+Complete evidence additionally requires a `completed` batch. The model-owned
+Trust finalizer first seals every exact source result, verifies the sealed
+inventory, and then atomically marks the batch terminal with one server
+`completed_at`/`updated_at`/`trust_evidence_finalized_at` timestamp and
+`trust_evidence_sealed`. Receipt issuance accepts only that durable finalized
+state. Consequently a rejected issuance leaves the finalized evidence
+protected for review; it does not unseal it. Subsequent model updates,
+replacements, deletes, document saves/deletes and bulk writes fail
 with the batch/result sealed-evidence error. New result saves and `insertMany`
 share the evidence mutex and reject sealed target batches; query upserts,
 update pipelines, replacements, and any attempt to change an existing result's
 `batch_id` are rejected. Corrections or human rejudging must create a new batch
 and therefore a new receipt identity.
+For a batch with frozen Trust context, ordinary terminal transitions are also
+rejected. Only the model-owned Trust finalizer can set the terminal status and
+server completion timestamp while holding the same evidence mutex used by
+result insertion. This closes both insert-versus-completion and
+update-versus-counter races: results are sealed before final counters are read,
+later writes fail, and verification requires every result creation timestamp
+to be server-created after both durable start timestamps, with its durable
+update timestamp no earlier than creation and neither timestamp later than
+completion. Caller-supplied Trust result creation times are rejected. Legacy
+batches without Trust context keep their ordinary lifecycle. Model
+`insertMany` cannot inject source context or its server commit timestamp,
+query upserts cannot materialize a batch context through filter equality, and
+aggregate pipelines containing `$merge` or `$out` are rejected recursively for
+both batches and results.
+If the final batch CAS loses a race after result sealing, Product deliberately
+does not guess at a rollback: the partial sealed inventory remains protected
+and requires explicit operator review. It cannot become receipt-qualified.
 The source verifier runs after sealing, before receipt insertion. Mutations
 that finish first are therefore included in verification; mutations that race
 after the seal cannot match the model's mandatory unsealed predicate.
+
+Freshness is derived rather than asserted. `createdAt` is the durable server
+completion time, a future completion is invalid, and `validUntil` is the
+earliest of the preregistered stale cutoff and the judge validity cutoff. The
+longer expiry interval only distinguishes a late-stored receipt as `expired`;
+it cannot extend qualification beyond `stale`.
 
 Only bounded reads are registered:
 
@@ -72,10 +119,12 @@ or routing endpoint in this change.
 
 Receipt insertion and every destructive cleanup path share the standalone-
 Mongo-safe `benchmark-trust-evidence-mutation-v1` mutex. The store holds it
-while it verifies, seals and inserts; archive, prune, purge, global/failed clear
-and reset hold it from protection discovery through deletion. If cleanup wins,
-later issuance observes the missing inventory and fails. If issuance wins,
-later cleanup sees the receipt/seal and preserves the evidence. The mutex has
+while it verifies and inserts; Trust finalization uses the same mutex while it
+seals results and finalizes the batch. Archive, prune, purge, global/failed
+clear and reset hold it from protection discovery through deletion. Cleanup
+may remove an eligible legacy or not-yet-finalized inventory. Once Trust
+finalization wins, later cleanup sees the durable seals and preserves the
+evidence even if receipt issuance is later rejected. The mutex has
 no automatic stale expiry: a process crash leaves mutation blocked until a
 human verifies that no owner is active and performs explicit recovery.
 
@@ -112,13 +161,30 @@ fields are one atomic evidence claim: query updates must write a complete valid
 pair together, while update pipelines and provenance-bearing `$setOnInsert`
 operations are rejected.
 
+This foundation deliberately exposes no authority for importing new qualified
+human evidence. Ordinary `save`, `create`, query-update, and `insertMany`
+surfaces reject a qualified provenance/protocol pair, even when its fields are
+internally consistent. Existing qualified rows remain readable for migration
+and audit, but a future import path must verify an immutable human attestation
+before it may write one. Self-declared reviewer, date, or source fields are not
+an authority. Until that path exists, judge qualification must remain blocked
+and the separate AIOps `verifyJudgeQualification` trust-root check is mandatory.
+
 Judge drift consumes only that qualified-human loader. Missing samples or an
 incomplete/missing baseline remain explicit `insufficient_data` or
 `no_baseline` states and are never collapsed to `ok`.
 
-The active calibration baseline is protected by a unique Mongo slot so two
-concurrent ratifications cannot leave two active baselines on a standalone
-Mongo deployment. This does not qualify a judge by itself.
+The active calibration baseline is protected by an identity-scoped unique
+Mongo slot so two concurrent ratifications cannot leave two active baselines
+for one exact judge on a standalone Mongo deployment. Activation fields are
+immutable through ordinary creates, saves, updates, replacements, pipelines,
+upserts, `insertMany`, and `bulkWrite`; only the model-owned ratification
+transition may change them. Baseline content is append-only by label: an exact
+replay is idempotent, while different metrics or provenance under the same
+label and judge identity fail with a conflict before any bytes change. This
+does not qualify a judge by itself. Ratification validates a complete unique
+seven-category inventory, finite bounded correlations, and sufficient integer
+sample counts before it materializes anything or deactivates the prior baseline.
 
 ## Retention and reset
 
@@ -140,10 +206,11 @@ sealed-result model guard prevents score, exclusion or review mutations from
 rewriting already receipted evidence.
 
 The Mongo integration tests prove this mapping with real batches, reject
-pending or count-mismatched sources, reject an absent/negative fingerprint
-verifier, preserve receipted rows through cleanup, block score/exclusion/delete
-rewrites, reject post-receipt insert/upsert/reparent attempts, preserve partially
-sealed states, and exercise concurrent issuance versus global cleanup.
+pending or count-mismatched sources, forged WorkerReceipts and negative
+external verification, preserve receipted rows through cleanup, block
+score/exclusion/delete rewrites, reject post-receipt insert/upsert/reparent
+attempts, preserve partially sealed states, and exercise concurrent insertion,
+finalization, issuance and global cleanup.
 
 ## Required order and stop conditions
 

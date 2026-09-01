@@ -607,7 +607,23 @@ const BenchmarkResultSchema = new mongoose.Schema({
         default: 1,
         min: 1
     },
-    // Set only by the trust-receipt store after exact source verification.
+    // Opaque preregistered identities. They are optional for legacy results,
+    // but the canonical trust source verifier requires both and never infers
+    // them from mutable display names, hosts, or the observed result universe.
+    trust_candidate_id: {
+        type: String,
+        default: null,
+        match: /^candidate_[0-9a-f]{32}$/,
+        index: true
+    },
+    trust_prompt_id: {
+        type: String,
+        default: null,
+        match: /^prompt_[0-9a-f]{32}$/,
+        index: true
+    },
+    // Set only by the Product Trust finalizer (or the receipt store's
+    // fail-closed compatibility seal path) through raw internal writes.
     // Once true, model-level mutations fail closed; a changed score must be
     // written to a new batch and receive a new evidence identity.
     trust_evidence_sealed: {
@@ -860,6 +876,22 @@ function protectedEvidenceError(operation) {
     return error;
 }
 
+const TRUST_TERMINAL_BATCH_STATUSES = new Set(['completed', 'failed', 'stopped', 'interrupted']);
+
+function aggregateContainsWriteStage(value) {
+    if (Array.isArray(value)) return value.some(aggregateContainsWriteStage);
+    if (!value || typeof value !== 'object') return false;
+    return Object.entries(value).some(([key, entry]) => (
+        key === '$merge' || key === '$out' || aggregateContainsWriteStage(entry)
+    ));
+}
+
+BenchmarkResultSchema.pre('aggregate', function blockResultAggregateWrites() {
+    if (aggregateContainsWriteStage(this.pipeline())) {
+        throw protectedEvidenceError('aggregate write stage');
+    }
+});
+
 for (const operation of [
     'updateOne',
     'updateMany',
@@ -889,9 +921,38 @@ for (const operation of [
             const directPaths = Object.keys(update).filter(key => !key.startsWith('$'));
             const operatorPaths = operators.flatMap(value => Object.keys(value));
             const renameTargets = Object.entries(update.$rename || {}).flatMap(([from, to]) => [from, to]);
-            const touchesBatchId = [...directPaths, ...operatorPaths, ...renameTargets]
+            const touchedPaths = [...directPaths, ...operatorPaths, ...renameTargets];
+            const touchesBatchId = touchedPaths
                 .some(path => path === 'batch_id' || path.startsWith('batch_id.'));
             if (touchesBatchId) throw protectedEvidenceError(`${operation} changing batch_id`);
+            const touchesTrustIdentity = touchedPaths.some(path => (
+                path === 'trust_candidate_id'
+                || path.startsWith('trust_candidate_id.')
+                || path === 'trust_prompt_id'
+                || path.startsWith('trust_prompt_id.')
+            ));
+            if (touchesTrustIdentity) throw protectedEvidenceError(`${operation} changing trust source identity`);
+            const touchesTrustSeal = touchedPaths.some(path => (
+                path === 'trust_evidence_sealed' || path.startsWith('trust_evidence_sealed.')
+            ));
+            if (touchesTrustSeal) {
+                throw protectedEvidenceError(`${operation} changing server evidence seal`);
+            }
+            const touchesCreationTimestamp = touchedPaths.some(path => (
+                path === 'timestamp' || path.startsWith('timestamp.')
+            ));
+            if (touchesCreationTimestamp) {
+                const trustEvidenceMatch = await this.model.exists({
+                    $and: [
+                        this.getFilter() || {},
+                        { trust_candidate_id: { $ne: null } },
+                        { trust_prompt_id: { $ne: null } }
+                    ]
+                });
+                if (trustEvidenceMatch) {
+                    throw protectedEvidenceError(`${operation} changing server creation timestamp`);
+                }
+            }
         }
         const originalFilter = this.getFilter() || {};
         const sealedMatch = await this.model.exists({
@@ -902,7 +963,10 @@ for (const operation of [
         // Close the check/update race: even if a receipt seals matching rows
         // after the read above, the actual write cannot match those rows.
         this.setQuery({
-            $and: [originalFilter, { trust_evidence_sealed: { $ne: true } }]
+            $and: [
+                originalFilter,
+                { trust_evidence_sealed: { $ne: true } }
+            ]
         });
     });
 }
@@ -914,6 +978,13 @@ async function releaseResultDocumentLock(document) {
     await releaseBenchmarkTrustEvidenceLock(ownerToken);
 }
 
+BenchmarkResultSchema.pre('validate', function rememberCallerSuppliedTrustTimestamps() {
+    if (!this.isNew) return;
+    this.$locals.benchmarkTrustCallerSuppliedTimestamp = !this.$isDefault('timestamp')
+        || this.isModified('updated_at');
+    this.$locals.benchmarkTrustCallerSuppliedSeal = !this.$isDefault('trust_evidence_sealed');
+});
+
 BenchmarkResultSchema.pre('save', async function serializeResultDocumentSave() {
     try {
         if (this.isNew) {
@@ -922,17 +993,56 @@ BenchmarkResultSchema.pre('save', async function serializeResultDocumentSave() {
                 { waitMs: 30_000 }
             );
             this.$locals.benchmarkTrustEvidenceLockToken = ownerToken;
+            if (this.$locals.benchmarkTrustCallerSuppliedSeal === true) {
+                throw protectedEvidenceError('result insert with caller-supplied evidence seal');
+            }
+            const trustTagged = this.trust_candidate_id != null || this.trust_prompt_id != null;
+            if (trustTagged && (this.trust_candidate_id == null || this.trust_prompt_id == null || !this.batch_id)) {
+                throw protectedEvidenceError('incomplete trust-tagged result insert');
+            }
             if (!this.batch_id) return;
             const BenchmarkBatch = require('./BenchmarkBatch');
-            const sealedBatch = await BenchmarkBatch.exists({
-                _id: this.batch_id,
-                trust_evidence_sealed: true
-            });
-            if (sealedBatch) throw protectedEvidenceError('insert into sealed batch');
+            const targetBatch = await BenchmarkBatch.findById(this.batch_id)
+                .select('_id status started_at execution_started_at trust_evidence_sealed +trust_evidence_context +trust_evidence_finalized_at')
+                .lean();
+            if (targetBatch?.trust_evidence_sealed === true) {
+                throw protectedEvidenceError('insert into sealed batch');
+            }
+            if (targetBatch?.trust_evidence_context
+                && TRUST_TERMINAL_BATCH_STATUSES.has(targetBatch.status)) {
+                throw protectedEvidenceError('insert into terminal Trust batch');
+            }
+            if (targetBatch?.trust_evidence_context) {
+                if (targetBatch.started_at == null || targetBatch.execution_started_at == null) {
+                    throw protectedEvidenceError('Trust result insert before durable execution start');
+                }
+                if (this.$locals.benchmarkTrustCallerSuppliedTimestamp === true) {
+                    throw protectedEvidenceError('Trust result insert with caller-supplied timestamp');
+                }
+                const serverTimestamp = new Date();
+                if ([targetBatch.started_at, targetBatch.execution_started_at]
+                    .some(value => serverTimestamp < new Date(value))) {
+                    throw protectedEvidenceError('Trust result insert before durable execution start');
+                }
+                this.timestamp = serverTimestamp;
+                this.updated_at = serverTimestamp;
+            }
+            if (trustTagged && !targetBatch?.trust_evidence_context) {
+                throw protectedEvidenceError('trust-tagged insert without committed Trust context');
+            }
             return;
         }
         if (this.isModified('batch_id')) {
             throw protectedEvidenceError('document.save changing batch_id');
+        }
+        if (this.isModified('trust_candidate_id') || this.isModified('trust_prompt_id')) {
+            throw protectedEvidenceError('document.save changing trust source identity');
+        }
+        if (this.isModified('trust_evidence_sealed')) {
+            throw protectedEvidenceError('document.save changing server evidence seal');
+        }
+        if (this.isModified('timestamp')) {
+            throw protectedEvidenceError('document.save changing server creation timestamp');
         }
         this.$where = {
             ...(this.$where || {}),
@@ -985,17 +1095,62 @@ const unguardedInsertMany = BenchmarkResult.insertMany.bind(BenchmarkResult);
 BenchmarkResult.insertMany = async function guardedBenchmarkResultInsertMany(documents, options) {
     return withBenchmarkTrustEvidenceLock('insert-many-benchmark-results', async () => {
         const rows = Array.isArray(documents) ? documents : [documents];
+        if (rows.some(row => row instanceof mongoose.Document
+            ? !row.$isDefault('trust_evidence_sealed')
+            : Object.prototype.hasOwnProperty.call(row || {}, 'trust_evidence_sealed'))) {
+            throw protectedEvidenceError('insertMany with caller-supplied evidence seal');
+        }
         const batchIds = [...new Set(rows
             .map(document => document?.batch_id)
             .filter(batchId => batchId !== null && batchId !== undefined)
             .map(batchId => String(batchId)))];
         if (batchIds.length > 0) {
             const BenchmarkBatch = require('./BenchmarkBatch');
-            const sealedBatch = await BenchmarkBatch.exists({
-                _id: { $in: batchIds },
-                trust_evidence_sealed: true
-            });
-            if (sealedBatch) throw protectedEvidenceError('insertMany into sealed batch');
+            const targetBatches = await BenchmarkBatch.find({ _id: { $in: batchIds } })
+                .select('_id status started_at execution_started_at trust_evidence_sealed +trust_evidence_context +trust_evidence_finalized_at')
+                .lean();
+            const batchById = new Map(targetBatches.map(batch => [String(batch._id), batch]));
+            const serverTimestamp = new Date();
+            for (const row of rows) {
+                const trustTagged = row?.trust_candidate_id != null || row?.trust_prompt_id != null;
+                if (trustTagged && (row?.trust_candidate_id == null || row?.trust_prompt_id == null || row?.batch_id == null)) {
+                    throw protectedEvidenceError('incomplete trust-tagged insertMany row');
+                }
+                if (row?.batch_id == null) continue;
+                const targetBatch = batchById.get(String(row.batch_id));
+                if (targetBatch?.trust_evidence_sealed === true) {
+                    throw protectedEvidenceError('insertMany into sealed batch');
+                }
+                if (targetBatch?.trust_evidence_context
+                    && TRUST_TERMINAL_BATCH_STATUSES.has(targetBatch.status)) {
+                    throw protectedEvidenceError('insertMany into terminal Trust batch');
+                }
+                if (targetBatch?.trust_evidence_context) {
+                    if (targetBatch.started_at == null
+                        || targetBatch.execution_started_at == null
+                        || [targetBatch.started_at, targetBatch.execution_started_at]
+                            .some(value => serverTimestamp < new Date(value))) {
+                        throw protectedEvidenceError('Trust insertMany before durable execution start');
+                    }
+                    const callerSuppliedTimestamp = row instanceof mongoose.Document
+                        ? !row.$isDefault('timestamp') || row.isModified('updated_at')
+                        : Object.prototype.hasOwnProperty.call(row || {}, 'timestamp')
+                            || Object.prototype.hasOwnProperty.call(row || {}, 'updated_at');
+                    if (callerSuppliedTimestamp) {
+                        throw protectedEvidenceError('Trust insertMany with caller-supplied timestamp');
+                    }
+                    if (row instanceof mongoose.Document) {
+                        row.set('timestamp', serverTimestamp);
+                        row.set('updated_at', serverTimestamp);
+                    } else {
+                        row.timestamp = serverTimestamp;
+                        row.updated_at = serverTimestamp;
+                    }
+                }
+                if (trustTagged && !targetBatch?.trust_evidence_context) {
+                    throw protectedEvidenceError('trust-tagged insertMany without committed Trust context');
+                }
+            }
         }
         return unguardedInsertMany(documents, options);
     }, { waitMs: 30_000 });
