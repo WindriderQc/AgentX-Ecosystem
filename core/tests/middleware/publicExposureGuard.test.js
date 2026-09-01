@@ -34,6 +34,7 @@ function buildApp() {
   app.delete('/api/cluster/schedule/claim/claim-1', (_req, res) => res.json({ ok: true }));
   app.post('/api/pipeline/tasks/task-1/claim', (_req, res) => res.json({ ok: true }));
   app.get('/api/pipeline/tasks/next', (_req, res) => res.json({ ok: true }));
+  app.get('/api/pipeline/tasks/task-1/worker', (_req, res) => res.json({ ok: true }));
   app.post('/api/pipeline/tasks/task-1/status', (_req, res) => res.json({ ok: true }));
   app.post('/api/todos', (_req, res) => res.json({ ok: true }));
   app.post('/api/alerts/alert-1/delivery-status', (_req, res) => res.json({ ok: true }));
@@ -433,6 +434,10 @@ describe('publicExposureGuard', () => {
       .set('X-AgentX-Pipeline-Token', 'pipeline-token')
       .expect(200);
     await request(app).get('/api/pipeline/tasks/next')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-token')
+      .expect(200);
+    await request(app).get('/api/pipeline/tasks/task-1/worker')
       .set('Host', 'agentx.example.test')
       .set('X-AgentX-Pipeline-Token', 'pipeline-token')
       .expect(200);

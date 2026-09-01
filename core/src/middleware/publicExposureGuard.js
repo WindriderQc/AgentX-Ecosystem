@@ -137,7 +137,10 @@ function workflowMachineCredential(pathname, method) {
   if ((verb === 'POST' && (
     /^\/api\/pipeline\/tasks\/[^/]+\/(claim|feedback|heartbeat|status)$/.test(path)
     || path === '/api/todos'
-  )) || (verb === 'GET' && path === '/api/pipeline/tasks/next')) {
+  )) || (verb === 'GET' && (
+    path === '/api/pipeline/tasks/next'
+    || /^\/api\/pipeline\/tasks\/[^/]+\/worker$/.test(path)
+  ))) {
     return {
       environmentVariable: 'AGENTX_PIPELINE_TOKEN',
       header: 'x-agentx-pipeline-token',

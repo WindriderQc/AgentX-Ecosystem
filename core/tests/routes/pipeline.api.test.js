@@ -12,6 +12,9 @@ jest.mock('../../src/services/pipelineTaskService', () => ({
   createTaskInMongo: jest.fn(),
   findNextEligibleTask: jest.fn(),
   claimEligibleTask: jest.fn(),
+  assertLeaseMutationAllowed: jest.fn(() => null),
+  heartbeatClaim: jest.fn(),
+  releaseAutomationSlot: jest.fn(),
 }));
 
 const PipelineTask = require('../../models/PipelineTask');
@@ -84,6 +87,7 @@ describe('GET /api/pipeline/tasks', () => {
       [
         'pipelineId', 'title', 'service', 'status', 'assignee', 'heartbeatAt',
         'epic', 'source', 'priority', 'dependsOn', 'notBefore', 'dueAt', 'risk',
+        'automation', 'automationAttemptCount',
         'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt'
       ].join(' ')
     );
@@ -176,6 +180,50 @@ describe('GET /api/pipeline/tasks/:id', () => {
 
     expect(pipelineTaskService.findNextEligibleTask).toHaveBeenCalled();
     expect(PipelineTask.findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/pipeline/tasks/:id/worker', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('returns one non-personal queued task without changing claim state', async () => {
+    PipelineTask.findOne.mockReturnValue({
+      lean: async () => ({
+        pipelineId: '0707',
+        status: 'queued',
+        assignee: null,
+        service: 'core',
+        spec: '# bounded worker prompt',
+      }),
+    });
+
+    const response = await request(createApp())
+      .get('/api/pipeline/tasks/0707/worker?agent=worker-a')
+      .expect(200);
+
+    expect(PipelineTask.findOne).toHaveBeenCalledWith({
+      pipelineId: '0707',
+      service: { $ne: 'personal' },
+      source: { $ne: 'idea-drop' },
+      $or: [
+        { status: 'queued', assignee: null },
+        { status: { $in: ['in_progress', 'review', 'blocked'] }, assignee: 'worker-a' },
+      ],
+    });
+    expect(response.body.data.task.spec).toBe('# bounded worker prompt');
+    expect(pipelineTaskService.claimEligibleTask).not.toHaveBeenCalled();
+  });
+
+  test('does not disclose unavailable or personal task detail', async () => {
+    PipelineTask.findOne.mockReturnValue({ lean: async () => null });
+
+    const response = await request(createApp())
+      .get('/api/pipeline/tasks/0708/worker?agent=worker-a')
+      .expect(404);
+
+    expect(response.body.code).toBe('WORKER_TASK_UNAVAILABLE');
   });
 });
 
@@ -291,11 +339,37 @@ describe('POST /api/pipeline/tasks/:id/claim', () => {
 
     expect(res.body.code).toBe('TASK_DEPENDENCIES_BLOCKED');
   });
+
+  test('requests a server-issued lease only for explicit automated claims', async () => {
+    pipelineTaskService.claimEligibleTask.mockResolvedValue({
+      pipelineId: '0520',
+      status: 'in_progress',
+      assignee: 'coding-dispatcher',
+      automationLease: { leaseId: 'lease-1' },
+    });
+
+    const res = await request(createApp())
+      .post('/api/pipeline/tasks/0520/claim')
+      .send({ assignee: 'coding-dispatcher', automated: true, leaseDurationMs: 60000 })
+      .expect(200);
+
+    expect(pipelineTaskService.claimEligibleTask).toHaveBeenCalledWith(
+      '0520',
+      'coding-dispatcher',
+      expect.any(Date),
+      { automated: true, leaseDurationMs: 60000 }
+    );
+    expect(res.body.data.task.automationLease.leaseId).toBe('lease-1');
+  });
 });
 
 describe('POST /api/pipeline/tasks/:id/feedback', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0352', status: 'in_progress', assignee: 'codex'
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue(null);
   });
 
   test('rejects empty feedback without updating the task', async () => {
@@ -371,6 +445,54 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
     );
     expect(res.body.data.task.pipelineId).toBe('0403');
     expect(res.body.data.task.status).toBe('blocked');
+  });
+
+  test('binds automated completion to the active lease and attempt', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0710',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automationLease: { leaseId: 'lease-1', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-1', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0710', status: 'review' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0710/feedback')
+      .send({
+        status: 'done',
+        by: 'guarded-dispatch',
+        leaseAssignee: 'worker-a',
+        leaseId: 'lease-1',
+        text: 'verified',
+      })
+      .expect(200);
+
+    expect(PipelineTask.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pipelineId: '0710',
+        status: 'in_progress',
+        assignee: 'worker-a',
+        'automationLease.leaseId': 'lease-1',
+        'automationLease.expiresAt': { $gt: expect.any(Date) },
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'review',
+          'automationAttempts.$[attempt].finalState': 'review',
+          'automationAttempts.$[attempt].completedAt': expect.any(Date),
+        }),
+        $unset: { automationLease: 1 },
+      }),
+      { new: true, arrayFilters: [{ 'attempt.leaseId': 'lease-1' }] }
+    );
+    expect(pipelineTaskService.releaseAutomationSlot).toHaveBeenCalledWith({
+      leaseId: 'lease-1',
+      pipelineId: '0710',
+      assignee: 'worker-a',
+    });
   });
 });
 
@@ -468,6 +590,7 @@ describe('pipeline scoped machine identity', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue(null);
     for (const key of ENV_KEYS) delete process.env[key];
   });
 
@@ -483,7 +606,7 @@ describe('pipeline scoped machine identity', () => {
       expect(pipelineTaskService.claimEligibleTask).not.toHaveBeenCalled();
     }],
     ['heartbeat', '/api/pipeline/tasks/0700/heartbeat', {}, () => {
-      expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(pipelineTaskService.heartbeatClaim).not.toHaveBeenCalled();
     }],
     ['status', '/api/pipeline/tasks/0700/status', { status: 'in_progress' }, () => {
       expect(PipelineTask.findOne).not.toHaveBeenCalled();
@@ -537,7 +660,7 @@ describe('pipeline scoped machine identity', () => {
       .send({ assignee: 'remote-worker' })
       .expect(200);
 
-    PipelineTask.findOneAndUpdate.mockResolvedValueOnce({
+    pipelineTaskService.heartbeatClaim.mockResolvedValueOnce({
       pipelineId: '0701', heartbeatAt: new Date('2026-08-28T12:00:00.000Z')
     });
     await request(app)
@@ -558,6 +681,9 @@ describe('pipeline scoped machine identity', () => {
       .send({ status: 'blocked', by: 'remote-worker' })
       .expect(200);
 
+    PipelineTask.findOne.mockResolvedValueOnce({
+      pipelineId: '0701', status: 'in_progress', assignee: 'remote-worker'
+    });
     PipelineTask.findOneAndUpdate.mockResolvedValueOnce({
       pipelineId: '0701', status: 'review', assignee: 'remote-worker'
     });
@@ -575,6 +701,26 @@ describe('pipeline scoped machine identity', () => {
     );
   });
 
+  test('reports an automation heartbeat lease mismatch as a conflict', async () => {
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+    pipelineTaskService.heartbeatClaim.mockRejectedValueOnce(Object.assign(
+      new Error('automation lease identity is missing or stale'),
+      { status: 409, code: 'TASK_LEASE_MISMATCH' }
+    ));
+
+    const response = await request(createApp({ ip: REMOTE_IP }))
+      .post('/api/pipeline/tasks/0701/heartbeat')
+      .set('Host', 'remote-worker.example')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-secret')
+      .send({ assignee: 'remote-worker', leaseId: 'stale-lease' })
+      .expect(409);
+
+    expect(response.body).toMatchObject({
+      ok: false,
+      code: 'TASK_LEASE_MISMATCH',
+    });
+  });
+
   test('does not let a remote worker token acquire final authority through status=done', async () => {
     process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
 
@@ -588,6 +734,57 @@ describe('pipeline scoped machine identity', () => {
     expect(response.body.code).toBe('PIPELINE_FINALIZE_REQUIRES_CONTROL_AUTHORITY');
     expect(PipelineTask.findOne).not.toHaveBeenCalled();
     expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  test('binds a remote non-final status mutation to the active automation lease', async () => {
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0711',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automationLease: {
+        leaseId: 'lease-1',
+        assignee: 'worker-a',
+        expiresAt: new Date(Date.now() + 60000),
+      },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-1', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({
+      pipelineId: '0711', status: 'blocked', assignee: 'worker-a'
+    });
+
+    await request(createApp({ ip: REMOTE_IP }))
+      .post('/api/pipeline/tasks/0711/status')
+      .set('Host', 'remote-worker.example')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-secret')
+      .send({ status: 'blocked', by: 'worker-a', leaseId: 'lease-1' })
+      .expect(200);
+
+    expect(PipelineTask.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pipelineId: '0711',
+        status: 'in_progress',
+        assignee: 'worker-a',
+        'automationLease.leaseId': 'lease-1',
+        'automationLease.expiresAt': { $gt: expect.any(Date) },
+      }),
+      {
+        $set: {
+          status: 'blocked',
+          'automationAttempts.$[attempt].finalState': 'blocked',
+          'automationAttempts.$[attempt].completedAt': expect.any(Date),
+        },
+        $unset: { automationLease: 1 },
+      },
+      { new: true, arrayFilters: [{ 'attempt.leaseId': 'lease-1' }] }
+    );
+    expect(pipelineTaskService.releaseAutomationSlot).toHaveBeenCalledWith({
+      leaseId: 'lease-1',
+      pipelineId: '0711',
+      assignee: 'worker-a',
+    });
   });
 
   test('retains remote operator finalization and its existing force override', async () => {
