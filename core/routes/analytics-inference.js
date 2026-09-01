@@ -56,7 +56,17 @@ const round = (n, d = 2) => {
 
 const rate = (part, total) => (total > 0 ? round((part / total) * 100) : 0);
 
-const LOG_FILTER_FIELDS = ['caller', 'callerDetail', 'consumerContract', 'taskType', 'model', 'host'];
+const LOG_FILTER_FIELDS = [
+  'caller',
+  'callerDetail',
+  'consumerContract',
+  'runtime',
+  'workItemId',
+  'correlationId',
+  'taskType',
+  'model',
+  'host'
+];
 const LOG_STATUSES = new Set(['success', 'error', 'timeout']);
 
 function boundedText(value, max = 200) {
@@ -148,6 +158,9 @@ router.get('/logs', async (req, res) => {
         caller: req.query.caller || null,
         callerDetail: req.query.callerDetail || null,
         consumerContract: req.query.consumerContract || null,
+        runtime: req.query.runtime || null,
+        workItemId: req.query.workItemId || null,
+        correlationId: req.query.correlationId || null,
         taskType: req.query.taskType || null,
         model: req.query.model || null,
         host: req.query.host || null,
