@@ -16,6 +16,7 @@ const {
 const { tokenAllowed: mcpTokenAllowed } = require('../helpers/mcpToken');
 
 const PROTECTED_PATH_PREFIXES = ['/api/', '/mcp', '/api/mcp'];
+const RUNTIME_BRIDGE_PATH_PREFIX = '/api/openclaw-ollama';
 // These names exist only on the product-owned container network. They preserve
 // secret-free default service-to-service calls while browser-shaped requests
 // to the same Host values still have to prove exact same-origin access.
@@ -109,6 +110,22 @@ function benchmarkCredentialPath(pathname, method) {
   )) || (verb === 'DELETE' && /\/benchmark-claim\/[^/]+$/.test(path));
 }
 
+function runtimeBridgeCredentialPath(pathname) {
+  const path = String(pathname || '').split('?')[0].toLowerCase();
+  return path === RUNTIME_BRIDGE_PATH_PREFIX
+    || path.startsWith(`${RUNTIME_BRIDGE_PATH_PREFIX}/`);
+}
+
+function runtimeBridgeCredentialAllowed(req) {
+  if (!runtimeBridgeCredentialPath(req.path || req.originalUrl)) return false;
+  const authorization = String(req.get?.('authorization') || '');
+  const bearer = authorization.toLowerCase().startsWith('bearer ')
+    ? authorization.slice(7).trim()
+    : '';
+  const presented = bearer || String(req.get?.('x-agentx-openclaw-token') || '').trim();
+  return tokensMatch(process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN, presented);
+}
+
 function workflowMachineCredential(pathname, method) {
   const path = String(pathname || '').toLowerCase();
   const verb = String(method || 'GET').toUpperCase();
@@ -188,6 +205,11 @@ function scopedMachineCredentialAllowed(req) {
     req.get?.('x-agentx-benchmark-token')
   )) return true;
 
+  // A separately operated runtime bridge may receive one dedicated token, but
+  // only on the exact OpenClaw-compatible proxy family. The mounted bridge
+  // revalidates this same credential before serving discovery or inference.
+  if (runtimeBridgeCredentialAllowed(req)) return true;
+
   const workflowCredential = workflowMachineCredential(pathname, method);
   if (workflowCredential && tokensMatch(
     process.env[workflowCredential.environmentVariable],
@@ -253,10 +275,13 @@ module.exports = {
   configuredPublicHosts,
   INTERNAL_CORE_HOSTS,
   LOOPBACK_PUBLISHED_HOSTS,
+  RUNTIME_BRIDGE_PATH_PREFIX,
   benchmarkCredentialPath,
   requestHost,
   isProtectedPath,
   publicExposureGuard,
+  runtimeBridgeCredentialAllowed,
+  runtimeBridgeCredentialPath,
   scopedMachineCredentialAllowed,
   trustedLocalMachineAllowed,
   tokensMatch,

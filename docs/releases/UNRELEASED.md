@@ -6,6 +6,10 @@ v0.1.1.
 
 ## Product trust and experience
 
+- Core now admits a dedicated runtime-bridge credential only on the exact
+  `/api/openclaw-ollama` family. Wrong, absent, or near-prefix credentials fail
+  at the public-exposure guard, and the mounted bridge still revalidates the
+  same token before discovery or inference.
 - Inference analytics now groups consumer traffic by the server-attested
   `consumerContract` field and no longer returns caller-controlled
   `callerDetail` aggregate values. The external-consumer route supplies its
