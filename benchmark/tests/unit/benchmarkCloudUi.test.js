@@ -93,4 +93,10 @@ describe('cloud benchmark UI contracts', () => {
     expect(models).toContain('saved.has(raw) || saved.has(normalized)');
     expect(models).not.toContain('saved.size');
   });
+
+  test('a failed launch restores the primary action for a safe retry', () => {
+    const config = read('public/js/benchmark-v2/batch-config.js');
+    expect(config).toContain('await onLaunch(batchConfig)');
+    expect(config).toMatch(/finally\s*{[\s\S]*?_resetLaunchButton\(\)/);
+  });
 });
