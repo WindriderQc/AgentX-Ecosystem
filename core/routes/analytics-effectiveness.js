@@ -18,10 +18,19 @@ router.get('/effectiveness', async (req, res) => {
   try {
     const snapshot = await readEffectivenessSnapshot({
       window: req.query.window,
+      from: req.query.from,
+      to: req.query.to,
       runtime,
     });
     return res.json(snapshot);
   } catch (error) {
+    if (error.status === 400) {
+      return res.status(400).json({
+        status: 'error',
+        code: error.code || 'INVALID_EFFECTIVENESS_WINDOW',
+        message: error.message,
+      });
+    }
     logger.error('LLM effectiveness snapshot failed', { error: error.message });
     return res.status(500).json({ status: 'error', message: 'Effectiveness telemetry is temporarily unavailable.' });
   }

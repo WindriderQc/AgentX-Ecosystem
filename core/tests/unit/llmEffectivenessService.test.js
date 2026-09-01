@@ -4,6 +4,7 @@ const {
   buildEffectivenessSnapshot,
   derivePipelineOutcomes,
   normalizeOutcomeInput,
+  normalizeExactWindow,
   normalizeWindow,
   pipelineRuntime,
 } = require('../../src/services/llmEffectivenessService');
@@ -32,6 +33,40 @@ function outcome(overrides = {}) {
 const window = normalizeWindow('7d', Date.parse('2026-07-17T13:00:00Z'));
 
 describe('llmEffectivenessService', () => {
+  test('normalizes explicit offset windows as bounded half-open intervals', () => {
+    const exact = normalizeExactWindow(
+      '2026-11-01T00:00:00-04:00',
+      '2026-11-02T00:00:00-05:00',
+      Date.parse('2026-11-03T00:00:00Z')
+    );
+    expect(exact).toEqual({
+      key: 'exact',
+      from: new Date('2026-11-01T04:00:00.000Z'),
+      to: new Date('2026-11-02T05:00:00.000Z'),
+      endExclusive: true,
+    });
+    expect(() => normalizeExactWindow('2026-08-30T00:00:00', '2026-08-31T00:00:00Z'))
+      .toThrow(/explicit offset/);
+    expect(() => normalizeExactWindow('2026-02-30T00:00:00Z', '2026-03-01T00:00:00Z'))
+      .toThrow(/explicit offset/);
+    expect(() => normalizeExactWindow('2026-08-30T24:00:00Z', '2026-08-31T00:00:00Z'))
+      .toThrow(/explicit offset/);
+    expect(() => normalizeExactWindow('2026-08-30T00:00:00Z', null))
+      .toThrow(/supplied together/);
+    expect(() => normalizeExactWindow('2026-08-31T00:00:00Z', '2026-08-30T00:00:00Z'))
+      .toThrow(/increasing/);
+    expect(() => normalizeExactWindow(
+      '2026-08-01T00:00:00Z',
+      '2026-09-02T00:00:00Z',
+      Date.parse('2026-09-03T00:00:00Z')
+    )).toThrow(/no longer than 31 days/);
+    expect(() => normalizeExactWindow(
+      '2026-08-30T00:00:00Z',
+      '2026-09-02T00:00:00Z',
+      Date.parse('2026-09-01T00:00:00Z')
+    )).toThrow(/future/);
+  });
+
   test('uses source-owned reported usage instead of adding matching AgentX logs', () => {
     const snapshot = buildEffectivenessSnapshot({
       window,
@@ -76,6 +111,7 @@ describe('llmEffectivenessService', () => {
     });
 
     expect(snapshot.summary.attributionCoveragePct).toBe(50);
+    expect(snapshot.summary.attributedOutcomes).toBe(1);
     expect(snapshot.byRuntime[0].tokens).toBe(60);
     expect(snapshot.waste.unattributedTokens).toBe(0);
   });

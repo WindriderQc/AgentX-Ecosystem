@@ -26,7 +26,44 @@ describe('analytics effectiveness API', () => {
     const response = await request(app()).get('/api/analytics/effectiveness?window=7d&runtime=external');
     expect(response.status).toBe(200);
     expect(response.body.summary.productiveOutcomes).toBe(3);
-    expect(service.readEffectivenessSnapshot).toHaveBeenCalledWith({ window: '7d', runtime: 'external' });
+    expect(service.readEffectivenessSnapshot).toHaveBeenCalledWith({
+      window: '7d', from: undefined, to: undefined, runtime: 'external',
+    });
+  });
+
+  test('passes an exact half-open interval to the effectiveness authority', async () => {
+    service.readEffectivenessSnapshot.mockResolvedValue({
+      ok: true,
+      window: {
+        key: 'exact',
+        from: '2026-08-30T04:00:00.000Z',
+        to: '2026-08-31T04:00:00.000Z',
+        endExclusive: true,
+      },
+    });
+    const response = await request(app()).get(
+      '/api/analytics/effectiveness?from=2026-08-30T00%3A00%3A00-04%3A00&to=2026-08-31T00%3A00%3A00-04%3A00&runtime=external'
+    );
+    expect(response.status).toBe(200);
+    expect(service.readEffectivenessSnapshot).toHaveBeenCalledWith({
+      window: undefined,
+      from: '2026-08-30T00:00:00-04:00',
+      to: '2026-08-31T00:00:00-04:00',
+      runtime: 'external',
+    });
+  });
+
+  test('returns bounded validation failures as 400', async () => {
+    const error = new Error('from and to must be supplied together');
+    error.status = 400;
+    error.code = 'INVALID_EFFECTIVENESS_WINDOW';
+    service.readEffectivenessSnapshot.mockRejectedValue(error);
+    const response = await request(app()).get(
+      '/api/analytics/effectiveness?from=2026-08-30T00%3A00%3A00-04%3A00'
+    );
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('INVALID_EFFECTIVENESS_WINDOW');
+    expect(service.readEffectivenessSnapshot).toHaveBeenCalledTimes(1);
   });
 
   test('rejects an unknown runtime before querying storage', async () => {

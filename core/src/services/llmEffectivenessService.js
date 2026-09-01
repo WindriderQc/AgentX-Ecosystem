@@ -22,6 +22,8 @@ const WINDOW_MS = {
   '14d': 14 * 24 * 60 * 60 * 1000,
   '30d': 30 * 24 * 60 * 60 * 1000,
 };
+const MAX_EXACT_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
+const EXPLICIT_OFFSET_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))$/i;
 
 function finiteNonNegative(value, fallback = 0) {
   const parsed = Number(value);
@@ -43,6 +45,58 @@ function normalizeWindow(value, now = Date.now()) {
   if (key === 'all') return { key, from: new Date(0), to: new Date(now) };
   const ms = WINDOW_MS[key] || WINDOW_MS['7d'];
   return { key: WINDOW_MS[key] ? key : '7d', from: new Date(now - ms), to: new Date(now) };
+}
+
+function invalidExactWindow(message) {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = 'INVALID_EFFECTIVENESS_WINDOW';
+  return error;
+}
+
+function exactTimestamp(value, name) {
+  const text = String(value || '').trim();
+  const match = EXPLICIT_OFFSET_TIMESTAMP.exec(text);
+  if (!match) {
+    throw invalidExactWindow(`${name} must be an ISO-8601 timestamp with an explicit offset`);
+  }
+  const [, rawYear, rawMonth, rawDay, rawHour, rawMinute, rawSecond,
+    _fraction, zone, _sign, rawOffsetHour, rawOffsetMinute] = match;
+  const year = Number(rawYear);
+  const month = Number(rawMonth);
+  const day = Number(rawDay);
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  const second = Number(rawSecond);
+  const offsetHour = zone.toUpperCase() === 'Z' ? 0 : Number(rawOffsetHour);
+  const offsetMinute = zone.toUpperCase() === 'Z' ? 0 : Number(rawOffsetMinute);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (year < 1970 || month < 1 || month > 12 || day < 1 || day > daysInMonth
+      || hour > 23 || minute > 59 || second > 59
+      || offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
+    throw invalidExactWindow(`${name} must be an ISO-8601 timestamp with an explicit offset`);
+  }
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    throw invalidExactWindow(`${name} must be an ISO-8601 timestamp with an explicit offset`);
+  }
+  return parsed;
+}
+
+function normalizeExactWindow(from, to, now = Date.now()) {
+  if (from == null || to == null) {
+    throw invalidExactWindow('from and to must be supplied together');
+  }
+  const exactFrom = exactTimestamp(from, 'from');
+  const exactTo = exactTimestamp(to, 'to');
+  const durationMs = exactTo.getTime() - exactFrom.getTime();
+  if (durationMs <= 0 || durationMs > MAX_EXACT_WINDOW_MS) {
+    throw invalidExactWindow('exact effectiveness window must be increasing and no longer than 31 days');
+  }
+  if (exactTo.getTime() > Number(now)) {
+    throw invalidExactWindow('exact effectiveness window must not end in the future');
+  }
+  return { key: 'exact', from: exactFrom, to: exactTo, endExclusive: true };
 }
 
 function rejectSensitivePayload(input) {
@@ -346,6 +400,7 @@ function buildEffectivenessSnapshot({ outcomes = [], pipelineTasks = [], inferen
     reportedOutcomes: combined.length,
     verifiedOutcomes,
     productiveOutcomes,
+    attributedOutcomes,
     verificationRatePct: percentage(verifiedOutcomes, combined.length),
     productivityRatePct: percentage(productiveOutcomes, combined.length),
     attributionCoveragePct: percentage(attributedOutcomes, combined.length),
@@ -388,7 +443,12 @@ function buildEffectivenessSnapshot({ outcomes = [], pipelineTasks = [], inferen
   return {
     ok: true,
     asOf: new Date().toISOString(),
-    window: { key: window.key, from: window.from.toISOString(), to: window.to.toISOString() },
+    window: {
+      key: window.key,
+      from: window.from.toISOString(),
+      to: window.to.toISOString(),
+      ...(window.endExclusive === true && { endExclusive: true }),
+    },
     signal,
     summary,
     waste: {
@@ -427,16 +487,28 @@ function buildEffectivenessSnapshot({ outcomes = [], pipelineTasks = [], inferen
   };
 }
 
-async function readEffectivenessSnapshot({ window: rawWindow = '7d', runtime = null } = {}) {
-  const window = normalizeWindow(rawWindow);
-  const outcomeQuery = { completedAt: { $gte: window.from, $lte: window.to } };
-  const logQuery = { timestamp: { $gte: window.from, $lte: window.to } };
+async function readEffectivenessSnapshot({
+  window: rawWindow = null, from = null, to = null, runtime = null, now = Date.now(),
+} = {}) {
+  const exactRequested = from != null || to != null;
+  const rollingRequested = rawWindow != null && String(rawWindow).trim() !== '';
+  if (exactRequested && rollingRequested) {
+    throw invalidExactWindow('window cannot be combined with from and to');
+  }
+  const window = exactRequested
+    ? normalizeExactWindow(from, to, now)
+    : normalizeWindow(rawWindow || '7d', now);
+  const boundedRange = window.endExclusive
+    ? { $gte: window.from, $lt: window.to }
+    : { $gte: window.from, $lte: window.to };
+  const outcomeQuery = { completedAt: boundedRange };
+  const logQuery = { timestamp: boundedRange };
   if (runtime && RUNTIMES.has(runtime)) {
     outcomeQuery.runtime = runtime;
   }
   const [outcomes, pipelineTasks, inferenceLogs] = await Promise.all([
     LlmOutcome.find(outcomeQuery).sort({ completedAt: -1 }).limit(5000).lean(),
-    PipelineTask.find({ status: { $in: ['done', 'review', 'blocked'] }, updatedAt: { $gte: window.from, $lte: window.to } })
+    PipelineTask.find({ status: { $in: ['done', 'review', 'blocked'] }, updatedAt: boundedRange })
       .select('pipelineId status assignee createdAt updatedAt')
       .sort({ updatedAt: -1 })
       .limit(5000)
@@ -465,6 +537,7 @@ module.exports = {
   buildEffectivenessSnapshot,
   derivePipelineOutcomes,
   normalizeOutcomeInput,
+  normalizeExactWindow,
   normalizeWindow,
   pipelineRuntime,
   readEffectivenessSnapshot,
