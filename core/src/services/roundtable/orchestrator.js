@@ -437,10 +437,15 @@ async function runRoundtable(roundtableId, emitter) {
     const agents = doc.panelConfig.map((a) => a.toObject());
     const totalTimer = setTimeout(async () => {
       logger.error('Roundtable total timeout exceeded', { roundtableId });
-      await Roundtable.updateOne(
+      const totalDurationMs = Date.now() - startTime;
+      const timeoutError = `Total timeout after ${DEFAULT_TOTAL_TIMEOUT_MS}ms`;
+      const result = await Roundtable.updateOne(
         { _id: roundtableId, status: 'running' },
-        { $set: { status: 'timeout', error: `Total timeout after ${DEFAULT_TOTAL_TIMEOUT_MS}ms`, completedAt: new Date(), totalDurationMs: Date.now() - startTime } }
+        { $set: { status: 'timeout', error: timeoutError, completedAt: new Date(), totalDurationMs } }
       );
+      if (result?.modifiedCount > 0 && emitter) {
+        emitter.emit('chunk', { type: 'done', status: 'timeout', error: timeoutError, totalDurationMs });
+      }
     }, DEFAULT_TOTAL_TIMEOUT_MS);
 
     // Round 1 — blind

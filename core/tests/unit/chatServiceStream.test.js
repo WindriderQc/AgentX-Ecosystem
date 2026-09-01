@@ -507,4 +507,97 @@ describe('chatServiceStream', () => {
       })
     }));
   });
+
+  it('finishes at the terminal NDJSON record even when the upstream body does not close', async () => {
+    let requestedNextChunk = false;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: (async function* stream() {
+        yield Buffer.from(JSON.stringify({ message: { content: 'Done' } }) + '\n' + JSON.stringify({
+          done: true,
+          eval_count: 1,
+          total_duration: 1000000,
+          eval_duration: 1000000
+        }) + '\n');
+        requestedNextChunk = true;
+        await new Promise(() => {});
+      })()
+    });
+    const onComplete = jest.fn();
+
+    await handleChatRequestStream({
+      userId: 'user-1', model: 'qwen3:14b', message: 'finish cleanly',
+      target: 'http://192.0.2.66:11434', onToken: jest.fn(), onThinking: jest.fn(),
+      onComplete, onError: jest.fn()
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(requestedNextChunk).toBe(false);
+  });
+
+  it('rejects a closed stream without an Ollama terminal record', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: (async function* stream() {
+        yield Buffer.from(JSON.stringify({ message: { content: '(stopped)' } }) + '\n');
+      })()
+    });
+    const onComplete = jest.fn();
+    const onError = jest.fn();
+
+    await handleChatRequestStream({
+      userId: 'user-1', model: 'qwen3:14b', message: 'do not wedge',
+      target: 'http://192.0.2.66:11434', onToken: jest.fn(), onThinking: jest.fn(),
+      onComplete, onError
+    });
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'OLLAMA_STREAM_INCOMPLETE'
+    }));
+    expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+  });
+
+  it('keeps the five-minute deadline active while the upstream body is stalled', async () => {
+    let upstreamSignal;
+    let markStreaming;
+    const streaming = new Promise(resolve => { markStreaming = resolve; });
+    mockFetch.mockImplementation(async (_url, options) => {
+      upstreamSignal = options.signal;
+      return {
+        ok: true,
+        body: (async function* stalledStream() {
+          markStreaming();
+          await new Promise((resolve, reject) => {
+            const abort = () => {
+              const error = new Error('aborted');
+              error.name = 'AbortError';
+              reject(error);
+            };
+            if (upstreamSignal.aborted) abort();
+            else upstreamSignal.addEventListener('abort', abort, { once: true });
+          });
+          yield Buffer.from('');
+        })()
+      };
+    });
+    const onError = jest.fn();
+
+    const request = handleChatRequestStream({
+      userId: 'user-1', model: 'qwen3:14b', message: 'bounded deep request',
+      target: 'http://192.0.2.66:11434', upstreamTimeoutMs: 20,
+      onToken: jest.fn(), onThinking: jest.fn(), onComplete: jest.fn(), onError
+    });
+    await streaming;
+    expect(upstreamSignal.aborted).toBe(false);
+    await request;
+
+    expect(upstreamSignal.aborted).toBe(true);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'AbortError',
+      code: 'OLLAMA_TIMEOUT',
+      message: 'Ollama request timed out (5m limit).'
+    }));
+    expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'timeout' }));
+  });
 });
