@@ -4,7 +4,7 @@ const express = require('express');
 const request = require('supertest');
 const { createApiHostGuard } = require('../../../shared/apiHostGuard');
 
-function appFor(env = {}, forcedIp = '127.0.0.1') {
+function appFor(env = {}, forcedIp = '127.0.0.1', guardOptions = {}) {
   const app = express();
   app.use((req, _res, next) => {
     Object.defineProperty(req, 'ip', { value: forcedIp, configurable: true });
@@ -15,9 +15,11 @@ function appFor(env = {}, forcedIp = '127.0.0.1') {
     publicUrlEnv: ['BENCHMARK_PUBLIC_URL'],
     protectMutations: true,
     env,
+    ...guardOptions,
   }));
   app.get('/health', (_req, res) => res.json({ ok: true }));
   app.post('/api/mutate', (_req, res) => res.json({ ok: true }));
+  app.post('/api/observe', (_req, res) => res.json({ ok: true }));
   return app;
 }
 
@@ -119,6 +121,42 @@ describe('shared service API Host guard', () => {
       .set('Host', 'bench.example.test')
       .set('Origin', 'https://bench.example.test')
       .set('Sec-Fetch-Site', 'same-origin')
+      .expect(403)
+      .expect(({ body }) => expect(body.code).toBe('CROSS_SITE_MUTATION_FORBIDDEN'));
+  });
+
+  test('allows only an explicitly declared action-observation from an exact remote same-origin UI', async () => {
+    const env = {
+      BENCHMARK_PUBLIC_URL: 'http://bench.example.test',
+      AGENTX_OPERATOR_UI_HOSTS: 'https://bench.example.test',
+    };
+    const app = appFor(env, '192.0.2.10', {
+      sameOriginActionObservationRoutes: [
+        { method: 'POST', path: '/api/observe' },
+      ],
+    });
+
+    await request(app).post('/API/Observe')
+      .set('Host', 'bench.example.test')
+      .set('Origin', 'http://bench.example.test')
+      .set('Sec-Fetch-Site', 'same-origin')
+      .expect(200);
+    await request(app).post('/api/mutate')
+      .set('Host', 'bench.example.test')
+      .set('Origin', 'http://bench.example.test')
+      .set('Sec-Fetch-Site', 'same-origin')
+      .expect(403)
+      .expect(({ body }) => expect(body.code).toBe('CROSS_SITE_MUTATION_FORBIDDEN'));
+    await request(app).post('/api/observe')
+      .set('Host', 'bench.example.test')
+      .set('Origin', 'https://bench.example.test')
+      .set('Sec-Fetch-Site', 'same-origin')
+      .expect(403)
+      .expect(({ body }) => expect(body.code).toBe('CROSS_SITE_MUTATION_FORBIDDEN'));
+    await request(app).post('/api/observe')
+      .set('Host', 'bench.example.test')
+      .set('Origin', 'https://attacker.example')
+      .set('Sec-Fetch-Site', 'cross-site')
       .expect(403)
       .expect(({ body }) => expect(body.code).toBe('CROSS_SITE_MUTATION_FORBIDDEN'));
   });

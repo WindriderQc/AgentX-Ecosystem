@@ -132,7 +132,23 @@ describe('GET /api/rag/status — dependency health matrix', () => {
     expect(res.body.data.healthy).toBe(false); // mongo is disconnected in test
     expect(res.body.data.serviceReady).toBe(false);
     expect(res.body.data.queryReady).toBe(false);
+    expect(res.body.data.status).toBe('red');
     expect(Number.isFinite(Date.parse(res.body.data.observedAt))).toBe(true);
+  });
+
+  it('does not preserve a green adapter status when end-to-end query readiness is false', async () => {
+    mockVectorStore.getStats.mockResolvedValue({
+      status: 'green',
+      documentCount: 10,
+      chunkCount: 50,
+      vectorDimension: 768,
+    });
+
+    const res = await api.get('/api/rag/status');
+
+    expect(res.body.data.healthy).toBe(false);
+    expect(res.body.data.queryReady).toBe(false);
+    expect(res.body.data.status).not.toBe('green');
   });
 
   it('preserves existing fields (documentCount, chunkCount, embeddingModel)', async () => {
