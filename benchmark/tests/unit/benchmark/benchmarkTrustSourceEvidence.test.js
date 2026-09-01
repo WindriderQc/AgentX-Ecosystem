@@ -9,23 +9,87 @@ const {
     buildBenchmarkTrustFreshnessProjection,
     buildBenchmarkTrustSourceProjection,
     computeBenchmarkTrustExecutionEnvelopeSetFingerprint,
-    computeBenchmarkTrustExecutionResultFingerprint,
     computeBenchmarkTrustJudgeBindingFingerprint,
-    computeBenchmarkTrustJudgeResultFingerprint,
     computePromptSourceFingerprint,
     normalizeSourceContext
 } = require('../../../src/services/benchmark/benchmarkTrustSourceEvidence');
 const {
     fingerprint: workerFingerprint,
+    normalizeWorkerEnvelope,
     normalizeWorkerReceipt
 } = require('../../../../shared/workerContract');
+const { normalizeBenchmarkTarget } = require('../../../../shared/benchmarkTargetContract');
 const {
-    buildBenchmarkTrustPowerAnalysisFields
+    buildHarnessEnvelope,
+    buildTrustJudgeCellId,
+    normalizeHarnessInvocationParameters
+} = require('../../../src/services/benchmark/harnessBrokerClient');
+const {
+    buildBenchmarkTrustPowerAnalysisFields,
+    buildBenchmarkTrustVarianceBasis,
+    computeBenchmarkTrustCandidateInferenceContractFingerprint,
+    computeBenchmarkTrustVarianceCandidateSetFingerprint,
+    computeBenchmarkTrustVariancePairFingerprints
 } = require('../../../src/services/benchmark/benchmarkTrustStatistics');
+const {
+    buildBenchmarkTrustPromptSamplingPolicy
+} = require('../../../src/services/benchmark/config');
 
 const clone = value => JSON.parse(JSON.stringify(value));
+const campaignArtifact = Object.freeze({
+    schema: 'source-evidence-test-campaign/v1', frozen: true
+});
+const executionConfig = Object.freeze({
+    repeats: 2,
+    temperature: 0,
+    top_p: 1,
+    seed: 7,
+    response_max_tokens: 1024,
+    per_test_timeout_ms: 60000
+});
+const varianceBasis = ({ candidateBindings, rubricFingerprint, promptSamplingPolicy }) => {
+    const candidateInferenceContractFingerprint =
+        computeBenchmarkTrustCandidateInferenceContractFingerprint({
+            candidateBindings,
+            repeatCount: 2,
+            parameters: {
+                temperature: 0,
+                topP: 1,
+                seed: 7,
+                maxTokens: 1024,
+                timeoutMs: 60000
+            }
+        });
+    const pairFingerprints = computeBenchmarkTrustVariancePairFingerprints(
+        candidateBindings,
+        rubricFingerprint
+    );
+    return buildBenchmarkTrustVarianceBasis({
+    schema: 'agentx.benchmark-trust-variance-basis/independent-pilot-upper-bound/v1',
+    provenance: 'independent_pilot',
+    cohortFingerprint: 'e'.repeat(64),
+    candidateSetFingerprint: computeBenchmarkTrustVarianceCandidateSetFingerprint(candidateBindings),
+    rubricFingerprint,
+    repeatCount: 2,
+    candidateInferenceContractFingerprint,
+    promptSamplingPolicyFingerprint: workerFingerprint(promptSamplingPolicy),
+    candidatePairCount: pairFingerprints.length,
+    pairwiseObservedStdDevs: pairFingerprints.map((pairFingerprint, index) => ({
+        pairFingerprint,
+        observedPairedStdDevMicros: 150000 - index
+    })),
+    method: 'chi-square-one-sided-upper-confidence-bound-v1',
+    independentPromptCount: 30,
+    confidenceBasisPoints: 9500,
+    observedPairedStdDevMicros: 150000
+    });
+};
 const candidateId = character => `candidate_${character.repeat(32)}`;
 const promptId = character => `prompt_${character.repeat(32)}`;
+const poweredPromptIds = Object.freeze(Array.from(
+    { length: 30 },
+    (_, index) => `prompt_${(index + 1).toString(16).padStart(32, '0')}`
+));
 const sourceBatchId = `batch_${'d'.repeat(32)}`;
 const workerJudgeIdentity = Object.freeze({
     harness: { name: 'judge-harness', version: '1.0.0' },
@@ -40,25 +104,92 @@ const workerJudgeIdentity = Object.freeze({
     api: { name: 'judge-api', version: '1.0.0' },
     environment: { id: 'judge-env', version: '1.0.0', fingerprint: '6'.repeat(64) }
 });
+const judgeTarget = normalizeBenchmarkTarget({
+    id: 'source-test-judge',
+    label: 'source-test-judge',
+    executionKind: 'harness',
+    mode: 'isolated_model',
+    tier: 'free_cloud',
+    provider: 'judge-provider',
+    model: 'judge-model',
+    modelVersion: '1.0.0',
+    harness: { name: 'judge-harness', version: '1.0.0' },
+    adapter: { name: 'judge-adapter', version: '1.0.0' },
+    profile: { id: 'judge-env', version: '1.0.0', fingerprint: '6'.repeat(64) },
+    api: { name: 'judge-api', version: '1.0.0' },
+    contextWindow: 131072,
+    capabilities: { candidate: false, judge: true },
+    pricing: {
+        kind: 'free',
+        currency: 'USD',
+        source: 'test',
+        effectiveAt: null,
+        inputNanodollarsPerMillion: 0,
+        outputNanodollarsPerMillion: 0,
+        callNanodollars: 0
+    },
+    available: true,
+    observedAt: '2026-01-01T00:00:00.000Z',
+    catalogFingerprint: '5'.repeat(64)
+});
+const judgeInvocation = Object.freeze(normalizeHarnessInvocationParameters({
+    temperature: 0,
+    seed: 7,
+    maxTokens: 1024,
+    timeoutMs: 60000
+}, { role: 'judge' }));
+const representativeJudgeEnvelope = normalizeWorkerEnvelope(buildHarnessEnvelope({
+    batchId: '507f1f77bcf86cd799439099',
+    cellId: `trust-judge:${candidateId('a')}:${promptId('1')}:0`,
+    target: judgeTarget,
+    promptText: 'representative judge prompt',
+    parameters: judgeInvocation,
+    role: 'judge'
+}));
+const runtimeRubric = Object.freeze({
+    schema: 'agentx.benchmark-trust-judge-runtime-rubric/v1',
+    scoringMethod: 'llm_judge',
+    scorerVersion: 'source-evidence-test-v1',
+    scorerComponents: { judge_prompt: 2, judge_parsing: 2 },
+    promptContract: 'dynamic-judge-prompt',
+    implementationManifest: {
+        sourceFiles: [
+            'benchmarkTrustCampaignRuntime', 'categories', 'formatComplianceScorer', 'judgeCall',
+            'judgeConfidence', 'judgeExecutor', 'jsonUtils', 'qualityScorer', 'scoringConfigs'
+        ].map((module, index) => ({ module, sha256: String(index + 1).padStart(64, '0') })),
+        loadedFunctions: Object.fromEntries([
+            'buildDynamicJudgePrompt', 'buildPromptData', 'computeMonolithicJudgeScore', 'getScoringDimensions',
+            'judgeConfidenceAssess', 'parseJudgeJsonResponse', 'scoreFormatCompliance',
+            'scoreResponse', 'stripMarkdownCodeFences'
+        ].map((name, index) => [name, String(index + 11).padStart(64, '0')])),
+        scoringConfigsFingerprint: 'f'.repeat(64)
+    },
+    resultContract: representativeJudgeEnvelope.resultContract,
+    executionProfile: representativeJudgeEnvelope.executionProfile,
+    toolsFingerprint: representativeJudgeEnvelope.tools.schemaFingerprint,
+    policiesFingerprint: representativeJudgeEnvelope.policies.fingerprint,
+    judgeInvocation
+});
 const judge = Object.freeze({
     qualificationReceiptId: '9'.repeat(64),
     identityFingerprint: workerFingerprint(workerJudgeIdentity),
-    rubricFingerprint: 'b'.repeat(64),
+    rubricFingerprint: workerFingerprint(runtimeRubric),
     corpusFingerprint: 'c'.repeat(64),
     holdoutFingerprint: 'd'.repeat(64),
     qualificationStatus: 'qualified',
     validUntil: '2099-09-15T12:00:00.000Z'
 });
 const scoreEvidenceBase = Object.freeze({
-    judgeTargetFingerprint: 'e'.repeat(64),
+    judgeTargetFingerprint: judgeTarget.fingerprint,
     qualityCohortFingerprint: 'a'.repeat(64),
     scoringMethod: 'llm_judge',
     scorerVersion: 'source-evidence-test-v1',
     workerIdentityFingerprint: judge.identityFingerprint,
-    toolsFingerprint: 'f'.repeat(64),
-    policiesFingerprint: judge.rubricFingerprint,
-    executionProfile: 'portable',
-    envelopeFingerprint: '5'.repeat(64)
+    toolsFingerprint: representativeJudgeEnvelope.tools.schemaFingerprint,
+    policiesFingerprint: representativeJudgeEnvelope.policies.fingerprint,
+    executionProfile: representativeJudgeEnvelope.executionProfile,
+    judgeInvocation,
+    runtimeRubric
 });
 const scoreEvidence = Object.freeze({
     ...scoreEvidenceBase,
@@ -86,7 +217,7 @@ const identities = [
                     digest: `sha256:${'1'.repeat(64)}`,
                     runtimeFingerprint: '3'.repeat(64)
                 },
-                environment: { ...workerJudgeIdentity.environment, fingerprint: '4'.repeat(64) }
+                environment: { ...workerJudgeIdentity.environment, fingerprint: '3'.repeat(64) }
             }),
             toolsFingerprint: '1'.repeat(64),
             policiesFingerprint: '2'.repeat(64),
@@ -111,7 +242,7 @@ const identities = [
                     digest: `sha256:${'5'.repeat(64)}`,
                     runtimeFingerprint: '7'.repeat(64)
                 },
-                environment: { ...workerJudgeIdentity.environment, fingerprint: '8'.repeat(64) }
+                environment: { ...workerJudgeIdentity.environment, fingerprint: '7'.repeat(64) }
             }),
             toolsFingerprint: '3'.repeat(64),
             policiesFingerprint: '4'.repeat(64),
@@ -132,7 +263,7 @@ function executionWorkerIdentity(candidate) {
         },
         environment: {
             ...clone(workerJudgeIdentity.environment),
-            fingerprint: candidate.sourceIdentity.executionTargetFingerprint
+            fingerprint: candidate.sourceIdentity.inferenceContractFingerprint
         }
     };
 }
@@ -140,15 +271,16 @@ function executionWorkerIdentity(candidate) {
 function rowsFixture() {
     const rows = [];
     for (const [candidateIndex, candidate] of identities.entries()) {
-        for (const [promptIndex, exactPromptId] of [promptId('1'), promptId('2'), promptId('3')].entries()) {
+        for (const [promptIndex, exactPromptId] of poweredPromptIds.entries()) {
             for (const repeatIndex of [0, 1]) {
-                const qualityScore = candidateIndex === 0 ? [9, 9.01, 8.99][promptIndex] : 7;
+                const qualityScore = candidateIndex === 0 ? 10 : 0;
                 const row = {
+                batch_id: '507f1f77bcf86cd799439099',
                 model: candidate.sourceIdentity.model,
                 model_digest: candidate.sourceIdentity.modelDigest,
                 host: candidate.sourceIdentity.host,
                 execution_target: { fingerprint: candidate.sourceIdentity.executionTargetFingerprint },
-                judge_target: { fingerprint: scoreEvidence.judgeTargetFingerprint },
+                judge_target: clone(judgeTarget),
                 quality_cohort_fingerprint: scoreEvidence.qualityCohortFingerprint,
                 prompt: `opaque-prompt-${promptIndex}`,
                 prompt_name: `prompt-${promptIndex}`,
@@ -157,11 +289,17 @@ function rowsFixture() {
                 scoring_type: 'reasoning',
                 scoring_plan: 'llm_judge',
                 response: `opaque-response-${candidateIndex}-${promptIndex}-${repeatIndex}`,
+                judge_prompt: `judge-prompt-${candidateIndex}-${promptIndex}-${repeatIndex}`,
+                judge_raw_response: JSON.stringify({ overall: qualityScore }),
                 success: true,
                 scoring_method: scoreEvidence.scoringMethod,
                 scorer_version: scoreEvidence.scorerVersion,
                 quality_score: qualityScore,
-                composite_score: candidateIndex === 0 ? [90, 90.1, 89.9][promptIndex] : 70,
+                quality_breakdown: { overall: qualityScore },
+                judge_reported_overall: qualityScore,
+                format_score: null,
+                format_compliant: null,
+                composite_score: candidateIndex === 0 ? 100 : 0,
                 excluded_from_leaderboard: false,
                 execution_settings: {
                     artifact_digest: candidate.sourceIdentity.artifactDigest,
@@ -174,14 +312,13 @@ function rowsFixture() {
                 timestamp: '2026-01-01T00:00:00.000Z',
                 updated_at: '2026-01-01T00:00:00.000Z'
                 };
-                const promptFingerprint = computePromptSourceFingerprint(row);
-                row.execution_receipt = normalizeWorkerReceipt({
+                row.trust_execution_receipt = normalizeWorkerReceipt({
                     schema: 'agentx.worker-receipt/v1',
                     schemaVersion: 1,
                     executionProfile: candidate.sourceIdentity.executionProfile,
                     identity: executionWorkerIdentity(candidate),
                     fingerprints: {
-                        prompt: promptFingerprint,
+                        prompt: workerFingerprint(row.prompt),
                         tools: candidate.sourceIdentity.toolsFingerprint,
                         policies: candidate.sourceIdentity.policiesFingerprint,
                         envelope: workerFingerprint({
@@ -209,25 +346,27 @@ function rowsFixture() {
                     violations: [],
                     result: {
                         contractSatisfied: true,
-                        fingerprint: computeBenchmarkTrustExecutionResultFingerprint({
-                            candidateId: candidate.candidateId,
-                            promptId: exactPromptId,
-                            repeatIndex,
-                            response: row.response,
-                            success: row.success
-                        })
+                        fingerprint: workerFingerprint(row.response)
                     }
                 });
-                row.judge_receipt = normalizeWorkerReceipt({
+                const judgeEnvelope = normalizeWorkerEnvelope(buildHarnessEnvelope({
+                    batchId: row.batch_id,
+                    cellId: buildTrustJudgeCellId(row),
+                    target: row.judge_target,
+                    promptText: row.judge_prompt,
+                    parameters: scoreEvidence.judgeInvocation,
+                    role: 'judge'
+                }));
+                row.trust_judge_receipt = normalizeWorkerReceipt({
                     schema: 'agentx.worker-receipt/v1',
                     schemaVersion: 1,
                     executionProfile: scoreEvidence.executionProfile,
                     identity: clone(workerJudgeIdentity),
                     fingerprints: {
-                        prompt: promptFingerprint,
+                        prompt: workerFingerprint(row.judge_prompt),
                         tools: scoreEvidence.toolsFingerprint,
                         policies: scoreEvidence.policiesFingerprint,
-                        envelope: scoreEvidence.envelopeFingerprint
+                        envelope: judgeEnvelope.fingerprint
                     },
                     finalState: 'succeeded',
                     failure: { classification: null, code: null },
@@ -246,17 +385,11 @@ function rowsFixture() {
                     violations: [],
                     result: {
                         contractSatisfied: true,
-                        fingerprint: computeBenchmarkTrustJudgeResultFingerprint({
-                            candidateId: candidate.candidateId,
-                            promptId: exactPromptId,
-                            repeatIndex,
-                            response: row.response,
-                            qualityScore,
-                            rubricFingerprint: judge.rubricFingerprint,
-                            judgeIdentityFingerprint: judge.identityFingerprint
-                        })
+                        fingerprint: workerFingerprint(row.judge_raw_response)
                     }
                 });
+                row.execution_receipt = clone(row.trust_execution_receipt);
+                row.judge_receipt = clone(row.trust_judge_receipt);
                 rows.push(row);
             }
         }
@@ -266,27 +399,54 @@ function rowsFixture() {
 
 function contextFixture(rows = rowsFixture()) {
     const candidateIds = identities.map(candidate => candidate.candidateId);
-    const promptIds = [promptId('1'), promptId('2'), promptId('3')];
-    const powerFields = buildBenchmarkTrustPowerAnalysisFields({
-        alpha: 0.05,
-        mde: 1,
-        candidateIds,
-        targetPowerBasisPoints: 8000,
-        assumedMaxPairedStdDevMicros: 50000
-    });
-    const analysisPlan = {
-        alpha: 0.05,
-        mde: 1,
-        equivalenceMargin: 0.1,
-        repeatCount: 2,
-        ...powerFields,
-        candidateIds,
-        promptIds
-    };
+    const promptIds = [...poweredPromptIds];
     const firstByPrompt = new Map();
     for (const row of rows) {
         if (!firstByPrompt.has(row.trust_prompt_id)) firstByPrompt.set(row.trust_prompt_id, row);
     }
+    const promptSamplingPolicy = buildBenchmarkTrustPromptSamplingPolicy(
+        campaignArtifact,
+        executionConfig,
+        [...firstByPrompt.values()].map(row => computePromptSourceFingerprint(row))
+    );
+    const frozenVarianceBasis = varianceBasis({
+        candidateBindings: identities.map(candidate => ({
+            targetFingerprint: candidate.sourceIdentity.executionTargetFingerprint,
+            modelDigest: candidate.sourceIdentity.modelDigest,
+            artifactDigest: candidate.sourceIdentity.artifactDigest,
+            inferenceContractFingerprint: candidate.sourceIdentity.inferenceContractFingerprint
+        })),
+        rubricFingerprint: judge.rubricFingerprint,
+        promptSamplingPolicy
+    });
+    const powerFields = buildBenchmarkTrustPowerAnalysisFields({
+        alpha: 0.05,
+        mde: 1,
+        poweredAlternativeEffect: 10,
+        candidateIds,
+        targetPowerBasisPoints: 8000,
+        assumedMaxPairedStdDevMicros: frozenVarianceBasis.upperConfidenceBoundMicros,
+        varianceBasis: frozenVarianceBasis
+    });
+    const analysisPlan = {
+        alpha: 0.05,
+        mde: 1,
+        poweredAlternativeEffect: 10,
+        equivalenceMargin: 0.1,
+        repeatCount: 2,
+        candidateInferenceParameters: {
+            temperature: 0,
+            topP: 1,
+            seed: 7,
+            maxTokens: 1024,
+            timeoutMs: 60000
+        },
+        promptSamplingPolicy,
+        variancePilotAttestationId: '7'.repeat(64),
+        ...powerFields,
+        candidateIds,
+        promptIds
+    };
     return {
         schema: SOURCE_CONTEXT_SCHEMA,
         sourceBatchId,
@@ -299,7 +459,7 @@ function contextFixture(rows = rowsFixture()) {
         },
         campaign: {
             campaignId: `campaign_${'c'.repeat(32)}`,
-            artifact: { schema: 'source-evidence-test-campaign/v1', frozen: true }
+            artifact: campaignArtifact
         },
         inferenceProfile: {
             artifact: { schema: 'source-evidence-test-profile/v1', profile: 'controlled' }
@@ -319,7 +479,7 @@ function contextFixture(rows = rowsFixture()) {
                         .map(row => ({
                             promptId: row.trust_prompt_id,
                             repeatIndex: row.repeat_index,
-                            envelopeFingerprint: row.execution_receipt.fingerprints.envelope
+                            envelopeFingerprint: row.trust_execution_receipt.fingerprints.envelope
                         }))
                 })
             }
@@ -334,7 +494,7 @@ function contextFixture(rows = rowsFixture()) {
         statistics: {
             analysisPlan,
             analysisPlanFingerprint: crypto.createHash('sha256').update(stableSerialize({
-                schema: 'agentx.benchmark-trust-analysis-plan/v1',
+                schema: 'agentx.benchmark-trust-analysis-plan/v2',
                 plan: analysisPlan
             })).digest('hex'),
             rankingPolicy: {
@@ -361,12 +521,12 @@ describe('benchmarkTrustSourceEvidence', () => {
             evidenceStatus: 'complete',
             decisionOutcome: 'winner',
             execution: {
-                expectedResultCount: 12,
-                observedResultCount: 12,
+                expectedResultCount: 120,
+                observedResultCount: 120,
                 excludedResultCount: 0,
-                promptCount: 3,
+                promptCount: 30,
                 cellInventory: {
-                    cellCount: 6,
+                    cellCount: 60,
                     minimumRepeatCount: 2,
                     maximumRepeatCount: 2
                 }
@@ -389,7 +549,7 @@ describe('benchmarkTrustSourceEvidence', () => {
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
 
         const missingJudgeReceipt = clone(rows);
-        missingJudgeReceipt[0].judge_receipt = null;
+        missingJudgeReceipt[0].trust_judge_receipt = null;
         expect(() => buildBenchmarkTrustSourceProjection({
             context,
             results: missingJudgeReceipt,
@@ -397,7 +557,7 @@ describe('benchmarkTrustSourceEvidence', () => {
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
 
         const minimalFake = clone(rows);
-        minimalFake[0].judge_receipt = { fingerprint: 'f'.repeat(64) };
+        minimalFake[0].trust_judge_receipt = { fingerprint: 'f'.repeat(64) };
         expect(() => buildBenchmarkTrustSourceProjection({
             context,
             results: minimalFake,
@@ -405,7 +565,7 @@ describe('benchmarkTrustSourceEvidence', () => {
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
 
         const reusedReceipt = clone(rows);
-        reusedReceipt[1].judge_receipt = clone(reusedReceipt[0].judge_receipt);
+        reusedReceipt[1].trust_judge_receipt = clone(reusedReceipt[0].trust_judge_receipt);
         expect(() => buildBenchmarkTrustSourceProjection({
             context,
             results: reusedReceipt,
@@ -413,7 +573,7 @@ describe('benchmarkTrustSourceEvidence', () => {
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
 
         const mutatedReceipt = clone(rows);
-        mutatedReceipt[0].judge_receipt.usage.durationMs += 1;
+        mutatedReceipt[0].trust_judge_receipt.usage.durationMs += 1;
         expect(() => buildBenchmarkTrustSourceProjection({
             context,
             results: mutatedReceipt,
@@ -421,7 +581,7 @@ describe('benchmarkTrustSourceEvidence', () => {
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
 
         const missingExecutionReceipt = clone(rows);
-        missingExecutionReceipt[0].execution_receipt = null;
+        missingExecutionReceipt[0].trust_execution_receipt = null;
         expect(() => buildBenchmarkTrustSourceProjection({
             context,
             results: missingExecutionReceipt,
@@ -429,7 +589,7 @@ describe('benchmarkTrustSourceEvidence', () => {
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
 
         const fakeExecutionReceipt = clone(rows);
-        fakeExecutionReceipt[0].execution_receipt = { fingerprint: 'f'.repeat(64) };
+        fakeExecutionReceipt[0].trust_execution_receipt = { fingerprint: 'f'.repeat(64) };
         expect(() => buildBenchmarkTrustSourceProjection({
             context,
             results: fakeExecutionReceipt,
@@ -437,7 +597,7 @@ describe('benchmarkTrustSourceEvidence', () => {
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
 
         const reusedExecutionReceipt = clone(rows);
-        reusedExecutionReceipt[1].execution_receipt = clone(reusedExecutionReceipt[0].execution_receipt);
+        reusedExecutionReceipt[1].trust_execution_receipt = clone(reusedExecutionReceipt[0].trust_execution_receipt);
         expect(() => buildBenchmarkTrustSourceProjection({
             context,
             results: reusedExecutionReceipt,
@@ -445,10 +605,34 @@ describe('benchmarkTrustSourceEvidence', () => {
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
 
         const mutatedExecutionReceipt = clone(rows);
-        mutatedExecutionReceipt[0].execution_receipt.usage.durationMs += 1;
+        mutatedExecutionReceipt[0].trust_execution_receipt.usage.durationMs += 1;
         expect(() => buildBenchmarkTrustSourceProjection({
             context,
             results: mutatedExecutionReceipt,
+            sourceBatchId
+        })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
+
+        const intervenedReceipt = clone(rows);
+        delete intervenedReceipt[0].trust_judge_receipt.fingerprint;
+        intervenedReceipt[0].trust_judge_receipt.humanInterventions = [
+            { kind: 'human_override', count: 1 }
+        ];
+        intervenedReceipt[0].trust_judge_receipt = normalizeWorkerReceipt(
+            intervenedReceipt[0].trust_judge_receipt
+        );
+        expect(() => buildBenchmarkTrustSourceProjection({
+            context,
+            results: intervenedReceipt,
+            sourceBatchId
+        })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
+
+        const humanOverride = clone(rows);
+        humanOverride[0].quality_score = 10;
+        humanOverride[0].human_review_status = 'overridden';
+        humanOverride[0].human_score = 10;
+        expect(() => buildBenchmarkTrustSourceProjection({
+            context,
+            results: humanOverride,
             sourceBatchId
         })).toThrow(expect.objectContaining({ code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH' }));
     });
@@ -537,6 +721,12 @@ describe('benchmarkTrustSourceEvidence', () => {
 
     test('rejects legacy, extensible, or underpowered source contexts', () => {
         const context = contextFixture();
+        const legacyV2 = clone(context);
+        legacyV2.schema = 'agentx.benchmark-trust-source-context/v2';
+        expect(() => normalizeSourceContext(legacyV2)).toThrow(expect.objectContaining({
+            code: 'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID'
+        }));
+
         const missing = clone(context);
         delete missing.statistics.analysisPlanFingerprint;
         expect(() => normalizeSourceContext(missing)).toThrow(expect.objectContaining({
@@ -553,6 +743,42 @@ describe('benchmarkTrustSourceEvidence', () => {
         underpowered.statistics.analysisPlan.requiredIndependentPromptCount += 1;
         expect(() => normalizeSourceContext(underpowered)).toThrow(expect.objectContaining({
             code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH'
+        }));
+
+        const changedPoweredAlternative = clone(context);
+        changedPoweredAlternative.statistics.analysisPlan.poweredAlternativeEffect -= 0.25;
+        expect(() => normalizeSourceContext(changedPoweredAlternative)).toThrow(expect.objectContaining({
+            code: 'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH'
+        }));
+
+        const impossiblePoweredAlternative = clone(context);
+        impossiblePoweredAlternative.statistics.analysisPlan.poweredAlternativeEffect = 10.1;
+        expect(() => normalizeSourceContext(impossiblePoweredAlternative)).toThrow(expect.objectContaining({
+            code: 'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID'
+        }));
+
+        const changedPromptPolicy = clone(context);
+        changedPromptPolicy.statistics.analysisPlan.promptSamplingPolicy
+            .promptTransformation.executionConfig.custom_hint = 'changed-after-launch';
+        changedPromptPolicy.statistics.analysisPlanFingerprint = crypto
+            .createHash('sha256')
+            .update(stableSerialize({
+                schema: 'agentx.benchmark-trust-analysis-plan/v2',
+                plan: changedPromptPolicy.statistics.analysisPlan
+            }))
+            .digest('hex');
+        expect(() => normalizeSourceContext(changedPromptPolicy)).toThrow(expect.objectContaining({
+            code: 'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID'
+        }));
+
+        const differentRuntimeRubric = clone(context);
+        differentRuntimeRubric.scoreEvidence.runtimeRubric.promptContract = 'different-judge-prompt';
+        differentRuntimeRubric.scoreEvidence.judgeBindingFingerprint = computeBenchmarkTrustJudgeBindingFingerprint({
+            judge: differentRuntimeRubric.judge,
+            scoreEvidence: differentRuntimeRubric.scoreEvidence
+        });
+        expect(() => normalizeSourceContext(differentRuntimeRubric)).toThrow(expect.objectContaining({
+            code: 'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID'
         }));
     });
 });

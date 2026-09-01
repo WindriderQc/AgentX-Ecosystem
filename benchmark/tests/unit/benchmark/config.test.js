@@ -1,8 +1,10 @@
 const {
     normalizeExecutionConfig,
     buildPromptHints,
-    applyLengthHint
+    applyLengthHint,
+    buildBenchmarkTrustPromptSamplingPolicy
 } = require('../../../src/services/benchmark/config');
+const { fingerprint } = require('../../../../shared/workerContract');
 
 describe('benchmark execution config prompt hints', () => {
     it('defaults execution thinking to auto and preserves explicit controls', () => {
@@ -152,5 +154,40 @@ describe('benchmark execution config prompt hints', () => {
             applied: false,
             mode: 'off'
         });
+    });
+
+    it('fingerprints the exact Trust prompt universe and transformation policy', () => {
+        const campaignArtifact = { schema: 'prompt-policy-test/v1', frozen: true };
+        const prompts = ['a'.repeat(64), 'b'.repeat(64)];
+        const baseline = buildBenchmarkTrustPromptSamplingPolicy(
+            campaignArtifact,
+            { response_max_tokens: 1024 },
+            prompts
+        );
+        expect(baseline.promptTransformation).toMatchObject({
+            implementationFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/)
+        });
+        expect(baseline.promptTransformation).not.toHaveProperty('implementationSourceSha256');
+
+        expect(fingerprint(buildBenchmarkTrustPromptSamplingPolicy(
+            campaignArtifact,
+            { response_max_tokens: 1024 },
+            [...prompts].reverse()
+        ))).toBe(fingerprint(baseline));
+        expect(fingerprint(buildBenchmarkTrustPromptSamplingPolicy(
+            campaignArtifact,
+            { response_max_tokens: 1024, custom_hint: 'changed' },
+            prompts
+        ))).not.toBe(fingerprint(baseline));
+        expect(fingerprint(buildBenchmarkTrustPromptSamplingPolicy(
+            campaignArtifact,
+            { response_max_tokens: 1024 },
+            ['a'.repeat(64), 'c'.repeat(64)]
+        ))).not.toBe(fingerprint(baseline));
+        expect(() => buildBenchmarkTrustPromptSamplingPolicy(
+            campaignArtifact,
+            { response_max_tokens: 1024 },
+            ['a'.repeat(64), 'a'.repeat(64)]
+        )).toThrow(/must be unique/);
     });
 });

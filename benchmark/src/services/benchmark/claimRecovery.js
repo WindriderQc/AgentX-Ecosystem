@@ -29,42 +29,205 @@ const { resolveJudgeHost } = require('./judgeHostResolution');
 const { groupModelsByHost } = require('./batchHelpers');
 
 const GHOST_BATCH_INACTIVE_THRESHOLD_MS = 10 * 60 * 1000; // 10 min
+const PRIOR_TRUST_RECOVERY_RETRY_MS = 5_000;
 
-async function recoverLeakedClaims() {
+function normalizeRecoveryCutoff(recoveryStartedAt) {
+    const cutoff = new Date(recoveryStartedAt);
+    if (Number.isNaN(cutoff.getTime())) {
+        throw new Error('Prior Trust runtime recovery cutoff is invalid');
+    }
+    return cutoff;
+}
+
+async function sweepPriorRuntimeTrustBatches(recoveryStartedAt) {
+    const cutoff = normalizeRecoveryCutoff(recoveryStartedAt);
+    const priorTrustBatches = await BenchmarkBatch.find({
+        status: { $in: ['running', 'judging'] },
+        trust_evidence_context: { $ne: null },
+        started_at: { $lt: cutoff }
+    }).select('_id status +trust_evidence_context').lean();
+
+    const interrupted = [];
+    const failed = [];
+    for (const batch of priorTrustBatches) {
+        try {
+            await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id, {
+                status: 'interrupted',
+                failureReason: 'process_restart',
+                allowUnstarted: true
+            });
+            interrupted.push(String(batch._id));
+        } catch (error) {
+            failed.push(String(batch._id));
+            logger.warn('[ClaimRecovery] Failed to finalize prior Trust runtime', {
+                batchId: String(batch._id),
+                error: error.message
+            });
+        }
+    }
+    return { matched: priorTrustBatches.length, interrupted, failed };
+}
+
+async function interruptPriorRuntimeTrustBatches(recoveryStartedAt = new Date()) {
+    const result = await sweepPriorRuntimeTrustBatches(recoveryStartedAt);
+    return result.interrupted;
+}
+
+async function releaseFinalizedPriorTrustClaims(recoveryStartedAt) {
+    const cutoff = normalizeRecoveryCutoff(recoveryStartedAt);
+    let claims;
+    try {
+        claims = await getBenchmarkClaims();
+    } catch (error) {
+        logger.warn('[ClaimRecovery] Deferred Trust claim reconciliation could not fetch claims', {
+            cutoff: cutoff.toISOString(),
+            error: error.message
+        });
+        return { fetched: false, matched: 0, released: [], failed: ['claims-fetch'] };
+    }
+
+    const released = [];
+    const failed = [];
+    let matched = 0;
+    for (const claim of Array.isArray(claims) ? claims : []) {
+        const batchId = String(claim?.batchId || '');
+        const hostUrl = String(claim?.hostUrl || '');
+        if (!batchId || !hostUrl) continue;
+        try {
+            const batch = await BenchmarkBatch.findById(batchId)
+                .select('status started_at +trust_evidence_context')
+                .lean();
+            const startedAt = batch?.started_at ? new Date(batch.started_at) : null;
+            const isPriorTrustBatch = Boolean(batch?.trust_evidence_context)
+                && startedAt
+                && !Number.isNaN(startedAt.getTime())
+                && startedAt < cutoff;
+            if (!isPriorTrustBatch
+                || !['completed', 'failed', 'stopped', 'interrupted'].includes(batch.status)) {
+                continue;
+            }
+            matched++;
+            const result = await releaseBenchmarkClaim(hostUrl, batchId);
+            if (result?.released !== true) {
+                failed.push(batchId);
+                logger.warn('[ClaimRecovery] Deferred Trust claim release was refused', {
+                    batchId,
+                    hostUrl,
+                    reason: result?.reason || 'release_not_confirmed'
+                });
+                continue;
+            }
+            released.push({ hostUrl, batchId });
+        } catch (error) {
+            failed.push(batchId);
+            logger.warn('[ClaimRecovery] Deferred Trust claim release failed', {
+                batchId,
+                hostUrl,
+                error: error.message
+            });
+        }
+    }
+    return { fetched: true, matched, released, failed };
+}
+
+function startPriorRuntimeTrustBatchRecoverySweep({
+    recoveryStartedAt = new Date(),
+    retryMs = PRIOR_TRUST_RECOVERY_RETRY_MS
+} = {}) {
+    const cutoff = normalizeRecoveryCutoff(recoveryStartedAt);
+    if (!Number.isSafeInteger(retryMs) || retryMs < 50 || retryMs > 60_000) {
+        throw new Error('Prior Trust runtime recovery retry interval is invalid');
+    }
+    let stopped = false;
+    let running = false;
+    let interval = null;
+    const stop = () => {
+        stopped = true;
+        if (interval) clearInterval(interval);
+        interval = null;
+    };
+    const run = async () => {
+        if (stopped || running) return;
+        running = true;
+        try {
+            const finalization = await sweepPriorRuntimeTrustBatches(cutoff);
+            const claims = await releaseFinalizedPriorTrustClaims(cutoff);
+            if (finalization.failed.length === 0 && claims.fetched && claims.failed.length === 0) {
+                stop();
+            }
+        } catch (error) {
+            logger.warn('[ClaimRecovery] Deferred Trust runtime finalization sweep failed', {
+                cutoff: cutoff.toISOString(),
+                error: error.message
+            });
+        } finally {
+            running = false;
+        }
+    };
+    interval = setInterval(run, retryMs);
+    interval.unref?.();
+    return { cutoff, run, stop };
+}
+
+async function recoverLeakedClaims({ recoveryStartedAt = new Date() } = {}) {
+    // Every active strict Trust batch predating this process belongs to a dead
+    // runner. A fresh persisted heartbeat describes the old process and must
+    // not cause the new process to re-claim a batch it cannot resume.
+    const interruptedTrustBatches = await interruptPriorRuntimeTrustBatches(recoveryStartedAt);
     let claims;
     try {
         claims = await getBenchmarkClaims();
     } catch (err) {
         logger.warn('[ClaimRecovery] Could not fetch claims from core — skipping', { error: err.message });
-        return { fetched: false, released: 0 };
+        return { fetched: false, released: 0, interruptedTrustBatches };
     }
 
     if (!Array.isArray(claims) || claims.length === 0) {
         logger.info('[ClaimRecovery] No active claims to reconcile');
-        return { fetched: true, released: 0 };
+        return { fetched: true, released: 0, interruptedTrustBatches };
     }
 
     const now = Date.now();
     const released = [];
+    const failed = [];
+
+    const recordRelease = (claim, result, reason, extra = {}) => {
+        const detail = {
+            hostUrl: claim.hostUrl,
+            batchId: claim.batchId,
+            reason,
+            ...extra
+        };
+        if (result?.released === true) {
+            released.push(detail);
+        } else {
+            failed.push({
+                ...detail,
+                releaseReason: result?.reason || 'core_refused_release'
+            });
+        }
+    };
 
     for (const claim of claims) {
         const { batchId, hostUrl } = claim;
         if (!batchId || !hostUrl) continue;
 
         try {
-            const batch = await BenchmarkBatch.findById(batchId).select('status last_activity_at').lean();
+            const batch = await BenchmarkBatch.findById(batchId)
+                .select('status last_activity_at +trust_evidence_context')
+                .lean();
 
             // Category 1: batch no longer exists
             if (!batch) {
                 const result = await releaseBenchmarkClaim(hostUrl, batchId);
-                released.push({ hostUrl, batchId, reason: 'batch-not-found', released: !!result?.released });
+                recordRelease(claim, result, 'batch-not-found');
                 continue;
             }
 
             // Category 2: dead batch (terminal status but claim leaked)
-            if (['completed', 'failed', 'stopped'].includes(batch.status)) {
+            if (['completed', 'failed', 'stopped', 'interrupted'].includes(batch.status)) {
                 const result = await releaseBenchmarkClaim(hostUrl, batchId);
-                released.push({ hostUrl, batchId, reason: `batch-${batch.status}`, released: !!result?.released });
+                recordRelease(claim, result, `batch-${batch.status}`);
                 continue;
             }
 
@@ -76,26 +239,47 @@ async function recoverLeakedClaims() {
                     // The current process can't own a batch that was running before
                     // this startup — that's a definitional crash-recovery. Mark as
                     // stopped so operators see it, then release the claim.
-                    await BenchmarkBatch.updateOne(
-                        { _id: batchId, status: { $in: ['running', 'judging'] } },
-                        { $set: { status: 'stopped', completed_at: new Date() } }
-                    );
+                    if (batch.trust_evidence_context) {
+                        await BenchmarkBatch.finalizeTrustEvidenceBatch(batchId, {
+                            status: 'interrupted',
+                            failureReason: 'stale_runtime_heartbeat',
+                            allowUnstarted: true
+                        });
+                    } else {
+                        await BenchmarkBatch.updateOne(
+                            { _id: batchId, status: { $in: ['running', 'judging'] } },
+                            { $set: { status: 'stopped', completed_at: new Date() } }
+                        );
+                    }
                     const result = await releaseBenchmarkClaim(hostUrl, batchId);
-                    released.push({ hostUrl, batchId, reason: 'ghost-batch', inactiveMs, released: !!result?.released });
+                    recordRelease(claim, result, 'ghost-batch', { inactiveMs });
                 }
             }
         } catch (err) {
+            failed.push({ hostUrl, batchId, reason: 'reconciliation_error', error: err.message });
             logger.warn('[ClaimRecovery] Error reconciling claim', { hostUrl, batchId, error: err.message });
         }
     }
 
     if (released.length > 0) {
         logger.warn('[ClaimRecovery] Released leaked claims on startup', { count: released.length, details: released });
-    } else {
+    } else if (failed.length === 0) {
         logger.info('[ClaimRecovery] All claims reconciled, none required release', { checked: claims.length });
     }
+    if (failed.length > 0) {
+        logger.warn('[ClaimRecovery] Some leaked claims remain active after startup reconciliation', {
+            count: failed.length,
+            details: failed
+        });
+    }
 
-    return { fetched: true, released: released.length, details: released };
+    return {
+        fetched: true,
+        released: released.length,
+        failed: failed.length,
+        details: [...released, ...failed],
+        interruptedTrustBatches
+    };
 }
 
 /**
@@ -111,7 +295,7 @@ async function reacquireActiveBatchClaims() {
     const now = Date.now();
     const active = await BenchmarkBatch.find({
         status: { $in: ['running', 'judging'] }
-    }).select('_id host models judge_config last_activity_at total_tests').lean();
+    }).select('_id host models judge_config last_activity_at total_tests +trust_evidence_context').lean();
 
     if (active.length === 0) {
         logger.info('[ClaimRecovery] No active batches to re-claim');
@@ -120,6 +304,15 @@ async function reacquireActiveBatchClaims() {
 
     let reacquired = 0;
     for (const batch of active) {
+        // Strict Trust execution has no resume path. If its startup finalizer
+        // failed, re-claiming hosts would manufacture a zombie owner with no
+        // worker capable of finishing the immutable campaign.
+        if (batch.trust_evidence_context) {
+            logger.warn('[ClaimRecovery] Refusing to re-claim an interrupted Trust runtime', {
+                batchId: String(batch._id)
+            });
+            continue;
+        }
         const lastActivity = batch.last_activity_at ? new Date(batch.last_activity_at).getTime() : 0;
         if (lastActivity > 0 && (now - lastActivity) > GHOST_BATCH_INACTIVE_THRESHOLD_MS) {
             // Ghost batch — handled by recoverLeakedClaims, skip here.
@@ -162,4 +355,11 @@ async function reacquireActiveBatchClaims() {
     return { checked: active.length, reacquired };
 }
 
-module.exports = { recoverLeakedClaims, reacquireActiveBatchClaims };
+module.exports = {
+    PRIOR_TRUST_RECOVERY_RETRY_MS,
+    interruptPriorRuntimeTrustBatches,
+    recoverLeakedClaims,
+    reacquireActiveBatchClaims,
+    releaseFinalizedPriorTrustClaims,
+    startPriorRuntimeTrustBatchRecoverySweep
+};

@@ -62,18 +62,38 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs) {
  * Release all benchmark claims acquired by this batch. Errors are logged
  * but never thrown — this runs in a finally block and must not mask the
  * original error.
+ * @returns {Promise<{released: number, failed: number, details: object[]}>}
  */
 async function releaseBenchmarkClaims(hostUrls, batchId) {
-    await Promise.allSettled(hostUrls.map(async (hostUrl) => {
+    const details = await Promise.all(hostUrls.map(async (hostUrl) => {
         try {
-            await releaseBenchmarkClaim(hostUrl, batchId);
-            logger.info('Benchmark claim released', { batchId, hostUrl });
+            const result = await releaseBenchmarkClaim(hostUrl, batchId);
+            if (result?.released === true) {
+                logger.info('Benchmark claim released', { batchId, hostUrl });
+                return { hostUrl, released: true };
+            }
+            logger.warn('Benchmark claim release refused', {
+                batchId,
+                hostUrl,
+                reason: result?.reason || 'core_refused_release'
+            });
+            return {
+                hostUrl,
+                released: false,
+                reason: result?.reason || 'core_refused_release'
+            };
         } catch (err) {
             logger.warn('Benchmark claim release failed', {
                 batchId, hostUrl, error: err.message
             });
+            return { hostUrl, released: false, reason: err.message };
         }
     }));
+    return {
+        released: details.filter(detail => detail.released).length,
+        failed: details.filter(detail => !detail.released).length,
+        details
+    };
 }
 
 function startBenchmarkClaimHeartbeat(hostUrls, batchId, estimatedDurationMs, options = {}) {

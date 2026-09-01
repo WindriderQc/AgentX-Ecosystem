@@ -61,12 +61,46 @@ function getCategoryDimensionWeights(prompt) {
     return weights;
 }
 
+function computeMonolithicJudgeScore(scores, weights) {
+    const normalizedScores = {};
+    for (const [key, value] of Object.entries(scores || {})) {
+        normalizedScores[key] = typeof value === 'number' && key !== 'overall'
+            ? Math.max(0, Math.min(10, value))
+            : value;
+    }
+    const judgeReportedOverall = normalizedScores.overall;
+    let overallScore = 0;
+    let totalWeight = 0;
+    const missingDimensions = [];
+    for (const [key, weight] of Object.entries(weights || {})) {
+        if (normalizedScores[key] !== undefined) {
+            overallScore += normalizedScores[key] * weight;
+            totalWeight += weight;
+        } else {
+            missingDimensions.push(key);
+        }
+    }
+    if (totalWeight > 0 && totalWeight !== 1.0) overallScore /= totalWeight;
+    if (totalWeight === 0) {
+        overallScore = Number.isFinite(judgeReportedOverall) ? judgeReportedOverall : 0;
+    }
+    overallScore = Math.round(Math.max(0, Math.min(10, overallScore)) * 10) / 10;
+    return {
+        normalizedScores,
+        judgeReportedOverall,
+        overallScore,
+        missingDimensions,
+        partialDimensionsFlag: missingDimensions.length > 0
+    };
+}
+
 /**
  * Score a model response for quality
  */
 async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = {}, _batchHardwareSnapshot = null }) {
     const startTime = Date.now();
     let mergedJudgeConfig = resolveJudgeConfig(judgeConfig);
+    const requireTrustWorkerReceipt = mergedJudgeConfig.require_trust_worker_receipt === true;
 
     // Helper: compute format compliance and semantic score, then merge into result.
     //
@@ -189,7 +223,7 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
     // answers embedded in prose.
     let deterministicMismatch = null;
     let deterministicDetResult = null;
-    if (prompt.deterministic_scoring) {
+    if (!requireTrustWorkerReceipt && prompt.deterministic_scoring) {
         const detResult = deterministicScorer.score(response, prompt);
         if (detResult) {
             const forbiddenViolation = Array.isArray(detResult.results)
@@ -247,7 +281,7 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
     };
 
     // Phase 2: Try quick scoring (legacy pattern matching)
-    const quickResult = quickScore(response, prompt);
+    const quickResult = requireTrustWorkerReceipt ? null : quickScore(response, prompt);
     if (quickResult && quickResult.quick) {
         const explanation = quickResult.matched
             ? `Quick scoring matched expected answer "${quickResult.expected}" (pattern: ${quickResult.pattern}).`
@@ -278,7 +312,7 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
         }, { deterministicMatch: quickResult.matched });
     }
 
-    if (skipLLM) {
+    if (skipLLM && !requireTrustWorkerReceipt) {
         if (deterministicDetResult) {
             return enrichWithDualScores({
                 quality_score: deterministicDetResult.score,
@@ -349,7 +383,9 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
     }
 
     // Phase 3: Try routed scoring (reference, decomposed, etc.)
-    const routedResult = await routeScoring(response, prompt, mergedJudgeConfig);
+    const routedResult = requireTrustWorkerReceipt
+        ? null
+        : await routeScoring(response, prompt, mergedJudgeConfig);
     if (routedResult) {
         const isDeterministicMatch = routedResult.matched_expected !== undefined ? routedResult.matched_expected : undefined;
         // Deterministic paths (including numeric match) set judge_confidence = 1.0
@@ -460,76 +496,35 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
         };
     }
 
-    const scores = judgeResult.scores;
-
-    // Validate and normalize judge scores to 0-10 range
-    const normalizedScores = {};
-    for (const [key, value] of Object.entries(scores)) {
-        if (typeof value === 'number' && key !== 'overall') {
-            normalizedScores[key] = Math.max(0, Math.min(10, value));
-            if (value < 0 || value > 10) {
-                logger.warn('Judge returned out-of-range score', {
-                    dimension: key,
-                    value,
-                    clamped_to: normalizedScores[key],
-                    prompt: prompt.name || prompt.prompt_name || 'unknown'
-                });
-            }
-        } else {
-            normalizedScores[key] = value;
-        }
+    if (requireTrustWorkerReceipt && !judgeResult.execution_evidence?.privateReceipt) {
+        const error = new Error('strict Benchmark Trust scoring requires a private judge WorkerReceipt');
+        error.code = 'BENCHMARK_TRUST_JUDGE_RECEIPT_MISSING';
+        error.statusCode = 409;
+        throw error;
     }
 
-    // Always recompute overall from dimension scores and declared weights.
-    // The judge-reported overall is retained as a diagnostic only.
-    const judgeReportedOverall = normalizedScores.overall;
-    let overallScore;
-    let partialDimensionsFlag = false;
-    {
-        overallScore = 0;
-        let totalWeight = 0;
-        const missingDimensions = [];
-        for (const [key, weight] of Object.entries(config.weight)) {
-            if (normalizedScores[key] !== undefined) {
-                overallScore += normalizedScores[key] * weight;
-                totalWeight += weight;
-            } else {
-                missingDimensions.push(key);
-            }
-        }
-
-        if (missingDimensions.length > 0) {
-            logger.warn('Judge response missing dimensions, score may be inflated', {
-                missing: missingDimensions,
-                scoring_type: scoringType,
-                prompt: prompt.name || prompt.prompt_name || 'unknown'
-            });
-            partialDimensionsFlag = true;
-        }
-
-        if (totalWeight > 0 && totalWeight !== 1.0) {
-            logger.warn('Weights do not sum to 1.0, normalizing', {
-                total_weight: totalWeight,
-                scoring_type: scoringType,
-                prompt: prompt.name || prompt.prompt_name || 'unknown'
-            });
-            overallScore = overallScore / totalWeight;
-        }
-
-        if (totalWeight === 0) {
-            overallScore = Number.isFinite(judgeReportedOverall) ? judgeReportedOverall : 0;
-        }
-
-        overallScore = Math.max(0, Math.min(10, overallScore));
-        overallScore = Math.round(overallScore * 10) / 10;
-
-        if (Number.isFinite(judgeReportedOverall) && Math.abs(judgeReportedOverall - overallScore) > 1.5) {
-            logger.debug('Judge self-reported overall diverges from weighted recompute', {
-                prompt: prompt.name || prompt.prompt_name || 'unknown',
-                judge_reported: judgeReportedOverall,
-                recomputed: overallScore
-            });
-        }
+    const scores = judgeResult.scores;
+    const computedJudgeScore = computeMonolithicJudgeScore(scores, config.weight);
+    const {
+        normalizedScores,
+        judgeReportedOverall,
+        overallScore,
+        missingDimensions,
+        partialDimensionsFlag
+    } = computedJudgeScore;
+    if (missingDimensions.length > 0) {
+        logger.warn('Judge response missing dimensions, score may be inflated', {
+            missing: missingDimensions,
+            scoring_type: scoringType,
+            prompt: prompt.name || prompt.prompt_name || 'unknown'
+        });
+    }
+    if (Number.isFinite(judgeReportedOverall) && Math.abs(judgeReportedOverall - overallScore) > 1.5) {
+        logger.debug('Judge self-reported overall diverges from weighted recompute', {
+            prompt: prompt.name || prompt.prompt_name || 'unknown',
+            judge_reported: judgeReportedOverall,
+            recomputed: overallScore
+        });
     }
 
     logger.info('LLM judge scoring completed', {
@@ -573,6 +568,7 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
         judge_raw_response: judgeResult.raw || null,
         judge_target: judgeResult.execution_evidence?.target || null,
         judge_receipt: judgeResult.execution_evidence?.receipt || null,
+        trust_judge_receipt: judgeResult.execution_evidence?.privateReceipt || null,
         judge_provider_usage: judgeResult.execution_evidence?.usage || null,
         judge_provider_cost: judgeResult.execution_evidence ? {
             estimated: judgeResult.execution_evidence.target?.pricing?.estimated === true,
@@ -833,6 +829,7 @@ module.exports = {
     buildDynamicJudgePrompt,
     getScoringDimensions,
     getCategoryDimensionWeights,
+    computeMonolithicJudgeScore,
     stripMarkdownCodeFences,
     jsonDeepEqual,
     tryParseJson,

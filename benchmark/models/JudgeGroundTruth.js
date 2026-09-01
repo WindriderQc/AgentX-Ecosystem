@@ -14,6 +14,27 @@ const GROUND_TRUTH_CATEGORIES = Object.freeze([
 ]);
 const JUDGE_IDENTITY_IMMUTABLE_ERROR_CODE = 'JUDGE_IDENTITY_FINGERPRINT_IMMUTABLE';
 const QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE_ERROR_CODE = 'QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE';
+const ATTESTED_HUMAN_SOURCE_LABEL = 'attested-human-evidence-v1';
+const HUMAN_ATTESTATION_PATHS = Object.freeze([
+    'human_attestation_fingerprint',
+    'human_attestation_issuer_id',
+    'human_attestation_key_id',
+    'human_attestation_nonce',
+    'human_attestation_issued_at',
+    'human_attestation_valid_until',
+    'human_attestation_source_fingerprint',
+    'human_attestation'
+]);
+
+function buildLegacyGroundTruthVisibilityFilter() {
+    return {
+        $nor: [
+            { source: ATTESTED_HUMAN_SOURCE_LABEL },
+            { created_by: /^attested:/ },
+            ...HUMAN_ATTESTATION_PATHS.map(path => ({ [path]: { $ne: null } }))
+        ]
+    };
+}
 const QUALIFIED_REVIEW_CONDITIONS = [
     {
         provenance_class: 'independent_human_score',
@@ -44,7 +65,8 @@ const QUALIFIED_DECISION_PATHS = new Set([
     'difficulty',
     'judge_criteria',
     'tags',
-    'active'
+    'active',
+    ...HUMAN_ATTESTATION_PATHS
 ]);
 
 function judgeIdentityImmutableError(operation) {
@@ -84,6 +106,12 @@ function isQualifiedReviewPair(provenanceClass, reviewProtocol) {
 
 function pathTouchesQualifiedDecisionContent(path) {
     return [...QUALIFIED_DECISION_PATHS].some(protectedPath => (
+        path === protectedPath || path.startsWith(`${protectedPath}.`)
+    ));
+}
+
+function pathTouchesHumanAttestation(path) {
+    return HUMAN_ATTESTATION_PATHS.some(protectedPath => (
         path === protectedPath || path.startsWith(`${protectedPath}.`)
     ));
 }
@@ -229,6 +257,11 @@ function assertGroundTruthScores(document, operation) {
 
 function assertNewGroundTruthSafety(document, operation) {
     assertGroundTruthScores(document, operation);
+    if (HUMAN_ATTESTATION_PATHS.some(path => document.get(path) !== null && document.get(path) !== undefined)) {
+        throw qualifiedGroundTruthImmutableError(
+            `${operation} creating attestation metadata outside the authorized attested import service`
+        );
+    }
     if (['independent_human_score', 'adjudicated_human_score'].includes(document.provenance_class)
         && !isQualifiedReviewPair(document.provenance_class, document.review_protocol)) {
         throw qualifiedReviewValidationError(
@@ -467,6 +500,54 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
         index: true
     },
 
+    // Signed qualified-human evidence is admitted only by the dedicated
+    // server-side import service. The complete canonical attestation remains
+    // private for re-verification; the projections support bounded lookup and
+    // current trust-root/revocation checks without granting mutation authority.
+    human_attestation_fingerprint: {
+        type: String,
+        default: null,
+        immutable: true,
+        match: JUDGE_IDENTITY_FINGERPRINT_PATTERN
+    },
+    human_attestation_issuer_id: {
+        type: String,
+        default: null,
+        immutable: true
+    },
+    human_attestation_key_id: {
+        type: String,
+        default: null,
+        immutable: true
+    },
+    human_attestation_nonce: {
+        type: String,
+        default: null,
+        immutable: true
+    },
+    human_attestation_issued_at: {
+        type: Date,
+        default: null,
+        immutable: true
+    },
+    human_attestation_valid_until: {
+        type: Date,
+        default: null,
+        immutable: true
+    },
+    human_attestation_source_fingerprint: {
+        type: String,
+        default: null,
+        immutable: true,
+        match: JUDGE_IDENTITY_FINGERPRINT_PATTERN
+    },
+    human_attestation: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null,
+        immutable: true,
+        select: false
+    },
+
     // Difficulty level (1-5)
     difficulty: {
         type: Number,
@@ -523,6 +604,30 @@ JudgeGroundTruthSchema.index({ category: 1, active: 1 });
 JudgeGroundTruthSchema.index({ difficulty: 1, active: 1 });
 JudgeGroundTruthSchema.index({ provenance_class: 1, active: 1, category: 1 });
 JudgeGroundTruthSchema.index({ judge_identity_fingerprint: 1, active: 1, category: 1 });
+JudgeGroundTruthSchema.index(
+    { human_attestation_fingerprint: 1 },
+    {
+        name: 'human_attestation_fingerprint_unique',
+        unique: true,
+        partialFilterExpression: { human_attestation_fingerprint: { $type: 'string' } }
+    }
+);
+JudgeGroundTruthSchema.index(
+    {
+        human_attestation_issuer_id: 1,
+        human_attestation_key_id: 1,
+        human_attestation_nonce: 1
+    },
+    {
+        name: 'human_attestation_nonce_unique',
+        unique: true,
+        partialFilterExpression: {
+            human_attestation_issuer_id: { $type: 'string' },
+            human_attestation_key_id: { $type: 'string' },
+            human_attestation_nonce: { $type: 'string' }
+        }
+    }
+);
 
 for (const operation of ['updateOne', 'updateMany', 'findOneAndUpdate', 'findOneAndReplace', 'replaceOne']) {
     JudgeGroundTruthSchema.pre(operation, async function validateQualifiedReviewPairOnQueryUpdate() {
@@ -536,6 +641,10 @@ for (const operation of ['updateOne', 'updateMany', 'findOneAndUpdate', 'findOne
         }
         if (updateTouchesJudgeIdentity(update)) {
             throw judgeIdentityImmutableError(`${operation} changing judge identity`);
+        }
+        if (mutationPaths(update).some(pathTouchesHumanAttestation)
+            || Object.keys(update.$setOnInsert || {}).some(pathTouchesHumanAttestation)) {
+            throw qualifiedGroundTruthImmutableError(`${operation} changing human attestation evidence`);
         }
         if (Object.prototype.hasOwnProperty.call(update.$setOnInsert || {}, 'judge_identity_fingerprint')) {
             const insertedIdentity = update.$setOnInsert.judge_identity_fingerprint;
@@ -613,6 +722,9 @@ JudgeGroundTruthSchema.pre('save', async function protectQualifiedGroundTruthOnD
     if (!this.isNew && this.isModified('judge_identity_fingerprint')) {
         throw judgeIdentityImmutableError('document.save changing judge identity');
     }
+    if (!this.isNew && this.modifiedPaths().some(pathTouchesHumanAttestation)) {
+        throw qualifiedGroundTruthImmutableError('document.save changing human attestation evidence');
+    }
     if (this.isNew) return;
 
     const touchesDecisionContent = this.modifiedPaths().some(pathTouchesQualifiedDecisionContent);
@@ -667,7 +779,10 @@ JudgeGroundTruthSchema.index({ 'validation_stats.avg_deviation': 1 });
  * Get active ground truth entries for validation
  */
 JudgeGroundTruthSchema.statics.getForValidation = function(options = {}) {
-    const query = { active: true };
+    const query = {
+        active: true,
+        ...buildLegacyGroundTruthVisibilityFilter()
+    };
 
     if (options.category) {
         query.category = options.category;
@@ -696,6 +811,10 @@ JudgeGroundTruthSchema.statics.getForValidation = function(options = {}) {
     }
 
     return q.sort({ difficulty: 1, createdAt: -1 });
+};
+
+JudgeGroundTruthSchema.statics.buildLegacyGroundTruthVisibilityFilter = function() {
+    return buildLegacyGroundTruthVisibilityFilter();
 };
 
 /**
@@ -734,7 +853,8 @@ JudgeGroundTruthSchema.methods.recordValidation = async function(result) {
 JudgeGroundTruthSchema.statics.getHighDeviation = function(threshold = 2.0, limit = 20) {
     return this.find({
         active: true,
-        'validation_stats.avg_deviation': { $gte: threshold }
+        'validation_stats.avg_deviation': { $gte: threshold },
+        ...buildLegacyGroundTruthVisibilityFilter()
     })
     .sort({ 'validation_stats.avg_deviation': -1 })
     .limit(limit);
@@ -744,9 +864,10 @@ JudgeGroundTruthSchema.statics.getHighDeviation = function(threshold = 2.0, limi
  * Get validation accuracy summary
  */
 JudgeGroundTruthSchema.statics.getAccuracySummary = async function() {
+    const legacyVisibility = buildLegacyGroundTruthVisibilityFilter();
     // Validated entries: those with at least one accuracy run
     const validated = await this.aggregate([
-        { $match: { active: true, 'validation_stats.total_runs': { $gt: 0 } } },
+        { $match: { active: true, 'validation_stats.total_runs': { $gt: 0 }, ...legacyVisibility } },
         {
             $group: {
                 _id: '$category',
@@ -762,7 +883,7 @@ JudgeGroundTruthSchema.statics.getAccuracySummary = async function() {
 
     // Inventory: every active entry, validated or not — what the dashboard expects
     const inventory = await this.aggregate([
-        { $match: { active: true } },
+        { $match: { active: true, ...legacyVisibility } },
         { $group: { _id: '$category', count: { $sum: 1 } } },
         { $sort: { _id: 1 } }
     ]);
@@ -782,7 +903,7 @@ JudgeGroundTruthSchema.statics.getAccuracySummary = async function() {
     });
 
     const validatedTotal = await this.aggregate([
-        { $match: { active: true, 'validation_stats.total_runs': { $gt: 0 } } },
+        { $match: { active: true, 'validation_stats.total_runs': { $gt: 0 }, ...legacyVisibility } },
         {
             $group: {
                 _id: null,
@@ -793,7 +914,7 @@ JudgeGroundTruthSchema.statics.getAccuracySummary = async function() {
         }
     ]);
 
-    const totalActive = await this.countDocuments({ active: true });
+    const totalActive = await this.countDocuments({ active: true, ...legacyVisibility });
 
     return {
         by_category,

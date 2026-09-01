@@ -1,0 +1,84 @@
+{
+  "schema": "agentx.benchmark-trust-receipt/v1",
+  "receiptId": "7f956c3ef9c72f0f2a0f0789c45fdc8530d077d3f6ac664baed3de37d27749bf",
+  "createdAt": "2026-08-31T12:00:00.000Z",
+  "validUntil": "2026-09-30T12:00:00.000Z",
+  "claimScope": "capability",
+  "product": {
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "coreImageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "benchmarkImageDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "ragImageDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "execution": {
+    "campaignId": "campaign_cccccccccccccccccccccccccccccccc",
+    "sourceBatchId": "batch_dddddddddddddddddddddddddddddddd",
+    "campaignFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "inferenceProfileFingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "promptCatalogFingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+    "candidateSetFingerprint": "74061e3497b6c25b04abd374cbe6aab8b8184f510f0ed51c3c23e3f03fe70048",
+    "cellInventory": {
+      "fingerprint": "3333333333333333333333333333333333333333333333333333333333333333",
+      "cellCount": 50,
+      "minimumRepeatCount": 2,
+      "maximumRepeatCount": 2
+    },
+    "promptCount": 25,
+    "expectedResultCount": 100,
+    "observedResultCount": 100,
+    "excludedResultCount": 0,
+    "exclusionManifestFingerprint": null,
+    "candidates": [
+      {
+        "candidateId": "candidate_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artifactFingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "runtimeFingerprint": "2222222222222222222222222222222222222222222222222222222222222222",
+        "environmentFingerprint": "3333333333333333333333333333333333333333333333333333333333333333",
+        "resultSetFingerprint": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      {
+        "candidateId": "candidate_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "artifactFingerprint": "5555555555555555555555555555555555555555555555555555555555555555",
+        "runtimeFingerprint": "6666666666666666666666666666666666666666666666666666666666666666",
+        "environmentFingerprint": "7777777777777777777777777777777777777777777777777777777777777777",
+        "resultSetFingerprint": "8888888888888888888888888888888888888888888888888888888888888888"
+      }
+    ]
+  },
+  "judge": {
+    "qualificationReceiptId": "9999999999999999999999999999999999999999999999999999999999999999",
+    "identityFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rubricFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "corpusFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "holdoutFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "qualificationStatus": "qualified",
+    "validUntil": "2026-09-15T12:00:00.000Z"
+  },
+  "statistics": {
+    "unit": "prompt",
+    "method": "paired-prompt-t-v1",
+    "alphaBasisPoints": 500,
+    "multiplicityCorrection": "bonferroni",
+    "minimumEffectMicros": 25000,
+    "preregistration": {
+      "repeatCount": 2,
+      "analysisPlanFingerprint": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "rankingPolicyFingerprint": "2222222222222222222222222222222222222222222222222222222222222222",
+    "decisionFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "winnerCandidateId": "candidate_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "equivalenceCandidateIds": []
+  },
+  "axes": {
+    "evidenceStatus": "complete",
+    "decisionOutcome": "winner",
+    "freshnessStatus": "fresh"
+  },
+  "privacy": {
+    "containsRawPrompts": false,
+    "containsRawResponses": false,
+    "containsPrivateEnvironmentIdentity": false,
+    "containsProviderPayloads": false,
+    "containsSecrets": false
+  }
+}

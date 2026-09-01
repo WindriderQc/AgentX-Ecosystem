@@ -9,6 +9,11 @@ const {
     releaseBenchmarkTrustEvidenceLock,
     withBenchmarkTrustEvidenceLock
 } = require('../src/services/benchmark/benchmarkTrustEvidenceLock');
+const {
+    applyStrictTrustExclusionToAggregate,
+    combineWithStrictTrustResultExclusion,
+    isPublicBenchmarkRead
+} = require('../src/services/benchmark/publicReadPrivacy');
 
 const BenchmarkResultSchema = new mongoose.Schema({
     batch_id: {
@@ -55,6 +60,19 @@ const BenchmarkResultSchema = new mongoose.Schema({
     judge_receipt: {
         type: mongoose.Schema.Types.Mixed,
         default: null
+    },
+    // Full WorkerReceipt documents are retained only for canonical Trust
+    // verification. Public result projections continue to use the bounded
+    // receipt fields above; these private fields are excluded by default.
+    trust_execution_receipt: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null,
+        select: false
+    },
+    trust_judge_receipt: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null,
+        select: false
     },
     provider_usage: {
         type: mongoose.Schema.Types.Mixed,
@@ -638,7 +656,10 @@ const BenchmarkResultSchema = new mongoose.Schema({
         index: true
     }
 }, {
-    timestamps: { createdAt: 'timestamp', updatedAt: 'updated_at' }
+    // `timestamp` is declared above with its own server default. Disabling the
+    // timestamps plugin's createdAt handling keeps caller attempts visible to
+    // the Trust mutation guard instead of having Mongoose silently strip them.
+    timestamps: { createdAt: false, updatedAt: 'updated_at' }
 });
 
 // Compound indexes for analytics queries
@@ -890,7 +911,17 @@ BenchmarkResultSchema.pre('aggregate', function blockResultAggregateWrites() {
     if (aggregateContainsWriteStage(this.pipeline())) {
         throw protectedEvidenceError('aggregate write stage');
     }
+    if (isPublicBenchmarkRead()) {
+        applyStrictTrustExclusionToAggregate(this.pipeline());
+    }
 });
+
+for (const operation of ['find', 'findOne', 'countDocuments', 'distinct']) {
+    BenchmarkResultSchema.pre(operation, function excludeStrictTrustEvidenceFromPublicReads() {
+        if (!isPublicBenchmarkRead()) return;
+        this.setQuery(combineWithStrictTrustResultExclusion(this.getFilter() || {}));
+    });
+}
 
 for (const operation of [
     'updateOne',
@@ -932,14 +963,45 @@ for (const operation of [
                 || path.startsWith('trust_prompt_id.')
             ));
             if (touchesTrustIdentity) throw protectedEvidenceError(`${operation} changing trust source identity`);
+            const touchesTrustExecutionReceipt = touchedPaths.some(path => (
+                path === 'trust_execution_receipt' || path.startsWith('trust_execution_receipt.')
+            ));
+            if (touchesTrustExecutionReceipt) {
+                throw protectedEvidenceError(`${operation} changing private execution receipt`);
+            }
+            const touchesTrustJudgeReceipt = touchedPaths.some(path => (
+                path === 'trust_judge_receipt' || path.startsWith('trust_judge_receipt.')
+            ));
+            if (touchesTrustJudgeReceipt) {
+                const originalFilter = this.getFilter() || {};
+                const existingTrustJudgeReceipt = await this.model.exists({
+                    $and: [originalFilter, { trust_judge_receipt: { $ne: null } }]
+                });
+                if (existingTrustJudgeReceipt) {
+                    throw protectedEvidenceError(`${operation} replacing private judge receipt`);
+                }
+                this.setQuery({
+                    $and: [originalFilter, { trust_judge_receipt: null }]
+                });
+            }
             const touchesTrustSeal = touchedPaths.some(path => (
                 path === 'trust_evidence_sealed' || path.startsWith('trust_evidence_sealed.')
             ));
             if (touchesTrustSeal) {
                 throw protectedEvidenceError(`${operation} changing server evidence seal`);
             }
-            const touchesCreationTimestamp = touchedPaths.some(path => (
+            // Upserts are already rejected above. A $setOnInsert-only value is
+            // therefore inert; direct or effective operators that can mutate
+            // the server-owned creation timestamp are forbidden for Trust rows.
+            const touchesCreationTimestamp = directPaths.some(path => (
                 path === 'timestamp' || path.startsWith('timestamp.')
+            )) || Object.entries(update).some(([operator, value]) => (
+                operator.startsWith('$')
+                && operator !== '$setOnInsert'
+                && value && typeof value === 'object'
+                && Object.keys(value).some(path => (
+                    path === 'timestamp' || path.startsWith('timestamp.')
+                ))
             ));
             if (touchesCreationTimestamp) {
                 const trustEvidenceMatch = await this.model.exists({
@@ -1013,6 +1075,12 @@ BenchmarkResultSchema.pre('save', async function serializeResultDocumentSave() {
                 throw protectedEvidenceError('insert into terminal Trust batch');
             }
             if (targetBatch?.trust_evidence_context) {
+                if (!trustTagged) {
+                    throw protectedEvidenceError('untagged result insert into committed Trust batch');
+                }
+                if (!this.trust_execution_receipt) {
+                    throw protectedEvidenceError('Trust result insert without private execution receipt');
+                }
                 if (targetBatch.started_at == null || targetBatch.execution_started_at == null) {
                     throw protectedEvidenceError('Trust result insert before durable execution start');
                 }
@@ -1037,6 +1105,22 @@ BenchmarkResultSchema.pre('save', async function serializeResultDocumentSave() {
         }
         if (this.isModified('trust_candidate_id') || this.isModified('trust_prompt_id')) {
             throw protectedEvidenceError('document.save changing trust source identity');
+        }
+        if (this.isModified('trust_execution_receipt')) {
+            throw protectedEvidenceError('document.save changing private execution receipt');
+        }
+        if (this.isModified('trust_judge_receipt')) {
+            const existingPrivateReceipt = await this.constructor.exists({
+                _id: this._id,
+                trust_judge_receipt: { $ne: null }
+            });
+            if (existingPrivateReceipt) {
+                throw protectedEvidenceError('document.save replacing private judge receipt');
+            }
+            this.$where = {
+                ...(this.$where || {}),
+                trust_judge_receipt: null
+            };
         }
         if (this.isModified('trust_evidence_sealed')) {
             throw protectedEvidenceError('document.save changing server evidence seal');
@@ -1126,6 +1210,12 @@ BenchmarkResult.insertMany = async function guardedBenchmarkResultInsertMany(doc
                     throw protectedEvidenceError('insertMany into terminal Trust batch');
                 }
                 if (targetBatch?.trust_evidence_context) {
+                    if (!trustTagged) {
+                        throw protectedEvidenceError('untagged insertMany row into committed Trust batch');
+                    }
+                    if (!row?.trust_execution_receipt) {
+                        throw protectedEvidenceError('Trust insertMany row without private execution receipt');
+                    }
                     if (targetBatch.started_at == null
                         || targetBatch.execution_started_at == null
                         || [targetBatch.started_at, targetBatch.execution_started_at]

@@ -16,15 +16,15 @@ function clone(value) {
 
 test('the checked-in matrix audits every non-safe route and preserves a zero-gap receipt', () => {
   const receipt = verifyActionAuthorizationMatrix();
-  assert.equal(receipt.total, 239);
-  assert.deepEqual(receipt.byService, { core: 144, benchmark: 80, rag: 15 });
+  assert.equal(receipt.total, 241);
+  assert.deepEqual(receipt.byService, { core: 144, benchmark: 82, rag: 15 });
   assert.deepEqual(receipt.byClassification, {
-    'user-mutation': 122,
+    'user-mutation': 124,
     'scoped-machine-call': 28,
     'action-observation': 35,
     'destructive-mutation': 54,
   });
-  assert.deepEqual(receipt.byEnforcementStatus, { enforced: 238, disabled: 1 });
+  assert.deepEqual(receipt.byEnforcementStatus, { enforced: 240, disabled: 1 });
   assert.equal(receipt.gapRoutes.length, 0);
 });
 
@@ -36,9 +36,26 @@ test('distinguishes consequence tiers and requires exact phrases only for irreve
     'ephemeral-maintenance': 1,
   });
   assert.deepEqual(receipt.byTypedConfirmation, {
-    'not-required': 199,
+    'not-required': 201,
     enforced: 40,
   });
+});
+
+test('audits human-evidence import and requires a route-local operator gate for Trust launch', () => {
+  const validated = validateMatrix(readMatrix(), readMutationPolicy());
+  const importRoute = validated.routes.get(
+    'benchmark/routes/benchmark/humanEvidence.js#POST /judge/ground-truth/import-attested'
+  );
+  const launchRoute = validated.routes.get(
+    'benchmark/routes/benchmark/trustBatches.js#POST /trust-batches/:specId/start'
+  );
+
+  assert.equal(importRoute.classification, 'user-mutation');
+  assert.equal(importRoute.enforcementStatus, 'enforced');
+  assert.equal(launchRoute.classification, 'user-mutation');
+  assert.equal(launchRoute.routeLocalValidator, 'enforced');
+  assert.equal(launchRoute.enforcementStatus, 'enforced');
+  assert.deepEqual(launchRoute.evidence, ['benchmark-trust-operator-launch-validator']);
 });
 
 test('reports no scoped-machine gaps after every machine lane gains route-local identity', () => {

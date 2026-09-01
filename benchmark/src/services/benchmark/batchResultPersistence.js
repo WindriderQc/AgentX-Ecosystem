@@ -9,6 +9,7 @@ const { SCORER_VERSION } = require('../scoring/scorerVersion');
 const { getModelDigest } = require('./modelDigestService');
 const { classifyBenchmarkError } = require('./errorClassifier');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
+const { resolveTrustCellIdentity } = require('./benchmarkTrustCampaignRuntime');
 
 async function persistSuccessfulResult({
     batchId,
@@ -48,9 +49,11 @@ async function persistSuccessfulResult({
     repeatGroupId = null,
     executionTarget = null,
     executionReceipt = null,
+    trustExecutionReceipt = null,
     providerUsage = null,
     providerCost = null,
-    qualityCohortFingerprint = null
+    qualityCohortFingerprint = null,
+    trustEvidenceContext = null
 }) {
     const scoringType = normalizeScoringCategory(prompt.scoring_type || prompt.category, DEFAULT_SCORING_CATEGORY);
     const visibleResponseBudget = !!(lengthHintApplied || answerContract?.applied);
@@ -93,7 +96,19 @@ async function persistSuccessfulResult({
     const modelDigest = executionTarget?.executionKind === 'harness'
         ? (executionReceipt?.identity?.model?.digest || null)
         : await getModelDigest(hostUrl, model);
-    const result = new BenchmarkResult({
+    const trustIdentity = resolveTrustCellIdentity({
+        context: trustEvidenceContext,
+        executionTarget,
+        prompt,
+        promptText
+    });
+    if (trustEvidenceContext && !trustExecutionReceipt) {
+        const error = new Error('strict Trust result requires the full private execution WorkerReceipt');
+        error.code = 'BENCHMARK_TRUST_EXECUTION_RECEIPT_REQUIRED';
+        error.statusCode = 409;
+        throw error;
+    }
+    const resultDocument = {
         model,
         model_digest: modelDigest,
         host: hostUrl,
@@ -101,6 +116,7 @@ async function persistSuccessfulResult({
         execution_target: executionTarget,
         judge_target: judgeConfig.target || null,
         execution_receipt: executionReceipt,
+        trust_execution_receipt: trustExecutionReceipt,
         provider_usage: providerUsage,
         provider_cost: providerCost,
         quality_cohort_fingerprint: qualityCohortFingerprint,
@@ -125,7 +141,8 @@ async function persistSuccessfulResult({
         thinking: hiddenThinking || null,
         success: true,
         batch_id: batchId,
-        timestamp: new Date(),
+        trust_candidate_id: trustIdentity.candidateId,
+        trust_prompt_id: trustIdentity.promptId,
         scorer_version: (hasEmptyVisibleResponse && !responseContractFailure) ? SCORER_VERSION : null,
         quality_score: (hasEmptyVisibleResponse && !responseContractFailure) ? 0 : null,
         quality_explanation: hasEmptyVisibleResponse ? emptyResponseExplanation : null,
@@ -210,7 +227,9 @@ async function persistSuccessfulResult({
         repeat_index: repeatIndex,
         repeat_total: repeatTotal,
         repeat_group_id: repeatGroupId
-    });
+    };
+    if (!trustEvidenceContext) resultDocument.timestamp = new Date();
+    const result = new BenchmarkResult(resultDocument);
 
     await result.save();
     pendingModelTimeline.push({
@@ -243,7 +262,7 @@ async function persistSuccessfulResult({
     return result._id;
 }
 
-async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, flushBatchProgress, model, hostUrl, judgeHostUrl, prompt, err, errorDuration, currentBatch, pendingModelTimeline, repeatIndex = 0, repeatTotal = 1, repeatGroupId = null, executionSettings = null, executionTarget = null, executionReceipt = null, providerUsage = null, providerCost = null, qualityCohortFingerprint = null }) {
+async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, flushBatchProgress, model, hostUrl, judgeHostUrl, prompt, promptText = null, err, errorDuration, currentBatch, pendingModelTimeline, repeatIndex = 0, repeatTotal = 1, repeatGroupId = null, executionSettings = null, executionTarget = null, executionReceipt = null, trustExecutionReceipt = null, providerUsage = null, providerCost = null, qualityCohortFingerprint = null, trustEvidenceContext = null }) {
     const classified = classifyBenchmarkError(err);
     const scoringType = normalizeScoringCategory(prompt.scoring_type || prompt.category, DEFAULT_SCORING_CATEGORY);
     const reviewReason = classified.infra
@@ -254,17 +273,31 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
         const modelDigest = executionTarget?.executionKind === 'harness'
             ? (executionReceipt?.identity?.model?.digest || null)
             : await getModelDigest(hostUrl, model);
-        const result = new BenchmarkResult({
+        const frozenPromptText = typeof promptText === 'string' ? promptText : prompt.prompt;
+        const trustIdentity = resolveTrustCellIdentity({
+            context: trustEvidenceContext,
+            executionTarget,
+            prompt,
+            promptText: frozenPromptText
+        });
+        if (trustEvidenceContext && !trustExecutionReceipt) {
+            const error = new Error('strict Trust result requires the full private execution WorkerReceipt');
+            error.code = 'BENCHMARK_TRUST_EXECUTION_RECEIPT_REQUIRED';
+            error.statusCode = 409;
+            throw error;
+        }
+        const resultDocument = {
             model,
             model_digest: modelDigest,
             host: hostUrl,
             execution_target: executionTarget,
             judge_target: judgeConfig.target || null,
             execution_receipt: executionReceipt,
+            trust_execution_receipt: trustExecutionReceipt,
             provider_usage: providerUsage,
             provider_cost: providerCost,
             quality_cohort_fingerprint: qualityCohortFingerprint,
-            prompt: prompt.prompt,
+            prompt: frozenPromptText,
             prompt_level: prompt.level,
             prompt_category: prompt.category,
             prompt_name: prompt.name,
@@ -275,7 +308,8 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
             error_http_status: classified.httpStatus,
             success: false,
             batch_id: batchId,
-            timestamp: new Date(),
+            trust_candidate_id: trustIdentity.candidateId,
+            trust_prompt_id: trustIdentity.promptId,
             quality_score: null,
             scoring_method: 'exec_failed',
             scoring_type: scoringType,
@@ -297,7 +331,9 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
             repeat_index: repeatIndex,
             repeat_total: repeatTotal,
             repeat_group_id: repeatGroupId
-        });
+        };
+        if (!trustEvidenceContext) resultDocument.timestamp = new Date();
+        const result = new BenchmarkResult(resultDocument);
 
         await result.save();
         pendingModelTimeline.push({

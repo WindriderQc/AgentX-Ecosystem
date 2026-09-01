@@ -31,6 +31,14 @@ const {
 
 const LEADERBOARD_CATEGORIES = Object.keys(CATEGORY_COMPOSITE_PROFILES);
 
+function buildCourthouseGroundTruthCountQuery() {
+    return {
+        active: true,
+        created_by: { $ne: 'retro-calibration' },
+        ...JudgeGroundTruth.buildLegacyGroundTruthVisibilityFilter()
+    };
+}
+
 function buildCategoryScoreFields(scoreValue) {
     return LEADERBOARD_CATEGORIES.reduce((fields, category) => {
         fields[`${category}_score`] = scoreValue;
@@ -414,10 +422,7 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
         BenchmarkResult.countDocuments({ human_review_status: 'overridden' }),
         // Match the human-derived coverage contract: retro-calibration rows are
         // model-generated reference scores and must not inflate Ground Truth.
-        JudgeGroundTruth.countDocuments({
-            active: true,
-            created_by: { $ne: 'retro-calibration' }
-        })
+        JudgeGroundTruth.countDocuments(buildCourthouseGroundTruthCountQuery())
     ]);
 
     const failureByKey = new Map(
@@ -721,6 +726,7 @@ async function compareModels(models) {
 }
 
 module.exports = {
+    buildCourthouseGroundTruthCountQuery,
     getResults,
     getSummary,
     getDashboard,

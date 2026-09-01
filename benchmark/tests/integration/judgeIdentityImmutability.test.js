@@ -182,6 +182,56 @@ test('qualified JudgeGroundTruth rows are append-only while diagnostic validatio
     expect(afterDiagnostic.expert_scores).toEqual(before.expert_scores);
 });
 
+test('human-attestation fields are server-import-only, immutable, and uniquely replay-bound', async () => {
+    const attestationFingerprint = 'c'.repeat(64);
+    const sourceFingerprint = 'd'.repeat(64);
+    const rawLegacy = {
+        ...groundTruthFixture(),
+        _id: new mongoose.Types.ObjectId(),
+        name: 'legacy-with-attestation-metadata',
+        provenance_class: 'legacy_unverified',
+        review_protocol: 'legacy_unknown',
+        judge_identity_fingerprint: null,
+        human_attestation_fingerprint: attestationFingerprint,
+        human_attestation_issuer_id: 'human-review-board',
+        human_attestation_key_id: 'review-key-2026-09',
+        human_attestation_nonce: 'review-nonce-00000000000000000001',
+        human_attestation_issued_at: new Date('2026-09-01T11:00:00.000Z'),
+        human_attestation_valid_until: new Date('2026-10-01T11:00:00.000Z'),
+        human_attestation_source_fingerprint: sourceFingerprint,
+        human_attestation: { signed: true },
+        createdAt: new Date(),
+        updatedAt: new Date()
+    };
+
+    await expect(JudgeGroundTruth.create({ ...rawLegacy, _id: undefined }))
+        .rejects.toMatchObject(QUALIFIED_IMMUTABLE);
+    await expect(JudgeGroundTruth.countDocuments({ name: rawLegacy.name })).resolves.toBe(0);
+
+    await JudgeGroundTruth.collection.insertOne(rawLegacy);
+    const before = await JudgeGroundTruth.collection.findOne({ _id: rawLegacy._id });
+    await expect(JudgeGroundTruth.updateOne(
+        { _id: rawLegacy._id },
+        { $set: { human_attestation_nonce: 'different-nonce-0000000000000000001' } }
+    )).rejects.toMatchObject(QUALIFIED_IMMUTABLE);
+    const loaded = await JudgeGroundTruth.findById(rawLegacy._id);
+    loaded.set('human_attestation_fingerprint', 'e'.repeat(64), null, { overwriteImmutable: true });
+    await expect(loaded.save()).rejects.toMatchObject(QUALIFIED_IMMUTABLE);
+    await expect(JudgeGroundTruth.collection.findOne({ _id: rawLegacy._id })).resolves.toEqual(before);
+
+    await expect(JudgeGroundTruth.collection.insertOne({
+        ...rawLegacy,
+        _id: new mongoose.Types.ObjectId(),
+        name: 'duplicate-attestation-fingerprint'
+    })).rejects.toMatchObject({ code: 11000 });
+    await expect(JudgeGroundTruth.collection.insertOne({
+        ...rawLegacy,
+        _id: new mongoose.Types.ObjectId(),
+        name: 'duplicate-attestation-nonce',
+        human_attestation_fingerprint: 'f'.repeat(64)
+    })).rejects.toMatchObject({ code: 11000 });
+});
+
 test('legacy rows cannot be qualified by query, document save, or upsert filter', async () => {
     const legacy = await JudgeGroundTruth.create({
         ...groundTruthFixture(),

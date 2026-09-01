@@ -127,6 +127,7 @@ async function runBatchOrchestrator({
     spendGrant = null,
     qualityCohortFingerprint = null,
     batchContractFingerprint = null,
+    trustEvidenceContext = null,
     prompts,
     judgeConfig,
     executionConfig,
@@ -278,6 +279,7 @@ async function runBatchOrchestrator({
         const start = Date.now();
         const think = modelExecConfig.think === true;
         let testController = null;
+        let frozenPromptText = prompt.prompt;
 
         try {
             pendingModelTimeline.push({
@@ -312,6 +314,7 @@ async function runBatchOrchestrator({
                 modelExecConfig
             );
             const promptText = promptHints.promptText;
+            frozenPromptText = promptText;
             const hintApplied = promptHints.applied;
             const hintText = promptHints.hintText;
             const ollamaOptions = { num_predict: numPredict };
@@ -363,10 +366,7 @@ async function runBatchOrchestrator({
 
             let response;
             let data;
-            const testTimeoutId = setTimeout(
-                () => testController.abort(),
-                modelExecConfig.per_test_timeout_ms || 600000
-            );
+            const testTimeoutId = setTimeout(() => testController.abort(), modelExecConfig.per_test_timeout_ms || 600000);
             const unregisterController = registerActiveBatchController(batchId, testController);
             try {
                 response = await fetch(url, fetchOptions);
@@ -576,7 +576,8 @@ async function runBatchOrchestrator({
                 repeatTotal,
                 repeatGroupId,
                 executionTarget,
-                qualityCohortFingerprint
+                qualityCohortFingerprint,
+                trustEvidenceContext
             });
 
             if (!hasEmptyResponse) {
@@ -607,6 +608,7 @@ async function runBatchOrchestrator({
                 hostUrl,
                 judgeHostUrl,
                 prompt,
+                promptText: frozenPromptText,
                 err,
                 errorDuration: Date.now() - start,
                 currentBatch,
@@ -625,7 +627,8 @@ async function runBatchOrchestrator({
                     artifact_digest: modelExecConfig.artifact_digest || null
                 },
                 executionTarget,
-                qualityCohortFingerprint
+                qualityCohortFingerprint,
+                trustEvidenceContext
             });
             if (classified.infra) return { infraError: true };
         }
@@ -736,8 +739,8 @@ async function runBatchOrchestrator({
                             promptEvalCount: usage.inputTokens,
                             inputBudget: executionConfig.input_token_ceiling || null,
                             executionSettings: {
-                                sampling_profile: 'harness-isolated',
-                                sampling_source: 'benchmark_target_v1',
+                                sampling_profile: executionConfig.sampling_profile || 'controlled',
+                                sampling_source: executionConfig.sampling_source || 'controlled_override',
                                 num_ctx: target.contextWindow,
                                 num_ctx_source: 'target_catalog',
                                 think: false,
@@ -754,6 +757,7 @@ async function runBatchOrchestrator({
                             repeatGroupId: repeats > 1 ? repeatGroupId : null,
                             executionTarget: target,
                             executionReceipt: execution.publicReceipt,
+                            trustExecutionReceipt: execution.receipt,
                             providerUsage: usage,
                             providerCost: {
                                 estimated: target.pricing?.estimated === true,
@@ -761,7 +765,8 @@ async function runBatchOrchestrator({
                                 pricing: target.pricing,
                                 observedAt: new Date().toISOString()
                             },
-                            qualityCohortFingerprint
+                            qualityCohortFingerprint,
+                            trustEvidenceContext
                         });
                         if (cleanedResponse.trim()) {
                             if (judgeHostUrl === hostUrl) deferJudgeTask({ hostUrl, judgeHostUrl, model: target.model, prompt, resultId });
@@ -778,14 +783,18 @@ async function runBatchOrchestrator({
                             repeatIndex, repeatTotal: repeats,
                             repeatGroupId: repeats > 1 ? repeatGroupId : null,
                             executionSettings: {
-                                sampling_profile: 'harness-isolated', sampling_source: 'benchmark_target_v1',
+                                sampling_profile: executionConfig.sampling_profile || 'controlled',
+                                sampling_source: executionConfig.sampling_source || 'controlled_override',
                                 think: false, think_mode: 'off', rankable_mode: target.mode === 'isolated_model',
                                 inference_contract_fingerprint: target.profile.fingerprint
                             },
                             executionTarget: target,
                             executionReceipt: execution?.publicReceipt || null,
+                            trustExecutionReceipt: execution?.receipt || null,
                             providerUsage: execution?.receipt?.usage || null,
-                            qualityCohortFingerprint
+                            qualityCohortFingerprint,
+                            trustEvidenceContext,
+                            promptText: promptHints.promptText
                         });
                     } finally {
                         clearTimeout(timeoutId);

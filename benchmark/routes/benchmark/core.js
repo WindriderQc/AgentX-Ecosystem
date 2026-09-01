@@ -135,6 +135,8 @@ async function resolveBatchJudgeTarget(executionHost, judgeConfig = {}, { judgeD
 
 function buildActiveBatchConflict(active) {
     const STUCK_THRESHOLD_SECONDS = 300;
+    const trustCampaign = benchmarkService.isTrustCampaignBatch(active)
+        || Boolean(active?.trust_evidence_context);
     const inactiveSeconds = active.last_activity_at
         ? Math.floor((Date.now() - new Date(active.last_activity_at).getTime()) / 1000)
         : 0;
@@ -144,16 +146,18 @@ function buildActiveBatchConflict(active) {
         error: 'Another batch is already running',
         active_batch: {
             id: active._id,
-            run_name: active.run_name,
+            ...(trustCampaign ? { privacy_redacted: true } : { run_name: active.run_name }),
             status: active.status,
             progress: active.progress,
             inactive_seconds: inactiveSeconds,
             is_stuck: inactiveSeconds > STUCK_THRESHOLD_SECONDS,
             started_at: active.started_at
         },
-        message: inactiveSeconds > STUCK_THRESHOLD_SECONDS
-            ? 'The active batch appears stuck. Use the "Recover" button to stop it before starting a new batch.'
-            : `Batch "${active.run_name}" is currently running (${active.progress}% complete). Please wait for it to finish or stop it first.`
+        message: trustCampaign
+            ? `A strict Benchmark Trust campaign is currently running (${active.progress}% complete). Please wait for it to finish or use the durable stop action.`
+            : inactiveSeconds > STUCK_THRESHOLD_SECONDS
+                ? 'The active batch appears stuck. Use the "Recover" button to stop it before starting a new batch.'
+                : `Batch "${active.run_name}" is currently running (${active.progress}% complete). Please wait for it to finish or stop it first.`
     };
 }
 
@@ -714,6 +718,8 @@ router.post('/batch/:id/stop', async (req, res) => {
         // releases them only after every cancelled task has settled. Direct
         // release remains the recovery path for an orphaned/non-local batch.
         const claimReleaseHosts = managedLocally ? [] : releaseStoppedBatchClaims(batch);
+        const trustCampaign = benchmarkService.isTrustCampaignBatch(batch)
+            || Boolean(batch?.trust_evidence_context);
 
         res.json({
             status: 'success',
@@ -724,7 +730,9 @@ router.post('/batch/:id/stop', async (req, res) => {
                 already_stopped: alreadyStopped,
                 cleanup_managed_by_runner: managedLocally === true,
                 claim_release_started: claimReleaseHosts.length > 0,
-                claim_release_hosts: claimReleaseHosts
+                ...(trustCampaign
+                    ? { privacy_redacted: true }
+                    : { claim_release_hosts: claimReleaseHosts })
             }
         });
     } catch (err) {
@@ -743,10 +751,17 @@ router.post('/batch/:id/resume', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
         const batch = await BenchmarkBatch.findById(req.params.id)
-            .select('judge_config plan.judge_model plan.exec_hosts')
+            .select('judge_config plan.judge_model plan.exec_hosts trust_campaign_spec_id +trust_evidence_context')
             .lean();
         if (!batch) {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
+        }
+        if (benchmarkService.isTrustCampaignBatch(batch) || batch.trust_evidence_context) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_RESUME_FORBIDDEN',
+                error: 'Strict Benchmark Trust batches are append-only and cannot be resumed'
+            });
         }
         let resumedJudgeConfig = { ...(batch.judge_config || {}) };
         if (batch.judge_config?.target?.executionKind === 'harness') {
@@ -794,9 +809,18 @@ router.post('/batch/:id/rerun-invalid', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
 
-        const batch = await BenchmarkBatch.findById(req.params.id).lean();
+        const batch = await BenchmarkBatch.findById(req.params.id)
+            .select('+trust_evidence_context')
+            .lean();
         if (!batch) {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
+        }
+        if (benchmarkService.isTrustCampaignBatch(batch)) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_LEGACY_RERUN_FORBIDDEN',
+                error: 'Strict Benchmark Trust evidence cannot be cloned through the legacy rerun route'
+            });
         }
 
         const invalidRows = await BenchmarkResult.find({

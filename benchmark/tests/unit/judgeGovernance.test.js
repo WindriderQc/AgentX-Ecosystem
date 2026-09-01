@@ -21,7 +21,8 @@ jest.mock('../../models/JudgeGovernanceRun', () => {
 });
 
 jest.mock('../../models/BenchmarkBatch', () => ({
-    findOne: jest.fn()
+    findOne: jest.fn(),
+    findById: jest.fn()
 }));
 
 jest.mock('../../models/BenchmarkResult', () => ({
@@ -65,13 +66,18 @@ const feedbackLoop = require('../../src/services/judgeFeedbackLoop');
 const retro = require('../../src/services/benchmark/retroCalibration');
 const calibration = require('../../src/services/benchmark/calibrationRunner');
 const drift = require('../../src/services/benchmark/driftDetector');
+const mongoose = require('mongoose');
 
 const { runJudgeGovernanceLoop, getLatestGovernanceRun } =
     require('../../src/services/judgeGovernance');
 
 // --- helpers --------------------------------------------------------------
 
-function mockBatchFound(batchId = 'batch-xyz') {
+const BATCH_1 = '507f1f77bcf86cd799439011';
+const BATCH_2 = '507f1f77bcf86cd799439012';
+const BATCH_3 = '507f1f77bcf86cd799439013';
+
+function mockBatchFound(batchId = BATCH_1) {
     BenchmarkBatch.findOne.mockReturnValue({
         sort: jest.fn().mockReturnValue({
             select: jest.fn().mockReturnValue({
@@ -118,8 +124,31 @@ beforeEach(() => {
 });
 
 describe('judgeGovernance — orchestrator', () => {
+    it('rejects an explicit strict Trust batch before every legacy sub-step', async () => {
+        BenchmarkBatch.findById.mockReturnValue({
+            select: jest.fn().mockReturnValue({
+                lean: jest.fn().mockResolvedValue({
+                    _id: { toString: () => 'strict-batch' },
+                    trust_campaign_spec_id: 'a'.repeat(64)
+                })
+            })
+        });
+
+        await expect(runJudgeGovernanceLoop({
+            batchId: 'strict-batch',
+            runRetroCalibration: true,
+            persist: false
+        })).rejects.toMatchObject({
+            code: 'BENCHMARK_TRUST_GOVERNANCE_BATCH_FORBIDDEN',
+            statusCode: 409
+        });
+        expect(feedbackLoop.getJudgeFeedbackStats).not.toHaveBeenCalled();
+        expect(feedbackLoop.autoPromoteGroundTruth).not.toHaveBeenCalled();
+        expect(retro.runRetroCalibration).not.toHaveBeenCalled();
+    });
+
     it('runs all sub-steps in the documented order and records ok status', async () => {
-        mockBatchFound('b1');
+        mockBatchFound(BATCH_1);
         defaultFeedback();
         retro.runRetroCalibration.mockResolvedValue({
             samples: 10, results: { created: 4, skipped: 6, errors: 0, total: 10 }
@@ -154,6 +183,26 @@ describe('judgeGovernance — orchestrator', () => {
         expect(retro.runRetroCalibration).toHaveBeenCalledTimes(1);
         expect(calibration.runCalibrationBatch).toHaveBeenCalledTimes(2); // ref + challenger
         expect(drift.detectDrift).toHaveBeenCalledTimes(1);
+        expect(BenchmarkResult.aggregate).toHaveBeenNthCalledWith(1, expect.arrayContaining([
+            expect.objectContaining({
+                $match: expect.objectContaining({
+                    batch_id: new mongoose.Types.ObjectId(BATCH_1),
+                    $nor: expect.arrayContaining([
+                        { trust_candidate_id: { $ne: null } },
+                        { trust_prompt_id: { $ne: null } },
+                        { trust_evidence_sealed: true }
+                    ])
+                })
+            })
+        ]));
+        expect(BenchmarkResult.aggregate).toHaveBeenNthCalledWith(2, expect.arrayContaining([
+            expect.objectContaining({
+                $match: expect.objectContaining({
+                    batch_id: { $ne: new mongoose.Types.ObjectId(BATCH_1) },
+                    $nor: expect.any(Array)
+                })
+            })
+        ]));
 
         const names = out.sub_steps.map(s => s.name);
         expect(names).toEqual([
@@ -167,13 +216,14 @@ describe('judgeGovernance — orchestrator', () => {
         expect(out.headline.auto_promoted).toBe(3);
         expect(out.headline.retro_created).toBe(4);
         expect(out.headline.matrix_pass_rate).toBe(100);
+        expect(out.headline.drift_status).toBe('ok');
         expect(out.headline.drift_detected).toBe(false);
 
         expect(JudgeGovernanceRun.create).toHaveBeenCalledTimes(1);
     });
 
     it('captures a partial failure without erasing sibling outputs', async () => {
-        mockBatchFound('b2');
+        mockBatchFound(BATCH_2);
         defaultFeedback();
         // auto_promote fails; all other sub-steps continue.
         feedbackLoop.autoPromoteGroundTruth.mockRejectedValue(new Error('db down'));
@@ -221,13 +271,28 @@ describe('judgeGovernance — orchestrator', () => {
         const driftStep = out.sub_steps.find(s => s.name === 'drift_detection');
         expect(driftStep.status).toBe('skipped');
 
-        expect(out.status).toBe('ok');  // no failures, just skips
+        expect(out.status).toBe('partial');
+        expect(out.headline.drift_status).toBe('skipped');
+        expect(out.headline.drift_detected).toBeNull();
         expect(retro.runRetroCalibration).not.toHaveBeenCalled();
         expect(calibration.runCalibrationBatch).not.toHaveBeenCalled();
     });
 
+    it('keeps insufficient drift evidence unknown rather than reporting no drift', async () => {
+        mockBatchFound(BATCH_2);
+        defaultFeedback();
+        JudgeGroundTruth.getForValidation.mockResolvedValue([]);
+        mockDriftAggregates(null, null);
+
+        const out = await runJudgeGovernanceLoop({ persist: false });
+
+        expect(out.status).toBe('partial');
+        expect(out.headline.drift_status).toBe('insufficient_data');
+        expect(out.headline.drift_detected).toBeNull();
+    });
+
     it('persists the summary doc so a single read replaces five manual endpoints', async () => {
-        mockBatchFound('b3');
+        mockBatchFound(BATCH_3);
         defaultFeedback();
         mockDriftAggregates(null, null);
 

@@ -101,6 +101,7 @@ const HostPreferenceSchema = new mongoose.Schema({
   // here so we can restore it when the batch finishes.
   benchmarkClaim: {
     batchId: { type: String, default: null },
+    claimGeneration: { type: String, default: null },
     prevStatus: { type: String, default: null },
     claimedAt: { type: Date, default: null },
     estimatedDurationMs: { type: Number, default: null },

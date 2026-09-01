@@ -7,6 +7,7 @@
  * @see docs/SERVICE_CONTRACTS.md
  */
 
+const crypto = require('crypto');
 const logger = require('../../config/logger');
 const nodeFetch = require('node-fetch');
 const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
@@ -91,13 +92,19 @@ const CORE_OPERATION_SPECS = Object.freeze({
   [CORE_OPERATIONS.CLAIM_RELEASE]: operation(
     'DELETE',
     '^/api/nerve-center/host-preferences/[^/]+/benchmark-claim/[^/]+$',
-    { deadlineMs: PIN_RESTORE_TIMEOUT_MS, maxResponseBytes: 256 * 1024 }
+    { deadlineMs: PIN_RESTORE_TIMEOUT_MS, maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
   ),
   [CORE_OPERATIONS.CLAIMS_ACTIVE]: operation(
     'GET',
     '^/api/nerve-center/host-preferences/benchmark-claims/active$'
   ),
 });
+
+const claimGenerationByOwner = new Map();
+
+function claimOwnerKey(hostUrl, batchId) {
+  return `${hostUrl}\n${batchId}`;
+}
 
 function configuredCoreOrigin() {
   let parsed;
@@ -347,13 +354,21 @@ async function restoreDedication(hostUrlOrKey) {
  */
 async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = null, claimOptions = {}) {
   const path = `/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/benchmark-claim`;
+  const ownerKey = claimOwnerKey(hostUrl, batchId);
+  const claimGeneration = claimOptions.claimGeneration
+    || claimGenerationByOwner.get(ownerKey)
+    || crypto.randomUUID();
+  claimGenerationByOwner.set(ownerKey, claimGeneration);
   try {
     const data = await coreRequest(path, {
       method: 'POST',
       operationId: CORE_OPERATIONS.CLAIM_ACQUIRE,
-      body: JSON.stringify({ batchId, estimatedDurationMs, ...claimOptions })
+      body: JSON.stringify({ ...claimOptions, batchId, claimGeneration, estimatedDurationMs })
     });
-    return data.data || { claimed: true };
+    const result = data.data || { claimed: true, claimGeneration };
+    const confirmedGeneration = result.claimGeneration || result.pref?.benchmarkClaim?.claimGeneration;
+    if (confirmedGeneration) claimGenerationByOwner.set(ownerKey, confirmedGeneration);
+    return result;
   } catch (err) {
     // 409 Conflict = already claimed — surface without throwing
     if (err.status === 409) {
@@ -373,6 +388,7 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = n
       method: 'POST',
       operationId: CORE_OPERATIONS.CLAIM_HEARTBEAT,
       body: JSON.stringify({
+        claimGeneration: claimGenerationByOwner.get(claimOwnerKey(hostUrl, batchId)) || null,
         estimatedDurationMs,
         source: 'benchmark',
         owner: 'agentx-benchmark'
@@ -397,8 +413,13 @@ async function releaseBenchmarkClaim(hostUrl, batchId) {
     method: 'DELETE',
     operationId: CORE_OPERATIONS.CLAIM_RELEASE,
     timeout: PIN_RESTORE_TIMEOUT_MS,
+    body: JSON.stringify({
+      claimGeneration: claimGenerationByOwner.get(claimOwnerKey(hostUrl, batchId)) || null
+    })
   });
-  return data.data || { released: true };
+  const result = data.data || { released: true };
+  if (result.released === true) claimGenerationByOwner.delete(claimOwnerKey(hostUrl, batchId));
+  return result;
 }
 
 /**
@@ -411,7 +432,16 @@ async function getBenchmarkClaims() {
     method: 'GET',
     operationId: CORE_OPERATIONS.CLAIMS_ACTIVE,
   });
-  return data?.data?.claims || [];
+  const claims = data?.data?.claims || [];
+  for (const claim of claims) {
+    if (claim?.hostUrl && claim?.batchId && claim?.claimGeneration) {
+      claimGenerationByOwner.set(
+        claimOwnerKey(claim.hostUrl, claim.batchId),
+        claim.claimGeneration
+      );
+    }
+  }
+  return claims;
 }
 
 module.exports = {

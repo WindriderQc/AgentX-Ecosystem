@@ -14,6 +14,10 @@ jest.mock('../../models/BenchmarkResult', () => ({
     aggregate: jest.fn()
 }));
 
+jest.mock('../../models/BenchmarkBatch', () => ({
+    findById: jest.fn()
+}));
+
 jest.mock('../../models/JudgeGroundTruth', () => ({
     findOne: jest.fn(),
     create: jest.fn(),
@@ -25,10 +29,19 @@ jest.mock('../../src/services/qualityScorer', () => ({
     scoreResponse: jest.fn()
 }));
 
+jest.mock('../../src/services/benchmark/humanGroundTruthImport', () => ({
+    verifyStoredAttestedHumanGroundTruth: jest.fn()
+}));
+
 const BenchmarkResult = require('../../models/BenchmarkResult');
+const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const JudgeGroundTruth = require('../../models/JudgeGroundTruth');
 const { scoreResponse } = require('../../src/services/qualityScorer');
+const {
+    verifyStoredAttestedHumanGroundTruth
+} = require('../../src/services/benchmark/humanGroundTruthImport');
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -49,6 +62,11 @@ const FAKE_BATCH_ID = new mongoose.Types.ObjectId().toHexString();
 
 beforeEach(() => {
     jest.clearAllMocks();
+    BenchmarkBatch.findById.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+            lean: jest.fn().mockResolvedValue({ _id: FAKE_BATCH_ID })
+        })
+    });
 });
 
 describe('SCORE_BUCKETS', () => {
@@ -224,6 +242,26 @@ describe('runRetroCalibration', () => {
         expect(result.results.total).toBe(0);
         expect(result.message).toContain('No samples');
     });
+
+    test('rejects strict Trust evidence before sampling', async () => {
+        BenchmarkBatch.findById.mockReturnValue({
+            select: jest.fn().mockReturnValue({
+                lean: jest.fn().mockResolvedValue({
+                    _id: FAKE_BATCH_ID,
+                    trust_campaign_spec_id: 'a'.repeat(64)
+                })
+            })
+        });
+
+        await expect(runRetroCalibration(
+            FAKE_BATCH_ID,
+            { model: 'qwq:32b', host: 'http://localhost' }
+        )).rejects.toMatchObject({
+            code: 'BENCHMARK_TRUST_RETRO_CALIBRATION_FORBIDDEN',
+            statusCode: 409
+        });
+        expect(BenchmarkResult.aggregate).not.toHaveBeenCalled();
+    });
 });
 
 // 0129 — union loader tests
@@ -271,11 +309,16 @@ describe('loadHumanReviewGroundTruth (0129)', () => {
 });
 
 describe('loadQualifiedHumanGroundTruth', () => {
-    test('requires qualified provenance and the exact judge identity, excluding unbound legacy rows', async () => {
+    test('requires signed qualified provenance, exact judge identity, and current verification', async () => {
         const judgeIdentityFingerprint = 'a'.repeat(64);
-        const docs = [{ name: 'qualified-human-1', provenance_class: 'independent_human_score' }];
+        const docs = [{
+            name: 'qualified-human-1',
+            provenance_class: 'independent_human_score',
+            human_attestation_fingerprint: 'b'.repeat(64),
+            human_attestation: { signed: true }
+        }];
         const chain = {
-            limit: jest.fn().mockReturnThis(),
+            select: jest.fn().mockReturnThis(),
             sort: jest.fn().mockReturnThis(),
             lean: jest.fn().mockResolvedValue(docs)
         };
@@ -290,6 +333,8 @@ describe('loadQualifiedHumanGroundTruth', () => {
             active: true,
             category: 'math',
             judge_identity_fingerprint: judgeIdentityFingerprint,
+            human_attestation_fingerprint: { $type: 'string' },
+            human_attestation: { $ne: null },
             $or: [
                 {
                     provenance_class: 'independent_human_score',
@@ -301,7 +346,53 @@ describe('loadQualifiedHumanGroundTruth', () => {
                 }
             ]
         });
-        expect(out).toEqual(docs);
+        expect(chain.select).toHaveBeenCalledWith('+human_attestation');
+        expect(verifyStoredAttestedHumanGroundTruth).toHaveBeenCalledWith(docs[0]);
+        expect(out).toEqual([{ name: 'qualified-human-1', provenance_class: 'independent_human_score', human_attestation_fingerprint: 'b'.repeat(64) }]);
+    });
+
+    test('excludes revoked or expired signed rows and fails closed on tamper/config failure', async () => {
+        const docs = [
+            { name: 'valid', human_attestation: { id: 'valid' }, human_attestation_fingerprint: '1'.repeat(64) },
+            { name: 'expired', human_attestation: { id: 'expired' }, human_attestation_fingerprint: '2'.repeat(64) }
+        ];
+        JudgeGroundTruth.find.mockReturnValue({
+            select: jest.fn().mockReturnThis(),
+            sort: jest.fn().mockReturnThis(),
+            lean: jest.fn().mockResolvedValue(docs)
+        });
+        verifyStoredAttestedHumanGroundTruth
+            .mockReturnValueOnce({ attestationId: '1'.repeat(64) })
+            .mockImplementationOnce(() => {
+                throw Object.assign(new Error('expired'), { code: 'HUMAN_EVIDENCE_ATTESTATION_EXPIRED' });
+            });
+        await expect(loadQualifiedHumanGroundTruth()).resolves.toEqual([
+            { name: 'valid', human_attestation_fingerprint: '1'.repeat(64) }
+        ]);
+
+        verifyStoredAttestedHumanGroundTruth.mockReset().mockImplementation(() => {
+            throw Object.assign(new Error('tampered'), { code: 'HUMAN_EVIDENCE_STORED_ROW_MISMATCH' });
+        });
+        await expect(loadQualifiedHumanGroundTruth()).rejects.toMatchObject({
+            code: 'HUMAN_EVIDENCE_STORED_ROW_MISMATCH'
+        });
+    });
+
+    test('fails closed instead of double-weighting two valid attestations for one source result', async () => {
+        const docs = [
+            { name: 'first', source_result_id: 'same-source', human_attestation: {}, human_attestation_fingerprint: '1'.repeat(64) },
+            { name: 'second', source_result_id: 'same-source', human_attestation: {}, human_attestation_fingerprint: '2'.repeat(64) }
+        ];
+        JudgeGroundTruth.find.mockReturnValue({
+            select: jest.fn().mockReturnThis(),
+            sort: jest.fn().mockReturnThis(),
+            lean: jest.fn().mockResolvedValue(docs)
+        });
+        verifyStoredAttestedHumanGroundTruth.mockReset().mockReturnValue({});
+        await expect(loadQualifiedHumanGroundTruth()).rejects.toMatchObject({
+            code: 'HUMAN_EVIDENCE_DUPLICATE_SOURCE',
+            statusCode: 409
+        });
     });
 });
 
@@ -368,10 +459,41 @@ describe('loadUnionedGoldset (0129)', () => {
 });
 
 describe('getCoverageStats', () => {
+    function qualifiedRows(category, difficulty, count, prefix = `${category}-${difficulty}`) {
+        return Array.from({ length: count }, (_, index) => ({
+            name: `${prefix}-${index}`,
+            category,
+            difficulty,
+            source_result_id: `${prefix}-source-${index}`,
+            provenance_class: 'independent_human_score',
+            review_protocol: 'blind_independent',
+            human_attestation_fingerprint: String(index + 1).padStart(64, '0'),
+            human_attestation: { signed: true }
+        }));
+    }
+
+    function mockQualifiedRows(rows, verifier = async row => ({
+        source: {
+            promptFingerprint: row.prompt_authority_fingerprint
+                || crypto.createHash('sha256').update(String(row.source_result_id)).digest('hex')
+        }
+    })) {
+        JudgeGroundTruth.find.mockReturnValue({
+            select: jest.fn().mockReturnThis(),
+            sort: jest.fn().mockReturnThis(),
+            lean: jest.fn().mockResolvedValue(rows)
+        });
+        verifyStoredAttestedHumanGroundTruth.mockImplementation(verifier);
+    }
+
     test('returns coverage matrix with qualified-human totals', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'coding', difficulty: 1 }, count: 3, retro_count: 1, seed_count: 2, qualified_human_count: 2 },
-            { _id: { category: 'coding', difficulty: 2 }, count: 6, retro_count: 4, seed_count: 2, qualified_human_count: 2 }
+            { _id: { category: 'coding', difficulty: 1 }, count: 3, retro_count: 1, seed_count: 2 },
+            { _id: { category: 'coding', difficulty: 2 }, count: 6, retro_count: 4, seed_count: 2 }
+        ]);
+        mockQualifiedRows([
+            ...qualifiedRows('coding', 1, 2, 'coding-one'),
+            ...qualifiedRows('coding', 2, 2, 'coding-two')
         ]);
 
         const coverage = await getCoverageStats();
@@ -397,8 +519,9 @@ describe('getCoverageStats', () => {
 
     test('retro-only inflation does not satisfy coverage target', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'coding', difficulty: 1 }, count: 6, retro_count: 6, seed_count: 0, qualified_human_count: 0 }
+            { _id: { category: 'coding', difficulty: 1 }, count: 6, retro_count: 6, seed_count: 0 }
         ]);
+        mockQualifiedRows([]);
 
         const coverage = await getCoverageStats();
 
@@ -417,8 +540,9 @@ describe('getCoverageStats', () => {
 
     test('mixed qualified and retro rows count only qualified humans toward target', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'math', difficulty: 3 }, count: 6, retro_count: 3, seed_count: 3, qualified_human_count: 3 }
+            { _id: { category: 'math', difficulty: 3 }, count: 6, retro_count: 3, seed_count: 3 }
         ]);
+        mockQualifiedRows(qualifiedRows('math', 3, 3));
 
         const coverage = await getCoverageStats();
 
@@ -433,8 +557,9 @@ describe('getCoverageStats', () => {
 
     test('qualified-human cell that legitimately meets target', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'coding', difficulty: 1 }, count: 5, retro_count: 0, seed_count: 5, qualified_human_count: 5 }
+            { _id: { category: 'coding', difficulty: 1 }, count: 5, retro_count: 0, seed_count: 5 }
         ]);
+        mockQualifiedRows(qualifiedRows('coding', 1, 5));
 
         const coverage = await getCoverageStats();
 
@@ -450,11 +575,50 @@ describe('getCoverageStats', () => {
         expect(coverage.by_category).toEqual({ coding: 5 });
     });
 
+    test('counts repeated candidate results for one prompt as one independent prompt authority', async () => {
+        JudgeGroundTruth.aggregate.mockResolvedValue([
+            { _id: { category: 'coding', difficulty: 1 }, count: 5, retro_count: 0, seed_count: 5 }
+        ]);
+        const repeated = qualifiedRows('coding', 1, 5, 'same-prompt').map(row => ({
+            ...row,
+            prompt_authority_fingerprint: 'a'.repeat(64)
+        }));
+        mockQualifiedRows(repeated);
+
+        const coverage = await getCoverageStats();
+
+        expect(coverage.cells[0]).toMatchObject({
+            count: 1,
+            human: 1,
+            meets_target: false
+        });
+        expect(coverage.total_entries).toBe(1);
+        expect(coverage.cells_meeting_target).toBe(0);
+    });
+
+    test('fails closed when one prompt authority is assigned to multiple cells', async () => {
+        JudgeGroundTruth.aggregate.mockResolvedValue([
+            { _id: { category: 'coding', difficulty: 1 }, count: 1, retro_count: 0, seed_count: 1 },
+            { _id: { category: 'math', difficulty: 2 }, count: 1, retro_count: 0, seed_count: 1 }
+        ]);
+        const sharedPrompt = 'b'.repeat(64);
+        mockQualifiedRows([
+            { ...qualifiedRows('coding', 1, 1, 'coding-cell')[0], prompt_authority_fingerprint: sharedPrompt },
+            { ...qualifiedRows('math', 2, 1, 'math-cell')[0], prompt_authority_fingerprint: sharedPrompt }
+        ]);
+
+        await expect(getCoverageStats()).rejects.toMatchObject({
+            code: 'HUMAN_EVIDENCE_PROMPT_CELL_CONFLICT',
+            statusCode: 409
+        });
+    });
+
     test('separates human-derived from retro-calibration coverage', async () => {
         JudgeGroundTruth.aggregate.mockResolvedValue([
-            { _id: { category: 'coding', difficulty: 1 }, count: 8, retro_count: 2, seed_count: 3, qualified_human_count: 6 },
-            { _id: { category: 'math', difficulty: 3 }, count: 5, retro_count: 5, seed_count: 0, qualified_human_count: 0 }
+            { _id: { category: 'coding', difficulty: 1 }, count: 8, retro_count: 2, seed_count: 3 },
+            { _id: { category: 'math', difficulty: 3 }, count: 5, retro_count: 5, seed_count: 0 }
         ]);
+        mockQualifiedRows(qualifiedRows('coding', 1, 6));
 
         const coverage = await getCoverageStats();
 
@@ -478,15 +642,56 @@ describe('getCoverageStats', () => {
         expect(mathCell.meets_target_with_retro).toBe(true);
     });
 
-    test('coverage aggregation encodes the same provenance/protocol pairs as the qualified loader', async () => {
-        JudgeGroundTruth.aggregate.mockResolvedValue([]);
-        await getCoverageStats();
-        const pipeline = JSON.stringify(JudgeGroundTruth.aggregate.mock.calls[0][0]);
-        expect(pipeline).toContain('independent_human_score');
-        expect(pipeline).toContain('blind_independent');
-        expect(pipeline).toContain('blind_double_review');
-        expect(pipeline).toContain('adjudicated_human_score');
-        expect(pipeline).toContain('adjudicated');
-        expect(pipeline).not.toContain('judge_visible_single_review');
+    test('expired and revoked attestations remain visible only in all_count', async () => {
+        const rows = qualifiedRows('reasoning', 4, 6, 'adversarial');
+        rows[1].name = 'expired';
+        rows[2].name = 'revoked';
+        rows[3].name = 'expired-two';
+        rows[4].name = 'revoked-two';
+        rows[5].name = 'expired-three';
+        JudgeGroundTruth.aggregate.mockResolvedValue([
+            { _id: { category: 'reasoning', difficulty: 4 }, count: 6, retro_count: 0, seed_count: 0 }
+        ]);
+        mockQualifiedRows(rows, async row => {
+            if (row.name.startsWith('expired')) {
+                throw Object.assign(new Error('expired'), { code: 'HUMAN_EVIDENCE_ATTESTATION_EXPIRED' });
+            }
+            if (row.name.startsWith('revoked')) {
+                throw Object.assign(new Error('revoked'), { code: 'HUMAN_EVIDENCE_ATTESTATION_REVOKED' });
+            }
+            return {
+                source: {
+                    promptFingerprint: crypto.createHash('sha256')
+                        .update(String(row.source_result_id))
+                        .digest('hex')
+                }
+            };
+        });
+
+        const coverage = await getCoverageStats();
+
+        expect(verifyStoredAttestedHumanGroundTruth).toHaveBeenCalledTimes(6);
+        expect(coverage.cells[0]).toMatchObject({
+            count: 1,
+            human: 1,
+            all_count: 6,
+            meets_target: false
+        });
+        expect(coverage.total_entries).toBe(1);
+        expect(coverage.total_all_entries).toBe(6);
+        expect(coverage.cells_meeting_target).toBe(0);
+    });
+
+    test('fails closed when a stored attestation is falsified', async () => {
+        JudgeGroundTruth.aggregate.mockResolvedValue([
+            { _id: { category: 'reasoning', difficulty: 4 }, count: 5, retro_count: 0, seed_count: 0 }
+        ]);
+        mockQualifiedRows(qualifiedRows('reasoning', 4, 5, 'tampered'), async () => {
+            throw Object.assign(new Error('tampered'), { code: 'HUMAN_EVIDENCE_STORED_ROW_MISMATCH' });
+        });
+
+        await expect(getCoverageStats()).rejects.toMatchObject({
+            code: 'HUMAN_EVIDENCE_STORED_ROW_MISMATCH'
+        });
     });
 });

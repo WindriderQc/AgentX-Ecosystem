@@ -1320,12 +1320,20 @@ describe('Nerve Center API Routes', () => {
 
   describe('POST /host-preferences/:hostUrl/benchmark-claim', () => {
     const HOST_URL = 'http://primary:11434';
+    const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
     const path = `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim`;
 
     it('returns 400 when batchId missing', async () => {
       const res = await request(app).post(path).send({}).expect(400);
       expect(res.body.status).toBe('error');
       expect(res.body.message).toMatch(/batchId/);
+    });
+
+    it('returns 400 when claimGeneration is missing', async () => {
+      const res = await request(app).post(path).send({ batchId: 'b1' }).expect(400);
+      expect(res.body.status).toBe('error');
+      expect(res.body.message).toMatch(/claimGeneration/);
+      expect(hostPrefService.claimBenchmark).not.toHaveBeenCalled();
     });
 
     it('returns 200 with claim data on success', async () => {
@@ -1336,12 +1344,17 @@ describe('Nerve Center API Routes', () => {
 
       const res = await request(app)
         .post(path)
-        .send({ batchId: 'b1', estimatedDurationMs: 60000 })
+        .send({ batchId: 'b1', claimGeneration: CLAIM_GENERATION, estimatedDurationMs: 60000 })
         .expect(200);
 
       expect(res.body.status).toBe('success');
       expect(res.body.data.claimed).toBe(true);
-      expect(hostPrefService.claimBenchmark).toHaveBeenCalledWith(HOST_URL, 'b1', 60000);
+      expect(hostPrefService.claimBenchmark).toHaveBeenCalledWith(
+        HOST_URL,
+        'b1',
+        60000,
+        { claimGeneration: CLAIM_GENERATION }
+      );
     });
 
     it('passes optional manual claim metadata to the service', async () => {
@@ -1358,6 +1371,7 @@ describe('Nerve Center API Routes', () => {
         .post(path)
         .send({
           batchId: 'manual-b1',
+          claimGeneration: CLAIM_GENERATION,
           estimatedDurationMs: 60000,
           source: 'manual',
           owner: 'operator',
@@ -1372,6 +1386,7 @@ describe('Nerve Center API Routes', () => {
         'manual-b1',
         60000,
         {
+          claimGeneration: CLAIM_GENERATION,
           source: 'manual',
           owner: 'operator',
           note: 'scout',
@@ -1388,7 +1403,7 @@ describe('Nerve Center API Routes', () => {
 
       const res = await request(app)
         .post(path)
-        .send({ batchId: 'b2' })
+        .send({ batchId: 'b2', claimGeneration: CLAIM_GENERATION })
         .expect(409);
 
       expect(res.body.status).toBe('error');
@@ -1400,7 +1415,7 @@ describe('Nerve Center API Routes', () => {
 
       const res = await request(app)
         .post(path)
-        .send({ batchId: 'b3' })
+        .send({ batchId: 'b3', claimGeneration: CLAIM_GENERATION })
         .expect(500);
 
       expect(res.body.status).toBe('error');
@@ -1410,6 +1425,7 @@ describe('Nerve Center API Routes', () => {
 
   describe('POST /host-preferences/:hostUrl/benchmark-claim/:batchId/heartbeat', () => {
     const HOST_URL = 'http://primary:11434';
+    const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
 
     it('refreshes an active claim heartbeat', async () => {
       hostPrefService.heartbeatBenchmarkClaim.mockResolvedValue({
@@ -1419,7 +1435,7 @@ describe('Nerve Center API Routes', () => {
 
       const res = await request(app)
         .post(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`)
-        .send({ owner: 'operator', heartbeatTtlMs: 30000 })
+        .send({ claimGeneration: CLAIM_GENERATION, owner: 'operator', heartbeatTtlMs: 30000 })
         .expect(200);
 
       expect(res.body.status).toBe('success');
@@ -1427,7 +1443,7 @@ describe('Nerve Center API Routes', () => {
       expect(hostPrefService.heartbeatBenchmarkClaim).toHaveBeenCalledWith(
         HOST_URL,
         'b1',
-        expect.objectContaining({ owner: 'operator', heartbeatTtlMs: 30000 })
+        expect.objectContaining({ claimGeneration: CLAIM_GENERATION, owner: 'operator', heartbeatTtlMs: 30000 })
       );
     });
 
@@ -1439,7 +1455,7 @@ describe('Nerve Center API Routes', () => {
 
       const res = await request(app)
         .post(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`)
-        .send({})
+        .send({ claimGeneration: CLAIM_GENERATION })
         .expect(409);
 
       expect(res.body.status).toBe('error');
@@ -1449,6 +1465,7 @@ describe('Nerve Center API Routes', () => {
 
   describe('DELETE /host-preferences/:hostUrl/benchmark-claim/:batchId', () => {
     const HOST_URL = 'http://primary:11434';
+    const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
 
     it('releases claim and returns released=true', async () => {
       hostPrefService.releaseBenchmarkClaim.mockResolvedValue({
@@ -1458,11 +1475,16 @@ describe('Nerve Center API Routes', () => {
 
       const res = await request(app)
         .delete(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1`)
+        .send({ claimGeneration: CLAIM_GENERATION })
         .expect(200);
 
       expect(res.body.status).toBe('success');
       expect(res.body.data.released).toBe(true);
-      expect(hostPrefService.releaseBenchmarkClaim).toHaveBeenCalledWith(HOST_URL, 'b1');
+      expect(hostPrefService.releaseBenchmarkClaim).toHaveBeenCalledWith(
+        HOST_URL,
+        'b1',
+        { claimGeneration: CLAIM_GENERATION }
+      );
     });
 
     it('returns 200 with released=false when claim mismatched (idempotent)', async () => {
@@ -1473,6 +1495,7 @@ describe('Nerve Center API Routes', () => {
 
       const res = await request(app)
         .delete(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/bX`)
+        .send({ claimGeneration: CLAIM_GENERATION })
         .expect(200);
 
       expect(res.body.data.released).toBe(false);

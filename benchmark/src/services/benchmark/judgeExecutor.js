@@ -7,6 +7,7 @@ const { classifyBenchmarkError } = require('./errorClassifier');
 const { multiJudgeScore, shouldEscalateToMultiJudge, AGREEMENT_REVIEW_THRESHOLD } = require('./multiJudge');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
 const { throwIfJudgeCancelled } = require('../scoring/judgeCall');
+const { buildTrustJudgeCellId } = require('./harnessBrokerClient');
 
 function buildPromptData(result, originalPrompt) {
     return {
@@ -162,6 +163,9 @@ async function applyScoresToResult(resultId, scores, resultData, cancellationCon
                 judge_raw_response: scores.judge_raw_response,
                 judge_target: scores.judge_target || null,
                 judge_receipt: scores.judge_receipt || null,
+                ...(scores.trust_judge_receipt
+                    ? { trust_judge_receipt: scores.trust_judge_receipt }
+                    : {}),
                 judge_provider_usage: scores.judge_provider_usage || null,
                 judge_provider_cost: scores.judge_provider_cost || null,
                 judge_hardware_snapshot: scores.judge_hardware_snapshot || null,
@@ -220,14 +224,27 @@ async function judgeResult(resultId, judgeConfig = {}, batchHardwareSnapshot = n
     if (!result.response) {
         throw new Error('No response to judge');
     }
+    if ((result.trust_candidate_id || result.trust_prompt_id)
+        && judgeConfig.require_trust_worker_receipt !== true) {
+        const error = new Error('Strict Benchmark Trust evidence cannot be rejudged in place');
+        error.code = 'BENCHMARK_TRUST_RESULT_MUTATION_FORBIDDEN';
+        error.statusCode = 409;
+        throw error;
+    }
 
     const originalPrompt = await findOriginalPrompt(result);
     throwIfJudgeCancelled(judgeConfig);
     const promptData = buildPromptData(result, originalPrompt);
     const resultData = buildResultScoreContext(result);
-    const mergedConfig = resolveJudgeConfig(judgeConfig, {
+    let mergedConfig = resolveJudgeConfig(judgeConfig, {
         resultDefaults: { judge_model: result.judge_model, judge_host: result.judge_host }
     });
+    if (mergedConfig.require_trust_worker_receipt === true) {
+        mergedConfig = {
+            ...mergedConfig,
+            cell_id: buildTrustJudgeCellId(result)
+        };
+    }
 
     const baseScores = await scoreResponse({
         response: result.response,
@@ -303,5 +320,6 @@ async function judgeResult(resultId, judgeConfig = {}, batchHardwareSnapshot = n
 
 module.exports = {
     applyScoresToResult,
+    buildPromptData,
     judgeResult
 };

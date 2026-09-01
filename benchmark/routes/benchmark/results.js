@@ -71,6 +71,16 @@ function scoreEvidenceKind(result = {}) {
     return 'unscored';
 }
 
+function rejectStrictTrustResultMutation(res, result) {
+    if (!result?.trust_candidate_id && !result?.trust_prompt_id) return false;
+    res.status(409).json({
+        status: 'error',
+        code: 'BENCHMARK_TRUST_RESULT_MUTATION_FORBIDDEN',
+        error: 'Strict Benchmark Trust evidence cannot be reviewed, rejudged, or promoted in place'
+    });
+    return true;
+}
+
 /**
  * GET /api/benchmark/results
  * Get all test results (paginated)
@@ -418,6 +428,7 @@ router.post('/results/:id/human-review', async (req, res) => {
                 error: 'Result not found'
             });
         }
+        if (rejectStrictTrustResultMutation(res, result)) return;
 
         const updateFields = {
             human_reviewed_at: new Date(),
@@ -723,6 +734,7 @@ router.post('/results/:id/promote-ground-truth', async (req, res) => {
         if (!result) {
             return res.status(404).json({ status: 'error', error: 'Result not found' });
         }
+        if (rejectStrictTrustResultMutation(res, result)) return;
 
         const name = `promoted-${id}-${Date.now()}`;
 

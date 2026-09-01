@@ -25,7 +25,16 @@ jest.mock('../../src/services/benchmarkServiceClient', () => ({
 
 const svc = require('../../src/services/hostPreferenceService');
 
-function claim({ hostUrl, batchId, ageMinutes, estimatedMinutes = null, source = null, heartbeatAgeMinutes = null, heartbeatTtlMinutes = null }) {
+function claim({
+  hostUrl,
+  batchId,
+  ageMinutes,
+  estimatedMinutes = null,
+  source = null,
+  heartbeatAgeMinutes = null,
+  heartbeatTtlMinutes = null,
+  claimGeneration = '11111111-1111-4111-8111-111111111111'
+}) {
   const claimedAt = new Date(Date.now() - ageMinutes * 60 * 1000);
   const heartbeatAt = heartbeatAgeMinutes == null
     ? null
@@ -35,6 +44,7 @@ function claim({ hostUrl, batchId, ageMinutes, estimatedMinutes = null, source =
     status: 'benchmarking',
     benchmarkClaim: {
       batchId,
+      claimGeneration,
       prevStatus: 'ready',
       claimedAt,
       estimatedDurationMs: estimatedMinutes != null ? estimatedMinutes * 60 * 1000 : null,
@@ -49,7 +59,8 @@ function mockFindReturning(docs) {
   mockFind.mockReturnValueOnce({ lean: () => Promise.resolve(docs) });
 }
 
-// The reaper calls releaseBenchmarkClaim(hostUrl, batchId) for each stale
+// The reaper calls releaseBenchmarkClaim(hostUrl, batchId, { claimGeneration })
+// for each stale
 // doc. releaseBenchmarkClaim reads the current HostPreference via findOne
 // and only releases if batchId matches — so the mock must return a claim
 // whose batchId matches whatever the reaper passes in.
@@ -95,6 +106,70 @@ describe('reapStaleBenchmarkClaims', () => {
     expect(r.reaped[0].hostUrl).toBe('h-stale');
     expect(r.reaped[0].batchId).toBe('b-stale');
     expect(r.reaped[0].released).toBe(true);
+    expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'benchmarkClaim.batchId': 'b-stale',
+        'benchmarkClaim.claimGeneration': '11111111-1111-4111-8111-111111111111'
+      }),
+      expect.any(Object),
+      expect.any(Object)
+    );
+  });
+
+  it('releases a stale legacy claim without a generation through an exact CAS', async () => {
+    const claims = [claim({
+      hostUrl: 'h-legacy',
+      batchId: 'b-legacy',
+      ageMinutes: 150,
+      claimGeneration: null
+    })];
+    mockFindReturning(claims);
+    mockReleaseHappyPath(claims);
+
+    const r = await svc.reapStaleBenchmarkClaims({ hardCapMs: 60 * 60 * 1000 });
+
+    expect(r.reaped).toHaveLength(1);
+    expect(r.reaped[0]).toEqual(expect.objectContaining({
+      hostUrl: 'h-legacy',
+      released: true,
+      reason: null
+    }));
+    expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'benchmarkClaim.batchId': 'b-legacy',
+        'benchmarkClaim.claimGeneration': null,
+        'benchmarkClaim.claimedAt': claims[0].benchmarkClaim.claimedAt
+      }),
+      expect.any(Object),
+      expect.any(Object)
+    );
+  });
+
+  it('does not release a fresh generationless replacement created after the reaper scan', async () => {
+    const stale = claim({
+      hostUrl: 'h-legacy-race',
+      batchId: 'b-legacy-race',
+      ageMinutes: 150,
+      claimGeneration: null
+    });
+    const replacement = claim({
+      hostUrl: 'h-legacy-race',
+      batchId: 'b-legacy-race',
+      ageMinutes: 1,
+      claimGeneration: null
+    });
+    mockFindReturning([stale]);
+    mockReleaseHappyPath([replacement]);
+
+    const r = await svc.reapStaleBenchmarkClaims({ hardCapMs: 60 * 60 * 1000 });
+
+    expect(r.reaped).toHaveLength(1);
+    expect(r.reaped[0]).toEqual(expect.objectContaining({
+      hostUrl: 'h-legacy-race',
+      released: false,
+      reason: 'legacy claim changed since reaper scan'
+    }));
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('reaps a claim past estimatedDuration × graceFactor', async () => {

@@ -195,6 +195,7 @@
     "benchmark/routes/benchmark/diagnostics.js#POST /judge/validate/ground-truth",
     "benchmark/routes/benchmark/drift.js#POST /drift/baseline",
     "benchmark/routes/benchmark/drift.js#POST /drift/compute",
+    "benchmark/routes/benchmark/humanEvidence.js#POST /judge/ground-truth/import-attested",
     "benchmark/routes/benchmark/judgeDefaults.js#PUT /judge-defaults",
     "benchmark/routes/benchmark/results.js#DELETE /results",
     "benchmark/routes/benchmark/results.js#DELETE /results/failed",
@@ -210,6 +211,7 @@
     "benchmark/routes/benchmark/templates.js#POST /templates",
     "benchmark/routes/benchmark/templates.js#POST /templates/:id/use",
     "benchmark/routes/benchmark/templates.js#PUT /templates/:id",
+    "benchmark/routes/benchmark/trustBatches.js#POST /trust-batches/:specId/start",
     "benchmark/routes/profiler/hosts.js#POST /:hostId/release",
     "benchmark/routes/profiler/hosts.js#POST /:hostId/status/refresh",
     "benchmark/routes/profiler/hosts.js#POST /:hostId/sync",
@@ -449,6 +451,12 @@
       "enforcementStatus": "enforced",
       "note": "Template deletion requires DELETE TEMPLATE <id>, bound to the selected template.",
       "evidence": ["benchmark-template-typed-confirmation"]
+    },
+    "benchmark/routes/benchmark/trustBatches.js#POST /trust-batches/:specId/start": {
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Strict Trust launch revalidates the configured Product operator token at the route before consuming the immutable CampaignSpec.",
+      "evidence": ["benchmark-trust-operator-launch-validator"]
     },
     "core/routes/alerts-ops.js#DELETE /rules/:ruleId": {
       "typedConfirmation": "enforced",
@@ -978,6 +986,15 @@
       "contains": [
         "const expectedConfirmation = `DELETE TEMPLATE ${req.params.id}`;",
         "if (!requireExactConfirmation(req, res, expectedConfirmation)) return;"
+      ]
+    },
+    "benchmark-trust-operator-launch-validator": {
+      "file": "benchmark/routes/benchmark/trustBatches.js",
+      "contains": [
+        "function operatorLaunchAuthorized(req, env = process.env)",
+        "return safeTokenMatch(env.AGENTX_OPERATOR_TOKEN || env.AGENTX_ADMIN_TOKEN, presented);",
+        "if (!operatorLaunchAuthorized(req))",
+        "code: 'BENCHMARK_TRUST_OPERATOR_AUTH_REQUIRED'"
       ]
     },
     "core-codex-usage-validator": {

@@ -3,7 +3,12 @@
 const crypto = require('crypto');
 const { stableSerialize } = require('./artifactIdentity');
 
-const BENCHMARK_TRUST_RECEIPT_SCHEMA = 'agentx.benchmark-trust-receipt/v1';
+const BENCHMARK_TRUST_RECEIPT_SCHEMA_V1 = 'agentx.benchmark-trust-receipt/v1';
+const BENCHMARK_TRUST_RECEIPT_SCHEMA = 'agentx.benchmark-trust-receipt/v2';
+const SUPPORTED_BENCHMARK_TRUST_RECEIPT_SCHEMAS = Object.freeze([
+  BENCHMARK_TRUST_RECEIPT_SCHEMA_V1,
+  BENCHMARK_TRUST_RECEIPT_SCHEMA,
+]);
 const BENCHMARK_TRUST_RATIFICATION_SCHEMA = 'agentx.benchmark-trust-ratification/v1';
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -20,14 +25,32 @@ const DECISION_OUTCOMES = Object.freeze(['winner', 'equivalence_set', 'inconclus
 const FRESHNESS_STATUSES = Object.freeze(['fresh', 'stale', 'expired']);
 const RATIFICATION_STATUSES = Object.freeze(['unratified', 'ratified', 'revoked']);
 const JUDGE_QUALIFICATION_STATUSES = Object.freeze(['qualified', 'unqualified', 'expired']);
-// v1 has one integrated estimand and one family-wise correction. Expanding
+// v2 has one integrated estimand and one family-wise correction. Expanding
 // these independently would allow a caller to mint a structurally valid
 // winner that the Product statistics engine never computed.
-const STATISTICAL_METHODS = Object.freeze(['paired-prompt-t-v1']);
-const MULTIPLICITY_CORRECTIONS = Object.freeze(['bonferroni']);
+const LEGACY_STATISTICAL_METHODS = Object.freeze([
+  'paired-prompt-t-v1',
+  'paired-bootstrap-v1',
+  'paired-permutation-v1',
+]);
+const CURRENT_STATISTICAL_METHODS = Object.freeze(['paired-prompt-hoeffding-v1']);
+const STATISTICAL_METHODS = Object.freeze([
+  ...LEGACY_STATISTICAL_METHODS,
+  ...CURRENT_STATISTICAL_METHODS,
+]);
+const LEGACY_MULTIPLICITY_CORRECTIONS = Object.freeze([
+  'bonferroni',
+  'holm-bonferroni',
+  'none',
+]);
+const CURRENT_MULTIPLICITY_CORRECTIONS = Object.freeze(['bonferroni']);
+const MULTIPLICITY_CORRECTIONS = Object.freeze([
+  ...LEGACY_MULTIPLICITY_CORRECTIONS,
+]);
 const MINIMUM_INDEPENDENT_PROMPT_COUNT = 3;
 const MINIMUM_TARGET_POWER_BASIS_POINTS = 8000;
 const MAXIMUM_TARGET_POWER_BASIS_POINTS = 9999;
+const MAXIMUM_SCORE_MICROS = 10_000_000;
 
 const RECEIPT_KEYS = Object.freeze([
   'schema',
@@ -94,11 +117,53 @@ const STATISTICS_KEYS = Object.freeze([
   'winnerCandidateId',
   'equivalenceCandidateIds',
 ]);
-const PREREGISTRATION_KEYS = Object.freeze([
+const PREREGISTRATION_KEYS_V1_MINIMAL = Object.freeze([
+  'repeatCount',
+  'analysisPlanFingerprint',
+]);
+const PREREGISTRATION_KEYS_V1_POWER = Object.freeze([
   'repeatCount',
   'requiredIndependentPromptCount',
   'targetPowerBasisPoints',
   'assumedMaxPairedStdDevMicros',
+  'powerAnalysisFingerprint',
+  'analysisPlanFingerprint',
+]);
+const PREREGISTRATION_KEYS_V1_VARIANCE = Object.freeze([
+  'repeatCount',
+  'requiredIndependentPromptCount',
+  'targetPowerBasisPoints',
+  'assumedMaxPairedStdDevMicros',
+  'varianceBasisFingerprint',
+  'variancePilotAttestationId',
+  'powerAnalysisFingerprint',
+  'analysisPlanFingerprint',
+]);
+const PREREGISTRATION_KEYS_V1_ALTERNATIVE = Object.freeze([
+  'repeatCount',
+  'poweredAlternativeEffectMicros',
+  'requiredIndependentPromptCount',
+  'targetPowerBasisPoints',
+  'assumedMaxPairedStdDevMicros',
+  'varianceBasisFingerprint',
+  'variancePilotAttestationId',
+  'powerAnalysisFingerprint',
+  'analysisPlanFingerprint',
+]);
+const PREREGISTRATION_KEYSETS_V1 = Object.freeze([
+  PREREGISTRATION_KEYS_V1_MINIMAL,
+  PREREGISTRATION_KEYS_V1_POWER,
+  PREREGISTRATION_KEYS_V1_VARIANCE,
+  PREREGISTRATION_KEYS_V1_ALTERNATIVE,
+]);
+const PREREGISTRATION_KEYS = Object.freeze([
+  'repeatCount',
+  'poweredAlternativeEffectMicros',
+  'requiredIndependentPromptCount',
+  'targetPowerBasisPoints',
+  'assumedMaxPairedStdDevMicros',
+  'varianceBasisFingerprint',
+  'variancePilotAttestationId',
   'powerAnalysisFingerprint',
   'analysisPlanFingerprint',
 ]);
@@ -249,8 +314,8 @@ function validateBenchmarkTrustReceipt(receipt) {
   const errors = [];
   if (!hasExactKeys(receipt, RECEIPT_KEYS, 'receipt', errors)) return { valid: false, errors };
 
-  if (receipt.schema !== BENCHMARK_TRUST_RECEIPT_SCHEMA) {
-    errors.push(`receipt.schema must be ${BENCHMARK_TRUST_RECEIPT_SCHEMA}`);
+  if (!SUPPORTED_BENCHMARK_TRUST_RECEIPT_SCHEMAS.includes(receipt.schema)) {
+    errors.push(`receipt.schema must be one of ${SUPPORTED_BENCHMARK_TRUST_RECEIPT_SCHEMAS.join(', ')}`);
   }
   if (!isFingerprint(receipt.receiptId)) {
     errors.push('receipt.receiptId must be a lowercase SHA-256 fingerprint');
@@ -398,8 +463,11 @@ function validateBenchmarkTrustReceipt(receipt) {
 
   if (hasExactKeys(receipt.statistics, STATISTICS_KEYS, 'receipt.statistics', errors)) {
     if (receipt.statistics.unit !== 'prompt') errors.push('receipt.statistics.unit must be prompt');
-    if (!STATISTICAL_METHODS.includes(receipt.statistics.method)) {
-      errors.push(`receipt.statistics.method must be one of ${STATISTICAL_METHODS.join(', ')}`);
+    const statisticalMethods = receipt.schema === BENCHMARK_TRUST_RECEIPT_SCHEMA_V1
+      ? LEGACY_STATISTICAL_METHODS
+      : CURRENT_STATISTICAL_METHODS;
+    if (!statisticalMethods.includes(receipt.statistics.method)) {
+      errors.push(`receipt.statistics.method must be one of ${statisticalMethods.join(', ')} for ${receipt.schema}`);
     }
     if (
       !Number.isSafeInteger(receipt.statistics.alphaBasisPoints)
@@ -408,40 +476,80 @@ function validateBenchmarkTrustReceipt(receipt) {
     ) {
       errors.push('receipt.statistics.alphaBasisPoints must be an integer from 1 through 5000');
     }
-    if (!MULTIPLICITY_CORRECTIONS.includes(receipt.statistics.multiplicityCorrection)) {
-      errors.push(`receipt.statistics.multiplicityCorrection must be one of ${MULTIPLICITY_CORRECTIONS.join(', ')}`);
+    const multiplicityCorrections = receipt.schema === BENCHMARK_TRUST_RECEIPT_SCHEMA_V1
+      ? LEGACY_MULTIPLICITY_CORRECTIONS
+      : CURRENT_MULTIPLICITY_CORRECTIONS;
+    if (!multiplicityCorrections.includes(receipt.statistics.multiplicityCorrection)) {
+      errors.push(`receipt.statistics.multiplicityCorrection must be one of ${multiplicityCorrections.join(', ')} for ${receipt.schema}`);
     }
-    if (!Number.isSafeInteger(receipt.statistics.minimumEffectMicros)
-      || receipt.statistics.minimumEffectMicros <= 0) {
-      errors.push('receipt.statistics.minimumEffectMicros must be a positive safe integer');
+    const minimumEffectValid = receipt.schema === BENCHMARK_TRUST_RECEIPT_SCHEMA_V1
+      ? isNonNegativeSafeInteger(receipt.statistics.minimumEffectMicros)
+      : Number.isSafeInteger(receipt.statistics.minimumEffectMicros)
+        && receipt.statistics.minimumEffectMicros > 0;
+    if (!minimumEffectValid) {
+      errors.push(receipt.schema === BENCHMARK_TRUST_RECEIPT_SCHEMA_V1
+        ? 'receipt.statistics.minimumEffectMicros must be a non-negative safe integer'
+        : 'receipt.statistics.minimumEffectMicros must be a positive safe integer');
     }
-    if (hasExactKeys(
-      receipt.statistics.preregistration,
-      PREREGISTRATION_KEYS,
-      'receipt.statistics.preregistration',
-      errors
-    )) {
-      if (!Number.isSafeInteger(receipt.statistics.preregistration.repeatCount)
-        || receipt.statistics.preregistration.repeatCount <= 0) {
+    const preregistration = receipt.statistics.preregistration;
+    let preregistrationValid = false;
+    if (receipt.schema === BENCHMARK_TRUST_RECEIPT_SCHEMA_V1) {
+      preregistrationValid = PREREGISTRATION_KEYSETS_V1.some((keys) => (
+        hasExactKeysSilently(preregistration, keys)
+      ));
+      if (!preregistrationValid) {
+        errors.push('receipt.statistics.preregistration must match one supported historical v1 shape exactly');
+      }
+    } else {
+      preregistrationValid = hasExactKeys(
+        preregistration,
+        PREREGISTRATION_KEYS,
+        'receipt.statistics.preregistration',
+        errors
+      );
+    }
+    if (preregistrationValid) {
+      if (!Number.isSafeInteger(preregistration.repeatCount)
+        || preregistration.repeatCount <= 0) {
         errors.push('receipt.statistics.preregistration.repeatCount must be a positive safe integer');
       }
-      if (!Number.isSafeInteger(receipt.statistics.preregistration.requiredIndependentPromptCount)
-        || receipt.statistics.preregistration.requiredIndependentPromptCount < MINIMUM_INDEPENDENT_PROMPT_COUNT) {
-        errors.push(`receipt.statistics.preregistration.requiredIndependentPromptCount must be a safe integer of at least ${MINIMUM_INDEPENDENT_PROMPT_COUNT}`);
+      if (Object.prototype.hasOwnProperty.call(preregistration, 'requiredIndependentPromptCount')) {
+        if (!Number.isSafeInteger(preregistration.requiredIndependentPromptCount)
+          || preregistration.requiredIndependentPromptCount < MINIMUM_INDEPENDENT_PROMPT_COUNT) {
+          errors.push(`receipt.statistics.preregistration.requiredIndependentPromptCount must be a safe integer of at least ${MINIMUM_INDEPENDENT_PROMPT_COUNT}`);
+        }
+        if (!Number.isSafeInteger(preregistration.targetPowerBasisPoints)
+          || preregistration.targetPowerBasisPoints < MINIMUM_TARGET_POWER_BASIS_POINTS
+          || preregistration.targetPowerBasisPoints > MAXIMUM_TARGET_POWER_BASIS_POINTS) {
+          errors.push(`receipt.statistics.preregistration.targetPowerBasisPoints must be an integer from ${MINIMUM_TARGET_POWER_BASIS_POINTS} through ${MAXIMUM_TARGET_POWER_BASIS_POINTS}`);
+        }
+        if (!Number.isSafeInteger(preregistration.assumedMaxPairedStdDevMicros)
+          || preregistration.assumedMaxPairedStdDevMicros <= 0) {
+          errors.push('receipt.statistics.preregistration.assumedMaxPairedStdDevMicros must be a positive safe integer');
+        }
+        if (!isFingerprint(preregistration.powerAnalysisFingerprint)) {
+          errors.push('receipt.statistics.preregistration.powerAnalysisFingerprint must be a lowercase SHA-256 fingerprint');
+        }
       }
-      if (!Number.isSafeInteger(receipt.statistics.preregistration.targetPowerBasisPoints)
-        || receipt.statistics.preregistration.targetPowerBasisPoints < MINIMUM_TARGET_POWER_BASIS_POINTS
-        || receipt.statistics.preregistration.targetPowerBasisPoints > MAXIMUM_TARGET_POWER_BASIS_POINTS) {
-        errors.push(`receipt.statistics.preregistration.targetPowerBasisPoints must be an integer from ${MINIMUM_TARGET_POWER_BASIS_POINTS} through ${MAXIMUM_TARGET_POWER_BASIS_POINTS}`);
+      if (Object.prototype.hasOwnProperty.call(preregistration, 'varianceBasisFingerprint')) {
+        if (!isFingerprint(preregistration.varianceBasisFingerprint)) {
+          errors.push('receipt.statistics.preregistration.varianceBasisFingerprint must be a lowercase SHA-256 fingerprint');
+        }
+        if (!isFingerprint(preregistration.variancePilotAttestationId)) {
+          errors.push('receipt.statistics.preregistration.variancePilotAttestationId must be a lowercase SHA-256 fingerprint');
+        }
       }
-      if (!Number.isSafeInteger(receipt.statistics.preregistration.assumedMaxPairedStdDevMicros)
-        || receipt.statistics.preregistration.assumedMaxPairedStdDevMicros <= 0) {
-        errors.push('receipt.statistics.preregistration.assumedMaxPairedStdDevMicros must be a positive safe integer');
+      if (Object.prototype.hasOwnProperty.call(preregistration, 'poweredAlternativeEffectMicros')) {
+        if (receipt.statistics.minimumEffectMicros >= MAXIMUM_SCORE_MICROS) {
+          errors.push('receipt.statistics.minimumEffectMicros must be less than the maximum score');
+        }
+        if (!Number.isSafeInteger(preregistration.poweredAlternativeEffectMicros)
+          || preregistration.poweredAlternativeEffectMicros <= receipt.statistics.minimumEffectMicros
+          || preregistration.poweredAlternativeEffectMicros > MAXIMUM_SCORE_MICROS) {
+          errors.push('receipt.statistics.preregistration.poweredAlternativeEffectMicros must be a safe integer greater than minimumEffectMicros and at most the maximum score');
+        }
       }
-      if (!isFingerprint(receipt.statistics.preregistration.powerAnalysisFingerprint)) {
-        errors.push('receipt.statistics.preregistration.powerAnalysisFingerprint must be a lowercase SHA-256 fingerprint');
-      }
-      if (!isFingerprint(receipt.statistics.preregistration.analysisPlanFingerprint)) {
+      if (!isFingerprint(preregistration.analysisPlanFingerprint)) {
         errors.push('receipt.statistics.preregistration.analysisPlanFingerprint must be a lowercase SHA-256 fingerprint');
       }
     }
@@ -633,23 +741,86 @@ function validateBenchmarkTrustRatification(ratification) {
   return { valid: errors.length === 0, errors };
 }
 
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+function frozenStableClone(value) {
+  try {
+    return deepFreeze(JSON.parse(stableSerialize(value)));
+  } catch (_error) {
+    return null;
+  }
+}
+
 function deriveBenchmarkQualification(receipt, ratification = null, options = {}) {
-  const receiptValidation = validateBenchmarkTrustReceipt(receipt);
+  const verificationOptions = options && (typeof options === 'object' || typeof options === 'function')
+    ? options
+    : {};
+  const verificationTime = verificationOptions.now === undefined
+    ? new Date()
+    : new Date(verificationOptions.now);
+  const verifyPromptIndependence = verificationOptions.verifyPromptIndependence;
+  const verifyVariancePilot = verificationOptions.verifyVariancePilot;
+  const verifyJudgeQualification = verificationOptions.verifyJudgeQualification;
+  const verifyRatification = verificationOptions.verifyRatification;
+  const receiptSnapshot = frozenStableClone(receipt);
+  const ratificationSnapshot = frozenStableClone(ratification);
+  const receiptValidation = validateBenchmarkTrustReceipt(receiptSnapshot);
   const reasons = [];
   if (!receiptValidation.valid) reasons.push('invalid_receipt');
-  if (receipt?.axes?.evidenceStatus !== 'complete') reasons.push('evidence_not_complete');
-  if (receipt?.axes?.decisionOutcome !== 'winner') reasons.push('no_statistical_winner');
-  if (receipt?.axes?.freshnessStatus !== 'fresh') reasons.push('evidence_not_fresh');
-  if (receipt?.judge?.qualificationStatus !== 'qualified') reasons.push('judge_not_qualified');
+  if (receiptSnapshot?.axes?.evidenceStatus !== 'complete') reasons.push('evidence_not_complete');
+  if (receiptSnapshot?.axes?.decisionOutcome !== 'winner') reasons.push('no_statistical_winner');
+  if (receiptSnapshot?.axes?.freshnessStatus !== 'fresh') reasons.push('evidence_not_fresh');
+  if (receiptSnapshot?.judge?.qualificationStatus !== 'qualified') reasons.push('judge_not_qualified');
+  if (receiptSnapshot?.schema === BENCHMARK_TRUST_RECEIPT_SCHEMA_V1) {
+    reasons.push('legacy_receipt_schema_not_qualifiable');
+  }
+
+  // Unique prompt identifiers do not prove that the prompt-level observations
+  // are independent. The receipt binds the frozen analysis plan, but a
+  // consumer must separately validate that sampling assumption before a
+  // distribution-free winner can become qualified.
+  if (typeof verifyPromptIndependence !== 'function') {
+    reasons.push('prompt_independence_not_verified');
+  } else {
+    try {
+      if (verifyPromptIndependence(
+        receiptSnapshot?.statistics?.preregistration?.analysisPlanFingerprint,
+        receiptSnapshot
+      ) !== true) {
+        reasons.push('prompt_independence_not_verified');
+      }
+    } catch (_error) {
+      reasons.push('prompt_independence_not_verified');
+    }
+  }
+
+  // The receipt binds only the opaque signed-pilot identity. Qualification
+  // requires a consumer to revalidate that attestation against current roots
+  // and revocations, just like the separate judge qualification.
+  if (typeof verifyVariancePilot !== 'function') {
+    reasons.push('variance_pilot_not_verified');
+  } else {
+    try {
+      if (verifyVariancePilot(receiptSnapshot?.statistics?.preregistration, receiptSnapshot) !== true) {
+        reasons.push('variance_pilot_not_verified');
+      }
+    } catch (_error) {
+      reasons.push('variance_pilot_not_verified');
+    }
+  }
 
   // The receipt only binds the opaque identity of a judge qualification. Its
   // status, holdout, corpus and validity are claims until a consumer verifies
   // the separate qualification attestation against its current trust root.
-  if (typeof options.verifyJudgeQualification !== 'function') {
+  if (typeof verifyJudgeQualification !== 'function') {
     reasons.push('judge_qualification_not_verified');
   } else {
     try {
-      if (options.verifyJudgeQualification(receipt?.judge, receipt) !== true) {
+      if (verifyJudgeQualification(receiptSnapshot?.judge, receiptSnapshot) !== true) {
         reasons.push('judge_qualification_not_verified');
       }
     } catch (_error) {
@@ -657,39 +828,39 @@ function deriveBenchmarkQualification(receipt, ratification = null, options = {}
     }
   }
 
-  const now = options.now === undefined ? new Date() : new Date(options.now);
+  const now = verificationTime;
   if (!Number.isFinite(now.getTime())) {
     reasons.push('invalid_verification_time');
   } else {
-    if (isCanonicalIsoTimestamp(receipt?.validUntil) && now.getTime() > Date.parse(receipt.validUntil)) {
+    if (isCanonicalIsoTimestamp(receiptSnapshot?.validUntil) && now.getTime() > Date.parse(receiptSnapshot.validUntil)) {
       reasons.push('receipt_expired');
     }
-    if (isCanonicalIsoTimestamp(receipt?.judge?.validUntil) && now.getTime() > Date.parse(receipt.judge.validUntil)) {
+    if (isCanonicalIsoTimestamp(receiptSnapshot?.judge?.validUntil) && now.getTime() > Date.parse(receiptSnapshot.judge.validUntil)) {
       reasons.push('judge_qualification_expired');
     }
   }
 
-  const ratificationValidation = validateBenchmarkTrustRatification(ratification);
+  const ratificationValidation = validateBenchmarkTrustRatification(ratificationSnapshot);
   let ratificationStatus = 'unratified';
   let ratificationVerified = false;
   if (!ratificationValidation.valid) {
     reasons.push('missing_or_invalid_ratification');
   } else {
-    if (ratification.receiptId !== receipt?.receiptId) reasons.push('ratification_receipt_mismatch');
+    if (ratificationSnapshot.receiptId !== receiptSnapshot?.receiptId) reasons.push('ratification_receipt_mismatch');
     if (
-      isCanonicalIsoTimestamp(receipt?.createdAt)
-      && Date.parse(ratification.ratifiedAt) < Date.parse(receipt.createdAt)
+      isCanonicalIsoTimestamp(receiptSnapshot?.createdAt)
+      && Date.parse(ratificationSnapshot.ratifiedAt) < Date.parse(receiptSnapshot.createdAt)
     ) {
       reasons.push('ratification_predates_receipt');
     }
-    if (Number.isFinite(now.getTime()) && Date.parse(ratification.ratifiedAt) > now.getTime()) {
+    if (Number.isFinite(now.getTime()) && Date.parse(ratificationSnapshot.ratifiedAt) > now.getTime()) {
       reasons.push('ratification_in_future');
     }
-    if (typeof options.verifyRatification !== 'function') {
+    if (typeof verifyRatification !== 'function') {
       reasons.push('ratification_not_verified');
     } else {
       try {
-        if (options.verifyRatification(ratification, receipt) === true) {
+        if (verifyRatification(ratificationSnapshot, receiptSnapshot) === true) {
           ratificationVerified = true;
         } else {
           reasons.push('ratification_not_verified');
@@ -700,11 +871,11 @@ function deriveBenchmarkQualification(receipt, ratification = null, options = {}
     }
     if (
       ratificationVerified
-      && ratification.receiptId === receipt?.receiptId
+      && ratificationSnapshot.receiptId === receiptSnapshot?.receiptId
       && !reasons.includes('ratification_predates_receipt')
       && !reasons.includes('ratification_in_future')
     ) {
-      ratificationStatus = ratification.status;
+      ratificationStatus = ratificationSnapshot.status;
     }
   }
 
@@ -715,7 +886,8 @@ function deriveBenchmarkQualification(receipt, ratification = null, options = {}
   const qualified = uniqueReasons.length === 0;
   return {
     qualified,
-    qualifiedWinner: qualified ? receipt.statistics.winnerCandidateId : null,
+    qualifiedWinner: qualified ? receiptSnapshot.statistics.winnerCandidateId : null,
+    claimScope: CLAIM_SCOPES.includes(receiptSnapshot?.claimScope) ? receiptSnapshot.claimScope : null,
     ratificationStatus,
     reasons: uniqueReasons,
   };
@@ -724,6 +896,7 @@ function deriveBenchmarkQualification(receipt, ratification = null, options = {}
 module.exports = {
   BENCHMARK_TRUST_RATIFICATION_SCHEMA,
   BENCHMARK_TRUST_RECEIPT_SCHEMA,
+  BENCHMARK_TRUST_RECEIPT_SCHEMA_V1,
   CLAIM_SCOPES,
   DECISION_OUTCOMES,
   EVIDENCE_STATUSES,
@@ -733,6 +906,10 @@ module.exports = {
   MINIMUM_INDEPENDENT_PROMPT_COUNT,
   MINIMUM_TARGET_POWER_BASIS_POINTS,
   MULTIPLICITY_CORRECTIONS,
+  CURRENT_MULTIPLICITY_CORRECTIONS,
+  CURRENT_STATISTICAL_METHODS,
+  LEGACY_MULTIPLICITY_CORRECTIONS,
+  LEGACY_STATISTICAL_METHODS,
   RATIFICATION_STATUSES,
   STATISTICAL_METHODS,
   assertBenchmarkTrustReceipt,

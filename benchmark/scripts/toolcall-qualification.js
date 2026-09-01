@@ -126,8 +126,8 @@ async function main() {
     artifact = { model: args.model, digest: null, host: args.host };
     campaign = {
       mode: 'live-single-artifact',
-      claimCommand: `POST /api/nerve-center/host-preferences/${encodeURIComponent(args.host)}/benchmark-claim {"batchId":"toolcall-<ts>"}`,
-      releaseCommand: `DELETE /api/nerve-center/host-preferences/${encodeURIComponent(args.host)}/benchmark-claim/toolcall-<ts>`,
+      claimCommand: `POST /api/nerve-center/host-preferences/${encodeURIComponent(args.host)}/benchmark-claim {"batchId":"toolcall-<ts>","claimGeneration":"<uuid-v4>"}`,
+      releaseCommand: `DELETE /api/nerve-center/host-preferences/${encodeURIComponent(args.host)}/benchmark-claim/toolcall-<ts> {"claimGeneration":"<same-uuid-v4>"}`,
       note: 'Mocked tools only; the model never touches a production tool.'
     };
   } else {

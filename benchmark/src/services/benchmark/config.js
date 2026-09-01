@@ -1,3 +1,5 @@
+const { fingerprint } = require('../../../../shared/workerContract');
+
 /**
  * Benchmark Configuration
  * Default settings and normalization functions for benchmark execution
@@ -71,6 +73,11 @@ const DEFAULT_EXECUTION_CONFIG = {
     judge_drain_timeout_ms: 1800000,
     judge_stall_timeout_ms: 120000
 };
+
+const BENCHMARK_TRUST_PROMPT_SAMPLING_POLICY_SCHEMA =
+    'agentx.benchmark-trust-prompt-sampling-policy/v1';
+const BENCHMARK_TRUST_PROMPT_TRANSFORM_IMPLEMENTATION_SCHEMA =
+    'agentx.benchmark-trust-prompt-transform-implementation/v1';
 
 /**
  * Normalize and validate execution configuration
@@ -393,15 +400,88 @@ function buildPromptHints(promptText, expectedTokens, numPredict, config) {
     };
 }
 
+function canonicalFunctionSource(value) {
+    return Function.prototype.toString.call(value).replace(/\r\n?/g, '\n');
+}
+
+function computeBenchmarkTrustPromptTransformImplementationFingerprint() {
+    return fingerprint({
+        schema: BENCHMARK_TRUST_PROMPT_TRANSFORM_IMPLEMENTATION_SCHEMA,
+        defaultExecutionConfig: DEFAULT_EXECUTION_CONFIG,
+        functions: {
+            normalizeExecutionConfig: canonicalFunctionSource(normalizeExecutionConfig),
+            renderTokenTemplate: canonicalFunctionSource(renderTokenTemplate),
+            buildAnswerContract: canonicalFunctionSource(buildAnswerContract),
+            buildPromptHints: canonicalFunctionSource(buildPromptHints)
+        }
+    });
+}
+
+/**
+ * Freeze the complete policy that can change the prompt text seen by a Trust
+ * campaign candidate. The campaign artifact binds prompt selection, while the
+ * normalized execution fields bind every branch and template used by
+ * buildPromptHints. Hashing this source file also prevents a pilot produced by
+ * an older transformation implementation from being reused after code drift.
+ */
+function buildBenchmarkTrustPromptSamplingPolicy(
+    campaignArtifact,
+    executionConfig,
+    promptSourceFingerprints
+) {
+    const config = normalizeExecutionConfig(executionConfig);
+    if (!Array.isArray(promptSourceFingerprints)
+        || promptSourceFingerprints.length < 1
+        || promptSourceFingerprints.some(value => (
+            typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)
+        ))) {
+        throw new TypeError('promptSourceFingerprints must be a non-empty SHA-256 fingerprint array');
+    }
+    const canonicalPromptSourceFingerprints = [...promptSourceFingerprints].sort();
+    if (new Set(canonicalPromptSourceFingerprints).size !== canonicalPromptSourceFingerprints.length) {
+        throw new TypeError('promptSourceFingerprints must be unique');
+    }
+    return {
+        schema: BENCHMARK_TRUST_PROMPT_SAMPLING_POLICY_SCHEMA,
+        campaignArtifactFingerprint: fingerprint(campaignArtifact),
+        promptUniverseFingerprint: fingerprint({
+            schema: 'agentx.benchmark-trust-prompt-universe/v1',
+            promptSourceFingerprints: canonicalPromptSourceFingerprints
+        }),
+        promptTransformation: {
+            implementationFingerprint:
+                computeBenchmarkTrustPromptTransformImplementationFingerprint(),
+            executionConfig: {
+                response_max_tokens: config.response_max_tokens,
+                response_min_tokens: config.response_min_tokens,
+                response_tokens_multiplier: config.response_tokens_multiplier,
+                think: config.think,
+                thinking_final_answer_policy: config.thinking_final_answer_policy,
+                thinking_final_answer_template: config.thinking_final_answer_template,
+                include_length_hint: config.include_length_hint,
+                length_hint_template: config.length_hint_template,
+                answer_contract_mode: config.answer_contract_mode,
+                answer_contract_template: config.answer_contract_template,
+                answer_contract_slack_multiplier: config.answer_contract_slack_multiplier,
+                answer_contract_min_tokens: config.answer_contract_min_tokens,
+                custom_hint: config.custom_hint
+            }
+        }
+    };
+}
+
 function applyLengthHint(promptText, expectedTokens, numPredict, config) {
     return buildPromptHints(promptText, expectedTokens, numPredict, config).promptText;
 }
 
 
 module.exports = {
+    BENCHMARK_TRUST_PROMPT_SAMPLING_POLICY_SCHEMA,
     DEFAULT_EXECUTION_CONFIG,
     normalizeExecutionConfig,
     applyLengthHint,
     buildPromptHints,
-    buildAnswerContract
+    buildAnswerContract,
+    buildBenchmarkTrustPromptSamplingPolicy,
+    computeBenchmarkTrustPromptTransformImplementationFingerprint
 };

@@ -64,27 +64,68 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: benchmark/package-lock.json
+          cache-dependency-path: |
+            benchmark/package-lock.json
+            core/package-lock.json
       - run: npm ci
         working-directory: benchmark
-      - name: Validate the portable receipt contract
-        run: node --test shared/benchmarkTrustReceipt.test.js
-      - name: Validate the isolated Mongo receipt lifecycle
-        run: npm test -- --runInBand tests/integration/benchmarkTrustReceiptStore.test.js
+      - run: npm ci
+        working-directory: core
+      - name: Validate Core claim authority
+        run: >-
+          npm test -- --runInBand
+          tests/unit/benchmarkClaimService.test.js
+          tests/unit/benchmarkClaimReaper.test.js
+          tests/routes/benchmarkServiceHostRoutes.api.test.js
+          tests/routes/nerve-center.api.test.js
+          tests/unit/nerveCenterInferenceHealthUi.test.js
+        working-directory: core
+      - name: Validate the portable Trust contracts
+        run: >-
+          node --test
+          shared/benchmarkTrustReceipt.test.js
+          shared/benchmarkHumanEvidenceAttestation.test.js
+          shared/benchmarkJudgeQualificationAttestation.test.js
+          shared/benchmarkVariancePilotAttestation.test.js
+      - name: Validate the isolated Mongo receipt and composed runtime lifecycles
+        run: >-
+          npm test -- --runInBand
+          tests/integration/benchmarkTrustReceiptStore.test.js
+          tests/integration/benchmarkTrustRuntimePipeline.test.js
         working-directory: benchmark
       - name: Validate statistics and read-only consumers
         run: >-
           npm test -- --runInBand
+          tests/unit/benchmark/config.test.js
+          tests/unit/benchmark/batchesPrivacy.test.js
           tests/unit/benchmark/benchmarkTrustStatistics.test.js
+          tests/unit/benchmark/benchmarkTrustCampaignRuntime.test.js
+          tests/unit/benchmark/benchmarkTrustEvidenceLock.test.js
+          tests/unit/benchmark/benchmarkTrustSourceEvidence.test.js
+          tests/unit/benchmark/claimRecovery.test.js
+          tests/unit/benchmark/executionLock.test.js
+          tests/unit/benchmark/executionStartBatch.test.js
+          tests/unit/benchmark/trustBatchesRoute.test.js
+          tests/unit/benchmarkJudgeQualificationAuthority.test.js
           tests/unit/benchmarkTrustBatchId.test.js
           tests/unit/benchmarkTrustBatchMigration.test.js
           tests/unit/benchmarkTrustReceiptRetention.test.js
           tests/unit/benchmarkTrustReceiptResetGuard.test.js
           tests/unit/benchmarkTrustReceiptRoutes.test.js
+          tests/unit/benchmarkTemplates.test.js
           tests/unit/calibrationBaselineIndexes.test.js
+          tests/unit/courthouseDashboardCounts.test.js
+          tests/unit/diagnosticsGroundTruthGaps.test.js
+          tests/unit/driftDetector.test.js
           tests/unit/judgeGroundTruthProvenance.test.js
           tests/unit/judgeDriftService.test.js
+          tests/unit/judgeFeedbackLoop.test.js
+          tests/unit/judgeGovernance.test.js
+          tests/unit/legacyJudgeDriftRoute.test.js
+          tests/unit/humanGroundTruthImport.test.js
+          tests/unit/publicReadPostPrivacy.test.js
           tests/unit/retroCalibration.test.js
+          tests/unit/scoring/benchmarkTrustJudgePath.test.js
         working-directory: benchmark
 
   rag-contracts:
