@@ -98,7 +98,10 @@ describe('external consumer v1 routes', () => {
 
     expect(runtimeServices.inference.execute).toHaveBeenCalledWith(
       expect.objectContaining({ callerDetail: 'external/example-app' }),
-      expect.objectContaining({ signal: expect.any(AbortSignal) })
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        consumerContract: 'external-consumer-v1',
+      })
     );
     expect(runtimeServices.inference.execute.mock.calls[0][0]).not.toHaveProperty('persist');
     expect(response.body.data).toMatchObject({
