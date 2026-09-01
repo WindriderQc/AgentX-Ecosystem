@@ -85,10 +85,17 @@ retaining the attempt count and bounded attempt history.
 A lease-bound terminal feedback call may include an
 `agentx.pipeline-automation-evidence/v1` receipt. It carries only bounded
 verification status and duration, changed file/byte counts, observed execution
-duration and cost, normalized failure codes, and an optional generic
-WorkerReceipt fingerprint. It never carries prompts, transcripts, file paths,
-tool payloads, hostnames, or credentials. Partial evidence is valid: every
-unobserved metric remains `null`, never zero.
+duration and cost, an optional bounded cost source plus SHA-256 evidence
+fingerprint, normalized failure codes, and an optional generic WorkerReceipt
+fingerprint. It never carries prompts, transcripts, file paths, tool payloads,
+hostnames, provider credentials, or raw billing records. Partial evidence is
+valid: every unobserved metric remains `null`, never zero.
+
+An operator may reconcile a completed attempt whose cost was initially unknown
+through `POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost`. The
+operation is write-once and requires an exact integer nanodollar value, bounded
+source, SHA-256 evidence fingerprint, and reviewer identity. It cannot overwrite
+or contradict an existing cost and records a feedback audit entry.
 
 Human confirmation or re-queue records the review decision and timestamp on
 the exact attempt. `GET /api/pipeline/performance?window=7d|30d|90d` aggregates

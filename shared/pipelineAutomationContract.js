@@ -241,6 +241,15 @@ function normalizePipelineAutomationEvidence(rawValue) {
         'attemptEvidence.usage.costNanodollars',
         { min: 0, max: 9_000_000_000_000_000 }
       ),
+      costSource: optionalIdentifier(
+        usageRaw.costSource,
+        'attemptEvidence.usage.costSource',
+        160
+      ),
+      costEvidenceFingerprint: optionalFingerprint(
+        usageRaw.costEvidenceFingerprint,
+        'attemptEvidence.usage.costEvidenceFingerprint'
+      ),
     },
     failureCodes: sortedUnique(
       raw.failureCodes || [],

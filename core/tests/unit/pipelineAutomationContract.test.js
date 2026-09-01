@@ -120,8 +120,32 @@ describe('pipeline automation contract', () => {
     expect(evidence).toMatchObject({
       verification: { status: 'passed', durationMs: 1200, testsPassed: 18, testsFailed: null },
       changes: { filesChanged: 2, bytesChanged: 4096 },
-      usage: { durationMs: 65000, costNanodollars: null },
+      usage: {
+        durationMs: 65000,
+        costNanodollars: null,
+        costSource: null,
+        costEvidenceFingerprint: null,
+      },
       workerReceiptFingerprint: null,
+    });
+  });
+
+  test('normalizes bounded cost provenance without exposing raw billing data', () => {
+    const evidence = normalizePipelineAutomationEvidence({
+      schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
+      verification: { status: 'passed' },
+      changes: {},
+      usage: {
+        costNanodollars: 125971320,
+        costSource: 'openclaw-provider-billed/v1',
+        costEvidenceFingerprint: 'a'.repeat(64),
+      },
+    });
+
+    expect(evidence.usage).toMatchObject({
+      costNanodollars: 125971320,
+      costSource: 'openclaw-provider-billed/v1',
+      costEvidenceFingerprint: 'a'.repeat(64),
     });
   });
 

@@ -92,6 +92,8 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
         usage: {
           durationMs: observedInteger(usage.durationMs) ?? executionMs,
           costNanodollars,
+          costSource: usage.costSource || null,
+          costEvidenceFingerprint: usage.costEvidenceFingerprint || null,
         },
         failureCodes: Array.isArray(evidence?.failureCodes) ? evidence.failureCodes.slice(0, 32) : [],
         workerReceiptFingerprint: evidence?.workerReceiptFingerprint || null,

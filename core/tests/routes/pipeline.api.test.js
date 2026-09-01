@@ -551,7 +551,12 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
             schema: 'agentx.pipeline-automation-evidence/v1',
             verification: { status: 'passed', durationMs: 1200, testsPassed: 12, testsFailed: 0 },
             changes: { filesChanged: 2, bytesChanged: 900 },
-            usage: { durationMs: 45000, costNanodollars: null },
+            usage: {
+              durationMs: 45000,
+              costNanodollars: null,
+              costSource: null,
+              costEvidenceFingerprint: null,
+            },
             failureCodes: [],
             workerReceiptFingerprint: null,
             source: 'clawdx-guarded/v1',
@@ -585,6 +590,142 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
       .expect(400);
 
     expect(response.body.code).toBe('AUTOMATION_EVIDENCE_REQUIRES_LEASE');
+    expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  test('forces an observed over-budget success into blocked with bounded evidence', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0711',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-2', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-2', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0711', status: 'blocked' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0711/feedback')
+      .send({
+        status: 'done',
+        by: 'guarded-dispatch',
+        leaseAssignee: 'worker-a',
+        leaseId: 'lease-2',
+        text: 'verified',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: { filesChanged: 1, bytesChanged: 10 },
+          usage: {
+            durationMs: 1000,
+            costNanodollars: 1,
+            costSource: 'openclaw-provider-billed/v1',
+            costEvidenceFingerprint: 'b'.repeat(64),
+          },
+          failureCodes: [],
+          source: 'clawdx-guarded/v1',
+        },
+      })
+      .expect(200);
+
+    const update = PipelineTask.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set.status).toBe('blocked');
+    expect(update.$set['automationAttempts.$[attempt].finalState']).toBe('blocked');
+    expect(update.$set['automationAttempts.$[attempt].evidence'].failureCodes)
+      .toContain('cost_budget_exceeded');
+  });
+});
+
+describe('POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost', () => {
+  const savedOperatorToken = process.env.AGENTX_OPERATOR_TOKEN;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.AGENTX_OPERATOR_TOKEN = 'operator-token';
+  });
+
+  afterAll(() => {
+    if (savedOperatorToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
+    else process.env.AGENTX_OPERATOR_TOKEN = savedOperatorToken;
+  });
+
+  test('write-once reconciles a completed unknown cost and records an audit entry', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0580',
+      automationAttempts: [{
+        attempt: 2,
+        completedAt: new Date('2026-09-01T12:59:53.642Z'),
+        finalState: 'review',
+        evidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed', durationMs: 406 },
+          changes: { filesChanged: 1, bytesChanged: 1283 },
+          usage: { durationMs: 67219, costNanodollars: null },
+          failureCodes: [],
+          source: 'clawdx-guarded/v1',
+        },
+      }],
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0580' });
+
+    const response = await request(createApp())
+      .post('/api/pipeline/tasks/0580/automation-attempts/2/cost')
+      .set('X-AgentX-Operator-Token', 'operator-token')
+      .send({
+        by: 'codex-cost-reconciler',
+        costNanodollars: 15281520,
+        costSource: 'openclaw-provider-billed/v1',
+        costEvidenceFingerprint: 'c'.repeat(64),
+      })
+      .expect(200);
+
+    const [query, update, options] = PipelineTask.findOneAndUpdate.mock.calls[0];
+    expect(query).toMatchObject({ pipelineId: '0580' });
+    expect(update.$set['automationAttempts.$[attempt].evidence'].usage).toMatchObject({
+      costNanodollars: 15281520,
+      costSource: 'openclaw-provider-billed/v1',
+      costEvidenceFingerprint: 'c'.repeat(64),
+    });
+    expect(update.$push.feedback).toMatchObject({ by: 'codex-cost-reconciler' });
+    expect(options).toEqual({ new: true, arrayFilters: [{ 'attempt.attempt': 2 }] });
+    expect(response.body.data.costReconciliation.reconciled).toBe(true);
+  });
+
+  test('rejects attempts to contradict existing cost evidence', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0580',
+      automationAttempts: [{
+        attempt: 2,
+        completedAt: new Date(),
+        finalState: 'review',
+        evidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: {},
+          usage: {
+            costNanodollars: 10,
+            costSource: 'openclaw-provider-billed/v1',
+            costEvidenceFingerprint: 'd'.repeat(64),
+          },
+          failureCodes: [],
+        },
+      }],
+    });
+
+    const response = await request(createApp())
+      .post('/api/pipeline/tasks/0580/automation-attempts/2/cost')
+      .set('X-AgentX-Operator-Token', 'operator-token')
+      .send({
+        by: 'codex-cost-reconciler',
+        costNanodollars: 11,
+        costSource: 'openclaw-provider-billed/v1',
+        costEvidenceFingerprint: 'e'.repeat(64),
+      })
+      .expect(409);
+
+    expect(response.body.code).toBe('COST_EVIDENCE_CONFLICT');
     expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

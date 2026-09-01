@@ -758,6 +758,9 @@
       const change = files == null || bytes == null
         ? 'Unknown'
         : `${files} file${files === 1 ? '' : 's'} · ${Number(bytes).toLocaleString()} B`;
+      const costSource = attempt.usage?.costSource
+        ? `<span class="pipeline-team-subtle">${escapeHtml(attempt.usage.costSource)}</span>`
+        : '';
       return `
         <tr data-pipeline-task="${escapeHtml(attempt.pipelineId)}" tabindex="0" aria-label="Open task ${escapeHtml(attempt.pipelineId)} attempt ${escapeHtml(attempt.attempt)}">
           <td><strong class="pipeline-id">${escapeHtml(attempt.pipelineId)}</strong><span class="pipeline-team-subtle">Attempt ${escapeHtml(attempt.attempt)}</span></td>
@@ -766,7 +769,7 @@
           <td>${escapeHtml(formatStatus(verification))}</td>
           <td>${escapeHtml(change)}</td>
           <td>${escapeHtml(durationLabel(attempt.usage?.durationMs))}</td>
-          <td>${escapeHtml(costLabel(attempt.usage?.costNanodollars))}</td>
+          <td>${escapeHtml(costLabel(attempt.usage?.costNanodollars))}${costSource}</td>
         </tr>`;
     }).join('');
   }
