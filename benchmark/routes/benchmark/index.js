@@ -33,6 +33,7 @@ router.use('/', require('./templates'));
 router.use('/', require('./drift'));
 router.use('/', require('./sweeps'));
 router.use('/', require('./cloudLanes'));
+router.use('/', require('./trustReceipts'));
 router.use('/recommend', require('./recommend'));
 
 module.exports = router;

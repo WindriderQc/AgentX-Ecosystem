@@ -47,12 +47,29 @@ const CalibrationBaselineSchema = new mongoose.Schema({
         type: Boolean,
         default: false,
         index: true
+    },
+
+    // A single constant-valued slot makes the active-baseline invariant
+    // enforceable by MongoDB without requiring a replica-set transaction.
+    // Inactive and legacy documents omit the field entirely.
+    active_slot: {
+        type: String,
+        enum: ['active'],
+        default: undefined
     }
 }, {
     timestamps: true
 });
 
 CalibrationBaselineSchema.index({ active: 1, createdAt: -1 });
+CalibrationBaselineSchema.index(
+    { active_slot: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { active_slot: 'active' },
+        name: 'uniq_active_calibration_baseline'
+    }
+);
 
 /**
  * Get the currently active baseline (most recently ratified).

@@ -6,6 +6,25 @@
 
 const mongoose = require('mongoose');
 
+function qualifiedReviewPairIsValid(provenanceClass, reviewProtocol) {
+    if (provenanceClass === 'independent_human_score') {
+        return ['blind_independent', 'blind_double_review'].includes(reviewProtocol);
+    }
+    if (provenanceClass === 'adjudicated_human_score') {
+        return reviewProtocol === 'adjudicated';
+    }
+    return true;
+}
+
+function qualifiedReviewValidationError(message) {
+    const error = new mongoose.Error.ValidationError();
+    error.addError('review_protocol', new mongoose.Error.ValidatorError({
+        path: 'review_protocol',
+        message
+    }));
+    return error;
+}
+
 const JudgeGroundTruthSchema = new mongoose.Schema({
     // Unique identifier for this ground truth entry
     name: {
@@ -75,6 +94,41 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
         type: String,
         default: null,
         index: true
+    },
+
+    // Qualification provenance is deliberately separate from the historical
+    // `source` label. A Courthouse row can be human-approved while its score
+    // still comes directly from the judge; source alone must never certify an
+    // independent human label.
+    provenance_class: {
+        type: String,
+        enum: [
+            'endorsed_judge_score',
+            'human_override_visible_judge',
+            'independent_human_score',
+            'adjudicated_human_score',
+            'legacy_unverified'
+        ],
+        default: 'legacy_unverified',
+        index: true
+    },
+
+    review_protocol: {
+        type: String,
+        enum: [
+            'judge_visible_single_review',
+            'blind_independent',
+            'blind_double_review',
+            'adjudicated',
+            'legacy_unknown'
+        ],
+        default: 'legacy_unknown',
+        validate: {
+            validator: function reviewProtocolMatchesProvenance(reviewProtocol) {
+                return qualifiedReviewPairIsValid(this.provenance_class, reviewProtocol);
+            },
+            message: 'qualified human provenance requires a matching blind or adjudicated review protocol'
+        }
     },
 
     // 0129 — reviewer user id (for courthouse-review entries)
@@ -156,6 +210,46 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
 // Index for efficient validation queries
 JudgeGroundTruthSchema.index({ category: 1, active: 1 });
 JudgeGroundTruthSchema.index({ difficulty: 1, active: 1 });
+JudgeGroundTruthSchema.index({ provenance_class: 1, active: 1, category: 1 });
+
+for (const operation of ['updateOne', 'updateMany', 'findOneAndUpdate', 'findOneAndReplace', 'replaceOne']) {
+    JudgeGroundTruthSchema.pre(operation, async function validateQualifiedReviewPairOnQueryUpdate() {
+        const update = this.getUpdate() || {};
+        if (Array.isArray(update)) {
+            throw qualifiedReviewValidationError(
+                'JudgeGroundTruth update pipelines are not allowed because provenance must remain auditable'
+            );
+        }
+        const setOnInsert = update.$setOnInsert || {};
+        if (Object.prototype.hasOwnProperty.call(setOnInsert, 'provenance_class')
+            || Object.prototype.hasOwnProperty.call(setOnInsert, 'review_protocol')) {
+            throw qualifiedReviewValidationError(
+                'JudgeGroundTruth provenance cannot be changed through $setOnInsert'
+            );
+        }
+        const set = update.$set || update;
+        const unset = update.$unset || {};
+        const touchesPair = Object.prototype.hasOwnProperty.call(set, 'provenance_class')
+            || Object.prototype.hasOwnProperty.call(set, 'review_protocol')
+            || Object.prototype.hasOwnProperty.call(unset, 'provenance_class')
+            || Object.prototype.hasOwnProperty.call(unset, 'review_protocol');
+        if (!touchesPair) return;
+
+        // Treat provenance and review protocol as one atomic evidence claim.
+        // Requiring both fields in the same update eliminates the read/check/
+        // write race where two individually valid partial updates can combine
+        // into a contradictory persisted pair.
+        const hasCompletePair = Object.prototype.hasOwnProperty.call(set, 'provenance_class')
+            && Object.prototype.hasOwnProperty.call(set, 'review_protocol')
+            && !Object.prototype.hasOwnProperty.call(unset, 'provenance_class')
+            && !Object.prototype.hasOwnProperty.call(unset, 'review_protocol');
+        if (!hasCompletePair || !qualifiedReviewPairIsValid(set.provenance_class, set.review_protocol)) {
+            throw qualifiedReviewValidationError(
+                'JudgeGroundTruth provenance updates require one complete, internally consistent review pair'
+            );
+        }
+    });
+}
 JudgeGroundTruthSchema.index({ 'validation_stats.avg_deviation': 1 });
 
 /**
@@ -301,4 +395,13 @@ JudgeGroundTruthSchema.statics.getAccuracySummary = async function() {
     };
 };
 
-module.exports = mongoose.model('JudgeGroundTruth', JudgeGroundTruthSchema);
+const JudgeGroundTruth = mongoose.models.JudgeGroundTruth
+    || mongoose.model('JudgeGroundTruth', JudgeGroundTruthSchema);
+
+JudgeGroundTruth.bulkWrite = async function blockedJudgeGroundTruthBulkWrite() {
+    throw qualifiedReviewValidationError(
+        'JudgeGroundTruth bulkWrite is not allowed because provenance must remain auditable'
+    );
+};
+
+module.exports = JudgeGroundTruth;

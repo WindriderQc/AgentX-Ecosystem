@@ -19,7 +19,7 @@ const CalibrationBaseline = require('../../../models/CalibrationBaseline');
 const {
     calculatePearsonCorrelation
 } = require('../judgeValidationHelpers');
-const { CATEGORIES, loadUnionedGoldset } = require('./retroCalibration');
+const { CATEGORIES, loadQualifiedHumanGroundTruth } = require('./retroCalibration');
 
 const DRIFT_THRESHOLDS = {
     drop_pp: 0.15,              // drop of 15 percentage points
@@ -70,7 +70,8 @@ function classifyDrift(current_rho, baseline_rho, sample_size) {
 }
 
 /**
- * Pull the latest N (default 30) courthouse/sprint reviews per category.
+ * Pull the latest N (default 30) independently authored or adjudicated human
+ * reviews per category. Historical source labels alone are not qualification.
  * Returns pairs suitable for Pearson computation.
  *
  * @param {number} perCategory - default 30
@@ -80,8 +81,8 @@ function classifyDrift(current_rho, baseline_rho, sample_size) {
 async function gatherReviewSample(perCategory = 30, categories = CATEGORIES) {
     const result = {};
     for (const cat of categories) {
-        const unioned = await loadUnionedGoldset({ category: cat });
-        const scored = unioned
+        const qualifiedHuman = await loadQualifiedHumanGroundTruth({ category: cat });
+        const scored = qualifiedHuman
             .filter(d => d.expert_scores?.overall !== null
                 && d.expert_scores?.overall !== undefined
                 && d.judge_score_at_review !== null
@@ -97,10 +98,10 @@ async function gatherReviewSample(perCategory = 30, categories = CATEGORIES) {
             judge: scored.map(d => d.judge_score_at_review),
             human: scored.map(d => d.expert_scores?.overall),
             entries: scored,
-            unioned_count: unioned.length,
+            qualified_human_count: qualifiedHuman.length,
             scored_count: scored.length,
-            unscored_count: Math.max(0, unioned.length - scored.length),
-            sample_source: 'unioned_goldset_scored_rows'
+            unscored_qualified_human_count: Math.max(0, qualifiedHuman.length - scored.length),
+            sample_source: 'qualified_human_ground_truth'
         };
     }
     return result;
@@ -144,8 +145,8 @@ async function computeDrift(options = {}) {
         rows.push({
             category: cat,
             sample_size: n,
-            unioned_goldset_size: pair.unioned_count || n,
-            unscored_goldset_size: pair.unscored_count || 0,
+            qualified_human_source_size: pair.qualified_human_count || n,
+            unscored_qualified_human_size: pair.unscored_qualified_human_count || 0,
             sample_source: pair.sample_source || 'unknown',
             current_rho,
             baseline_rho,
@@ -160,10 +161,13 @@ async function computeDrift(options = {}) {
         }
     }
 
-    // Overall status label: ok | warning | alert (collapse insufficient/no_baseline)
+    // Missing evidence is an explicit non-OK state. It must never be rendered
+    // as healthy drift simply because no comparison could be made.
     let overall_status = 'ok';
     if (rows.some(r => r.status === 'alert')) overall_status = 'alert';
     else if (rows.some(r => r.status === 'warning')) overall_status = 'warning';
+    else if (rows.some(r => r.status === 'insufficient_data')) overall_status = 'insufficient_data';
+    else if (rows.some(r => r.status === 'no_baseline')) overall_status = 'no_baseline';
 
     const payload = {
         computed_at: new Date().toISOString(),
@@ -198,9 +202,12 @@ async function ratifyBaseline(input) {
     if (!input.label) throw new Error('label required');
     if (!Array.isArray(input.categories)) throw new Error('categories[] required');
 
-    await CalibrationBaseline.updateMany({ active: true }, { $set: { active: false } });
-
-    const doc = await CalibrationBaseline.findOneAndUpdate(
+    // Materialize the target before releasing the current slot. The
+    // constant-valued unique partial index on active_slot guarantees that two
+    // concurrent ratifications can never leave two active baselines. MongoDB
+    // standalone deployments do not support the multi-document transaction
+    // this would otherwise require, so a race loser fails closed.
+    const target = await CalibrationBaseline.findOneAndUpdate(
         { label: input.label },
         {
             $set: {
@@ -209,12 +216,33 @@ async function ratifyBaseline(input) {
                 overall_rho: input.overall_rho ?? null,
                 overall_sample_size: input.overall_sample_size || 0,
                 categories: input.categories,
-                notes: input.notes || null,
-                active: true
-            }
+                notes: input.notes || null
+            },
+            $setOnInsert: { active: false }
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+
+    await CalibrationBaseline.updateMany(
+        { _id: { $ne: target._id }, active: true },
+        { $set: { active: false }, $unset: { active_slot: '' } }
+    );
+
+    let doc;
+    try {
+        doc = await CalibrationBaseline.findOneAndUpdate(
+            { _id: target._id },
+            { $set: { active: true, active_slot: 'active' } },
+            { new: true }
+        );
+    } catch (err) {
+        if (err?.code === 11000) {
+            const conflict = new Error('another calibration baseline won concurrent ratification');
+            conflict.code = 'CALIBRATION_BASELINE_CONFLICT';
+            throw conflict;
+        }
+        throw err;
+    }
     logger.info('Calibration baseline ratified', { label: doc.label });
     return doc;
 }
