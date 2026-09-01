@@ -117,6 +117,29 @@ Only bounded reads are registered:
 There is deliberately no HTTP issuance, ratification, revocation, promotion,
 or routing endpoint in this change.
 
+## Consumer fail-closed bridge
+
+Historical consumers remain useful for inspection, but they cannot upgrade
+their own metrics into Trust authority:
+
+- `/api/benchmark/recommend` keeps every Phase 0 row at low confidence and
+  ignores caller-supplied qualified-winner fields;
+- `/api/benchmark/sweeps/recommend` treats caller-supplied metrics as
+  exploratory observations and downgrades an otherwise promotable result to
+  `inconclusive` until a receipt and ratification are verified;
+- the Efficiency Map exposes an exploratory trust verdict and awards no medal,
+  even if its browser input contains forged qualified-winner fields;
+- Core Planning refuses to turn a Phase 0 generalist score into progress,
+  including when the upstream payload claims `qualified: true`;
+- legacy Model Registry scores remain visible observations, but do not sort
+  category catalogs, break routing-priority ties, or crown a model.
+
+This bridge does not create the missing positive authority path. The current
+Phase 0 cohort projection still returns `qualified: false`, and the Product
+still has no ratification issuer or deployment action. A later AIOps-owned
+verifier must bind a separate human attestation before any consumer can receive
+a positive qualified-winner verdict.
+
 Receipt insertion and every destructive cleanup path share the standalone-
 Mongo-safe `benchmark-trust-evidence-mutation-v1` mutex. The store holds it
 while it verifies and inserts; Trust finalization uses the same mutex while it

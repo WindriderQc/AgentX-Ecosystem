@@ -271,7 +271,8 @@ function showBenchmarkPopout(self) {
         return;
     }
 
-    // Top performers
+    // Legacy registry scores are historical observations. They remain useful
+    // for inspection, but they are not receipt-qualified winners.
     const top = [...benchmarked].sort((a, b) => b.benchmarkStats.avgCompositeScore - a.benchmarkStats.avgCompositeScore);
     const maxScore = top[0]?.benchmarkStats.avgCompositeScore || 100;
 
@@ -315,6 +316,7 @@ function showBenchmarkPopout(self) {
                 <span class="popout-summary-value">${unbenchmarked.length}</span>
             </div>
         </div>
+        <div class="popout-muted" role="status">Historical benchmark observations only. These scores do not identify a qualified winner or authorize routing.</div>
         <div class="popout-section">
             <h3 class="popout-heading"><i class="fas fa-chart-simple"></i> Score Distribution</h3>
             <div class="popout-bar-list">
@@ -328,16 +330,15 @@ function showBenchmarkPopout(self) {
             </div>
         </div>
         <div class="popout-section">
-            <h3 class="popout-heading"><i class="fas fa-trophy"></i> Top Performers</h3>
+            <h3 class="popout-heading"><i class="fas fa-chart-line"></i> Measured observations</h3>
             <div class="popout-bar-list">
-                ${top.slice(0, 10).map((m, i) => {
+                ${top.slice(0, 10).map((m) => {
                     const s = m.benchmarkStats.avgCompositeScore;
                     const color = scoreColor(s);
-                    const medal = i === 0 ? '<i class="fas fa-crown" style="color:#fbbf24; margin-right:4px;"></i>' : '';
                     const isGone = m.deployment?.status === 'gone';
                     return `
                     <div class="popout-bar-row${isGone ? ' gone' : ''}">
-                        <span class="popout-bar-label">${medal}${escapeHtml(m.name)}${isGone ? ' <i class="fas fa-ghost" style="font-size:10px; opacity:0.5;"></i>' : ''}</span>
+                        <span class="popout-bar-label">${escapeHtml(m.name)}${isGone ? ' <i class="fas fa-ghost" style="font-size:10px; opacity:0.5;"></i>' : ''}</span>
                         <div class="popout-bar"><div class="popout-bar-fill" style="width:${(s / maxScore * 100).toFixed(0)}%; background:${color};"></div></div>
                         <span class="popout-bar-value" style="color:${color}; font-weight:700;">${s.toFixed(1)}</span>
                     </div>`;
