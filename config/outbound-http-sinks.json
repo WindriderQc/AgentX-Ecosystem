@@ -1096,7 +1096,7 @@
     { "id": "core.backup.rag-request", "service": "core", "source": "core/src/services/backupService.js", "line": 473, "column": 22, "constructor": "fetch", "policyId": "configured.product-recovery" },
     { "id": "core.backup.snapshot-download", "service": "core", "source": "core/src/services/backupService.js", "line": 501, "column": 22, "constructor": "fetch", "policyId": "configured.product-recovery" },
     { "id": "core.chat.generate", "service": "core", "source": "core/src/services/chatService.js", "line": 208, "column": 30, "constructor": "fetch", "policyId": "configured.ollama-inference" },
-    { "id": "core.chat.stream", "service": "core", "source": "core/src/services/chatServiceStream.js", "line": 226, "column": 30, "constructor": "fetch", "policyId": "configured.ollama-stream" },
+    { "id": "core.chat.stream", "service": "core", "source": "core/src/services/chatServiceStream.js", "line": 236, "column": 30, "constructor": "fetch", "policyId": "configured.ollama-stream" },
     { "id": "core.cluster-live.ps", "service": "core", "source": "core/src/services/clusterLiveService.js", "line": 67, "column": 23, "constructor": "fetchFn", "policyId": "configured.ollama-observation" },
     { "id": "core.custom-model.create", "service": "core", "source": "core/src/services/customModelService.js", "line": 147, "column": 30, "constructor": "fetch", "policyId": "request-admitted.ollama-lifecycle" },
     { "id": "core.host-pin.ps", "service": "core", "source": "core/src/services/hostPinPrimitives.js", "line": 209, "column": 30, "constructor": "fetch", "policyId": "configured.ollama-observation" },
