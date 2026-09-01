@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { stableSerialize } = require('../../../../shared/artifactIdentity');
 const { fingerprint } = require('../../../../shared/workerContract');
 const {
     normalizeBenchmarkTrustRatificationAttestation,
@@ -310,6 +311,25 @@ function verifyBenchmarkTrustRatificationAuthority(rawAttestation, options = {})
     });
 }
 
+function verifyBenchmarkTrustRatificationForReceipt(
+    rawAttestation,
+    ratification,
+    receipt,
+    options = {}
+) {
+    const attestation = verifyBenchmarkTrustRatificationAuthority(rawAttestation, options);
+    if (!isPlainObject(ratification)
+        || !isPlainObject(receipt)
+        || receipt.receiptId !== attestation.ratification.receiptId) {
+        return false;
+    }
+    try {
+        return stableSerialize(ratification) === stableSerialize(attestation.ratification);
+    } catch (_error) {
+        return false;
+    }
+}
+
 module.exports = {
     MIN_REVOCATION_VERSION_ENV,
     RATIFICATION_SCOPE,
@@ -319,5 +339,6 @@ module.exports = {
     TRUST_ROOTS_ENV,
     TRUST_ROOTS_SCHEMA,
     loadBenchmarkTrustRatificationTrustState,
-    verifyBenchmarkTrustRatificationAuthority
+    verifyBenchmarkTrustRatificationAuthority,
+    verifyBenchmarkTrustRatificationForReceipt
 };

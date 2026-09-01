@@ -17,7 +17,8 @@ const {
     REVOCATIONS_SCHEMA,
     TRUST_ROOTS_ENV,
     TRUST_ROOTS_SCHEMA,
-    verifyBenchmarkTrustRatificationAuthority
+    verifyBenchmarkTrustRatificationAuthority,
+    verifyBenchmarkTrustRatificationForReceipt
 } = require('../../src/services/benchmark/benchmarkTrustRatificationAuthority');
 
 const NOW = new Date('2026-09-01T12:00:00.000Z');
@@ -98,6 +99,29 @@ test('verifies ratification only with the exact scoped root and pinned revocatio
         code: 'BENCHMARK_TRUST_RATIFICATION_ISSUER_NOT_TRUSTED',
         statusCode: 403
     }));
+});
+
+test('binds the verified decision atomically to the exact ratification and receipt', () => {
+    const attestation = signedAttestation();
+    const options = { env: trustEnvironment(), now: NOW };
+    expect(verifyBenchmarkTrustRatificationForReceipt(
+        attestation,
+        attestation.ratification,
+        { receiptId: attestation.ratification.receiptId },
+        options
+    )).toBe(true);
+    expect(verifyBenchmarkTrustRatificationForReceipt(
+        attestation,
+        { ...attestation.ratification, status: 'revoked' },
+        { receiptId: attestation.ratification.receiptId },
+        options
+    )).toBe(false);
+    expect(verifyBenchmarkTrustRatificationForReceipt(
+        attestation,
+        attestation.ratification,
+        { receiptId: '3'.repeat(64) },
+        options
+    )).toBe(false);
 });
 
 test('rejects issuer, key, and attestation revocations', () => {
