@@ -57,6 +57,7 @@ const AutomationAttemptEvidenceSchema = new mongoose.Schema({
   usage: {
     durationMs: { type: Number, min: 0, default: null },
     costNanodollars: { type: Number, min: 0, default: null },
+    costKind: { type: String, enum: ['provider-spend', 'session-estimate'], default: null },
     costSource: { type: String, default: null },
     costEvidenceFingerprint: { type: String, default: null },
   },

@@ -554,6 +554,7 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
             usage: {
               durationMs: 45000,
               costNanodollars: null,
+              costKind: null,
               costSource: null,
               costEvidenceFingerprint: null,
             },
@@ -621,7 +622,8 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
           usage: {
             durationMs: 1000,
             costNanodollars: 1,
-            costSource: 'openclaw-provider-billed/v1',
+            costKind: 'session-estimate',
+            costSource: 'openclaw-session-usage/v1',
             costEvidenceFingerprint: 'b'.repeat(64),
           },
           failureCodes: [],
@@ -635,6 +637,40 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
     expect(update.$set['automationAttempts.$[attempt].finalState']).toBe('blocked');
     expect(update.$set['automationAttempts.$[attempt].evidence'].failureCodes)
       .toContain('cost_budget_exceeded');
+  });
+
+  test('rejects a worker cost amount without its complete nature and provenance', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0712',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-3', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-3', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+
+    const response = await request(createApp())
+      .post('/api/pipeline/tasks/0712/feedback')
+      .send({
+        status: 'done',
+        by: 'guarded-dispatch',
+        leaseAssignee: 'worker-a',
+        leaseId: 'lease-3',
+        text: 'verified',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: {},
+          usage: { costNanodollars: 0 },
+          failureCodes: [],
+        },
+      })
+      .expect(400);
+
+    expect(response.body.code).toBe('INVALID_AUTOMATION_INTENT');
+    expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -676,7 +712,8 @@ describe('POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost', () =>
       .send({
         by: 'codex-cost-reconciler',
         costNanodollars: 15281520,
-        costSource: 'openclaw-provider-billed/v1',
+        costKind: 'session-estimate',
+        costSource: 'openclaw-session-usage/v1',
         costEvidenceFingerprint: 'c'.repeat(64),
       })
       .expect(200);
@@ -685,7 +722,8 @@ describe('POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost', () =>
     expect(query).toMatchObject({ pipelineId: '0580' });
     expect(update.$set['automationAttempts.$[attempt].evidence'].usage).toMatchObject({
       costNanodollars: 15281520,
-      costSource: 'openclaw-provider-billed/v1',
+      costKind: 'session-estimate',
+      costSource: 'openclaw-session-usage/v1',
       costEvidenceFingerprint: 'c'.repeat(64),
     });
     expect(update.$push.feedback).toMatchObject({ by: 'codex-cost-reconciler' });
@@ -706,7 +744,8 @@ describe('POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost', () =>
           changes: {},
           usage: {
             costNanodollars: 10,
-            costSource: 'openclaw-provider-billed/v1',
+            costKind: 'session-estimate',
+            costSource: 'openclaw-session-usage/v1',
             costEvidenceFingerprint: 'd'.repeat(64),
           },
           failureCodes: [],
@@ -720,7 +759,8 @@ describe('POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost', () =>
       .send({
         by: 'codex-cost-reconciler',
         costNanodollars: 11,
-        costSource: 'openclaw-provider-billed/v1',
+        costKind: 'session-estimate',
+        costSource: 'openclaw-session-usage/v1',
         costEvidenceFingerprint: 'e'.repeat(64),
       })
       .expect(409);

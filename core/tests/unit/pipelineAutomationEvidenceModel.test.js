@@ -30,8 +30,43 @@ describe('pipeline automation evidence model', () => {
     expect(task.validateSync()).toBeUndefined();
     const evidence = task.toObject().automationAttempts[0].evidence;
     expect(evidence.usage.costNanodollars).toBeNull();
+    expect(evidence.usage.costKind).toBeNull();
     expect(evidence.verification.testsPassed).toBeNull();
     expect(evidence.failureCodes).toEqual([]);
+  });
+
+  test('persists the explicit nature and provenance of complete cost evidence', () => {
+    const task = new PipelineTask({
+      pipelineId: '0581',
+      title: 'Zero-provider-spend canary',
+      automationAttempts: [{
+        leaseId: 'lease-2',
+        assignee: 'worker-1',
+        attempt: 1,
+        acquiredAt: new Date('2026-09-01T00:00:00.000Z'),
+        heartbeatAt: new Date('2026-09-01T00:01:00.000Z'),
+        expiresAt: new Date('2026-09-01T00:10:00.000Z'),
+        evidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: {},
+          usage: {
+            costNanodollars: 0,
+            costKind: 'provider-spend',
+            costSource: 'openclaw-local-provider-spend/v1',
+            costEvidenceFingerprint: 'a'.repeat(64),
+          },
+          failureCodes: [],
+        },
+      }],
+    });
+
+    expect(task.validateSync()).toBeUndefined();
+    expect(task.toObject().automationAttempts[0].evidence.usage).toMatchObject({
+      costNanodollars: 0,
+      costKind: 'provider-spend',
+      costSource: 'openclaw-local-provider-spend/v1',
+    });
   });
 
   test('indexes the attempt timestamp used by performance windows', () => {

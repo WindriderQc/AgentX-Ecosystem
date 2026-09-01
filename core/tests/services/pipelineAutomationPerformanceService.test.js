@@ -24,7 +24,13 @@ describe('pipeline automation performance service', () => {
           evidence: {
             verification: { status: 'passed', durationMs: 120000, testsPassed: 20, testsFailed: 0 },
             changes: { filesChanged: 2, bytesChanged: 3000 },
-            usage: { durationMs: 600000, costNanodollars: 0 },
+            usage: {
+              durationMs: 600000,
+              costNanodollars: 0,
+              costKind: 'provider-spend',
+              costSource: 'openclaw-local-provider-spend/v1',
+              costEvidenceFingerprint: 'a'.repeat(64),
+            },
             failureCodes: [],
           },
         }],
@@ -76,6 +82,9 @@ describe('pipeline automation performance service', () => {
     expect(performance.usage).toMatchObject({
       observedCostNanodollars: 0,
       totalCostNanodollars: null,
+      costAggregateKind: 'provider-spend',
+      observedProviderSpendNanodollars: 0,
+      observedSessionEstimateNanodollars: null,
       filesChanged: 2,
       bytesChanged: 3000,
     });
@@ -84,10 +93,71 @@ describe('pipeline automation performance service', () => {
       verification: 2,
       changes: 1,
       cost: 1,
+      providerSpend: 1,
+      sessionEstimate: 0,
       review: 1,
       total: 2,
     });
     expect(performance.attempts[0].unknown).toEqual(['change', 'cost', 'review']);
+  });
+
+  test('keeps provider spend separate from billing-unverified session estimates', () => {
+    const attempts = [
+      {
+        pipelineId: '0702',
+        createdAt: '2026-08-22T09:00:00.000Z',
+        automationAttempts: [{
+          assignee: 'worker-a', attempt: 1,
+          acquiredAt: '2026-08-22T10:00:00.000Z',
+          completedAt: '2026-08-22T10:01:00.000Z',
+          finalState: 'review',
+          evidence: {
+            verification: { status: 'passed' }, changes: {}, failureCodes: [],
+            usage: {
+              costNanodollars: 0,
+              costKind: 'provider-spend',
+              costSource: 'openclaw-local-provider-spend/v1',
+              costEvidenceFingerprint: 'b'.repeat(64),
+            },
+          },
+        }],
+      },
+      {
+        pipelineId: '0703',
+        createdAt: '2026-08-23T09:00:00.000Z',
+        automationAttempts: [{
+          assignee: 'worker-b', attempt: 1,
+          acquiredAt: '2026-08-23T10:00:00.000Z',
+          completedAt: '2026-08-23T10:01:00.000Z',
+          finalState: 'review',
+          evidence: {
+            verification: { status: 'passed' }, changes: {}, failureCodes: [],
+            usage: {
+              costNanodollars: 125971320,
+              costKind: 'session-estimate',
+              costSource: 'openclaw-session-usage/v1',
+              costEvidenceFingerprint: 'c'.repeat(64),
+            },
+          },
+        }],
+      },
+    ];
+    const performance = buildPipelineAutomationPerformance(attempts, {
+      now: '2026-09-01T00:00:00.000Z', windowDays: 30,
+    });
+
+    expect(performance.usage).toMatchObject({
+      costAggregateKind: 'mixed',
+      observedCostNanodollars: null,
+      totalCostNanodollars: null,
+      observedProviderSpendNanodollars: 0,
+      observedSessionEstimateNanodollars: 125971320,
+    });
+    expect(performance.coverage).toMatchObject({
+      cost: 2,
+      providerSpend: 1,
+      sessionEstimate: 1,
+    });
   });
 
   test('reports no data without fabricating rates, timings, or costs', () => {

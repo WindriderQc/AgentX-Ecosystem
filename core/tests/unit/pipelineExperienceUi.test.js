@@ -48,6 +48,10 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain('/api/pipeline/performance?window=');
     expect(script).toContain("return 'Unknown'");
     expect(script).toContain('missing fields remain unknown');
+    expect(view).toContain('Provider spend and unpriced local compute stay distinct');
+    expect(script).toContain('Local compute unpriced');
+    expect(script).toContain('Billing unverified · OpenClaw session receipt');
+    expect(script).toContain("? 'Mixed evidence'");
     expect(script).toContain('data-pipeline-task=');
   });
 });

@@ -123,6 +123,7 @@ describe('pipeline automation contract', () => {
       usage: {
         durationMs: 65000,
         costNanodollars: null,
+        costKind: null,
         costSource: null,
         costEvidenceFingerprint: null,
       },
@@ -137,14 +138,16 @@ describe('pipeline automation contract', () => {
       changes: {},
       usage: {
         costNanodollars: 125971320,
-        costSource: 'openclaw-provider-billed/v1',
+        costKind: 'session-estimate',
+        costSource: 'openclaw-session-usage/v1',
         costEvidenceFingerprint: 'a'.repeat(64),
       },
     });
 
     expect(evidence.usage).toMatchObject({
       costNanodollars: 125971320,
-      costSource: 'openclaw-provider-billed/v1',
+      costKind: 'session-estimate',
+      costSource: 'openclaw-session-usage/v1',
       costEvidenceFingerprint: 'a'.repeat(64),
     });
   });
@@ -168,5 +171,18 @@ describe('pipeline automation contract', () => {
       ...base,
       workerReceiptFingerprint: 'not-a-digest',
     })).toThrow(/SHA-256/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      usage: { costNanodollars: 0 },
+    })).toThrow(/must provide costNanodollars, costKind, costSource, and costEvidenceFingerprint together/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      usage: {
+        costNanodollars: 0,
+        costKind: 'total-compute-cost',
+        costSource: 'unsupported/v1',
+        costEvidenceFingerprint: 'a'.repeat(64),
+      },
+    })).toThrow(/costKind is not supported/);
   });
 });

@@ -262,6 +262,7 @@ router.post(
         usage: {
           ...(existing?.usage || {}),
           costNanodollars: body.costNanodollars,
+          costKind: body.costKind,
           costSource: body.costSource,
           costEvidenceFingerprint: body.costEvidenceFingerprint,
         },
@@ -270,12 +271,13 @@ router.post(
         source: existing?.source || 'cost-reconciliation/v1',
       });
       if (normalized.usage.costNanodollars == null
+        || !normalized.usage.costKind
         || !normalized.usage.costSource
         || !normalized.usage.costEvidenceFingerprint) {
         return envelope.error(
           res,
           400,
-          'costNanodollars, costSource, and costEvidenceFingerprint are required',
+          'costNanodollars, costKind, costSource, and costEvidenceFingerprint are required',
           'INCOMPLETE_COST_EVIDENCE'
         );
       }
@@ -283,6 +285,7 @@ router.post(
       const priorUsage = existing?.usage || {};
       if (priorUsage.costNanodollars != null) {
         const idempotent = Number(priorUsage.costNanodollars) === normalized.usage.costNanodollars
+          && String(priorUsage.costKind || '') === normalized.usage.costKind
           && String(priorUsage.costSource || '') === normalized.usage.costSource
           && String(priorUsage.costEvidenceFingerprint || '') === normalized.usage.costEvidenceFingerprint;
         if (!idempotent) {
@@ -302,7 +305,7 @@ router.post(
       const audit = {
         by,
         at: new Date(),
-        text: `Reconciled automation attempt ${attemptNumber} cost as ${normalized.usage.costNanodollars} nanodollars from ${normalized.usage.costSource}.`,
+        text: `Reconciled automation attempt ${attemptNumber} ${normalized.usage.costKind} as ${normalized.usage.costNanodollars} nanodollars from ${normalized.usage.costSource}.`,
       };
       const task = await PipelineTask.findOneAndUpdate(
         {
@@ -331,6 +334,7 @@ router.post(
           reconciled: true,
           idempotent: false,
           costNanodollars: normalized.usage.costNanodollars,
+          costKind: normalized.usage.costKind,
           costSource: normalized.usage.costSource,
           costEvidenceFingerprint: normalized.usage.costEvidenceFingerprint,
         },

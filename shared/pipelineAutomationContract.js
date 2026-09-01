@@ -8,6 +8,7 @@ const AUTOMATION_MODES = new Set(['manual', 'review_only']);
 const HUMAN_GATES = new Set(['review', 'merge', 'deploy', 'protected_change']);
 const CHANGE_OPERATIONS = new Set(['create', 'update', 'delete']);
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'unknown']);
+const COST_KINDS = new Set(['provider-spend', 'session-estimate']);
 const IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 function automationError(message, code = 'INVALID_AUTOMATION_INTENT') {
@@ -198,6 +199,36 @@ function normalizePipelineAutomationEvidence(rawValue) {
     throw automationError('attemptEvidence.verification.status is not supported');
   }
 
+  const costNanodollars = optionalInteger(
+    usageRaw.costNanodollars,
+    'attemptEvidence.usage.costNanodollars',
+    { min: 0, max: 9_000_000_000_000_000 }
+  );
+  const costKind = optionalIdentifier(
+    usageRaw.costKind,
+    'attemptEvidence.usage.costKind',
+    80
+  );
+  const costSource = optionalIdentifier(
+    usageRaw.costSource,
+    'attemptEvidence.usage.costSource',
+    160
+  );
+  const costEvidenceFingerprint = optionalFingerprint(
+    usageRaw.costEvidenceFingerprint,
+    'attemptEvidence.usage.costEvidenceFingerprint'
+  );
+  const costParts = [costNanodollars, costKind, costSource, costEvidenceFingerprint];
+  const populatedCostParts = costParts.filter((value) => value != null).length;
+  if (populatedCostParts !== 0 && populatedCostParts !== costParts.length) {
+    throw automationError(
+      'attemptEvidence.usage cost evidence must provide costNanodollars, costKind, costSource, and costEvidenceFingerprint together'
+    );
+  }
+  if (costKind != null && !COST_KINDS.has(costKind)) {
+    throw automationError('attemptEvidence.usage.costKind is not supported');
+  }
+
   return {
     schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
     verification: {
@@ -236,20 +267,10 @@ function normalizePipelineAutomationEvidence(rawValue) {
         'attemptEvidence.usage.durationMs',
         { min: 0, max: 604_800_000 }
       ),
-      costNanodollars: optionalInteger(
-        usageRaw.costNanodollars,
-        'attemptEvidence.usage.costNanodollars',
-        { min: 0, max: 9_000_000_000_000_000 }
-      ),
-      costSource: optionalIdentifier(
-        usageRaw.costSource,
-        'attemptEvidence.usage.costSource',
-        160
-      ),
-      costEvidenceFingerprint: optionalFingerprint(
-        usageRaw.costEvidenceFingerprint,
-        'attemptEvidence.usage.costEvidenceFingerprint'
-      ),
+      costNanodollars,
+      costKind,
+      costSource,
+      costEvidenceFingerprint,
     },
     failureCodes: sortedUnique(
       raw.failureCodes || [],
