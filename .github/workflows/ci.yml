@@ -84,6 +84,7 @@ jobs:
         run: >-
           node --test
           shared/benchmarkTrustReceipt.test.js
+          shared/benchmarkTrustRatificationAttestation.test.js
           shared/benchmarkHumanEvidenceAttestation.test.js
           shared/benchmarkJudgeQualificationAttestation.test.js
           shared/benchmarkVariancePilotAttestation.test.js
@@ -107,6 +108,7 @@ jobs:
           tests/unit/benchmark/executionStartBatch.test.js
           tests/unit/benchmark/trustBatchesRoute.test.js
           tests/unit/benchmarkJudgeQualificationAuthority.test.js
+          tests/unit/benchmarkTrustRatificationAuthority.test.js
           tests/unit/benchmarkTrustBatchId.test.js
           tests/unit/benchmarkTrustBatchMigration.test.js
           tests/unit/benchmarkTrustReceiptRetention.test.js
