@@ -179,6 +179,13 @@ test('Product CI remains non-publishing and retains its existing exact-SHA proof
   assert.match(workflow, /node --test e2e\/unit\/upgrade-rollback-receipt\.test\.js e2e\/unit\/run-upgrade-rollback\.test\.js/);
   assert.match(workflow, /node --test scripts\/bounded-response\.test\.js/);
   assert.match(workflow, /node --test shared\/recoveryBundleContract\.test\.js/);
+  assert.match(workflow, /-f \/app\/scripts\/repo-coding-qualification\.js/);
+  assert.match(workflow, /-f \/app\/data\/repo-tasks\/manifest\.json/);
+  assert.match(workflow, /-f \/scripts\/bounded-response\.js/);
+  assert.match(workflow, /--entrypoint git agentx-benchmark:ci --version/);
+  assert.match(workflow, /--network none --entrypoint node agentx-benchmark:ci[\s\S]*?--dry-run --attempts 1 --ks 1/);
+  assert.match(workflow, /DRY-RUN \(golden diffs, no model calls\)/);
+  assert.match(workflow, /pass@1=1\.000/);
   assert.match(workflow, /name: agentx-release-evidence-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_attempt \}\}[\s\S]*?retention-days: 30/);
   assert.match(workflow, /name: agentx-live-cancellation-evidence-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_attempt \}\}[\s\S]*?retention-days: 30/);
 });

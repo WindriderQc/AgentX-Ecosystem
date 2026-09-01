@@ -858,8 +858,23 @@ jobs:
             -f /app/scripts/migrate-benchmark-trust-batch-ids.js
           docker run --rm --entrypoint test agentx-benchmark:ci \
             -f /app/scripts/cloud-lane-campaign.js
+          docker run --rm --entrypoint test agentx-benchmark:ci \
+            -f /app/scripts/repo-coding-qualification.js
+          docker run --rm --entrypoint test agentx-benchmark:ci \
+            -f /app/data/repo-tasks/manifest.json
+          docker run --rm --entrypoint test agentx-benchmark:ci \
+            -f /scripts/bounded-response.js
+          docker run --rm --entrypoint git agentx-benchmark:ci --version
           docker run --rm --entrypoint node agentx-benchmark:ci \
             scripts/cloud-lane-campaign.js \
             --campaign data/cloud-lane-campaign.example.json \
             --fixtures data/cloud-lane-campaign-fixtures.example.json \
             | grep -F '"networkCalls": 0'
+          docker run --rm --network none --entrypoint node agentx-benchmark:ci \
+            scripts/repo-coding-qualification.js \
+            --dry-run --attempts 1 --ks 1 \
+            | tee /tmp/repo-coding-qualification-dry-run.txt
+          grep -F 'DRY-RUN (golden diffs, no model calls)' \
+            /tmp/repo-coding-qualification-dry-run.txt
+          grep -F 'pass@1=1.000' \
+            /tmp/repo-coding-qualification-dry-run.txt
