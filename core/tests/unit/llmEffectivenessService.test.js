@@ -97,6 +97,37 @@ describe('llmEffectivenessService', () => {
     expect(snapshot.coverage.pipelineDerivedOutcomes).toBe(1);
   });
 
+  test('joins OpenClaw pipeline work to server-attested external-runtime inference', () => {
+    const tasks = [{
+      pipelineId: '0404',
+      status: 'done',
+      assignee: 'clawdx-coder',
+      updatedAt: new Date('2026-07-17T12:00:00Z'),
+    }];
+    const snapshot = buildEffectivenessSnapshot({
+      window,
+      pipelineTasks: tasks,
+      inferenceLogs: [{
+        _id: 'log-openclaw',
+        runtime: 'external',
+        callerDetail: 'openclaw-pipeline-runtime-bridge',
+        workItemId: '0404',
+        correlationId: 'pipeline:0404:lease-1',
+        tokensIn: 90,
+        tokensOut: 10,
+        durationMs: 1_500,
+        status: 'success',
+      }],
+    });
+
+    expect(snapshot.summary.reportedOutcomes).toBe(1);
+    expect(snapshot.summary.attributionCoveragePct).toBe(100);
+    expect(snapshot.waste.unattributedTokens).toBe(0);
+    expect(snapshot.byRuntime).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runtime: 'external', tokens: 100 }),
+    ]));
+  });
+
   test('includes review and blocked pipeline work without pretending it is verified success', () => {
     const tasks = [
       { pipelineId: '0405', status: 'review', assignee: 'codex', updatedAt: new Date() },
@@ -166,6 +197,8 @@ describe('llmEffectivenessService', () => {
     expect(pipelineRuntime('codex')).toBe('codex');
     expect(pipelineRuntime('claude-code')).toBe('claude-code');
     expect(pipelineRuntime('terminal-ops')).toBe('agentx');
+    expect(pipelineRuntime('clawdx-coder')).toBe('external');
+    expect(pipelineRuntime('openclaw-worker')).toBe('external');
     expect(pipelineRuntime('external-worker')).toBe('other');
     expect(pipelineRuntime('Example User')).toBe('other');
   });

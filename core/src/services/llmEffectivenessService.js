@@ -158,6 +158,7 @@ function pipelineRuntime(assignee) {
   if (value.includes('codex')) return 'codex';
   if (value.includes('claude')) return 'claude-code';
   if (value.includes('agentx') || value.includes('terminal-ops')) return 'agentx';
+  if (value.includes('openclaw') || value.includes('clawdx')) return 'external';
   return 'other';
 }
 
