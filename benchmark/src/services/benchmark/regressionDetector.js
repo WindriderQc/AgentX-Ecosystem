@@ -189,11 +189,25 @@ function pairedModelCompare(currentEntry, previousEntry) {
 }
 
 async function compareBatchRegression(currentBatchId, previousBatchId) {
-    const [currentStats, previousStats, currentBatch, previousBatch, curVersions, prevVersions] = await Promise.all([
+    const [currentBatch, previousBatch] = await Promise.all([
+        BenchmarkBatch.findById(currentBatchId)
+            .select('run_name created_at completed_at trust_campaign_spec_id +trust_evidence_context')
+            .lean(),
+        BenchmarkBatch.findById(previousBatchId)
+            .select('run_name created_at completed_at trust_campaign_spec_id +trust_evidence_context')
+            .lean()
+    ]);
+    if ([currentBatch, previousBatch].some(batch => batch?.trust_evidence_context
+        || /^[a-f0-9]{64}$/i.test(String(batch?.trust_campaign_spec_id || '')))) {
+        const error = new Error('Strict Benchmark Trust batches are unavailable to generic regression comparison');
+        error.code = 'BENCHMARK_TRUST_GENERIC_REGRESSION_FORBIDDEN';
+        error.statusCode = 409;
+        throw error;
+    }
+
+    const [currentStats, previousStats, curVersions, prevVersions] = await Promise.all([
         getBatchPromptScores(currentBatchId),
         getBatchPromptScores(previousBatchId),
-        BenchmarkBatch.findById(currentBatchId).select('run_name created_at completed_at').lean(),
-        BenchmarkBatch.findById(previousBatchId).select('run_name created_at completed_at').lean(),
         getBatchScorerVersions(currentBatchId),
         getBatchScorerVersions(previousBatchId)
     ]);
@@ -315,7 +329,11 @@ async function compareBatchRegression(currentBatchId, previousBatchId) {
 }
 
 async function detectLatestRegression() {
-    const batches = await BenchmarkBatch.find({ status: 'completed' })
+    const batches = await BenchmarkBatch.find({
+        status: 'completed',
+        trust_campaign_spec_id: null,
+        trust_evidence_context: null
+    })
         .sort({ completed_at: -1 })
         .limit(2)
         .select('_id')

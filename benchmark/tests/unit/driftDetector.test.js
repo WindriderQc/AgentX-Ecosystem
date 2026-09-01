@@ -39,7 +39,46 @@ describe('Drift Detector', () => {
         const historical = { mean: 7.0, variance: 1.4, count: 5 };
 
         const result = detectDrift(current, historical);
-        expect(result.drifted).toBe(false);
+        expect(result.drifted).toBeNull();
         expect(result.insufficient_data).toBe(true);
+        expect(result.mean_delta).toBeNull();
+        expect(result.variance_ratio).toBeNull();
+    });
+
+    it('detects variance emerging from a zero-variance baseline', () => {
+        const current = { mean: 7.0, variance: 0.5, count: 50 };
+        const historical = { mean: 7.0, variance: 0, count: 200 };
+
+        const result = detectDrift(current, historical);
+        expect(result.drifted).toBe(true);
+        expect(result.reasons).toContain('variance_spike');
+        expect(result.variance_ratio).toBeNull();
+    });
+
+    it('keeps two exact zero-variance cohorts comparable', () => {
+        const current = { mean: 7.0, variance: 0, count: 50 };
+        const historical = { mean: 7.0, variance: 0, count: 200 };
+
+        const result = detectDrift(current, historical);
+        expect(result.drifted).toBe(false);
+        expect(result.variance_ratio).toBe(1);
+    });
+
+    it('fails closed on non-finite or invalid statistics', () => {
+        for (const current of [
+            { mean: Number.NaN, variance: 1, count: 50 },
+            { mean: 7, variance: -1, count: 50 },
+            { mean: 7, variance: 1, count: Number.POSITIVE_INFINITY }
+        ]) {
+            const result = detectDrift(current, { mean: 7, variance: 1, count: 200 });
+            expect(result).toMatchObject({
+                drifted: null,
+                reasons: ['invalid_statistics'],
+                mean_delta: null,
+                variance_ratio: null,
+                insufficient_data: true,
+                invalid_data: true
+            });
+        }
     });
 });

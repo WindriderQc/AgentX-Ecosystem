@@ -18,6 +18,9 @@ const BenchmarkResult = require('../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const BenchmarkTrustReceipt = require('../../models/BenchmarkTrustReceipt');
 const { withBenchmarkTrustEvidenceLock } = require('../../src/services/benchmark/benchmarkTrustEvidenceLock');
+const {
+    withPublicBenchmarkResultReadPrivacy
+} = require('../../src/services/benchmark/publicReadPrivacy');
 
 function parseBool(value) {
     return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
@@ -126,7 +129,7 @@ router.get('/quality-breakdown', async (req, res) => {
  * Fetch quality breakdowns for multiple model/host pairs in one request.
  * Body: { pairs: [{ model, host }] }  -- max 50 entries.
  */
-router.post('/quality-breakdown/batch', async (req, res) => {
+router.post('/quality-breakdown/batch', withPublicBenchmarkResultReadPrivacy, async (req, res) => {
     try {
         const { pairs } = req.body || {};
 
@@ -332,7 +335,7 @@ router.get('/truncation-stats', async (req, res) => {
  * POST /api/benchmark/compare-batches
  * Compare multiple batches side-by-side
  */
-router.post('/compare-batches', async (req, res) => {
+router.post('/compare-batches', withPublicBenchmarkResultReadPrivacy, async (req, res) => {
     try {
         const { batch_ids } = req.body;
 
@@ -359,6 +362,19 @@ router.post('/compare-batches', async (req, res) => {
             });
         }
 
+        const requestedBatches = await BenchmarkBatch.find({ _id: { $in: batch_ids } })
+            .select('_id trust_campaign_spec_id +trust_evidence_context')
+            .lean();
+        if (requestedBatches.some(batch => (
+            benchmarkService.isTrustCampaignBatch(batch) || batch.trust_evidence_context
+        ))) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_GENERIC_COMPARISON_FORBIDDEN',
+                error: 'Strict Benchmark Trust campaigns cannot be opened through generic batch comparison'
+            });
+        }
+
         const data = await benchmarkService.compareBatches(batch_ids);
 
         res.json({
@@ -367,7 +383,7 @@ router.post('/compare-batches', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to compare batches', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -652,7 +668,7 @@ router.get('/regression', async (req, res) => {
  * Compare two specific batches for regressions
  * Body: { current_batch_id, previous_batch_id }
  */
-router.post('/regression/compare', async (req, res) => {
+router.post('/regression/compare', withPublicBenchmarkResultReadPrivacy, async (req, res) => {
     try {
         const { current_batch_id, previous_batch_id } = req.body || {};
         if (!current_batch_id || !previous_batch_id) {
@@ -675,7 +691,7 @@ router.post('/regression/compare', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to compare batches for regression', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 

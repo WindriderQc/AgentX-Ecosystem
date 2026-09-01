@@ -96,6 +96,14 @@ const BenchmarkBatchSchema = new mongoose.Schema({
         default: createTrustBatchId,
         match: TRUST_BATCH_ID_PATTERN
     },
+    // Content-addressed launch authority. A strict CampaignSpec is consumable
+    // exactly once, including when preregistration fails after reservation.
+    trust_campaign_spec_id: {
+        type: String,
+        immutable: true,
+        default: null,
+        match: /^[0-9a-f]{64}$/
+    },
     // Immutable campaign-level inference contract. Resolved once after the
     // benchmark host claim/preflight and reused across every attempt/resume.
     inference_contract_campaign: {
@@ -103,7 +111,7 @@ const BenchmarkBatchSchema = new mongoose.Schema({
         default: null
     },
     // Product-owned, private source context for BenchmarkTrustReceipt issuance.
-    // It is written only when a future campaign launcher can freeze every
+    // It is written only by the strict campaign launcher after it freezes every
     // identity and policy before execution. Legacy batches intentionally keep
     // this null and are therefore not eligible for trust-receipt issuance.
     trust_evidence_context: {
@@ -391,6 +399,14 @@ BenchmarkBatchSchema.index(
     }
 );
 BenchmarkBatchSchema.index(
+    { trust_campaign_spec_id: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { trust_campaign_spec_id: { $type: 'string' } },
+        name: 'uniq_benchmark_batch_trust_campaign_spec_id'
+    }
+);
+BenchmarkBatchSchema.index(
     { active_slot: 1 },
     {
         unique: true,
@@ -438,7 +454,9 @@ BenchmarkBatchSchema.statics.getActive = function() {
             { status: { $in: ['running', 'judging'] } },
             { judge_status: 'running' }
         ]
-    }).sort({ created_at: -1 });
+    })
+        .select('+trust_evidence_context')
+        .sort({ created_at: -1 });
 };
 
 BenchmarkBatchSchema.statics.getCompleted = function(limit = 20) {
@@ -479,6 +497,24 @@ BenchmarkBatchSchema.statics.cleanupStale = async function(inactivityThresholdSe
     // This prevents killing active batches on server restart/reload
     const threshold = new Date(Date.now() - (inactivityThresholdSeconds * 1000));
 
+    // A process can stop after consuming a CampaignSpec but before committing
+    // its source context. Preserve the one-shot reservation as failed evidence
+    // instead of leaving an apparently launchable pending batch forever.
+    await this.updateMany({
+        status: 'pending',
+        trust_campaign_spec_id: { $type: 'string' },
+        trust_evidence_context: null,
+        created_at: { $lt: threshold }
+    }, {
+        $set: {
+            status: 'failed',
+            failure_reason: 'trust_preregistration_abandoned',
+            completed_at: new Date(),
+            last_activity_at: new Date()
+        },
+        $unset: { active_slot: 1 }
+    });
+
     // Find stale batches first so we can fix them properly
     const staleBatches = await this.find({
         status: { $in: ['running', 'judging'] },
@@ -486,7 +522,7 @@ BenchmarkBatchSchema.statics.cleanupStale = async function(inactivityThresholdSe
             { last_activity_at: { $lt: threshold } },
             { last_activity_at: null }
         ]
-    });
+    }).select('+trust_evidence_context');
 
     let fixedCount = 0;
 
@@ -500,13 +536,21 @@ BenchmarkBatchSchema.statics.cleanupStale = async function(inactivityThresholdSe
                 ? 'completed'
                 : 'interrupted';
 
-            await batch.reconcileFromResults({
-                status: reconciledStatus,
-                judgeStatus: deriveTerminalJudgeStatus(batch, counts, reconciledStatus),
-                authoritativeCounts: counts,
-                timelineEvent: 'stale_cleanup',
-                timelineError: 'Batch reconciled after inactivity threshold was exceeded'
-            });
+            if (batch.trust_evidence_context) {
+                await this.finalizeTrustEvidenceBatch(batch._id, {
+                    status: reconciledStatus,
+                    failureReason: reconciledStatus === 'completed' ? null : 'stale_runtime_heartbeat',
+                    allowUnstarted: reconciledStatus !== 'completed'
+                });
+            } else {
+                await batch.reconcileFromResults({
+                    status: reconciledStatus,
+                    judgeStatus: deriveTerminalJudgeStatus(batch, counts, reconciledStatus),
+                    authoritativeCounts: counts,
+                    timelineEvent: 'stale_cleanup',
+                    timelineError: 'Batch reconciled after inactivity threshold was exceeded'
+                });
+            }
             fixedCount++;
         } catch (err) {
             console.error('Failed to cleanup batch', batch._id, err.message);
@@ -533,7 +577,9 @@ BenchmarkBatchSchema.statics.findStuck = async function(inactivityThresholdSecon
                 ]
             }
         ]
-    }).sort({ last_activity_at: 1 });
+    })
+        .select('+trust_evidence_context')
+        .sort({ last_activity_at: 1 });
 };
 
 // Instance methods for state transitions
@@ -921,6 +967,7 @@ for (const operation of [
         const renameTargets = Object.entries(update.$rename || {}).flatMap(([from, to]) => [from, to]);
         const touchedPaths = [...directPaths, ...operatorPaths, ...renameTargets];
         const touchesTrustBatchId = touchedPaths.some(path => pathMatches(path, ['trust_batch_id']));
+        const touchesTrustCampaignSpecId = touchedPaths.some(path => pathMatches(path, ['trust_campaign_spec_id']));
         const touchesTrustSeal = touchedPaths.some(path => pathMatches(path, ['trust_evidence_sealed']));
         const touchesTrustContext = touchedPaths.some(path => (
             path === 'trust_evidence_context'
@@ -932,6 +979,9 @@ for (const operation of [
         ));
         if (touchesTrustBatchId) {
             throw protectedBatchEvidenceError(`${operation} changing trust_batch_id`);
+        }
+        if (touchesTrustCampaignSpecId) {
+            throw protectedBatchContextError(`${operation} changing trust_campaign_spec_id`);
         }
         if (touchesTrustSeal) {
             throw protectedBatchEvidenceError(`${operation} changing server evidence seal`);
@@ -945,7 +995,15 @@ for (const operation of [
             || operation.includes('Remove');
         if (isDeleteOperation) {
             const trustContextMatch = await this.model.exists({
-                $and: [originalFilter, { trust_evidence_context: { $ne: null } }]
+                $and: [
+                    originalFilter,
+                    {
+                        $or: [
+                            { trust_evidence_context: { $ne: null } },
+                            { trust_campaign_spec_id: { $type: 'string' } }
+                        ]
+                    }
+                ]
             });
             if (trustContextMatch) {
                 throw protectedBatchContextError(`${operation} committed Trust batch`);
@@ -960,10 +1018,11 @@ for (const operation of [
             && value && typeof value === 'object'
             && Object.keys(value).some(path => pathMatches(path, ['status']))
         ));
-        if (TRUST_TERMINAL_BATCH_STATUSES.has(requestedStatus)
+        const isTerminalTransition = TRUST_TERMINAL_BATCH_STATUSES.has(requestedStatus)
             || touchesCompletedAt
             || statusUsesUnsafeOperator
-            || (touchesStatus && requestedStatus == null)) {
+            || (touchesStatus && requestedStatus == null);
+        if (isTerminalTransition) {
             const trustContextMatch = await this.model.exists({
                 $and: [originalFilter, { trust_evidence_context: { $ne: null } }]
             });
@@ -979,13 +1038,18 @@ for (const operation of [
             $and: [originalFilter, { trust_evidence_finalized_at: { $ne: null } }]
         });
         if (finalizedMatch) throw protectedBatchEvidenceError(`${operation} after Trust finalization`);
-        this.setQuery({
-            $and: [
-                originalFilter,
-                { trust_evidence_sealed: { $ne: true } },
-                { trust_evidence_finalized_at: null }
-            ]
-        });
+        const atomicGuards = [
+            { trust_evidence_sealed: { $ne: true } },
+            { trust_evidence_finalized_at: null }
+        ];
+        if (isTerminalTransition) atomicGuards.push({ trust_evidence_context: null });
+        if (isDeleteOperation) {
+            atomicGuards.push(
+                { trust_evidence_context: null },
+                { trust_campaign_spec_id: null }
+            );
+        }
+        this.setQuery({ $and: [originalFilter, ...atomicGuards] });
     });
 }
 
@@ -1000,13 +1064,15 @@ BenchmarkBatchSchema.pre('save', async function serializeBatchDocumentSave() {
         return;
     }
     if (this.isModified('trust_evidence_context')
+        || this.isModified('trust_campaign_spec_id')
         || this.isModified('trust_evidence_committed_at')
         || this.isModified('trust_evidence_finalized_at')
         || this.isModified('trust_evidence_sealed')) {
         throw protectedBatchContextError('document.save changing trust source context');
     }
-    if ((this.isModified('status') && TRUST_TERMINAL_BATCH_STATUSES.has(this.status))
-        || this.isModified('completed_at')) {
+    const isTerminalSave = (this.isModified('status') && TRUST_TERMINAL_BATCH_STATUSES.has(this.status))
+        || this.isModified('completed_at');
+    if (isTerminalSave) {
         const trustContextMatch = await this.constructor.exists({
             _id: this._id,
             trust_evidence_context: { $ne: null }
@@ -1018,7 +1084,8 @@ BenchmarkBatchSchema.pre('save', async function serializeBatchDocumentSave() {
     this.$where = {
         ...(this.$where || {}),
         trust_evidence_sealed: { $ne: true },
-        trust_evidence_finalized_at: null
+        trust_evidence_finalized_at: null,
+        ...(isTerminalSave ? { trust_evidence_context: null } : {})
     };
     const sealed = await this.constructor.exists({
         _id: this._id,
@@ -1090,8 +1157,61 @@ BenchmarkBatch.commitTrustEvidenceContext = async function commitTrustEvidenceCo
     }, { waitMs: 30_000 });
 };
 
+BenchmarkBatch.commitAndStartTrustEvidenceBatch = async function commitAndStartTrustEvidenceBatch(batchId, rawContext) {
+    const { withBenchmarkTrustEvidenceLock } = require('../src/services/benchmark/benchmarkTrustEvidenceLock');
+    const { normalizeSourceContext } = require('../src/services/benchmark/benchmarkTrustSourceEvidence');
+    const BenchmarkResult = require('./BenchmarkResult');
+    const context = normalizeSourceContext(rawContext);
+
+    return withBenchmarkTrustEvidenceLock('commit-and-start-benchmark-trust-source-context', async () => {
+        const batch = await this.findById(batchId)
+            .select('_id status started_at execution_started_at trust_batch_id trust_evidence_sealed +trust_evidence_context +trust_evidence_committed_at +trust_evidence_finalized_at')
+            .lean();
+        if (!batch || String(batch.trust_batch_id || '') !== context.sourceBatchId) {
+            throw protectedBatchContextError('atomic start for a different or missing source batch');
+        }
+        if (batch.status !== 'pending'
+            || batch.started_at != null
+            || batch.execution_started_at != null
+            || batch.trust_evidence_context != null
+            || batch.trust_evidence_committed_at != null
+            || batch.trust_evidence_sealed === true
+            || batch.trust_evidence_finalized_at != null
+            || await BenchmarkResult.exists({ batch_id: batch._id })) {
+            throw protectedBatchContextError('atomic start after campaign evidence or execution state exists');
+        }
+        const committedAt = new Date();
+        const update = await this.collection.updateOne(
+            {
+                _id: batch._id,
+                status: 'pending',
+                started_at: null,
+                execution_started_at: null,
+                trust_evidence_context: null,
+                trust_evidence_committed_at: null,
+                trust_evidence_sealed: { $ne: true },
+                trust_evidence_finalized_at: null
+            },
+            {
+                $set: {
+                    trust_evidence_context: context,
+                    trust_evidence_committed_at: committedAt,
+                    status: 'running',
+                    started_at: committedAt,
+                    last_activity_at: committedAt
+                }
+            }
+        );
+        if (update.matchedCount !== 1) {
+            throw protectedBatchContextError('atomic context/start transition lost a race');
+        }
+        return { context, committedAt };
+    }, { waitMs: 30_000 });
+};
+
 BenchmarkBatch.finalizeTrustEvidenceBatch = async function finalizeTrustEvidenceBatch(batchId, options = {}) {
     const { withBenchmarkTrustEvidenceLock } = require('../src/services/benchmark/benchmarkTrustEvidenceLock');
+    const { buildBenchmarkTrustSourceProjection } = require('../src/services/benchmark/benchmarkTrustSourceEvidence');
     const BenchmarkResult = require('./BenchmarkResult');
     const terminalStatus = options.status || 'completed';
     if (!TRUST_TERMINAL_BATCH_STATUSES.has(terminalStatus)) {
@@ -1099,25 +1219,43 @@ BenchmarkBatch.finalizeTrustEvidenceBatch = async function finalizeTrustEvidence
     }
     return withBenchmarkTrustEvidenceLock('finalize-benchmark-trust-source-batch', async () => {
         const batch = await this.findById(batchId)
-            .select('_id status started_at execution_started_at trust_evidence_sealed +trust_evidence_context +trust_evidence_finalized_at')
+            .select('_id status total_tests started_at execution_started_at trust_evidence_sealed +trust_evidence_context +trust_evidence_finalized_at')
             .lean();
         if (!batch?.trust_evidence_context) {
             throw protectedBatchContextError('Trust finalizer without committed context');
+        }
+        if (TRUST_TERMINAL_BATCH_STATUSES.has(batch.status)
+            && batch.trust_evidence_sealed === true
+            && batch.trust_evidence_finalized_at != null
+            && batch.status === terminalStatus) {
+            return this.findById(batch._id)
+                .select('+trust_evidence_context +trust_evidence_committed_at +trust_evidence_finalized_at');
         }
         if (TRUST_TERMINAL_BATCH_STATUSES.has(batch.status)
             || batch.trust_evidence_sealed === true
             || batch.trust_evidence_finalized_at != null) {
             throw protectedBatchContextError('Trust finalizer after terminal or sealed state');
         }
-        if (batch.started_at == null || batch.execution_started_at == null) {
+        if (batch.started_at == null
+            || (batch.execution_started_at == null && options.allowUnstarted !== true)) {
             throw protectedBatchContextError('Trust finalizer before execution start');
         }
-        const alreadyFinalizedResultCount = await BenchmarkResult.countDocuments({
-            batch_id: batch._id,
-            trust_evidence_sealed: true
-        });
-        if (alreadyFinalizedResultCount !== 0) {
-            throw protectedBatchContextError('Trust finalizer found a partial finalized result inventory');
+        if (options.allowUnstarted === true && terminalStatus === 'completed') {
+            throw protectedBatchContextError('completed Trust finalizer cannot allow an unstarted batch');
+        }
+        if (terminalStatus === 'completed') {
+            const terminalResults = await BenchmarkResult.find({ batch_id: batch._id })
+                .select('+trust_execution_receipt +trust_judge_receipt')
+                .lean();
+            try {
+                buildBenchmarkTrustSourceProjection({
+                    context: batch.trust_evidence_context,
+                    results: terminalResults,
+                    sourceBatchId: batch.trust_evidence_context.sourceBatchId
+                });
+            } catch (_error) {
+                throw protectedBatchContextError('completed Trust finalizer requires the exact canonical inventory');
+            }
         }
         const resultFinalization = await BenchmarkResult.collection.updateMany(
             {
@@ -1126,12 +1264,74 @@ BenchmarkBatch.finalizeTrustEvidenceBatch = async function finalizeTrustEvidence
             },
             { $set: { trust_evidence_sealed: true } }
         );
-        const [resultCount, succeededCount] = await Promise.all([
+        const [resultCount, succeededCount, sealedResultCount, judgedResultCount, sealedTerminalResults] = await Promise.all([
             BenchmarkResult.countDocuments({ batch_id: batch._id }),
-            BenchmarkResult.countDocuments({ batch_id: batch._id, success: true })
+            BenchmarkResult.countDocuments({ batch_id: batch._id, success: true }),
+            BenchmarkResult.countDocuments({ batch_id: batch._id, trust_evidence_sealed: true }),
+            BenchmarkResult.countDocuments({
+                batch_id: batch._id,
+                success: true,
+                scoring_method: 'llm_judge',
+                trust_judge_receipt: { $type: 'object' }
+            }),
+            terminalStatus === 'completed'
+                ? BenchmarkResult.find({ batch_id: batch._id })
+                    .select('+trust_execution_receipt +trust_judge_receipt')
+                    .lean()
+                : Promise.resolve(null)
         ]);
-        if (resultFinalization.matchedCount !== resultCount) {
-            throw protectedBatchContextError('Trust finalizer lost a result mutation race');
+
+        let finalizationFailure = null;
+        if (resultFinalization.matchedCount > resultCount || sealedResultCount !== resultCount) {
+            finalizationFailure = 'Trust finalizer lost a result mutation race';
+        }
+        if (!finalizationFailure && terminalStatus === 'completed') {
+            try {
+                buildBenchmarkTrustSourceProjection({
+                    context: batch.trust_evidence_context,
+                    results: sealedTerminalResults,
+                    sourceBatchId: batch.trust_evidence_context.sourceBatchId
+                });
+            } catch (_error) {
+                finalizationFailure = 'Trust evidence changed during finalization';
+            }
+        }
+        if (!finalizationFailure && terminalStatus === 'completed'
+            && (resultCount !== Number(batch.total_tests)
+                || succeededCount !== resultCount
+                || judgedResultCount !== resultCount)) {
+            finalizationFailure = 'completed Trust finalizer requires the exact successful and judge-receipted inventory';
+        }
+        if (finalizationFailure) {
+            const failedAt = new Date();
+            const failedUpdate = await this.collection.updateOne(
+                {
+                    _id: batch._id,
+                    trust_evidence_sealed: { $ne: true },
+                    trust_evidence_finalized_at: null,
+                    trust_evidence_context: { $ne: null }
+                },
+                {
+                    $set: {
+                        status: 'failed',
+                        completed_at: failedAt,
+                        completed: succeededCount,
+                        failed: resultCount - succeededCount,
+                        failure_reason: 'trust_evidence_changed_during_finalization',
+                        judge_status: 'failed',
+                        last_activity_at: failedAt,
+                        active_slot: null,
+                        execution_pid: null,
+                        trust_evidence_sealed: true,
+                        trust_evidence_finalized_at: failedAt,
+                        updated_at: failedAt
+                    }
+                }
+            );
+            if (failedUpdate.matchedCount !== 1) {
+                throw protectedBatchContextError('Trust finalizer lost a fail-closed state transition');
+            }
+            throw protectedBatchContextError(finalizationFailure);
         }
         const completedAt = new Date();
         const update = await this.collection.updateOne(
@@ -1145,9 +1345,17 @@ BenchmarkBatch.finalizeTrustEvidenceBatch = async function finalizeTrustEvidence
                 $set: {
                     status: terminalStatus,
                     completed_at: completedAt,
-                    completed: succeededCount,
+                    completed: resultCount,
                     failed: resultCount - succeededCount,
+                    failure_reason: options.failureReason || null,
+                    judge_status: terminalStatus === 'completed'
+                        ? 'completed'
+                        : (terminalStatus === 'stopped' || terminalStatus === 'interrupted')
+                            ? 'stopped'
+                            : 'failed',
+                    last_activity_at: completedAt,
                     active_slot: null,
+                    execution_pid: null,
                     trust_evidence_sealed: true,
                     trust_evidence_finalized_at: completedAt,
                     updated_at: completedAt

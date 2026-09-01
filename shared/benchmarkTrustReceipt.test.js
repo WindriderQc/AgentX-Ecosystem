@@ -2,10 +2,12 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const HISTORICAL_V1_RECEIPT = require('./fixtures/benchmark-trust-receipt-v1-a51fcd1.json');
 
 const {
   BENCHMARK_TRUST_RATIFICATION_SCHEMA,
   BENCHMARK_TRUST_RECEIPT_SCHEMA,
+  BENCHMARK_TRUST_RECEIPT_SCHEMA_V1,
   buildBenchmarkTrustReceipt,
   computeCandidateSetFingerprint,
   deriveBenchmarkQualification,
@@ -78,15 +80,18 @@ function bodyFixture(overrides = {}) {
     },
     statistics: {
       unit: 'prompt',
-      method: 'paired-prompt-t-v1',
+      method: 'paired-prompt-hoeffding-v1',
       alphaBasisPoints: 500,
       multiplicityCorrection: 'bonferroni',
       minimumEffectMicros: 25000,
       preregistration: {
         repeatCount: 2,
+        poweredAlternativeEffectMicros: 50000,
         requiredIndependentPromptCount: 10,
         targetPowerBasisPoints: 8000,
         assumedMaxPairedStdDevMicros: 25000,
+        varianceBasisFingerprint: '8'.repeat(64),
+        variancePilotAttestationId: '7'.repeat(64),
         powerAnalysisFingerprint: '90e1cbc6b75f21a7579d7c49a392cacf28fa827b064c6ab7b93bea1435919a27',
         analysisPlanFingerprint: '1'.repeat(64),
       },
@@ -123,18 +128,29 @@ function ratificationFixture(receipt, overrides = {}) {
   };
 }
 
+function legacyV1BodyFixture() {
+  const body = bodyFixture({ schema: BENCHMARK_TRUST_RECEIPT_SCHEMA_V1 });
+  body.statistics.method = 'paired-prompt-t-v1';
+  delete body.statistics.preregistration.poweredAlternativeEffectMicros;
+  delete body.statistics.preregistration.varianceBasisFingerprint;
+  delete body.statistics.preregistration.variancePilotAttestationId;
+  return body;
+}
+
 function qualificationOptions(now = '2026-09-01T00:00:00.000Z') {
   return {
     now,
+    verifyPromptIndependence: () => true,
+    verifyVariancePilot: () => true,
     verifyJudgeQualification: () => true,
     verifyRatification: () => true,
   };
 }
 
-test('builds a strict content-addressed v1 receipt and derives no caller-owned qualification field', () => {
+test('builds a strict content-addressed v2 receipt and derives no caller-owned qualification field', () => {
   const receipt = buildBenchmarkTrustReceipt(bodyFixture());
   assert.equal(validateBenchmarkTrustReceipt(receipt).valid, true);
-  assert.equal(receipt.receiptId, '7ed78ea7365cdb613e2bde5848258cc2ea60812169bb49699ad30e454353757b');
+  assert.equal(receipt.receiptId, 'acab9364c36dd7475047818e29fad99929de0aa2f94495bf84875f52a75b0dab');
   assert.equal(Object.prototype.hasOwnProperty.call(receipt, 'qualified'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(receipt, 'qualifiedWinner'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(receipt.axes, 'ratificationStatus'), false);
@@ -174,7 +190,7 @@ test('rejects unknown fields, non-finite metrics, duplicate candidates, and fing
   assert.match(validateBenchmarkTrustReceipt(unknown).errors.join('\n'), /unsupported keys/);
 
   const unknownVersion = bodyFixture();
-  unknownVersion.schema = 'agentx.benchmark-trust-receipt/v2';
+  unknownVersion.schema = 'agentx.benchmark-trust-receipt/v3';
   assert.throws(() => buildBenchmarkTrustReceipt(unknownVersion), /schema must be/);
 
   const unknownCandidateField = bodyFixture();
@@ -238,6 +254,10 @@ test('binds repeat and powered prompt counts and rejects an unbalanced preregist
   delete missingPowerFields.statistics.preregistration.powerAnalysisFingerprint;
   assert.throws(() => buildBenchmarkTrustReceipt(missingPowerFields), /missing keys: powerAnalysisFingerprint/);
 
+  const missingVarianceBasis = bodyFixture();
+  delete missingVarianceBasis.statistics.preregistration.varianceBasisFingerprint;
+  assert.throws(() => buildBenchmarkTrustReceipt(missingVarianceBasis), /missing keys: varianceBasisFingerprint/);
+
   const underpowered = bodyFixture();
   underpowered.statistics.preregistration.requiredIndependentPromptCount = 26;
   assert.throws(() => buildBenchmarkTrustReceipt(underpowered), /underpowered prompt count cannot declare a winner/);
@@ -273,14 +293,170 @@ test('binds repeat and powered prompt counts and rejects an unbalanced preregist
   assert.throws(() => buildBenchmarkTrustReceipt(impossibleRange), /cannot exceed maximumRepeatCount/);
 });
 
-test('v1 rejects statistical methods or corrections the integrated engine does not compute', () => {
+test('keeps immutable v1 receipts readable but never newly qualifiable', () => {
+  const receipt = buildBenchmarkTrustReceipt(legacyV1BodyFixture());
+  assert.equal(receipt.schema, BENCHMARK_TRUST_RECEIPT_SCHEMA_V1);
+  assert.equal(receipt.receiptId, '7ed78ea7365cdb613e2bde5848258cc2ea60812169bb49699ad30e454353757b');
+  assert.equal(validateBenchmarkTrustReceipt(receipt).valid, true);
+  assert.equal(JSON.parse(serializeBenchmarkTrustReceipt(receipt)).receiptId, receipt.receiptId);
+
+  const qualification = deriveBenchmarkQualification(
+    receipt,
+    ratificationFixture(receipt),
+    qualificationOptions()
+  );
+  assert.equal(qualification.qualified, false);
+  assert.ok(qualification.reasons.includes('legacy_receipt_schema_not_qualifiable'));
+
+  const rewrittenV1 = structuredClone(legacyV1BodyFixture());
+  rewrittenV1.statistics.preregistration.unknownPowerField = 50000;
+  assert.throws(
+    () => buildBenchmarkTrustReceipt(rewrittenV1),
+    /supported historical v1 shape exactly/
+  );
+});
+
+test('reads every historical v1 preregistration shape but keeps each unqualifiable', () => {
+  const base = legacyV1BodyFixture();
+  const power = structuredClone(base.statistics.preregistration);
+  const minimal = {
+    repeatCount: power.repeatCount,
+    analysisPlanFingerprint: power.analysisPlanFingerprint,
+  };
+  const variance = {
+    ...power,
+    varianceBasisFingerprint: '8'.repeat(64),
+    variancePilotAttestationId: '7'.repeat(64),
+  };
+  const alternative = {
+    repeatCount: variance.repeatCount,
+    poweredAlternativeEffectMicros: 50000,
+    requiredIndependentPromptCount: variance.requiredIndependentPromptCount,
+    targetPowerBasisPoints: variance.targetPowerBasisPoints,
+    assumedMaxPairedStdDevMicros: variance.assumedMaxPairedStdDevMicros,
+    varianceBasisFingerprint: variance.varianceBasisFingerprint,
+    variancePilotAttestationId: variance.variancePilotAttestationId,
+    powerAnalysisFingerprint: variance.powerAnalysisFingerprint,
+    analysisPlanFingerprint: variance.analysisPlanFingerprint,
+  };
+
+  for (const preregistration of [minimal, power, variance, alternative]) {
+    const body = legacyV1BodyFixture();
+    body.statistics.preregistration = preregistration;
+    const receipt = buildBenchmarkTrustReceipt(body);
+    assert.equal(validateBenchmarkTrustReceipt(receipt).valid, true);
+    assert.equal(
+      deriveBenchmarkQualification(receipt, ratificationFixture(receipt), qualificationOptions()).qualified,
+      false
+    );
+  }
+});
+
+test('reads the literal a51fcd1 v1 receipt bytes under their historical identity', () => {
+  assert.equal(HISTORICAL_V1_RECEIPT.receiptId, '7f956c3ef9c72f0f2a0f0789c45fdc8530d077d3f6ac664baed3de37d27749bf');
+  assert.equal(validateBenchmarkTrustReceipt(HISTORICAL_V1_RECEIPT).valid, true);
+  assert.deepEqual(
+    JSON.parse(serializeBenchmarkTrustReceipt(HISTORICAL_V1_RECEIPT)),
+    HISTORICAL_V1_RECEIPT
+  );
+  const rebuilt = buildBenchmarkTrustReceipt((({ receiptId, ...body }) => body)(HISTORICAL_V1_RECEIPT));
+  assert.deepEqual(rebuilt, HISTORICAL_V1_RECEIPT);
+  assert.equal(
+    deriveBenchmarkQualification(
+      HISTORICAL_V1_RECEIPT,
+      ratificationFixture(HISTORICAL_V1_RECEIPT),
+      qualificationOptions()
+    ).qualified,
+    false
+  );
+});
+
+test('reads every historical a51fcd1 method and correction without qualifying v1', () => {
+  const historicalVariants = [
+    {
+      method: 'paired-bootstrap-v1',
+      multiplicityCorrection: 'bonferroni',
+      receiptId: '1a2548581f7b8be653c40cde7f7a5182dbdf4c56b25378608cad4bf1e5bbaf59',
+    },
+    {
+      method: 'paired-permutation-v1',
+      multiplicityCorrection: 'holm-bonferroni',
+      receiptId: 'baa8c40312a33ffbc5545c9dcb775f6b90293eee4ea508cd445d1c52dd233a91',
+    },
+    {
+      method: 'paired-prompt-t-v1',
+      multiplicityCorrection: 'none',
+      receiptId: 'd03d4fd1c2445521b30e24ae8ddd953a45f11d42f6f7c3a045e27fc4faf2ed5e',
+    },
+  ];
+
+  for (const variant of historicalVariants) {
+    const body = structuredClone(HISTORICAL_V1_RECEIPT);
+    delete body.receiptId;
+    body.statistics.method = variant.method;
+    body.statistics.multiplicityCorrection = variant.multiplicityCorrection;
+
+    const receipt = buildBenchmarkTrustReceipt(body);
+    assert.equal(receipt.receiptId, variant.receiptId);
+    assert.equal(validateBenchmarkTrustReceipt(receipt).valid, true);
+    assert.equal(
+      deriveBenchmarkQualification(receipt, ratificationFixture(receipt), qualificationOptions()).qualified,
+      false
+    );
+  }
+});
+
+test('reads the historical zero-margin v1 receipt but keeps it unqualifiable', () => {
+  const body = structuredClone(HISTORICAL_V1_RECEIPT);
+  delete body.receiptId;
+  body.statistics.minimumEffectMicros = 0;
+
+  const receipt = buildBenchmarkTrustReceipt(body);
+  assert.equal(receipt.receiptId, 'b874bd47fde51e6412ad2872036b8ccb3dd6f5107bb91c4f7f698de08b7578ce');
+  assert.equal(validateBenchmarkTrustReceipt(receipt).valid, true);
+  assert.equal(
+    deriveBenchmarkQualification(receipt, ratificationFixture(receipt), qualificationOptions()).qualified,
+    false
+  );
+});
+
+test('binds a powered alternative strictly above the superiority margin', () => {
+  const equalToMargin = bodyFixture();
+  equalToMargin.statistics.preregistration.poweredAlternativeEffectMicros =
+    equalToMargin.statistics.minimumEffectMicros;
+  assert.throws(
+    () => buildBenchmarkTrustReceipt(equalToMargin),
+    /poweredAlternativeEffectMicros must be a safe integer greater than minimumEffectMicros/
+  );
+
+  const impossibleAlternative = bodyFixture();
+  impossibleAlternative.statistics.preregistration.poweredAlternativeEffectMicros = 10_000_001;
+  assert.throws(
+    () => buildBenchmarkTrustReceipt(impossibleAlternative),
+    /at most the maximum score/
+  );
+
+  const impossibleMargin = bodyFixture();
+  impossibleMargin.statistics.minimumEffectMicros = 10_000_000;
+  impossibleMargin.statistics.preregistration.poweredAlternativeEffectMicros = 10_000_001;
+  assert.throws(
+    () => buildBenchmarkTrustReceipt(impossibleMargin),
+    /minimumEffectMicros must be less than the maximum score/
+  );
+});
+
+test('v2 rejects statistical methods or corrections the integrated engine does not compute', () => {
   const uncorrectedWinner = bodyFixture();
   uncorrectedWinner.statistics.multiplicityCorrection = 'none';
   assert.throws(() => buildBenchmarkTrustReceipt(uncorrectedWinner), /multiplicityCorrection must be one of bonferroni/);
 
   const unsupportedMethod = bodyFixture();
   unsupportedMethod.statistics.method = 'paired-bootstrap-v1';
-  assert.throws(() => buildBenchmarkTrustReceipt(unsupportedMethod), /method must be one of paired-prompt-t-v1/);
+  assert.throws(() => buildBenchmarkTrustReceipt(unsupportedMethod), /method must be one of paired-prompt-hoeffding-v1/);
+
+  const legacyMethod = bodyFixture();
+  legacyMethod.statistics.method = 'paired-prompt-t-v1';
+  assert.throws(() => buildBenchmarkTrustReceipt(legacyMethod), /method must be one of paired-prompt-hoeffding-v1/);
 });
 
 test('qualifies only complete, decisive, fresh, ratified evidence with a current judge', () => {
@@ -293,6 +469,7 @@ test('qualifies only complete, decisive, fresh, ratified evidence with a current
   assert.deepEqual(result, {
     qualified: true,
     qualifiedWinner: CANDIDATE_A,
+    claimScope: 'capability',
     ratificationStatus: 'ratified',
     reasons: [],
   });
@@ -302,17 +479,95 @@ test('qualifies only complete, decisive, fresh, ratified evidence with a current
   });
   assert.equal(unverified.qualified, false);
   assert.equal(unverified.ratificationStatus, 'unratified');
+  assert.ok(unverified.reasons.includes('variance_pilot_not_verified'));
+  assert.ok(unverified.reasons.includes('prompt_independence_not_verified'));
   assert.ok(unverified.reasons.includes('judge_qualification_not_verified'));
   assert.ok(unverified.reasons.includes('ratification_not_verified'));
 
   const unverifiedJudge = deriveBenchmarkQualification(receipt, ratificationFixture(receipt), {
     now: '2026-09-01T00:00:00.000Z',
+    verifyPromptIndependence: () => true,
+    verifyVariancePilot: () => true,
     verifyJudgeQualification: () => false,
     verifyRatification: () => true,
   });
   assert.equal(unverifiedJudge.qualified, false);
   assert.equal(unverifiedJudge.ratificationStatus, 'ratified');
   assert.deepEqual(unverifiedJudge.reasons, ['judge_qualification_not_verified']);
+
+  const dependentPrompts = deriveBenchmarkQualification(receipt, ratificationFixture(receipt), {
+    ...qualificationOptions(),
+    verifyPromptIndependence: () => false,
+  });
+  assert.equal(dependentPrompts.qualified, false);
+  assert.deepEqual(dependentPrompts.reasons, ['prompt_independence_not_verified']);
+});
+
+test('derives qualification from frozen snapshots despite mutations in every verifier', () => {
+  for (const verifierName of [
+    'verifyPromptIndependence',
+    'verifyVariancePilot',
+    'verifyJudgeQualification',
+    'verifyRatification',
+  ]) {
+    const receipt = buildBenchmarkTrustReceipt(bodyFixture());
+    const ratification = ratificationFixture(receipt);
+    const options = qualificationOptions();
+    options[verifierName] = (...args) => {
+      receipt.statistics.winnerCandidateId = CANDIDATE_B;
+      ratification.status = 'revoked';
+      for (const argument of args) {
+        if (argument && typeof argument === 'object') {
+          assert.equal(Object.isFrozen(argument), true);
+        }
+      }
+      return true;
+    };
+
+    assert.deepEqual(
+      deriveBenchmarkQualification(receipt, ratification, options),
+      {
+        qualified: true,
+        qualifiedWinner: CANDIDATE_A,
+        claimScope: 'capability',
+        ratificationStatus: 'ratified',
+        reasons: [],
+      }
+    );
+  }
+});
+
+test('captures verifier authorities and time before any verifier can replace them', () => {
+  const receipt = buildBenchmarkTrustReceipt(bodyFixture());
+  const ratification = ratificationFixture(receipt);
+  const options = {
+    now: '2026-10-01T00:00:00.000Z',
+    verifyPromptIndependence: () => {
+      options.now = '2026-09-01T00:00:00.000Z';
+      options.verifyVariancePilot = () => true;
+      options.verifyJudgeQualification = () => true;
+      options.verifyRatification = () => true;
+      return true;
+    },
+    verifyVariancePilot: () => false,
+    verifyJudgeQualification: () => false,
+    verifyRatification: () => false,
+  };
+
+  const result = deriveBenchmarkQualification(receipt, ratification, options);
+  assert.equal(result.qualified, false);
+  assert.equal(result.qualifiedWinner, null);
+  assert.equal(result.ratificationStatus, 'unratified');
+  for (const reason of [
+    'variance_pilot_not_verified',
+    'judge_qualification_not_verified',
+    'receipt_expired',
+    'judge_qualification_expired',
+    'ratification_not_verified',
+    'not_ratified',
+  ]) {
+    assert.ok(result.reasons.includes(reason), `missing ${reason}`);
+  }
 });
 
 test('keeps inconclusive and equivalence outcomes honest and unqualified', () => {
@@ -325,6 +580,7 @@ test('keeps inconclusive and equivalence outcomes honest and unqualified', () =>
     {
       qualified: false,
       qualifiedWinner: null,
+      claimScope: 'capability',
       ratificationStatus: 'ratified',
       reasons: ['no_statistical_winner'],
     }

@@ -25,6 +25,7 @@
  *     judge-completed batch
  */
 
+const mongoose = require('mongoose');
 const logger = require('../../config/logger');
 const JudgeGovernanceRun = require('../../models/JudgeGovernanceRun');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
@@ -36,6 +37,7 @@ const { getJudgeFeedbackStats, autoPromoteGroundTruth } = require('./judgeFeedba
 const { runRetroCalibration } = require('./benchmark/retroCalibration');
 const { runCalibrationBatch, buildAccuracyMatrix } = require('./benchmark/calibrationRunner');
 const { detectDrift } = require('./benchmark/driftDetector');
+const { buildStrictTrustResultExclusion } = require('./benchmark/publicReadPrivacy');
 
 /**
  * Execute one sub-step, capturing timing + errors without throwing upward.
@@ -81,9 +83,26 @@ function skipped(reason) {
  * one. Returns null when nothing is available.
  */
 async function resolveBatchId(explicitBatchId) {
-    if (explicitBatchId) return explicitBatchId;
+    if (explicitBatchId) {
+        const explicit = await BenchmarkBatch.findById(explicitBatchId)
+            .select('_id trust_campaign_spec_id +trust_evidence_context')
+            .lean();
+        if (!explicit) return null;
+        if (explicit.trust_evidence_context
+            || /^[a-f0-9]{64}$/i.test(String(explicit.trust_campaign_spec_id || ''))) {
+            const error = new Error('Strict Benchmark Trust evidence cannot be consumed by legacy judge governance');
+            error.code = 'BENCHMARK_TRUST_GOVERNANCE_BATCH_FORBIDDEN';
+            error.statusCode = 409;
+            throw error;
+        }
+        return explicit._id.toString();
+    }
     const latest = await BenchmarkBatch
-        .findOne({ judge_status: 'completed' })
+        .findOne({
+            judge_status: 'completed',
+            trust_campaign_spec_id: null,
+            trust_evidence_context: null
+        })
         .sort({ updatedAt: -1 })
         .select('_id')
         .lean();
@@ -97,18 +116,26 @@ async function resolveBatchId(explicitBatchId) {
 async function computeDrift({ batchId, judgeModel }) {
     if (!batchId) return skipped('no batch_id available');
 
+    const normalizedBatchId = String(batchId);
+    if (!/^[0-9a-f]{24}$/i.test(normalizedBatchId)) {
+        const error = new Error('batch_id must resolve to a canonical Mongo ObjectId');
+        error.code = 'BENCHMARK_GOVERNANCE_BATCH_ID_INVALID';
+        throw error;
+    }
+    const resultBatchId = new mongoose.Types.ObjectId(normalizedBatchId);
+
     const match = { quality_score: { $ne: null } };
     if (judgeModel) match.judge_model = judgeModel;
 
-    // batch_id is an ObjectId on BenchmarkResult; cast handled via $match +
-    // string equality in existing diagnostics route by using the raw string.
+    // Mongoose does not cast aggregation pipelines. BenchmarkResult.batch_id is
+    // an ObjectId, so use the exact storage type for both cohort boundaries.
     const [currentStats, historicalStats] = await Promise.all([
         BenchmarkResult.aggregate([
-            { $match: { ...match, batch_id: batchId } },
+            { $match: { ...match, batch_id: resultBatchId, ...buildStrictTrustResultExclusion() } },
             { $group: { _id: null, mean: { $avg: '$quality_score' }, stddev: { $stdDevPop: '$quality_score' }, count: { $sum: 1 } } }
         ]),
         BenchmarkResult.aggregate([
-            { $match: { ...match, batch_id: { $ne: batchId } } },
+            { $match: { ...match, batch_id: { $ne: resultBatchId }, ...buildStrictTrustResultExclusion() } },
             { $sort: { timestamp: -1 } },
             { $limit: 500 },
             { $group: { _id: null, mean: { $avg: '$quality_score' }, stddev: { $stdDevPop: '$quality_score' }, count: { $sum: 1 } } }
@@ -116,7 +143,7 @@ async function computeDrift({ batchId, judgeModel }) {
     ]);
 
     if (!currentStats.length || !historicalStats.length) {
-        return { drifted: false, insufficient_data: true, batch_id: batchId };
+        return { drifted: null, insufficient_data: true, batch_id: batchId };
     }
 
     const current = {
@@ -191,6 +218,23 @@ function buildHeadline(subStepsByName) {
     const retro = subStepsByName.retro_calibration;
     const matrix = subStepsByName.matrix_calibration;
     const drift = subStepsByName.drift_detection;
+    let driftStatus = 'unknown';
+    if (drift?.status === 'skipped' || drift?.status === 'failed') {
+        driftStatus = drift.status;
+    } else if (drift?.status === 'ok') {
+        const reportedStatus = drift.output?.overall_status;
+        if (['ok', 'alert', 'insufficient_data', 'no_baseline'].includes(reportedStatus)) {
+            driftStatus = reportedStatus;
+        } else if (drift.output?.insufficient_data === true) {
+            driftStatus = 'insufficient_data';
+        } else if (drift.output?.no_baseline === true) {
+            driftStatus = 'no_baseline';
+        } else if (drift.output?.drifted === true) {
+            driftStatus = 'alert';
+        } else if (drift.output?.drifted === false && drift.output?.insufficient_data === false) {
+            driftStatus = 'ok';
+        }
+    }
 
     return {
         feedback_overall_count:
@@ -205,8 +249,10 @@ function buildHeadline(subStepsByName) {
             matrix?.status === 'ok' ? (matrix.output?.pass_rate ?? null) : null,
         matrix_overall_deviation:
             matrix?.status === 'ok' ? (matrix.output?.overall_avg_deviation ?? null) : null,
-        drift_detected:
-            drift?.status === 'ok' ? !!drift.output?.drifted : false,
+        drift_status: driftStatus,
+        drift_detected: driftStatus === 'alert'
+            ? true
+            : driftStatus === 'ok' ? false : null,
         drift_reasons:
             drift?.status === 'ok' ? (drift.output?.reasons || []) : []
     };
@@ -260,6 +306,9 @@ async function runJudgeGovernanceLoop(options = {}) {
     try {
         batchId = await resolveBatchId(explicitBatchId);
     } catch (err) {
+        if (explicitBatchId || err?.code === 'BENCHMARK_TRUST_GOVERNANCE_BATCH_FORBIDDEN') {
+            throw err;
+        }
         logger.warn('Failed to resolve batch id', { error: err.message });
     }
 
@@ -298,7 +347,8 @@ async function runJudgeGovernanceLoop(options = {}) {
     const headline = buildHeadline(byName);
 
     const anyFailed = subSteps.some(s => s.status === 'failed');
-    const status = anyFailed ? 'partial' : 'ok';
+    const driftEvidenceIncomplete = !['ok', 'alert'].includes(headline.drift_status);
+    const status = anyFailed || driftEvidenceIncomplete ? 'partial' : 'ok';
 
     const doc = {
         batch_id: batchId,

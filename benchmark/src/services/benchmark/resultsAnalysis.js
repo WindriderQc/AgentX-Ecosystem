@@ -11,6 +11,19 @@
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 
+function strictTrustComparisonError() {
+    const error = new Error('Strict Benchmark Trust campaigns cannot be opened through generic batch comparison');
+    error.code = 'BENCHMARK_TRUST_GENERIC_COMPARISON_FORBIDDEN';
+    error.statusCode = 409;
+    return error;
+}
+
+function isStrictTrustBatch(batch) {
+    return Boolean(batch?.trust_evidence_context)
+        || (typeof batch?.trust_campaign_spec_id === 'string'
+            && /^[0-9a-f]{64}$/.test(batch.trust_campaign_spec_id));
+}
+
 /**
  * Get quality score breakdown by category and level
  */
@@ -142,12 +155,16 @@ async function compareBatches(batchIds) {
         throw new Error('batchIds array is required');
     }
 
-    const batches = await BenchmarkBatch.find({ _id: { $in: batchIds } });
+    const batches = await BenchmarkBatch.find({ _id: { $in: batchIds } })
+        .select('+trust_evidence_context');
 
     const validBatches = batches.filter(b => b !== null);
 
     if (validBatches.length === 0) {
         throw new Error('No valid batches found');
+    }
+    if (validBatches.some(isStrictTrustBatch)) {
+        throw strictTrustComparisonError();
     }
 
     const comparison = await Promise.all(validBatches.map(async batch => {

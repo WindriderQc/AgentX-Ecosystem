@@ -34,5 +34,15 @@ describe('BenchmarkBatch opaque trust mapping', () => {
             unique: true,
             partialFilterExpression: { trust_batch_id: { $type: 'string' } }
         });
+
+        const campaignIndex = BenchmarkBatch.schema.indexes().find(([, options]) => (
+            options?.name === 'uniq_benchmark_batch_trust_campaign_spec_id'
+        ));
+        expect(campaignIndex).toBeDefined();
+        expect(campaignIndex[0]).toEqual({ trust_campaign_spec_id: 1 });
+        expect(campaignIndex[1]).toMatchObject({
+            unique: true,
+            partialFilterExpression: { trust_campaign_spec_id: { $type: 'string' } }
+        });
     });
 });

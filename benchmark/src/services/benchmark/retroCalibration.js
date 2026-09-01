@@ -9,9 +9,13 @@ const mongoose = require('mongoose');
 const path = require('path');
 const fs = require('fs');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
+const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const JudgeGroundTruth = require('../../../models/JudgeGroundTruth');
 const { scoreResponse } = require('../qualityScorer');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
+const {
+    verifyStoredAttestedHumanGroundTruth
+} = require('./humanGroundTruthImport');
 
 // 0129 calibration loop — sources that count as "human-derived ground truth"
 // when unioning with the static config goldset for calibration.
@@ -207,6 +211,22 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
 async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) {
     const { perCell = 3, dryRun = false } = options;
 
+    const batch = await BenchmarkBatch.findById(batchId)
+        .select('trust_campaign_spec_id +trust_evidence_context')
+        .lean();
+    if (!batch) {
+        const error = new Error('Batch not found');
+        error.statusCode = 404;
+        throw error;
+    }
+    if (batch.trust_evidence_context
+        || /^[a-f0-9]{64}$/i.test(String(batch.trust_campaign_spec_id || ''))) {
+        const error = new Error('Strict Benchmark Trust evidence cannot be consumed by legacy retro-calibration');
+        error.code = 'BENCHMARK_TRUST_RETRO_CALIBRATION_FORBIDDEN';
+        error.statusCode = 409;
+        throw error;
+    }
+
     const samples = await buildStratifiedSample(batchId, perCell);
 
     if (samples.length === 0) {
@@ -233,46 +253,46 @@ async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) 
  * @returns {Object} Coverage matrix by category x difficulty
  */
 async function getCoverageStats() {
-    const coverage = await JudgeGroundTruth.aggregate([
-        { $match: { active: true } },
-        {
-            $group: {
-                _id: { category: '$category', difficulty: '$difficulty' },
-                count: { $sum: 1 },
-                retro_count: {
-                    $sum: { $cond: [{ $eq: ['$created_by', 'retro-calibration'] }, 1, 0] }
-                },
-                seed_count: {
-                    $sum: { $cond: [{ $eq: ['$created_by', 'seed-script'] }, 1, 0] }
-                },
-                qualified_human_count: {
-                    $sum: {
-                        $cond: [
-                            {
-                                $or: [
-                                    {
-                                        $and: [
-                                            { $eq: ['$provenance_class', 'independent_human_score'] },
-                                            { $in: ['$review_protocol', ['blind_independent', 'blind_double_review']] }
-                                        ]
-                                    },
-                                    {
-                                        $and: [
-                                            { $eq: ['$provenance_class', 'adjudicated_human_score'] },
-                                            { $eq: ['$review_protocol', 'adjudicated'] }
-                                        ]
-                                    }
-                                ]
-                            },
-                            1,
-                            0
-                        ]
+    const [coverage, qualifiedHumanRows] = await Promise.all([
+        JudgeGroundTruth.aggregate([
+            { $match: { active: true } },
+            {
+                $group: {
+                    _id: { category: '$category', difficulty: '$difficulty' },
+                    count: { $sum: 1 },
+                    retro_count: {
+                        $sum: { $cond: [{ $eq: ['$created_by', 'retro-calibration'] }, 1, 0] }
+                    },
+                    seed_count: {
+                        $sum: { $cond: [{ $eq: ['$created_by', 'seed-script'] }, 1, 0] }
                     }
                 }
-            }
-        },
-        { $sort: { '_id.category': 1, '_id.difficulty': 1 } }
+            },
+            { $sort: { '_id.category': 1, '_id.difficulty': 1 } }
+        ]),
+        // Coverage is an operational trust signal, so its qualified counts
+        // must traverse the same current signature/revocation verification as
+        // judge calibration and drift decisions. The aggregate above remains
+        // intentionally raw so all_count/retro_count stay observable.
+        loadQualifiedHumanGroundTruth({ includePromptAuthority: true })
     ]);
+
+    const qualifiedPromptsByCell = new Map();
+    const cellByPromptFingerprint = new Map();
+    for (const row of qualifiedHumanRows) {
+        const key = `${row.category}\u0000${Number(row.difficulty)}`;
+        const promptFingerprint = row.qualified_prompt_fingerprint;
+        const priorCell = cellByPromptFingerprint.get(promptFingerprint);
+        if (priorCell && priorCell !== key) {
+            const error = new Error('one qualified prompt authority is assigned to multiple coverage cells');
+            error.code = 'HUMAN_EVIDENCE_PROMPT_CELL_CONFLICT';
+            error.statusCode = 409;
+            throw error;
+        }
+        cellByPromptFingerprint.set(promptFingerprint, key);
+        if (!qualifiedPromptsByCell.has(key)) qualifiedPromptsByCell.set(key, new Set());
+        qualifiedPromptsByCell.get(key).add(promptFingerprint);
+    }
 
     const allByCategory = {};
     const humanByCategory = {};
@@ -290,7 +310,8 @@ async function getCoverageStats() {
     // cannot inflate meets_target or coverage_percent.
     for (const row of coverage) {
         const cat = row._id.category;
-        const humanCount = Number(row.qualified_human_count) || 0;
+        const key = `${cat}\u0000${Number(row._id.difficulty)}`;
+        const humanCount = qualifiedPromptsByCell.get(key)?.size || 0;
         if (!allByCategory[cat]) allByCategory[cat] = 0;
         if (!humanByCategory[cat]) humanByCategory[cat] = 0;
         allByCategory[cat] += row.count;
@@ -304,7 +325,8 @@ async function getCoverageStats() {
 
     return {
         cells: coverage.map(r => {
-            const humanCount = Number(r.qualified_human_count) || 0;
+            const key = `${r._id.category}\u0000${Number(r._id.difficulty)}`;
+            const humanCount = qualifiedPromptsByCell.get(key)?.size || 0;
             return {
                 category: r._id.category,
                 difficulty: r._id.difficulty,
@@ -409,6 +431,8 @@ async function loadHumanReviewGroundTruth(options = {}) {
 async function loadQualifiedHumanGroundTruth(options = {}) {
     const query = {
         active: true,
+        human_attestation_fingerprint: { $type: 'string' },
+        human_attestation: { $ne: null },
         $or: QUALIFIED_HUMAN_REVIEW_LANES.map(lane => ({
             ...lane,
             review_protocol: typeof lane.review_protocol === 'object'
@@ -421,10 +445,48 @@ async function loadQualifiedHumanGroundTruth(options = {}) {
         query.judge_identity_fingerprint = options.judge_identity_fingerprint;
     }
 
-    let q = JudgeGroundTruth.find(query);
-    if (options.limit) q = q.limit(options.limit);
-    q = q.sort({ reviewed_at: -1, createdAt: -1 });
-    return q.lean();
+    const rows = await JudgeGroundTruth.find(query)
+        .select('+human_attestation')
+        .sort({ reviewed_at: -1, createdAt: -1 })
+        .lean();
+    const verified = [];
+    const verifiedSourceResultIds = new Set();
+    for (const row of rows) {
+        try {
+            const attestation = await verifyStoredAttestedHumanGroundTruth(row);
+            const sourceResultId = String(row.source_result_id);
+            if (verifiedSourceResultIds.has(sourceResultId)) {
+                const error = new Error('multiple current human attestations bind the same source result');
+                error.code = 'HUMAN_EVIDENCE_DUPLICATE_SOURCE';
+                error.statusCode = 409;
+                throw error;
+            }
+            verifiedSourceResultIds.add(sourceResultId);
+            const { human_attestation: _privateAttestation, ...publicRow } = row;
+            if (options.includePromptAuthority === true) {
+                const promptFingerprint = attestation?.source?.promptFingerprint;
+                if (typeof promptFingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(promptFingerprint)) {
+                    const error = new Error('qualified human evidence lacks a verified prompt authority fingerprint');
+                    error.code = 'HUMAN_EVIDENCE_PROMPT_AUTHORITY_MISSING';
+                    error.statusCode = 409;
+                    throw error;
+                }
+                publicRow.qualified_prompt_fingerprint = promptFingerprint;
+            }
+            verified.push(publicRow);
+        } catch (error) {
+            if (['HUMAN_EVIDENCE_ATTESTATION_EXPIRED', 'HUMAN_EVIDENCE_ATTESTATION_REVOKED']
+                .includes(error.code)) {
+                logger.warn('Excluded no-longer-qualified human evidence', {
+                    code: error.code,
+                    attestationFingerprint: row.human_attestation_fingerprint
+                });
+                continue;
+            }
+            throw error;
+        }
+    }
+    return options.limit ? verified.slice(0, options.limit) : verified;
 }
 
 /**

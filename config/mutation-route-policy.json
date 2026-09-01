@@ -283,6 +283,9 @@
       "POST /drift/compute": "action-observation",
       "POST /drift/baseline": "user-mutation"
     },
+    "benchmark/routes/benchmark/humanEvidence.js": {
+      "POST /judge/ground-truth/import-attested": "user-mutation"
+    },
     "benchmark/routes/benchmark/judgeDefaults.js": {
       "PUT /judge-defaults": "user-mutation"
     },
@@ -307,6 +310,9 @@
       "PUT /templates/:id": "user-mutation",
       "DELETE /templates/:id": "destructive-mutation",
       "POST /templates/:id/use": "user-mutation"
+    },
+    "benchmark/routes/benchmark/trustBatches.js": {
+      "POST /trust-batches/:specId/start": "user-mutation"
     },
     "benchmark/routes/profiler/hosts.js": {
       "POST /discover": "user-mutation",

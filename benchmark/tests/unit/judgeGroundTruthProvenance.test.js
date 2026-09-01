@@ -36,6 +36,88 @@ describe('JudgeGroundTruth qualified provenance contract', () => {
         expect(identityIndex).toBeDefined();
     });
 
+    test('keeps signed-attestation bytes private and immutable behind unique partial replay indexes', () => {
+        for (const path of [
+            'human_attestation_fingerprint',
+            'human_attestation_issuer_id',
+            'human_attestation_key_id',
+            'human_attestation_nonce',
+            'human_attestation_issued_at',
+            'human_attestation_valid_until',
+            'human_attestation_source_fingerprint',
+            'human_attestation'
+        ]) {
+            expect(JudgeGroundTruth.schema.path(path).options.immutable).toBe(true);
+        }
+        expect(JudgeGroundTruth.schema.path('human_attestation').options.select).toBe(false);
+
+        const indexes = JudgeGroundTruth.schema.indexes();
+        expect(indexes).toEqual(expect.arrayContaining([
+            [
+                { human_attestation_fingerprint: 1 },
+                expect.objectContaining({
+                    name: 'human_attestation_fingerprint_unique',
+                    unique: true,
+                    partialFilterExpression: { human_attestation_fingerprint: { $type: 'string' } }
+                })
+            ],
+            [
+                {
+                    human_attestation_issuer_id: 1,
+                    human_attestation_key_id: 1,
+                    human_attestation_nonce: 1
+                },
+                expect.objectContaining({ name: 'human_attestation_nonce_unique', unique: true })
+            ]
+        ]));
+    });
+
+    test('excludes any complete or partial attestation marker from legacy visibility', () => {
+        const visibility = JudgeGroundTruth.buildLegacyGroundTruthVisibilityFilter();
+        expect(visibility.$nor).toEqual(expect.arrayContaining([
+            { source: 'attested-human-evidence-v1' },
+            { created_by: /^attested:/ },
+            { human_attestation_fingerprint: { $ne: null } },
+            { human_attestation_issuer_id: { $ne: null } },
+            { human_attestation: { $ne: null } }
+        ]));
+    });
+
+    test('applies legacy visibility to deviation and accuracy summaries', async () => {
+        const find = jest.spyOn(JudgeGroundTruth, 'find').mockReturnValue({
+            sort: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockReturnThis()
+        });
+        JudgeGroundTruth.getHighDeviation();
+        expect(find).toHaveBeenCalledWith(expect.objectContaining({
+            active: true,
+            $nor: expect.arrayContaining([
+                { source: 'attested-human-evidence-v1' },
+                { human_attestation_fingerprint: { $ne: null } }
+            ])
+        }));
+        find.mockRestore();
+
+        const aggregate = jest.spyOn(JudgeGroundTruth, 'aggregate')
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([]);
+        const countDocuments = jest.spyOn(JudgeGroundTruth, 'countDocuments').mockResolvedValue(0);
+        await JudgeGroundTruth.getAccuracySummary();
+        for (const [pipeline] of aggregate.mock.calls) {
+            expect(pipeline[0].$match.$nor).toEqual(expect.arrayContaining([
+                { source: 'attested-human-evidence-v1' },
+                { human_attestation_fingerprint: { $ne: null } }
+            ]));
+        }
+        expect(countDocuments).toHaveBeenCalledWith(expect.objectContaining({
+            active: true,
+            $nor: expect.any(Array)
+        }));
+        aggregate.mockRestore();
+        countDocuments.mockRestore();
+    });
+
     test.each(['blind_independent', 'blind_double_review'])(
         'accepts independent human evidence produced by %s',
         (reviewProtocol) => {

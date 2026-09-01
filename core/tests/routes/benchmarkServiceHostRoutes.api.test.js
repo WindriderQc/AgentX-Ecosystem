@@ -38,20 +38,24 @@ const ROUTES = [
     label: 'claim acquisition',
     method: 'post',
     path: `/api/nerve-center/host-preferences/${ENCODED_HOST}/benchmark-claim`,
-    body: { batchId: 'batch-1' },
+    body: { batchId: 'batch-1', claimGeneration: '11111111-1111-4111-8111-111111111111' },
     sideEffects: [hostPrefService.claimBenchmark]
   },
   {
     label: 'claim heartbeat',
     method: 'post',
     path: `/api/nerve-center/host-preferences/${ENCODED_HOST}/benchmark-claim/batch-1/heartbeat`,
-    body: { estimatedDurationMs: 60000 },
+    body: {
+      claimGeneration: '11111111-1111-4111-8111-111111111111',
+      estimatedDurationMs: 60000
+    },
     sideEffects: [hostPrefService.heartbeatBenchmarkClaim]
   },
   {
     label: 'claim release',
     method: 'delete',
     path: `/api/nerve-center/host-preferences/${ENCODED_HOST}/benchmark-claim/batch-1`,
+    body: { claimGeneration: '11111111-1111-4111-8111-111111111111' },
     sideEffects: [hostPrefService.releaseBenchmarkClaim]
   },
   {

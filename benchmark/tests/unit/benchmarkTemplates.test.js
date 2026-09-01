@@ -103,6 +103,7 @@ describe('benchmark templates routes', () => {
 
         it('creates from source batch', async () => {
             BenchmarkBatch.findById.mockReturnValue({
+                select: jest.fn().mockReturnThis(),
                 lean: jest.fn().mockResolvedValue({
                     _id: VALID_ID,
                     host: 'http://host:11434',
@@ -124,6 +125,26 @@ describe('benchmark templates routes', () => {
             );
         });
 
+        it('refuses to export a strict Trust campaign into a public template', async () => {
+            BenchmarkBatch.findById.mockReturnValue({
+                select: jest.fn().mockReturnThis(),
+                lean: jest.fn().mockResolvedValue({
+                    _id: VALID_ID,
+                    trust_campaign_spec_id: 'a'.repeat(64),
+                    execution_config: { custom_hint: 'PRIVATE-TRUST-HINT' }
+                })
+            });
+
+            const res = await api
+                .post('/api/benchmark/templates')
+                .send({ name: 'Forbidden Trust Export', source_batch_id: VALID_ID });
+
+            expect(res.status).toBe(409);
+            expect(res.body.code).toBe('BENCHMARK_TRUST_TEMPLATE_EXPORT_FORBIDDEN');
+            expect(BenchmarkTemplate.create).not.toHaveBeenCalled();
+            expect(JSON.stringify(res.body)).not.toContain('PRIVATE-TRUST-HINT');
+        });
+
         it('rejects invalid source_batch_id', async () => {
             const res = await api
                 .post('/api/benchmark/templates')
@@ -134,6 +155,7 @@ describe('benchmark templates routes', () => {
 
         it('returns 404 for missing source batch', async () => {
             BenchmarkBatch.findById.mockReturnValue({
+                select: jest.fn().mockReturnThis(),
                 lean: jest.fn().mockResolvedValue(null)
             });
 

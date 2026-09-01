@@ -41,8 +41,9 @@ const JudgeGovernanceRunSchema = new mongoose.Schema({
     started_at: { type: Date, default: Date.now, index: true },
     finished_at: { type: Date, default: null },
     duration_ms: { type: Number, default: 0 },
-    // Aggregate status: ok if every non-skipped sub-step is ok, partial if any
-    // failed, failed if orchestration itself threw before the summary assembled.
+    // Aggregate status: ok only when orchestration succeeds and drift evidence
+    // is conclusive, partial when a step fails or mandatory drift is unknown,
+    // failed if orchestration itself threw before the summary assembled.
     status: {
         type: String,
         enum: ['ok', 'partial', 'failed'],
@@ -58,7 +59,12 @@ const JudgeGovernanceRunSchema = new mongoose.Schema({
         retro_created: { type: Number, default: 0 },
         matrix_pass_rate: { type: Number, default: null },
         matrix_overall_deviation: { type: Number, default: null },
-        drift_detected: { type: Boolean, default: false },
+        drift_status: {
+            type: String,
+            enum: ['ok', 'alert', 'insufficient_data', 'no_baseline', 'skipped', 'failed', 'unknown'],
+            default: 'unknown'
+        },
+        drift_detected: { type: Boolean, default: null },
         drift_reasons: { type: [String], default: [] }
     },
     notes: { type: String, default: null }

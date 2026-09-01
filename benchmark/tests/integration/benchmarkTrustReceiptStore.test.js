@@ -1,7 +1,7 @@
 'use strict';
 
 process.env.MONGOMS_VERSION = '7.0.24';
-jest.setTimeout(30_000);
+jest.setTimeout(120_000);
 
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
@@ -11,8 +11,10 @@ const BenchmarkTimelineEntry = require('../../models/BenchmarkTimelineEntry');
 const BenchmarkTrustReceipt = require('../../models/BenchmarkTrustReceipt');
 const BenchmarkTrustEvidenceLock = require('../../models/BenchmarkTrustEvidenceLock');
 const JudgeGroundTruth = require('../../models/JudgeGroundTruth');
+const HISTORICAL_V1_RECEIPT = require('../../../shared/fixtures/benchmark-trust-receipt-v1-a51fcd1.json');
 const {
     BENCHMARK_TRUST_RECEIPT_SCHEMA,
+    BENCHMARK_TRUST_RECEIPT_SCHEMA_V1,
     buildBenchmarkTrustReceipt,
     computeCandidateSetFingerprint,
     serializeBenchmarkTrustReceipt
@@ -26,6 +28,9 @@ const {
 const { archiveOldResults } = require('../../src/services/benchmark/dataRetention');
 const { clearResults, clearFailedResults } = require('../../src/services/benchmark/batches');
 const {
+    buildCourthouseGroundTruthCountQuery
+} = require('../../src/services/benchmark/results');
+const {
     acquireBenchmarkTrustEvidenceLock,
     releaseBenchmarkTrustEvidenceLock,
     withBenchmarkTrustEvidenceLock
@@ -37,25 +42,111 @@ const {
     buildBenchmarkTrustFreshnessProjection,
     buildBenchmarkTrustSourceProjection,
     computeBenchmarkTrustExecutionEnvelopeSetFingerprint,
-    computeBenchmarkTrustExecutionResultFingerprint,
     computeBenchmarkTrustJudgeBindingFingerprint,
-    computeBenchmarkTrustJudgeResultFingerprint,
     computePromptSourceFingerprint
 } = require('../../src/services/benchmark/benchmarkTrustSourceEvidence');
 const {
     fingerprint: workerFingerprint,
     normalizeWorkerReceipt
 } = require('../../../shared/workerContract');
+const {
+    BENCHMARK_HUMAN_EVIDENCE_ATTESTATION_SCHEMA,
+    computeBenchmarkHumanEvidenceAttestationId,
+    computeBenchmarkHumanEvidenceSourceResultFingerprint,
+    serializeBenchmarkHumanEvidenceAttestationSigningPayload
+} = require('../../../shared/benchmarkHumanEvidenceAttestation');
+const {
+    HUMAN_EVIDENCE_SCOPE,
+    MIN_REVOCATION_VERSION_ENV,
+    REVOCATION_SNAPSHOT_ID_ENV,
+    REVOCATIONS_ENV,
+    REVOCATIONS_SCHEMA,
+    TRUST_ROOTS_ENV,
+    TRUST_ROOTS_SCHEMA,
+    importAttestedHumanGroundTruth,
+    verifyStoredAttestedHumanGroundTruth
+} = require('../../src/services/benchmark/humanGroundTruthImport');
+const {
+    runWithPublicBenchmarkReadPrivacy
+} = require('../../src/services/benchmark/publicReadPrivacy');
+const {
+    loadQualifiedHumanGroundTruth
+} = require('../../src/services/benchmark/retroCalibration');
 const crypto = require('crypto');
 const { stableSerialize } = require('../../../shared/artifactIdentity');
 const {
-    buildBenchmarkTrustPowerAnalysisFields
+    buildBenchmarkTrustPowerAnalysisFields,
+    buildBenchmarkTrustVarianceBasis,
+    computeBenchmarkTrustCandidateInferenceContractFingerprint,
+    computeBenchmarkTrustVarianceCandidateSetFingerprint,
+    computeBenchmarkTrustVariancePairFingerprints
 } = require('../../src/services/benchmark/benchmarkTrustStatistics');
+const {
+    buildBenchmarkTrustPromptSamplingPolicy
+} = require('../../src/services/benchmark/config');
+const campaignArtifact = Object.freeze({ schema: 'trust-test-campaign/v1', frozen: true });
+const promptExecutionConfig = Object.freeze({
+    repeats: 2,
+    temperature: 0,
+    top_p: 1,
+    seed: 7,
+    response_max_tokens: 1024,
+    per_test_timeout_ms: 60000
+});
+const varianceBasis = ({ candidateBindings, rubricFingerprint, promptSamplingPolicy }) => {
+    const candidateInferenceContractFingerprint =
+        computeBenchmarkTrustCandidateInferenceContractFingerprint({
+            candidateBindings,
+            repeatCount: 2,
+            parameters: {
+                temperature: 0,
+                topP: 1,
+                seed: 7,
+                maxTokens: 1024,
+                timeoutMs: 60000
+            }
+        });
+    const pairFingerprints = computeBenchmarkTrustVariancePairFingerprints(
+        candidateBindings,
+        rubricFingerprint
+    );
+    return buildBenchmarkTrustVarianceBasis({
+    schema: 'agentx.benchmark-trust-variance-basis/independent-pilot-upper-bound/v1',
+    provenance: 'independent_pilot',
+    cohortFingerprint: 'e'.repeat(64),
+    candidateSetFingerprint: computeBenchmarkTrustVarianceCandidateSetFingerprint(candidateBindings),
+    rubricFingerprint,
+    repeatCount: 2,
+    candidateInferenceContractFingerprint,
+    promptSamplingPolicyFingerprint: workerFingerprint(promptSamplingPolicy),
+    candidatePairCount: pairFingerprints.length,
+    pairwiseObservedStdDevs: pairFingerprints.map((pairFingerprint, index) => ({
+        pairFingerprint,
+        observedPairedStdDevMicros: 150000 - index
+    })),
+    method: 'chi-square-one-sided-upper-confidence-bound-v1',
+    independentPromptCount: 30,
+    confidenceBasisPoints: 9500,
+    observedPairedStdDevMicros: 150000
+    });
+};
+const {
+    buildHarnessEnvelope,
+    buildTrustJudgeCellId,
+    normalizeHarnessInvocationParameters
+} = require('../../src/services/benchmark/harnessBrokerClient');
+const {
+    normalizeBenchmarkTarget
+} = require('../../../shared/benchmarkTargetContract');
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const sourceBatchId = (character = 'd') => `batch_${character.repeat(32)}`;
 const candidateId = (character) => `candidate_${character.repeat(32)}`;
 const promptId = (character) => `prompt_${character.repeat(32)}`;
+const TRUST_PROMPT_IDS = Object.freeze(Array.from(
+    { length: 21 },
+    (_, index) => `prompt_${(index + 1).toString(16).padStart(32, '0')}`
+));
 const sourceCompletionTimes = new Map();
 const sourceEvidenceRows = new Map();
 
@@ -96,7 +187,7 @@ const SOURCE_IDENTITIES = Object.freeze([
                 'model-a',
                 `sha256:${'1'.repeat(64)}`,
                 '3'.repeat(64),
-                '4'.repeat(64)
+                '3'.repeat(64)
             )),
             toolsFingerprint: '1'.repeat(64),
             policiesFingerprint: '2'.repeat(64),
@@ -117,7 +208,7 @@ const SOURCE_IDENTITIES = Object.freeze([
                 'model-b',
                 `sha256:${'5'.repeat(64)}`,
                 '7'.repeat(64),
-                '8'.repeat(64)
+                '7'.repeat(64)
             )),
             toolsFingerprint: '3'.repeat(64),
             policiesFingerprint: '4'.repeat(64),
@@ -141,10 +232,80 @@ const WORKER_JUDGE_IDENTITY = Object.freeze({
     environment: { id: 'judge-env', version: '1.0.0', fingerprint: '6'.repeat(64) }
 });
 
+const JUDGE_TARGET = Object.freeze(normalizeBenchmarkTarget({
+    id: 'trust-integration-judge',
+    label: 'Trust integration judge',
+    executionKind: 'harness',
+    mode: 'isolated_model',
+    tier: 'free_cloud',
+    provider: WORKER_JUDGE_IDENTITY.provider.name,
+    model: WORKER_JUDGE_IDENTITY.model.name,
+    modelVersion: WORKER_JUDGE_IDENTITY.model.version,
+    harness: WORKER_JUDGE_IDENTITY.harness,
+    adapter: WORKER_JUDGE_IDENTITY.adapter,
+    profile: {
+        id: WORKER_JUDGE_IDENTITY.environment.id,
+        version: WORKER_JUDGE_IDENTITY.environment.version,
+        fingerprint: WORKER_JUDGE_IDENTITY.environment.fingerprint
+    },
+    api: WORKER_JUDGE_IDENTITY.api,
+    contextWindow: 131072,
+    capabilities: { candidate: false, judge: true },
+    pricing: {
+        kind: 'free',
+        currency: 'USD',
+        source: 'integration-fixture',
+        effectiveAt: null,
+        inputNanodollarsPerMillion: 0,
+        outputNanodollarsPerMillion: 0,
+        callNanodollars: 0
+    },
+    available: true,
+    observedAt: '2026-01-01T00:00:00.000Z',
+    catalogFingerprint: '5'.repeat(64)
+}));
+const JUDGE_INVOCATION = Object.freeze(normalizeHarnessInvocationParameters({
+    temperature: 0,
+    seed: 7,
+    maxTokens: 1024,
+    timeoutMs: 60000
+}, { role: 'judge' }));
+const JUDGE_POLICY_ENVELOPE = buildHarnessEnvelope({
+    batchId: 'fixture-batch',
+    cellId: 'fixture-cell',
+    target: JUDGE_TARGET,
+    promptText: 'fixture-prompt',
+    parameters: JUDGE_INVOCATION,
+    role: 'judge'
+});
+const RUNTIME_RUBRIC = Object.freeze({
+    schema: 'agentx.benchmark-trust-judge-runtime-rubric/v1',
+    scoringMethod: 'llm_judge',
+    scorerVersion: 'trust-test-v1',
+    scorerComponents: { judge_prompt: 2, judge_parsing: 2 },
+    promptContract: 'dynamic-judge-prompt',
+    implementationManifest: {
+        sourceFiles: [
+            'benchmarkTrustCampaignRuntime', 'categories', 'formatComplianceScorer', 'judgeCall',
+            'judgeConfidence', 'judgeExecutor', 'jsonUtils', 'qualityScorer', 'scoringConfigs'
+        ].map((module, index) => ({ module, sha256: String(index + 1).padStart(64, '0') })),
+        loadedFunctions: Object.fromEntries([
+            'buildDynamicJudgePrompt', 'buildPromptData', 'computeMonolithicJudgeScore', 'getScoringDimensions',
+            'judgeConfidenceAssess', 'parseJudgeJsonResponse', 'scoreFormatCompliance',
+            'scoreResponse', 'stripMarkdownCodeFences'
+        ].map((name, index) => [name, String(index + 11).padStart(64, '0')])),
+        scoringConfigsFingerprint: 'f'.repeat(64)
+    },
+    resultContract: JUDGE_POLICY_ENVELOPE.resultContract,
+    executionProfile: 'portable',
+    toolsFingerprint: JUDGE_POLICY_ENVELOPE.tools.schemaFingerprint,
+    policiesFingerprint: JUDGE_POLICY_ENVELOPE.policies.fingerprint,
+    judgeInvocation: JUDGE_INVOCATION
+});
 const JUDGE = Object.freeze({
     qualificationReceiptId: '9'.repeat(64),
     identityFingerprint: workerFingerprint(WORKER_JUDGE_IDENTITY),
-    rubricFingerprint: 'b'.repeat(64),
+    rubricFingerprint: workerFingerprint(RUNTIME_RUBRIC),
     corpusFingerprint: 'c'.repeat(64),
     holdoutFingerprint: 'd'.repeat(64),
     qualificationStatus: 'qualified',
@@ -152,15 +313,16 @@ const JUDGE = Object.freeze({
 });
 
 const SCORE_EVIDENCE_BASE = Object.freeze({
-    judgeTargetFingerprint: 'e'.repeat(64),
+    judgeTargetFingerprint: JUDGE_TARGET.fingerprint,
     qualityCohortFingerprint: 'a'.repeat(64),
     scoringMethod: 'llm_judge',
     scorerVersion: 'trust-test-v1',
     workerIdentityFingerprint: JUDGE.identityFingerprint,
-    toolsFingerprint: 'f'.repeat(64),
-    policiesFingerprint: JUDGE.rubricFingerprint,
+    toolsFingerprint: JUDGE_POLICY_ENVELOPE.tools.schemaFingerprint,
+    policiesFingerprint: JUDGE_POLICY_ENVELOPE.policies.fingerprint,
     executionProfile: 'portable',
-    envelopeFingerprint: '5'.repeat(64)
+    judgeInvocation: JUDGE_INVOCATION,
+    runtimeRubric: RUNTIME_RUBRIC
 });
 const SCORE_EVIDENCE = Object.freeze({
     ...SCORE_EVIDENCE_BASE,
@@ -179,17 +341,17 @@ const FRESHNESS_POLICY = Object.freeze({
 function sourceResultFixtures() {
     const rows = [];
     for (const [candidateIndex, candidate] of SOURCE_IDENTITIES.entries()) {
-        for (const [promptIndex, exactPromptId] of [promptId('1'), promptId('2'), promptId('3')].entries()) {
+        for (const [promptIndex, exactPromptId] of TRUST_PROMPT_IDS.entries()) {
             for (let repeatIndex = 0; repeatIndex < 2; repeatIndex += 1) {
                 const qualityScore = candidateIndex === 0
-                    ? [9, 9.01, 8.99][promptIndex]
-                    : 7;
+                    ? [9, 9.1, 8.9][promptIndex % 3]
+                    : 1;
                 const row = {
                     model: candidate.sourceIdentity.model,
                     model_digest: candidate.sourceIdentity.modelDigest,
                     host: candidate.sourceIdentity.host,
                     execution_target: { fingerprint: candidate.sourceIdentity.executionTargetFingerprint },
-                    judge_target: { fingerprint: SCORE_EVIDENCE.judgeTargetFingerprint },
+                    judge_target: clone(JUDGE_TARGET),
                     quality_cohort_fingerprint: SCORE_EVIDENCE.qualityCohortFingerprint,
                     prompt: `opaque-prompt-${promptIndex}`,
                     prompt_name: `prompt-${promptIndex}`,
@@ -198,15 +360,21 @@ function sourceResultFixtures() {
                     scoring_type: 'reasoning',
                     scoring_plan: 'llm_judge',
                     response: `opaque-response-${candidateIndex}-${promptIndex}-${repeatIndex}`,
+                    judge_prompt: `judge-prompt-${candidateIndex}-${promptIndex}-${repeatIndex}`,
+                    judge_raw_response: JSON.stringify({ overall: qualityScore }),
                     success: true,
                     scoring_method: SCORE_EVIDENCE.scoringMethod,
                     scorer_version: SCORE_EVIDENCE.scorerVersion,
                     // Keep prompt-level paired differences non-constant while
                     // leaving a comfortably significant preregistered winner.
                     quality_score: qualityScore,
+                    quality_breakdown: { overall: qualityScore },
+                    judge_reported_overall: qualityScore,
+                    format_score: null,
+                    format_compliant: null,
                     composite_score: candidateIndex === 0
-                        ? [90, 90.1, 89.9][promptIndex]
-                        : 70,
+                        ? [90, 91, 89][promptIndex % 3]
+                        : 10,
                     excluded_from_leaderboard: false,
                     execution_settings: {
                         artifact_digest: candidate.sourceIdentity.artifactDigest,
@@ -219,8 +387,7 @@ function sourceResultFixtures() {
                     timestamp: new Date('2026-01-01T00:00:00.000Z'),
                     updated_at: new Date('2026-01-01T00:00:00.000Z')
                 };
-                const promptFingerprint = computePromptSourceFingerprint(row);
-                row.execution_receipt = normalizeWorkerReceipt({
+                row.trust_execution_receipt = normalizeWorkerReceipt({
                     schema: 'agentx.worker-receipt/v1',
                     schemaVersion: 1,
                     executionProfile: candidate.sourceIdentity.executionProfile,
@@ -228,10 +395,10 @@ function sourceResultFixtures() {
                         candidate.sourceIdentity.model,
                         candidate.sourceIdentity.modelDigest,
                         candidate.sourceIdentity.inferenceContractFingerprint,
-                        candidate.sourceIdentity.executionTargetFingerprint
+                        candidate.sourceIdentity.inferenceContractFingerprint
                     ),
                     fingerprints: {
-                        prompt: promptFingerprint,
+                        prompt: workerFingerprint(row.prompt),
                         tools: candidate.sourceIdentity.toolsFingerprint,
                         policies: candidate.sourceIdentity.policiesFingerprint,
                         envelope: workerFingerprint({
@@ -259,34 +426,26 @@ function sourceResultFixtures() {
                     violations: [],
                     result: {
                         contractSatisfied: true,
-                        fingerprint: computeBenchmarkTrustExecutionResultFingerprint({
-                            candidateId: candidate.candidateId,
-                            promptId: exactPromptId,
-                            repeatIndex,
-                            response: row.response,
-                            success: row.success
-                        })
+                        fingerprint: workerFingerprint(row.response)
                     }
                 });
-                const resultFingerprint = computeBenchmarkTrustJudgeResultFingerprint({
-                    candidateId: candidate.candidateId,
-                    promptId: exactPromptId,
-                    repeatIndex,
-                    response: row.response,
-                    qualityScore,
-                    rubricFingerprint: JUDGE.rubricFingerprint,
-                    judgeIdentityFingerprint: JUDGE.identityFingerprint
-                });
-                row.judge_receipt = normalizeWorkerReceipt({
+                row.trust_judge_receipt = normalizeWorkerReceipt({
                     schema: 'agentx.worker-receipt/v1',
                     schemaVersion: 1,
                     executionProfile: SCORE_EVIDENCE.executionProfile,
                     identity: clone(WORKER_JUDGE_IDENTITY),
                     fingerprints: {
-                        prompt: promptFingerprint,
+                        prompt: workerFingerprint(row.judge_prompt),
                         tools: SCORE_EVIDENCE.toolsFingerprint,
                         policies: SCORE_EVIDENCE.policiesFingerprint,
-                        envelope: SCORE_EVIDENCE.envelopeFingerprint
+                        envelope: buildHarnessEnvelope({
+                            batchId: String(row.batch_id),
+                            cellId: buildTrustJudgeCellId(row),
+                            target: JUDGE_TARGET,
+                            promptText: row.judge_prompt,
+                            parameters: JUDGE_INVOCATION,
+                            role: 'judge'
+                        }).fingerprint
                     },
                     finalState: 'succeeded',
                     failure: { classification: null, code: null },
@@ -303,8 +462,13 @@ function sourceResultFixtures() {
                     humanInterventions: [],
                     evidence: { patches: [], artifacts: [], tests: [] },
                     violations: [],
-                    result: { contractSatisfied: true, fingerprint: resultFingerprint }
+                    result: {
+                        contractSatisfied: true,
+                        fingerprint: workerFingerprint(row.judge_raw_response)
+                    }
                 });
+                row.execution_receipt = clone(row.trust_execution_receipt);
+                row.judge_receipt = clone(row.trust_judge_receipt);
                 rows.push(row);
             }
         }
@@ -312,7 +476,7 @@ function sourceResultFixtures() {
     return rows;
 }
 
-const SOURCE_RESULT_COUNT = 12;
+const SOURCE_RESULT_COUNT = 84;
 
 function sourceContextFixture(sourceId = sourceBatchId(), sourceResults = sourceResultFixtures()) {
     const firstByPrompt = new Map();
@@ -320,25 +484,52 @@ function sourceContextFixture(sourceId = sourceBatchId(), sourceResults = source
         if (!firstByPrompt.has(row.trust_prompt_id)) firstByPrompt.set(row.trust_prompt_id, row);
     }
     const candidateIds = SOURCE_IDENTITIES.map(candidate => candidate.candidateId);
-    const promptIds = [promptId('1'), promptId('2'), promptId('3')];
+    const promptIds = [...firstByPrompt.keys()].sort();
+    const promptSamplingPolicy = buildBenchmarkTrustPromptSamplingPolicy(
+        campaignArtifact,
+        promptExecutionConfig,
+        [...firstByPrompt.values()].map(row => computePromptSourceFingerprint(row))
+    );
+    const frozenVarianceBasis = varianceBasis({
+        candidateBindings: SOURCE_IDENTITIES.map(candidate => ({
+            targetFingerprint: candidate.sourceIdentity.executionTargetFingerprint,
+            modelDigest: candidate.sourceIdentity.modelDigest,
+            artifactDigest: candidate.sourceIdentity.artifactDigest,
+            inferenceContractFingerprint: candidate.sourceIdentity.inferenceContractFingerprint
+        })),
+        rubricFingerprint: JUDGE.rubricFingerprint,
+        promptSamplingPolicy
+    });
     const powerFields = buildBenchmarkTrustPowerAnalysisFields({
         alpha: 0.05,
-        mde: 1,
+        mde: 0.1,
+        poweredAlternativeEffect: 10,
         candidateIds,
         targetPowerBasisPoints: 8000,
-        assumedMaxPairedStdDevMicros: 50000
+        assumedMaxPairedStdDevMicros: frozenVarianceBasis.upperConfidenceBoundMicros,
+        varianceBasis: frozenVarianceBasis
     });
     const analysisPlan = {
         alpha: 0.05,
-        mde: 1,
+        mde: 0.1,
+        poweredAlternativeEffect: 10,
         equivalenceMargin: 0.1,
         repeatCount: 2,
+        candidateInferenceParameters: {
+            temperature: 0,
+            topP: 1,
+            seed: 7,
+            maxTokens: 1024,
+            timeoutMs: 60000
+        },
+        promptSamplingPolicy,
+        variancePilotAttestationId: '7'.repeat(64),
         ...powerFields,
         candidateIds,
         promptIds
     };
     const analysisPlanFingerprint = crypto.createHash('sha256').update(stableSerialize({
-        schema: 'agentx.benchmark-trust-analysis-plan/v1',
+        schema: 'agentx.benchmark-trust-analysis-plan/v2',
         plan: analysisPlan
     })).digest('hex');
     return {
@@ -348,7 +539,7 @@ function sourceContextFixture(sourceId = sourceBatchId(), sourceResults = source
         product: { ...PRODUCT },
         campaign: {
             campaignId: `campaign_${'c'.repeat(32)}`,
-            artifact: { schema: 'trust-test-campaign/v1', frozen: true }
+            artifact: campaignArtifact
         },
         inferenceProfile: {
             artifact: { schema: 'trust-test-inference-profile/v1', profile: 'controlled' }
@@ -368,7 +559,7 @@ function sourceContextFixture(sourceId = sourceBatchId(), sourceResults = source
                         .map(row => ({
                             promptId: row.trust_prompt_id,
                             repeatIndex: row.repeat_index,
-                            envelopeFingerprint: row.execution_receipt.fingerprints.envelope
+                            envelopeFingerprint: row.trust_execution_receipt.fingerprints.envelope
                         }))
                 })
             }
@@ -462,14 +653,13 @@ async function createLinkedBatch(
             row.updated_at = new Date(evidenceTime);
         }
         const storedRows = sourceResults.map(row => ({
-            ...clone(row),
+            ...runtimeTrustRow(row, batch._id),
             timestamp: new Date(evidenceTime),
             updated_at: new Date(evidenceTime),
-            trust_evidence_sealed: terminalTrustBatch,
-            batch_id: batch._id
+            trust_evidence_sealed: terminalTrustBatch
         }));
         await BenchmarkResult.collection.insertMany(storedRows);
-        sourceEvidenceRows.set(sourceId, clone(sourceResults));
+        sourceEvidenceRows.set(sourceId, clone(storedRows));
     }
     const completedAt = overrides.completed_at
         || (desiredStatus === 'pending' ? null : new Date(Math.max(Date.now(), evidenceTime.getTime())));
@@ -532,6 +722,21 @@ function runtimeTrustRow(row, batchId) {
     delete runtimeRow.timestamp;
     delete runtimeRow.updated_at;
     delete runtimeRow.trust_evidence_sealed;
+    if (runtimeRow.trust_judge_receipt?.fingerprints) {
+        const judgeEnvelope = buildHarnessEnvelope({
+            batchId: String(batchId),
+            cellId: buildTrustJudgeCellId(runtimeRow),
+            target: runtimeRow.judge_target,
+            promptText: runtimeRow.judge_prompt,
+            parameters: JUDGE_INVOCATION,
+            role: 'judge'
+        });
+        runtimeRow.trust_judge_receipt.fingerprints.envelope = judgeEnvelope.fingerprint;
+        const { fingerprint: _previousJudgeReceiptFingerprint, ...judgeReceiptBody } =
+            runtimeRow.trust_judge_receipt;
+        runtimeRow.trust_judge_receipt = normalizeWorkerReceipt(judgeReceiptBody);
+        runtimeRow.judge_receipt = clone(runtimeRow.trust_judge_receipt);
+    }
     return runtimeRow;
 }
 
@@ -558,11 +763,19 @@ beforeEach(async () => {
     await BenchmarkTimelineEntry.collection.deleteMany({});
     await BenchmarkBatch.collection.deleteMany({});
     await JudgeGroundTruth.collection.deleteMany({});
+    delete process.env[TRUST_ROOTS_ENV];
+    delete process.env[REVOCATIONS_ENV];
+    delete process.env[MIN_REVOCATION_VERSION_ENV];
+    delete process.env[REVOCATION_SNAPSHOT_ID_ENV];
     sourceCompletionTimes.clear();
     sourceEvidenceRows.clear();
 });
 
 afterAll(async () => {
+    delete process.env[TRUST_ROOTS_ENV];
+    delete process.env[REVOCATIONS_ENV];
+    delete process.env[MIN_REVOCATION_VERSION_ENV];
+    delete process.env[REVOCATION_SNAPSHOT_ID_ENV];
     await mongoose.disconnect();
     await mongoServer.stop();
 });
@@ -690,6 +903,68 @@ describe('BenchmarkTrustReceipt append-only store', () => {
             key: { trust_batch_id: 1 },
             unique: true
         });
+        expect(batches.get('uniq_benchmark_batch_trust_campaign_spec_id')).toMatchObject({
+            key: { trust_campaign_spec_id: 1 },
+            unique: true
+        });
+    });
+
+    test('consumes every strict CampaignSpec id at most once', async () => {
+        const specId = 'f'.repeat(64);
+        const first = await BenchmarkBatch.create({
+            run_name: 'strict-campaign-reservation',
+            host: 'harness',
+            models: ['model-a'],
+            levels: [1],
+            total_tests: 1,
+            status: 'failed',
+            trust_campaign_spec_id: specId
+        });
+
+        await expect(BenchmarkBatch.create({
+            run_name: 'strict-campaign-replay',
+            host: 'harness',
+            models: ['model-a'],
+            levels: [1],
+            total_tests: 1,
+            status: 'pending',
+            trust_campaign_spec_id: specId
+        })).rejects.toMatchObject({ code: 11000 });
+
+        await expect(BenchmarkBatch.deleteOne({ _id: first._id }))
+            .rejects.toMatchObject({ code: 'BENCHMARK_TRUST_SOURCE_CONTEXT_IMMUTABLE' });
+    });
+
+    test('marks an abandoned one-shot reservation failed without making it replayable', async () => {
+        const specId = 'e'.repeat(64);
+        const reserved = await BenchmarkBatch.create({
+            run_name: 'abandoned-strict-campaign-reservation',
+            host: 'harness',
+            models: ['model-a'],
+            levels: [1],
+            total_tests: 1,
+            status: 'pending',
+            trust_campaign_spec_id: specId
+        });
+        await BenchmarkBatch.collection.updateOne(
+            { _id: reserved._id },
+            { $set: { created_at: new Date(Date.now() - 60_000) } }
+        );
+
+        await BenchmarkBatch.cleanupStale(1);
+        await expect(BenchmarkBatch.findById(reserved._id).lean()).resolves.toMatchObject({
+            status: 'failed',
+            failure_reason: 'trust_preregistration_abandoned'
+        });
+        await expect(BenchmarkBatch.create({
+            run_name: 'abandoned-strict-campaign-replay',
+            host: 'harness',
+            models: ['model-a'],
+            levels: [1],
+            total_tests: 1,
+            status: 'pending',
+            trust_campaign_spec_id: specId
+        })).rejects.toMatchObject({ code: 11000 });
     });
 
     test('stores only a strictly verified payload linked to a durable opaque batch', async () => {
@@ -816,6 +1091,132 @@ describe('BenchmarkTrustReceipt append-only store', () => {
             started._id,
             sourceContextFixture(sourceBatchId('2'))
         )).rejects.toMatchObject(immutable);
+    });
+
+    test('atomically refuses a legacy terminal update when Trust context wins after the precheck', async () => {
+        const sourceId = sourceBatchId('a');
+        const context = sourceContextFixture(sourceId);
+        const batch = await BenchmarkBatch.create({
+            run_name: 'terminal-context-race',
+            host: 'opaque-test-host',
+            models: ['model-a', 'model-b'],
+            levels: [1],
+            total_tests: SOURCE_RESULT_COUNT,
+            status: 'pending',
+            trust_batch_id: sourceId
+        });
+        const originalExists = BenchmarkBatch.exists.bind(BenchmarkBatch);
+        const existsSpy = jest.spyOn(BenchmarkBatch, 'exists')
+            .mockImplementationOnce(async () => {
+                await BenchmarkBatch.collection.updateOne(
+                    { _id: batch._id },
+                    {
+                        $set: {
+                            trust_evidence_context: context,
+                            trust_evidence_committed_at: new Date()
+                        }
+                    }
+                );
+                return null;
+            })
+            .mockImplementation((...args) => originalExists(...args));
+
+        try {
+            const update = await BenchmarkBatch.updateOne(
+                { _id: batch._id },
+                { $set: { status: 'failed', completed_at: new Date() } }
+            );
+            expect(update.matchedCount).toBe(0);
+        } finally {
+            existsSpy.mockRestore();
+        }
+        await expect(BenchmarkBatch.findById(batch._id)
+            .select('+trust_evidence_context')
+            .lean()).resolves.toMatchObject({
+            status: 'pending',
+            trust_evidence_context: context,
+            completed_at: null
+        });
+    });
+
+    test('atomically refuses a legacy terminal document save when Trust context wins after the precheck', async () => {
+        const sourceId = sourceBatchId('b');
+        const context = sourceContextFixture(sourceId);
+        const batch = await BenchmarkBatch.create({
+            run_name: 'terminal-document-context-race',
+            host: 'opaque-test-host',
+            models: ['model-a', 'model-b'],
+            levels: [1],
+            total_tests: SOURCE_RESULT_COUNT,
+            status: 'pending',
+            trust_batch_id: sourceId
+        });
+        const document = await BenchmarkBatch.findById(batch._id);
+        document.status = 'failed';
+        document.completed_at = new Date();
+
+        const originalExists = BenchmarkBatch.exists.bind(BenchmarkBatch);
+        const existsSpy = jest.spyOn(BenchmarkBatch, 'exists')
+            .mockImplementationOnce(async () => {
+                await BenchmarkBatch.collection.updateOne(
+                    { _id: batch._id },
+                    {
+                        $set: {
+                            trust_evidence_context: context,
+                            trust_evidence_committed_at: new Date()
+                        }
+                    }
+                );
+                return null;
+            })
+            .mockImplementation((...args) => originalExists(...args));
+
+        try {
+            await expect(document.save()).rejects.toMatchObject({
+                name: 'DocumentNotFoundError'
+            });
+        } finally {
+            existsSpy.mockRestore();
+        }
+        await expect(BenchmarkBatch.findById(batch._id)
+            .select('+trust_evidence_context')
+            .lean()).resolves.toMatchObject({
+            status: 'pending',
+            trust_evidence_context: context,
+            completed_at: null
+        });
+    });
+
+    test('atomically refuses deletion when a CampaignSpec reservation wins after the precheck', async () => {
+        const batch = await BenchmarkBatch.create({
+            run_name: 'delete-spec-race',
+            host: 'opaque-test-host',
+            models: ['model-a'],
+            levels: [1],
+            total_tests: 1,
+            status: 'pending'
+        });
+        const specId = '9'.repeat(64);
+        const originalExists = BenchmarkBatch.exists.bind(BenchmarkBatch);
+        const existsSpy = jest.spyOn(BenchmarkBatch, 'exists')
+            .mockImplementationOnce(async () => {
+                await BenchmarkBatch.collection.updateOne(
+                    { _id: batch._id },
+                    { $set: { trust_campaign_spec_id: specId } }
+                );
+                return null;
+            })
+            .mockImplementation((...args) => originalExists(...args));
+
+        try {
+            const deletion = await BenchmarkBatch.deleteOne({ _id: batch._id });
+            expect(deletion.deletedCount).toBe(0);
+        } finally {
+            existsSpy.mockRestore();
+        }
+        await expect(BenchmarkBatch.findById(batch._id).lean()).resolves.toMatchObject({
+            trust_campaign_spec_id: specId
+        });
     });
 
     test('rejects missing or post-start server commitment timestamps at receipt verification', async () => {
@@ -993,6 +1394,104 @@ describe('BenchmarkTrustReceipt append-only store', () => {
         expect(inserted.updated_at.getTime()).toBeGreaterThanOrEqual(inserted.timestamp.getTime());
     });
 
+    test('atomically commits the source context with server start time and keeps private receipts private', async () => {
+        const sourceId = sourceBatchId('f');
+        const sourceResults = sourceResultFixtures();
+        const batch = await BenchmarkBatch.create({
+            run_name: 'atomic-trust-start',
+            host: 'opaque-test-host',
+            models: ['model-a', 'model-b'],
+            levels: [1],
+            total_tests: sourceResults.length,
+            status: 'pending',
+            trust_batch_id: sourceId
+        });
+        const committed = await BenchmarkBatch.commitAndStartTrustEvidenceBatch(
+            batch._id,
+            sourceContextFixture(sourceId, sourceResults)
+        );
+        const started = await BenchmarkBatch.findById(batch._id)
+            .select('+trust_evidence_context +trust_evidence_committed_at')
+            .lean();
+        expect(started).toMatchObject({ status: 'running', execution_started_at: null });
+        expect(started.started_at).toEqual(committed.committedAt);
+        expect(started.trust_evidence_committed_at).toEqual(committed.committedAt);
+
+        await expect(BenchmarkResult.create(runtimeTrustRow(sourceResults[0], batch._id)))
+            .rejects.toMatchObject({ code: BenchmarkResult.PROTECTED_EVIDENCE_ERROR_CODE });
+        const executionStartedAt = new Date();
+        await BenchmarkBatch.updateOne(
+            { _id: batch._id, execution_started_at: null },
+            { $set: { execution_started_at: executionStartedAt, execution_pid: 1234 } }
+        );
+        const created = await BenchmarkResult.create(runtimeTrustRow(sourceResults[0], batch._id));
+        const publicRow = await BenchmarkResult.findById(created._id).lean();
+        expect(publicRow).not.toHaveProperty('trust_execution_receipt');
+        expect(publicRow).not.toHaveProperty('trust_judge_receipt');
+        const privateRow = await BenchmarkResult.findById(created._id)
+            .select('+trust_execution_receipt +trust_judge_receipt')
+            .lean();
+        expect(privateRow.trust_execution_receipt.fingerprint)
+            .toBe(sourceResults[0].trust_execution_receipt.fingerprint);
+        expect(privateRow.trust_judge_receipt.fingerprint)
+            .toBe(runtimeTrustRow(sourceResults[0], batch._id).trust_judge_receipt.fingerprint);
+    });
+
+    test('maps an interrupted pre-execution Trust finalization to a stopped judge state', async () => {
+        const sourceId = sourceBatchId('4');
+        const sourceResults = sourceResultFixtures();
+        const batch = await BenchmarkBatch.create({
+            run_name: 'interrupted-before-execution-lock',
+            host: 'opaque-test-host',
+            models: ['model-a', 'model-b'],
+            levels: [1],
+            total_tests: sourceResults.length,
+            status: 'pending',
+            trust_batch_id: sourceId
+        });
+        await BenchmarkBatch.commitAndStartTrustEvidenceBatch(
+            batch._id,
+            sourceContextFixture(sourceId, sourceResults)
+        );
+        const finalized = await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id, {
+            status: 'interrupted',
+            failureReason: 'process_shutdown',
+            allowUnstarted: true
+        });
+        expect(finalized).toMatchObject({
+            status: 'interrupted',
+            judge_status: 'stopped',
+            completed: 0,
+            failed: 0,
+            trust_evidence_sealed: true
+        });
+    });
+
+    test('sets the private judge WorkerReceipt once and closes concurrent replacement races', async () => {
+        const { batch, sourceResults } = await createRunningTrustBatch(sourceBatchId('5'));
+        const row = runtimeTrustRow(sourceResults[0], batch._id);
+        const judgeReceipt = clone(row.trust_judge_receipt);
+        row.trust_judge_receipt = null;
+        row.judge_receipt = null;
+        const created = await BenchmarkResult.create(row);
+
+        const attempts = await Promise.all([
+            BenchmarkResult.updateOne(
+                { _id: created._id },
+                { $set: { trust_judge_receipt: judgeReceipt, judge_receipt: judgeReceipt } }
+            ),
+            BenchmarkResult.updateOne(
+                { _id: created._id },
+                { $set: { trust_judge_receipt: judgeReceipt, judge_receipt: judgeReceipt } }
+            )
+        ]);
+        expect(attempts.reduce((sum, result) => sum + result.matchedCount, 0)).toBe(1);
+        await expect(BenchmarkResult.updateOne(
+            { _id: created._id },
+            { $set: { trust_judge_receipt: judgeReceipt } }
+        )).rejects.toMatchObject({ code: BenchmarkResult.PROTECTED_EVIDENCE_ERROR_CODE });
+    });
+
     test('only the locked Trust finalizer may terminate a context batch and no result can follow it', async () => {
         const { batch, sourceResults } = await createRunningTrustBatch(sourceBatchId('2'));
         const row = runtimeTrustRow(sourceResults[0], batch._id);
@@ -1014,8 +1513,11 @@ describe('BenchmarkTrustReceipt append-only store', () => {
         await expect(document.markAsCompleted('completed'))
             .rejects.toMatchObject({ code: BenchmarkBatch.PROTECTED_CONTEXT_ERROR_CODE });
 
-        const finalized = await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id);
-        expect(finalized).toMatchObject({ status: 'completed', completed: 1, failed: 0 });
+        const finalized = await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id, {
+            status: 'interrupted',
+            failureReason: 'bounded-test-interruption'
+        });
+        expect(finalized).toMatchObject({ status: 'interrupted', completed: 1, failed: 0 });
         expect(finalized.trust_evidence_finalized_at).toEqual(finalized.completed_at);
         expect(finalized.updated_at).toEqual(finalized.completed_at);
         const finalizedRow = await BenchmarkResult.findOne({ batch_id: batch._id });
@@ -1057,12 +1559,15 @@ describe('BenchmarkTrustReceipt append-only store', () => {
     test('serializes Trust finalization against result insertion under one evidence lock', async () => {
         const { batch, sourceResults } = await createRunningTrustBatch(sourceBatchId('3'));
         const insertion = BenchmarkResult.create(runtimeTrustRow(sourceResults[0], batch._id));
-        const finalization = BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id);
+        const finalization = BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id, {
+            status: 'interrupted',
+            failureReason: 'concurrent-test-interruption'
+        });
         const outcomes = await Promise.allSettled([insertion, finalization]);
         const currentBatch = await BenchmarkBatch.findById(batch._id).lean();
         const currentRows = await BenchmarkResult.find({ batch_id: batch._id }).lean();
 
-        expect(currentBatch.status).toBe('completed');
+        expect(currentBatch.status).toBe('interrupted');
         expect(currentRows).toHaveLength(outcomes[0].status === 'fulfilled' ? 1 : 0);
         expect(currentBatch.completed).toBe(currentRows.length);
         expect(currentRows.every(row => row.timestamp <= currentBatch.completed_at)).toBe(true);
@@ -1077,24 +1582,150 @@ describe('BenchmarkTrustReceipt append-only store', () => {
         const row = await BenchmarkResult.create(runtimeTrustRow(sourceResults[0], batch._id));
         await Promise.allSettled([
             BenchmarkResult.updateOne({ _id: row._id }, { $set: { success: false } }),
-            BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id)
+            BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id, {
+                status: 'interrupted',
+                failureReason: 'mutation-test-interruption'
+            })
         ]);
 
         const [currentBatch, currentRow] = await Promise.all([
             BenchmarkBatch.findById(batch._id).select('+trust_evidence_finalized_at').lean(),
             BenchmarkResult.findById(row._id).lean()
         ]);
-        expect(currentBatch.status).toBe('completed');
+        expect(currentBatch.status).toBe('interrupted');
         expect(currentRow.trust_evidence_sealed).toBe(true);
-        expect(currentBatch.completed).toBe(currentRow.success === true ? 1 : 0);
+        expect(currentBatch.completed).toBe(1);
         expect(currentBatch.failed).toBe(currentRow.success === true ? 0 : 1);
+    });
+
+    test('keeps an immutable legacy v1 receipt readable under the v2 reader', async () => {
+        const sourceId = sourceBatchId('1');
+        await createLinkedBatch(sourceId);
+        const legacyBody = bodyFixture({ sourceId, campaignCharacter: '1' });
+        legacyBody.schema = BENCHMARK_TRUST_RECEIPT_SCHEMA_V1;
+        legacyBody.statistics.method = 'paired-prompt-t-v1';
+        delete legacyBody.statistics.preregistration.poweredAlternativeEffectMicros;
+        delete legacyBody.statistics.preregistration.varianceBasisFingerprint;
+        delete legacyBody.statistics.preregistration.variancePilotAttestationId;
+        const legacyReceipt = buildBenchmarkTrustReceipt(legacyBody);
+
+        await BenchmarkTrustReceipt.create(
+            BenchmarkTrustReceipt.buildStoredRecord(legacyReceipt)
+        );
+        const stored = await BenchmarkTrustReceipt.findOne({
+            receiptId: legacyReceipt.receiptId
+        }).lean();
+
+        expect(BenchmarkTrustReceipt.verifyStoredRecord(stored)).toEqual(legacyReceipt);
+        await expect(getBenchmarkTrustReceiptById(legacyReceipt.receiptId))
+            .resolves.toEqual(legacyReceipt);
+    });
+
+    test('verifies and retains evidence referenced by the literal a51fcd1 v1 receipt', async () => {
+        const historicalReceipt = clone(HISTORICAL_V1_RECEIPT);
+        const batch = await BenchmarkBatch.create({
+            run_name: 'historical-v1-retention',
+            host: 'opaque-test-host',
+            models: ['historical-model'],
+            levels: [1],
+            total_tests: 1,
+            completed: 1,
+            status: 'completed',
+            completed_at: new Date(0),
+            trust_batch_id: historicalReceipt.execution.sourceBatchId
+        });
+        await BenchmarkResult.collection.insertOne({
+            batch_id: batch._id,
+            model: 'historical-model',
+            marker: 'historical-v1-protected'
+        });
+        await BenchmarkTrustReceipt.create(
+            BenchmarkTrustReceipt.buildStoredRecord(historicalReceipt)
+        );
+
+        const stored = await BenchmarkTrustReceipt.findOne({
+            receiptId: historicalReceipt.receiptId
+        }).lean();
+        expect(BenchmarkTrustReceipt.verifyStoredRecord(stored)).toEqual(historicalReceipt);
+
+        const outcome = await archiveOldResults(-1, false);
+        expect(outcome.protectedSourceBatchIds).toContain(historicalReceipt.execution.sourceBatchId);
+        await expect(BenchmarkResult.collection.countDocuments({ batch_id: batch._id }))
+            .resolves.toBe(1);
+    });
+
+    test('courthouse counts legacy human rows but excludes complete and partial attestation markers', async () => {
+        const query = buildCourthouseGroundTruthCountQuery();
+        const before = await JudgeGroundTruth.countDocuments(query);
+        await JudgeGroundTruth.collection.insertMany([
+            {
+                name: 'dashboard-visible-human',
+                active: true,
+                created_by: 'human-reviewer',
+                source: 'courthouse-review'
+            },
+            {
+                name: 'dashboard-private-attested',
+                active: true,
+                created_by: 'attested:issuer',
+                source: 'attested-human-evidence-v1'
+            },
+            {
+                name: 'dashboard-private-partial-marker',
+                active: true,
+                created_by: 'human-reviewer',
+                source: 'courthouse-review',
+                human_attestation_fingerprint: 'a'.repeat(64)
+            }
+        ]);
+
+        await expect(JudgeGroundTruth.countDocuments(query)).resolves.toBe(before + 1);
+    });
+
+    test('fails closed if source evidence changes between validation and result sealing', async () => {
+        const { batch, sourceResults } = await createRunningTrustBatch(sourceBatchId('d'));
+        await BenchmarkResult.insertMany(
+            sourceResults.map(row => runtimeTrustRow(row, batch._id))
+        );
+        const originalUpdateMany = BenchmarkResult.collection.updateMany.bind(BenchmarkResult.collection);
+        BenchmarkResult.collection.updateMany = async (...args) => {
+            await BenchmarkResult.collection.updateOne(
+                { batch_id: batch._id, trust_candidate_id: sourceResults[0].trust_candidate_id },
+                { $set: { response: 'tampered-between-validation-and-seal' } }
+            );
+            return originalUpdateMany(...args);
+        };
+
+        try {
+            await expect(BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id))
+                .rejects.toMatchObject({ code: BenchmarkBatch.PROTECTED_CONTEXT_ERROR_CODE });
+        } finally {
+            BenchmarkResult.collection.updateMany = originalUpdateMany;
+        }
+
+        const [currentBatch, currentRows] = await Promise.all([
+            BenchmarkBatch.findById(batch._id).select('+trust_evidence_finalized_at').lean(),
+            BenchmarkResult.find({ batch_id: batch._id }).lean()
+        ]);
+        expect(currentBatch).toMatchObject({
+            status: 'failed',
+            judge_status: 'failed',
+            failure_reason: 'trust_evidence_changed_during_finalization',
+            trust_evidence_sealed: true
+        });
+        expect(currentBatch.trust_evidence_finalized_at).toEqual(currentBatch.completed_at);
+        expect(currentRows).toHaveLength(SOURCE_RESULT_COUNT);
+        expect(currentRows.every(row => row.trust_evidence_sealed === true)).toBe(true);
     });
 
     test('Trust finalization cannot be stranded by a concurrent nonterminal status update', async () => {
         const { batch } = await createRunningTrustBatch(sourceBatchId('c'));
         const outcomes = await Promise.allSettled([
             BenchmarkBatch.updateOne({ _id: batch._id }, { $set: { status: 'judging' } }),
-            BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id)
+            BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id, {
+                status: 'interrupted',
+                failureReason: 'status-race-test-interruption'
+            })
         ]);
         const current = await BenchmarkBatch.findById(batch._id)
             .select('+trust_evidence_finalized_at')
@@ -1102,7 +1733,7 @@ describe('BenchmarkTrustReceipt append-only store', () => {
 
         expect(outcomes[1].status).toBe('fulfilled');
         expect(current).toMatchObject({
-            status: 'completed',
+            status: 'interrupted',
             trust_evidence_sealed: true
         });
         expect(current.trust_evidence_finalized_at).toEqual(current.completed_at);
@@ -1115,7 +1746,9 @@ describe('BenchmarkTrustReceipt append-only store', () => {
             sourceResults.map(row => runtimeTrustRow(row, batch._id))
         );
         const finalized = await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id);
-        const durableRows = await BenchmarkResult.find({ batch_id: batch._id }).lean();
+        const durableRows = await BenchmarkResult.find({ batch_id: batch._id })
+            .select('+trust_execution_receipt +trust_judge_receipt')
+            .lean();
         const receipt = buildBenchmarkTrustReceipt(bodyFixture({
             sourceId,
             sourceResults: durableRows,
@@ -1134,6 +1767,192 @@ describe('BenchmarkTrustReceipt append-only store', () => {
             batch_id: batch._id,
             trust_evidence_sealed: true
         })).resolves.toBe(SOURCE_RESULT_COUNT);
+    });
+
+    test('resumes finalization after result sealing and is idempotent after completion', async () => {
+        const sourceId = sourceBatchId('f');
+        const { batch, sourceResults } = await createRunningTrustBatch(sourceId);
+        await BenchmarkResult.insertMany(
+            sourceResults.map(row => runtimeTrustRow(row, batch._id))
+        );
+        await BenchmarkResult.collection.updateMany(
+            { batch_id: batch._id },
+            { $set: { trust_evidence_sealed: true } }
+        );
+
+        const finalized = await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id);
+        expect(finalized).toMatchObject({
+            status: 'completed',
+            trust_evidence_sealed: true,
+            completed: SOURCE_RESULT_COUNT
+        });
+        const repeated = await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id);
+        expect(repeated.completed_at).toEqual(finalized.completed_at);
+        expect(repeated.trust_evidence_finalized_at).toEqual(finalized.trust_evidence_finalized_at);
+    });
+
+    test('cannot report completed when any strict judge receipt is missing', async () => {
+        const sourceId = sourceBatchId('8');
+        const { batch, sourceResults } = await createRunningTrustBatch(sourceId);
+        const rows = sourceResults.map(row => runtimeTrustRow(row, batch._id));
+        rows[0].trust_judge_receipt = null;
+        rows[0].judge_receipt = null;
+        await BenchmarkResult.insertMany(rows);
+
+        await expect(BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id))
+            .rejects.toMatchObject({ code: BenchmarkBatch.PROTECTED_CONTEXT_ERROR_CODE });
+        const failed = await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id, {
+            status: 'failed',
+            failureReason: 'missing_strict_judge_receipt'
+        });
+        expect(failed).toMatchObject({
+            status: 'failed',
+            judge_status: 'failed',
+            trust_evidence_sealed: true
+        });
+    });
+
+    test('cannot seal a duplicated candidate x prompt x repeat inventory as completed', async () => {
+        const sourceId = sourceBatchId('6');
+        const { batch, sourceResults } = await createRunningTrustBatch(sourceId);
+        const duplicatedRows = sourceResults.map(row => runtimeTrustRow(row, batch._id));
+        duplicatedRows[1] = clone(duplicatedRows[0]);
+        await BenchmarkResult.insertMany(duplicatedRows);
+
+        await expect(BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id))
+            .rejects.toMatchObject({ code: BenchmarkBatch.PROTECTED_CONTEXT_ERROR_CODE });
+
+        const [currentBatch, currentRows] = await Promise.all([
+            BenchmarkBatch.findById(batch._id).lean(),
+            BenchmarkResult.find({ batch_id: batch._id }).lean()
+        ]);
+        expect(currentBatch.status).toBe('running');
+        expect(currentBatch.trust_evidence_sealed).not.toBe(true);
+        expect(currentRows).toHaveLength(SOURCE_RESULT_COUNT);
+        expect(currentRows.every(row => row.trust_evidence_sealed !== true)).toBe(true);
+    });
+
+    test('imports and re-verifies signed human evidence from one real sealed Trust result', async () => {
+        const sourceId = sourceBatchId('9');
+        const { batch, sourceResults } = await createRunningTrustBatch(sourceId);
+        await BenchmarkResult.insertMany(
+            sourceResults.map(row => runtimeTrustRow(row, batch._id))
+        );
+        await BenchmarkBatch.finalizeTrustEvidenceBatch(batch._id);
+        const sourceResult = await BenchmarkResult.findOne({
+            batch_id: batch._id,
+            trust_candidate_id: sourceResults[0].trust_candidate_id,
+            trust_prompt_id: sourceResults[0].trust_prompt_id,
+            repeat_index: 0
+        }).select('+trust_execution_receipt +trust_judge_receipt').lean();
+        const judgeReceipt = normalizeWorkerReceipt(sourceResult.trust_judge_receipt);
+        const sealedBatch = await BenchmarkBatch.findById(batch._id)
+            .select('+trust_evidence_finalized_at')
+            .lean();
+        const sourceProjection = {
+            sourceResultId: String(sourceResult._id),
+            sourceBatchId: sourceId,
+            candidateId: sourceResult.trust_candidate_id,
+            promptId: sourceResult.trust_prompt_id,
+            repeatIndex: sourceResult.repeat_index,
+            repeatTotal: sourceResult.repeat_total,
+            model: sourceResult.model,
+            host: sourceResult.host,
+            modelDigest: sourceResult.model_digest,
+            promptFingerprint: computePromptSourceFingerprint(sourceResult),
+            responseFingerprint: workerFingerprint(String(sourceResult.response)),
+            category: sourceResult.prompt_category,
+            judgeIdentityFingerprint: workerFingerprint(judgeReceipt.identity),
+            judgeScoreMicros: Math.round(sourceResult.quality_score * 1_000_000),
+            judgeReceiptFingerprint: judgeReceipt.fingerprint,
+            executionReceiptFingerprint: sourceResult.trust_execution_receipt.fingerprint,
+            sourceCreatedAt: sourceResult.timestamp.toISOString(),
+            sourceUpdatedAt: sourceResult.updated_at.toISOString()
+        };
+        const reviewedAt = new Date(sealedBatch.trust_evidence_finalized_at);
+        const issuedAt = new Date(Math.max(Date.now(), reviewedAt.getTime()));
+        const validUntil = new Date(issuedAt.getTime() + 24 * 60 * 60 * 1000);
+        const body = {
+            schema: BENCHMARK_HUMAN_EVIDENCE_ATTESTATION_SCHEMA,
+            issuer: { issuerId: 'integration-review-board', keyId: 'ed25519-2026-09' },
+            issuedAt: issuedAt.toISOString(),
+            validUntil: validUntil.toISOString(),
+            nonce: 'integration-human-review-nonce-000000000001',
+            source: {
+                sourceResultId: sourceProjection.sourceResultId,
+                sourceBatchId: sourceProjection.sourceBatchId,
+                sourceResultFingerprint: computeBenchmarkHumanEvidenceSourceResultFingerprint(sourceProjection),
+                promptFingerprint: sourceProjection.promptFingerprint,
+                responseFingerprint: sourceProjection.responseFingerprint,
+                category: sourceProjection.category,
+                judgeIdentityFingerprint: sourceProjection.judgeIdentityFingerprint,
+                judgeScoreMicros: sourceProjection.judgeScoreMicros
+            },
+            human: {
+                provenanceClass: 'independent_human_score',
+                reviewProtocol: 'blind_independent',
+                expertScoreMicros: 8_000_000,
+                dimensionScores: [{ dimension: 'correctness', scoreMicros: 8_000_000 }],
+                expertRationale: 'Two independent reviewers agreed on the sealed result.',
+                reviewerId: 'reviewer-pseudonym-integration',
+                reviewedAt: reviewedAt.toISOString()
+            }
+        };
+        const attestationId = computeBenchmarkHumanEvidenceAttestationId(body);
+        const signingPayload = serializeBenchmarkHumanEvidenceAttestationSigningPayload(body, attestationId);
+        const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+        const attestation = {
+            ...body,
+            attestationId,
+            signature: crypto.sign(null, Buffer.from(signingPayload), privateKey).toString('base64url')
+        };
+        process.env[TRUST_ROOTS_ENV] = JSON.stringify({
+            schema: TRUST_ROOTS_SCHEMA,
+            issuers: [{
+                issuerId: body.issuer.issuerId,
+                keys: [{
+                    keyId: body.issuer.keyId,
+                    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }),
+                    notBefore: '2026-01-01T00:00:00.000Z',
+                    notAfter: '2027-01-01T00:00:00.000Z',
+                    scopes: [HUMAN_EVIDENCE_SCOPE]
+                }]
+            }]
+        });
+        const revocations = {
+            schema: REVOCATIONS_SCHEMA,
+            version: 1,
+            issuedAt: new Date(issuedAt.getTime() - 60_000).toISOString(),
+            validUntil: validUntil.toISOString(),
+            revokedIssuerIds: [],
+            revokedKeys: [],
+            revokedAttestationIds: []
+        };
+        const revocationSnapshotId = workerFingerprint(revocations);
+        process.env[REVOCATIONS_ENV] = JSON.stringify({
+            ...revocations,
+            snapshotId: revocationSnapshotId
+        });
+        process.env[MIN_REVOCATION_VERSION_ENV] = '1';
+        process.env[REVOCATION_SNAPSHOT_ID_ENV] = revocationSnapshotId;
+
+        await expect(importAttestedHumanGroundTruth(attestation))
+            .resolves.toMatchObject({ imported: true });
+        const qualified = await loadQualifiedHumanGroundTruth();
+        expect(qualified).toHaveLength(1);
+        expect(qualified[0]).toMatchObject({
+            source: 'attested-human-evidence-v1',
+            source_result_id: sourceResult._id,
+            provenance_class: 'independent_human_score',
+            review_protocol: 'blind_independent'
+        });
+        expect(qualified[0]).not.toHaveProperty('human_attestation');
+        const storedHumanEvidence = await JudgeGroundTruth.findOne({
+            human_attestation_fingerprint: attestation.attestationId
+        }).select('+human_attestation').lean();
+        await expect(runWithPublicBenchmarkReadPrivacy(() => (
+            verifyStoredAttestedHumanGroundTruth(storedHumanEvidence)
+        ))).resolves.toEqual(attestation);
     });
 
     test('canonical verification rejects forged source and decision fingerprints before any external verifier', async () => {
@@ -1168,7 +1987,7 @@ describe('BenchmarkTrustReceipt append-only store', () => {
         const canonicalRows = sourceResultFixtures();
         const frozenContext = sourceContextFixture(wrongRowJudgeSourceId, canonicalRows);
         const storedRows = clone(canonicalRows);
-        storedRows[1].judge_receipt = clone(storedRows[0].judge_receipt);
+        storedRows[1].trust_judge_receipt = clone(storedRows[0].trust_judge_receipt);
         const wrongRowJudgeBatch = await createLinkedBatch(
             wrongRowJudgeSourceId,
             {},
@@ -1189,11 +2008,11 @@ describe('BenchmarkTrustReceipt append-only store', () => {
 
     test('rejects fake and cryptographically mutated per-row WorkerReceipts', async () => {
         for (const [character, mutate] of [
-            ['4', rows => { rows[0].judge_receipt = { fingerprint: 'f'.repeat(64) }; }],
-            ['5', rows => { rows[0].judge_receipt.usage.durationMs += 1; }],
-            ['6', rows => { rows[0].execution_receipt = { fingerprint: 'f'.repeat(64) }; }],
-            ['7', rows => { rows[1].execution_receipt = clone(rows[0].execution_receipt); }],
-            ['8', rows => { rows[0].execution_receipt.usage.durationMs += 1; }]
+            ['4', rows => { rows[0].trust_judge_receipt = { fingerprint: 'f'.repeat(64) }; }],
+            ['5', rows => { rows[0].trust_judge_receipt.usage.durationMs += 1; }],
+            ['6', rows => { rows[0].trust_execution_receipt = { fingerprint: 'f'.repeat(64) }; }],
+            ['7', rows => { rows[1].trust_execution_receipt = clone(rows[0].trust_execution_receipt); }],
+            ['8', rows => { rows[0].trust_execution_receipt.usage.durationMs += 1; }]
         ]) {
             const sourceId = sourceBatchId(character);
             const canonicalRows = sourceResultFixtures();
@@ -1369,7 +2188,7 @@ describe('BenchmarkTrustReceipt append-only store', () => {
         const body = bodyFixture({
             sourceId,
             campaignCharacter: 'a',
-            sourceResults,
+            sourceResults: sourceEvidenceRows.get(sourceId),
             sourceContext
         });
         const receipt = buildBenchmarkTrustReceipt(body);

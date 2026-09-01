@@ -110,7 +110,10 @@ describe('benchmark coordination helpers', () => {
         it('calls releaseBenchmarkClaim for every acquired host', async () => {
             coreApiClient.releaseBenchmarkClaim.mockResolvedValue({ released: true });
 
-            await releaseBenchmarkClaims(['http://a:11434', 'http://b:11434'], BATCH);
+            await expect(releaseBenchmarkClaims(
+                ['http://a:11434', 'http://b:11434'],
+                BATCH
+            )).resolves.toMatchObject({ released: 2, failed: 0 });
 
             expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledTimes(2);
             expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledWith('http://a:11434', BATCH);
@@ -124,15 +127,34 @@ describe('benchmark coordination helpers', () => {
 
             await expect(
                 releaseBenchmarkClaims(['http://a:11434', 'http://b:11434'], BATCH)
-            ).resolves.toBeUndefined();
+            ).resolves.toMatchObject({ released: 1, failed: 1 });
 
             // Both attempts should still have been made
             expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledTimes(2);
         });
 
         it('no-ops on empty list', async () => {
-            await releaseBenchmarkClaims([], BATCH);
+            await expect(releaseBenchmarkClaims([], BATCH))
+                .resolves.toEqual({ released: 0, failed: 0, details: [] });
             expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
+        });
+
+        it('reports released=false honestly without claiming success', async () => {
+            coreApiClient.releaseBenchmarkClaim.mockResolvedValue({
+                released: false,
+                reason: 'claim generation changed'
+            });
+
+            await expect(releaseBenchmarkClaims(['http://a:11434'], BATCH))
+                .resolves.toEqual({
+                    released: 0,
+                    failed: 1,
+                    details: [{
+                        hostUrl: 'http://a:11434',
+                        released: false,
+                        reason: 'claim generation changed'
+                    }]
+                });
         });
     });
 

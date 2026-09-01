@@ -41,6 +41,20 @@ describe('benchmarkClaimService', () => {
   const BATCH_A = 'batch-aaa';
   const BATCH_B = 'batch-bbb';
 
+  test('summarizes only confirmed releases as reaped', () => {
+    expect(service.summarizeBenchmarkClaimReaps([
+      { hostUrl: 'released', released: true },
+      { hostUrl: 'changed', released: false },
+      { hostUrl: 'unknown' }
+    ])).toEqual({
+      released: [{ hostUrl: 'released', released: true }],
+      refused: [
+        { hostUrl: 'changed', released: false },
+        { hostUrl: 'unknown' }
+      ]
+    });
+  });
+
   beforeEach(async () => {
     await HostPreference.create({
       hostUrl: HOST_URL,
@@ -77,11 +91,48 @@ describe('benchmarkClaimService', () => {
     });
 
     it('is idempotent for same batch reclaiming', async () => {
-      await service.claimBenchmark(HOST_URL, BATCH_A, 300_000);
-      const again = await service.claimBenchmark(HOST_URL, BATCH_A, 999_999);
+      const first = await service.claimBenchmark(HOST_URL, BATCH_A, 300_000);
+      const again = await service.claimBenchmark(HOST_URL, BATCH_A, 999_999, {
+        claimGeneration: first.claimGeneration
+      });
       expect(again.claimed).toBe(true);
+      expect(again.claimGeneration).toBe(first.claimGeneration);
       // prevStatus should still be 'ready' — not overwritten to 'benchmarking'
       expect(again.pref.benchmarkClaim.prevStatus).toBe('ready');
+    });
+
+    it('does not let a delayed same-batch reclaim update a newer generation', async () => {
+      const first = await service.claimBenchmark(HOST_URL, BATCH_A, 300_000, {
+        owner: 'old-owner'
+      });
+      const originalFindOneAndUpdate = HostPreference.findOneAndUpdate.bind(HostPreference);
+      let second;
+      const updateSpy = jest.spyOn(HostPreference, 'findOneAndUpdate')
+        .mockImplementationOnce((...args) => ({
+          lean: async () => {
+            updateSpy.mockRestore();
+            await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+              skipPinRestore: true,
+              claimGeneration: first.claimGeneration
+            });
+            second = await service.claimBenchmark(HOST_URL, BATCH_A, 600_000, {
+              owner: 'new-owner'
+            });
+            return originalFindOneAndUpdate(...args).lean();
+          }
+        }));
+
+      const staleReclaim = await service.claimBenchmark(HOST_URL, BATCH_A, 999_999, {
+        claimGeneration: first.claimGeneration,
+        owner: 'stale-owner'
+      });
+
+      expect(staleReclaim.claimed).toBe(false);
+      expect(second.claimed).toBe(true);
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.benchmarkClaim.claimGeneration).toBe(second.claimGeneration);
+      expect(stored.benchmarkClaim.owner).toBe('new-owner');
+      expect(stored.benchmarkClaim.estimatedDurationMs).toBe(600_000);
     });
 
     it('rejects a claim from a different batch while already benchmarking', async () => {
@@ -89,6 +140,20 @@ describe('benchmarkClaimService', () => {
       const conflict = await service.claimBenchmark(HOST_URL, BATCH_B);
       expect(conflict.claimed).toBe(false);
       expect(conflict.reason).toContain(BATCH_A);
+    });
+
+    it('atomically grants exactly one of two concurrent claimants', async () => {
+      const [left, right] = await Promise.all([
+        service.claimBenchmark(HOST_URL, BATCH_A),
+        service.claimBenchmark(HOST_URL, BATCH_B)
+      ]);
+      expect([left, right].filter(result => result.claimed)).toHaveLength(1);
+
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.status).toBe('benchmarking');
+      expect([BATCH_A, BATCH_B]).toContain(stored.benchmarkClaim.batchId);
+      const winner = left.claimed ? BATCH_A : BATCH_B;
+      expect(stored.benchmarkClaim.batchId).toBe(winner);
     });
 
     it('rejects missing hostUrl or batchId', async () => {
@@ -103,6 +168,58 @@ describe('benchmarkClaimService', () => {
       expect(result.claimed).toBe(true);
       expect(result.pref.hostUrl).toBe('http://unknown:11434');
     });
+
+    it('preserves a concurrent ready status while seeding an unknown host', async () => {
+      const unknownHost = 'http://unknown-ready-race:11434';
+      const originalUpdateOne = HostPreference.updateOne.bind(HostPreference);
+      const updateSpy = jest.spyOn(HostPreference, 'updateOne').mockImplementationOnce(async (...args) => {
+        await HostPreference.collection.insertOne({
+          hostUrl: unknownHost,
+          hostKey: 'primary',
+          status: 'ready',
+          pinnedModels: []
+        });
+        return originalUpdateOne(...args);
+      });
+
+      try {
+        const claimed = await service.claimBenchmark(unknownHost, BATCH_A);
+        expect(claimed.claimed).toBe(true);
+        expect(claimed.pref.benchmarkClaim.prevStatus).toBe('ready');
+
+        const released = await service.releaseBenchmarkClaim(unknownHost, BATCH_A, {
+          skipPinRestore: true,
+          claimGeneration: claimed.claimGeneration
+        });
+        expect(released.released).toBe(true);
+        const stored = await HostPreference.findOne({ hostUrl: unknownHost }).lean();
+        expect(stored.status).toBe('ready');
+      } finally {
+        updateSpy.mockRestore();
+      }
+    });
+
+    it('atomically creates one owner when an unknown host is claimed concurrently', async () => {
+      const unknownHost = 'http://concurrent-unknown:11434';
+      await HostPreference.collection.dropIndex('hostUrl_1').catch((error) => {
+        if (error?.codeName !== 'IndexNotFound') throw error;
+      });
+      const batchIds = Array.from({ length: 32 }, (_, index) => `batch-concurrent-${index}`);
+      const results = await Promise.all(
+        batchIds.map(id => service.claimBenchmark(unknownHost, id))
+      );
+      expect(results.filter(result => result.claimed)).toHaveLength(1);
+      await expect(HostPreference.countDocuments({ hostUrl: unknownHost })).resolves.toBe(1);
+
+      const stored = await HostPreference.findOne({ hostUrl: unknownHost }).lean();
+      expect(stored.status).toBe('benchmarking');
+      expect(stored.benchmarkClaim.batchId).toBe(
+        results.find(result => result.claimed).pref.benchmarkClaim.batchId
+      );
+      const hostUrlIndex = (await HostPreference.collection.indexes())
+        .find(index => index.name === 'hostUrl_1');
+      expect(hostUrlIndex).toMatchObject({ key: { hostUrl: 1 }, unique: true });
+    });
   });
 
   describe('heartbeatBenchmarkClaim', () => {
@@ -115,6 +232,7 @@ describe('benchmarkClaimService', () => {
       await new Promise(resolve => setTimeout(resolve, 5));
 
       const heartbeat = await service.heartbeatBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration,
         owner: 'heartbeat-owner',
         heartbeatTtlMs: 90_000
       });
@@ -126,21 +244,66 @@ describe('benchmarkClaimService', () => {
     });
 
     it('rejects heartbeat when another batch owns the claim', async () => {
-      await service.claimBenchmark(HOST_URL, BATCH_A);
-      const heartbeat = await service.heartbeatBenchmarkClaim(HOST_URL, BATCH_B);
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const heartbeat = await service.heartbeatBenchmarkClaim(HOST_URL, BATCH_B, {
+        claimGeneration: claimed.claimGeneration
+      });
       expect(heartbeat.heartbeat).toBe(false);
       expect(heartbeat.reason).toContain(BATCH_A);
     });
   });
 
   describe('releaseBenchmarkClaim', () => {
+    it('drains a pre-upgrade generationless stale claim only through the reaper CAS', async () => {
+      const claimedAt = new Date(Date.now() - 10 * 60 * 1000);
+      await HostPreference.updateOne(
+        { hostUrl: HOST_URL },
+        {
+          $set: {
+            status: 'benchmarking',
+            pinnedModels: [],
+            benchmarkClaim: {
+              batchId: 'legacy-batch',
+              prevStatus: 'ready',
+              claimedAt,
+              estimatedDurationMs: null,
+              source: 'manual',
+              heartbeatAt: null,
+              heartbeatTtlMs: null
+            }
+          }
+        }
+      );
+      await HostPreference.updateOne(
+        { hostUrl: HOST_URL },
+        { $unset: { 'benchmarkClaim.claimGeneration': 1 } }
+      );
+
+      const direct = await service.releaseBenchmarkClaim(HOST_URL, 'legacy-batch');
+      expect(direct).toEqual(expect.objectContaining({
+        released: false,
+        reason: 'claimGeneration is required'
+      }));
+
+      const reaped = await service.reapStaleBenchmarkClaims({ hardCapMs: 1000 });
+      expect(reaped.reaped).toHaveLength(1);
+      expect(reaped.reaped[0].released).toBe(true);
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.status).toBe('ready');
+      expect(stored.benchmarkClaim.batchId).toBeNull();
+    });
+
     // Pass skipPinRestore so the async post-release restore doesn't leak
     // a `setHostStatus('restoring')` call into the next test (0175).
     const RELEASE_OPTS = { skipPinRestore: true };
+    const releaseOptions = claimed => ({
+      ...RELEASE_OPTS,
+      claimGeneration: claimed.claimGeneration
+    });
 
     it('restores prevStatus and clears claim fields', async () => {
-      await service.claimBenchmark(HOST_URL, BATCH_A);
-      const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, RELEASE_OPTS);
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, releaseOptions(claimed));
       expect(released.released).toBe(true);
       expect(released.pref.status).toBe('ready');
       expect(released.pref.benchmarkClaim.batchId).toBeNull();
@@ -151,8 +314,8 @@ describe('benchmarkClaimService', () => {
 
     it('refuses to release another batch\'s claim', async () => {
       mockObserveClaimReleaseFailure.mockClear();
-      await service.claimBenchmark(HOST_URL, BATCH_A);
-      const refused = await service.releaseBenchmarkClaim(HOST_URL, BATCH_B, RELEASE_OPTS);
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const refused = await service.releaseBenchmarkClaim(HOST_URL, BATCH_B, releaseOptions(claimed));
       expect(refused.released).toBe(false);
       expect(refused.reason).toContain(BATCH_A);
       // Status should still be benchmarking
@@ -165,9 +328,48 @@ describe('benchmarkClaimService', () => {
       }));
     });
 
+    it('does not let a stale release erase a newer claim owner', async () => {
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const originalFindOneAndUpdate = HostPreference.findOneAndUpdate.bind(HostPreference);
+      const replacementClaim = {
+        batchId: BATCH_B,
+        claimGeneration: '11111111-1111-4111-8111-111111111111',
+        prevStatus: 'ready',
+        claimedAt: new Date(),
+        estimatedDurationMs: null,
+        source: 'manual',
+        owner: null,
+        note: null,
+        heartbeatAt: new Date(),
+        heartbeatTtlMs: null
+      };
+      const updateSpy = jest.spyOn(HostPreference, 'findOneAndUpdate')
+        .mockImplementationOnce((...args) => ({
+          lean: async () => {
+            await HostPreference.collection.updateOne(
+              { hostUrl: HOST_URL },
+              { $set: { status: 'benchmarking', benchmarkClaim: replacementClaim } }
+            );
+            return originalFindOneAndUpdate(...args).lean();
+          }
+        }));
+
+      const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, releaseOptions(claimed));
+      updateSpy.mockRestore();
+
+      expect(released.released).toBe(false);
+      expect(released.reason).toContain(BATCH_B);
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.status).toBe('benchmarking');
+      expect(stored.benchmarkClaim.batchId).toBe(BATCH_B);
+    });
+
     it('returns released=false when host preference missing', async () => {
       mockObserveClaimReleaseFailure.mockClear();
-      const res = await service.releaseBenchmarkClaim('http://nohost:11434', BATCH_A, RELEASE_OPTS);
+      const res = await service.releaseBenchmarkClaim('http://nohost:11434', BATCH_A, {
+        ...RELEASE_OPTS,
+        claimGeneration: '22222222-2222-4222-8222-222222222222'
+      });
       expect(res.released).toBe(false);
       expect(mockObserveClaimReleaseFailure).toHaveBeenCalledTimes(1);
     });
@@ -193,8 +395,10 @@ describe('benchmarkClaimService', () => {
       });
 
       try {
-        await service.claimBenchmark(HOST_URL, BATCH_A);
-        const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A);
+        const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+        const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+          claimGeneration: claimed.claimGeneration
+        });
         expect(released.released).toBe(true);
         expect(released.pinRestore?.status).toBe('ready');
         expect(released.pinRestore?.verified).toBe(true);
@@ -205,6 +409,30 @@ describe('benchmarkClaimService', () => {
       } finally {
         global.fetch = originalFetch;
       }
+    });
+
+    it('rejects stale same-batch heartbeat and release after a new generation acquires the host', async () => {
+      const first = await service.claimBenchmark(HOST_URL, BATCH_A, null, { owner: 'old-owner' });
+      await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, releaseOptions(first));
+      const second = await service.claimBenchmark(HOST_URL, BATCH_A, null, { owner: 'new-owner' });
+      expect(second.claimGeneration).not.toBe(first.claimGeneration);
+
+      const staleHeartbeat = await service.heartbeatBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: first.claimGeneration,
+        owner: 'stale-old'
+      });
+      const staleRelease = await service.releaseBenchmarkClaim(
+        HOST_URL,
+        BATCH_A,
+        releaseOptions(first)
+      );
+
+      expect(staleHeartbeat.heartbeat).toBe(false);
+      expect(staleRelease.released).toBe(false);
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.status).toBe('benchmarking');
+      expect(stored.benchmarkClaim.claimGeneration).toBe(second.claimGeneration);
+      expect(stored.benchmarkClaim.owner).toBe('new-owner');
     });
   });
 

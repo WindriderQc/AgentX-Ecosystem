@@ -64,9 +64,11 @@ jest.mock('../../../src/services/benchmark/batchPlanner', () => ({
 
 // All mock variables prefixed with 'mock' to satisfy jest.mock factory scope rules
 jest.mock('../../../models/BenchmarkBatch', () => ({
+    collection: { indexes: jest.fn() },
     findOneAndUpdate: jest.fn(),
     findById: jest.fn(),
     updateOne: jest.fn(async () => ({ matchedCount: 1 })),
+    finalizeTrustEvidenceBatch: jest.fn(),
     distinct: jest.fn(async () => [])
 }));
 
@@ -90,7 +92,13 @@ jest.mock('../../../models/BenchmarkPrompt', () => ({
 }));
 
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
-const { executeBatch, stopBatch, getActiveBatchId, clearActiveBatch } = require('../../../src/services/benchmark/execution');
+const {
+    assertTrustCampaignSpecOneShotIndex,
+    executeBatch,
+    stopBatch,
+    getActiveBatchId,
+    clearActiveBatch
+} = require('../../../src/services/benchmark/execution');
 const { runBatchOrchestrator, abortActiveBatchRequests } = require('../../../src/services/benchmark/batchOrchestrator');
 const logger = require('../../../config/logger');
 
@@ -130,13 +138,77 @@ beforeEach(() => {
     BenchmarkBatch.findOneAndUpdate.mockReset();
     BenchmarkBatch.findById.mockReset();
     BenchmarkBatch.updateOne.mockReset();
+    BenchmarkBatch.finalizeTrustEvidenceBatch.mockReset();
+    BenchmarkBatch.collection.indexes.mockReset();
+    BenchmarkBatch.collection.indexes.mockResolvedValue([{
+        name: 'uniq_benchmark_batch_trust_campaign_spec_id',
+        key: { trust_campaign_spec_id: 1 },
+        unique: true,
+        partialFilterExpression: { trust_campaign_spec_id: { $type: 'string' } }
+    }]);
     clearActiveBatch();
     // Default: findById returns a runnable batch
     BenchmarkBatch.findById.mockImplementation(() => makeSelectableBatchDoc('running'));
     BenchmarkBatch.updateOne.mockResolvedValue({ matchedCount: 1 });
+    BenchmarkBatch.finalizeTrustEvidenceBatch.mockResolvedValue(makeBatchDoc({ status: 'stopped' }));
     BenchmarkBatch.findOneAndUpdate.mockImplementation(async (filter) => {
         if (filter?.status?.$in) return makeBatchDoc();
         return null;
+    });
+});
+
+describe('Trust CampaignSpec one-shot index', () => {
+    it('accepts only the exact verified unique partial index', async () => {
+        await expect(assertTrustCampaignSpecOneShotIndex()).resolves.toMatchObject({
+            name: 'uniq_benchmark_batch_trust_campaign_spec_id',
+            unique: true
+        });
+    });
+
+    it.each([
+        { indexes: [] },
+        { indexes: [{
+            name: 'uniq_benchmark_batch_trust_campaign_spec_id',
+            key: { trust_campaign_spec_id: 1 },
+            unique: false,
+            partialFilterExpression: { trust_campaign_spec_id: { $type: 'string' } }
+        }] },
+        { indexes: [{
+            name: 'uniq_benchmark_batch_trust_campaign_spec_id',
+            key: { trust_campaign_spec_id: 1 },
+            unique: true,
+            partialFilterExpression: { trust_campaign_spec_id: { $type: 'objectId' } }
+        }] },
+        { indexes: [{
+            name: 'uniq_benchmark_batch_trust_campaign_spec_id',
+            key: { trust_campaign_spec_id: 1 },
+            unique: true,
+            partialFilterExpression: {
+                trust_campaign_spec_id: { $type: 'string' },
+                status: 'completed'
+            }
+        }] },
+        { indexes: [{
+            name: 'uniq_benchmark_batch_trust_campaign_spec_id',
+            key: { trust_campaign_spec_id: 1 },
+            unique: true,
+            partialFilterExpression: {
+                trust_campaign_spec_id: { $type: 'string', $ne: '' }
+            }
+        }] }
+    ])('fails closed without creating or repairing an invalid index', async ({ indexes }) => {
+        BenchmarkBatch.collection.indexes.mockResolvedValue(indexes);
+
+        await expect(assertTrustCampaignSpecOneShotIndex())
+            .rejects.toMatchObject({ code: 'BENCHMARK_TRUST_CAMPAIGN_SPEC_INDEX_MISSING' });
+        expect(BenchmarkBatch.collection.indexes).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed when index inspection is unavailable', async () => {
+        BenchmarkBatch.collection.indexes.mockRejectedValue(new Error('mongo unavailable'));
+
+        await expect(assertTrustCampaignSpecOneShotIndex())
+            .rejects.toMatchObject({ code: 'BENCHMARK_TRUST_CAMPAIGN_SPEC_INDEX_UNAVAILABLE' });
     });
 });
 
@@ -393,6 +465,91 @@ describe('Batch lifecycle', () => {
 });
 
 describe('Durable stop transition', () => {
+    it('finalizes strict Trust evidence before aborting live work', async () => {
+        const snapshot = makeSelectableBatchDoc('running', {
+            trust_evidence_context: { schema: 'agentx.benchmark-trust-source-context/v2' }
+        });
+        snapshot.lean.mockReturnValue({
+            status: 'running',
+            trust_evidence_context: { schema: 'agentx.benchmark-trust-source-context/v2' },
+            trust_evidence_sealed: false,
+            trust_evidence_finalized_at: null
+        });
+        BenchmarkBatch.findById.mockReturnValueOnce(snapshot);
+
+        await stopBatch(BATCH_ID);
+
+        expect(BenchmarkBatch.finalizeTrustEvidenceBatch).toHaveBeenCalledWith(BATCH_ID, {
+            status: 'stopped',
+            failureReason: 'operator_stop',
+            allowUnstarted: true
+        });
+        expect(BenchmarkBatch.finalizeTrustEvidenceBatch.mock.invocationCallOrder[0])
+            .toBeLessThan(abortActiveBatchRequests.mock.invocationCallOrder[0]);
+    });
+
+    it('does not abort strict Trust work when durable finalization fails', async () => {
+        const snapshot = makeSelectableBatchDoc('running', {
+            trust_evidence_context: { schema: 'agentx.benchmark-trust-source-context/v2' }
+        });
+        snapshot.lean.mockReturnValue({
+            status: 'running',
+            trust_evidence_context: { schema: 'agentx.benchmark-trust-source-context/v2' }
+        });
+        BenchmarkBatch.findById.mockReturnValueOnce(snapshot);
+        BenchmarkBatch.finalizeTrustEvidenceBatch.mockRejectedValueOnce(new Error('mongo unavailable'));
+
+        await expect(stopBatch(BATCH_ID)).rejects.toThrow('mongo unavailable');
+        expect(abortActiveBatchRequests).not.toHaveBeenCalled();
+    });
+
+    it('keeps strict local ownership until the cancelled runner has drained', async () => {
+        let finishOrchestrator;
+        runBatchOrchestrator.mockImplementationOnce(() => new Promise(resolve => {
+            finishOrchestrator = resolve;
+        }));
+        BenchmarkBatch.findOneAndUpdate.mockResolvedValueOnce(makeBatchDoc({
+            trust_evidence_context: { schema: 'agentx.benchmark-trust-source-context/v2' }
+        }));
+
+        const running = executeBatch(BATCH_ID, DEFAULT_HOST, MODELS, PROMPTS, {
+            trust_evidence_context: { schema: 'agentx.benchmark-trust-source-context/v2' }
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(getActiveBatchId()).toBe(BATCH_ID);
+
+        const runningSnapshot = makeSelectableBatchDoc('running');
+        runningSnapshot.lean.mockReturnValue({
+            status: 'running',
+            trust_evidence_context: { schema: 'agentx.benchmark-trust-source-context/v2' },
+            trust_evidence_sealed: false,
+            trust_evidence_finalized_at: null
+        });
+        BenchmarkBatch.findById.mockReturnValueOnce(runningSnapshot);
+        const firstStop = await stopBatch(BATCH_ID);
+        expect(firstStop.managedLocally).toBe(true);
+        expect(getActiveBatchId()).toBe(BATCH_ID);
+
+        const stoppedSnapshot = makeSelectableBatchDoc('stopped');
+        stoppedSnapshot.lean.mockReturnValue({
+            status: 'stopped',
+            trust_evidence_context: { schema: 'agentx.benchmark-trust-source-context/v2' },
+            trust_evidence_sealed: true,
+            trust_evidence_finalized_at: new Date()
+        });
+        const stoppedDocument = makeBatchDoc({ status: 'stopped' });
+        BenchmarkBatch.findById
+            .mockReturnValueOnce(stoppedSnapshot)
+            .mockReturnValueOnce(stoppedDocument);
+        const repeatedStop = await stopBatch(BATCH_ID);
+        expect(repeatedStop).toMatchObject({ alreadyStopped: true, managedLocally: true });
+        expect(getActiveBatchId()).toBe(BATCH_ID);
+
+        finishOrchestrator();
+        await running;
+        expect(getActiveBatchId()).toBeNull();
+    });
+
     it('keeps the committed stopped state when reconciliation fails', async () => {
         const stoppedIntent = makeBatchDoc({
             status: 'stopped',

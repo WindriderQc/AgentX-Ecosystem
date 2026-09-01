@@ -3,8 +3,9 @@
  *
  * The independent unit is a prompt. Repeated attempts are averaged inside
  * each candidate/prompt cell before any comparison is made. Candidate effects
- * are paired prompt-mean differences, with simultaneous two-sided Student-t
- * intervals protected by a deterministic Bonferroni family correction.
+ * are paired prompt-mean differences in [-10, 10], with simultaneous
+ * distribution-free Hoeffding intervals protected by a deterministic
+ * Bonferroni family correction.
  *
  * This module intentionally has no persistence or route responsibilities.
  */
@@ -18,18 +19,25 @@ const {
 } = require('../../../../shared/benchmarkTrustReceipt');
 
 const STATISTICS_METHOD = Object.freeze({
-    name: 'paired-prompt-t-v1',
-    version: 'agentx.benchmark-trust-statistics/paired-prompt-bonferroni-t/v1',
+    name: 'paired-prompt-hoeffding-v1',
+    version: 'agentx.benchmark-trust-statistics/paired-prompt-bonferroni-hoeffding/v1',
     independentUnit: 'prompt',
     repeatAggregation: 'arithmetic_mean_per_candidate_prompt',
-    interval: 'two_sided_student_t',
+    interval: 'two_sided_bounded_hoeffding',
     multiplicity: 'bonferroni',
     multiplicityFamily: 'all_unordered_candidate_pairs',
-    powerAnalysis: 'student-t-critical-normal-shift-bound-v1'
+    powerAnalysis: 'bounded-hoeffding-superiority-power-v1'
 });
 
-const POWER_ANALYSIS_SCHEMA = 'agentx.benchmark-trust-power-analysis/student-t-critical-normal-shift-bound/v1';
+const POWER_ANALYSIS_SCHEMA = 'agentx.benchmark-trust-power-analysis/bounded-hoeffding-superiority/v1';
+const VARIANCE_BASIS_SCHEMA = 'agentx.benchmark-trust-variance-basis/independent-pilot-upper-bound/v1';
+const VARIANCE_BASIS_METHOD = 'chi-square-one-sided-upper-confidence-bound-v1';
+const VARIANCE_BASIS_PROVENANCE = 'independent_pilot';
+const MINIMUM_VARIANCE_BASIS_PROMPT_COUNT = 30;
 const MAXIMUM_POWER_PROMPT_COUNT = 100_000;
+const MINIMUM_SCORE = 0;
+const MAXIMUM_SCORE = 10;
+const PAIRED_DIFFERENCE_RANGE = 2 * (MAXIMUM_SCORE - MINIMUM_SCORE);
 
 const NUMERICAL_EPSILON = 1e-14;
 const CONTINUED_FRACTION_FLOOR = 1e-300;
@@ -42,6 +50,106 @@ function compareText(left, right) {
 
 function normalizeId(value) {
     return typeof value === 'string' ? value.trim() : '';
+}
+
+function isPlainObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
+
+function buildBenchmarkTrustVarianceBasis(raw = {}) {
+    const basis = {
+        schema: raw.schema,
+        provenance: raw.provenance,
+        cohortFingerprint: raw.cohortFingerprint,
+        candidateSetFingerprint: raw.candidateSetFingerprint,
+        rubricFingerprint: raw.rubricFingerprint,
+        repeatCount: raw.repeatCount,
+        candidateInferenceContractFingerprint: raw.candidateInferenceContractFingerprint,
+        promptSamplingPolicyFingerprint: raw.promptSamplingPolicyFingerprint,
+        candidatePairCount: raw.candidatePairCount,
+        pairwiseObservedStdDevs: raw.pairwiseObservedStdDevs,
+        method: raw.method,
+        independentPromptCount: raw.independentPromptCount,
+        confidenceBasisPoints: raw.confidenceBasisPoints,
+        observedPairedStdDevMicros: raw.observedPairedStdDevMicros
+    };
+    const allowedKeys = [...Object.keys(basis), 'upperConfidenceBoundMicros', 'artifactFingerprint'];
+    if (!isPlainObject(raw)
+        || Object.keys(raw).some(key => !allowedKeys.includes(key))
+        || Object.keys(basis).some(key => !Object.prototype.hasOwnProperty.call(raw, key))
+        || basis.schema !== VARIANCE_BASIS_SCHEMA
+        || basis.provenance !== VARIANCE_BASIS_PROVENANCE
+        || typeof basis.cohortFingerprint !== 'string'
+        || !/^[0-9a-f]{64}$/.test(basis.cohortFingerprint)
+        || typeof basis.candidateSetFingerprint !== 'string'
+        || !/^[0-9a-f]{64}$/.test(basis.candidateSetFingerprint)
+        || typeof basis.rubricFingerprint !== 'string'
+        || !/^[0-9a-f]{64}$/.test(basis.rubricFingerprint)
+        || !Number.isSafeInteger(basis.repeatCount)
+        || basis.repeatCount < 1
+        || basis.repeatCount > 5
+        || typeof basis.candidateInferenceContractFingerprint !== 'string'
+        || !/^[0-9a-f]{64}$/.test(basis.candidateInferenceContractFingerprint)
+        || typeof basis.promptSamplingPolicyFingerprint !== 'string'
+        || !/^[0-9a-f]{64}$/.test(basis.promptSamplingPolicyFingerprint)
+        || !Number.isSafeInteger(basis.candidatePairCount)
+        || basis.candidatePairCount < 1
+        || !Array.isArray(basis.pairwiseObservedStdDevs)
+        || basis.pairwiseObservedStdDevs.length !== basis.candidatePairCount
+        || basis.method !== VARIANCE_BASIS_METHOD
+        || !Number.isSafeInteger(basis.independentPromptCount)
+        || basis.independentPromptCount < MINIMUM_VARIANCE_BASIS_PROMPT_COUNT
+        || !Number.isSafeInteger(basis.confidenceBasisPoints)
+        || basis.confidenceBasisPoints < 9500
+        || basis.confidenceBasisPoints > 9999
+        || !Number.isSafeInteger(basis.observedPairedStdDevMicros)
+        || basis.observedPairedStdDevMicros <= 0) {
+        throw new Error('variance basis must be an immutable independent-pilot upper-confidence-bound artifact');
+    }
+    const pairwiseObservedStdDevs = basis.pairwiseObservedStdDevs.map((entry) => {
+        if (!isPlainObject(entry)
+            || Object.keys(entry).length !== 2
+            || !Object.prototype.hasOwnProperty.call(entry, 'pairFingerprint')
+            || !Object.prototype.hasOwnProperty.call(entry, 'observedPairedStdDevMicros')
+            || typeof entry.pairFingerprint !== 'string'
+            || !/^[0-9a-f]{64}$/.test(entry.pairFingerprint)
+            || !Number.isSafeInteger(entry.observedPairedStdDevMicros)
+            || entry.observedPairedStdDevMicros <= 0) {
+            throw new Error('variance basis pairwise deviation entry is invalid');
+        }
+        return { ...entry };
+    });
+    const pairFingerprints = pairwiseObservedStdDevs.map(entry => entry.pairFingerprint);
+    if (new Set(pairFingerprints).size !== pairFingerprints.length
+        || pairFingerprints.join('\n') !== [...pairFingerprints].sort(compareText).join('\n')
+        || basis.observedPairedStdDevMicros !== Math.max(
+            ...pairwiseObservedStdDevs.map(entry => entry.observedPairedStdDevMicros)
+        )) {
+        throw new Error('variance basis must contain the canonical complete pair family and its maximum deviation');
+    }
+    basis.pairwiseObservedStdDevs = pairwiseObservedStdDevs;
+    const upperConfidenceBoundMicros = computePairedStdDevUpperConfidenceBoundMicros({
+        observedPairedStdDevMicros: basis.observedPairedStdDevMicros,
+        independentPromptCount: basis.independentPromptCount,
+        confidenceBasisPoints: basis.confidenceBasisPoints
+    });
+    if (!Number.isSafeInteger(upperConfidenceBoundMicros)
+        || upperConfidenceBoundMicros <= basis.observedPairedStdDevMicros
+        || (Object.prototype.hasOwnProperty.call(raw, 'upperConfidenceBoundMicros')
+            && raw.upperConfidenceBoundMicros !== upperConfidenceBoundMicros)) {
+        throw new Error('variance basis upper confidence bound does not match the versioned chi-square calculation');
+    }
+    const body = { ...basis, upperConfidenceBoundMicros };
+    const artifactFingerprint = crypto.createHash('sha256')
+        .update(stableSerialize(body))
+        .digest('hex');
+    if (Object.prototype.hasOwnProperty.call(raw, 'artifactFingerprint')
+        && raw.artifactFingerprint !== artifactFingerprint) {
+        throw new Error('variance basis artifact fingerprint does not match its canonical body');
+    }
+    return { ...body, artifactFingerprint };
 }
 
 function mean(values) {
@@ -86,140 +194,211 @@ function logGamma(value) {
         + Math.log(series);
 }
 
-function betaContinuedFraction(a, b, x) {
-    const qab = a + b;
-    const qap = a + 1;
-    const qam = a - 1;
-    let c = 1;
-    let d = 1 - (qab * x / qap);
-    if (Math.abs(d) < CONTINUED_FRACTION_FLOOR) d = CONTINUED_FRACTION_FLOOR;
-    d = 1 / d;
-    let result = d;
+function sha256Stable(value) {
+    return crypto.createHash('sha256').update(stableSerialize(value)).digest('hex');
+}
 
+function normalizeVarianceCandidateBindings(candidateBindings) {
+    if (!Array.isArray(candidateBindings) || candidateBindings.length < 2) {
+        throw new Error('variance basis requires at least two exact candidate bindings');
+    }
+    const normalized = candidateBindings.map((binding) => {
+        if (!isPlainObject(binding)
+            || typeof binding.targetFingerprint !== 'string'
+            || !/^[0-9a-f]{64}$/.test(binding.targetFingerprint)
+            || typeof binding.modelDigest !== 'string' || binding.modelDigest.trim() === ''
+            || typeof binding.artifactDigest !== 'string' || binding.artifactDigest.trim() === ''
+            || typeof binding.inferenceContractFingerprint !== 'string'
+            || !/^[0-9a-f]{64}$/.test(binding.inferenceContractFingerprint)) {
+            throw new Error('variance basis candidate binding is invalid');
+        }
+        return {
+            targetFingerprint: binding.targetFingerprint,
+            modelDigest: binding.modelDigest,
+            artifactDigest: binding.artifactDigest,
+            inferenceContractFingerprint: binding.inferenceContractFingerprint
+        };
+    }).sort((left, right) => compareText(left.targetFingerprint, right.targetFingerprint));
+    if (new Set(normalized.map(binding => binding.targetFingerprint)).size !== normalized.length) {
+        throw new Error('variance basis candidate bindings must be unique');
+    }
+    return normalized;
+}
+
+function computeBenchmarkTrustVarianceCandidateSetFingerprint(candidateBindings) {
+    return sha256Stable(normalizeVarianceCandidateBindings(candidateBindings));
+}
+
+function computeBenchmarkTrustCandidateInferenceContractFingerprint({
+    candidateBindings,
+    repeatCount,
+    parameters
+} = {}) {
+    if (!Number.isSafeInteger(repeatCount) || repeatCount < 1 || repeatCount > 5
+        || !isPlainObject(parameters)
+        || Object.keys(parameters).some(key => ![
+            'temperature', 'topP', 'seed', 'maxTokens', 'timeoutMs'
+        ].includes(key))
+        || ['temperature', 'topP', 'seed', 'maxTokens', 'timeoutMs']
+            .some(key => !Object.prototype.hasOwnProperty.call(parameters, key))
+        || typeof parameters.temperature !== 'number'
+        || !Number.isFinite(parameters.temperature)
+        || parameters.temperature < 0
+        || parameters.temperature > 2
+        || typeof parameters.topP !== 'number'
+        || !Number.isFinite(parameters.topP)
+        || parameters.topP < 0
+        || parameters.topP > 1
+        || !(parameters.seed === null || Number.isSafeInteger(parameters.seed))
+        || !Number.isSafeInteger(parameters.maxTokens)
+        || parameters.maxTokens < 1
+        || !Number.isSafeInteger(parameters.timeoutMs)
+        || parameters.timeoutMs < 1) {
+        throw new Error('variance basis inference contract is invalid');
+    }
+    return sha256Stable({
+        schema: 'agentx.benchmark-trust-candidate-inference-contract/v1',
+        repeatCount,
+        parameters: {
+            temperature: parameters.temperature,
+            topP: parameters.topP,
+            seed: parameters.seed,
+            maxTokens: parameters.maxTokens,
+            timeoutMs: parameters.timeoutMs
+        },
+        candidates: normalizeVarianceCandidateBindings(candidateBindings)
+    });
+}
+
+function computeBenchmarkTrustVariancePairFingerprints(candidateBindings, rubricFingerprint) {
+    const normalized = normalizeVarianceCandidateBindings(candidateBindings);
+    if (typeof rubricFingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(rubricFingerprint)) {
+        throw new Error('variance basis rubric fingerprint is invalid');
+    }
+    const candidateFingerprints = normalized.map(binding => sha256Stable(binding));
+    const pairs = [];
+    for (let leftIndex = 0; leftIndex < candidateFingerprints.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < candidateFingerprints.length; rightIndex += 1) {
+            pairs.push(sha256Stable({
+                schema: 'agentx.benchmark-trust-variance-pair/v1',
+                rubricFingerprint,
+                candidateFingerprints: [
+                    candidateFingerprints[leftIndex],
+                    candidateFingerprints[rightIndex]
+                ].sort(compareText)
+            }));
+        }
+    }
+    return pairs.sort(compareText);
+}
+
+function regularizedGammaP(shape, value) {
+    if (!Number.isFinite(shape) || shape <= 0 || !Number.isFinite(value) || value < 0) return null;
+    if (value === 0) return 0;
+    const logScale = -value + (shape * Math.log(value)) - logGamma(shape);
+    if (value < shape + 1) {
+        let term = 1 / shape;
+        let sum = term;
+        let denominator = shape;
+        for (let iteration = 1; iteration <= MAX_CONTINUED_FRACTION_ITERATIONS; iteration += 1) {
+            denominator += 1;
+            term *= value / denominator;
+            sum += term;
+            if (Math.abs(term) <= Math.abs(sum) * NUMERICAL_EPSILON) break;
+        }
+        return Math.max(0, Math.min(1, sum * Math.exp(logScale)));
+    }
+
+    let b = value + 1 - shape;
+    let c = 1 / CONTINUED_FRACTION_FLOOR;
+    let d = 1 / Math.max(b, CONTINUED_FRACTION_FLOOR);
+    let fraction = d;
     for (let iteration = 1; iteration <= MAX_CONTINUED_FRACTION_ITERATIONS; iteration += 1) {
-        const evenStep = 2 * iteration;
-        let coefficient = iteration * (b - iteration) * x
-            / ((qam + evenStep) * (a + evenStep));
-        d = 1 + coefficient * d;
+        const coefficient = -iteration * (iteration - shape);
+        b += 2;
+        d = (coefficient * d) + b;
         if (Math.abs(d) < CONTINUED_FRACTION_FLOOR) d = CONTINUED_FRACTION_FLOOR;
-        c = 1 + coefficient / c;
-        if (Math.abs(c) < CONTINUED_FRACTION_FLOOR) c = CONTINUED_FRACTION_FLOOR;
-        d = 1 / d;
-        result *= d * c;
-
-        coefficient = -(a + iteration) * (qab + iteration) * x
-            / ((a + evenStep) * (qap + evenStep));
-        d = 1 + coefficient * d;
-        if (Math.abs(d) < CONTINUED_FRACTION_FLOOR) d = CONTINUED_FRACTION_FLOOR;
-        c = 1 + coefficient / c;
+        c = b + (coefficient / c);
         if (Math.abs(c) < CONTINUED_FRACTION_FLOOR) c = CONTINUED_FRACTION_FLOOR;
         d = 1 / d;
         const delta = d * c;
-        result *= delta;
+        fraction *= delta;
         if (Math.abs(delta - 1) <= NUMERICAL_EPSILON) break;
     }
-    return result;
+    const complement = Math.exp(logScale) * fraction;
+    return Math.max(0, Math.min(1, 1 - complement));
 }
 
-function regularizedIncompleteBeta(x, a, b) {
-    if (x <= 0) return 0;
-    if (x >= 1) return 1;
-    const front = Math.exp(
-        logGamma(a + b) - logGamma(a) - logGamma(b)
-        + a * Math.log(x) + b * Math.log1p(-x)
-    );
-    if (x < (a + 1) / (a + b + 2)) {
-        return front * betaContinuedFraction(a, b, x) / a;
-    }
-    return 1 - (front * betaContinuedFraction(b, a, 1 - x) / b);
-}
-
-function studentTCdf(value, degreesOfFreedom) {
-    const df = Number(degreesOfFreedom);
-    if (!Number.isFinite(value) || !Number.isFinite(df) || df <= 0) return null;
-    if (value === 0) return 0.5;
-    const x = df / (df + value * value);
-    const tail = 0.5 * regularizedIncompleteBeta(x, df / 2, 0.5);
-    return value > 0 ? 1 - tail : tail;
-}
-
-/**
- * Deterministic inverse Student-t CDF using monotonic bracketing and bisection.
- */
-function studentTQuantile(probability, degreesOfFreedom) {
-    const p = Number(probability);
-    const df = Number(degreesOfFreedom);
-    if (!Number.isFinite(p) || p <= 0 || p >= 1 || !Number.isFinite(df) || df <= 0) return null;
-    if (p === 0.5) return 0;
-    if (p < 0.5) {
-        const mirrored = studentTQuantile(1 - p, df);
-        return mirrored === null ? null : -mirrored;
-    }
-
+function chiSquareQuantile(probability, degreesOfFreedom) {
+    if (typeof probability !== 'number' || !Number.isFinite(probability)
+        || probability <= 0 || probability >= 1
+        || !Number.isSafeInteger(degreesOfFreedom) || degreesOfFreedom < 1) return null;
     let lower = 0;
-    let upper = 1;
-    while (upper < 1e12 && studentTCdf(upper, df) < p) upper *= 2;
-    if (studentTCdf(upper, df) < p) return null;
-
-    for (let iteration = 0; iteration < 120; iteration += 1) {
+    let upper = Math.max(1, degreesOfFreedom);
+    while (regularizedGammaP(degreesOfFreedom / 2, upper / 2) < probability) {
+        upper *= 2;
+        if (!Number.isFinite(upper)) return null;
+    }
+    for (let iteration = 0; iteration < 200; iteration += 1) {
         const midpoint = (lower + upper) / 2;
-        if (studentTCdf(midpoint, df) < p) lower = midpoint;
+        if (regularizedGammaP(degreesOfFreedom / 2, midpoint / 2) < probability) lower = midpoint;
         else upper = midpoint;
     }
     return (lower + upper) / 2;
 }
 
-/**
- * Acklam's deterministic inverse-normal approximation. The power planner uses
- * this only for the preregistered target-power margin; the reported interval
- * remains the exact Student-t interval above.
- */
-function standardNormalQuantile(probability) {
-    const p = Number(probability);
-    if (!Number.isFinite(p) || p <= 0 || p >= 1) return null;
-    const a = [
-        -3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2,
-        1.38357751867269e2, -3.066479806614716e1, 2.506628277459239
-    ];
-    const b = [
-        -5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2,
-        6.680131188771972e1, -1.328068155288572e1
-    ];
-    const c = [
-        -7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838,
-        -2.549732539343734, 4.374664141464968, 2.938163982698783
-    ];
-    const d = [
-        7.784695709041462e-3, 3.224671290700398e-1,
-        2.445134137142996, 3.754408661907416
-    ];
-    const lowerTail = 0.02425;
-    const upperTail = 1 - lowerTail;
-    if (p < lowerTail) {
-        const q = Math.sqrt(-2 * Math.log(p));
-        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
-    }
-    if (p > upperTail) {
-        const q = Math.sqrt(-2 * Math.log(1 - p));
-        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
-    }
-    const q = p - 0.5;
-    const r = q * q;
-    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
-        / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+function computePairedStdDevUpperConfidenceBoundMicros({
+    observedPairedStdDevMicros,
+    independentPromptCount,
+    confidenceBasisPoints
+} = {}) {
+    if (!Number.isSafeInteger(observedPairedStdDevMicros) || observedPairedStdDevMicros <= 0
+        || !Number.isSafeInteger(independentPromptCount)
+        || independentPromptCount < MINIMUM_VARIANCE_BASIS_PROMPT_COUNT
+        || !Number.isSafeInteger(confidenceBasisPoints)
+        || confidenceBasisPoints < 9500 || confidenceBasisPoints > 9999) return null;
+    const degreesOfFreedom = independentPromptCount - 1;
+    const lowerTailProbability = 1 - (confidenceBasisPoints / 10_000);
+    const lowerQuantile = chiSquareQuantile(lowerTailProbability, degreesOfFreedom);
+    if (!Number.isFinite(lowerQuantile) || lowerQuantile <= 0) return null;
+    const upper = observedPairedStdDevMicros * Math.sqrt(degreesOfFreedom / lowerQuantile);
+    return Number.isFinite(upper) && upper <= Number.MAX_SAFE_INTEGER ? Math.ceil(upper) : null;
+}
+
+function boundedHoeffdingConfidenceRadius(count, alpha, familySize) {
+    if (!Number.isSafeInteger(count) || count < 1
+        || typeof alpha !== 'number' || !Number.isFinite(alpha) || alpha <= 0 || alpha >= 1
+        || !Number.isSafeInteger(familySize) || familySize < 1) return null;
+    return PAIRED_DIFFERENCE_RANGE * Math.sqrt(
+        Math.log((2 * familySize) / alpha) / (2 * count)
+    );
+}
+
+function boundedHoeffdingFamilyMissUpperBound(count, alpha, familySize, poweredExcessEffect) {
+    const radius = boundedHoeffdingConfidenceRadius(count, alpha, familySize);
+    if (!Number.isFinite(radius) || typeof poweredExcessEffect !== 'number'
+        || !Number.isFinite(poweredExcessEffect) || poweredExcessEffect <= radius) return 1;
+    const remainingSignal = poweredExcessEffect - radius;
+    return Math.min(1, familySize * Math.exp(
+        (-2 * count * remainingSignal * remainingSignal)
+        / (PAIRED_DIFFERENCE_RANGE * PAIRED_DIFFERENCE_RANGE)
+    ));
 }
 
 function requiredIndependentPromptCount({
     alpha,
     mde,
+    poweredAlternativeEffect,
     candidateCount,
     targetPowerBasisPoints,
     assumedMaxPairedStdDevMicros
 }) {
     if (typeof alpha !== 'number' || !Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) return null;
-    if (typeof mde !== 'number' || !Number.isFinite(mde) || mde <= 0) return null;
+    if (typeof mde !== 'number' || !Number.isFinite(mde) || mde <= 0 || mde >= MAXIMUM_SCORE) return null;
+    if (typeof poweredAlternativeEffect !== 'number'
+        || !Number.isFinite(poweredAlternativeEffect)
+        || poweredAlternativeEffect <= mde
+        || poweredAlternativeEffect > MAXIMUM_SCORE) return null;
     if (!Number.isSafeInteger(candidateCount) || candidateCount < 2) return null;
     if (!Number.isSafeInteger(targetPowerBasisPoints)
         || targetPowerBasisPoints < MINIMUM_TARGET_POWER_BASIS_POINTS
@@ -228,53 +407,58 @@ function requiredIndependentPromptCount({
         || assumedMaxPairedStdDevMicros <= 0) return null;
 
     const familySize = candidateCount * (candidateCount - 1) / 2;
-    const adjustedAlpha = alpha / familySize;
-    const powerMargin = standardNormalQuantile(targetPowerBasisPoints / 10_000);
-    const assumedStdDev = assumedMaxPairedStdDevMicros / 1_000_000;
-    if (!Number.isFinite(adjustedAlpha) || adjustedAlpha <= 0 || adjustedAlpha >= 1
-        || !Number.isFinite(powerMargin) || !Number.isFinite(assumedStdDev) || assumedStdDev <= 0) return null;
+    const poweredExcessEffect = poweredAlternativeEffect - mde;
+    const targetPower = targetPowerBasisPoints / 10_000;
+    const confidenceLog = Math.log((2 * familySize) / alpha);
+    const powerLog = Math.log(familySize / (1 - targetPower));
+    if (![poweredExcessEffect, confidenceLog, powerLog].every(Number.isFinite)
+        || poweredExcessEffect <= 0 || confidenceLog <= 0 || powerLog <= 0) return null;
 
-    // Conservative, explicitly versioned planning bound: require the signal at
-    // the MDE to clear the finite-df Student-t critical value plus the target
-    // standard-normal power margin. This never substitutes for the final t CI.
+    // Every prompt-level paired difference lies in [-10, 10]. The simultaneous
+    // confidence radius and the miss-probability bound therefore hold for any
+    // score distribution; no normality or asymptotic approximation is assumed.
     const meetsBound = (count) => {
-        const critical = studentTQuantile(1 - adjustedAlpha / 2, count - 1);
-        return Number.isFinite(critical)
-            && (mde * Math.sqrt(count) / assumedStdDev) >= critical + powerMargin;
+        const familyMissBound = boundedHoeffdingFamilyMissUpperBound(
+            count,
+            alpha,
+            familySize,
+            poweredExcessEffect
+        );
+        return Number.isFinite(familyMissBound)
+            && familyMissBound <= 1 - targetPower;
     };
 
-    if (meetsBound(MINIMUM_INDEPENDENT_PROMPT_COUNT)) return MINIMUM_INDEPENDENT_PROMPT_COUNT;
-    let lower = MINIMUM_INDEPENDENT_PROMPT_COUNT;
-    let upper = lower * 2;
-    while (upper <= MAXIMUM_POWER_PROMPT_COUNT && !meetsBound(upper)) {
-        lower = upper;
-        upper *= 2;
-    }
-    if (upper > MAXIMUM_POWER_PROMPT_COUNT) {
-        upper = MAXIMUM_POWER_PROMPT_COUNT;
-        if (!meetsBound(upper)) return null;
-    }
-    while (lower + 1 < upper) {
-        const midpoint = Math.floor((lower + upper) / 2);
-        if (meetsBound(midpoint)) upper = midpoint;
-        else lower = midpoint;
-    }
-    return upper;
+    const direct = Math.ceil((PAIRED_DIFFERENCE_RANGE * (
+        Math.sqrt(confidenceLog / 2) + Math.sqrt(powerLog / 2)
+    ) / poweredExcessEffect) ** 2);
+    if (!Number.isSafeInteger(direct) || direct > MAXIMUM_POWER_PROMPT_COUNT) return null;
+    let required = Math.max(MINIMUM_INDEPENDENT_PROMPT_COUNT, direct);
+    while (required <= MAXIMUM_POWER_PROMPT_COUNT && !meetsBound(required)) required += 1;
+    if (required > MAXIMUM_POWER_PROMPT_COUNT) return null;
+    while (required > MINIMUM_INDEPENDENT_PROMPT_COUNT && meetsBound(required - 1)) required -= 1;
+    return required;
 }
 
 function buildBenchmarkTrustPowerAnalysisFields({
     alpha,
     mde,
+    poweredAlternativeEffect,
     candidateIds,
     targetPowerBasisPoints,
-    assumedMaxPairedStdDevMicros
+    assumedMaxPairedStdDevMicros,
+    varianceBasis
 } = {}) {
     const normalizedCandidateIds = Array.isArray(candidateIds)
         ? [...new Set(candidateIds.map(normalizeId).filter(Boolean))].sort(compareText)
         : [];
+    const normalizedVarianceBasis = buildBenchmarkTrustVarianceBasis(varianceBasis);
+    if (assumedMaxPairedStdDevMicros !== normalizedVarianceBasis.upperConfidenceBoundMicros) {
+        throw new Error('assumed maximum paired standard deviation must equal the frozen variance upper bound');
+    }
     const requiredCount = requiredIndependentPromptCount({
         alpha,
         mde,
+        poweredAlternativeEffect,
         candidateCount: normalizedCandidateIds.length,
         targetPowerBasisPoints,
         assumedMaxPairedStdDevMicros
@@ -283,22 +467,35 @@ function buildBenchmarkTrustPowerAnalysisFields({
         throw new Error('power analysis inputs cannot produce a bounded required independent prompt count');
     }
     const familySize = normalizedCandidateIds.length * (normalizedCandidateIds.length - 1) / 2;
+    if (normalizedVarianceBasis.candidatePairCount !== familySize) {
+        throw new Error('variance basis candidate pair family does not match the preregistered candidates');
+    }
     const artifact = {
         schema: POWER_ANALYSIS_SCHEMA,
         statisticalMethod: STATISTICS_METHOD.name,
         multiplicityCorrection: STATISTICS_METHOD.multiplicity,
         alpha,
-        minimumEffect: mde,
+        superiorityMargin: mde,
+        poweredAlternativeEffect,
+        poweredExcessEffect: poweredAlternativeEffect - mde,
         candidateCount: normalizedCandidateIds.length,
         familySize,
+        scoreMinimum: MINIMUM_SCORE,
+        scoreMaximum: MAXIMUM_SCORE,
+        pairedDifferenceRange: PAIRED_DIFFERENCE_RANGE,
         targetPowerBasisPoints,
         assumedMaxPairedStdDevMicros,
+        variancePilotUsedForPowerNarrowing: false,
+        varianceBasisFingerprint: normalizedVarianceBasis.artifactFingerprint,
         requiredIndependentPromptCount: requiredCount
     };
     return {
         requiredIndependentPromptCount: requiredCount,
         targetPowerBasisPoints,
+        poweredAlternativeEffect,
         assumedMaxPairedStdDevMicros,
+        varianceBasis: normalizedVarianceBasis,
+        varianceBasisFingerprint: normalizedVarianceBasis.artifactFingerprint,
         powerAnalysisFingerprint: crypto.createHash('sha256')
             .update(stableSerialize(artifact))
             .digest('hex')
@@ -314,21 +511,33 @@ function validatePreregistration(preregistration) {
 
     const alpha = source.alpha;
     const mde = source.mde;
+    const poweredAlternativeEffect = source.poweredAlternativeEffect;
     const equivalenceMargin = source.equivalenceMargin;
     const repeatCount = source.repeatCount;
     const requiredPromptCount = source.requiredIndependentPromptCount;
     const targetPowerBasisPoints = source.targetPowerBasisPoints;
     const assumedMaxPairedStdDevMicros = source.assumedMaxPairedStdDevMicros;
+    const varianceBasis = source.varianceBasis;
+    const varianceBasisFingerprint = source.varianceBasisFingerprint;
+    const variancePilotAttestationId = source.variancePilotAttestationId;
     const powerAnalysisFingerprint = source.powerAnalysisFingerprint;
     if (typeof alpha !== 'number' || !Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) {
         reasons.push('alpha_invalid');
     }
-    if (typeof mde !== 'number' || !Number.isFinite(mde) || mde <= 0) {
+    if (typeof mde !== 'number' || !Number.isFinite(mde) || mde <= 0 || mde >= MAXIMUM_SCORE) {
         reasons.push('mde_invalid');
+    }
+    if (typeof poweredAlternativeEffect !== 'number'
+        || !Number.isFinite(poweredAlternativeEffect)
+        || !(poweredAlternativeEffect > mde)
+        || poweredAlternativeEffect > MAXIMUM_SCORE) {
+        reasons.push('powered_alternative_effect_invalid');
     }
     if (typeof equivalenceMargin !== 'number' || !Number.isFinite(equivalenceMargin)
         || equivalenceMargin < 0) {
         reasons.push('equivalence_margin_invalid');
+    } else if (typeof mde === 'number' && Number.isFinite(mde) && equivalenceMargin > mde) {
+        reasons.push('equivalence_margin_exceeds_mde');
     }
     if (!Number.isSafeInteger(repeatCount) || repeatCount < 1) {
         reasons.push('repeat_count_invalid');
@@ -349,6 +558,14 @@ function validatePreregistration(preregistration) {
     if (typeof powerAnalysisFingerprint !== 'string'
         || !/^[0-9a-f]{64}$/.test(powerAnalysisFingerprint)) {
         reasons.push('power_analysis_fingerprint_invalid');
+    }
+    if (typeof varianceBasisFingerprint !== 'string'
+        || !/^[0-9a-f]{64}$/.test(varianceBasisFingerprint)) {
+        reasons.push('variance_basis_fingerprint_invalid');
+    }
+    if (typeof variancePilotAttestationId !== 'string'
+        || !/^[0-9a-f]{64}$/.test(variancePilotAttestationId)) {
+        reasons.push('variance_pilot_attestation_id_invalid');
     }
 
     function declaredIds(field, label) {
@@ -374,19 +591,27 @@ function validatePreregistration(preregistration) {
         computedPower = buildBenchmarkTrustPowerAnalysisFields({
             alpha,
             mde,
+            poweredAlternativeEffect,
             candidateIds: candidates.values,
             targetPowerBasisPoints,
-            assumedMaxPairedStdDevMicros
+            assumedMaxPairedStdDevMicros,
+            varianceBasis
         });
     } catch (_error) {
         reasons.push('power_analysis_unavailable');
     }
     if (computedPower) {
+        if (computedPower.varianceBasis.repeatCount !== repeatCount) {
+            reasons.push('variance_basis_repeat_mismatch');
+        }
         if (requiredPromptCount !== computedPower.requiredIndependentPromptCount) {
             reasons.push('required_prompt_count_mismatch');
         }
         if (powerAnalysisFingerprint !== computedPower.powerAnalysisFingerprint) {
             reasons.push('power_analysis_fingerprint_mismatch');
+        }
+        if (varianceBasisFingerprint !== computedPower.varianceBasisFingerprint) {
+            reasons.push('variance_basis_fingerprint_mismatch');
         }
         if (prompts.supplied && prompts.values.length < computedPower.requiredIndependentPromptCount) {
             reasons.push('underpowered_prompt_count');
@@ -398,6 +623,10 @@ function validatePreregistration(preregistration) {
         values: {
             alpha: typeof alpha === 'number' && Number.isFinite(alpha) ? alpha : null,
             mde: typeof mde === 'number' && Number.isFinite(mde) ? mde : null,
+            poweredAlternativeEffect: typeof poweredAlternativeEffect === 'number'
+                && Number.isFinite(poweredAlternativeEffect)
+                ? poweredAlternativeEffect
+                : null,
             equivalenceMargin: typeof equivalenceMargin === 'number' && Number.isFinite(equivalenceMargin)
                 ? equivalenceMargin
                 : null,
@@ -411,6 +640,13 @@ function validatePreregistration(preregistration) {
                 : null,
             assumedMaxPairedStdDevMicros: Number.isSafeInteger(assumedMaxPairedStdDevMicros)
                 ? assumedMaxPairedStdDevMicros
+                : null,
+            varianceBasis: computedPower?.varianceBasis || null,
+            varianceBasisFingerprint: typeof varianceBasisFingerprint === 'string'
+                ? varianceBasisFingerprint
+                : null,
+            variancePilotAttestationId: typeof variancePilotAttestationId === 'string'
+                ? variancePilotAttestationId
                 : null,
             powerAnalysisFingerprint: typeof powerAnalysisFingerprint === 'string'
                 ? powerAnalysisFingerprint
@@ -442,6 +678,7 @@ function aggregatePromptMeans(rows, preregistration = {}) {
         if (!candidateId) rowReasons.push('candidate_id_invalid');
         if (!promptId) rowReasons.push('prompt_id_invalid');
         if (typeof score !== 'number' || !Number.isFinite(score)) rowReasons.push('score_invalid');
+        else if (score < MINIMUM_SCORE || score > MAXIMUM_SCORE) rowReasons.push('score_out_of_range');
         if (!Number.isSafeInteger(repeatIndex) || repeatIndex < 0) {
             rowReasons.push('repeat_index_invalid');
         }
@@ -553,7 +790,8 @@ function buildBaseComparison(leftSummary, rightSummary, promptIds, {
     adjustedAlpha,
     matrixComplete,
     preregistrationValid,
-    requiredPromptCount
+    requiredPromptCount,
+    assumedMaxPairedStdDevMicros
 }) {
     const leftByPrompt = new Map(leftSummary.promptMeans.map(row => [row.promptId, row.mean]));
     const rightByPrompt = new Map(rightSummary.promptMeans.map(row => [row.promptId, row.mean]));
@@ -576,29 +814,30 @@ function buildBaseComparison(leftSummary, rightSummary, promptIds, {
     }
     if (adjustedAlpha === null) reasons.push('adjusted_alpha_unavailable');
 
-    let standardError = null;
-    let criticalValue = null;
+    let observedPairedStdDevMicros = null;
+    let confidenceRadius = null;
     let lower = null;
     let upper = null;
+    const variance = sampleVariance(differences, effect);
+    if (Number.isFinite(variance) && variance >= 0) {
+        observedPairedStdDevMicros = Math.round(Math.sqrt(variance) * 1_000_000);
+        if (Number.isSafeInteger(assumedMaxPairedStdDevMicros)
+            && observedPairedStdDevMicros > assumedMaxPairedStdDevMicros) {
+            reasons.push('observed_variance_exceeds_preregistered_bound');
+        }
+    }
     if (reasons.length === 0) {
-        const variance = sampleVariance(differences, effect);
-        if (!Number.isFinite(variance) || variance <= 0) {
-            reasons.push('degenerate_paired_variance');
+        confidenceRadius = boundedHoeffdingConfidenceRadius(
+            differences.length,
+            adjustedAlpha,
+            1
+        );
+        if (!Number.isFinite(confidenceRadius)) {
+            reasons.push('confidence_radius_unavailable');
+            confidenceRadius = null;
         } else {
-            standardError = Math.sqrt(variance / differences.length);
-            const probability = 1 - adjustedAlpha / 2;
-            criticalValue = probability < 1
-                ? studentTQuantile(probability, differences.length - 1)
-                : null;
-            if (criticalValue === null || !Number.isFinite(criticalValue)) {
-                reasons.push('critical_value_unavailable');
-                standardError = null;
-                criticalValue = null;
-            } else {
-                const margin = criticalValue * standardError;
-                lower = cleanZero(effect - margin);
-                upper = cleanZero(effect + margin);
-            }
+            lower = cleanZero(Math.max(-MAXIMUM_SCORE, effect - confidenceRadius));
+            upper = cleanZero(Math.min(MAXIMUM_SCORE, effect + confidenceRadius));
         }
     }
 
@@ -610,9 +849,8 @@ function buildBaseComparison(leftSummary, rightSummary, promptIds, {
         adjustedAlpha,
         lower,
         upper,
-        standardError,
-        degreesOfFreedom: paired.length >= 2 ? paired.length - 1 : null,
-        criticalValue,
+        confidenceRadius,
+        observedPairedStdDevMicros,
         complete: reasons.length === 0,
         reasons
     };
@@ -633,9 +871,8 @@ function orientComparison(base, reverse, mde, equivalenceMargin) {
         adjustedAlpha: base.adjustedAlpha,
         lower,
         upper,
-        standardError: base.standardError,
-        degreesOfFreedom: base.degreesOfFreedom,
-        criticalValue: base.criticalValue,
+        confidenceRadius: base.confidenceRadius,
+        observedPairedStdDevMicros: base.observedPairedStdDevMicros,
         complete: base.complete,
         strictSuperiority: intervalAvailable && lower > mde,
         equivalent: intervalAvailable
@@ -656,13 +893,20 @@ function requireFingerprint(value, label) {
     return value;
 }
 
+function isReceiptScaleRepresentable(value, factor) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+    const scaled = value * factor;
+    const rounded = Math.round(scaled);
+    return Number.isSafeInteger(rounded) && Math.abs(scaled - rounded) <= 1e-8;
+}
+
 function exactScaledInteger(value, factor, label) {
     if (typeof value !== 'number' || !Number.isFinite(value)) {
         throw new Error(`${label} must be finite`);
     }
     const scaled = value * factor;
     const rounded = Math.round(scaled);
-    if (!Number.isSafeInteger(rounded) || Math.abs(scaled - rounded) > 1e-8) {
+    if (!isReceiptScaleRepresentable(value, factor)) {
         throw new Error(`${label} is not exactly representable at the receipt scale`);
     }
     return rounded;
@@ -684,8 +928,9 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
     const adjustedAlpha = validation.valid && familySize > 0
         ? alpha / familySize
         : null;
-    const probability = adjustedAlpha === null ? null : 1 - adjustedAlpha / 2;
-    const adjustedAlphaUsable = adjustedAlpha !== null && adjustedAlpha > 0 && probability < 1;
+    const adjustedAlphaUsable = adjustedAlpha !== null
+        && adjustedAlpha > 0
+        && adjustedAlpha < 1;
     const effectiveAdjustedAlpha = adjustedAlphaUsable ? adjustedAlpha : null;
 
     const summariesById = new Map(candidateSummaries.map(summary => [summary.candidateId, summary]));
@@ -700,7 +945,8 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
                     adjustedAlpha: effectiveAdjustedAlpha,
                     matrixComplete: matrix.complete,
                     preregistrationValid: validation.valid,
-                    requiredPromptCount: validation.values.requiredIndependentPromptCount
+                    requiredPromptCount: validation.values.requiredIndependentPromptCount,
+                    assumedMaxPairedStdDevMicros: validation.values.assumedMaxPairedStdDevMicros
                 }
             ));
         }
@@ -732,6 +978,10 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
     if (adjustedAlpha !== null && !adjustedAlphaUsable) reasons.push('adjusted_alpha_unrepresentable');
     if (comparisons.some(comparison => comparison.reasons.includes('degenerate_paired_variance'))) {
         reasons.push('degenerate_paired_variance');
+    }
+    if (comparisons.some(comparison => comparison.reasons
+        .includes('observed_variance_exceeds_preregistered_bound'))) {
+        reasons.push('observed_variance_exceeds_preregistered_bound');
     }
 
     let outcome = 'inconclusive';
@@ -770,7 +1020,7 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
                     .get(`${candidateId}\u0000${otherId}`)?.equivalent === true)
             ));
             const outsiders = candidateIds.filter(candidateId => !survivors.includes(candidateId));
-            const outsidersDominatedBySet = outsiders.every(outsideId => survivors.some(candidateId => (
+            const outsidersDominatedBySet = outsiders.every(outsideId => survivors.every(candidateId => (
                 comparisonByDirection.get(`${candidateId}\u0000${outsideId}`)?.strictSuperiority === true
             )));
             if (survivorPairsEquivalent && outsidersDominatedBySet) {
@@ -805,7 +1055,7 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
 
 /**
  * Evaluate raw rows and project the resulting decision into the exact
- * statistical fields of BenchmarkTrustReceipt v1. A caller cannot inject or
+ * statistical fields of BenchmarkTrustReceipt v2. A caller cannot inject or
  * mutate a precomputed evaluation object: this boundary always re-evaluates.
  */
 function buildBenchmarkTrustStatisticsReceiptFields(source, {
@@ -833,7 +1083,7 @@ function buildBenchmarkTrustStatisticsReceiptFields(source, {
     if (evaluation.method?.name !== STATISTICS_METHOD.name
         || evaluation.method?.multiplicity !== STATISTICS_METHOD.multiplicity
         || evaluation.preregistration?.repeatCount === null) {
-        throw new Error('evaluation method or preregistration is incompatible with BenchmarkTrustReceipt v1');
+        throw new Error('evaluation method or preregistration is incompatible with BenchmarkTrustReceipt v2');
     }
     const receiptCandidatePattern = /^candidate_[0-9a-f]{32}$/;
     if (!Array.isArray(evaluation.candidateSummaries)
@@ -851,6 +1101,11 @@ function buildBenchmarkTrustStatisticsReceiptFields(source, {
         evaluation.preregistration.mde,
         1_000_000,
         'mde'
+    );
+    const poweredAlternativeEffectMicros = exactScaledInteger(
+        evaluation.preregistration.poweredAlternativeEffect,
+        1_000_000,
+        'poweredAlternativeEffect'
     );
     const decisionArtifact = {
         method: evaluation.method,
@@ -887,9 +1142,12 @@ function buildBenchmarkTrustStatisticsReceiptFields(source, {
         minimumEffectMicros,
         preregistration: {
             repeatCount: evaluation.preregistration.repeatCount,
+            poweredAlternativeEffectMicros,
             requiredIndependentPromptCount: evaluation.preregistration.requiredIndependentPromptCount,
             targetPowerBasisPoints: evaluation.preregistration.targetPowerBasisPoints,
             assumedMaxPairedStdDevMicros: evaluation.preregistration.assumedMaxPairedStdDevMicros,
+            varianceBasisFingerprint: evaluation.preregistration.varianceBasisFingerprint,
+            variancePilotAttestationId: evaluation.preregistration.variancePilotAttestationId,
             powerAnalysisFingerprint: evaluation.preregistration.powerAnalysisFingerprint,
             analysisPlanFingerprint: requireFingerprint(
                 analysisPlanFingerprint,
@@ -908,10 +1166,20 @@ function buildBenchmarkTrustStatisticsReceiptFields(source, {
 
 module.exports = {
     POWER_ANALYSIS_SCHEMA,
+    VARIANCE_BASIS_METHOD,
+    VARIANCE_BASIS_PROVENANCE,
+    VARIANCE_BASIS_SCHEMA,
     STATISTICS_METHOD,
+    buildBenchmarkTrustVarianceBasis,
     buildBenchmarkTrustPowerAnalysisFields,
-    studentTCdf,
-    studentTQuantile,
+    boundedHoeffdingConfidenceRadius,
+    boundedHoeffdingFamilyMissUpperBound,
+    isReceiptScaleRepresentable,
+    chiSquareQuantile,
+    computeBenchmarkTrustVarianceCandidateSetFingerprint,
+    computeBenchmarkTrustCandidateInferenceContractFingerprint,
+    computeBenchmarkTrustVariancePairFingerprints,
+    computePairedStdDevUpperConfidenceBoundMicros,
     validatePreregistration,
     aggregatePromptMeans,
     evaluateBenchmarkTrustStatistics,

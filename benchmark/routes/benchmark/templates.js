@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const BenchmarkTemplate = require('../../models/BenchmarkTemplate');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
+const benchmarkService = require('../../src/services/benchmark');
 const { validateObjectId } = require('../../src/helpers/objectIdValidator');
 const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
 const logger = require('../../config/logger');
@@ -38,8 +39,17 @@ router.post('/templates', async (req, res) => {
 
         if (source_batch_id) {
             if (!validateObjectId(source_batch_id, res, 'source_batch_id')) return;
-            const batch = await BenchmarkBatch.findById(source_batch_id).lean();
+            const batch = await BenchmarkBatch.findById(source_batch_id)
+                .select('+trust_evidence_context')
+                .lean();
             if (!batch) return res.status(404).json({ status: 'error', error: 'Source batch not found' });
+            if (benchmarkService.isTrustCampaignBatch(batch)) {
+                return res.status(409).json({
+                    status: 'error',
+                    code: 'BENCHMARK_TRUST_TEMPLATE_EXPORT_FORBIDDEN',
+                    error: 'Strict Trust campaign configuration cannot be copied into a reusable template'
+                });
+            }
             for (const field of CONFIG_FIELDS) {
                 if (batch[field] !== undefined) templateConfig[field] = batch[field];
             }

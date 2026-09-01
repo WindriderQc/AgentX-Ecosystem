@@ -194,13 +194,73 @@ async function resolveHarnessTarget(rawTarget, { force = false } = {}) {
   return current;
 }
 
-function buildHarnessEnvelope({ batchId, cellId, target, promptText, timeoutMs, maxTokens, maxCostNanodollars = 0, role = 'candidate' }) {
+function normalizeHarnessInvocationParameters(parameters = {}, {
+  timeoutMs = null,
+  maxTokens = null,
+  role = 'candidate'
+} = {}) {
+  const finiteOrNull = (value) => (
+    value === null || value === undefined || value === ''
+      ? null
+      : (Number.isFinite(Number(value)) ? Number(value) : null)
+  );
+  const normalizedMaxTokens = Math.max(1, Math.round(Number(
+    parameters.maxTokens ?? parameters.num_predict ?? maxTokens
+  ) || 32_000));
+  const normalizedTimeoutMs = Math.max(1, Math.round(Number(
+    parameters.timeoutMs ?? timeoutMs
+  ) || 600_000));
+  const seedValue = finiteOrNull(parameters.seed);
+  return {
+    temperature: finiteOrNull(parameters.temperature),
+    topP: finiteOrNull(parameters.topP),
+    seed: seedValue === null ? null : Math.round(seedValue),
+    maxTokens: normalizedMaxTokens,
+    timeoutMs: normalizedTimeoutMs,
+    responseFormat: role === 'judge' ? 'json' : 'text'
+  };
+}
+
+function buildTrustJudgeCellId({ trust_candidate_id, trust_prompt_id, repeat_index }) {
+  if (!/^candidate_[0-9a-f]{32}$/.test(String(trust_candidate_id || ''))
+    || !/^prompt_[0-9a-f]{32}$/.test(String(trust_prompt_id || ''))
+    || !Number.isSafeInteger(repeat_index)
+    || repeat_index < 0) {
+    throw brokerError(
+      'BENCHMARK_TRUST_JUDGE_CELL_ID_INVALID',
+      'strict judge execution requires an exact Trust candidate/prompt/repeat identity',
+      409
+    );
+  }
+  return `trust-judge:${trust_candidate_id}:${trust_prompt_id}:${repeat_index}`;
+}
+
+function buildHarnessEnvelope({
+  batchId,
+  cellId,
+  target,
+  promptText,
+  parameters = {},
+  timeoutMs,
+  maxTokens,
+  maxCostNanodollars = 0,
+  role = 'candidate'
+}) {
   const targetIdentity = normalizeBenchmarkTarget(target);
   const isNative = targetIdentity.mode === 'native_agent';
   const nativePolicy = targetIdentity.nativePolicy;
   const promptFingerprint = fingerprint(String(promptText || ''));
+  const invocationParameters = normalizeHarnessInvocationParameters(parameters, {
+    timeoutMs,
+    maxTokens,
+    role
+  });
+  const invocationFingerprint = fingerprint({
+    schema: 'agentx.benchmark-harness-invocation/v1',
+    parameters: invocationParameters
+  });
   const estimatedInputTokens = Math.max(1, Math.ceil(Buffer.byteLength(String(promptText || ''), 'utf8') / 3));
-  const totalTokenBudget = Math.min(1_000_000_000, estimatedInputTokens + Math.max(1, Number(maxTokens) || 32_000));
+  const totalTokenBudget = Math.min(1_000_000_000, estimatedInputTokens + invocationParameters.maxTokens);
   return normalizeWorkerEnvelope({
     schema: 'agentx.worker-envelope/v1',
     schemaVersion: 1,
@@ -219,13 +279,15 @@ function buildHarnessEnvelope({ batchId, cellId, target, promptText, timeoutMs, 
         id: targetIdentity.model,
         version: targetIdentity.modelVersion,
         digest: null,
-        constraints: targetIdentity.mode === 'isolated_model' ? ['isolated-model', 'no-fallback'] : ['native-agent'],
+        constraints: targetIdentity.mode === 'isolated_model'
+          ? ['isolated-model', 'no-fallback', `inference-contract:${invocationFingerprint}`]
+          : ['native-agent', `inference-contract:${invocationFingerprint}`],
       },
     },
     prompt: { reference: `benchmark.${role}.prompt`, fingerprint: promptFingerprint },
     tools: { allowed: isNative ? nativePolicy.tools : [] },
     budgets: {
-      maxDurationMs: Math.max(1, Math.min(604_800_000, Number(timeoutMs) || 600_000)),
+      maxDurationMs: Math.max(1, Math.min(604_800_000, invocationParameters.timeoutMs)),
       maxTokens: totalTokenBudget,
       maxCostNanodollars: Math.max(0, Number(maxCostNanodollars) || 0),
       maxTurns: isNative ? nativePolicy.maxTurns : 1,
@@ -257,14 +319,13 @@ async function executeHarnessTarget({ batchId, batchFingerprint, cellId, target,
   if (role === 'judge' && (!currentTarget.capabilities.judge || currentTarget.mode !== 'isolated_model')) {
     throw brokerError('HARNESS_JUDGE_NOT_ALLOWED', 'Only isolated_model harness targets may judge', 422);
   }
-  const maxTokens = Number(parameters.maxTokens || parameters.num_predict || 32_000);
+  const invocationParameters = normalizeHarnessInvocationParameters(parameters, { role });
   const envelope = buildHarnessEnvelope({
     batchId,
     cellId,
     target: currentTarget,
     promptText,
-    timeoutMs: parameters.timeoutMs,
-    maxTokens,
+    parameters: invocationParameters,
     maxCostNanodollars: spendGrant?.maxCostNanodollars || 0,
     role,
   });
@@ -280,14 +341,7 @@ async function executeHarnessTarget({ batchId, batchFingerprint, cellId, target,
       target: currentTarget,
       envelope,
       input: { prompt: String(promptText || '') },
-      parameters: {
-        temperature: parameters.temperature ?? null,
-        topP: parameters.topP ?? null,
-        seed: parameters.seed ?? null,
-        maxTokens,
-        timeoutMs: Number(parameters.timeoutMs) || 600_000,
-        responseFormat: role === 'judge' ? 'json' : 'text',
-      },
+      parameters: invocationParameters,
       spendGrant,
     },
     signal,
@@ -391,11 +445,13 @@ function clearHarnessCatalogCache() {
 module.exports = {
   buildHarnessEnvelope,
   buildSpendPlan,
+  buildTrustJudgeCellId,
   clearHarnessCatalogCache,
   createSpendGrant,
   estimateTargetCostNanodollars,
   executeHarnessTarget,
   getHarnessTargets,
   isHarnessBrokerEnabled,
+  normalizeHarnessInvocationParameters,
   resolveHarnessTarget,
 };

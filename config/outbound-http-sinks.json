@@ -215,7 +215,7 @@
       "allowSearch": false,
       "responseMode": "json",
       "deadlineMs": 600000,
-      "maxRequestBytes": 0,
+      "maxRequestBytes": 32768,
       "maxResponseBytes": 262144,
       "enforcementStatus": "enforced"
     },
@@ -1147,7 +1147,7 @@
     { "id": "benchmark.judge-validator.show", "service": "benchmark", "source": "benchmark/src/services/benchmark/judgeModelValidator.js", "line": 211, "column": 25, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.preflight.tags", "service": "benchmark", "source": "benchmark/src/services/benchmark/preflight.js", "line": 284, "column": 32, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.test-execution.generate", "service": "benchmark", "source": "benchmark/src/services/benchmark/testExecution.js", "line": 43, "column": 32, "constructor": "fetch", "policyId": "configured.product-inference" },
-    { "id": "benchmark.judge-call.generate", "service": "benchmark", "source": "benchmark/src/services/scoring/judgeCall.js", "line": 375, "column": 36, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.judge-call.generate", "service": "benchmark", "source": "benchmark/src/services/scoring/judgeCall.js", "line": 415, "column": 36, "constructor": "fetch", "policyId": "configured.product-inference" },
 
     { "id": "rag.core-outbound.execute", "service": "rag", "source": "rag/src/clients/coreOutboundClient.js", "line": 279, "column": 30, "constructor": "fetchImpl", "policyId": "configured.qdrant-data" }
   ]

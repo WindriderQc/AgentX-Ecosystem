@@ -269,18 +269,16 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkSer
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
-    const { batchId, estimatedDurationMs, source, owner, note, heartbeatTtlMs } = req.body || {};
-    if (!batchId) {
-      return res.status(400).json({ status: 'error', message: 'batchId is required' });
+    const { batchId, claimGeneration, estimatedDurationMs, source, owner, note, heartbeatTtlMs } = req.body || {};
+    if (!batchId || !claimGeneration) {
+      return res.status(400).json({ status: 'error', message: 'batchId and claimGeneration are required' });
     }
-    const claimOptions = {};
+    const claimOptions = { claimGeneration };
     if (source !== undefined) claimOptions.source = source;
     if (owner !== undefined) claimOptions.owner = owner;
     if (note !== undefined) claimOptions.note = note;
     if (heartbeatTtlMs !== undefined) claimOptions.heartbeatTtlMs = heartbeatTtlMs;
-    const result = Object.keys(claimOptions).length
-      ? await hostPrefService.claimBenchmark(hostUrl, batchId, estimatedDurationMs, claimOptions)
-      : await hostPrefService.claimBenchmark(hostUrl, batchId, estimatedDurationMs);
+    const result = await hostPrefService.claimBenchmark(hostUrl, batchId, estimatedDurationMs, claimOptions);
     if (!result.claimed) {
       return res.status(409).json({ status: 'error', message: result.reason, data: result });
     }
@@ -297,8 +295,9 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', 
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     const batchId = req.params.batchId;
-    const { estimatedDurationMs, source, owner, note, heartbeatTtlMs } = req.body || {};
+    const { claimGeneration, estimatedDurationMs, source, owner, note, heartbeatTtlMs } = req.body || {};
     const result = await hostPrefService.heartbeatBenchmarkClaim(hostUrl, batchId, {
+      claimGeneration,
       estimatedDurationMs,
       source,
       owner,
@@ -321,7 +320,8 @@ router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireB
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     const batchId = req.params.batchId;
-    const result = await hostPrefService.releaseBenchmarkClaim(hostUrl, batchId);
+    const { claimGeneration } = req.body || {};
+    const result = await hostPrefService.releaseBenchmarkClaim(hostUrl, batchId, { claimGeneration });
     if (!result.released) {
       // Still 200 — release is idempotent; caller just learns the reason
       return res.json({ status: 'success', data: result });

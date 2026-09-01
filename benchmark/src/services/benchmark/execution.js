@@ -29,11 +29,48 @@ const {
     normalizeBatchTargets,
     normalizeBenchmarkTarget
 } = require('../../../../shared/benchmarkTargetContract');
-const { createSpendGrant } = require('./harnessBrokerClient');
+const { createSpendGrant, resolveHarnessTarget } = require('./harnessBrokerClient');
 const { fingerprint } = require('../../../../shared/workerContract');
+const {
+    assertConfiguredProductManifest,
+    buildTrustSourceContext,
+    loadCampaignSpec
+} = require('./benchmarkTrustCampaignRuntime');
 
 let activeBatchId = null;
 let activeHeartbeatInterval = null;
+const TRUST_LAUNCH_AUTHORITY = Symbol('benchmark-trust-launch-authority');
+const TRUST_CAMPAIGN_SPEC_INDEX_NAME = 'uniq_benchmark_batch_trust_campaign_spec_id';
+
+async function assertTrustCampaignSpecOneShotIndex() {
+    let indexes;
+    try {
+        indexes = await BenchmarkBatch.collection.indexes();
+    } catch (error) {
+        const unavailable = new Error('strict Benchmark Trust launch cannot verify its one-shot database index');
+        unavailable.code = 'BENCHMARK_TRUST_CAMPAIGN_SPEC_INDEX_UNAVAILABLE';
+        unavailable.statusCode = 503;
+        unavailable.cause = error;
+        throw unavailable;
+    }
+    const index = indexes.find(entry => entry?.name === TRUST_CAMPAIGN_SPEC_INDEX_NAME);
+    const partialFilter = index?.partialFilterExpression;
+    const partial = partialFilter?.trust_campaign_spec_id;
+    if (!index
+        || index.unique !== true
+        || Object.keys(index.key || {}).length !== 1
+        || index.key?.trust_campaign_spec_id !== 1
+        || !partialFilter
+        || Object.keys(partialFilter).length !== 1
+        || Object.keys(partial || {}).length !== 1
+        || partial?.$type !== 'string') {
+        const missing = new Error('strict Benchmark Trust launch requires the verified unique CampaignSpec index');
+        missing.code = 'BENCHMARK_TRUST_CAMPAIGN_SPEC_INDEX_MISSING';
+        missing.statusCode = 503;
+        throw missing;
+    }
+    return index;
+}
 
 function getActiveBatchId() {
     return activeBatchId;
@@ -65,12 +102,21 @@ async function startBatch({
     execution_mode = 'latency',
     depth_config = null,
     paid_approval = null,
-    campaign_kind = 'model'
+    campaign_kind = 'model',
+    trust_campaign_spec = null,
+    trust_runtime_env = process.env,
+    trust_launch_authority = null
 }) {
+    if (trust_campaign_spec && trust_launch_authority !== TRUST_LAUNCH_AUTHORITY) {
+        const error = new Error('strict Benchmark Trust campaigns must be loaded through startTrustBatch');
+        error.code = 'BENCHMARK_TRUST_LAUNCH_AUTHORITY_REQUIRED';
+        error.statusCode = 403;
+        throw error;
+    }
     if (!levels || !Array.isArray(levels)) {
         throw new Error('levels (array) are required');
     }
-    const normalizedTargets = normalizeBatchTargets({ host, models, targets });
+    let normalizedTargets = normalizeBatchTargets({ host, models, targets });
     if (campaign_kind === 'model' && normalizedTargets.some((target) => target.mode === 'native_agent')) {
         throw new Error('native_agent targets require campaign_kind native_agent');
     }
@@ -80,11 +126,18 @@ async function startBatch({
     const defaultHost = normalizedTargets.find((target) => target.executionKind === 'ollama')?.host || 'harness';
     const displayModels = normalizedTargets.map((target) => target.model);
     judge_config = { ...(judge_config || {}), think: false };
-    const judgeTarget = judge_config.target
+    let judgeTarget = judge_config.target
         ? normalizeBenchmarkTarget(judge_config.target, { allowMissingCatalogFingerprint: judge_config.target.executionKind === 'ollama' })
         : buildOllamaTarget(judge_config.host || defaultHost, judge_config.model || JUDGE_CONFIG.model);
     if (judgeTarget.mode === 'native_agent' || !judgeTarget.capabilities.judge) {
         throw new Error('Only direct_model or isolated_model targets may be used as judge');
+    }
+    if (trust_campaign_spec) {
+        assertConfiguredProductManifest(trust_campaign_spec, trust_runtime_env);
+        normalizedTargets = await Promise.all(
+            normalizedTargets.map(target => resolveHarnessTarget(target, { force: true }))
+        );
+        judgeTarget = await resolveHarnessTarget(judgeTarget, { force: true });
     }
     judge_config = { ...judge_config, target: judgeTarget, host: judgeTarget.host || `harness:${judgeTarget.harness.name}`, model: judgeTarget.model };
 
@@ -118,6 +171,15 @@ async function startBatch({
     if (selectedPrompts.length === 0) {
         throw new Error('No prompts found for selected levels');
     }
+    const persistedLevels = explicitPromptIds.length > 0
+        ? [...new Set(selectedPrompts
+            .map(prompt => Number(prompt.level))
+            .filter(level => Number.isSafeInteger(level) && level >= 1 && level <= 5))]
+            .sort((left, right) => left - right)
+        : [...levels];
+    if (persistedLevels.length === 0) {
+        throw new Error('Selected prompts require at least one valid level between 1 and 5');
+    }
 
     const { plan, normalizedExecutionConfig } = buildExecutionPlan(
         defaultHost,
@@ -144,12 +206,12 @@ async function startBatch({
         executionMode: execution_mode || 'latency'
     });
     plan.batch_contract_fingerprint = batchContractFingerprint;
-    const batch = new BenchmarkBatch({
+    let batch = new BenchmarkBatch({
         host: defaultHost,
         models: displayModels,
         targets: normalizedTargets,
         campaign_kind,
-        levels,
+        levels: persistedLevels,
         prompt_ids: explicitPromptIds,
         judge_config,
         execution_config: normalizedExecutionConfig,
@@ -158,13 +220,14 @@ async function startBatch({
         active_slot: 'benchmark_singleton',
         total_tests: normalizedTargets.length * selectedPrompts.length * repeats,
         plan,
-        status: 'running',
-        started_at: new Date(),
+        status: trust_campaign_spec ? 'pending' : 'running',
+        started_at: trust_campaign_spec ? null : new Date(),
         tags: Array.isArray(tags) ? tags : [],
         description: typeof description === 'string' ? description : '',
         execution_mode: execution_mode || 'latency',
         quality_cohort_fingerprint: qualityCohortFingerprint,
-        batch_contract_fingerprint: batchContractFingerprint
+        batch_contract_fingerprint: batchContractFingerprint,
+        trust_campaign_spec_id: trust_campaign_spec?.specId || null
     });
 
     const spendGrant = await createSpendGrant({
@@ -181,8 +244,53 @@ async function startBatch({
     batch.spend_grant = spendGrant;
 
     batch.captureSystemSnapshot();
-    await batch.save();
+    try {
+        await batch.save();
+    } catch (error) {
+        if (trust_campaign_spec && error?.code === 11000
+            && (error?.keyPattern?.trust_campaign_spec_id || error?.keyValue?.trust_campaign_spec_id)) {
+            const consumed = new Error('Benchmark Trust CampaignSpec has already been consumed');
+            consumed.code = 'BENCHMARK_TRUST_CAMPAIGN_SPEC_ALREADY_CONSUMED';
+            consumed.statusCode = 409;
+            throw consumed;
+        }
+        throw error;
+    }
     const batchId = batch._id.toString();
+    let trustEvidenceContext = null;
+    if (trust_campaign_spec) {
+        try {
+            trustEvidenceContext = buildTrustSourceContext({
+                batch,
+                targets: normalizedTargets,
+                prompts: selectedPrompts,
+                judgeTarget,
+                executionConfig: normalizedExecutionConfig,
+                spendGrant,
+                qualityCohortFingerprint,
+                campaignSpec: trust_campaign_spec,
+                env: trust_runtime_env
+            });
+            await BenchmarkBatch.commitAndStartTrustEvidenceBatch(batch._id, trustEvidenceContext);
+            batch = await BenchmarkBatch.findById(batch._id).select('+trust_evidence_context');
+        } catch (error) {
+            await BenchmarkBatch.updateOne({
+                _id: batch._id,
+                status: 'pending',
+                trust_evidence_context: null,
+                trust_evidence_committed_at: null
+            }, {
+                $set: {
+                    status: 'failed',
+                    failure_reason: 'trust_preregistration_failed',
+                    completed_at: new Date(),
+                    last_activity_at: new Date()
+                },
+                $unset: { active_slot: 1 }
+            }).catch(() => {});
+            throw error;
+        }
+    }
 
     if (process.env.NODE_ENV !== 'test') {
         executeBatch(batchId, defaultHost, displayModels, selectedPrompts, {
@@ -192,7 +300,8 @@ async function startBatch({
             batch_contract_fingerprint: batchContractFingerprint,
             judge_config,
             execution_config: normalizedExecutionConfig,
-            execution_mode
+            execution_mode,
+            trust_evidence_context: trustEvidenceContext
         }).catch((err) => {
             logger.error('Batch execution failed', { batchId, error: err.message });
         });
@@ -201,8 +310,43 @@ async function startBatch({
     return {
         batch_id: batchId,
         total_tests: batch.total_tests,
-        plan
+        plan,
+        ...(trustEvidenceContext ? {
+            trust_campaign_spec_id: trust_campaign_spec.specId,
+            trust_source_batch_id: batch.trust_batch_id
+        } : {})
     };
+}
+
+async function startTrustBatch(specId, options = {}) {
+    const spec = await loadCampaignSpec(specId, options);
+    assertConfiguredProductManifest(spec, options.env || process.env);
+    await assertTrustCampaignSpecOneShotIndex();
+    return startBatch({
+        host: 'harness',
+        models: spec.launch.targets.map(target => target.model),
+        targets: spec.launch.targets,
+        levels: [],
+        prompt_ids: spec.launch.promptIds,
+        run_name: spec.launch.runName,
+        judge_config: {
+            target: spec.launch.judgeTarget,
+            require_trust_worker_receipt: true,
+            temperature: spec.launch.judgeConfig.temperature,
+            seed: spec.launch.judgeConfig.seed,
+            num_predict: spec.launch.judgeConfig.maxTokens,
+            timeout: spec.launch.judgeConfig.timeoutMs,
+            max_retries: 0
+        },
+        execution_config: spec.launch.executionConfig,
+        tags: spec.launch.tags,
+        description: spec.launch.description,
+        execution_mode: spec.launch.executionMode,
+        campaign_kind: spec.launch.campaignKind,
+        trust_campaign_spec: spec,
+        trust_runtime_env: options.env || process.env,
+        trust_launch_authority: TRUST_LAUNCH_AUTHORITY
+    });
 }
 
 async function updateHardwareProfiles(batchId) {
@@ -238,7 +382,7 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                 last_activity_at: now
             }
         },
-        { new: true }
+        { new: true, select: '+trust_evidence_context' }
     );
 
     if (!batch) {
@@ -272,6 +416,7 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
     );
 
     const executionConfig = normalizeExecutionConfig(options.execution_config || batch.execution_config || {});
+    const trustEvidenceContext = options.trust_evidence_context || batch.trust_evidence_context || null;
     activeBatchId = batchId;
     let heartbeatInterval = null;
 
@@ -431,6 +576,7 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             spendGrant: options.spend_grant || batch.spend_grant || null,
             qualityCohortFingerprint: options.quality_cohort_fingerprint || batch.quality_cohort_fingerprint || null,
             batchContractFingerprint: options.batch_contract_fingerprint || batch.batch_contract_fingerprint || null,
+            trustEvidenceContext,
             prompts,
             judgeConfig,
             executionConfig,
@@ -448,13 +594,32 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             return orchestrationOutcome;
         }
 
-        const finalSnapshot = await BenchmarkBatch.findById(batchId);
+        const finalSnapshot = await BenchmarkBatch.findById(batchId, '+trust_evidence_context');
         if (finalSnapshot) {
             const outcome = deriveTerminalBatchOutcome({
                 totalTests: finalSnapshot.total_tests,
                 completed: finalSnapshot.completed,
                 failed: finalSnapshot.failed
             });
+            if (finalSnapshot.trust_evidence_context) {
+                await finalSnapshot.calculateMetrics();
+                const finalBatch = await BenchmarkBatch.finalizeTrustEvidenceBatch(batchId, {
+                    status: outcome.status,
+                    failureReason: outcome.failureReason || null
+                });
+                logger.info('Strict Trust batch finalized with immutable evidence', {
+                    batchId,
+                    status: finalBatch.status,
+                    completed: finalBatch.completed,
+                    failed: finalBatch.failed
+                });
+                emitBuddyEvent(
+                    'batch_completed',
+                    'benchmark',
+                    `Benchmark Trust batch done: ${finalBatch.completed || 0} tests, ${finalBatch.failed || 0} failed`
+                );
+                return finalBatch;
+            }
             const completedAt = new Date();
             // Finalization is one conditional transition. A stop that wins
             // before this write cannot be overwritten by a stale document
@@ -525,7 +690,32 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
         });
 
         const failedAt = new Date();
-        const failureTransition = await BenchmarkBatch.updateOne(
+        let crashSnapshot = null;
+        try {
+            crashSnapshot = await BenchmarkBatch.findById(batchId)
+                .select('status +trust_evidence_context +trust_evidence_finalized_at trust_evidence_sealed')
+                .lean();
+        } catch (_lookupError) {
+            crashSnapshot = null;
+        }
+        let failureTransition;
+        if (crashSnapshot?.trust_evidence_context
+            && crashSnapshot.trust_evidence_sealed !== true
+            && crashSnapshot.trust_evidence_finalized_at == null
+            && ['pending', 'running', 'judging'].includes(crashSnapshot.status)) {
+            failureTransition = await BenchmarkBatch.finalizeTrustEvidenceBatch(batchId, {
+                status: 'failed',
+                failureReason: 'execution_crash',
+                allowUnstarted: true
+            }).then(() => ({ matchedCount: 1 })).catch((persistErr) => {
+                logger.error('Failed to preserve strict Trust crash evidence', {
+                    batchId,
+                    error: persistErr.message
+                });
+                return null;
+            });
+        } else {
+            failureTransition = await BenchmarkBatch.updateOne(
             {
                 _id: batchId,
                 status: { $in: ['pending', 'running', 'judging'] }
@@ -541,13 +731,14 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                     execution_pid: null
                 }
             }
-        ).catch((persistErr) => {
-            logger.error('Failed to persist batch crash state', {
-                batchId,
-                error: persistErr.message
+            ).catch((persistErr) => {
+                logger.error('Failed to persist batch crash state', {
+                    batchId,
+                    error: persistErr.message
+                });
+                return null;
             });
-            return null;
-        });
+        }
 
         // A concurrent user stop is a successful terminal transition, not a
         // crash. Never overwrite it or emit misleading failure telemetry.
@@ -604,6 +795,30 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
 async function stopBatch(batchId) {
     const stoppedAt = new Date();
     const managedLocally = activeBatchId === String(batchId);
+    const trustSnapshot = await BenchmarkBatch.findById(batchId)
+        .select('status +trust_evidence_context +trust_evidence_finalized_at trust_evidence_sealed')
+        .lean();
+    if (trustSnapshot?.trust_evidence_context) {
+        if (['completed', 'failed', 'stopped', 'interrupted'].includes(trustSnapshot.status)
+            || trustSnapshot.trust_evidence_sealed === true
+            || trustSnapshot.trust_evidence_finalized_at != null) {
+            const existing = await BenchmarkBatch.findById(batchId);
+            return { batch: existing, alreadyStopped: trustSnapshot.status === 'stopped', managedLocally };
+        }
+        const batch = await BenchmarkBatch.finalizeTrustEvidenceBatch(batchId, {
+            status: 'stopped',
+            failureReason: 'operator_stop',
+            allowUnstarted: true
+        });
+        // A strict run is interrupted only after its terminal evidence state is
+        // durable. If finalization fails, the live runner remains authoritative
+        // and may continue or be stopped by a later retry.
+        abortActiveBatchRequests(batchId);
+        // Keep local ownership until executeBatch's finally block confirms
+        // every cancelled request has drained and the orchestrator has run its
+        // claim teardown. A repeated stop must not release claims early.
+        return { batch, alreadyStopped: false, managedLocally };
+    }
 
     // Establish the user stop as durable truth before interrupting work. This
     // small atomic write releases the singleton slot even if authoritative
@@ -674,8 +889,14 @@ async function stopBatch(batchId) {
  * Re-uses the original batch config; the orchestrator skips completed pairs.
  */
 async function resumeBatch(batchId, options = {}) {
-    const batch = await BenchmarkBatch.findById(batchId).select('+spend_grant');
+    const batch = await BenchmarkBatch.findById(batchId).select('+spend_grant +trust_evidence_context');
     if (!batch) throw new Error('Batch not found');
+    if (batch.trust_evidence_context) {
+        const error = new Error('Strict Trust batches are append-only and cannot be resumed; create a new campaign spec');
+        error.code = 'BENCHMARK_TRUST_RESUME_FORBIDDEN';
+        error.statusCode = 409;
+        throw error;
+    }
     if (!['stopped', 'failed', 'interrupted'].includes(batch.status)) {
         throw new Error(`Cannot resume batch in status "${batch.status}"`);
     }
@@ -774,8 +995,10 @@ async function resumeBatch(batchId, options = {}) {
 }
 
 module.exports = {
+    assertTrustCampaignSpecOneShotIndex,
     runTest,
     startBatch,
+    startTrustBatch,
     resumeBatch,
     executeBatch,
     stopBatch,

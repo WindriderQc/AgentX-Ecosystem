@@ -655,5 +655,6 @@ module.exports = {
   heartbeatBenchmarkClaim: benchmarkClaimService.heartbeatBenchmarkClaim,
   releaseBenchmarkClaim: benchmarkClaimService.releaseBenchmarkClaim,
   listBenchmarkClaims: benchmarkClaimService.listBenchmarkClaims,
+  summarizeBenchmarkClaimReaps: benchmarkClaimService.summarizeBenchmarkClaimReaps,
   reapStaleBenchmarkClaims: benchmarkClaimService.reapStaleBenchmarkClaims
 };

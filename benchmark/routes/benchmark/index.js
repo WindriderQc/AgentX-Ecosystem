@@ -7,6 +7,9 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../../config/logger');
 const benchmarkService = require('../../src/services/benchmark');
+const {
+    withPublicBenchmarkReadPrivacy
+} = require('../../src/services/benchmark/publicReadPrivacy');
 
 // Cleanup stale batches on startup
 // Skip in tests to avoid timers/open handles and cross-test DB interference.
@@ -21,6 +24,19 @@ if (process.env.NODE_ENV !== 'test') {
     })();
 }
 
+router.use((req, res, next) => {
+    const rawPath = String(req.path || '');
+    const normalizedPath = rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath;
+    const path = normalizedPath.toLowerCase();
+    const usesDedicatedPrivacyOrVerification = path === '/batches'
+        || path.startsWith('/batches/')
+        || path.startsWith('/batch/')
+        || path.startsWith('/trust-receipts')
+        || path === '/retention/stats';
+    if (usesDedicatedPrivacyOrVerification) return next();
+    return withPublicBenchmarkReadPrivacy(req, res, next);
+});
+
 router.use('/', require('./core'));
 router.use('/', require('./results'));
 router.use('/', require('./batches'));
@@ -34,6 +50,8 @@ router.use('/', require('./drift'));
 router.use('/', require('./sweeps'));
 router.use('/', require('./cloudLanes'));
 router.use('/', require('./trustReceipts'));
+router.use('/', require('./trustBatches'));
+router.use('/', require('./humanEvidence'));
 router.use('/recommend', require('./recommend'));
 
 module.exports = router;

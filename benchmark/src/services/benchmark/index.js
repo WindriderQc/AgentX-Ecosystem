@@ -16,9 +16,19 @@ const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
 // Import sub-modules
 const { DEFAULT_EXECUTION_CONFIG } = require('./config');
 const { seedPrompts, cleanupStaleBatches, getPrompts, getConfigPresets } = require('./init');
-const { runTest, startBatch, resumeBatch, executeBatch, stopBatch, getActiveBatchId, getActiveHeartbeatInterval } = require('./execution');
+const { runTest, startBatch, startTrustBatch, resumeBatch, executeBatch, stopBatch, getActiveBatchId, getActiveHeartbeatInterval } = require('./execution');
 const { getResults, getSummary, getDashboard, compareModels, getQualityBreakdown, getModelTrends, compareBatches, getBatchQualityBreakdown } = require('./results');
-const { getBatches, getBatch, getBatchStatsByTag, clearResults, clearFailedResults, getActiveStats } = require('./batches');
+const {
+    getBatches,
+    getBatch,
+    getBatchStatsByTag,
+    clearResults,
+    clearFailedResults,
+    getActiveStats,
+    isTrustCampaignBatch,
+    projectBenchmarkBatchForPublicRead,
+    projectBenchmarkTimelineEventForPublicRead
+} = require('./batches');
 const { getJudgeLeaderboard, getJudgeBreakdown, getJudgeActivity, getTruncationStats } = require('./judges');
 const {
     calculateAllGeneralistScores,
@@ -66,18 +76,29 @@ process.on('SIGTERM', async () => {
                     error: 'Process received SIGTERM signal'
                 }).catch(() => {});
 
-                await BenchmarkBatch.updateOne(
-                    { _id: activeBatchId, status: 'running' },
-                    {
-                        $set: {
-                            status: 'interrupted',
-                            completed_at: new Date(),
-                            last_activity_at: new Date(),
-                            current_test: buildIdleCurrentTest(),
-                            active_slot: null
+                const trustBatch = await BenchmarkBatch.findById(activeBatchId)
+                    .select('+trust_evidence_context')
+                    .lean();
+                if (trustBatch?.trust_evidence_context) {
+                    await BenchmarkBatch.finalizeTrustEvidenceBatch(activeBatchId, {
+                        status: 'interrupted',
+                        failureReason: 'process_sigterm',
+                        allowUnstarted: true
+                    });
+                } else {
+                    await BenchmarkBatch.updateOne(
+                        { _id: activeBatchId, status: 'running' },
+                        {
+                            $set: {
+                                status: 'interrupted',
+                                completed_at: new Date(),
+                                last_activity_at: new Date(),
+                                current_test: buildIdleCurrentTest(),
+                                active_slot: null
+                            }
                         }
-                    }
-                );
+                    );
+                }
                 logger.info('Batch marked as interrupted', { batchId: activeBatchId });
             } catch (err) {
                 logger.error('Failed to mark batch as interrupted on SIGTERM', {
@@ -119,6 +140,7 @@ class BenchmarkService {
     // Execution
     runTest = runTest;
     startBatch = startBatch;
+    startTrustBatch = startTrustBatch;
     resumeBatch = resumeBatch;
     executeBatch = executeBatch;
     stopBatch = stopBatch;
@@ -140,6 +162,9 @@ class BenchmarkService {
     clearResults = clearResults;
     clearFailedResults = clearFailedResults;
     getActiveStats = getActiveStats;
+    isTrustCampaignBatch = isTrustCampaignBatch;
+    projectBenchmarkBatchForPublicRead = projectBenchmarkBatchForPublicRead;
+    projectBenchmarkTimelineEventForPublicRead = projectBenchmarkTimelineEventForPublicRead;
 
     // Judges
     getJudgeLeaderboard = getJudgeLeaderboard;

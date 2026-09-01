@@ -4,14 +4,35 @@ const crypto = require('crypto');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const { stableSerialize } = require('../../../../shared/artifactIdentity');
 const { computeCandidateSetFingerprint } = require('../../../../shared/benchmarkTrustReceipt');
-const { normalizeWorkerReceipt } = require('../../../../shared/workerContract');
+const {
+    normalizeWorkerEnvelope,
+    normalizeWorkerReceipt
+} = require('../../../../shared/workerContract');
+const {
+    buildHarnessEnvelope,
+    buildTrustJudgeCellId,
+    normalizeHarnessInvocationParameters
+} = require('./harnessBrokerClient');
 const {
     buildBenchmarkTrustPowerAnalysisFields,
     evaluateBenchmarkTrustStatistics,
-    buildBenchmarkTrustStatisticsReceiptFields
+    buildBenchmarkTrustStatisticsReceiptFields,
+    computeBenchmarkTrustCandidateInferenceContractFingerprint,
+    computeBenchmarkTrustVarianceCandidateSetFingerprint,
+    computeBenchmarkTrustVariancePairFingerprints
 } = require('./benchmarkTrustStatistics');
+const {
+    buildBenchmarkTrustPromptSamplingPolicy
+} = require('./config');
+const {
+    computeMonolithicJudgeScore,
+    getScoringDimensions
+} = require('../qualityScorer');
+const { parseJudgeJsonResponse } = require('../scoring/judgeCall');
+const { scoreFormatCompliance } = require('../scoring/formatComplianceScorer');
 
-const SOURCE_CONTEXT_SCHEMA = 'agentx.benchmark-trust-source-context/v1';
+const SOURCE_CONTEXT_SCHEMA = 'agentx.benchmark-trust-source-context/v3';
+const ANALYSIS_PLAN_SCHEMA = 'agentx.benchmark-trust-analysis-plan/v2';
 const RANKING_POLICY_SCHEMA = 'agentx.benchmark-trust-ranking-policy/v1';
 const FRESHNESS_POLICY_SCHEMA = 'agentx.benchmark-trust-freshness-policy/v1';
 const CANDIDATE_ID_PATTERN = /^candidate_[0-9a-f]{32}$/;
@@ -59,14 +80,23 @@ const STATISTICS_KEYS = Object.freeze(['analysisPlan', 'analysisPlanFingerprint'
 const ANALYSIS_PLAN_KEYS = Object.freeze([
     'alpha',
     'mde',
+    'poweredAlternativeEffect',
     'equivalenceMargin',
     'repeatCount',
+    'candidateInferenceParameters',
+    'promptSamplingPolicy',
+    'variancePilotAttestationId',
     'requiredIndependentPromptCount',
     'targetPowerBasisPoints',
     'assumedMaxPairedStdDevMicros',
+    'varianceBasis',
+    'varianceBasisFingerprint',
     'powerAnalysisFingerprint',
     'candidateIds',
     'promptIds'
+]);
+const CANDIDATE_INFERENCE_PARAMETER_KEYS = Object.freeze([
+    'temperature', 'topP', 'seed', 'maxTokens', 'timeoutMs'
 ]);
 const RANKING_POLICY_KEYS = Object.freeze(['schema', 'scoreField']);
 const JUDGE_KEYS = Object.freeze([
@@ -87,8 +117,48 @@ const SCORE_EVIDENCE_KEYS = Object.freeze([
     'toolsFingerprint',
     'policiesFingerprint',
     'executionProfile',
-    'envelopeFingerprint',
+    'judgeInvocation',
+    'runtimeRubric',
     'judgeBindingFingerprint'
+]);
+const RUNTIME_RUBRIC_KEYS = Object.freeze([
+    'schema',
+    'scoringMethod',
+    'scorerVersion',
+    'scorerComponents',
+    'promptContract',
+    'implementationManifest',
+    'resultContract',
+    'executionProfile',
+    'toolsFingerprint',
+    'policiesFingerprint',
+    'judgeInvocation'
+]);
+const RUNTIME_IMPLEMENTATION_MANIFEST_KEYS = Object.freeze([
+    'sourceFiles', 'loadedFunctions', 'scoringConfigsFingerprint'
+]);
+const RUNTIME_SOURCE_FILE_KEYS = Object.freeze(['module', 'sha256']);
+const RUNTIME_SOURCE_MODULES = Object.freeze([
+    'benchmarkTrustCampaignRuntime',
+    'categories',
+    'formatComplianceScorer',
+    'judgeCall',
+    'judgeConfidence',
+    'judgeExecutor',
+    'jsonUtils',
+    'qualityScorer',
+    'scoringConfigs'
+]);
+const RUNTIME_LOADED_FUNCTIONS = Object.freeze([
+    'buildDynamicJudgePrompt',
+    'buildPromptData',
+    'computeMonolithicJudgeScore',
+    'getScoringDimensions',
+    'judgeConfidenceAssess',
+    'parseJudgeJsonResponse',
+    'scoreFormatCompliance',
+    'scoreResponse',
+    'stripMarkdownCodeFences'
 ]);
 const FRESHNESS_POLICY_KEYS = Object.freeze([
     'schema', 'staleAfterSeconds', 'expiresAfterSeconds'
@@ -240,6 +310,74 @@ function normalizeJudge(judge) {
 
 function normalizeScoreEvidence(scoreEvidence) {
     assertExactKeys(scoreEvidence, SCORE_EVIDENCE_KEYS, 'context.scoreEvidence');
+    const judgeInvocation = normalizeHarnessInvocationParameters(
+        scoreEvidence.judgeInvocation,
+        { role: 'judge' }
+    );
+    requireSame(
+        'context.scoreEvidence.judgeInvocation',
+        scoreEvidence.judgeInvocation,
+        judgeInvocation
+    );
+    assertExactKeys(scoreEvidence.runtimeRubric, RUNTIME_RUBRIC_KEYS, 'context.scoreEvidence.runtimeRubric');
+    assertCanonicalJson(scoreEvidence.runtimeRubric, 'context.scoreEvidence.runtimeRubric');
+    const runtimeRubric = JSON.parse(JSON.stringify(scoreEvidence.runtimeRubric));
+    assertExactKeys(
+        runtimeRubric.implementationManifest,
+        RUNTIME_IMPLEMENTATION_MANIFEST_KEYS,
+        'context.scoreEvidence.runtimeRubric.implementationManifest'
+    );
+    const implementationManifest = runtimeRubric.implementationManifest;
+    if (!Array.isArray(implementationManifest.sourceFiles)
+        || implementationManifest.sourceFiles.length !== RUNTIME_SOURCE_MODULES.length) {
+        throw sourceError(
+            'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID',
+            'runtime rubric source manifest must bind every canonical scorer module'
+        );
+    }
+    const sourceModules = implementationManifest.sourceFiles.map((entry, index) => {
+        assertExactKeys(
+            entry,
+            RUNTIME_SOURCE_FILE_KEYS,
+            `context.scoreEvidence.runtimeRubric.implementationManifest.sourceFiles[${index}]`
+        );
+        requirePattern(entry.sha256, FINGERPRINT_PATTERN, `runtime rubric sourceFiles[${index}].sha256`);
+        return entry.module;
+    });
+    requireSame('runtime rubric source module inventory', sourceModules, RUNTIME_SOURCE_MODULES);
+    assertExactKeys(
+        implementationManifest.loadedFunctions,
+        RUNTIME_LOADED_FUNCTIONS,
+        'context.scoreEvidence.runtimeRubric.implementationManifest.loadedFunctions'
+    );
+    for (const functionName of RUNTIME_LOADED_FUNCTIONS) {
+        requirePattern(
+            implementationManifest.loadedFunctions[functionName],
+            FINGERPRINT_PATTERN,
+            `runtime rubric loadedFunctions.${functionName}`
+        );
+    }
+    requirePattern(
+        implementationManifest.scoringConfigsFingerprint,
+        FINGERPRINT_PATTERN,
+        'runtime rubric scoringConfigsFingerprint'
+    );
+    if (runtimeRubric.schema !== 'agentx.benchmark-trust-judge-runtime-rubric/v1'
+        || runtimeRubric.scoringMethod !== scoreEvidence.scoringMethod
+        || runtimeRubric.scorerVersion !== scoreEvidence.scorerVersion
+        || runtimeRubric.executionProfile !== scoreEvidence.executionProfile
+        || runtimeRubric.toolsFingerprint !== scoreEvidence.toolsFingerprint
+        || runtimeRubric.policiesFingerprint !== scoreEvidence.policiesFingerprint) {
+        throw sourceError(
+            'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID',
+            'context.scoreEvidence.runtimeRubric does not match the frozen score evidence'
+        );
+    }
+    requireSame(
+        'context.scoreEvidence.runtimeRubric.judgeInvocation',
+        runtimeRubric.judgeInvocation,
+        judgeInvocation
+    );
     return {
         judgeTargetFingerprint: requirePattern(
             scoreEvidence.judgeTargetFingerprint,
@@ -276,11 +414,8 @@ function normalizeScoreEvidence(scoreEvidence) {
                     'context.scoreEvidence.executionProfile is invalid'
                 );
             })(),
-        envelopeFingerprint: requirePattern(
-            scoreEvidence.envelopeFingerprint,
-            FINGERPRINT_PATTERN,
-            'context.scoreEvidence.envelopeFingerprint'
-        ),
+        judgeInvocation,
+        runtimeRubric,
         judgeBindingFingerprint: requirePattern(
             scoreEvidence.judgeBindingFingerprint,
             FINGERPRINT_PATTERN,
@@ -301,7 +436,8 @@ function computeBenchmarkTrustJudgeBindingFingerprint({ judge, scoreEvidence }) 
         toolsFingerprint: scoreEvidence.toolsFingerprint,
         policiesFingerprint: scoreEvidence.policiesFingerprint,
         executionProfile: scoreEvidence.executionProfile,
-        envelopeFingerprint: scoreEvidence.envelopeFingerprint
+        judgeInvocation: scoreEvidence.judgeInvocation,
+        runtimeRubricFingerprint: fingerprint(scoreEvidence.runtimeRubric)
     });
 }
 
@@ -345,20 +481,42 @@ function normalizeAnalysisPlan(plan) {
         throw sourceError('BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID', 'analysisPlan ids must be unique and sorted');
     }
     if (typeof plan.alpha !== 'number' || !Number.isFinite(plan.alpha) || plan.alpha <= 0 || plan.alpha >= 1
-        || typeof plan.mde !== 'number' || !Number.isFinite(plan.mde) || plan.mde < 0
+        || typeof plan.mde !== 'number' || !Number.isFinite(plan.mde) || plan.mde <= 0
+        || plan.mde >= 10
+        || typeof plan.poweredAlternativeEffect !== 'number'
+        || !Number.isFinite(plan.poweredAlternativeEffect)
+        || plan.poweredAlternativeEffect <= plan.mde
+        || plan.poweredAlternativeEffect > 10
         || typeof plan.equivalenceMargin !== 'number' || !Number.isFinite(plan.equivalenceMargin)
         || plan.equivalenceMargin < 0
+        || plan.equivalenceMargin > plan.mde
         || !Number.isSafeInteger(plan.repeatCount) || plan.repeatCount < 1) {
         throw sourceError('BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID', 'analysisPlan numerical fields are invalid');
     }
+    assertExactKeys(
+        plan.candidateInferenceParameters,
+        CANDIDATE_INFERENCE_PARAMETER_KEYS,
+        'context.statistics.analysisPlan.candidateInferenceParameters'
+    );
+    assertCanonicalJson(
+        plan.promptSamplingPolicy,
+        'context.statistics.analysisPlan.promptSamplingPolicy'
+    );
+    requirePattern(
+        plan.variancePilotAttestationId,
+        FINGERPRINT_PATTERN,
+        'context.statistics.analysisPlan.variancePilotAttestationId'
+    );
     let expectedPowerFields;
     try {
         expectedPowerFields = buildBenchmarkTrustPowerAnalysisFields({
             alpha: plan.alpha,
             mde: plan.mde,
+            poweredAlternativeEffect: plan.poweredAlternativeEffect,
             candidateIds,
             targetPowerBasisPoints: plan.targetPowerBasisPoints,
-            assumedMaxPairedStdDevMicros: plan.assumedMaxPairedStdDevMicros
+            assumedMaxPairedStdDevMicros: plan.assumedMaxPairedStdDevMicros,
+            varianceBasis: plan.varianceBasis
         });
     } catch (_error) {
         throw sourceError('BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID', 'analysisPlan power analysis is invalid');
@@ -366,7 +524,10 @@ function normalizeAnalysisPlan(plan) {
     requireSame('analysisPlan power analysis', {
         requiredIndependentPromptCount: plan.requiredIndependentPromptCount,
         targetPowerBasisPoints: plan.targetPowerBasisPoints,
+        poweredAlternativeEffect: plan.poweredAlternativeEffect,
         assumedMaxPairedStdDevMicros: plan.assumedMaxPairedStdDevMicros,
+        varianceBasis: plan.varianceBasis,
+        varianceBasisFingerprint: plan.varianceBasisFingerprint,
         powerAnalysisFingerprint: plan.powerAnalysisFingerprint
     }, expectedPowerFields);
     if (promptIds.length < expectedPowerFields.requiredIndependentPromptCount) {
@@ -378,8 +539,12 @@ function normalizeAnalysisPlan(plan) {
     return {
         alpha: plan.alpha,
         mde: plan.mde,
+        poweredAlternativeEffect: plan.poweredAlternativeEffect,
         equivalenceMargin: plan.equivalenceMargin,
         repeatCount: plan.repeatCount,
+        candidateInferenceParameters: { ...plan.candidateInferenceParameters },
+        promptSamplingPolicy: plan.promptSamplingPolicy,
+        variancePilotAttestationId: plan.variancePilotAttestationId,
         ...expectedPowerFields,
         candidateIds,
         promptIds
@@ -478,7 +643,7 @@ function normalizeSourceContext(rawContext) {
     assertExactKeys(rawContext.statistics, STATISTICS_KEYS, 'context.statistics');
     const analysisPlan = normalizeAnalysisPlan(rawContext.statistics.analysisPlan);
     const analysisPlanFingerprint = fingerprint({
-        schema: 'agentx.benchmark-trust-analysis-plan/v1',
+        schema: ANALYSIS_PLAN_SCHEMA,
         plan: analysisPlan
     });
     requirePattern(
@@ -513,11 +678,59 @@ function normalizeSourceContext(rawContext) {
             'context.scoreEvidence.judgeBindingFingerprint does not bind the frozen judge and score policy'
         );
     }
-    if (scoreEvidence.workerIdentityFingerprint !== judge.identityFingerprint
-        || scoreEvidence.policiesFingerprint !== judge.rubricFingerprint) {
+    if (scoreEvidence.workerIdentityFingerprint !== judge.identityFingerprint) {
         throw sourceError(
             'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID',
-            'worker judge identity and policy must match the frozen receipt judge identity and rubric'
+            'worker judge identity must match the frozen receipt judge identity'
+        );
+    }
+    if (fingerprint(scoreEvidence.runtimeRubric) !== judge.rubricFingerprint) {
+        throw sourceError(
+            'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID',
+            'signed judge rubric does not match the publicly replayable runtime rubric'
+        );
+    }
+    const varianceCandidateBindings = candidates.map(candidate => ({
+        targetFingerprint: candidate.sourceIdentity.executionTargetFingerprint,
+        modelDigest: candidate.sourceIdentity.modelDigest,
+        artifactDigest: candidate.sourceIdentity.artifactDigest,
+        inferenceContractFingerprint: candidate.sourceIdentity.inferenceContractFingerprint
+    }));
+    const variancePairFingerprints = computeBenchmarkTrustVariancePairFingerprints(
+        varianceCandidateBindings,
+        judge.rubricFingerprint
+    );
+    let expectedPromptSamplingPolicy;
+    try {
+        expectedPromptSamplingPolicy = buildBenchmarkTrustPromptSamplingPolicy(
+            rawContext.campaign.artifact,
+            analysisPlan.promptSamplingPolicy?.promptTransformation?.executionConfig,
+            rawContext.prompts.map(prompt => prompt.fingerprint)
+        );
+    } catch (_error) {
+        throw sourceError(
+            'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID',
+            'analysisPlan prompt sampling policy is invalid'
+        );
+    }
+    if (analysisPlan.varianceBasis.candidateSetFingerprint
+            !== computeBenchmarkTrustVarianceCandidateSetFingerprint(varianceCandidateBindings)
+        || analysisPlan.varianceBasis.rubricFingerprint !== judge.rubricFingerprint
+        || analysisPlan.varianceBasis.repeatCount !== analysisPlan.repeatCount
+        || analysisPlan.varianceBasis.candidateInferenceContractFingerprint
+            !== computeBenchmarkTrustCandidateInferenceContractFingerprint({
+                candidateBindings: varianceCandidateBindings,
+                repeatCount: analysisPlan.repeatCount,
+                parameters: analysisPlan.candidateInferenceParameters
+            })
+        || fingerprint(analysisPlan.promptSamplingPolicy) !== fingerprint(expectedPromptSamplingPolicy)
+        || analysisPlan.varianceBasis.promptSamplingPolicyFingerprint
+            !== fingerprint(expectedPromptSamplingPolicy)
+        || analysisPlan.varianceBasis.pairwiseObservedStdDevs
+            .map(entry => entry.pairFingerprint).join('\n') !== variancePairFingerprints.join('\n')) {
+        throw sourceError(
+            'BENCHMARK_TRUST_SOURCE_CONTEXT_INVALID',
+            'analysisPlan variance basis does not bind the exact candidate set, prompt policy, and judge rubric'
         );
     }
 
@@ -672,6 +885,71 @@ function normalizeBoundWorkerReceipt(rawReceipt, label) {
     }
 }
 
+function assertUnassistedWorkerReceipt(workerReceipt, label) {
+    if (workerReceipt.humanInterventions.length > 0
+        || workerReceipt.violations.length > 0
+        || workerReceipt.toolErrors.length > 0) {
+        throw sourceError(
+            'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH',
+            `${label} declares intervention, policy violation, or tool error`
+        );
+    }
+}
+
+function assertCanonicalJudgeScore(row, score) {
+    let parsedScores;
+    try {
+        parsedScores = parseJudgeJsonResponse(row.judge_raw_response);
+    } catch (_error) {
+        throw sourceError(
+            'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH',
+            'stored judge response cannot be projected by the frozen scorer'
+        );
+    }
+    const prompt = {
+        prompt: row.prompt,
+        name: row.prompt_name,
+        level: row.prompt_level,
+        category: row.prompt_category,
+        expected_answer: row.expected_answer,
+        scoring_type: row.scoring_type,
+        scoring_dimensions: row.scoring_dimensions,
+        output_contract: row.output_contract,
+        judge_criteria: row.judge_criteria
+    };
+    const dimensions = getScoringDimensions(prompt);
+    const computed = computeMonolithicJudgeScore(parsedScores, dimensions.weights);
+    requireSame('judge score breakdown', row.quality_breakdown, computed.normalizedScores);
+    const reportedOverall = Number.isFinite(computed.judgeReportedOverall)
+        ? computed.judgeReportedOverall
+        : null;
+    requireSame('judge reported overall', row.judge_reported_overall ?? null, reportedOverall);
+
+    const format = scoreFormatCompliance(String(row.response ?? ''), row.output_contract);
+    requireSame('judge format score', row.format_score ?? null, format.format_score);
+    requireSame('judge format compliance', row.format_compliant ?? null, format.format_compliant);
+    let expectedScore = computed.overallScore;
+    const category = row.scoring_type || row.prompt_category;
+    if (['reasoning', 'instruction'].includes(category)
+        && row.output_contract
+        && format.format_score !== null
+        && format.format_score < 5) {
+        expectedScore = Math.round(
+            Math.max(3, Math.min(expectedScore, expectedScore * 0.5)) * 10
+        ) / 10;
+    }
+    requireSame('judge derived quality score', score, expectedScore);
+    if (row.human_review_status != null
+        || row.human_score != null
+        || row.human_reviewed_at != null
+        || row.human_reviewer != null) {
+        throw sourceError(
+            'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH',
+            'strict Trust source row contains an in-place human review mutation'
+        );
+    }
+}
+
 function assertRowIdentity(row, candidate, prompt, scoreEvidence, judge, score) {
     const identity = candidate.sourceIdentity;
     const actualIdentity = {
@@ -698,7 +976,7 @@ function assertRowIdentity(row, candidate, prompt, scoreEvidence, judge, score) 
         );
     }
     const executionWorkerReceipt = normalizeBoundWorkerReceipt(
-        row.execution_receipt,
+        row.trust_execution_receipt,
         'result execution receipt'
     );
     const executionSucceeded = executionWorkerReceipt.finalState === 'succeeded'
@@ -719,25 +997,25 @@ function assertRowIdentity(row, candidate, prompt, scoreEvidence, judge, score) 
         model: identity.model,
         modelDigest: identity.modelDigest,
         runtimeFingerprint: identity.inferenceContractFingerprint,
-        environmentFingerprint: identity.executionTargetFingerprint
+        environmentFingerprint: identity.inferenceContractFingerprint
     });
     requireSame('result execution tools fingerprint', executionWorkerReceipt.fingerprints.tools, identity.toolsFingerprint);
     requireSame('result execution policies fingerprint', executionWorkerReceipt.fingerprints.policies, identity.policiesFingerprint);
     requireSame('result execution profile', executionWorkerReceipt.executionProfile, identity.executionProfile);
-    requireSame('result execution prompt fingerprint', executionWorkerReceipt.fingerprints.prompt, prompt.fingerprint);
+    requireSame(
+        'result execution prompt fingerprint',
+        executionWorkerReceipt.fingerprints.prompt,
+        fingerprint(String(row.prompt ?? ''))
+    );
+    assertUnassistedWorkerReceipt(executionWorkerReceipt, 'result execution receipt');
     requireSame(
         'result execution result fingerprint',
         executionWorkerReceipt.result.fingerprint,
-        computeBenchmarkTrustExecutionResultFingerprint({
-            candidateId: candidate.candidateId,
-            promptId: prompt.promptId,
-            repeatIndex: row.repeat_index,
-            response: row.response,
-            success: row.success
-        })
+        fingerprint(String(row.response ?? ''))
     );
 
-    const workerReceipt = normalizeBoundWorkerReceipt(row.judge_receipt, 'result judge receipt');
+    const workerReceipt = normalizeBoundWorkerReceipt(row.trust_judge_receipt, 'result judge receipt');
+    assertUnassistedWorkerReceipt(workerReceipt, 'result judge receipt');
     if (workerReceipt.finalState !== 'succeeded' || workerReceipt.result.contractSatisfied !== true) {
         throw sourceError(
             'BENCHMARK_TRUST_SOURCE_EVIDENCE_MISMATCH',
@@ -753,24 +1031,35 @@ function assertRowIdentity(row, candidate, prompt, scoreEvidence, judge, score) 
         toolsFingerprint: workerReceipt.fingerprints.tools,
         policiesFingerprint: workerReceipt.fingerprints.policies,
         executionProfile: workerReceipt.executionProfile,
-        envelopeFingerprint: workerReceipt.fingerprints.envelope,
+        judgeInvocation: scoreEvidence.judgeInvocation,
+        runtimeRubric: scoreEvidence.runtimeRubric,
         judgeBindingFingerprint: scoreEvidence.judgeBindingFingerprint
     }, scoreEvidence);
-    requireSame('judge receipt prompt fingerprint', workerReceipt.fingerprints.prompt, prompt.fingerprint);
-    const expectedJudgeResultFingerprint = computeBenchmarkTrustJudgeResultFingerprint({
-        candidateId: candidate.candidateId,
-        promptId: prompt.promptId,
-        repeatIndex: row.repeat_index,
-        response: row.response,
-        qualityScore: score,
-        rubricFingerprint: judge.rubricFingerprint,
-        judgeIdentityFingerprint: judge.identityFingerprint
-    });
+    requireSame(
+        'judge receipt prompt fingerprint',
+        workerReceipt.fingerprints.prompt,
+        fingerprint(String(row.judge_prompt ?? ''))
+    );
     requireSame(
         'judge receipt result fingerprint',
         workerReceipt.result.fingerprint,
-        expectedJudgeResultFingerprint
+        fingerprint(String(row.judge_raw_response ?? ''))
     );
+    const expectedJudgeEnvelope = normalizeWorkerEnvelope(buildHarnessEnvelope({
+        batchId: String(row.batch_id),
+        cellId: buildTrustJudgeCellId(row),
+        target: row.judge_target,
+        promptText: String(row.judge_prompt ?? ''),
+        parameters: scoreEvidence.judgeInvocation,
+        maxCostNanodollars: 0,
+        role: 'judge'
+    }));
+    requireSame(
+        'judge receipt envelope fingerprint',
+        workerReceipt.fingerprints.envelope,
+        expectedJudgeEnvelope.fingerprint
+    );
+    assertCanonicalJudgeScore(row, score);
     return {
         executionEnvelopeFingerprint: executionWorkerReceipt.fingerprints.envelope
     };
@@ -803,9 +1092,9 @@ function resultProjection(row, candidateId, promptId, score) {
         artifactDigest: row.execution_settings?.artifact_digest,
         runtimeFingerprint: row.execution_settings?.inference_contract_fingerprint,
         executionTargetFingerprint: row.execution_target?.fingerprint,
-        executionReceiptFingerprint: row.execution_receipt?.fingerprint ?? null,
+        executionReceiptFingerprint: row.trust_execution_receipt?.fingerprint ?? null,
         judgeTargetFingerprint: row.judge_target?.fingerprint ?? null,
-        judgeReceiptFingerprint: row.judge_receipt?.fingerprint ?? null,
+        judgeReceiptFingerprint: row.trust_judge_receipt?.fingerprint ?? null,
         qualityCohortFingerprint: row.quality_cohort_fingerprint ?? null,
         promptSourceFingerprint: computePromptSourceFingerprint(row),
         responseFingerprint: fingerprint(String(row.response ?? '')),
@@ -1083,7 +1372,7 @@ async function verifyBenchmarkTrustSourceEvidence({ receipt, batch, now = new Da
     const results = await BenchmarkResult.find({
         batch_id: batch._id,
         trust_evidence_sealed: true
-    }).lean();
+    }).select('+trust_execution_receipt +trust_judge_receipt').lean();
     if (results.some(row => {
         const createdAt = requiredTimestampMillis(row.timestamp);
         const updatedAt = requiredTimestampMillis(row.updated_at);
@@ -1135,6 +1424,7 @@ async function verifyBenchmarkTrustSourceEvidence({ receipt, batch, now = new Da
 
 module.exports = {
     SOURCE_CONTEXT_SCHEMA,
+    ANALYSIS_PLAN_SCHEMA,
     RANKING_POLICY_SCHEMA,
     FRESHNESS_POLICY_SCHEMA,
     computeBenchmarkTrustJudgeBindingFingerprint,

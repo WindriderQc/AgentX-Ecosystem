@@ -405,7 +405,6 @@ async function purgeDeadModelsUnlocked(dryRun = false) {
         resultsDeleted: totalDeleted,
         models: purgedModels,
         modelsProtected: protectedModels.length,
-        protectedModels,
         ...protectionSummary(protectionState, totalProtected),
         dryRun: !!dryRun
     };

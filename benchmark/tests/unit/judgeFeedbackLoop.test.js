@@ -24,6 +24,32 @@ const { getJudgeFeedbackStats, autoPromoteGroundTruth } = require('../../src/ser
 beforeEach(() => jest.clearAllMocks());
 
 describe('judgeFeedbackLoop', () => {
+    it.each([
+        ['feedback stats', getJudgeFeedbackStats],
+        ['auto promotion', autoPromoteGroundTruth]
+    ])('excludes every strict Trust marker from %s at the service boundary', async (_label, action) => {
+        BenchmarkResult.find.mockReturnValue({
+            select: jest.fn().mockReturnValue({
+                lean: jest.fn().mockResolvedValue([])
+            })
+        });
+        JudgeGroundTruth.find.mockReturnValue({
+            select: jest.fn().mockReturnValue({
+                lean: jest.fn().mockResolvedValue([])
+            })
+        });
+
+        await action();
+
+        expect(BenchmarkResult.find).toHaveBeenCalledWith(expect.objectContaining({
+            $nor: [
+                { trust_candidate_id: { $ne: null } },
+                { trust_prompt_id: { $ne: null } },
+                { trust_evidence_sealed: true }
+            ]
+        }));
+    });
+
     describe('getJudgeFeedbackStats', () => {
         it('returns empty stats when no reviewed results', async () => {
             BenchmarkResult.find.mockReturnValue({

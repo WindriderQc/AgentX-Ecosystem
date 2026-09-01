@@ -425,8 +425,14 @@ async function start() {
   if (shouldRecoverBenchmarkClaims(app.locals.agentxProfile)) {
     // Reconcile benchmark claims with actual batch state. A process crash
     // mid-batch can otherwise leave a host claimed until the hard-cap reaper.
-    const { recoverLeakedClaims, reacquireActiveBatchClaims } = require('./src/services/benchmark/claimRecovery');
-    recoverLeakedClaims()
+    const {
+      recoverLeakedClaims,
+      reacquireActiveBatchClaims,
+      startPriorRuntimeTrustBatchRecoverySweep
+    } = require('./src/services/benchmark/claimRecovery');
+    const recoveryStartedAt = new Date();
+    startPriorRuntimeTrustBatchRecoverySweep({ recoveryStartedAt });
+    recoverLeakedClaims({ recoveryStartedAt })
       .then(() => reacquireActiveBatchClaims())
       .catch(err => logger.warn('Claim recovery error', { error: err.message }));
   } else {

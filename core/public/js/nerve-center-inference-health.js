@@ -215,29 +215,34 @@
                 </div>`;
         }
 
-        const overall = jd.overall_status || 'ok';
-        const overallTone = overall === 'alert' ? '#f87171'
-                          : overall === 'warning' ? '#fbbf24'
-                          : '#4ade80';
+        const normalizeStatus = value => {
+            const status = typeof value === 'string' ? value.trim().toLowerCase() : 'unknown';
+            return [
+                'ok', 'alert', 'warning', 'insufficient_data', 'no_baseline',
+                'skipped', 'failed', 'unavailable', 'unknown'
+            ].includes(status) ? status : 'unknown';
+        };
+        const statusColor = value => {
+            const status = normalizeStatus(value);
+            return status === 'alert' ? '#f87171'
+                : status === 'warning' ? '#fbbf24'
+                : status === 'ok' ? '#4ade80'
+                : '#94a3b8';
+        };
+        const statusLabel = value => {
+            const status = normalizeStatus(value);
+            return status === 'alert' ? 'TRIPPED'
+                : status === 'warning' ? 'WARNING'
+                : status === 'ok' ? 'OK'
+                : status === 'insufficient_data' ? 'insufficient'
+                : status === 'no_baseline' ? 'no baseline'
+                : status;
+        };
+        const overall = normalizeStatus(jd.overall_status);
+        const overallTone = statusColor(overall);
         const baseline = jd.baseline_label || 'no baseline';
         const t = jd.thresholds || {};
         const thresholdText = `${Math.round((t.drop_pp || 0.15) * 100)}pp drop OR ρ<${t.absolute_floor ?? 0.5}`;
-
-        const statusColor = s => (
-            s === 'alert' ? '#f87171'
-            : s === 'warning' ? '#fbbf24'
-            : s === 'insufficient_data' || s === 'no_baseline' ? '#94a3b8'
-            : '#4ade80'
-        );
-
-        const statusLabel = s => (
-            s === 'alert' ? 'TRIPPED'
-            : s === 'warning' ? 'WARNING'
-            : s === 'ok' ? 'OK'
-            : s === 'insufficient_data' ? 'insufficient'
-            : s === 'no_baseline' ? 'no baseline'
-            : s
-        );
 
         const fmt = v => (v == null || Number.isNaN(v)) ? '—' : Number(v).toFixed(3);
 
@@ -298,11 +303,20 @@
             parts.push(`<span style="color:${color}">${drift.driftPct.toFixed(1)}% drift</span>`);
         }
         const jd = data.judgeDrift;
-        if (jd && !jd.unavailable && jd.overall_status) {
-            const jdColor = jd.overall_status === 'alert' ? '#f87171'
-                          : jd.overall_status === 'warning' ? '#fbbf24'
-                          : '#4ade80';
-            parts.push(`<span style="color:${jdColor}">judge ${jd.overall_status}</span>`);
+        if (jd) {
+            const rawStatus = jd.unavailable ? 'unavailable' : jd.overall_status;
+            const status = typeof rawStatus === 'string'
+                && ['ok', 'alert', 'warning'].includes(rawStatus.trim().toLowerCase())
+                ? rawStatus.trim().toLowerCase()
+                : typeof rawStatus === 'string'
+                    && ['insufficient_data', 'no_baseline', 'skipped', 'failed', 'unavailable'].includes(rawStatus.trim().toLowerCase())
+                    ? rawStatus.trim().toLowerCase()
+                    : 'unknown';
+            const jdColor = status === 'alert' ? '#f87171'
+                : status === 'warning' ? '#fbbf24'
+                : status === 'ok' ? '#4ade80'
+                : '#94a3b8';
+            parts.push(`<span style="color:${jdColor}">judge ${status}</span>`);
         }
         return parts.join(' · ') || 'no activity';
     }
@@ -343,5 +357,9 @@
         }
     }
 
-    window.NerveCenterInferenceHealth = { loadInferenceHealth };
+    window.NerveCenterInferenceHealth = {
+        loadInferenceHealth,
+        buildJudgeDriftPanel,
+        buildSummary
+    };
 })();

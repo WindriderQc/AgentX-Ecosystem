@@ -293,6 +293,45 @@ function isRetryableError(message) {
            message.includes('returned array');
 }
 
+function parseJudgeJsonResponse(text) {
+    const rawText = String(text || '');
+    const codeBlockMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const jsonStr = codeBlockMatch ? codeBlockMatch[1] : extractBalancedJson(rawText);
+    if (!jsonStr) throw new Error('No JSON found in judge response');
+
+    let sanitized = jsonStr.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+    sanitized = sanitized.replace(/\\([^"\\/bfnrtu])/g, '\\\\$1');
+    const parsed = JSON.parse(sanitized);
+    if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error('Judge returned non-object response');
+    }
+    if (Array.isArray(parsed)) {
+        throw new Error(`Judge returned array instead of JSON object. Array content: ${JSON.stringify(parsed).substring(0, 200)}`);
+    }
+
+    const scores = {};
+    for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'number') {
+            scores[key] = Math.max(0, Math.min(10, value));
+        } else if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim())) {
+            scores[key] = Math.max(0, Math.min(10, parseFloat(value.trim())));
+        } else {
+            scores[key] = value;
+        }
+    }
+    const numericFields = Object.keys(scores).filter(key => (
+        typeof scores[key] === 'number' && key !== 'overall'
+    ));
+    if (numericFields.length === 0 && typeof scores.overall !== 'number') {
+        const receivedKeys = Object.keys(scores);
+        const receivedTypes = receivedKeys.map(key => `${key}:${typeof scores[key]}`).join(', ');
+        throw new Error(
+            `Judge response missing numeric scores after coercion. Received ${receivedKeys.length} keys. Types: [${receivedTypes}]`
+        );
+    }
+    return scores;
+}
+
 /**
  * Call the judge model to evaluate a response
  */
@@ -345,6 +384,7 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
             executionEvidence = {
                 target: judgeConfig.target,
                 receipt: execution.publicReceipt,
+                privateReceipt: execution.receipt,
                 usage: execution.receipt?.usage || null,
                 outputFingerprint: execution.outputFingerprint
             };
@@ -411,81 +451,8 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
             }
         }
 
-        let jsonStr = null;
-
-        const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-        if (codeBlockMatch) {
-            jsonStr = codeBlockMatch[1];
-        } else {
-            jsonStr = extractBalancedJson(text);
-        }
-
-        if (!jsonStr) {
-            logger.error('Judge response format - no JSON found', {
-                fullResponse: text,
-                responseLength: text.length,
-                containsBraces: text.includes('{') && text.includes('}'),
-                containsCodeBlock: text.includes('```'),
-                judge_model: judgeConfig.model || JUDGE_CONFIG.model
-            });
-            throw new Error('No JSON found in judge response');
-        }
-
-        logger.debug('Judge JSON extraction', {
-            length: jsonStr.length,
-            preview: jsonStr.substring(0, 200)
-        });
-
         try {
-            let sanitized = jsonStr.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
-            sanitized = sanitized.replace(/\\([^"\\/bfnrtu])/g, "\\\\$1");
-
-            let scores = JSON.parse(sanitized);
-
-            if (typeof scores !== 'object' || scores === null) {
-                throw new Error('Judge returned non-object response');
-            }
-
-            if (Array.isArray(scores)) {
-                throw new Error(`Judge returned array instead of JSON object. Array content: ${JSON.stringify(scores).substring(0, 200)}`);
-            }
-
-            // Coerce string numbers to actual numbers and clamp to [0, 10]
-            const coercedScores = {};
-            for (const [key, value] of Object.entries(scores)) {
-                if (typeof value === 'number') {
-                    const clamped = Math.max(0, Math.min(10, value));
-                    if (clamped !== value) {
-                        logger.warn('Judge score clamped to [0, 10]', { key, original: value, clamped });
-                    }
-                    coercedScores[key] = clamped;
-                } else if (typeof value === 'string') {
-                    const trimmed = value.trim();
-                    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-                        const num = parseFloat(trimmed);
-                        const clamped = Math.max(0, Math.min(10, num));
-                        if (clamped !== num) {
-                            logger.warn('Judge score clamped to [0, 10]', { key, original: num, clamped });
-                        }
-                        coercedScores[key] = clamped;
-                    } else {
-                        coercedScores[key] = value;
-                    }
-                } else {
-                    coercedScores[key] = value;
-                }
-            }
-            scores = coercedScores;
-
-            const numericFields = Object.keys(scores).filter(key =>
-                typeof scores[key] === 'number' && key !== 'overall'
-            );
-
-            if (numericFields.length === 0 && typeof scores.overall !== 'number') {
-                const receivedKeys = Object.keys(scores);
-                const receivedTypes = receivedKeys.map(k => `${k}:${typeof scores[k]}`).join(', ');
-                throw new Error(`Judge response missing numeric scores after coercion. Received ${receivedKeys.length} keys. Types: [${receivedTypes}]`);
-            }
+            const scores = parseJudgeJsonResponse(text);
 
             return {
                 success: true,
@@ -498,7 +465,6 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         } catch (parseErr) {
             logger.error('JSON parse error details', {
                 error: parseErr.message,
-                jsonPreview: jsonStr.substring(0, 500),
                 fullText: text.substring(0, 1000)
             });
             throw new Error(`JSON parse failed: ${parseErr.message}`);
@@ -549,5 +515,6 @@ module.exports = {
     waitForJudgeRetry,
     getJudgeFailureCount,
     incrementJudgeFailureCount,
-    normalizeJudgeHost
+    normalizeJudgeHost,
+    parseJudgeJsonResponse
 };

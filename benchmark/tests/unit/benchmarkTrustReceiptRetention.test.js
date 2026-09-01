@@ -292,7 +292,6 @@ describe('BenchmarkTrustReceipt retention protection', () => {
             resultsDeleted: 4,
             models: [{ model: 'dead-model', host: 'host-a', results: 4, emptyRate: 100 }],
             modelsProtected: 1,
-            protectedModels: [{ model: 'dead-model', host: 'host-a', results: 2, emptyRate: 100 }],
             protectedBatches: 1,
             protectedResults: 2,
             protectedSourceBatchIds: [RECEIPTED_SOURCE_ID],

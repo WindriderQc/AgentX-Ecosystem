@@ -381,7 +381,13 @@ async function startServer() {
       // One immediate sweep so a freshly-booted core doesn't wait a full
       // interval to clear any claim left over from the previous process.
       hostPrefSvc.reapStaleBenchmarkClaims()
-        .then(r => { if (r.reaped.length > 0) console.warn(`   ♻ Reaped ${r.reaped.length} stale benchmark claim(s)`); })
+        .then(r => {
+          const summary = hostPrefSvc.summarizeBenchmarkClaimReaps(r.reaped);
+          const releasedCount = summary.released.length;
+          const refusedCount = summary.refused.length;
+          if (releasedCount > 0) console.warn(`   ♻ Reaped ${releasedCount} stale benchmark claim(s)`);
+          if (refusedCount > 0) console.warn(`   ⚠ Refused to reap ${refusedCount} changed benchmark claim(s)`);
+        })
         .catch(err => console.warn('Benchmark claim reap failed:', err.message));
       hostPrefSvc.startBenchmarkClaimReaper();
       const intervalSec = hostPrefSvc.getBenchmarkClaimReaperIntervalMs() / 1000;
