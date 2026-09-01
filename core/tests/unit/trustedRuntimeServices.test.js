@@ -286,6 +286,42 @@ describe('trusted runtime services', () => {
     expect(() => Object.defineProperty(snapshot.tasks.general_chat, 'model', { value: 'changed' })).toThrow();
   });
 
+  test('resolves exact artifact identity only when a trusted consumer explicitly requests it', async () => {
+    const resolveInferenceContract = jest.fn(async () => ({
+      version: 'agentx.inference-contract.v1',
+      qualification: { qualified: true, exactArtifact: true }
+    }));
+    const deps = {
+      buildRouterConfigPayload: jest.fn(async () => ({
+        authority: { operational: 'router' },
+        hosts: { primary: 'http://ollama.test:11434' },
+        taskModels: { code_generation: { model: 'model-a', host: 'primary' } }
+      })),
+      hostPreferenceService: {
+        getAll: jest.fn(async () => []),
+        getPinnedEntries: () => []
+      },
+      getContextInfo: jest.fn(async () => null),
+      resolveInferenceContract,
+      modelsMatch: (left, right) => left === right,
+      ModelRegistry: { find: jest.fn() }
+    };
+
+    await buildEffectiveRoutingSnapshot(deps, { includeCatalog: false });
+    expect(resolveInferenceContract.mock.calls[0]).toEqual([
+      { model: 'model-a', host: 'http://ollama.test:11434' }
+    ]);
+
+    await buildEffectiveRoutingSnapshot(deps, {
+      includeCatalog: false,
+      includeArtifactIdentity: true
+    });
+    expect(resolveInferenceContract.mock.calls[1]).toEqual([
+      { model: 'model-a', host: 'http://ollama.test:11434' },
+      { includeArtifactIdentity: true }
+    ]);
+  });
+
   test('rejects invalid requests before routing', async () => {
     await expect(executeRoutedInference(inferenceDeps(), {
       mode: 'chat', model: 'model-a', messages: 'not-an-array'

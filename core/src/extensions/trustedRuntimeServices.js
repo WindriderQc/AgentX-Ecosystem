@@ -156,9 +156,12 @@ async function buildEffectiveRoutingSnapshot(deps, options = {}) {
     const resolved = buildTaskSnapshot(taskType, task, routerConfig, preferencesByHost, deps.modelsMatch);
     if (resolved.model) {
       try {
+        const contractInput = { model: resolved.model, host: resolved.hostUrl };
         const [contextInfo, inferenceContract] = await Promise.all([
           deps.getContextInfo(resolved.model, resolved.hostUrl),
-          deps.resolveInferenceContract({ model: resolved.model, host: resolved.hostUrl })
+          options.includeArtifactIdentity === true
+            ? deps.resolveInferenceContract(contractInput, { includeArtifactIdentity: true })
+            : deps.resolveInferenceContract(contractInput)
         ]);
         if (!resolved.contextSize && positiveInteger(contextInfo?.num_ctx)) {
           resolved.contextSize = positiveInteger(contextInfo.num_ctx);
