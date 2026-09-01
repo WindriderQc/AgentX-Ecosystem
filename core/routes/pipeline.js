@@ -15,6 +15,12 @@ const {
   heartbeatClaim,
   releaseAutomationSlot,
 } = require('../src/services/pipelineTaskService');
+const {
+  normalizePipelineAutomationEvidence,
+} = require('../../shared/pipelineAutomationContract');
+const {
+  buildPipelineAutomationPerformance,
+} = require('../src/services/pipelineAutomationPerformanceService');
 const STATUSES = ['queued', 'in_progress', 'review', 'blocked', 'done'];
 
 // A worker's feedback verdict maps to a task status. "done" goes to REVIEW (the
@@ -122,6 +128,11 @@ function feedbackTextFromBody(body = {}) {
   return String(body.text ?? body.summary ?? '').trim().slice(0, 5000);
 }
 
+function performanceWindow(value) {
+  const match = String(value || '30d').trim().match(/^(7|30|90)d$/);
+  return match ? Number(match[1]) : null;
+}
+
 // List tasks (queryable). GET /api/pipeline/tasks?status=&assignee=&limit=&view=summary
 router.get('/tasks', async (req, res) => {
   try {
@@ -138,6 +149,26 @@ router.get('/tasks', async (req, res) => {
     ]);
     const evidence = taskListEvidence(q, limit, tasks.length, summary, observedAt);
     return envelope.success(res, { count: tasks.length, tasks, summary, evidence });
+  } catch (err) { return envelope.error(res, 500, err.message); }
+});
+
+// Privacy-safe team performance over persisted autonomous attempts. Missing
+// evidence remains null and is reported through coverage rather than becoming
+// a false zero. GET /api/pipeline/performance?window=7d|30d|90d
+router.get('/performance', async (req, res) => {
+  const windowDays = performanceWindow(req.query.window);
+  if (!windowDays) {
+    return envelope.error(res, 400, 'window must be one of 7d, 30d, or 90d', 'INVALID_PERFORMANCE_WINDOW');
+  }
+  try {
+    const now = new Date();
+    const from = new Date(now.getTime() - windowDays * 86_400_000);
+    const tasks = await PipelineTask.find({
+      'automationAttempts.acquiredAt': { $gte: from, $lte: now },
+    }).select('pipelineId createdAt automation automationAttempts').lean();
+    return envelope.success(res, {
+      performance: buildPipelineAutomationPerformance(tasks, { now, windowDays }),
+    });
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
 
@@ -254,6 +285,22 @@ router.post('/tasks/:id/status', requirePipelineStatusAccess, async (req, res) =
       update.$unset = { automationLease: 1 };
     }
 
+    const latestAttempt = Array.isArray(current.automationAttempts)
+      ? current.automationAttempts.slice().reverse().find((attempt) => attempt?.leaseId)
+      : null;
+    const reviewOutcome = !terminalAutomationLease && latestAttempt
+      ? (
+        status === 'done' && current.status === 'review' ? 'accepted'
+          : status === 'queued' && ['review', 'blocked'].includes(current.status) ? 'requeued'
+            : status === 'blocked' && current.status === 'review' ? 'rejected'
+              : null
+      )
+      : null;
+    if (reviewOutcome) {
+      update.$set['automationAttempts.$[reviewAttempt].reviewOutcome'] = reviewOutcome;
+      update.$set['automationAttempts.$[reviewAttempt].reviewedAt'] = new Date();
+    }
+
     if (status === 'done' && current.status !== 'done') {
       const by = String(b.by || '').trim();
       const operator = req.pipelineAuthority === PIPELINE_AUTHORITY.OPERATOR;
@@ -281,6 +328,8 @@ router.post('/tasks/:id/status', requirePipelineStatusAccess, async (req, res) =
     const options = { new: true };
     if (terminalAutomationLease) {
       options.arrayFilters = [{ 'attempt.leaseId': current.automationLease.leaseId }];
+    } else if (reviewOutcome) {
+      options.arrayFilters = [{ 'reviewAttempt.leaseId': latestAttempt.leaseId }];
     }
     const task = await PipelineTask.findOneAndUpdate(mutationQuery, update, options);
     if (!task && workerLease) {
@@ -312,6 +361,22 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
     } catch (err) {
       return envelope.error(res, 409, err.message, err.code);
     }
+    if (b.attemptEvidence && !lease) {
+      return envelope.error(
+        res,
+        400,
+        'attemptEvidence requires an active automation lease',
+        'AUTOMATION_EVIDENCE_REQUIRES_LEASE'
+      );
+    }
+    if (b.attemptEvidence && !['done', 'blocked'].includes(b.status)) {
+      return envelope.error(
+        res,
+        400,
+        'attemptEvidence may be recorded only with a terminal worker verdict',
+        'AUTOMATION_EVIDENCE_REQUIRES_TERMINAL_VERDICT'
+      );
+    }
 
     const query = { pipelineId: req.params.id };
     const options = { new: true };
@@ -323,6 +388,15 @@ router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res)
       if (b.status === 'done' || b.status === 'blocked') {
         update.$set['automationAttempts.$[attempt].finalState'] = FEEDBACK_STATUS[b.status];
         update.$set['automationAttempts.$[attempt].completedAt'] = entry.at;
+        if (b.attemptEvidence) {
+          try {
+            update.$set['automationAttempts.$[attempt].evidence'] = normalizePipelineAutomationEvidence(
+              b.attemptEvidence
+            );
+          } catch (err) {
+            return envelope.error(res, err.status || 400, err.message, err.code || 'INVALID_AUTOMATION_EVIDENCE');
+          }
+        }
         update.$unset = { automationLease: 1 };
         options.arrayFilters = [{ 'attempt.leaseId': lease.leaseId }];
       }

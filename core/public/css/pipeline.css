@@ -391,6 +391,126 @@
   color: #fbbf24;
 }
 
+/* ------------------------------------------------ Coding Team scorecard */
+
+.pipeline-team {
+  margin-bottom: 14px;
+}
+
+.pipeline-team-header {
+  align-items: center;
+}
+
+.pipeline-team-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.pipeline-team-state[data-tone="healthy"] i { color: #4ade80; }
+.pipeline-team-state[data-tone="partial"] i { color: #fbbf24; }
+.pipeline-team-state[data-tone="empty"] i { color: #64748b; }
+.pipeline-team-state[data-tone="unavailable"] { color: #fecaca; }
+.pipeline-team-state[data-tone="unavailable"] i { color: #f87171; }
+
+.pipeline-team-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.pipeline-team-metrics article {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 108px;
+  padding: 15px 16px;
+  background: rgba(15, 20, 34, 0.98);
+}
+
+.pipeline-team-metrics span {
+  color: #94a3b8;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.pipeline-team-metrics strong {
+  color: #f8fafc;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.pipeline-team-metrics small {
+  color: #74839a;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.pipeline-team-attempts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+}
+
+.pipeline-team-attempts-head span,
+.pipeline-team-subtle {
+  color: #64748b;
+  font-size: 0.74rem;
+}
+
+.pipeline-team-table {
+  min-width: 820px;
+}
+
+.pipeline-team-table td:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.pipeline-team-outcome {
+  display: inline-flex;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 7px;
+  padding: 3px 7px;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.pipeline-team-outcome.outcome-accepted {
+  border-color: rgba(34, 197, 94, 0.36);
+  background: rgba(34, 197, 94, 0.1);
+  color: #86efac;
+}
+
+.pipeline-team-outcome.outcome-blocked,
+.pipeline-team-outcome.outcome-rejected {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.1);
+  color: #fecaca;
+}
+
+.pipeline-team-outcome.outcome-review,
+.pipeline-team-outcome.outcome-requeued {
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fde68a;
+}
+
 .pipeline-metric.active {
   border-color: rgba(124, 240, 255, 0.55);
   border-top-width: 3px;
@@ -1206,6 +1326,10 @@ body.pipeline-drawer-open {
   .pipeline-lower-grid {
     grid-template-columns: 1fr;
   }
+
+  .pipeline-team-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
@@ -1228,6 +1352,14 @@ body.pipeline-drawer-open {
   }
 
   .pipeline-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pipeline-team-header {
+    align-items: stretch;
+  }
+
+  .pipeline-team-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1261,6 +1393,10 @@ body.pipeline-drawer-open {
 
 @media (max-width: 460px) {
   .pipeline-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline-team-metrics {
     grid-template-columns: 1fr;
   }
 }

@@ -3,9 +3,11 @@
 const { fingerprint, DATA_CLASSIFICATIONS } = require('./workerContract');
 
 const PIPELINE_AUTOMATION_SCHEMA = 'agentx.pipeline-automation/v1';
+const PIPELINE_AUTOMATION_EVIDENCE_SCHEMA = 'agentx.pipeline-automation-evidence/v1';
 const AUTOMATION_MODES = new Set(['manual', 'review_only']);
 const HUMAN_GATES = new Set(['review', 'merge', 'deploy', 'protected_change']);
 const CHANGE_OPERATIONS = new Set(['create', 'update', 'delete']);
+const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'unknown']);
 const IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 function automationError(message, code = 'INVALID_AUTOMATION_INTENT') {
@@ -34,6 +36,25 @@ function integer(value, name, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   const normalized = Number(value);
   if (!Number.isSafeInteger(normalized) || normalized < min || normalized > max) {
     throw automationError(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return normalized;
+}
+
+function optionalInteger(value, name, options) {
+  if (value == null || value === '') return null;
+  return integer(value, name, options);
+}
+
+function optionalIdentifier(value, name, max = 160) {
+  if (value == null || value === '') return null;
+  return identifier(value, name, max);
+}
+
+function optionalFingerprint(value, name) {
+  if (value == null || value === '') return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw automationError(`${name} must be a 64-character SHA-256 fingerprint`);
   }
   return normalized;
 }
@@ -157,6 +178,84 @@ function normalizePipelineAutomationIntent(rawValue) {
   return { ...normalized, fingerprint: computed };
 }
 
+function normalizePipelineAutomationEvidence(rawValue) {
+  const raw = object(rawValue, 'attemptEvidence');
+  if (raw.schema !== PIPELINE_AUTOMATION_EVIDENCE_SCHEMA) {
+    throw automationError(
+      `attemptEvidence.schema must be ${PIPELINE_AUTOMATION_EVIDENCE_SCHEMA}`,
+      'UNSUPPORTED_AUTOMATION_EVIDENCE_SCHEMA'
+    );
+  }
+  const verificationRaw = object(raw.verification, 'attemptEvidence.verification');
+  const changesRaw = object(raw.changes, 'attemptEvidence.changes');
+  const usageRaw = object(raw.usage, 'attemptEvidence.usage');
+  const verificationStatus = identifier(
+    verificationRaw.status,
+    'attemptEvidence.verification.status',
+    40
+  );
+  if (!VERIFICATION_STATUSES.has(verificationStatus)) {
+    throw automationError('attemptEvidence.verification.status is not supported');
+  }
+
+  return {
+    schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
+    verification: {
+      status: verificationStatus,
+      durationMs: optionalInteger(
+        verificationRaw.durationMs,
+        'attemptEvidence.verification.durationMs',
+        { min: 0, max: 604_800_000 }
+      ),
+      testsPassed: optionalInteger(
+        verificationRaw.testsPassed,
+        'attemptEvidence.verification.testsPassed',
+        { min: 0, max: 10_000_000 }
+      ),
+      testsFailed: optionalInteger(
+        verificationRaw.testsFailed,
+        'attemptEvidence.verification.testsFailed',
+        { min: 0, max: 10_000_000 }
+      ),
+    },
+    changes: {
+      filesChanged: optionalInteger(
+        changesRaw.filesChanged,
+        'attemptEvidence.changes.filesChanged',
+        { min: 0, max: 1_000_000 }
+      ),
+      bytesChanged: optionalInteger(
+        changesRaw.bytesChanged,
+        'attemptEvidence.changes.bytesChanged',
+        { min: 0, max: 10_000_000_000 }
+      ),
+    },
+    usage: {
+      durationMs: optionalInteger(
+        usageRaw.durationMs,
+        'attemptEvidence.usage.durationMs',
+        { min: 0, max: 604_800_000 }
+      ),
+      costNanodollars: optionalInteger(
+        usageRaw.costNanodollars,
+        'attemptEvidence.usage.costNanodollars',
+        { min: 0, max: 9_000_000_000_000_000 }
+      ),
+    },
+    failureCodes: sortedUnique(
+      raw.failureCodes || [],
+      'attemptEvidence.failureCodes',
+      (value, name) => identifier(value, name, 160),
+      { minItems: 0, maxItems: 32 }
+    ),
+    workerReceiptFingerprint: optionalFingerprint(
+      raw.workerReceiptFingerprint,
+      'attemptEvidence.workerReceiptFingerprint'
+    ),
+    source: optionalIdentifier(raw.source, 'attemptEvidence.source', 160),
+  };
+}
+
 function pathIsProtected(path, protectedPathPrefixes) {
   return protectedPathPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
@@ -219,6 +318,8 @@ function automationAdmissionReasons(task = {}, context = {}) {
 
 module.exports = {
   PIPELINE_AUTOMATION_SCHEMA,
+  PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
   normalizePipelineAutomationIntent,
+  normalizePipelineAutomationEvidence,
   automationAdmissionReasons,
 };

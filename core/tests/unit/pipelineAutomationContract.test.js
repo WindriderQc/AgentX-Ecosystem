@@ -1,6 +1,8 @@
 const {
   PIPELINE_AUTOMATION_SCHEMA,
+  PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
   normalizePipelineAutomationIntent,
+  normalizePipelineAutomationEvidence,
   automationAdmissionReasons,
 } = require('../../../shared/pipelineAutomationContract');
 
@@ -103,5 +105,44 @@ describe('pipeline automation contract', () => {
       'resource_lock_conflict',
       'protected_scope',
     ]);
+  });
+
+  test('normalizes partial attempt evidence without converting unknown metrics to zero', () => {
+    const evidence = normalizePipelineAutomationEvidence({
+      schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
+      verification: { status: 'passed', durationMs: 1200, testsPassed: 18 },
+      changes: { filesChanged: 2, bytesChanged: 4096 },
+      usage: { durationMs: 65000 },
+      failureCodes: [],
+      source: 'clawdx-guarded/v1',
+    });
+
+    expect(evidence).toMatchObject({
+      verification: { status: 'passed', durationMs: 1200, testsPassed: 18, testsFailed: null },
+      changes: { filesChanged: 2, bytesChanged: 4096 },
+      usage: { durationMs: 65000, costNanodollars: null },
+      workerReceiptFingerprint: null,
+    });
+  });
+
+  test('rejects malformed attempt metrics, failure codes, and receipt fingerprints', () => {
+    const base = {
+      schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
+      verification: { status: 'unknown' },
+      changes: {},
+      usage: {},
+    };
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      changes: { filesChanged: -1 },
+    })).toThrow(/filesChanged/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      failureCodes: ['raw failure with spaces'],
+    })).toThrow(/bounded identifier/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      workerReceiptFingerprint: 'not-a-digest',
+    })).toThrow(/SHA-256/);
   });
 });

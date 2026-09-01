@@ -136,6 +136,62 @@ describe('GET /api/pipeline/tasks', () => {
   });
 });
 
+describe('GET /api/pipeline/performance', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('returns privacy-safe attempt performance with explicit evidence coverage', async () => {
+    const acquiredAt = new Date(Date.now() - 60_000).toISOString();
+    const completedAt = new Date(Date.now() - 30_000).toISOString();
+    const query = createFindQuery([{
+      pipelineId: '0700',
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      automationAttempts: [{
+        leaseId: 'lease-1',
+        assignee: 'worker-a',
+        attempt: 1,
+        acquiredAt,
+        completedAt,
+        finalState: 'review',
+        evidence: {
+          verification: { status: 'passed' },
+          changes: { filesChanged: 1, bytesChanged: 100 },
+          usage: { durationMs: 60000, costNanodollars: null },
+          failureCodes: [],
+        },
+      }],
+    }]);
+    PipelineTask.find.mockReturnValue(query);
+
+    const response = await request(createApp())
+      .get('/api/pipeline/performance?window=7d')
+      .expect(200);
+
+    expect(PipelineTask.find).toHaveBeenCalledWith({
+      'automationAttempts.acquiredAt': { $gte: expect.any(Date), $lte: expect.any(Date) },
+    });
+    expect(query.select).toHaveBeenCalledWith('pipelineId createdAt automation automationAttempts');
+    expect(response.body.data.performance).toMatchObject({
+      schema: 'agentx.pipeline-automation-performance/v1',
+      authority: 'core.pipeline',
+      window: { days: 7 },
+      counts: { attempts: 1 },
+      coverage: { attemptEvidence: 1, cost: 0, total: 1 },
+      usage: { totalCostNanodollars: null },
+    });
+  });
+
+  test('rejects unbounded performance windows', async () => {
+    const response = await request(createApp())
+      .get('/api/pipeline/performance?window=365d')
+      .expect(400);
+
+    expect(response.body.code).toBe('INVALID_PERFORMANCE_WINDOW');
+    expect(PipelineTask.find).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/pipeline/tasks/:id', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -467,6 +523,14 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
         leaseAssignee: 'worker-a',
         leaseId: 'lease-1',
         text: 'verified',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed', durationMs: 1200, testsPassed: 12, testsFailed: 0 },
+          changes: { filesChanged: 2, bytesChanged: 900 },
+          usage: { durationMs: 45000 },
+          failureCodes: [],
+          source: 'clawdx-guarded/v1',
+        },
       })
       .expect(200);
 
@@ -483,6 +547,15 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
           status: 'review',
           'automationAttempts.$[attempt].finalState': 'review',
           'automationAttempts.$[attempt].completedAt': expect.any(Date),
+          'automationAttempts.$[attempt].evidence': {
+            schema: 'agentx.pipeline-automation-evidence/v1',
+            verification: { status: 'passed', durationMs: 1200, testsPassed: 12, testsFailed: 0 },
+            changes: { filesChanged: 2, bytesChanged: 900 },
+            usage: { durationMs: 45000, costNanodollars: null },
+            failureCodes: [],
+            workerReceiptFingerprint: null,
+            source: 'clawdx-guarded/v1',
+          },
         }),
         $unset: { automationLease: 1 },
       }),
@@ -493,6 +566,26 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
       pipelineId: '0710',
       assignee: 'worker-a',
     });
+  });
+
+  test('rejects attempt evidence that is not bound to an automation lease', async () => {
+    const response = await request(createApp())
+      .post('/api/pipeline/tasks/0352/feedback')
+      .send({
+        status: 'done',
+        by: 'manual-worker',
+        text: 'not lease bound',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'unknown' },
+          changes: {},
+          usage: {},
+        },
+      })
+      .expect(400);
+
+    expect(response.body.code).toBe('AUTOMATION_EVIDENCE_REQUIRES_LEASE');
+    expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -557,6 +650,39 @@ describe('POST /api/pipeline/tasks/:id/status (0354 review->done gate)', () => {
       { new: true }
     );
     expect(res.body.data.task.status).toBe('done');
+  });
+
+  test('records the human review outcome against the exact latest automation attempt', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0501',
+      status: 'review',
+      assignee: 'worker-a',
+      automationAttempts: [{
+        leaseId: 'lease-review',
+        attempt: 1,
+        finalState: 'review',
+        completedAt: new Date('2026-09-01T00:00:00.000Z'),
+      }],
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0501', status: 'done' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0501/status')
+      .send({ status: 'done', by: 'overseer' })
+      .expect(200);
+
+    expect(PipelineTask.findOneAndUpdate).toHaveBeenCalledWith(
+      { pipelineId: '0501' },
+      {
+        $set: {
+          status: 'done',
+          'automationAttempts.$[reviewAttempt].reviewOutcome': 'accepted',
+          'automationAttempts.$[reviewAttempt].reviewedAt': expect.any(Date),
+        },
+        $push: { feedback: expect.objectContaining({ by: 'overseer' }) },
+      },
+      { new: true, arrayFilters: [{ 'reviewAttempt.leaseId': 'lease-review' }] }
+    );
   });
 
   test('releases the worker and heartbeat when a task is re-queued', async () => {

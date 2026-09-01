@@ -42,6 +42,27 @@ const AutomationLeaseSchema = new mongoose.Schema({
   attempt: { type: Number, required: true, min: 1 },
 }, { _id: false });
 
+const AutomationAttemptEvidenceSchema = new mongoose.Schema({
+  schema: { type: String, required: true },
+  verification: {
+    status: { type: String, enum: ['passed', 'failed', 'unknown'], required: true },
+    durationMs: { type: Number, min: 0, default: null },
+    testsPassed: { type: Number, min: 0, default: null },
+    testsFailed: { type: Number, min: 0, default: null },
+  },
+  changes: {
+    filesChanged: { type: Number, min: 0, default: null },
+    bytesChanged: { type: Number, min: 0, default: null },
+  },
+  usage: {
+    durationMs: { type: Number, min: 0, default: null },
+    costNanodollars: { type: Number, min: 0, default: null },
+  },
+  failureCodes: { type: [String], default: undefined },
+  workerReceiptFingerprint: { type: String, default: null },
+  source: { type: String, default: null },
+}, { _id: false });
+
 const AutomationAttemptSchema = new mongoose.Schema({
   leaseId: { type: String, required: true },
   assignee: { type: String, required: true },
@@ -54,6 +75,13 @@ const AutomationAttemptSchema = new mongoose.Schema({
     type: String,
     enum: ['active', 'review', 'blocked', 'done', 'partial', 'released', 'expired'],
     default: 'active',
+  },
+  evidence: { type: AutomationAttemptEvidenceSchema, default: undefined },
+  reviewedAt: { type: Date, default: null },
+  reviewOutcome: {
+    type: String,
+    enum: ['pending', 'accepted', 'requeued', 'rejected'],
+    default: 'pending',
   },
 }, { _id: false });
 
@@ -103,5 +131,6 @@ PipelineTaskSchema.index(
 );
 PipelineTaskSchema.index({ 'automation.mode': 1, status: 1, priority: 1 });
 PipelineTaskSchema.index({ 'automationLease.expiresAt': 1 });
+PipelineTaskSchema.index({ 'automationAttempts.acquiredAt': 1 });
 
 module.exports = mongoose.model('PipelineTask', PipelineTaskSchema);

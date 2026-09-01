@@ -80,6 +80,24 @@ own task `done`, merge code, or authorize deployment. Review, blocked, and
 re-queue transitions release both the task lease and global slot while
 retaining the attempt count and bounded attempt history.
 
+## Performance evidence
+
+A lease-bound terminal feedback call may include an
+`agentx.pipeline-automation-evidence/v1` receipt. It carries only bounded
+verification status and duration, changed file/byte counts, observed execution
+duration and cost, normalized failure codes, and an optional generic
+WorkerReceipt fingerprint. It never carries prompts, transcripts, file paths,
+tool payloads, hostnames, or credentials. Partial evidence is valid: every
+unobserved metric remains `null`, never zero.
+
+Human confirmation or re-queue records the review decision and timestamp on
+the exact attempt. `GET /api/pipeline/performance?window=7d|30d|90d` aggregates
+throughput, acceptance, first-pass share, corrective interventions, timing,
+cost, change volume, safety blocks, and evidence coverage from Mongo task
+history. Rates exclude unknown samples and always publish their coverage.
+Pipeline renders the same projection in its Coding Team scorecard and attempt
+timeline; it does not infer worker value from activity alone.
+
 ## Trust boundary
 
 The automation intent is authorization input, not proof that a task is safe or
