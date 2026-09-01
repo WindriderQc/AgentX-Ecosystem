@@ -184,5 +184,14 @@ describe('pipeline automation contract', () => {
         costEvidenceFingerprint: 'a'.repeat(64),
       },
     })).toThrow(/costKind is not supported/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      usage: {
+        costNanodollars: 0,
+        costKind: 'provider-spend',
+        costSource: 'fake/v1',
+        costEvidenceFingerprint: 'a'.repeat(64),
+      },
+    })).toThrow(/costSource is not allowed for costKind/);
   });
 });

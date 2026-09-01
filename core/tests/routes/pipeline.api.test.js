@@ -182,6 +182,40 @@ describe('GET /api/pipeline/performance', () => {
     });
   });
 
+  test('keeps provider spend separate from session estimates in the API aggregate', async () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const completed = new Date(Date.now() - 30_000).toISOString();
+    const costAttempt = (costKind, costSource, costNanodollars, digest) => ({
+      assignee: 'worker-a', attempt: 1, acquiredAt: recent, completedAt: completed, finalState: 'review',
+      evidence: {
+        verification: { status: 'passed' }, changes: {}, failureCodes: [],
+        usage: { costKind, costSource, costNanodollars, costEvidenceFingerprint: digest.repeat(64) },
+      },
+    });
+    PipelineTask.find.mockReturnValue(createFindQuery([
+      {
+        pipelineId: '0701', createdAt: recent,
+        automationAttempts: [costAttempt('provider-spend', 'openclaw-local-provider-spend/v1', 0, 'a')],
+      },
+      {
+        pipelineId: '0702', createdAt: recent,
+        automationAttempts: [costAttempt('session-estimate', 'openclaw-session-usage/v1', 125971320, 'b')],
+      },
+    ]));
+
+    const response = await request(createApp())
+      .get('/api/pipeline/performance?window=30d')
+      .expect(200);
+
+    expect(response.body.data.performance.usage).toMatchObject({
+      costAggregateKind: 'mixed',
+      observedCostNanodollars: 0,
+      totalCostNanodollars: null,
+      observedProviderSpendNanodollars: 0,
+      observedSessionEstimateNanodollars: 125971320,
+    });
+  });
+
   test('rejects unbounded performance windows', async () => {
     const response = await request(createApp())
       .get('/api/pipeline/performance?window=365d')

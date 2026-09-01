@@ -141,6 +141,25 @@ describe('pipeline automation performance service', () => {
           },
         }],
       },
+      {
+        pipelineId: '0704',
+        createdAt: '2026-08-24T09:00:00.000Z',
+        automationAttempts: [{
+          assignee: 'legacy-worker', attempt: 1,
+          acquiredAt: '2026-08-24T10:00:00.000Z',
+          completedAt: '2026-08-24T10:01:00.000Z',
+          finalState: 'review',
+          evidence: {
+            verification: { status: 'passed' }, changes: {}, failureCodes: [],
+            usage: {
+              costNanodollars: 999000000,
+              costKind: 'provider-spend',
+              costSource: 'fake/v1',
+              costEvidenceFingerprint: 'd'.repeat(64),
+            },
+          },
+        }],
+      },
     ];
     const performance = buildPipelineAutomationPerformance(attempts, {
       now: '2026-09-01T00:00:00.000Z', windowDays: 30,
@@ -148,7 +167,7 @@ describe('pipeline automation performance service', () => {
 
     expect(performance.usage).toMatchObject({
       costAggregateKind: 'mixed',
-      observedCostNanodollars: null,
+      observedCostNanodollars: 0,
       totalCostNanodollars: null,
       observedProviderSpendNanodollars: 0,
       observedSessionEstimateNanodollars: 125971320,
@@ -158,6 +177,8 @@ describe('pipeline automation performance service', () => {
       providerSpend: 1,
       sessionEstimate: 1,
     });
+    expect(performance.state).toBe('partial');
+    expect(performance.attempts[0].unknown).toContain('cost_provenance');
   });
 
   test('reports no data without fabricating rates, timings, or costs', () => {

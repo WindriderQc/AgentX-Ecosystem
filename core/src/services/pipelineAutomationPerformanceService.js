@@ -1,6 +1,10 @@
 'use strict';
 
 const PERFORMANCE_SCHEMA = 'agentx.pipeline-automation-performance/v1';
+const COST_SOURCES_BY_KIND = Object.freeze({
+  'provider-spend': 'openclaw-local-provider-spend/v1',
+  'session-estimate': 'openclaw-session-usage/v1',
+});
 
 function timestamp(value) {
   const date = value ? new Date(value) : null;
@@ -73,7 +77,7 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
         : null;
       const costEvidenceComplete = costNanodollars != null
         && costKind != null
-        && costSource != null
+        && costSource === COST_SOURCES_BY_KIND[costKind]
         && costEvidenceFingerprint != null;
       const filesChanged = observedInteger(changes.filesChanged);
       const bytesChanged = observedInteger(changes.bytesChanged);
@@ -140,7 +144,6 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
   const safetyBlocks = rows.filter((row) => row.failureCodes.some((code) => (
     /policy|scope|secret|protected|violation/i.test(code)
   ))).length;
-  const observedCostNanodollars = knownCosts.reduce((sum, row) => sum + row.usage.costNanodollars, 0);
   const observedProviderSpendNanodollars = providerSpendCosts.reduce(
     (sum, row) => sum + row.usage.costNanodollars,
     0
@@ -196,13 +199,12 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
     },
     usage: {
       costAggregateKind,
-      observedCostNanodollars: knownCosts.length && costAggregateKind !== 'mixed'
-        ? observedCostNanodollars
+      observedCostNanodollars: providerSpendCosts.length
+        ? observedProviderSpendNanodollars
         : null,
       totalCostNanodollars: rows.length > 0
-        && knownCosts.length === rows.length
-        && costAggregateKind !== 'mixed'
-        ? observedCostNanodollars
+        && providerSpendCosts.length === rows.length
+        ? observedProviderSpendNanodollars
         : null,
       observedProviderSpendNanodollars: providerSpendCosts.length
         ? observedProviderSpendNanodollars

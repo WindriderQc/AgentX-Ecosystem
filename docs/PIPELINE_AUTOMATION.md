@@ -86,8 +86,9 @@ A lease-bound terminal feedback call may include an
 `agentx.pipeline-automation-evidence/v1` receipt. It carries only bounded
 verification status and duration, changed file/byte counts, observed execution
 duration and an atomic cost-evidence quartet: integer nanodollars, a supported
-cost kind (`provider-spend` or `session-estimate`), bounded source, and SHA-256
-evidence fingerprint. All four cost fields are present or all four are `null`.
+cost kind (`provider-spend` or `session-estimate`), kind-matched allowlisted
+source, and SHA-256 evidence fingerprint. All four cost fields are present or
+all four are `null`; arbitrary sources and mismatched kind/source pairs fail closed.
 The receipt also carries normalized failure codes and an optional generic WorkerReceipt
 fingerprint. It never carries prompts, transcripts, file paths, tool payloads,
 hostnames, provider credentials, or raw billing records. Partial evidence is

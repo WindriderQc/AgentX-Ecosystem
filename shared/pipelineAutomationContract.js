@@ -9,6 +9,10 @@ const HUMAN_GATES = new Set(['review', 'merge', 'deploy', 'protected_change']);
 const CHANGE_OPERATIONS = new Set(['create', 'update', 'delete']);
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'unknown']);
 const COST_KINDS = new Set(['provider-spend', 'session-estimate']);
+const COST_SOURCES_BY_KIND = new Map([
+  ['provider-spend', new Set(['openclaw-local-provider-spend/v1'])],
+  ['session-estimate', new Set(['openclaw-session-usage/v1'])],
+]);
 const IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 function automationError(message, code = 'INVALID_AUTOMATION_INTENT') {
@@ -227,6 +231,9 @@ function normalizePipelineAutomationEvidence(rawValue) {
   }
   if (costKind != null && !COST_KINDS.has(costKind)) {
     throw automationError('attemptEvidence.usage.costKind is not supported');
+  }
+  if (costKind != null && !COST_SOURCES_BY_KIND.get(costKind)?.has(costSource)) {
+    throw automationError('attemptEvidence.usage costSource is not allowed for costKind');
   }
 
   return {
