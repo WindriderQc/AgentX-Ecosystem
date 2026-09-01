@@ -149,15 +149,19 @@ curl -fsS -X POST "$BENCHMARK_BASE_URL/api/benchmark/sweeps/recommend" \
 ```
 
 Built-in lanes are `daily`, `lightweight`, `utility`, `generalist`, `deep`,
-`master_brain`, and `deep_reflection`. The result is `promote`, `keep`, or
-`inconclusive`, with the ranked candidates, guard evidence, and a ledger draft.
-Every candidate requires a nonempty `model`. A `promote` result additionally
-requires an explicit incumbent present in the candidate set and complete,
-numeric `composite`, `latencyMs`, and `failures` evidence for both the winner
-and incumbent. A missing incumbent or missing head-to-head evidence is
-`inconclusive`, never a promotion. Applying a recommendation remains a separate
-deployment-owned decision with its own backup, validation, health, smoke, and
-rollback evidence.
+`master_brain`, and `deep_reflection`. The route returns ranked observations,
+guard evidence, an explicit fail-closed Trust verdict, and a ledger draft.
+Caller-supplied metrics can produce `keep` or `inconclusive`, but never an
+actionable `promote`: an otherwise promotable result is downgraded to
+`inconclusive` until a qualified Benchmark Trust receipt and separate
+ratification are verified. `winner` remains a legacy scoring field whose
+`winnerMeaning` is `top_lane_score_observation`; `qualifiedWinner` is `null`.
+Every candidate requires a nonempty `model`. The underlying observation engine
+still checks an explicit incumbent and complete numeric `composite`,
+`latencyMs`, and `failures` evidence, but passing those guards alone creates no
+promotion authority. Applying any later qualified recommendation remains a
+separate deployment-owned decision with its own backup, validation, health,
+smoke, and rollback evidence.
 
 Candidate identities must be unique after case and implicit `:latest`
 normalization. Supplied metrics must be JSON numbers in their contract domains:

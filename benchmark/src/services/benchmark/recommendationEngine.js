@@ -297,6 +297,9 @@ function formatRecommendation(rec) {
     return `${head} keep ${rec.incumbent} (${rec.reasons.join('; ')})`;
   }
   if (rec.recommendation === 'inconclusive') {
+    if (rec.winnerMeaning === 'top_lane_score_observation') {
+      return `${head} top observation ${rec.winner} (laneScore ${rec.winnerScore}): INCONCLUSIVE (${rec.reasons.join('; ')})`;
+    }
     const arrow = `${rec.incumbent || '(none)'} -> ${rec.winner}`;
     return `${head} ${arrow}: INCONCLUSIVE (${rec.reasons.join('; ')})`;
   }
@@ -498,7 +501,10 @@ function formatLedgerEntry(rec, opts = {}) {
     lines.push('');
     lines.push(`- **Actor:** ${actor}`);
     lines.push(`- **Decision:** ${rec.recommendation} — ${rec.reasons.join('; ')}`);
-    lines.push(`- **Evidence:** winner \`${rec.winner}\` laneScore ${rec.winnerScore}; incumbent \`${rec.incumbent || '(none)'}\`.${refs}`);
+    const observationLabel = rec.winnerMeaning === 'top_lane_score_observation'
+      ? 'top observation'
+      : 'winner';
+    lines.push(`- **Evidence:** ${observationLabel} \`${rec.winner}\` laneScore ${rec.winnerScore}; incumbent \`${rec.incumbent || '(none)'}\`.${refs}`);
     lines.push(`- **Changes:** none — ${rec.incumbent ? 'incumbent retained' : 'no promotion proposed'}`);
   }
   return lines.join('\n');

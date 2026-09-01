@@ -36,7 +36,9 @@ async function findByCategory(category) {
     categories: category,
     isActive: true
   })
-  .sort({ 'benchmarkStats.avgCompositeScore': -1 })
+  // Registry benchmarkStats are legacy display observations, not immutable
+  // Trust receipts. Keep catalog ordering deterministic and non-authorizing.
+  .sort({ displayName: 1, modelName: 1 })
   .lean();
 }
 
@@ -88,7 +90,8 @@ async function getBestForTask(taskType, constraints = {}) {
   const models = await getModel().find(query)
     .sort({
       'routingRules.priority': -1,
-      'benchmarkStats.avgCompositeScore': -1
+      displayName: 1,
+      modelName: 1
     })
     .limit(1)
     .lean();
@@ -113,13 +116,11 @@ async function getGroupedByCategory() {
     });
   });
 
-  // Sort each group by composite score
+  // Legacy composite scores remain visible, but must not crown or select a
+  // registry model without a separate receipt-qualified routing decision.
   Object.keys(grouped).forEach(category => {
-    grouped[category].sort((a, b) => {
-      const scoreA = a.benchmarkStats?.avgCompositeScore || 0;
-      const scoreB = b.benchmarkStats?.avgCompositeScore || 0;
-      return scoreB - scoreA;
-    });
+    grouped[category].sort((a, b) => String(a.displayName || a.modelName || '')
+      .localeCompare(String(b.displayName || b.modelName || '')));
   });
 
   return grouped;
@@ -142,7 +143,12 @@ async function getCategoryStats() {
           latencyCount: 0,
           avgCompositeScore: 0,
           avgLatency: 0,
-          models: []
+          models: [],
+          benchmarkEvidence: {
+            state: 'exploratory',
+            qualified: false,
+            claim: 'legacy_observations'
+          }
         };
       }
 

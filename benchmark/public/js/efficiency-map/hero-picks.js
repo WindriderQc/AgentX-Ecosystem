@@ -2,9 +2,7 @@
 import { scoreColor } from '../components/score-color.js';
 import { NO_THROUGHPUT_MESSAGE, rankableEfficiencyEntries } from './evidence.js';
 
-const MEDALS = ['\u{1F947}', '\u{1F948}', '\u{1F949}'];
-const MEDAL_LABELS = ['Most Efficient', 'Runner-up', 'Third'];
-const BORDER_COLORS = ['#ffd700', '#c0c0c0', '#cd7f32'];
+const OBSERVATION_BORDER = '#64748b';
 
 function shortHost(url) {
     try {
@@ -22,11 +20,11 @@ function pickCard(entry, idx) {
         ? entry.throughputTestCount
         : entry.testCount;
     const pareto = entry.paretoOptimal ? '<span class="eff-pareto-badge" title="Pareto-optimal">★</span>' : '';
+    const label = idx === 0 ? 'Top measured observation' : `Measured observation #${idx + 1}`;
 
-    return `<div class="eff-pick" style="border-left: 3px solid ${BORDER_COLORS[idx]}">
+    return `<div class="eff-pick" style="border-left: 3px solid ${OBSERVATION_BORDER}">
         <div class="eff-pick-rank">#${idx + 1}</div>
-        <div class="eff-pick-medal">${MEDALS[idx]}</div>
-        <div class="eff-pick-label">${MEDAL_LABELS[idx]}</div>
+        <div class="eff-pick-label">${label}</div>
         <div class="eff-pick-model">${entry.model} ${pareto}</div>
         <div class="eff-pick-host">${host}</div>
         <div class="eff-pick-stats">

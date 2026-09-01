@@ -1,12 +1,10 @@
-// generalist-board.js — Lean quality ranking table for the leaderboard section
+// generalist-board.js — Legacy quality observations for the leaderboard section
 import { getReadinessMap, getBadgeHtml } from '../model-profiler/components/readiness-cache.js';
 
 function _shortHost(url) {
     return String(url || '').replace(/^https?:\/\//, '').replace(/:11434$/, '');
 }
 
-const MEDAL = ['🥇', '🥈', '🥉'];
-const RANK_CLASS = ['r1', 'r2', 'r3'];
 const CATEGORY_META = {
   coding: { icon: '💻', label: 'Coding' },
   reasoning: { icon: '🧠', label: 'Reasoning' },
@@ -25,9 +23,6 @@ function scoreClass(score) {
 }
 
 function renderRank(index) {
-  if (index < 3) {
-    return `<td class="gr ${RANK_CLASS[index]}">${MEDAL[index]}</td>`;
-  }
   return `<td class="gr rn">#${index + 1}</td>`;
 }
 
@@ -53,9 +48,9 @@ function renderConfidenceBadge(entry) {
     return '<span title="Insufficient data" style="color:var(--r-text-dim)">—</span>';
   }
   if (calibrated && count >= 10) {
-    return '<span title="Calibrated judge, 10+ results" style="color:var(--r-good)">✓</span>';
+    return '<span title="Model-only calibration metadata; not Trust qualification" style="color:var(--r-text-dim)">◇</span>';
   }
-  return '<span title="Uncalibrated judge or few results" style="color:var(--r-anomaly)">⚠</span>';
+  return '<span title="Unqualified judge metadata or few results" style="color:var(--r-anomaly)">⚠</span>';
 }
 
 function renderTrend(trend) {
@@ -75,58 +70,11 @@ function renderTrend(trend) {
   return '<td class="gtrend"></td>';
 }
 
-function entryKey(entry) {
-  return `${entry.model || ''}::${entry.host || ''}`;
-}
-
 function categoryScore(entry, category) {
   const raw = entry.categoryScores?.[category];
   return raw !== null && raw !== undefined && Number.isFinite(Number(raw))
     ? Number(raw)
     : null;
-}
-
-function buildChampionMap(rankings) {
-  const champions = new Map();
-
-  for (const category of CATEGORY_ORDER) {
-    let winner = null;
-    let winnerScore = -Infinity;
-
-    for (const entry of rankings) {
-      const score = categoryScore(entry, category);
-      if (score === null) continue;
-      if (score > winnerScore) {
-        winner = entry;
-        winnerScore = score;
-      }
-    }
-
-    if (!winner) continue;
-
-    const key = entryKey(winner);
-    const current = champions.get(key) || [];
-    current.push({
-      ...CATEGORY_META[category],
-      score: winnerScore
-    });
-    champions.set(key, current);
-  }
-
-  return champions;
-}
-
-function renderChampionBadges(entry, championMap) {
-  const champions = championMap.get(entryKey(entry)) || [];
-  if (champions.length === 0) return '';
-
-  return `<div class="g-best-strip">
-    ${champions.map(({ icon, label, score }) => `
-      <span class="g-best-badge" title="Best in ${label} (${score.toFixed(1)} / 10)">
-        <span class="g-best-icon">${icon}</span>
-        <span class="g-best-label">${label}</span>
-      </span>`).join('')}
-  </div>`;
 }
 
 function categoryExtremes(entry) {
@@ -166,7 +114,7 @@ function renderEvidence(entry) {
   </td>`;
 }
 
-function renderRow(entry, index, championMap, readinessMap) {
+function renderRow(entry, index, readinessMap) {
   const modelName = entry.model ?? '—';
   const readinessBadge = readinessMap ? getBadgeHtml(modelName, readinessMap) : '';
   const { best, watch } = categoryExtremes(entry);
@@ -178,7 +126,6 @@ function renderRow(entry, index, championMap, readinessMap) {
         <a href="/courthouse?model=${encodeURIComponent(modelName)}" class="gen-courthouse-link" title="Review in Courthouse"><i class="fas fa-gavel"></i></a>
         <a href="/efficiency-map" class="gen-courthouse-link" title="Efficiency Map"><i class="fas fa-chart-line"></i></a>
       </div>
-      ${renderChampionBadges(entry, championMap)}
       <div class="gh">${entry.hostName || _shortHost(entry.host) || '—'}</div>
     </td>
     ${renderScore(entry.score ?? 0)}
@@ -194,9 +141,9 @@ function renderRow(entry, index, championMap, readinessMap) {
 const SCORING_EXPLAINER = `<details class="gen-scoring-explainer">
   <summary class="gen-explainer-toggle">How Scoring Works <span class="gen-explainer-caret">&#9660;</span></summary>
   <div class="gen-explainer-body">
-    <p class="gen-explainer-title">How the Quality Ranking Works</p>
-    <p>Each model's generalist score reflects quality across 7 evaluation categories, adjusted for category breadth, hard-level coverage, and consistency.</p>
-    <p>Category weights are shared across every model, so the leaderboard stays apples-to-apples.</p>
+    <p class="gen-explainer-title">How the Historical Quality Observation Is Computed</p>
+    <p>Each displayed generalist score summarizes the categories present in that row, adjusted for category breadth, hard-level coverage, and consistency.</p>
+    <p>Rows can come from different cohorts, judges, prompts, and dates. They are not a receipt-qualified comparison or promotion decision.</p>
     <p class="gen-explainer-formula"><strong>Formula:</strong> weighted_quality &minus; coverage_penalty + consistency_bonus</p>
     <ul class="gen-explainer-list">
       <li><strong>Weighted Quality:</strong> Average quality score (0&ndash;10) across categories, weighted by category importance (e.g., coding 20%, reasoning 20%, math 10%&hellip;).</li>
@@ -209,22 +156,21 @@ const SCORING_EXPLAINER = `<details class="gen-scoring-explainer">
 
 function buildTable(rankings, readinessMap) {
   if (!rankings || rankings.length === 0) {
-    return `<div class="r-empty">No rankings yet — launch a benchmark to populate the leaderboard.</div>`;
+    return `<div class="r-empty">No measured observations yet — launch a benchmark to collect evidence.</div>`;
   }
 
-  const championMap = buildChampionMap(rankings);
-  const rows = rankings.map((entry, i) => renderRow(entry, i, championMap, readinessMap)).join('');
+  const rows = rankings.map((entry, i) => renderRow(entry, i, readinessMap)).join('');
 
   return `${SCORING_EXPLAINER}<div class="gen-table-wrap"><table class="gen-table quality-ranking-table">
     <thead>
       <tr>
-        <th>Rank</th>
+        <th>Position</th>
         <th>Model / Host</th>
         <th title="Generalist score (0-10). Weighted quality minus coverage penalty plus consistency bonus.">Score</th>
         <th title="Highest-scoring category for this model. Full category detail lives in Model Stats.">Best Lane</th>
         <th title="Lowest-scoring category for this model. Use this as the quick weakness marker.">Watch Lane</th>
         <th title="Completed evaluations and confidence margin. Smaller confidence margins are better.">Evidence</th>
-        <th title="Judge calibration status. Checkmark = calibrated judge with 10+ results. Warning = uncalibrated judge or insufficient data.">Cal</th>
+        <th title="Legacy judge metadata only. This field never establishes Benchmark Trust qualification.">Judge evidence</th>
         <th title="Number of results that have been human-reviewed in the courthouse.">Reviewed</th>
         <th title="Score change compared to the previous batch. Up = improving, Down = declining, NEW = first appearance.">Trend</th>
       </tr>
@@ -238,7 +184,7 @@ export async function renderGeneralistBoard(container, rankings) {
 
   const sectionHead = `<div class="r-sec-head">
     <span class="r-sec-icon">🏁</span>
-    <span class="r-sec-title r-t-cyan">Quality Ranking</span>
+    <span class="r-sec-title r-t-cyan">Quality observations</span>
     <span class="r-sec-toggle">▼</span>
   </div>`;
 
