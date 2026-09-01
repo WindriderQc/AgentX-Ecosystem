@@ -11,6 +11,11 @@
 
 const crypto = require('crypto');
 const { stableSerialize } = require('../../../../shared/artifactIdentity');
+const {
+    MAXIMUM_TARGET_POWER_BASIS_POINTS,
+    MINIMUM_INDEPENDENT_PROMPT_COUNT,
+    MINIMUM_TARGET_POWER_BASIS_POINTS
+} = require('../../../../shared/benchmarkTrustReceipt');
 
 const STATISTICS_METHOD = Object.freeze({
     name: 'paired-prompt-t-v1',
@@ -19,8 +24,12 @@ const STATISTICS_METHOD = Object.freeze({
     repeatAggregation: 'arithmetic_mean_per_candidate_prompt',
     interval: 'two_sided_student_t',
     multiplicity: 'bonferroni',
-    multiplicityFamily: 'all_unordered_candidate_pairs'
+    multiplicityFamily: 'all_unordered_candidate_pairs',
+    powerAnalysis: 'student-t-critical-normal-shift-bound-v1'
 });
+
+const POWER_ANALYSIS_SCHEMA = 'agentx.benchmark-trust-power-analysis/student-t-critical-normal-shift-bound/v1';
+const MAXIMUM_POWER_PROMPT_COUNT = 100_000;
 
 const NUMERICAL_EPSILON = 1e-14;
 const CONTINUED_FRACTION_FLOOR = 1e-300;
@@ -160,6 +169,142 @@ function studentTQuantile(probability, degreesOfFreedom) {
     return (lower + upper) / 2;
 }
 
+/**
+ * Acklam's deterministic inverse-normal approximation. The power planner uses
+ * this only for the preregistered target-power margin; the reported interval
+ * remains the exact Student-t interval above.
+ */
+function standardNormalQuantile(probability) {
+    const p = Number(probability);
+    if (!Number.isFinite(p) || p <= 0 || p >= 1) return null;
+    const a = [
+        -3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2,
+        1.38357751867269e2, -3.066479806614716e1, 2.506628277459239
+    ];
+    const b = [
+        -5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2,
+        6.680131188771972e1, -1.328068155288572e1
+    ];
+    const c = [
+        -7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838,
+        -2.549732539343734, 4.374664141464968, 2.938163982698783
+    ];
+    const d = [
+        7.784695709041462e-3, 3.224671290700398e-1,
+        2.445134137142996, 3.754408661907416
+    ];
+    const lowerTail = 0.02425;
+    const upperTail = 1 - lowerTail;
+    if (p < lowerTail) {
+        const q = Math.sqrt(-2 * Math.log(p));
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+    }
+    if (p > upperTail) {
+        const q = Math.sqrt(-2 * Math.log(1 - p));
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+    }
+    const q = p - 0.5;
+    const r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
+        / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+
+function requiredIndependentPromptCount({
+    alpha,
+    mde,
+    candidateCount,
+    targetPowerBasisPoints,
+    assumedMaxPairedStdDevMicros
+}) {
+    if (typeof alpha !== 'number' || !Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) return null;
+    if (typeof mde !== 'number' || !Number.isFinite(mde) || mde <= 0) return null;
+    if (!Number.isSafeInteger(candidateCount) || candidateCount < 2) return null;
+    if (!Number.isSafeInteger(targetPowerBasisPoints)
+        || targetPowerBasisPoints < MINIMUM_TARGET_POWER_BASIS_POINTS
+        || targetPowerBasisPoints > MAXIMUM_TARGET_POWER_BASIS_POINTS) return null;
+    if (!Number.isSafeInteger(assumedMaxPairedStdDevMicros)
+        || assumedMaxPairedStdDevMicros <= 0) return null;
+
+    const familySize = candidateCount * (candidateCount - 1) / 2;
+    const adjustedAlpha = alpha / familySize;
+    const powerMargin = standardNormalQuantile(targetPowerBasisPoints / 10_000);
+    const assumedStdDev = assumedMaxPairedStdDevMicros / 1_000_000;
+    if (!Number.isFinite(adjustedAlpha) || adjustedAlpha <= 0 || adjustedAlpha >= 1
+        || !Number.isFinite(powerMargin) || !Number.isFinite(assumedStdDev) || assumedStdDev <= 0) return null;
+
+    // Conservative, explicitly versioned planning bound: require the signal at
+    // the MDE to clear the finite-df Student-t critical value plus the target
+    // standard-normal power margin. This never substitutes for the final t CI.
+    const meetsBound = (count) => {
+        const critical = studentTQuantile(1 - adjustedAlpha / 2, count - 1);
+        return Number.isFinite(critical)
+            && (mde * Math.sqrt(count) / assumedStdDev) >= critical + powerMargin;
+    };
+
+    if (meetsBound(MINIMUM_INDEPENDENT_PROMPT_COUNT)) return MINIMUM_INDEPENDENT_PROMPT_COUNT;
+    let lower = MINIMUM_INDEPENDENT_PROMPT_COUNT;
+    let upper = lower * 2;
+    while (upper <= MAXIMUM_POWER_PROMPT_COUNT && !meetsBound(upper)) {
+        lower = upper;
+        upper *= 2;
+    }
+    if (upper > MAXIMUM_POWER_PROMPT_COUNT) {
+        upper = MAXIMUM_POWER_PROMPT_COUNT;
+        if (!meetsBound(upper)) return null;
+    }
+    while (lower + 1 < upper) {
+        const midpoint = Math.floor((lower + upper) / 2);
+        if (meetsBound(midpoint)) upper = midpoint;
+        else lower = midpoint;
+    }
+    return upper;
+}
+
+function buildBenchmarkTrustPowerAnalysisFields({
+    alpha,
+    mde,
+    candidateIds,
+    targetPowerBasisPoints,
+    assumedMaxPairedStdDevMicros
+} = {}) {
+    const normalizedCandidateIds = Array.isArray(candidateIds)
+        ? [...new Set(candidateIds.map(normalizeId).filter(Boolean))].sort(compareText)
+        : [];
+    const requiredCount = requiredIndependentPromptCount({
+        alpha,
+        mde,
+        candidateCount: normalizedCandidateIds.length,
+        targetPowerBasisPoints,
+        assumedMaxPairedStdDevMicros
+    });
+    if (requiredCount === null) {
+        throw new Error('power analysis inputs cannot produce a bounded required independent prompt count');
+    }
+    const familySize = normalizedCandidateIds.length * (normalizedCandidateIds.length - 1) / 2;
+    const artifact = {
+        schema: POWER_ANALYSIS_SCHEMA,
+        statisticalMethod: STATISTICS_METHOD.name,
+        multiplicityCorrection: STATISTICS_METHOD.multiplicity,
+        alpha,
+        minimumEffect: mde,
+        candidateCount: normalizedCandidateIds.length,
+        familySize,
+        targetPowerBasisPoints,
+        assumedMaxPairedStdDevMicros,
+        requiredIndependentPromptCount: requiredCount
+    };
+    return {
+        requiredIndependentPromptCount: requiredCount,
+        targetPowerBasisPoints,
+        assumedMaxPairedStdDevMicros,
+        powerAnalysisFingerprint: crypto.createHash('sha256')
+            .update(stableSerialize(artifact))
+            .digest('hex')
+    };
+}
+
 function validatePreregistration(preregistration) {
     const reasons = [];
     const source = preregistration && typeof preregistration === 'object'
@@ -171,10 +316,14 @@ function validatePreregistration(preregistration) {
     const mde = source.mde;
     const equivalenceMargin = source.equivalenceMargin;
     const repeatCount = source.repeatCount;
+    const requiredPromptCount = source.requiredIndependentPromptCount;
+    const targetPowerBasisPoints = source.targetPowerBasisPoints;
+    const assumedMaxPairedStdDevMicros = source.assumedMaxPairedStdDevMicros;
+    const powerAnalysisFingerprint = source.powerAnalysisFingerprint;
     if (typeof alpha !== 'number' || !Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) {
         reasons.push('alpha_invalid');
     }
-    if (typeof mde !== 'number' || !Number.isFinite(mde) || mde < 0) {
+    if (typeof mde !== 'number' || !Number.isFinite(mde) || mde <= 0) {
         reasons.push('mde_invalid');
     }
     if (typeof equivalenceMargin !== 'number' || !Number.isFinite(equivalenceMargin)
@@ -183,6 +332,23 @@ function validatePreregistration(preregistration) {
     }
     if (!Number.isSafeInteger(repeatCount) || repeatCount < 1) {
         reasons.push('repeat_count_invalid');
+    }
+    if (!Number.isSafeInteger(requiredPromptCount)
+        || requiredPromptCount < MINIMUM_INDEPENDENT_PROMPT_COUNT) {
+        reasons.push('required_prompt_count_invalid');
+    }
+    if (!Number.isSafeInteger(targetPowerBasisPoints)
+        || targetPowerBasisPoints < MINIMUM_TARGET_POWER_BASIS_POINTS
+        || targetPowerBasisPoints > MAXIMUM_TARGET_POWER_BASIS_POINTS) {
+        reasons.push('target_power_invalid');
+    }
+    if (!Number.isSafeInteger(assumedMaxPairedStdDevMicros)
+        || assumedMaxPairedStdDevMicros <= 0) {
+        reasons.push('assumed_paired_stddev_invalid');
+    }
+    if (typeof powerAnalysisFingerprint !== 'string'
+        || !/^[0-9a-f]{64}$/.test(powerAnalysisFingerprint)) {
+        reasons.push('power_analysis_fingerprint_invalid');
     }
 
     function declaredIds(field, label) {
@@ -203,6 +369,29 @@ function validatePreregistration(preregistration) {
 
     const candidates = declaredIds('candidateIds', 'candidate');
     const prompts = declaredIds('promptIds', 'prompt');
+    let computedPower = null;
+    try {
+        computedPower = buildBenchmarkTrustPowerAnalysisFields({
+            alpha,
+            mde,
+            candidateIds: candidates.values,
+            targetPowerBasisPoints,
+            assumedMaxPairedStdDevMicros
+        });
+    } catch (_error) {
+        reasons.push('power_analysis_unavailable');
+    }
+    if (computedPower) {
+        if (requiredPromptCount !== computedPower.requiredIndependentPromptCount) {
+            reasons.push('required_prompt_count_mismatch');
+        }
+        if (powerAnalysisFingerprint !== computedPower.powerAnalysisFingerprint) {
+            reasons.push('power_analysis_fingerprint_mismatch');
+        }
+        if (prompts.supplied && prompts.values.length < computedPower.requiredIndependentPromptCount) {
+            reasons.push('underpowered_prompt_count');
+        }
+    }
     return {
         valid: reasons.length === 0,
         reasons,
@@ -213,6 +402,19 @@ function validatePreregistration(preregistration) {
                 ? equivalenceMargin
                 : null,
             repeatCount: Number.isSafeInteger(repeatCount) && repeatCount >= 1 ? repeatCount : null,
+            requiredIndependentPromptCount: Number.isSafeInteger(requiredPromptCount)
+                && requiredPromptCount >= MINIMUM_INDEPENDENT_PROMPT_COUNT
+                ? requiredPromptCount
+                : null,
+            targetPowerBasisPoints: Number.isSafeInteger(targetPowerBasisPoints)
+                ? targetPowerBasisPoints
+                : null,
+            assumedMaxPairedStdDevMicros: Number.isSafeInteger(assumedMaxPairedStdDevMicros)
+                ? assumedMaxPairedStdDevMicros
+                : null,
+            powerAnalysisFingerprint: typeof powerAnalysisFingerprint === 'string'
+                ? powerAnalysisFingerprint
+                : null,
             candidateIds: candidates.supplied ? candidates.values : null,
             promptIds: prompts.supplied ? prompts.values : null
         },
@@ -350,7 +552,8 @@ function aggregatePromptMeans(rows, preregistration = {}) {
 function buildBaseComparison(leftSummary, rightSummary, promptIds, {
     adjustedAlpha,
     matrixComplete,
-    preregistrationValid
+    preregistrationValid,
+    requiredPromptCount
 }) {
     const leftByPrompt = new Map(leftSummary.promptMeans.map(row => [row.promptId, row.mean]));
     const rightByPrompt = new Map(rightSummary.promptMeans.map(row => [row.promptId, row.mean]));
@@ -367,7 +570,10 @@ function buildBaseComparison(leftSummary, rightSummary, promptIds, {
     if (!matrixComplete) reasons.push('incomplete_matrix');
     if (!preregistrationValid) reasons.push('invalid_preregistration');
     if (paired.length !== promptIds.length) reasons.push('incomplete_pair');
-    if (paired.length < 2) reasons.push('insufficient_independent_prompts');
+    if (paired.length < MINIMUM_INDEPENDENT_PROMPT_COUNT) reasons.push('insufficient_independent_prompts');
+    if (Number.isSafeInteger(requiredPromptCount) && paired.length < requiredPromptCount) {
+        reasons.push('underpowered_prompt_count');
+    }
     if (adjustedAlpha === null) reasons.push('adjusted_alpha_unavailable');
 
     let standardError = null;
@@ -376,19 +582,23 @@ function buildBaseComparison(leftSummary, rightSummary, promptIds, {
     let upper = null;
     if (reasons.length === 0) {
         const variance = sampleVariance(differences, effect);
-        standardError = Math.sqrt(variance / differences.length);
-        const probability = 1 - adjustedAlpha / 2;
-        criticalValue = probability < 1
-            ? studentTQuantile(probability, differences.length - 1)
-            : null;
-        if (criticalValue === null || !Number.isFinite(criticalValue)) {
-            reasons.push('critical_value_unavailable');
-            standardError = null;
-            criticalValue = null;
+        if (!Number.isFinite(variance) || variance <= 0) {
+            reasons.push('degenerate_paired_variance');
         } else {
-            const margin = criticalValue * standardError;
-            lower = cleanZero(effect - margin);
-            upper = cleanZero(effect + margin);
+            standardError = Math.sqrt(variance / differences.length);
+            const probability = 1 - adjustedAlpha / 2;
+            criticalValue = probability < 1
+                ? studentTQuantile(probability, differences.length - 1)
+                : null;
+            if (criticalValue === null || !Number.isFinite(criticalValue)) {
+                reasons.push('critical_value_unavailable');
+                standardError = null;
+                criticalValue = null;
+            } else {
+                const margin = criticalValue * standardError;
+                lower = cleanZero(effect - margin);
+                upper = cleanZero(effect + margin);
+            }
         }
     }
 
@@ -489,7 +699,8 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
                 {
                     adjustedAlpha: effectiveAdjustedAlpha,
                     matrixComplete: matrix.complete,
-                    preregistrationValid: validation.valid
+                    preregistrationValid: validation.valid,
+                    requiredPromptCount: validation.values.requiredIndependentPromptCount
                 }
             ));
         }
@@ -517,8 +728,11 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
     if (candidateIds.length === 0) reasons.push('no_candidates');
     else if (candidateIds.length === 1) reasons.push('insufficient_candidates');
     if (promptIds.length === 0) reasons.push('no_prompts');
-    else if (promptIds.length === 1) reasons.push('insufficient_independent_prompts');
+    else if (promptIds.length < MINIMUM_INDEPENDENT_PROMPT_COUNT) reasons.push('insufficient_independent_prompts');
     if (adjustedAlpha !== null && !adjustedAlphaUsable) reasons.push('adjusted_alpha_unrepresentable');
+    if (comparisons.some(comparison => comparison.reasons.includes('degenerate_paired_variance'))) {
+        reasons.push('degenerate_paired_variance');
+    }
 
     let outcome = 'inconclusive';
     let winner = null;
@@ -529,7 +743,8 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
     const eligibleForDecision = validation.valid
         && matrix.complete
         && candidateIds.length >= 2
-        && promptIds.length >= 2
+        && promptIds.length >= MINIMUM_INDEPENDENT_PROMPT_COUNT
+        && promptIds.length >= validation.values.requiredIndependentPromptCount
         && adjustedAlphaUsable
         && intervalsComplete;
 
@@ -589,17 +804,32 @@ function evaluateBenchmarkTrustStatistics({ rows = [], preregistration = {} } = 
 }
 
 /**
- * Project a completed pure evaluation into the exact statistical fields of
- * BenchmarkTrustReceipt v1. The decision fingerprint is derived here from the
- * normalized decision artifact; callers cannot provide a mismatched digest.
+ * Evaluate raw rows and project the resulting decision into the exact
+ * statistical fields of BenchmarkTrustReceipt v1. A caller cannot inject or
+ * mutate a precomputed evaluation object: this boundary always re-evaluates.
  */
-function buildBenchmarkTrustStatisticsReceiptFields(evaluation, {
+function buildBenchmarkTrustStatisticsReceiptFields(source, {
     analysisPlanFingerprint,
     rankingPolicyFingerprint
 } = {}) {
-    if (!evaluation || typeof evaluation !== 'object' || Array.isArray(evaluation)) {
-        throw new Error('evaluation must be a Benchmark trust statistical result');
+    if (!source || typeof source !== 'object' || Array.isArray(source)
+        || !Object.prototype.hasOwnProperty.call(source, 'rows')
+        || !Array.isArray(source.rows)
+        || !source.preregistration
+        || typeof source.preregistration !== 'object'
+        || Array.isArray(source.preregistration)) {
+        throw new Error('source must contain raw rows and a Benchmark trust preregistration');
     }
+    const preregistrationValidation = validatePreregistration(source.preregistration);
+    const fatalPreregistrationReasons = preregistrationValidation.reasons
+        .filter(reason => reason !== 'underpowered_prompt_count');
+    if (fatalPreregistrationReasons.length > 0) {
+        throw new Error(`source preregistration is not structurally valid: ${fatalPreregistrationReasons.join(', ')}`);
+    }
+    const evaluation = evaluateBenchmarkTrustStatistics({
+        rows: source.rows,
+        preregistration: source.preregistration
+    });
     if (evaluation.method?.name !== STATISTICS_METHOD.name
         || evaluation.method?.multiplicity !== STATISTICS_METHOD.multiplicity
         || evaluation.preregistration?.repeatCount === null) {
@@ -644,6 +874,10 @@ function buildBenchmarkTrustStatisticsReceiptFields(evaluation, {
         || equivalenceCandidateIds.some(candidateId => !receiptCandidatePattern.test(candidateId))) {
         throw new Error('evaluation decision references a non-portable candidate identifier');
     }
+    if ((winnerCandidateId !== null || equivalenceCandidateIds.length > 0)
+        && evaluation.eligibleForDecision !== true) {
+        throw new Error('evaluation decision is not supported by a complete powered comparison family');
+    }
 
     return {
         unit: 'prompt',
@@ -653,6 +887,10 @@ function buildBenchmarkTrustStatisticsReceiptFields(evaluation, {
         minimumEffectMicros,
         preregistration: {
             repeatCount: evaluation.preregistration.repeatCount,
+            requiredIndependentPromptCount: evaluation.preregistration.requiredIndependentPromptCount,
+            targetPowerBasisPoints: evaluation.preregistration.targetPowerBasisPoints,
+            assumedMaxPairedStdDevMicros: evaluation.preregistration.assumedMaxPairedStdDevMicros,
+            powerAnalysisFingerprint: evaluation.preregistration.powerAnalysisFingerprint,
             analysisPlanFingerprint: requireFingerprint(
                 analysisPlanFingerprint,
                 'analysisPlanFingerprint'
@@ -669,7 +907,9 @@ function buildBenchmarkTrustStatisticsReceiptFields(evaluation, {
 }
 
 module.exports = {
+    POWER_ANALYSIS_SCHEMA,
     STATISTICS_METHOD,
+    buildBenchmarkTrustPowerAnalysisFields,
     studentTCdf,
     studentTQuantile,
     validatePreregistration,

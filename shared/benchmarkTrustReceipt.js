@@ -25,6 +25,9 @@ const JUDGE_QUALIFICATION_STATUSES = Object.freeze(['qualified', 'unqualified', 
 // winner that the Product statistics engine never computed.
 const STATISTICAL_METHODS = Object.freeze(['paired-prompt-t-v1']);
 const MULTIPLICITY_CORRECTIONS = Object.freeze(['bonferroni']);
+const MINIMUM_INDEPENDENT_PROMPT_COUNT = 3;
+const MINIMUM_TARGET_POWER_BASIS_POINTS = 8000;
+const MAXIMUM_TARGET_POWER_BASIS_POINTS = 9999;
 
 const RECEIPT_KEYS = Object.freeze([
   'schema',
@@ -91,7 +94,14 @@ const STATISTICS_KEYS = Object.freeze([
   'winnerCandidateId',
   'equivalenceCandidateIds',
 ]);
-const PREREGISTRATION_KEYS = Object.freeze(['repeatCount', 'analysisPlanFingerprint']);
+const PREREGISTRATION_KEYS = Object.freeze([
+  'repeatCount',
+  'requiredIndependentPromptCount',
+  'targetPowerBasisPoints',
+  'assumedMaxPairedStdDevMicros',
+  'powerAnalysisFingerprint',
+  'analysisPlanFingerprint',
+]);
 const AXES_KEYS = Object.freeze([
   'evidenceStatus',
   'decisionOutcome',
@@ -401,8 +411,9 @@ function validateBenchmarkTrustReceipt(receipt) {
     if (!MULTIPLICITY_CORRECTIONS.includes(receipt.statistics.multiplicityCorrection)) {
       errors.push(`receipt.statistics.multiplicityCorrection must be one of ${MULTIPLICITY_CORRECTIONS.join(', ')}`);
     }
-    if (!isNonNegativeSafeInteger(receipt.statistics.minimumEffectMicros)) {
-      errors.push('receipt.statistics.minimumEffectMicros must be a non-negative safe integer');
+    if (!Number.isSafeInteger(receipt.statistics.minimumEffectMicros)
+      || receipt.statistics.minimumEffectMicros <= 0) {
+      errors.push('receipt.statistics.minimumEffectMicros must be a positive safe integer');
     }
     if (hasExactKeys(
       receipt.statistics.preregistration,
@@ -413,6 +424,22 @@ function validateBenchmarkTrustReceipt(receipt) {
       if (!Number.isSafeInteger(receipt.statistics.preregistration.repeatCount)
         || receipt.statistics.preregistration.repeatCount <= 0) {
         errors.push('receipt.statistics.preregistration.repeatCount must be a positive safe integer');
+      }
+      if (!Number.isSafeInteger(receipt.statistics.preregistration.requiredIndependentPromptCount)
+        || receipt.statistics.preregistration.requiredIndependentPromptCount < MINIMUM_INDEPENDENT_PROMPT_COUNT) {
+        errors.push(`receipt.statistics.preregistration.requiredIndependentPromptCount must be a safe integer of at least ${MINIMUM_INDEPENDENT_PROMPT_COUNT}`);
+      }
+      if (!Number.isSafeInteger(receipt.statistics.preregistration.targetPowerBasisPoints)
+        || receipt.statistics.preregistration.targetPowerBasisPoints < MINIMUM_TARGET_POWER_BASIS_POINTS
+        || receipt.statistics.preregistration.targetPowerBasisPoints > MAXIMUM_TARGET_POWER_BASIS_POINTS) {
+        errors.push(`receipt.statistics.preregistration.targetPowerBasisPoints must be an integer from ${MINIMUM_TARGET_POWER_BASIS_POINTS} through ${MAXIMUM_TARGET_POWER_BASIS_POINTS}`);
+      }
+      if (!Number.isSafeInteger(receipt.statistics.preregistration.assumedMaxPairedStdDevMicros)
+        || receipt.statistics.preregistration.assumedMaxPairedStdDevMicros <= 0) {
+        errors.push('receipt.statistics.preregistration.assumedMaxPairedStdDevMicros must be a positive safe integer');
+      }
+      if (!isFingerprint(receipt.statistics.preregistration.powerAnalysisFingerprint)) {
+        errors.push('receipt.statistics.preregistration.powerAnalysisFingerprint must be a lowercase SHA-256 fingerprint');
       }
       if (!isFingerprint(receipt.statistics.preregistration.analysisPlanFingerprint)) {
         errors.push('receipt.statistics.preregistration.analysisPlanFingerprint must be a lowercase SHA-256 fingerprint');
@@ -490,8 +517,16 @@ function validateBenchmarkTrustReceipt(receipt) {
 function validateInventoryConsistency(receipt, candidateIds, errors) {
   if (!isPlainObject(receipt.execution) || !isPlainObject(receipt.statistics?.preregistration)) return;
   const { promptCount, expectedResultCount, observedResultCount, excludedResultCount } = receipt.execution;
-  const { repeatCount } = receipt.statistics.preregistration;
+  const { repeatCount, requiredIndependentPromptCount } = receipt.statistics.preregistration;
   const cellInventory = receipt.execution.cellInventory;
+  if (
+    Number.isSafeInteger(promptCount)
+    && Number.isSafeInteger(requiredIndependentPromptCount)
+    && promptCount < requiredIndependentPromptCount
+    && (receipt.axes?.decisionOutcome === 'winner' || receipt.axes?.decisionOutcome === 'equivalence_set')
+  ) {
+    errors.push('an underpowered prompt count cannot declare a winner or equivalence set');
+  }
   if (
     Number.isSafeInteger(promptCount)
     && Number.isSafeInteger(repeatCount)
@@ -694,6 +729,9 @@ module.exports = {
   EVIDENCE_STATUSES,
   FRESHNESS_STATUSES,
   JUDGE_QUALIFICATION_STATUSES,
+  MAXIMUM_TARGET_POWER_BASIS_POINTS,
+  MINIMUM_INDEPENDENT_PROMPT_COUNT,
+  MINIMUM_TARGET_POWER_BASIS_POINTS,
   MULTIPLICITY_CORRECTIONS,
   RATIFICATION_STATUSES,
   STATISTICAL_METHODS,

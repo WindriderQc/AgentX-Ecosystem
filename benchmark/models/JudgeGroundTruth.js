@@ -6,12 +6,184 @@
 
 const mongoose = require('mongoose');
 
-function qualifiedReviewPairIsValid(provenanceClass, reviewProtocol) {
-    if (provenanceClass === 'independent_human_score') {
-        return ['blind_independent', 'blind_double_review'].includes(reviewProtocol);
+const JUDGE_IDENTITY_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
+const SCORE_MIN = 0;
+const SCORE_MAX = 10;
+const GROUND_TRUTH_CATEGORIES = Object.freeze([
+    'coding', 'reasoning', 'math', 'knowledge', 'instruction', 'creative', 'translation', 'factual'
+]);
+const JUDGE_IDENTITY_IMMUTABLE_ERROR_CODE = 'JUDGE_IDENTITY_FINGERPRINT_IMMUTABLE';
+const QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE_ERROR_CODE = 'QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE';
+const QUALIFIED_REVIEW_CONDITIONS = [
+    {
+        provenance_class: 'independent_human_score',
+        review_protocol: { $in: ['blind_independent', 'blind_double_review'] }
+    },
+    {
+        provenance_class: 'adjudicated_human_score',
+        review_protocol: 'adjudicated'
     }
-    if (provenanceClass === 'adjudicated_human_score') {
-        return reviewProtocol === 'adjudicated';
+];
+const QUALIFIED_DECISION_PATHS = new Set([
+    'name',
+    'prompt',
+    'response',
+    'category',
+    'expected_answer',
+    'expert_scores',
+    'expert_rationale',
+    'created_by',
+    'source',
+    'provenance_class',
+    'review_protocol',
+    'reviewer',
+    'reviewed_at',
+    'source_result_id',
+    'judge_score_at_review',
+    'judge_identity_fingerprint',
+    'difficulty',
+    'judge_criteria',
+    'tags',
+    'active'
+]);
+
+function judgeIdentityImmutableError(operation) {
+    const detail = operation.includes('not allowed') ? operation : `${operation} is forbidden`;
+    const error = new Error(`judge_identity_fingerprint is immutable; ${detail}`);
+    error.code = JUDGE_IDENTITY_IMMUTABLE_ERROR_CODE;
+    error.statusCode = 409;
+    return error;
+}
+
+function qualifiedGroundTruthImmutableError(operation) {
+    const error = new Error(
+        `qualified JudgeGroundTruth evidence is append-only; ${operation} is forbidden; create a new row/version`
+    );
+    error.code = QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE_ERROR_CODE;
+    error.statusCode = 409;
+    return error;
+}
+
+function qualifiedReviewFilter() {
+    return { $or: QUALIFIED_REVIEW_CONDITIONS };
+}
+
+function excludesQualifiedReviewFilter() {
+    return { $nor: QUALIFIED_REVIEW_CONDITIONS };
+}
+
+function isQualifiedReviewPair(provenanceClass, reviewProtocol) {
+    return (
+        provenanceClass === 'independent_human_score'
+        && ['blind_independent', 'blind_double_review'].includes(reviewProtocol)
+    ) || (
+        provenanceClass === 'adjudicated_human_score'
+        && reviewProtocol === 'adjudicated'
+    );
+}
+
+function pathTouchesQualifiedDecisionContent(path) {
+    return [...QUALIFIED_DECISION_PATHS].some(protectedPath => (
+        path === protectedPath || path.startsWith(`${protectedPath}.`)
+    ));
+}
+
+function pathTouchesQualifiedReviewPair(path) {
+    return path === 'provenance_class'
+        || path.startsWith('provenance_class.')
+        || path === 'review_protocol'
+        || path.startsWith('review_protocol.');
+}
+
+function mutationPaths(update) {
+    const directPaths = Object.keys(update).filter(key => !key.startsWith('$'));
+    const operatorPaths = Object.entries(update)
+        .filter(([key, value]) => key !== '$setOnInsert' && key.startsWith('$')
+            && value && typeof value === 'object' && !Array.isArray(value))
+        .flatMap(([, value]) => Object.keys(value));
+    const renamePaths = Object.entries(update.$rename || {}).flatMap(([from, to]) => [from, to]);
+    return [...directPaths, ...operatorPaths, ...renamePaths];
+}
+
+function updateTouchesQualifiedDecisionContent(update) {
+    return mutationPaths(update).some(pathTouchesQualifiedDecisionContent);
+}
+
+function updateTouchesQualifiedReviewPairOutsideSet(update) {
+    const nonSetOperatorPaths = Object.entries(update)
+        .filter(([operator, value]) => operator.startsWith('$')
+            && operator !== '$set'
+            && operator !== '$setOnInsert'
+            && value && typeof value === 'object' && !Array.isArray(value))
+        .flatMap(([operator, value]) => (
+            operator === '$rename'
+                ? Object.entries(value).flatMap(([from, to]) => [from, to])
+                : Object.keys(value)
+        ));
+    return nonSetOperatorPaths.some(pathTouchesQualifiedReviewPair);
+}
+
+function setOnInsertTouchesQualifiedReviewPair(update) {
+    return Object.keys(update.$setOnInsert || {}).some(pathTouchesQualifiedReviewPair);
+}
+
+function aggregateContainsWriteStage(value) {
+    if (Array.isArray(value)) return value.some(aggregateContainsWriteStage);
+    if (!value || typeof value !== 'object') return false;
+    return Object.entries(value).some(([key, entry]) => (
+        key === '$merge' || key === '$out' || aggregateContainsWriteStage(entry)
+    ));
+}
+
+function exactFilterValue(filter, path) {
+    if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return undefined;
+    if (typeof filter[path] === 'string') return filter[path];
+    if (!Array.isArray(filter.$and)) return undefined;
+    for (const entry of filter.$and) {
+        const value = exactFilterValue(entry, path);
+        if (value !== undefined) return value;
+    }
+    return undefined;
+}
+
+function filterSeedsQualifiedReviewPair(filter) {
+    return isQualifiedReviewPair(
+        exactFilterValue(filter, 'provenance_class'),
+        exactFilterValue(filter, 'review_protocol')
+    );
+}
+
+function filterMentionsPath(filter, targetPath) {
+    if (Array.isArray(filter)) return filter.some(entry => filterMentionsPath(entry, targetPath));
+    if (!filter || typeof filter !== 'object') return false;
+    return Object.entries(filter).some(([path, value]) => (
+        path === targetPath || filterMentionsPath(value, targetPath)
+    ));
+}
+
+function filterBindsExactJudgeIdentity(filter, fingerprint) {
+    if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return false;
+    if (filter.judge_identity_fingerprint === fingerprint) return true;
+    return Array.isArray(filter.$and)
+        && filter.$and.some(entry => filterBindsExactJudgeIdentity(entry, fingerprint));
+}
+
+function updateTouchesJudgeIdentity(update) {
+    const directPaths = Object.keys(update).filter(key => !key.startsWith('$'));
+    const operatorPaths = Object.entries(update)
+        .filter(([key, value]) => key !== '$setOnInsert' && key.startsWith('$')
+            && value && typeof value === 'object' && !Array.isArray(value))
+        .flatMap(([, value]) => Object.keys(value));
+    const renamePaths = Object.entries(update.$rename || {}).flatMap(([from, to]) => [from, to]);
+    return [...directPaths, ...operatorPaths, ...renamePaths].some(path => (
+        path === 'judge_identity_fingerprint'
+        || path.startsWith('judge_identity_fingerprint.')
+    ));
+}
+
+function qualifiedReviewPairIsValid(provenanceClass, reviewProtocol) {
+    if (['independent_human_score', 'adjudicated_human_score'].includes(provenanceClass)) {
+        return isQualifiedReviewPair(provenanceClass, reviewProtocol);
     }
     return true;
 }
@@ -23,6 +195,115 @@ function qualifiedReviewValidationError(message) {
         message
     }));
     return error;
+}
+
+function scoreIsFiniteAndInRange(value) {
+    return Number.isFinite(value) && value >= SCORE_MIN && value <= SCORE_MAX;
+}
+
+function scoreMapIsFiniteAndInRange(value) {
+    if (value === null || value === undefined) return true;
+    const values = value instanceof Map ? [...value.values()] : Object.values(value);
+    return values.every(scoreIsFiniteAndInRange);
+}
+
+function assertGroundTruthScores(document, operation) {
+    if (!scoreIsFiniteAndInRange(document.expert_scores?.overall)) {
+        throw qualifiedReviewValidationError(
+            `${operation} requires expert_scores.overall to be a finite score from 0 through 10`
+        );
+    }
+    if (!scoreMapIsFiniteAndInRange(document.expert_scores?.dimensions)) {
+        throw qualifiedReviewValidationError(
+            `${operation} requires every expert dimension score to be finite and from 0 through 10`
+        );
+    }
+    if (document.judge_score_at_review !== null
+        && document.judge_score_at_review !== undefined
+        && !scoreIsFiniteAndInRange(document.judge_score_at_review)) {
+        throw qualifiedReviewValidationError(
+            `${operation} requires judge_score_at_review to be a finite score from 0 through 10`
+        );
+    }
+}
+
+function assertNewGroundTruthSafety(document, operation) {
+    assertGroundTruthScores(document, operation);
+    if (['independent_human_score', 'adjudicated_human_score'].includes(document.provenance_class)
+        && !isQualifiedReviewPair(document.provenance_class, document.review_protocol)) {
+        throw qualifiedReviewValidationError(
+            `${operation} qualified provenance requires its matching blind or adjudicated review protocol`
+        );
+    }
+    if (isQualifiedReviewPair(document.provenance_class, document.review_protocol)) {
+        const requiredText = ['name', 'prompt', 'response', 'expert_rationale'];
+        if (requiredText.some(path => (
+            typeof document[path] !== 'string' || document[path].trim().length === 0
+        )) || !GROUND_TRUTH_CATEGORIES.includes(document.category)) {
+            throw qualifiedReviewValidationError(
+                `${operation} qualified evidence requires non-empty name, prompt, response, expert_rationale, and a known category`
+            );
+        }
+        if (!JUDGE_IDENTITY_FINGERPRINT_PATTERN.test(document.judge_identity_fingerprint || '')) {
+            throw qualifiedReviewValidationError(
+                `${operation} qualified evidence requires an exact judge_identity_fingerprint`
+            );
+        }
+        if (document.active !== true || !scoreIsFiniteAndInRange(document.judge_score_at_review)) {
+            throw qualifiedReviewValidationError(
+                `${operation} qualified evidence must be active and carry a finite judge score from 0 through 10`
+            );
+        }
+        throw qualifiedGroundTruthImmutableError(
+            `${operation} creating qualified evidence without an authorized attested import authority`
+        );
+    }
+}
+
+function pathTouchesDecisionScore(path) {
+    return path === 'judge_score_at_review'
+        || path === 'expert_scores'
+        || path.startsWith('expert_scores.');
+}
+
+function assignedScoreIsValid(path, value) {
+    if (path === 'judge_score_at_review' || path === 'expert_scores.overall') {
+        return value === null || value === undefined || scoreIsFiniteAndInRange(value);
+    }
+    if (path === 'expert_scores') {
+        return value && scoreIsFiniteAndInRange(value.overall)
+            && scoreMapIsFiniteAndInRange(value.dimensions);
+    }
+    if (path === 'expert_scores.dimensions') return scoreMapIsFiniteAndInRange(value);
+    if (path.startsWith('expert_scores.dimensions.')) return scoreIsFiniteAndInRange(value);
+    return true;
+}
+
+function assertQueryScoreMutationIsSafe(update, operation) {
+    for (const [operator, assignments] of Object.entries(update)) {
+        if (operator.startsWith('$')) {
+            if (!assignments || typeof assignments !== 'object' || Array.isArray(assignments)) continue;
+            for (const [path, value] of Object.entries(assignments)) {
+                const touchesScore = pathTouchesDecisionScore(path)
+                    || (operator === '$rename'
+                        && typeof value === 'string'
+                        && pathTouchesDecisionScore(value));
+                if (!touchesScore) continue;
+                const exactAssignmentIsSafe = ['$set', '$setOnInsert'].includes(operator)
+                    && assignedScoreIsValid(path, value);
+                if (!exactAssignmentIsSafe) {
+                    throw qualifiedReviewValidationError(
+                        `${operation} cannot apply an unbounded or invalid numeric mutation to decision scores`
+                    );
+                }
+            }
+        } else if (pathTouchesDecisionScore(operator)
+            && !assignedScoreIsValid(operator, assignments)) {
+            throw qualifiedReviewValidationError(
+                `${operation} cannot assign an invalid decision score`
+            );
+        }
+    }
 }
 
 const JudgeGroundTruthSchema = new mongoose.Schema({
@@ -50,7 +331,7 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
     category: {
         type: String,
         enum: [
-            'coding', 'reasoning', 'math', 'knowledge', 'instruction', 'creative', 'translation', 'factual'
+            ...GROUND_TRUTH_CATEGORIES
         ],
         required: true,
         index: true
@@ -64,12 +345,25 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
 
     // Human expert scores (reference truth) - 0-10 scale
     expert_scores: {
-        overall: { type: Number, min: 0, max: 10, required: true },
+        overall: {
+            type: Number,
+            min: 0,
+            max: 10,
+            required: true,
+            validate: {
+                validator: scoreIsFiniteAndInRange,
+                message: 'expert_scores.overall must be a finite score from 0 through 10'
+            }
+        },
         // Dimension scores vary by category, stored as object
         dimensions: {
             type: Map,
             of: Number,
-            default: {}
+            default: {},
+            validate: {
+                validator: scoreMapIsFiniteAndInRange,
+                message: 'expert score dimensions must be finite scores from 0 through 10'
+            }
         }
     },
 
@@ -153,7 +447,24 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
     // 0129 — the judge's score at the time of review (for drift computation)
     judge_score_at_review: {
         type: Number,
-        default: null
+        default: null,
+        min: 0,
+        max: 10,
+        validate: {
+            validator: value => value === null || value === undefined || scoreIsFiniteAndInRange(value),
+            message: 'judge_score_at_review must be a finite score from 0 through 10'
+        }
+    },
+
+    // Exact immutable identity of the judge that produced
+    // `judge_score_at_review`. Legacy rows omit it and are intentionally
+    // ineligible for identity-scoped drift calculations.
+    judge_identity_fingerprint: {
+        type: String,
+        default: null,
+        immutable: true,
+        match: JUDGE_IDENTITY_FINGERPRINT_PATTERN,
+        index: true
     },
 
     // Difficulty level (1-5)
@@ -211,45 +522,145 @@ const JudgeGroundTruthSchema = new mongoose.Schema({
 JudgeGroundTruthSchema.index({ category: 1, active: 1 });
 JudgeGroundTruthSchema.index({ difficulty: 1, active: 1 });
 JudgeGroundTruthSchema.index({ provenance_class: 1, active: 1, category: 1 });
+JudgeGroundTruthSchema.index({ judge_identity_fingerprint: 1, active: 1, category: 1 });
 
 for (const operation of ['updateOne', 'updateMany', 'findOneAndUpdate', 'findOneAndReplace', 'replaceOne']) {
     JudgeGroundTruthSchema.pre(operation, async function validateQualifiedReviewPairOnQueryUpdate() {
         const update = this.getUpdate() || {};
-        if (Array.isArray(update)) {
-            throw qualifiedReviewValidationError(
-                'JudgeGroundTruth update pipelines are not allowed because provenance must remain auditable'
-            );
+        const originalFilter = this.getFilter() || {};
+        if (operation === 'replaceOne' || operation === 'findOneAndReplace') {
+            throw judgeIdentityImmutableError(operation);
         }
-        const setOnInsert = update.$setOnInsert || {};
-        if (Object.prototype.hasOwnProperty.call(setOnInsert, 'provenance_class')
-            || Object.prototype.hasOwnProperty.call(setOnInsert, 'review_protocol')) {
+        if (Array.isArray(update)) {
+            throw judgeIdentityImmutableError(`update pipelines are not allowed; ${operation} pipeline`);
+        }
+        if (updateTouchesJudgeIdentity(update)) {
+            throw judgeIdentityImmutableError(`${operation} changing judge identity`);
+        }
+        if (Object.prototype.hasOwnProperty.call(update.$setOnInsert || {}, 'judge_identity_fingerprint')) {
+            const insertedIdentity = update.$setOnInsert.judge_identity_fingerprint;
+            if (!filterBindsExactJudgeIdentity(originalFilter, insertedIdentity)) {
+                throw judgeIdentityImmutableError(`${operation} with unbound judge identity insert`);
+            }
+        }
+        if (setOnInsertTouchesQualifiedReviewPair(update)) {
             throw qualifiedReviewValidationError(
                 'JudgeGroundTruth provenance cannot be changed through $setOnInsert'
             );
         }
-        const set = update.$set || update;
-        const unset = update.$unset || {};
-        const touchesPair = Object.prototype.hasOwnProperty.call(set, 'provenance_class')
-            || Object.prototype.hasOwnProperty.call(set, 'review_protocol')
-            || Object.prototype.hasOwnProperty.call(unset, 'provenance_class')
-            || Object.prototype.hasOwnProperty.call(unset, 'review_protocol');
-        if (!touchesPair) return;
-
-        // Treat provenance and review protocol as one atomic evidence claim.
-        // Requiring both fields in the same update eliminates the read/check/
-        // write race where two individually valid partial updates can combine
-        // into a contradictory persisted pair.
-        const hasCompletePair = Object.prototype.hasOwnProperty.call(set, 'provenance_class')
-            && Object.prototype.hasOwnProperty.call(set, 'review_protocol')
-            && !Object.prototype.hasOwnProperty.call(unset, 'provenance_class')
-            && !Object.prototype.hasOwnProperty.call(unset, 'review_protocol');
-        if (!hasCompletePair || !qualifiedReviewPairIsValid(set.provenance_class, set.review_protocol)) {
-            throw qualifiedReviewValidationError(
-                'JudgeGroundTruth provenance updates require one complete, internally consistent review pair'
+        if (this.getOptions().upsert
+            && (filterMentionsPath(originalFilter, 'provenance_class')
+                || filterMentionsPath(originalFilter, 'review_protocol'))) {
+            throw qualifiedGroundTruthImmutableError(
+                `${operation} upsert with provenance or review protocol in its filter`
             );
         }
+        const set = update.$set || update;
+        const unset = update.$unset || {};
+        const touchesPair = mutationPaths(update).some(pathTouchesQualifiedReviewPair);
+        if (updateTouchesQualifiedReviewPairOutsideSet(update)) {
+            throw qualifiedGroundTruthImmutableError(
+                `${operation} changing provenance or review protocol through a non-$set operator`
+            );
+        }
+        if (filterSeedsQualifiedReviewPair(originalFilter)
+            || (touchesPair && isQualifiedReviewPair(set.provenance_class, set.review_protocol))) {
+            throw qualifiedGroundTruthImmutableError(`${operation} transition to qualified evidence`);
+        }
+
+        if (touchesPair) {
+            // Treat provenance and review protocol as one atomic evidence claim.
+            // Qualified evidence cannot be assembled by updating a legacy row;
+            // it must be created atomically as a new append-only row.
+            const hasCompletePair = Object.prototype.hasOwnProperty.call(set, 'provenance_class')
+                && Object.prototype.hasOwnProperty.call(set, 'review_protocol')
+                && !Object.keys(unset).some(pathTouchesQualifiedReviewPair);
+            if (!hasCompletePair || !qualifiedReviewPairIsValid(set.provenance_class, set.review_protocol)) {
+                throw qualifiedReviewValidationError(
+                    'JudgeGroundTruth provenance updates require one complete, internally consistent review pair'
+                );
+            }
+        }
+
+        if (updateTouchesQualifiedDecisionContent(update)) {
+            const matchedQualified = await this.model.exists({
+                $and: [originalFilter, qualifiedReviewFilter()]
+            });
+            if (matchedQualified) {
+                throw qualifiedGroundTruthImmutableError(`${operation} changing qualified evidence`);
+            }
+
+            // Keep the mutation fail-closed if another writer qualifies the row
+            // between the pre-read and MongoDB's atomic update match.
+            this.setQuery({
+                $and: [originalFilter, excludesQualifiedReviewFilter()]
+            });
+        }
+        assertQueryScoreMutationIsSafe(update, operation);
     });
 }
+
+JudgeGroundTruthSchema.pre('save', async function protectQualifiedGroundTruthOnDocumentSave() {
+    if (this.isNew) {
+        // `save({ validateBeforeSave: false })` must not be an escape hatch for
+        // incomplete or numerically invalid decision evidence.
+        await this.validate();
+        assertNewGroundTruthSafety(this, 'document.save');
+    }
+    if (!this.isNew && this.modifiedPaths().some(pathTouchesDecisionScore)) {
+        assertGroundTruthScores(this, 'document.save');
+    }
+    if (!this.isNew && this.isModified('judge_identity_fingerprint')) {
+        throw judgeIdentityImmutableError('document.save changing judge identity');
+    }
+    if (this.isNew) return;
+
+    const touchesDecisionContent = this.modifiedPaths().some(pathTouchesQualifiedDecisionContent);
+    if (!touchesDecisionContent) return;
+
+    const persisted = await this.constructor.collection.findOne(
+        { _id: this._id },
+        { projection: { provenance_class: 1, review_protocol: 1 } }
+    );
+    if (isQualifiedReviewPair(persisted?.provenance_class, persisted?.review_protocol)) {
+        throw qualifiedGroundTruthImmutableError('document.save changing qualified evidence');
+    }
+    if (isQualifiedReviewPair(this.provenance_class, this.review_protocol)) {
+        throw qualifiedGroundTruthImmutableError('document.save transition to qualified evidence');
+    }
+
+    // Mongoose includes `$where` in the atomic save predicate. This closes the
+    // pre-read/save race without preventing validation-history-only saves.
+    this.$where = {
+        ...(this.$where || {}),
+        ...excludesQualifiedReviewFilter()
+    };
+});
+
+for (const operation of ['deleteOne', 'deleteMany', 'findOneAndDelete', 'findOneAndRemove']) {
+    JudgeGroundTruthSchema.pre(operation, async function protectQualifiedGroundTruthOnQueryDeletion() {
+        const originalFilter = this.getFilter() || {};
+        const matchedQualified = await this.model.exists({
+            $and: [originalFilter, qualifiedReviewFilter()]
+        });
+        if (matchedQualified) {
+            throw qualifiedGroundTruthImmutableError(`${operation} deleting qualified evidence`);
+        }
+        this.setQuery({
+            $and: [originalFilter, excludesQualifiedReviewFilter()]
+        });
+    });
+}
+
+JudgeGroundTruthSchema.pre('deleteOne', { document: true, query: false }, function blockDocumentDeletion() {
+    throw qualifiedGroundTruthImmutableError('document.deleteOne is not an authorized deletion surface');
+});
+
+JudgeGroundTruthSchema.pre('aggregate', function blockGroundTruthAggregateWrites() {
+    if (aggregateContainsWriteStage(this.pipeline())) {
+        throw qualifiedGroundTruthImmutableError('aggregate write stage');
+    }
+});
 JudgeGroundTruthSchema.index({ 'validation_stats.avg_deviation': 1 });
 
 /**
@@ -398,10 +809,30 @@ JudgeGroundTruthSchema.statics.getAccuracySummary = async function() {
 const JudgeGroundTruth = mongoose.models.JudgeGroundTruth
     || mongoose.model('JudgeGroundTruth', JudgeGroundTruthSchema);
 
-JudgeGroundTruth.bulkWrite = async function blockedJudgeGroundTruthBulkWrite() {
-    throw qualifiedReviewValidationError(
-        'JudgeGroundTruth bulkWrite is not allowed because provenance must remain auditable'
-    );
+const unguardedJudgeGroundTruthInsertMany = JudgeGroundTruth.insertMany.bind(JudgeGroundTruth);
+JudgeGroundTruth.insertMany = async function guardedJudgeGroundTruthInsertMany(documents, options = {}) {
+    if (options?.lean === true) {
+        throw qualifiedReviewValidationError('insertMany lean/raw validation bypass is forbidden');
+    }
+    const rows = Array.isArray(documents) ? documents : [documents];
+    const validatedRows = rows.map(row => (
+        row instanceof JudgeGroundTruth ? row : new JudgeGroundTruth(row)
+    ));
+    for (const row of validatedRows) {
+        await row.validate();
+        assertNewGroundTruthSafety(row, 'insertMany');
+    }
+    return unguardedJudgeGroundTruthInsertMany(validatedRows, {
+        ...options,
+        lean: false
+    });
 };
+
+JudgeGroundTruth.bulkWrite = async function blockedJudgeGroundTruthBulkWrite() {
+    throw judgeIdentityImmutableError('bulkWrite is not allowed');
+};
+
+JudgeGroundTruth.JUDGE_IDENTITY_IMMUTABLE_ERROR_CODE = JUDGE_IDENTITY_IMMUTABLE_ERROR_CODE;
+JudgeGroundTruth.QUALIFIED_IMMUTABLE_ERROR_CODE = QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE_ERROR_CODE;
 
 module.exports = JudgeGroundTruth;

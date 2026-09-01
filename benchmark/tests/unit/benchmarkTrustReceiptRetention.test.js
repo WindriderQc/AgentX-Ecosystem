@@ -13,7 +13,7 @@ jest.mock('../../models/BenchmarkResult', () => ({
 jest.mock('../../models/BenchmarkBatch', () => ({
     find: jest.fn(),
     aggregate: jest.fn(),
-    updateMany: jest.fn(),
+    updateOne: jest.fn(),
     countDocuments: jest.fn()
 }));
 jest.mock('../../models/BenchmarkTimelineEntry', () => ({
@@ -65,7 +65,7 @@ beforeEach(() => {
     jest.clearAllMocks();
     BenchmarkResult.deleteMany.mockResolvedValue({ deletedCount: 0 });
     BenchmarkResult.distinct.mockImplementation(async () => []);
-    BenchmarkBatch.updateMany.mockResolvedValue({ modifiedCount: 0 });
+    BenchmarkBatch.updateOne.mockResolvedValue({ modifiedCount: 0 });
     BenchmarkTimelineEntry.deleteMany.mockResolvedValue({ deletedCount: 0 });
     mockReceiptedSourceIds();
     BenchmarkTrustReceipt.verifyStoredRecord.mockImplementation(record => ({
@@ -92,7 +92,7 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         });
         expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
         expect(BenchmarkTimelineEntry.deleteMany).not.toHaveBeenCalled();
-        expect(BenchmarkBatch.updateMany).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateOne).not.toHaveBeenCalled();
         expect(BenchmarkTrustReceipt.find).toHaveBeenCalledWith({});
     });
 
@@ -114,7 +114,7 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         expect(BenchmarkTrustReceipt.find).toHaveBeenCalledWith({});
         expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
         expect(BenchmarkTimelineEntry.deleteMany).not.toHaveBeenCalled();
-        expect(BenchmarkBatch.updateMany).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateOne).not.toHaveBeenCalled();
     });
 
     test('archive dry-run exposes protected evidence without counting it as archivable', async () => {
@@ -139,7 +139,7 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         });
         expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
         expect(BenchmarkTimelineEntry.deleteMany).not.toHaveBeenCalled();
-        expect(BenchmarkBatch.updateMany).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateOne).not.toHaveBeenCalled();
     });
 
     test('archive deletes and compacts only batches with no receipt', async () => {
@@ -161,9 +161,16 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         expect(BenchmarkTimelineEntry.deleteMany).toHaveBeenCalledWith({
             batchId: { $in: ['batch-open'] }
         });
-        expect(BenchmarkBatch.updateMany.mock.calls[0][0]).toEqual({
-            _id: { $in: ['batch-open'] }
-        });
+        expect(BenchmarkBatch.updateOne).toHaveBeenCalledWith(
+            { _id: 'batch-open' },
+            {
+                $set: {
+                    timeline: [],
+                    results: [],
+                    description: ' [archived]'
+                }
+            }
+        );
         expect(result).toMatchObject({
             batchesProcessed: 1,
             resultsDeleted: 4,
@@ -190,7 +197,7 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         });
         expect(BenchmarkResult.deleteMany).not.toHaveBeenCalled();
         expect(BenchmarkTimelineEntry.deleteMany).not.toHaveBeenCalled();
-        expect(BenchmarkBatch.updateMany).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateOne).not.toHaveBeenCalled();
     });
 
     test.each([

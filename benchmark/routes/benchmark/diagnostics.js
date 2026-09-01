@@ -490,7 +490,11 @@ router.patch('/judge/ground-truth/:id', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to update ground truth entry', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({
+            status: 'error',
+            code: err.code,
+            error: err.message
+        });
     }
 });
 
@@ -527,7 +531,11 @@ router.delete('/judge/ground-truth/:id', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to delete ground truth entry', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({
+            status: 'error',
+            code: err.code,
+            error: err.message
+        });
     }
 });
 

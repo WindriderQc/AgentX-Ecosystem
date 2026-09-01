@@ -403,7 +403,8 @@ async function loadHumanReviewGroundTruth(options = {}) {
 /**
  * Load only entries whose provenance contract proves that the score was
  * authored independently of the production judge or was adjudicated from
- * independent reviews. Historical source tags are intentionally insufficient.
+ * independent reviews. When an exact judge identity is supplied, MongoDB also
+ * excludes every unbound legacy row instead of mixing judge/runtime evidence.
  */
 async function loadQualifiedHumanGroundTruth(options = {}) {
     const query = {
@@ -416,6 +417,9 @@ async function loadQualifiedHumanGroundTruth(options = {}) {
         }))
     };
     if (options.category) query.category = options.category;
+    if (options.judge_identity_fingerprint) {
+        query.judge_identity_fingerprint = options.judge_identity_fingerprint;
+    }
 
     let q = JudgeGroundTruth.find(query);
     if (options.limit) q = q.limit(options.limit);
