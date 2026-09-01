@@ -34,6 +34,7 @@ RUN mkdir -p /app/config-data \
   && ln -sf /app/config-data/benchmark.config.json /app/benchmark.config.json \
   && find scripts -type f \
     ! -name 'migrate-exact-artifact-profile-indexes.js' \
+    ! -name 'migrate-benchmark-trust-batch-ids.js' \
     ! -name 'cloud-lane-campaign.js' \
     -delete \
   && rm -rf tests coverage test-results .env .env.* .git

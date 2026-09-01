@@ -515,6 +515,13 @@ router.post('/results/:id/human-review', async (req, res) => {
                     : `Courthouse ${effectiveAction} by ${updateFields.human_reviewer}`;
                 const evidenceKind = scoreEvidenceKind(updated);
                 const hasJudgeEvidence = evidenceKind === 'judge_scored' || evidenceKind === 'hybrid';
+                // The current Courthouse UI is judge-visible. Approval copies
+                // the judge score and override is still a single visible
+                // review; neither may be relabelled as independent human
+                // ground truth for Benchmark Trust qualification.
+                const provenanceClass = effectiveAction === 'approve'
+                    ? 'endorsed_judge_score'
+                    : 'human_override_visible_judge';
                 const gtDoc = await JudgeGroundTruth.findOneAndUpdate(
                     { name: gtName },
                     {
@@ -531,6 +538,8 @@ router.post('/results/:id/human-review', async (req, res) => {
                             expert_rationale: rationaleBase,
                             created_by: 'courthouse-review',
                             source: 'courthouse-review',
+                            provenance_class: provenanceClass,
+                            review_protocol: 'judge_visible_single_review',
                             reviewer: updateFields.human_reviewer,
                             reviewed_at: updateFields.human_reviewed_at,
                             source_result_id: updated._id,
@@ -573,7 +582,7 @@ router.post('/results/:id/human-review', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to submit human review', { error: err.message, id: req.params.id });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -638,10 +647,10 @@ router.post('/results/:id/rejudge', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to rejudge result', { error: err.message, id: req.params.id });
-        const statusCode = err.message.includes('not found') ? 404
+        const statusCode = err.statusCode || (err.message.includes('not found') ? 404
             : err.message.includes('Cannot judge') || err.message.includes('No response') ? 400
-            : 500;
-        res.status(statusCode).json({ status: 'error', error: err.message });
+            : 500);
+        res.status(statusCode).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -662,7 +671,7 @@ router.delete('/results', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to clear results', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -683,7 +692,7 @@ router.delete('/results/failed', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to clear failed results', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 

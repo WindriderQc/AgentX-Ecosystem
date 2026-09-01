@@ -2142,6 +2142,12 @@ describe('Benchmark System - Integration Tests', () => {
             expect(refreshed.needs_review).toBe(false);
             expect(refreshed.review_reason).toBeNull();
             expect(refreshed.excluded_from_leaderboard).toBe(false);
+
+            const gt = await JudgeGroundTruth.findOne({
+                name: `courthouse-review-${result._id}`
+            }).lean();
+            expect(gt.provenance_class).toBe('endorsed_judge_score');
+            expect(gt.review_protocol).toBe('judge_visible_single_review');
         });
 
         it('should reject a result and exclude it from leaderboard calculations', async () => {
@@ -2204,6 +2210,8 @@ describe('Benchmark System - Integration Tests', () => {
             }).lean();
             expect(gt).toBeTruthy();
             expect(gt.source).toBe('courthouse-review');
+            expect(gt.provenance_class).toBe('human_override_visible_judge');
+            expect(gt.review_protocol).toBe('judge_visible_single_review');
             expect(gt.reviewer).toBe('yb');
             expect(gt.expert_scores.overall).toBe(4.0);
             expect(gt.judge_score_at_review).toBe(7.0);

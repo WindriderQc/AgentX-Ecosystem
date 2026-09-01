@@ -4,6 +4,11 @@
  */
 
 const mongoose = require('mongoose');
+const {
+    acquireBenchmarkTrustEvidenceLock,
+    releaseBenchmarkTrustEvidenceLock,
+    withBenchmarkTrustEvidenceLock
+} = require('../src/services/benchmark/benchmarkTrustEvidenceLock');
 
 const BenchmarkResultSchema = new mongoose.Schema({
     batch_id: {
@@ -602,6 +607,15 @@ const BenchmarkResultSchema = new mongoose.Schema({
         default: 1,
         min: 1
     },
+    // Set only by the trust-receipt store after exact source verification.
+    // Once true, model-level mutations fail closed; a changed score must be
+    // written to a new batch and receive a new evidence identity.
+    trust_evidence_sealed: {
+        type: Boolean,
+        default: false,
+        immutable: true,
+        index: true
+    },
     timestamp: {
         type: Date,
         default: Date.now,
@@ -616,6 +630,7 @@ BenchmarkResultSchema.index({ model: 1, success: 1 });
 BenchmarkResultSchema.index({ model: 1, prompt_level: 1 });
 BenchmarkResultSchema.index({ model: 1, prompt_category: 1 });
 BenchmarkResultSchema.index({ batch_id: 1, timestamp: -1 });
+BenchmarkResultSchema.index({ batch_id: 1, trust_evidence_sealed: 1 });
 BenchmarkResultSchema.index({ 'execution_target.id': 1, quality_cohort_fingerprint: 1, success: 1 }, { sparse: true });
 BenchmarkResultSchema.index({ 'execution_target.tier': 1, quality_cohort_fingerprint: 1, success: 1 }, { sparse: true });
 BenchmarkResultSchema.index({ quality_score: 1 });
@@ -838,4 +853,154 @@ BenchmarkResultSchema.methods.updateQualityScore = function(scoreData) {
     return this.save();
 };
 
-module.exports = mongoose.model('BenchmarkResult', BenchmarkResultSchema);
+function protectedEvidenceError(operation) {
+    const error = new Error(`Benchmark result evidence is sealed by an append-only trust receipt; ${operation} is forbidden`);
+    error.code = 'BENCHMARK_TRUST_RESULT_EVIDENCE_SEALED';
+    error.statusCode = 409;
+    return error;
+}
+
+for (const operation of [
+    'updateOne',
+    'updateMany',
+    'replaceOne',
+    'findOneAndUpdate',
+    'findOneAndReplace',
+    'deleteOne',
+    'deleteMany',
+    'findOneAndDelete',
+    'findOneAndRemove'
+]) {
+    BenchmarkResultSchema.pre(operation, async function blockSealedQueryMutation() {
+        if (this.getOptions()?.upsert === true) {
+            throw protectedEvidenceError(`${operation} with upsert`);
+        }
+        if (!operation.startsWith('delete') && !operation.includes('Delete') && !operation.includes('Remove')) {
+            const update = this.getUpdate() || {};
+            if (Array.isArray(update)) {
+                throw protectedEvidenceError(`${operation} with update pipeline`);
+            }
+            if (['replaceOne', 'findOneAndReplace'].includes(operation)) {
+                throw protectedEvidenceError(operation);
+            }
+            const operators = Object.entries(update)
+                .filter(([key, value]) => key.startsWith('$') && value && typeof value === 'object')
+                .map(([, value]) => value);
+            const directPaths = Object.keys(update).filter(key => !key.startsWith('$'));
+            const operatorPaths = operators.flatMap(value => Object.keys(value));
+            const renameTargets = Object.entries(update.$rename || {}).flatMap(([from, to]) => [from, to]);
+            const touchesBatchId = [...directPaths, ...operatorPaths, ...renameTargets]
+                .some(path => path === 'batch_id' || path.startsWith('batch_id.'));
+            if (touchesBatchId) throw protectedEvidenceError(`${operation} changing batch_id`);
+        }
+        const originalFilter = this.getFilter() || {};
+        const sealedMatch = await this.model.exists({
+            $and: [originalFilter, { trust_evidence_sealed: true }]
+        });
+        if (sealedMatch) throw protectedEvidenceError(operation);
+
+        // Close the check/update race: even if a receipt seals matching rows
+        // after the read above, the actual write cannot match those rows.
+        this.setQuery({
+            $and: [originalFilter, { trust_evidence_sealed: { $ne: true } }]
+        });
+    });
+}
+
+async function releaseResultDocumentLock(document) {
+    const ownerToken = document?.$locals?.benchmarkTrustEvidenceLockToken;
+    if (!ownerToken) return;
+    delete document.$locals.benchmarkTrustEvidenceLockToken;
+    await releaseBenchmarkTrustEvidenceLock(ownerToken);
+}
+
+BenchmarkResultSchema.pre('save', async function serializeResultDocumentSave() {
+    try {
+        if (this.isNew) {
+            const ownerToken = await acquireBenchmarkTrustEvidenceLock(
+                'create-benchmark-result-evidence',
+                { waitMs: 30_000 }
+            );
+            this.$locals.benchmarkTrustEvidenceLockToken = ownerToken;
+            if (!this.batch_id) return;
+            const BenchmarkBatch = require('./BenchmarkBatch');
+            const sealedBatch = await BenchmarkBatch.exists({
+                _id: this.batch_id,
+                trust_evidence_sealed: true
+            });
+            if (sealedBatch) throw protectedEvidenceError('insert into sealed batch');
+            return;
+        }
+        if (this.isModified('batch_id')) {
+            throw protectedEvidenceError('document.save changing batch_id');
+        }
+        this.$where = {
+            ...(this.$where || {}),
+            trust_evidence_sealed: { $ne: true }
+        };
+        const sealed = await this.constructor.exists({
+            _id: this._id,
+            trust_evidence_sealed: true
+        });
+        if (sealed) throw protectedEvidenceError('document.save');
+    } catch (error) {
+        await releaseResultDocumentLock(this);
+        throw error;
+    }
+});
+
+BenchmarkResultSchema.post('save', async function releaseResultLockAfterSave(document, next) {
+    try {
+        await releaseResultDocumentLock(document);
+        next();
+    } catch (error) {
+        next(error);
+    }
+});
+
+BenchmarkResultSchema.post('save', async function releaseResultLockAfterSaveError(error, document, next) {
+    try {
+        await releaseResultDocumentLock(document);
+    } catch (releaseError) {
+        error.lockReleaseError = releaseError;
+    }
+    next(error);
+});
+
+BenchmarkResultSchema.pre('deleteOne', { document: true, query: false }, function blockResultDocumentDelete() {
+    throw protectedEvidenceError('document.deleteOne');
+});
+
+const BenchmarkResult = mongoose.models.BenchmarkResult
+    || mongoose.model('BenchmarkResult', BenchmarkResultSchema);
+
+// Mongoose bulkWrite bypasses query/document middleware. No production path
+// needs it, so reject the bypass instead of creating an unguarded mutation
+// surface for receipted evidence.
+BenchmarkResult.bulkWrite = async function blockedBenchmarkResultBulkWrite() {
+    throw protectedEvidenceError('bulkWrite');
+};
+
+const unguardedInsertMany = BenchmarkResult.insertMany.bind(BenchmarkResult);
+BenchmarkResult.insertMany = async function guardedBenchmarkResultInsertMany(documents, options) {
+    return withBenchmarkTrustEvidenceLock('insert-many-benchmark-results', async () => {
+        const rows = Array.isArray(documents) ? documents : [documents];
+        const batchIds = [...new Set(rows
+            .map(document => document?.batch_id)
+            .filter(batchId => batchId !== null && batchId !== undefined)
+            .map(batchId => String(batchId)))];
+        if (batchIds.length > 0) {
+            const BenchmarkBatch = require('./BenchmarkBatch');
+            const sealedBatch = await BenchmarkBatch.exists({
+                _id: { $in: batchIds },
+                trust_evidence_sealed: true
+            });
+            if (sealedBatch) throw protectedEvidenceError('insertMany into sealed batch');
+        }
+        return unguardedInsertMany(documents, options);
+    }, { waitMs: 30_000 });
+};
+
+BenchmarkResult.PROTECTED_EVIDENCE_ERROR_CODE = 'BENCHMARK_TRUST_RESULT_EVIDENCE_SEALED';
+
+module.exports = BenchmarkResult;
