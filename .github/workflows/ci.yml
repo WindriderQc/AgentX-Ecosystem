@@ -88,6 +88,8 @@ jobs:
           shared/benchmarkHumanEvidenceAttestation.test.js
           shared/benchmarkJudgeQualificationAttestation.test.js
           shared/benchmarkVariancePilotAttestation.test.js
+          shared/benchmarkBlindReviewPacket.test.js
+          shared/benchmarkBlindReviewPacketCli.test.js
       - name: Validate the isolated Mongo receipt and composed runtime lifecycles
         run: >-
           npm test -- --runInBand

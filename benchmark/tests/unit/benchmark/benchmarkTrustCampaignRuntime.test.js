@@ -247,10 +247,10 @@ function qualificationAttestation(judgeIdentity, overrides = {}) {
     return { ...body, attestationId, signature };
 }
 
-function campaignSpecFixture(overrides = {}) {
-    const first = normalizeBenchmarkTarget(targetRaw('candidate-a', 'a'));
-    const second = normalizeBenchmarkTarget(targetRaw('candidate-b', 'b'));
-    const judgeTarget = normalizeBenchmarkTarget(targetRaw('judge-c', 'c'));
+function campaignSpecFixture(overrides = {}, targetOverrides = {}) {
+    const first = normalizeBenchmarkTarget(targetRaw('candidate-a', 'a', targetOverrides));
+    const second = normalizeBenchmarkTarget(targetRaw('candidate-b', 'b', targetOverrides));
+    const judgeTarget = normalizeBenchmarkTarget(targetRaw('judge-c', 'c', targetOverrides));
     const judgeIdentity = workerIdentity(judgeTarget, 'c');
     const judgeConfig = { temperature: 0, seed: 7, maxTokens: 1024, timeoutMs: 60000 };
     const rubricFingerprint = computeJudgeRuntimeRubricFingerprint({ judgeTarget, judgeConfig });
@@ -473,6 +473,14 @@ describe('benchmarkTrustCampaignRuntime', () => {
             env: runtimeEnv(spec),
             now
         })).rejects.toMatchObject({ code: 'BENCHMARK_TRUST_CAMPAIGN_SPEC_FINGERPRINT_MISMATCH' });
+    });
+
+    test('accepts exact isolated local harness candidates and judge', () => {
+        const spec = campaignSpecFixture({}, { tier: 'local', pricing: null });
+        const normalized = normalizeCampaignSpec(spec, { now, env: runtimeEnv(spec) });
+        expect(normalized.launch.targets.map(target => target.tier)).toEqual(['local', 'local']);
+        expect(normalized.launch.judgeTarget.tier).toBe('local');
+        expect(normalized.launch.targets.every(target => target.executionKind === 'harness')).toBe(true);
     });
 
     test('rejects native, non-candidate, paid, expired, or Product-mismatched authority', () => {

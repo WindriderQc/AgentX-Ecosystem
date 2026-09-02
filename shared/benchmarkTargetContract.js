@@ -176,9 +176,9 @@ function normalizeBenchmarkTarget(rawValue, options = {}) {
   if (executionKind === 'harness' && mode === 'direct_model') {
     throw contractError('TARGET_KIND_CONFLICT', 'harness targets must use isolated_model or native_agent');
   }
-  if (executionKind === 'harness' && tier === 'local') {
-    throw contractError('TARGET_KIND_CONFLICT', 'harness benchmark targets are cloud lanes');
-  }
+  // A harness may isolate either a local model or a cloud provider. Strict
+  // Benchmark Trust campaigns require the Worker envelope/receipt boundary,
+  // even when the actual provider is an operator-owned local Ollama host.
   const capabilitiesRaw = raw.capabilities && typeof raw.capabilities === 'object' ? raw.capabilities : {};
   const target = {
     schema: BENCHMARK_TARGET_SCHEMA,

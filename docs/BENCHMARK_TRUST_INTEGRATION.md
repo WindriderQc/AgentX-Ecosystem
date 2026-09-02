@@ -194,9 +194,10 @@ running Product profile is explicitly `full` (the profile that starts Trust
 crash recovery), and the service exposes the exact immutable Product manifest through
 `AGENTX_PRODUCT_REVISION`, `AGENTX_CORE_IMAGE_DIGEST`,
 `AGENTX_BENCHMARK_IMAGE_DIGEST`, and `AGENTX_RAG_IMAGE_DIGEST`. That manifest
-must equal the content-addressed spec. V2 accepts only free, available,
+must equal the content-addressed spec. V2 accepts only local or free, available,
 `isolated_model` harness targets with candidate capability and one isolated
-harness judge with judge capability. Native agents, local/direct execution,
+harness judge with judge capability. Local models remain behind that harness
+and its exact Worker identity; direct Ollama execution, native agents,
 paid targets, duplicate targets/prompts, expired judge authority, target drift,
 and Worker identities not bound to the exact target all fail before launch.
 For v2, the candidate artifact digest is the exact model digest attested by the
@@ -407,6 +408,22 @@ replacement therefore requires current revocation of the superseded evidence.
 Public list/problematic and import responses omit reviewer, source-result,
 issuer, key and nonce metadata; the private signed payload remains available
 only to the verifier.
+
+For a canonical 175-review judge-qualification corpus, Product also exposes a
+portable offline packet builder. The input
+`agentx.benchmark-blind-review-source-bundle/v1` must contain exactly two
+validation and three holdout sealed results for every one of the seven
+categories and five difficulty levels. Source result IDs and fingerprints must
+be unique, and each response must still match its sealed response fingerprint.
+
+`node benchmark/scripts/prepare-blind-review-packet.js --input FILE
+--output-dir NEW_DIRECTORY` emits a reviewer packet, a separate operator-only
+control manifest and a blank response template. Split, source, candidate,
+model, host, judge identity and judge score never enter the reviewer packet.
+The new output directory must not exist. The builder has no campaign, provider,
+network, key-generation, signing, import or overwrite capability. It therefore
+cannot make an unexecuted corpus sealed or a human review qualified; it only
+prepares the blind boundary around already sealed source results.
 
 This import proves admission of one human label only. It does not qualify a
 judge, ratify a Benchmark receipt, promote a winner, or authorize routing. The
