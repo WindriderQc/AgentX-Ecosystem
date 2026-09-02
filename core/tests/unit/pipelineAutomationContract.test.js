@@ -5,6 +5,7 @@ const {
   normalizePipelineAutomationEvidence,
   automationAdmissionReasons,
 } = require('../../../shared/pipelineAutomationContract');
+const PipelineTask = require('../../models/PipelineTask');
 
 function intent(overrides = {}) {
   return {
@@ -43,6 +44,23 @@ describe('pipeline automation contract', () => {
       'shared/workerContract.js',
     ]);
     expect(normalized.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  test('persists declared authority source files in the embedded task intent', () => {
+    const automation = normalizePipelineAutomationIntent(intent({
+      sourceFiles: ['shared/workerContract.js', 'shared/pipelineAutomationContract.js'],
+    }));
+    const task = new PipelineTask({
+      pipelineId: '0702',
+      title: 'Authority source persistence fixture',
+      automation,
+    });
+
+    expect(task.validateSync()).toBeUndefined();
+    expect(task.toObject().automation.sourceFiles).toEqual([
+      'shared/pipelineAutomationContract.js',
+      'shared/workerContract.js',
+    ]);
   });
 
   test('manual intent is explicit and carries no executable policy', () => {
