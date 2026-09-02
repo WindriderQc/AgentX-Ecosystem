@@ -446,6 +446,29 @@ async function startServer() {
     console.log(`   ⚠ Lane Observability: ${err.message}`);
   }
 
+  // Council sessions only advance inside the process that started them. Close
+  // any pending/running session a previous process left behind so the Council
+  // page never shows a RUNNING status that nothing can complete.
+  try {
+    const roundtableService = require('./src/services/roundtable');
+    let councilReaper = null;
+    await startCoreSingletonDaemon({
+      name: 'council-stale-session-reaper',
+      label: 'Council Reaper',
+      start: async () => {
+        const first = await roundtableService.reconcileStaleRoundtables();
+        councilReaper = setInterval(() => {
+          roundtableService.reconcileStaleRoundtables().catch(() => {});
+        }, 5 * 60 * 1000);
+        if (typeof councilReaper.unref === 'function') councilReaper.unref();
+        console.log(`   ✓ Council Reaper: Active (closed ${first.reconciled} stale session${first.reconciled === 1 ? '' : 's'} at boot, 5m sweep)`);
+      },
+      stop: async () => { if (councilReaper) clearInterval(councilReaper); }
+    });
+  } catch (err) {
+    console.log(`   ⚠ Council Reaper: ${err.message}`);
+  }
+
   // Durable platform backups. Docker enables this by default after wiring a
   // host-visible /backups mount and the MongoDB database tools into Core. Each
   // cycle attempts Mongo, runtime config, and Qdrant independently so one
