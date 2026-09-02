@@ -83,8 +83,25 @@
     $('cfgScheduleStatus').textContent = schedule.enabled
       ? `Enabled${source} · normal cycle every ${formatDuration(schedule.normalEveryMs)} · 3 logical operations/cycle (${schedule.normalCyclesPerDay}/day at normal cadence)`
       : `Disabled${source} · only explicit manual backup requests create artifacts`;
+    const reasonLabels = {
+      startup: 'startup run',
+      normal: 'normal cadence',
+      retry: 'retry of the failed layer(s) only',
+      'retry-exhausted': 'normal cadence (retry budget exhausted)',
+      'non-retryable-failure': 'normal cadence (last failure is not retryable — operator action required)'
+    };
+    const nextRun = schedule.nextRunAt
+      ? ` · next run ${formatDate(schedule.nextRunAt)}${schedule.nextRunReason && reasonLabels[schedule.nextRunReason] ? ` (${reasonLabels[schedule.nextRunReason]})` : ''}`
+      : '';
+    const retryBudget = Number.isFinite(Number(schedule.maxRetries))
+      ? `, max ${schedule.maxRetries} consecutive`
+      : '';
+    const lastFailures = Array.isArray(schedule.lastFailures) ? schedule.lastFailures : [];
+    const failureSummary = lastFailures.length
+      ? ` · last cycle ${schedule.lastStatus}: ${lastFailures.map(entry => `${entry.name} — ${entry.error}${entry.retryable === false ? ' (not retryable)' : ''}`).join('; ')}`
+      : '';
     $('cfgScheduleDetail').textContent = schedule.enabled
-      ? `After partial/failed cycles only: retry every ${formatDuration(schedule.failureRetryEveryMs)}${schedule.nextRunAt ? ` · next run ${formatDate(schedule.nextRunAt)}` : ''}`
+      ? `After partial/failed cycles only: retry the failed layer(s) every ${formatDuration(schedule.failureRetryEveryMs)}${retryBudget}${nextRun}${failureSummary}`
       : `Inactive while scheduler is disabled (configured retry: ${formatDuration(schedule.failureRetryEveryMs)})`;
     $('cfgRetentionPolicy').textContent = retention.mode === 'unbounded'
       ? `Forever (${retention.source}) · automatic pruning disabled`

@@ -12,6 +12,21 @@ const CONFIG_SOURCE_IDS = Object.freeze({
   'config/container-image-pins.json': 'container-image-pins'
 });
 
+const SAFE_NEXT_RUN_REASONS = new Set(['startup', 'normal', 'retry', 'retry-exhausted', 'non-retryable-failure']);
+const OPERATION_NAMES = ['mongo', 'config', 'qdrant'];
+
+function projectFailures(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(entry => entry && OPERATION_NAMES.includes(entry.name))
+    .map(entry => ({
+      name: entry.name,
+      error: typeof entry.error === 'string' ? entry.error.slice(0, 200) : 'unknown error',
+      code: typeof entry.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(entry.code) ? entry.code : null,
+      retryable: entry.retryable !== false
+    }));
+}
+
 const RECOVERY_STORAGE = Object.freeze({
   kind: 'docker-named-volume',
   scope: 'persistent-recovery-storage',
@@ -84,6 +99,30 @@ function projectPolicyEvidence(value = {}) {
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
   };
   const riskLevel = ['low', 'watch', 'high'].includes(growthRisk.level) ? growthRisk.level : 'watch';
+  const lastFailures = projectFailures(schedule.lastFailures);
+  const blockedLayers = lastFailures.filter(entry => entry.retryable === false);
+  const nextRunReason = SAFE_NEXT_RUN_REASONS.has(schedule.nextRunReason) ? schedule.nextRunReason : null;
+  const riskReasons = riskLevel === 'high'
+    ? ['Scheduled creation is enabled while retention is unbounded.']
+    : riskLevel === 'watch'
+      ? ['Retention or creation policy requires operator attention.']
+      : ['Retention and creation cadence are bounded.'];
+  const riskWarnings = ['A recovery archive is not proof of a coherent, restorable recovery set.'];
+  if (blockedLayers.length > 0) {
+    riskReasons.push(
+      `${blockedLayers.map(entry => entry.name).join(', ')} backup${blockedLayers.length > 1 ? 's are' : ' is'} failing with a non-retryable error; automatic retries are suspended for that layer until an operator fixes the configuration.`
+    );
+    for (const entry of blockedLayers) {
+      riskWarnings.push(`${entry.name}: ${entry.error}${entry.code ? ` (${entry.code})` : ''}`);
+    }
+  } else if (lastFailures.length > 0) {
+    riskWarnings.push(
+      `Last cycle left ${lastFailures.map(entry => entry.name).join(', ')} without a fresh artifact; only the failed layer${lastFailures.length > 1 ? 's are' : ' is'} retried.`
+    );
+  }
+  if (nextRunReason === 'retry-exhausted') {
+    riskWarnings.push('The retry budget for the last failure was exhausted; the scheduler is back on the normal cadence.');
+  }
   return {
     authority: 'core.backup-policy',
     observedAt: safeDate(value.observedAt) || new Date().toISOString(),
@@ -102,6 +141,12 @@ function projectPolicyEvidence(value = {}) {
       lastStatus: ['never', 'running', 'success', 'partial', 'failed', 'stopped'].includes(schedule.lastStatus)
         ? schedule.lastStatus
         : 'unknown',
+      lastCycleMode: schedule.lastCycleMode === 'retry' ? 'retry' : (schedule.lastCycleMode === 'full' ? 'full' : null),
+      lastFailures,
+      nextRunReason,
+      consecutiveRetries: Math.floor(finite(schedule.consecutiveRetries)),
+      maxRetries: Math.floor(finite(schedule.maxRetries)),
+      maxRetriesSource: source(schedule.maxRetriesSource),
       logicalOperationsPerCycle: finite(schedule.logicalOperationsPerCycle),
       operationNames: ['mongo', 'config', 'qdrant'],
       normalCyclesPerDay: finite(schedule.normalCyclesPerDay),
@@ -126,12 +171,8 @@ function projectPolicyEvidence(value = {}) {
     },
     growthRisk: {
       level: riskLevel,
-      reasons: riskLevel === 'high'
-        ? ['Scheduled creation is enabled while retention is unbounded.']
-        : riskLevel === 'watch'
-          ? ['Retention or creation policy requires operator attention.']
-          : ['Retention and creation cadence are bounded.'],
-      warnings: ['A recovery archive is not proof of a coherent, restorable recovery set.']
+      reasons: riskReasons,
+      warnings: riskWarnings
     }
   };
 }

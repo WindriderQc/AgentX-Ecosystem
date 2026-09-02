@@ -85,3 +85,37 @@ describe('backupEvidenceService', () => {
     expect(inventory.countBasis).toMatch(/no date window or pagination/i);
   });
 });
+
+describe('backupEvidenceService failure evidence', () => {
+  const { projectBackupPolicy: project } = require('../../src/services/backupEvidenceService');
+
+  test('surfaces a non-retryable layer failure and the suspended retry reason', () => {
+    const policy = project(
+      { retentionDays: 30, retentionDaysSource: 'env' },
+      {
+        enabled: true,
+        intervalMs: 24 * 60 * 60 * 1000,
+        retryDelayMs: 60 * 60 * 1000,
+        lastStatus: 'partial',
+        lastCycleMode: 'full',
+        nextRunReason: 'non-retryable-failure',
+        consecutiveRetries: 0,
+        maxRetries: 3,
+        maxRetriesSource: 'default',
+        lastFailures: [
+          { name: 'qdrant', error: 'Recovery snapshot authorization is not configured', code: 'RECOVERY_AUTH_REQUIRED', retryable: false },
+          { name: 'bogus', error: 'ignored', code: 'x', retryable: true }
+        ]
+      }
+    );
+
+    expect(policy.schedule.lastFailures).toEqual([
+      { name: 'qdrant', error: 'Recovery snapshot authorization is not configured', code: 'RECOVERY_AUTH_REQUIRED', retryable: false }
+    ]);
+    expect(policy.schedule.nextRunReason).toBe('non-retryable-failure');
+    expect(policy.schedule.maxRetries).toBe(3);
+    expect(policy.growthRisk.level).toBe('watch');
+    expect(policy.growthRisk.reasons.join(' ')).toMatch(/qdrant backup is failing with a non-retryable error/);
+    expect(policy.growthRisk.warnings.join(' ')).toMatch(/RECOVERY_AUTH_REQUIRED/);
+  });
+});
