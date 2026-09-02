@@ -7,13 +7,13 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   buildBenchmarkBlindReviewPackage,
-} = require('../../shared/benchmarkBlindReviewPacket');
-const { fingerprint } = require('../../shared/workerContract');
+} = require('./benchmarkBlindReviewPacket');
+const { fingerprint } = require('./workerContract');
 const {
   OUTPUT_FILES,
   parseArgs,
   writePackage,
-} = require('./prepare-blind-review-packet');
+} = require('../benchmark/scripts/prepare-blind-review-packet');
 
 function packageFixture() {
   const categories = [
@@ -85,6 +85,9 @@ test('writes three separate artifacts once and refuses overwrite', (context) => 
 });
 
 test('source contains no provider, campaign, network, key-generation, or signing primitive', () => {
-  const source = fs.readFileSync(__filename.replace(/\.test\.js$/, '.js'), 'utf8');
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'benchmark', 'scripts', 'prepare-blind-review-packet.js'),
+    'utf8'
+  );
   assert.doesNotMatch(source, /fetch\(|https?:\/\/|generateKeyPair|privateKey|crypto\.sign|campaign.*start/i);
 });
