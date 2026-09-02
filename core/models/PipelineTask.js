@@ -24,6 +24,7 @@ const AutomationIntentSchema = new mongoose.Schema({
   },
   operations: { type: [String], default: undefined },
   scope: { type: [String], default: undefined },
+  sourceFiles: { type: [String], default: undefined },
   lockKeys: { type: [String], default: undefined },
   executionProfile: { type: String, default: null },
   verificationProfile: { type: String, default: null },
