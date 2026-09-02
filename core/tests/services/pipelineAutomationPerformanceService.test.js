@@ -30,6 +30,22 @@ describe('pipeline automation performance service', () => {
               costKind: 'provider-spend',
               costSource: 'openclaw-local-provider-spend/v1',
               costEvidenceFingerprint: 'a'.repeat(64),
+              localEnergy: {
+                measurementScope: 'gpu-incremental-lower-bound',
+                energyMillijoules: 3_600_000,
+                measurementDurationMs: 600_000,
+                sampleCount: 600,
+                baselineMilliwatts: 48_000,
+                source: 'nvidia-smi-baseline-integral/v1',
+                evidenceFingerprint: 'e'.repeat(64),
+                tariff: {
+                  currency: 'CAD',
+                  rateNanoCurrencyUnitsPerKwh: 100_000_000,
+                  estimatedCostNanoCurrencyUnits: 100_000,
+                  source: 'operator-configured-electricity-tariff/v1',
+                  evidenceFingerprint: 'f'.repeat(64),
+                },
+              },
             },
             failureCodes: [],
           },
@@ -85,6 +101,9 @@ describe('pipeline automation performance service', () => {
       costAggregateKind: 'provider-spend',
       observedProviderSpendNanodollars: 0,
       observedSessionEstimateNanodollars: null,
+      energyAggregateScope: 'gpu-incremental-lower-bound',
+      observedEnergyMillijoules: 3_600_000,
+      electricityByCurrency: [{ currency: 'CAD', attempts: 1, costNanoCurrencyUnits: 100_000 }],
       filesChanged: 2,
       bytesChanged: 3000,
     });
@@ -95,10 +114,12 @@ describe('pipeline automation performance service', () => {
       cost: 1,
       providerSpend: 1,
       sessionEstimate: 0,
+      localEnergy: 1,
+      electricityCost: 1,
       review: 1,
       total: 2,
     });
-    expect(performance.attempts[0].unknown).toEqual(['change', 'cost', 'review']);
+    expect(performance.attempts[0].unknown).toEqual(['change', 'cost', 'local_energy', 'review']);
   });
 
   test('keeps provider spend separate from billing-unverified session estimates', () => {

@@ -43,6 +43,29 @@ const AutomationLeaseSchema = new mongoose.Schema({
   attempt: { type: Number, required: true, min: 1 },
 }, { _id: false });
 
+const ElectricityTariffEvidenceSchema = new mongoose.Schema({
+  currency: { type: String, required: true, match: /^[A-Z]{3}$/ },
+  rateNanoCurrencyUnitsPerKwh: { type: Number, required: true, min: 0 },
+  estimatedCostNanoCurrencyUnits: { type: Number, required: true, min: 0 },
+  source: { type: String, required: true },
+  evidenceFingerprint: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+}, { _id: false });
+
+const LocalEnergyEvidenceSchema = new mongoose.Schema({
+  measurementScope: {
+    type: String,
+    enum: ['gpu-incremental-lower-bound'],
+    required: true,
+  },
+  energyMillijoules: { type: Number, required: true, min: 0 },
+  measurementDurationMs: { type: Number, required: true, min: 1 },
+  sampleCount: { type: Number, required: true, min: 1 },
+  baselineMilliwatts: { type: Number, required: true, min: 0 },
+  source: { type: String, required: true },
+  evidenceFingerprint: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+  tariff: { type: ElectricityTariffEvidenceSchema, default: undefined },
+}, { _id: false });
+
 const AutomationAttemptEvidenceSchema = new mongoose.Schema({
   schema: { type: String, required: true },
   verification: {
@@ -61,6 +84,7 @@ const AutomationAttemptEvidenceSchema = new mongoose.Schema({
     costKind: { type: String, enum: ['provider-spend', 'session-estimate'], default: null },
     costSource: { type: String, default: null },
     costEvidenceFingerprint: { type: String, default: null },
+    localEnergy: { type: LocalEnergyEvidenceSchema, default: undefined },
   },
   // This subdocument must retain the public field named `schema`. Mongoose's
   // primitive-array caster collides with that field name while validating an

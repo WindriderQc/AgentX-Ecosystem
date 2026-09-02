@@ -13,6 +13,10 @@ const COST_SOURCES_BY_KIND = new Map([
   ['provider-spend', new Set(['openclaw-local-provider-spend/v1'])],
   ['session-estimate', new Set(['openclaw-session-usage/v1'])],
 ]);
+const LOCAL_ENERGY_SOURCES_BY_SCOPE = new Map([
+  ['gpu-incremental-lower-bound', new Set(['nvidia-smi-baseline-integral/v1'])],
+]);
+const ELECTRICITY_TARIFF_SOURCES = new Set(['operator-configured-electricity-tariff/v1']);
 const IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 function automationError(message, code = 'INVALID_AUTOMATION_INTENT') {
@@ -244,6 +248,119 @@ function normalizePipelineAutomationEvidence(rawValue) {
     throw automationError('attemptEvidence.usage costSource is not allowed for costKind');
   }
 
+  let localEnergy = null;
+  if (usageRaw.localEnergy != null) {
+    const localEnergyRaw = object(usageRaw.localEnergy, 'attemptEvidence.usage.localEnergy');
+    const measurementScope = identifier(
+      localEnergyRaw.measurementScope,
+      'attemptEvidence.usage.localEnergy.measurementScope',
+      80
+    );
+    const source = identifier(localEnergyRaw.source, 'attemptEvidence.usage.localEnergy.source', 160);
+    if (!LOCAL_ENERGY_SOURCES_BY_SCOPE.get(measurementScope)?.has(source)) {
+      throw automationError('attemptEvidence.usage.localEnergy source is not allowed for measurementScope');
+    }
+    const energyMillijoules = integer(
+      localEnergyRaw.energyMillijoules,
+      'attemptEvidence.usage.localEnergy.energyMillijoules',
+      { min: 0, max: 9_000_000_000_000_000 }
+    );
+    const measurementDurationMs = integer(
+      localEnergyRaw.measurementDurationMs,
+      'attemptEvidence.usage.localEnergy.measurementDurationMs',
+      { min: 1, max: 604_800_000 }
+    );
+    const sampleCount = integer(
+      localEnergyRaw.sampleCount,
+      'attemptEvidence.usage.localEnergy.sampleCount',
+      { min: 1, max: 10_000_000 }
+    );
+    const baselineMilliwatts = integer(
+      localEnergyRaw.baselineMilliwatts,
+      'attemptEvidence.usage.localEnergy.baselineMilliwatts',
+      { min: 0, max: 10_000_000 }
+    );
+    const evidenceFingerprint = optionalFingerprint(
+      localEnergyRaw.evidenceFingerprint,
+      'attemptEvidence.usage.localEnergy.evidenceFingerprint'
+    );
+    if (!evidenceFingerprint) {
+      throw automationError('attemptEvidence.usage.localEnergy.evidenceFingerprint is required');
+    }
+
+    let tariff = null;
+    if (localEnergyRaw.tariff != null) {
+      const tariffRaw = object(localEnergyRaw.tariff, 'attemptEvidence.usage.localEnergy.tariff');
+      const currency = String(tariffRaw.currency || '').trim().toUpperCase();
+      if (!/^[A-Z]{3}$/.test(currency)) {
+        throw automationError('attemptEvidence.usage.localEnergy.tariff.currency must be an ISO 4217 code');
+      }
+      const rateNanoCurrencyUnitsPerKwh = integer(
+        tariffRaw.rateNanoCurrencyUnitsPerKwh,
+        'attemptEvidence.usage.localEnergy.tariff.rateNanoCurrencyUnitsPerKwh',
+        { min: 0, max: 9_000_000_000_000_000 }
+      );
+      const estimatedCostNanoCurrencyUnits = integer(
+        tariffRaw.estimatedCostNanoCurrencyUnits,
+        'attemptEvidence.usage.localEnergy.tariff.estimatedCostNanoCurrencyUnits',
+        { min: 0, max: 9_000_000_000_000_000 }
+      );
+      const tariffSource = identifier(
+        tariffRaw.source,
+        'attemptEvidence.usage.localEnergy.tariff.source',
+        160
+      );
+      if (!ELECTRICITY_TARIFF_SOURCES.has(tariffSource)) {
+        throw automationError('attemptEvidence.usage.localEnergy.tariff.source is not supported');
+      }
+      const tariffFingerprint = optionalFingerprint(
+        tariffRaw.evidenceFingerprint,
+        'attemptEvidence.usage.localEnergy.tariff.evidenceFingerprint'
+      );
+      if (!tariffFingerprint) {
+        throw automationError('attemptEvidence.usage.localEnergy.tariff.evidenceFingerprint is required');
+      }
+      const expectedCost = (
+        BigInt(energyMillijoules) * BigInt(rateNanoCurrencyUnitsPerKwh) + 1_800_000_000n
+      ) / 3_600_000_000n;
+      if (BigInt(estimatedCostNanoCurrencyUnits) !== expectedCost) {
+        throw automationError(
+          'attemptEvidence.usage.localEnergy.tariff estimated cost does not match energy and rate'
+        );
+      }
+      tariff = {
+        currency,
+        rateNanoCurrencyUnitsPerKwh,
+        estimatedCostNanoCurrencyUnits,
+        source: tariffSource,
+        evidenceFingerprint: tariffFingerprint,
+      };
+    }
+    localEnergy = {
+      measurementScope,
+      energyMillijoules,
+      measurementDurationMs,
+      sampleCount,
+      baselineMilliwatts,
+      source,
+      evidenceFingerprint,
+      tariff,
+    };
+  }
+
+  const normalizedUsage = {
+    durationMs: optionalInteger(
+      usageRaw.durationMs,
+      'attemptEvidence.usage.durationMs',
+      { min: 0, max: 604_800_000 }
+    ),
+    costNanodollars,
+    costKind,
+    costSource,
+    costEvidenceFingerprint,
+  };
+  if (localEnergy != null) normalizedUsage.localEnergy = localEnergy;
+
   return {
     schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
     verification: {
@@ -276,17 +393,7 @@ function normalizePipelineAutomationEvidence(rawValue) {
         { min: 0, max: 10_000_000_000 }
       ),
     },
-    usage: {
-      durationMs: optionalInteger(
-        usageRaw.durationMs,
-        'attemptEvidence.usage.durationMs',
-        { min: 0, max: 604_800_000 }
-      ),
-      costNanodollars,
-      costKind,
-      costSource,
-      costEvidenceFingerprint,
-    },
+    usage: normalizedUsage,
     failureCodes: sortedUnique(
       raw.failureCodes || [],
       'attemptEvidence.failureCodes',

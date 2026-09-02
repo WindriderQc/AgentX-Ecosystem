@@ -48,11 +48,23 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain('/api/pipeline/performance?window=');
     expect(script).toContain("return 'Unknown'");
     expect(script).toContain('missing fields remain unknown');
-    expect(view).toContain('Provider spend and unpriced local compute stay distinct');
-    expect(script).toContain('Local compute unpriced');
+    expect(view).toContain('Provider spend, measured energy, and electricity estimates stay distinct');
+    expect(script).toContain('GPU incremental lower bound · electricity tariff not configured');
+    expect(script).toContain('electricityByCurrency');
     expect(script).toContain('Billing unverified · OpenClaw session receipt');
     expect(script).toContain("? 'Mixed evidence'");
     expect(script).toContain('data-pipeline-task=');
+  });
+
+  test('shows a privacy-safe attempt dossier inside each coding task drawer', () => {
+    expect(script).toContain('Operator attempt dossier');
+    expect(script).toContain('Prompts, inference transcripts, tool payloads, raw verifier output');
+    expect(script).toContain("metaRow('Editable scope'");
+    expect(script).toContain("metaRow('Authority sources'");
+    expect(script).toContain("metaRow('Local energy'");
+    expect(script).toContain("metaRow('Electricity'");
+    expect(script).toContain('readDeepLinkedTask()');
+    expect(script).toContain('openDrawer(pipelineId, null)');
   });
 
   test('offers an explicit operator-only one-shot launch without implying a scheduler', () => {

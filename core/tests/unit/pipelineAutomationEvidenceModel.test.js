@@ -69,6 +69,51 @@ describe('pipeline automation evidence model', () => {
     });
   });
 
+  test('persists local energy separately from an optional currency-bound tariff', () => {
+    const task = new PipelineTask({
+      pipelineId: '0592',
+      title: 'Measured coding energy',
+      automationAttempts: [{
+        leaseId: 'lease-energy',
+        assignee: 'worker-1',
+        attempt: 1,
+        acquiredAt: new Date('2026-09-01T00:00:00.000Z'),
+        heartbeatAt: new Date('2026-09-01T00:01:00.000Z'),
+        expiresAt: new Date('2026-09-01T00:10:00.000Z'),
+        evidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: {},
+          usage: {
+            localEnergy: {
+              measurementScope: 'gpu-incremental-lower-bound',
+              energyMillijoules: 3_600_000,
+              measurementDurationMs: 60_000,
+              sampleCount: 60,
+              baselineMilliwatts: 48_000,
+              source: 'nvidia-smi-baseline-integral/v1',
+              evidenceFingerprint: 'b'.repeat(64),
+              tariff: {
+                currency: 'CAD',
+                rateNanoCurrencyUnitsPerKwh: 100_000_000,
+                estimatedCostNanoCurrencyUnits: 100_000,
+                source: 'operator-configured-electricity-tariff/v1',
+                evidenceFingerprint: 'c'.repeat(64),
+              },
+            },
+          },
+          failureCodes: [],
+        },
+      }],
+    });
+
+    expect(task.validateSync()).toBeUndefined();
+    expect(task.toObject().automationAttempts[0].evidence.usage.localEnergy).toMatchObject({
+      energyMillijoules: 3_600_000,
+      tariff: { currency: 'CAD', estimatedCostNanoCurrencyUnits: 100_000 },
+    });
+  });
+
   test('indexes the attempt timestamp used by performance windows', () => {
     const indexes = PipelineTask.schema.indexes().map(([keys]) => keys);
     expect(indexes).toContainEqual({ 'automationAttempts.acquiredAt': 1 });

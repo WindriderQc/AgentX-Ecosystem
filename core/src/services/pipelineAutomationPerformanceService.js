@@ -5,6 +5,9 @@ const COST_SOURCES_BY_KIND = Object.freeze({
   'provider-spend': 'openclaw-local-provider-spend/v1',
   'session-estimate': 'openclaw-session-usage/v1',
 });
+const LOCAL_ENERGY_SOURCE = 'nvidia-smi-baseline-integral/v1';
+const LOCAL_ENERGY_SCOPE = 'gpu-incremental-lower-bound';
+const ELECTRICITY_TARIFF_SOURCE = 'operator-configured-electricity-tariff/v1';
 
 function timestamp(value) {
   const date = value ? new Date(value) : null;
@@ -79,6 +82,40 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
         && costKind != null
         && costSource === COST_SOURCES_BY_KIND[costKind]
         && costEvidenceFingerprint != null;
+      const localEnergyRaw = usage.localEnergy || {};
+      const energyMillijoules = observedInteger(localEnergyRaw.energyMillijoules);
+      const measurementDurationMs = observedInteger(localEnergyRaw.measurementDurationMs);
+      const sampleCount = observedInteger(localEnergyRaw.sampleCount);
+      const baselineMilliwatts = observedInteger(localEnergyRaw.baselineMilliwatts);
+      const localEnergyFingerprint = /^[a-f0-9]{64}$/.test(String(localEnergyRaw.evidenceFingerprint || ''))
+        ? localEnergyRaw.evidenceFingerprint
+        : null;
+      const localEnergyEvidenceComplete = energyMillijoules != null
+        && measurementDurationMs != null && measurementDurationMs > 0
+        && sampleCount != null && sampleCount > 0
+        && baselineMilliwatts != null
+        && localEnergyRaw.measurementScope === LOCAL_ENERGY_SCOPE
+        && localEnergyRaw.source === LOCAL_ENERGY_SOURCE
+        && localEnergyFingerprint != null;
+      const tariffRaw = localEnergyRaw.tariff || {};
+      const tariffCurrency = /^[A-Z]{3}$/.test(String(tariffRaw.currency || ''))
+        ? tariffRaw.currency
+        : null;
+      const tariffRate = observedInteger(tariffRaw.rateNanoCurrencyUnitsPerKwh);
+      const electricityCost = observedInteger(tariffRaw.estimatedCostNanoCurrencyUnits);
+      const tariffFingerprint = /^[a-f0-9]{64}$/.test(String(tariffRaw.evidenceFingerprint || ''))
+        ? tariffRaw.evidenceFingerprint
+        : null;
+      const expectedElectricityCost = energyMillijoules != null && tariffRate != null
+        ? (BigInt(energyMillijoules) * BigInt(tariffRate) + 1_800_000_000n) / 3_600_000_000n
+        : null;
+      const tariffEvidenceComplete = localEnergyEvidenceComplete
+        && tariffCurrency != null
+        && tariffRate != null
+        && electricityCost != null
+        && tariffRaw.source === ELECTRICITY_TARIFF_SOURCE
+        && tariffFingerprint != null
+        && BigInt(electricityCost) === expectedElectricityCost;
       const filesChanged = observedInteger(changes.filesChanged);
       const bytesChanged = observedInteger(changes.bytesChanged);
       const executionMs = elapsed(acquiredAt, completedAt);
@@ -87,6 +124,8 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
       if (filesChanged == null || bytesChanged == null) unknown.push('change');
       if (costNanodollars == null) unknown.push('cost');
       else if (!costEvidenceComplete) unknown.push('cost_provenance');
+      if (!localEnergyEvidenceComplete) unknown.push('local_energy');
+      else if (!tariffEvidenceComplete) unknown.push('electricity_cost');
       if (outcome === 'pending') unknown.push('review');
 
       rows.push({
@@ -114,6 +153,24 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
           costSource,
           costEvidenceFingerprint,
           costEvidenceComplete,
+          localEnergy: localEnergyEvidenceComplete ? {
+            measurementScope: LOCAL_ENERGY_SCOPE,
+            energyMillijoules,
+            measurementDurationMs,
+            sampleCount,
+            baselineMilliwatts,
+            source: LOCAL_ENERGY_SOURCE,
+            evidenceFingerprint: localEnergyFingerprint,
+            tariff: tariffEvidenceComplete ? {
+              currency: tariffCurrency,
+              rateNanoCurrencyUnitsPerKwh: tariffRate,
+              estimatedCostNanoCurrencyUnits: electricityCost,
+              source: ELECTRICITY_TARIFF_SOURCE,
+              evidenceFingerprint: tariffFingerprint,
+            } : null,
+          } : null,
+          localEnergyEvidenceComplete,
+          tariffEvidenceComplete,
         },
         failureCodes: Array.isArray(evidence?.failureCodes) ? evidence.failureCodes.slice(0, 32) : [],
         workerReceiptFingerprint: evidence?.workerReceiptFingerprint || null,
@@ -140,6 +197,8 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
   const knownCosts = rows.filter((row) => row.usage.costEvidenceComplete);
   const providerSpendCosts = knownCosts.filter((row) => row.usage.costKind === 'provider-spend');
   const sessionEstimateCosts = knownCosts.filter((row) => row.usage.costKind === 'session-estimate');
+  const knownLocalEnergy = rows.filter((row) => row.usage.localEnergyEvidenceComplete);
+  const knownElectricityCosts = rows.filter((row) => row.usage.tariffEvidenceComplete);
   const knownChanges = rows.filter((row) => row.changes.filesChanged != null && row.changes.bytesChanged != null);
   const safetyBlocks = rows.filter((row) => row.failureCodes.some((code) => (
     /policy|scope|secret|protected|violation/i.test(code)
@@ -156,6 +215,18 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
   const costAggregateKind = observedCostKinds.size === 1 ? [...observedCostKinds][0] : (
     observedCostKinds.size > 1 ? 'mixed' : null
   );
+  const energyScopes = new Set(knownLocalEnergy.map((row) => row.usage.localEnergy.measurementScope));
+  const energyAggregateScope = energyScopes.size === 1 ? [...energyScopes][0] : (
+    energyScopes.size > 1 ? 'mixed' : null
+  );
+  const electricityByCurrency = [...knownElectricityCosts.reduce((groups, row) => {
+    const tariff = row.usage.localEnergy.tariff;
+    const current = groups.get(tariff.currency) || { currency: tariff.currency, attempts: 0, costNanoCurrencyUnits: 0 };
+    current.attempts += 1;
+    current.costNanoCurrencyUnits += tariff.estimatedCostNanoCurrencyUnits;
+    groups.set(tariff.currency, current);
+    return groups;
+  }, new Map()).values()].sort((left, right) => left.currency.localeCompare(right.currency));
   const uniqueTasks = new Set(rows.map((row) => row.pipelineId));
 
   return {
@@ -212,6 +283,11 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
       observedSessionEstimateNanodollars: sessionEstimateCosts.length
         ? observedSessionEstimateNanodollars
         : null,
+      energyAggregateScope,
+      observedEnergyMillijoules: knownLocalEnergy.length
+        ? knownLocalEnergy.reduce((sum, row) => sum + row.usage.localEnergy.energyMillijoules, 0)
+        : null,
+      electricityByCurrency,
       filesChanged: knownChanges.length
         ? knownChanges.reduce((sum, row) => sum + row.changes.filesChanged, 0)
         : null,
@@ -226,6 +302,8 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
       cost: knownCosts.length,
       providerSpend: providerSpendCosts.length,
       sessionEstimate: sessionEstimateCosts.length,
+      localEnergy: knownLocalEnergy.length,
+      electricityCost: knownElectricityCosts.length,
       review: decided,
       total: rows.length,
     },

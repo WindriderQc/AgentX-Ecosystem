@@ -1356,6 +1356,43 @@ body.pipeline-drawer-open {
   overflow-wrap: anywhere;
 }
 
+.pipeline-drawer-privacy {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid rgba(124, 240, 255, 0.45);
+  border-radius: 7px;
+  background: rgba(124, 240, 255, 0.06);
+  color: #94a3b8;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.pipeline-drawer-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pipeline-attempt-dossier {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.pipeline-attempt-dossier > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #e2e8f0;
+}
+
 .pipeline-drawer-feedback {
   display: grid;
   gap: 10px;

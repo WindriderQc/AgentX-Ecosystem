@@ -29,6 +29,7 @@
     dispatchLaunching: false,
     loading: false,
     context: readContext(),
+    deepLinkedTask: readDeepLinkedTask(),
     filters: { status: null, search: '', service: '', lane: '' },
     sort: 'urgency',
     autoTimer: null,
@@ -211,6 +212,43 @@
       };
     }
     return { amount: 'Unknown', detail: 'Cost nature or provenance missing' };
+  }
+
+  function readDeepLinkedTask() {
+    const value = String(new URLSearchParams(window.location.search).get('task') || '').trim();
+    return /^\d{3,4}$/.test(value) ? value : null;
+  }
+
+  function energyLabel(value) {
+    if (value == null || value === '') return 'Unknown';
+    const millijoules = Number(value);
+    if (!Number.isFinite(millijoules) || millijoules < 0) return 'Unknown';
+    const wattHours = millijoules / 3_600_000;
+    if (wattHours > 0 && wattHours < 0.01) return '<0.01 Wh';
+    return `${wattHours.toFixed(2)} Wh`;
+  }
+
+  function nanoCurrencyLabel(value, currency) {
+    if (value == null || value === '' || !/^[A-Z]{3}$/.test(String(currency || ''))) return 'Unknown';
+    const nanoUnits = Number(value);
+    if (!Number.isFinite(nanoUnits) || nanoUnits < 0) return 'Unknown';
+    const amount = nanoUnits / 1_000_000_000;
+    if (amount > 0 && amount < 0.01) return `<0.01 ${currency}`;
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+
+  function localEnergyPresentation(localEnergy) {
+    if (!localEnergy || localEnergy.measurementScope !== 'gpu-incremental-lower-bound') {
+      return { energy: 'Unknown', cost: 'Unknown', detail: 'No measured local-energy evidence' };
+    }
+    const tariff = localEnergy.tariff || null;
+    return {
+      energy: energyLabel(localEnergy.energyMillijoules),
+      cost: nanoCurrencyLabel(tariff?.estimatedCostNanoCurrencyUnits, tariff?.currency),
+      detail: tariff
+        ? 'GPU incremental lower bound · operator-configured tariff'
+        : 'GPU incremental lower bound · electricity tariff not configured',
+    };
   }
 
   function dueCell(task) {
@@ -852,9 +890,10 @@
     );
     const providerSpend = performance.usage?.observedProviderSpendNanodollars;
     const sessionEstimate = performance.usage?.observedSessionEstimateNanodollars;
-    const localComputeObserved = attempts.some((attempt) => (
-      attempt.usage?.costSource === 'openclaw-local-provider-spend/v1'
-    ));
+    const localEnergy = performance.usage?.observedEnergyMillijoules;
+    const electricityByCurrency = Array.isArray(performance.usage?.electricityByCurrency)
+      ? performance.usage.electricityByCurrency
+      : [];
     const costHeadline = providerSpend != null && sessionEstimate != null
       ? 'Mixed evidence'
       : (providerSpend != null
@@ -863,7 +902,13 @@
     const costDetails = [`${costKnown}/${total} evidenced`];
     if (providerSpend != null) costDetails.push(`${costLabel(providerSpend)} provider spend`);
     if (sessionEstimate != null) costDetails.push(`${costLabel(sessionEstimate)} session estimate, billing unverified`);
-    if (localComputeObserved) costDetails.push('local compute unpriced');
+    if (localEnergy != null) costDetails.push(`${energyLabel(localEnergy)} measured local GPU energy`);
+    for (const electricity of electricityByCurrency) {
+      costDetails.push(`${nanoCurrencyLabel(electricity.costNanoCurrencyUnits, electricity.currency)} electricity estimate`);
+    }
+    if (localEnergy != null && electricityByCurrency.length === 0) {
+      costDetails.push('electricity tariff not configured');
+    }
     teamMetric(
       'pipelineTeamCost',
       costHeadline,
@@ -892,6 +937,7 @@
         ? 'Unknown'
         : `${files} file${files === 1 ? '' : 's'} · ${Number(bytes).toLocaleString()} B`;
       const costEvidence = costEvidencePresentation(attempt.usage);
+      const energyEvidence = localEnergyPresentation(attempt.usage?.localEnergy);
       return `
         <tr data-pipeline-task="${escapeHtml(attempt.pipelineId)}" tabindex="0" aria-label="Open task ${escapeHtml(attempt.pipelineId)} attempt ${escapeHtml(attempt.attempt)}">
           <td><strong class="pipeline-id">${escapeHtml(attempt.pipelineId)}</strong><span class="pipeline-team-subtle">Attempt ${escapeHtml(attempt.attempt)}</span></td>
@@ -900,7 +946,7 @@
           <td>${escapeHtml(formatStatus(verification))}</td>
           <td>${escapeHtml(change)}</td>
           <td>${escapeHtml(durationLabel(attempt.usage?.durationMs))}</td>
-          <td>${escapeHtml(costEvidence.amount)}<span class="pipeline-team-subtle">${escapeHtml(costEvidence.detail)}</span></td>
+          <td>${escapeHtml(costEvidence.amount)}<span class="pipeline-team-subtle">${escapeHtml(costEvidence.detail)} · ${escapeHtml(energyEvidence.energy)} local energy · ${escapeHtml(energyEvidence.cost)} electricity</span></td>
         </tr>`;
     }).join('');
   }
@@ -967,6 +1013,66 @@
     return `<div class="pipeline-drawer-meta-row"><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`;
   }
 
+  function repositoryPathList(paths) {
+    const values = Array.isArray(paths) ? paths.filter((value) => typeof value === 'string' && value) : [];
+    return values.length
+      ? `<ul class="pipeline-drawer-paths">${values.map((value) => `<li><code>${escapeHtml(value)}</code></li>`).join('')}</ul>`
+      : '<span class="pipeline-subtle">Not declared</span>';
+  }
+
+  function renderAttemptDossier(task) {
+    const attempts = Array.isArray(task.automationAttempts) ? task.automationAttempts.slice().reverse() : [];
+    if (!task.automation && attempts.length === 0) return '';
+    const automation = task.automation || {};
+    const cards = attempts.map((attempt) => {
+      const evidence = attempt.evidence || {};
+      const verification = evidence.verification || {};
+      const changes = evidence.changes || {};
+      const usage = evidence.usage || {};
+      const cost = costEvidencePresentation(usage);
+      const energy = localEnergyPresentation(usage.localEnergy);
+      const failureCodes = Array.isArray(evidence.failureCodes) ? evidence.failureCodes : [];
+      const tests = verification.testsPassed == null && verification.testsFailed == null
+        ? 'Unknown'
+        : `${verification.testsPassed ?? '?'} passed · ${verification.testsFailed ?? '?'} failed`;
+      const changed = changes.filesChanged == null && changes.bytesChanged == null
+        ? 'Unknown'
+        : `${changes.filesChanged ?? '?'} files · ${changes.bytesChanged == null ? '?' : Number(changes.bytesChanged).toLocaleString()} B`;
+      return `
+        <article class="pipeline-attempt-dossier">
+          <header>
+            <strong>Attempt ${escapeHtml(attempt.attempt || '?')}</strong>
+            <span class="pipeline-team-outcome">${escapeHtml(formatStatus(attemptOutcome(attempt)))}</span>
+          </header>
+          <dl class="pipeline-drawer-meta">
+            ${metaRow('Worker', escapeHtml(attempt.assignee || 'unknown'))}
+            ${metaRow('Lifecycle', escapeHtml(`${formatDate(attempt.acquiredAt)} → ${attempt.completedAt ? formatDate(attempt.completedAt) : 'active'}`))}
+            ${metaRow('Review', escapeHtml(attempt.reviewedAt ? `${formatStatus(attempt.reviewOutcome)} · ${formatDate(attempt.reviewedAt)}` : formatStatus(attempt.reviewOutcome || 'pending')))}
+            ${metaRow('Verification', escapeHtml(`${formatStatus(verification.status || 'unknown')} · ${durationLabel(verification.durationMs)}`))}
+            ${metaRow('Tests', escapeHtml(tests))}
+            ${metaRow('Change', escapeHtml(changed))}
+            ${metaRow('Execution', escapeHtml(durationLabel(usage.durationMs)))}
+            ${metaRow('Provider/session', `${escapeHtml(cost.amount)}<span class="pipeline-team-subtle">${escapeHtml(cost.detail)}</span>`)}
+            ${metaRow('Local energy', `${escapeHtml(energy.energy)}<span class="pipeline-team-subtle">${escapeHtml(energy.detail)}</span>`)}
+            ${metaRow('Electricity', escapeHtml(energy.cost))}
+            ${failureCodes.length ? metaRow('Failure codes', failureCodes.map((code) => `<code>${escapeHtml(code)}</code>`).join(' ')) : ''}
+          </dl>
+        </article>`;
+    }).join('');
+    return `
+      <section class="pipeline-drawer-section">
+        <h3><i class="fas fa-magnifying-glass-chart" aria-hidden="true"></i> Operator attempt dossier <span class="pipeline-drawer-count">${attempts.length}</span></h3>
+        <p class="pipeline-drawer-privacy">Prompts, inference transcripts, tool payloads, raw verifier output, secrets, hostnames, and absolute paths are intentionally not retained here.</p>
+        <dl class="pipeline-drawer-meta">
+          ${metaRow('Policy', escapeHtml(automation.policyRef || '--'))}
+          ${metaRow('Profile', escapeHtml(automation.executionProfile || '--'))}
+          ${metaRow('Editable scope', repositoryPathList(automation.scope))}
+          ${metaRow('Authority sources', repositoryPathList(automation.sourceFiles))}
+        </dl>
+        ${cards || '<div class="pipeline-empty">No coding attempt recorded yet.</div>'}
+      </section>`;
+  }
+
   function renderDrawer(task) {
     const { title, id, body } = drawerEls();
     if (title) title.textContent = task.title || 'Untitled task';
@@ -1029,6 +1135,7 @@
           <h3><i class="fas fa-file-lines" aria-hidden="true"></i> Specification</h3>
           <pre class="pipeline-drawer-spec">${escapeHtml(task.spec)}</pre>
         </section>` : ''}
+      ${renderAttemptDossier(task)}
       <section class="pipeline-drawer-section">
         <h3><i class="fas fa-timeline" aria-hidden="true"></i> Audit trail <span class="pipeline-drawer-count">${feedback.length}</span></h3>
         ${feedback.length ? `
@@ -1150,6 +1257,11 @@
       state.summary = normalized.summary;
       state.evidence = normalized.evidence;
       renderAll();
+      if (state.deepLinkedTask) {
+        const pipelineId = state.deepLinkedTask;
+        state.deepLinkedTask = null;
+        openDrawer(pipelineId, null);
+      }
     } catch (error) {
       renderError(error);
     } finally {
