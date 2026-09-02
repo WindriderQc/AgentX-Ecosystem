@@ -132,6 +132,7 @@ function _build() {
     <div class="ls-bar">
       <div class="ls-estimates">
         <span id="ls-est-time" class="ls-est"></span>
+        <span id="ls-est-cost" class="ls-est ls-est-cost">No paid targets selected</span>
       </div>
       <button type="button" id="ls-launch-btn" class="ls-launch-btn" disabled>Launch Benchmark</button>
     </div>`;
@@ -296,6 +297,36 @@ function _updateSummary(container, deps) {
         } else {
             estTimeEl.textContent = '';
         }
+    }
+
+    // Worst-case manual ceiling for explicitly selected paid targets. The
+    // broker still revalidates pricing and requires a one-batch SpendGrant.
+    const repeats = Math.max(1, Math.min(5, Number($batchConfig?.querySelector('#bv2-adv-exec_repeats')?.value) || 1));
+    const judgeAttempts = Math.max(1, Math.min(6, Number($batchConfig?.querySelector('#bv2-adv-max_retries')?.value ?? 2) + 1));
+    const outputTokensPerCall = Math.max(1, Number($batchConfig?.querySelector('#bv2-adv-response_max_tokens')?.value) || 32_000);
+    const inputTokensPerCall = 32_000;
+    const callsPerCandidate = totalPrompts * repeats;
+    const paidCandidateInputs = modelCbs.filter((input) => input.dataset.paid === 'true');
+    const paidJudge = $batchConfig?.querySelector('input[name="bv2-cloud-judge"]:checked[data-paid="true"]') || null;
+    const paidUnits = [
+        ...paidCandidateInputs.map((input) => ({ input, calls: callsPerCandidate })),
+        ...(paidJudge ? [{ input: paidJudge, calls: modelNames.length * callsPerCandidate * judgeAttempts }] : []),
+    ];
+    const maxCalls = paidUnits.reduce((sum, unit) => sum + unit.calls, 0);
+    const maxCostNanodollars = paidUnits.reduce((sum, { input, calls }) => (
+        sum
+        + calls * Number(input.dataset.callNanodollars || 0)
+        + calls * Math.ceil(inputTokensPerCall * Number(input.dataset.inputNanodollars || 0) / 1_000_000)
+        + calls * Math.ceil(outputTokensPerCall * Number(input.dataset.outputNanodollars || 0) / 1_000_000)
+    ), 0);
+    const costEl = container.querySelector('#ls-est-cost');
+    if (costEl) {
+        costEl.classList.toggle('ls-est-cost-paid', maxCalls > 0);
+        costEl.textContent = maxCalls > 0
+            ? `Paid ceiling · ${maxCalls} calls · ${(maxCalls * (inputTokensPerCall + outputTokensPerCall)).toLocaleString()} tokens · ~US$${(maxCostNanodollars / 1e9).toFixed(6)} manual`
+            : paidUnits.length
+                ? 'Paid target selected · configure test depth to calculate the ceiling'
+                : 'No paid targets selected';
     }
 
     // Enable/disable launch

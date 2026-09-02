@@ -31,9 +31,64 @@ describe('cloud benchmark UI contracts', () => {
     expect(models).toContain('${esc(harness)} Cloud');
     expect(models).toContain('data-execution-kind="harness"');
     expect(config).toContain('paid_approval');
-    expect(config).toContain("target?.mode === 'isolated_model'");
-    expect(config).toContain('Cloud judges disabled in this environment');
-    expect(config).toContain("cloudJudges.length ? '' : 'disabled'");
+    expect(models).toContain("target?.mode === 'isolated_model'");
+    expect(models).toContain('Cloud judges are disabled in this environment');
+    expect(models).toContain('input type="radio" name="bv2-cloud-judge"');
+    expect(models).toContain('optional · isolated targets only');
+  });
+
+  test('the unified picker searches all target evidence and groups dynamic sources', () => {
+    const models = read('public/js/benchmark-v2/batch-config-models.js');
+    const config = read('public/js/benchmark-v2/batch-config.js');
+    const page = read('public/js/benchmark-v2/index.js');
+    expect(models).toContain('Search model, provider, harness or capability');
+    expect(models).toContain('data-source-filter="${esc(sourceKey(harness))}"');
+    expect(models).toContain('target?.provider');
+    expect(models).toContain('target?.capabilities?.judge');
+    expect(config).toContain("card.dataset.filterText");
+    expect(config).toContain("card.dataset.source === source");
+    expect(page).toContain('harnessCatalogMeta');
+    expect(page).toContain('observedAt: targetCatalog.observedAt');
+  });
+
+  test('paid cloud targets are locked by default and recipes cannot select them', () => {
+    const models = read('public/js/benchmark-v2/batch-config-models.js');
+    const config = read('public/js/benchmark-v2/batch-config.js');
+    expect(models).toContain('id="bv2-allow-paid"');
+    expect(models).toContain('data-paid-lock="${paid && ready}"');
+    expect(models).toContain('Manual selection only · SpendGrant still required');
+    expect(config).toContain("cb.dataset.paid !== 'true'");
+    expect(config).toContain("preset === 'free-cloud'");
+    expect(models).toContain('data-preset="recommended"');
+    expect(models).toContain('data-preset="unbenchmarked"');
+    expect(config).not.toContain("preset === 'all'");
+    expect(config).toContain('Paid targets always require a manual click.');
+  });
+
+  test('cards expose context, pricing, judge capability and unavailable remediation', () => {
+    const models = read('public/js/benchmark-v2/batch-config-models.js');
+    expect(models).toContain('formatContextWindow(target.contextWindow)');
+    expect(models).toContain('priceLabel(target)');
+    expect(models).toContain('priceEvidenceLabel(target)');
+    expect(models).toContain('Source: ${pricing.source}');
+    expect(models).toContain('data-price-kind');
+    expect(models).toContain('Refresh the catalog or verify the harness profile.');
+    expect(models).toContain('mc-badge-judge');
+  });
+
+  test('review and run shows a dynamic manual paid ceiling before confirmation', () => {
+    const summary = read('public/js/benchmark-v2/launch-summary.js');
+    expect(summary).toContain('id="ls-est-cost"');
+    expect(summary).toContain('inputTokensPerCall = 32_000');
+    expect(summary).toContain('input.dataset.callNanodollars');
+    expect(summary).toContain('Paid ceiling · ${maxCalls} calls');
+    expect(summary).toContain('SpendGrant');
+  });
+
+  test('the picker and cloud judge collapse to one column on mobile', () => {
+    const css = read('public/css/benchmark-v2-layout.css');
+    expect(css).toMatch(/@media \(max-width: 700px\)[\s\S]*?\.mc-tier-cards,[\s\S]*?\.mc-judge-choice\s*\{\s*grid-template-columns: minmax\(0, 1fr\)/);
+    expect(css).toContain('.model-checklist { overflow-x: clip; }');
   });
 
   test('native-agent campaigns have a separate Harnesses surface', () => {
@@ -90,7 +145,7 @@ describe('cloud benchmark UI contracts', () => {
 
   test('local selection summary ignores stale cloud target ids', () => {
     const models = read('public/js/benchmark-v2/batch-config-models.js');
-    expect(models).toContain('saved.has(raw) || saved.has(normalized)');
+    expect(models).toContain('saved.has(value) || saved.has(m)');
     expect(models).not.toContain('saved.size');
   });
 

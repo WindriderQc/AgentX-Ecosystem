@@ -18,6 +18,93 @@ import {
 
 // ── Model checklist — tier-grouped ──────────────────────────────────────────
 
+function sourceKey(value) {
+    return _slug(String(value || 'harness').toLowerCase());
+}
+
+function formatContextWindow(value) {
+    const tokens = Number(value || 0);
+    if (!Number.isFinite(tokens) || tokens <= 0) return '';
+    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens % 1_000_000 === 0 ? 0 : 1)}M ctx`;
+    if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K ctx`;
+    return `${tokens} ctx`;
+}
+
+function formatCatalogTime(value) {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function targetFilterText(target) {
+    return [
+        target?.label,
+        target?.model,
+        target?.provider,
+        target?.harness?.name,
+        target?.harness?.version,
+        target?.tier,
+        target?.mode,
+        target?.pricing?.source,
+        target?.pricing?.effectiveAt,
+        target?.capabilities?.candidate ? 'candidate' : '',
+        target?.capabilities?.judge ? 'judge' : '',
+        target?.available === false ? 'unavailable' : 'ready',
+        target?.tier === 'paid_cloud' ? 'paid' : 'free',
+    ].filter(Boolean).join(' ').toLowerCase();
+}
+
+export function _buildModelPickerToolbar(host, targets = [], catalog = {}) {
+    const candidates = (Array.isArray(targets) ? targets : [])
+        .filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate);
+    const harnesses = [...new Set(candidates.map((target) => target?.harness?.name || 'Harness'))];
+    const hasPaid = candidates.some((target) => target?.tier === 'paid_cloud' && target?.available !== false);
+    const observed = formatCatalogTime(catalog?.observedAt);
+    const expires = formatCatalogTime(catalog?.expiresAt);
+    const catalogCopy = observed
+        ? `Catalog attested ${observed}${expires ? ` · valid until ${expires}` : ''}`
+        : candidates.length ? 'Attested catalog · freshness revalidated before every cell' : '';
+
+    return `<div class="mc-picker-head">
+      <div class="mc-toolbar">
+        <label class="mc-search-wrap" for="bv2-model-search">
+          <span class="mc-search-icon" aria-hidden="true">⌕</span>
+          <input type="search" class="mc-search" id="bv2-model-search"
+            placeholder="Search model, provider, harness or capability…" autocomplete="off">
+        </label>
+        <div class="mc-source-tabs" role="group" aria-label="Model source">
+          <button type="button" class="mc-source-btn is-active" data-source-filter="all" aria-pressed="true">All</button>
+          ${host ? '<button type="button" class="mc-source-btn" data-source-filter="local" aria-pressed="false">Local</button>' : ''}
+          ${harnesses.map((harness) => `<button type="button" class="mc-source-btn" data-source-filter="${esc(sourceKey(harness))}" aria-pressed="false">${esc(harness)}</button>`).join('')}
+        </div>
+      </div>
+      <div class="mc-picker-actions">
+        <div class="mc-presets" role="group" aria-label="Selection recipes">
+          ${host ? '<button type="button" class="mc-preset-btn" data-preset="quick" title="Three smallest ready local models">⚡ Quick local</button>' : ''}
+          ${host && candidates.length ? '<button type="button" class="mc-preset-btn" data-preset="balanced" title="One ready local contender plus one free cloud contender">★ Balanced</button>' : ''}
+          ${host ? '<button type="button" class="mc-preset-btn" data-preset="recommended" title="One ready local model per size tier">Tier mix</button>' : ''}
+          ${host ? '<button type="button" class="mc-preset-btn" data-preset="unbenchmarked" title="Ready local models without successful benchmark history">New evidence</button>' : ''}
+          ${candidates.length ? '<button type="button" class="mc-preset-btn" data-preset="free-cloud" title="Every ready free cloud contender">☁ Free cloud</button>' : ''}
+          <button type="button" class="mc-preset-btn mc-preset-accent" data-preset="lastbatch" title="Restore the last safe non-paid selection">↻ Last batch</button>
+          <button type="button" class="mc-preset-btn" data-preset="filtered" title="Select visible ready non-paid models">Select visible</button>
+          <button type="button" class="mc-preset-btn" data-preset="none">Clear</button>
+        </div>
+        <div class="mc-filter-chips" role="group" aria-label="Model filters">
+          <button type="button" class="mc-filter-chip" data-picker-filter="ready" aria-pressed="false">Ready</button>
+          <button type="button" class="mc-filter-chip" data-picker-filter="free" aria-pressed="false">Free</button>
+          <button type="button" class="mc-filter-chip" data-picker-filter="paid" aria-pressed="false">Paid</button>
+          <button type="button" class="mc-filter-chip" data-picker-filter="judge" aria-pressed="false">Judge-capable</button>
+        </div>
+        ${hasPaid ? `<label class="mc-paid-optin" for="bv2-allow-paid">
+          <input type="checkbox" id="bv2-allow-paid">
+          <span><strong>Allow paid models</strong><small>Manual selection only · SpendGrant still required</small></span>
+        </label>` : ''}
+      </div>
+      ${catalogCopy ? `<div class="mc-catalog-proof" role="status">✓ ${esc(catalogCopy)}</div>` : ''}
+    </div>`;
+}
+
 export function _buildModelChecklist(host) {
     if (!host) return _emptyMsg('No host selected.');
     const rawModels = Array.isArray(host.models) ? host.models : [];
@@ -38,28 +125,7 @@ export function _buildModelChecklist(host) {
     const saved = loadSet(SK_MODELS);
     const hostName = host.displayName || host.name || host.hostname || host.url || '';
 
-    // Toolbar: search + presets
-    let html = `<div class="mc-toolbar">
-      <input type="text" class="mc-search" id="bv2-model-search" placeholder="Filter models…" autocomplete="off">
-      <div class="mc-presets">
-        <button type="button" class="mc-preset-btn" data-preset="quick" title="3 smallest models for fast smoke tests">⚡ Quick</button>
-        <button type="button" class="mc-preset-btn" data-preset="recommended" title="1 per tier for balanced coverage">★ Recommended</button>
-        <button type="button" class="mc-preset-btn" data-preset="unbenchmarked" title="Select eligible models without successful benchmark history">Not Benchmarked</button>
-        <button type="button" class="mc-preset-btn mc-preset-accent" data-preset="lastbatch" title="Reselect models from most recent batch">🔁 Last Batch</button>
-        <button type="button" class="mc-preset-btn" data-preset="filtered" title="Select all currently visible models">✓ Select Filtered</button>
-        <button type="button" class="mc-preset-btn" data-preset="all">All</button>
-        <button type="button" class="mc-preset-btn" data-preset="none">None</button>
-      </div>
-    </div>`;
-
-    // Tooltip bar
-    html += `<div class="mc-preset-tooltip">
-      <span><b>⚡ Quick:</b> 3 smallest by param size</span>
-      <span><b>★ Recommended:</b> 1 per tier</span>
-      <span><b>Not Benchmarked:</b> first-run candidates</span>
-      <span><b>🔁 Last Batch:</b> from previous run</span>
-      <span><b>✓ Filtered:</b> visible models only</span>
-    </div>`;
+    let html = '';
 
     // Sort by parameter size ascending, then name
     const sorted = [...models].sort((a, b) => {
@@ -112,10 +178,16 @@ export function _buildModelChecklist(host) {
             const sizeClass = _sizeClass(d.parameterSize);
             const diskSize = _formatDiskSize(d.size);
 
-            html += `<label class="mc-card${checked ? ' selected' : ''}${isEmbedding ? ' mc-embedding' : ''}" data-model="${esc(value)}" data-model-norm="${esc(m)}" data-tier="${tier}" style="background:${tc.bg};border-color:${tc.border}">
+            html += `<label class="mc-card${checked ? ' selected' : ''}${isEmbedding ? ' mc-embedding' : ''}"
+              data-model="${esc(value)}" data-model-norm="${esc(m)}" data-size-tier="${tier}"
+              data-source="local" data-provider="ollama" data-ready="${isEmbedding ? 'false' : 'true'}"
+              data-paid="false" data-judge="false"
+              data-filter-text="${esc(`${value} ${m} ollama local ready candidate ${d.parameterSize || ''} ${d.quantization || ''}`.toLowerCase())}"
+              style="background:${tc.bg};border-color:${tc.border}">
               <input type="checkbox" class="bv2-model-cb" id="${esc(id)}"
                 value="${esc(value)}" data-host="${esc(host.url || '')}"
                 data-execution-kind="ollama"
+                data-paid="false"
                 data-host-name="${esc(hostName)}" ${checked} ${disabled}>
               <div class="mc-card-body">
                 <span class="mc-card-name" title="${esc(value)}">${esc(m)}${isEmbedding ? ' <span class="ax-readiness ax-warn">EMBEDDING</span>' : ''}</span>
@@ -131,19 +203,10 @@ export function _buildModelChecklist(host) {
         html += '</div></div>';
     }
 
-    // Summary
-    const totalModels = models.length;
-    const checkedCount = models.filter((raw) => {
-        const normalized = normModel(raw);
-        if (/embed|nomic|bert|bge|diagnostic/i.test(normalized)) return false;
-        return saved === null || saved.has(raw) || saved.has(normalized);
-    }).length;
-    html += `<div class="mc-summary">${checkedCount} of ${totalModels} models selected</div>`;
-
     return html;
 }
 
-function priceLabel(target) {
+export function priceLabel(target) {
     const pricing = target?.pricing;
     if (!pricing || pricing.kind === 'free') return 'free';
     if (pricing.kind === 'manual_per_call') {
@@ -152,6 +215,23 @@ function priceLabel(target) {
     const input = Number(pricing.inputNanodollarsPerMillion || 0) / 1e9;
     const output = Number(pricing.outputNanodollarsPerMillion || 0) / 1e9;
     return `manual ~US$${input.toFixed(4)}/${output.toFixed(4)} per 1M in/out`;
+}
+
+function priceEvidenceLabel(target) {
+    const pricing = target?.pricing;
+    if (!pricing || pricing.kind === 'free') return '';
+    const effective = formatCatalogTime(pricing.effectiveAt);
+    return [pricing.source ? `Source: ${pricing.source}` : '', effective ? `effective ${effective}` : '']
+        .filter(Boolean)
+        .join(' · ');
+}
+
+function pricingDataAttrs(target) {
+    const pricing = target?.pricing || {};
+    return `data-price-kind="${esc(pricing.kind || 'free')}"`
+        + ` data-call-nanodollars="${Number(pricing.callNanodollars || 0)}"`
+        + ` data-input-nanodollars="${Number(pricing.inputNanodollarsPerMillion || 0)}"`
+        + ` data-output-nanodollars="${Number(pricing.outputNanodollarsPerMillion || 0)}"`;
 }
 
 export function _buildHarnessChecklist(targets = [], catalogEnabled = false) {
@@ -171,27 +251,103 @@ export function _buildHarnessChecklist(targets = [], catalogEnabled = false) {
         groups.set(label, group);
     }
     return [...groups.entries()].map(([harness, entries]) => `
-      <div class="mc-tier-group" data-harness="${esc(harness)}">
+      <div class="mc-tier-group" data-harness="${esc(harness)}" data-source-group="${esc(sourceKey(harness))}">
         <div class="mc-tier-header">
           <span class="mc-tier-label" style="color:var(--r-active)">☁ ${esc(harness)} Cloud</span>
           <span class="mc-tier-count">— ${entries.length} target${entries.length === 1 ? '' : 's'}</span>
         </div>
         <div class="mc-tier-cards">
-          ${entries.map((target) => `
-            <label class="mc-card${target.available === false ? ' is-disabled' : ''}" data-model="${esc(target.model)}" data-tier="cloud">
+          ${entries.map((target) => {
+            const paid = target.tier === 'paid_cloud';
+            const ready = target.available !== false;
+            const source = sourceKey(target.harness?.name || 'Harness');
+            const context = formatContextWindow(target.contextWindow);
+            const unavailableCopy = ready ? '' : 'Unavailable in the current attested catalog. Refresh the catalog or verify the harness profile.';
+            return `
+            <label class="mc-card mc-cloud-card${ready ? '' : ' is-disabled'}${paid && ready ? ' mc-paid-locked' : ''}"
+              data-model="${esc(target.model)}" data-source="${esc(source)}" data-provider="${esc(target.provider)}"
+              data-ready="${ready}" data-paid="${paid}" data-judge="${target.capabilities?.judge === true}"
+              data-filter-text="${esc(targetFilterText(target))}">
               <input type="checkbox" class="bv2-model-cb" value="${esc(target.id)}"
-                data-target-id="${esc(target.id)}" data-execution-kind="harness" ${target.available === false ? 'disabled' : ''}>
+                data-target-id="${esc(target.id)}" data-execution-kind="harness"
+                data-paid="${paid}" data-paid-lock="${paid && ready}" ${pricingDataAttrs(target)}
+                ${!ready || paid ? 'disabled' : ''}>
               <div class="mc-card-body">
                 <span class="mc-card-name">${esc(target.label || target.model)}</span>
+                <span class="mc-card-subtitle">${esc(target.model)}</span>
                 <div class="mc-card-meta">
                   <span class="mc-badge">${esc(target.provider)}</span>
-                  <span class="mc-badge">${esc(target.tier === 'paid_cloud' ? 'PAID' : 'FREE')}</span>
+                  <span class="mc-badge ${paid ? 'mc-badge-paid' : 'mc-badge-free'}">${paid ? 'PAID' : 'FREE'}</span>
+                  <span class="mc-badge">ISOLATED</span>
+                  ${target.capabilities?.judge ? '<span class="mc-badge mc-badge-judge">JUDGE</span>' : ''}
+                  ${context ? `<span class="mc-badge">${esc(context)}</span>` : ''}
                   ${target.available === false ? '<span class="mc-badge">UNAVAILABLE</span>' : ''}
                   <span class="mc-badge">${esc(target.harness?.version || '')}</span>
-                  <span class="mc-badge mc-badge-dim">${esc(priceLabel(target))}</span>
                 </div>
+                <span class="mc-card-price">${esc(priceLabel(target))}</span>
+                ${priceEvidenceLabel(target) ? `<span class="mc-card-price-source">${esc(priceEvidenceLabel(target))}</span>` : ''}
+                ${paid && ready ? '<span class="mc-card-note" data-paid-note>Enable paid models, then select manually.</span>' : ''}
+                ${unavailableCopy ? `<span class="mc-card-note mc-card-note-error">${esc(unavailableCopy)}</span>` : ''}
               </div>
-            </label>`).join('')}
+            </label>`;
+          }).join('')}
         </div>
       </div>`).join('');
+}
+
+export function _buildCloudJudgePicker(targets = [], catalogEnabled = false) {
+    const judges = (Array.isArray(targets) ? targets : [])
+        .filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.judge);
+    const availableJudges = judges.filter((target) => target.available !== false);
+    if (!availableJudges.length) {
+        const copy = catalogEnabled
+            ? 'No attested isolated cloud judge is available. Continue with a ready local judge.'
+            : 'Cloud judges are disabled in this environment.';
+        return `<div class="mc-judge-picker-empty">${esc(copy)}</div>`;
+    }
+
+    return `<fieldset class="mc-judge-picker">
+      <legend>Cloud judge <span>optional · isolated targets only</span></legend>
+      <p class="mc-judge-help">A cloud judge overrides the local selection above. Paid judges require the same explicit paid-model unlock and one-batch SpendGrant.</p>
+      <div class="mc-judge-choice" role="radiogroup" aria-label="Cloud judge target">
+        <label class="mc-card mc-judge-card selected" data-source="local" data-paid="false">
+          <input type="radio" name="bv2-cloud-judge" value="" checked>
+          <span class="mc-card-body"><span class="mc-card-name">Use local judge</span><span class="mc-card-subtitle">Selected from the ready host above</span></span>
+        </label>
+        ${availableJudges.map((target) => {
+          const paid = target.tier === 'paid_cloud';
+          const context = formatContextWindow(target.contextWindow);
+          return `<label class="mc-card mc-cloud-card mc-judge-card${paid ? ' mc-paid-locked' : ''}"
+            data-source="${esc(sourceKey(target.harness?.name || 'Harness'))}" data-paid="${paid}">
+            <input type="radio" name="bv2-cloud-judge" value="${esc(target.id)}"
+              data-target-id="${esc(target.id)}" data-model="${esc(target.model)}" data-label="${esc(target.label || target.model)}"
+              data-provider="${esc(target.provider)}" data-harness="${esc(target.harness?.name || 'Harness')}"
+              data-paid="${paid}" data-paid-lock="${paid}" ${pricingDataAttrs(target)} ${paid ? 'disabled' : ''}>
+            <span class="mc-card-body">
+              <span class="mc-card-name">${esc(target.label || target.model)}</span>
+              <span class="mc-card-subtitle">${esc(target.model)}</span>
+              <span class="mc-card-meta">
+                <span class="mc-badge">${esc(target.harness?.name || 'Harness')}</span>
+                <span class="mc-badge">${esc(target.provider)}</span>
+                <span class="mc-badge ${paid ? 'mc-badge-paid' : 'mc-badge-free'}">${paid ? 'PAID' : 'FREE'}</span>
+                <span class="mc-badge">ISOLATED</span>
+                ${context ? `<span class="mc-badge">${esc(context)}</span>` : ''}
+                <span class="mc-badge mc-badge-judge">JUDGE</span>
+              </span>
+              <span class="mc-card-price">${esc(priceLabel(target))}</span>
+              ${priceEvidenceLabel(target) ? `<span class="mc-card-price-source">${esc(priceEvidenceLabel(target))}</span>` : ''}
+            </span>
+          </label>`;
+        }).join('')}
+      </div>
+    </fieldset>`;
+}
+
+export function _buildSelectionBasket() {
+    return `<div id="bv2-selection-basket" class="mc-selection-basket" role="status" aria-live="polite">
+      <span class="mc-basket-kicker">Selection</span>
+      <strong data-basket-count>0 contenders</strong>
+      <span data-basket-detail>Choose ready local or cloud models.</span>
+      <span class="mc-basket-safety">Paid targets are manual-only. Worst-case calls, tokens and cost appear in Review &amp; run.</span>
+    </div>`;
 }
