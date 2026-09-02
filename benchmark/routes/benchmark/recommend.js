@@ -68,6 +68,9 @@ router.get('/', async (req, res) => {
 
         const match = {
             success: true,
+            infra_error: { $ne: true },
+            needs_review: { $ne: true },
+            excluded_from_leaderboard: { $ne: true },
             prompt_category: category,
             quality_score: { $ne: null }
         };
@@ -83,6 +86,7 @@ router.get('/', async (req, res) => {
             cohortResolution = await resolveTrustedEvidenceCohort({
                 success: true,
                 infra_error: { $ne: true },
+                needs_review: { $ne: true },
                 excluded_from_leaderboard: { $ne: true },
                 quality_score: { $ne: null }
             });

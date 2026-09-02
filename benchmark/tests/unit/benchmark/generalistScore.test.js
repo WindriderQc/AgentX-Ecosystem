@@ -101,6 +101,19 @@ describe('buildCategoryEvidenceView', () => {
         expect(view.categoryAverages.reasoning).toBeNull();
         expect(view.categoryEvidence.reasoning).toBe('untested');
     });
+
+    it('labels quarantined categories as pending review rather than scored zero', () => {
+        const scores = {
+            coding: { avg: 8, count: 2, attempted: true },
+            reasoning: { count: 0, attempted: true, review_pending: true }
+        };
+        const calculated = { coding: 80, reasoning: 0, math: 0 };
+
+        const view = buildCategoryEvidenceView(scores, calculated, TEST_WEIGHTS);
+
+        expect(view.categoryAverages.reasoning).toBeNull();
+        expect(view.categoryEvidence.reasoning).toBe('review_pending');
+    });
 });
 
 describe('calculateGeneralistScoreFromCategories', () => {

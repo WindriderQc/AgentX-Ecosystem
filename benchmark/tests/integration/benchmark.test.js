@@ -2150,6 +2150,34 @@ describe('Benchmark System - Integration Tests', () => {
             expect(gt.review_protocol).toBe('judge_visible_single_review');
         });
 
+        it('cannot convert an executable-authority advisory row into leaderboard evidence', async () => {
+            const result = await BenchmarkResult.create({
+                model: 'scheduler-candidate',
+                host: 'http://localhost:11434',
+                prompt: 'Refactor the scheduler',
+                response: 'Plausible but unexecuted code',
+                latency: 300,
+                tokens: 30,
+                quality_score: 9,
+                evaluation_authority: 'executable',
+                executable_fixture_id: 'scheduler-dedup-refactor',
+                needs_review: true,
+                excluded_from_leaderboard: true,
+                success: true
+            });
+
+            const response = await api
+                .post(`/api/benchmark/results/${result._id}/human-review`)
+                .send({ action: 'approve', reviewer: 'qa-reviewer' });
+
+            expect(response.status).toBe(409);
+            expect(response.body.code).toBe('EXECUTABLE_VERIFICATION_REQUIRED');
+            const refreshed = await BenchmarkResult.findById(result._id).lean();
+            expect(refreshed.needs_review).toBe(true);
+            expect(refreshed.excluded_from_leaderboard).toBe(true);
+            expect(refreshed.human_review_status).toBeNull();
+        });
+
         it('should reject a result and exclude it from leaderboard calculations', async () => {
             const result = await BenchmarkResult.create({
                 model: 'rejected-model',

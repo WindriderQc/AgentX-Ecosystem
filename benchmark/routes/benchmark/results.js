@@ -438,6 +438,15 @@ router.post('/results/:id/human-review', async (req, res) => {
 
         const effectiveAction = action || ((human_score !== undefined && human_score !== null) ? 'override' : 'approve');
 
+        if (result.evaluation_authority === 'executable'
+            && (effectiveAction === 'approve' || effectiveAction === 'override')) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'EXECUTABLE_VERIFICATION_REQUIRED',
+                error: `Result correctness is owned by executable fixture ${result.executable_fixture_id || '(missing fixture id)'}; a human review cannot make this advisory row leaderboard-eligible`
+            });
+        }
+
         switch (effectiveAction) {
         case 'approve':
             if (result.quality_score === null || result.quality_score === undefined) {

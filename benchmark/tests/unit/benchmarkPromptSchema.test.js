@@ -187,10 +187,52 @@ describe('BenchmarkPrompt — structured_text output_contract round-trip', () =>
             type: 'exact',
             template: 'Paris'
         });
+        expect(fetched.evaluation_authority).toBe('deterministic');
+    });
+
+    test('seedPrompts syncs executable evaluation authority onto existing prompt rows', async () => {
+        await BenchmarkPrompt.create({
+            name: 'Concurrent Scheduler Refactor',
+            prompt: 'stale scheduler prompt',
+            level: 5,
+            category: 'coding',
+            scoring_type: 'coding'
+        });
+
+        await seedPrompts();
+
+        const fetched = await BenchmarkPrompt.findOne({ name: 'Concurrent Scheduler Refactor' }).lean();
+        expect(fetched.evaluation_authority).toBe('executable');
+        expect(fetched.executable_fixture_id).toBe('scheduler-dedup-refactor');
+    });
+
+    test('executable evaluation authority requires a fixture id', async () => {
+        await expect(BenchmarkPrompt.create({
+            name: 'missing-executable-fixture',
+            prompt: 'Change the repository.',
+            level: 5,
+            category: 'coding',
+            evaluation_authority: 'executable'
+        })).rejects.toThrow(/executable_fixture_id/);
     });
 });
 
 describe('BenchmarkResult — format_gated field (0149 sibling fix)', () => {
+    test('executable authority fields round-trip', async () => {
+        const saved = await BenchmarkResult.create({
+            model: 'test-model',
+            host: 'http://localhost:11434',
+            prompt: 'scheduler probe',
+            success: true,
+            evaluation_authority: 'executable',
+            executable_fixture_id: 'scheduler-dedup-refactor'
+        });
+
+        const fetched = await BenchmarkResult.findById(saved._id).lean();
+        expect(fetched.evaluation_authority).toBe('executable');
+        expect(fetched.executable_fixture_id).toBe('scheduler-dedup-refactor');
+    });
+
     test('format_gated path is declared on the schema', () => {
         const path = BenchmarkResult.schema.path('format_gated');
         expect(path).toBeDefined();

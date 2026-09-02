@@ -94,7 +94,10 @@ async function getModelTrends({ model, days = 7, groupBy = 'day' } = {}) {
 
     const matchStage = {
         timestamp: { $gte: cutoff },
-        success: true
+        success: true,
+        infra_error: { $ne: true },
+        needs_review: { $ne: true },
+        excluded_from_leaderboard: { $ne: true }
     };
 
     if (model) {
@@ -175,22 +178,42 @@ async function compareBatches(batchIds) {
         let judge_failed = 0;
         let judge_pending = 0;
 
+        const hasRankableQuality = {
+            $and: [
+                { $eq: ['$success', true] },
+                { $ne: ['$infra_error', true] },
+                { $ne: ['$needs_review', true] },
+                { $ne: ['$excluded_from_leaderboard', true] },
+                { $ne: [{ $ifNull: ['$quality_score', null] }, null] }
+            ]
+        };
+
         const scores = await BenchmarkResult.aggregate([
             { $match: { batch_id: batch._id } },
             {
                 $group: {
                     _id: null,
-                    avg_quality: { $avg: '$quality_score' },
-                    avg_composite: { $avg: '$composite_score' },
-                    full_passed: {
-                        $sum: {
+                    avg_quality: {
+                        $avg: { $cond: [hasRankableQuality, '$quality_score', null] }
+                    },
+                    avg_composite: {
+                        $avg: {
                             $cond: [
                                 {
                                     $and: [
-                                        { $eq: ['$success', true] },
-                                        { $ne: [{ $ifNull: ['$quality_score', null] }, null] }
+                                        hasRankableQuality,
+                                        { $ne: [{ $ifNull: ['$composite_score', null] }, null] }
                                     ]
                                 },
+                                '$composite_score',
+                                null
+                            ]
+                        }
+                    },
+                    full_passed: {
+                        $sum: {
+                            $cond: [
+                                hasRankableQuality,
                                 1,
                                 0
                             ]

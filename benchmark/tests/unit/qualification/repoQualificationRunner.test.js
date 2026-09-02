@@ -225,8 +225,8 @@ describe('repoQualificationRunner.runQualification (offline dry-run)', () => {
       onRecord: (rec) => emitted.push(rec)
     });
 
-    // 2 models x 12 tasks x 3 attempts.
-    expect(result.records).toHaveLength(2 * 12 * 3);
+    // 2 models x 13 tasks x 3 attempts.
+    expect(result.records).toHaveLength(2 * 13 * 3);
     expect(emitted).toHaveLength(result.records.length);
     expect(result.records.every((r) => r.grade.pass)).toBe(true);
     expect(result.records.every((r) => r.dryRun === true)).toBe(true);

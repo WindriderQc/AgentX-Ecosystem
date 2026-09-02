@@ -86,6 +86,23 @@ const BenchmarkPromptSchema = new mongoose.Schema({
         enum: ['deterministic', 'criteria', 'reference', 'decomposed', 'llm_judge', 'hybrid', 'auto', null],
         default: null
     },
+    // Declares which evidence is allowed to decide correctness. `executable`
+    // prompts may still be LLM-judged for diagnostic feedback, but their
+    // ordinary batch rows are quarantined from leaderboard aggregation until
+    // the named repository fixture is executed.
+    evaluation_authority: {
+        type: String,
+        enum: ['judge', 'deterministic', 'executable'],
+        default: 'judge'
+    },
+    executable_fixture_id: {
+        type: String,
+        default: null,
+        trim: true,
+        required: function executableFixtureRequired() {
+            return this.evaluation_authority === 'executable';
+        }
+    },
     deterministic_scoring: {
         type: {
             type: String,

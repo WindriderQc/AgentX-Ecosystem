@@ -13,10 +13,10 @@ const { buildPassAtKReport } = require('../../../src/services/qualification/pass
 const tasks = loadRepoTasks();
 
 describe('repoTaskFixtures manifest', () => {
-  test('loads twelve tasks with unique ids and representative categories', () => {
-    expect(tasks).toHaveLength(12);
+  test('loads thirteen tasks with unique ids and representative categories', () => {
+    expect(tasks).toHaveLength(13);
     const ids = tasks.map((t) => t.id);
-    expect(new Set(ids).size).toBe(12);
+    expect(new Set(ids).size).toBe(13);
     for (const t of tasks) {
       expect(t.fixture.fixtureDir).toBeTruthy();
       expect(t.fixtureFingerprint).toMatch(/^[a-f0-9]{64}$/);
@@ -29,7 +29,8 @@ describe('repoTaskFixtures manifest', () => {
     const categories = new Set(tasks.map((t) => t.category));
     for (const category of [
       'feature', 'async-error-handling', 'api-preserving-refactor',
-      'multi-file-feature', 'validation-edge-cases', 'test-repair'
+      'multi-file-feature', 'validation-edge-cases', 'test-repair',
+      'concurrency-refactor'
     ]) expect(categories.has(category)).toBe(true);
   });
 });
@@ -75,8 +76,8 @@ describe('full-set qualification harness (golden run)', () => {
     expect(runs.every((r) => r.grade.pass)).toBe(true);
     const report = buildPassAtKReport(runs, { ks: [1] });
     const golden = report.find((r) => r.model === 'golden');
-    expect(golden.samples).toBe(12);
-    expect(golden.correct).toBe(12);
+    expect(golden.samples).toBe(13);
+    expect(golden.correct).toBe(13);
     expect(golden.passAtK['pass@1']).toBe(1);
   });
 });

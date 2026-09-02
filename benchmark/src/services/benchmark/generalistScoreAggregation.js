@@ -217,11 +217,16 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
     // however, needs to *find* infra failures — so strip that filter from its base.
     const baseForInfra = { ...baseMatch };
     delete baseForInfra.infra_error;
+    const baseForReview = { ...baseMatch };
+    delete baseForReview.infra_error;
+    delete baseForReview.needs_review;
+    delete baseForReview.excluded_from_leaderboard;
 
     const successMatch = {
         ...baseMatch,
         success: true,
         infra_error: { $ne: true },
+        needs_review: { $ne: true },
         excluded_from_leaderboard: { $ne: true }
     };
     const infraFailureMatch = {
@@ -233,8 +238,15 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
             { error: { $regex: INFRA_ERROR_REGEX } }
         ]
     };
+    const reviewPendingMatch = {
+        ...baseForReview,
+        success: true,
+        infra_error: { $ne: true },
+        needs_review: true,
+        excluded_from_leaderboard: { $ne: true }
+    };
 
-    const [categoryStats, infraAttempts, categoryDiagnostics] = await Promise.all([
+    const [categoryStats, infraAttempts, reviewAttempts, categoryDiagnostics] = await Promise.all([
         BenchmarkResult.aggregate([
             { $match: successMatch },
             {
@@ -286,6 +298,19 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
         ], GENERALIST_AGGREGATION_OPTIONS),
         BenchmarkResult.aggregate([
             { $match: infraFailureMatch },
+            {
+                $group: {
+                    _id: {
+                        model: '$model',
+                        host: '$host',
+                        category: '$prompt_category'
+                    },
+                    count: { $sum: 1 }
+                }
+            }
+        ], GENERALIST_AGGREGATION_OPTIONS),
+        BenchmarkResult.aggregate([
+            { $match: reviewPendingMatch },
             {
                 $group: {
                     _id: {
@@ -369,6 +394,22 @@ async function getCategoryScoresByModel(matchQuery = { success: true }, options 
         }
     }
 
+    // Review-pending rows are evidence attempts, not measured quality. Keep the
+    // category visible without allowing its provisional judge score into the
+    // aggregate. As with infra failures, review-only models stay off the board.
+    for (const att of reviewAttempts) {
+        const key = `${att._id.model}@@${att._id.host}`;
+        const category = normalizeCategoryKey(att._id.category);
+        if (!category || !Object.prototype.hasOwnProperty.call(GENERALIST_CATEGORY_WEIGHTS, category)) continue;
+        if (!modelCategoryMap.has(key)) continue;
+        if (!modelCategoryMap.get(key)[category]) {
+            modelCategoryMap.get(key)[category] = { attempted: true, count: 0, review_pending: true };
+        } else {
+            modelCategoryMap.get(key)[category].attempted = true;
+            modelCategoryMap.get(key)[category].review_pending = true;
+        }
+    }
+
     return modelCategoryMap;
 }
 
@@ -387,6 +428,7 @@ async function getEmptyResponseRates(matchQuery = {}) {
                 ...baseMatch,
                 success: true,
                 infra_error: { $ne: true },
+                needs_review: { $ne: true },
                 excluded_from_leaderboard: { $ne: true }
             }
         },

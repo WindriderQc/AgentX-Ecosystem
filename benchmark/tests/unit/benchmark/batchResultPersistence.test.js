@@ -146,6 +146,33 @@ describe('batchResultPersistence truncation quarantine', () => {
         expect(doc.truncation.visible_response_budget).toBe(true);
     });
 
+    it('keeps LLM scoring advisory when executable verification is authoritative', async () => {
+        await persistSuccessfulResult(baseArgs({
+            prompt: {
+                _id: 'scheduler-prompt-id',
+                name: 'Concurrent Scheduler Refactor',
+                prompt: 'Refactor the scheduler.',
+                level: 5,
+                category: 'coding',
+                expected_answer: 'A correct refactor.',
+                expected_tokens: 480,
+                evaluation_authority: 'executable',
+                executable_fixture_id: 'scheduler-dedup-refactor'
+            },
+            promptText: 'Refactor the scheduler.',
+            cleanedResponse: 'Plausible-looking code that has not been executed.',
+            responseTruncated: false,
+            doneReason: 'stop'
+        }));
+
+        const doc = savedDocs[0];
+        expect(doc.evaluation_authority).toBe('executable');
+        expect(doc.executable_fixture_id).toBe('scheduler-dedup-refactor');
+        expect(doc.needs_review).toBe(true);
+        expect(doc.excluded_from_leaderboard).toBe(true);
+        expect(doc.review_reason).toMatch(/LLM judge output is advisory only/);
+    });
+
     it('records thinking-only output as an empty visible response without dropping the hidden reasoning', async () => {
         await persistSuccessfulResult(baseArgs({
             cleanedResponse: '',

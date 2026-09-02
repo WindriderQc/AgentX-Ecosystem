@@ -6,6 +6,7 @@
   "license": "MIT",
   "scripts": {
     "campaign:cloud-lanes": "node scripts/cloud-lane-campaign.js",
+    "campaign:paired-thinking": "node scripts/paired-thinking-campaign.js",
     "compare:cloud-lanes:offline": "node scripts/cloud-lane-comparison-offline.js",
     "qualify:toolcalls": "node scripts/toolcall-qualification.js",
     "start": "node server.js",
