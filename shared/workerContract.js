@@ -451,6 +451,19 @@ function normalizeWorkerReceipt(rawValue = {}, options = {}) {
     turns: metricInteger(usageRaw.turns, 'usage.turns'),
     toolCalls: metricInteger(usageRaw.toolCalls, 'usage.toolCalls'),
   };
+  if (usageRaw.cacheReadTokens != null) {
+    usage.cacheReadTokens = metricInteger(usageRaw.cacheReadTokens, 'usage.cacheReadTokens');
+  }
+  if (usageRaw.cacheWriteTokens != null) {
+    usage.cacheWriteTokens = metricInteger(usageRaw.cacheWriteTokens, 'usage.cacheWriteTokens');
+  }
+  if (usageRaw.costSource != null) {
+    usage.costSource = enumValue(
+      usageRaw.costSource,
+      'usage.costSource',
+      ['declared-pricing', 'provider-reported']
+    );
+  }
   const result = {
     contractSatisfied: boolean(resultRaw.contractSatisfied, 'result.contractSatisfied'),
     fingerprint: resultRaw.fingerprint == null ? null : hexFingerprint(resultRaw.fingerprint, 'result.fingerprint'),

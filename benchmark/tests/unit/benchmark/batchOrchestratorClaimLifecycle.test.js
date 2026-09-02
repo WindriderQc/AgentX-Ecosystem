@@ -1394,7 +1394,13 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             batchId: 'batch-mixed', defaultHost: local.host, models: [local.model, cloud.model], targets: [local, cloud],
             prompts: [{ _id: 'prompt-1', name: 'Prompt 1', prompt: 'Say hello', level: 1, category: 'reasoning' }],
             judgeConfig: { host: local.host, model: 'judge-1', concurrency: 2 },
-            executionConfig: { per_test_timeout_ms: 60_000, judge_drain_timeout_ms: 120_000, judge_stall_timeout_ms: 30_000 },
+            executionConfig: {
+                per_test_timeout_ms: 60_000,
+                judge_drain_timeout_ms: 120_000,
+                judge_stall_timeout_ms: 30_000,
+                think: true,
+                think_mode: 'explicit_thinking'
+            },
             executionMode: 'throughput', recordBatchTimelineEvent: jest.fn(() => Promise.resolve()),
             queueBatchProgress: jest.fn(), flushBatchProgress: jest.fn(() => Promise.resolve()),
             setBatchPhase: jest.fn(() => Promise.resolve()), handleGracefulStop: jest.fn(),
@@ -1403,7 +1409,14 @@ describe('runBatchOrchestrator claim lifecycle', () => {
 
         expect(mockBenchmarkFetch).toHaveBeenCalledTimes(1);
         expect(mockExecuteHarnessTarget).toHaveBeenCalledTimes(1);
+        expect(mockExecuteHarnessTarget).toHaveBeenCalledWith(expect.objectContaining({
+            parameters: expect.objectContaining({ thinking: true })
+        }));
         expect(mockPersistSuccessfulResult).toHaveBeenCalledTimes(2);
+        expect(mockPersistSuccessfulResult).toHaveBeenCalledWith(expect.objectContaining({
+            executionTarget: expect.objectContaining({ executionKind: 'harness' }),
+            executionSettings: expect.objectContaining({ think: true, think_mode: 'explicit_thinking' })
+        }));
         expect(mockPersistSuccessfulResult.mock.calls.map(([args]) => args.executionTarget.executionKind).sort())
             .toEqual(['harness', 'ollama']);
         expect(mockClaimHostForBenchmark.mock.calls.flatMap(([hosts]) => hosts)).not.toContain('harness:openclaw');
