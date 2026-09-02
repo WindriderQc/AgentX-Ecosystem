@@ -312,6 +312,7 @@
     return state.tasks.filter((task) => {
       if (task.status !== 'queued' || task.assignee || String(task.risk).toLowerCase() !== 'low') return false;
       if (task.automation?.mode !== 'review_only') return false;
+      if (!Array.isArray(task.automation?.sourceFiles) || !task.automation.sourceFiles.length) return false;
       if (unmetDependencies(task, byId).length) return false;
       const notBefore = task.notBefore ? new Date(task.notBefore) : null;
       if (notBefore && !Number.isNaN(notBefore.getTime()) && notBefore.getTime() > Date.now()) return false;
@@ -361,8 +362,8 @@
     } else {
       button.innerHTML = '<i class="fas fa-play" aria-hidden="true"></i><span>Run one task</span>';
       detail.textContent = candidates.length
-        ? 'AIOps revalidates scope, dependencies, locks, budgets, and the zero-provider-spend policy before claiming anything.'
-        : 'No queued low-risk review-only task currently passes the visible generic prerequisites.';
+        ? 'AIOps revalidates authority sources, scope, dependencies, locks, budgets, and the zero-provider-spend policy before claiming anything.'
+        : 'No queued low-risk review-only task with declared authority sources currently passes the visible prerequisites.';
     }
   }
 

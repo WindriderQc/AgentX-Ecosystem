@@ -70,6 +70,8 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain('/api/runtime-bridges/coding-dispatch/status');
     expect(script).toContain('/api/runtime-bridges/coding-dispatch/runs');
     expect(script).toContain('provider spend ceiling $0');
+    expect(script).toContain('task.automation?.sourceFiles');
+    expect(script).toContain('declared authority sources');
     expect(script).toContain("task.automation?.mode !== 'review_only'");
     expect(script).toContain('JSON.stringify({ pipelineId, confirm: true })');
   });

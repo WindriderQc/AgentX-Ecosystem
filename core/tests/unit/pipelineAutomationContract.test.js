@@ -32,11 +32,16 @@ describe('pipeline automation contract', () => {
     const normalized = normalizePipelineAutomationIntent(intent({
       humanGates: ['review', 'deploy', 'merge'],
       scope: ['core/tests/example.test.js', 'core/src/example.js'],
+      sourceFiles: ['shared/workerContract.js', 'shared/pipelineAutomationContract.js'],
     }));
     const replay = normalizePipelineAutomationIntent({ ...normalized });
 
     expect(replay).toEqual(normalized);
     expect(normalized.scope).toEqual(['core/src/example.js', 'core/tests/example.test.js']);
+    expect(normalized.sourceFiles).toEqual([
+      'shared/pipelineAutomationContract.js',
+      'shared/workerContract.js',
+    ]);
     expect(normalized.fingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
@@ -72,6 +77,8 @@ describe('pipeline automation contract', () => {
       .toThrow(expect.objectContaining({ code: 'INVALID_AUTOMATION_INTENT' }));
     expect(() => normalizePipelineAutomationIntent(intent({ humanGates: ['review', 'merge', 'protected_change'] })))
       .toThrow(expect.objectContaining({ code: 'AUTOMATION_HUMAN_GATE_REQUIRED' }));
+    expect(() => normalizePipelineAutomationIntent(intent({ sourceFiles: ['../secret'] })))
+      .toThrow(expect.objectContaining({ code: 'INVALID_AUTOMATION_INTENT' }));
 
     const normalized = normalizePipelineAutomationIntent(intent());
     expect(() => normalizePipelineAutomationIntent({ ...normalized, policyRef: 'changed/v1' }))
