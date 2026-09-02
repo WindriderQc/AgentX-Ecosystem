@@ -163,3 +163,23 @@ test('generic packet builder dispatches v2 without weakening v1', () => {
   const { buildBenchmarkBlindReviewPackage } = require('./benchmarkBlindReviewPacket');
   assert.equal(buildBenchmarkBlindReviewPackage(sourceBundle()).packet.schema, BENCHMARK_BLIND_REVIEW_PACKET_V2_SCHEMA);
 });
+
+test('preserves non-blank response whitespace because fingerprints bind exact judged bytes', () => {
+  const bundle = sourceBundle();
+  bundle.items[0].response += '\n';
+  bundle.items[0].source.responseFingerprint = fingerprint(bundle.items[0].response);
+  const source = bundle.items[0].source;
+  source.captureFingerprint = fingerprint({
+    schema: 'agentx.benchmark-judge-calibration-capture-item/v1',
+    captureItemId: source.captureItemId,
+    promptFingerprint: source.promptFingerprint,
+    expectedAnswerFingerprint: source.expectedAnswerFingerprint,
+    responseFingerprint: source.responseFingerprint,
+    category: source.category,
+    judgeIdentityFingerprint: source.judgeIdentityFingerprint,
+    judgeReceiptFingerprint: source.judgeReceiptFingerprint,
+    judgeScoreMicros: source.judgeScoreMicros,
+  });
+  const result = buildBenchmarkBlindReviewPackageV2(bundle);
+  assert.equal(result.packet.items[0].response.endsWith('\n'), true);
+});

@@ -54,8 +54,15 @@ function canonicalText(value, label, max = 100_000) {
   return value;
 }
 
-function nullableText(value, label) {
-  return value === null ? null : canonicalText(value, label);
+function contentText(value, label, max = 100_000) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > max || value.trim().length < 1) {
+    throw packetError(`${label} must be non-blank bounded text`);
+  }
+  return value;
+}
+
+function nullableContentText(value, label) {
+  return value === null ? null : contentText(value, label);
 }
 
 function sha256(value, label) {
@@ -242,9 +249,9 @@ function normalizeItem(rawValue, index) {
     split: value.split,
     category: value.category,
     difficulty: value.difficulty,
-    prompt: canonicalText(value.prompt, `${label}.prompt`),
-    expectedAnswer: nullableText(value.expectedAnswer, `${label}.expectedAnswer`),
-    response: canonicalText(value.response, `${label}.response`),
+    prompt: contentText(value.prompt, `${label}.prompt`),
+    expectedAnswer: nullableContentText(value.expectedAnswer, `${label}.expectedAnswer`),
+    response: contentText(value.response, `${label}.response`),
   };
   return { ...item, source: normalizeSource(value.source, item, index) };
 }
