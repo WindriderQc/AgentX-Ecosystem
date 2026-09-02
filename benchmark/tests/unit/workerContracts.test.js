@@ -52,6 +52,20 @@ describe('WorkerReceipt v1', () => {
     expect(receipt.fingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  test('preserves provider-reported cost provenance and cache usage', () => {
+    const envelope = normalizeWorkerEnvelope(envelopeInput());
+    const raw = receiptInput(envelope);
+    raw.usage.cacheReadTokens = 12;
+    raw.usage.cacheWriteTokens = 3;
+    raw.usage.costSource = 'provider-reported';
+    const receipt = normalizeWorkerReceipt(raw, { envelope });
+    expect(receipt.usage).toMatchObject({
+      cacheReadTokens: 12,
+      cacheWriteTokens: 3,
+      costSource: 'provider-reported',
+    });
+  });
+
   test('normalizes a failed receipt with bounded tool and human evidence', () => {
     const envelope = normalizeWorkerEnvelope(envelopeInput());
     const receipt = normalizeWorkerReceipt(receiptInput(envelope, {

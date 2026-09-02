@@ -17,6 +17,7 @@ const {
   createSpendGrant,
   executeHarnessTarget,
   getHarnessTargets,
+  normalizeHarnessInvocationParameters,
   resolveHarnessTarget,
 } = require('../../src/services/benchmark/harnessBrokerClient');
 const { normalizeBenchmarkTarget } = require('../../../shared/benchmarkTargetContract');
@@ -150,7 +151,7 @@ describe('harness broker client', () => {
     expect(catalog.targets).toEqual([currentTarget]);
     const candidate = await executeHarnessTarget({
       batchId: 'batch-1', batchFingerprint: HEX('f'), cellId: 'candidate-1', target: currentTarget,
-      promptText: 'candidate prompt', parameters: { maxTokens: 20, timeoutMs: 1000 }, role: 'candidate',
+      promptText: 'candidate prompt', parameters: { maxTokens: 20, timeoutMs: 1000, thinking: true }, role: 'candidate',
     });
     const judge = await executeHarnessTarget({
       batchId: 'batch-1', batchFingerprint: HEX('f'), cellId: 'judge-1', target: currentTarget,
@@ -159,6 +160,9 @@ describe('harness broker client', () => {
     expect(candidate.output).toBe('cloud candidate answer');
     expect(judge.output).toBe('{"score":8}');
     expect(requests.map((request) => request.role)).toEqual(['candidate', 'judge']);
+    expect(requests.map((request) => request.parameters.thinking)).toEqual([true, false]);
+    expect(requests[0].envelope.selection.model.constraints)
+      .not.toEqual(requests[1].envelope.selection.model.constraints);
     for (const request of requests) {
       expect(request.batchId).toBe('batch-1');
       expect(request.envelope).toMatchObject({
@@ -167,6 +171,13 @@ describe('harness broker client', () => {
         policies: { filesystem: { mode: 'none' } },
       });
     }
+  });
+
+  test('normalizes thinking as an explicit boolean and rejects ambiguous values', () => {
+    expect(normalizeHarnessInvocationParameters({ thinking: true })).toMatchObject({ thinking: true });
+    expect(normalizeHarnessInvocationParameters({})).toMatchObject({ thinking: false });
+    expect(() => normalizeHarnessInvocationParameters({ thinking: 'true' }))
+      .toThrow(expect.objectContaining({ code: 'HARNESS_PARAMETER_INVALID' }));
   });
 
   test('fails before execution when the catalog target drifts', async () => {

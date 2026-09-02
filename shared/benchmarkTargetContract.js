@@ -115,7 +115,9 @@ function normalizePricing(rawValue, tier) {
     if (tier === 'paid_cloud') throw contractError('PAID_PRICE_REQUIRED', 'paid_cloud targets require a manual price declaration');
     return tier === 'free_cloud' ? {
       kind: 'free', currency: 'USD', estimated: false, source: 'declared-free', effectiveAt: null,
-      inputNanodollarsPerMillion: 0, outputNanodollarsPerMillion: 0, callNanodollars: 0,
+      inputNanodollarsPerMillion: 0, outputNanodollarsPerMillion: 0,
+      cacheReadNanodollarsPerMillion: 0, cacheWriteNanodollarsPerMillion: 0,
+      callNanodollars: 0,
     } : null;
   }
   const raw = object(rawValue, 'pricing');
@@ -128,9 +130,17 @@ function normalizePricing(rawValue, tier) {
     effectiveAt: raw.effectiveAt == null ? null : isoTimestamp(raw.effectiveAt, 'pricing.effectiveAt'),
     inputNanodollarsPerMillion: safeInteger(raw.inputNanodollarsPerMillion ?? 0, 'pricing.inputNanodollarsPerMillion'),
     outputNanodollarsPerMillion: safeInteger(raw.outputNanodollarsPerMillion ?? 0, 'pricing.outputNanodollarsPerMillion'),
+    cacheReadNanodollarsPerMillion: safeInteger(raw.cacheReadNanodollarsPerMillion ?? 0, 'pricing.cacheReadNanodollarsPerMillion'),
+    cacheWriteNanodollarsPerMillion: safeInteger(raw.cacheWriteNanodollarsPerMillion ?? 0, 'pricing.cacheWriteNanodollarsPerMillion'),
     callNanodollars: safeInteger(raw.callNanodollars ?? 0, 'pricing.callNanodollars'),
   };
-  if (kind === 'free' && (normalized.inputNanodollarsPerMillion || normalized.outputNanodollarsPerMillion || normalized.callNanodollars)) {
+  if (kind === 'free' && (
+    normalized.inputNanodollarsPerMillion
+    || normalized.outputNanodollarsPerMillion
+    || normalized.cacheReadNanodollarsPerMillion
+    || normalized.cacheWriteNanodollarsPerMillion
+    || normalized.callNanodollars
+  )) {
     throw contractError('FREE_PRICE_CONFLICT', 'free pricing cannot carry a positive price');
   }
   if (kind === 'manual_per_token' && normalized.inputNanodollarsPerMillion === 0 && normalized.outputNanodollarsPerMillion === 0) {

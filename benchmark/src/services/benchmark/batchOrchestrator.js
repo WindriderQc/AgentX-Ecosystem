@@ -698,7 +698,8 @@ async function runBatchOrchestrator({
                                 topP: executionConfig.top_p,
                                 seed: executionConfig.seed,
                                 maxTokens: numPredict,
-                                timeoutMs: executionConfig.per_test_timeout_ms || 600000
+                                timeoutMs: executionConfig.per_test_timeout_ms || 600000,
+                                thinking: executionConfig.think === true
                             },
                             spendGrant,
                             role: 'candidate',
@@ -743,8 +744,8 @@ async function runBatchOrchestrator({
                                 sampling_source: executionConfig.sampling_source || 'controlled_override',
                                 num_ctx: target.contextWindow,
                                 num_ctx_source: 'target_catalog',
-                                think: false,
-                                think_mode: 'off',
+                                think: executionConfig.think === true,
+                                think_mode: executionConfig.think_mode || (executionConfig.think === true ? 'on' : 'off'),
                                 temperature: executionConfig.temperature ?? null,
                                 top_p: executionConfig.top_p ?? null,
                                 seed: executionConfig.seed ?? null,
@@ -760,7 +761,7 @@ async function runBatchOrchestrator({
                             trustExecutionReceipt: execution.receipt,
                             providerUsage: usage,
                             providerCost: {
-                                estimated: target.pricing?.estimated === true,
+                                estimated: target.pricing?.estimated === true && usage.costSource !== 'provider-reported',
                                 costNanodollars: usage.costNanodollars,
                                 pricing: target.pricing,
                                 observedAt: new Date().toISOString()
@@ -785,7 +786,9 @@ async function runBatchOrchestrator({
                             executionSettings: {
                                 sampling_profile: executionConfig.sampling_profile || 'controlled',
                                 sampling_source: executionConfig.sampling_source || 'controlled_override',
-                                think: false, think_mode: 'off', rankable_mode: target.mode === 'isolated_model',
+                                think: executionConfig.think === true,
+                                think_mode: executionConfig.think_mode || (executionConfig.think === true ? 'on' : 'off'),
+                                rankable_mode: target.mode === 'isolated_model',
                                 inference_contract_fingerprint: target.profile.fingerprint
                             },
                             executionTarget: target,

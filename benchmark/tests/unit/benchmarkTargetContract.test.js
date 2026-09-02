@@ -173,4 +173,26 @@ describe('harness envelope, receipt, and spend contracts', () => {
     });
     expect(request).not.toHaveProperty('signature');
   });
+
+  test('reserves the highest declared input or cache rate for paid token pricing', () => {
+    const paid = harnessTarget({
+      id: 'openrouter-paid-model', tier: 'paid_cloud', provider: 'Alibaba', model: 'vendor/model',
+      pricing: {
+        kind: 'manual_per_token', currency: 'USD', source: 'provider endpoint snapshot',
+        effectiveAt: '2026-09-02T00:00:00.000Z', inputNanodollarsPerMillion: 150_000_000,
+        outputNanodollarsPerMillion: 470_000_000, cacheReadNanodollarsPerMillion: 16_000_000,
+        cacheWriteNanodollarsPerMillion: 200_000_000, callNanodollars: 0,
+      },
+    });
+    expect(() => buildSpendPlan({
+      batchId: 'batch-cache-price', batchFingerprint: HEX('f'), targets: [paid], promptCount: 1, repeats: 1,
+      executionConfig: { response_max_tokens: 10, input_token_ceiling: 10 },
+      approval: { confirmed: true, maxCalls: 1, maxTokens: 20, maxCostNanodollars: 6_699 },
+    })).toThrow(expect.objectContaining({ code: 'PAID_APPROVAL_TOO_LOW' }));
+    expect(buildSpendPlan({
+      batchId: 'batch-cache-price', batchFingerprint: HEX('f'), targets: [paid], promptCount: 1, repeats: 1,
+      executionConfig: { response_max_tokens: 10, input_token_ceiling: 10 },
+      approval: { confirmed: true, maxCalls: 1, maxTokens: 20, maxCostNanodollars: 6_700 },
+    }).approval.maxCostNanodollars).toBe(6_700);
+  });
 });

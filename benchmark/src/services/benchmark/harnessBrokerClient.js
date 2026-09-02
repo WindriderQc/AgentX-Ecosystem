@@ -211,12 +211,17 @@ function normalizeHarnessInvocationParameters(parameters = {}, {
     parameters.timeoutMs ?? timeoutMs
   ) || 600_000));
   const seedValue = finiteOrNull(parameters.seed);
+  const thinkingValue = parameters.thinking ?? parameters.think ?? false;
+  if (typeof thinkingValue !== 'boolean') {
+    throw brokerError('HARNESS_PARAMETER_INVALID', 'Harness thinking must be a boolean', 422);
+  }
   return {
     temperature: finiteOrNull(parameters.temperature),
     topP: finiteOrNull(parameters.topP),
     seed: seedValue === null ? null : Math.round(seedValue),
     maxTokens: normalizedMaxTokens,
     timeoutMs: normalizedTimeoutMs,
+    thinking: thinkingValue,
     responseFormat: role === 'judge' ? 'json' : 'text'
   };
 }
@@ -363,7 +368,12 @@ function estimateTargetCostNanodollars(target, { calls, inputTokensPerCall, outp
   const pricing = normalized.pricing;
   const count = BigInt(calls);
   let perCall = BigInt(pricing.callNanodollars || 0);
-  perCall += (BigInt(inputTokensPerCall) * BigInt(pricing.inputNanodollarsPerMillion || 0) + 999_999n) / 1_000_000n;
+  const conservativeInputRate = Math.max(
+    pricing.inputNanodollarsPerMillion || 0,
+    pricing.cacheReadNanodollarsPerMillion || 0,
+    pricing.cacheWriteNanodollarsPerMillion || 0
+  );
+  perCall += (BigInt(inputTokensPerCall) * BigInt(conservativeInputRate) + 999_999n) / 1_000_000n;
   perCall += (BigInt(outputTokensPerCall) * BigInt(pricing.outputNanodollarsPerMillion || 0) + 999_999n) / 1_000_000n;
   const total = perCall * count;
   if (total > BigInt(Number.MAX_SAFE_INTEGER)) throw brokerError('SPEND_ESTIMATE_OVERFLOW', 'Paid batch estimate exceeds the safe integer range', 422);
