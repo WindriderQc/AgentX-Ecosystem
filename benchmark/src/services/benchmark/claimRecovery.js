@@ -30,6 +30,8 @@ const { groupModelsByHost } = require('./batchHelpers');
 
 const GHOST_BATCH_INACTIVE_THRESHOLD_MS = 10 * 60 * 1000; // 10 min
 const PRIOR_TRUST_RECOVERY_RETRY_MS = 5_000;
+const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/i;
+const PROFILER_CLAIM_PATTERN = /^profile-[a-f0-9]{16}$/i;
 
 function normalizeRecoveryCutoff(recoveryStartedAt) {
     const cutoff = new Date(recoveryStartedAt);
@@ -93,6 +95,7 @@ async function releaseFinalizedPriorTrustClaims(recoveryStartedAt) {
         const batchId = String(claim?.batchId || '');
         const hostUrl = String(claim?.hostUrl || '');
         if (!batchId || !hostUrl) continue;
+        if (!OBJECT_ID_PATTERN.test(batchId)) continue;
         try {
             const batch = await BenchmarkBatch.findById(batchId)
                 .select('status started_at +trust_evidence_context')
@@ -213,6 +216,19 @@ async function recoverLeakedClaims({ recoveryStartedAt = new Date() } = {}) {
         if (!batchId || !hostUrl) continue;
 
         try {
+            // Profiler jobs live only in this process. After a Benchmark
+            // restart, a profile-* claim cannot still have a worker capable
+            // of completing or heartbeating it, so release that exact
+            // generation-bound claim before trying to interpret batch ids.
+            if (PROFILER_CLAIM_PATTERN.test(batchId)) {
+                const result = await releaseBenchmarkClaim(hostUrl, batchId);
+                recordRelease(claim, result, 'orphaned-profiler-runtime');
+                continue;
+            }
+            // Manual/external claim ids are not BenchmarkBatch ObjectIds and
+            // may still be owned by a live wrapper outside this container.
+            // Leave them untouched rather than casting or stealing them.
+            if (!OBJECT_ID_PATTERN.test(batchId)) continue;
             const batch = await BenchmarkBatch.findById(batchId)
                 .select('status last_activity_at +trust_evidence_context')
                 .lean();
@@ -357,6 +373,8 @@ async function reacquireActiveBatchClaims() {
 
 module.exports = {
     PRIOR_TRUST_RECOVERY_RETRY_MS,
+    OBJECT_ID_PATTERN,
+    PROFILER_CLAIM_PATTERN,
     interruptPriorRuntimeTrustBatches,
     recoverLeakedClaims,
     reacquireActiveBatchClaims,

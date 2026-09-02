@@ -7,7 +7,12 @@ const {
   compareModeSummaries,
   buildBatchPayload
 } = require('../../../src/services/qualification/pairedThinkingCampaign');
-const { parseArgs, headersFor } = require('../../../scripts/paired-thinking-campaign');
+const {
+  parseArgs,
+  headersFor,
+  waitForSingletonIdle,
+  assertReusableFinalOnlyBatch
+} = require('../../../scripts/paired-thinking-campaign');
 
 function row(prompt, score, overrides = {}) {
   return {
@@ -169,6 +174,55 @@ describe('paired thinking campaign plan', () => {
     expect(parseArgs([...argv, '--execute']).execute).toBe(true);
     expect(() => parseArgs([...argv, '--repeats', '2'])).toThrow(/3 to 5/);
     expect(() => parseArgs([...argv.slice(0, -1), 'not-an-id'])).toThrow(/ObjectId/);
+    expect(() => parseArgs([...argv, '--resume-final-only-batch', 'not-an-id'])).toThrow(/Mongo ObjectId/);
+  });
+
+  test('waits for the persisted singleton slot to clear after terminal row counts', async () => {
+    const requestJson = jest.fn()
+      .mockResolvedValueOnce({ data: [{ _id: 'a'.repeat(24), status: 'running' }] })
+      .mockResolvedValueOnce({ data: [] });
+    const delay = jest.fn().mockResolvedValue();
+
+    await waitForSingletonIdle({
+      api: 'http://benchmark:3081',
+      operatorTokenEnv: null,
+      singletonIdleTimeoutMs: 60_000,
+      pollMs: 1000
+    }, { requestJson, delay });
+
+    expect(requestJson).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenCalledWith(1000);
+  });
+
+  test('resumes only a completed final-only half with the exact frozen contract', () => {
+    const pairId = 'f'.repeat(64);
+    const batch = {
+      _id: 'b'.repeat(24),
+      status: 'completed',
+      host: config.host,
+      models: [config.model],
+      prompt_ids: config.promptIds,
+      judge_config: { host: config.judgeHost, model: config.judgeModel },
+      execution_config: {
+        repeats: config.repeats,
+        force_num_ctx: config.numCtx,
+        response_max_tokens: config.numPredict,
+        temperature: config.temperature,
+        top_p: config.topP,
+        top_k: config.topK,
+        repeat_penalty: config.repeatPenalty,
+        seed: config.seed,
+        response_mode: 'final_only',
+        think: false
+      },
+      description: `Exploratory paired thinking campaign ${pairId}; no automatic routing authority.`
+    };
+
+    expect(assertReusableFinalOnlyBatch(config, batch)).toBe(pairId);
+    expect(() => assertReusableFinalOnlyBatch(config, {
+      ...batch,
+      execution_config: { ...batch.execution_config, seed: 99 }
+    })).toThrow(/seed: expected 42, got 99/);
   });
 
   test('reads operator authorization from an environment variable without embedding it in the plan', () => {

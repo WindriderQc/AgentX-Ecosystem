@@ -35,6 +35,7 @@ jest.mock('../../../models/BenchmarkBatch', () => mockBenchmarkBatch);
 const {
     recoverLeakedClaims,
     reacquireActiveBatchClaims,
+    releaseFinalizedPriorTrustClaims,
     startPriorRuntimeTrustBatchRecoverySweep
 } = require('../../../src/services/benchmark/claimRecovery');
 
@@ -122,6 +123,40 @@ test('reports a refused startup release as failed rather than released', async (
         '[ClaimRecovery] Some leaked claims remain active after startup reconciliation',
         expect.objectContaining({ count: 1 })
     );
+});
+
+test('releases an orphaned in-memory profiler claim without casting it as a batch id', async () => {
+    const claim = {
+        batchId: 'profile-e726031ada693290',
+        hostUrl: 'http://profile-host.internal:11434'
+    };
+    mockGetBenchmarkClaims.mockResolvedValue([claim]);
+
+    const outcome = await recoverLeakedClaims();
+
+    expect(mockBenchmarkBatch.findById).not.toHaveBeenCalled();
+    expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith(claim.hostUrl, claim.batchId);
+    expect(outcome).toMatchObject({ released: 1, failed: 0 });
+    expect(outcome.details).toEqual([expect.objectContaining({
+        batchId: claim.batchId,
+        reason: 'orphaned-profiler-runtime'
+    })]);
+});
+
+test('leaves an external non-batch claim untouched during Benchmark startup', async () => {
+    const claim = {
+        batchId: 'repo-coding-final-20260902',
+        hostUrl: 'http://profile-host.internal:11434'
+    };
+    mockGetBenchmarkClaims.mockResolvedValue([claim]);
+
+    const outcome = await recoverLeakedClaims();
+    const deferred = await releaseFinalizedPriorTrustClaims(new Date());
+
+    expect(mockBenchmarkBatch.findById).not.toHaveBeenCalled();
+    expect(mockReleaseBenchmarkClaim).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ released: 0, failed: 0 });
+    expect(deferred).toMatchObject({ fetched: true, matched: 0, released: [], failed: [] });
 });
 
 test('does not re-claim Trust work that startup recovery already finalized', async () => {

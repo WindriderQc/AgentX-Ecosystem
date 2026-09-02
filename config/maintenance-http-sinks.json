@@ -32,7 +32,7 @@
     {
       "id": "benchmark.maintenance.paired-thinking.product-api",
       "source": "benchmark/scripts/paired-thinking-campaign.js",
-      "line": 132,
+      "line": 143,
       "column": 26,
       "constructor": "fetchImpl",
       "authoritySource": "operator-supplied",
