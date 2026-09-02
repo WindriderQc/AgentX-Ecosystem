@@ -9,6 +9,9 @@ their evidence cohorts cannot be silently mixed.
 The command is a dry plan unless `--execute` is present. Live runs require the
 Benchmark singleton to be free and accept an operator token only through the
 named environment variable; the token is never written to the plan or report.
+After each batch reaches terminal row counts, the runner also waits for the
+persisted singleton slot to become idle. This covers the bounded pin-restore
+window without racing the next mode.
 
 ```powershell
 npm run campaign:paired-thinking -- `
@@ -21,6 +24,20 @@ npm run campaign:paired-thinking -- `
 
 npm run campaign:paired-thinking -- --execute <the same frozen arguments>
 ```
+
+If the process stops after a completed final-only half, resume it without
+spending those rows again:
+
+```powershell
+npm run campaign:paired-thinking -- --execute `
+  --resume-final-only-batch <exact-batch-object-id> `
+  <the same frozen arguments>
+```
+
+Resume is fail-closed: the completed batch must match the exact host, model,
+judge, prompt order, repeats, context, output budget, sampling settings, seed,
+and final-only response mode. The original full pair ID is recovered from the
+batch description and reused for the thinking half.
 
 The report has three deliberately separate views:
 
