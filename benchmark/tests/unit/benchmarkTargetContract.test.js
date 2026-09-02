@@ -67,6 +67,24 @@ describe('BenchmarkTarget v1', () => {
     })).toThrow(expect.objectContaining({ code: 'MANUAL_PRICE_DATE_REQUIRED' }));
   });
 
+  test('accepts an isolated local harness without cloud pricing', () => {
+    const target = harnessTarget({
+      id: 'local-ollama-isolated',
+      tier: 'local',
+      provider: 'ollama',
+      model: 'qwen3.5:9b',
+      pricing: null,
+    });
+    expect(target).toMatchObject({
+      executionKind: 'harness',
+      mode: 'isolated_model',
+      tier: 'local',
+      provider: 'ollama',
+      model: 'qwen3.5:9b',
+      pricing: null,
+    });
+  });
+
   test('quality cohort changes with judge identity but not target ordering', () => {
     const common = {
       prompts: [{ _id: '2', name: 'B', level: 2, category: 'reasoning' }, { _id: '1', name: 'A', level: 1, category: 'coding' }],
