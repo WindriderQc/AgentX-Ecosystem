@@ -177,6 +177,44 @@ describe('pipeline automation contract', () => {
     });
   });
 
+  test('normalizes measured local energy and an explicitly configured tariff', () => {
+    const evidence = normalizePipelineAutomationEvidence({
+      schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
+      verification: { status: 'passed' },
+      changes: {},
+      usage: {
+        localEnergy: {
+          measurementScope: 'gpu-incremental-lower-bound',
+          energyMillijoules: 3_600_000,
+          measurementDurationMs: 60_000,
+          sampleCount: 60,
+          baselineMilliwatts: 48_000,
+          source: 'nvidia-smi-baseline-integral/v1',
+          evidenceFingerprint: 'b'.repeat(64),
+          tariff: {
+            currency: 'cad',
+            rateNanoCurrencyUnitsPerKwh: 100_000_000,
+            estimatedCostNanoCurrencyUnits: 100_000,
+            source: 'operator-configured-electricity-tariff/v1',
+            evidenceFingerprint: 'c'.repeat(64),
+          },
+        },
+      },
+    });
+
+    expect(evidence.usage.localEnergy).toMatchObject({
+      measurementScope: 'gpu-incremental-lower-bound',
+      energyMillijoules: 3_600_000,
+      baselineMilliwatts: 48_000,
+      source: 'nvidia-smi-baseline-integral/v1',
+      tariff: {
+        currency: 'CAD',
+        rateNanoCurrencyUnitsPerKwh: 100_000_000,
+        estimatedCostNanoCurrencyUnits: 100_000,
+      },
+    });
+  });
+
   test('rejects malformed attempt metrics, failure codes, and receipt fingerprints', () => {
     const base = {
       schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
@@ -218,5 +256,30 @@ describe('pipeline automation contract', () => {
         costEvidenceFingerprint: 'a'.repeat(64),
       },
     })).toThrow(/costSource is not allowed for costKind/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      usage: { localEnergy: { energyMillijoules: 0 } },
+    })).toThrow(/measurementScope/);
+    expect(() => normalizePipelineAutomationEvidence({
+      ...base,
+      usage: {
+        localEnergy: {
+          measurementScope: 'gpu-incremental-lower-bound',
+          energyMillijoules: 3_600_000,
+          measurementDurationMs: 60_000,
+          sampleCount: 60,
+          baselineMilliwatts: 48_000,
+          source: 'nvidia-smi-baseline-integral/v1',
+          evidenceFingerprint: 'b'.repeat(64),
+          tariff: {
+            currency: 'CAD',
+            rateNanoCurrencyUnitsPerKwh: 100_000_000,
+            estimatedCostNanoCurrencyUnits: 99_999,
+            source: 'operator-configured-electricity-tariff/v1',
+            evidenceFingerprint: 'c'.repeat(64),
+          },
+        },
+      },
+    })).toThrow(/estimated cost does not match/);
   });
 });
