@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const logger = require('../config/logger');
+const { explainModelUnavailability } = require('../src/services/chat/modelUnavailability');
 const Conversation = require('../models/Conversation');
 const { getUserId } = require('../src/helpers/userHelpers');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
@@ -160,6 +161,15 @@ router.post('/chat', async (req, res) => {
     };
     if (err.code) body.code = err.code;
     if (err.notImplemented) body.notImplemented = true;
+    if (err.code === 'MODEL_UNAVAILABLE') {
+      // Say which host answered "not found" and where the model actually is,
+      // so a benchmark-reserved or offline host is not reported as a missing model.
+      try {
+        const detail = await explainModelUnavailability(err);
+        body.detail = detail;
+        body.message = detail.message;
+      } catch { /* keep the upstream message */ }
+    }
     res.status(statusCode).json(body);
   }
 });
