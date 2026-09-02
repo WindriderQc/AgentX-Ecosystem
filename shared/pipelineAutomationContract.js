@@ -176,6 +176,14 @@ function normalizePipelineAutomationIntent(rawValue) {
     },
     humanGates,
   };
+  if (raw.sourceFiles != null) {
+    normalized.sourceFiles = sortedUnique(
+      raw.sourceFiles,
+      'automation.sourceFiles',
+      repositoryPath,
+      { minItems: 1, maxItems: 30 }
+    );
+  }
   const computed = fingerprint(normalized);
   if (raw.fingerprint && raw.fingerprint !== computed) {
     throw automationError('automation fingerprint does not match normalized intent', 'AUTOMATION_FINGERPRINT_MISMATCH');
