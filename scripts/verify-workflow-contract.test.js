@@ -16,7 +16,7 @@ function section(source, start, end) {
   return source.slice(startIndex, endIndex);
 }
 
-test('release contract requires exact green CI and prior main-push lifecycle evidence', () => {
+test('release contract requires exact green CI and prior explicitly authorized lifecycle evidence', () => {
   const workflow = read('.github/workflows/publish-images.yml');
   const contract = section(workflow, '\n  release-contract:', '\n  publish:');
 
@@ -27,12 +27,12 @@ test('release contract requires exact green CI and prior main-push lifecycle evi
   assert.match(contract, /source_sha="\$\(git rev-parse HEAD\)"/);
   assert.match(contract, /\^\[A-Za-z0-9_\]\[A-Za-z0-9_\.\-\]\{0,127\}\$/);
   assert.match(contract, /build metadata with '\+' is unsupported/);
-  assert.match(contract, /workflowId\) =>[\s\S]*?head_sha: sourceSha[\s\S]*?branch: 'main'[\s\S]*?event: 'push'/);
+  assert.match(contract, /workflowId, eventName\) =>[\s\S]*?head_sha: sourceSha[\s\S]*?branch: 'main'[\s\S]*?event: eventName/);
+  assert.match(contract, /exactRuns\('ci\.yml', 'push'\)/);
+  assert.match(contract, /exactRuns\('publish-images\.yml', 'workflow_dispatch'\)/);
   assert.match(contract, /Date\.parse\(run\.created_at\) <= publishedAt\)[\s\S]*?\.sort\([\s\S]*?const latest = runs\[0\];[\s\S]*?Date\.parse\(String\(latest\?\.updated_at/);
   assert.doesNotMatch(contract, /\.filter\([\s\S]*?Date\.parse\(run\.updated_at\)/);
   assert.match(contract, /updatedAt > publishedAt[\s\S]*?did not complete before release publication/);
-  assert.match(contract, /exactRuns\('ci\.yml'\)/);
-  assert.match(contract, /exactRuns\('publish-images\.yml'\)/);
   assert.match(contract, /latest\.status !== 'completed'/);
   assert.match(contract, /latest\.conclusion !== 'success'/);
   assert.match(contract, /agentx-candidate-image-manifest-\$\{sourceSha\}-\$\{lifecycleRun\.run_attempt\}/);
@@ -57,13 +57,21 @@ test('release contract requires exact green CI and prior main-push lifecycle evi
   assert.match(contract, /elif \[ "\$mode" != "in-band-health" \]/);
 });
 
-test('main-push images create unique receipts and one closed exact candidate manifest', () => {
+test('manual exact-SHA publication creates unique receipts and one closed candidate manifest', () => {
   const workflow = read('.github/workflows/publish-images.yml');
   const publish = section(workflow, '\n  publish:', '\n  candidate-manifest:');
   const candidate = section(workflow, '\n  candidate-manifest:', '\n  previous-stable:');
 
-  assert.match(publish, /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
-  assert.doesNotMatch(workflow, /workflow_dispatch/);
+  const trigger = section(workflow, 'on:', '\n\npermissions:');
+  assert.match(trigger, /workflow_dispatch:/);
+  assert.match(trigger, /source_sha:[\s\S]*required: true[\s\S]*confirmation:[\s\S]*required: true/);
+  assert.doesNotMatch(trigger, /\n\s+push:/);
+  assert.match(workflow, /Manual publication requires confirmation=PUBLISH/);
+  assert.match(workflow, /source_sha" =~ \^\[0-9a-f\]\{40\}\$/);
+  assert.match(workflow, /"\$GITHUB_REF" != "refs\/heads\/main"/);
+  assert.match(workflow, /"\$source_sha" != "\$GITHUB_SHA"/);
+  assert.match(workflow, /git merge-base --is-ancestor "\$source_sha" origin\/main/);
+  assert.match(publish, /if: github\.event_name == 'workflow_dispatch'/);
   assert.match(publish, /group: publish-product-image-\$\{\{ matrix\.service \}\}-\$\{\{ needs\.release-contract\.outputs\.source_sha \}\}/);
   assert.match(publish, /type=raw,value=sha-\$\{\{ needs\.release-contract\.outputs\.source_sha \}\}/);
   assert.match(publish, /AGENTX_BUILD_REVISION=\$\{\{ needs\.release-contract\.outputs\.source_sha \}\}/);

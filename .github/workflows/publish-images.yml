@@ -1,8 +1,16 @@
 name: publish-product-images
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full 40-character current Product main commit
+        required: true
+        type: string
+      confirmation:
+        description: Type PUBLISH to authorize immutable image publication
+        required: true
+        type: string
   release:
     types: [published]
 
@@ -29,13 +37,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
-          fetch-depth: 1
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.source_sha }}
+          fetch-depth: 0
       - name: Resolve the exact checked-out source commit
         id: source
         shell: bash
         env:
           RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+          REQUESTED_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || '' }}
+          PUBLICATION_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || '' }}
         run: |
           set -euo pipefail
           source_sha="$(git rev-parse HEAD)"
@@ -43,9 +53,27 @@ jobs:
             echo "Expected a full lowercase Git commit, received: $source_sha" >&2
             exit 1
           fi
-          if [ "$GITHUB_EVENT_NAME" != "release" ] && [ "$source_sha" != "$GITHUB_SHA" ]; then
-            echo "Checkout does not match the triggering source SHA" >&2
-            exit 1
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            if ! [[ "$REQUESTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Manual publication requires an exact lowercase 40-character source_sha" >&2
+              exit 1
+            fi
+            if [ "$PUBLICATION_CONFIRMATION" != "PUBLISH" ]; then
+              echo "Manual publication requires confirmation=PUBLISH" >&2
+              exit 1
+            fi
+            if [ "$source_sha" != "$REQUESTED_SOURCE_SHA" ]; then
+              echo "Checkout does not match the explicitly authorized source SHA" >&2
+              exit 1
+            fi
+            if [ "$GITHUB_REF" != "refs/heads/main" ] || [ "$source_sha" != "$GITHUB_SHA" ]; then
+              echo "Manual publication must be dispatched on main and source_sha must equal its triggering commit" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$source_sha" origin/main; then
+              echo "Explicitly authorized source SHA is not reachable from origin/main" >&2
+              exit 1
+            fi
           fi
           if [ "$GITHUB_EVENT_NAME" = "release" ] \
               && ! [[ "$RELEASE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
@@ -60,7 +88,7 @@ jobs:
         env:
           AGENTX_RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
         run: node scripts/verify-release-contract.js
-      - name: Require exact green Product CI and lifecycle push runs for a release
+      - name: Require exact green Product CI and authorized lifecycle runs for a release
         id: release-gates
         if: github.event_name == 'release'
         uses: actions/github-script@v8
@@ -79,20 +107,20 @@ jobs:
               core.setFailed('release event does not contain a valid publication time');
               return;
             }
-            const exactRuns = async (workflowId) => {
+            const exactRuns = async (workflowId, eventName) => {
               const response = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 workflow_id: workflowId,
                 head_sha: sourceSha,
                 branch: 'main',
-                event: 'push',
+                event: eventName,
                 per_page: 100,
               });
               return response.data.workflow_runs
                 .filter((run) => run.head_sha === sourceSha
                   && run.head_branch === 'main'
-                  && run.event === 'push'
+                  && run.event === eventName
                   && Date.parse(run.created_at) <= publishedAt)
                 .sort((left, right) => new Date(right.created_at) - new Date(left.created_at));
             };
@@ -109,10 +137,10 @@ jobs:
               return latest;
             };
             try {
-              const ciRun = requireLatestSuccess(await exactRuns('ci.yml'), 'Product CI');
+              const ciRun = requireLatestSuccess(await exactRuns('ci.yml', 'push'), 'Product CI');
               const lifecycleRun = requireLatestSuccess(
-                await exactRuns('publish-images.yml'),
-                'publish-product-images push lifecycle'
+                await exactRuns('publish-images.yml', 'workflow_dispatch'),
+                'explicitly authorized publish-product-images lifecycle'
               );
               if (!Number.isSafeInteger(ciRun.run_attempt) || ciRun.run_attempt < 1
                   || !Number.isSafeInteger(lifecycleRun.run_attempt) || lifecycleRun.run_attempt < 1) {
@@ -268,7 +296,7 @@ jobs:
             "${baseline_args[@]}"
 
   publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     needs: release-contract
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -412,7 +440,7 @@ jobs:
           retention-days: 30
 
   candidate-manifest:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     needs: [release-contract, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -461,7 +489,7 @@ jobs:
           retention-days: 30
 
   previous-stable:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     needs: release-contract
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -539,7 +567,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
   upgrade-rollback:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     needs: [release-contract, candidate-manifest, previous-stable]
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -697,7 +725,7 @@ jobs:
           retention-days: 30
 
   recovery-drill:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     needs: [release-contract, candidate-manifest, previous-stable]
     runs-on: ubuntu-latest
     timeout-minutes: 45
