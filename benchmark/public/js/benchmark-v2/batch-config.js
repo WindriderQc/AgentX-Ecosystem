@@ -14,7 +14,13 @@ import {
     SK_DEPTH, SK_JUDGE, SK_MODELS, SK_HOST, SK_THINK, SK_ADVANCED,
     _parseParamSize, _emptyMsg, _slug,
 } from './batch-config-constants.js';
-import { _buildHarnessChecklist, _buildModelChecklist } from './batch-config-models.js';
+import {
+    _buildCloudJudgePicker,
+    _buildHarnessChecklist,
+    _buildModelChecklist,
+    _buildModelPickerToolbar,
+    _buildSelectionBasket,
+} from './batch-config-models.js';
 import {
     _loadAdvancedSettings,
     _buildAdvancedSettings,
@@ -74,7 +80,7 @@ let _harnessCatalogEnabled = false;
  * @param {Array}       opts.modelProfiles — ModelProfile[] with readiness maps
  * @param {Array}       opts.benchmarkedModels — base model names with successful benchmark history
  */
-export function renderBatchConfig(container, { host = null, modelProfiles = [], benchmarkedModels = [], prompts = [], config = {}, judgeRoster = null, harnessTargets = [], harnessCatalogEnabled = false, lastBatch = null, onLaunch }) {
+export function renderBatchConfig(container, { host = null, modelProfiles = [], benchmarkedModels = [], prompts = [], config = {}, judgeRoster = null, harnessTargets = [], harnessCatalogEnabled = false, harnessCatalogMeta = {}, lastBatch = null, onLaunch }) {
     _lastBatch = lastBatch;
     _currentHost = host;
     _modelProfiles = modelProfiles;
@@ -82,9 +88,9 @@ export function renderBatchConfig(container, { host = null, modelProfiles = [], 
     _harnessTargetMap = new Map((harnessTargets || []).map((target) => [target.id, target]));
     _harnessCatalogEnabled = harnessCatalogEnabled === true;
     const onlineHosts = host ? [host] : [];
-    container.innerHTML = _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets, _harnessCatalogEnabled);
+    container.innerHTML = _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets, _harnessCatalogEnabled, harnessCatalogMeta);
 
-    if (host) _wireModelTools(container.querySelector('#bv2-model-checklist'), host);
+    _wireModelTools(container.querySelector('#bv2-model-checklist'), host);
     _wireDepthPersist(container);
     _wireThinkPersist(container);
     _wireAdvancedSettings(container);
@@ -106,10 +112,13 @@ export function renderBatchConfig(container, { host = null, modelProfiles = [], 
                 if (card) card.classList.toggle('selected', e.target.checked);
                 _saveSelectedModels(container);
                 _updateDepthSummary(container, _readLevelDepth(container));
+                _updateModelSelectionBasket(container);
                 container.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
             }
         });
     }
+
+    _updateModelSelectionBasket(container);
 }
 
 /** Inject per-host readiness badges into model cards */
@@ -185,7 +194,7 @@ function _benchmarkBadge(hasBenchmarkHistory) {
 
 // ── Form scaffold ─────────────────────────────────────────────────────────────
 
-function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [], harnessCatalogEnabled = false) {
+function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [], harnessCatalogEnabled = false, harnessCatalogMeta = {}) {
     const hostName = host?.displayName || host?.name || host?.hostname || 'No host selected';
     const modelCount = host?.models?.length || host?.modelCount || host?._modelCount || 0;
     const cloudCandidates = (harnessTargets || []).filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate && target?.available !== false);
@@ -195,11 +204,6 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [],
         : cloudCandidateCount
             ? `via <strong style="color:var(--r-active)">Cloud harnesses</strong> \u2014 ${cloudCandidateCount} available`
             : 'no execution target available';
-    const cloudJudges = (harnessTargets || []).filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.judge && target?.available !== false);
-    const cloudJudgeFallback = harnessCatalogEnabled
-        ? 'No attested isolated cloud judge available — use Ollama judge'
-        : 'Cloud judges disabled in this environment — use Ollama judge';
-
     return `
     <form id="bv2-batch-form" class="batch-form" novalidate>
 
@@ -212,9 +216,12 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [],
 
       <div class="bf-field">
         <div id="bv2-model-checklist" class="model-checklist">
+          ${_buildModelPickerToolbar(host, harnessTargets, harnessCatalogMeta)}
           ${host ? _buildModelChecklist(host) : cloudCandidateCount ? '' : _emptyMsg('Select an execution host above.')}
           ${_buildHarnessChecklist(harnessTargets, harnessCatalogEnabled)}
+          <div id="bv2-model-filter-empty" class="mc-filter-empty" hidden>No models match these filters.</div>
         </div>
+        ${_buildSelectionBasket()}
       </div>
 
       <!-- ③ Judge & Tests -->
@@ -229,15 +236,7 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [],
         <div class="bf-judge-col">
           <div id="bv2-judge-roster">
             ${buildJudgeRoster(judgeRoster, config, onlineHosts)}
-            <label class="bf-field-mini" style="margin-top:0.75rem;display:block;">
-              <span>Cloud judge <span style="color:var(--r-text-muted);font-size:0.65rem">optional; isolated targets only</span></span>
-              <select id="bv2-cloud-judge" ${cloudJudges.length ? '' : 'disabled'}>
-                <option value="">${cloudJudges.length ? 'Use selected Ollama judge' : cloudJudgeFallback}</option>
-                ${cloudJudges.map((target) =>
-                    `<option value="${esc(target.id)}">${esc(target.harness?.name || 'Harness')} · ${esc(target.provider)} · ${esc(target.label || target.model)} · ${target.tier === 'paid_cloud' ? 'paid' : 'free'}</option>`
-                ).join('')}
-              </select>
-            </label>
+            ${_buildCloudJudgePicker(harnessTargets, harnessCatalogEnabled)}
           </div>
         </div>
         <div class="bf-options-col">
@@ -289,15 +288,91 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [],
 function _wireModelTools(checklistEl, host) {
     if (!checklistEl) return;
 
+    const form = checklistEl.closest('form') || checklistEl;
+    const notifySelectionChanged = () => {
+        _saveSelectedModels(form);
+        _updateDepthSummary(form, _readLevelDepth(form));
+        _updateModelSelectionBasket(form);
+        form.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
+    };
+
+    const applyFilters = () => {
+        const query = (checklistEl.querySelector('#bv2-model-search')?.value || '').toLowerCase().trim();
+        const source = checklistEl.querySelector('.mc-source-btn.is-active')?.dataset.sourceFilter || 'all';
+        const activeFilters = new Set(
+            Array.from(checklistEl.querySelectorAll('.mc-filter-chip[aria-pressed="true"]'))
+                .map((button) => button.dataset.pickerFilter)
+        );
+        let visible = 0;
+        Array.from(checklistEl.querySelectorAll('.mc-card'))
+            .filter((card) => card.querySelector('.bv2-model-cb'))
+            .forEach((card) => {
+            const sourceMatches = source === 'all' || card.dataset.source === source;
+            const queryMatches = !query || (card.dataset.filterText || '').includes(query);
+            const filterMatches = [...activeFilters].every((filter) => {
+                if (filter === 'ready') return card.dataset.ready === 'true';
+                if (filter === 'free') return card.dataset.paid !== 'true';
+                if (filter === 'paid') return card.dataset.paid === 'true';
+                if (filter === 'judge') return card.dataset.judge === 'true';
+                return true;
+            });
+            const show = sourceMatches && queryMatches && filterMatches;
+            card.hidden = !show;
+            if (show) visible += 1;
+        });
+        checklistEl.querySelectorAll('.mc-tier-group').forEach((group) => {
+            const cards = Array.from(group.querySelectorAll('.mc-card'))
+                .filter((card) => card.querySelector('.bv2-model-cb'));
+            if (cards.length) group.hidden = cards.every((card) => card.hidden);
+        });
+        const empty = checklistEl.querySelector('#bv2-model-filter-empty');
+        if (empty) empty.hidden = visible > 0;
+    };
+
     // Search filter
     const search = checklistEl.querySelector('#bv2-model-search');
-    if (search) {
-        search.addEventListener('input', () => {
-            const q = search.value.toLowerCase().trim();
-            checklistEl.querySelectorAll('.mc-card').forEach(card => {
-                const name = (card.dataset.model || '').toLowerCase();
-                card.style.display = !q || name.includes(q) ? '' : 'none';
+    if (search) search.addEventListener('input', applyFilters);
+
+    checklistEl.querySelectorAll('.mc-source-btn').forEach((button) => {
+        button.addEventListener('click', () => {
+            checklistEl.querySelectorAll('.mc-source-btn').forEach((candidate) => {
+                const selected = candidate === button;
+                candidate.classList.toggle('is-active', selected);
+                candidate.setAttribute('aria-pressed', String(selected));
             });
+            applyFilters();
+        });
+    });
+
+    checklistEl.querySelectorAll('.mc-filter-chip').forEach((button) => {
+        button.addEventListener('click', () => {
+            button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
+            applyFilters();
+        });
+    });
+
+    const paidOptIn = checklistEl.querySelector('#bv2-allow-paid');
+    if (paidOptIn) {
+        paidOptIn.addEventListener('change', () => {
+            const allowPaid = paidOptIn.checked;
+            form.querySelectorAll('input[data-paid-lock="true"]').forEach((input) => {
+                input.disabled = !allowPaid;
+                if (!allowPaid) input.checked = false;
+                const card = input.closest('.mc-card');
+                card?.classList.toggle('mc-paid-locked', !allowPaid);
+                const note = card?.querySelector('[data-paid-note]');
+                if (note) note.textContent = allowPaid
+                    ? 'Unlocked for manual selection. SpendGrant still required at launch.'
+                    : 'Enable paid models, then select manually.';
+            });
+            if (!allowPaid) {
+                const localJudge = form.querySelector('input[name="bv2-cloud-judge"][value=""]');
+                if (localJudge) {
+                    localJudge.checked = true;
+                    localJudge.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+            notifySelectionChanged();
         });
     }
 
@@ -305,67 +380,85 @@ function _wireModelTools(checklistEl, host) {
     checklistEl.querySelectorAll('.mc-preset-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             _applyPreset(checklistEl, host, btn.dataset.preset);
+            notifySelectionChanged();
         });
     });
     checklistEl.querySelectorAll('.mc-tier-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const tier = btn.dataset.tier;
             const action = btn.dataset.action; // 'select' or 'clear'
-            const cards = checklistEl.querySelectorAll(`.mc-card[data-tier="${tier}"]`);
+            const cards = checklistEl.querySelectorAll(`.mc-card[data-size-tier="${tier}"]`);
             cards.forEach(card => {
                 const cb = card.querySelector('.bv2-model-cb');
                 if (cb && !cb.disabled) { cb.checked = action === 'select'; card.classList.toggle('selected', cb.checked); }
             });
-            const form = checklistEl.closest('form') || checklistEl;
-            _saveSelectedModels(form);
-            _updateDepthSummary(form, _readLevelDepth(form));
+            notifySelectionChanged();
         });
     });
+
+    applyFilters();
 }
 
 function _applyPreset(checklistEl, host, preset) {
     const details = Array.isArray(host?.modelDetails) ? host.modelDetails : [];
     const detailMap = new Map(details.map(d => [normModel(d.name), d]));
-    // Only operate on enabled (profiled) model checkboxes
-    const cbs = Array.from(checklistEl.querySelectorAll('.bv2-model-cb:not(:disabled)'));
+    const allCbs = Array.from(checklistEl.querySelectorAll('.bv2-model-cb'));
+    // Recipes are deliberately non-paid. Paid targets always require a manual click.
+    const cbs = allCbs.filter((cb) => !cb.disabled && cb.dataset.paid !== 'true');
+    const localCbs = cbs.filter((cb) => cb.dataset.executionKind !== 'harness');
+    const freeCloudCbs = cbs.filter((cb) => cb.dataset.executionKind === 'harness');
+    const hasLastBatchSelection = (Array.isArray(_lastBatch?.models) && _lastBatch.models.length > 0)
+        || (Array.isArray(_lastBatch?.targets) && _lastBatch.targets.length > 0);
+    if (preset === 'lastbatch' && !hasLastBatchSelection) return;
 
-    if (preset === 'all') {
-        cbs.forEach(cb => { cb.checked = true; });
-    } else if (preset === 'none') {
-        cbs.forEach(cb => { cb.checked = false; });
-    } else if (preset === 'quick') {
-        const sorted = cbs
-            .map(cb => ({ cb, size: _parseParamSize(detailMap.get(cb.value)?.parameterSize) || 999 }))
+    allCbs.forEach((cb) => { cb.checked = false; });
+
+    if (preset === 'quick') {
+        const sorted = localCbs
+            .map(cb => ({ cb, size: _parseParamSize(detailMap.get(normModel(cb.value))?.parameterSize) || 999 }))
             .sort((a, b) => a.size - b.size);
-        cbs.forEach(cb => { cb.checked = false; });
         sorted.slice(0, 3).forEach(({ cb }) => { cb.checked = true; });
+    } else if (preset === 'balanced') {
+        const smallestLocal = localCbs
+            .map(cb => ({ cb, size: _parseParamSize(detailMap.get(normModel(cb.value))?.parameterSize) || 999 }))
+            .sort((a, b) => a.size - b.size)[0]?.cb;
+        if (smallestLocal) smallestLocal.checked = true;
+        if (freeCloudCbs[0]) freeCloudCbs[0].checked = true;
+    } else if (preset === 'free-cloud') {
+        freeCloudCbs.forEach((cb) => { cb.checked = true; });
     } else if (preset === 'recommended') {
         const tiers = { small: null, medium: null, large: null };
-        const sorted = cbs
-            .map(cb => ({ cb, size: _parseParamSize(detailMap.get(cb.value)?.parameterSize) || 0 }))
+        const sorted = localCbs
+            .map(cb => ({ cb, size: _parseParamSize(detailMap.get(normModel(cb.value))?.parameterSize) || 0 }))
             .sort((a, b) => a.size - b.size);
         for (const { cb, size } of sorted) {
             if (size > 0 && size <= 4 && !tiers.small) tiers.small = cb;
             else if (size > 4 && size <= 10 && !tiers.medium) tiers.medium = cb;
             else if (size > 10 && !tiers.large) tiers.large = cb;
         }
-        cbs.forEach(cb => { cb.checked = false; });
         Object.values(tiers).filter(Boolean).forEach(cb => { cb.checked = true; });
     } else if (preset === 'unbenchmarked') {
-        cbs.forEach(cb => {
+        localCbs.forEach(cb => {
             const card = cb.closest('.mc-card');
             cb.checked = card?.dataset.benchmarked === 'false';
         });
     } else if (preset === 'lastbatch') {
-        if (!_lastBatch?.models?.length) return;
-        const lastSet = new Set(_lastBatch.models.map(m => normModel(m)));
-        // cb.value is the raw tag; compare against the normalized lastSet.
-        cbs.forEach(cb => { cb.checked = lastSet.has(normModel(cb.value)); });
+        const lastModels = Array.isArray(_lastBatch?.models) ? _lastBatch.models : [];
+        const lastTargets = Array.isArray(_lastBatch?.targets) ? _lastBatch.targets : [];
+        const lastSet = new Set([
+            ...lastModels.map((model) => normModel(typeof model === 'string' ? model : model?.model || model?.name || '')),
+            ...lastTargets.map((target) => typeof target === 'string' ? target : target?.id || target?.targetId || ''),
+        ].filter(Boolean));
+        cbs.forEach(cb => {
+            cb.checked = lastSet.has(cb.value) || lastSet.has(normModel(cb.value));
+        });
     } else if (preset === 'filtered') {
-        checklistEl.querySelectorAll('.mc-card').forEach(card => {
-            if (card.style.display === 'none') return;
+        Array.from(checklistEl.querySelectorAll('.mc-card'))
+            .filter((card) => card.querySelector('.bv2-model-cb'))
+            .forEach(card => {
+            if (card.hidden) return;
             const cb = card.querySelector('.bv2-model-cb');
-            if (cb && !cb.disabled) cb.checked = true;
+            if (cb && !cb.disabled && cb.dataset.paid !== 'true') cb.checked = true;
         });
     }
 
@@ -375,9 +468,25 @@ function _applyPreset(checklistEl, host, preset) {
         card.classList.toggle('selected', cb?.checked || false);
     });
 
-    const form = checklistEl.closest('form') || checklistEl;
-    _saveSelectedModels(form);
-    _updateDepthSummary(form, _readLevelDepth(form));
+    _updateModelSelectionBasket(checklistEl.closest('form') || checklistEl);
+}
+
+function _updateModelSelectionBasket(container) {
+    const selected = Array.from(container.querySelectorAll('.bv2-model-cb:checked'));
+    const local = selected.filter((input) => input.dataset.executionKind !== 'harness').length;
+    const cloud = selected.length - local;
+    const paid = selected.filter((input) => input.dataset.paid === 'true').length;
+    const count = container.querySelector('[data-basket-count]');
+    const detail = container.querySelector('[data-basket-detail]');
+    if (count) count.textContent = `${selected.length} contender${selected.length === 1 ? '' : 's'}`;
+    if (detail) detail.textContent = selected.length
+        ? `${local} local · ${cloud} cloud · ${paid} paid`
+        : 'Choose ready local or cloud models.';
+    Array.from(container.querySelectorAll('.mc-card'))
+        .filter((card) => card.querySelector('.bv2-model-cb'))
+        .forEach((card) => {
+        card.classList.toggle('selected', card.querySelector('.bv2-model-cb')?.checked === true);
+    });
 }
 
 // ── Level depth (off / single / light / full per level) ───────────────────────

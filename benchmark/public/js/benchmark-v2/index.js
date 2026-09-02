@@ -652,7 +652,7 @@ async function _onHostChanged(host) {
 async function _renderBatchConfigForHost(host) {
     if (!$batchConfig) return;
 
-    let prompts = [], config = {}, judgeRoster = null, lastBatch = null, harnessTargets = [], harnessCatalogEnabled = false;
+    let prompts = [], config = {}, judgeRoster = null, lastBatch = null, harnessTargets = [], harnessCatalogEnabled = false, harnessCatalogMeta = {};
     try {
         const [promptsRes, configRes, rosterRes, batchesRes, targetsRes] = await Promise.all([
             fetchPrompts(),
@@ -668,8 +668,14 @@ async function _renderBatchConfigForHost(host) {
         judgeRoster = rosterRes?.data || null;
         const batches = batchesRes?.data?.batches || [];
         lastBatch = batches[0] || null;
-        harnessTargets = targetsRes?.data?.targets || targetsRes?.targets || [];
-        harnessCatalogEnabled = (targetsRes?.data?.enabled ?? targetsRes?.enabled) === true;
+        const targetCatalog = targetsRes?.data || targetsRes || {};
+        harnessTargets = targetCatalog.targets || [];
+        harnessCatalogEnabled = targetCatalog.enabled === true;
+        harnessCatalogMeta = {
+            observedAt: targetCatalog.observedAt || null,
+            expiresAt: targetCatalog.expiresAt || null,
+            broker: targetCatalog.broker || null,
+        };
     } catch (err) {
         console.warn('[bv2] fetchPrompts/fetchConfig failed:', err.message);
     }
@@ -685,6 +691,7 @@ async function _renderBatchConfigForHost(host) {
             lastBatch,
             harnessTargets,
             harnessCatalogEnabled,
+            harnessCatalogMeta,
             onLaunch: _handleLaunch,
         });
         _updateWorkflowGuide();

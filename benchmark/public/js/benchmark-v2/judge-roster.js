@@ -51,18 +51,21 @@ export function buildJudgeRoster(judgeRoster, config, onlineHosts) {
  * Wire click-to-select on judge hosts and judge model overrides.
  */
 export function wireJudgeRoster(container) {
-    const cloudJudge = container.querySelector('#bv2-cloud-judge');
-    if (cloudJudge) {
+    const cloudJudges = container.querySelectorAll('input[name="bv2-cloud-judge"]');
+    cloudJudges.forEach((cloudJudge) => {
         cloudJudge.addEventListener('change', () => {
+            _refreshCloudJudgeCards(container);
             container.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
         });
-    }
+    });
+    _refreshCloudJudgeCards(container);
     const hostCards = container.querySelectorAll('.jhc-card');
     if (!hostCards.length) {
         const modelSelect = container.querySelector('#bv2-judge-model');
         const hostSelect = container.querySelector('#bv2-judge-host');
         [modelSelect, hostSelect].filter(Boolean).forEach((el) => {
             el.addEventListener('change', () => {
+                _selectLocalJudgeMode(container);
                 _persistJudge(container);
                 container.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
             });
@@ -73,6 +76,7 @@ export function wireJudgeRoster(container) {
     container.addEventListener('click', (e) => {
         const judgePill = e.target.closest('.jhc-judge-pill');
         if (judgePill) {
+            _selectLocalJudgeMode(container);
             _activateHost(container, judgePill.dataset.host || '');
             _selectJudgePill(container, judgePill);
             _persistJudge(container);
@@ -83,6 +87,7 @@ export function wireJudgeRoster(container) {
         const hostCard = e.target.closest('.jhc-card');
         if (!hostCard) return;
 
+        _selectLocalJudgeMode(container);
         _activateHost(container, hostCard.dataset.host || '');
         _persistJudge(container);
         container.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
@@ -94,13 +99,15 @@ export function wireJudgeRoster(container) {
  * Returns { model, host } — multiJudge is read separately from batch-config.
  */
 export function getSelectedJudge(container) {
-    const cloudTargetId = container.querySelector('#bv2-cloud-judge')?.value || '';
+    const cloudJudge = container.querySelector('input[name="bv2-cloud-judge"]:checked');
+    const cloudTargetId = cloudJudge?.value || '';
     if (cloudTargetId) {
-        const option = container.querySelector(`#bv2-cloud-judge option[value="${CSS.escape(cloudTargetId)}"]`);
         return {
-            model: option?.textContent?.split(' · ')[2]?.trim() || cloudTargetId,
+            model: cloudJudge.dataset.model || cloudTargetId,
             host: 'harness',
-            targetId: cloudTargetId
+            targetId: cloudTargetId,
+            provider: cloudJudge.dataset.provider || '',
+            harness: cloudJudge.dataset.harness || '',
         };
     }
     const activePanel = container.querySelector('.jhc-host-panel.is-active');
@@ -349,6 +356,19 @@ function _selectJudgePill(container, pill) {
     });
 
     _refreshPanels(container);
+}
+
+function _selectLocalJudgeMode(container) {
+    const localJudge = container.querySelector('input[name="bv2-cloud-judge"][value=""]');
+    if (localJudge) localJudge.checked = true;
+    _refreshCloudJudgeCards(container);
+}
+
+function _refreshCloudJudgeCards(container) {
+    container.querySelectorAll('.mc-judge-card').forEach((card) => {
+        const input = card.querySelector('input[name="bv2-cloud-judge"]');
+        card.classList.toggle('selected', input?.checked === true);
+    });
 }
 
 function _refreshPanels(container) {
