@@ -128,7 +128,9 @@ function buildCategoryEvidenceView(categoryScores, calculatedAverages, categoryW
             : null;
         categoryEvidence[category] = hasScoredRows
             ? 'scored'
-            : categoryData?.attempted
+            : categoryData?.review_pending
+                ? 'review_pending'
+                : categoryData?.attempted
                 ? 'attempted_unscored'
                 : 'untested';
     }

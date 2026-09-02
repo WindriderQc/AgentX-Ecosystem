@@ -38,6 +38,7 @@ RUN mkdir -p /app/config-data \
     ! -name 'migrate-benchmark-trust-batch-ids.js' \
     ! -name 'cloud-lane-campaign.js' \
     ! -name 'repo-coding-qualification.js' \
+    ! -name 'paired-thinking-campaign.js' \
     -delete \
   && rm -rf tests coverage test-results .env .env.* .git
 

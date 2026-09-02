@@ -95,6 +95,9 @@ describe('leaderboard evidence-honesty UI', () => {
         expect(html).toContain('Reasoning: not tested');
         expect(html).not.toContain('Reasoning: 0%');
 
+        const reviewHtml = categoryBars([], { reasoning: 'review_pending' });
+        expect(reviewHtml).toContain('Reasoning: pending human review; provisional score withheld');
+
         expect(categoryExtremes({ categoryScores: { coding: null, reasoning: null } })).toMatchObject({
             best: null,
             watch: null

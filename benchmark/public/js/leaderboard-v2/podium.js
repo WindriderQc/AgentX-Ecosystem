@@ -160,9 +160,11 @@ function laneStrip(entry, field) {
         const tiny = CAT_TINY[cat] || cat;
         if (s == null) {
             const evidence = entry.categoryEvidence?.[cat];
-            const unavailableReason = evidence === 'attempted_unscored'
-                ? 'attempted; score unavailable'
-                : 'not tested';
+            const unavailableReason = evidence === 'review_pending'
+                ? 'pending human review; provisional score withheld'
+                : evidence === 'attempted_unscored'
+                    ? 'attempted; score unavailable'
+                    : 'not tested';
             return `<div class="pod-lane pod-lane-empty" title="${CAT_LABELS[cat]}: ${unavailableReason}">
                 <div class="pod-lane-track"></div>
                 <span class="pod-lane-val">–</span>

@@ -233,8 +233,21 @@ function validateKeyValueFields(response, expected) {
  * numbers embedded in explanation, where the LLM judge is unreliable.
  */
 function extractAllNumbers(text) {
-    const cleaned = cleanText(text).replace(/(\d),(?=\d{3}(\D|$))/g, '$1');
+    const source = cleanText(text);
     const numbers = [];
+    // Preserve ordinary token extraction, but also recognize human-formatted
+    // thousands such as "5 000", "5\u00a0000", and "5\u202f000". Do not remove
+    // spaces globally: adjacent answer values (for example "50 100") must
+    // remain independently discoverable. A grouped candidate is additive, so
+    // the original numeric tokens stay available to the validator as well.
+    const grouped = /(^|[^\d.,])(-?\d{1,3}(?:(?:,|[ \u00a0\u202f])\d{3})+)(?![\d,.])/g;
+    let groupedMatch;
+    while ((groupedMatch = grouped.exec(source)) !== null) {
+        const value = Number(groupedMatch[2].replace(/[, \u00a0\u202f]/g, ''));
+        if (Number.isFinite(value)) numbers.push(value);
+    }
+
+    const cleaned = source.replace(/(\d),(?=\d{3}(\D|$))/g, '$1');
     const re = /-?\d+(?:\.\d+)?\/\d+(?:\.\d+)?|-?\d+(?:\.\d+)?|-?\.\d+/g;
     let m;
     while ((m = re.exec(cleaned)) !== null) {

@@ -197,9 +197,11 @@ function categoryBars(dims, categoryEvidence = {}) {
     const barColor = pct != null ? scoreColor(score10) : 'var(--r-border)';
     const valText = pct != null ? `${clamped}` : '—';
     const naCls = pct == null ? ' cb-bar-na' : '';
-    const unavailableReason = categoryEvidence[cat] === 'attempted_unscored'
-      ? 'attempted; score unavailable'
-      : 'not tested';
+    const unavailableReason = categoryEvidence[cat] === 'review_pending'
+      ? 'pending human review; provisional score withheld'
+      : categoryEvidence[cat] === 'attempted_unscored'
+        ? 'attempted; score unavailable'
+        : 'not tested';
     const title = pct != null ? `${meta.label}: ${valText}%` : `${meta.label}: ${unavailableReason}`;
     return `<div class="cb-bar${naCls}" title="${title}">
       <span class="cb-bar-l">${meta.label}</span>

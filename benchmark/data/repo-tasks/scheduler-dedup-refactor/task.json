@@ -1,0 +1,9 @@
+{
+  "id": "scheduler-dedup-refactor",
+  "title": "Refactor a concurrent scheduler without breaking its invariants",
+  "instructions": "Refactor src/JobScheduler.js. Preserve FIFO start order and the configured maximum concurrency. Submitting the same jobId concurrently or after completion must execute its function at most once and return the same eventual value or error to every caller. Replace polling with event-driven promise settlement, keep completed results cached, and ensure every success and error path releases capacity so queued work continues. Do not use setInterval or setTimeout polling. Preserve the exported JobScheduler class API.",
+  "language": "javascript",
+  "allowedPaths": ["src/JobScheduler.js"],
+  "publicTest": { "cmd": "node", "args": ["test/public.js"] },
+  "hiddenTest": { "cmd": "node", "args": ["test/hidden.js"] }
+}

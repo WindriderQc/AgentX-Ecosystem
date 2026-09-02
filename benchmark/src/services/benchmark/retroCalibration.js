@@ -60,6 +60,8 @@ async function buildStratifiedSample(batchId, perCell = 3) {
                     $match: {
                         batch_id: batchOid,
                         prompt_category: category,
+                        needs_review: { $ne: true },
+                        excluded_from_leaderboard: { $ne: true },
                         quality_score: { $gte: bucket.min, $lte: bucket.max },
                         scoring_method: { $nin: ['empty_response', 'skipped', 'llm_failed', 'pending'] }
                     }

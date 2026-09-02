@@ -863,6 +863,8 @@ jobs:
           docker run --rm --entrypoint test agentx-benchmark:ci \
             -f /app/scripts/repo-coding-qualification.js
           docker run --rm --entrypoint test agentx-benchmark:ci \
+            -f /app/scripts/paired-thinking-campaign.js
+          docker run --rm --entrypoint test agentx-benchmark:ci \
             -f /app/data/repo-tasks/manifest.json
           docker run --rm --entrypoint test agentx-benchmark:ci \
             -f /scripts/bounded-response.js
@@ -876,6 +878,12 @@ jobs:
             scripts/repo-coding-qualification.js \
             --dry-run --attempts 1 --ks 1 \
             | tee /tmp/repo-coding-qualification-dry-run.txt
+          docker run --rm --network none --entrypoint node agentx-benchmark:ci \
+            scripts/paired-thinking-campaign.js \
+            --host http://candidate:11434 --model candidate:exact \
+            --judge-host http://judge:11434 --judge-model judge:exact \
+            --prompt-ids aaaaaaaaaaaaaaaaaaaaaaaa --repeats 3 \
+            | grep -F '"execution": "not_authorized_dry_plan"'
           grep -F 'DRY-RUN (golden diffs, no model calls)' \
             /tmp/repo-coding-qualification-dry-run.txt
           grep -F 'pass@1=1.000' \

@@ -223,6 +223,7 @@ class BenchmarkService {
         const leaderboardMatch = {
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true },
             // Every axis is now driven by a populated score field; without
             // this filter the aggregate averages over a sea of nulls and

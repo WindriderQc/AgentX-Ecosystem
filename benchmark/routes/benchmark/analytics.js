@@ -546,6 +546,7 @@ router.get('/ceiling-analysis', async (req, res) => {
         const leaderboardMatch = {
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true }
         };
         const generalistScores = await calculateAllGeneralistScores(leaderboardMatch, { categoryWeights });
@@ -588,6 +589,7 @@ router.get('/category-heatmap', async (req, res) => {
         const data = await getCategoryHeatmap({
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true }
         });
         res.json({ status: 'success', data });
@@ -607,6 +609,7 @@ router.get('/dimension-breakdown', async (req, res) => {
         const data = await getDimensionBreakdown({
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true }
         });
         res.json({ status: 'success', data });
@@ -626,6 +629,7 @@ router.get('/elite-scores', async (req, res) => {
         const data = await calculateEliteScores({
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true }
         });
         res.json({ status: 'success', data });

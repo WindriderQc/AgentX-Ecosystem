@@ -546,6 +546,8 @@ async function getBatch(batchId, {
             judge_model: inferredJudgeModel,
             scoring_method: inferredScoringMethod,
             scoring_type: r.scoring_type,
+            evaluation_authority: r.evaluation_authority || 'judge',
+            executable_fixture_id: r.executable_fixture_id || null,
             scoring_time_ms: r.scoring_time_ms,
             quick_pattern: r.quick_pattern,
             composite_score: r.composite_score,

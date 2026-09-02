@@ -21,6 +21,10 @@ async function evaluateAndPersistEarlyStop({ batchId, model, hostUrl, recordBatc
     const judgedResults = await BenchmarkResult.find({
         batch_id: batchId,
         model,
+        success: true,
+        infra_error: { $ne: true },
+        needs_review: { $ne: true },
+        excluded_from_leaderboard: { $ne: true },
         quality_score: { $ne: null }
     }).select('quality_score').lean().catch(() => []);
 

@@ -61,6 +61,7 @@ function assessCohort(group, batch = completedBatch(), options = {}) {
         inventory: {
             totalRows: group.rowCount,
             excludedRows: 0,
+            reviewRows: 0,
             failedRows: 0,
             unscoredRows: 0
         },
@@ -124,6 +125,21 @@ describe('Trusted leaderboard evidence cohorts', () => {
 
         expect(cohort.eligible).toBe(false);
         expect(cohort.reasons).toEqual(expect.arrayContaining(['excluded_rows', 'partial_scope']));
+    });
+
+    test('rejects a cohort while any row is pending human review', () => {
+        const cohort = assessCohort(exactGroup({ rowCount: 3 }), completedBatch(), {
+            inventory: {
+                totalRows: 4,
+                excludedRows: 0,
+                reviewRows: 1,
+                failedRows: 0,
+                unscoredRows: 0
+            }
+        });
+
+        expect(cohort.eligible).toBe(false);
+        expect(cohort.reasons).toEqual(expect.arrayContaining(['review_pending_rows', 'partial_scope']));
     });
 
     test('rejects a batch when candidates did not run the same fixtures', () => {

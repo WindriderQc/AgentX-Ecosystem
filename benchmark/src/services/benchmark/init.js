@@ -62,6 +62,12 @@ function sanitizePromptRecord(rawPrompt, sourceFile) {
     if (rawPrompt && rawPrompt.scoring_plan) {
         sanitized.scoring_plan = String(rawPrompt.scoring_plan).trim();
     }
+    sanitized.evaluation_authority = rawPrompt && rawPrompt.evaluation_authority
+        ? String(rawPrompt.evaluation_authority).trim()
+        : (rawPrompt && rawPrompt.deterministic_scoring ? 'deterministic' : 'judge');
+    if (rawPrompt && rawPrompt.executable_fixture_id) {
+        sanitized.executable_fixture_id = String(rawPrompt.executable_fixture_id).trim();
+    }
 
     if (rawPrompt && rawPrompt.deterministic_scoring && typeof rawPrompt.deterministic_scoring === 'object') {
         sanitized.deterministic_scoring = rawPrompt.deterministic_scoring;
@@ -93,6 +99,8 @@ function buildPromptLibrarySyncUpdate(record) {
         expected_tokens: record.expected_tokens || null,
         scoring_type: record.scoring_type || record.category,
         scoring_plan: record.scoring_plan || null,
+        evaluation_authority: record.evaluation_authority || 'judge',
+        executable_fixture_id: record.executable_fixture_id || null,
         reference_answer: record.reference_answer || null,
         representative: record.representative === true
     };

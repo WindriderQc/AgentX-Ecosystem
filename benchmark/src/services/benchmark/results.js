@@ -141,6 +141,7 @@ async function getSummary() {
         // Defense in depth per scoring-contract-v1 §2.7 (0117): infra-failed rows never surface
         // in a leaderboard, even though success:true already excludes them.
         infra_error: { $ne: true },
+        needs_review: { $ne: true },
         excluded_from_leaderboard: { $ne: true },
         model: { $not: /diagnostic/i } // Exclude diagnostic models
     };
@@ -216,6 +217,7 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
     const matchQuery = {
         success: true,
         infra_error: { $ne: true },
+        needs_review: { $ne: true },
         excluded_from_leaderboard: { $ne: true }
     };
     if (!includeCloud) {

@@ -31,7 +31,16 @@ function toBatchObjectId(batchId) {
 async function getBatchPromptScores(batchId) {
     const batchOid = toBatchObjectId(batchId);
     const rows = await BenchmarkResult.aggregate([
-        { $match: { batch_id: batchOid, success: true, quality_score: { $ne: null } } },
+        {
+            $match: {
+                batch_id: batchOid,
+                success: true,
+                infra_error: { $ne: true },
+                needs_review: { $ne: true },
+                excluded_from_leaderboard: { $ne: true },
+                quality_score: { $ne: null }
+            }
+        },
         {
             $group: {
                 _id: {

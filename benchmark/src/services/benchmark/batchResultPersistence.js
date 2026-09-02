@@ -72,8 +72,12 @@ async function persistSuccessfulResult({
     const hiddenRuntimeCap = !!(responseTruncated && !visibleResponseBudget);
     const responseContractFailure = thinkingOnlyResponse;
     const nonRankableMode = executionSettings?.rankable_mode === false;
+    const executableVerificationRequired = prompt.evaluation_authority === 'executable';
     const truncationInvalidatesScore = hiddenRuntimeCap || !!inputTruncated || thinkingRunaway;
-    const excludedFromLeaderboard = truncationInvalidatesScore || responseContractFailure || nonRankableMode;
+    const excludedFromLeaderboard = truncationInvalidatesScore
+        || responseContractFailure
+        || nonRankableMode
+        || executableVerificationRequired;
     const reviewReasons = [];
     if (hiddenRuntimeCap) {
         reviewReasons.push('Response hit a hidden runtime token cap; the prompt did not expose a response budget, so the row is invalid for automatic quality ranking');
@@ -89,6 +93,9 @@ async function persistSuccessfulResult({
     }
     if (nonRankableMode) {
         reviewReasons.push('Campaign mode is diagnostic/profile-only under the frozen artifact contract and is not rankable');
+    }
+    if (executableVerificationRequired) {
+        reviewReasons.push(`Correctness requires executable repository fixture ${prompt.executable_fixture_id || '(missing fixture id)'}; LLM judge output is advisory only`);
     }
     const emptyResponseExplanation = thinkingOnlyResponse
         ? 'Model produced hidden thinking but no visible final answer'
@@ -127,6 +134,8 @@ async function persistSuccessfulResult({
         expected_answer: prompt.expected_answer,
         scoring_type: scoringType,
         scoring_plan: prompt.scoring_plan || null,
+        evaluation_authority: prompt.evaluation_authority || 'judge',
+        executable_fixture_id: prompt.executable_fixture_id || null,
         deterministic_scoring: prompt.deterministic_scoring || undefined,
         scoring_dimensions: prompt.scoring_dimensions || undefined,
         reference_answer: prompt.reference_answer || null,
@@ -301,6 +310,8 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
             prompt_level: prompt.level,
             prompt_category: prompt.category,
             prompt_name: prompt.name,
+            evaluation_authority: prompt.evaluation_authority || 'judge',
+            executable_fixture_id: prompt.executable_fixture_id || null,
             error: err.message,
             failure_classification: err.failureClassification || classified.type || 'unknown',
             infra_error: classified.infra,

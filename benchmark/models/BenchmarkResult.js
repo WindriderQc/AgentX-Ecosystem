@@ -136,6 +136,16 @@ const BenchmarkResultSchema = new mongoose.Schema({
         enum: ['deterministic', 'criteria', 'reference', 'decomposed', 'llm_judge', 'hybrid', 'auto', null],
         default: null
     },
+    evaluation_authority: {
+        type: String,
+        enum: ['judge', 'deterministic', 'executable'],
+        default: 'judge',
+        index: true
+    },
+    executable_fixture_id: {
+        type: String,
+        default: null
+    },
     output_contract: {
         type: mongoose.Schema.Types.Mixed,
         default: undefined
@@ -727,6 +737,14 @@ BenchmarkResultSchema.statics.getByModel = function(model, options = {}) {
 };
 
 BenchmarkResultSchema.statics.getModelStats = async function(model) {
+    const hasRankableQuality = {
+        $and: [
+            { $ne: ['$infra_error', true] },
+            { $ne: ['$needs_review', true] },
+            { $ne: ['$excluded_from_leaderboard', true] },
+            { $ne: [{ $ifNull: ['$quality_score', null] }, null] }
+        ]
+    };
     const agg = await this.aggregate([
         { $match: { model, success: true } },
         {
@@ -740,7 +758,7 @@ BenchmarkResultSchema.statics.getModelStats = async function(model) {
                 avg_quality: {
                     $avg: {
                         $cond: [
-                            { $ne: ['$quality_score', null] },
+                            hasRankableQuality,
                             '$quality_score',
                             null
                         ]
@@ -749,7 +767,7 @@ BenchmarkResultSchema.statics.getModelStats = async function(model) {
                 quality_tests: {
                     $sum: {
                         $cond: [
-                            { $ne: ['$quality_score', null] },
+                            hasRankableQuality,
                             1,
                             0
                         ]
@@ -784,6 +802,9 @@ BenchmarkResultSchema.statics.getModelStats = async function(model) {
 BenchmarkResultSchema.statics.getQualityBreakdown = async function(model = null, host = null) {
     const matchStage = {
         success: true,
+        infra_error: { $ne: true },
+        needs_review: { $ne: true },
+        excluded_from_leaderboard: { $ne: true },
         quality_score: { $ne: null }
     };
     if (model) {
