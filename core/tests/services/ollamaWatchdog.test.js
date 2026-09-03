@@ -204,6 +204,23 @@ describe('probeCycle (integration)', () => {
     }
   });
 
+  it('does not probe a resident model while a different model is waiting on the host', async () => {
+    hostGate._resetForTests();
+    const release = await hostGate.acquire(MOCK_HOST.url, 'cold-swap-model');
+    const generate = jest.fn(() => ({ ok: true, status: 200 }));
+    watchdog._setFetch(makeMockFetch({
+      '/api/generate': generate,
+      '/api/ps': () => ({ ok: true, json: async () => ({ models: [{ name: 'resident-model' }] }) })
+    }));
+
+    try {
+      await watchdog.runNow();
+      expect(generate).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
   it('does not trigger on first timeout (requires consecutive fails)', async () => {
     jest.useFakeTimers();
     watchdog._setFetch(makeMockFetch({
