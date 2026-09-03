@@ -36,6 +36,7 @@
 
     { "id": "benchmark-home", "service": "benchmark", "path": "/", "profiles": ["demo", "full"], "journey": "evaluate", "critical": true, "performanceBudget": "visualization" },
     { "id": "benchmark-leaderboard", "service": "benchmark", "path": "/leaderboard", "profiles": ["demo", "full"], "journey": "compare", "critical": true, "performanceBudget": "visualization" },
+    { "id": "benchmark-harnesses", "service": "benchmark", "path": "/harnesses", "profiles": ["demo", "full"], "journey": "evaluate", "critical": false, "performanceBudget": "standard" },
     { "id": "benchmark-courthouse", "service": "benchmark", "path": "/courthouse", "profiles": ["demo", "full"], "journey": "judge", "critical": true, "performanceBudget": "visualization" },
     { "id": "benchmark-profiler", "service": "benchmark", "path": "/profiler", "profiles": ["demo", "full"], "journey": "evaluate", "critical": true, "performanceBudget": "visualization" },
     { "id": "benchmark-efficiency", "service": "benchmark", "path": "/efficiency-map", "profiles": ["demo", "full"], "journey": "compare", "critical": true, "performanceBudget": "visualization" },

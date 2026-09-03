@@ -77,7 +77,9 @@ test('the checked-in registry is valid and separates demo-only from full-only su
 
   assert(demo.some((surface) => surface.id === 'core-demo'));
   assert(!demo.some((surface) => surface.id === 'core-nerve-center'));
+  assert(demo.some((surface) => surface.id === 'benchmark-harnesses'));
   assert(full.some((surface) => surface.id === 'core-nerve-center'));
+  assert(full.some((surface) => surface.id === 'benchmark-harnesses'));
   assert(!full.some((surface) => surface.id === 'core-demo'));
   assert(registry.surfaces
     .filter((surface) => surface.critical)
