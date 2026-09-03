@@ -22,6 +22,7 @@ const {
 } = require('../../shared/agentxRuntimeProfile');
 const { loadTrustedExtensions } = require('./extensions/trustedExtensionLoader');
 const { createTrustedRuntimeServices } = require('./extensions/trustedRuntimeServices');
+const { normalizeTrustedRuntimeNavItems } = require('./extensions/trustedRuntimeNavigation');
 const { conversationLifecycle } = require('./services/conversationLifecycleService');
 
 // Browser-reachable URLs for each service. Distinct from server-to-server
@@ -302,6 +303,16 @@ const trustedExtensions = loadTrustedExtensions({
   })
 });
 app.locals.trustedExtensions = trustedExtensions;
+
+// Full-profile operators may install private runtimes outside Product. Trusted
+// extensions contribute only same-origin launcher routes; Product validates the
+// bounded display contract before any item reaches a rendered navigation bar.
+app.use((_req, res, next) => {
+  res.locals.trustedRuntimeNavItems = isDemoProfile(agentxProfile)
+    ? Object.freeze([])
+    : normalizeTrustedRuntimeNavItems(app.locals.trustedRuntimeNavItems);
+  next();
+});
 
 // Agent Ops is a product-owned read-only shell whose operational projection is
 // supplied by a separately installed trusted extension. Extensions register

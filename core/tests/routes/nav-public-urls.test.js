@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const ejs = require('ejs');
+const { normalizeTrustedRuntimeNavItems } = require('../../src/extensions/trustedRuntimeNavigation');
 
 const navPath = path.join(__dirname, '../../views/partials/nav.ejs');
 const portalPath = path.join(__dirname, '../../public/portal/index.html');
@@ -11,13 +12,14 @@ const publicUrls = {
   data: 'http://data.example:4183',
 };
 
-async function renderNav(service, agentxProfile = 'full', activePage = 'nerve-center') {
+async function renderNav(service, agentxProfile = 'full', activePage = 'nerve-center', trustedRuntimeNavItems = []) {
   return ejs.renderFile(navPath, {
     service,
     activePage,
     agentxProfile,
     publicUrls,
     reqHost: 'wrong-host.example',
+    trustedRuntimeNavItems,
   });
 }
 
@@ -68,6 +70,32 @@ describe('shared navigation public URL contract', () => {
       expect(directChat[0]).toContain('Chat');
       expect(directChat[0]).toContain('aria-current="page"');
     }
+  });
+
+  test('full Core navigation exposes validated trusted runtime launchers only where supplied', async () => {
+    const items = [
+      { id: 'openclaw-runtime', label: 'OpenClaw', href: '/api/openclaw/control-launch/overview', icon: 'fa-paw' },
+      { id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal' },
+    ];
+    const core = await renderNav('core', 'full', 'nerve-center', items);
+    expect(core).toContain('External runtimes');
+    expect(hrefFor(core, 'OpenClaw')).toBe('/api/openclaw/control-launch/overview');
+    expect(hrefFor(core, 'DSH Studio')).toBe('/api/dsh/control-launch');
+
+    expect(await renderNav('core', 'demo', 'demo', items)).not.toContain('DSH Studio');
+    expect(await renderNav('benchmark', 'full', 'benchmark', items)).not.toContain('DSH Studio');
+  });
+
+  test('trusted runtime labels stay escaped in rendered navigation', async () => {
+    const items = normalizeTrustedRuntimeNavItems([{
+      id: 'private-runtime',
+      label: '<img src=x onerror=alert(1)>',
+      href: '/api/private-runtime/control-launch',
+      icon: 'fa-terminal',
+    }]);
+    const html = await renderNav('core', 'full', 'nerve-center', items);
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
   });
 
   test('navigation exposes every release-critical demo surface and exact RAG page state', async () => {

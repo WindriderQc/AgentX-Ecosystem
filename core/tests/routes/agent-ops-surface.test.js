@@ -60,6 +60,8 @@ describe('read-only Agent Ops shell', () => {
     expect(source).toContain('/TOPIC[_\\s-]*CLOSED/i');
     expect(source).not.toMatch(/renderRuntimeHandoff|renderCapabilities/);
     expect(source).toContain("if (body.available === false)");
+    expect(source).toContain('safeRuntimeLaunchUrl(runtime.launchUrl)');
+    expect(source).toContain("raw.startsWith('/api/')");
     expect(source).toContain("availability?.show(body)");
   });
 });
