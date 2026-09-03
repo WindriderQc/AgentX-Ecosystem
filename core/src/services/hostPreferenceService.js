@@ -31,7 +31,6 @@ const benchmarkClaimService = require('./benchmarkClaimService');
 const hostHealthDaemon = require('./hostHealthDaemon');
 const pinReconciler = require('./pinReconciler');
 const hostPreferenceIdentity = require('./hostPreferenceIdentity');
-const { unloadModel, prepareExclusiveModel } = require('./hostModelHandoffService');
 const {
   pinRestoreVerifyTimeoutMs,
   normalizePinName,
@@ -48,6 +47,7 @@ const {
   getLoadedEntryStatus,
   entrySatisfiedByLoadedModel,
   fetchRunningModelInfos,
+  fetchRunningModelInfosStrict,
   sleep,
   verifyPinnedEntriesLoaded
 } = require('./hostPinPrimitives');
@@ -137,6 +137,57 @@ async function warmDefaultModel(hostUrl, model, { keepAlive = -1, contextSize = 
   } catch (err) {
     return { host: hostUrl, model, status: 'error', error: err.message };
   }
+}
+
+async function unloadModel(hostUrl, model) {
+  try {
+    const response = await fetch(`${hostUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, keep_alive: 0 }),
+      signal: AbortSignal.timeout(30_000)
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      return { host: hostUrl, model, status: 'error', error: text };
+    }
+    await response.text();
+    return { host: hostUrl, model, status: 'ok' };
+  } catch (err) {
+    return { host: hostUrl, model, status: 'error', error: err.message };
+  }
+}
+
+async function prepareExclusiveModel(hostUrl, model) {
+  let runningModelInfos;
+  try {
+    runningModelInfos = await fetchRunningModelInfosStrict(hostUrl);
+  } catch (error) {
+    return { host: hostUrl, model, status: 'error', error: error.message, unloaded: [] };
+  }
+  const runningModels = runningModelInfos.map(entry => entry.name || entry.model).filter(Boolean);
+  const unloaded = [];
+
+  for (const loaded of runningModels) {
+    if (pinNamesMatch(loaded, model)) continue;
+    if (hostGate.inFlightFor(hostUrl, loaded) > 0) {
+      return { host: hostUrl, model, status: 'busy', unloaded, blockingModel: loaded };
+    }
+    const result = await unloadModel(hostUrl, loaded);
+    if (result.status !== 'ok') {
+      return { host: hostUrl, model, status: 'error', error: result.error, unloaded };
+    }
+    unloaded.push(loaded);
+  }
+
+  if (unloaded.length > 0) {
+    await HostPreference.findOneAndUpdate(
+      { hostUrl },
+      { $set: { status: 'swapping', loadedModel: null, loadedModels: [] } }
+    );
+    logger.info(`[HostPreference] Prepared exclusive model handoff to ${model} on ${hostUrl}`, { unloaded });
+  }
+  return { host: hostUrl, model, status: 'ready', unloaded };
 }
 
 /**
