@@ -29,8 +29,8 @@
       <ol class="pipeline-lifecycle-flow">
         <li class="stage-queued" data-cockpit-tip-title="Queued" data-cockpit-tip="Ready for any worker to claim atomically. Re-queueing a task releases its worker and heartbeat." tabindex="0"><i class="fas fa-inbox"></i><span>Queued</span></li>
         <li class="stage-progress" data-cockpit-tip-title="In progress" data-cockpit-tip="Claimed by a worker. Healthy work heartbeats regularly; a silent hour marks it stale." tabindex="0"><i class="fas fa-bolt"></i><span>In progress</span></li>
-        <li class="stage-review" data-cockpit-tip-title="Review" data-cockpit-tip="The worker reported done. A different overseer must confirm it — workers never self-certify." tabindex="0"><i class="fas fa-magnifying-glass"></i><span>Review</span></li>
-        <li class="stage-done" data-cockpit-tip-title="Done" data-cockpit-tip="Confirmed by an overseer distinct from the worker. Every confirmation lands in the audit trail." tabindex="0"><i class="fas fa-check"></i><span>Done</span></li>
+        <li class="stage-review" data-cockpit-tip-title="Review" data-cockpit-tip="Human review is required. Current Coding Team attempts carry a receipt; legacy dossiers may not. Workers never self-certify." tabindex="0"><i class="fas fa-magnifying-glass"></i><span>Review</span></li>
+        <li class="stage-done" data-cockpit-tip-title="Done" data-cockpit-tip="Confirmed by a human identity distinct from the worker. Every confirmation lands in the audit trail." tabindex="0"><i class="fas fa-check"></i><span>Done</span></li>
       </ol>
       <div class="pipeline-lifecycle-branch" data-cockpit-tip-title="Blocked" data-cockpit-tip="Any stage can report blocked. Blocked work needs an operator or upstream action before it can move." tabindex="0">
         <i class="fas fa-hand"></i><span>Blocked &mdash; needs intervention</span>
@@ -71,7 +71,7 @@
     <button class="pipeline-metric metric-review" type="button" data-status-filter="review" aria-pressed="false">
       <span><i class="fas fa-magnifying-glass" aria-hidden="true"></i> Review</span>
       <strong id="pipelineCountReview">--</strong>
-      <small>Waiting for overseer confirmation</small>
+      <small>Human review required; receipt status shown in dossier</small>
     </button>
     <button class="pipeline-metric metric-blocked" type="button" data-status-filter="blocked" aria-pressed="false">
       <span><i class="fas fa-hand" aria-hidden="true"></i> Blocked</span>
@@ -259,11 +259,11 @@
         { title: 'Measure the coding team', body: 'Coding Team joins queue, lease, verifier, change, cost, and human-review evidence. Coverage is always visible and missing metrics stay unknown rather than becoming zero.' },
         { title: 'Find the work', body: 'Search matches id, title, owner, epic, and source. Service and lane/source filters narrow the loaded rows; urgency sort surfaces blocked and overdue work first.' },
         { title: 'Open the dossier', body: 'Select any row for the full task: specification, declared coding scope, per-attempt verification, measured cost and energy evidence, and the complete feedback audit trail. Inference content is intentionally excluded.' },
-        { title: 'Confirm like an overseer', body: 'A task in review can be confirmed done from its dossier — but only by an identity different from the worker. The gate is enforced server-side and every confirmation is audited.' },
+        { title: 'Record a human decision', body: 'A task in review can be confirmed done from its dossier — but only by an identity different from the worker. Current Coding Team attempts show their receipt; legacy dossiers without one are labeled explicitly and must be reconciled from their existing evidence.' },
         { title: 'Unstick what is stuck', body: 'Re-queue releases a task back to the queue (clearing its worker and heartbeat), and notes land in the same audit trail agents read.' },
         { title: 'Trust the heartbeat', body: 'In-progress work should heartbeat regularly. A silent hour marks it stale in Activity and raises it under Needs attention.' }
       ],
-      note: { title: 'One bounded contract', body: 'This page reads and writes /api/pipeline/tasks and reads its aggregate /api/pipeline/performance projection — the same audited Mongo authority used by workers, overseers, and separately deployed boards. There is no privileged side channel.' },
+      note: { title: 'One bounded contract', body: 'This page reads and writes /api/pipeline/tasks and reads its aggregate /api/pipeline/performance projection — the same audited Mongo authority used by workers, human reviewers, and separately deployed boards. There is no privileged side channel.' },
       links: [
         { href: '/agent-ops', icon: 'fa-circle-nodes', label: 'Agent Ops', detail: 'Who does what, and is it running' },
         { href: '/planning', icon: 'fa-diagram-project', label: 'Planning', detail: 'Workstreams and outcomes' },
