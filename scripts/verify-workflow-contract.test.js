@@ -57,21 +57,29 @@ test('release contract requires exact green CI and prior explicitly authorized l
   assert.match(contract, /elif \[ "\$mode" != "in-band-health" \]/);
 });
 
-test('manual exact-SHA publication creates unique receipts and one closed candidate manifest', () => {
+test('green main CI or manual exact-SHA publication creates one immutable candidate manifest', () => {
   const workflow = read('.github/workflows/publish-images.yml');
   const publish = section(workflow, '\n  publish:', '\n  candidate-manifest:');
   const candidate = section(workflow, '\n  candidate-manifest:', '\n  previous-stable:');
 
   const trigger = section(workflow, 'on:', '\n\npermissions:');
+  assert.match(trigger, /workflow_run:[\s\S]*workflows: \[product-ci\][\s\S]*types: \[completed\][\s\S]*branches: \[main\]/);
   assert.match(trigger, /workflow_dispatch:/);
   assert.match(trigger, /source_sha:[\s\S]*required: true[\s\S]*confirmation:[\s\S]*required: true/);
   assert.doesNotMatch(trigger, /\n\s+push:/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_sha/);
+  assert.match(workflow, /CI_CONCLUSION[\s\S]*CI_EVENT[\s\S]*CI_BRANCH/);
+  assert.match(workflow, /Automatic publication requires one successful Product CI push on main/);
+  assert.match(workflow, /Automatic publication checkout does not match the completed Product CI commit/);
+  assert.match(workflow, /lifecycle_required: \$\{\{ steps\.source\.outputs\.lifecycle_required \}\}/);
+  assert.match(workflow, /git diff --name-only "\$\{source_sha\}\^" "\$source_sha" \| grep -Eq/);
+  assert.match(workflow, /\.github\/workflows\/\(ci\|publish-images\)\\\.yml/);
   assert.match(workflow, /Manual publication requires confirmation=PUBLISH/);
   assert.match(workflow, /source_sha" =~ \^\[0-9a-f\]\{40\}\$/);
   assert.match(workflow, /"\$GITHUB_REF" != "refs\/heads\/main"/);
   assert.match(workflow, /"\$source_sha" != "\$GITHUB_SHA"/);
   assert.match(workflow, /git merge-base --is-ancestor "\$source_sha" origin\/main/);
-  assert.match(publish, /if: github\.event_name == 'workflow_dispatch'/);
+  assert.match(publish, /if: github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'workflow_run'/);
   assert.match(publish, /group: publish-product-image-\$\{\{ matrix\.service \}\}-\$\{\{ needs\.release-contract\.outputs\.source_sha \}\}/);
   assert.match(publish, /type=raw,value=sha-\$\{\{ needs\.release-contract\.outputs\.source_sha \}\}/);
   assert.match(publish, /AGENTX_BUILD_REVISION=\$\{\{ needs\.release-contract\.outputs\.source_sha \}\}/);
@@ -100,6 +108,7 @@ test('previous stable manifest gates parallel exact-digest upgrade and recovery 
   const recovery = section(workflow, '\n  recovery-drill:', '\n  release-record:');
 
   assert.match(previous, /!release\.draft && !release\.prerelease/);
+  assert.match(previous, /if: needs\.release-contract\.outputs\.lifecycle_required == 'true'/);
   assert.match(previous, /agentx-\$\{stable\.tag_name\}-images\.json/);
   assert.match(previous, /matches\.length !== 1 \|\| matches\[0\]\.size <= 0/);
   assert.match(previous, /releases\/assets\/\$\{PREVIOUS_ASSET_ID\}/);
@@ -110,6 +119,7 @@ test('previous stable manifest gates parallel exact-digest upgrade and recovery 
   assert.match(previous, /previous_identity_evidence_mode/);
 
   for (const job of [upgrade, recovery]) {
+    assert.match(job, /if: needs\.release-contract\.outputs\.lifecycle_required == 'true'/);
     assert.match(job, /needs: \[release-contract, candidate-manifest, previous-stable\]/);
     assert.match(job, /--candidate-artifact candidate-artifact/);
     assert.match(job, /config\/container-image-pins\.json/);
@@ -187,22 +197,37 @@ test('Product CI remains non-publishing and retains its existing exact-SHA proof
   assert.match(workflow, /node --test e2e\/unit\/upgrade-rollback-receipt\.test\.js e2e\/unit\/run-upgrade-rollback\.test\.js/);
   assert.match(workflow, /node --test scripts\/bounded-response\.test\.js/);
   assert.match(workflow, /node --test shared\/recoveryBundleContract\.test\.js/);
-  assert.match(workflow, /-f \/app\/scripts\/repo-coding-qualification\.js/);
-  assert.match(workflow, /-f \/app\/data\/repo-tasks\/manifest\.json/);
-  assert.match(workflow, /-f \/scripts\/bounded-response\.js/);
-  assert.match(workflow, /--entrypoint git agentx-benchmark:ci --version/);
-  assert.match(workflow, /--network none --entrypoint node agentx-benchmark:ci[\s\S]*?--dry-run --attempts 1 --ks 1/);
+  assert.match(workflow, /\/app\/scripts\/repo-coding-qualification\.js/);
+  assert.match(workflow, /\/app\/data\/repo-tasks\/manifest\.json/);
+  assert.match(workflow, /\/scripts\/bounded-response\.js/);
+  assert.match(workflow, /--entrypoint git "\$benchmark_image" --version/);
+  assert.match(workflow, /--network none --entrypoint node "\$benchmark_image"[\s\S]*?--dry-run --attempts 1 --ks 1/);
   assert.match(workflow, /DRY-RUN \(golden diffs, no model calls\)/);
   assert.match(workflow, /pass@1=1\.000/);
   assert.match(workflow, /name: agentx-release-evidence-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_attempt \}\}[\s\S]*?retention-days: 30/);
   assert.match(workflow, /name: agentx-live-cancellation-evidence-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_attempt \}\}[\s\S]*?retention-days: 30/);
+  assert.doesNotMatch(workflow, /\n  image-builds:/);
+});
+
+test('Product PR renders demo evidence while main alone runs the full suite', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  const firstRun = section(workflow, '\n  clean-first-run:', '\n  live-cancellation:');
+  const live = workflow.slice(workflow.indexOf('\n  live-cancellation:'));
+
+  assert.match(workflow, /fromJSON\(github\.event_name == 'pull_request'[\s\S]*ubuntu-latest[\s\S]*windows-latest/);
+  assert.match(firstRun, /Start the supported full product profile[\s\S]*if: github\.event_name == 'push'/);
+  assert.match(firstRun, /Verify packaged Benchmark operator scripts without rebuilding images[\s\S]*if: github\.event_name == 'push'/);
+  assert.match(firstRun, /Rehearse a bounded RAG outage and verified recovery[\s\S]*if: github\.event_name == 'push'/);
+  assert.match(firstRun, /Require the useful PR demo receipt set[\s\S]*github\.event_name == 'pull_request'/);
+  assert.match(live, /if: github\.event_name == 'push'/);
 });
 
 test('live cancellation runs in a separate ephemeral Compose project with exact cleanup', () => {
   const workflow = read('.github/workflows/ci.yml');
   const topology = read('docker-compose.live-cancellation.yml');
-  const live = section(workflow, '\n  live-cancellation:', '\n  image-builds:');
+  const live = workflow.slice(workflow.indexOf('\n  live-cancellation:'));
 
+  assert.match(live, /if: github\.event_name == 'push'/);
   assert.match(live, /runs-on: ubuntu-latest/);
   assert.doesNotMatch(live, /^\s+needs:/m);
   assert.match(live, /project="agentx-live-cancel-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/);
