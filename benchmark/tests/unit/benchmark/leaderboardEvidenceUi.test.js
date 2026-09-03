@@ -133,10 +133,122 @@ describe('leaderboard evidence-honesty UI', () => {
         }, 0, new Map(), {}, { provisional: true });
 
         expect(html).toContain('Legacy rows may still contain an LLM judge score');
-        expect(html).toContain('<span class="cb-stat-v ">—</span>');
-        expect(html).not.toContain('<span class="cb-stat-v good">—</span>');
-        expect(html).toContain('<span class="cb-stat-l">Needs review</span>');
-        expect(html).toContain('>8</span>');
+        expect(html).toContain('<span class="cb-detail-stat-label">Evidence confidence</span>');
+        expect(html).toContain('<strong class="cb-detail-stat-value ">—</strong>');
+        expect(html).not.toContain('<strong class="cb-detail-stat-value good">—</strong>');
+        expect(html).toContain('<span class="cb-detail-stat-label">Needs review</span>');
+        expect(html).toContain('<strong class="cb-detail-stat-value watch">8</strong>');
+    });
+
+    test('renders a one-row graphic summary and preserves the complete evidence sheet', () => {
+        const { renderRow } = loadBrowserModule(
+            'combined-board.js',
+            'renderRow',
+            {
+                getBadgeHtml: () => '<span>Ready</span>',
+                speedometer: () => '<svg data-speedometer></svg>',
+                formatMs: value => `${value}ms`,
+                valColor: () => '#fff',
+                shortHost: () => 'gpu-studio'
+            }
+        );
+        const categoryScores = {
+            coding: 8.8,
+            reasoning: 8.1,
+            math: 7.9,
+            knowledge: 7.5,
+            instruction: 8.4,
+            creative: 7.1,
+            translation: null
+        };
+        const html = renderRow({
+            model: 'exact-model:q8',
+            host: 'http://gpu-studio:11434',
+            hostName: 'GPU Studio',
+            provider: 'ollama',
+            tier: 'local',
+            score: 8.21,
+            scoreAxis: 'quality',
+            fullScopeEligible: false,
+            evidenceTrustState: 'exploratory',
+            categoryScores,
+            dimensions: Object.entries(categoryScores)
+                .filter(([, value]) => value != null)
+                .map(([name, value]) => ({ name, yesRate: value / 10 })),
+            categoryEvidence: { translation: 'review_pending' },
+            promptLevelCounts: { 4: 6, 5: 5 },
+            contextCounts: { 32768: 7, 65536: 4 },
+            requiredPromptLevels: [4, 5],
+            fullScopeMinLevel: 4,
+            difficultyCoverage: 79,
+            difficultyPenalty: 1.2,
+            evidenceConfidence: 0.76,
+            evidenceConfidenceTarget: 0.8,
+            evidenceConfidencePenalty: 0.4,
+            confidence: 0.61,
+            confidenceMethod: 'weighted_category_prompt_means_t95',
+            confidenceSampleSize: 11,
+            confidenceRepeatCount: 22,
+            testCount: 22,
+            needsReviewCount: 3,
+            lowConfidenceCount: 2,
+            judgeModel: 'judge-model:q8',
+            judgeCalibrated: true,
+            tokPerSec: 41.2,
+            avgLatency: 1320,
+            p95Latency: 2210,
+            benchmarkTtft: 420,
+            hostTtft: 360,
+            successRate: 95,
+            perfCoeff: 0.95,
+            qualityCohortFingerprint: 'sha256:cohort',
+            harness: { name: 'native', version: '1.2' }
+        }, 0, new Map(), {}, { provisional: true });
+
+        expect(html).toContain('class="cb-row-open"');
+        expect(html).toContain('aria-haspopup="dialog"');
+        expect(html).toContain('class="cb-summary-categories"');
+        expect(html).toContain('data-cb-detail="model-detail-0"');
+        expect(html).toContain('Complete model evidence');
+        expect(html).toContain('sha256:cohort');
+        expect(html).toContain('judge-model:q8');
+        expect(html).toContain('data-speedometer');
+        [
+            'Capability profile', 'Speed & latency', 'Evidence ledger',
+            'Tests', 'Levels', 'Contexts', 'Hard coverage', 'Evidence confidence',
+            'Scope', 'Uncertainty', 'Calibration', 'Needs review', 'Low confidence',
+            'Success', 'Provider cost', 'Performance coeff.',
+            'Review in Courthouse', 'Efficiency Map'
+        ].forEach(label => expect(html).toContain(label));
+        expect(html).toContain('Translation: pending human review; provisional score withheld');
+    });
+
+    test('consolidates evidence warnings and keeps cohort visuals behind one disclosure', () => {
+        const source = fs.readFileSync(path.join(PUBLIC_ROOT, 'index.js'), 'utf8');
+        const leaderboard = source.indexOf('<div id="leaderboard"');
+        const cohortDoor = source.indexOf('<details id="leaderboard-cohort-overview"');
+
+        expect(source).toContain('function renderEvidenceNotice');
+        expect(source).toContain('id = \'leaderboard-evidence-notice\'');
+        expect(source).not.toContain("id = 'trust-onboard-banner'");
+        expect(source).not.toContain("id = 'hard-coverage-banner'");
+        expect(source).toContain('Hard L4–L5 judge evidence is exploratory.');
+        expect(leaderboard).toBeGreaterThan(-1);
+        expect(cohortDoor).toBeGreaterThan(leaderboard);
+        expect(source).not.toContain('<details id="leaderboard-cohort-overview" class="r-cohort-lab" open>');
+    });
+
+    test('keeps the no-evidence experience on the primary list surface', () => {
+        const source = fs.readFileSync(path.join(PUBLIC_ROOT, 'index.js'), 'utf8');
+        const emptyState = source.slice(
+            source.indexOf('if (!hasHistoricalEvidence)'),
+            source.indexOf('// --- Step 3: podium')
+        );
+
+        expect(emptyState).toContain("const leaderboardEl = main.querySelector('#leaderboard')");
+        expect(emptyState).toContain('<h1>No ranked models yet</h1>');
+        expect(emptyState).not.toContain("['scoring-system', 'leaderboard', 'category-map']");
+        expect(emptyState).toContain("hideInactiveSurface(main.querySelector('#leaderboard-cohort-overview'))");
     });
 
     test('keeps missing Courthouse calibration unknown and describes judge selection precisely', () => {
@@ -247,6 +359,7 @@ describe('leaderboard evidence-honesty UI', () => {
         }]);
 
         expect(container.innerHTML).toContain('P1');
+        expect(container.innerHTML).toContain('id="cb-model-dialog"');
         expect(container.innerHTML).not.toContain('🥇');
     });
 
