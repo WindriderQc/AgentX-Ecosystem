@@ -91,7 +91,7 @@ function printHelp() {
     'Usage: node benchmark/scripts/prepare-blind-review-packet.js '
     + '--input SOURCE_BUNDLE.json --output-dir NEW_DIRECTORY\n\n'
     + 'Builds a reviewer-safe packet, a separate operator-only control manifest, and a blank response template. '
-    + 'The source bundle must contain exactly 175 sealed results with 2 validation and 3 holdout reviews per category/difficulty cell. '
+    + 'The source bundle must contain exactly 175 sealed Trust results (v1) or local calibration captures (v2), with 2 validation and 3 holdout reviews per category/difficulty cell. '
     + 'The command never launches a campaign, calls a model/provider, creates a key, signs evidence, or overwrites an existing directory.\n'
   );
 }
@@ -103,7 +103,9 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
   const reviewPackage = buildBenchmarkBlindReviewPackage(source);
   const files = writePackage(options.outputDirectory, reviewPackage, dependencies);
   const receipt = {
-    schema: 'agentx.benchmark-blind-review-package-preparation-receipt/v1',
+    schema: reviewPackage.packet.schema.endsWith('/v2')
+      ? 'agentx.benchmark-blind-review-package-preparation-receipt/v2'
+      : 'agentx.benchmark-blind-review-package-preparation-receipt/v1',
     packetId: reviewPackage.packet.packetId,
     manifestId: reviewPackage.controlManifest.manifestId,
     corpusFingerprint: reviewPackage.packet.corpusFingerprint,

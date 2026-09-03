@@ -1,6 +1,11 @@
 'use strict';
 
 const { fingerprint } = require('./workerContract');
+const {
+  BENCHMARK_BLIND_REVIEW_SOURCE_BUNDLE_V2_SCHEMA,
+  buildBenchmarkBlindReviewPackageV2,
+  normalizeBenchmarkBlindReviewSourceBundleV2,
+} = require('./benchmarkBlindReviewPacketV2');
 
 const BENCHMARK_BLIND_REVIEW_SOURCE_BUNDLE_SCHEMA =
   'agentx.benchmark-blind-review-source-bundle/v1';
@@ -205,7 +210,7 @@ function assertExactCoverage(items) {
   }
 }
 
-function normalizeBenchmarkBlindReviewSourceBundle(rawValue) {
+function normalizeBenchmarkBlindReviewSourceBundleV1(rawValue) {
   const value = exactObject(rawValue, [
     'schema', 'corpusId', 'reviewerId', 'reviewProtocol', 'rubric', 'items',
   ], 'source bundle');
@@ -237,7 +242,10 @@ function normalizeBenchmarkBlindReviewSourceBundle(rawValue) {
 }
 
 function buildBenchmarkBlindReviewPackage(rawBundle) {
-  const bundle = normalizeBenchmarkBlindReviewSourceBundle(rawBundle);
+  if (rawBundle?.schema === BENCHMARK_BLIND_REVIEW_SOURCE_BUNDLE_V2_SCHEMA) {
+    return buildBenchmarkBlindReviewPackageV2(rawBundle);
+  }
+  const bundle = normalizeBenchmarkBlindReviewSourceBundleV1(rawBundle);
   const corpusFingerprint = fingerprint({
     schema: BENCHMARK_BLIND_REVIEW_SOURCE_BUNDLE_SCHEMA,
     corpusId: bundle.corpusId,
@@ -297,11 +305,19 @@ function buildBenchmarkBlindReviewPackage(rawBundle) {
   return { packet, controlManifest, responseTemplate };
 }
 
+function normalizeBenchmarkBlindReviewSourceBundle(rawValue) {
+  if (rawValue?.schema === BENCHMARK_BLIND_REVIEW_SOURCE_BUNDLE_V2_SCHEMA) {
+    return normalizeBenchmarkBlindReviewSourceBundleV2(rawValue);
+  }
+  return normalizeBenchmarkBlindReviewSourceBundleV1(rawValue);
+}
+
 module.exports = {
   BENCHMARK_BLIND_REVIEW_CONTROL_MANIFEST_SCHEMA,
   BENCHMARK_BLIND_REVIEW_PACKET_SCHEMA,
   BENCHMARK_BLIND_REVIEW_RESPONSE_TEMPLATE_SCHEMA,
   BENCHMARK_BLIND_REVIEW_SOURCE_BUNDLE_SCHEMA,
+  BENCHMARK_BLIND_REVIEW_SOURCE_BUNDLE_V2_SCHEMA,
   CATEGORIES,
   DIFFICULTIES,
   EXPECTED_HOLDOUT_PER_CELL,

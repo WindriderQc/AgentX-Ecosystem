@@ -416,14 +416,29 @@ validation and three holdout sealed results for every one of the seven
 categories and five difficulty levels. Source result IDs and fingerprints must
 be unique, and each response must still match its sealed response fingerprint.
 
+The same builder accepts
+`agentx.benchmark-blind-review-source-bundle/v2` for a dedicated, zero-cost
+local judge-calibration capture that deliberately precedes judge
+qualification. This avoids requiring a qualification attestation in order to
+collect the evidence needed to qualify that judge. V2 binds exact Product and
+collector revisions, the judge target and model digest, the Product runtime
+rubric fingerprint, every judge WorkerReceipt, and a zero-cost/no-fallback
+capture profile in the operator-only manifest. It is calibration evidence, not
+a Trust campaign result and not an importable substitute for a sealed Mongo
+source result.
+
 `node benchmark/scripts/prepare-blind-review-packet.js --input FILE
 --output-dir NEW_DIRECTORY` emits a reviewer packet, a separate operator-only
 control manifest and a blank response template. Split, source, candidate,
 model, host, judge identity and judge score never enter the reviewer packet.
+For v2, the packet preserves the Product category-specific dimension names,
+descriptions, integer weights, and approved 0-10 scoring anchors; each response
+row contains only the dimensions for its own category.
 The new output directory must not exist. The builder has no campaign, provider,
 network, key-generation, signing, import or overwrite capability. It therefore
 cannot make an unexecuted corpus sealed or a human review qualified; it only
-prepares the blind boundary around already sealed source results.
+prepares the blind boundary around already sealed source results or completed
+local calibration captures.
 
 This import proves admission of one human label only. It does not qualify a
 judge, ratify a Benchmark receipt, promote a winner, or authorize routing. The
