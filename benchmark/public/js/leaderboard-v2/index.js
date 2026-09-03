@@ -162,8 +162,11 @@ function hostSelectOptionsHtml(hosts) {
 /** Restore the section containers after a successful initial fetch */
 function restoreShell(main, hosts = []) {
     main.innerHTML = `
-        <section id="hero"></section>
-        <section id="filter-bar" class="r-filterbar" aria-label="Leaderboard filters">
+        <details id="filter-bar" class="r-filterbar" aria-label="Leaderboard filters" open>
+            <summary class="r-filter-summary">
+                <span><i class="fas fa-sliders" aria-hidden="true"></i> Filters</span>
+                <small id="filter-summary-value">Quality · Hard L4–L5 · Trusted</small>
+            </summary>
             <div class="r-fgroup">
                 <span class="r-fgroup-label"><i class="fas fa-arrow-down-wide-short" aria-hidden="true"></i> Rank by</span>
                 <div class="r-seg">
@@ -210,26 +213,37 @@ function restoreShell(main, hosts = []) {
                 </label>
             </div>
             <p class="r-view-summary" id="view-summary" aria-live="polite"></p>
-        </section>
-        <section id="podium"></section>
-        <div id="scoring-system" class="r-section"></div>
+        </details>
         <div id="leaderboard" class="r-section"></div>
-        <div id="category-map" class="r-section"></div>`;
+        <details id="leaderboard-cohort-overview" class="r-cohort-lab">
+            <summary>
+                <span><i class="fas fa-layer-group" aria-hidden="true"></i> Cohort visuals & scoring</span>
+                <small>Podium view, fleet summary, scoring method and category heatmap</small>
+            </summary>
+            <div class="r-cohort-lab-body">
+                <section id="hero"></section>
+                <section id="podium"></section>
+                <div id="scoring-system" class="r-section"></div>
+                <div id="category-map" class="r-section"></div>
+            </div>
+        </details>`;
+    const filterBar = main.querySelector('#filter-bar');
+    if (filterBar && typeof window.matchMedia === 'function') {
+        filterBar.open = !window.matchMedia('(max-width: 700px)').matches;
+    }
 }
 
 /**
- * When the Trusted view is selected but the board is empty or thin, the table
- * alone reads as "broken". Render an explanatory banner above the leaderboard
- * that explains the actual confidence weighting and links to the Courthouse
- * evidence view. UI/guidance only — does not change what data is shown.
- *
- * @param {HTMLElement} leaderboardEl - the #leaderboard section
- * @param {object} opts - { trusted:boolean, visibleCount:number, excluded:number }
+ * Render one compact evidence notice for trust, qualification, legacy-cohort
+ * exclusions and hard-level human coverage. These were previously split over
+ * two visually competing alerts. Consolidation is presentation-only: every
+ * limitation stays explicit and links back to its evidence surface.
  */
-function renderTrustBanner(leaderboardEl, { trusted, visibleCount, trustedFilters, trustVerdict } = {}) {
-    if (!leaderboardEl) return;
-    // Remove any banner from a previous render so toggling is clean.
-    const prior = document.getElementById('trust-onboard-banner');
+function renderEvidenceNotice(main, { trusted, visibleCount, trustedFilters, trustVerdict, coverageResponse } = {}) {
+    if (!main) return;
+    const filterBar = main.querySelector('#filter-bar');
+    if (!filterBar) return;
+    const prior = document.getElementById('leaderboard-evidence-notice');
     if (prior) prior.remove();
 
     const cohort = trustedFilters?.cohort || {};
@@ -252,38 +266,30 @@ function renderTrustBanner(leaderboardEl, { trusted, visibleCount, trustedFilter
             ? `One exact compatible cohort is visible. Human qualification of the exact judge/rubric/holdout and an immutable ranking receipt are not present in Phase 0.`
             : 'No recent, complete, compatible cohort satisfies the requested Trusted scope.';
 
-    const banner = document.createElement('div');
-    banner.id = 'trust-onboard-banner';
-    banner.className = 'r-trust-banner';
-    banner.style.cssText = 'display:flex;gap:0.75rem;align-items:flex-start;background:rgba(255,183,77,0.06);border:1px solid rgba(255,183,77,0.4);border-radius:10px;padding:0.85rem 1rem;margin-bottom:0.75rem;';
-    banner.innerHTML = `
-        <div style="font-size:1.3rem;line-height:1;">🎯</div>
-        <div style="flex:1;min-width:0;">
-            <div style="font-weight:700;color:var(--r-text,#eee);font-size:0.92rem;margin-bottom:0.25rem;">${lead}</div>
-            <p style="color:#bbb;font-size:0.82rem;line-height:1.45;margin:0 0 0.55rem;">${detail}${excludedNote} Switch scopes only to inspect evidence; no view changes routing.</p>
-            <a class="r-nav-btn r-primary" href="/" style="text-decoration:none;display:inline-block;">Run compatible evidence →</a>
-        </div>`;
-    leaderboardEl.parentNode?.insertBefore(banner, leaderboardEl);
-}
-
-function renderHardCoverageBanner(main, coverageResponse) {
-    if (!main || _challengeScope !== 'advanced' || _currentAxis === 'deterministic') return;
-    const filterBar = main.querySelector('#filter-bar');
-    if (!filterBar) return;
     const coverage = coverageResponse?.data || coverageResponse || null;
     const hard = coverage?.hard_scope || null;
-    if (hard?.ready === true) return;
-
-    const banner = document.createElement('div');
-    banner.id = 'hard-coverage-banner';
-    banner.className = 'r-trust-banner';
-    banner.setAttribute('role', 'alert');
-    banner.style.cssText = 'background:rgba(239,83,80,0.07);border:1px solid rgba(239,83,80,0.45);border-radius:10px;padding:0.8rem 1rem;margin:0.75rem 0;';
-    const evidence = hard
-        ? `${hard.cells_meeting_target || 0}/${hard.total_cells || 14} category/level cells meet the ${hard.target_per_cell || 5}-entry human target.`
+    const hardLimited = _challengeScope === 'advanced' && _currentAxis !== 'deterministic' && hard?.ready !== true;
+    const hardEvidence = hard
+        ? `${hard.cells_meeting_target || 0}/${hard.total_cells || 14} hard category/level cells meet the ${hard.target_per_cell || 5}-entry human target.`
         : 'Current L4–L5 human coverage could not be verified.';
-    banner.innerHTML = `<strong>Hard L4–L5 judge evidence is exploratory.</strong> ${evidence} The ranking remains visible, but its judge-scored component is not human-calibrated for this scope. <a href="/courthouse?tab=calibration">Inspect coverage →</a>`;
-    filterBar.insertAdjacentElement('afterend', banner);
+    const limitationCount = 1 + (hardLimited ? 1 : 0) + (excluded > 0 ? 1 : 0);
+
+    const notice = document.createElement('aside');
+    notice.id = 'leaderboard-evidence-notice';
+    notice.className = 'r-evidence-notice';
+    notice.setAttribute('role', 'note');
+    notice.innerHTML = `
+        <span class="r-evidence-notice-icon" aria-hidden="true"><i class="fas fa-shield-halved"></i></span>
+        <div class="r-evidence-notice-copy">
+            <strong>${lead}</strong>
+            <span>${limitationCount} evidence note${limitationCount === 1 ? '' : 's'} · ranking and routing stay unchanged</span>
+            <details>
+                <summary>Read evidence limits</summary>
+                <p>${detail}${excludedNote} ${hardLimited ? `<strong>Hard L4–L5 judge evidence is exploratory.</strong> ${hardEvidence} Its judge-scored component is not human-calibrated for this scope.` : ''} Switch scopes only to inspect evidence; no view changes routing.</p>
+                <div><a href="/">Run compatible evidence →</a><a href="/courthouse?tab=calibration">Inspect coverage →</a></div>
+            </details>
+        </div>`;
+    filterBar.insertAdjacentElement('afterend', notice);
 }
 
 // Module-level state — survives re-init() calls so chip clicks pick the right axis
@@ -435,6 +441,8 @@ function wireAxisChip(main, leaderboardMeta = {}) {
             : '';
         const cloudNote = _includeCloud ? ' <span class="r-vs-dot">·</span> cloud included' : ' <span class="r-vs-dot">·</span> local only';
         summaryEl.innerHTML = `<i class="fas fa-eye" aria-hidden="true"></i> <span class="r-vs-text">Showing the <b>${axisLabel}</b> ranking across <b>${hostLabel}</b>, scored on <b>${diffLabel}</b>, in <b>${trustLabel}</b> trust mode${cloudNote}${archiveNote}.</span>`;
+        const compactSummary = bar.querySelector('#filter-summary-value');
+        if (compactSummary) compactSummary.textContent = `${axisLabel} · ${diffLabel} · ${trustLabel}`;
     }
 }
 
@@ -648,7 +656,6 @@ async function init() {
     // Restore section containers (the Hosts selector renders from hostsList)
     restoreShell(main, Array.isArray(hostsList) ? hostsList : []);
     wireAxisChip(main, generalistRes?.data || {});
-    renderHardCoverageBanner(main, coverageRes);
 
     // Extract leaderboard array; when a single host is selected, narrow to it
     // (the server returns the whole configured fleet under 'current' scope).
@@ -677,6 +684,14 @@ async function init() {
         }
     }
 
+    renderEvidenceNotice(main, {
+        trusted: _trustScope === 'trusted',
+        visibleCount: rankings.filter(e => !e.filtered).length,
+        trustedFilters: generalistRes?.data?.trustedFilters || null,
+        trustVerdict,
+        coverageResponse: coverageRes
+    });
+
     // --- Step 2: hero (async, handles its own host fetch internally) ---
     const heroEl = main.querySelector('#hero');
     if (heroEl) {
@@ -701,9 +716,9 @@ async function init() {
     if (!hasHistoricalEvidence) {
         const filterBar = main.querySelector('#filter-bar');
         hideInactiveSurface(filterBar);
-        const podiumEl = main.querySelector('#podium');
-        if (podiumEl) {
-            podiumEl.innerHTML = `
+        const leaderboardEl = main.querySelector('#leaderboard');
+        if (leaderboardEl) {
+            leaderboardEl.innerHTML = `
                 <section class="results-empty-experience" role="status">
                     <span class="results-empty-icon" aria-hidden="true"><i class="fas fa-trophy"></i></span>
                     <h1>No ranked models yet</h1>
@@ -714,10 +729,11 @@ async function init() {
                     </div>
                 </section>`;
         }
-        ['scoring-system', 'leaderboard', 'category-map'].forEach(id => {
+        ['podium', 'scoring-system', 'category-map'].forEach(id => {
             const section = main.querySelector('#' + id);
             hideInactiveSurface(section);
         });
+        hideInactiveSurface(main.querySelector('#leaderboard-cohort-overview'));
         return;
     }
 
@@ -774,14 +790,6 @@ async function init() {
             console.warn('[leaderboard] initial render failed:', err);
             showSectionError(leaderboardEl, 'Could not render Model Leaderboard.');
         }
-
-        // Onboarding: explain an empty/thin Trusted board instead of a silent table.
-        renderTrustBanner(leaderboardEl, {
-            trusted: _trustScope === 'trusted',
-            visibleCount: visibleRankings.length,
-            trustedFilters: generalistRes?.data?.trustedFilters || null,
-            trustVerdict
-        });
 
         // Enrich with performance metrics and judge calibration, then re-render.
         // Category values already come from the exact filtered leaderboard
