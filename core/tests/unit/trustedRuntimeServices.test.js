@@ -26,7 +26,8 @@ function inferenceDeps(overrides = {}) {
     hostPreferenceService: {
       getByHost: jest.fn(async () => ({
         pinnedModels: [{ model: 'model-a', contextSize: 32768, keepAlive: -1 }]
-      }))
+      })),
+      prepareExclusiveModel: jest.fn(async () => ({ status: 'ready', unloaded: [] }))
     },
     modelsMatch: (left, right) => left === right,
     resolveInferenceContract: jest.fn(async () => ({
@@ -34,7 +35,10 @@ function inferenceDeps(overrides = {}) {
       contextBudget: { windowTokens: 32768 }
     })),
     applyContractOutputLimit: jest.fn(),
-    hostGate: { acquire: jest.fn(async () => jest.fn()) },
+    hostGate: {
+      acquire: jest.fn(async () => jest.fn()),
+      acquireExclusive: jest.fn(async () => jest.fn())
+    },
     recordInference: jest.fn(async () => null),
     fetch: jest.fn(async () => response({ body: { model: 'model-a', response: 'ok', done: true } })),
     ...overrides
@@ -131,6 +135,45 @@ describe('trusted runtime services', () => {
       callerDetail: 'nestor/voix-native/chat',
       routingTrace: { selected: { routingSource: 'trusted_host_override' } },
     }));
+  });
+
+  test('takes exclusive host admission and releases an idle resident model before inference', async () => {
+    const events = [];
+    const release = jest.fn(() => events.push('release'));
+    const deps = inferenceDeps({
+      hostGate: {
+        acquire: jest.fn(async () => jest.fn()),
+        acquireExclusive: jest.fn(async () => {
+          events.push('exclusive-acquired');
+          return release;
+        })
+      },
+      hostPreferenceService: {
+        getByHost: jest.fn(async () => ({ pinnedModels: [] })),
+        prepareExclusiveModel: jest.fn(async () => {
+          events.push('resident-released');
+          return { status: 'ready', unloaded: ['normal-model'] };
+        })
+      },
+      fetch: jest.fn(async () => {
+        events.push('inference');
+        return response({ body: { model: 'open-model', response: 'ok', done: true } });
+      })
+    });
+
+    const result = await executeRoutedInference(deps, {
+      mode: 'generate', model: 'open-model', prompt: 'hello', exclusiveHost: true
+    });
+
+    expect(result.ok).toBe(true);
+    expect(deps.hostGate.acquire).not.toHaveBeenCalled();
+    expect(deps.hostGate.acquireExclusive).toHaveBeenCalledWith(
+      'http://ollama.test:11434', 'open-model', { signal: undefined }
+    );
+    expect(deps.hostPreferenceService.prepareExclusiveModel).toHaveBeenCalledWith(
+      'http://ollama.test:11434', 'open-model'
+    );
+    expect(events).toEqual(['exclusive-acquired', 'resident-released', 'inference', 'release']);
   });
 
   test('records only validated server-side work attribution', async () => {

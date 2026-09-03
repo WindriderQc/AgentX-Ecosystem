@@ -481,6 +481,11 @@ function validateRequest(request) {
       code: 'INFERENCE_POLICY_INVALID', statusCode: 400
     });
   }
+  if (request.exclusiveHost !== undefined && typeof request.exclusiveHost !== 'boolean') {
+    throw new TrustedRuntimeServiceError('exclusiveHost must be a boolean when supplied.', {
+      code: 'INFERENCE_POLICY_INVALID', statusCode: 400
+    });
+  }
   for (const [name, value] of [
     ['options.num_ctx', request.options?.num_ctx],
     ['options.num_predict', request.options?.num_predict],
@@ -651,7 +656,9 @@ async function executeRoutedInference(deps, request, options = {}) {
   }
   upstreamUrl = `${hostUrl}/api/${request.mode === 'embed' ? 'embed' : request.mode}`;
   payload = buildLocalPayload(request, model, runtimeOptions, keepAlive);
-  release = await deps.hostGate.acquire(hostUrl, model);
+  release = request.exclusiveHost === true
+    ? await deps.hostGate.acquireExclusive(hostUrl, model, { signal: options.signal })
+    : await deps.hostGate.acquire(hostUrl, model, { signal: options.signal });
 
   const metadata = frozenCopy({
     requestedModel: requestedModel || null,
@@ -671,6 +678,17 @@ async function executeRoutedInference(deps, request, options = {}) {
   const releaseGate = releaseOnce(release);
 
   try {
+    if (request.exclusiveHost === true) {
+      const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model);
+      if (prepared?.status !== 'ready') {
+        throw new TrustedRuntimeServiceError('The inference host could not complete its exclusive model handoff.', {
+          code: prepared?.status === 'busy'
+            ? 'INFERENCE_EXCLUSIVE_HOST_BUSY'
+            : 'INFERENCE_EXCLUSIVE_HOST_PREPARE_FAILED',
+          statusCode: 503
+        });
+      }
+    }
     const response = await deps.fetch(upstreamUrl, {
       method: 'POST',
       headers,

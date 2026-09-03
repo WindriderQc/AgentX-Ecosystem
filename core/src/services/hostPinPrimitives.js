@@ -204,11 +204,17 @@ function entrySatisfiedByLoadedModel(entry, runningModelInfos) {
   return status.loaded && !status.contextMismatch && !status.residencyMismatch;
 }
 
+async function fetchRunningModelInfosStrict(hostUrl, timeoutMs = 5_000) {
+  const psResponse = await fetch(`${hostUrl}/api/ps`, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!psResponse.ok) throw new Error(`Ollama model inventory returned HTTP ${psResponse.status}`);
+  const psData = await psResponse.json();
+  if (!Array.isArray(psData?.models)) throw new Error('Ollama model inventory is malformed');
+  return psData.models;
+}
+
 async function fetchRunningModelInfos(hostUrl, timeoutMs = 5_000) {
   try {
-    const psResponse = await fetch(`${hostUrl}/api/ps`, { signal: AbortSignal.timeout(timeoutMs) });
-    const psData = psResponse.ok ? await psResponse.json() : { models: [] };
-    return psData.models || [];
+    return await fetchRunningModelInfosStrict(hostUrl, timeoutMs);
   } catch {
     return [];
   }
@@ -267,6 +273,7 @@ module.exports = {
   getLoadedEntryStatus,
   entrySatisfiedByLoadedModel,
   fetchRunningModelInfos,
+  fetchRunningModelInfosStrict,
   sleep,
   verifyPinnedEntriesLoaded
 };

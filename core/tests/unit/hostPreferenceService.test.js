@@ -196,6 +196,56 @@ describe('hostPreferenceService', () => {
       }
     });
 
+    it('releases an idle resident pin for an exclusive cross-model handoff without deleting the pin', async () => {
+      const originalFetch = global.fetch;
+      const hostUrl = 'http://exclusive-host:11434';
+      await HostPreference.create({
+        hostUrl,
+        hostKey: 'primary',
+        pinnedModels: [{ model: 'normal-model', keepAlive: -1, autoRestore: true }],
+        loadedModel: 'normal-model',
+        loadedModels: ['normal-model'],
+        status: 'ready'
+      });
+      global.fetch = jest.fn(async (url, options) => {
+        if (String(url).endsWith('/api/ps')) {
+          return { ok: true, json: async () => ({ models: [{ name: 'normal-model' }] }) };
+        }
+        return { ok: true, text: async () => '{}' };
+      });
+
+      try {
+        const result = await service.prepareExclusiveModel(hostUrl, 'open-model');
+        expect(result).toEqual({
+          host: hostUrl,
+          model: 'open-model',
+          status: 'ready',
+          unloaded: ['normal-model']
+        });
+        const unloadCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith('/api/generate'));
+        expect(JSON.parse(unloadCall[1].body)).toEqual({ model: 'normal-model', keep_alive: 0 });
+        const pref = await service.getByHost(hostUrl);
+        expect(service.getPinnedModelNames(pref)).toEqual(['normal-model']);
+        expect(pref.loadedModels).toEqual([]);
+        expect(pref.status).toBe('swapping');
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('fails closed when exclusive handoff cannot prove the resident model inventory', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn(async () => ({ ok: false, status: 503 }));
+      try {
+        const result = await service.prepareExclusiveModel('http://exclusive-host:11434', 'open-model');
+        expect(result).toMatchObject({ status: 'error', unloaded: [] });
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(String(global.fetch.mock.calls[0][0])).toMatch(/\/api\/ps$/);
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
     it('warmHost does not treat a namespaced artifact as satisfying a bare pin', async () => {
       const originalFetch = global.fetch;
       const hostUrl = 'http://adapted-host:11434';
