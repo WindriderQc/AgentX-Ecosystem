@@ -715,6 +715,23 @@
   // Attention + recently done
   // ---------------------------------------------------------------------------
 
+  function reviewContext(task) {
+    const attempts = Array.isArray(task.automationAttempts) ? task.automationAttempts : [];
+    const currentReceipt = attempts.some((attempt) => attempt && attempt.evidence);
+    if (!currentReceipt) {
+      return {
+        label: 'Human review required · legacy dossier without receipt',
+        detail: 'This review predates the current Coding Team attempt receipt and has no recorded review decision.',
+        action: 'A human must inspect the existing evidence, then record a decision or re-queue it under the current reviewed automation.',
+      };
+    }
+    return {
+      label: 'Human review required · Coding Team receipt present',
+      detail: 'A current guarded attempt receipt is ready for an independent human decision.',
+      action: 'Accept or reject it from the dossier using an identity different from the worker.',
+    };
+  }
+
   function attentionItems() {
     const items = [];
     state.tasks.filter(matchesContext).forEach((task) => {
@@ -729,14 +746,15 @@
           action: 'Open the dossier for the blocking feedback.'
         });
       } else if (task.status === 'review') {
+        const review = reviewContext(task);
         items.push({
           rank: 1,
           icon: 'fa-magnifying-glass',
           tone: 'review',
           pipelineId: task.pipelineId,
-          title: `${task.pipelineId} ready for review`,
-          detail: task.title || 'Worker feedback is waiting for overseer review.',
-          action: 'Confirm it done from the dossier — a different identity than the worker.'
+          title: `${task.pipelineId} ${review.label}`,
+          detail: `${task.title || 'Untitled task'} · ${review.detail}`,
+          action: review.action,
         });
       } else if (task.status === 'in_progress' && !task.assignee) {
         items.push({
@@ -1020,6 +1038,65 @@
       : '<span class="pipeline-subtle">Not declared</span>';
   }
 
+  function attemptHumanSummary(attempt, evidence) {
+    const codes = new Set(Array.isArray(evidence.failureCodes) ? evidence.failureCodes : []);
+    const verification = evidence.verification || {};
+    const happened = [];
+    const next = [];
+    const attributionFailed = codes.has('attribution_request_count_mismatch')
+      || codes.has('attribution_session_model_mismatch');
+
+    if (codes.has('independent_verification_failed')) {
+      happened.push('The exact changed checkout failed its independent verification profile.');
+      next.push('Correct only the failing verification or implementation evidence, deploy the guard, then rerun this task.');
+    }
+    if (codes.has('attribution_request_count_mismatch')) {
+      happened.push('The server request count and the OpenClaw session call count did not agree.');
+    }
+    if (codes.has('attribution_session_model_mismatch')) {
+      happened.push('The OpenClaw session model did not match the model requested for the attested run.');
+    }
+    if (codes.has('cost_evidence_unavailable')) {
+      happened.push('The provider-spend receipt was unavailable; the dossier does not treat unknown cost as zero.');
+    }
+    if (attributionFailed) {
+      next.push('Inspect the session receipt and model binding before accepting another result.');
+    }
+    if (codes.size > 0 && happened.length === 0) {
+      happened.push('One or more mandatory guarded-dispatch gates failed; the machine codes and audit trail identify the exact controls.');
+      next.push('Resolve the recorded gate failure, then rerun under the same reviewed scope.');
+    }
+
+    if (codes.size > 0) {
+      return {
+        stage: codes.has('independent_verification_failed') && attributionFailed
+          ? 'Independent verification and attribution'
+          : codes.has('independent_verification_failed')
+            ? 'Independent verification'
+            : attributionFailed
+              ? 'Session attribution'
+              : 'Guarded dispatch',
+        happened: happened.join(' '),
+        impact: 'The attempt is blocked and cannot become completion evidence or a PR candidate.',
+        next: Array.from(new Set(next)).join(' '),
+      };
+    }
+    if (verification.status === 'passed') {
+      return {
+        stage: 'Human review handoff',
+        happened: 'The worker stopped and the exact changed checkout passed its independent verification profile.',
+        impact: 'The result is a review candidate only; it has not been approved, merged, or deployed.',
+        next: attempt.reviewedAt ? 'Follow the recorded human review outcome.' : 'A human reviewer must accept or reject the result.',
+      };
+    }
+    return {
+      stage: 'Worker attempt',
+      happened: attempt.completedAt ? 'The attempt ended without complete verification evidence.' : 'The bounded worker attempt is still active.',
+      impact: 'No completion or promotion may be inferred from this state.',
+      next: 'Wait for a terminal guarded result or inspect the audit trail if progress stops.',
+    };
+  }
+
   function renderAttemptDossier(task) {
     const attempts = Array.isArray(task.automationAttempts) ? task.automationAttempts.slice().reverse() : [];
     if (!task.automation && attempts.length === 0) return '';
@@ -1032,6 +1109,7 @@
       const cost = costEvidencePresentation(usage);
       const energy = localEnergyPresentation(usage.localEnergy);
       const failureCodes = Array.isArray(evidence.failureCodes) ? evidence.failureCodes : [];
+      const humanSummary = attemptHumanSummary(attempt, evidence);
       const tests = verification.testsPassed == null && verification.testsFailed == null
         ? 'Unknown'
         : `${verification.testsPassed ?? '?'} passed · ${verification.testsFailed ?? '?'} failed`;
@@ -1055,6 +1133,10 @@
             ${metaRow('Provider/session', `${escapeHtml(cost.amount)}<span class="pipeline-team-subtle">${escapeHtml(cost.detail)}</span>`)}
             ${metaRow('Local energy', `${escapeHtml(energy.energy)}<span class="pipeline-team-subtle">${escapeHtml(energy.detail)}</span>`)}
             ${metaRow('Electricity', escapeHtml(energy.cost))}
+            ${metaRow('Step', escapeHtml(humanSummary.stage))}
+            ${metaRow('What happened', escapeHtml(humanSummary.happened))}
+            ${metaRow('Impact', escapeHtml(humanSummary.impact))}
+            ${metaRow('Next action', escapeHtml(humanSummary.next))}
             ${failureCodes.length ? metaRow('Failure codes', failureCodes.map((code) => `<code>${escapeHtml(code)}</code>`).join(' ')) : ''}
           </dl>
         </article>`;
@@ -1082,11 +1164,13 @@
     const feedback = Array.isArray(task.feedback) ? task.feedback.slice().reverse() : [];
     const deps = Array.isArray(task.dependsOn) ? task.dependsOn : [];
     const reviewer = readStorage(STORAGE_REVIEWER) || '';
+    const review = task.status === 'review' ? reviewContext(task) : null;
 
     const actions = [];
     if (task.status === 'review') {
       actions.push(`
         <form class="pipeline-drawer-action" data-drawer-action="confirm-done">
+          <p><strong>${escapeHtml(review.label)}</strong><br>${escapeHtml(review.detail)} ${escapeHtml(review.action)}</p>
           <label>
             <span>Confirm done as (must differ from worker <code>${escapeHtml(task.assignee || 'unassigned')}</code>)</span>
             <input type="text" name="by" required maxlength="80" placeholder="your identity, e.g. yanik" value="${escapeHtml(reviewer)}">
@@ -1108,7 +1192,7 @@
         <form class="pipeline-drawer-action" data-drawer-action="add-note">
           <label>
             <span>Add a note to the audit trail</span>
-            <textarea name="text" rows="2" maxlength="5000" required placeholder="What should workers and overseers know?"></textarea>
+            <textarea name="text" rows="2" maxlength="5000" required placeholder="What should workers and human reviewers know?"></textarea>
           </label>
           <button type="submit" class="pipeline-btn compact"><i class="fas fa-pen"></i><span>Add note</span></button>
         </form>

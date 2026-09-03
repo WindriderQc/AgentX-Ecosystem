@@ -63,8 +63,26 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain("metaRow('Authority sources'");
     expect(script).toContain("metaRow('Local energy'");
     expect(script).toContain("metaRow('Electricity'");
+    expect(script).toContain('function attemptHumanSummary(attempt, evidence)');
+    expect(script).toContain("codes.has('independent_verification_failed')");
+    expect(script).toContain("codes.has('attribution_request_count_mismatch')");
+    expect(script).toContain("metaRow('What happened'");
+    expect(script).toContain("metaRow('Impact'");
+    expect(script).toContain("metaRow('Next action'");
+    expect(script).toContain("metaRow('Failure codes'");
+    expect(script).toContain('it has not been approved, merged, or deployed');
     expect(script).toContain('readDeepLinkedTask()');
     expect(script).toContain('openDrawer(pipelineId, null)');
+  });
+
+  test('distinguishes legacy review dossiers from current Coding Team receipts', () => {
+    expect(script).toContain('function reviewContext(task)');
+    expect(script).toContain('Human review required · legacy dossier without receipt');
+    expect(script).toContain('has no recorded review decision');
+    expect(script).toContain('record a decision or re-queue it under the current reviewed automation');
+    expect(script).toContain('Human review required · Coding Team receipt present');
+    expect(view).toContain('Human review required; receipt status shown in dossier');
+    expect(view).not.toContain('Waiting for overseer confirmation');
   });
 
   test('offers an explicit operator-only one-shot launch without implying a scheduler', () => {
