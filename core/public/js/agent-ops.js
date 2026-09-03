@@ -36,6 +36,19 @@
     }[char]));
   }
 
+  function safeRuntimeLaunchUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw.startsWith('/api/') || raw.startsWith('//') || /[\u0000-\u0020\\]/.test(raw)) return '';
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      return parsed.origin === window.location.origin && parsed.pathname.startsWith('/api/')
+        ? `${parsed.pathname}${parsed.search}`
+        : '';
+    } catch {
+      return '';
+    }
+  }
+
   function number(value) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
@@ -772,9 +785,10 @@
     const agents = asArray(state.data.agents).filter((agent) => agent.runtime === runtime.id);
     const source = asObject(state.data.sources?.[runtime.id]);
     const duration = Number(source.durationMs);
-    const runtimeLink = runtime.id === 'openclaw'
+    const explicitRuntimeLink = safeRuntimeLaunchUrl(runtime.launchUrl);
+    const runtimeLink = explicitRuntimeLink || (runtime.id === 'openclaw'
       ? openclawControlUrl('/overview')
-      : runtime.id === 'hermes' && hermesBase ? hermesBase : '/nerve-center';
+      : runtime.id === 'hermes' && hermesBase ? hermesBase : '/nerve-center');
     const body = `
       <section class="agent-ops-drawer-lead">
         <div>${badge(humanize(runtime.status), runtime.status)}${badge(humanize(source.status || 'configured'), source.status || 'configured', 'fa-signal')}</div>
@@ -809,7 +823,7 @@
           <p class="agent-ops-drawer-note">${esc(clipText(source.issues[0]))}</p>
         </section>` : ''}
       <footer class="agent-ops-drawer-actions">
-        <a class="agent-ops-button primary" ${runtime.id === 'openclaw' ? nativeControlAttributes('/overview') : `href="${esc(runtimeLink)}"`}><i class="fas fa-arrow-up-right"></i>${runtime.id === 'openclaw' ? 'Open official Control UI' : 'Open runtime'}</a>
+        <a class="agent-ops-button primary" ${runtime.id === 'openclaw' && !explicitRuntimeLink ? nativeControlAttributes('/overview') : `href="${esc(runtimeLink)}"`}><i class="fas fa-arrow-up-right"></i>${runtime.id === 'openclaw' ? 'Open official Control UI' : 'Open runtime'}</a>
         <a class="agent-ops-button" href="${esc(nerveContextHref({ focus: 'cluster', source: runtime.id }))}" title="Carry this runtime context into Nerve Center"><i class="fas fa-brain"></i>Trace topology</a>
         <a class="agent-ops-button" href="/cluster-schedule"><i class="fas fa-calendar-days"></i>Open schedule</a>
       </footer>`;

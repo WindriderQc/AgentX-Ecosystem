@@ -109,6 +109,31 @@ asynchronous registration fail startup. Registration occurs after Core's
 general API limiter and before built-in routes, so extensions share admission
 controls and can install privacy middleware in front of Core-owned paths.
 
+An extension may also contribute a small full-profile operator entry point by
+setting `app.locals.trustedRuntimeNavItems` during registration. Product accepts
+at most eight unique items with this shape:
+
+```js
+app.locals.trustedRuntimeNavItems = [{
+  id: 'private-runtime',
+  label: 'Private Runtime',
+  href: '/api/private-runtime/control-launch',
+  icon: 'fa-terminal'
+}];
+```
+
+Core validates the list on every rendered request. IDs and Font Awesome icon
+classes are bounded, and `href` must be a same-origin `/api/...` launcher.
+Direct external URLs, script URLs, malformed fields, and duplicates are
+dropped. Items appear only in the full Core navigation under
+`Operate → External runtimes`; demo and cross-service navigation never inherit
+private runtime links. The launcher remains responsible for operator access,
+safe handoff, and any external runtime authentication.
+
+Agent Ops runtime projections may similarly provide a `launchUrl` on a runtime
+layer. The shell treats it as the runtime-owned destination; the AIOps adapter
+still owns validation and access control for that URL.
+
 Extensions run with Core's process privileges. Treat them as deployment code:
 review and pin them independently, mount them read-only, and never load an
 untrusted checkout. Extension source, secrets, mounts, and deployment remain

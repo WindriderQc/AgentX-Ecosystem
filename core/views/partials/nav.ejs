@@ -7,6 +7,7 @@
    *   service    — 'core' | 'benchmark' | 'rag'
    *   activePage — slug of the current page for highlight
    *   publicUrls — normalized browser-reachable service authorities
+   *   trustedRuntimeNavItems — validated same-origin launchers from trusted extensions
    */
   const cleanBase = (value) => String(value || '').replace(/\/+$/, '');
   const urls = typeof publicUrls === 'object' && publicUrls ? publicUrls : {};
@@ -81,6 +82,17 @@
       ]
     }
   ];
+
+  const runtimeNavItems = Array.isArray(locals.trustedRuntimeNavItems)
+    ? locals.trustedRuntimeNavItems
+    : [];
+  if (service === 'core' && runtimeNavItems.length) {
+    const operateGroup = fullNavItems.find(function(item) { return item.id === 'operate-group'; });
+    operateGroup.children.push(
+      { section: 'External runtimes' },
+      ...runtimeNavItems
+    );
+  }
 
   const demoNavItems = [
     { label: 'Chat', href: coreBase + '/playground', icon: 'fa-comments', id: 'playground', primary: true },
