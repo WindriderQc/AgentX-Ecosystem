@@ -55,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","windows-latest"]') }}
     env:
       MONGOMS_VERSION: '7.0.24'
     steps:
@@ -340,16 +340,54 @@ jobs:
           exit "$action_status"
         working-directory: e2e
       - name: Start the supported full product profile from clean storage
+        if: github.event_name == 'push'
         run: |
           ./agentx down --volumes --remove-orphans
           AGENTX_PROFILE=full AGENTX_BUILD_REVISION="$GITHUB_SHA" ./agentx up
           ./agentx health
       - name: Verify full-profile evidence and registered pages
+        if: github.event_name == 'push'
         run: |
           node scripts/verify-product-surfaces.js --profile full
           node scripts/verify-release-evidence.js --profile full --expected-revision "$GITHUB_SHA" --output /tmp/agentx-full-release-evidence.json
           node scripts/export-support-receipt.js --profile full --output /tmp/agentx-full-support-receipt.json
+      - name: Verify packaged Benchmark operator scripts without rebuilding images
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          benchmark_image="$(docker container inspect --format '{{.Image}}' agentx-ecosystem-benchmark)"
+          for artifact in \
+            /app/scripts/migrate-exact-artifact-profile-indexes.js \
+            /app/scripts/migrate-benchmark-trust-batch-ids.js \
+            /app/scripts/cloud-lane-campaign.js \
+            /app/scripts/repo-coding-qualification.js \
+            /app/scripts/paired-thinking-campaign.js \
+            /app/data/repo-tasks/manifest.json \
+            /scripts/bounded-response.js; do
+            docker run --rm --entrypoint test "$benchmark_image" -f "$artifact"
+          done
+          docker run --rm --entrypoint git "$benchmark_image" --version
+          docker run --rm --entrypoint node "$benchmark_image" \
+            scripts/cloud-lane-campaign.js \
+            --campaign data/cloud-lane-campaign.example.json \
+            --fixtures data/cloud-lane-campaign-fixtures.example.json \
+            | grep -F '"networkCalls": 0'
+          docker run --rm --network none --entrypoint node "$benchmark_image" \
+            scripts/repo-coding-qualification.js \
+            --dry-run --attempts 1 --ks 1 \
+            | tee /tmp/repo-coding-qualification-dry-run.txt
+          docker run --rm --network none --entrypoint node "$benchmark_image" \
+            scripts/paired-thinking-campaign.js \
+            --host http://candidate:11434 --model candidate:exact \
+            --judge-host http://judge:11434 --judge-model judge:exact \
+            --prompt-ids aaaaaaaaaaaaaaaaaaaaaaaa --repeats 3 \
+            | grep -F '"execution": "not_authorized_dry_plan"'
+          grep -F 'DRY-RUN (golden diffs, no model calls)' \
+            /tmp/repo-coding-qualification-dry-run.txt
+          grep -F 'pass@1=1.000' \
+            /tmp/repo-coding-qualification-dry-run.txt
       - name: Verify full-profile critical journeys at desktop and mobile widths
+        if: github.event_name == 'push'
         run: |
           set +e
           npm test
@@ -375,6 +413,7 @@ jobs:
         env:
           AGENTX_E2E_PROFILE: full
       - name: Rehearse a bounded RAG outage and verified recovery
+        if: github.event_name == 'push'
         run: |
           set +e
           scenario_run_id="compose-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}"
@@ -435,7 +474,7 @@ jobs:
             exit 1
           fi
       - name: Require the complete release and resilience receipt set
-        if: always()
+        if: always() && github.event_name == 'push'
         run: |
           missing=0
           for receipt in \
@@ -453,6 +492,22 @@ jobs:
             /tmp/agentx-rag-unavailable-recovery.json; do
             if ! test -s "$receipt"; then
               echo "Required CI receipt is missing or empty: $receipt" >&2
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: Require the useful PR demo receipt set
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          missing=0
+          for receipt in \
+            /tmp/agentx-demo-release-evidence.json \
+            /tmp/agentx-browser-actions-demo.json \
+            /tmp/agentx-browser-actions-prompts-demo.json \
+            /tmp/agentx-browser-actions-playground-demo.json \
+            /tmp/agentx-browser-actions-rag-demo.json; do
+            if ! test -s "$receipt"; then
+              echo "Required PR receipt is missing or empty: $receipt" >&2
               missing=1
             fi
           done
@@ -508,7 +563,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Retain degraded and recovery resilience receipts
-        if: always()
+        if: always() && github.event_name == 'push'
         uses: actions/upload-artifact@v6
         with:
           name: agentx-resilience-evidence-${{ github.sha }}-${{ github.run_attempt }}
@@ -564,6 +619,7 @@ jobs:
           fi
 
   live-cancellation:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -839,52 +895,3 @@ jobs:
           path: /tmp/agentx-live-cancellation.json
           if-no-files-found: error
           retention-days: 30
-
-  image-builds:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [core, benchmark, rag]
-    steps:
-      - uses: actions/checkout@v7
-      - name: Build ${{ matrix.service }} image without publishing
-        run: docker build --file docker/${{ matrix.service }}.Dockerfile --tag agentx-${{ matrix.service }}:ci .
-      - name: Verify Benchmark operator scripts are packaged and default offline
-        if: matrix.service == 'benchmark'
-        run: |
-          docker run --rm --entrypoint test agentx-benchmark:ci \
-            -f /app/scripts/migrate-exact-artifact-profile-indexes.js
-          docker run --rm --entrypoint test agentx-benchmark:ci \
-            -f /app/scripts/migrate-benchmark-trust-batch-ids.js
-          docker run --rm --entrypoint test agentx-benchmark:ci \
-            -f /app/scripts/cloud-lane-campaign.js
-          docker run --rm --entrypoint test agentx-benchmark:ci \
-            -f /app/scripts/repo-coding-qualification.js
-          docker run --rm --entrypoint test agentx-benchmark:ci \
-            -f /app/scripts/paired-thinking-campaign.js
-          docker run --rm --entrypoint test agentx-benchmark:ci \
-            -f /app/data/repo-tasks/manifest.json
-          docker run --rm --entrypoint test agentx-benchmark:ci \
-            -f /scripts/bounded-response.js
-          docker run --rm --entrypoint git agentx-benchmark:ci --version
-          docker run --rm --entrypoint node agentx-benchmark:ci \
-            scripts/cloud-lane-campaign.js \
-            --campaign data/cloud-lane-campaign.example.json \
-            --fixtures data/cloud-lane-campaign-fixtures.example.json \
-            | grep -F '"networkCalls": 0'
-          docker run --rm --network none --entrypoint node agentx-benchmark:ci \
-            scripts/repo-coding-qualification.js \
-            --dry-run --attempts 1 --ks 1 \
-            | tee /tmp/repo-coding-qualification-dry-run.txt
-          docker run --rm --network none --entrypoint node agentx-benchmark:ci \
-            scripts/paired-thinking-campaign.js \
-            --host http://candidate:11434 --model candidate:exact \
-            --judge-host http://judge:11434 --judge-model judge:exact \
-            --prompt-ids aaaaaaaaaaaaaaaaaaaaaaaa --repeats 3 \
-            | grep -F '"execution": "not_authorized_dry_plan"'
-          grep -F 'DRY-RUN (golden diffs, no model calls)' \
-            /tmp/repo-coding-qualification-dry-run.txt
-          grep -F 'pass@1=1.000' \
-            /tmp/repo-coding-qualification-dry-run.txt
