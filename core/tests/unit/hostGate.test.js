@@ -146,6 +146,38 @@ describe('hostGate', () => {
     r1(); r2(); r3(); r4();
   });
 
+  it('drains the host for an exclusive model handoff and blocks cross-model arrivals until release', async () => {
+    const normalRelease = await hostGate.acquire('http://exclusive', 'normal-model');
+    let exclusiveResolved = false;
+    let lateNormalResolved = false;
+    const exclusive = hostGate.acquireExclusive('http://exclusive', 'open-model').then((release) => {
+      exclusiveResolved = true;
+      return release;
+    });
+    const lateNormal = hostGate.acquire('http://exclusive', 'normal-model').then((release) => {
+      lateNormalResolved = true;
+      return release;
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(exclusiveResolved).toBe(false);
+    expect(lateNormalResolved).toBe(false);
+
+    normalRelease();
+    const exclusiveRelease = await exclusive;
+    expect(exclusiveResolved).toBe(true);
+    expect(lateNormalResolved).toBe(false);
+    expect(hostGate.inFlightFor('http://exclusive', 'open-model')).toBe(1);
+    expect(hostGate.hostHasInflight('http://exclusive')).toBe(true);
+
+    exclusiveRelease();
+    const lateNormalRelease = await lateNormal;
+    expect(lateNormalResolved).toBe(true);
+    expect(hostGate.inFlightFor('http://exclusive', 'open-model')).toBe(0);
+    expect(hostGate.inFlightFor('http://exclusive', 'normal-model')).toBe(1);
+    lateNormalRelease();
+  });
+
   it('release is idempotent (double-release does not over-free slots)', async () => {
     const r1 = await hostGate.acquire('http://h3', 'm1');
     r1();
@@ -362,5 +394,11 @@ describe('hostGate (disabled)', () => {
     // All resolved immediately without blocking — no assertion beyond "did not hang"
     r1(); r2(); r3();
     expect(disabledGate.ENABLED).toBe(false);
+  });
+
+  it('fails closed instead of evicting a resident model without admission ownership', async () => {
+    await expect(disabledGate.acquireExclusive('http://h', 'open-model')).rejects.toMatchObject({
+      code: 'HOST_GATE_EXCLUSIVE_DISABLED'
+    });
   });
 });

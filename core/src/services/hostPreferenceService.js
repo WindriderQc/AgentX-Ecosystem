@@ -31,6 +31,7 @@ const benchmarkClaimService = require('./benchmarkClaimService');
 const hostHealthDaemon = require('./hostHealthDaemon');
 const pinReconciler = require('./pinReconciler');
 const hostPreferenceIdentity = require('./hostPreferenceIdentity');
+const { unloadModel, prepareExclusiveModel } = require('./hostModelHandoffService');
 const {
   pinRestoreVerifyTimeoutMs,
   normalizePinName,
@@ -360,25 +361,6 @@ async function setHostStatus(hostUrl, status) {
   ).lean();
 }
 
-async function unloadModel(hostUrl, model) {
-  try {
-    const response = await fetch(`${hostUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, keep_alive: 0 }),
-      signal: AbortSignal.timeout(30_000)
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      return { host: hostUrl, model, status: 'error', error: text };
-    }
-    await response.text();
-    return { host: hostUrl, model, status: 'ok' };
-  } catch (err) {
-    return { host: hostUrl, model, status: 'error', error: err.message };
-  }
-}
-
 /**
  * Restore every pinned model on a host that isn't currently loaded. Unloads
  * the primary host's loaded-but-not-pinned model first to free VRAM for the
@@ -649,6 +631,7 @@ module.exports = {
   updateLoadedModel,
   setHostStatus,
   unloadModel,
+  prepareExclusiveModel,
   restorePinnedModels,
   swapModel,
   claimBenchmark: benchmarkClaimService.claimBenchmark,
