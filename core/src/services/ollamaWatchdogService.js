@@ -436,14 +436,16 @@ async function probeCycle() {
     if (!meta.ok) {
       result = { ok: false, reason: 'metadata_unreachable' };
     } else {
-      const probeModel = meta.models.find(model => hostGate.inFlightFor(host.url, model) === 0) || null;
-
-      // A real AgentX call already exercises every loaded model. Do not queue a
-      // synthetic probe behind it; the next idle cycle will verify the worker.
-      if (meta.models.length > 0 && !probeModel) {
-        logger.debug(`[Watchdog] ${host.name} probe skipped — all loaded models have active inference`);
+      // Host ownership matters across model names. A caller may be waiting for
+      // Ollama to evict the resident model and load a different one; probing the
+      // currently loaded model during that window can repeatedly win the
+      // scheduler race and starve the legitimate cold swap.
+      if (hostGate.hostHasInflight(host.url)) {
+        logger.debug(`[Watchdog] ${host.name} probe skipped — host has active inference`);
         continue;
       }
+
+      const probeModel = meta.models[0] || null;
 
       _stats.probesSent++;
       result = await probeHost(host, probeModel);
