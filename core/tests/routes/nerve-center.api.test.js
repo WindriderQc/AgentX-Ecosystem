@@ -137,6 +137,10 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
 }));
 
 jest.mock('../../src/services/runtimeCoordinationService', () => ({
+  acquireMaintenance: jest.fn(),
+  heartbeat: jest.fn(),
+  release: jest.fn(),
+  markMaintenanceUnknown: jest.fn(),
   assertWorkloadAdmission: jest.fn(() => Promise.resolve({
     admitted: true,
     admissionId: 'admission-core',
@@ -196,6 +200,17 @@ describe('Nerve Center API Routes', () => {
     hostPrefService.reload.mockResolvedValue();
     hostPrefService.getHealthCheckIntervalMs.mockReturnValue(30000);
     hostPrefService.getPinnedEntries.mockImplementation((pref) => pref.pinnedModels || []);
+    runtimeCoordinationService.acquireMaintenance.mockResolvedValue({
+      acquired: true,
+      leaseId: 'config-lease',
+      generation: 'config-generation',
+      principal: 'loopback-operator',
+      requestId: 'config-request',
+      scope: 'router-task-config:bulk-update'
+    });
+    runtimeCoordinationService.heartbeat.mockResolvedValue({ heartbeat: true });
+    runtimeCoordinationService.release.mockResolvedValue({ released: true });
+    runtimeCoordinationService.markMaintenanceUnknown.mockResolvedValue({ quarantined: true });
     const observedAt = new Date().toISOString();
     const identity = (service) => ({
       service,

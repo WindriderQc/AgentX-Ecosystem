@@ -28,6 +28,7 @@ const {
   operatorRequestIdentity
 } = require('../src/middleware/operatorAccess');
 const runtimeCoordinationService = require('../src/services/runtimeCoordinationService');
+const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
 const { projectHostPreferenceForRead } = require('../src/services/hostPreferencePublicProjection');
 
 function coordinationPrincipal(req) {
@@ -774,13 +775,20 @@ router.put('/host-preferences/:hostUrl(*)', requireOperatorUiAccess, async (req,
       if (updates[key] !== undefined) filtered[key] = updates[key];
     }
 
-    const data = await hostPrefService.updatePreference(hostUrl, filtered);
+    const data = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: 'host-preference:update'
+    }, () => hostPrefService.updatePreference(hostUrl, filtered));
     emitBuddyEvent('host_preference_updated', 'infrastructure', `Host preference updated: ${data.displayName || hostUrl}`, 'normal');
     logger.info('[NerveCenter] Host preference updated', { hostUrl, updates: Object.keys(filtered) });
     res.json({ status: 'success', data: projectHostPreferenceForRead(data) });
   } catch (err) {
     logger.error('[NerveCenter] host preference update failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({
+      status: 'error',
+      code: err.code || 'HOST_PREFERENCE_UPDATE_FAILED',
+      message: err.message
+    });
   }
 });
 

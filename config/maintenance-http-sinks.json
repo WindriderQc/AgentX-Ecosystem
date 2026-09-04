@@ -56,7 +56,7 @@
     {
       "id": "benchmark.maintenance.toolcall.ollama-chat",
       "source": "benchmark/scripts/toolcall-qualification.js",
-      "line": 93,
+      "line": 96,
       "column": 23,
       "constructor": "fetch",
       "authoritySource": "operator-supplied",

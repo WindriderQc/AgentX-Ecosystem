@@ -8,7 +8,10 @@ jest.mock('../../src/services/runtimeCoordinationService', () => ({
 }));
 
 const runtime = require('../../src/services/runtimeCoordinationService');
-const { beginRuntimeMutation } = require('../../src/services/runtimeMutationLeaseService');
+const {
+  beginRuntimeMutation,
+  runRuntimeMutation
+} = require('../../src/services/runtimeMutationLeaseService');
 
 describe('runtime mutation maintenance lifecycle', () => {
   beforeEach(() => {
@@ -74,5 +77,73 @@ describe('runtime mutation maintenance lifecycle', () => {
     expect(lifecycle.signal.aborted).toBe(true);
     expect(runtime.markMaintenanceUnknown).toHaveBeenCalledTimes(1);
     expect(() => lifecycle.assertActive()).toThrow('generation replaced');
+  });
+
+  test('coordinates an acknowledged application mutation through one exact maintenance generation', async () => {
+    const operation = jest.fn(async proof => ({ updated: true, proof }));
+
+    await expect(runRuntimeMutation({
+      principal: 'operator-token',
+      requestId: 'request-a',
+      scope: 'router-task-config:quick_chat'
+    }, operation)).resolves.toMatchObject({
+      updated: true,
+      proof: {
+        leaseId: 'lease-a',
+        generation: 'generation-a',
+        principal: 'operator-token'
+      }
+    });
+
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(runtime.release).toHaveBeenCalledWith('maintenance', {
+      id: 'lease-a', generation: 'generation-a', principal: 'operator-token'
+    });
+    expect(runtime.markMaintenanceUnknown).not.toHaveBeenCalled();
+  });
+
+  test('releases a failed application mutation but quarantines an unverified terminal release', async () => {
+    const writeError = new Error('validation rejected');
+    await expect(runRuntimeMutation({
+      principal: 'operator-token', requestId: 'request-a', scope: 'host-preference:update'
+    }, async () => { throw writeError; })).rejects.toBe(writeError);
+    expect(runtime.release).toHaveBeenCalledWith('maintenance', {
+      id: 'lease-a', generation: 'generation-a', principal: 'operator-token'
+    });
+    expect(runtime.markMaintenanceUnknown).not.toHaveBeenCalled();
+
+    jest.clearAllMocks();
+    runtime.acquireMaintenance.mockResolvedValue({
+      acquired: true, leaseId: 'lease-a', generation: 'generation-a',
+      principal: 'operator-token', requestId: 'request-a', scope: 'host-preference:update'
+    });
+    runtime.release.mockResolvedValue({ released: false, reason: 'release receipt missing' });
+    runtime.markMaintenanceUnknown.mockResolvedValue({ quarantined: true });
+
+    await expect(runRuntimeMutation({
+      principal: 'operator-token', requestId: 'request-a', scope: 'host-preference:update'
+    }, async () => ({ updated: true }))).rejects.toMatchObject({
+      code: 'RUNTIME_MUTATION_RELEASE_UNVERIFIED'
+    });
+    expect(runtime.markMaintenanceUnknown).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'lease-a', generation: 'generation-a', principal: 'operator-token',
+      reason: 'release receipt missing'
+    }));
+  });
+
+  test('does not dispatch a configuration writer while workload or inference authority is active', async () => {
+    runtime.acquireMaintenance.mockResolvedValueOnce({
+      acquired: false,
+      reason: 'active workload, inference admission, or maintenance lease blocks maintenance'
+    });
+    const operation = jest.fn();
+
+    await expect(runRuntimeMutation({
+      principal: 'same-origin-ui', scope: 'router-task-config:voice_persona_chat'
+    }, operation)).rejects.toMatchObject({
+      code: 'RUNTIME_MUTATION_LEASE_DENIED',
+      statusCode: 409
+    });
+    expect(operation).not.toHaveBeenCalled();
   });
 });

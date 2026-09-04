@@ -136,7 +136,41 @@ async function beginRuntimeMutation({
   };
 }
 
+async function runRuntimeMutation(options, operation) {
+  if (typeof operation !== 'function') {
+    throw new TypeError('Runtime mutation operation must be a function');
+  }
+
+  const lifecycle = await beginRuntimeMutation(options);
+  try {
+    lifecycle.assertActive();
+    const result = await operation({
+      leaseId: lifecycle.leaseId,
+      generation: lifecycle.generation,
+      principal: lifecycle.principal,
+      signal: lifecycle.signal
+    });
+    // The application mutation has now returned an acknowledgement. Mark it
+    // dispatched before releasing so an ambiguous release fails closed into
+    // the durable maintenance quarantine instead of reopening the runtime.
+    lifecycle.markDispatched();
+    await lifecycle.complete();
+    return result;
+  } catch (error) {
+    try {
+      await lifecycle.abandon(error);
+    } catch (abandonError) {
+      logger.error('Runtime mutation cleanup failed closed', {
+        leaseId: lifecycle.leaseId,
+        error: abandonError.message
+      });
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   beginRuntimeMutation,
+  runRuntimeMutation,
   _internal: { boundedTtl, createAbortBridge }
 };

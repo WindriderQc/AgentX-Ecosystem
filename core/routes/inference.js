@@ -26,6 +26,8 @@ const { resolveTarget } = require('../src/helpers/ollamaUtils');
 const { normalizeHostUrl, validateHostUrl, getHostUrls, hostUrlKey } = require('../src/helpers/ollamaHostConfig');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
+const { requireOperatorUiAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
+const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
 const {
   HOSTS,
   buildRouterConfigPayload,
@@ -1721,12 +1723,15 @@ router.get('/router/config/defaults', async (_req, res) => {
     }
 });
 
-router.put('/router/config/tasks/:taskType', async (req, res) => {
+router.put('/router/config/tasks/:taskType', requireOperatorUiAccess, async (req, res) => {
     try {
         const { taskType } = req.params;
-        const state = req.body?.resetToDefault === true
-            ? await resetTaskModelOverride(taskType)
-            : await saveTaskModelOverride(taskType, req.body || {});
+        const state = await runRuntimeMutation({
+            principal: operatorRequestIdentity(req),
+            scope: `router-task-config:${taskType}`
+        }, () => req.body?.resetToDefault === true
+            ? resetTaskModelOverride(taskType)
+            : saveTaskModelOverride(taskType, req.body || {}));
 
         res.json({
             status: 'success',
@@ -1744,10 +1749,13 @@ router.put('/router/config/tasks/:taskType', async (req, res) => {
     }
 });
 
-router.post('/router/config/reset', async (req, res) => {
+router.post('/router/config/reset', requireOperatorUiAccess, async (req, res) => {
     if (!requireTypedConfirmation(req, res, 'RESET ROUTER CONFIG')) return;
     try {
-        const taskConfigState = await resetAllTaskModelOverrides();
+        const taskConfigState = await runRuntimeMutation({
+            principal: operatorRequestIdentity(req),
+            scope: 'router-task-config:reset-all'
+        }, () => resetAllTaskModelOverrides());
         const data = await buildRouterConfigPayload();
         data.taskConfigState = taskConfigState;
         res.json({ status: 'success', data });

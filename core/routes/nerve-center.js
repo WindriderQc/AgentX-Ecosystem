@@ -42,6 +42,8 @@ const { describeHost } = require('../src/services/hostIdentityService');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { projectHealthFeed } = require('../src/services/alertFeedProjection');
 const { projectHostPreferencesForRead } = require('../src/services/hostPreferencePublicProjection');
+const { requireOperatorUiAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
+const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
 
 // ========================================
 // Helpers
@@ -333,19 +335,24 @@ router.get('/routing/config', async (_req, res) => {
 // 3. PUT /routing/config — update in-memory
 // ========================================
 
-router.put('/routing/config', async (req, res) => {
+router.put('/routing/config', requireOperatorUiAccess, async (req, res) => {
   try {
     const { taskModels } = req.body || {};
 
-    if (taskModels && typeof taskModels === 'object') {
-      for (const [taskType, entry] of Object.entries(taskModels)) {
-        if (entry?.resetToDefault === true) {
-          await resetTaskModelOverride(taskType);
-        } else {
-          await saveTaskModelOverride(taskType, entry);
+    await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: 'router-task-config:bulk-update'
+    }, async () => {
+      if (taskModels && typeof taskModels === 'object') {
+        for (const [taskType, entry] of Object.entries(taskModels)) {
+          if (entry?.resetToDefault === true) {
+            await resetTaskModelOverride(taskType);
+          } else {
+            await saveTaskModelOverride(taskType, entry);
+          }
         }
       }
-    }
+    });
 
     res.json({
       status: 'success',
@@ -578,12 +585,15 @@ router.get('/inference/routing-config', async (_req, res) => {
 // 14. PUT /inference/routing-config/:taskType — update a task-model assignment
 // ========================================
 
-router.put('/inference/routing-config/:taskType', async (req, res) => {
+router.put('/inference/routing-config/:taskType', requireOperatorUiAccess, async (req, res) => {
   try {
     const { taskType } = req.params;
-    const state = req.body?.resetToDefault === true
-      ? await resetTaskModelOverride(taskType)
-      : await saveTaskModelOverride(taskType, req.body || {});
+    const state = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `router-task-config:${taskType}`
+    }, () => req.body?.resetToDefault === true
+      ? resetTaskModelOverride(taskType)
+      : saveTaskModelOverride(taskType, req.body || {}));
 
     logger.info('[NerveCenter] inference routing-config updated', { taskType });
 
