@@ -24,6 +24,11 @@ function configuredDeadline(envName, fallbackMs, hardMaximumMs) {
 const COMPRESSION_DEADLINE_MS = configuredDeadline('COMPRESSION_TIMEOUT_MS', 15_000, 300_000);
 const EMBEDDING_DEADLINE_MS = configuredDeadline('EMBEDDING_TIMEOUT_MS', 60_000, 300_000);
 const QDRANT_DEADLINE_MS = configuredDeadline('QDRANT_TIMEOUT_MS', 30_000, 120_000);
+const QDRANT_SNAPSHOT_DEADLINE_MS = configuredDeadline(
+  'QDRANT_SNAPSHOT_TIMEOUT_MS',
+  120_000,
+  600_000
+);
 const QUERY_EXPANSION_DEADLINE_MS = configuredDeadline('QUERY_EXPANSION_TIMEOUT_MS', 15_000, 300_000);
 const RERANK_DEADLINE_MS = configuredDeadline('RERANK_TIMEOUT_MS', 15_000, 300_000);
 const INGEST_DEADLINE_MS = 120_000;
@@ -42,6 +47,11 @@ const SERVICE_OUTBOUND_OPERATION_IDS = Object.freeze({
   QDRANT_POINTS_SCROLL: 'rag.qdrant.points-scroll',
   QDRANT_POINTS_SEARCH: 'rag.qdrant.points-search',
   QDRANT_POINTS_UPSERT: 'rag.qdrant.points-upsert',
+  QDRANT_SNAPSHOT_CREATE: 'rag.qdrant.snapshot-create',
+  QDRANT_SNAPSHOT_DELETE: 'rag.qdrant.snapshot-delete',
+  QDRANT_SNAPSHOT_DOWNLOAD: 'rag.qdrant.snapshot-download',
+  QDRANT_SNAPSHOT_LIST: 'rag.qdrant.snapshot-list',
+  QDRANT_SNAPSHOT_RESTORE: 'rag.qdrant.snapshot-restore',
   QUERY_EXPANSION_GENERATE: 'rag.query-expansion.generate',
   RERANKER_GENERATE: 'rag.reranker.generate',
 });
@@ -89,6 +99,21 @@ const SERVICE_OUTBOUND_OPERATIONS = Object.freeze({
   [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_UPSERT]: Object.freeze({
     authoritySource: 'configured', deadlineMs: 120_000, maxRequestBytes: 32 * MIB, maxResponseBytes: 2 * MIB,
   }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_CREATE]: Object.freeze({
+    authoritySource: 'configured', deadlineMs: 600_000, maxRequestBytes: 0, maxResponseBytes: 2 * MIB,
+  }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_DELETE]: Object.freeze({
+    authoritySource: 'configured', deadlineMs: 600_000, maxRequestBytes: 0, maxResponseBytes: 2 * MIB,
+  }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_DOWNLOAD]: Object.freeze({
+    authoritySource: 'configured', deadlineMs: 600_000, maxRequestBytes: 0, maxResponseBytes: 256 * MIB,
+  }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_LIST]: Object.freeze({
+    authoritySource: 'configured', deadlineMs: 600_000, maxRequestBytes: 0, maxResponseBytes: 4 * MIB,
+  }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_RESTORE]: Object.freeze({
+    authoritySource: 'configured', deadlineMs: 600_000, maxRequestBytes: 64 * 1024, maxResponseBytes: 2 * MIB,
+  }),
   [SERVICE_OUTBOUND_OPERATION_IDS.QUERY_EXPANSION_GENERATE]: Object.freeze({
     authoritySource: 'configured', deadlineMs: 300_000, maxRequestBytes: 256 * 1024, maxResponseBytes: 2 * MIB,
   }),
@@ -111,11 +136,17 @@ const SERVICE_OUTBOUND_TIMEOUTS = Object.freeze({
   [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_SCROLL]: QDRANT_DEADLINE_MS,
   [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_SEARCH]: QDRANT_DEADLINE_MS,
   [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_UPSERT]: QDRANT_DEADLINE_MS,
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_CREATE]: QDRANT_SNAPSHOT_DEADLINE_MS,
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_DELETE]: QDRANT_SNAPSHOT_DEADLINE_MS,
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_DOWNLOAD]: QDRANT_SNAPSHOT_DEADLINE_MS,
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_LIST]: QDRANT_SNAPSHOT_DEADLINE_MS,
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_RESTORE]: QDRANT_SNAPSHOT_DEADLINE_MS,
   [SERVICE_OUTBOUND_OPERATION_IDS.QUERY_EXPANSION_GENERATE]: QUERY_EXPANSION_DEADLINE_MS,
   [SERVICE_OUTBOUND_OPERATION_IDS.RERANKER_GENERATE]: RERANK_DEADLINE_MS,
 });
 
 const COLLECTION_SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]{0,254}';
+const SNAPSHOT_SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]{0,254}';
 
 const SERVICE_OUTBOUND_REQUEST_SPECS = Object.freeze({
   [SERVICE_OUTBOUND_OPERATION_IDS.COMPRESSION_GENERATE]: Object.freeze({ allowSearch: false, method: 'POST', pathPattern: '^/api/inference/generate$' }),
@@ -131,6 +162,11 @@ const SERVICE_OUTBOUND_REQUEST_SPECS = Object.freeze({
   [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_SCROLL]: Object.freeze({ allowSearch: false, method: 'POST', pathPattern: `^/collections/${COLLECTION_SEGMENT}/points/scroll$` }),
   [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_SEARCH]: Object.freeze({ allowSearch: false, method: 'POST', pathPattern: `^/collections/${COLLECTION_SEGMENT}/points/search$` }),
   [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_UPSERT]: Object.freeze({ allowSearch: false, method: 'PUT', pathPattern: `^/collections/${COLLECTION_SEGMENT}/points$` }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_CREATE]: Object.freeze({ allowSearch: false, method: 'POST', pathPattern: `^/collections/${COLLECTION_SEGMENT}/snapshots$` }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_DELETE]: Object.freeze({ allowSearch: false, method: 'DELETE', pathPattern: `^/collections/${COLLECTION_SEGMENT}/snapshots/${SNAPSHOT_SEGMENT}$` }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_DOWNLOAD]: Object.freeze({ allowSearch: false, method: 'GET', pathPattern: `^/collections/${COLLECTION_SEGMENT}/snapshots/${SNAPSHOT_SEGMENT}$` }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_LIST]: Object.freeze({ allowSearch: false, method: 'GET', pathPattern: `^/collections/${COLLECTION_SEGMENT}/snapshots$` }),
+  [SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_RESTORE]: Object.freeze({ allowSearch: false, method: 'PUT', pathPattern: `^/collections/${COLLECTION_SEGMENT}/snapshots/recover$` }),
   [SERVICE_OUTBOUND_OPERATION_IDS.QUERY_EXPANSION_GENERATE]: Object.freeze({ allowSearch: false, method: 'POST', pathPattern: '^/api/inference/generate$' }),
   [SERVICE_OUTBOUND_OPERATION_IDS.RERANKER_GENERATE]: Object.freeze({ allowSearch: false, method: 'POST', pathPattern: '^/api/inference/generate$' }),
 });
