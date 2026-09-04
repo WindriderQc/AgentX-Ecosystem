@@ -17,6 +17,7 @@
 
 const mongoose = require('mongoose');
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
+const authorityReconciliation = require('./benchmark/benchmarkAuthorityReconciliation');
 const ollamaVramService        = require('./ollamaVramService');
 const nodeFetch                = require('node-fetch');
 const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
@@ -608,34 +609,54 @@ async function snapshotVram(hostUrl, signal = null) {
   return { usedMiB: null, totalMiB: null };
 }
 
-async function persistHostSnapshot(modelName, snapshot, { signal, checkpoint } = {}) {
-  const payload = { _id: new mongoose.Types.ObjectId(), modelName, ...snapshot };
+async function persistHostSnapshot(modelName, snapshot, { signal, checkpoint, workloadId } = {}) {
+  const snapshotId = new mongoose.Types.ObjectId();
+  const authorityWriteId = new mongoose.Types.ObjectId().toString();
+  if (!workloadId) {
+    const error = new Error('Host snapshot publication requires an exact durable workload identity');
+    error.code = 'PROFILER_AUTHORITY_JOURNAL_REQUIRED';
+    throw error;
+  }
+  let journal = null;
   checkpoint?.();
   try {
+    const basePayload = { _id: snapshotId, modelName, ...snapshot };
+    journal = await authorityReconciliation.prepareProfilerAuthorityWrite({
+      kind: 'profiler_snapshot_write',
+      resultId: `profiler-snapshot:${workloadId}:${snapshotId}`,
+      workloadId,
+      phase: 'profiler host performance snapshot publication',
+      details: {
+        snapshotId: String(snapshotId),
+        authorityWriteId,
+        payload: basePayload
+      }
+    });
+    checkpoint?.();
+    const payload = {
+      ...basePayload,
+      authorityState: 'pending_reconciliation',
+      authorityWriteId,
+      authorityReconciliationId: String(journal._id)
+    };
     const created = await HostPerformanceSnapshot.create(
       [payload],
       signal ? { signal } : undefined
     );
     const saved = Array.isArray(created) ? created[0] : created;
     checkpoint?.();
+    await authorityReconciliation.completeProfilerAuthorityWrite(journal, {
+      details: journal.details,
+      signal,
+      assertAuthorityActive: checkpoint
+    });
     return saved;
   } catch (error) {
-    try {
-      await HostPerformanceSnapshot.updateOne(
-        { _id: payload._id },
-        {
-          $set: {
-            authorityState: 'authority_invalidated',
-            authorityReconciliationReason: 'host snapshot save raced profiler claim loss'
-          }
-        },
-        { upsert: true }
-      );
-      error.authorityInvalidated = true;
-    } catch (invalidationError) {
-      error.invalidationError = invalidationError;
+    if (journal) {
       error.retainAdmission = true;
-      error.code = 'HOST_SNAPSHOT_RECONCILIATION_PENDING';
+      error.authorityInvalidationFailed = true;
+      error.code = error.code || 'HOST_SNAPSHOT_RECONCILIATION_PENDING';
+      error.reconciliationId = String(journal._id);
     }
     throw error;
   }
@@ -767,6 +788,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
   const { hostId, _skipHostCheck } = options;
   const checkpoint = typeof options.assertClaimActive === 'function' ? options.assertClaimActive : () => {};
   const signal = options.signal || null;
+  const workloadId = options.benchmarkClaim?.claimBatchId || null;
   const normalizedModelName = normalizeModelName(modelName);
   checkpoint();
   throwIfAborted(signal);
@@ -782,7 +804,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       };
       checkpoint();
       throwIfAborted(signal);
-      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint, workloadId });
       return snapshot;
     }
   }
@@ -838,7 +860,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       };
       checkpoint();
       throwIfAborted(signal);
-      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint, workloadId });
       return snapshot;
     }
   }
@@ -888,7 +910,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       };
       checkpoint();
       throwIfAborted(signal);
-      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint, workloadId });
       return snapshot;
     }
 
@@ -902,6 +924,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     checkpoint();
   } catch (err) {
     throwIfAborted(signal);
+    if (err.retainAdmission === true || err.code === 'HOST_SNAPSHOT_RECONCILIATION_PENDING') throw err;
     circuitBreaker.recordFailure(hostUrl);
     const latencyMs = Date.now() - start;
     const isTimeout = probeDeadline.expired
@@ -921,7 +944,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     };
     checkpoint();
     throwIfAborted(signal);
-    await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
+    await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint, workloadId });
     return snapshot;
   } finally {
     probeDeadline.dispose();
@@ -981,7 +1004,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
 
   checkpoint();
   throwIfAborted(signal);
-  await persistHostSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
+  await persistHostSnapshot(normalizedModelName, snapshot, { signal, checkpoint, workloadId });
   circuitBreaker.recordSuccess(hostUrl);
 
   logger.info('Host test completed', {
@@ -1037,6 +1060,7 @@ async function testAllModelsOnHost(hostUrl, options = {}) {
       });
     } catch (err) {
       throwIfAborted(options.signal);
+      if (err.retainAdmission === true || err.code === 'HOST_SNAPSHOT_RECONCILIATION_PENDING') throw err;
       if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
       result = {
         hostUrl, hostId, tokensPerSec: 0, latencyMs: 0,

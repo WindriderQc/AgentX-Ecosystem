@@ -32,6 +32,7 @@ function evidence() {
     _id: 'evidence-1', modelName: 'qwen:7b', hostId: 'host-a', artifact: ARTIFACT,
     profile: {
       profileDepth: 'standard', requiredRetainedSamples: 5,
+      benchmarkQualified: true,
       tokensPerSec: 50, recommendedInteractiveContext: 32768,
       recommendedDocumentContext: 65536, maxVerifiedContext: 262144,
       performanceKneeContext: 32768, performanceKneeDegradationPct: 15,
@@ -129,6 +130,30 @@ describe('Host Fit authority gate', () => {
     mockModelFind.mockReturnValue(selectLean([{
       name: 'qwen:7b', parameters: '7B', quantization: 'Q4_K_M',
       readiness: { 'host-a': readiness() }
+    }]));
+
+    const report = await buildHostFitReport('host-a');
+    expect(report.measured).toHaveLength(0);
+    expect(report.estimated).toHaveLength(1);
+  });
+
+  test('treats a forged qualified readiness over sealed non-qualified evidence as unprofiled', async () => {
+    const nonQualified = evidence();
+    nonQualified.profile.benchmarkQualified = false;
+    mockEvidenceFind.mockReturnValue(leanResult([nonQualified]));
+    const forged = readiness({
+      benchmarkQualified: true,
+      authorityReceipt: createProfilerAuthorityReceipt({
+        modelName: nonQualified.modelName,
+        hostId: nonQualified.hostId,
+        artifact: nonQualified.artifact,
+        profile: nonQualified.profile,
+        evidenceId: nonQualified._id
+      })
+    });
+    mockModelFind.mockReturnValue(selectLean([{
+      name: 'qwen:7b', parameters: '7B', quantization: 'Q4_K_M',
+      readiness: { 'host-a': forged }
     }]));
 
     const report = await buildHostFitReport('host-a');

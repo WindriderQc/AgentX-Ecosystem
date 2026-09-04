@@ -8,6 +8,12 @@ const BenchmarkResult = require('../../../models/BenchmarkResult');
 const JudgeAccuracyMatrix = require('../../../models/JudgeAccuracyMatrix');
 const JudgeGovernanceRun = require('../../../models/JudgeGovernanceRun');
 const JudgeGroundTruth = require('../../../models/JudgeGroundTruth');
+const HostPerformanceSnapshot = require('../../../models/HostPerformanceSnapshot');
+const HostProfile = require('../../../models/HostProfile');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
+const ModelProfile = require('../../../models/ModelProfile');
+const ModelContextProfile = require('../../../models/ModelContextProfile');
+const ModelContextProbeSnapshot = require('../../../models/ModelContextProbeSnapshot');
 const {
   getWorkloadRecoveryIdentity,
   adoptWorkloadRecovery,
@@ -38,7 +44,11 @@ function resourceTypeForKind(kind) {
     batch_invalidation: 'BenchmarkBatch',
     judge_matrix_invalidation: 'JudgeAccuracyMatrix',
     judge_governance_invalidation: 'JudgeGovernanceRun',
-    ground_truth_invalidation: 'JudgeGroundTruth'
+    ground_truth_invalidation: 'JudgeGroundTruth',
+    profiler_evidence_write: 'ModelPerformanceProfile',
+    profiler_baseline_write: 'HostProfileBaseline',
+    profiler_snapshot_write: 'HostPerformanceSnapshot',
+    profiler_context_write: 'ModelContextProfile'
   }[kind] || null;
 }
 
@@ -82,7 +92,11 @@ function resourceModel(record) {
     batch_invalidation: BenchmarkBatch,
     judge_matrix_invalidation: JudgeAccuracyMatrix,
     judge_governance_invalidation: JudgeGovernanceRun,
-    ground_truth_invalidation: JudgeGroundTruth
+    ground_truth_invalidation: JudgeGroundTruth,
+    profiler_evidence_write: ModelPerformanceProfile,
+    profiler_baseline_write: HostProfile,
+    profiler_snapshot_write: HostPerformanceSnapshot,
+    profiler_context_write: ModelContextProfile
   }[record.kind] || null;
 }
 
@@ -159,7 +173,16 @@ async function resolveWorkloadAuthority(workloadId, releaseReceipt) {
   return updated;
 }
 
-async function enqueueAuthorityInvalidation({ kind = 'result_invalidation', resultId, batchId, workloadId, phase, reason }) {
+async function enqueueAuthorityInvalidation({
+  kind = 'result_invalidation',
+  resultId,
+  batchId,
+  workloadId,
+  phase,
+  reason,
+  details = null,
+  resolutionMode = 'invalidate'
+}) {
   const identity = String(resultId || '');
   const workloadKey = String(workloadId || batchId || '');
   if (!identity) throw new Error('resultId is required for authority reconciliation');
@@ -185,6 +208,8 @@ async function enqueueAuthorityInvalidation({ kind = 'result_invalidation', resu
         recoveryId: recovery.recoveryId,
         recoveryRequestId: recovery.recoveryRequestId,
         phase,
+        details,
+        resolutionMode,
         state: 'pending_reconciliation',
         reason: reason || null,
         attempts: 0,
@@ -215,6 +240,229 @@ async function enqueueAuthorityInvalidation({ kind = 'result_invalidation', resu
 
 function enqueueResultInvalidation(input) {
   return enqueueAuthorityInvalidation({ ...input, kind: 'result_invalidation' });
+}
+
+function isProfilerAuthorityKind(kind) {
+  return new Set([
+    'profiler_evidence_write',
+    'profiler_baseline_write',
+    'profiler_snapshot_write',
+    'profiler_context_write'
+  ]).has(kind);
+}
+
+async function prepareProfilerAuthorityWrite(input = {}) {
+  if (!isProfilerAuthorityKind(input.kind)) {
+    throw new Error(`Unsupported profiler authority write kind: ${input.kind || 'unknown'}`);
+  }
+  return enqueueAuthorityInvalidation({
+    ...input,
+    reason: input.reason || 'profiler authority write prepared before first projection mutation',
+    resolutionMode: 'invalidate'
+  });
+}
+
+function matchedExactlyOne(result) {
+  const matched = Number(result?.matchedCount ?? result?.modifiedCount);
+  return !Number.isFinite(matched) || matched === 1;
+}
+
+async function publishProfilerResource(record, options = {}) {
+  const details = record.details || {};
+  options.assertActive?.();
+  if (record.kind === 'profiler_evidence_write') {
+    const evidenceId = details.evidenceId || null;
+    const evidence = await ModelPerformanceProfile.updateOne(
+      {
+        ...(evidenceId ? { _id: objectId(evidenceId) } : {
+          modelName: details.modelName,
+          hostId: details.hostId,
+          'artifact.digest': details.artifactDigest,
+          'artifact.runtimeFingerprint': details.runtimeFingerprint
+        }),
+        authorityWriteId: details.authorityWriteId,
+        authorityState: { $in: ['pending_reconciliation', 'authoritative'] }
+      },
+      { $set: { authorityState: 'authoritative', authorityReconciliationId: String(record._id) } },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    if (!matchedExactlyOne(evidence)) throw new Error('Profiler evidence publication CAS did not match its pending write');
+    const readinessSet = {
+      [`readiness.${details.hostId}.authorityState`]: 'authoritative'
+    };
+    if (details.thinking === true) {
+      readinessSet[`thinkingProfiles.${details.hostId}.authorityState`] = 'authoritative';
+    }
+    const projection = await ModelProfile.updateOne(
+      {
+        name: details.modelName,
+        [`readiness.${details.hostId}.evidenceId`]: objectId(evidenceId),
+        [`readiness.${details.hostId}.authorityWriteId`]: details.authorityWriteId,
+        rejectedAuthorityWriteIds: { $ne: details.authorityWriteId }
+      },
+      { $set: readinessSet },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    if (!matchedExactlyOne(projection)) throw new Error('Profiler readiness publication CAS did not match its pending write');
+    options.assertActive?.();
+    return {
+      contract: 'agentx.profiler-authority-publication/v1',
+      resourceType: record.resourceType,
+      resourceId: String(evidenceId),
+      authorityWriteId: details.authorityWriteId,
+      state: 'authoritative',
+      publishedAt: new Date().toISOString()
+    };
+  }
+  if (record.kind === 'profiler_snapshot_write') {
+    const snapshot = await HostPerformanceSnapshot.updateOne(
+      {
+        _id: objectId(details.snapshotId || record.resultId),
+        authorityWriteId: details.authorityWriteId,
+        authorityState: { $in: ['pending_reconciliation', 'authoritative'] }
+      },
+      { $set: { authorityState: 'authoritative', authorityReconciliationId: String(record._id) } },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    if (!matchedExactlyOne(snapshot)) throw new Error('Host snapshot publication CAS did not match its pending write');
+    options.assertActive?.();
+    return {
+      contract: 'agentx.profiler-authority-publication/v1',
+      resourceType: record.resourceType,
+      resourceId: String(details.snapshotId || record.resultId),
+      authorityWriteId: details.authorityWriteId,
+      state: 'authoritative',
+      publishedAt: new Date().toISOString()
+    };
+  }
+  if (record.kind === 'profiler_baseline_write') {
+    const baseline = await HostProfile.updateOne(
+      {
+        hostId: details.hostId,
+        'baseline.persistenceReceipt': details.persistenceReceipt,
+        'baseline.authorityWriteId': details.authorityWriteId,
+        'baseline.authorityState': { $in: ['pending_reconciliation', 'authoritative'] },
+        rejectedBaselineReceipts: { $ne: details.persistenceReceipt }
+      },
+      { $set: {
+        'baseline.authorityState': 'authoritative',
+        'baseline.authorityReconciliationId': String(record._id)
+      } },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    if (!matchedExactlyOne(baseline)) throw new Error('Host baseline publication CAS did not match its pending write');
+    options.assertActive?.();
+    return {
+      contract: 'agentx.profiler-authority-publication/v1',
+      resourceType: record.resourceType,
+      resourceId: details.hostId,
+      authorityWriteId: details.authorityWriteId,
+      state: 'authoritative',
+      publishedAt: new Date().toISOString()
+    };
+  }
+  if (record.kind === 'profiler_context_write') {
+    const snapshot = await ModelContextProbeSnapshot.updateOne(
+      {
+        _id: objectId(details.snapshotId),
+        authorityWriteId: details.authorityWriteId,
+        authorityStatus: { $in: ['pending', 'committed'] }
+      },
+      { $set: {
+        authorityStatus: 'committed',
+        authorityError: null,
+        authorityReconciliationId: String(record._id)
+      } },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    if (!matchedExactlyOne(snapshot)) throw new Error('Context probe snapshot publication CAS did not match its pending write');
+    const profile = await ModelContextProfile.updateOne(
+      {
+        modelName: details.modelName,
+        hostUrl: details.hostUrl,
+        artifactDigest: details.artifactDigest,
+        runtimeFingerprint: details.runtimeFingerprint,
+        authorityWriteId: details.authorityWriteId,
+        authorityState: { $in: ['pending_reconciliation', 'authoritative'] },
+        rejectedEvidenceIds: { $ne: details.snapshotId }
+      },
+      { $set: {
+        authorityState: 'authoritative',
+        authorityReconciliationId: String(record._id)
+      } },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    if (!matchedExactlyOne(profile)) throw new Error('Context profile publication CAS did not match its pending write');
+    options.assertActive?.();
+    return {
+      contract: 'agentx.profiler-authority-publication/v1',
+      resourceType: record.resourceType,
+      resourceId: details.snapshotId,
+      authorityWriteId: details.authorityWriteId,
+      state: 'authoritative',
+      publishedAt: new Date().toISOString()
+    };
+  }
+  throw new Error(`Unsupported profiler authority publication kind: ${record.kind}`);
+}
+
+async function completeProfilerAuthorityWrite(recordOrId, input = {}) {
+  const recordId = recordOrId?._id || recordOrId;
+  input.assertAuthorityActive?.();
+  const verified = await BenchmarkAuthorityReconciliation.findOneAndUpdate(
+    {
+      _id: recordId,
+      state: 'pending_reconciliation',
+      $or: [{ ownerId: null }, { ownerId: { $exists: false } }]
+    },
+    { $set: {
+      state: 'verified',
+      resolutionMode: 'publish',
+      details: input.details || recordOrId?.details || null,
+      compensationReceipt: {
+        contract: 'agentx.profiler-authority-write/v1',
+        terminal: 'all_projection_writes_acknowledged',
+        verifiedAt: new Date().toISOString()
+      },
+      lastError: null
+    } },
+    { new: true, ...(input.signal ? { signal: input.signal } : {}) }
+  ).lean();
+  if (!verified) {
+    const error = new Error('Profiler authority journal verification CAS was lost');
+    error.code = 'PROFILER_AUTHORITY_RECONCILIATION_PENDING';
+    error.retainAdmission = true;
+    error.authorityInvalidationFailed = true;
+    throw error;
+  }
+  input.assertAuthorityActive?.();
+  const publicationReceipt = await publishProfilerResource(verified, {
+    signal: input.signal,
+    assertActive: input.assertAuthorityActive
+  });
+  input.assertAuthorityActive?.();
+  const resolvedAt = new Date();
+  const resolved = await BenchmarkAuthorityReconciliation.findOneAndUpdate(
+    { _id: recordId, state: 'verified', resolutionMode: 'publish' },
+    { $set: {
+      state: 'resolved',
+      compensationReceipt: publicationReceipt,
+      resolvedAt,
+      lastError: null,
+      ownerId: null,
+      ownerEpoch: null,
+      ownerClaimedAt: null
+    } },
+    { new: true, ...(input.signal ? { signal: input.signal } : {}) }
+  ).lean();
+  if (!resolved) {
+    const error = new Error('Profiler authority journal resolution CAS was lost');
+    error.code = 'PROFILER_AUTHORITY_RECONCILIATION_PENDING';
+    error.retainAdmission = true;
+    error.authorityInvalidationFailed = true;
+    throw error;
+  }
+  return { record: resolved, publicationReceipt };
 }
 
 async function invalidateResource(record, options = {}) {
@@ -267,6 +515,184 @@ async function invalidateResource(record, options = {}) {
         governance: Number(governance?.modifiedCount || 0),
         groundTruth: Number(groundTruth?.modifiedCount || 0)
       },
+      compensatedAt: new Date().toISOString()
+    };
+  }
+  if (record.kind === 'profiler_evidence_write') {
+    const details = record.details || {};
+    const invalidated = await ModelPerformanceProfile.findOneAndUpdate(
+      {
+        modelName: details.modelName,
+        hostId: details.hostId,
+        authorityWriteId: details.authorityWriteId
+      },
+      {
+        $setOnInsert: {
+          artifact: details.artifact,
+          profile: details.profile
+        },
+        $set: {
+        active: false,
+        stale: true,
+        staleReason: 'profiler_authority_write_reconciled',
+        authorityState: 'authority_invalidated',
+        authorityReconciliationId: String(record._id)
+        }
+      },
+      { upsert: true, new: true, ...(options.signal ? { signal: options.signal } : {}) }
+    ).lean();
+    await ModelProfile.updateOne(
+      { name: details.modelName },
+      {
+        $addToSet: { rejectedAuthorityWriteIds: details.authorityWriteId },
+        $set: {
+          [`readiness.${details.hostId}`]: details.priorReadiness || null,
+          ...(details.thinking === true
+            ? { [`thinkingProfiles.${details.hostId}`]: details.priorThinking || null }
+            : {})
+        }
+      },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    await ModelPerformanceProfile.updateMany(
+      {
+        modelName: details.modelName,
+        hostId: details.hostId,
+        supersededByAuthorityWriteId: details.authorityWriteId
+      },
+      { $set: {
+        active: true,
+        stale: false,
+        staleReason: null,
+        supersededByAuthorityWriteId: null
+      } },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    options.assertActive?.();
+    return {
+      contract: 'agentx.authority-compensation/v1',
+      resourceType: record.resourceType,
+      resourceId: details.evidenceId || record.resultId,
+      state: 'authority_invalidated',
+      afterVersion: Number.isFinite(Number(invalidated?.__v)) ? Number(invalidated.__v) : null,
+      compensatedAt: new Date().toISOString()
+    };
+  }
+  if (record.kind === 'profiler_snapshot_write') {
+    const details = record.details || {};
+    const payload = details.payload || {};
+    const updated = await HostPerformanceSnapshot.findOneAndUpdate(
+      { _id: objectId(details.snapshotId || record.resultId) },
+      {
+        $setOnInsert: payload,
+        $set: {
+          authorityState: 'authority_invalidated',
+          authorityReconciliationReason: 'host snapshot persistence acknowledgement reconciled after owner loss',
+          authorityWriteId: details.authorityWriteId,
+          authorityReconciliationId: String(record._id)
+        }
+      },
+      { upsert: true, new: true, ...(options.signal ? { signal: options.signal } : {}) }
+    ).lean();
+    options.assertActive?.();
+    return {
+      contract: 'agentx.authority-compensation/v1',
+      resourceType: record.resourceType,
+      resourceId: String(details.snapshotId || record.resultId),
+      state: 'authority_invalidated',
+      afterVersion: Number.isFinite(Number(updated?.__v)) ? Number(updated.__v) : null,
+      compensatedAt: new Date().toISOString()
+    };
+  }
+  if (record.kind === 'profiler_baseline_write') {
+    const details = record.details || {};
+    const receipt = String(details.persistenceReceipt || '');
+    const fenced = await HostProfile.updateOne(
+      { hostId: details.hostId },
+      { $addToSet: { rejectedBaselineReceipts: receipt } },
+      options.signal ? { signal: options.signal } : undefined
+    );
+    if (!matchedExactlyOne(fenced)) throw new Error('Host baseline receipt fence did not match its host');
+    const replacement = details.priorBaseline
+      ? { $set: { baseline: details.priorBaseline } }
+      : { $unset: { baseline: '' } };
+    await HostProfile.updateOne(
+      { hostId: details.hostId, 'baseline.persistenceReceipt': receipt },
+      replacement,
+      options.signal ? { signal: options.signal } : undefined
+    );
+    options.assertActive?.();
+    return {
+      contract: 'agentx.authority-compensation/v1',
+      resourceType: record.resourceType,
+      resourceId: details.hostId,
+      state: 'authority_invalidated',
+      persistenceReceipt: receipt,
+      compensatedAt: new Date().toISOString()
+    };
+  }
+  if (record.kind === 'profiler_context_write') {
+    const details = record.details || {};
+    await ModelContextProbeSnapshot.findOneAndUpdate(
+      { _id: objectId(details.snapshotId) },
+      {
+        $setOnInsert: details.snapshotPayload || {},
+        $set: {
+          authorityStatus: 'rejected',
+          authorityError: 'context authority write reconciled after owner loss',
+          authorityWriteId: details.authorityWriteId,
+          authorityReconciliationId: String(record._id)
+        }
+      },
+      { upsert: true, new: true, ...(options.signal ? { signal: options.signal } : {}) }
+    ).lean();
+    const identity = {
+      modelName: details.modelName,
+      hostUrl: details.hostUrl,
+      artifactDigest: details.artifactDigest,
+      runtimeFingerprint: details.runtimeFingerprint
+    };
+    const rejected = [
+      ...new Set([...(details.priorProfile?.rejectedEvidenceIds || []), String(details.snapshotId)])
+    ];
+    if (details.priorProfile) {
+      const { _id, __v, createdAt, updatedAt, ...priorProfile } = details.priorProfile;
+      await ModelContextProfile.updateOne(
+        identity,
+        { $set: { ...priorProfile, rejectedEvidenceIds: rejected } },
+        { upsert: true, ...(options.signal ? { signal: options.signal } : {}) }
+      );
+    } else {
+      await ModelContextProfile.updateOne(
+        identity,
+        {
+          $setOnInsert: identity,
+          $set: {
+            authorityState: 'authority_invalidated',
+            authorityWriteId: details.authorityWriteId,
+            authorityReconciliationId: String(record._id),
+            stale: true,
+            staleReason: 'context_authority_write_reconciled',
+            recommendationStatus: 'unknown',
+            revalidationRequired: true,
+            recommendedInteractiveContext: null,
+            recommendedDocumentContext: null,
+            performanceKneeContext: null,
+            qualityVerifiedContext: null,
+            qualityContextStatus: 'unknown',
+            recommendedContext: null,
+            rejectedEvidenceIds: rejected
+          }
+        },
+        { upsert: true, ...(options.signal ? { signal: options.signal } : {}) }
+      );
+    }
+    options.assertActive?.();
+    return {
+      contract: 'agentx.authority-compensation/v1',
+      resourceType: record.resourceType,
+      resourceId: details.snapshotId,
+      state: 'authority_invalidated',
       compensatedAt: new Date().toISOString()
     };
   }
@@ -398,6 +824,16 @@ async function reconcileOwnedRecord(ownership) {
   await ownershipHeartbeat.ready;
 
   if (record.state === 'verified' || record.state === 'releasing') {
+    if (record.state === 'verified' && record.resolutionMode === 'publish' && isProfilerAuthorityKind(record.kind)) {
+      const publicationReceipt = await publishProfilerResource(record, {
+        signal: ownershipHeartbeat.signal,
+        assertActive: ownershipHeartbeat.assertActive
+      });
+      record = await persistJournalState(ownership, ['verified'], 'verified', {
+        compensationReceipt: publicationReceipt,
+        lastError: null
+      }, { signal: ownershipHeartbeat.signal, assertActive: ownershipHeartbeat.assertActive });
+    }
     ownershipHeartbeat.assertActive();
     const recovered = await recoverWorkloadAdmissionRelease({
       admissionId: record.admissionId,
@@ -479,6 +915,16 @@ async function reconcileOwnedRecord(ownership) {
   }
 
   if (record.state === 'verified') {
+    if (record.resolutionMode === 'publish' && isProfilerAuthorityKind(record.kind)) {
+      const publicationReceipt = await publishProfilerResource(record, {
+        signal: ownershipHeartbeat.signal,
+        assertActive: ownershipHeartbeat.assertActive
+      });
+      record = await persistJournalState(ownership, ['verified'], 'verified', {
+        compensationReceipt: publicationReceipt,
+        lastError: null
+      }, { signal: ownershipHeartbeat.signal, assertActive: ownershipHeartbeat.assertActive });
+    }
     const core = await assertWorkloadRecovery(record.workloadId, { signal: ownershipHeartbeat.signal });
     if (core.recoveryState !== 'VERIFIED' && core.recoveryState !== 'RESTORED') {
       await transitionWorkloadRecovery(record.workloadId, 'VERIFIED', {
@@ -600,7 +1046,17 @@ async function reconcilePendingResultInvalidations(options = {}) {
   if (running) return { skipped: true, reason: 'authority reconciliation already running' };
   running = true;
   try {
-    const rows = await BenchmarkAuthorityReconciliation.find({ state: { $ne: 'resolved' } })
+    const profilerKinds = ['profiler_evidence_write', 'profiler_baseline_write', 'profiler_snapshot_write'];
+    const rows = await BenchmarkAuthorityReconciliation.find({
+      state: { $ne: 'resolved' },
+      $or: [
+        { kind: { $nin: profilerKinds } },
+        {
+          kind: { $in: profilerKinds },
+          startedAt: { $lte: new Date(Date.now() - OWNER_STALE_MS) }
+        }
+      ]
+    })
       .sort({ startedAt: 1 }).limit(Number(options.limit) || 50).lean();
     const results = [];
     const workerId = String(options.workerId || `benchmark-recovery:${process.pid}`);
@@ -672,11 +1128,14 @@ module.exports = {
   resolveWorkloadAuthority,
   enqueueAuthorityInvalidation,
   enqueueResultInvalidation,
+  prepareProfilerAuthorityWrite,
+  completeProfilerAuthorityWrite,
   reconcilePendingResultInvalidations,
   waitForResultInvalidation,
   startBenchmarkAuthorityReconciliation,
   stopBenchmarkAuthorityReconciliation,
   _claimRecoveryRecord: claimRecoveryRecord,
   _reconcileOwnedRecord: reconcileOwnedRecord,
-  _invalidateResource: invalidateResource
+  _invalidateResource: invalidateResource,
+  _publishProfilerResource: publishProfilerResource
 };

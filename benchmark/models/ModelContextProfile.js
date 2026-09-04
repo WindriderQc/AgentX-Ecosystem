@@ -66,6 +66,14 @@ const ModelContextProfileSchema = new mongoose.Schema({
   source: { type: String, default: 'context_probe' },
   stale: { type: Boolean, default: false },
   staleReason: { type: String, default: null },
+  authorityState: {
+    type: String,
+    enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+    default: 'authoritative',
+    index: true
+  },
+  authorityWriteId: { type: String, default: null, index: true },
+  authorityReconciliationId: { type: String, default: null },
   // Durable tombstones for probe writes whose acknowledgement raced lease
   // loss. The guarded upsert refuses to publish any rejected snapshot later.
   rejectedEvidenceIds: { type: [String], default: [] },

@@ -19,6 +19,14 @@ const ModelPerformanceProfileSchema = new mongoose.Schema({
   artifact: { type: ArtifactIdentitySchema, required: true },
   profile: { type: mongoose.Schema.Types.Mixed, required: true },
   authorityWriteId: { type: String, default: null },
+  authorityReconciliationId: { type: String, default: null },
+  authorityState: {
+    type: String,
+    enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+    default: 'authoritative',
+    index: true
+  },
+  supersededByAuthorityWriteId: { type: String, default: null },
   active: { type: Boolean, default: true, index: true },
   stale: { type: Boolean, default: false },
   staleReason: { type: String, default: null }

@@ -22,10 +22,15 @@ function mapToObject(value) {
 
 function serializeModelProfile(profile) {
   if (!profile) return null;
+  const thinkingProfiles = Object.fromEntries(
+    Object.entries(mapToObject(profile.thinkingProfiles)).filter(([, entry]) =>
+      !new Set(['pending_reconciliation', 'authority_invalidated']).has(entry?.authorityState)
+    )
+  );
   return {
     name: profile.name,
     capabilities: profile.capabilities || {},
-    thinkingProfiles: mapToObject(profile.thinkingProfiles),
+    thinkingProfiles,
     readiness: mapToObject(profile.readiness),
     updatedAt: profile.updatedAt || null
   };

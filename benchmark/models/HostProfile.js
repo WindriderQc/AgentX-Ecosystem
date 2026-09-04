@@ -20,6 +20,13 @@ const HostProfileSchema = new mongoose.Schema({
     cudaVersion: String
   },
   baseline: {
+    authorityState: {
+      type: String,
+      enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+      default: 'authoritative'
+    },
+    authorityWriteId: { type: String, default: null, select: false },
+    authorityReconciliationId: { type: String, default: null, select: false },
     referenceModel: String,
     tokensPerSec: Number,
     latencyMs: Number,

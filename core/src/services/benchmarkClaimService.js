@@ -106,6 +106,10 @@ function getBenchmarkClaimReaperIntervalMs() {
 // host for 8+ hours. 2h ceiling matches the reaper's no-estimate hard cap.
 const CLAIM_DURATION_CAP_MS = 2 * 60 * 60 * 1000;
 const CLAIM_FINALIZE_TTL_MS = 30 * 60 * 1000;
+const CLAIM_FINALIZE_HEARTBEAT_MS = Math.max(
+  1_000,
+  Math.min(CLAIM_FINALIZE_TTL_MS / 3, Number(process.env.BENCHMARK_CLAIM_FINALIZE_HEARTBEAT_MS) || 60_000)
+);
 const CLAIM_SNAPSHOT_WAIT_MS = Math.max(
   5_000,
   (Number(process.env.BENCHMARK_CLAIM_DRAIN_TIMEOUT_MS) || 30_000) + 5_000
@@ -113,6 +117,61 @@ const CLAIM_SNAPSHOT_WAIT_MS = Math.max(
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function startFinalizeFenceHeartbeat({ preferenceId, hostUrl, batchId, claimGeneration, finalizeToken }) {
+  const controller = new AbortController();
+  let stopped = false;
+  let pending = Promise.resolve();
+  const assertActive = () => {
+    if (controller.signal.aborted) {
+      throw controller.signal.reason instanceof Error
+        ? controller.signal.reason
+        : Object.assign(new Error('Benchmark finalizer fence was lost'), { code: 'BENCHMARK_CLAIM_LOST' });
+    }
+  };
+  const refresh = async () => {
+    if (stopped || controller.signal.aborted) return;
+    const refreshedAt = new Date();
+    const result = await HostPreference.updateOne(
+      {
+        _id: preferenceId,
+        hostUrl,
+        status: 'benchmarking',
+        'benchmarkClaim.batchId': batchId,
+        'benchmarkClaim.claimGeneration': claimGeneration,
+        'benchmarkClaim.finalizeToken': finalizeToken
+      },
+      { $set: {
+        'benchmarkClaim.heartbeatAt': refreshedAt,
+        'benchmarkClaim.heartbeatTtlMs': CLAIM_FINALIZE_TTL_MS,
+        'benchmarkClaim.finalizingAt': refreshedAt
+      } }
+    );
+    const matched = Number(result?.matchedCount ?? result?.modifiedCount);
+    if (Number.isFinite(matched) && matched !== 1) {
+      const error = new Error('Benchmark finalizer fence heartbeat was rejected');
+      error.code = 'BENCHMARK_CLAIM_LOST';
+      throw error;
+    }
+  };
+  const tick = () => {
+    pending = pending.then(refresh).catch(error => {
+      if (!controller.signal.aborted) controller.abort(error);
+    });
+  };
+  const timer = setInterval(tick, CLAIM_FINALIZE_HEARTBEAT_MS);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    assertActive,
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      await pending;
+      assertActive();
+    }
+  };
 }
 
 function isMongoObjectIdLike(value) {
@@ -641,10 +700,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     status: 'benchmarking',
     'benchmarkClaim.batchId': batchId,
     'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration,
-    $or: [
-      { 'benchmarkClaim.finalizeToken': null },
-      { 'benchmarkClaim.finalizingAt': { $lte: new Date(Date.now() - CLAIM_FINALIZE_TTL_MS) } }
-    ]
+    'benchmarkClaim.finalizeToken': null
   };
   if (legacyMissingGeneration) finalizingFilter['benchmarkClaim.claimedAt'] = expectedLegacyClaimedAt;
   if (expectedHeartbeatAt !== undefined) finalizingFilter['benchmarkClaim.heartbeatAt'] = expectedHeartbeatAt;
@@ -675,6 +731,13 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       pref: current || undefined
     };
   }
+  const finalizerHeartbeat = startFinalizeFenceHeartbeat({
+    preferenceId: renewed._id,
+    hostUrl,
+    batchId,
+    claimGeneration: legacyMissingGeneration ? null : claimGeneration,
+    finalizeToken
+  });
 
   if (!skipPinRestore) {
     const originalSnapshot = renewed.benchmarkClaim?.preClaimRuntime;
@@ -710,9 +773,12 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
           batchId,
           claimGeneration: legacyMissingGeneration ? null : claimGeneration,
           finalizeToken,
-          snapshotAlreadyFiltered: true
+          snapshotAlreadyFiltered: true,
+          signal: finalizerHeartbeat.signal,
+          assertAuthorityActive: finalizerHeartbeat.assertActive
         }
       );
+      finalizerHeartbeat.assertActive();
     } catch (err) {
       pinRestore = {
         host: hostUrl,
@@ -735,29 +801,19 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
         error,
         source: 'benchmark-claim-fenced-release'
       });
-      await HostPreference.updateOne(
-        {
-          _id: renewed._id,
-          hostUrl,
-          status: 'benchmarking',
-          'benchmarkClaim.batchId': batchId,
-          'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration,
-          'benchmarkClaim.finalizeToken': finalizeToken
-        },
-        { $set: {
-          'benchmarkClaim.finalizeToken': null,
-          'benchmarkClaim.finalizingAt': null
-        } }
-      );
+      await finalizerHeartbeat.stop().catch(() => {});
       return {
         released: false,
         reason: `fenced runtime restore failed: ${error}`,
+        finalizationQuarantined: true,
         pinRestore,
         runtimeRestore: pinRestore,
         pref: await HostPreference.findOne({ hostUrl }).lean()
       };
     }
   }
+
+  await finalizerHeartbeat.stop();
 
   const restoreStatus = renewed.benchmarkClaim?.prevStatus || 'idle';
   const releaseFilter = {

@@ -161,6 +161,20 @@ describe('modelContextProfileService', () => {
     });
   });
 
+  it.each(['pending_reconciliation', 'authority_invalidated'])(
+    'never normalizes %s context evidence into a runtime recommendation',
+    authorityState => {
+      expect(service.normalizeContextProfile({
+        authorityState,
+        maxVerifiedContext: 262144,
+        recommendationStatus: 'verified',
+        recommendationEvidenceVersion: service.RECOMMENDATION_EVIDENCE_VERSION,
+        recommendedInteractiveContext: 262144,
+        recommendedDocumentContext: 262144
+      })).toBeNull();
+    }
+  );
+
   it('persists a rejected snapshot fence before invalidating its projected authority', async () => {
     const snapshot = {
       _id: 'snapshot-rejected',

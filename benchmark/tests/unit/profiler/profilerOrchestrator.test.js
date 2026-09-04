@@ -30,6 +30,12 @@ jest.mock('../../../src/clients/ollamaClient', () => ({
 jest.mock('../../../models/ModelProfile', () => ({ findOne: jest.fn() }));
 jest.mock('../../../models/ModelPerformanceProfile', () => ({ findOne: jest.fn() }));
 jest.mock('../../../src/services/benchmark/buddySurfaceEvents', () => ({ emitLifecycle: jest.fn() }));
+const mockPrepareProfilerAuthorityWrite = jest.fn();
+const mockCompleteProfilerAuthorityWrite = jest.fn();
+jest.mock('../../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+  prepareProfilerAuthorityWrite: (...args) => mockPrepareProfilerAuthorityWrite(...args),
+  completeProfilerAuthorityWrite: (...args) => mockCompleteProfilerAuthorityWrite(...args)
+}));
 
 const hostTestService = require('../../../src/services/hostTestService');
 const contextProbeService = require('../../../src/services/contextProbeService');
@@ -58,6 +64,7 @@ const ARTIFACT = {
   registryDigest: 'sha256:exact',
   registryQualified: true
 };
+const PROFILE_OPTIONS = Object.freeze({ claimIdentity: { claimBatchId: 'profile-test' } });
 
 function readiness(overrides = {}) {
   const evidence = {
@@ -123,6 +130,15 @@ beforeEach(() => {
     vramUsedMiB: 4096
   });
   performanceProfiles.saveProfile.mockResolvedValue({ _id: 'evidence-1' });
+  mockPrepareProfilerAuthorityWrite.mockReset().mockImplementation(async input => ({
+    _id: 'journal-evidence-1',
+    details: input.details
+  }));
+  mockCompleteProfilerAuthorityWrite.mockReset().mockResolvedValue({ record: { state: 'resolved' } });
+  ModelProfile.findOne.mockReturnValue({
+    select: jest.fn().mockReturnThis(),
+    lean: jest.fn().mockResolvedValue({ readiness: {}, thinkingProfiles: {} })
+  });
   ModelPerformanceProfile.findOne.mockReturnValue({
     lean: jest.fn().mockResolvedValue({
       _id: 'evidence-1', modelName: MODEL, hostId: HOST_ID, artifact: ARTIFACT,
@@ -136,7 +152,7 @@ beforeEach(() => {
 
 describe('profile', () => {
   it('records evidence for the exact requested tag without creating another model', async () => {
-    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS);
     expect(hostTestService.testModelOnHost).toHaveBeenCalledWith(MODEL, HOST_URL, expect.any(Object));
     expect(hostTestService.testModelOnHost.mock.calls[0][2]).not.toHaveProperty('numCtx');
     expect(performanceProfiles.saveProfile).toHaveBeenCalledWith(expect.objectContaining({
@@ -161,17 +177,14 @@ describe('profile', () => {
     modelProfileService.updateReadiness.mockRejectedValueOnce(new Error('readiness acknowledgement lost'));
     performanceProfiles.invalidateProfile.mockRejectedValueOnce(new Error('profile invalidation unavailable'));
 
-    const error = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick').catch(caught => caught);
+    const error = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS).catch(caught => caught);
 
     expect(error).toMatchObject({
       authorityInvalidationFailed: true,
-      invalidationErrors: [expect.any(Error)]
+      reconciliationId: 'journal-evidence-1'
     });
-    expect(performanceProfiles.invalidateProfile).toHaveBeenCalledWith(
-      'evidence-1',
-      'profiler_authority_write_failed'
-    );
-    expect(modelProfileService.invalidateReadinessIfEvidence).toHaveBeenCalled();
+    expect(performanceProfiles.invalidateProfile).not.toHaveBeenCalled();
+    expect(modelProfileService.invalidateReadinessIfEvidence).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -194,7 +207,7 @@ describe('profile', () => {
       vramUsedMiB: 4096
     });
 
-    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS);
 
     expect(result.profile.spill).toEqual(expect.objectContaining({
       spillDetected: true,
@@ -217,7 +230,7 @@ describe('profile', () => {
       ]
     });
 
-    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'standard');
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'standard', PROFILE_OPTIONS);
 
     expect(result.profile).toEqual(expect.objectContaining({
       profileDepth: 'standard',
@@ -268,7 +281,7 @@ describe('profile', () => {
     }));
     thinkingProfileService.profileThinkingBehavior.mockResolvedValue({ recommendedPolicy: 'on' });
 
-    await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
+    await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS);
 
     expect(hostTestService.testModelOnHost).toHaveBeenCalledWith(
       MODEL,

@@ -310,7 +310,13 @@ const handleChatRequestStream = async ({
 
         try {
             for await (const chunk of response.body) {
-                if (abortSignal?.aborted) return;
+                if (abortSignal?.aborted) {
+                    const abortError = abortSignal.reason instanceof Error
+                        ? abortSignal.reason
+                        : new Error('Streaming request was aborted after dispatch');
+                    abortError.name = 'AbortError';
+                    throw abortError;
+                }
 
                 lineBuffer += decoder.decode(chunk, { stream: true });
                 let boundary;

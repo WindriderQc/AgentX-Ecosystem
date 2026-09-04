@@ -5,6 +5,7 @@ const request = require('supertest');
 
 jest.mock('../../src/services/profiler/hostProfileService', () => ({
   getById: jest.fn(),
+  getByIdForAuthority: jest.fn(),
   checkStatus: jest.fn(),
   updateStatusMetadata: jest.fn(),
   upsertMetadata: jest.fn(),
@@ -27,6 +28,12 @@ jest.mock('../../src/services/profiler/baselineModelService', () => ({
 }));
 jest.mock('../../src/services/profiler/profilerClaimLifecycle', () => ({
   acquireProfilerClaimLease: jest.fn()
+}));
+const mockPrepareProfilerAuthorityWrite = jest.fn();
+const mockCompleteProfilerAuthorityWrite = jest.fn();
+jest.mock('../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+  prepareProfilerAuthorityWrite: (...args) => mockPrepareProfilerAuthorityWrite(...args),
+  completeProfilerAuthorityWrite: (...args) => mockCompleteProfilerAuthorityWrite(...args)
 }));
 jest.mock('../../src/clients/coreApiClient', () => ({
   getWorkloadRecoveryIdentity: jest.fn(() => ({
@@ -58,6 +65,7 @@ describe('Profiler host status read/refresh split', () => {
     hostProfileService.upsertAuthority.mockReset().mockResolvedValue({});
     hostProfileService.invalidateBaselineReceipt.mockResolvedValue({ invalidated: true });
     lease = {
+      operationId: 'profiler-host-test-route',
       signal: new AbortController().signal,
       assertActive: jest.fn(() => true),
       identityFor: jest.fn(() => ({ claimBatchId: 'profile-test', claimGeneration: 'generation-1' })),
@@ -92,6 +100,11 @@ describe('Profiler host status read/refresh split', () => {
       })
     };
     acquireProfilerClaimLease.mockResolvedValue(lease);
+    mockPrepareProfilerAuthorityWrite.mockReset().mockImplementation(async input => ({
+      _id: 'journal-baseline-1',
+      details: input.details
+    }));
+    mockCompleteProfilerAuthorityWrite.mockReset().mockResolvedValue({ record: { state: 'resolved' } });
     hostProfileService.getById.mockResolvedValue({
       hostId: 'primary',
       hostUrl: 'http://localhost:11434',
@@ -99,6 +112,9 @@ describe('Profiler host status read/refresh split', () => {
       lastSeenAt: new Date('2026-08-28T00:00:00.000Z'),
       dedicated: null,
     });
+    hostProfileService.getByIdForAuthority.mockImplementation(
+      (...args) => hostProfileService.getById(...args)
+    );
     process.env.AGENTX_OPERATOR_TOKEN = 'test-operator-token';
   });
 
@@ -309,12 +325,11 @@ describe('Profiler host status read/refresh split', () => {
         assertAuthorityActive: lease.assertActive
       })
     );
-    expect(hostProfileService.invalidateBaselineReceipt).toHaveBeenCalledWith(
-      'primary',
-      expect.any(String),
-      priorBaseline
-    );
-    expect(lease.finalize).toHaveBeenCalled();
+    expect(mockPrepareProfilerAuthorityWrite.mock.invocationCallOrder[0])
+      .toBeLessThan(hostProfileService.updateBaseline.mock.invocationCallOrder[0]);
+    expect(mockCompleteProfilerAuthorityWrite).not.toHaveBeenCalled();
+    expect(lease.abandon).toHaveBeenCalledWith(lost);
+    expect(lease.finalize).not.toHaveBeenCalled();
   });
 
   test('leaves durable reconciliation pending when the post-restore projection commit fails', async () => {
@@ -342,7 +357,7 @@ describe('Profiler host status read/refresh split', () => {
     expect(lease.finalize).toHaveBeenCalledTimes(1);
   });
 
-  test('holds the lease for TTL recovery when baseline projection compensation fails', async () => {
+  test('holds the lease for durable recovery when baseline journal finalization is ambiguous', async () => {
     hostProfileService.getById.mockResolvedValue({
       hostId: 'primary',
       hostUrl: 'http://localhost:11434',
@@ -357,17 +372,9 @@ describe('Profiler host status read/refresh split', () => {
       timeToFirstTokenMs: 50,
       testedAt: new Date('2026-09-04T00:00:00.000Z')
     });
-    let authorityLost = false;
-    lease.assertActive.mockImplementation(() => {
-      if (authorityLost) throw new Error('baseline claim lost after write');
-      return true;
-    });
-    hostProfileService.updateBaseline.mockImplementation(async () => {
-      authorityLost = true;
-      return { baseline: { referenceModel: 'baseline:model' } };
-    });
+    hostProfileService.updateBaseline.mockResolvedValue({ baseline: { referenceModel: 'baseline:model' } });
     const compensationFailure = new Error('baseline compensation unavailable');
-    hostProfileService.invalidateBaselineReceipt.mockRejectedValue(compensationFailure);
+    mockCompleteProfilerAuthorityWrite.mockRejectedValue(compensationFailure);
 
     const response = await request(app)
       .post('/api/profiler/hosts/test/run')

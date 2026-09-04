@@ -32,26 +32,35 @@ function getConfiguredHost(hostId) {
   return getConfiguredHosts().find(host => String(host.id) === String(hostId)) || null;
 }
 
-function applyConfiguredIdentity(profile, configuredHost) {
-  if (!configuredHost) return profile;
+function maskPendingAuthority(profile) {
+  if (!profile) return profile;
+  if (new Set(['pending_reconciliation', 'authority_invalidated']).has(profile.baseline?.authorityState)) {
+    return { ...profile, baseline: null };
+  }
+  return profile;
+}
 
-  const previousUrl = normalizeHostUrlForCompare(profile?.hostUrl);
+function applyConfiguredIdentity(profile, configuredHost) {
+  const safeProfile = maskPendingAuthority(profile);
+  if (!configuredHost) return safeProfile;
+
+  const previousUrl = normalizeHostUrlForCompare(safeProfile?.hostUrl);
   const configuredUrl = normalizeHostUrlForCompare(configuredHost.url);
   const identityMoved = Boolean(previousUrl && configuredUrl && previousUrl !== configuredUrl);
   const configuredVram = Number(configuredHost.vramMb);
 
   return {
-    ...(profile || {}),
+    ...(safeProfile || {}),
     hostId: configuredHost.id,
     hostUrl: configuredHost.url,
     displayName: configuredHost.name,
     gpu: {
-      ...(profile?.gpu || {}),
+      ...(safeProfile?.gpu || {}),
       ...(Number.isFinite(configuredVram) && configuredVram > 0
         ? { vramTotalMiB: configuredVram }
         : {})
     },
-    status: profile?.status || 'unknown',
+    status: safeProfile?.status || 'unknown',
     // Measurements belong to the physical endpoint, not to a reusable host
     // slot. Do not display a baseline captured before that slot moved.
     ...(identityMoved ? { baseline: null } : {})
@@ -102,7 +111,7 @@ async function getByUrl(hostUrl) {
     host => normalizeHostUrlForCompare(host.url) === normalizeHostUrlForCompare(normalized)
   );
   if (configuredHost) return getById(configuredHost.id);
-  return HostProfile.findOne({ hostUrl: normalized }).lean();
+  return maskPendingAuthority(await HostProfile.findOne({ hostUrl: normalized }).lean());
 }
 
 /**
@@ -162,6 +171,18 @@ async function writeProfile(data, options = {}) {
   );
   options.assertAuthorityActive?.();
   return updated;
+}
+
+async function getByIdForAuthority(hostId) {
+  return HostProfile.findOne({ hostId })
+    .select([
+      '+baseline.persistenceReceipt',
+      '+baseline.authorityAdmissionId',
+      '+baseline.authorityPrincipal',
+      '+baseline.authorityWriteId',
+      '+baseline.authorityReconciliationId'
+    ].join(' '))
+    .lean();
 }
 
 function assertAllowedFields(data, allowed, code) {
@@ -446,6 +467,7 @@ function isDedicatedConflict(host, modelName) {
 module.exports = {
   getAll,
   getById,
+  getByIdForAuthority,
   getByUrl,
   upsertMetadata,
   upsertAuthority,

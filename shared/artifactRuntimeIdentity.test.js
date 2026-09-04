@@ -94,3 +94,24 @@ test('fails closed on incomplete identity, stale evidence, and fingerprint drift
   assert.ok(verdict.reasons.includes('runtime_fingerprint_mismatch'));
   assert.ok(verdict.reasons.includes('receipt_id_mismatch'));
 });
+
+test('rejects every altered derived field and unknown receipt key', () => {
+  const receipt = buildRuntimeArtifactReceipt(INPUT, {
+    observedAt: '2026-09-04T18:00:00.000Z',
+    freshnessMs: 30_000
+  });
+  const mutations = [
+    ['contract', { contract: 'agentx.runtime-artifact-identity/v0' }],
+    ['model', { model: 'ax/other-model' }],
+    ['fullVram', { fullVram: false }],
+    ['extra key', { callerClaim: true }]
+  ];
+
+  for (const [label, mutation] of mutations) {
+    const verdict = verifyRuntimeArtifactReceipt({ ...receipt, ...mutation }, {
+      now: '2026-09-04T18:00:15.000Z'
+    });
+    assert.equal(verdict.valid, false, label);
+    assert.ok(verdict.reasons.includes('receipt_body_mismatch'), label);
+  }
+});

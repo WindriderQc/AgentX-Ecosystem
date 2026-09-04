@@ -178,9 +178,66 @@ describe('trusted runtime services', () => {
       'http://ollama.test:11434', 'open-model', { signal: expect.any(AbortSignal) }
     );
     expect(deps.hostPreferenceService.prepareExclusiveModel).toHaveBeenCalledWith(
-      'http://ollama.test:11434', 'open-model'
+      'http://ollama.test:11434', 'open-model', {
+        signal: expect.any(AbortSignal),
+        assertAuthorityActive: expect.any(Function)
+      }
     );
     expect(events).toEqual(['exclusive-acquired', 'resident-released', 'inference', 'release']);
+  });
+
+  test('quarantines an exclusive handoff when authority is lost before a late unload settles', async () => {
+    const controller = new AbortController();
+    const lifecycle = [];
+    let dispatched = false;
+    const abandon = jest.fn(async () => {
+      lifecycle.push('abandon');
+      return { quarantined: dispatched };
+    });
+    const markDispatched = jest.fn(() => {
+      dispatched = true;
+      lifecycle.push('dispatched');
+    });
+    const assertActive = jest.fn(() => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+    });
+    let releaseLateUnload;
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: controller.signal,
+        markDispatched,
+        assertActive,
+        complete: jest.fn(async () => ({ released: true })),
+        abandon
+      })),
+      hostPreferenceService: {
+        getByHost: jest.fn(async () => ({ pinnedModels: [] })),
+        prepareExclusiveModel: jest.fn(async (_host, _model, options) => {
+          expect(dispatched).toBe(true);
+          expect(options.signal).toBe(controller.signal);
+          options.assertAuthorityActive();
+          await new Promise(resolve => { releaseLateUnload = resolve; });
+          options.assertAuthorityActive();
+          return { status: 'ready', unloaded: ['normal-model'] };
+        })
+      }
+    });
+
+    const pending = executeRoutedInference(deps, {
+      mode: 'generate', model: 'open-model', prompt: 'hello', exclusiveHost: true
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const lost = Object.assign(new Error('inference admission heartbeat was lost'), {
+      code: 'RUNTIME_INFERENCE_ADMISSION_LOST'
+    });
+    controller.abort(lost);
+    releaseLateUnload();
+
+    await expect(pending).rejects.toMatchObject({ code: 'INFERENCE_UPSTREAM_UNAVAILABLE' });
+    expect(lifecycle).toEqual(['dispatched', 'abandon']);
+    expect(abandon).toHaveBeenCalledWith(lost);
+    expect(await abandon.mock.results[0].value).toEqual({ quarantined: true });
+    expect(deps.fetch).not.toHaveBeenCalled();
   });
 
   test('records only validated server-side work attribution', async () => {
@@ -290,6 +347,7 @@ describe('trusted runtime services', () => {
       beginInferenceAdmission: jest.fn(async () => ({
         signal: new AbortController().signal,
         markDispatched: jest.fn(),
+        assertActive: jest.fn(),
         complete,
         abandon
       })),
@@ -309,6 +367,41 @@ describe('trusted runtime services', () => {
     expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
       status: 'error',
       error: expect.stringMatching(/terminal/i)
+    }));
+  });
+
+  test('quarantines when downstream closes after done:true but before upstream EOF', async () => {
+    const upstream = new PassThrough();
+    const abandon = jest.fn(async () => ({ quarantined: true }));
+    const complete = jest.fn(async () => ({ released: true }));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => response({ stream: upstream }))
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    });
+    result.stream.resume();
+    const firstChunk = new Promise(resolve => result.stream.once('data', resolve));
+
+    upstream.write(`${JSON.stringify({ done: true })}\n`);
+    await firstChunk;
+    result.stream.destroy();
+    await new Promise(resolve => result.stream.once('close', resolve));
+    upstream.end(`${JSON.stringify({ message: { content: 'late' } })}\n`);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalledWith(expect.any(Error));
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      error: expect.stringMatching(/terminal|closed|cancelled/i)
     }));
   });
 

@@ -102,6 +102,8 @@ const ModelContextProbeSnapshotSchema = new mongoose.Schema({
     default: 'pending'
   },
   authorityError: { type: String, default: null },
+  authorityWriteId: { type: String, default: null, index: true },
+  authorityReconciliationId: { type: String, default: null },
   steps: {
     type:    [ProbeStepSchema],
     default: []

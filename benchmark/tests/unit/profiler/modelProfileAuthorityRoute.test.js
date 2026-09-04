@@ -14,6 +14,7 @@ jest.mock('../../../src/services/profiler/modelPerformanceProfileService', () =>
 jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
   resolveArtifactIdentity: jest.fn(),
   resolveRuntimeArtifactReceipt: jest.fn(),
+  runtimeReceiptMatchesProfile: jest.fn(() => true),
   identitiesMatch: jest.fn((left, right) => left?.digest === right?.digest
     && left?.runtimeFingerprint === right?.runtimeFingerprint)
 }));
@@ -74,6 +75,7 @@ describe('ModelProfile write authority', () => {
     artifactIdentityService.resolveRuntimeArtifactReceipt.mockResolvedValue(runtimeReceipt);
     const profile = {
       profileDepth: 'standard',
+      benchmarkQualified: true,
       requiredRetainedSamples: 5,
       measurementQuality: { passingSampleCount: 5 },
       maxVerifiedContext: 262144,
@@ -129,7 +131,7 @@ describe('ModelProfile write authority', () => {
       digest: 'sha256:old', runtimeFingerprint: 'runtime-a', registryQualified: true
     };
     const profile = {
-      profileDepth: 'standard', requiredRetainedSamples: 5,
+      profileDepth: 'standard', benchmarkQualified: true, requiredRetainedSamples: 5,
       measurementQuality: { passingSampleCount: 5 }, recommendedInteractiveContext: 32768
     };
     performanceService.getActiveProfile.mockResolvedValue({
@@ -158,7 +160,7 @@ describe('ModelProfile write authority', () => {
       digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
     };
     const profile = {
-      profileDepth: 'standard', requiredRetainedSamples: 5,
+      profileDepth: 'standard', benchmarkQualified: true, requiredRetainedSamples: 5,
       measurementQuality: { passingSampleCount: 5 }, recommendedInteractiveContext: 32768
     };
     performanceService.getActiveProfile.mockResolvedValue({
@@ -180,5 +182,38 @@ describe('ModelProfile write authority', () => {
 
     expect(response.status).toBe(409);
     expect(response.body.code).toBe('RUNTIME_ARTIFACT_IDENTITY_UNAVAILABLE');
+  });
+
+  it('refuses config when the tag is repointed between profile validation and runtime receipt', async () => {
+    const evidenceId = '68b8af284f953a0bd8931038';
+    const artifact = {
+      model: 'qwen:9b', hostId: 'host-beta', hostUrl: 'http://host-beta:11434',
+      digest: 'sha256:old', runtimeFingerprint: 'runtime-a', registryQualified: true
+    };
+    const profile = {
+      profileDepth: 'standard', benchmarkQualified: true,
+      requiredRetainedSamples: 5, measurementQuality: { passingSampleCount: 5 },
+      recommendedInteractiveContext: 32768
+    };
+    const evidence = { _id: evidenceId, modelName: 'qwen:9b', hostId: 'host-beta', artifact, profile };
+    performanceService.getActiveProfile.mockResolvedValue(evidence);
+    service.getByName.mockResolvedValue({ readiness: { 'host-beta': {
+      benchmarkQualified: true, stale: false, profileDepth: 'standard', evidenceId, artifact,
+      authorityReceipt: createProfilerAuthorityReceipt({
+        modelName: 'qwen:9b', hostId: 'host-beta', artifact, profile, evidenceId
+      })
+    } } });
+    artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...artifact });
+    artifactIdentityService.resolveRuntimeArtifactReceipt.mockResolvedValue({
+      model: 'qwen:9b', hostId: 'host-beta', hostUrl: artifact.hostUrl, digest: 'sha256:new',
+      contextLength: 32768
+    });
+    artifactIdentityService.runtimeReceiptMatchesProfile.mockReturnValueOnce(false);
+
+    const response = await request(app)
+      .get('/api/profiler/models/qwen%3A9b/config?host=host-beta');
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('RUNTIME_ARTIFACT_IDENTITY_DRIFT');
   });
 });

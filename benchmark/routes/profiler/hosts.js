@@ -23,6 +23,7 @@ const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdm
 const { isSameOllamaModel } = require('../../src/helpers/ollamaModelIdentity');
 const { getWorkloadRecoveryIdentity } = require('../../src/clients/coreApiClient');
 const { safeTokenMatch } = require('../../../shared/apiHostGuard');
+const authorityReconciliation = require('../../src/services/benchmark/benchmarkAuthorityReconciliation');
 
 const logger = require('../../config/logger');
 
@@ -95,14 +96,32 @@ function buildBaselineFromResults(results = [], preferredModel = '') {
 
 async function updateBaselineUnderLease(hostId, baseline, lease) {
   lease.assertActive();
-  const prior = await hostProfileService.getById(hostId);
+  const prior = await hostProfileService.getByIdForAuthority(hostId);
   lease.assertActive();
   const authorityProof = lease.authorityProof();
   const persistenceReceipt = crypto.randomUUID();
+  const authorityWriteId = crypto.randomUUID();
+  let journal = null;
   try {
+    journal = await authorityReconciliation.prepareProfilerAuthorityWrite({
+      kind: 'profiler_baseline_write',
+      resultId: `profiler-baseline:${lease.operationId}:${hostId}:${authorityWriteId}`,
+      workloadId: lease.operationId,
+      phase: 'profiler host baseline publication',
+      details: {
+        hostId,
+        persistenceReceipt,
+        authorityWriteId,
+        priorBaseline: prior?.baseline || null
+      }
+    });
+    lease.assertActive();
     const updated = await hostProfileService.updateBaseline(hostId, {
       ...baseline,
-      persistenceReceipt
+      persistenceReceipt,
+      authorityWriteId,
+      authorityReconciliationId: String(journal._id),
+      authorityState: 'pending_reconciliation'
     }, {
       authorityService: 'profiler-baseline',
       authorityProof,
@@ -111,29 +130,19 @@ async function updateBaselineUnderLease(hostId, baseline, lease) {
       assertAuthorityActive: lease.assertActive
     });
     lease.assertActive();
+    await authorityReconciliation.completeProfilerAuthorityWrite(journal, {
+      details: journal.details,
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
     return updated;
   } catch (error) {
-    // Fence the preallocated receipt before restoring the prior value. A late
-    // Mongo acknowledgement can no longer republish this unauthorized
-    // baseline, and the receipt predicate cannot clobber a newer valid write.
-    try {
-      await hostProfileService.invalidateBaselineReceipt(
-        hostId,
-        persistenceReceipt,
-        prior?.baseline || null
-      );
-      error.authorityCompensated = true;
-    } catch (compensationError) {
-      error.compensationError = compensationError;
+    if (journal) {
       error.retainAdmission = true;
-      error.code = 'HOST_BASELINE_RECONCILIATION_PENDING';
-      logger.error('Host baseline compensation failed', {
-        hostId,
-        error: compensationError.message
-      });
-    }
-    if (error.compensationError && typeof lease.abandon === 'function') {
-      await lease.abandon(error.compensationError);
+      error.authorityInvalidationFailed = true;
+      error.code = error.code || 'HOST_BASELINE_RECONCILIATION_PENDING';
+      error.reconciliationId = String(journal._id);
+      if (typeof lease.abandon === 'function') await lease.abandon(error);
     }
     throw error;
   }
@@ -407,7 +416,11 @@ router.post('/test/run-all', async (req, res) => {
         lease.assertActive();
         await updateBaselineUnderLease(hostId, baseline, lease);
       }
-    }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; })
+    }).catch(async err => {
+      tracker.status = 'failed';
+      tracker.error = err.message;
+      if (err.retainAdmission === true) await lease.abandon(err);
+    })
       .finally(async () => {
         try {
           await lease.finalize();
@@ -528,6 +541,11 @@ router.post('/test/run-fleet', async (req, res) => {
         } catch (err) {
           slot.status = 'failed';
           slot.error = err.message;
+          if (err.retainAdmission === true) {
+            tracker.cancelled = true;
+            await lease.abandon(err);
+            throw err;
+          }
           logger.error('Fleet: host sweep failed', { hostUrl: slot.hostUrl, error: err.message });
         } finally {
           slot.finishedAt = Date.now();
@@ -646,7 +664,13 @@ router.post('/test/compare', async (req, res) => {
     await lease.finalize();
     lease = null;
     res.json({ status: 'success', data });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null }); }
+  } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
+    res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null });
+  }
   finally {
     if (lease) {
       await lease.finalize().catch(error => logger.error('Host comparison lease finalization failed', { error: error.message }));
@@ -689,6 +713,7 @@ router.post('/test/context-probe/run', async (req, res) => {
       contextProbeFillPct: contextProbeFillPct ?? promptFillPct,
       force: !!force,
       acknowledgeMaintenance: true,
+      workloadId: lease.operationId,
       assertClaimActive: lease.assertActive,
       signal: lease.signal
     });
@@ -696,7 +721,13 @@ router.post('/test/context-probe/run', async (req, res) => {
     await lease.finalize();
     lease = null;
     res.json({ status: 'success', data });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null }); }
+  } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
+    res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null });
+  }
   finally {
     if (lease) {
       await lease.finalize().catch(error => logger.error('Context probe lease finalization failed', { error: error.message }));

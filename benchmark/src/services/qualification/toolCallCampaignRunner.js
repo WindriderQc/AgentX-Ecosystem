@@ -272,6 +272,7 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
   let pinBefore = null;
   let pinAfter = null;
   let qualification = null;
+  let frozenCampaign = null;
   const reports = [];
 
   try {
@@ -300,7 +301,7 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
     await heartbeat.ready;
     heartbeat.assertActive();
 
-    const frozenCampaign = await deps.resolveStandaloneCampaignInferenceContracts({
+    frozenCampaign = await deps.resolveStandaloneCampaignInferenceContracts({
       hostGroups: new Map([[host, [model]]]),
       executionConfig: {
         response_mode: 'final_only',
@@ -360,13 +361,31 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
       await deps.recordRepetition(campaignId, identity, report);
     }
 
-    heartbeat.assertActive();
-    await assertActiveClaim(claimReceipt, deps);
-    await deps.assertFrozenArtifactDigest(frozenCampaign, model, host);
-    await assertCurrentArtifactIdentity(identity, deps);
   } catch (error) {
     failure = error;
   } finally {
+    // Final evidence is written while both the exact host claim and the global
+    // workload admission are still live. Re-resolve the runtime immediately
+    // before the CAS so a tag/restart race can only finalize as interrupted.
+    if (persistenceStarted && identity) {
+      try {
+        heartbeat?.assertActive();
+        await assertActiveClaim(claimReceipt, deps);
+        await deps.assertFrozenArtifactDigest(frozenCampaign, model, host);
+        await assertCurrentArtifactIdentity(identity, deps);
+      } catch (error) {
+        failure = failure || error;
+      }
+      try {
+        qualification = await deps.finalizeQualification(campaignId, identity, {
+          interrupted: Boolean(failure),
+          failureCode: failure?.code || (failure ? 'TOOL_CAMPAIGN_FAILED' : null)
+        });
+      } catch (error) {
+        if (failure) failure.finalizationError = error;
+        else failure = error;
+      }
+    }
     if (heartbeat) {
       try {
         await heartbeat.stop();
@@ -393,16 +412,6 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
       try {
         if (failure) await workload.retainForRecovery(failure);
         else await workload.complete();
-      } catch (error) {
-        failure = failure || error;
-      }
-    }
-    if (persistenceStarted && identity) {
-      try {
-        qualification = await deps.finalizeQualification(campaignId, identity, {
-          interrupted: Boolean(failure),
-          failureCode: failure?.code || (failure ? 'TOOL_CAMPAIGN_FAILED' : null)
-        });
       } catch (error) {
         failure = failure || error;
       }

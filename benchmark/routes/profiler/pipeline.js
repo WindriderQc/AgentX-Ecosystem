@@ -55,7 +55,13 @@ router.post('/scout', async (req, res) => {
     await lease.finalize();
     lease = null;
     res.json({ status: 'success', data });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null }); }
+  } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
+    res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
+  }
   finally {
     if (lease) {
       await lease.finalize().catch(error => logger.error('Scout lease finalization failed', { error: error.message }));

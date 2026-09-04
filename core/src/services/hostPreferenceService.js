@@ -32,6 +32,7 @@ const benchmarkClaimService = require('./benchmarkClaimService');
 const hostHealthDaemon = require('./hostHealthDaemon');
 const pinReconciler = require('./pinReconciler');
 const hostPreferenceIdentity = require('./hostPreferenceIdentity');
+const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
 const {
   pinRestoreVerifyTimeoutMs,
   normalizePinName,
@@ -148,9 +149,11 @@ async function warmDefaultModel(hostUrl, model, {
     assertAuthorityActive?.();
     let terminal;
     try { terminal = JSON.parse(raw); } catch { terminal = null; }
+    const errorFree = terminal && typeof terminal === 'object' && !Array.isArray(terminal)
+      && typeof terminal.error !== 'string';
     const exactTerminal = isEmbedding
-      ? (Array.isArray(terminal?.embedding) || Array.isArray(terminal?.embeddings))
-      : terminal?.done === true;
+      ? errorFree && (Array.isArray(terminal.embedding) || Array.isArray(terminal.embeddings))
+      : errorFree && terminal.done === true;
     if (!exactTerminal) {
       throw Object.assign(new Error(isEmbedding
         ? 'Ollama embedding warmup ended without a terminal embedding array'
@@ -184,7 +187,8 @@ async function unloadModel(hostUrl, model, options = {}) {
     options.assertAuthorityActive?.();
     let terminal;
     try { terminal = JSON.parse(raw); } catch { terminal = null; }
-    if (terminal?.done !== true) {
+    if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)
+      || typeof terminal.error === 'string' || terminal.done !== true) {
       throw Object.assign(new Error('Ollama unload ended without an exact terminal done object'), {
         code: 'OLLAMA_RESPONSE_INCOMPLETE'
       });
@@ -351,7 +355,17 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
   }
 
   const assertFence = async () => {
-    const current = await HostPreference.findOne({ hostUrl }).lean();
+    benchmarkClaim?.assertAuthorityActive?.();
+    if (benchmarkClaim?.signal?.aborted) {
+      throw benchmarkClaim.signal.reason instanceof Error
+        ? benchmarkClaim.signal.reason
+        : Object.assign(new Error('Benchmark finalizer fence was aborted'), { code: 'BENCHMARK_CLAIM_LOST' });
+    }
+    const current = await HostPreference.findOne(
+      { hostUrl },
+      null,
+      benchmarkClaim?.signal ? { signal: benchmarkClaim.signal } : undefined
+    ).lean();
     if (current?.status !== 'benchmarking'
       || current?.benchmarkClaim?.batchId !== benchmarkClaim?.batchId
       || current?.benchmarkClaim?.claimGeneration !== benchmarkClaim?.claimGeneration
@@ -367,7 +381,7 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
     ? (snapshot?.residents || [])
     : desiredBenchmarkResidents(snapshot);
   const desiredNames = desired.map(entry => entry.model);
-  let running = await fetchRunningModelInfosStrict(hostUrl);
+  let running = await fetchRunningModelInfosStrict(hostUrl, 5_000, { signal: benchmarkClaim?.signal });
 
   for (const entry of running) {
     const loaded = entry.name || entry.model;
@@ -382,7 +396,10 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
       };
     }
     await assertFence();
-    const unloaded = await unloadModel(hostUrl, loaded);
+    const unloaded = await unloadModel(hostUrl, loaded, {
+      signal: benchmarkClaim?.signal,
+      assertAuthorityActive: benchmarkClaim?.assertAuthorityActive
+    });
     if (unloaded.status !== 'ok') {
       return {
         host: hostUrl,
@@ -396,11 +413,14 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
 
   for (const target of desired) {
     await assertFence();
-    running = await fetchRunningModelInfosStrict(hostUrl);
+    running = await fetchRunningModelInfosStrict(hostUrl, 5_000, { signal: benchmarkClaim?.signal });
     const loaded = findLoadedModelInfo(running, target.model);
     const loadedCtx = readLoadedContextLength(loaded);
     if (loaded && target.contextLength && loadedCtx !== target.contextLength) {
-      const unloaded = await unloadModel(hostUrl, loaded.name || loaded.model || target.model);
+      const unloaded = await unloadModel(hostUrl, loaded.name || loaded.model || target.model, {
+        signal: benchmarkClaim?.signal,
+        assertAuthorityActive: benchmarkClaim?.assertAuthorityActive
+      });
       if (unloaded.status !== 'ok') {
         return {
           host: hostUrl,
@@ -416,7 +436,9 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
       : Math.max(1, Math.ceil((new Date(target.expiresAt).getTime() - Date.now()) / 1000));
     const warmed = await warmDefaultModel(hostUrl, target.model, {
       keepAlive: remainingKeepAlive,
-      contextSize: target.contextLength || 0
+      contextSize: target.contextLength || 0,
+      signal: benchmarkClaim?.signal,
+      assertAuthorityActive: benchmarkClaim?.assertAuthorityActive
     });
     if (warmed.status !== 'ok') {
       return {
@@ -430,7 +452,7 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
   }
 
   await assertFence();
-  const verifiedRunning = await fetchRunningModelInfosStrict(hostUrl);
+  const verifiedRunning = await fetchRunningModelInfosStrict(hostUrl, 5_000, { signal: benchmarkClaim?.signal });
   const noExtraResidents = verifiedRunning.every(entry => desired.some(target =>
     pinNamesMatch(target.model, entry.name || entry.model)
   ));
@@ -472,7 +494,7 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
       loadedModel: desiredNames[0] || null,
       loadedModels: desiredNames
     } },
-    { new: true }
+    { new: true, ...(benchmarkClaim?.signal ? { signal: benchmarkClaim.signal } : {}) }
   ).lean();
   if (!updated) {
     const error = new Error('Benchmark claim changed after runtime restore verification');
@@ -499,11 +521,18 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
   };
 }
 
-async function prepareExclusiveModel(hostUrl, model) {
+async function prepareExclusiveModel(hostUrl, model, options = {}) {
   let runningModelInfos;
   try {
-    runningModelInfos = await fetchRunningModelInfosStrict(hostUrl);
+    options.assertAuthorityActive?.();
+    runningModelInfos = await fetchRunningModelInfosStrict(hostUrl, 5_000, {
+      signal: options.signal
+    });
+    options.assertAuthorityActive?.();
   } catch (error) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason instanceof Error ? options.signal.reason : error;
+    }
     return { host: hostUrl, model, status: 'error', error: error.message, unloaded: [] };
   }
   const runningModels = runningModelInfos.map(entry => entry.name || entry.model).filter(Boolean);
@@ -511,10 +540,12 @@ async function prepareExclusiveModel(hostUrl, model) {
 
   for (const loaded of runningModels) {
     if (pinNamesMatch(loaded, model)) continue;
+    options.assertAuthorityActive?.();
     if (hostGate.inFlightFor(hostUrl, loaded) > 0) {
       return { host: hostUrl, model, status: 'busy', unloaded, blockingModel: loaded };
     }
-    const result = await unloadModel(hostUrl, loaded);
+    const result = await unloadModel(hostUrl, loaded, options);
+    options.assertAuthorityActive?.();
     if (result.status !== 'ok') {
       return { host: hostUrl, model, status: 'error', error: result.error, unloaded };
     }
@@ -522,10 +553,13 @@ async function prepareExclusiveModel(hostUrl, model) {
   }
 
   if (unloaded.length > 0) {
+    options.assertAuthorityActive?.();
     await HostPreference.findOneAndUpdate(
       { hostUrl },
-      { $set: { status: 'swapping', loadedModel: null, loadedModels: [] } }
+      { $set: { status: 'swapping', loadedModel: null, loadedModels: [] } },
+      options.signal ? { signal: options.signal } : {}
     );
+    options.assertAuthorityActive?.();
     logger.info(`[HostPreference] Prepared exclusive model handoff to ${model} on ${hostUrl}`, { unloaded });
   }
   return { host: hostUrl, model, status: 'ready', unloaded };
@@ -537,7 +571,12 @@ async function prepareExclusiveModel(hostUrl, model) {
  */
 async function warmHost(hostUrl, options = {}) {
   options.assertAuthorityActive?.();
-  const pref = await HostPreference.findOne({ hostUrl }).lean();
+  const pref = await HostPreference.findOne(
+    { hostUrl },
+    null,
+    options.signal ? { signal: options.signal } : {}
+  ).lean();
+  options.assertAuthorityActive?.();
   if (!pref) return [];
   const entries = getPinnedEntries(pref);
   if (entries.length === 0) return [];
@@ -565,7 +604,10 @@ async function warmHost(hostUrl, options = {}) {
   const results = [];
 
   // Fetch running models once per host; if unreachable we still attempt warmup
-  let runningModelInfos = await fetchRunningModelInfos(hostUrl);
+  let runningModelInfos = await fetchRunningModelInfos(hostUrl, 5_000, {
+    signal: options.signal
+  });
+  options.assertAuthorityActive?.();
 
   for (const entry of getWarmOrder(entries)) {
     const t0 = Date.now();
@@ -574,7 +616,8 @@ async function warmHost(hostUrl, options = {}) {
     const loadedStatus = getLoadedEntryStatus(entry, runningModelInfos);
     if (entrySatisfiedByLoadedModel(entry, runningModelInfos)) {
       options.assertAuthorityActive?.();
-      await updateLoadedModel(hostUrl, entry.model);
+      await updateLoadedModel(hostUrl, entry.model, options);
+      options.assertAuthorityActive?.();
       results.push({
         host: hostUrl, model: entry.model, status: 'already_loaded',
         durationMs: Date.now() - t0
@@ -595,7 +638,8 @@ async function warmHost(hostUrl, options = {}) {
     // only care about the primary for status — secondary warmups inherit.
     if (entries[0].model === entry.model) {
       options.assertAuthorityActive?.();
-      await setHostStatus(hostUrl, 'restoring');
+      await setHostStatus(hostUrl, 'restoring', options);
+      options.assertAuthorityActive?.();
     }
     const opts = { keepAlive: entry.keepAlive ?? -1, contextSize: entry.contextSize ?? 0 };
     const result = await warmDefaultModel(hostUrl, entry.model, { ...opts, ...options });
@@ -604,21 +648,33 @@ async function warmHost(hostUrl, options = {}) {
 
     if (result.status === 'ok' && entries[0].model === entry.model) {
       options.assertAuthorityActive?.();
-      await updateLoadedModel(hostUrl, entry.model);
-      runningModelInfos = await fetchRunningModelInfos(hostUrl);
+      await updateLoadedModel(hostUrl, entry.model, options);
+      options.assertAuthorityActive?.();
+      runningModelInfos = await fetchRunningModelInfos(hostUrl, 5_000, {
+        signal: options.signal
+      });
+      options.assertAuthorityActive?.();
     } else if (result.status !== 'ok' && entries[0].model === entry.model) {
-      await setHostStatus(hostUrl, 'idle');
+      await setHostStatus(hostUrl, 'idle', options);
+      options.assertAuthorityActive?.();
     }
   }
 
   return results;
 }
 
-async function warmAllDefaults() {
+async function warmAllDefaults(options = {}) {
   const prefs = await getAll();
   const results = [];
   for (const pref of prefs) {
-    const hostResults = await warmHost(pref.hostUrl);
+    const hostResults = await runRuntimeMutation({
+      principal: 'core-startup-pin-warm',
+      scope: `startup-pin-warm:${pref.hostUrl}`,
+      signal: options.signal
+    }, async ({ signal, assertActive }) => warmHost(pref.hostUrl, {
+      signal,
+      assertAuthorityActive: assertActive
+    }));
     results.push(...hostResults);
   }
   return results;
@@ -734,7 +790,13 @@ async function removePinnedModel(hostUrl, model) {
 }
 
 async function updateLoadedModel(hostUrl, model, options = {}) {
-  const pref = await HostPreference.findOne({ hostUrl }).lean();
+  options.assertAuthorityActive?.();
+  const pref = await HostPreference.findOne(
+    { hostUrl },
+    null,
+    options.signal ? { signal: options.signal } : {}
+  ).lean();
+  options.assertAuthorityActive?.();
   const fencedClaim = options.benchmarkClaim || null;
   if (fencedClaim && (pref?.status !== 'benchmarking'
     || pref?.benchmarkClaim?.batchId !== fencedClaim.batchId
@@ -759,8 +821,9 @@ async function updateLoadedModel(hostUrl, model, options = {}) {
   const updated = await HostPreference.findOneAndUpdate(
     filter,
     { $set: update },
-    { new: true }
+    { new: true, ...(options.signal ? { signal: options.signal } : {}) }
   ).lean();
+  options.assertAuthorityActive?.();
   if (fencedClaim && !updated) {
     const error = new Error('Benchmark claim changed during fenced pin restore');
     error.code = 'BENCHMARK_CLAIM_LOST';
@@ -769,12 +832,15 @@ async function updateLoadedModel(hostUrl, model, options = {}) {
   return updated;
 }
 
-async function setHostStatus(hostUrl, status) {
-  return HostPreference.findOneAndUpdate(
+async function setHostStatus(hostUrl, status, options = {}) {
+  options.assertAuthorityActive?.();
+  const updated = await HostPreference.findOneAndUpdate(
     { hostUrl },
     { $set: { status } },
-    { new: true }
+    { new: true, ...(options.signal ? { signal: options.signal } : {}) }
   ).lean();
+  options.assertAuthorityActive?.();
+  return updated;
 }
 
 /**

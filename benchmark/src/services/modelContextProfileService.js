@@ -91,6 +91,7 @@ function recommendationEvidenceQualified(snapshot, contexts) {
 
 function normalizeContextProfile(profile) {
   if (!profile) return null;
+  if (new Set(['pending_reconciliation', 'authority_invalidated']).has(profile.authorityState)) return null;
   const maxVerifiedContext = positiveInteger(profile.maxVerifiedContext)
     || positiveInteger(profile.verifiedMaxContext);
   const recommendationsVerified = profile.recommendationStatus === 'verified'
@@ -147,7 +148,10 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
 
   const identityFilter = { modelName, hostUrl, artifactDigest, runtimeFingerprint };
   const snapshotId = snapshot._id ? String(snapshot._id) : null;
-  const existingQuery = ModelContextProfile.findOne(identityFilter);
+  const existingQuery = ModelContextProfile.findOne({
+    ...identityFilter,
+    authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
+  });
   if (options.signal && typeof existingQuery.setOptions === 'function') existingQuery.setOptions({ signal: options.signal });
   const existing = await existingQuery.lean();
   options.assertAuthorityActive?.();
@@ -230,6 +234,9 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
         source: 'context_probe',
         stale: !recommendationsVerified,
         staleReason: recommendationsVerified ? null : 'context_recommendation_unavailable',
+        authorityState: options.authorityState || 'authoritative',
+        authorityWriteId: options.authorityWriteId || null,
+        authorityReconciliationId: options.authorityReconciliationId || null,
         lastValidatedAt: snapshot.testedAt || new Date(),
         latestEvidence: {
           snapshotId: snapshot._id ? String(snapshot._id) : null,
@@ -266,10 +273,23 @@ async function findContextProfile(modelName, hostUrl, artifact = {}) {
     hostUrl: host,
     stale: { $ne: true }
   };
+  filter.authorityState = { $nin: ['pending_reconciliation', 'authority_invalidated'] };
   filter.artifactDigest = artifact.digest;
   filter.runtimeFingerprint = artifact.runtimeFingerprint;
   const profile = await ModelContextProfile.findOne(filter).sort({ lastValidatedAt: -1 }).lean();
   return normalizeContextProfile(profile);
+}
+
+async function getByIdentityForAuthority(snapshot, options = {}) {
+  const query = ModelContextProfile.findOne({
+    modelName: String(snapshot?.modelName || '').trim().replace(/:latest$/i, ''),
+    hostUrl: normalizeHostUrl(snapshot?.hostUrl),
+    artifactDigest: snapshot?.artifactDigest,
+    runtimeFingerprint: snapshot?.runtimeFingerprint,
+    authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
+  });
+  if (options.signal && typeof query.setOptions === 'function') query.setOptions({ signal: options.signal });
+  return query.lean();
 }
 
 async function invalidateIfSnapshot(snapshot, reason = 'claim_lost_during_context_authority_write') {
@@ -313,6 +333,7 @@ module.exports = {
   modelNameCandidates,
   normalizeContextProfile,
   updateFromProbeSnapshot,
+  getByIdentityForAuthority,
   invalidateIfSnapshot,
   RECOMMENDATION_EVIDENCE_VERSION
 };

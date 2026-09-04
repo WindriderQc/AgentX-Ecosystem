@@ -7,9 +7,10 @@ const modelPerformanceProfileService = require('../../src/services/profiler/mode
 const {
   resolveArtifactIdentity,
   resolveRuntimeArtifactReceipt,
-  identitiesMatch
+  identitiesMatch,
+  runtimeReceiptMatchesProfile
 } = require('../../src/services/profiler/artifactIdentityService');
-const { verifyProfilerAuthorityReceipt } = require('../../src/services/profiler/profilerAuthorityReceipt');
+const { hasQualifiedProfilerAuthority } = require('../../src/services/profiler/profilerAuthorityReceipt');
 const { projectReadinessProfiles } = require('../../src/services/profiler/profilerReadinessProjectionService');
 
 function validateHostId(hostId, res) {
@@ -52,10 +53,10 @@ router.get('/:name/config', async (req, res) => {
     const liveArtifact = await resolveArtifactIdentity(req.params.name, hostId, evidence.artifact?.hostUrl, {
       refresh: true
     });
-    const authoritative = readiness?.benchmarkQualified === true
-      && readiness?.stale !== true
-      && ['standard', 'full'].includes(readiness?.profileDepth)
-      && verifyProfilerAuthorityReceipt(readiness, evidence, { modelName: evidence.modelName, hostId })
+    const authoritative = hasQualifiedProfilerAuthority(readiness, evidence, {
+      modelName: evidence.modelName,
+      hostId
+    })
       && identitiesMatch(evidence.artifact, readiness?.artifact)
       && identitiesMatch(evidence.artifact, liveArtifact)
       && Number(evidence.profile?.recommendedInteractiveContext) > 0;
@@ -78,6 +79,13 @@ router.get('/:name/config', async (req, res) => {
         status: 'error',
         code: 'RUNTIME_ARTIFACT_IDENTITY_UNAVAILABLE',
         error: error.message
+      });
+    }
+    if (!runtimeReceiptMatchesProfile(runtimeArtifactReceipt, evidence)) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'RUNTIME_ARTIFACT_IDENTITY_DRIFT',
+        error: 'Live runtime identity no longer matches the benchmark-qualified profile evidence'
       });
     }
     res.json({

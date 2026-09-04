@@ -20,6 +20,12 @@ const AuthorityReceiptSchema = new mongoose.Schema({
 }, { _id: false });
 
 const ReadinessSchema = new mongoose.Schema({
+  authorityState: {
+    type: String,
+    enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+    default: 'authoritative'
+  },
+  authorityWriteId: { type: String, default: null },
   stage: {
     type: String,
     enum: ['available', 'profiled', 'benchmarked'],
@@ -57,6 +63,12 @@ const BenchmarkStatsSchema = new mongoose.Schema({
 }, { _id: false });
 
 const ThinkingCapabilitySchema = new mongoose.Schema({
+  authorityState: {
+    type: String,
+    enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+    default: 'authoritative'
+  },
+  authorityWriteId: { type: String, default: null },
   profileVersion: Number,
   profiledAt: Date,
   hostId: String,
@@ -112,6 +124,7 @@ const ModelProfileSchema = new mongoose.Schema({
   thinkingProfiles: { type: Map, of: ThinkingCapabilitySchema, default: () => new Map() },
   hosts: { type: Map, of: HostAvailabilitySchema, default: () => new Map() },
   readiness: { type: Map, of: ReadinessSchema, default: () => new Map() },
+  rejectedAuthorityWriteIds: { type: [String], default: [], select: false },
   tags: { type: [String], default: [] },
   categories: { type: [String], default: [] },
   benchmarkStats: { type: BenchmarkStatsSchema, default: () => ({}) }

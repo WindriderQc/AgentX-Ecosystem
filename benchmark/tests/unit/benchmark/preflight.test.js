@@ -20,6 +20,23 @@ jest.mock('../../../models/BenchmarkBatch', () => ({
     find: jest.fn()
 }));
 
+jest.mock('../../../models/ModelPerformanceProfile', () => ({
+    findOne: jest.fn(() => ({
+        lean: jest.fn().mockResolvedValue({
+            _id: 'evidence-default',
+            modelName: 'model-a',
+            hostId: 'exec-host',
+            active: true,
+            stale: false,
+            artifact: {
+                model: 'model-a', hostId: 'exec-host', hostUrl: 'http://exec-host:11434',
+                digest: 'sha256:model-a', runtimeFingerprint: 'runtime-a'
+            },
+            profile: { profileDepth: 'standard', benchmarkQualified: true }
+        })
+    }))
+}));
+
 // Profile-gate check queries ModelProfile + HostProfile. Default: treat every
 // model as profiled on the test exec host so existing tests that don't care
 // about this path keep passing. Readiness is per-host: readiness[hostId].stage.
@@ -34,6 +51,8 @@ jest.mock('../../../models/ModelProfile', () => ({
                         profileDepth: 'standard',
                         benchmarkQualified: true,
                         stale: false,
+                        evidenceId: 'evidence-default',
+                        authorityReceipt: { source: 'profiler_pipeline' },
                         artifact: {
                             model: 'model-a',
                             hostId: 'exec-host',
@@ -66,6 +85,16 @@ jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
         registryQualified: true
     })),
     identitiesMatch: jest.fn(() => true)
+}));
+
+jest.mock('../../../src/services/profiler/profilerAuthorityReceipt', () => ({
+    hasQualifiedProfilerAuthority: jest.fn((readiness, evidence) => Boolean(
+        readiness?.benchmarkQualified === true
+        && readiness?.stale !== true
+        && readiness?.authorityReceipt?.source === 'profiler_pipeline'
+        && evidence?.profile?.benchmarkQualified === true
+        && evidence.profile.profileDepth === readiness.profileDepth
+    ))
 }));
 
 
@@ -120,6 +149,7 @@ jest.mock('../../../src/clients/coreApiClient', () => ({
 const BenchmarkPrompt = require('../../../models/BenchmarkPrompt');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const ModelProfile = require('../../../models/ModelProfile');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const { benchmarkFetch } = require('../../../src/services/benchmark/http');
 const { probeJudgeCapability } = require('../../../src/services/benchmark/judgeModelValidator');
 const {
@@ -304,6 +334,63 @@ describe('benchmark preflight', () => {
         expect(ModelProfile.findOne).toHaveBeenCalledWith({ name: 'ax/qwen3.5:9b' });
     });
 
+    it('rejects legacy, receipt-less, and qualification-tampered readiness before benchmark launch', async () => {
+        benchmarkFetch.mockResolvedValue(okJson({
+            models: [{ name: 'model-a' }, { name: 'judge-model:latest' }]
+        }));
+        const artifact = {
+            model: 'model-a', hostId: 'exec-host', hostUrl: 'http://exec-host:11434',
+            digest: 'sha256:model-a', runtimeFingerprint: 'runtime-a'
+        };
+        const cases = [
+            {
+                label: 'legacy',
+                readiness: { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false, artifact },
+                evidence: null
+            },
+            {
+                label: 'receipt-less',
+                readiness: {
+                    stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false,
+                    evidenceId: 'evidence-default', artifact
+                },
+                evidence: {
+                    _id: 'evidence-default', modelName: 'model-a', hostId: 'exec-host', artifact,
+                    profile: { profileDepth: 'standard', benchmarkQualified: true }
+                }
+            },
+            {
+                label: 'tampered qualification',
+                readiness: {
+                    stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false,
+                    evidenceId: 'evidence-default', authorityReceipt: { source: 'profiler_pipeline' }, artifact
+                },
+                evidence: {
+                    _id: 'evidence-default', modelName: 'model-a', hostId: 'exec-host', artifact,
+                    profile: { profileDepth: 'standard', benchmarkQualified: false }
+                }
+            }
+        ];
+
+        for (const testCase of cases) {
+            ModelProfile.findOne.mockReturnValueOnce(chainResolved({
+                readiness: { 'exec-host': testCase.readiness }
+            }));
+            if (testCase.readiness.evidenceId) {
+                ModelPerformanceProfile.findOne.mockReturnValueOnce({
+                    lean: jest.fn().mockResolvedValue(testCase.evidence)
+                });
+            }
+            const result = await runPreflight({
+                targets: [{ host: 'http://exec-host:11434', model: 'model-a' }],
+                judgeConfig: { host: 'http://judge-host:11434', model: 'judge-model:latest' },
+                levels: [5]
+            });
+            expect(result.checks.hosts[0].benchmark_eligible).toBe(false);
+            expect(result.checks.hosts[0].benchmark_blocked_reason).toMatch(/benchmark-qualified profile/i);
+        }
+    });
+
     it('aggregates host, judge, and orphaned-batch issues in runPreflight', async () => {
         BenchmarkBatch.find.mockReturnValue(chainResolved([
             {
@@ -447,7 +534,10 @@ describe('benchmark preflight', () => {
             models: [{ name: 'ax/qwen3:8b' }, { name: 'judge-model:latest' }]
         }));
         ModelProfile.findOne.mockReturnValue(chainResolved({
-            readiness: { 'exec-host': { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false, artifact: {} } },
+            readiness: { 'exec-host': {
+                stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false,
+                evidenceId: 'evidence-default', authorityReceipt: { source: 'profiler_pipeline' }, artifact: {}
+            } },
             thinkingProfiles: {
                 'exec-host': {
                     profileVersion: 2,
@@ -489,7 +579,10 @@ describe('benchmark preflight', () => {
             models: [{ name: 'ax/qwen3:8b' }, { name: 'judge-model:latest' }]
         }));
         ModelProfile.findOne.mockReturnValue(chainResolved({
-            readiness: { 'exec-host': { stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false, artifact: {} } },
+            readiness: { 'exec-host': {
+                stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false,
+                evidenceId: 'evidence-default', authorityReceipt: { source: 'profiler_pipeline' }, artifact: {}
+            } },
             thinkingProfiles: {
                 'exec-host': {
                     supported: true,

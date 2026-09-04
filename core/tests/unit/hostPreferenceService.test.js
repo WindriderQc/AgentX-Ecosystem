@@ -15,12 +15,18 @@ jest.mock('../../src/services/laneObservabilityService', () => ({
   observePinRestoreFailure: (...args) => mockObservePinRestoreFailure(...args)
 }));
 
+const mockRunRuntimeMutation = jest.fn(async (_options, operation) => operation({
+  signal: new AbortController().signal,
+  assertActive: jest.fn()
+}));
 jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
-  runRuntimeMutation: jest.fn(async (_options, operation) => operation({
+  runRuntimeMutation: (...args) => mockRunRuntimeMutation(...args)
+}));
+
+const defaultRuntimeMutationImplementation = async (_options, operation) => operation({
     signal: new AbortController().signal,
     assertActive: jest.fn()
-  }))
-}));
+  });
 
 const HostPreference = require('../../models/HostPreference');
 const service = require('../../src/services/hostPreferenceService');
@@ -28,6 +34,8 @@ const hostGate = require('../../src/services/hostGate');
 
 afterEach(async () => {
   await HostPreference.deleteMany({});
+  mockRunRuntimeMutation.mockReset();
+  mockRunRuntimeMutation.mockImplementation(defaultRuntimeMutationImplementation);
 });
 
 describe('hostPreferenceService', () => {
@@ -475,6 +483,95 @@ describe('hostPreferenceService', () => {
         global.fetch = originalFetch;
       }
     });
+
+    it('does not publish a late exclusive unload after its admission heartbeat is lost', async () => {
+      const originalFetch = global.fetch;
+      const hostUrl = 'http://exclusive-lost-host:11434';
+      await HostPreference.create({
+        hostUrl,
+        hostKey: 'primary',
+        pinnedModels: [{ model: 'normal-model', keepAlive: -1, autoRestore: true }],
+        loadedModel: 'normal-model',
+        loadedModels: ['normal-model'],
+        status: 'ready'
+      });
+      const controller = new AbortController();
+      let releaseLateUnload;
+      global.fetch = jest.fn((url) => {
+        if (String(url).endsWith('/api/ps')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ models: [{ name: 'normal-model' }] })
+          });
+        }
+        return new Promise(resolve => {
+          releaseLateUnload = () => resolve({ ok: true, text: async () => '{"done":true}' });
+        });
+      });
+      const assertAuthorityActive = () => {
+        if (controller.signal.aborted) throw controller.signal.reason;
+      };
+
+      try {
+        const pending = service.prepareExclusiveModel(hostUrl, 'open-model', {
+          signal: controller.signal,
+          assertAuthorityActive
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        const lost = Object.assign(new Error('inference admission heartbeat was lost'), {
+          code: 'RUNTIME_INFERENCE_ADMISSION_LOST'
+        });
+        controller.abort(lost);
+        releaseLateUnload();
+
+        await expect(pending).rejects.toBe(lost);
+        const stored = await HostPreference.findOne({ hostUrl }).lean();
+        expect(stored.status).toBe('ready');
+        expect(stored.loadedModel).toBe('normal-model');
+        expect(stored.loadedModels).toEqual(['normal-model']);
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it.each(['maintenance', 'workload', 'inference'])(
+      'startup pin warm performs no Ollama request or projection write while %s owns coordination',
+      async (blocker) => {
+        const originalFetch = global.fetch;
+        const hostUrl = `http://startup-${blocker}:11434`;
+        await HostPreference.create({
+          hostUrl,
+          hostKey: 'primary',
+          pinnedModels: [{ model: 'normal-model', keepAlive: -1, autoRestore: true }],
+          loadedModel: null,
+          loadedModels: [],
+          status: 'idle'
+        });
+        global.fetch = jest.fn();
+        const denied = Object.assign(new Error(`${blocker} coordination blocks maintenance`), {
+          code: 'RUNTIME_MUTATION_LEASE_DENIED'
+        });
+        mockRunRuntimeMutation.mockRejectedValueOnce(denied);
+
+        try {
+          await expect(service.warmAllDefaults()).rejects.toBe(denied);
+          expect(mockRunRuntimeMutation).toHaveBeenCalledWith(
+            expect.objectContaining({
+              principal: 'core-startup-pin-warm',
+              scope: `startup-pin-warm:${hostUrl}`
+            }),
+            expect.any(Function)
+          );
+          expect(global.fetch).not.toHaveBeenCalled();
+          const stored = await HostPreference.findOne({ hostUrl }).lean();
+          expect(stored.status).toBe('idle');
+          expect(stored.loadedModel).toBeNull();
+          expect(stored.loadedModels).toEqual([]);
+        } finally {
+          global.fetch = originalFetch;
+        }
+      }
+    );
 
     it('warmHost does not treat a namespaced artifact as satisfying a bare pin', async () => {
       const originalFetch = global.fetch;
@@ -1105,6 +1202,17 @@ describe('hostPreferenceService', () => {
       const payload = JSON.parse(init.body);
       expect(payload.keep_alive).toBe(-1);
       expect(payload.options.num_ctx).toBe(83558);
+    });
+
+    it('rejects contradictory done-plus-error terminals for warm and unload', async () => {
+      global.fetch = jest.fn()
+        .mockResolvedValueOnce({ ok: true, text: async () => '{"done":true,"error":"warm failed"}' })
+        .mockResolvedValueOnce({ ok: true, text: async () => '{"done":true,"error":"unload failed"}' });
+
+      await expect(service.warmDefaultModel(HOST_URL, 'ax/gemma4:26b-a4b-it-qat'))
+        .resolves.toMatchObject({ status: 'error' });
+      await expect(service.unloadModel(HOST_URL, 'ax/gemma4:26b-a4b-it-qat'))
+        .resolves.toMatchObject({ status: 'error' });
     });
   });
 });

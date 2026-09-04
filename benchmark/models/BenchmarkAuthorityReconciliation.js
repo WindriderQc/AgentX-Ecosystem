@@ -5,7 +5,18 @@ const mongoose = require('mongoose');
 const BenchmarkAuthorityReconciliationSchema = new mongoose.Schema({
   kind: {
     type: String,
-    enum: ['workload_invalidation', 'result_invalidation', 'batch_invalidation', 'judge_matrix_invalidation', 'judge_governance_invalidation', 'ground_truth_invalidation'],
+    enum: [
+      'workload_invalidation',
+      'result_invalidation',
+      'batch_invalidation',
+      'judge_matrix_invalidation',
+      'judge_governance_invalidation',
+      'ground_truth_invalidation',
+      'profiler_evidence_write',
+      'profiler_baseline_write',
+      'profiler_snapshot_write',
+      'profiler_context_write'
+    ],
     required: true,
     default: 'result_invalidation'
   },
@@ -19,6 +30,12 @@ const BenchmarkAuthorityReconciliationSchema = new mongoose.Schema({
   recoveryId: { type: String, required: true, index: true },
   recoveryRequestId: { type: String, required: true },
   phase: { type: String, required: true },
+  details: { type: mongoose.Schema.Types.Mixed, default: null },
+  resolutionMode: {
+    type: String,
+    enum: ['invalidate', 'publish'],
+    default: 'invalidate'
+  },
   state: {
     type: String,
     enum: ['pending_reconciliation', 'verified', 'releasing', 'resolved'],

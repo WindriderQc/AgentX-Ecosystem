@@ -10,7 +10,8 @@ const {
   buildRuntimeFingerprint,
   canonicalSha256Digest,
   exactModelNamesMatch,
-  normalizeHostUrl
+  normalizeHostUrl,
+  verifyRuntimeArtifactReceipt
 } = require('../../../../shared/artifactIdentity');
 
 function digestsMatch(left, right) {
@@ -118,6 +119,10 @@ async function resolveRuntimeArtifactReceipt(modelName, hostId, hostUrl, options
   if (!resident) {
     throw new Error('Exact model is not resident; live sizeVram and contextLength cannot be attested');
   }
+  if (!resident.digest || !digestsMatch(resident.digest, installed.digest)
+    || !digestsMatch(resident.digest, artifact.digest)) {
+    throw new Error('Live Ollama tag, resident runtime, and registry do not identify the same digest');
+  }
 
   return buildRuntimeArtifactReceipt({
     tag: String(installed.name || installed.model || '').trim(),
@@ -133,6 +138,24 @@ async function resolveRuntimeArtifactReceipt(modelName, hostId, hostUrl, options
     observedAt: options.observedAt || new Date(),
     freshnessMs: options.freshnessMs
   });
+}
+
+function runtimeReceiptMatchesProfile(receipt, evidence, options = {}) {
+  const verified = verifyRuntimeArtifactReceipt(receipt, { now: options.now });
+  const artifact = evidence?.artifact;
+  const recommendedContext = Number(evidence?.profile?.recommendedInteractiveContext);
+  return Boolean(
+    verified.valid
+    && artifact
+    && exactModelNamesMatch(receipt?.model, artifact.model || evidence?.modelName)
+    && exactModelNamesMatch(receipt?.tag, artifact.model || evidence?.modelName)
+    && String(receipt?.hostId || '') === String(artifact.hostId || evidence?.hostId || '')
+    && normalizeHostUrl(receipt?.hostUrl) === normalizeHostUrl(artifact.hostUrl)
+    && digestsMatch(receipt?.digest, artifact.digest)
+    && Number.isSafeInteger(recommendedContext)
+    && recommendedContext > 0
+    && receipt.contextLength === recommendedContext
+  );
 }
 
 function identitiesMatch(left, right) {
@@ -154,5 +177,6 @@ module.exports = {
   identitiesMatch,
   registryInstallation,
   resolveArtifactIdentity,
-  resolveRuntimeArtifactReceipt
+  resolveRuntimeArtifactReceipt,
+  runtimeReceiptMatchesProfile
 };

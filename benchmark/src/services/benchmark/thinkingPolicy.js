@@ -37,6 +37,9 @@ function shouldEnableProfiledThinking(thinkingProfile) {
 
 function isThinkingProfileCurrent(thinkingProfile) {
     if (!thinkingProfile) return false;
+    if (new Set(['pending_reconciliation', 'authority_invalidated']).has(thinkingProfile.authorityState)) {
+        return false;
+    }
     const probeCount = Number(thinkingProfile.probeCount) || 0;
     const profileVersion = Number(thinkingProfile.profileVersion) || 0;
     return probeCount >= MIN_THINKING_PROBE_COUNT

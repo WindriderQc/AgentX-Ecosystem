@@ -31,6 +31,7 @@ const {
 } = require('../helpers/peerVerifiedNodeFetchTransport');
 const hostGate = require('./hostGate');
 const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
+const { beginInferenceAdmission } = require('./inferenceAdmissionService');
 
 let _fetch = nodeFetch;
 let _outboundExecutor = null;
@@ -96,7 +97,7 @@ const WATCHDOG_OPERATION_SPECS = Object.freeze({
     deadlineMs: PROBE_TIMEOUT_MS,
     maxRequestBytes: GENERATE_MAX_REQUEST_BYTES,
     maxResponseBytes: GENERATE_MAX_RESPONSE_BYTES,
-    responseMode: 'discard'
+    responseMode: 'json'
   }),
   [WATCHDOG_OPERATIONS.PS]: operation('GET', '^/api/ps$', {
     deadlineMs: META_TIMEOUT_MS,
@@ -255,7 +256,21 @@ const _stats = {
  * Returns { ok: true } or { ok: false, reason: string }.
  */
 async function probeHost(host, model = null, executor = getWatchdogExecutor()) {
+  let admission = null;
   try {
+    const probeModel = model || '_';
+    admission = await beginInferenceAdmission({
+      host: host.url,
+      model: probeModel,
+      kind: 'watchdog-probe',
+      mode: 'shared',
+      principal: 'core-watchdog',
+      runtimeOptions: { num_predict: 1 },
+      keepAlive: -1,
+      ttlMs: Math.max(30_000, PROBE_TIMEOUT_MS * 2)
+    });
+    admission.assertActive();
+    admission.markDispatched();
     const res = await watchdogRequest(
       WATCHDOG_OPERATIONS.GENERATE_PROBE,
       hostTarget(host, '/api/generate'),
@@ -263,24 +278,38 @@ async function probeHost(host, model = null, executor = getWatchdogExecutor()) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: model || '_',
+          model: probeModel,
           prompt: 'ok',
           stream: false,
           think: false,
           keep_alive: -1,
           options: { num_predict: 1 }
-        })
+        }),
+        signal: admission.signal
       },
       executor
     );
 
-    // Any completed response means the request reached the worker/control
-    // plane. Model-capability errors are still useful responses; a jammed or
-    // false-ready worker hangs until the bounded timeout. The body is not part
-    // of this status-first result, so explicitly cancel it to close the socket
-    // lifecycle without waiting on an untrusted error body.
+    // Hold distributed admission through an exact response EOF. A successful
+    // probe requires done:true with no error; a non-success is terminal only
+    // when Ollama returns its explicit error object. Everything else remains
+    // UNKNOWN because the generation may still have changed residency.
     const status = res.status;
-    await res.cancel();
+    const terminal = await readBoundedJson(res);
+    const successTerminal = res.ok
+      && terminal && typeof terminal === 'object' && !Array.isArray(terminal)
+      && terminal.done === true && typeof terminal.error !== 'string';
+    const rejectionTerminal = !res.ok
+      && terminal && typeof terminal === 'object' && !Array.isArray(terminal)
+      && typeof terminal.error === 'string' && terminal.done !== true;
+    if (!successTerminal && !rejectionTerminal) {
+      const error = new Error('Watchdog probe ended without an exact Ollama terminal response');
+      error.code = 'WATCHDOG_PROBE_TERMINAL_UNVERIFIED';
+      throw error;
+    }
+    admission.assertActive();
+    await admission.complete();
+    admission = null;
     return {
       ok: true,
       status,
@@ -288,8 +317,16 @@ async function probeHost(host, model = null, executor = getWatchdogExecutor()) {
       model
     };
   } catch (err) {
+    if (admission) {
+      await admission.abandon(err).catch(quarantineError => {
+        err.inferenceQuarantineError = quarantineError;
+      });
+    }
     if (isDeadlineError(err)) {
       return { ok: false, reason: 'timeout' };
+    }
+    if (err?.code === 'RUNTIME_INFERENCE_ADMISSION_DENIED') {
+      return { ok: false, reason: 'coordination_busy' };
     }
     return { ok: false, reason: err.message };
   }
@@ -364,7 +401,8 @@ async function unjamHost(host, models, executor = getWatchdogExecutor()) {
         );
         const terminal = await readBoundedJson(res);
         assertActive();
-        if (!res.ok || terminal?.done !== true) {
+        if (!res.ok || !terminal || typeof terminal !== 'object' || Array.isArray(terminal)
+          || typeof terminal.error === 'string' || terminal.done !== true) {
           const error = new Error(!res.ok
             ? `HTTP ${res.status}`
             : 'Ollama unload ended without an exact terminal done object');
@@ -413,7 +451,8 @@ async function reloadModel(host, model, executor = getWatchdogExecutor()) {
       );
       const terminal = await readBoundedJson(res);
       assertActive();
-      if (!res.ok || terminal?.done !== true) {
+      if (!res.ok || !terminal || typeof terminal !== 'object' || Array.isArray(terminal)
+        || typeof terminal.error === 'string' || terminal.done !== true) {
         const error = new Error(!res.ok
           ? `HTTP ${res.status}`
           : 'Ollama restore ended without an exact terminal done object');

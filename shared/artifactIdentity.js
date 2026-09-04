@@ -148,6 +148,11 @@ function verifyRuntimeArtifactReceipt(value, options = {}) {
   } catch (error) {
     return { valid: false, fresh: false, reasons: [error.message] };
   }
+  // A receipt is a closed canonical object, not a bag of partially checked
+  // claims. This catches changes to derived fields (contract/model/fullVram),
+  // unknown extra keys, and any other body drift even when the attacker keeps
+  // the original fingerprint and receiptId.
+  if (stableSerialize(value) !== stableSerialize(rebuilt)) reasons.push('receipt_body_mismatch');
   if (value?.runtimeFingerprint !== rebuilt.runtimeFingerprint) reasons.push('runtime_fingerprint_mismatch');
   if (value?.receiptId !== rebuilt.receiptId) reasons.push('receipt_id_mismatch');
   if (stableSerialize(value?.provenance) !== stableSerialize(RUNTIME_ARTIFACT_PROVENANCE)) {

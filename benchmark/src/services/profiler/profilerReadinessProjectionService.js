@@ -41,7 +41,11 @@ async function projectReadinessEntry(modelName, hostId, rawReadiness, evidenceBy
       liveIdentityVerified = false;
     }
   }
-  const evidenceQualified = evidence?.profile?.benchmarkQualified === readiness.benchmarkQualified;
+  const evidenceQualified = evidence?.profile?.benchmarkQualified === true
+    && readiness.benchmarkQualified === true
+    && evidence.profile.benchmarkQualified === readiness.benchmarkQualified
+    && !new Set(['pending_reconciliation', 'authority_invalidated']).has(readiness.authorityState)
+    && !new Set(['pending_reconciliation', 'authority_invalidated']).has(evidence?.authorityState);
   const authorityVerified = receiptVerified && liveIdentityVerified && evidenceQualified;
   const failureReason = authorityFailureReason({ receiptVerified, liveIdentityVerified, evidenceQualified });
 

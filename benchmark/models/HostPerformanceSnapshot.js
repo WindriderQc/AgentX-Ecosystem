@@ -17,6 +17,8 @@ const HostPerformanceSnapshotSchema = new mongoose.Schema({
     index: true
   },
   authorityReconciliationReason: { type: String, default: null },
+  authorityWriteId: { type: String, default: null },
+  authorityReconciliationId: { type: String, default: null },
   modelName:                { type: String, required: true, index: true },
   hostUrl:                  { type: String, required: true },
   hostId:                   String,

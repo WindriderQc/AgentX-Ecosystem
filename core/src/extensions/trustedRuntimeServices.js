@@ -250,10 +250,10 @@ function safeJson(raw) {
 
 function releaseOnce(release) {
   let released = false;
-  return () => {
+  return (...args) => {
     if (released) return;
     released = true;
-    release?.();
+    release?.(...args);
   };
 }
 
@@ -333,6 +333,7 @@ function createStreamingTelemetryObserver() {
 
 function attachStreamLifecycle(stream, { abortBridge, release, inferenceAdmission, onComplete }) {
   const observer = createStreamingTelemetryObserver();
+  let sourceEnded = false;
   const relay = new Transform({
     transform(chunk, encoding, callback) {
       observer.write(chunk, encoding);
@@ -350,35 +351,48 @@ function attachStreamLifecycle(stream, { abortBridge, release, inferenceAdmissio
       callback();
     }
   });
-  const finish = releaseOnce(() => {
+  const settle = releaseOnce((mode, error = null) => {
     abortBridge.cleanup();
     release();
     const snapshot = observer.snapshot();
-    const settle = snapshot.terminalComplete === true && !abortBridge.signal.aborted
+    const exactSourceTerminal = mode === 'complete'
+      && sourceEnded === true
+      && snapshot.terminalComplete === true
+      && !abortBridge.signal.aborted;
+    const admissionSettlement = exactSourceTerminal
       ? inferenceAdmission.complete()
-      : inferenceAdmission.abandon(new Error('Trusted runtime stream ended without a verified terminal record'));
-    void Promise.resolve(settle)
-      .then(() => onComplete({ ...snapshot, completed: true }))
-      .catch(error => onComplete({
+      : inferenceAdmission.abandon(error || new Error('Trusted runtime stream closed before verified upstream EOF'));
+    void Promise.resolve(admissionSettlement)
+      .then(() => onComplete({ ...snapshot, completed: exactSourceTerminal }))
+      .catch(settlementError => onComplete({
         ...snapshot,
         completed: false,
-        admissionError: error.message
+        admissionError: settlementError.message
       }));
   });
-  stream.once('error', (error) => relay.destroy(error));
+  stream.once('end', () => { sourceEnded = true; });
+  stream.once('error', (error) => {
+    relay.destroy(error);
+    settle('abandon', error);
+  });
   stream.once('close', () => {
     if (!stream.readableEnded && !relay.destroyed) relay.destroy();
+    if (!stream.readableEnded) settle('abandon', new Error('Trusted runtime upstream closed before EOF'));
   });
-  relay.once('finish', finish);
+  // Transform.flush runs only after the upstream readable reaches EOF. The
+  // writable-side finish event is therefore the sole success settlement.
+  relay.once('finish', () => settle('complete'));
   relay.once('close', () => {
     if (!stream.destroyed && !stream.readableEnded) stream.destroy();
-    finish();
+    if (!sourceEnded) {
+      settle('abandon', new Error('Trusted runtime downstream closed before upstream EOF'));
+    }
   });
-  relay.once('error', finish);
+  relay.once('error', error => settle('abandon', error));
   abortBridge.signal.addEventListener('abort', () => {
     if (!stream.destroyed) stream.destroy(abortBridge.signal.reason || new Error('Inference request cancelled'));
     if (!relay.destroyed) relay.destroy(abortBridge.signal.reason || new Error('Inference request cancelled'));
-    finish();
+    settle('abandon', abortBridge.signal.reason || new Error('Inference request cancelled'));
   }, { once: true });
   stream.pipe(relay);
   return relay;
@@ -721,7 +735,16 @@ async function executeRoutedInference(deps, request, options = {}) {
       : await deps.hostGate.acquire(hostUrl, model, { signal: inferenceAdmission.signal });
     releaseGate = releaseOnce(release);
     if (request.exclusiveHost === true) {
-      const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model);
+      // Exclusive preparation can unload resident models. Arm UNKNOWN/quarantine
+      // semantics before the first possible runtime mutation, and keep every
+      // preparation step under the same admission signal and generation fence.
+      inferenceAdmission.markDispatched();
+      inferenceAdmission.assertActive();
+      const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model, {
+        signal: inferenceAdmission.signal,
+        assertAuthorityActive: () => inferenceAdmission.assertActive()
+      });
+      inferenceAdmission.assertActive();
       if (prepared?.status !== 'ready') {
         throw new TrustedRuntimeServiceError('The inference host could not complete its exclusive model handoff.', {
           code: prepared?.status === 'busy'
@@ -730,8 +753,10 @@ async function executeRoutedInference(deps, request, options = {}) {
           statusCode: 503
         });
       }
+    } else {
+      inferenceAdmission.markDispatched();
     }
-    inferenceAdmission.markDispatched();
+    inferenceAdmission.assertActive();
     const response = await deps.fetch(upstreamUrl, {
       method: 'POST',
       headers,

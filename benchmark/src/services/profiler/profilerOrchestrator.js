@@ -22,6 +22,7 @@ const ModelProfile = require('../../../models/ModelProfile');
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const logger = require('../../../config/logger');
 const buddySurface = require('../benchmark/buddySurfaceEvents');
+const authorityReconciliation = require('../benchmark/benchmarkAuthorityReconciliation');
 
 function _formatCtx(n) {
   if (n >= 1024) return `${Math.round(n / 1024)}k`;
@@ -545,6 +546,7 @@ async function persistProfileEvidence({
   hostUrl,
   artifact,
   profileData,
+  claimIdentity,
   assertClaimActive,
   signal
 }) {
@@ -557,6 +559,7 @@ async function persistProfileEvidence({
     assertClaimActive?.();
   };
   let evidence = null;
+  let authorityJournal = null;
   try {
     checkpoint();
     const currentArtifact = await resolveArtifactIdentity(modelName, hostId, hostUrl, { refresh: true });
@@ -570,6 +573,44 @@ async function persistProfileEvidence({
     const benchmarkQualified = qualificationFailures.length === 0;
     profileData.benchmarkQualified = benchmarkQualified;
     profileData.qualificationFailures = qualificationFailures;
+    const workloadId = String(claimIdentity?.claimBatchId || '');
+    if (!workloadId) {
+      const error = new Error('Profiler evidence publication requires an exact durable workload identity');
+      error.code = 'PROFILER_AUTHORITY_JOURNAL_REQUIRED';
+      throw error;
+    }
+    const authorityWriteId = crypto.randomUUID();
+    const priorProfile = await ModelProfile.findOne({ name: modelName })
+      .select('readiness thinkingProfiles')
+      .lean();
+    checkpoint();
+    const priorReadinessMap = priorProfile?.readiness instanceof Map
+      ? Object.fromEntries(priorProfile.readiness)
+      : (priorProfile?.readiness || {});
+    const priorThinkingMap = priorProfile?.thinkingProfiles instanceof Map
+      ? Object.fromEntries(priorProfile.thinkingProfiles)
+      : (priorProfile?.thinkingProfiles || {});
+    const journalDetails = {
+      modelName,
+      hostId,
+      artifactDigest: currentArtifact.digest,
+      runtimeFingerprint: currentArtifact.runtimeFingerprint,
+      artifact: currentArtifact,
+      profile: { ...profileData, artifact: currentArtifact },
+      authorityWriteId,
+      evidenceId: null,
+      thinking: Boolean(profileData.thinking),
+      priorReadiness: priorReadinessMap[hostId] || null,
+      priorThinking: priorThinkingMap[hostId] || null
+    };
+    authorityJournal = await authorityReconciliation.prepareProfilerAuthorityWrite({
+      kind: 'profiler_evidence_write',
+      resultId: `profiler-evidence:${workloadId}:${authorityWriteId}`,
+      workloadId,
+      phase: 'profiler evidence/readiness/thinking publication',
+      details: journalDetails
+    });
+    checkpoint();
     evidence = await modelPerformanceProfileService.saveProfile({
       modelName,
       hostId,
@@ -577,8 +618,13 @@ async function persistProfileEvidence({
       profile: { ...profileData, artifact: currentArtifact }
     }, {
       signal,
-      assertAuthorityActive: checkpoint
+      assertAuthorityActive: checkpoint,
+      authorityWriteId,
+      authorityReconciliationId: String(authorityJournal._id),
+      authorityState: 'pending_reconciliation',
+      deferAuthorityCompensation: true
     });
+    journalDetails.evidenceId = evidence?._id || null;
     checkpoint();
     const authorityReceipt = createProfilerAuthorityReceipt({
       modelName,
@@ -596,24 +642,43 @@ async function persistProfileEvidence({
       [`readiness.${hostId}.qualificationReason`]: benchmarkQualified ? null : qualificationFailures.join(','),
       [`readiness.${hostId}.measurementReliability`]: quality.reliability || 'unknown',
       [`readiness.${hostId}.authorityReceipt`]: authorityReceipt,
+      [`readiness.${hostId}.authorityState`]: 'pending_reconciliation',
+      [`readiness.${hostId}.authorityWriteId`]: authorityWriteId,
       [`readiness.${hostId}.stale`]: false,
       [`readiness.${hostId}.staleReason`]: null
     }, { signal });
     checkpoint();
     if (profileData.thinking) {
-      await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking, { signal });
+      await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking, {
+        signal,
+        authorityWriteId,
+        authorityState: 'pending_reconciliation'
+      });
       checkpoint();
     }
     await modelPerformanceProfileService.retireSupersededProfiles({
       modelName,
       hostId,
       evidenceId: evidence?._id,
+      authorityWriteId,
       assertAuthorityActive: checkpoint,
       signal
     });
     checkpoint();
+    await authorityReconciliation.completeProfilerAuthorityWrite(authorityJournal, {
+      details: journalDetails,
+      signal,
+      assertAuthorityActive: checkpoint
+    });
     return evidence;
   } catch (error) {
+    if (authorityJournal) {
+      error.retainAdmission = true;
+      error.authorityInvalidationFailed = true;
+      error.code = error.code || 'PROFILER_AUTHORITY_RECONCILIATION_PENDING';
+      error.reconciliationId = String(authorityJournal._id);
+      throw error;
+    }
     if (evidence?._id) {
       const reason = error.code === 'BENCHMARK_CLAIM_LOST' || error.code === 'BENCHMARK_CLAIM_STOPPED'
         ? 'claim_lost_during_profiler_authority_write'
@@ -898,7 +963,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     notify('saving', { message: 'Saving profile to database…' });
     checkpoint();
     const evidence = await persistProfileEvidence({
-      modelName, hostId, hostUrl, artifact, profileData, assertClaimActive: checkpoint, signal
+      modelName, hostId, hostUrl, artifact, profileData, claimIdentity, assertClaimActive: checkpoint, signal
     });
     return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
   }
@@ -915,6 +980,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     performanceKneeDegradationThreshold: Number(settings.performanceKneeDegradationThreshold),
     candidateRepeats: contextProbeRepeatsForDepth(depth, settings),
     profileDepth: depth,
+    workloadId: claimIdentity?.claimBatchId,
     assertClaimActive: checkpoint,
     signal,
     onProgress: (info) => {
@@ -985,7 +1051,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     notify('saving', { message: 'Saving profile to database…' });
     checkpoint();
     const evidence = await persistProfileEvidence({
-      modelName, hostId, hostUrl, artifact, profileData, assertClaimActive: checkpoint, signal
+      modelName, hostId, hostUrl, artifact, profileData, claimIdentity, assertClaimActive: checkpoint, signal
     });
     notify('saved', { message: `Profile saved for exact artifact ${modelName}` });
     return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
@@ -1035,7 +1101,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
   notify('saving', { message: 'Saving profile to database…' });
   checkpoint();
   const evidence = await persistProfileEvidence({
-    modelName, hostId, hostUrl, artifact, profileData, assertClaimActive: checkpoint, signal
+    modelName, hostId, hostUrl, artifact, profileData, claimIdentity, assertClaimActive: checkpoint, signal
   });
   notify('saved', { message: `Profile saved for exact artifact ${modelName}` });
   return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
@@ -1128,7 +1194,8 @@ async function preflight(batchConfig) {
         modelName: artifact.model,
         hostId,
         active: true,
-        stale: { $ne: true }
+        stale: { $ne: true },
+        authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
       }).lean()
       : null;
     const hasProfile = ['standard', 'full'].includes(readinessForHost?.profileDepth)

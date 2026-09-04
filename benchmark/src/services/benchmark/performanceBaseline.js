@@ -65,7 +65,8 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
         'artifact.digest': artifact.digest,
         'artifact.runtimeFingerprint': artifact.runtimeFingerprint,
         active: true,
-        stale: { $ne: true }
+        stale: { $ne: true },
+        authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
     })
         .select('profile artifact updatedAt')
         .lean()

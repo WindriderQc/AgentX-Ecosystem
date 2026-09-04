@@ -4,20 +4,34 @@ const crypto = require('crypto');
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 
 async function saveProfile({ modelName, hostId, artifact, profile }, options = {}) {
-  const authorityWriteId = crypto.randomUUID();
+  const authorityWriteId = options.authorityWriteId || crypto.randomUUID();
   const identity = {
     modelName,
     hostId,
     'artifact.digest': artifact.digest,
     'artifact.runtimeFingerprint': artifact.runtimeFingerprint
   };
+  const writableIdentity = {
+    ...identity,
+    authorityState: { $ne: 'authority_invalidated' }
+  };
   let writeStarted = false;
   try {
     options.assertAuthorityActive?.();
     writeStarted = true;
     const saved = await ModelPerformanceProfile.findOneAndUpdate(
-      identity,
-      { $set: { artifact, profile, authorityWriteId, active: true, stale: false, staleReason: null } },
+      writableIdentity,
+      { $set: {
+        artifact,
+        profile,
+        authorityWriteId,
+        authorityReconciliationId: options.authorityReconciliationId || null,
+        authorityState: options.authorityState || 'authoritative',
+        active: true,
+        stale: false,
+        staleReason: null,
+        supersededByAuthorityWriteId: null
+      } },
       {
         upsert: true,
         new: true,
@@ -29,7 +43,7 @@ async function saveProfile({ modelName, hostId, artifact, profile }, options = {
     options.assertAuthorityActive?.();
     return saved;
   } catch (error) {
-    if (writeStarted) {
+    if (writeStarted && options.deferAuthorityCompensation !== true) {
       try {
         await ModelPerformanceProfile.updateOne(
           { ...identity, authorityWriteId },
@@ -45,17 +59,35 @@ async function saveProfile({ modelName, hostId, artifact, profile }, options = {
   }
 }
 
-async function retireSupersededProfiles({ modelName, hostId, evidenceId, assertAuthorityActive, signal }) {
+async function retireSupersededProfiles({
+  modelName,
+  hostId,
+  evidenceId,
+  authorityWriteId = null,
+  assertAuthorityActive,
+  signal
+}) {
   assertAuthorityActive?.();
   const filter = { _id: { $ne: evidenceId }, modelName, hostId, active: true };
-  const update = { $set: { active: false, stale: true, staleReason: 'superseded' } };
+  const update = { $set: {
+    active: false,
+    stale: true,
+    staleReason: 'superseded',
+    supersededByAuthorityWriteId: authorityWriteId
+  } };
   if (signal) await ModelPerformanceProfile.updateMany(filter, update, { signal });
   else await ModelPerformanceProfile.updateMany(filter, update);
   assertAuthorityActive?.();
 }
 
 async function getActiveProfile(modelName, hostId) {
-  return ModelPerformanceProfile.findOne({ modelName, hostId, active: true, stale: { $ne: true } })
+  return ModelPerformanceProfile.findOne({
+    modelName,
+    hostId,
+    active: true,
+    stale: { $ne: true },
+    authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
+  })
     .sort({ updatedAt: -1 })
     .lean();
 }
@@ -63,7 +95,11 @@ async function getActiveProfile(modelName, hostId) {
 async function getRoster(filter = {}) {
   // The roster is a current-view projection, not an audit-history endpoint.
   // A stale active row must never be merged back into the UI after reload.
-  const query = { active: true, stale: { $ne: true } };
+  const query = {
+    active: true,
+    stale: { $ne: true },
+    authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
+  };
   if (filter.hostId) query.hostId = filter.hostId;
   if (filter.modelName) query.modelName = filter.modelName;
   return ModelPerformanceProfile.find(query).sort({ updatedAt: -1 }).lean();

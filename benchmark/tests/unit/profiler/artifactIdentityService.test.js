@@ -15,7 +15,8 @@ const hostProfiles = require('../../../src/services/profiler/hostProfileService'
 const ollama = require('../../../src/clients/ollamaClient');
 const {
   resolveArtifactIdentity,
-  resolveRuntimeArtifactReceipt
+  resolveRuntimeArtifactReceipt,
+  runtimeReceiptMatchesProfile
 } = require('../../../src/services/profiler/artifactIdentityService');
 
 const HOST_URL = 'http://host-a:11434';
@@ -91,6 +92,7 @@ describe('profiler artifact identity service', () => {
     ollama.listRunning.mockResolvedValue({
       models: [{
         name: 'owner/model:8b-q4',
+        digest: RAW_DIGEST,
         size: 8_500_000_000,
         size_vram: 8_500_000_000,
         context_length: 32_768
@@ -123,6 +125,38 @@ describe('profiler artifact identity service', () => {
     });
     expect(receipt.runtimeFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(receipt.receiptId).toMatch(/^[a-f0-9]{64}$/);
+    expect(runtimeReceiptMatchesProfile(receipt, {
+      modelName: 'owner/model:8b-q4',
+      hostId: 'host-a',
+      artifact: {
+        model: 'owner/model:8b-q4',
+        hostId: 'host-a',
+        hostUrl: HOST_URL,
+        digest: EXACT_DIGEST
+      },
+      profile: { recommendedInteractiveContext: 32_768 }
+    }, { now: '2026-09-04T18:00:15.000Z' })).toBe(true);
+  });
+
+  it('rejects an old resident blob after the installed tag is repointed', async () => {
+    getModelDigest.mockResolvedValue(EXACT_DIGEST);
+    getModelRegistryByName.mockResolvedValue({
+      modelName: 'owner/model:8b-q4',
+      installations: [{ hostUrl: HOST_URL, digest: EXACT_DIGEST, isActive: true }]
+    });
+    ollama.listModels.mockResolvedValue({
+      models: [{ name: 'owner/model:8b-q4', digest: EXACT_DIGEST, size: 9_000_000_000 }]
+    });
+    ollama.listRunning.mockResolvedValue({
+      models: [{
+        name: 'owner/model:8b-q4', digest: `sha256:${'b'.repeat(64)}`,
+        size: 8_500_000_000, size_vram: 8_500_000_000, context_length: 32_768
+      }]
+    });
+    ollama.getVersion.mockResolvedValue({ version: '0.11.10' });
+
+    await expect(resolveRuntimeArtifactReceipt('owner/model:8b-q4', 'host-a', HOST_URL))
+      .rejects.toThrow(/resident runtime.*same digest/i);
   });
 
   it('fails closed when residency cannot prove live VRAM and context', async () => {

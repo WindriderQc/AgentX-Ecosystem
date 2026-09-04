@@ -1227,13 +1227,28 @@ async function resolveWorkloadRecovery({ recoveryId, recoveryGeneration, princip
         admissionId: owned.admissionId,
         generation: owned.generation,
         principal,
+        recoveryRequired: true,
         recoveryId,
         recoveryGeneration,
-        ...(ownerId ? { recoveryOwnerId: ownerId } : {})
+        recoveryState: 'RESTORED',
+        recoveryVersion: owned.recoveryVersion,
+        recoveryReceipt: { $ne: null },
+        ...(ownerId
+          ? { recoveryOwnerId: ownerId, recoveryExpiresAt: { $gt: releasedAt } }
+          : { recoveryOwnerId: null, expiresAt: { $gt: releasedAt } })
       } }
     },
     {
-      $pull: { workloads: { admissionId: owned.admissionId, generation: owned.generation, principal } },
+      $pull: { workloads: {
+        admissionId: owned.admissionId,
+        generation: owned.generation,
+        principal,
+        recoveryId,
+        recoveryGeneration,
+        recoveryState: 'RESTORED',
+        recoveryVersion: owned.recoveryVersion,
+        ...(ownerId ? { recoveryOwnerId: ownerId } : { recoveryOwnerId: null })
+      } },
       $push: { releaseReceipts: { $each: [releaseReceipt], $slice: -100 } }
     },
     { new: false }

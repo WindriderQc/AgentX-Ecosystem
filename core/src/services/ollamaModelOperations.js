@@ -29,8 +29,10 @@ function parseExactJson(raw) {
 }
 
 function hasExactMutationTerminal({ terminal, response, raw, data }) {
-  if (terminal === 'pull') return data?.status === 'success';
-  if (terminal === 'generate') return data?.done === true;
+  const errorFree = data && typeof data === 'object' && !Array.isArray(data)
+    && typeof data.error !== 'string';
+  if (terminal === 'pull') return errorFree && data.status === 'success';
+  if (terminal === 'generate') return errorFree && data.done === true;
   if (terminal === 'delete') {
     return (response.status === 200 || response.status === 204) && String(raw || '').trim() === '';
   }
@@ -52,7 +54,7 @@ async function requestOllama(host, path, {
   if (!response.ok) {
     const error = new Error(await readError(response));
     error.statusCode = response.status >= 400 && response.status < 500 ? response.status : 502;
-    error.ollamaTerminalObserved = true;
+    error.code = 'OLLAMA_MUTATION_TERMINAL_UNVERIFIED';
     throw error;
   }
 
@@ -81,11 +83,11 @@ async function runRuntimeMutation({ host, name, action, principal, signal, timeo
     await lifecycle.complete();
     return result;
   } catch (error) {
-    if (error.ollamaTerminalObserved === true) {
-      await lifecycle.complete().catch(releaseError => { error.releaseError = releaseError; });
-    } else {
-      await lifecycle.abandon(error).catch(quarantineError => { error.quarantineError = quarantineError; });
-    }
+    // Any response without the endpoint's exact success receipt is ambiguous:
+    // Ollama may have applied the mutation before returning a 4xx/5xx or losing
+    // the connection. Keep maintenance UNKNOWN until fenced recovery verifies
+    // or compensates the side effect; an HTTP status is not a terminal proof.
+    await lifecycle.abandon(error).catch(quarantineError => { error.quarantineError = quarantineError; });
     throw error;
   }
 }

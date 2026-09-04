@@ -6,6 +6,15 @@ const mockReconciliationFindOne = jest.fn();
 const mockReconciliationCountDocuments = jest.fn();
 const mockBatchUpdateOne = jest.fn();
 const mockResultFindOneAndUpdate = jest.fn();
+const mockHostSnapshotFindOneAndUpdate = jest.fn();
+const mockHostProfileUpdateOne = jest.fn();
+const mockModelPerformanceFindOneAndUpdate = jest.fn();
+const mockModelPerformanceUpdateOne = jest.fn();
+const mockModelPerformanceUpdateMany = jest.fn();
+const mockModelProfileUpdateOne = jest.fn();
+const mockContextProfileUpdateOne = jest.fn();
+const mockContextSnapshotUpdateOne = jest.fn();
+const mockContextSnapshotFindOneAndUpdate = jest.fn();
 const mockGetRecoveryIdentity = jest.fn();
 const mockAdoptRecovery = jest.fn();
 const mockHeartbeatRecovery = jest.fn();
@@ -33,6 +42,28 @@ jest.mock('../../../models/BenchmarkResult', () => ({
 jest.mock('../../../models/JudgeAccuracyMatrix', () => ({ findOneAndUpdate: jest.fn() }));
 jest.mock('../../../models/JudgeGovernanceRun', () => ({ findOneAndUpdate: jest.fn() }));
 jest.mock('../../../models/JudgeGroundTruth', () => ({ findOneAndUpdate: jest.fn() }));
+jest.mock('../../../models/HostPerformanceSnapshot', () => ({
+  findOneAndUpdate: (...args) => mockHostSnapshotFindOneAndUpdate(...args),
+  updateOne: jest.fn()
+}));
+jest.mock('../../../models/HostProfile', () => ({
+  updateOne: (...args) => mockHostProfileUpdateOne(...args)
+}));
+jest.mock('../../../models/ModelPerformanceProfile', () => ({
+  findOneAndUpdate: (...args) => mockModelPerformanceFindOneAndUpdate(...args),
+  updateOne: (...args) => mockModelPerformanceUpdateOne(...args),
+  updateMany: (...args) => mockModelPerformanceUpdateMany(...args)
+}));
+jest.mock('../../../models/ModelProfile', () => ({
+  updateOne: (...args) => mockModelProfileUpdateOne(...args)
+}));
+jest.mock('../../../models/ModelContextProfile', () => ({
+  updateOne: (...args) => mockContextProfileUpdateOne(...args)
+}));
+jest.mock('../../../models/ModelContextProbeSnapshot', () => ({
+  updateOne: (...args) => mockContextSnapshotUpdateOne(...args),
+  findOneAndUpdate: (...args) => mockContextSnapshotFindOneAndUpdate(...args)
+}));
 jest.mock('../../../src/clients/coreApiClient', () => ({
   getWorkloadRecoveryIdentity: (...args) => mockGetRecoveryIdentity(...args),
   adoptWorkloadRecovery: (...args) => mockAdoptRecovery(...args),
@@ -76,6 +107,12 @@ beforeEach(() => {
   mockRecoverRelease.mockResolvedValue({ recovered: false, released: false });
   mockHeartbeatRecovery.mockResolvedValue({ heartbeat: true });
   mockRestoreRecoveryHosts.mockResolvedValue({ restored: true, details: [] });
+  mockHostProfileUpdateOne.mockResolvedValue({ matchedCount: 1 });
+  mockModelPerformanceUpdateOne.mockResolvedValue({ matchedCount: 1 });
+  mockModelPerformanceUpdateMany.mockResolvedValue({ matchedCount: 1 });
+  mockModelProfileUpdateOne.mockResolvedValue({ matchedCount: 1 });
+  mockContextProfileUpdateOne.mockResolvedValue({ matchedCount: 1 });
+  mockContextSnapshotUpdateOne.mockResolvedValue({ matchedCount: 1 });
 });
 
 test('journals the Core quarantine identity before handing ambiguous authority to recovery', async () => {
@@ -230,4 +267,245 @@ test('a releasing journal recovers the durable Core receipt after a crash withou
   });
   expect(mockAdoptRecovery).not.toHaveBeenCalled();
   expect(mockResultFindOneAndUpdate).not.toHaveBeenCalled();
+});
+
+test('publishes profiler evidence only after the durable journal verifies every projection write', async () => {
+  const details = {
+    modelName: 'model-a',
+    hostId: 'host-a',
+    artifactDigest: 'sha256:model-a',
+    runtimeFingerprint: 'runtime-a',
+    authorityWriteId: 'write-a',
+    evidenceId: 'evidence-a',
+    thinking: true
+  };
+  const pending = {
+    _id: 'journal-profiler-a',
+    kind: 'profiler_evidence_write',
+    resourceType: 'ModelPerformanceProfile',
+    state: 'pending_reconciliation',
+    details
+  };
+  mockReconciliationFindOneAndUpdate
+    .mockReturnValueOnce(lean({ ...pending, state: 'verified', resolutionMode: 'publish' }))
+    .mockReturnValueOnce(lean({ ...pending, state: 'resolved', resolutionMode: 'publish' }));
+  mockModelPerformanceUpdateOne.mockResolvedValueOnce({ matchedCount: 1 });
+  mockModelProfileUpdateOne.mockResolvedValueOnce({ matchedCount: 1 });
+
+  await expect(service.completeProfilerAuthorityWrite(pending, { details }))
+    .resolves.toMatchObject({ record: { state: 'resolved' } });
+
+  expect(mockReconciliationFindOneAndUpdate.mock.invocationCallOrder[0])
+    .toBeLessThan(mockModelPerformanceUpdateOne.mock.invocationCallOrder[0]);
+  expect(mockModelPerformanceUpdateOne).toHaveBeenCalledWith(
+    expect.objectContaining({
+      _id: 'evidence-a',
+      authorityWriteId: 'write-a',
+      authorityState: { $in: ['pending_reconciliation', 'authoritative'] }
+    }),
+    { $set: expect.objectContaining({ authorityState: 'authoritative' }) },
+    undefined
+  );
+  expect(mockModelProfileUpdateOne).toHaveBeenCalledWith(
+    expect.objectContaining({
+      name: 'model-a',
+      'readiness.host-a.authorityWriteId': 'write-a'
+    }),
+    { $set: expect.objectContaining({
+      'readiness.host-a.authorityState': 'authoritative',
+      'thinkingProfiles.host-a.authorityState': 'authoritative'
+    }) },
+    undefined
+  );
+});
+
+test('publishes a context profile only after its durable journal and raw snapshot are committed', async () => {
+  const details = {
+    snapshotId: 'snapshot-context-a',
+    authorityWriteId: 'write-context-a',
+    modelName: 'model-a',
+    hostUrl: 'http://host-a:11434',
+    artifactDigest: 'sha256:model-a',
+    runtimeFingerprint: 'runtime-a'
+  };
+  const pending = {
+    _id: 'journal-context-a',
+    kind: 'profiler_context_write',
+    resourceType: 'ModelContextProfile',
+    state: 'pending_reconciliation',
+    details
+  };
+  mockReconciliationFindOneAndUpdate
+    .mockReturnValueOnce(lean({ ...pending, state: 'verified', resolutionMode: 'publish' }))
+    .mockReturnValueOnce(lean({ ...pending, state: 'resolved', resolutionMode: 'publish' }));
+
+  await expect(service.completeProfilerAuthorityWrite(pending, { details }))
+    .resolves.toMatchObject({ record: { state: 'resolved' } });
+
+  expect(mockReconciliationFindOneAndUpdate.mock.invocationCallOrder[0])
+    .toBeLessThan(mockContextSnapshotUpdateOne.mock.invocationCallOrder[0]);
+  expect(mockContextSnapshotUpdateOne.mock.invocationCallOrder[0])
+    .toBeLessThan(mockContextProfileUpdateOne.mock.invocationCallOrder[0]);
+  expect(mockContextSnapshotUpdateOne).toHaveBeenCalledWith(
+    expect.objectContaining({ _id: 'snapshot-context-a', authorityStatus: { $in: ['pending', 'committed'] } }),
+    { $set: expect.objectContaining({ authorityStatus: 'committed' }) },
+    undefined
+  );
+  expect(mockContextProfileUpdateOne).toHaveBeenCalledWith(
+    expect.objectContaining({
+      modelName: 'model-a',
+      authorityWriteId: 'write-context-a',
+      authorityState: { $in: ['pending_reconciliation', 'authoritative'] }
+    }),
+    { $set: expect.objectContaining({ authorityState: 'authoritative' }) },
+    undefined
+  );
+});
+
+test('restart compensation rejects an ambiguous context snapshot and restores prior authority', async () => {
+  const priorProfile = {
+    modelName: 'model-a',
+    hostUrl: 'http://host-a:11434',
+    artifactDigest: 'sha256:model-a',
+    runtimeFingerprint: 'runtime-a',
+    authorityState: 'authoritative',
+    recommendedContext: 8192,
+    rejectedEvidenceIds: ['older-rejected']
+  };
+  mockContextSnapshotFindOneAndUpdate.mockReturnValue(lean({
+    _id: 'snapshot-context-ambiguous',
+    authorityStatus: 'rejected'
+  }));
+
+  await expect(service._invalidateResource({
+    _id: 'journal-context-ambiguous',
+    kind: 'profiler_context_write',
+    resourceType: 'ModelContextProfile',
+    resultId: 'profiler-context:workload-a:write-context-a',
+    details: {
+      snapshotId: 'snapshot-context-ambiguous',
+      authorityWriteId: 'write-context-a',
+      modelName: 'model-a',
+      hostUrl: 'http://host-a:11434',
+      artifactDigest: 'sha256:model-a',
+      runtimeFingerprint: 'runtime-a',
+      snapshotPayload: { modelName: 'model-a', authorityStatus: 'pending' },
+      priorProfile
+    }
+  })).resolves.toMatchObject({
+    resourceId: 'snapshot-context-ambiguous',
+    state: 'authority_invalidated'
+  });
+
+  expect(mockContextSnapshotFindOneAndUpdate).toHaveBeenCalledWith(
+    { _id: 'snapshot-context-ambiguous' },
+    expect.objectContaining({
+      $set: expect.objectContaining({ authorityStatus: 'rejected', authorityWriteId: 'write-context-a' })
+    }),
+    expect.objectContaining({ upsert: true, new: true })
+  );
+  expect(mockContextProfileUpdateOne).toHaveBeenCalledWith(
+    expect.objectContaining({ modelName: 'model-a', artifactDigest: 'sha256:model-a' }),
+    { $set: expect.objectContaining({
+      authorityState: 'authoritative',
+      recommendedContext: 8192,
+      rejectedEvidenceIds: ['older-rejected', 'snapshot-context-ambiguous']
+    }) },
+    expect.objectContaining({ upsert: true })
+  );
+});
+
+test('restart worker tombstones an ambiguously acknowledged profiler snapshot before releasing Core', async () => {
+  const calls = [];
+  const record = {
+    _id: 'journal-snapshot-a',
+    kind: 'profiler_snapshot_write',
+    resourceType: 'HostPerformanceSnapshot',
+    resultId: 'profiler-snapshot:workload-a:snapshot-a',
+    workloadId: proof.workloadId,
+    admissionId: proof.admissionId,
+    admissionGeneration: proof.generation,
+    admissionPrincipal: proof.principal,
+    recoveryId: proof.recoveryId,
+    recoveryRequestId: proof.recoveryRequestId,
+    phase: 'snapshot save',
+    state: 'pending_reconciliation',
+    resolutionMode: 'invalidate',
+    details: {
+      snapshotId: 'snapshot-a',
+      authorityWriteId: 'write-snapshot-a',
+      payload: {
+        modelName: 'model-a',
+        hostUrl: 'http://host-a:11434',
+        status: 'pass'
+      }
+    }
+  };
+  const ownership = { ownerId: 'worker-restart', ownerEpoch: 'epoch-snapshot', record };
+  let coreState = 'MUTATING';
+  mockAdoptRecovery.mockImplementation(async () => {
+    calls.push('adopt');
+    return { adopted: true };
+  });
+  mockAssertRecovery.mockImplementation(async () => ({
+    owned: true,
+    recoveryOwnerId: ownership.ownerId,
+    recoveryState: coreState
+  }));
+  mockTransitionRecovery.mockImplementation(async (_workloadId, state) => {
+    coreState = state;
+    calls.push(`transition:${state}`);
+    return { transitioned: true, recoveryState: state };
+  });
+  mockReconciliationFindOne.mockImplementation(() => lean({ _id: record._id }));
+  mockHostSnapshotFindOneAndUpdate.mockImplementation(() => {
+    calls.push('tombstone');
+    return lean({ _id: 'snapshot-a', __v: 2 });
+  });
+  mockReconciliationFindOneAndUpdate
+    .mockImplementationOnce(() => lean({ ...record, state: 'verified', compensationReceipt: { afterVersion: 2 } }))
+    .mockImplementationOnce(() => lean({ ...record, state: 'releasing', compensationReceipt: { afterVersion: 2 } }))
+    .mockImplementationOnce(() => lean({ ...record, state: 'resolved' }));
+  mockReleaseAdmission.mockImplementation(async () => {
+    calls.push('release');
+    return { released: true };
+  });
+
+  await expect(service._reconcileOwnedRecord(ownership)).resolves.toMatchObject({ resolved: true });
+  expect(calls.indexOf('adopt')).toBeLessThan(calls.indexOf('tombstone'));
+  expect(calls.indexOf('tombstone')).toBeLessThan(calls.indexOf('release'));
+  expect(mockHostSnapshotFindOneAndUpdate).toHaveBeenCalledWith(
+    { _id: 'snapshot-a' },
+    expect.objectContaining({
+      $setOnInsert: expect.objectContaining({ modelName: 'model-a' }),
+      $set: expect.objectContaining({ authorityState: 'authority_invalidated' })
+    }),
+    expect.objectContaining({ upsert: true, new: true, signal: expect.any(AbortSignal) })
+  );
+});
+
+test('baseline recovery fences the receipt before restoring the prior value', async () => {
+  await expect(service._invalidateResource({
+    _id: 'journal-baseline-a',
+    kind: 'profiler_baseline_write',
+    resourceType: 'HostProfileBaseline',
+    resultId: 'baseline-write-a',
+    details: {
+      hostId: 'host-a',
+      persistenceReceipt: 'receipt-a',
+      authorityWriteId: 'write-a',
+      priorBaseline: { referenceModel: 'old-model', tokensPerSec: 10 }
+    }
+  })).resolves.toMatchObject({ state: 'authority_invalidated', persistenceReceipt: 'receipt-a' });
+
+  expect(mockHostProfileUpdateOne.mock.calls[0]).toEqual([
+    { hostId: 'host-a' },
+    { $addToSet: { rejectedBaselineReceipts: 'receipt-a' } },
+    undefined
+  ]);
+  expect(mockHostProfileUpdateOne.mock.calls[1]).toEqual([
+    { hostId: 'host-a', 'baseline.persistenceReceipt': 'receipt-a' },
+    { $set: { baseline: { referenceModel: 'old-model', tokensPerSec: 10 } } },
+    undefined
+  ]);
 });

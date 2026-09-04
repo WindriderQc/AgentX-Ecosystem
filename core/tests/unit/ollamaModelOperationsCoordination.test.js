@@ -57,11 +57,29 @@ describe('Ollama model mutations use durable runtime coordination', () => {
     expect(lease.complete).not.toHaveBeenCalled();
   });
 
+  test('HTTP 500 after a possible mutation stays UNKNOWN instead of reopening the host', async () => {
+    const lease = lifecycle();
+    beginRuntimeMutation.mockResolvedValueOnce(lease);
+    fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      text: jest.fn(async () => '{"error":"write outcome unknown"}')
+    });
+
+    await expect(operations.deleteModel('http://host:11434', 'model-a'))
+      .rejects.toMatchObject({ code: 'OLLAMA_MUTATION_TERMINAL_UNVERIFIED', statusCode: 502 });
+    expect(lease.abandon).toHaveBeenCalledTimes(1);
+    expect(lease.complete).not.toHaveBeenCalled();
+  });
+
   test.each([
     ['pull', () => operations.pullModel('http://host:11434', 'model-a'), '{"status":"downloading"}'],
     ['start', () => operations.startModel('http://host:11434', 'model-a'), '{"done":false}'],
     ['stop', () => operations.stopModel('http://host:11434', 'model-a'), 'not-json'],
-    ['delete', () => operations.deleteModel('http://host:11434', 'model-a'), '{"status":"success"}']
+    ['delete', () => operations.deleteModel('http://host:11434', 'model-a'), '{"status":"success"}'],
+    ['pull-with-error', () => operations.pullModel('http://host:11434', 'model-a'), '{"status":"success","error":"failed"}'],
+    ['start-with-error', () => operations.startModel('http://host:11434', 'model-a'), '{"done":true,"error":"failed"}']
   ])('%s quarantines a non-terminal success response', async (_action, invoke, terminalBody) => {
     const lease = lifecycle();
     beginRuntimeMutation.mockResolvedValueOnce(lease);

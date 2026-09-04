@@ -6,6 +6,13 @@ jest.mock('../../models/HostPerformanceSnapshot', () => ({
   updateOne: jest.fn().mockResolvedValue({ matchedCount: 1 })
 }));
 
+const mockPrepareProfilerAuthorityWrite = jest.fn();
+const mockCompleteProfilerAuthorityWrite = jest.fn();
+jest.mock('../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+  prepareProfilerAuthorityWrite: (...args) => mockPrepareProfilerAuthorityWrite(...args),
+  completeProfilerAuthorityWrite: (...args) => mockCompleteProfilerAuthorityWrite(...args)
+}));
+
 jest.mock('../../src/services/ollamaVramService', () => ({
   getHostVram: jest.fn()
 }));
@@ -58,6 +65,14 @@ describe('hostTestService config helpers', () => {
     process.env.HOST_TEST_CONTEXT_FILL_PCT = '25';
     process.env.HOST_TEST_MAX_PROMPT_TOKENS = '2048';
     process.env.HOST_TEST_WARMUP = 'true';
+    mockPrepareProfilerAuthorityWrite.mockReset().mockResolvedValue({
+      _id: 'journal-snapshot-1',
+      details: {
+        snapshotId: 'snapshot-1',
+        authorityWriteId: 'write-1'
+      }
+    });
+    mockCompleteProfilerAuthorityWrite.mockReset().mockResolvedValue({ record: { state: 'resolved' } });
   });
 
   afterEach(() => {
@@ -149,29 +164,33 @@ describe('hostTestService config helpers', () => {
     }));
   });
 
-  it('tombstones an ambiguously committed host snapshot when the claim is lost after save', async () => {
+  it('journals an ambiguously committed host snapshot before save and retains recovery authority', async () => {
     const controller = new AbortController();
     HostPerformanceSnapshot.create.mockImplementationOnce(async ([payload]) => [payload]);
     let checkpointCount = 0;
     const lost = Object.assign(new Error('claim lost after write'), { code: 'BENCHMARK_CLAIM_LOST' });
     const checkpoint = jest.fn(() => {
       checkpointCount += 1;
-      if (checkpointCount === 2) throw lost;
+      if (checkpointCount === 3) throw lost;
     });
 
     await expect(persistHostSnapshot('model-a', {
       hostUrl: 'http://host:11434',
       status: 'success'
-    }, { signal: controller.signal, checkpoint })).rejects.toBe(lost);
+    }, { signal: controller.signal, checkpoint, workloadId: 'profiler-host-test-1' })).rejects.toBe(lost);
 
+    expect(mockPrepareProfilerAuthorityWrite.mock.invocationCallOrder[0])
+      .toBeLessThan(HostPerformanceSnapshot.create.mock.invocationCallOrder[0]);
     expect(HostPerformanceSnapshot.create).toHaveBeenCalledWith(
-      [expect.objectContaining({ _id: expect.anything(), modelName: 'model-a' })],
+      [expect.objectContaining({
+        _id: expect.anything(),
+        modelName: 'model-a',
+        authorityState: 'pending_reconciliation',
+        authorityWriteId: expect.any(String),
+        authorityReconciliationId: 'journal-snapshot-1'
+      })],
       { signal: controller.signal }
     );
-    expect(HostPerformanceSnapshot.updateOne).toHaveBeenCalledWith(
-      { _id: expect.anything() },
-      { $set: expect.objectContaining({ authorityState: 'authority_invalidated' }) },
-      { upsert: true }
-    );
+    expect(mockCompleteProfilerAuthorityWrite).not.toHaveBeenCalled();
   });
 });

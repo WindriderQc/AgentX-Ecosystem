@@ -25,15 +25,12 @@ const { parseParameterCount, parseQuantization } = require('../parameterDetectio
 const est = require('./fitEstimator');
 const logger = require('../../../config/logger');
 const { resolveArtifactIdentity, identitiesMatch } = require('./artifactIdentityService');
-const { verifyProfilerAuthorityReceipt } = require('./profilerAuthorityReceipt');
+const { hasQualifiedProfilerAuthority } = require('./profilerAuthorityReceipt');
 
 const MIB = est.MIB;
 
 function hasProfilerAuthority(readiness, evidence) {
-  return readiness?.benchmarkQualified === true
-    && readiness?.stale !== true
-    && ['standard', 'full'].includes(readiness?.profileDepth)
-    && verifyProfilerAuthorityReceipt(readiness, evidence, {
+  return hasQualifiedProfilerAuthority(readiness, evidence, {
       modelName: evidence?.modelName,
       hostId: evidence?.hostId
     });
@@ -66,7 +63,12 @@ async function buildHostFitReport(hostId) {
   const { vramTotalMiB, source: vramSource } = est.resolveHostVram(host, telemetry);
 
   // Measured profiles for this host, keyed by normalized model name.
-  const evidenceRecords = await ModelPerformanceProfile.find({ hostId, active: true, stale: { $ne: true } }).lean();
+  const evidenceRecords = await ModelPerformanceProfile.find({
+    hostId,
+    active: true,
+    stale: { $ne: true },
+    authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
+  }).lean();
   const profileByModel = new Map();
   const liveArtifactByModel = new Map();
   for (const evidence of evidenceRecords) {

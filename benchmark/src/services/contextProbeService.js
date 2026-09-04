@@ -5,11 +5,13 @@
  * to benchmark-owned storage instead of writing back into modelregistries.
  */
 
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const ModelProfile = require('../../models/ModelProfile');
 const ModelContextProbeSnapshot = require('../../models/ModelContextProbeSnapshot');
 const ollamaVramService = require('./ollamaVramService');
 const modelContextProfileService = require('./modelContextProfileService');
+const authorityReconciliation = require('./benchmark/benchmarkAuthorityReconciliation');
 const hostProfileService = require('./profiler/hostProfileService');
 const { identitiesMatch, resolveArtifactIdentity } = require('./profiler/artifactIdentityService');
 const { showModel, generate, listRunning } = require('../clients/ollamaClient');
@@ -474,6 +476,12 @@ async function probeModelContext(modelName, options = {}) {
   if (options.acknowledgeMaintenance !== true) {
     throw new Error('Context probe refused: caller must set acknowledgeMaintenance:true — probe evicts KV cache and breaks live traffic');
   }
+  const workloadId = String(options.workloadId || '');
+  if (!workloadId) {
+    const error = new Error('Context probe requires an exact durable profiler workload identity');
+    error.code = 'PROFILER_AUTHORITY_JOURNAL_REQUIRED';
+    throw error;
+  }
 
   const cfg = getConfig();
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
@@ -719,7 +727,10 @@ async function probeModelContext(modelName, options = {}) {
     }
 
     checkpoint();
-    const snapshot = await persistProbeSnapshot({
+    const snapshotId = new mongoose.Types.ObjectId();
+    const authorityWriteId = crypto.randomUUID();
+    const snapshotPayload = {
+      _id: snapshotId,
       modelName: normalizedModel,
       hostUrl,
       hostId: currentArtifact.hostId,
@@ -752,22 +763,49 @@ async function probeModelContext(modelName, options = {}) {
       error: null,
       authorityStatus: 'pending',
       authorityError: null,
+      authorityWriteId,
       steps
-    }, { signal: options.signal, checkpoint });
-
-    logger.info('Benchmark context probe completed', {
-      modelName: normalizedModel,
-      hostUrl,
-      testedNumCtx,
-      durationMs: snapshot.testDurationMs
+    };
+    const priorProfile = await modelContextProfileService.getByIdentityForAuthority(snapshotPayload, {
+      signal: options.signal
     });
-
-    const snapshotObject = snapshot.toObject();
+    checkpoint();
+    const authorityJournal = await authorityReconciliation.prepareProfilerAuthorityWrite({
+      kind: 'profiler_context_write',
+      resultId: `profiler-context:${workloadId}:${authorityWriteId}`,
+      workloadId,
+      phase: 'profiler context snapshot/profile publication',
+      details: {
+        snapshotId: String(snapshotId),
+        authorityWriteId,
+        modelName: normalizedModel,
+        hostUrl,
+        artifactDigest: currentArtifact.digest,
+        runtimeFingerprint: currentArtifact.runtimeFingerprint,
+        snapshotPayload,
+        priorProfile: priorProfile || null
+      }
+    });
+    snapshotPayload.authorityReconciliationId = String(authorityJournal._id);
+    let snapshot;
     try {
+      snapshot = await persistProbeSnapshot(snapshotPayload, { signal: options.signal, checkpoint });
+
+      logger.info('Benchmark context probe completed', {
+        modelName: normalizedModel,
+        hostUrl,
+        testedNumCtx,
+        durationMs: snapshot.testDurationMs
+      });
+
+      const snapshotObject = snapshot.toObject();
       checkpoint();
       const contextAuthority = await modelContextProfileService.updateFromProbeSnapshot(snapshotObject, {
         signal: options.signal,
-        assertAuthorityActive: checkpoint
+        assertAuthorityActive: checkpoint,
+        authorityState: 'pending_reconciliation',
+        authorityWriteId,
+        authorityReconciliationId: String(authorityJournal._id)
       });
       if (!contextAuthority) {
         const error = new Error('Model context profile rejected completed probe evidence');
@@ -775,41 +813,25 @@ async function probeModelContext(modelName, options = {}) {
         throw error;
       }
       checkpoint();
-      await ModelContextProbeSnapshot.updateOne(
-        { _id: snapshotObject._id, authorityStatus: 'pending' },
-        { $set: { authorityStatus: 'committed', authorityError: null } },
-        options.signal ? { signal: options.signal } : undefined
-      );
-      checkpoint();
+      await authorityReconciliation.completeProfilerAuthorityWrite(authorityJournal, {
+        details: authorityJournal.details,
+        signal: options.signal,
+        assertAuthorityActive: checkpoint
+      });
+      return { ...snapshotObject, authorityStatus: 'committed', authorityError: null };
     } catch (profileErr) {
-      try {
-        await modelContextProfileService.invalidateIfSnapshot(
-          snapshotObject,
-          profileErr.code === 'BENCHMARK_CLAIM_LOST'
-            ? 'claim_lost_during_context_authority_write'
-            : 'context_authority_write_failed'
-        );
-        await ModelContextProbeSnapshot.updateOne(
-          { _id: snapshotObject._id },
-          { $set: { authorityStatus: 'rejected', authorityError: profileErr.message } }
-        );
-        profileErr.authorityCompensated = true;
-      } catch (compensationError) {
-        profileErr.compensationError = compensationError;
-        profileErr.retainAdmission = true;
-        profileErr.code = 'MODEL_CONTEXT_PROFILE_RECONCILIATION_PENDING';
-      }
-      logger.warn('Failed to update model context profile from probe snapshot', {
+      profileErr.retainAdmission = true;
+      profileErr.authorityInvalidationFailed = true;
+      profileErr.code = profileErr.code || 'MODEL_CONTEXT_PROFILE_RECONCILIATION_PENDING';
+      profileErr.reconciliationId = String(authorityJournal._id);
+      logger.warn('Context authority write retained for durable reconciliation', {
         modelName: normalizedModel,
         hostUrl,
-        snapshotId: snapshotObject._id ? String(snapshotObject._id) : null,
+        snapshotId: String(snapshotId),
         error: profileErr.message
       });
-      profileErr.code = profileErr.code || 'MODEL_CONTEXT_PROFILE_PERSIST_FAILED';
       throw profileErr;
     }
-
-    return { ...snapshotObject, authorityStatus: 'committed', authorityError: null };
   } catch (err) {
     if (err?.retainAdmission === true
       || err?.code === 'MODEL_CONTEXT_PROFILE_RECONCILIATION_PENDING') {

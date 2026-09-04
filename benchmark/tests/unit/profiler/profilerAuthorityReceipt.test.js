@@ -2,7 +2,8 @@
 
 const {
   createProfilerAuthorityReceipt,
-  verifyProfilerAuthorityReceipt
+  verifyProfilerAuthorityReceipt,
+  hasQualifiedProfilerAuthority
 } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 
 const ARTIFACT = {
@@ -65,6 +66,32 @@ describe('profilerAuthorityReceipt', () => {
     })).toBe(true);
   });
 
+  it('never promotes a sealed non-qualified profile through a forged readiness flag', () => {
+    const record = evidence();
+    record.profile.benchmarkQualified = false;
+    const authorityReceipt = createProfilerAuthorityReceipt({
+      ...record,
+      profile: record.profile,
+      evidenceId: record._id
+    });
+    const readiness = {
+      evidenceId: record._id,
+      benchmarkQualified: true,
+      stale: false,
+      profileDepth: 'full',
+      authorityReceipt
+    };
+
+    expect(verifyProfilerAuthorityReceipt(readiness, record, {
+      modelName: record.modelName,
+      hostId: record.hostId
+    })).toBe(true);
+    expect(hasQualifiedProfilerAuthority(readiness, record, {
+      modelName: record.modelName,
+      hostId: record.hostId
+    })).toBe(false);
+  });
+
   it.each([
     ['well-formed forged digest', receipt => { receipt.digest = '0'.repeat(64); }],
     ['changed artifact digest', (_receipt, record) => { record.artifact = { ...record.artifact, digest: 'sha256:model-b' }; }],
@@ -78,6 +105,7 @@ describe('profilerAuthorityReceipt', () => {
     ['changed GPU spill evidence', (_receipt, record) => { record.profile.gpu.spillStatus = 'unknown'; }],
     ['changed matrix evidence', (_receipt, record) => { record.profile.prefillDecodeMatrix[0].decodeTokensPerSec = 99; }],
     ['changed load timing', (_receipt, record) => { record.profile.loadTiming.coldMs = 99; }],
+    ['changed issuance time', receipt => { receipt.issuedAt = '2099-01-01T00:00:00.000Z'; }],
     ['changed evidence identity', receipt => { receipt.evidenceId = 'evidence-b'; }]
   ])('rejects %s', (_label, mutate) => {
     const record = evidence();

@@ -605,6 +605,111 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     });
   });
 
+  test('final recovery release CAS refuses an owner that expires and is adopted after its read', async () => {
+    const admission = await service.acquireWorkload({
+      principal: 'benchmark-service',
+      requestId: 'resolve-race-request',
+      workloadId: 'resolve-race-workload'
+    });
+    const armed = await service.armWorkloadRecovery({
+      id: admission.admissionId,
+      generation: admission.generation,
+      principal: admission.principal,
+      recoveryRequestId: 'recovery:resolve-race-request'
+    });
+    await RuntimeCoordination.updateOne(
+      { _id: 'runtime', 'workloads.admissionId': admission.admissionId },
+      { $set: { 'workloads.$.expiresAt': new Date(Date.now() - 1_000) } }
+    );
+    const firstOwner = await service.adoptWorkloadRecovery({
+      recoveryId: armed.recoveryId,
+      principal: admission.principal,
+      recoveryRequestId: 'recovery:resolve-race-request',
+      ownerId: 'worker-a',
+      ttl: 60_000
+    });
+    expect(firstOwner).toMatchObject({ adopted: true, recoveryOwnerId: 'worker-a' });
+    const mutating = await service.transitionWorkloadRecovery({
+      recoveryId: firstOwner.recoveryId,
+      recoveryGeneration: firstOwner.recoveryGeneration,
+      principal: admission.principal,
+      ownerId: firstOwner.recoveryOwnerId,
+      expectedVersion: firstOwner.recoveryVersion,
+      state: 'MUTATING',
+      receipt: { event: 'mutating' }
+    });
+    expect(mutating).toMatchObject({ transitioned: true, recoveryState: 'MUTATING' });
+    const verified = await service.transitionWorkloadRecovery({
+      recoveryId: firstOwner.recoveryId,
+      recoveryGeneration: firstOwner.recoveryGeneration,
+      principal: admission.principal,
+      ownerId: firstOwner.recoveryOwnerId,
+      expectedVersion: mutating.recoveryVersion,
+      state: 'VERIFIED',
+      receipt: { event: 'verified' }
+    });
+    expect(verified).toMatchObject({ transitioned: true, recoveryState: 'VERIFIED' });
+    const restored = await service.transitionWorkloadRecovery({
+      recoveryId: firstOwner.recoveryId,
+      recoveryGeneration: firstOwner.recoveryGeneration,
+      principal: admission.principal,
+      ownerId: firstOwner.recoveryOwnerId,
+      expectedVersion: verified.recoveryVersion,
+      state: 'RESTORED',
+      receipt: { contract: 'agentx.workload-recovery/v1', event: 'restored' }
+    });
+    expect(restored).toMatchObject({ transitioned: true, recoveryState: 'RESTORED' });
+
+    const originalFindOneAndUpdate = RuntimeCoordination.findOneAndUpdate.bind(RuntimeCoordination);
+    let replacementOwner = null;
+    const updateSpy = jest.spyOn(RuntimeCoordination, 'findOneAndUpdate')
+      .mockImplementation((filter, update, options) => {
+        const finalResolve = filter?.workloads?.$elemMatch?.recoveryState === 'RESTORED'
+          && filter?.workloads?.$elemMatch?.recoveryVersion === restored.recoveryVersion;
+        if (!finalResolve) return originalFindOneAndUpdate(filter, update, options);
+        return {
+          lean: async () => {
+            await RuntimeCoordination.updateOne(
+              { _id: 'runtime', 'workloads.recoveryId': firstOwner.recoveryId },
+              { $set: { 'workloads.$.recoveryExpiresAt': new Date(Date.now() - 1_000) } }
+            );
+            replacementOwner = await service.adoptWorkloadRecovery({
+              recoveryId: firstOwner.recoveryId,
+              principal: admission.principal,
+              recoveryRequestId: 'recovery:resolve-race-request',
+              ownerId: 'worker-b',
+              ttl: 60_000
+            });
+            return originalFindOneAndUpdate(filter, update, options).lean();
+          }
+        };
+      });
+
+    try {
+      await expect(service.resolveWorkloadRecovery({
+        recoveryId: firstOwner.recoveryId,
+        recoveryGeneration: firstOwner.recoveryGeneration,
+        principal: admission.principal,
+        ownerId: firstOwner.recoveryOwnerId
+      })).resolves.toMatchObject({
+        released: false,
+        reason: 'recovery proof changed during release'
+      });
+    } finally {
+      updateSpy.mockRestore();
+    }
+    expect(replacementOwner).toMatchObject({ adopted: true, recoveryOwnerId: 'worker-b' });
+    const stored = await RuntimeCoordination.findById('runtime').lean();
+    expect(stored.workloads).toHaveLength(1);
+    expect(stored.workloads[0]).toMatchObject({
+      recoveryId: firstOwner.recoveryId,
+      recoveryGeneration: replacementOwner.recoveryGeneration,
+      recoveryOwnerId: 'worker-b',
+      recoveryState: 'RESTORED',
+      recoveryVersion: restored.recoveryVersion
+    });
+  });
+
   test('ordinary inference and exclusive workload acquisition linearize by host', async () => {
     const inference = await service.acquireInference({
       principal: 'core-service',

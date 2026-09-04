@@ -90,6 +90,7 @@ jest.mock('../../models/Conversation', () => jest.fn());
 const { handleChatRequestStream } = require('../../src/services/chatServiceStream');
 const { routeRequest, recordInference } = require('../../src/services/modelRouter');
 const { buildOllamaPayload, buildOllamaStats } = require('../../src/helpers/ollamaResponseHandler');
+const { beginInferenceAdmission } = require('../../src/services/inferenceAdmissionService');
 
 describe('chatServiceStream', () => {
   beforeEach(() => {
@@ -587,6 +588,39 @@ describe('chatServiceStream', () => {
       code: 'OLLAMA_STREAM_INCOMPLETE'
     }));
     expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+  });
+
+  it('quarantines a dispatched admission when the caller disconnects between stream chunks', async () => {
+    const controller = new AbortController();
+    const lifecycle = {
+      signal: new AbortController().signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn(async () => ({ released: true })),
+      abandon: jest.fn(async () => ({ quarantined: true }))
+    };
+    beginInferenceAdmission.mockResolvedValueOnce(lifecycle);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: (async function* disconnectingStream() {
+        yield Buffer.from(JSON.stringify({ message: { content: 'first' }, done: false }) + '\n');
+        controller.abort(new Error('client disconnected'));
+        yield Buffer.from(JSON.stringify({ message: { content: 'late' }, done: false }) + '\n');
+      })()
+    });
+
+    await handleChatRequestStream({
+      userId: 'user-1', model: 'qwen3:14b', message: 'disconnect me',
+      target: 'http://192.0.2.66:11434', abortSignal: controller.signal,
+      onToken: jest.fn(), onThinking: jest.fn(), onComplete: jest.fn(), onError: jest.fn()
+    });
+
+    expect(lifecycle.markDispatched).toHaveBeenCalledTimes(1);
+    expect(lifecycle.complete).not.toHaveBeenCalled();
+    expect(lifecycle.abandon).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'AbortError',
+      message: 'client disconnected'
+    }));
   });
 
   it('keeps the five-minute deadline active while the upstream body is stalled', async () => {

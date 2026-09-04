@@ -120,7 +120,8 @@ describe('performanceBaseline', () => {
             'artifact.digest': 'sha256:exact',
             'artifact.runtimeFingerprint': 'runtime-a',
             active: true,
-            stale: { $ne: true }
+            stale: { $ne: true },
+            authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
         });
         expect(result).toMatchObject({
             hostId: 'host-beta',
