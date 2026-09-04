@@ -151,7 +151,9 @@ router.get('/active', async (req, res) => {
     }
     // Fallback — look for any doc still marked running/pending, after closing
     // sessions a previous process left behind so a stale RUNNING is never served.
-    await roundtableService.reconcileStaleRoundtables().catch(() => {});
+    if (typeof roundtableService.reconcileStaleRoundtables === 'function') {
+      await roundtableService.reconcileStaleRoundtables().catch(() => {});
+    }
     const doc = await Roundtable.findOne({ status: { $in: ['pending', 'running'] } }).sort({ createdAt: -1 });
     res.json({ status: 'ok', data: doc });
   } catch (err) {
