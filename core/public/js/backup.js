@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const PAGE_SIZE = 25;
+  const PAGE_SIZE = 10;
   const inventories = {
     mongo: { items: [], page: 1 },
     qdrant: { items: [], page: 1 },
@@ -48,6 +48,33 @@
     return `${Math.round((hours / 24) * 10) / 10} d`;
   }
 
+  function setLayerAvailability(kind, available) {
+    const layer = document.querySelector(`[data-backup-layer="${kind}"]`);
+    if (layer) layer.classList.toggle('is-unavailable', !available);
+  }
+
+  function setControlRoom(tone, icon, kicker, title, summary) {
+    const room = $('backupControlRoom');
+    room.className = `backup-control-room is-${tone}`;
+    $('backupOverallIcon').innerHTML = `<i class="fas ${icon}" aria-hidden="true"></i>`;
+    $('backupOverallKicker').textContent = kicker;
+    $('backupOverallTitle').textContent = title;
+    $('backupOverallSummary').textContent = summary;
+  }
+
+  function renderPolicyUnavailable(message) {
+    setControlRoom('danger', 'fa-triangle-exclamation', 'RECOVERY STATE UNAVAILABLE', 'Backup status could not be verified', message);
+    $('cfgLastCycle').textContent = 'Unknown';
+    $('cfgLastCycleAt').textContent = 'No trusted scheduler evidence';
+    $('cfgLayerCoverage').textContent = 'Unknown';
+    $('cfgNextRun').textContent = 'Unknown';
+    $('cfgNextRunReason').textContent = 'Schedule unavailable';
+    $('cfgRetentionOverview').textContent = 'Unknown';
+    $('cfgRetryBudget').textContent = 'Retry budget unknown';
+    $('backupIncidentPanel').hidden = false;
+    $('backupIncidentSummary').textContent = message;
+  }
+
   function renderInventoryEvidence(id, evidence) {
     const el = $(id);
     const inventory = evidence?.inventory;
@@ -73,6 +100,7 @@
       $('cfgScheduleStatus').textContent = 'Policy evidence unavailable';
       $('cfgGrowthRisk').textContent = 'Unknown — cadence and retention could not be reconciled';
       $('cfgPolicyPanel').style.borderColor = '#f59e0b';
+      renderPolicyUnavailable('Cadence, retry, and retention evidence are missing from the response.');
       return;
     }
     const schedule = policy.schedule;
@@ -113,6 +141,53 @@
     const color = colors[risk.level] || '#94a3b8';
     $('cfgGrowthRisk').style.color = color;
     $('cfgPolicyPanel').style.borderColor = color;
+
+    const lastStatus = String(schedule.lastStatus || 'never').toLowerCase();
+    const failedCycle = ['partial', 'failed'].includes(lastStatus) || lastFailures.length > 0;
+    const blocked = lastFailures.some(entry => entry.retryable === false);
+    const succeededLayers = lastStatus === 'success'
+      ? 3
+      : failedCycle && lastFailures.length > 0
+        ? Math.max(0, 3 - new Set(lastFailures.map(entry => entry.name)).size)
+        : null;
+    $('cfgLastCycle').textContent = lastStatus === 'never' ? 'No cycle yet' : lastStatus.toUpperCase();
+    $('cfgLastCycleAt').textContent = schedule.lastFinishedAt ? formatDate(schedule.lastFinishedAt) : 'No completed-cycle timestamp';
+    $('cfgLayerCoverage').textContent = succeededLayers === null ? 'Not established' : `${succeededLayers} / 3 without failure`;
+    $('cfgNextRun').textContent = schedule.enabled
+      ? (schedule.nextRunAt ? formatDate(schedule.nextRunAt) : 'Pending scheduling')
+      : 'Manual only';
+    $('cfgNextRunReason').textContent = schedule.enabled
+      ? (reasonLabels[schedule.nextRunReason] || 'scheduler enabled')
+      : 'Automatic creation disabled';
+    $('cfgRetentionOverview').textContent = retention.mode === 'unbounded' ? 'Forever' : `${retention.days} days`;
+    $('cfgRetryBudget').textContent = `Retry budget ${schedule.consecutiveRetries || 0} / ${Number.isFinite(Number(schedule.maxRetries)) ? schedule.maxRetries : '—'}`;
+
+    const incident = $('backupIncidentPanel');
+    if (failedCycle) {
+      const failureText = lastFailures.length
+        ? lastFailures.map(entry => `${entry.name}: ${entry.error}${entry.retryable === false ? ' — operator action required' : ' — retryable'}`).join(' · ')
+        : `The last cycle reported ${lastStatus}, but no bounded layer detail was provided.`;
+      incident.hidden = false;
+      $('backupIncidentSummary').textContent = failureText;
+      setControlRoom(
+        blocked || lastStatus === 'failed' ? 'danger' : 'warning',
+        blocked || lastStatus === 'failed' ? 'fa-circle-xmark' : 'fa-triangle-exclamation',
+        blocked ? 'RECOVERY ACTION REQUIRED' : 'RECOVERY DEGRADED',
+        blocked ? 'One or more backup layers are blocked' : 'The latest backup cycle is incomplete',
+        blocked
+          ? 'Automatic retries cannot heal every reported failure. Review the incident before creating more artifacts.'
+          : 'Only failed layers will use the short retry cadence; successful layers are not recreated.'
+      );
+    } else {
+      incident.hidden = true;
+      if (lastStatus === 'success') {
+        setControlRoom('healthy', 'fa-circle-check', 'RECOVERY HEALTHY', 'Latest backup cycle completed', 'All three logical backup layers completed without a recorded failure.');
+      } else if (!schedule.enabled) {
+        setControlRoom('warning', 'fa-hand', 'MANUAL RECOVERY MODE', 'Automatic backup creation is disabled', 'Artifacts are created only by explicit operator requests.');
+      } else {
+        setControlRoom('loading', 'fa-clock', 'RECOVERY INITIALIZING', 'Waiting for a completed backup cycle', 'The scheduler is enabled, but no complete cycle has been recorded yet.');
+      }
+    }
   }
 
   async function jsonFetch(url, opts = {}) {
@@ -218,11 +293,15 @@
     try {
       const { backups = [], evidence } = await jsonFetch('/api/operations/backups');
       $('mongoStatus').textContent = `${backups.length} backup${backups.length === 1 ? '' : 's'}`;
+      setLayerAvailability('mongo', true);
       renderInventoryEvidence('mongoEvidence', evidence);
       inventories.mongo = { items: backups, page: 1 };
       renderInventoryPage('mongo');
     } catch (err) {
       list.innerHTML = `<tr><td colspan="4" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
+      $('mongoStatus').textContent = 'unavailable';
+      $('mongoEvidence').textContent = `Inventory unavailable: ${err.message}`;
+      setLayerAvailability('mongo', false);
     }
   }
 
@@ -260,12 +339,15 @@
     try {
       const { snapshots = [], evidence } = await jsonFetch('/api/operations/qdrant/backups');
       $('qdrantStatus').textContent = `${snapshots.length} snapshot${snapshots.length === 1 ? '' : 's'}`;
+      setLayerAvailability('qdrant', true);
       renderInventoryEvidence('qdrantEvidence', evidence);
       inventories.qdrant = { items: snapshots, page: 1 };
       renderInventoryPage('qdrant');
     } catch (err) {
       list.innerHTML = `<tr><td colspan="4" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
       $('qdrantStatus').textContent = 'unavailable';
+      $('qdrantEvidence').textContent = `Inventory unavailable: ${err.message}`;
+      setLayerAvailability('qdrant', false);
     }
   }
 
@@ -303,11 +385,15 @@
     try {
       const { backups = [], evidence } = await jsonFetch('/api/operations/config/backups');
       $('configStatus').textContent = `${backups.length} backup${backups.length === 1 ? '' : 's'}`;
+      setLayerAvailability('config', true);
       renderInventoryEvidence('configEvidence', evidence);
       inventories.config = { items: backups, page: 1 };
       renderInventoryPage('config');
     } catch (err) {
       list.innerHTML = `<tr><td colspan="4" style="padding:16px; text-align:center; color:#dc3545;">Failed to load: ${escape(err.message)}</td></tr>`;
+      $('configStatus').textContent = 'unavailable';
+      $('configEvidence').textContent = `Inventory unavailable: ${err.message}`;
+      setLayerAvailability('config', false);
     }
   }
 
@@ -355,7 +441,20 @@
       $('cfgRestorePolicy').textContent = config.restorePolicy?.message || 'Restore policy unavailable';
       renderPolicyEvidence(config);
     } catch (err) {
+      renderPolicyUnavailable(`Backup policy request failed: ${err.message}`);
       showToast(`Failed to load settings: ${err.message}`, 'error');
+    }
+  }
+
+  async function refreshAll() {
+    const btn = $('backupRefreshAllBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i> Refreshing…';
+    try {
+      await Promise.all([loadConfig(), loadMongoBackups(), loadQdrantBackups(), loadConfigBackups()]);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-sync-alt" aria-hidden="true"></i> Refresh all';
     }
   }
 
@@ -400,6 +499,7 @@
   });
 
   document.addEventListener('DOMContentLoaded', () => {
+    $('backupRefreshAllBtn').addEventListener('click', refreshAll);
     $('mongoBackupBtn').addEventListener('click', createMongoBackup);
     $('mongoRefreshBtn').addEventListener('click', loadMongoBackups);
     $('qdrantBackupBtn').addEventListener('click', createQdrantBackup);
@@ -418,9 +518,6 @@
     });
     $('backupConfirmCancel').addEventListener('click', () => finishConfirmation(false));
     $('backupConfirmDialog').addEventListener('cancel', (event) => { event.preventDefault(); finishConfirmation(false); });
-    loadConfig();
-    loadMongoBackups();
-    loadQdrantBackups();
-    loadConfigBackups();
+    refreshAll();
   });
 })();

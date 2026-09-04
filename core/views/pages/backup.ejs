@@ -1,193 +1,207 @@
-    <div class="bg-grid"></div>
+<div class="bg-grid"></div>
 
-    <div class="backup-page" style="max-width: 1200px; margin: 0 auto; padding: 24px;">
+<main class="backup-page">
+  <header class="backup-header">
+    <div>
+      <div class="eyebrow">OPERATIONS · RECOVERY</div>
+      <h1><i class="fas fa-shield-halved" aria-hidden="true"></i> Backup control room</h1>
+      <p class="lede">See whether MongoDB, Qdrant, and supported product configuration are protected in persistent recovery storage before browsing individual artifacts.</p>
+    </div>
+    <button id="backupRefreshAllBtn" class="btn backup-refresh-all" type="button">
+      <i class="fas fa-sync-alt" aria-hidden="true"></i> Refresh all
+    </button>
+  </header>
 
-        <header class="backup-header" style="margin-bottom: 24px;">
-            <div class="eyebrow">OPERATIONS</div>
-            <h1><i class="fas fa-database"></i> Backup &amp; Restore</h1>
-            <p class="lede">Create and inspect persistent MongoDB, Qdrant, and supported product-configuration recovery artifacts. Live restore is disabled until a controlled offline rehearsal is explicitly enabled.</p>
-        </header>
+  <div id="toast" class="backup-toast" role="status" aria-live="polite"></div>
 
-        <div id="toast" style="display:none; position:fixed; top:80px; right:24px; padding:12px 20px; border-radius:6px; color:#fff; z-index:1000; font-weight:500;"></div>
-
-        <!-- Settings section -->
-        <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px; margin-bottom:24px;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px;">
-                <div>
-                    <h2 style="margin:0;"><i class="fas fa-gear" style="color:#7cf0ff;"></i> Settings</h2>
-                    <div style="font-size:12px; color:#888; margin-top:4px;">
-                        Retention settings persist inside logical recovery storage. Internal paths, service endpoints, and credentials are never projected to this page.
-                    </div>
-                </div>
-            </div>
-
-            <div style="display:grid; grid-template-columns:auto 1fr auto; gap:12px 16px; align-items:center;">
-                <label style="color:#cbd5e1;">Recovery storage</label>
-                <span id="cfgStorage" style="color:#94a3b8;">—</span>
-                <span id="cfgStorageLifecycle" style="font-size:11px; color:#888;">—</span>
-
-                <label style="color:#cbd5e1;">Host-loss protection</label>
-                <span id="cfgStorageExport" style="color:#94a3b8;">—</span>
-                <span style="font-size:11px; color:#888;">not implied by local persistence</span>
-
-                <label style="color:#cbd5e1;">Retention (days, 0 = forever)</label>
-                <div>
-                    <input id="cfgRetentionDays" type="number" min="0" step="1" style="width:100px; padding:6px 10px; background:#0f1629; border:1px solid #2a3145; color:#fff; border-radius:4px;">
-                    <button id="cfgSaveBtn" class="btn btn-primary" style="padding:6px 14px; margin-left:8px;">Save</button>
-                </div>
-                <span id="cfgRetentionSrc" style="font-size:11px; color:#888;">—</span>
-
-                <label style="color:#cbd5e1;">Config backup scope</label>
-                <span id="cfgConfigScope" style="color:#94a3b8;">—</span>
-                <span style="font-size:11px; color:#888;">runtime env, secrets, private adapters, data, and crontab excluded</span>
-
-                <label style="color:#cbd5e1;">Restore policy</label>
-                <span id="cfgRestorePolicy" style="color:#f59e0b;">—</span>
-                <span style="font-size:11px; color:#888;">no coherent recovery-set proof yet</span>
-            </div>
-
-            <div id="cfgPolicyPanel" role="status" aria-live="polite" style="margin-top:16px; padding:12px 14px; border:1px solid #2a3145; border-radius:6px; background:#111827;">
-                <div style="display:grid; grid-template-columns:minmax(130px, auto) 1fr; gap:8px 16px; font-size:12px;">
-                    <strong style="color:#cbd5e1;">Creation cadence</strong>
-                    <span id="cfgScheduleStatus" style="color:#94a3b8;">Loading effective scheduler policy...</span>
-                    <strong style="color:#cbd5e1;">Failure retry</strong>
-                    <span id="cfgScheduleDetail" style="color:#94a3b8;">—</span>
-                    <strong style="color:#cbd5e1;">Retention enforcement</strong>
-                    <span id="cfgRetentionPolicy" style="color:#94a3b8;">—</span>
-                    <strong style="color:#cbd5e1;">Growth risk</strong>
-                    <span id="cfgGrowthRisk" style="color:#94a3b8;">—</span>
-                </div>
-                <div id="cfgPolicyWarnings" style="margin-top:10px; color:#94a3b8; font-size:11px; line-height:1.55;"></div>
-            </div>
-
-            <div style="margin-top:12px; padding:10px 12px; background:rgba(124,240,255,0.05); border-left:3px solid #7cf0ff; font-size:12px; color:#94a3b8;">
-                <i class="fas fa-info-circle"></i>
-                <strong>Retention</strong> is runtime-editable and pruning runs after each successful backup operation; changing it does not delete anything immediately. Ordinary <code>down</code> preserves recovery storage. Only the exact confirmed <code>reset</code> removes it.
-            </div>
-        </section>
-
-        <!-- MongoDB section -->
-        <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px; margin-bottom:24px;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px;">
-                <div>
-                    <h2 style="margin:0;"><i class="fas fa-leaf" style="color:#4db33d;"></i> MongoDB</h2>
-                    <div style="font-size:12px; color:#888; margin-top:4px;">Stored in persistent recovery storage.</div>
-                    <div id="mongoEvidence" style="font-size:11px; color:#94a3b8; margin-top:5px;">Loading inventory basis...</div>
-                </div>
-                <div style="display:flex; gap:12px; align-items:center;">
-                    <span id="mongoStatus" style="color:#888; font-size:14px;">—</span>
-                    <button id="mongoBackupBtn" class="btn btn-primary" style="padding:8px 16px;">
-                        <i class="fas fa-plus"></i> Create backup
-                    </button>
-                    <button id="mongoRefreshBtn" class="btn" style="padding:8px 12px;" title="Refresh">
-                        <i class="fas fa-sync-alt"></i>
-                    </button>
-                </div>
-            </div>
-            <table style="width:100%; border-collapse:collapse;">
-                <thead>
-                    <tr style="text-align:left; border-bottom:1px solid var(--border, #2a3145);">
-                        <th style="padding:8px 4px;">Name</th>
-                        <th style="padding:8px 4px;">Date</th>
-                        <th style="padding:8px 4px; text-align:right;">Size</th>
-                        <th style="padding:8px 4px; text-align:right;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="mongoBackupsList">
-                    <tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
-                </tbody>
-            </table>
-            <div id="mongoPager" aria-live="polite" style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; color:#94a3b8; font-size:12px;"></div>
-        </section>
-
-        <!-- Qdrant section -->
-        <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px; margin-bottom:24px;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px;">
-                <div>
-                    <h2 style="margin:0;"><i class="fas fa-cube" style="color:#dc3545;"></i> Qdrant</h2>
-                    <div style="font-size:12px; color:#888; margin-top:4px;">Stored in the logical Qdrant snapshot store, with a best-effort persistent recovery copy.</div>
-                    <div id="qdrantEvidence" style="font-size:11px; color:#94a3b8; margin-top:5px;">Loading inventory basis...</div>
-                </div>
-                <div style="display:flex; gap:12px; align-items:center;">
-                    <span id="qdrantStatus" style="color:#888; font-size:14px;">—</span>
-                    <button id="qdrantBackupBtn" class="btn btn-primary" style="padding:8px 16px;">
-                        <i class="fas fa-plus"></i> Create snapshot
-                    </button>
-                    <button id="qdrantRefreshBtn" class="btn" style="padding:8px 12px;" title="Refresh">
-                        <i class="fas fa-sync-alt"></i>
-                    </button>
-                </div>
-            </div>
-            <table style="width:100%; border-collapse:collapse;">
-                <thead>
-                    <tr style="text-align:left; border-bottom:1px solid var(--border, #2a3145);">
-                        <th style="padding:8px 4px;">Name</th>
-                        <th style="padding:8px 4px;">Created</th>
-                        <th style="padding:8px 4px; text-align:right;">Size</th>
-                        <th style="padding:8px 4px; text-align:right;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="qdrantBackupsList">
-                    <tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
-                </tbody>
-            </table>
-            <div id="qdrantPager" aria-live="polite" style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; color:#94a3b8; font-size:12px;"></div>
-        </section>
-
-        <!-- Config section -->
-        <section class="backup-section" style="background: var(--panel-bg, #1a1f2e); border:1px solid var(--border, #2a3145); border-radius:8px; padding:20px;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px;">
-                <div>
-                    <h2 style="margin:0;"><i class="fas fa-sliders" style="color:#f59e0b;"></i> Config</h2>
-                    <div style="font-size:12px; color:#888; margin-top:4px;">
-                        Tarball of the explicit supported, secret-free Compose and product configuration allowlist. Runtime env files, credentials, private adapters, data, historical sources, and system crontab are never captured.
-                    </div>
-                    <div id="configEvidence" style="font-size:11px; color:#94a3b8; margin-top:5px;">Loading inventory basis...</div>
-                </div>
-                <div style="display:flex; gap:12px; align-items:center;">
-                    <span id="configStatus" style="color:#888; font-size:14px;">—</span>
-                    <button id="configBackupBtn" class="btn btn-primary" style="padding:8px 16px;">
-                        <i class="fas fa-plus"></i> Create backup
-                    </button>
-                    <button id="configRefreshBtn" class="btn" style="padding:8px 12px;" title="Refresh">
-                        <i class="fas fa-sync-alt"></i>
-                    </button>
-                </div>
-            </div>
-            <table style="width:100%; border-collapse:collapse;">
-                <thead>
-                    <tr style="text-align:left; border-bottom:1px solid var(--border, #2a3145);">
-                        <th style="padding:8px 4px;">Name</th>
-                        <th style="padding:8px 4px;">Date</th>
-                        <th style="padding:8px 4px; text-align:right;">Size</th>
-                        <th style="padding:8px 4px; text-align:right;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="configBackupsList">
-                    <tr><td colspan="4" style="padding:16px; text-align:center; color:#888;">Loading…</td></tr>
-                </tbody>
-            </table>
-            <div id="configPager" aria-live="polite" style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; color:#94a3b8; font-size:12px;"></div>
-        </section>
-
-        <footer style="margin-top:24px; padding:16px; color:#888; font-size:13px;">
-            <i class="fas fa-info-circle"></i>
-            These artifacts are recovery inputs, not proof of a coherent or restorable recovery set. MongoDB and Qdrant restore remain unavailable in the running product until a controlled offline release rehearsal is explicitly enabled; exact typed confirmation remains required after that gate.
-        </footer>
+  <section id="backupControlRoom" class="backup-control-room is-loading" aria-labelledby="backupOverallTitle">
+    <div class="backup-overall">
+      <div id="backupOverallIcon" class="backup-overall-icon" aria-hidden="true"><i class="fas fa-circle-notch fa-spin"></i></div>
+      <div>
+        <div id="backupOverallKicker" class="backup-kicker">CHECKING RECOVERY STATE</div>
+        <h2 id="backupOverallTitle">Reading the latest backup cycle…</h2>
+        <p id="backupOverallSummary">Scheduler evidence is loading.</p>
+      </div>
     </div>
 
-    <dialog id="backupConfirmDialog" aria-labelledby="backupConfirmTitle" aria-describedby="backupConfirmDescription" style="width:min(560px, calc(100vw - 32px)); color:#e5e7eb; background:#111827; border:1px solid #475569; border-radius:10px; padding:0; box-shadow:0 24px 80px rgba(0,0,0,.55);">
-        <form id="backupConfirmForm" style="padding:24px;">
-            <h2 id="backupConfirmTitle" style="margin:0 0 10px;"></h2>
-            <p id="backupConfirmDescription" style="color:#cbd5e1; line-height:1.55;"></p>
-            <label for="backupConfirmInput" style="display:block; margin-top:18px; color:#cbd5e1;">
-                Type <code id="backupConfirmExpected" style="color:#fbbf24;"></code> exactly
-            </label>
-            <input id="backupConfirmInput" type="text" autocomplete="off" spellcheck="false" aria-describedby="backupConfirmError" style="box-sizing:border-box; width:100%; margin-top:8px; padding:10px 12px; color:#fff; background:#0f1629; border:1px solid #475569; border-radius:6px;">
-            <div id="backupConfirmError" role="status" aria-live="polite" style="min-height:1.4em; margin-top:6px; color:#fca5a5; font-size:12px;"></div>
-            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:18px;">
-                <button id="backupConfirmCancel" class="btn" type="button">Cancel</button>
-                <button id="backupConfirmSubmit" class="btn" type="submit" disabled style="background:#dc3545; color:#fff;">Confirm destructive action</button>
-            </div>
-        </form>
-    </dialog>
+    <div id="backupIncidentPanel" class="backup-incident" role="alert" hidden>
+      <div class="backup-incident-heading"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i> Operator attention</div>
+      <div id="backupIncidentSummary"></div>
+    </div>
+
+    <div class="backup-signal-grid">
+      <article class="backup-signal">
+        <span>Last cycle</span>
+        <strong id="cfgLastCycle">—</strong>
+        <small id="cfgLastCycleAt">Waiting for evidence</small>
+      </article>
+      <article class="backup-signal">
+        <span>Layer health</span>
+        <strong id="cfgLayerCoverage">—</strong>
+        <small>Mongo · Config · Qdrant</small>
+      </article>
+      <article class="backup-signal">
+        <span>Next run</span>
+        <strong id="cfgNextRun">—</strong>
+        <small id="cfgNextRunReason">Waiting for schedule</small>
+      </article>
+      <article class="backup-signal">
+        <span>Retention</span>
+        <strong id="cfgRetentionOverview">—</strong>
+        <small id="cfgRetryBudget">Retry budget —</small>
+      </article>
+    </div>
+  </section>
+
+  <details class="backup-section backup-settings">
+    <summary>
+      <span><i class="fas fa-gear" aria-hidden="true"></i> Policy &amp; settings</span>
+      <small>Cadence, retention, storage lifecycle, and restore boundary</small>
+    </summary>
+    <div class="backup-settings-body">
+      <div class="backup-settings-grid">
+        <label>Recovery storage</label>
+        <span id="cfgStorage">—</span>
+        <small id="cfgStorageLifecycle">—</small>
+
+        <label>Host-loss protection</label>
+        <span id="cfgStorageExport">—</span>
+        <small>not implied by local persistence</small>
+
+        <label for="cfgRetentionDays">Retention (days, 0 = forever)</label>
+        <div class="backup-inline-control">
+          <input id="cfgRetentionDays" type="number" min="0" step="1">
+          <button id="cfgSaveBtn" class="btn btn-primary" type="button">Save</button>
+        </div>
+        <small id="cfgRetentionSrc">—</small>
+
+        <label>Config backup scope</label>
+        <span id="cfgConfigScope">—</span>
+        <small>Runtime env files, credentials, private adapters, data, and crontab are never captured.</small>
+
+        <label>Restore policy</label>
+        <span id="cfgRestorePolicy" class="backup-warning-text">—</span>
+        <small>no coherent recovery-set proof yet</small>
+      </div>
+
+      <div id="cfgPolicyPanel" class="backup-policy-panel" role="status" aria-live="polite">
+        <strong>Creation cadence</strong><span id="cfgScheduleStatus">Loading effective scheduler policy…</span>
+        <strong>Failure retry</strong><span id="cfgScheduleDetail">—</span>
+        <strong>Retention enforcement</strong><span id="cfgRetentionPolicy">—</span>
+        <strong>Growth risk</strong><span id="cfgGrowthRisk">—</span>
+        <div id="cfgPolicyWarnings" class="backup-policy-warnings"></div>
+      </div>
+
+      <div class="backup-note">
+        <i class="fas fa-info-circle" aria-hidden="true"></i>
+        <span><strong>Retention</strong> is runtime-editable and pruning runs after each successful backup operation; changing it does not delete anything immediately. Ordinary <code>down</code> preserves recovery storage. Only the exact confirmed <code>reset</code> removes it.</span>
+      </div>
+    </div>
+  </details>
+
+  <div class="backup-layer-stack">
+    <section class="backup-section backup-layer" data-backup-layer="mongo" aria-labelledby="mongoTitle">
+      <div class="backup-layer-header">
+        <div class="backup-layer-identity">
+          <span class="backup-layer-icon mongo"><i class="fas fa-leaf" aria-hidden="true"></i></span>
+          <div>
+            <div class="backup-kicker">DATABASE</div>
+            <h2 id="mongoTitle">MongoDB</h2>
+            <p id="mongoEvidence">Loading inventory basis…</p>
+          </div>
+        </div>
+        <div class="backup-layer-actions">
+          <span id="mongoStatus" class="backup-count">—</span>
+          <button id="mongoBackupBtn" class="btn btn-primary" type="button"><i class="fas fa-plus" aria-hidden="true"></i> Create backup</button>
+          <button id="mongoRefreshBtn" class="btn backup-icon-button" type="button" title="Refresh MongoDB inventory" aria-label="Refresh MongoDB inventory"><i class="fas fa-sync-alt" aria-hidden="true"></i></button>
+        </div>
+      </div>
+      <details class="backup-inventory">
+        <summary>Browse MongoDB recovery artifacts <span>full inventory</span></summary>
+        <div class="backup-table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Date</th><th class="align-right">Size</th><th class="align-right">Actions</th></tr></thead>
+            <tbody id="mongoBackupsList"><tr><td colspan="4" class="backup-empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="mongoPager" class="backup-pager" aria-live="polite"></div>
+      </details>
+    </section>
+
+    <section class="backup-section backup-layer" data-backup-layer="qdrant" aria-labelledby="qdrantTitle">
+      <div class="backup-layer-header">
+        <div class="backup-layer-identity">
+          <span class="backup-layer-icon qdrant"><i class="fas fa-cube" aria-hidden="true"></i></span>
+          <div>
+            <div class="backup-kicker">VECTOR MEMORY</div>
+            <h2 id="qdrantTitle">Qdrant</h2>
+            <p id="qdrantEvidence">Loading inventory basis…</p>
+          </div>
+        </div>
+        <div class="backup-layer-actions">
+          <span id="qdrantStatus" class="backup-count">—</span>
+          <button id="qdrantBackupBtn" class="btn btn-primary" type="button"><i class="fas fa-plus" aria-hidden="true"></i> Create snapshot</button>
+          <button id="qdrantRefreshBtn" class="btn backup-icon-button" type="button" title="Refresh Qdrant inventory" aria-label="Refresh Qdrant inventory"><i class="fas fa-sync-alt" aria-hidden="true"></i></button>
+        </div>
+      </div>
+      <details class="backup-inventory">
+        <summary>Browse Qdrant snapshots <span>full inventory</span></summary>
+        <div class="backup-table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Created</th><th class="align-right">Size</th><th class="align-right">Actions</th></tr></thead>
+            <tbody id="qdrantBackupsList"><tr><td colspan="4" class="backup-empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="qdrantPager" class="backup-pager" aria-live="polite"></div>
+      </details>
+    </section>
+
+    <section class="backup-section backup-layer" data-backup-layer="config" aria-labelledby="configTitle">
+      <div class="backup-layer-header">
+        <div class="backup-layer-identity">
+          <span class="backup-layer-icon config"><i class="fas fa-sliders" aria-hidden="true"></i></span>
+          <div>
+            <div class="backup-kicker">PRODUCT CONFIG</div>
+            <h2 id="configTitle">Configuration</h2>
+            <p id="configEvidence">Loading inventory basis…</p>
+          </div>
+        </div>
+        <div class="backup-layer-actions">
+          <span id="configStatus" class="backup-count">—</span>
+          <button id="configBackupBtn" class="btn btn-primary" type="button"><i class="fas fa-plus" aria-hidden="true"></i> Create backup</button>
+          <button id="configRefreshBtn" class="btn backup-icon-button" type="button" title="Refresh configuration inventory" aria-label="Refresh configuration inventory"><i class="fas fa-sync-alt" aria-hidden="true"></i></button>
+        </div>
+      </div>
+      <details class="backup-inventory">
+        <summary>Browse configuration artifacts <span>full inventory</span></summary>
+        <div class="backup-table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Date</th><th class="align-right">Size</th><th class="align-right">Actions</th></tr></thead>
+            <tbody id="configBackupsList"><tr><td colspan="4" class="backup-empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="configPager" class="backup-pager" aria-live="polite"></div>
+      </details>
+    </section>
+  </div>
+
+  <footer class="backup-footer">
+    <i class="fas fa-circle-info" aria-hidden="true"></i>
+    <span>These artifacts are recovery inputs, not proof of a coherent or restorable recovery set. MongoDB and Qdrant restore remain unavailable in the running product until a controlled offline release rehearsal is explicitly enabled; exact typed confirmation remains required after that gate.</span>
+  </footer>
+</main>
+
+<dialog id="backupConfirmDialog" class="backup-dialog" aria-labelledby="backupConfirmTitle" aria-describedby="backupConfirmDescription">
+  <form id="backupConfirmForm">
+    <div class="backup-dialog-icon"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i></div>
+    <h2 id="backupConfirmTitle"></h2>
+    <p id="backupConfirmDescription"></p>
+    <label for="backupConfirmInput">Type <code id="backupConfirmExpected"></code> exactly</label>
+    <input id="backupConfirmInput" type="text" autocomplete="off" spellcheck="false" aria-describedby="backupConfirmError">
+    <div id="backupConfirmError" role="status" aria-live="polite"></div>
+    <div class="backup-dialog-actions">
+      <button id="backupConfirmCancel" class="btn" type="button">Cancel</button>
+      <button id="backupConfirmSubmit" class="btn backup-danger" type="submit" disabled>Confirm permanent deletion</button>
+    </div>
+  </form>
+</dialog>
