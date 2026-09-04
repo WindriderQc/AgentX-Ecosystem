@@ -1,9 +1,11 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -15,6 +17,65 @@ function section(source, start, end) {
   assert.notEqual(endIndex, -1, `missing workflow section ${end}`);
   return source.slice(startIndex, endIndex);
 }
+
+function executeMongoSeed(relative) {
+  const collections = new Map();
+  const collection = name => ({
+    countDocuments: () => (collections.get(name) || []).length,
+    insertOne: document => {
+      collections.set(name, [...(collections.get(name) || []), document]);
+    },
+    insertMany: documents => {
+      collections.set(name, [...(collections.get(name) || []), ...documents]);
+    },
+  });
+  const db = new Proxy({ getCollection: collection }, {
+    get(target, property) {
+      if (property in target) return target[property];
+      return collection(String(property));
+    },
+  });
+  const ObjectId = value => ({
+    value,
+    toString() { return value; },
+  });
+
+  vm.runInNewContext(read(relative), { db, ObjectId, print() {} }, { timeout: 1_000 });
+  return collections;
+}
+
+test('live cancellation seed carries an exact profiler authority receipt', () => {
+  const collections = executeMongoSeed('e2e/fixtures/live-cancellation-seed.mongodb.js');
+  const [model] = collections.get('modelprofiles');
+  const [evidence] = collections.get('modelperformanceprofiles');
+  const readiness = model.readiness.primary;
+  const receipt = readiness.authorityReceipt;
+
+  assert.equal(readiness.profileDepth, 'standard');
+  assert.equal(readiness.benchmarkQualified, true);
+  assert.equal(readiness.qualificationReason, null);
+  assert.equal(readiness.measurementReliability, 'medium');
+  assert.equal(String(readiness.evidenceId), String(evidence._id));
+  assert.equal(receipt.source, 'profiler_pipeline');
+  assert.equal(receipt.version, 1);
+  assert.equal(receipt.evidenceId, String(evidence._id));
+  assert.match(receipt.digest, /^[a-f0-9]{64}$/);
+  assert.equal(readiness.stale, false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(readiness.artifact)),
+    JSON.parse(JSON.stringify(evidence.artifact)),
+  );
+
+  const expectedDigest = crypto.createHash('sha256').update(JSON.stringify({
+    modelName: evidence.modelName,
+    hostId: evidence.hostId,
+    artifact: evidence.artifact,
+    profileDepth: evidence.profile.profileDepth,
+    required: evidence.profile.requiredRetainedSamples,
+    passing: evidence.profile.measurementQuality.passingSampleCount,
+  })).digest('hex');
+  assert.equal(receipt.digest, expectedDigest);
+});
 
 test('release contract requires exact green CI and prior explicitly authorized lifecycle evidence', () => {
   const workflow = read('.github/workflows/publish-images.yml');
