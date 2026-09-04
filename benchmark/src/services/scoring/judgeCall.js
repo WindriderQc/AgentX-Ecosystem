@@ -8,6 +8,7 @@ const { getFetchOptions } = require('../../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const { benchmarkFetch: fetch } = require('../benchmark/http');
 const { normalizeJudgeNumCtx } = require('./judgeRuntimeConfig');
+const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
 
 // Judge calls always route through the core inference proxy. Lane policy (0168)
 // classifies `callerDetail: 'benchmark-judge'`; the scoped Benchmark credential
@@ -404,6 +405,7 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
                 responseMode: 'normalized',
                 think,
                 callerDetail: 'benchmark-judge',
+                ...(getBenchmarkClaimIdentity(judgeConfig.host, judgeConfig.batch_id) || {}),
                 options: judgeOptions
             };
             const fetchOptions = getFetchOptions(url, {

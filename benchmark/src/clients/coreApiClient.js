@@ -381,7 +381,7 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
   }
 }
 
-async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = null) {
+async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = null, claimOptions = {}) {
   const path = `/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/benchmark-claim/${encodeURIComponent(batchId)}/heartbeat`;
   try {
     const data = await coreRequest(path, {
@@ -390,8 +390,8 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = n
       body: JSON.stringify({
         claimGeneration: claimGenerationByOwner.get(claimOwnerKey(hostUrl, batchId)) || null,
         estimatedDurationMs,
-        source: 'benchmark',
-        owner: 'agentx-benchmark'
+        source: claimOptions.source || 'benchmark',
+        owner: claimOptions.owner || 'agentx-benchmark'
       })
     });
     return data.data || { heartbeat: true };
@@ -420,6 +420,12 @@ async function releaseBenchmarkClaim(hostUrl, batchId) {
   const result = data.data || { released: true };
   if (result.released === true) claimGenerationByOwner.delete(claimOwnerKey(hostUrl, batchId));
   return result;
+}
+
+function getBenchmarkClaimIdentity(hostUrl, batchId) {
+  const claimGeneration = claimGenerationByOwner.get(claimOwnerKey(hostUrl, batchId));
+  if (!claimGeneration) return null;
+  return { claimBatchId: batchId, claimGeneration };
 }
 
 /**
@@ -455,6 +461,7 @@ module.exports = {
   claimHostForBenchmark,
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
+  getBenchmarkClaimIdentity,
   getBenchmarkClaims,
   CORE_OPERATIONS,
   _internal: {

@@ -115,7 +115,8 @@ describe('runPrefillDecodeMatrix', () => {
     const cell = result.cells[0];
     expect(cell.prefillTokensPerSec).toBeCloseTo(800, 0);
     expect(cell.decodeTokensPerSec).toBeCloseTo(120, 0);
-    expect(cell.ttftMs).toBeGreaterThan(0);
+    expect(cell.promptEvalDurationMs).toBeGreaterThan(0);
+    expect(cell).not.toHaveProperty('ttftMs');
     expect(cell.status).toBe('pass');
   });
 

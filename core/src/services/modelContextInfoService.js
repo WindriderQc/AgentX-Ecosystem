@@ -111,7 +111,7 @@ async function fromContextProfile(model, hostUrl, artifact, deps = {}) {
         runtimeFingerprint: artifact.runtimeFingerprint,
         stale: { $ne: true }
       })
-        .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext verifiedMaxContext verifiedInputTokens lastValidatedAt source')
+        .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext recommendedInteractiveContext recommendedDocumentContext maxVerifiedContext verifiedMaxContext historicalMaxVerifiedContext verifiedInputTokens lastValidatedAt source')
         .lean();
     } else {
       const client = deps.benchmarkClient || getBenchmarkServiceClient();
@@ -121,12 +121,16 @@ async function fromContextProfile(model, hostUrl, artifact, deps = {}) {
         runtimeFingerprint: artifact.runtimeFingerprint
       });
     }
-    const verified = Number(profile?.verifiedMaxContext || profile?.recommendedContext);
+    const verified = Number(profile?.maxVerifiedContext || profile?.verifiedMaxContext || profile?.recommendedContext);
     if (!Number.isFinite(verified) || verified <= 0) return null;
     return {
       num_ctx: Math.round(verified),
       source: 'model_context_profile',
       verifiedMaxContext: Math.round(verified),
+      maxVerifiedContext: Math.round(verified),
+      recommendedInteractiveContext: Number(profile?.recommendedInteractiveContext) || null,
+      recommendedDocumentContext: Number(profile?.recommendedDocumentContext || profile?.recommendedContext) || null,
+      historicalMaxVerifiedContext: Number(profile?.historicalMaxVerifiedContext) || Math.round(verified),
       verifiedInputTokens: profile.verifiedInputTokens || null,
       profiledAt: profile.lastValidatedAt || null,
       matchedName: profile.modelName || null

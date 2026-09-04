@@ -29,6 +29,19 @@ async function upsert(data) {
   );
 }
 
+async function updateMetadata(name, metadata = {}) {
+  const allowed = ['displayName', 'tags', 'categories'];
+  const set = {};
+  for (const key of allowed) {
+    if (metadata[key] !== undefined) set[key] = metadata[key];
+  }
+  return ModelProfile.findOneAndUpdate(
+    { name },
+    { $set: set, $setOnInsert: { name } },
+    { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+  );
+}
+
 async function updateReadiness(modelName, hostId, stage, extraFields = {}) {
   if (!['available', 'profiled', 'benchmarked'].includes(stage)) {
     throw new RangeError(`Unsupported readiness stage: ${stage}`);
@@ -127,6 +140,7 @@ module.exports = {
   getAll,
   getByName,
   upsert,
+  updateMetadata,
   updateReadiness,
   updateThinkingCapability,
   updateHostAvailability,

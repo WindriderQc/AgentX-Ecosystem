@@ -24,6 +24,7 @@ const HostProfileSchema = new mongoose.Schema({
     tokensPerSec: Number,
     latencyMs: Number,
     ttftMs: Number,
+    ttftMeasurement: { type: String, enum: ['streamed_wall_clock'], default: undefined },
     testedAt: Date
   },
   status: {

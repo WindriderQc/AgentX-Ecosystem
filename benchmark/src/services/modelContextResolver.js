@@ -75,7 +75,8 @@ async function resolveModelNumCtxDetails(modelName, opts = {}) {
 
   if (!skipPriorProfileArtifacts) {
     const profile = await findContextProfile(normalizedModel, targetHost, artifactIdentity);
-    const verifiedContext = positiveInteger(profile?.verifiedMaxContext)
+    const verifiedContext = positiveInteger(profile?.maxVerifiedContext)
+      || positiveInteger(profile?.verifiedMaxContext)
       || positiveInteger(profile?.recommendedContext);
     if (verifiedContext) {
       return {
@@ -86,6 +87,9 @@ async function resolveModelNumCtxDetails(modelName, opts = {}) {
         testedAt: profile.lastValidatedAt || null,
         details: {
           verifiedMaxContext: verifiedContext,
+          maxVerifiedContext: verifiedContext,
+          recommendedInteractiveContext: positiveInteger(profile?.recommendedInteractiveContext),
+          recommendedDocumentContext: positiveInteger(profile?.recommendedDocumentContext),
           verifiedInputTokens: positiveInteger(profile.verifiedInputTokens),
           matchedName: profile.modelName || null
         }

@@ -63,7 +63,9 @@ describe('modelContextProfileService', () => {
       artifactDigest: 'sha256:exact',
       runtimeFingerprint: 'runtime-a',
       hostId: 'secondary',
+      maxVerifiedContext: 237568,
       verifiedMaxContext: 237568,
+      historicalMaxVerifiedContext: 237568,
       verifiedInputTokens: 190000,
       recommendedContext: 237568,
       source: 'context_probe',
@@ -78,7 +80,7 @@ describe('modelContextProfileService', () => {
     }));
   });
 
-  it('preserves a higher verified ceiling when a later bounded probe updates evidence', async () => {
+  it('lowers the current ceiling while retaining the historical maximum', async () => {
     ModelContextProfile.findOne.mockReturnValue(mockLean({
       verifiedMaxContext: 237568
     }));
@@ -96,8 +98,10 @@ describe('modelContextProfileService', () => {
     });
 
     expect(profile).toEqual(expect.objectContaining({
-      verifiedMaxContext: 237568,
-      recommendedContext: 237568
+      maxVerifiedContext: 131072,
+      verifiedMaxContext: 131072,
+      historicalMaxVerifiedContext: 237568,
+      recommendedContext: 131072
     }));
     expect(profile.latestEvidence).toEqual(expect.objectContaining({
       snapshotId: 'snapshot-2',

@@ -298,7 +298,10 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
                     avg_time_to_first_token_ms: {
                         $avg: {
                             $cond: [
-                                { $gt: ['$time_to_first_token_ms', 0] },
+                                { $and: [
+                                    { $eq: ['$ttft_measurement', 'streamed_wall_clock'] },
+                                    { $gt: ['$time_to_first_token_ms', 0] }
+                                ] },
                                 '$time_to_first_token_ms',
                                 null
                             ]
@@ -603,7 +606,8 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
             host_test_status: hostSnapshot?.status || null,
             host_test_tokens_per_sec: hostSnapshot?.tokensPerSec ?? null,
             host_test_latency_ms: hostSnapshot?.latencyMs ?? null,
-            host_test_ttft_ms: hostSnapshot?.timeToFirstTokenMs ?? null,
+            host_test_ttft_ms: hostSnapshot?.ttftMeasurement === 'streamed_wall_clock'
+                ? (hostSnapshot?.timeToFirstTokenMs ?? null) : null,
             host_test_vram_used_mib: hostSnapshot?.vramUsedMiB ?? null,
             host_test_vram_total_mib: hostSnapshot?.vramTotalMiB ?? null,
             host_test_vram_efficiency: vramEfficiency,

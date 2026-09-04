@@ -4,8 +4,6 @@ const express = require('express');
 const router = express.Router();
 const modelProfileService = require('../../src/services/profiler/modelProfileService');
 const modelPerformanceProfileService = require('../../src/services/profiler/modelPerformanceProfileService');
-const { getConfiguredHosts } = require('../../src/helpers/ollamaHostConfig');
-const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdmission');
 
 function validateHostId(hostId, res) {
   if (/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(String(hostId || ''))) return true;
@@ -52,17 +50,19 @@ router.get('/:name/config', async (req, res) => {
 
 router.put('/:name', async (req, res) => {
   try {
-    const allowed = ['stage', 'hostId', 'sourceHost', 'readiness', 'profile', 'notes'];
-    const update = { name: req.params.name };
-    for (const key of allowed) {
-      if (req.body[key] !== undefined) update[key] = req.body[key];
-    }
-    if (update.sourceHost) {
-      update.sourceHost = await admitOllamaTargetResolved(update.sourceHost, {
-        configuredHosts: getConfiguredHosts()
+    const authorityFields = ['stage', 'hostId', 'sourceHost', 'readiness', 'profile', 'benchmarkStats', 'capabilities', 'thinkingProfiles'];
+    const forbidden = authorityFields.filter(key => req.body?.[key] !== undefined);
+    if (forbidden.length) {
+      return res.status(403).json({
+        status: 'error',
+        code: 'PROFILE_AUTHORITY_FIELDS_FORBIDDEN',
+        error: `Profiler authority fields are pipeline-owned: ${forbidden.join(', ')}`
       });
     }
-    res.json({ status: 'success', data: await modelProfileService.upsert(update) });
+    const allowed = ['displayName', 'tags', 'categories'];
+    const unknown = Object.keys(req.body || {}).filter(key => !allowed.includes(key));
+    if (unknown.length) return res.status(400).json({ status: 'error', error: `Unsupported fields: ${unknown.join(', ')}` });
+    res.json({ status: 'success', authority: 'metadata_only', data: await modelProfileService.updateMetadata(req.params.name, req.body || {}) });
   } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message }); }
 });
 

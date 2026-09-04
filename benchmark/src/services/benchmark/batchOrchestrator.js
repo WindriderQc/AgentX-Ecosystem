@@ -49,6 +49,7 @@ const { createResumeRevalidation, RESUME_CODES } = require('./resumeRevalidation
 const { checkBatchPreflight, executionModelsFromHostGroups, preflightCounts, runBatchPreflight } = require('./batchPreflightLifecycle');
 const { executionHost, normalizeBatchTargets } = require('../../../../shared/benchmarkTargetContract');
 const { executeHarnessTarget, resolveHarnessTarget } = require('./harnessBrokerClient');
+const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
 
 // A throughput batch can have one in-flight Core request per host. Keep the
 // controllers grouped by the exact batch id so the stop route can interrupt
@@ -146,6 +147,8 @@ async function runBatchOrchestrator({
         handleGracefulStop = () => {};
     }
     const batchCancellationController = new AbortController();
+    let assertClaimActive = () => true;
+    const claimIdentityFor = hostUrl => getBenchmarkClaimIdentity(hostUrl, String(batchId));
     let unregisterBatchCancellation = () => false;
     let orchestrationCompleted = false;
     const normalizedTargets = normalizeBatchTargets({ host: defaultHost, models, targets });
@@ -337,6 +340,7 @@ async function runBatchOrchestrator({
                 stream: false,
                 responseMode: 'normalized',
                 callerDetail: `benchmark-batch-${batchId}`,
+                ...(claimIdentityFor(hostUrl) || {}),
                 options: ollamaOptions,
                 ...(sendThink ? {
                     suppressThinking: !think,
@@ -388,19 +392,13 @@ async function runBatchOrchestrator({
             const responseText = useChat ? (data.message?.content || '') : (data.response || '');
             const tokenEstimateText = `${responseText || ''}${data.thinking || data.message?.thinking || ''}`;
             const tokens = data.eval_count || Math.ceil(tokenEstimateText.length / 4);
-            // NOTE: this is NOT a true streaming TTFT. We call Ollama with
-            // stream:false, so we cannot observe when the first token actually
-            // arrives over the wire. `prompt_eval_duration` is Ollama's
-            // self-reported time to ingest+evaluate the prompt before
-            // generation begins — a reasonable lower bound for TTFT, but it
-            // excludes queueing, model-load, and network. Field is named
-            // `time_to_first_token_ms` for backwards compatibility with
-            // existing dashboards/leaderboards; treat it as "prompt eval
-            // duration" semantically. Real streaming TTFT requires switching
-            // to stream:true and timing the first chunk — out of scope here.
-            const timeToFirstTokenMs = data.prompt_eval_duration > 0
+            // Non-streamed batch execution cannot observe wall-to-wall TTFT.
+            // Preserve Ollama's prompt evaluation duration under its truthful
+            // name and leave the legacy TTFT field null.
+            const promptEvalDurationMs = data.prompt_eval_duration > 0
                 ? Number((data.prompt_eval_duration / 1e6).toFixed(1))
                 : null;
+            const timeToFirstTokenMs = null;
             const tokensPerSec = (tokens > 0 && latency > 0)
                 ? Number((tokens / (latency / 1000)).toFixed(2))
                 : 0;
@@ -512,7 +510,8 @@ async function runBatchOrchestrator({
                     latency,
                     tokens,
                     tokens_per_sec: tokensPerSec,
-                    time_to_first_token_ms: timeToFirstTokenMs
+                    time_to_first_token_ms: null,
+                    prompt_eval_duration_ms: promptEvalDurationMs
                 }).catch(err => logger.debug('Failed to update responded stage', { error: err.message }));
             }
 
@@ -530,6 +529,7 @@ async function runBatchOrchestrator({
                 tokens,
                 tokensPerSec,
                 timeToFirstTokenMs,
+                promptEvalDurationMs,
                 cleanedResponse,
                 extractedThinking,
                 hasEmptyResponse,
@@ -858,6 +858,7 @@ async function runBatchOrchestrator({
             hostUrl,
             numCtx: modelExecConfig.num_ctx || null
         });
+        assertClaimActive();
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping before model warmup because batch is stopped', { batchId, model, host: hostUrl });
             return { stopped: true, cancelled: false };
@@ -872,7 +873,9 @@ async function runBatchOrchestrator({
             num_ctx: modelExecConfig.num_ctx || null,
             warmupTimeoutCold,
             warmupTimeoutLoaded,
-            onPhaseDetail: (detail) => setBatchPhase('warmup', detail)
+            onPhaseDetail: (detail) => setBatchPhase('warmup', detail),
+            claimIdentity: claimIdentityFor(hostUrl),
+            assertClaimActive
         });
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping after model warmup because batch is stopped', { batchId, model, host: hostUrl });
@@ -912,6 +915,7 @@ async function runBatchOrchestrator({
                         handleGracefulStop();
                         return { stopped: true, cancelled: false };
                     }
+                    assertClaimActive();
 
                     if (consecutiveInfraErrors >= INFRA_ERROR_CIRCUIT_BREAKER_THRESHOLD) {
                         logger.warn(`Circuit breaker: skipping remaining prompts on ${hostUrl} after ${consecutiveInfraErrors} consecutive infra errors`, {
@@ -980,7 +984,9 @@ async function runBatchOrchestrator({
                                 timelinePrefix: 'infra_recovery_warmup',
                                 recordTimelineEvent: recordBatchTimelineEvent,
                                 num_ctx: modelExecConfig.num_ctx || null,
-                                onPhaseDetail: (detail) => setBatchPhase('warmup', detail)
+                                onPhaseDetail: (detail) => setBatchPhase('warmup', detail),
+                                claimIdentity: claimIdentityFor(hostUrl),
+                                assertClaimActive
                             });
                             await setBatchPhase('executing', null);
                             logger.info('Model recovered after infra error', { batchId, model, host: hostUrl });
@@ -1197,8 +1203,25 @@ async function runBatchOrchestrator({
     const stopClaimHeartbeat = startBenchmarkClaimHeartbeat(
         claimedHostUrls,
         batchId,
-        claimEstimateMs
+        claimEstimateMs,
+        {
+            onFatal: error => {
+                if (!batchCancellationController.signal.aborted) {
+                    batchCancellationController.abort(error);
+                }
+            }
+        }
     );
+    await stopClaimHeartbeat.ready;
+    try {
+        stopClaimHeartbeat.assertActive();
+    } catch (error) {
+        if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
+        else stopClaimHeartbeat();
+        await releaseBenchmarkClaims(claimedHostUrls, batchId);
+        throw error;
+    }
+    assertClaimActive = stopClaimHeartbeat.assertActive;
     await recordBatchTimelineEvent('benchmark_claim_acquired', {
         hosts: claimedHostUrls,
         requested: allAffectedHosts,
@@ -1210,21 +1233,21 @@ async function runBatchOrchestrator({
             return;
         }
         hostLifecycleFinalized = true;
-        stopClaimHeartbeat();
+        const claimWasLost = Boolean(stopClaimHeartbeat.getFailure());
+        if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
+        else stopClaimHeartbeat();
 
-        const tasks = [];
+        let release = { failed: 0 };
         if (claimedHostUrls.length > 0) {
-            tasks.push((async () => {
-                await releaseBenchmarkClaims(claimedHostUrls, batchId);
-                await recordBatchTimelineEvent('benchmark_claim_released', {
-                    hosts: claimedHostUrls
-                }).catch(() => {});
-            })());
+            release = await releaseBenchmarkClaims(claimedHostUrls, batchId);
+            await recordBatchTimelineEvent('benchmark_claim_released', {
+                hosts: claimedHostUrls,
+                ...(release.failed > 0 ? { failed: release.failed } : {})
+            }).catch(() => {});
         }
-        if (dedicationState.size > 0) {
-            tasks.push(restoreAllDedication(dedicationState, { batchId, recordBatchTimelineEvent }));
+        if (!claimWasLost && release.failed === 0 && dedicationState.size > 0) {
+            await restoreAllDedication(dedicationState, { batchId, recordBatchTimelineEvent });
         }
-        await Promise.allSettled(tasks);
     };
 
     // Registered only once claim/dedication lifecycle protection exists. From
@@ -1232,6 +1255,7 @@ async function runBatchOrchestrator({
     unregisterBatchCancellation = registerActiveBatchController(batchId, batchCancellationController);
 
     try {
+        assertClaimActive();
         if (dedicationState.size > 0) {
             try {
                 await releaseAllDedication(dedicationState, {
@@ -1254,7 +1278,9 @@ async function runBatchOrchestrator({
             batchId,
             defaultHost,
             setBatchPhase,
-            recordBatchTimelineEvent
+            recordBatchTimelineEvent,
+            assertClaimActive,
+            claimIdentityFor
         });
 
         if (!isResuming && requestedHostGroups.length > 0) {

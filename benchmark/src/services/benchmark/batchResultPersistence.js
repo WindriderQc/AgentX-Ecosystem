@@ -25,6 +25,8 @@ async function persistSuccessfulResult({
     tokens,
     tokensPerSec,
     timeToFirstTokenMs,
+    ttftMeasurement = null,
+    promptEvalDurationMs = null,
     cleanedResponse,
     extractedThinking,
     hasEmptyResponse,
@@ -115,6 +117,10 @@ async function persistSuccessfulResult({
         error.statusCode = 409;
         throw error;
     }
+    const trustedTtftMs = ttftMeasurement === 'streamed_wall_clock'
+        && Number.isFinite(Number(timeToFirstTokenMs))
+        ? Number(timeToFirstTokenMs)
+        : null;
     const resultDocument = {
         model,
         model_digest: modelDigest,
@@ -145,7 +151,9 @@ async function persistSuccessfulResult({
         latency,
         tokens,
         tokens_per_sec: tokensPerSec,
-        time_to_first_token_ms: timeToFirstTokenMs,
+        time_to_first_token_ms: trustedTtftMs,
+        ttft_measurement: trustedTtftMs != null ? 'streamed_wall_clock' : null,
+        prompt_eval_duration_ms: promptEvalDurationMs,
         response: visibleResponse,
         thinking: hiddenThinking || null,
         success: true,
@@ -220,6 +228,7 @@ async function persistSuccessfulResult({
             promptEvalTokensPerSec: performanceBaseline.promptEvalTokensPerSec ?? null,
             latencyMs: performanceBaseline.latencyMs ?? null,
             timeToFirstTokenMs: performanceBaseline.timeToFirstTokenMs ?? null,
+            ttftMeasurement: performanceBaseline.ttftMeasurement || undefined,
             vramUsedMiB: performanceBaseline.vramUsedMiB ?? null,
             vramTotalMiB: performanceBaseline.vramTotalMiB ?? null,
             numCtx: performanceBaseline.numCtx ?? null,
@@ -250,7 +259,7 @@ async function persistSuccessfulResult({
         prompt_level: prompt.level,
         duration_ms: latency,
         tokens_per_sec: tokensPerSec,
-        time_to_first_token_ms: timeToFirstTokenMs,
+        time_to_first_token_ms: trustedTtftMs,
         success: true,
         error: null
     });

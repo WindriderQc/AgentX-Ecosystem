@@ -5,7 +5,7 @@
  *
  * Runs a grid of FIXED absolute workloads — prefill (prompt) token sizes ×
  * decode (generation) lengths — against a model on one host, and records
- * prefill tok/s, decode tok/s, TTFT and latency for every cell.
+ * prefill tok/s, decode tok/s, prompt-eval duration and latency for every cell.
  *
  * Why "fixed": the existing full-profile throughputCurve scales its prompt to
  * a percentage of each model's own max context, so its numbers are not
@@ -125,7 +125,7 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs) {
     const decodeTokensPerSec = evalDuration > 0
       ? Number((evalCount / (evalDuration / 1e9)).toFixed(2))
       : null;
-    const ttftMs = promptEvalDuration > 0
+    const promptEvalDurationMs = promptEvalDuration > 0
       ? Number((promptEvalDuration / 1e6).toFixed(1))
       : null;
 
@@ -139,7 +139,7 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs) {
       completionTokens: evalCount,
       prefillTokensPerSec,
       decodeTokensPerSec,
-      ttftMs,
+      promptEvalDurationMs,
       latencyMs,
       error: shortCompletion
         ? `Completion ${evalCount}/${decodeTokens} tokens — decode sample invalid`
@@ -154,7 +154,7 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs) {
       completionTokens: null,
       prefillTokensPerSec: null,
       decodeTokensPerSec: null,
-      ttftMs: null,
+      promptEvalDurationMs: null,
       latencyMs: Date.now() - start,
       error: err.message
     };
@@ -187,6 +187,7 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
   let index = 0;
 
   for (const plan of plannedCells) {
+    options.assertClaimActive?.();
     index += 1;
     if (!plan.fits || numCtx == null) {
       const skipped = {
@@ -197,7 +198,7 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
         completionTokens: null,
         prefillTokensPerSec: null,
         decodeTokensPerSec: null,
-        ttftMs: null,
+        promptEvalDurationMs: null,
         latencyMs: null,
         error: `Requires ${plan.requiredCtx} ctx > safe ${options.safeNumCtx}`
       };

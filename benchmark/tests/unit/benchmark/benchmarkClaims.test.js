@@ -22,6 +22,7 @@ jest.mock('../../../config/logger', () => ({
 // Mock the core API client so we can control claim/release outcomes
 jest.mock('../../../src/clients/coreApiClient', () => ({
     claimHostForBenchmark: jest.fn(),
+    heartbeatBenchmarkClaim: jest.fn(),
     releaseBenchmarkClaim: jest.fn(),
     // Other functions referenced by batchOrchestrator — no-op defaults
     getDedicationStatuses: jest.fn(() => Promise.resolve([])),
@@ -33,13 +34,35 @@ const coreApiClient = require('../../../src/clients/coreApiClient');
 const {
     acquireBenchmarkClaims,
     releaseBenchmarkClaims,
-    estimateBenchmarkClaimDurationMs
+    estimateBenchmarkClaimDurationMs,
+    startBenchmarkClaimHeartbeat
 } = require('../../../src/services/benchmark/benchmarkClaimLifecycle');
 
 describe('benchmark coordination helpers', () => {
     beforeEach(() => {
         coreApiClient.claimHostForBenchmark.mockReset();
         coreApiClient.releaseBenchmarkClaim.mockReset();
+        coreApiClient.heartbeatBenchmarkClaim.mockReset();
+    });
+
+    describe('startBenchmarkClaimHeartbeat', () => {
+        it('makes an ownership rejection fatal to the active run', async () => {
+            const onFatal = jest.fn();
+            coreApiClient.heartbeatBenchmarkClaim.mockResolvedValue({ heartbeat: false, reason: 'generation changed' });
+            const stop = startBenchmarkClaimHeartbeat(['http://a:11434'], 'batch-lost', 30_000, { onFatal, intervalMs: 60_000 });
+            await stop.ready;
+            expect(() => stop.assertActive()).toThrow(expect.objectContaining({ code: 'BENCHMARK_CLAIM_LOST' }));
+            expect(onFatal).toHaveBeenCalledWith(expect.objectContaining({ code: 'BENCHMARK_CLAIM_LOST' }));
+            stop();
+        });
+
+        it('treats Core heartbeat transport failure as fatal', async () => {
+            coreApiClient.heartbeatBenchmarkClaim.mockRejectedValue(new Error('core unavailable'));
+            const stop = startBenchmarkClaimHeartbeat(['http://a:11434'], 'batch-error', 30_000, { intervalMs: 60_000 });
+            await stop.ready;
+            expect(() => stop.assertActive()).toThrow(/core unavailable/);
+            stop();
+        });
     });
 
     describe('acquireBenchmarkClaims', () => {

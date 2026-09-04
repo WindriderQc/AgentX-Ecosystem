@@ -361,6 +361,8 @@ async function warmupModel(hostUrl, model, options = {}) {
         // when the test is running on the same host). Embedding/nomic/bge are
         // always kept per ALWAYS_KEEP_LOADED_PATTERNS.
         keepLoaded = [],
+        claimIdentity = null,
+        assertClaimActive = null,
         // Optional callback for sub-phase progress strings (UI visibility).
         onPhaseDetail = null
     } = options;
@@ -373,6 +375,8 @@ async function warmupModel(hostUrl, model, options = {}) {
             : modelWarmupExecutor
     );
     const warmupStart = Date.now();
+    const checkpoint = typeof assertClaimActive === 'function' ? assertClaimActive : () => {};
+    checkpoint();
     const warmupPrompt = 'Hi';
     let timeoutMs = timeoutOverride !== null ? timeoutOverride : (warmupTimeoutCold || 180000);
     const warmupData = {
@@ -439,6 +443,7 @@ async function warmupModel(hostUrl, model, options = {}) {
         const loadedNumCtx = readLoadedContextLength(loadedTarget);
         const contextMismatch = !!(modelAlreadyLoaded && requestedNumCtx && loadedNumCtx && loadedNumCtx !== requestedNumCtx);
         if (contextMismatch) {
+            checkpoint();
             const loadedName = loadedTarget.name || loadedTarget.model || model;
             logger.info('Reloading warmup target because loaded context differs from requested context', {
                 host: hostUrl,
@@ -464,6 +469,7 @@ async function warmupModel(hostUrl, model, options = {}) {
         // HTTP 200 with an empty response and tokens=0 when it can't fit
         // the model alongside whatever else is loaded.
         if (preUnloadOthers && !modelAlreadyLoaded && loadedModels.length > 0) {
+            checkpoint();
             if (typeof onPhaseDetail === 'function') {
                 try { await onPhaseDetail(`Unloading ${loadedModels.length} other model(s) from ${hostUrl}…`); } catch (_e) {}
             }
@@ -505,6 +511,7 @@ async function warmupModel(hostUrl, model, options = {}) {
                 responseMode: 'normalized',
                 think: false,
                 callerDetail: 'benchmark-warmup',
+                ...(claimIdentity || {}),
                 options: warmupOptions
             };
 

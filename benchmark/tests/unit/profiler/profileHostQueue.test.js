@@ -5,10 +5,12 @@ const request = require('supertest');
 
 jest.mock('../../../src/services/profiler/profilerOrchestrator', () => ({
   profile: jest.fn().mockResolvedValue({ ok: true }),
-  scout: jest.fn().mockResolvedValue([])
+  scout: jest.fn().mockResolvedValue([]),
+  fullPipeline: jest.fn().mockResolvedValue([])
 }));
 jest.mock('../../../src/services/profiler/hostProfileService', () => ({
-  getById: jest.fn()
+  getById: jest.fn(),
+  getAll: jest.fn()
 }));
 jest.mock('../../../src/services/profiler/modelProfileService', () => ({
   getAll: jest.fn()
@@ -21,7 +23,9 @@ jest.mock('../../../src/clients/coreApiClient', () => ({
   resolveHostKey: jest.fn(),
   restoreDedication: jest.fn().mockResolvedValue(undefined),
   claimHostForBenchmark: jest.fn().mockResolvedValue({ claimed: true }),
-  releaseBenchmarkClaim: jest.fn().mockResolvedValue(undefined)
+  heartbeatBenchmarkClaim: jest.fn().mockResolvedValue({ heartbeat: true }),
+  releaseBenchmarkClaim: jest.fn().mockResolvedValue({ released: true }),
+  getBenchmarkClaimIdentity: jest.fn((_host, batchId) => ({ claimBatchId: batchId, claimGeneration: 'generation-1' }))
 }));
 jest.mock('../../../config/logger', () => ({
   info: jest.fn(),
@@ -54,6 +58,7 @@ describe('profile-host queue depth selection', () => {
       hostUrl: 'http://localhost:11434',
       displayName: 'Example Host'
     });
+    hostProfileService.getAll.mockResolvedValue([{ hostId: 'host-beta', hostUrl: 'http://localhost:11434', status: 'online' }]);
     hostTestService.checkHost.mockResolvedValue({
       available: true,
       models: ['llama3:8b']
@@ -82,31 +87,21 @@ describe('profile-host queue depth selection', () => {
     );
   });
 
-  it('stops the queue when the host claim is rejected', async () => {
+  it('fails closed before queue start when the host claim is rejected', async () => {
     coreApiClient.claimHostForBenchmark.mockResolvedValue({ claimed: false, reason: 'benchmark batch-42 holds this host' });
 
-    const started = await startProfileHostQueue({ hostId: 'host-beta', skipRecentDays: 0 });
-    await flushPromises();
-
-    const tracker = activeProfileQueues.get(started.queueId);
-    expect(tracker.cancelled).toBe(true);
-    expect(tracker.status).toBe('cancelled');
-    expect(tracker.error).toMatch(/reserved/i);
-    expect(tracker.models[0].status).toBe('failed');
+    await expect(startProfileHostQueue({ hostId: 'host-beta', skipRecentDays: 0 }))
+      .rejects.toMatchObject({ code: 'PROFILER_CLAIM_UNAVAILABLE' });
     expect(orchestrator.profile).not.toHaveBeenCalled();
     expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
   });
 
-  it('proceeds unclaimed when the claim call itself fails (core unreachable)', async () => {
+  it('fails closed when the claim call itself fails (core unreachable)', async () => {
     coreApiClient.claimHostForBenchmark.mockRejectedValue(new Error('ECONNREFUSED'));
 
-    const started = await startProfileHostQueue({ hostId: 'host-beta', skipRecentDays: 0 });
-    await flushPromises();
-
-    const tracker = activeProfileQueues.get(started.queueId);
-    expect(tracker.models[0].status).toBe('completed');
-    expect(orchestrator.profile).toHaveBeenCalled();
-    // No claim was held, so nothing to release
+    await expect(startProfileHostQueue({ hostId: 'host-beta', skipRecentDays: 0 }))
+      .rejects.toMatchObject({ code: 'PROFILER_CLAIM_UNAVAILABLE', statusCode: 503 });
+    expect(orchestrator.profile).not.toHaveBeenCalled();
     expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
   });
 
@@ -118,7 +113,7 @@ describe('profile-host queue depth selection', () => {
 
     const tracker = activeProfileQueues.get(started.queueId);
     expect(tracker.models[0].status).toBe('completed');
-    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledWith('http://localhost:11434', expect.stringMatching(/^profile-/));
+    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledWith('http://localhost:11434', expect.stringMatching(/^profiler-queue-/));
   });
 
   it('honors explicit full depth for a per-host profile queue', async () => {
@@ -134,6 +129,29 @@ describe('profile-host queue depth selection', () => {
       'full',
       expect.any(Object)
     );
+  });
+});
+
+describe('full pipeline claim and depth contract', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    hostProfileService.getAll.mockResolvedValue([{ hostId: 'host-beta', hostUrl: 'http://localhost:11434', status: 'online' }]);
+    coreApiClient.claimHostForBenchmark.mockResolvedValue({ claimed: true });
+    coreApiClient.heartbeatBenchmarkClaim.mockResolvedValue({ heartbeat: true });
+    coreApiClient.releaseBenchmarkClaim.mockResolvedValue({ released: true });
+  });
+  it('claims every online host and delegates to the Full pipeline', async () => {
+    const response = await request(pipelineApp)
+      .post('/api/profiler/pipeline/full')
+      .send({ modelName: 'qwen:7b' });
+
+    expect(response.status).toBe(200);
+    expect(orchestrator.fullPipeline).toHaveBeenCalledWith(
+      'qwen:7b',
+      [expect.objectContaining({ hostId: 'host-beta' })],
+      expect.objectContaining({ assertClaimActive: expect.any(Function), claimIdentityFor: expect.any(Function) })
+    );
+    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalled();
   });
 });
 
@@ -156,6 +174,6 @@ describe('profiler scout target authority', () => {
     expect(orchestrator.scout).toHaveBeenCalledWith('qwen:7b', [{
       hostId: 'host-beta',
       hostUrl: 'http://localhost:11434'
-    }]);
+    }], expect.any(Object));
   });
 });

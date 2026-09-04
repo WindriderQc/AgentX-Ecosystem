@@ -110,6 +110,26 @@ describe('batchResultPersistence truncation quarantine', () => {
         savedDocs.length = 0;
     });
 
+    it('does not persist an unlabeled prompt-eval duration as TTFT', async () => {
+        await persistSuccessfulResult(baseArgs({ timeToFirstTokenMs: 100 }));
+        expect(savedDocs[0].time_to_first_token_ms).toBeNull();
+        expect(savedDocs[0].ttft_measurement).toBeNull();
+    });
+
+    it('persists TTFT only with streamed wall-clock provenance', async () => {
+        await persistSuccessfulResult(baseArgs({
+            timeToFirstTokenMs: 100,
+            ttftMeasurement: 'streamed_wall_clock',
+            performanceBaseline: {
+                timeToFirstTokenMs: 125,
+                ttftMeasurement: 'streamed_wall_clock'
+            }
+        }));
+        expect(savedDocs[0].time_to_first_token_ms).toBe(100);
+        expect(savedDocs[0].ttft_measurement).toBe('streamed_wall_clock');
+        expect(savedDocs[0].performance_baseline.ttftMeasurement).toBe('streamed_wall_clock');
+    });
+
     it('quarantines a response that hits a hidden runtime cap', async () => {
         await persistSuccessfulResult(baseArgs());
 

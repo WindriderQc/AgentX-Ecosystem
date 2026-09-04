@@ -72,6 +72,7 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
         promptEvalTokensPerSec: evidence.profile.promptEvalTokensPerSec ?? null,
         latencyMs: evidence.profile.loadTiming?.hotLoadMs ?? null,
         timeToFirstTokenMs: evidence.profile.ttftMs ?? null,
+        ttftMeasurement: evidence.profile.ttftMeasurement || undefined,
         vramUsedMiB: evidence.profile.vramUsedMiB ?? null,
         vramTotalMiB: null,
         numCtx: evidence.profile.recommendedConfig?.num_ctx ?? evidence.profile.optimalNumCtx ?? null,

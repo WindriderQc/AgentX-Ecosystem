@@ -43,6 +43,33 @@ function bestStepForSnapshot(snapshot) {
     || null;
 }
 
+function recommendationFor(snapshot, threshold, fallback) {
+  return (Array.isArray(snapshot?.steps) ? snapshot.steps : [])
+    .filter(step => step?.passed && Number(step.degradationPct) <= threshold)
+    .reduce((max, step) => Math.max(max, positiveInteger(step.numCtx) || 0), 0) || fallback;
+}
+
+function normalizeContextProfile(profile) {
+  if (!profile) return null;
+  const maxVerifiedContext = positiveInteger(profile.maxVerifiedContext)
+    || positiveInteger(profile.verifiedMaxContext)
+    || positiveInteger(profile.recommendedContext);
+  const recommendedDocumentContext = positiveInteger(profile.recommendedDocumentContext)
+    || positiveInteger(profile.recommendedContext)
+    || maxVerifiedContext;
+  const recommendedInteractiveContext = positiveInteger(profile.recommendedInteractiveContext)
+    || recommendedDocumentContext;
+  return {
+    ...profile,
+    maxVerifiedContext,
+    verifiedMaxContext: maxVerifiedContext,
+    historicalMaxVerifiedContext: positiveInteger(profile.historicalMaxVerifiedContext) || maxVerifiedContext,
+    recommendedInteractiveContext,
+    recommendedDocumentContext,
+    recommendedContext: recommendedDocumentContext
+  };
+}
+
 function hostIdForUrl(hostUrl) {
   const normalized = normalizeHostUrl(hostUrl);
   return getConfiguredHosts().find((host) => normalizeHostUrl(host.url) === normalized)?.id || null;
@@ -63,19 +90,27 @@ async function updateFromProbeSnapshot(snapshot) {
 
   const identityFilter = { modelName, hostUrl, artifactDigest, runtimeFingerprint };
   const existing = await ModelContextProfile.findOne(identityFilter).lean();
-  const verifiedMaxContext = Math.max(
-    positiveInteger(existing?.verifiedMaxContext) || 0,
+  // The current ceiling follows the latest valid revalidation and may move
+  // down. The historical maximum remains audit evidence, never runtime policy.
+  const maxVerifiedContext = tested;
+  const historicalMaxVerifiedContext = Math.max(
+    positiveInteger(existing?.historicalMaxVerifiedContext)
+      || positiveInteger(existing?.maxVerifiedContext)
+      || positiveInteger(existing?.verifiedMaxContext)
+      || 0,
     tested
   );
-  // Keep the legacy field equal to the measured value while downstream
-  // consumers migrate to verifiedMaxContext. It is no longer a second,
-  // independently capped runtime policy.
-  const recommendedContext = verifiedMaxContext;
+  const interactiveThreshold = Number.isFinite(Number(snapshot.interactiveDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(snapshot.interactiveDegradationThreshold))) : 15;
+  const documentThreshold = Number.isFinite(Number(snapshot.documentDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(snapshot.documentDegradationThreshold))) : 30;
+  const recommendedInteractiveContext = positiveInteger(snapshot.recommendedInteractiveContext)
+    || recommendationFor(snapshot, interactiveThreshold, tested);
+  const recommendedDocumentContext = positiveInteger(snapshot.recommendedDocumentContext)
+    || recommendationFor(snapshot, documentThreshold, tested);
+  const recommendedContext = recommendedDocumentContext;
   const step = bestStepForSnapshot(snapshot);
-  const verifiedInputTokens = Math.max(
-    positiveInteger(existing?.verifiedInputTokens) || 0,
-    positiveInteger(step?.promptTokens) || 0
-  ) || null;
+  const verifiedInputTokens = positiveInteger(step?.promptTokens) || null;
   const evidenceTokensPerSec = Number(step?.tokensPerSec ?? snapshot.atLimitTokensPerSec ?? 0) || null;
 
   return ModelContextProfile.findOneAndUpdate(
@@ -87,8 +122,16 @@ async function updateFromProbeSnapshot(snapshot) {
         hostId: snapshot.hostId || hostIdForUrl(hostUrl),
         artifactDigest,
         runtimeFingerprint,
-        verifiedMaxContext,
+        maxVerifiedContext,
+        verifiedMaxContext: maxVerifiedContext,
+        historicalMaxVerifiedContext,
         verifiedInputTokens,
+        recommendedInteractiveContext,
+        recommendedDocumentContext,
+        recommendationThresholds: {
+          interactiveDegradationPct: interactiveThreshold,
+          documentDegradationPct: documentThreshold
+        },
         recommendedContext,
         modelTheoreticalMax: positiveInteger(snapshot.modelTheoreticalMax),
         source: 'context_probe',
@@ -128,7 +171,8 @@ async function findContextProfile(modelName, hostUrl, artifact = {}) {
   };
   filter.artifactDigest = artifact.digest;
   filter.runtimeFingerprint = artifact.runtimeFingerprint;
-  return ModelContextProfile.findOne(filter).sort({ lastValidatedAt: -1 }).lean();
+  const profile = await ModelContextProfile.findOne(filter).sort({ lastValidatedAt: -1 }).lean();
+  return normalizeContextProfile(profile);
 }
 
 module.exports = {
@@ -136,5 +180,6 @@ module.exports = {
   hasValidThroughputEvidence,
   isValidTokensPerSec,
   modelNameCandidates,
+  normalizeContextProfile,
   updateFromProbeSnapshot
 };

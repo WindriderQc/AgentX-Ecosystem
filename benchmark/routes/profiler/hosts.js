@@ -18,6 +18,8 @@ const liveProbeService = require('../../src/services/profiler/liveProbeService')
 const baselineModelService = require('../../src/services/profiler/baselineModelService');
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
 const { getDedicationStatuses, resolveHostKey, restoreDedication } = require('../../src/clients/coreApiClient');
+const { acquireProfilerClaimLease } = require('../../src/services/profiler/profilerClaimLifecycle');
+const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdmission');
 
 const logger = require('../../config/logger');
 
@@ -67,20 +69,26 @@ function buildBaselineFromResults(results = [], preferredModel = '') {
     : null;
   const avg = (arr, key) => Number((arr.reduce((s, r) => s + (r[key] || 0), 0) / arr.length).toFixed(2));
   if (preferred) {
+    const hasStreamedTtft = preferred.ttftMeasurement === 'streamed_wall_clock'
+      && Number.isFinite(Number(preferred.timeToFirstTokenMs));
     return {
       referenceModel: preferred.modelName,
       tokensPerSec: preferred.tokensPerSec ?? avg(passing, 'tokensPerSec'),
       latencyMs: preferred.latencyMs ?? avg(passing, 'latencyMs'),
-      ttftMs: preferred.timeToFirstTokenMs ?? avg(passing, 'timeToFirstTokenMs'),
+      ttftMs: hasStreamedTtft ? Number(preferred.timeToFirstTokenMs) : null,
+      ttftMeasurement: hasStreamedTtft ? 'streamed_wall_clock' : undefined,
       testedAt: preferred.testedAt || new Date()
     };
   }
   const newest = [...passing].sort((a, b) => new Date(b.testedAt || 0) - new Date(a.testedAt || 0))[0];
+  const streamedTtft = passing.filter(item => item.ttftMeasurement === 'streamed_wall_clock'
+    && Number.isFinite(Number(item.timeToFirstTokenMs)));
   return {
     referenceModel: newest?.modelName || 'aggregate',
     tokensPerSec: avg(passing, 'tokensPerSec'),
     latencyMs: avg(passing, 'latencyMs'),
-    ttftMs: avg(passing, 'timeToFirstTokenMs'),
+    ttftMs: streamedTtft.length ? avg(streamedTtft, 'timeToFirstTokenMs') : null,
+    ttftMeasurement: streamedTtft.length ? 'streamed_wall_clock' : undefined,
     testedAt: newest?.testedAt || new Date()
   };
 }
@@ -179,8 +187,12 @@ router.get('/test/hosts-status', async (_req, res) => {
 
 /** POST /test/ensure-baseline — pull the configured baseline when absent. */
 router.post('/test/ensure-baseline', async (req, res) => {
+  let lease;
   try {
+    const target = baselineModelService.resolveConfiguredHost(req.body?.hostId);
+    lease = await acquireProfilerClaimLease([target.url], `profiler-baseline-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
     const data = await baselineModelService.ensureBaselineModel(req.body?.hostId);
+    lease.assertActive();
     res.json({
       status: 'success',
       data,
@@ -190,7 +202,9 @@ router.post('/test/ensure-baseline', async (req, res) => {
     });
   } catch (err) {
     logger.error('Baseline model preparation failed', { hostId: req.body?.hostId, error: err.message });
-    res.status(err.statusCode || 502).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 502).json({ status: 'error', message: err.message, code: err.code || null });
+  } finally {
+    if (lease) await lease.release();
   }
 });
 
@@ -237,6 +251,7 @@ router.get('/test/live-probes/:hostId/status', async (req, res) => {
 
 /** POST /test/run — single model test on a host */
 router.post('/test/run', async (req, res) => {
+  let lease;
   try {
     const { modelName, hostId } = req.body;
     if (!modelName || !hostId) {
@@ -246,28 +261,38 @@ router.post('/test/run', async (req, res) => {
     const baselineModel = await baselineModelService.getBaselineModel();
     const isBaseline = String(modelName).trim().replace(/:latest$/i, '').toLowerCase()
       === String(baselineModel).trim().replace(/:latest$/i, '').toLowerCase();
+    lease = await acquireProfilerClaimLease([configuredHost.url], `profiler-host-test-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
     const preparation = isBaseline && hostId
       ? await baselineModelService.ensureBaselineModel(hostId)
       : null;
     const targetHostUrl = preparation?.hostUrl || configuredHost.url;
-    const snapshot = await testModelOnHost(modelName, targetHostUrl, { hostId });
+    const snapshot = await testModelOnHost(modelName, targetHostUrl, {
+      hostId,
+      benchmarkClaim: lease.identityFor(targetHostUrl),
+      assertClaimActive: lease.assertActive
+    });
+    lease.assertActive();
     if (isBaseline && snapshot?.status === 'pass') {
       await hostProfileService.updateBaseline(hostId, {
         referenceModel: modelName,
         tokensPerSec: snapshot.tokensPerSec,
         latencyMs: snapshot.latencyMs,
         ttftMs: snapshot.timeToFirstTokenMs,
+        ttftMeasurement: snapshot.ttftMeasurement || undefined,
         testedAt: snapshot.testedAt
       }).catch(err => logger.warn('Failed to update baseline', { hostId, error: err.message }));
     }
-    // Restore dedication if the host has pinned models (fire-and-forget)
-    _restoreDedicationForHost(targetHostUrl);
     res.json({ status: 'success', data: { ...snapshot, preparation } });
   } catch (err) {
     logger.error('Host test run failed', { error: err.message, body: req.body });
     const code = err.statusCode || (err.message.includes('not found') ? 422
       : err.message.includes('unreachable') ? 503 : 500);
-    res.status(code).json({ status: 'error', message: err.message });
+    res.status(code).json({ status: 'error', message: err.message, code: err.code || null });
+  } finally {
+    if (lease) {
+      const release = await lease.release();
+      if (!lease.lost && release.failed === 0) await _restoreDedicationForHost(lease.hostUrls[0]);
+    }
   }
 });
 
@@ -283,9 +308,15 @@ router.post('/test/run-all', async (req, res) => {
     cleanupStale();
     const testId = crypto.randomBytes(8).toString('hex');
     const tracker = { status: 'running', total: hostCheck.models.length, completed: 0, failed: 0, currentModel: hostCheck.models[0] || null, results: [], startedAt: Date.now() };
+    const lease = await acquireProfilerClaimLease([hostUrl], `profiler-host-all-${testId}`, Math.max(10 * 60 * 1000, hostCheck.models.length * 5 * 60 * 1000), {
+      onFatal: err => { tracker.status = 'failed'; tracker.error = err.message; }
+    });
     activeTests.set(testId, tracker);
     testAllModelsOnHost(hostUrl, {
       hostId,
+      benchmarkClaim: lease.identityFor(hostUrl),
+      assertClaimActive: lease.assertActive,
+      shouldAbort: () => lease.lost,
       onProgress: (modelName, result, index, total) => {
         tracker.completed = index + 1;
         tracker.currentModel = index + 1 < total ? hostCheck.models[index + 1] : null;
@@ -293,13 +324,18 @@ router.post('/test/run-all', async (req, res) => {
         tracker.results.push({ modelName, ...result });
       }
     }).then(({ summary }) => {
+      lease.assertActive();
       tracker.status = 'completed'; tracker.summary = summary; tracker.currentModel = null;
       const baseline = buildBaselineFromResults(tracker.results, baselineModel);
       if (hostId && baseline) {
         hostProfileService.updateBaseline(hostId, baseline)
           .catch(err => logger.warn('Failed to update baseline after run-all', { hostId, error: err.message }));
       }
-    }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; });
+    }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; })
+      .finally(async () => {
+        const release = await lease.release();
+        if (!lease.lost && release.failed === 0) await _restoreDedicationForHost(hostUrl);
+      });
     res.json({ status: 'success', data: { testId, totalModels: hostCheck.models.length, models: hostCheck.models } });
   } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message }); }
 });
@@ -367,12 +403,18 @@ router.post('/test/run-fleet', async (req, res) => {
       finishedAt: null,
       error: null
     };
+    const lease = await acquireProfilerClaimLease(
+      queueHosts.filter(item => item.available).map(item => item.host.url),
+      `profiler-fleet-${queueId}`,
+      Math.max(30 * 60 * 1000, queueHosts.reduce((sum, item) => sum + item.models.length, 0) * 5 * 60 * 1000),
+      { onFatal: err => { tracker.cancelled = true; tracker.error = err.message; } }
+    );
     activeFleetQueues.set(queueId, tracker);
 
     // Fire-and-forget driver
     (async () => {
       for (let i = 0; i < tracker.hosts.length; i++) {
-        if (tracker.cancelled) break;
+        if (tracker.cancelled || lease.lost) break;
         const slot = tracker.hosts[i];
         tracker.currentIndex = i;
         if (slot.status === 'offline') continue; // skip unreachable hosts
@@ -382,7 +424,9 @@ router.post('/test/run-fleet', async (req, res) => {
         try {
           const { summary } = await testAllModelsOnHost(slot.hostUrl, {
             hostId: slot.hostId,
-            shouldAbort: () => tracker.cancelled,
+            shouldAbort: () => tracker.cancelled || lease.lost,
+            benchmarkClaim: lease.identityFor(slot.hostUrl),
+            assertClaimActive: lease.assertActive,
             onProgress: (modelName, result, index, total) => {
               slot.completed = index + 1;
               slot.currentModel = index + 1 < total ? slot.models[index + 1] : null;
@@ -390,6 +434,7 @@ router.post('/test/run-fleet', async (req, res) => {
               slot.results.push({ modelName, ...result });
             }
           });
+          lease.assertActive();
           slot.summary = summary;
           slot.status = 'completed';
           slot.currentModel = null;
@@ -399,13 +444,10 @@ router.post('/test/run-fleet', async (req, res) => {
             hostProfileService.updateBaseline(slot.hostId, baseline)
               .catch(err => logger.warn('Fleet: baseline update failed', { hostId: slot.hostId, error: err.message }));
           }
-          // Restore any pinned model the sweep may have evicted
-          _restoreDedicationForHost(slot.hostUrl);
         } catch (err) {
           slot.status = 'failed';
           slot.error = err.message;
           logger.error('Fleet: host sweep failed', { hostUrl: slot.hostUrl, error: err.message });
-          _restoreDedicationForHost(slot.hostUrl);
         } finally {
           slot.finishedAt = Date.now();
         }
@@ -423,11 +465,14 @@ router.post('/test/run-fleet', async (req, res) => {
            modelsTested: 0, passed: 0, failed: 0 });
       tracker.summary = fleetSummary;
       tracker.status = tracker.cancelled ? 'cancelled' : 'completed';
+      const release = await lease.release();
+      if (!lease.lost && release.failed === 0) await Promise.all(lease.hostUrls.map(_restoreDedicationForHost));
     })().catch(err => {
       tracker.status = 'failed';
       tracker.error = err.message;
       tracker.finishedAt = Date.now();
       logger.error('Fleet queue driver crashed', { queueId, error: err.message });
+      lease.release().catch(releaseErr => logger.warn('Fleet claim release failed', { queueId, error: releaseErr.message }));
     });
 
     res.json({ status: 'success', data: {
@@ -505,17 +550,32 @@ router.get('/test/run-fleet/active', (_req, res) => {
 
 /** POST /test/compare — test a model across all hosts */
 router.post('/test/compare', async (req, res) => {
+  let lease;
   try {
     const { modelName } = req.body;
     if (!modelName) return res.status(400).json({ status: 'error', message: 'modelName is required' });
-    res.json({ status: 'success', data: await testModelAcrossHosts(modelName) });
-  } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
+    const checks = await Promise.all(getConfiguredHosts().map(async host => ({ host, check: await checkHost(host.url) })));
+    const eligible = checks.filter(item => item.check.available && item.check.models.includes(String(modelName).replace(/:latest$/i, ''))).map(item => item.host.url);
+    if (!eligible.length) return res.status(422).json({ status: 'error', message: 'Model is not installed on any reachable host' });
+    lease = await acquireProfilerClaimLease(eligible, `profiler-compare-${crypto.randomBytes(8).toString('hex')}`, eligible.length * 10 * 60 * 1000);
+    res.json({ status: 'success', data: await testModelAcrossHosts(modelName, {
+      assertClaimActive: lease.assertActive,
+      claimIdentityFor: hostUrl => lease.identityFor(hostUrl)
+    }) });
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null }); }
+  finally {
+    if (lease) {
+      const release = await lease.release();
+      if (!lease.lost && release.failed === 0) await Promise.all(lease.hostUrls.map(_restoreDedicationForHost));
+    }
+  }
 });
 
 // ═══ CONTEXT PROBE ══════════════════════════════════════════════════════════
 
 /** POST /test/context-probe/run */
 router.post('/test/context-probe/run', async (req, res) => {
+  let lease;
   try {
     const {
       modelName,
@@ -529,22 +589,34 @@ router.post('/test/context-probe/run', async (req, res) => {
       acknowledgeMaintenance
     } = req.body || {};
     if (!modelName) return res.status(400).json({ status: 'error', message: 'modelName is required' });
+    if (!hostUrl) return res.status(400).json({ status: 'error', message: 'hostUrl is required for a claimed context probe' });
     if (acknowledgeMaintenance !== true) {
       return res.status(400).json({
         status: 'error',
         message: 'acknowledgeMaintenance:true is required — probe evicts KV cache and breaks live traffic on the target host'
       });
     }
-    res.json({ status: 'success', data: await probeModelContext(modelName, {
-      hostUrl,
+    const admittedHostUrl = await admitOllamaTargetResolved(hostUrl, { configuredHosts: getConfiguredHosts() });
+    lease = await acquireProfilerClaimLease([admittedHostUrl], `profiler-context-${crypto.randomBytes(8).toString('hex')}`, 45 * 60 * 1000);
+    const data = await probeModelContext(modelName, {
+      hostUrl: admittedHostUrl,
       timeoutMs,
       minCtx,
       maxCtx,
       contextProbeFillPct: contextProbeFillPct ?? promptFillPct,
       force: !!force,
-      acknowledgeMaintenance: true
-    }) });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message }); }
+      acknowledgeMaintenance: true,
+      assertClaimActive: lease.assertActive
+    });
+    lease.assertActive();
+    res.json({ status: 'success', data });
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null }); }
+  finally {
+    if (lease) {
+      const release = await lease.release();
+      if (!lease.lost && release.failed === 0) await _restoreDedicationForHost(lease.hostUrls[0]);
+    }
+  }
 });
 
 /** GET /test/context-probe/status/:modelName */
@@ -593,6 +665,7 @@ router.get('/test/results/:modelName', async (req, res) => {
 
 /** POST /:hostId/release — unload a pinned model from a host */
 router.post('/:hostId/release', async (req, res) => {
+  let lease;
   try {
     const host = await hostProfileService.getById(req.params.hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
@@ -600,6 +673,8 @@ router.post('/:hostId/release', async (req, res) => {
       return res.status(400).json({ status: 'error', error: 'Host has no pinned model' });
     }
 
+    lease = await acquireProfilerClaimLease([host.hostUrl], `profiler-release-${crypto.randomBytes(8).toString('hex')}`, 5 * 60 * 1000);
+    lease.assertActive();
     const result = await hostProfileService.releaseModel(host.hostUrl, host.dedicated.model);
     if (!result.success) {
       return res.status(502).json({ error: `Failed to release model: ${result.error}` });
@@ -621,7 +696,9 @@ router.post('/:hostId/release', async (req, res) => {
     }});
   } catch (err) {
     logger.error('Release model failed', { hostId: req.params.hostId, error: err.message });
-    res.status(500).json({ status: 'error', error: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
+  } finally {
+    if (lease) await lease.release();
   }
 });
 

@@ -55,6 +55,14 @@ function readiness(overrides = {}) {
     stage: 'profiled',
     profileDepth: 'standard',
     benchmarkQualified: true,
+    evidenceId: 'evidence-1',
+    authorityReceipt: {
+      version: 1,
+      source: 'profiler_pipeline',
+      evidenceId: 'evidence-1',
+      digest: 'a'.repeat(64),
+      issuedAt: new Date('2026-09-03T00:00:00Z')
+    },
     stale: false,
     artifact: ARTIFACT,
     ...overrides
@@ -83,6 +91,7 @@ beforeEach(() => {
     tokensPerSec: 42,
     promptEvalTokensPerSec: 100,
     timeToFirstTokenMs: 50,
+    ttftMeasurement: 'streamed_wall_clock',
     promptTokens: 100,
     requestedPromptTokens: 100,
     promptWorkloadMode: 'fixed',
@@ -126,6 +135,7 @@ describe('profile', () => {
       tokensPerSec: 42,
       promptEvalTokensPerSec: 100,
       timeToFirstTokenMs: 50,
+      ttftMeasurement: 'streamed_wall_clock',
       promptTokens: 100,
       requestedPromptTokens: 100,
       promptWorkloadMode: 'fixed',
@@ -195,6 +205,7 @@ describe('profile', () => {
       tokensPerSec: 42,
       promptEvalTokensPerSec: 100,
       timeToFirstTokenMs: 50,
+      ttftMeasurement: 'streamed_wall_clock',
       promptTokens: 100,
       requestedPromptTokens: 100,
       promptWorkloadMode: 'fixed',

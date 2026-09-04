@@ -24,10 +24,18 @@ const ModelContextProfileSchema = new mongoose.Schema({
   artifactDigest: { type: String, required: true, index: true },
   runtimeFingerprint: { type: String, required: true },
 
+  maxVerifiedContext: { type: Number, default: null },
+  // Backward-compatible alias for readers deployed before maxVerifiedContext.
   verifiedMaxContext: { type: Number, default: null },
+  historicalMaxVerifiedContext: { type: Number, default: null },
   verifiedInputTokens: { type: Number, default: null },
-  // Compatibility alias for older consumers. New writes keep this equal to
-  // verifiedMaxContext; it is not a separately capped recommendation.
+  recommendedInteractiveContext: { type: Number, default: null },
+  recommendedDocumentContext: { type: Number, default: null },
+  recommendationThresholds: {
+    interactiveDegradationPct: { type: Number, default: 15 },
+    documentDegradationPct: { type: Number, default: 30 }
+  },
+  // Compatibility alias: maps to the current document recommendation.
   recommendedContext: { type: Number, default: null },
   modelTheoreticalMax: { type: Number, default: null },
   source: { type: String, default: 'context_probe' },

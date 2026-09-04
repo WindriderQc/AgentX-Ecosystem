@@ -546,7 +546,8 @@ function buildHostCard(host, state) {
   const vramInfo = getHostVramDisplay(host, probeState);
   const baselineTok = fmtToks(host.baseline?.tokensPerSec);
   const latency = host.baseline?.latencyMs != null ? `${Math.round(host.baseline.latencyMs)} ms` : '—';
-  const ttft = host.baseline?.ttftMs != null ? `${Math.round(host.baseline.ttftMs)} ms` : '—';
+  const ttft = host.baseline?.ttftMeasurement === 'streamed_wall_clock' && host.baseline?.ttftMs != null
+    ? `${Math.round(host.baseline.ttftMs)} ms` : '—';
   const testedAt = host.baseline?.testedAt ? relTime(host.baseline.testedAt) : 'Not tested';
   const modelCount = host.modelCount ?? host.models?.length ?? null;
   const note = buildActionCopy(host, runState);

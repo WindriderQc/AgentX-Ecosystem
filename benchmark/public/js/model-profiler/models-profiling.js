@@ -307,7 +307,7 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
   function renderMetricsRow() {
     const hero = _heroStat(seenMetrics.tokensPerSec, seenMetrics.baselineTokensPerSec);
     const stats = [];
-    if (seenMetrics.ttftMs != null) {
+    if (seenMetrics.ttftMeasurement === 'streamed_wall_clock' && seenMetrics.ttftMs != null) {
       stats.push(_statCard(Math.round(seenMetrics.ttftMs) + ' ms', 'TTFT', '#9d8cff'));
     }
     if (seenMetrics.optimalNumCtx != null) {
@@ -442,7 +442,10 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
           if (progress.metrics) {
             const m = progress.metrics;
             if (m.tokensPerSec != null) seenMetrics.tokensPerSec = m.tokensPerSec;
-            if (m.ttftMs != null) seenMetrics.ttftMs = m.ttftMs;
+            if (m.ttftMeasurement === 'streamed_wall_clock' && m.ttftMs != null) {
+              seenMetrics.ttftMs = m.ttftMs;
+              seenMetrics.ttftMeasurement = m.ttftMeasurement;
+            }
             if (m.optimalNumCtx != null) seenMetrics.optimalNumCtx = m.optimalNumCtx;
             if (m.degradationPct != null) seenMetrics.degradationPct = m.degradationPct;
             if (m.vramUsedMiB != null) seenMetrics.vramUsedMiB = m.vramUsedMiB;
@@ -482,7 +485,10 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
     // Sync final values into seenMetrics so renderMetricsRow paints the
     // completed-state hero/stats consistently.
     if (p?.tokensPerSec != null) seenMetrics.tokensPerSec = p.tokensPerSec;
-    if (p?.ttftMs != null) seenMetrics.ttftMs = p.ttftMs;
+    if (p?.ttftMeasurement === 'streamed_wall_clock' && p?.ttftMs != null) {
+      seenMetrics.ttftMs = p.ttftMs;
+      seenMetrics.ttftMeasurement = p.ttftMeasurement;
+    }
     if (p?.optimalNumCtx != null) seenMetrics.optimalNumCtx = p.optimalNumCtx;
     if (p?.degradationPct != null) seenMetrics.degradationPct = p.degradationPct;
     if (p?.vramUsedMiB != null) seenMetrics.vramUsedMiB = p.vramUsedMiB;

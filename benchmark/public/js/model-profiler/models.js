@@ -308,6 +308,8 @@ function wireSettings(container, api) {
           maxPromptTokens: Number(container.querySelector('#mp-set-maxprompt')?.value ?? 2048),
           numPredict: Number(container.querySelector('#mp-set-predtokens')?.value ?? 64),
           throughputSamples: Number(container.querySelector('#mp-set-samples')?.value ?? 3),
+          interactiveDegradationThreshold: Number(container.querySelector('#mp-set-interactive-degradation')?.value ?? 15),
+          documentDegradationThreshold: Number(container.querySelector('#mp-set-document-degradation')?.value ?? 30),
           collectHardwareTelemetry: container.querySelector('#mp-set-hw-collect')?.checked !== false,
           showHardwareDiagnostics: container.querySelector('#mp-set-hw-show')?.checked !== false,
           warmup: container.querySelector('#mp-set-warmup')?.checked !== false,

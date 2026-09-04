@@ -25,6 +25,7 @@ const ProbeStepSchema = new mongoose.Schema({
   requestedCompletionTokens: Number,
   minCompletionTokens: Number,
   passed: Boolean,
+  degradationPct: Number,
   reason: String
 }, { _id: false });
 
@@ -39,6 +40,10 @@ const ModelContextProbeSnapshotSchema = new mongoose.Schema({
   atLimitTokensPerSec:    Number,
   degradationPct:         Number,
   degradationThreshold:   Number,
+  interactiveDegradationThreshold: Number,
+  documentDegradationThreshold: Number,
+  recommendedInteractiveContext: Number,
+  recommendedDocumentContext: Number,
   promptFillPct:          Number,
   vramAtLimitMiB:         Number,
   gpuPercentAtLimit:      Number,

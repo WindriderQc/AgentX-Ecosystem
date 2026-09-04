@@ -17,6 +17,7 @@ const { getFetchOptions } = require('../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { DECOMPOSED_QUESTIONS } = require('./decomposedJudgeQuestions');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
+const { getBenchmarkClaimIdentity } = require('../clients/coreApiClient');
 const {
     createJudgeAbortContext,
     rethrowIfJudgeCancelled,
@@ -153,6 +154,7 @@ Answer ONLY "YES" or "NO" for this specific question: ${question}`;
             responseMode: 'normalized',
             think,
             callerDetail: 'benchmark-decomposed-judge',
+            ...(getBenchmarkClaimIdentity(judgeConfig.host, judgeConfig.batch_id) || {}),
             options: {
                 temperature: 0.1,
                 num_predict: 20,

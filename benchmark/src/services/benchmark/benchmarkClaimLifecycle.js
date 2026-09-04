@@ -24,13 +24,13 @@ const CLAIM_HEARTBEAT_INTERVAL_MS = 30_000;
  * @param {number} estimatedDurationMs
  * @returns {Promise<string[]>} - URLs that were claimed and must be released
  */
-async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs) {
+async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, claimOptions = {}) {
     const acquired = [];
     for (const hostUrl of hostUrls) {
         try {
             const result = await claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs, {
-                source: 'benchmark',
-                owner: 'agentx-benchmark'
+                source: claimOptions.source || 'benchmark',
+                owner: claimOptions.owner || 'agentx-benchmark'
             });
             if (result?.claimed) {
                 acquired.push(hostUrl);
@@ -102,35 +102,73 @@ function startBenchmarkClaimHeartbeat(hostUrls, batchId, estimatedDurationMs, op
         : CLAIM_HEARTBEAT_INTERVAL_MS;
     let stopped = false;
     let running = false;
+    let inFlight = Promise.resolve();
+    let failure = null;
+    let resolveReady;
+    const ready = new Promise(resolve => { resolveReady = resolve; });
 
-    const heartbeat = async () => {
-        if (stopped || running) return;
+    const fail = (hostUrl, reason, cause = null) => {
+        if (failure) return;
+        failure = new Error(`Benchmark claim heartbeat lost for ${hostUrl || batchId}: ${reason}`);
+        failure.code = 'BENCHMARK_CLAIM_LOST';
+        failure.hostUrl = hostUrl || null;
+        failure.cause = cause;
+        if (typeof options.onFatal === 'function') options.onFatal(failure);
+    };
+
+    const heartbeat = () => {
+        if (stopped || running) return inFlight;
         running = true;
-        try {
-            await Promise.all(hostUrls.map(async (hostUrl) => {
-                const result = await heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs);
-                if (result?.heartbeat === false) {
-                    logger.error('Benchmark claim heartbeat lost ownership', {
-                        batchId,
-                        hostUrl,
-                        reason: result.reason || null
+        inFlight = (async () => {
+            try {
+                await Promise.all(hostUrls.map(async (hostUrl) => {
+                    const result = await heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs, {
+                        source: options.source || 'benchmark',
+                        owner: options.owner || 'agentx-benchmark'
                     });
-                }
-            }));
-        } catch (err) {
-            logger.warn('Benchmark claim heartbeat failed', { batchId, error: err.message });
-        } finally {
-            running = false;
-        }
+                    if (result?.heartbeat === false) {
+                        logger.error('Benchmark claim heartbeat lost ownership', {
+                            batchId,
+                            hostUrl,
+                            reason: result.reason || null
+                        });
+                        fail(hostUrl, result.reason || 'ownership rejected');
+                    }
+                }));
+            } catch (err) {
+                logger.warn('Benchmark claim heartbeat failed', { batchId, error: err.message });
+                fail(null, err.message, err);
+            } finally {
+                running = false;
+                resolveReady();
+            }
+        })();
+        return inFlight;
     };
 
     heartbeat();
     const interval = setInterval(heartbeat, intervalMs);
     if (typeof interval.unref === 'function') interval.unref();
-    return () => {
+    const stop = () => {
         stopped = true;
         clearInterval(interval);
     };
+    stop.ready = ready;
+    stop.drain = async () => {
+        stop();
+        await inFlight;
+    };
+    stop.getFailure = () => failure;
+    stop.assertActive = () => {
+        if (failure) throw failure;
+        if (stopped) {
+            const err = new Error('Benchmark claim heartbeat is stopped');
+            err.code = 'BENCHMARK_CLAIM_STOPPED';
+            throw err;
+        }
+        return true;
+    };
+    return stop;
 }
 
 function positiveNumber(value) {

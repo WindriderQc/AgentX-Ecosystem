@@ -25,11 +25,13 @@ const mockClaimHostForBenchmark = jest.fn();
 const mockHeartbeatBenchmarkClaim = jest.fn();
 const mockReleaseBenchmarkClaim = jest.fn();
 const mockGetBenchmarkClaims = jest.fn();
+const mockGetBenchmarkClaimIdentity = jest.fn();
 jest.mock('../../../src/clients/coreApiClient', () => ({
     claimHostForBenchmark: (...args) => mockClaimHostForBenchmark(...args),
     heartbeatBenchmarkClaim: (...args) => mockHeartbeatBenchmarkClaim(...args),
     releaseBenchmarkClaim: (...args) => mockReleaseBenchmarkClaim(...args),
     getBenchmarkClaims: (...args) => mockGetBenchmarkClaims(...args),
+    getBenchmarkClaimIdentity: (...args) => mockGetBenchmarkClaimIdentity(...args),
     getDedicationStatuses: jest.fn(() => Promise.resolve([])),
     resolveHostKey: jest.fn(() => Promise.resolve(null)),
     restoreDedication: jest.fn(() => Promise.resolve({}))
@@ -263,6 +265,10 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         mockRunPreflight.mockResolvedValue(undefined);
         mockClaimHostForBenchmark.mockResolvedValue({ claimed: true });
         mockHeartbeatBenchmarkClaim.mockResolvedValue({ heartbeat: true });
+        mockGetBenchmarkClaimIdentity.mockImplementation((_host, batchId) => ({
+            claimBatchId: String(batchId),
+            claimGeneration: 'generation-1'
+        }));
         mockReleaseBenchmarkClaim.mockResolvedValue({ released: true });
         mockDetectDedication.mockResolvedValue(new Map([
             ['http://exec:11434', { hostKey: 'primary', pinnedModels: ['pinned-model'] }]
@@ -437,7 +443,8 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         expect(mockHeartbeatBenchmarkClaim).toHaveBeenCalledWith(
             'http://exec:11434',
             'batch-judge-phase',
-            expectedEstimateMs
+            expectedEstimateMs,
+            { source: 'benchmark', owner: 'agentx-benchmark' }
         );
 
         releaseDrain.resolve();

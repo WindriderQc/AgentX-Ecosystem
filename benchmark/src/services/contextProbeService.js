@@ -339,6 +339,11 @@ async function probeModelContext(modelName, options = {}) {
   const minCtx = options.minCtx ?? cfg.minCtx;
   const maxCtx = options.maxCtx ?? cfg.maxCtx;
   const promptFillPct = Math.min(100, Math.max(5, Number(options.contextProbeFillPct ?? options.promptFillPct ?? 80) || 80));
+  const interactiveThreshold = Number.isFinite(Number(options.interactiveDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(options.interactiveDegradationThreshold))) : 15;
+  const documentThreshold = Number.isFinite(Number(options.documentDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(options.documentDegradationThreshold))) : 30;
+  const checkpoint = typeof options.assertClaimActive === 'function' ? options.assertClaimActive : () => {};
   const probeNotify = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   const normalizedModel = normalizeModelName(modelName);
   const hostUrl = await resolveHostUrl(normalizedModel, options.hostUrl);
@@ -386,6 +391,7 @@ async function probeModelContext(modelName, options = {}) {
         && coarseCandidates.includes(residentNumCtx)
       ) {
         probeNotify({ type: 'resident', numCtx: residentNumCtx, tokensPerSec: null });
+        checkpoint();
         residentCandidate = await runStep(
           hostUrl,
           normalizedModel,
@@ -407,6 +413,7 @@ async function probeModelContext(modelName, options = {}) {
     }
 
     probeNotify({ type: 'baseline', numCtx: coarseCandidates[0], tokensPerSec: null });
+    checkpoint();
     const baseline = await runStep(hostUrl, normalizedModel, coarseCandidates[0], timeoutMs, promptFillPct, modelContext);
     steps.push(baseline);
     stepCache.set(baseline.numCtx, baseline);
@@ -427,6 +434,7 @@ async function probeModelContext(modelName, options = {}) {
     let bestPassingStep = baseline;
 
     async function testCandidate(numCtx) {
+      checkpoint();
       if (stepCache.has(numCtx)) {
         return stepCache.get(numCtx);
       }
@@ -470,6 +478,11 @@ async function probeModelContext(modelName, options = {}) {
     const testedNumCtx = bestPassingStep.numCtx;
     const bestStep = steps.find((step) => step.numCtx === testedNumCtx && step.passed) || baseline;
     const degradation = Number(((1 - bestStep.tokensPerSec / baselineSpeed) * 100).toFixed(1));
+    const recommendedFor = threshold => steps
+      .filter(step => step.passed && Number(step.degradationPct) <= threshold)
+      .reduce((max, step) => Math.max(max, Number(step.numCtx) || 0), 0) || baseline.numCtx;
+    const recommendedInteractiveContext = recommendedFor(interactiveThreshold);
+    const recommendedDocumentContext = recommendedFor(documentThreshold);
     probeNotify({ type: 'result', testedNumCtx, degradationPct: degradation });
 
     const invalidStep = findInvalidThroughputStep(steps);
@@ -498,6 +511,11 @@ async function probeModelContext(modelName, options = {}) {
       baselineTokensPerSec: baselineSpeed,
       atLimitTokensPerSec: bestStep.tokensPerSec,
       degradationPct: degradation,
+      degradationThreshold: documentThreshold,
+      interactiveDegradationThreshold: interactiveThreshold,
+      documentDegradationThreshold: documentThreshold,
+      recommendedInteractiveContext,
+      recommendedDocumentContext,
       promptFillPct,
       vramAtLimitMiB: bestStep.vramUsedMiB ?? null,
       gpuPercentAtLimit: bestStep.gpuPercent ?? null,

@@ -13,6 +13,10 @@ const DEFAULTS = {
   // Default 3: sample 1 is discarded as a warm-up settle pass, leaving 2
   // steady-state samples for a meaningful coefficient of variation.
   throughputSamples: 3,
+  standardRetainedSamples: 5,
+  fullRetainedSamples: 10,
+  interactiveDegradationThreshold: 15,
+  documentDegradationThreshold: 30,
   thinkingProbeEnabled: true,
   collectHardwareTelemetry: true,
   showHardwareDiagnostics: true,
@@ -29,6 +33,10 @@ const ENV_MAP = {
   maxPromptTokens: 'HOST_TEST_MAX_PROMPT_TOKENS',
   numPredict: 'HOST_TEST_NUM_PREDICT',
   throughputSamples: 'PROFILER_THROUGHPUT_SAMPLES',
+  standardRetainedSamples: 'PROFILER_STANDARD_RETAINED_SAMPLES',
+  fullRetainedSamples: 'PROFILER_FULL_RETAINED_SAMPLES',
+  interactiveDegradationThreshold: 'PROFILER_INTERACTIVE_DEGRADATION_PCT',
+  documentDegradationThreshold: 'PROFILER_DOCUMENT_DEGRADATION_PCT',
   thinkingProbeEnabled: 'PROFILER_THINKING_PROBE_ENABLED',
   collectHardwareTelemetry: 'PROFILER_COLLECT_HARDWARE_TELEMETRY',
   showHardwareDiagnostics: 'PROFILER_SHOW_HARDWARE_DIAGNOSTICS',

@@ -26,23 +26,38 @@ async function getActiveBenchmarkClaim(hostUrl) {
 
 async function assertHostAvailableForConsumer(hostUrl, {
   callerDetail = null,
+  claimBatchId = null,
+  claimGeneration = null,
   model = null,
   path = null,
   allowBenchmarkCallers = true
 } = {}) {
-  if (allowBenchmarkCallers && isBenchmarkCaller(callerDetail)) {
+  const claim = await getActiveBenchmarkClaim(hostUrl);
+  if (!claim) {
+    // A caller-supplied prefix is telemetry, never authority. Supplying stale
+    // claim proof is also an error: the mutator must reacquire before swapping.
+    if (claimBatchId || claimGeneration) {
+      const err = buildBenchmarkClaimError(hostUrl, null, 'Benchmark claim proof is stale or inactive');
+      err.code = 'BENCHMARK_CLAIM_PROOF_INVALID';
+      throw err;
+    }
     return null;
   }
 
-  const claim = await getActiveBenchmarkClaim(hostUrl);
-  if (!claim) return null;
+  const hasExactProof = allowBenchmarkCallers
+    && typeof claimBatchId === 'string'
+    && typeof claimGeneration === 'string'
+    && claimBatchId === claim.batchId
+    && claimGeneration === claim.claimGeneration;
+  if (hasExactProof) return claim;
 
   logger.info('[benchmark-claim-guard] blocked consumer inference on claimed host', {
     hostUrl,
     model,
     path,
     callerDetail,
-    batchId: claim.batchId || null
+    batchId: claim.batchId || null,
+    suppliedBatchId: claimBatchId || null
   });
 
   throw buildBenchmarkClaimError(hostUrl, claim);

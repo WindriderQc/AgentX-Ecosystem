@@ -116,7 +116,7 @@ describe('_runGenerationStability()', () => {
     hostTestService.testModelOnHost.mockResolvedValue({
       status: 'pass',
       tokensPerSec: 35,
-      totalLatencyMs: 1800
+      latencyMs: 1800
     });
   });
 

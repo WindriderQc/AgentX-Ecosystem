@@ -12,6 +12,12 @@ const { benchmarkFetch: fetch } = require('./http');
 const { getModelDigest } = require('./modelDigestService');
 const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
 const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmission');
+const crypto = require('crypto');
+const {
+    acquireBenchmarkClaims,
+    releaseBenchmarkClaims,
+    startBenchmarkClaimHeartbeat
+} = require('./benchmarkClaimLifecycle');
 
 /**
  * Run a single benchmark test
@@ -22,6 +28,18 @@ async function runTest({ model, host, prompt }) {
     }
 
     host = await admitOllamaTargetResolved(host, { configuredHosts: getConfiguredHosts() });
+
+    const claimId = `benchmark-single-${crypto.randomBytes(8).toString('hex')}`;
+    const claimedHosts = await acquireBenchmarkClaims([host], claimId, 10 * 60 * 1000);
+    const stopHeartbeat = startBenchmarkClaimHeartbeat(claimedHosts, claimId, 10 * 60 * 1000);
+    await stopHeartbeat.ready;
+    try {
+        stopHeartbeat.assertActive();
+    } catch (error) {
+        stopHeartbeat();
+        await releaseBenchmarkClaims(claimedHosts, claimId);
+        throw error;
+    }
 
     const start = Date.now();
 
@@ -50,7 +68,8 @@ async function runTest({ model, host, prompt }) {
         const latency = Date.now() - start;
         const responseText = data.message?.content || '';
         const tokens = data.eval_count || Math.ceil(responseText.length / 4);
-        const timeToFirstTokenMs = data.prompt_eval_duration > 0
+        stopHeartbeat.assertActive();
+        const promptEvalDurationMs = data.prompt_eval_duration > 0
             ? Number((data.prompt_eval_duration / 1e6).toFixed(1))
             : null;
 
@@ -82,7 +101,8 @@ async function runTest({ model, host, prompt }) {
             latency,
             tokens,
             tokens_per_sec: tokensPerSec,
-            time_to_first_token_ms: timeToFirstTokenMs,
+            time_to_first_token_ms: null,
+            prompt_eval_duration_ms: promptEvalDurationMs,
             response: responseText,
             success: true,
             timestamp: new Date()
@@ -116,6 +136,9 @@ async function runTest({ model, host, prompt }) {
         logger.error('Benchmark test failed', { model, host, error: err.message });
 
         throw err;
+    } finally {
+        stopHeartbeat();
+        await releaseBenchmarkClaims(claimedHosts, claimId);
     }
 }
 

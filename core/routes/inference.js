@@ -1026,6 +1026,8 @@ router.post('/inference/generate', async (req, res) => {
     try {
         await assertHostAvailableForConsumer(target, {
             callerDetail: body.callerDetail || null,
+            claimBatchId: body.claimBatchId || null,
+            claimGeneration: body.claimGeneration || null,
             model,
             path: '/api/inference/generate'
         });

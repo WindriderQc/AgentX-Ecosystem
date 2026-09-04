@@ -477,7 +477,7 @@ async function unloadOneModel(hostUrl, modelName, executor = hostTestExecutor) {
  * Ensures the model is loaded into VRAM before the timed test.
  * Uses a longer timeout for cold loads (model not yet in VRAM).
  */
-async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTestExecutor) {
+async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTestExecutor, benchmarkClaim = null) {
   const loadedInfo = await getLoadedModelInfo(hostUrl, modelName, executor);
   const requestedNumCtx = Number.isFinite(Number(numCtx)) && Number(numCtx) > 0
     ? Math.round(Number(numCtx))
@@ -512,6 +512,9 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
   // timeout. Once resident, the second warm-up pass goes through Core so the
   // normal direct-lane telemetry remains represented.
   const request = buildWarmupRequest(hostUrl, modelName, alreadyLoaded, numCtx);
+  if (request.phase === 'loaded_prime' && benchmarkClaim) {
+    Object.assign(request.body, benchmarkClaim);
+  }
   logger.info('Host test warm-up', {
     hostUrl,
     modelName,
@@ -585,6 +588,36 @@ async function persistFailureSnapshot(modelName, snapshot) {
   });
 }
 
+/** Parse Ollama's NDJSON stream and measure the first emitted output token. */
+async function readOllamaGenerateStream(response, startedAt, now = Date.now) {
+  let buffer = '';
+  let terminal = null;
+  let output = '';
+  let timeToFirstTokenMs = null;
+
+  const consumeLine = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (typeof event.response === 'string' && event.response.length > 0) {
+      if (timeToFirstTokenMs === null) timeToFirstTokenMs = Math.max(0, now() - startedAt);
+      output += event.response;
+    }
+    if (event.done === true) terminal = event;
+  };
+
+  for await (const chunk of response.stream()) {
+    buffer += Buffer.from(chunk).toString('utf8');
+    let newline;
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      consumeLine(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+    }
+  }
+  if (buffer.trim()) consumeLine(buffer);
+  if (!terminal) throw new Error('Ollama stream ended without a terminal metrics event');
+  return { data: { ...terminal, response: output }, timeToFirstTokenMs };
+}
+
 // ── Core Test Functions ────────────────────────────────────────────────────────
 
 /**
@@ -599,6 +632,7 @@ async function persistFailureSnapshot(modelName, snapshot) {
 async function testModelOnHost(modelName, hostUrl, options = {}) {
   const cfg = getConfig(options);
   const { hostId, _skipHostCheck } = options;
+  const checkpoint = typeof options.assertClaimActive === 'function' ? options.assertClaimActive : () => {};
   const normalizedModelName = normalizeModelName(modelName);
 
   // Circuit breaker gate (when host check is skipped, we still enforce the breaker)
@@ -638,12 +672,14 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
 
   // 2. Warm-up (two passes: load model, then prime KV cache at target context)
   if (cfg.warmup) {
+    checkpoint();
     logger.info('Host test: warming up model', { modelName, hostUrl, numCtx });
     const warmUpStartedAt = Date.now();
     try {
-      await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx);
+      await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx, hostTestExecutor, options.benchmarkClaim || null);
       // Second pass with a small prompt at target num_ctx to prime KV cache allocation
-      await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx);
+      checkpoint();
+      await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx, hostTestExecutor, options.benchmarkClaim || null);
     } catch (err) {
       circuitBreaker.recordFailure(hostUrl);
       const snapshot = {
@@ -668,6 +704,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
   const { targetPromptTokens, requestedPromptTokens, promptWorkloadMode } = probePlan;
   const { prompt } = generateFillPrompt(targetPromptTokens);
 
+  checkpoint();
   const start = Date.now();
   let probeData;
   const probeDeadline = createLocalDeadline(
@@ -682,7 +719,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       body: JSON.stringify({
         model:   normalizedModelName,
         prompt,
-        stream:  false,
+        stream:  true,
         options: {
           num_ctx:     numCtx,
           num_predict: cfg.numPredict,
@@ -692,9 +729,8 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       signal: probeDeadline.signal
     });
 
-    const latencyMs = Date.now() - start;
-
     if (!res.ok) {
+      const latencyMs = Date.now() - start;
       circuitBreaker.recordFailure(hostUrl);
       const body = await readBoundedText(res).catch(() => '');
       const snapshot = {
@@ -708,8 +744,10 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       return snapshot;
     }
 
-    probeData = await readBoundedJson(res);
-    probeData._latencyMs = latencyMs;
+    const streamed = await readOllamaGenerateStream(res, start);
+    probeData = streamed.data;
+    probeData._latencyMs = Date.now() - start;
+    probeData._timeToFirstTokenMs = streamed.timeToFirstTokenMs;
   } catch (err) {
     circuitBreaker.recordFailure(hostUrl);
     const latencyMs = Date.now() - start;
@@ -749,8 +787,11 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
   const promptEvalTps = promptEvalDurationSec > 0
     ? Number((promptEvalCount / promptEvalDurationSec).toFixed(2))
     : null;
-  const timeToFirstTokenMs = promptEvalDuration > 0
+  const promptEvalDurationMs = promptEvalDuration > 0
     ? Number((promptEvalDuration / 1e6).toFixed(1))
+    : null;
+  const timeToFirstTokenMs = Number.isFinite(probeData._timeToFirstTokenMs)
+    ? probeData._timeToFirstTokenMs
     : null;
 
   // 5. VRAM snapshot
@@ -762,8 +803,10 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     hostId:                 hostId || null,
     tokensPerSec,
     promptEvalTokensPerSec: promptEvalTps,
+    promptEvalDurationMs,
     latencyMs:              probeData._latencyMs,
     timeToFirstTokenMs,
+    ttftMeasurement: timeToFirstTokenMs !== null ? 'streamed_wall_clock' : undefined,
     promptTokens:           promptEvalCount,
     completionTokens:       evalCount,
     requestedPromptTokens,
@@ -824,7 +867,12 @@ async function testAllModelsOnHost(hostUrl, options = {}) {
     const modelName = models[i];
     let result;
     try {
-      result = await testModelOnHost(modelName, hostUrl, { hostId, _skipHostCheck: true });
+      result = await testModelOnHost(modelName, hostUrl, {
+        hostId,
+        _skipHostCheck: true,
+        benchmarkClaim: options.benchmarkClaim || null,
+        assertClaimActive: options.assertClaimActive
+      });
     } catch (err) {
       result = {
         hostUrl, hostId, tokensPerSec: 0, latencyMs: 0,
@@ -869,14 +917,18 @@ async function testModelAcrossHosts(modelName, options = {}) {
   const normalizedModelName = normalizeModelName(modelName);
 
   for (const host of configuredHosts) {
+    options.assertClaimActive?.();
     const check = await checkHost(host.url);
     if (!check.available || !check.models.includes(normalizedModelName)) {
       continue;
     }
 
+    options.assertClaimActive?.();
     const snapshot = await testModelOnHost(normalizedModelName, host.url, {
       hostId:         options.hostIdMap?.[host.url] || host.id || null,
-      _skipHostCheck: true
+      _skipHostCheck: true,
+      benchmarkClaim: options.claimIdentityFor?.(host.url) || null,
+      assertClaimActive: options.assertClaimActive
     });
 
     hostResults.push({ hostId: host.id, hostUrl: host.url, ...snapshot });
@@ -904,6 +956,7 @@ module.exports = {
     operationMatches,
     unloadCurrentModel,
     unloadOneModel,
-    warmUp
+    warmUp,
+    readOllamaGenerateStream
   }
 };

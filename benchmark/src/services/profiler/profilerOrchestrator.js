@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const hostTestService = require('../hostTestService');
 const contextProbeService = require('../contextProbeService');
 const modelProfileService = require('./modelProfileService');
@@ -130,7 +131,18 @@ function _median(values) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-function summarizeThroughputSamples(samples) {
+function _quantile(values, q) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = (sorted.length - 1) * q;
+  const lower = Math.floor(position);
+  const fraction = position - lower;
+  return sorted[lower + 1] === undefined
+    ? sorted[lower]
+    : sorted[lower] + fraction * (sorted[lower + 1] - sorted[lower]);
+}
+
+function summarizeThroughputSamples(samples, { minimumRetainedSamples = 2 } = {}) {
   // Exclude warm-up / discarded samples from steady-state stats. They stay
   // on the record (sample.discarded=true) so the UI can show them, but they
   // never contribute to mean/median/CV/reliability.
@@ -140,12 +152,18 @@ function summarizeThroughputSamples(samples) {
   if (!values.length) {
     return {
       sampleCount: kept.length,
+      retainedSampleCount: kept.length,
+      passingSampleCount: 0,
+      minimumRetainedSamples,
       tokensPerSecMean: null,
       tokensPerSecMedian: null,
       tokensPerSecMin: null,
       tokensPerSecMax: null,
       tokensPerSecStdDev: null,
       coefficientOfVariation: null,
+      p50: null,
+      p95: null,
+      confidenceInterval95: null,
       reliability: 'unknown'
     };
   }
@@ -155,27 +173,46 @@ function summarizeThroughputSamples(samples) {
   if (values.length < 2) {
     return {
       sampleCount: kept.length,
+      retainedSampleCount: kept.length,
+      passingSampleCount: values.length,
+      minimumRetainedSamples,
       tokensPerSecMean: _round(mean),
       tokensPerSecMedian: _round(mean),
       tokensPerSecMin: _round(mean),
       tokensPerSecMax: _round(mean),
       tokensPerSecStdDev: null,
       coefficientOfVariation: null,
+      p50: _round(mean),
+      p95: _round(mean),
+      confidenceInterval95: null,
       reliability: 'unknown'
     };
   }
-  const variance = values.reduce((sum, n) => sum + ((n - mean) ** 2), 0) / values.length;
+  const variance = values.reduce((sum, n) => sum + ((n - mean) ** 2), 0) / (values.length - 1);
   const stdDev = Math.sqrt(variance);
   const cv = mean > 0 ? stdDev / mean : null;
-  const reliability = cv == null ? 'unknown' : cv <= 0.05 ? 'high' : cv <= 0.12 ? 'medium' : 'low';
+  const margin95 = 1.96 * stdDev / Math.sqrt(values.length);
+  const reliability = values.length < minimumRetainedSamples || cv == null
+    ? 'unknown'
+    : cv <= 0.05 ? 'high' : cv <= 0.12 ? 'medium' : 'low';
   return {
     sampleCount: kept.length,
+    retainedSampleCount: kept.length,
+    passingSampleCount: values.length,
+    minimumRetainedSamples,
     tokensPerSecMean: _round(mean),
     tokensPerSecMedian: _round(_median(values)),
     tokensPerSecMin: _round(Math.min(...values)),
     tokensPerSecMax: _round(Math.max(...values)),
     tokensPerSecStdDev: _round(stdDev),
     coefficientOfVariation: cv == null ? null : _round(cv, 4),
+    p50: _round(_quantile(values, 0.5)),
+    p95: _round(_quantile(values, 0.95)),
+    confidenceInterval95: {
+      low: _round(Math.max(0, mean - margin95)),
+      high: _round(mean + margin95),
+      method: 'normal_approximation'
+    },
     reliability
   };
 }
@@ -185,7 +222,9 @@ function _sampleFromResult(result, sample, opts = {}) {
     sample,
     tokensPerSec: result.tokensPerSec ?? null,
     promptEvalTokensPerSec: result.promptEvalTokensPerSec ?? null,
+    promptEvalDurationMs: result.promptEvalDurationMs ?? null,
     ttftMs: result.timeToFirstTokenMs ?? null,
+    ttftMeasurement: result.ttftMeasurement ?? null,
     latencyMs: result.latencyMs ?? null,
     promptTokens: result.promptTokens ?? null,
     completionTokens: result.completionTokens ?? null,
@@ -197,11 +236,24 @@ function _sampleFromResult(result, sample, opts = {}) {
   };
 }
 
-async function scout(modelName, hosts) {
+function hasProfilerAuthorityReceipt(readiness) {
+  const receipt = readiness?.authorityReceipt;
+  return receipt?.source === 'profiler_pipeline'
+    && Number(receipt.version) === 1
+    && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
+    && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '');
+}
+
+async function scout(modelName, hosts, { assertClaimActive, claimIdentityFor } = {}) {
   const results = [];
   for (const host of hosts) {
     try {
-      const testResult = await hostTestService.testModelOnHost(modelName, host.hostUrl);
+      assertClaimActive?.();
+      const testResult = await hostTestService.testModelOnHost(modelName, host.hostUrl, {
+        benchmarkClaim: claimIdentityFor?.(host.hostUrl) || null,
+        assertClaimActive
+      });
+      assertClaimActive?.();
       results.push({
         hostId: host.hostId,
         fit: testResult.status === 'pass',
@@ -209,6 +261,7 @@ async function scout(modelName, hosts) {
         error: testResult.error || null
       });
     } catch (err) {
+      if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
       results.push({ hostId: host.hostId, fit: false, error: err.message });
     }
   }
@@ -226,11 +279,33 @@ async function persistProfileEvidence({ modelName, hostId, hostUrl, artifact, pr
     artifact: currentArtifact,
     profile: { ...profileData, artifact: currentArtifact }
   });
+  const required = Number(profileData.requiredRetainedSamples) || 0;
+  const quality = profileData.measurementQuality || {};
+  const benchmarkQualified = profileData.profileDepth !== 'quick'
+    && Number(profileData.maxVerifiedContext || profileData.optimalNumCtx) > 0
+    && Number(quality.passingSampleCount) >= required
+    && quality.reliability !== 'unknown'
+    && profileData.ttftMeasurement === 'streamed_wall_clock'
+    && profileData.ttftMs !== null
+    && Number.isFinite(Number(profileData.ttftMs))
+    && Number(profileData.ttftMs) >= 0;
+  const authorityReceipt = {
+    version: 1,
+    source: 'profiler_pipeline',
+    evidenceId: evidence?._id ? String(evidence._id) : null,
+    digest: crypto.createHash('sha256').update(JSON.stringify({
+      modelName, hostId, artifact: currentArtifact,
+      profileDepth: profileData.profileDepth,
+      required, passing: quality.passingSampleCount || 0
+    })).digest('hex'),
+    issuedAt: new Date()
+  };
   await modelProfileService.updateReadiness(modelName, hostId, 'profiled', {
     [`readiness.${hostId}.artifact`]: currentArtifact,
     [`readiness.${hostId}.evidenceId`]: evidence?._id || null,
     [`readiness.${hostId}.profileDepth`]: profileData.profileDepth,
-    [`readiness.${hostId}.benchmarkQualified`]: profileData.profileDepth !== 'quick' && Number(profileData.optimalNumCtx) > 0,
+    [`readiness.${hostId}.benchmarkQualified`]: benchmarkQualified,
+    [`readiness.${hostId}.authorityReceipt`]: authorityReceipt,
     [`readiness.${hostId}.stale`]: false,
     [`readiness.${hostId}.staleReason`]: null
   });
@@ -240,9 +315,15 @@ async function persistProfileEvidence({ modelName, hostId, hostUrl, artifact, pr
   return evidence;
 }
 
-async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgress } = {}) {
+async function profile(modelName, hostId, hostUrl, depth = 'standard', {
+  onProgress,
+  assertClaimActive,
+  claimIdentity
+} = {}) {
   const notify = typeof onProgress === 'function' ? onProgress : () => {};
+  const checkpoint = typeof assertClaimActive === 'function' ? assertClaimActive : () => {};
   logger.info(`Profiling ${modelName} on ${hostId} (${depth})`);
+  checkpoint();
   let residentCtx = null;
   try {
     const running = await listRunning(hostUrl, { timeoutMs: 8000 });
@@ -310,14 +391,24 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     promptWorkloadMode: 'fixed',
     timeoutMs: settings.testTimeoutSec * 1000,
     skipPriorProfileArtifacts: true,
+    benchmarkClaim: claimIdentity || null,
+    assertClaimActive: checkpoint,
     ...(residentCtx ? { numCtx: residentCtx.num_ctx } : {})
   };
+  checkpoint();
   const testResult = await hostTestService.testModelOnHost(modelName, hostUrl, baseTestOptions);
   if (testResult.status !== 'pass') {
     throw new Error(`Throughput test failed: ${testResult.error || testResult.status}`);
   }
 
-  const requestedSamples = Math.max(1, Math.min(5, Number(settings.throughputSamples) || 1));
+  const minimumRetainedSamples = depth === 'full'
+    ? Math.max(10, Number(settings.fullRetainedSamples) || 10)
+    : depth === 'standard'
+      ? Math.max(5, Number(settings.standardRetainedSamples) || 5)
+      : 1;
+  const requestedSamples = depth === 'quick'
+    ? 1
+    : Math.min(26, Math.max(minimumRetainedSamples + 1, Number(settings.throughputSamples) || 0));
   // When 3+ samples are requested, drop sample 1 from CV stats: even after
   // the explicit 2-pass warm-up, the first measured run can carry KV-cache
   // settle overhead that inflates variance. With 1 or 2 samples we have no
@@ -327,6 +418,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     ? { discarded: true, discardReason: 'warmup_settle' }
     : {})];
   for (let i = 2; i <= requestedSamples; i++) {
+    checkpoint();
     notify('throughput', { message: `Throughput sample ${i}/${requestedSamples} — repeat run for reliability…`, sample: i, sampleCount: requestedSamples });
     const repeat = await hostTestService.testModelOnHost(modelName, hostUrl, {
       ...baseTestOptions,
@@ -337,7 +429,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
       logger.warn(`Throughput repeat sample failed for ${modelName} on ${hostId}`, { sample: i, error: repeat.error || repeat.status });
     }
   }
-  const measurementQuality = summarizeThroughputSamples(throughputSamples);
+  const measurementQuality = summarizeThroughputSamples(throughputSamples, { minimumRetainedSamples });
   const throughputHardware = await _captureHardwareSnapshot(hostId, 'after_throughput', settings);
   if (throughputHardware) {
     hardwareSnapshots.push(throughputHardware);
@@ -358,9 +450,14 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     }
   }
 
-  const representativeTokensPerSec = measurementQuality.tokensPerSecMedian || testResult.tokensPerSec;
+  const representativeTokensPerSec = measurementQuality.tokensPerSecMedian;
+  if (!representativeTokensPerSec) throw new Error('No retained passing throughput sample');
+  const representativeSample = throughputSamples
+    .filter(sample => !sample.discarded && sample.status === 'pass' && Number(sample.tokensPerSec) > 0)
+    .sort((left, right) => Math.abs(Number(left.tokensPerSec) - representativeTokensPerSec)
+      - Math.abs(Number(right.tokensPerSec) - representativeTokensPerSec))[0];
   const tpsStr = Number(representativeTokensPerSec).toFixed(1);
-  const ttftStr = testResult.timeToFirstTokenMs ? ` · TTFT ${Math.round(testResult.timeToFirstTokenMs)}ms` : '';
+  const ttftStr = representativeSample?.ttftMs ? ` · TTFT ${Math.round(representativeSample.ttftMs)}ms` : '';
   const pevalStr = testResult.promptEvalTokensPerSec ? ` · prompt eval ${Number(testResult.promptEvalTokensPerSec).toFixed(0)} tok/s` : '';
   notify('throughput', {
     message: `Throughput: ${tpsStr} tok/s${ttftStr}${pevalStr} · reliability ${measurementQuality.reliability}`,
@@ -370,6 +467,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
   });
 
   notify('spill_detection', { message: 'Checking GPU memory offload…' });
+  checkpoint();
   const spill = await _detectSpill(hostUrl, modelName);
   const spillMsg = spill.spillDetected
     ? `Spill detected — ${spill.sizeVram && spill.sizeTotal ? Math.round(spill.sizeVram / spill.sizeTotal * 100) : '?'}% on GPU`
@@ -380,6 +478,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
 
   let thinkingProfile = null;
   if (settings.thinkingProbeEnabled !== false) {
+    checkpoint();
     notify('thinking_behavior', { message: 'Checking think=true behavior and visible-answer safety…' });
     try {
       thinkingProfile = await profileThinkingBehavior(modelName, hostUrl, {
@@ -388,6 +487,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
         numPredict: 512,
         timeoutMs: Math.max(60000, (Number(settings.testTimeoutSec) || 60) * 1000)
       });
+      checkpoint();
       notify('thinking_behavior', {
         message: `Thinking behavior: ${thinkingProfile.recommendedPolicy} (${thinkingProfile.channel}, ${thinkingProfile.supportSignal})`,
         thinking: thinkingProfile
@@ -413,9 +513,11 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
 
   const profileData = {
     tokensPerSec: representativeTokensPerSec,
-    promptEvalTokensPerSec: testResult.promptEvalTokensPerSec || null,
-    ttftMs: testResult.timeToFirstTokenMs || null,
-    comparisonPromptTokens: testResult.promptTokens || null,
+    promptEvalTokensPerSec: representativeSample?.promptEvalTokensPerSec || null,
+    promptEvalDurationMs: representativeSample?.promptEvalDurationMs || null,
+    ttftMs: representativeSample?.ttftMs || null,
+    ttftMeasurement: representativeSample?.ttftMeasurement || null,
+    comparisonPromptTokens: representativeSample?.promptTokens || null,
     comparisonPromptTargetTokens: testResult.requestedPromptTokens || null,
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
     comparisonWorkloadMode: testResult.promptWorkloadMode || 'fixed',
@@ -423,6 +525,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     vramUsedMiB: testResult.vramUsedMiB || null,
     throughputSamples,
     measurementQuality,
+    requiredRetainedSamples: minimumRetainedSamples,
     spill: {
       ...spill,
       // /api/ps reports offload, not the context that caused it. Attribute a
@@ -445,6 +548,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
       profileData.contextInsight = buildContextInsight(previousCtx.num_ctx, previousCtx.source, discovered);
     }
     notify('saving', { message: 'Saving profile to database…' });
+    checkpoint();
     const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
     return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
   }
@@ -456,6 +560,9 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     artifactIdentity: artifact,
     acknowledgeMaintenance: true,
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
+    interactiveDegradationThreshold: Number(settings.interactiveDegradationThreshold),
+    documentDegradationThreshold: Number(settings.documentDegradationThreshold),
+    assertClaimActive: checkpoint,
     onProgress: (info) => {
       if (info.type === 'resident') {
         const msg = info.tokensPerSec == null
@@ -476,12 +583,17 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
       }
     }
   });
+  checkpoint();
   // `optimalNumCtx` is retained as a persisted compatibility field. Its value
   // is the largest verified context, not a synthetic performance tier.
   profileData.optimalNumCtx = probeResult.testedNumCtx || null;
+  profileData.maxVerifiedContext = probeResult.testedNumCtx || null;
+  profileData.recommendedInteractiveContext = probeResult.recommendedInteractiveContext || null;
+  profileData.recommendedDocumentContext = probeResult.recommendedDocumentContext || null;
   profileData.degradationPct = probeResult.degradationPct || null;
   profileData.probeSteps = (probeResult.steps || []).map(s => ({
-    numCtx: s.numCtx, tokPerSec: s.tokensPerSec, vramMiB: s.vramMiB
+    numCtx: s.numCtx, tokPerSec: s.tokensPerSec, vramMiB: s.vramMiB,
+    degradationPct: s.degradationPct, passed: s.passed
   }));
   const contextHardware = await _captureHardwareSnapshot(hostId, 'after_context_probe', settings);
   if (contextHardware) {
@@ -504,6 +616,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
 
   if (depth === 'standard') {
     notify('saving', { message: 'Saving profile to database…' });
+    checkpoint();
     const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
     notify('saved', { message: `Profile saved for exact artifact ${modelName}` });
     return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
@@ -512,13 +625,16 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
   // --- full: add throughputCurve + generationStability + loadTiming ---
   const maxCtx = profileData.optimalNumCtx;
   notify('throughput_curve', { message: `Running throughput curve across 5 context fills (max ${_formatCtx(maxCtx)})…` });
-  profileData.throughputCurve = await _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify);
+  checkpoint();
+  profileData.throughputCurve = await _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify, { checkpoint, claimIdentity });
   notify('generation_stability', { message: 'Testing generation stability at 64/256/512 output tokens…' });
-  profileData.generationStability = await _runGenerationStability(hostUrl, modelName, maxCtx, settings, notify);
+  checkpoint();
+  profileData.generationStability = await _runGenerationStability(hostUrl, modelName, maxCtx, settings, notify, { checkpoint, claimIdentity });
   notify('prefill_decode_matrix', { message: 'Running fixed prefill/decode matrix…' });
   profileData.prefillDecodeMatrix = await runPrefillDecodeMatrix(hostUrl, modelName, {
     safeNumCtx: profileData.spill?.lastSafeNumCtx || maxCtx,
     timeoutMs: Math.max(120000, (Number(settings.testTimeoutSec) || 60) * 1000),
+    assertClaimActive: checkpoint,
     onProgress: ({ index, total, cell }) => {
       const label = `${cell.prefillTokens}p/${cell.decodeTokens}d`;
       const detail = cell.status === 'pass'
@@ -528,7 +644,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
     }
   });
   notify('load_timing', { message: 'Measuring cold and hot load timing…' });
-  profileData.loadTiming = await _runLoadTiming(hostUrl, modelName);
+  profileData.loadTiming = await _runLoadTiming(hostUrl, modelName, { checkpoint });
   const fullHardware = await _captureHardwareSnapshot(hostId, 'after_full_profile', settings);
   if (fullHardware) {
     hardwareSnapshots.push(fullHardware);
@@ -536,6 +652,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', { onProgr
   }
 
   notify('saving', { message: 'Saving profile to database…' });
+  checkpoint();
   const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
   notify('saved', { message: `Profile saved for exact artifact ${modelName}` });
   return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
@@ -547,13 +664,18 @@ async function adapt() {
   throw error;
 }
 
-async function fullPipeline(modelName, hosts) {
+async function fullPipeline(modelName, hosts, { assertClaimActive, claimIdentityFor } = {}) {
   const results = [];
   for (const host of hosts) {
     try {
-      const profileResult = await profile(modelName, host.hostId, host.hostUrl, 'standard');
+      assertClaimActive?.();
+      const profileResult = await profile(modelName, host.hostId, host.hostUrl, 'full', {
+        assertClaimActive,
+        claimIdentity: claimIdentityFor?.(host.hostUrl) || null
+      });
       results.push({ ...host, profileResult, success: true });
     } catch (err) {
+      if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
       results.push({ ...host, success: false, error: err.message });
     }
   }
@@ -602,7 +724,8 @@ async function preflight(batchConfig) {
       ? profile.readiness.get(hostId)
       : profile?.readiness?.[hostId] || null;
     const hasProfile = ['standard', 'full'].includes(readinessForHost?.profileDepth)
-      && readinessForHost?.benchmarkQualified === true;
+      && readinessForHost?.benchmarkQualified === true
+      && hasProfilerAuthorityReceipt(readinessForHost);
 
     if (!hasProfile || !identitiesMatch(readinessForHost?.artifact, artifact)) {
       profilesNeeded.push({
@@ -623,7 +746,7 @@ async function preflight(batchConfig) {
   return { ready, profilesNeeded, warnings };
 }
 
-async function runPreflight(preflightResult, hostMap, { onEvent } = {}) {
+async function runPreflight(preflightResult, hostMap, { onEvent, assertClaimActive, claimIdentityFor } = {}) {
   const emit = typeof onEvent === 'function' ? onEvent : () => {};
   const profileCount = preflightResult.profilesNeeded.length;
   // Rate-limited: one Buddy preflight_start for the whole reprofile pass
@@ -638,8 +761,12 @@ async function runPreflight(preflightResult, hostMap, { onEvent } = {}) {
   }
   for (const model of preflightResult.profilesNeeded) {
     const hostUrl = hostMap?.[model.host] || model.hostUrl;
+    assertClaimActive?.();
     await emit('preflight_reprofile_start', { model: model.name, host: hostUrl, details: { hostId: model.host, reason: model.profileReason || 'missing_profile' } });
-    await profile(model.name, model.host, hostUrl, 'standard');
+    await profile(model.name, model.host, hostUrl, 'standard', {
+      assertClaimActive,
+      claimIdentity: claimIdentityFor?.(hostUrl) || null
+    });
   }
   // Pre-run only: profiling finished, batch about to execute. Suggesting
   // is allowed here (no judge/scoring active yet).
@@ -699,11 +826,12 @@ async function _detectSpill(hostUrl, modelName) {
  * Test throughput at 5 context fill percentages: 10%, 25%, 50%, 75%, 90%.
  * Returns array of { contextFillPct, numCtx, tokensPerSec, vramUsedMiB, gpuOffloaded }.
  */
-async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify) {
+async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify, { checkpoint = () => {}, claimIdentity = null } = {}) {
   const percentages = [10, 25, 50, 75, 90];
   const results = [];
 
   for (const pct of percentages) {
+    checkpoint();
     const numCtx = Math.max(512, Math.round(maxCtx * pct / 100));
     if (notify) notify('throughput_curve', { message: `Throughput curve: testing ${pct}% fill (${_formatCtx(numCtx)} ctx)…` });
     try {
@@ -712,7 +840,8 @@ async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify)
         contextFillPct: pct,
         numCtx,
         promptWorkloadMode: 'scaled',
-        timeoutMs: settings.testTimeoutSec * 1000
+        timeoutMs: settings.testTimeoutSec * 1000,
+        benchmarkClaim: claimIdentity
       });
       const spillCheck = await _detectSpill(hostUrl, modelName);
       results.push({
@@ -741,11 +870,12 @@ async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify)
  * Test generation stability at 3 output token lengths: 64, 256, 512.
  * Returns array of { numPredict, tokensPerSec, totalLatencyMs }.
  */
-async function _runGenerationStability(hostUrl, modelName, numCtx, settings, notify) {
+async function _runGenerationStability(hostUrl, modelName, numCtx, settings, notify, { checkpoint = () => {}, claimIdentity = null } = {}) {
   const targets = [64, 256, 512];
   const results = [];
 
   for (const target of targets) {
+    checkpoint();
     if (notify) notify('generation_stability', { message: `Stability: generating ${target} tokens…` });
     try {
       const testResult = await hostTestService.testModelOnHost(modelName, hostUrl, {
@@ -753,12 +883,13 @@ async function _runGenerationStability(hostUrl, modelName, numCtx, settings, not
         numPredict: target,
         numCtx,
         promptWorkloadMode: 'fixed',
-        timeoutMs: settings.testTimeoutSec * 1000
+        timeoutMs: settings.testTimeoutSec * 1000,
+        benchmarkClaim: claimIdentity
       });
       results.push({
         numPredict: target,
         tokensPerSec: testResult.tokensPerSec,
-        totalLatencyMs: testResult.totalLatencyMs || 0
+        totalLatencyMs: testResult.latencyMs || 0
       });
     } catch (err) {
       logger.warn(`_runGenerationStability: ${target} tokens failed for ${modelName} — ${err.message}`);
@@ -780,20 +911,23 @@ async function _runGenerationStability(hostUrl, modelName, numCtx, settings, not
  * 3. Cold start: timed generate call
  * 4. Hot start: immediate second generate call
  */
-async function _runLoadTiming(hostUrl, modelName) {
+async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {} } = {}) {
   try {
     // Unload model
+    checkpoint();
     await generate(hostUrl, { model: modelName, keep_alive: 0, stream: false }, { timeoutMs: 10000 });
 
     // Wait 2 seconds for unload to settle
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     // Cold start
+    checkpoint();
     const coldStart = Date.now();
     await generate(hostUrl, { model: modelName, prompt: 'Hi', stream: false, options: { num_predict: 1 } }, { timeoutMs: 120000 });
     const coldLoadMs = Date.now() - coldStart;
 
     // Hot start
+    checkpoint();
     const hotStart = Date.now();
     await generate(hostUrl, { model: modelName, prompt: 'Hi', stream: false, options: { num_predict: 1 } }, { timeoutMs: 30000 });
     const hotLoadMs = Date.now() - hotStart;
@@ -808,5 +942,6 @@ async function _runLoadTiming(hostUrl, modelName) {
 module.exports = {
   scout, profile, adapt, fullPipeline, preflight, runPreflight,
   _detectSpill, _runThroughputCurve, _runGenerationStability, _runLoadTiming,
-  summarizeThroughputSamples
+  summarizeThroughputSamples,
+  hasProfilerAuthorityReceipt
 };

@@ -31,6 +31,7 @@ const { resolveJudgeHost } = require('./judgeHostResolution');
 const { normalizeJudgeNumCtx } = require('../scoring/judgeRuntimeConfig');
 const { classifyBenchmarkError } = require('./errorClassifier');
 const { resolveHarnessTarget } = require('./harnessBrokerClient');
+const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
 
 function createJudgeOrchestrator({
     batchId,
@@ -126,13 +127,16 @@ function createJudgeOrchestrator({
                 }
             });
             try {
+                if (isCancelled()) throw cancellationReason();
                 await warmupModel(judgeHostUrl, judgeModel, {
                     timelinePrefix: 'judge_warmup',
                     recordTimelineEvent: recordBatchTimelineEvent,
                     strict: true,
                     timeoutOverride: 90000,
                     num_ctx: judgeNumCtx,
-                    onPhaseDetail: (detail) => _setPhase('judge_warmup', detail)
+                    onPhaseDetail: (detail) => _setPhase('judge_warmup', detail),
+                    claimIdentity: getBenchmarkClaimIdentity(judgeHostUrl, String(batchId)),
+                    assertClaimActive: () => { if (isCancelled()) throw cancellationReason(); }
                 });
                 logger.info('Judge model ready on configured host', { host: judgeHostUrl, model: judgeModel, num_ctx: judgeNumCtx });
             } finally {
@@ -325,13 +329,16 @@ function createJudgeOrchestrator({
                     }
                 });
                 try {
+                    if (isCancelled()) throw cancellationReason();
                     await warmupModel(judgeHostUrl, judgeModel, {
                         timelinePrefix: 'judge_warmup',
                         recordTimelineEvent: recordBatchTimelineEvent,
                         strict: true,
                         timeoutOverride: 90000,
                         num_ctx: judgeNumCtx,
-                        onPhaseDetail: (detail) => _setPhase('judge_warmup', detail)
+                        onPhaseDetail: (detail) => _setPhase('judge_warmup', detail),
+                        claimIdentity: getBenchmarkClaimIdentity(judgeHostUrl, String(batchId)),
+                        assertClaimActive: () => { if (isCancelled()) throw cancellationReason(); }
                     });
                     warmedJudgeHosts.add(warmupKey);
                     logger.info('Judge model ready for deferred same-host phase', {
