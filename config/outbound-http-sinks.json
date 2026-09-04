@@ -1130,11 +1130,11 @@
     { "id": "benchmark.transport.peer-verified-node-fetch", "service": "benchmark", "source": "benchmark/src/helpers/outboundHttpTransport.js", "line": 243, "column": 30, "constructor": "fetchImpl", "policyId": "delegated.benchmark-transport" },
     { "id": "benchmark.huggingface.catalog", "service": "benchmark", "source": "benchmark/src/clients/hfClient.js", "line": 12, "column": 17, "constructor": "https.get", "policyId": "canonical.public-model-metadata" },
     { "id": "benchmark.ollama-client.request", "service": "benchmark", "source": "benchmark/src/clients/ollamaClient.js", "line": 114, "column": 27, "constructor": "fetch", "policyId": "request-admitted.ollama-inference" },
-    { "id": "benchmark.decomposed-judge.generate", "service": "benchmark", "source": "benchmark/src/services/decomposedJudge.js", "line": 169, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
-    { "id": "benchmark.reference.key-point", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 116, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
-    { "id": "benchmark.reference.contradiction", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 175, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
-    { "id": "benchmark.reference.similarity", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 237, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
-    { "id": "benchmark.batch.execute", "service": "benchmark", "source": "benchmark/src/services/benchmark/batchOrchestrator.js", "line": 372, "column": 34, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.decomposed-judge.generate", "service": "benchmark", "source": "benchmark/src/services/decomposedJudge.js", "line": 171, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.reference.key-point", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 118, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.reference.contradiction", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 177, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.reference.similarity", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 239, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.batch.execute", "service": "benchmark", "source": "benchmark/src/services/benchmark/batchOrchestrator.js", "line": 376, "column": 34, "constructor": "fetch", "policyId": "configured.product-inference" },
     { "id": "benchmark.cloud-lane.transport", "service": "benchmark", "source": "benchmark/src/services/benchmark/cloudLaneTransports.js", "line": 32, "column": 22, "constructor": "fetchImpl", "policyId": "request-admitted.cloud-inference" },
     { "id": "benchmark.dedication.ps", "service": "benchmark", "source": "benchmark/src/services/benchmark/dedicationLifecycle.js", "line": 25, "column": 27, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.dedication.generate", "service": "benchmark", "source": "benchmark/src/services/benchmark/dedicationLifecycle.js", "line": 37, "column": 23, "constructor": "fetch", "policyId": "request-admitted.ollama-lifecycle" },
@@ -1146,8 +1146,8 @@
     { "id": "benchmark.judge-validator.chat", "service": "benchmark", "source": "benchmark/src/services/benchmark/judgeModelValidator.js", "line": 98, "column": 25, "constructor": "fetch", "policyId": "request-admitted.ollama-inference" },
     { "id": "benchmark.judge-validator.show", "service": "benchmark", "source": "benchmark/src/services/benchmark/judgeModelValidator.js", "line": 211, "column": 25, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.preflight.tags", "service": "benchmark", "source": "benchmark/src/services/benchmark/preflight.js", "line": 284, "column": 32, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
-    { "id": "benchmark.test-execution.generate", "service": "benchmark", "source": "benchmark/src/services/benchmark/testExecution.js", "line": 43, "column": 32, "constructor": "fetch", "policyId": "configured.product-inference" },
-    { "id": "benchmark.judge-call.generate", "service": "benchmark", "source": "benchmark/src/services/scoring/judgeCall.js", "line": 415, "column": 36, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.test-execution.generate", "service": "benchmark", "source": "benchmark/src/services/benchmark/testExecution.js", "line": 61, "column": 32, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.judge-call.generate", "service": "benchmark", "source": "benchmark/src/services/scoring/judgeCall.js", "line": 417, "column": 36, "constructor": "fetch", "policyId": "configured.product-inference" },
 
     { "id": "rag.core-outbound.execute", "service": "rag", "source": "rag/src/clients/coreOutboundClient.js", "line": 279, "column": 30, "constructor": "fetchImpl", "policyId": "configured.qdrant-data" }
   ]
