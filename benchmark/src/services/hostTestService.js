@@ -15,6 +15,7 @@
  *   HOST_TEST_WARMUP           - Enable warm-up (default true)
  */
 
+const mongoose = require('mongoose');
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
 const ollamaVramService        = require('./ollamaVramService');
 const nodeFetch                = require('node-fetch');
@@ -324,7 +325,10 @@ async function checkHost(hostUrl, options = {}) {
   const start = Date.now();
   try {
     const url = `${hostUrl}/api/tags`;
-    const res = await hostTestRequest(HOST_TEST_OPERATIONS.TAGS, url, { method: 'GET' }, executor);
+    const res = await hostTestRequest(HOST_TEST_OPERATIONS.TAGS, url, {
+      method: 'GET',
+      signal: options.signal
+    }, executor);
     if (!res.ok) {
       // Preserve the legacy status-first connectivity result.  Draining an
       // untrusted error body can otherwise turn an immediate HTTP failure into
@@ -359,13 +363,13 @@ async function checkHost(hostUrl, options = {}) {
 /**
  * Return loaded model metadata from /api/ps when the target is already in VRAM.
  */
-async function getLoadedModelInfo(hostUrl, modelName, executor = hostTestExecutor) {
+async function getLoadedModelInfo(hostUrl, modelName, executor = hostTestExecutor, signal = null) {
   try {
     const url = `${hostUrl}/api/ps`;
     const res = await hostTestRequest(
       HOST_TEST_OPERATIONS.LOADED_PS,
       url,
-      { method: 'GET' },
+      { method: 'GET', signal },
       executor
     );
     if (!res.ok) {
@@ -375,7 +379,8 @@ async function getLoadedModelInfo(hostUrl, modelName, executor = hostTestExecuto
     const data = await readBoundedJson(res);
     const loaded = data.models || [];
     return loaded.find(m => isSameOllamaModel(m.name || m.model, modelName)) || null;
-  } catch {
+  } catch (error) {
+    throwIfAborted(signal);
     return null;
   }
 }
@@ -430,13 +435,13 @@ function buildWarmupRequest(hostUrl, modelName, alreadyLoaded, numCtx) {
  * Unload whatever model is currently occupying VRAM so the target model
  * can load cleanly without Ollama juggling both simultaneously.
  */
-async function unloadCurrentModel(hostUrl, targetModelName, executor = hostTestExecutor) {
+async function unloadCurrentModel(hostUrl, targetModelName, executor = hostTestExecutor, signal = null) {
   try {
     const url = `${hostUrl}/api/ps`;
     const res = await hostTestRequest(
       HOST_TEST_OPERATIONS.UNLOAD_PS,
       url,
-      { method: 'GET' },
+      { method: 'GET', signal },
       executor
     );
     if (!res.ok) {
@@ -453,21 +458,24 @@ async function unloadCurrentModel(hostUrl, targetModelName, executor = hostTestE
       const unloadResponse = await hostTestRequest(HOST_TEST_OPERATIONS.UNLOAD_CURRENT, genUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: m.name, keep_alive: 0, stream: false })
+        body: JSON.stringify({ model: m.name, keep_alive: 0, stream: false }),
+        signal
       }, executor);
       await discardBoundedResponse(unloadResponse);
     }
   } catch (err) {
+    throwIfAborted(signal);
     logger.debug('Pre-warmup unload best-effort failed', { hostUrl, error: err.message });
   }
 }
 
-async function unloadOneModel(hostUrl, modelName, executor = hostTestExecutor) {
+async function unloadOneModel(hostUrl, modelName, executor = hostTestExecutor, signal = null) {
   const genUrl = `${hostUrl}/api/generate`;
   const response = await hostTestRequest(HOST_TEST_OPERATIONS.UNLOAD_ONE, genUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: modelName, keep_alive: 0, stream: false })
+    body: JSON.stringify({ model: modelName, keep_alive: 0, stream: false }),
+    signal
   }, executor);
   await discardBoundedResponse(response);
 }
@@ -477,8 +485,9 @@ async function unloadOneModel(hostUrl, modelName, executor = hostTestExecutor) {
  * Ensures the model is loaded into VRAM before the timed test.
  * Uses a longer timeout for cold loads (model not yet in VRAM).
  */
-async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTestExecutor) {
-  const loadedInfo = await getLoadedModelInfo(hostUrl, modelName, executor);
+async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTestExecutor, benchmarkClaim = null, signal = null) {
+  throwIfAborted(signal);
+  const loadedInfo = await getLoadedModelInfo(hostUrl, modelName, executor, signal);
   const requestedNumCtx = Number.isFinite(Number(numCtx)) && Number(numCtx) > 0
     ? Math.round(Number(numCtx))
     : null;
@@ -496,15 +505,16 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
       requestedNumCtx
     });
     try {
-      await unloadOneModel(hostUrl, loadedName, executor);
+      await unloadOneModel(hostUrl, loadedName, executor, signal);
     } catch (err) {
+      throwIfAborted(signal);
       logger.debug('Context-mismatch unload best-effort failed', { hostUrl, modelName, error: err.message });
     }
     alreadyLoaded = false;
   }
 
   if (!alreadyLoaded) {
-    await unloadCurrentModel(hostUrl, modelName, executor);
+    await unloadCurrentModel(hostUrl, modelName, executor, signal);
   }
 
   // Cold loading goes directly to the claimed Ollama host. This prevents a
@@ -512,6 +522,9 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
   // timeout. Once resident, the second warm-up pass goes through Core so the
   // normal direct-lane telemetry remains represented.
   const request = buildWarmupRequest(hostUrl, modelName, alreadyLoaded, numCtx);
+  if (request.phase === 'loaded_prime' && benchmarkClaim) {
+    Object.assign(request.body, benchmarkClaim);
+  }
   logger.info('Host test warm-up', {
     hostUrl,
     modelName,
@@ -531,7 +544,7 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
         ? withBenchmarkServiceAuth({ 'Content-Type': 'application/json' })
         : { 'Content-Type': 'application/json' },
       body: JSON.stringify(request.body),
-      signal: deadline.signal
+      signal: combineAbortSignals(deadline.signal, signal)
     }, executor);
     if (!response.ok) {
       const detail = await readBoundedText(response).catch(() => '');
@@ -539,6 +552,7 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
     }
     await discardBoundedResponse(response);
   } catch (err) {
+    throwIfAborted(signal);
     const errorMessage = deadline.expired
       && err?.code === OUTBOUND_ERROR_CODES.CALLER_ABORTED
       ? `request timeout after ${request.timeoutMs}ms`
@@ -559,20 +573,38 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
 /**
  * Snapshot VRAM usage for a host (best-effort).
  */
-async function snapshotVram(hostUrl) {
+async function snapshotVram(hostUrl, signal = null) {
   try {
-    const result = await ollamaVramService.getHostVram(hostUrl);
+    const result = await ollamaVramService.getHostVram(hostUrl, { signal });
     if (result.ok) {
       return { usedMiB: result.memoryUsedMiBTotal, totalMiB: result.memoryTotalMiBTotal };
     }
   } catch (err) {
+    throwIfAborted(signal);
     logger.warn('Host test VRAM snapshot unavailable', { hostUrl, error: err.message });
   }
   return { usedMiB: null, totalMiB: null };
 }
 
-async function persistFailureSnapshot(modelName, snapshot) {
-  await HostPerformanceSnapshot.create({
+async function persistHostSnapshot(modelName, snapshot, { signal, checkpoint } = {}) {
+  const payload = { _id: new mongoose.Types.ObjectId(), modelName, ...snapshot };
+  checkpoint?.();
+  try {
+    const created = await HostPerformanceSnapshot.create(
+      [payload],
+      signal ? { signal } : undefined
+    );
+    const saved = Array.isArray(created) ? created[0] : created;
+    checkpoint?.();
+    return saved;
+  } catch (error) {
+    await HostPerformanceSnapshot.deleteOne({ _id: payload._id }).catch(() => {});
+    throw error;
+  }
+}
+
+async function persistFailureSnapshot(modelName, snapshot, options = {}) {
+  return persistHostSnapshot(modelName, {
     modelName,
     hostId:      null,
     tokensPerSec: 0,
@@ -582,7 +614,79 @@ async function persistFailureSnapshot(modelName, snapshot) {
     status:       'error',
     error:        null,
     ...snapshot
-  });
+  }, options);
+}
+
+async function verifyAppliedContext(hostUrl, modelName, expectedNumCtx, signal = null, executor = hostTestExecutor) {
+  const resident = await getLoadedModelInfo(hostUrl, modelName, executor, signal);
+  const observedNumCtx = readLoadedContextLength(resident);
+  if (!observedNumCtx) {
+    const error = new Error(`Ollama /api/ps did not attest context_length=${expectedNumCtx} for ${modelName}`);
+    error.code = 'HOST_TEST_CONTEXT_UNVERIFIED';
+    throw error;
+  }
+  if (Number(observedNumCtx) !== Number(expectedNumCtx)) {
+    const error = new Error(`Ollama applied context_length=${observedNumCtx}, requested ${expectedNumCtx} for ${modelName}`);
+    error.code = 'HOST_TEST_CONTEXT_CLAMPED';
+    error.observedNumCtx = observedNumCtx;
+    error.requestedNumCtx = Number(expectedNumCtx);
+    throw error;
+  }
+  return observedNumCtx;
+}
+
+function combineAbortSignals(...signals) {
+  const active = signals.filter(Boolean);
+  if (!active.length) return undefined;
+  if (active.length === 1) return active[0];
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(active);
+  const controller = new AbortController();
+  for (const signal of active) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  }
+  return controller.signal;
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  const error = new Error('Profiler claim stopped while host request was running');
+  error.code = 'BENCHMARK_CLAIM_STOPPED';
+  throw error;
+}
+
+/** Parse Ollama's NDJSON stream and measure the first emitted output token. */
+async function readOllamaGenerateStream(response, startedAt, now = Date.now) {
+  let buffer = '';
+  let terminal = null;
+  let output = '';
+  let timeToFirstTokenMs = null;
+
+  const consumeLine = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (typeof event.response === 'string' && event.response.length > 0) {
+      if (timeToFirstTokenMs === null) timeToFirstTokenMs = Math.max(0, now() - startedAt);
+      output += event.response;
+    }
+    if (event.done === true) terminal = event;
+  };
+
+  for await (const chunk of response.stream()) {
+    buffer += Buffer.from(chunk).toString('utf8');
+    let newline;
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      consumeLine(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+    }
+  }
+  if (buffer.trim()) consumeLine(buffer);
+  if (!terminal) throw new Error('Ollama stream ended without a terminal metrics event');
+  return { data: { ...terminal, response: output }, timeToFirstTokenMs };
 }
 
 // ── Core Test Functions ────────────────────────────────────────────────────────
@@ -599,7 +703,11 @@ async function persistFailureSnapshot(modelName, snapshot) {
 async function testModelOnHost(modelName, hostUrl, options = {}) {
   const cfg = getConfig(options);
   const { hostId, _skipHostCheck } = options;
+  const checkpoint = typeof options.assertClaimActive === 'function' ? options.assertClaimActive : () => {};
+  const signal = options.signal || null;
   const normalizedModelName = normalizeModelName(modelName);
+  checkpoint();
+  throwIfAborted(signal);
 
   // Circuit breaker gate (when host check is skipped, we still enforce the breaker)
   if (_skipHostCheck) {
@@ -610,14 +718,17 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
         numCtx: null, numCtxSource: null, testedAt: new Date(),
         status: 'error', error: gate.reason, source: 'benchmark_host_test'
       };
-      await persistFailureSnapshot(normalizedModelName, snapshot);
+      checkpoint();
+      throwIfAborted(signal);
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
       return snapshot;
     }
   }
 
   // 1. Validate host (skip if caller already verified, e.g. testAllModelsOnHost)
   if (!_skipHostCheck) {
-    const hostCheck = await checkHost(hostUrl);
+    const hostCheck = await checkHost(hostUrl, { signal });
+    throwIfAborted(signal);
     if (!hostCheck.available) {
       throw new Error(`Host unreachable: ${hostUrl} (${hostCheck.error})`);
     }
@@ -638,13 +749,18 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
 
   // 2. Warm-up (two passes: load model, then prime KV cache at target context)
   if (cfg.warmup) {
+    checkpoint();
     logger.info('Host test: warming up model', { modelName, hostUrl, numCtx });
     const warmUpStartedAt = Date.now();
     try {
-      await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx);
+      await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx, hostTestExecutor, options.benchmarkClaim || null, signal);
+      checkpoint();
       // Second pass with a small prompt at target num_ctx to prime KV cache allocation
-      await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx);
+      checkpoint();
+      await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx, hostTestExecutor, options.benchmarkClaim || null, signal);
+      checkpoint();
     } catch (err) {
+      throwIfAborted(signal);
       circuitBreaker.recordFailure(hostUrl);
       const snapshot = {
         hostUrl,
@@ -658,7 +774,9 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
         error:        err.message,
         source:       'benchmark_host_test'
       };
-      await persistFailureSnapshot(normalizedModelName, snapshot);
+      checkpoint();
+      throwIfAborted(signal);
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
       return snapshot;
     }
   }
@@ -668,6 +786,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
   const { targetPromptTokens, requestedPromptTokens, promptWorkloadMode } = probePlan;
   const { prompt } = generateFillPrompt(targetPromptTokens);
 
+  checkpoint();
   const start = Date.now();
   let probeData;
   const probeDeadline = createLocalDeadline(
@@ -682,19 +801,20 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       body: JSON.stringify({
         model:   normalizedModelName,
         prompt,
-        stream:  false,
+        stream:  true,
         options: {
           num_ctx:     numCtx,
           num_predict: cfg.numPredict,
-          temperature: 0.1
+          temperature: 0,
+          seed: 7
         }
       }),
-      signal: probeDeadline.signal
+      signal: combineAbortSignals(probeDeadline.signal, signal)
     });
 
-    const latencyMs = Date.now() - start;
-
     if (!res.ok) {
+      throwIfAborted(signal);
+      const latencyMs = Date.now() - start;
       circuitBreaker.recordFailure(hostUrl);
       const body = await readBoundedText(res).catch(() => '');
       const snapshot = {
@@ -704,13 +824,22 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
         error: `HTTP ${res.status}: ${body.slice(0, 200)}`,
         source: 'benchmark_host_test'
       };
-      await persistFailureSnapshot(normalizedModelName, snapshot);
+      checkpoint();
+      throwIfAborted(signal);
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
       return snapshot;
     }
 
-    probeData = await readBoundedJson(res);
-    probeData._latencyMs = latencyMs;
+    const streamed = await readOllamaGenerateStream(res, start);
+    throwIfAborted(signal);
+    probeData = streamed.data;
+    probeData._latencyMs = Date.now() - start;
+    probeData._timeToFirstTokenMs = streamed.timeToFirstTokenMs;
+    checkpoint();
+    probeData._observedNumCtx = await verifyAppliedContext(hostUrl, normalizedModelName, numCtx, signal);
+    checkpoint();
   } catch (err) {
+    throwIfAborted(signal);
     circuitBreaker.recordFailure(hostUrl);
     const latencyMs = Date.now() - start;
     const isTimeout = probeDeadline.expired
@@ -728,7 +857,9 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       error: errorMessage,
       source: 'benchmark_host_test'
     };
-    await persistFailureSnapshot(normalizedModelName, snapshot);
+    checkpoint();
+    throwIfAborted(signal);
+    await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
     return snapshot;
   } finally {
     probeDeadline.dispose();
@@ -749,12 +880,17 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
   const promptEvalTps = promptEvalDurationSec > 0
     ? Number((promptEvalCount / promptEvalDurationSec).toFixed(2))
     : null;
-  const timeToFirstTokenMs = promptEvalDuration > 0
+  const promptEvalDurationMs = promptEvalDuration > 0
     ? Number((promptEvalDuration / 1e6).toFixed(1))
+    : null;
+  const timeToFirstTokenMs = Number.isFinite(probeData._timeToFirstTokenMs)
+    ? probeData._timeToFirstTokenMs
     : null;
 
   // 5. VRAM snapshot
-  const vram = await snapshotVram(hostUrl);
+  const vram = await snapshotVram(hostUrl, signal);
+  checkpoint();
+  throwIfAborted(signal);
 
   // 6. Build and persist snapshot
   const snapshot = {
@@ -762,8 +898,10 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     hostId:                 hostId || null,
     tokensPerSec,
     promptEvalTokensPerSec: promptEvalTps,
+    promptEvalDurationMs,
     latencyMs:              probeData._latencyMs,
     timeToFirstTokenMs,
+    ttftMeasurement: timeToFirstTokenMs !== null ? 'streamed_wall_clock' : undefined,
     promptTokens:           promptEvalCount,
     completionTokens:       evalCount,
     requestedPromptTokens,
@@ -771,6 +909,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     vramUsedMiB:            vram.usedMiB,
     vramTotalMiB:           vram.totalMiB,
     numCtx,
+    observedNumCtx:          probeData._observedNumCtx,
     numCtxSource,
     testedAt:               new Date(),
     status:                 'pass',
@@ -778,7 +917,9 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     source:                 'benchmark_host_test'
   };
 
-  await HostPerformanceSnapshot.create({ modelName: normalizedModelName, ...snapshot });
+  checkpoint();
+  throwIfAborted(signal);
+  await persistHostSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
   circuitBreaker.recordSuccess(hostUrl);
 
   logger.info('Host test completed', {
@@ -808,7 +949,8 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
 async function testAllModelsOnHost(hostUrl, options = {}) {
   const { hostId, onProgress, shouldAbort } = options;
 
-  const hostCheck = await checkHost(hostUrl);
+  const hostCheck = await checkHost(hostUrl, { signal: options.signal });
+  throwIfAborted(options.signal);
   if (!hostCheck.available) {
     throw new Error(`Host unreachable: ${hostUrl} (${hostCheck.error})`);
   }
@@ -824,8 +966,16 @@ async function testAllModelsOnHost(hostUrl, options = {}) {
     const modelName = models[i];
     let result;
     try {
-      result = await testModelOnHost(modelName, hostUrl, { hostId, _skipHostCheck: true });
+      result = await testModelOnHost(modelName, hostUrl, {
+        hostId,
+        _skipHostCheck: true,
+        benchmarkClaim: options.benchmarkClaim || null,
+        assertClaimActive: options.assertClaimActive,
+        signal: options.signal
+      });
     } catch (err) {
+      throwIfAborted(options.signal);
+      if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
       result = {
         hostUrl, hostId, tokensPerSec: 0, latencyMs: 0,
         numCtx: null, testedAt: new Date(),
@@ -869,14 +1019,20 @@ async function testModelAcrossHosts(modelName, options = {}) {
   const normalizedModelName = normalizeModelName(modelName);
 
   for (const host of configuredHosts) {
-    const check = await checkHost(host.url);
+    options.assertClaimActive?.();
+    const check = await checkHost(host.url, { signal: options.signal });
+    throwIfAborted(options.signal);
     if (!check.available || !check.models.includes(normalizedModelName)) {
       continue;
     }
 
+    options.assertClaimActive?.();
     const snapshot = await testModelOnHost(normalizedModelName, host.url, {
       hostId:         options.hostIdMap?.[host.url] || host.id || null,
-      _skipHostCheck: true
+      _skipHostCheck: true,
+      benchmarkClaim: options.claimIdentityFor?.(host.url) || null,
+      assertClaimActive: options.assertClaimActive,
+      signal: options.signal
     });
 
     hostResults.push({ hostId: host.id, hostUrl: host.url, ...snapshot });
@@ -899,11 +1055,16 @@ module.exports = {
     configuredCoreOrigin,
     createHostTestExecutor,
     createLocalDeadline,
+    combineAbortSignals,
+    throwIfAborted,
     getLoadedModelInfo,
+    persistHostSnapshot,
+    verifyAppliedContext,
     hostTestRequest,
     operationMatches,
     unloadCurrentModel,
     unloadOneModel,
-    warmUp
+    warmUp,
+    readOllamaGenerateStream
   }
 };

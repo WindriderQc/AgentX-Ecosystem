@@ -27,6 +27,18 @@ const logger = require('../../../config/logger');
 
 const MIB = est.MIB;
 
+function hasProfilerAuthority(readiness, evidence) {
+  const receipt = readiness?.authorityReceipt;
+  return readiness?.benchmarkQualified === true
+    && readiness?.stale !== true
+    && ['standard', 'full'].includes(readiness?.profileDepth)
+    && receipt?.source === 'profiler_pipeline'
+    && Number(receipt.version) === 1
+    && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
+    && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '')
+    && String(readiness?.evidenceId || '') === String(evidence?._id || '');
+}
+
 /**
  * Build the full fit report for one host.
  * @param {string} hostId
@@ -86,22 +98,26 @@ async function buildHostFitReport(hostId) {
       && evidence.artifact.digest === readiness.artifact.digest
       && evidence.artifact.runtimeFingerprint === readiness.artifact.runtimeFingerprint
       && evidence.artifact.registryQualified === true
-      && readiness.stale !== true
+      && hasProfilerAuthority(readiness, evidence)
     );
-    const p = artifactMatches ? evidence.profile : null;
+    const p = artifactMatches && Number(evidence.profile?.recommendedInteractiveContext) > 0
+      ? evidence.profile
+      : null;
     const bench = meta.benchmarkStats || {};
 
     if (p) {
       const modelVramMiB = (p.spill?.sizeTotal ? p.spill.sizeTotal / MIB : null) ?? p.vramUsedMiB ?? null;
       const vramPct = (modelVramMiB && vramTotalMiB) ? est.round((modelVramMiB / vramTotalMiB) * 100) : null;
-      const spillDetected = !!p.spill?.spillDetected;
+      const spillVerified = p.spill?.verified === true;
+      const spillDetected = spillVerified ? !!p.spill?.spillDetected : null;
       const fit = est.measuredFitLevel({ vramPct, spillDetected, reliability: p.measurementQuality?.reliability });
       const tps = est.round(p.tokensPerSec, 1);
       const benchScore = bench.avgCompositeScore != null ? bench.avgCompositeScore : null;
       const activeB = est.parseActiveParams(name);
       const moeActiveB = (activeB && paramB && activeB < paramB) ? activeB : null;
       const dims = est.dimensionScores({
-        tps, vramPct, spillDetected, benchmarkScore: benchScore, paramB, quant, ctx: p.optimalNumCtx || null
+        tps, vramPct, spillDetected, benchmarkScore: benchScore, paramB, quant,
+        ctx: p.recommendedInteractiveContext || null
       });
       measured.push({
         modelName: name,
@@ -109,10 +125,12 @@ async function buildHostFitReport(hostId) {
         moeActiveB,
         quant,
         tokensPerSec: tps,
-        ttftMs: est.round(p.ttftMs),
+        ttftMs: est.round(p.ttftP50Ms),
         reliability: p.measurementQuality?.reliability || null,
-        optimalNumCtx: p.optimalNumCtx || null,
-        safeCtx: p.spill?.lastSafeNumCtx || null,
+        maxVerifiedContext: p.maxVerifiedContext || null,
+        recommendedInteractiveContext: p.recommendedInteractiveContext || null,
+        recommendedDocumentContext: p.recommendedDocumentContext || null,
+        spillVerified,
         spillDetected,
         spillNumCtx: p.spill?.spillNumCtx || null,
         modelVramMiB: est.round(modelVramMiB),

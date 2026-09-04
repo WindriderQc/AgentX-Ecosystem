@@ -1,4 +1,4 @@
-const { ollamaFetch, listModels, listRunning, showModel, generate, chat, createModel, pullModel, normalizeCreateBody, DEFAULT_TIMEOUT_MS } = require('../../src/clients/ollamaClient');
+const { ollamaFetch, listModels, listRunning, showModel, generate, chat, createModel, pullModel, deleteModel, normalizeCreateBody, DEFAULT_TIMEOUT_MS } = require('../../src/clients/ollamaClient');
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -133,6 +133,14 @@ describe('ollamaClient', () => {
                 name: 'qwen2.5:3b',
                 stream: false
             });
+        });
+
+        it('deleteModel removes the exact artifact', async () => {
+            await deleteModel('http://host:11434', 'qwen2.5:3b');
+            expect(global.fetch).toHaveBeenCalledWith(
+                'http://host:11434/api/delete',
+                expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ name: 'qwen2.5:3b' }) })
+            );
         });
 
         it('allows timeout override via opts', async () => {

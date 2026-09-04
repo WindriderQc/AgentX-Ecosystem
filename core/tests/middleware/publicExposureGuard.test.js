@@ -26,6 +26,10 @@ function buildApp() {
   app.post('/api/analytics/codex-usage', (_req, res) => res.json({ ok: true }));
   app.post('/api/platform-events', (_req, res) => res.json({ ok: true }));
   app.post('/api/inference/generate', (_req, res) => res.json({ ok: true }));
+  app.post('/api/nerve-center/workload-admissions', (_req, res) => res.json({ ok: true }));
+  app.post('/api/nerve-center/workload-admissions/admission-1/heartbeat', (_req, res) => res.json({ ok: true }));
+  app.post('/api/nerve-center/workload-admissions/admission-1/release-receipt', (_req, res) => res.json({ ok: true }));
+  app.delete('/api/nerve-center/workload-admissions/admission-1', (_req, res) => res.json({ ok: true }));
   app.post('/api/planning/automation/reconcile', (_req, res) => res.json({ ok: true }));
   app.post('/api/memory-review/runs', (_req, res) => res.json({ ok: true }));
   app.post('/api/memory-review/runs/run-1/observations', (_req, res) => res.json({ ok: true }));
@@ -467,6 +471,22 @@ describe('publicExposureGuard', () => {
       .set('Host', 'agentx.example.test')
       .set('X-AgentX-Benchmark-Token', 'benchmark-token')
       .expect(200);
+    await request(app).post('/api/nerve-center/workload-admissions')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Benchmark-Token', 'benchmark-token')
+      .expect(200);
+    await request(app).post('/api/nerve-center/workload-admissions/admission-1/heartbeat')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Benchmark-Token', 'benchmark-token')
+      .expect(200);
+    await request(app).post('/api/nerve-center/workload-admissions/admission-1/release-receipt')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Benchmark-Token', 'benchmark-token')
+      .expect(200);
+    await request(app).delete('/api/nerve-center/workload-admissions/admission-1')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Benchmark-Token', 'benchmark-token')
+      .expect(200);
     await request(app).post('/api/memory-review/runs')
       .set('Host', 'agentx.example.test')
       .set('X-AgentX-Memory-Review-Token', 'memory-token')
@@ -527,5 +547,17 @@ describe('publicExposureGuard', () => {
     expect(benchmarkCredentialPath('/api/models/registry/model/context-info', 'GET')).toBe(false);
     expect(benchmarkCredentialPath('/api/models/registry/model/execution-config', 'GET')).toBe(false);
     expect(benchmarkCredentialPath('/api/models/registry/model', 'POST')).toBe(false);
+  });
+
+  it('scopes the Benchmark credential to the exact workload-admission lifecycle', () => {
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions', 'POST')).toBe(true);
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions/admission-1/heartbeat', 'POST')).toBe(true);
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions/admission-1/release-receipt', 'POST')).toBe(true);
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions/admission-1', 'DELETE')).toBe(true);
+    expect(benchmarkCredentialPath('/api/nerve-center/host-preferences/host/benchmark-claim/batch-1/release-receipt', 'POST')).toBe(true);
+
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions', 'GET')).toBe(false);
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions/admission-1', 'POST')).toBe(false);
+    expect(benchmarkCredentialPath('/api/nerve-center/maintenance-leases', 'POST')).toBe(false);
   });
 });

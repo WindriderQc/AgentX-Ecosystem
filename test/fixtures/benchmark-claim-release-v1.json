@@ -1,0 +1,165 @@
+{
+  "contract": "agentx.benchmark-claim-release-fixtures/v1",
+  "cases": [
+    {
+      "name": "finite_resident_live",
+      "acquireSnapshot": {
+        "capturedAt": "2026-09-04T12:00:00.000Z",
+        "source": "ollama_ps",
+        "exact": true,
+        "identityDigest": "49fd07188a85ff8479b900fb818f5834883e95c213dc5f4adf93d1a30ca3e8ad",
+        "residents": [
+          {
+            "model": "fixture-live:latest",
+            "digest": "sha256:fixture-live",
+            "artifactSize": 4000000000,
+            "sizeVram": 3800000000,
+            "contextLength": 32768,
+            "keepAlive": 3600,
+            "expiresAt": "2026-09-04T13:00:00.000Z"
+          }
+        ]
+      },
+      "releaseReceipt": {
+        "contract": "agentx.benchmark-claim-release/v1",
+        "hostUrl": "http://fixture:11434",
+        "batchId": "fixture-live-batch",
+        "claimGeneration": "11111111-1111-4111-8111-111111111111",
+        "snapshot": {
+          "identityDigest": "49fd07188a85ff8479b900fb818f5834883e95c213dc5f4adf93d1a30ca3e8ad",
+          "appliedIdentityDigest": "49fd07188a85ff8479b900fb818f5834883e95c213dc5f4adf93d1a30ca3e8ad",
+          "exact": true,
+          "residentCount": 1,
+          "residents": [
+            {
+              "model": "fixture-live:latest",
+              "digest": "sha256:fixture-live",
+              "artifactSize": 4000000000,
+              "sizeVram": 3800000000,
+              "contextLength": 32768,
+              "keepAlive": 3600,
+              "expiresAt": "2026-09-04T13:00:00.000Z"
+            }
+          ],
+          "excludedModels": [],
+          "expiredModels": []
+        },
+        "verification": {
+          "status": "ready",
+          "ready": true,
+          "verified": true,
+          "degraded": false,
+          "mode": "exact_runtime_snapshot",
+          "snapshotIdentity": "49fd07188a85ff8479b900fb818f5834883e95c213dc5f4adf93d1a30ca3e8ad"
+        },
+        "state": {
+          "restoredStatus": "ready",
+          "claimCleared": true,
+          "finalizerCleared": true
+        },
+        "releasedAt": "2026-09-04T12:00:05.000Z"
+      },
+      "wrapperExpected": true
+    },
+    {
+      "name": "finite_resident_expired",
+      "acquireSnapshot": {
+        "capturedAt": "2026-09-04T12:00:00.000Z",
+        "source": "ollama_ps",
+        "exact": true,
+        "identityDigest": "c142b545ab978109cd1cfb03f30e9a3e17119d162dc1b0b0883c83866566801d",
+        "residents": [
+          {
+            "model": "fixture-expired:latest",
+            "digest": "sha256:fixture-expired",
+            "artifactSize": 5000000000,
+            "sizeVram": 4700000000,
+            "contextLength": 65536,
+            "keepAlive": 30,
+            "expiresAt": "2026-09-04T11:59:00.000Z"
+          }
+        ]
+      },
+      "releaseReceipt": {
+        "contract": "agentx.benchmark-claim-release/v1",
+        "hostUrl": "http://fixture:11434",
+        "batchId": "fixture-expired-batch",
+        "claimGeneration": "22222222-2222-4222-8222-222222222222",
+        "snapshot": {
+          "identityDigest": "c142b545ab978109cd1cfb03f30e9a3e17119d162dc1b0b0883c83866566801d",
+          "appliedIdentityDigest": "7bb1ab37c5a3857021cbdb8eb11ce9580fa30001cc1501b32d45a745d089e476",
+          "exact": true,
+          "residentCount": 0,
+          "residents": [],
+          "excludedModels": [],
+          "expiredModels": ["fixture-expired:latest"]
+        },
+        "verification": {
+          "status": "ready",
+          "ready": true,
+          "verified": true,
+          "degraded": false,
+          "mode": "exact_runtime_snapshot",
+          "snapshotIdentity": "7bb1ab37c5a3857021cbdb8eb11ce9580fa30001cc1501b32d45a745d089e476"
+        },
+        "state": {
+          "restoredStatus": "ready",
+          "claimCleared": true,
+          "finalizerCleared": true
+        },
+        "releasedAt": "2026-09-04T12:00:05.000Z"
+      },
+      "wrapperExpected": true
+    },
+    {
+      "name": "explicit_exclusion_refused_by_aiops",
+      "acquireSnapshot": {
+        "capturedAt": "2026-09-04T12:00:00.000Z",
+        "source": "ollama_ps",
+        "exact": true,
+        "identityDigest": "5593d6b183dc1985ee844586c919f66a69cdc9c1610e3ec5fd18900922651888",
+        "residents": [
+          {
+            "model": "fixture-excluded:latest",
+            "digest": "sha256:fixture-excluded",
+            "artifactSize": 6000000000,
+            "sizeVram": 5800000000,
+            "contextLength": 131072,
+            "keepAlive": -1,
+            "expiresAt": "9999-12-31T23:59:59.000Z"
+          }
+        ]
+      },
+      "releaseReceipt": {
+        "contract": "agentx.benchmark-claim-release/v1",
+        "hostUrl": "http://fixture:11434",
+        "batchId": "fixture-exclusion-batch",
+        "claimGeneration": "33333333-3333-4333-8333-333333333333",
+        "snapshot": {
+          "identityDigest": "5593d6b183dc1985ee844586c919f66a69cdc9c1610e3ec5fd18900922651888",
+          "appliedIdentityDigest": "7bb1ab37c5a3857021cbdb8eb11ce9580fa30001cc1501b32d45a745d089e476",
+          "exact": true,
+          "residentCount": 0,
+          "residents": [],
+          "excludedModels": ["fixture-excluded:latest"],
+          "expiredModels": []
+        },
+        "verification": {
+          "status": "ready",
+          "ready": true,
+          "verified": true,
+          "degraded": false,
+          "mode": "exact_runtime_snapshot",
+          "snapshotIdentity": "7bb1ab37c5a3857021cbdb8eb11ce9580fa30001cc1501b32d45a745d089e476"
+        },
+        "state": {
+          "restoredStatus": "ready",
+          "claimCleared": true,
+          "finalizerCleared": true
+        },
+        "releasedAt": "2026-09-04T12:00:05.000Z"
+      },
+      "wrapperExpected": false
+    }
+  ]
+}

@@ -7,7 +7,10 @@ const { DEFAULT_EXECUTION_CONFIG } = require('./config');
 const {
     claimHostForBenchmark,
     heartbeatBenchmarkClaim,
-    releaseBenchmarkClaim
+    releaseBenchmarkClaim,
+    acquireWorkloadAdmission,
+    heartbeatWorkloadAdmission,
+    releaseWorkloadAdmission
 } = require('../../clients/coreApiClient');
 
 const PHASE_BUDGET_PER_TEST_MS = 30_000;
@@ -24,13 +27,20 @@ const CLAIM_HEARTBEAT_INTERVAL_MS = 30_000;
  * @param {number} estimatedDurationMs
  * @returns {Promise<string[]>} - URLs that were claimed and must be released
  */
-async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs) {
+async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, claimOptions = {}) {
     const acquired = [];
+    await acquireWorkloadAdmission(batchId, {
+        requestId: claimOptions.requestId || `benchmark:${batchId}`,
+        kind: claimOptions.kind || (claimOptions.source === 'profiler' ? 'profiler' : 'benchmark'),
+        batchId: claimOptions.source === 'benchmark' || !claimOptions.source ? batchId : null,
+        hosts: hostUrls,
+        ttlMs: estimatedDurationMs
+    });
     for (const hostUrl of hostUrls) {
         try {
             const result = await claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs, {
-                source: 'benchmark',
-                owner: 'agentx-benchmark'
+                source: claimOptions.source || 'benchmark',
+                owner: claimOptions.owner || 'agentx-benchmark'
             });
             if (result?.claimed) {
                 acquired.push(hostUrl);
@@ -45,8 +55,11 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs) {
             logger.warn('Benchmark claim acquisition failed — aborting batch', {
                 batchId, hostUrl, error: err.message
             });
-            if (acquired.length > 0) {
-                await releaseBenchmarkClaims(acquired, batchId);
+            const cleanup = await releaseBenchmarkClaims(acquired, batchId, {
+                releaseWorkloadAdmission: false
+            });
+            if (cleanup.failed === 0) {
+                await releaseWorkloadAdmission(batchId).catch(() => {});
             }
             const wrapped = new Error(`Unable to reserve benchmark host ${hostUrl}: ${err.message}`);
             wrapped.hostUrl = hostUrl;
@@ -64,13 +77,29 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs) {
  * original error.
  * @returns {Promise<{released: number, failed: number, details: object[]}>}
  */
-async function releaseBenchmarkClaims(hostUrls, batchId) {
+async function releaseBenchmarkClaims(hostUrls, batchId, options = {}) {
+    const {
+        releaseWorkloadAdmission: _releaseWorkloadAdmission,
+        byHost,
+        ...defaultHostOptions
+    } = options;
     const details = await Promise.all(hostUrls.map(async (hostUrl) => {
         try {
-            const result = await releaseBenchmarkClaim(hostUrl, batchId);
+            const hostOptions = byHost
+                ? (byHost[hostUrl] || {})
+                : defaultHostOptions;
+            const result = Object.keys(hostOptions).length > 0
+                ? await releaseBenchmarkClaim(hostUrl, batchId, hostOptions)
+                : await releaseBenchmarkClaim(hostUrl, batchId);
             if (result?.released === true) {
                 logger.info('Benchmark claim released', { batchId, hostUrl });
-                return { hostUrl, released: true };
+                return {
+                    hostUrl,
+                    released: true,
+                    runtimeRestore: result.runtimeRestore || null,
+                    pinRestore: result.pinRestore || null,
+                    releaseReceipt: result.releaseReceipt || null
+                };
             }
             logger.warn('Benchmark claim release refused', {
                 batchId,
@@ -80,7 +109,10 @@ async function releaseBenchmarkClaims(hostUrls, batchId) {
             return {
                 hostUrl,
                 released: false,
-                reason: result?.reason || 'core_refused_release'
+                reason: result?.reason || 'core_refused_release',
+                runtimeRestore: result?.runtimeRestore || null,
+                pinRestore: result?.pinRestore || null,
+                releaseReceipt: result?.releaseReceipt || null
             };
         } catch (err) {
             logger.warn('Benchmark claim release failed', {
@@ -89,10 +121,20 @@ async function releaseBenchmarkClaims(hostUrls, batchId) {
             return { hostUrl, released: false, reason: err.message };
         }
     }));
+    let workloadAdmission = null;
+    if (options.releaseWorkloadAdmission !== false) {
+        try {
+            workloadAdmission = await releaseWorkloadAdmission(batchId);
+        } catch (error) {
+            workloadAdmission = { released: false, reason: error.message };
+        }
+    }
     return {
         released: details.filter(detail => detail.released).length,
-        failed: details.filter(detail => !detail.released).length,
-        details
+        failed: details.filter(detail => !detail.released).length
+            + (options.releaseWorkloadAdmission !== false && workloadAdmission?.released !== true ? 1 : 0),
+        details,
+        workloadAdmission
     };
 }
 
@@ -101,36 +143,89 @@ function startBenchmarkClaimHeartbeat(hostUrls, batchId, estimatedDurationMs, op
         ? Number(options.intervalMs)
         : CLAIM_HEARTBEAT_INTERVAL_MS;
     let stopped = false;
+    let hostHeartbeatsEnabled = true;
     let running = false;
+    let inFlight = Promise.resolve();
+    let failure = null;
+    let resolveReady;
+    const ready = new Promise(resolve => { resolveReady = resolve; });
 
-    const heartbeat = async () => {
-        if (stopped || running) return;
+    const fail = (hostUrl, reason, cause = null) => {
+        if (failure) return;
+        failure = new Error(`Benchmark claim heartbeat lost for ${hostUrl || batchId}: ${reason}`);
+        failure.code = 'BENCHMARK_CLAIM_LOST';
+        failure.hostUrl = hostUrl || null;
+        failure.cause = cause;
+        if (typeof options.onFatal === 'function') options.onFatal(failure);
+    };
+
+    const heartbeat = () => {
+        if (stopped || running) return inFlight;
         running = true;
-        try {
-            await Promise.all(hostUrls.map(async (hostUrl) => {
-                const result = await heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs);
-                if (result?.heartbeat === false) {
-                    logger.error('Benchmark claim heartbeat lost ownership', {
-                        batchId,
-                        hostUrl,
-                        reason: result.reason || null
-                    });
+        inFlight = (async () => {
+            try {
+                const workload = await heartbeatWorkloadAdmission(batchId, estimatedDurationMs);
+                if (workload?.heartbeat === false) {
+                    fail(null, workload.reason || 'workload admission ownership rejected');
+                    return;
                 }
-            }));
-        } catch (err) {
-            logger.warn('Benchmark claim heartbeat failed', { batchId, error: err.message });
-        } finally {
-            running = false;
-        }
+                if (!hostHeartbeatsEnabled) return;
+                await Promise.all(hostUrls.map(async (hostUrl) => {
+                    const result = await heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs, {
+                        source: options.source || 'benchmark',
+                        owner: options.owner || 'agentx-benchmark'
+                    });
+                    if (result?.heartbeat === false) {
+                        logger.error('Benchmark claim heartbeat lost ownership', {
+                            batchId,
+                            hostUrl,
+                            reason: result.reason || null
+                        });
+                        fail(hostUrl, result.reason || 'ownership rejected');
+                    }
+                }));
+            } catch (err) {
+                logger.warn('Benchmark claim heartbeat failed', { batchId, error: err.message });
+                fail(null, err.message, err);
+            } finally {
+                running = false;
+                resolveReady();
+            }
+        })();
+        return inFlight;
     };
 
     heartbeat();
     const interval = setInterval(heartbeat, intervalMs);
     if (typeof interval.unref === 'function') interval.unref();
-    return () => {
+    const stop = () => {
         stopped = true;
         clearInterval(interval);
     };
+    stop.ready = ready;
+    // Host release is a fenced Core finalizer. Stop and drain host heartbeats
+    // before entering it so no client heartbeat races the finalizer CAS, while
+    // continuing to renew the global workload admission until every host has
+    // been restored and the durable terminal write has completed.
+    stop.drainHosts = async () => {
+        hostHeartbeatsEnabled = false;
+        await inFlight;
+    };
+    stop.drain = async () => {
+        stop();
+        await inFlight;
+    };
+    stop.getFailure = () => failure;
+    stop.assertActive = () => {
+        if (failure) throw failure;
+        if (stopped) {
+            const err = new Error('Benchmark claim heartbeat is stopped');
+            err.code = 'BENCHMARK_CLAIM_STOPPED';
+            throw err;
+        }
+        return true;
+    };
+    return stop;
 }
 
 function positiveNumber(value) {

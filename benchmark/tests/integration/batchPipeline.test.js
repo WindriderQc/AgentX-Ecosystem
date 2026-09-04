@@ -21,8 +21,22 @@ jest.mock('../../config/logger', () => ({
 // The claim lifecycle is exercised by dedicated unit tests. Keep this
 // integration suite isolated from the live Core control plane.
 jest.mock('../../src/clients/coreApiClient', () => ({
+    acquireWorkloadAdmission: jest.fn(async (workloadId, options = {}) => ({
+        acquired: true,
+        admissionId: `admission-${workloadId}`,
+        generation: `generation-${workloadId}`,
+        requestId: options.requestId,
+        workloadId
+    })),
+    heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
+    releaseWorkloadAdmission: jest.fn(async () => ({ released: true })),
     claimHostForBenchmark: jest.fn(async () => ({ claimed: true })),
-    releaseBenchmarkClaim: jest.fn(async () => ({ released: true }))
+    heartbeatBenchmarkClaim: jest.fn(async () => ({ heartbeat: true })),
+    releaseBenchmarkClaim: jest.fn(async () => ({ released: true })),
+    getBenchmarkClaimIdentity: jest.fn((_host, batchId) => ({
+        claimBatchId: batchId,
+        claimGeneration: `generation-${batchId}`
+    }))
 }));
 
 // Exact-artifact admission and profiling are covered by their focused suites.
@@ -35,6 +49,20 @@ jest.mock('../../src/services/profiler/profilerOrchestrator', () => ({
         warnings: []
     })),
     runPreflight: jest.fn(async () => undefined)
+}));
+jest.mock('../../src/services/benchmark/performanceBaseline', () => ({
+    capturePerformanceBaseline: jest.fn(async ({ model, hostUrl }) => ({
+        model,
+        host: hostUrl,
+        hostId: 'integration-host',
+        status: 'profiled',
+        source: 'exact_artifact_profile',
+        tokensPerSec: 50,
+        numCtx: 8192,
+        numCtxSource: 'exact_artifact_profile',
+        ttftMeasurement: 'streamed_wall_clock',
+        timeToFirstTokenMs: 100
+    }))
 }));
 
 // Mock Ollama HTTP: returns a canned model response for every call

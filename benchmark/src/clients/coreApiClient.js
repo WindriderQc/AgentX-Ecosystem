@@ -22,6 +22,10 @@ const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const SERVICE_NAME = 'benchmark';
 const DEFAULT_TIMEOUT_MS = 10000;
 const PIN_RESTORE_TIMEOUT_MS = 600000;
+const CLAIM_ACQUIRE_TIMEOUT_MS = Math.max(
+  45_000,
+  (Number(process.env.BENCHMARK_CLAIM_DRAIN_TIMEOUT_MS) || 30_000) + 15_000
+);
 const PROTECTED_CORE_HEADERS = new Set([
   ':authority',
   'content-type',
@@ -39,7 +43,12 @@ const CORE_OPERATIONS = Object.freeze({
   CLAIM_ACQUIRE: 'benchmark.core-api.claim-acquire',
   CLAIM_HEARTBEAT: 'benchmark.core-api.claim-heartbeat',
   CLAIM_RELEASE: 'benchmark.core-api.claim-release',
+  CLAIM_RELEASE_RECOVERY: 'benchmark.core-api.claim-release-recovery',
   CLAIMS_ACTIVE: 'benchmark.core-api.claims-active',
+  WORKLOAD_ACQUIRE: 'benchmark.core-api.workload-acquire',
+  WORKLOAD_HEARTBEAT: 'benchmark.core-api.workload-heartbeat',
+  WORKLOAD_RELEASE: 'benchmark.core-api.workload-release',
+  WORKLOAD_RELEASE_RECOVERY: 'benchmark.core-api.workload-release-recovery',
 });
 
 function operation(method, pathPattern, {
@@ -82,7 +91,7 @@ const CORE_OPERATION_SPECS = Object.freeze({
   [CORE_OPERATIONS.CLAIM_ACQUIRE]: operation(
     'POST',
     '^/api/nerve-center/host-preferences/[^/]+/benchmark-claim$',
-    { maxRequestBytes: 64 * 1024, maxResponseBytes: 256 * 1024 }
+    { deadlineMs: CLAIM_ACQUIRE_TIMEOUT_MS, maxRequestBytes: 64 * 1024, maxResponseBytes: 256 * 1024 }
   ),
   [CORE_OPERATIONS.CLAIM_HEARTBEAT]: operation(
     'POST',
@@ -98,12 +107,92 @@ const CORE_OPERATION_SPECS = Object.freeze({
     'GET',
     '^/api/nerve-center/host-preferences/benchmark-claims/active$'
   ),
+  [CORE_OPERATIONS.CLAIM_RELEASE_RECOVERY]: operation(
+    'POST',
+    '^/api/nerve-center/host-preferences/[^/]+/benchmark-claim/[^/]+/release-receipt$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_ACQUIRE]: operation(
+    'POST',
+    '^/api/nerve-center/workload-admissions$',
+    { deadlineMs: CLAIM_ACQUIRE_TIMEOUT_MS, maxRequestBytes: 64 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_HEARTBEAT]: operation(
+    'POST',
+    '^/api/nerve-center/workload-admissions/[^/]+/heartbeat$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RELEASE]: operation(
+    'DELETE',
+    '^/api/nerve-center/workload-admissions/[^/]+$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY]: operation(
+    'POST',
+    '^/api/nerve-center/workload-admissions/[^/]+/release-receipt$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
 });
 
-const claimGenerationByOwner = new Map();
+const claimProofByOwner = new Map();
+const workloadAdmissionById = new Map();
 
 function claimOwnerKey(hostUrl, batchId) {
   return `${hostUrl}\n${batchId}`;
+}
+
+function isSha256Hex(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+}
+
+function exactBenchmarkReleaseReceipt(result, expected) {
+  const receipt = result?.releaseReceipt;
+  const snapshot = receipt?.snapshot;
+  const verification = receipt?.verification;
+  const state = receipt?.state;
+  const residents = snapshot?.residents;
+  const actualExclusions = Array.isArray(snapshot?.excludedModels)
+    ? [...new Set(snapshot.excludedModels.map(String))].sort()
+    : null;
+  const expectedExclusions = [...new Set(expected.excludedModels.map(String))].sort();
+  const expiredModels = Array.isArray(snapshot?.expiredModels)
+    ? [...new Set(snapshot.expiredModels.map(String))].sort()
+    : null;
+  const residentsComplete = Array.isArray(residents) && residents.every((entry) => (
+    typeof entry?.model === 'string' && entry.model.length > 0
+    && typeof entry?.digest === 'string' && entry.digest.length > 0
+    && Number.isFinite(Number(entry.artifactSize)) && Number(entry.artifactSize) > 0
+    && Number.isFinite(Number(entry.sizeVram)) && Number(entry.sizeVram) >= 0
+    && Number.isInteger(Number(entry.contextLength)) && Number(entry.contextLength) > 0
+    && Number.isFinite(Number(entry.keepAlive))
+    && (entry.expiresAt === null || Number.isFinite(Date.parse(entry.expiresAt)))
+  ));
+  const identityChainExact = isSha256Hex(snapshot?.identityDigest)
+    && isSha256Hex(snapshot?.appliedIdentityDigest)
+    && verification?.snapshotIdentity === snapshot.appliedIdentityDigest
+    && (expectedExclusions.length > 0 || (expiredModels?.length || 0) > 0
+      || snapshot.identityDigest === snapshot.appliedIdentityDigest);
+
+  return result?.released === true
+    && receipt?.contract === 'agentx.benchmark-claim-release/v1'
+    && receipt.hostUrl === expected.hostUrl
+    && receipt.batchId === expected.batchId
+    && receipt.claimGeneration === expected.claimGeneration
+    && snapshot?.exact === true
+    && snapshot?.residentCount === residents?.length
+    && residentsComplete
+    && identityChainExact
+    && JSON.stringify(actualExclusions) === JSON.stringify(expectedExclusions)
+    && Array.isArray(expiredModels)
+    && verification?.status === 'ready'
+    && verification?.ready === true
+    && verification?.verified === true
+    && verification?.degraded === false
+    && verification?.mode === 'exact_runtime_snapshot'
+    && state?.restoredStatus === expected.prevStatus
+    && state?.claimCleared === true
+    && state?.finalizerCleared === true
+    && Number.isFinite(Date.parse(receipt.releasedAt));
 }
 
 function configuredCoreOrigin() {
@@ -356,18 +445,67 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
   const path = `/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/benchmark-claim`;
   const ownerKey = claimOwnerKey(hostUrl, batchId);
   const claimGeneration = claimOptions.claimGeneration
-    || claimGenerationByOwner.get(ownerKey)
+    || claimProofByOwner.get(ownerKey)?.claimGeneration
     || crypto.randomUUID();
-  claimGenerationByOwner.set(ownerKey, claimGeneration);
+  const admission = workloadAdmissionById.get(String(batchId));
+  if (!admission?.admissionId || !admission?.generation) {
+    const error = new Error('Exact workload admission proof is required before claiming a host');
+    error.code = 'WORKLOAD_ADMISSION_REQUIRED';
+    throw error;
+  }
+  claimProofByOwner.set(ownerKey, { claimGeneration });
   try {
     const data = await coreRequest(path, {
       method: 'POST',
       operationId: CORE_OPERATIONS.CLAIM_ACQUIRE,
-      body: JSON.stringify({ ...claimOptions, batchId, claimGeneration, estimatedDurationMs })
+      body: JSON.stringify({
+        ...claimOptions,
+        batchId,
+        claimGeneration,
+        admissionId: admission.admissionId,
+        admissionGeneration: admission.generation,
+        estimatedDurationMs
+      })
     });
-    const result = data.data || { claimed: true, claimGeneration };
+    const result = data?.data;
+    if (!result || typeof result !== 'object' || typeof result.claimed !== 'boolean') {
+      const error = new Error('Core claim response did not contain an explicit claim decision');
+      error.code = 'BENCHMARK_CLAIM_RECEIPT_INVALID';
+      throw error;
+    }
     const confirmedGeneration = result.claimGeneration || result.pref?.benchmarkClaim?.claimGeneration;
-    if (confirmedGeneration) claimGenerationByOwner.set(ownerKey, confirmedGeneration);
+    const confirmedBatchId = result.batchId || result.pref?.benchmarkClaim?.batchId;
+    const prevStatus = result.prevStatus || result.pref?.benchmarkClaim?.prevStatus;
+    const snapshotExact = result.snapshotExact === true
+      || result.pref?.benchmarkClaim?.preClaimRuntime?.exact === true;
+    const snapshotIdentity = result.snapshotIdentity
+      || result.pref?.benchmarkClaim?.preClaimRuntime?.identityDigest;
+    const nestedClaim = result.pref?.benchmarkClaim;
+    if (result.claimed === true
+      && (confirmedBatchId !== batchId || confirmedGeneration !== claimGeneration)) {
+      const error = new Error('Core claim receipt did not attest the requested batch and generation');
+      error.code = 'BENCHMARK_CLAIM_RECEIPT_MISMATCH';
+      throw error;
+    }
+    if (result.claimed === true && nestedClaim
+      && (nestedClaim.batchId !== confirmedBatchId
+        || nestedClaim.claimGeneration !== confirmedGeneration
+        || nestedClaim.prevStatus !== prevStatus
+        || nestedClaim.preClaimRuntime?.exact !== snapshotExact
+        || nestedClaim.preClaimRuntime?.identityDigest !== snapshotIdentity)) {
+      const error = new Error('Core claim receipt projections disagree');
+      error.code = 'BENCHMARK_CLAIM_RECEIPT_MISMATCH';
+      throw error;
+    }
+    if (result.claimed === true
+      && (typeof prevStatus !== 'string' || !prevStatus || !snapshotExact || !isSha256Hex(snapshotIdentity))) {
+      const error = new Error('Core claim receipt did not attest an exact pre-claim runtime snapshot');
+      error.code = 'BENCHMARK_CLAIM_RECEIPT_MISMATCH';
+      throw error;
+    }
+    if (result.claimed === true) {
+      claimProofByOwner.set(ownerKey, { claimGeneration, prevStatus, snapshotIdentity });
+    } else claimProofByOwner.delete(ownerKey);
     return result;
   } catch (err) {
     // 409 Conflict = already claimed — surface without throwing
@@ -375,26 +513,51 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
       logger.warn('Benchmark claim conflict — host already claimed', {
         hostUrl, batchId, error: err.message
       });
+      claimProofByOwner.delete(ownerKey);
       return { claimed: false, reason: err.message };
     }
+    // The request may have reached Core even when its response was lost.
+    // Cleanup is fenced by the locally generated UUID, so it can never clear
+    // another owner or a replacement generation.
+    if (err.code !== 'OUTBOUND_REQUEST_TOO_LARGE') {
+      await releaseBenchmarkClaim(hostUrl, batchId).catch(() => {});
+    }
+    claimProofByOwner.delete(ownerKey);
     throw err;
   }
 }
 
-async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = null) {
+async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = null, claimOptions = {}) {
   const path = `/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/benchmark-claim/${encodeURIComponent(batchId)}/heartbeat`;
+  const proof = claimProofByOwner.get(claimOwnerKey(hostUrl, batchId));
+  const admission = workloadAdmissionById.get(String(batchId));
+  if (!admission?.admissionId || !admission?.generation) {
+    return { heartbeat: false, reason: 'exact workload admission proof missing' };
+  }
   try {
     const data = await coreRequest(path, {
       method: 'POST',
       operationId: CORE_OPERATIONS.CLAIM_HEARTBEAT,
       body: JSON.stringify({
-        claimGeneration: claimGenerationByOwner.get(claimOwnerKey(hostUrl, batchId)) || null,
+        claimGeneration: proof?.claimGeneration || null,
+        admissionId: admission.admissionId,
+        admissionGeneration: admission.generation,
         estimatedDurationMs,
-        source: 'benchmark',
-        owner: 'agentx-benchmark'
+        source: claimOptions.source || 'benchmark',
+        owner: claimOptions.owner || 'agentx-benchmark'
       })
     });
-    return data.data || { heartbeat: true };
+    const result = data.data;
+    const exact = result?.heartbeat === true
+      && result.batchId === batchId
+      && result.claimGeneration === proof?.claimGeneration
+      && result.prevStatus === proof?.prevStatus
+      && result.snapshotExact === true
+      && result.snapshotIdentity === proof?.snapshotIdentity;
+    if (!exact) {
+      return { heartbeat: false, reason: result?.reason || 'Core benchmark heartbeat receipt is invalid' };
+    }
+    return result;
   } catch (err) {
     if (err.status === 409) return { heartbeat: false, reason: err.message };
     throw err;
@@ -407,19 +570,253 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = n
  * @param {string} batchId
  * @returns {Promise<{ released: boolean, reason?: string }>}
  */
-async function releaseBenchmarkClaim(hostUrl, batchId) {
+async function releaseBenchmarkClaim(hostUrl, batchId, options = {}) {
   const path = `/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/benchmark-claim/${encodeURIComponent(batchId)}`;
-  const data = await coreRequest(path, {
-    method: 'DELETE',
-    operationId: CORE_OPERATIONS.CLAIM_RELEASE,
-    timeout: PIN_RESTORE_TIMEOUT_MS,
+  const ownerKey = claimOwnerKey(hostUrl, batchId);
+  const proof = claimProofByOwner.get(ownerKey);
+  const admission = workloadAdmissionById.get(String(batchId));
+  if (!admission?.admissionId || !admission?.generation) {
+    return { released: false, reason: 'exact workload admission proof missing' };
+  }
+  const excludedModels = Array.isArray(options.excludedModels) ? options.excludedModels : [];
+  const releaseBody = {
+      claimGeneration: proof?.claimGeneration || null,
+      admissionId: admission.admissionId,
+      admissionGeneration: admission.generation,
+      ...(excludedModels.length > 0
+        ? { excludedModels }
+        : {})
+  };
+  const requestRelease = async () => {
+    const data = await coreRequest(path, {
+      method: 'DELETE',
+      operationId: CORE_OPERATIONS.CLAIM_RELEASE,
+      timeout: PIN_RESTORE_TIMEOUT_MS,
+      body: JSON.stringify(releaseBody)
+    });
+    return data?.data;
+  };
+  let result;
+  try {
+    result = await requestRelease();
+  } catch (releaseError) {
+    // A transport failure or 5xx after Core's terminal CAS is ambiguous. Ask
+    // the same authenticated authority for the durable exact receipt before
+    // deciding whether to retry or retain the local fence for recovery.
+    try {
+      const recovery = await coreRequest(`${path}/release-receipt`, {
+        method: 'POST',
+        operationId: CORE_OPERATIONS.CLAIM_RELEASE_RECOVERY,
+        body: JSON.stringify({
+          claimGeneration: proof?.claimGeneration || null,
+          admissionId: admission.admissionId,
+          admissionGeneration: admission.generation
+        })
+      });
+      const recovered = recovery?.data;
+      if (recovered?.released === true) result = recovered;
+      else if (recovered?.retryable === true && recovered?.finalizing !== true) result = await requestRelease();
+      else throw releaseError;
+    } catch (recoveryError) {
+      if (recoveryError !== releaseError) releaseError.recoveryError = recoveryError;
+      throw releaseError;
+    }
+  }
+  if (!result || typeof result !== 'object' || typeof result.released !== 'boolean') {
+    const error = new Error('Core release response did not contain an explicit release decision');
+    error.code = 'BENCHMARK_RELEASE_RECEIPT_INVALID';
+    throw error;
+  }
+  if (result.released === true && !exactBenchmarkReleaseReceipt(result, {
+    hostUrl,
+    batchId,
+    claimGeneration: proof?.claimGeneration || null,
+    prevStatus: proof?.prevStatus || null,
+    excludedModels
+  })) {
+    return {
+      released: false,
+      reason: 'Core benchmark release receipt is invalid',
+      releaseReceipt: result.releaseReceipt || null
+    };
+  }
+  if (result.released === true) claimProofByOwner.delete(ownerKey);
+  return result;
+}
+
+async function acquireWorkloadAdmission(workloadId, options = {}) {
+  const key = String(workloadId || '');
+  if (!key) throw new Error('workloadId is required');
+  const expectedKind = options.kind || 'benchmark';
+  const expectedBatchId = options.batchId || null;
+  const requestId = options.requestId || `benchmark:${key}`;
+  const expectedHosts = [...new Set((Array.isArray(options.hosts) ? options.hosts : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean))].sort();
+  const existing = workloadAdmissionById.get(key);
+  if (existing) {
+    if (existing.requestId !== requestId
+      || existing.kind !== expectedKind
+      || (existing.batchId || null) !== expectedBatchId
+      || JSON.stringify(existing.hosts || []) !== JSON.stringify(expectedHosts)) {
+      const error = new Error('Local workload id already binds a different admission intent');
+      error.code = 'WORKLOAD_ADMISSION_CONFLICT';
+      throw error;
+    }
+    // A local receipt is only an identity hint, never current authority. Core
+    // may have expired/reaped it and granted maintenance since our last call.
+    // Re-attest the exact generation before allowing another mutation to use
+    // this workload id.
+    const renewed = await heartbeatWorkloadAdmission(key, options.ttlMs || null);
+    if (renewed?.heartbeat === true) {
+      return { acquired: true, ...existing, expiresAt: renewed.expiresAt || existing.expiresAt, idempotent: true };
+    }
+    workloadAdmissionById.delete(key);
+  }
+  const request = async () => coreRequest('/api/nerve-center/workload-admissions', {
+    method: 'POST',
+    operationId: CORE_OPERATIONS.WORKLOAD_ACQUIRE,
     body: JSON.stringify({
-      claimGeneration: claimGenerationByOwner.get(claimOwnerKey(hostUrl, batchId)) || null
+      requestId,
+      workloadId: key,
+      kind: expectedKind,
+      batchId: expectedBatchId,
+      hosts: expectedHosts,
+      ttlMs: options.ttlMs || null
     })
   });
-  const result = data.data || { released: true };
-  if (result.released === true) claimGenerationByOwner.delete(claimOwnerKey(hostUrl, batchId));
+  let data;
+  try {
+    data = await request();
+  } catch (error) {
+    // A lost response after Core's atomic acquire is ambiguous. Retry the same
+    // idempotency key once; Core returns the same Core-minted proof.
+    try {
+      data = await request();
+    } catch {
+      throw error;
+    }
+  }
+  const result = data?.data;
+  if (!result?.acquired || !result.admissionId || !result.generation
+    || !result.principal
+    || result.workloadId !== key
+    || result.requestId !== requestId
+    || result.kind !== expectedKind
+    || (result.batchId || null) !== expectedBatchId
+    || JSON.stringify([...(result.hosts || [])].sort()) !== JSON.stringify(expectedHosts)) {
+    const error = new Error(result?.reason || 'Core workload admission receipt is invalid');
+    error.code = 'WORKLOAD_ADMISSION_REJECTED';
+    throw error;
+  }
+  const receipt = {
+    admissionId: result.admissionId,
+    generation: result.generation,
+    principal: result.principal,
+    requestId,
+    workloadId: key,
+    kind: expectedKind,
+    batchId: expectedBatchId,
+    hosts: expectedHosts,
+    expiresAt: result.expiresAt || null
+  };
+  workloadAdmissionById.set(key, receipt);
+  return { acquired: true, ...receipt };
+}
+
+async function heartbeatWorkloadAdmission(workloadId, ttlMs = null) {
+  const key = String(workloadId || '');
+  const receipt = workloadAdmissionById.get(key);
+  if (!receipt) return { heartbeat: false, reason: 'local workload admission proof missing' };
+  try {
+    const data = await coreRequest(`/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}/heartbeat`, {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_HEARTBEAT,
+      body: JSON.stringify({ generation: receipt.generation, ttlMs })
+    });
+    const result = data?.data;
+    const exact = result?.heartbeat === true
+      && result.admissionId === receipt.admissionId
+      && result.generation === receipt.generation
+      && result.principal === receipt.principal
+      && result.requestId === receipt.requestId
+      && result.workloadId === receipt.workloadId
+      && result.kind === receipt.kind
+      && (result.batchId || null) === (receipt.batchId || null)
+      && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || []);
+    if (!exact) {
+      return { heartbeat: false, reason: result?.reason || 'Core workload heartbeat receipt is invalid' };
+    }
+    receipt.expiresAt = result.expiresAt || receipt.expiresAt;
+    return result;
+  } catch (error) {
+    if (error.status === 409) return { heartbeat: false, reason: error.message };
+    throw error;
+  }
+}
+
+async function releaseWorkloadAdmission(workloadId) {
+  const key = String(workloadId || '');
+  const receipt = workloadAdmissionById.get(key);
+  if (!receipt) return { released: false, reason: 'local workload admission proof missing' };
+  const exactIdentity = result => result?.admissionId === receipt.admissionId
+    && result.generation === receipt.generation
+    && result.principal === receipt.principal
+    && result.requestId === receipt.requestId
+    && result.workloadId === receipt.workloadId
+    && result.kind === receipt.kind
+    && (result.batchId || null) === (receipt.batchId || null)
+    && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || []);
+  const exactRelease = result => result?.released === true
+    && exactIdentity(result)
+    && Number.isFinite(Date.parse(result.releasedAt));
+  const requestRelease = () => coreRequest(
+    `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`,
+    {
+      method: 'DELETE',
+      operationId: CORE_OPERATIONS.WORKLOAD_RELEASE,
+      body: JSON.stringify({ generation: receipt.generation })
+    }
+  );
+  let data;
+  try {
+    data = await requestRelease();
+  } catch (originalError) {
+    try {
+      const recovery = await coreRequest(
+        `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}/release-receipt`,
+        {
+          method: 'POST',
+          operationId: CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY,
+          body: JSON.stringify({ generation: receipt.generation })
+        }
+      );
+      const recovered = recovery?.data;
+      if (recovered?.recovered === true && exactRelease(recovered)) {
+        data = recovery;
+      } else if (recovered?.recovered === true
+        && recovered?.released === false
+        && recovered?.retryable === true
+        && exactIdentity(recovered)) {
+        data = await requestRelease();
+      } else {
+        throw originalError;
+      }
+    } catch {
+      throw originalError;
+    }
+  }
+  const result = data?.data;
+  const exact = exactRelease(result);
+  if (!exact) return { released: false, reason: result?.reason || 'Core workload release receipt is invalid' };
+  workloadAdmissionById.delete(key);
   return result;
+}
+
+function getBenchmarkClaimIdentity(hostUrl, batchId) {
+  const claimGeneration = claimProofByOwner.get(claimOwnerKey(hostUrl, batchId))?.claimGeneration;
+  if (!claimGeneration) return null;
+  return { claimBatchId: batchId, claimGeneration };
 }
 
 /**
@@ -433,14 +830,8 @@ async function getBenchmarkClaims() {
     operationId: CORE_OPERATIONS.CLAIMS_ACTIVE,
   });
   const claims = data?.data?.claims || [];
-  for (const claim of claims) {
-    if (claim?.hostUrl && claim?.batchId && claim?.claimGeneration) {
-      claimGenerationByOwner.set(
-        claimOwnerKey(claim.hostUrl, claim.batchId),
-        claim.claimGeneration
-      );
-    }
-  }
+  // Discovery is not capability acquisition. Never import claim generations
+  // from this operator-visible list into the local proof map.
   return claims;
 }
 
@@ -455,7 +846,11 @@ module.exports = {
   claimHostForBenchmark,
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
+  getBenchmarkClaimIdentity,
   getBenchmarkClaims,
+  acquireWorkloadAdmission,
+  heartbeatWorkloadAdmission,
+  releaseWorkloadAdmission,
   CORE_OPERATIONS,
   _internal: {
     classifyCoreOperation,

@@ -13,19 +13,13 @@ const {
   listActiveProfiles,
   listActiveProfileQueues
 } = require('../../src/services/profiler/activeProfileState');
-const {
-  getDedicationStatuses,
-  resolveHostKey,
-  restoreDedication,
-  claimHostForBenchmark,
-  releaseBenchmarkClaim
-} = require('../../src/clients/coreApiClient');
+const { acquireProfilerClaimLease } = require('../../src/services/profiler/profilerClaimLifecycle');
 const logger = require('../../config/logger');
 
 const STEPS_BY_DEPTH = {
   quick:    ['warmup', 'throughput', 'spill_detection', 'thinking_behavior', 'saving'],
   standard: ['warmup', 'throughput', 'spill_detection', 'thinking_behavior', 'context_probe', 'saving'],
-  full:     ['warmup', 'throughput', 'spill_detection', 'thinking_behavior', 'context_probe', 'throughput_curve', 'generation_stability', 'load_timing', 'saving']
+  full:     ['warmup', 'throughput', 'spill_detection', 'thinking_behavior', 'context_probe', 'throughput_curve', 'generation_stability', 'prefill_decode_matrix', 'load_timing', 'saving']
 };
 
 // Rough upper bound on how long a profile run can take — used by the
@@ -36,22 +30,8 @@ const ESTIMATED_DURATION_MS_BY_DEPTH = {
   full:     45 * 60 * 1000
 };
 
-async function _restoreDedicationForHost(hostUrl) {
-  try {
-    const statuses = await getDedicationStatuses();
-    const normalized = hostUrl.replace(/\/+$/, '');
-    const match = statuses.find(s => s.host?.replace(/\/+$/, '') === normalized);
-    if (!match?.pinnedModels?.length) return;
-    const hostKey = await resolveHostKey(hostUrl);
-    if (!hostKey) return;
-    await restoreDedication(hostKey);
-    logger.info('Dedication restored after profiling', { host: hostUrl, hostKey });
-  } catch (err) {
-    logger.debug('Dedication restore skipped', { host: hostUrl, error: err.message });
-  }
-}
-
 router.post('/scout', async (req, res) => {
+  let lease;
   try {
     const { modelName, hosts } = req.body || {};
     if (!modelName || !hosts?.length) return res.status(400).json({ status: 'error', error: 'modelName and hosts[] required' });
@@ -62,14 +42,33 @@ router.post('/scout', async (req, res) => {
       if (!persisted?.hostUrl) return res.status(404).json({ status: 'error', error: `Host not found: ${requested.hostId}` });
       admittedHosts.push({ hostId: persisted.hostId || requested.hostId, hostUrl: persisted.hostUrl });
     }
-    res.json({ status: 'success', data: await orchestrator.scout(modelName, admittedHosts) });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message }); }
+    lease = await acquireProfilerClaimLease(
+      admittedHosts.map(host => host.hostUrl),
+      `profiler-scout-${crypto.randomBytes(8).toString('hex')}`,
+      ESTIMATED_DURATION_MS_BY_DEPTH.quick
+    );
+    const data = await orchestrator.scout(modelName, admittedHosts, {
+      assertClaimActive: lease.assertActive,
+      claimIdentityFor: hostUrl => lease.identityFor(hostUrl),
+      signal: lease.signal
+    });
+    await lease.finalize();
+    lease = null;
+    res.json({ status: 'success', data });
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null }); }
+  finally {
+    if (lease) {
+      await lease.finalize().catch(error => logger.error('Scout lease finalization failed', { error: error.message }));
+    }
+  }
 });
 
 router.post('/profile', async (req, res) => {
   try {
     const { modelName, hostId, depth } = req.body;
     if (!modelName || !hostId) return res.status(400).json({ status: 'error', error: 'modelName and hostId required' });
+    const chosenDepth = depth || 'standard';
+    if (!STEPS_BY_DEPTH[chosenDepth]) return res.status(400).json({ status: 'error', error: 'depth must be quick, standard, or full' });
     const host = await hostProfileService.getById(hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
 
@@ -86,9 +85,9 @@ router.post('/profile', async (req, res) => {
     }
 
     const profileId = crypto.randomBytes(8).toString('hex');
-    const steps = STEPS_BY_DEPTH[depth] || STEPS_BY_DEPTH.standard;
+    const steps = STEPS_BY_DEPTH[chosenDepth];
     const claimBatchId = `profile-${profileId}`;
-    const estimatedDurationMs = ESTIMATED_DURATION_MS_BY_DEPTH[depth] || ESTIMATED_DURATION_MS_BY_DEPTH.standard;
+    const estimatedDurationMs = ESTIMATED_DURATION_MS_BY_DEPTH[chosenDepth];
 
     // Register the tracker BEFORE the first await so a concurrent POST for the
     // same host hits the guard above instead of racing past it (the guard and
@@ -98,7 +97,7 @@ router.post('/profile', async (req, res) => {
       modelName,
       hostId,
       hostUrl: host.hostUrl,
-      depth: depth || 'standard',
+      depth: chosenDepth,
       currentStep: steps[0],
       statusMessage: 'Claiming host…',
       stepsCompleted: 0,
@@ -121,35 +120,29 @@ router.post('/profile', async (req, res) => {
     // reload and times out. Claim flips host status to "benchmarking", which
     // the scheduler treats as hands-off until we release it.
     //
-    // A REJECTED claim means someone else (usually a benchmark batch) holds
-    // the host. Profiling anyway would unload the batch's working set and
-    // corrupt its results, so it is a hard abort. A claim CALL failure means
-    // core is unreachable — no scheduler is restoring pins and no batch can
-    // hold a claim, so standalone profiling may proceed.
+    // A rejected claim or an unavailable Core claim authority is a hard stop.
+    // Profiling without a proven lease could unload another batch's working
+    // set or race the scheduler while it restores pinned defaults.
+    let lease;
     try {
-      const claim = await claimHostForBenchmark(host.hostUrl, claimBatchId, estimatedDurationMs);
-      if (!claim.claimed) {
-        activeProfiles.delete(profileId);
-        logger.warn('Profile: host claim rejected — aborting', {
-          hostUrl: host.hostUrl, reason: claim.reason
-        });
-        return res.status(409).json({
-          status: 'error',
-          error: `Host ${hostId} is reserved (${claim.reason || 'claimed by another job'}). ` +
-            'A benchmark or another profiler run holds this host — wait for it to finish and retry.',
-          reason: claim.reason || null,
-          conflict: 'host_claimed'
-        });
-      }
-    } catch (err) {
-      logger.warn('Profile: host claim call failed (core unreachable) — proceeding unclaimed', {
-        hostUrl: host.hostUrl, error: err.message
+      lease = await acquireProfilerClaimLease([host.hostUrl], claimBatchId, estimatedDurationMs, {
+        onFatal: err => {
+          tracker.status = 'failed';
+          tracker.error = err.message;
+          tracker.statusMessage = 'Host claim lost; draining current operation';
+        }
       });
+    } catch (err) {
+      activeProfiles.delete(profileId);
+      return res.status(err.statusCode || 503).json({ status: 'error', error: err.message, code: err.code || 'PROFILER_CLAIM_UNAVAILABLE' });
     }
     tracker.statusMessage = 'Starting…';
 
     // Fire-and-forget
-    orchestrator.profile(modelName, hostId, host.hostUrl, depth || 'standard', {
+    orchestrator.profile(modelName, hostId, host.hostUrl, chosenDepth, {
+      assertClaimActive: lease.assertActive,
+      claimIdentity: lease.identityFor(host.hostUrl),
+      signal: lease.signal,
       onProgress: (step, data) => {
         const idx = steps.indexOf(step);
         if (idx >= 0) tracker.stepsCompleted = idx;
@@ -161,28 +154,29 @@ router.post('/profile', async (req, res) => {
         }
       }
     }).then(result => {
+      lease.assertActive();
       tracker.status = 'completed';
       tracker.stepsCompleted = steps.length;
       tracker.currentStep = null;
       tracker.result = result;
-    }).catch(err => {
+    }).catch(async err => {
+      if (err.authorityInvalidationFailed === true) {
+        await lease.abandon(err).catch(abandonError => logger.error('Profile integrity fence abandon failed', {
+          profileId, error: abandonError.message
+        }));
+      }
       tracker.status = 'failed';
       tracker.error = err.message;
       logger.error('Profile job failed', { profileId, modelName, hostId, error: err.message });
     }).finally(async () => {
-      // Release the claim first so the host returns to its prior status
-      // (typically 'ready' with pinned defaults). Then call restoreDedication
-      // to trigger the actual model reload on the host. Both paths run on
-      // success and failure — a failed profile must not leave the host
-      // stuck in 'benchmarking' status.
+      // Core performs a fenced restore under this exact lease and releases
+      // only after pinned residency verifies.
       try {
-        await releaseBenchmarkClaim(host.hostUrl, claimBatchId);
-      } catch (releaseErr) {
-        logger.warn('Profile: failed to release host claim', {
-          hostUrl: host.hostUrl, profileId, error: releaseErr.message
-        });
+        await lease.finalize();
+      } catch (error) {
+        tracker.status = 'failed';
+        tracker.error = error.message;
       }
-      _restoreDedicationForHost(host.hostUrl);
     });
 
     res.json({ status: 'success', data: { profileId } });
@@ -224,30 +218,10 @@ router.get('/profile/:profileId/progress', (req, res) => {
  * tracker the per-model UI watches so existing frontend reattach logic works.
  * Returns the profile result (resolves on success, throws on failure).
  */
-async function _queueRunSingleProfile(modelName, hostId, hostUrl, depth) {
+async function _queueRunSingleProfile(modelName, hostId, hostUrl, depth, lease) {
   const profileId = crypto.randomBytes(8).toString('hex');
   const steps = STEPS_BY_DEPTH[depth] || STEPS_BY_DEPTH.standard;
-  const claimBatchId = `profile-${profileId}`;
-  const estimatedDurationMs = ESTIMATED_DURATION_MS_BY_DEPTH[depth] || ESTIMATED_DURATION_MS_BY_DEPTH.standard;
-
-  // Same claim policy as POST /profile: rejection is a hard stop (the host is
-  // reserved by another job and profiling would evict its models); a claim
-  // call failure means core is unreachable, so proceed unclaimed.
-  let claimHeld = false;
-  try {
-    const claim = await claimHostForBenchmark(hostUrl, claimBatchId, estimatedDurationMs);
-    if (!claim.claimed) {
-      logger.warn('Queue profile: host claim rejected — stopping queue', { hostUrl, reason: claim.reason });
-      throw Object.assign(
-        new Error(`Host is reserved (${claim.reason || 'claimed by another job'})`),
-        { claimRejected: true, reason: claim.reason || null }
-      );
-    }
-    claimHeld = true;
-  } catch (err) {
-    if (err.claimRejected) throw err;
-    logger.warn('Queue profile: host claim call failed (core unreachable) — proceeding unclaimed', { hostUrl, error: err.message });
-  }
+  lease.assertActive();
 
   const tracker = {
     status: 'running',
@@ -268,6 +242,9 @@ async function _queueRunSingleProfile(modelName, hostId, hostUrl, depth) {
 
   try {
     const result = await orchestrator.profile(modelName, hostId, hostUrl, depth, {
+      assertClaimActive: lease.assertActive,
+      claimIdentity: lease.identityFor(hostUrl),
+      signal: lease.signal,
       onProgress: (step, data) => {
         const idx = steps.indexOf(step);
         if (idx >= 0) tracker.stepsCompleted = idx;
@@ -288,15 +265,6 @@ async function _queueRunSingleProfile(modelName, hostId, hostUrl, depth) {
     tracker.status = 'failed';
     tracker.error = err.message;
     throw err;
-  } finally {
-    if (claimHeld) {
-      try {
-        await releaseBenchmarkClaim(hostUrl, claimBatchId);
-      } catch (releaseErr) {
-        logger.warn('Queue profile: failed to release host claim', { hostUrl, profileId, error: releaseErr.message });
-      }
-    }
-    _restoreDedicationForHost(hostUrl);
   }
 }
 
@@ -411,6 +379,22 @@ async function startProfileHostQueue(body = {}) {
   tracker.models = candidates.map(name => ({ name, status: 'pending', error: null, startedAt: null, finishedAt: null }));
   tracker.skippedRecent = skippedRecent;
 
+  const queueDurationMs = (ESTIMATED_DURATION_MS_BY_DEPTH[chosenDepth] || ESTIMATED_DURATION_MS_BY_DEPTH.standard)
+    * Math.max(1, candidates.length);
+  let lease;
+  try {
+    lease = await acquireProfilerClaimLease([host.hostUrl], `profiler-queue-${queueId}`, queueDurationMs, {
+      onFatal: err => {
+        tracker.cancelled = true;
+        tracker.error = err.message;
+      }
+    });
+    lease.assertActive();
+  } catch (err) {
+    activeProfileQueues.delete(queueId);
+    throw err;
+  }
+
   // Fire-and-forget driver
   (async () => {
     for (let i = 0; i < tracker.models.length; i++) {
@@ -420,12 +404,20 @@ async function startProfileHostQueue(body = {}) {
       slot.status = 'running';
       slot.startedAt = Date.now();
       try {
-        await _queueRunSingleProfile(slot.name, hostId, host.hostUrl, chosenDepth);
+        lease.assertActive();
+        await _queueRunSingleProfile(slot.name, hostId, host.hostUrl, chosenDepth, lease);
         slot.status = 'completed';
       } catch (err) {
         slot.status = 'failed';
         slot.error = err.message;
-        if (err.claimRejected) {
+        if (err.authorityInvalidationFailed === true) {
+          await lease.abandon(err);
+          tracker.error = err.message;
+          tracker.cancelled = true;
+          logger.error('Profile queue: authority invalidation failed, holding fences for TTL recovery', {
+            hostId, model: slot.name, error: err.message
+          });
+        } else if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') {
           // The host is reserved by another job; every remaining model targets
           // the same host, so stop instead of failing them one by one.
           tracker.error = err.message;
@@ -444,11 +436,13 @@ async function startProfileHostQueue(body = {}) {
     const skipped = tracker.models.filter(m => m.status === 'pending').length;
     tracker.summary = { total: tracker.models.length, completed, failed, skipped };
     tracker.status = tracker.cancelled ? 'cancelled' : (failed && !completed ? 'failed' : 'completed');
+    await lease.finalize();
   })().catch(err => {
     tracker.status = 'failed';
     tracker.error = err.message;
     tracker.finishedAt = Date.now();
     logger.error('Profile queue driver crashed', { queueId, error: err.message });
+    lease.finalize().catch(releaseErr => logger.warn('Profile queue claim finalization failed', { queueId, error: releaseErr.message }));
   });
 
   return { queueId, hostId, depth: chosenDepth, total: candidates.length, models: candidates, skippedRecent, notOnHost };
@@ -511,14 +505,45 @@ router.post('/adapt', async (req, res) => {
 });
 
 router.post('/full', async (req, res) => {
+  let lease;
   try {
     const { modelName } = req.body;
     if (!modelName) return res.status(400).json({ status: 'error', error: 'modelName required' });
     const hosts = await hostProfileService.getAll();
     const onlineHosts = hosts.filter(h => h.status === 'online');
     if (!onlineHosts.length) return res.status(400).json({ status: 'error', error: 'No online hosts' });
-    res.json({ status: 'success', data: await orchestrator.fullPipeline(modelName, onlineHosts) });
-  } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
+    lease = await acquireProfilerClaimLease(
+      onlineHosts.map(host => host.hostUrl),
+      `profiler-full-${crypto.randomBytes(8).toString('hex')}`,
+      ESTIMATED_DURATION_MS_BY_DEPTH.full * Math.max(1, onlineHosts.length)
+    );
+    const data = await orchestrator.fullPipeline(modelName, onlineHosts, {
+      assertClaimActive: lease.assertActive,
+      claimIdentityFor: hostUrl => lease.identityFor(hostUrl),
+      signal: lease.signal
+    });
+    lease.assertActive();
+    await lease.finalize();
+    lease = null;
+    if (data?.completed !== true || data?.benchmarkQualified !== true) {
+      return res.status(422).json({
+        status: 'incomplete',
+        code: 'FULL_PROFILE_INCOMPLETE',
+        data
+      });
+    }
+    res.json({ status: 'success', data });
+  } catch (err) {
+    if (err.authorityInvalidationFailed === true && lease) {
+      await lease.abandon(err).catch(error => logger.error('Full pipeline integrity fence abandon failed', { error: error.message }));
+    }
+    res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
+  }
+  finally {
+    if (lease) {
+      await lease.finalize().catch(error => logger.error('Full pipeline lease finalization failed', { error: error.message }));
+    }
+  }
 });
 
 router.post('/preflight', async (req, res) => {

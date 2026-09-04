@@ -20,8 +20,37 @@ const {
 } = require('../../src/services/benchmark/harnessBrokerClient');
 const HarnessCampaign = require('../../models/HarnessCampaign');
 const { fingerprint } = require('../../../shared/workerContract');
+const {
+    acquireBenchmarkClaims,
+    releaseBenchmarkClaims,
+    startBenchmarkClaimHeartbeat
+} = require('../../src/services/benchmark/benchmarkClaimLifecycle');
 
 const router = express.Router();
+
+async function invalidateHarnessAuthority(campaign, error) {
+    if (!campaign?._id) return;
+    await HarnessCampaign.updateOne(
+        { _id: campaign._id },
+        {
+            $set: {
+                status: 'failed',
+                failure: {
+                    code: error?.code || 'WORKLOAD_ADMISSION_LOST',
+                    classification: 'coordination_error'
+                },
+                completed_at: new Date()
+            },
+            $unset: {
+                envelope: '',
+                receipt: '',
+                output_fingerprint: '',
+                usage: '',
+                cost: ''
+            }
+        }
+    ).catch(() => {});
+}
 
 /**
  * Optional deployment-owned cloud target catalog. The Product contains no
@@ -54,6 +83,10 @@ router.get('/harness-campaigns', async (_req, res) => {
 
 router.post('/harness-campaigns', async (req, res) => {
     let campaign = null;
+    let lifecycleId = null;
+    let stopHeartbeat = null;
+    let responseStatus = 200;
+    let responseBody = null;
     try {
         if (req.body?.confirmation_no_secrets !== true) {
             return res.status(422).json({
@@ -80,13 +113,31 @@ router.post('/harness-campaigns', async (req, res) => {
             responseMaxTokens: Number(req.body?.execution_config?.response_max_tokens) || 32_000,
             timeoutMs: Number(req.body?.execution_config?.per_test_timeout_ms) || 600_000,
         });
-        campaign = await HarnessCampaign.create({
+        campaign = new HarnessCampaign({
             target,
             execution_profile: 'native-ceiling',
             batch_contract_fingerprint: nativeBatchFingerprint,
             status: 'running',
             started_at: new Date()
         });
+        lifecycleId = `native-harness-${campaign._id}`;
+        const campaignTtlMs = Math.max(
+            120_000,
+            (Number(req.body?.execution_config?.per_test_timeout_ms) || 600_000) + 120_000
+        );
+        await acquireBenchmarkClaims([], lifecycleId, campaignTtlMs, {
+            requestId: `native-harness:${campaign._id}`,
+            kind: 'native-harness',
+            source: 'benchmark'
+        });
+        const cancellation = new AbortController();
+        stopHeartbeat = startBenchmarkClaimHeartbeat([], lifecycleId, campaignTtlMs, {
+            onFatal: error => cancellation.abort(error)
+        });
+        await stopHeartbeat.ready;
+        stopHeartbeat.assertActive();
+        await campaign.save();
+        stopHeartbeat.assertActive();
         const spendGrant = await createSpendGrant({
             batchId: campaign._id.toString(),
             batchFingerprint: nativeBatchFingerprint,
@@ -110,8 +161,10 @@ router.post('/harness-campaigns', async (req, res) => {
                 timeoutMs: req.body?.execution_config?.per_test_timeout_ms || 600_000
             },
             spendGrant,
-            role: 'candidate'
+            role: 'candidate',
+            signal: cancellation.signal
         });
+        stopHeartbeat.assertActive();
         campaign.status = 'completed';
         campaign.envelope = execution.envelope;
         campaign.receipt = execution.publicReceipt;
@@ -125,12 +178,18 @@ router.post('/harness-campaigns', async (req, res) => {
         };
         campaign.completed_at = new Date();
         await campaign.save();
-        return res.json({
+        stopHeartbeat.assertActive();
+        responseBody = {
             status: 'success',
             data: { campaign: campaign.toObject(), output: execution.output }
-        });
+        };
     } catch (error) {
-        if (campaign) {
+        // A lost workload lease means another owner may already hold runtime
+        // maintenance. Never write a terminal authority result after that
+        // fence was lost; TTL/recovery can reconcile the prior running row.
+        if (campaign && stopHeartbeat?.getFailure?.()) {
+            await invalidateHarnessAuthority(campaign, stopHeartbeat.getFailure());
+        } else if (campaign) {
             campaign.status = 'failed';
             campaign.failure = {
                 code: error.code || 'HARNESS_EXECUTION_FAILED',
@@ -138,11 +197,51 @@ router.post('/harness-campaigns', async (req, res) => {
             };
             campaign.completed_at = new Date();
             await campaign.save().catch(() => {});
+            try {
+                stopHeartbeat?.assertActive?.();
+            } catch (authorityError) {
+                await invalidateHarnessAuthority(campaign, authorityError);
+            }
         }
-        return res.status(Number(error.statusCode) || 500).json({
+        responseStatus = Number(error.statusCode) || 500;
+        responseBody = {
             status: 'error', code: error.code || 'HARNESS_EXECUTION_FAILED', error: error.message
-        });
+        };
+    } finally {
+        if (stopHeartbeat) await stopHeartbeat.drain().catch(() => {});
+        if (lifecycleId) {
+            let release = null;
+            try {
+                release = await releaseBenchmarkClaims([], lifecycleId);
+            } catch (error) {
+                release = { failed: 1, workloadAdmission: { released: false, reason: error.message } };
+            }
+            if (release?.failed !== 0 || release?.workloadAdmission?.released !== true) {
+                const releaseError = new Error(release?.workloadAdmission?.reason || 'Workload admission release was not verified');
+                releaseError.code = 'WORKLOAD_ADMISSION_RELEASE_UNVERIFIED';
+                if (campaign) {
+                    try {
+                        await invalidateHarnessAuthority(campaign, releaseError);
+                    } catch (invalidationError) {
+                        releaseError.invalidationError = invalidationError;
+                        logger.error('Harness authority invalidation failed after admission release failure', {
+                            campaignId: String(campaign._id),
+                            error: invalidationError.message
+                        });
+                    }
+                }
+                responseStatus = 503;
+                responseBody = {
+                    status: 'error',
+                    code: releaseError.code,
+                    error: releaseError.message
+                };
+            }
+        }
     }
+    return res.status(responseStatus).json(responseBody || {
+        status: 'error', code: 'HARNESS_EXECUTION_FAILED', error: 'Harness campaign produced no terminal result'
+    });
 });
 
 function respond(res, operation) {

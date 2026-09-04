@@ -21,6 +21,7 @@ jest.mock('../../../models/BenchmarkResult', () => ({
     })
 }));
 
+const BenchmarkResult = require('../../../models/BenchmarkResult');
 const { applyScoresToResult } = require('../../../src/services/benchmark/judgeExecutor');
 
 beforeEach(() => {
@@ -51,6 +52,34 @@ describe('applyScoresToResult — composite_score uses performance_baseline', ()
             message: 'Benchmark batch judging cancelled'
         });
         expect(captured).toHaveLength(0);
+    });
+
+    it('invalidates an ambiguously committed score when authority is lost during the write', async () => {
+        const controller = new AbortController();
+        BenchmarkResult.updateOne.mockImplementationOnce(async (filter, update) => {
+            captured.push({ filter, update });
+            controller.abort(new Error('lease heartbeat rejected'));
+            return { acknowledged: true };
+        });
+
+        await expect(applyScoresToResult('lost-during-write', baseScores, {
+            latency: 500,
+            tokens_per_sec: 20,
+            prompt_category: 'knowledge'
+        }, { cancelSignal: controller.signal })).rejects.toMatchObject({
+            code: 'BENCHMARK_BATCH_STOPPED'
+        });
+
+        expect(captured).toHaveLength(2);
+        expect(captured[1]).toEqual(expect.objectContaining({
+            filter: { _id: 'lost-during-write' },
+            update: { $set: expect.objectContaining({
+                excluded_from_leaderboard: true,
+                scoring_method: 'authority_invalidated',
+                quality_score: null,
+                composite_score: null
+            }) }
+        }));
     });
 
     it('produces a higher composite when calibrated baseline is present', async () => {

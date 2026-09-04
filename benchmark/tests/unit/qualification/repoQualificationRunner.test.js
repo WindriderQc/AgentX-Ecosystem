@@ -401,6 +401,35 @@ describe('repo-coding-qualification.js CLI (--dry-run smoke test)', () => {
     );
   });
 
+  test('refuses a matching legacy claim without an exact pre-claim runtime snapshot', async () => {
+    const requestJson = jest.fn(async () => ({
+      data: { claims: [{
+        hostUrl: 'http://exec:11434',
+        batchId: 'expected',
+        snapshotExact: false
+      }] }
+    }));
+    await expect(qualificationCli.assertExpectedActiveClaim({
+      core: 'http://core:3080',
+      host: 'http://exec:11434',
+      claimId: 'expected'
+    }, { requestJson })).rejects.toThrow(/refuses legacy claim expected/);
+  });
+
+  test('accepts only the matching host, batch, and exact runtime snapshot', async () => {
+    const exact = {
+      hostUrl: 'http://exec:11434',
+      batchId: 'expected',
+      snapshotExact: true
+    };
+    const requestJson = jest.fn(async () => ({ data: { claims: [exact] } }));
+    await expect(qualificationCli.assertExpectedActiveClaim({
+      core: 'http://core:3080',
+      host: 'http://exec:11434',
+      claimId: 'expected'
+    }, { requestJson })).resolves.toBe(exact);
+  });
+
   test('rejects a Core contract that changes any frozen campaign setting', () => {
     const args = qualificationCli.parseArgs([
       '--claim-id', 'coding-campaign',

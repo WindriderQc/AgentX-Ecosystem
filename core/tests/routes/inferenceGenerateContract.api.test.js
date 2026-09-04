@@ -231,6 +231,34 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       expect(recordInference).not.toHaveBeenCalled();
     });
 
+    test('same-origin callers cannot replay a redacted claim identity as Benchmark capability', async () => {
+      process.env.AGENTX_BENCHMARK_TOKEN = 'different-service-secret';
+      hostPreferenceService.getByHost.mockResolvedValueOnce({
+        status: 'benchmarking',
+        benchmarkClaim: {
+          batchId: 'batch-secret',
+          claimGeneration: 'generation-secret'
+        }
+      });
+      try {
+        const response = await request(app)
+          .post('/api/inference/generate')
+          .send({
+            model: 'test-model',
+            prompt: 'hello',
+            callerDetail: 'benchmark-batch-secret',
+            claimBatchId: 'batch-secret',
+            claimGeneration: 'generation-secret'
+          })
+          .expect(503);
+        expect(response.body.code).toBe('BENCHMARK_CLAIM_ACTIVE');
+        expect(fetch).not.toHaveBeenCalled();
+        expect(recordInference).not.toHaveBeenCalled();
+      } finally {
+        process.env.AGENTX_BENCHMARK_TOKEN = 'test-benchmark-token';
+      }
+    });
+
     test('telemetry carries the caller attribution the request supplied', async () => {
       mockOllamaOk();
       await request(app)
@@ -276,16 +304,22 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       expect(entry.inFlight).toBe(0);
     });
 
-    test('the direct lane skips admission entirely', async () => {
+    test('the direct lane skips semaphore admission but remains visible to the pre-claim drain', async () => {
       mockOllamaOk();
       await request(app)
         .post('/api/inference/generate')
         .send({ model: 'test-model', prompt: 'hello', callerDetail: 'benchmark-batch-abc123' })
         .expect(200);
 
-      // Bench/profiler self-sequence per host; admission is ceremony for them.
+      // Bench/profiler self-sequence per host, but passive tracking is required
+      // so a claim snapshot cannot race a direct request already in flight.
       const entry = hostGate.stats().entries['http://primary:11434::test-model'];
-      expect(entry === undefined || entry.totalAcquired === 0).toBe(true);
+      expect(entry).toMatchObject({
+        totalAcquired: 0,
+        totalTracked: 1,
+        trackedInFlight: 0,
+        inFlight: 0
+      });
     });
 
     test('the interactive lane KEEPS admission', async () => {

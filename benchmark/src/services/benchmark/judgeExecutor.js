@@ -9,6 +9,42 @@ const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scori
 const { throwIfJudgeCancelled } = require('../scoring/judgeCall');
 const { buildTrustJudgeCellId } = require('./harnessBrokerClient');
 
+function cancellationSignal(config = {}) {
+    return config.cancelSignal || config.signal || null;
+}
+
+async function invalidateAmbiguousJudgeWrite(resultId, phase) {
+    await BenchmarkResult.updateOne(
+        { _id: resultId },
+        {
+            $set: {
+                excluded_from_leaderboard: true,
+                needs_review: true,
+                scoring_method: 'authority_invalidated',
+                quality_score: null,
+                composite_score: null,
+                review_reason: `Judge authority was lost during ${phase}; result requires a fenced rejudge`
+            }
+        }
+    ).catch(() => {});
+}
+
+async function persistJudgeUpdate(resultId, update, cancellationConfig, phase) {
+    throwIfJudgeCancelled(cancellationConfig);
+    const signal = cancellationSignal(cancellationConfig);
+    try {
+        await BenchmarkResult.updateOne(
+            { _id: resultId },
+            update,
+            signal ? { signal } : undefined
+        );
+        throwIfJudgeCancelled(cancellationConfig);
+    } catch (error) {
+        if (signal?.aborted) await invalidateAmbiguousJudgeWrite(resultId, phase);
+        throw error;
+    }
+}
+
 function buildPromptData(result, originalPrompt) {
     return {
         prompt: result.prompt,
@@ -63,10 +99,11 @@ async function persistMultiJudgeScores(resultId, multiJudgeResult, cancellationC
             scoring_time_ms: score.scoring_time_ms
         }));
 
-    throwIfJudgeCancelled(cancellationConfig);
-    await BenchmarkResult.updateOne(
-        { _id: resultId },
-        { $set: { judge_scores: judgeScoreRecords } }
+    await persistJudgeUpdate(
+        resultId,
+        { $set: { judge_scores: judgeScoreRecords } },
+        cancellationConfig,
+        'multi-judge score persistence'
     );
 }
 
@@ -148,9 +185,8 @@ async function applyScoresToResult(resultId, scores, resultData, cancellationCon
     const combinedNeedsReview = !!resultData.needs_review || !!scores.needs_review;
     const combinedReviewReason = mergeReviewReasons(resultData.review_reason, scores.review_reason);
 
-    throwIfJudgeCancelled(cancellationConfig);
-    await BenchmarkResult.updateOne(
-        { _id: resultId },
+    await persistJudgeUpdate(
+        resultId,
         {
             $set: {
                 scorer_version: SCORER_VERSION,
@@ -198,7 +234,9 @@ async function applyScoresToResult(resultId, scores, resultData, cancellationCon
                 ...truncationUpdate,
                 ...judgeFailureUpdate
             }
-        }
+        },
+        cancellationConfig,
+        'judge score persistence'
     );
 
     return {

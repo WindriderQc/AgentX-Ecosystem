@@ -25,6 +25,8 @@ async function persistSuccessfulResult({
     tokens,
     tokensPerSec,
     timeToFirstTokenMs,
+    ttftMeasurement = null,
+    promptEvalDurationMs = null,
     cleanedResponse,
     extractedThinking,
     hasEmptyResponse,
@@ -53,8 +55,11 @@ async function persistSuccessfulResult({
     providerUsage = null,
     providerCost = null,
     qualityCohortFingerprint = null,
-    trustEvidenceContext = null
+    trustEvidenceContext = null,
+    signal = null,
+    assertAuthorityActive = null
 }) {
+    assertAuthorityActive?.();
     const scoringType = normalizeScoringCategory(prompt.scoring_type || prompt.category, DEFAULT_SCORING_CATEGORY);
     const visibleResponseBudget = !!(lengthHintApplied || answerContract?.applied);
     const visibleResponse = typeof cleanedResponse === 'string' ? cleanedResponse : '';
@@ -115,6 +120,10 @@ async function persistSuccessfulResult({
         error.statusCode = 409;
         throw error;
     }
+    const trustedTtftMs = ttftMeasurement === 'streamed_wall_clock'
+        && Number.isFinite(Number(timeToFirstTokenMs))
+        ? Number(timeToFirstTokenMs)
+        : null;
     const resultDocument = {
         model,
         model_digest: modelDigest,
@@ -145,7 +154,9 @@ async function persistSuccessfulResult({
         latency,
         tokens,
         tokens_per_sec: tokensPerSec,
-        time_to_first_token_ms: timeToFirstTokenMs,
+        time_to_first_token_ms: trustedTtftMs,
+        ttft_measurement: trustedTtftMs != null ? 'streamed_wall_clock' : null,
+        prompt_eval_duration_ms: promptEvalDurationMs,
         response: visibleResponse,
         thinking: hiddenThinking || null,
         success: true,
@@ -220,6 +231,7 @@ async function persistSuccessfulResult({
             promptEvalTokensPerSec: performanceBaseline.promptEvalTokensPerSec ?? null,
             latencyMs: performanceBaseline.latencyMs ?? null,
             timeToFirstTokenMs: performanceBaseline.timeToFirstTokenMs ?? null,
+            ttftMeasurement: performanceBaseline.ttftMeasurement || undefined,
             vramUsedMiB: performanceBaseline.vramUsedMiB ?? null,
             vramTotalMiB: performanceBaseline.vramTotalMiB ?? null,
             numCtx: performanceBaseline.numCtx ?? null,
@@ -240,7 +252,19 @@ async function persistSuccessfulResult({
     if (!trustEvidenceContext) resultDocument.timestamp = new Date();
     const result = new BenchmarkResult(resultDocument);
 
-    await result.save();
+    try {
+        assertAuthorityActive?.();
+        await result.save(signal ? { signal } : undefined);
+        assertAuthorityActive?.();
+    } catch (error) {
+        // The save acknowledgement may race admission loss. Deleting this
+        // preallocated _id is a safe retraction and prevents a late row from
+        // becoming leaderboard evidence under a newer maintenance owner.
+        if (signal?.aborted || error?.code === 'BENCHMARK_CLAIM_LOST') {
+            await BenchmarkResult.deleteOne({ _id: result._id }).catch(() => {});
+        }
+        throw error;
+    }
     pendingModelTimeline.push({
         timestamp: new Date(),
         event: 'test_complete',
@@ -250,7 +274,7 @@ async function persistSuccessfulResult({
         prompt_level: prompt.level,
         duration_ms: latency,
         tokens_per_sec: tokensPerSec,
-        time_to_first_token_ms: timeToFirstTokenMs,
+        time_to_first_token_ms: trustedTtftMs,
         success: true,
         error: null
     });
@@ -271,7 +295,8 @@ async function persistSuccessfulResult({
     return result._id;
 }
 
-async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, flushBatchProgress, model, hostUrl, judgeHostUrl, prompt, promptText = null, err, errorDuration, currentBatch, pendingModelTimeline, repeatIndex = 0, repeatTotal = 1, repeatGroupId = null, executionSettings = null, executionTarget = null, executionReceipt = null, trustExecutionReceipt = null, providerUsage = null, providerCost = null, qualityCohortFingerprint = null, trustEvidenceContext = null }) {
+async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, flushBatchProgress, model, hostUrl, judgeHostUrl, prompt, promptText = null, err, errorDuration, currentBatch, pendingModelTimeline, repeatIndex = 0, repeatTotal = 1, repeatGroupId = null, executionSettings = null, executionTarget = null, executionReceipt = null, trustExecutionReceipt = null, providerUsage = null, providerCost = null, qualityCohortFingerprint = null, trustEvidenceContext = null, signal = null, assertAuthorityActive = null }) {
+    assertAuthorityActive?.();
     const classified = classifyBenchmarkError(err);
     const scoringType = normalizeScoringCategory(prompt.scoring_type || prompt.category, DEFAULT_SCORING_CATEGORY);
     const reviewReason = classified.infra
@@ -346,7 +371,16 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
         if (!trustEvidenceContext) resultDocument.timestamp = new Date();
         const result = new BenchmarkResult(resultDocument);
 
-        await result.save();
+        try {
+            assertAuthorityActive?.();
+            await result.save(signal ? { signal } : undefined);
+            assertAuthorityActive?.();
+        } catch (error) {
+            if (signal?.aborted || error?.code === 'BENCHMARK_CLAIM_LOST') {
+                await BenchmarkResult.deleteOne({ _id: result._id }).catch(() => {});
+            }
+            throw error;
+        }
         pendingModelTimeline.push({
             timestamp: new Date(),
             event: 'error',
@@ -369,6 +403,11 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
 
         logger.error('Batch test failed', { batchId, model, prompt: prompt.name, error: err.message });
     } catch (saveErr) {
+        if (signal?.aborted
+            || saveErr?.code === 'BENCHMARK_CLAIM_LOST'
+            || saveErr?.code === 'BENCHMARK_CLAIM_STOPPED') {
+            throw saveErr;
+        }
         logger.error('Failed to save error result', {
             batchId,
             model,

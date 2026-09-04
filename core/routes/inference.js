@@ -787,6 +787,8 @@ router.post('/inference/generate', async (req, res) => {
     const { name: laneName, policy: lane } = lanePolicy.resolvePolicyLane(
         callerContext.effectivePolicy
     );
+    const benchmarkClaimAuthorized = callerContext.principal === 'benchmark-service'
+        && laneName === 'direct';
     const routeManaged = lane.route === true && !hostOverride;
 
     let model = requestedModel;
@@ -1026,6 +1028,9 @@ router.post('/inference/generate', async (req, res) => {
     try {
         await assertHostAvailableForConsumer(target, {
             callerDetail: body.callerDetail || null,
+            claimBatchId: body.claimBatchId || null,
+            claimGeneration: body.claimGeneration || null,
+            benchmarkAuthorized: benchmarkClaimAuthorized,
             model,
             path: '/api/inference/generate'
         });
@@ -1200,14 +1205,16 @@ router.post('/inference/generate', async (req, res) => {
     };
     routingTrace.difference = buildRoutingDifference(routingTrace);
 
-    // Admission gate — per-(host, model) semaphore. Streaming bypasses because
-    // long-lived streams would starve the gate for other callers.
+    // Admission gate — per-(host, model) semaphore. Streaming is tracked too:
+    // benchmark claims must drain every already-admitted inference before Core
+    // snapshots and mutates Ollama residency. Bypassing streams made that
+    // snapshot race an unobservable long-running generation.
     //
     // Lane policy:
     //   - direct lane: skip admission (bench/profiler self-sequence per host)
     //   - interactive: KEEP admission — load-bearing for cron fairness
     //   - automated:   keep admission
-    const skipGate = stream || !lane.admit;
+    const skipGate = !lane.admit;
     const disconnect = createInferenceDisconnectSignal(req, res);
     let gateRelease = () => {};
 
@@ -1370,11 +1377,20 @@ router.post('/inference/generate', async (req, res) => {
     });
 
     try {
-        if (!skipGate) {
-            gateRelease = await hostGate.acquire(target, model, {
+        gateRelease = await (skipGate ? hostGate.track : hostGate.acquire)(target, model, {
                 signal: disconnect.signal,
             });
-        }
+        // A request may have passed the first claim check and then waited in
+        // admission (or entered passive direct-lane tracking) while Benchmark
+        // fenced the host. Recheck before the Ollama write.
+        await assertHostAvailableForConsumer(target, {
+            callerDetail: body.callerDetail || null,
+            claimBatchId: body.claimBatchId || null,
+            claimGeneration: body.claimGeneration || null,
+            benchmarkAuthorized: benchmarkClaimAuthorized,
+            model,
+            path: '/api/inference/generate:post-admission'
+        });
 
         const primaryAttempt = await executeOllamaAttempt({
             hostUrl: target,

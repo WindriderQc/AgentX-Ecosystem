@@ -11,6 +11,14 @@ const ArtifactIdentitySchema = new mongoose.Schema({
   registryQualified: { type: Boolean, default: false }
 }, { _id: false });
 
+const AuthorityReceiptSchema = new mongoose.Schema({
+  version: { type: Number, required: true },
+  source: { type: String, enum: ['profiler_pipeline'], required: true },
+  evidenceId: { type: String, default: null },
+  digest: { type: String, required: true },
+  issuedAt: { type: Date, required: true }
+}, { _id: false });
+
 const ReadinessSchema = new mongoose.Schema({
   stage: {
     type: String,
@@ -20,10 +28,17 @@ const ReadinessSchema = new mongoose.Schema({
   profiledAt: Date,
   profileDepth: { type: String, enum: ['quick', 'standard', 'full', null], default: null },
   benchmarkQualified: { type: Boolean, default: false },
+  qualificationReason: { type: String, default: null },
+  measurementReliability: {
+    type: String,
+    enum: ['unknown', 'low', 'medium', 'high', null],
+    default: 'unknown'
+  },
   benchmarkedAt: Date,
   stale: { type: Boolean, default: false },
   staleReason: { type: String, default: null },
   evidenceId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  authorityReceipt: { type: AuthorityReceiptSchema, default: null },
   artifact: { type: ArtifactIdentitySchema, default: null }
 }, { _id: false });
 

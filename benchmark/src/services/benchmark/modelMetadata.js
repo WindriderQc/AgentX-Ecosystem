@@ -138,6 +138,7 @@ function buildHostPerformanceSnapshot(snapshot) {
         promptEvalTokensPerSec: snapshot.promptEvalTokensPerSec ?? null,
         latencyMs: snapshot.latencyMs ?? null,
         timeToFirstTokenMs: snapshot.timeToFirstTokenMs ?? null,
+        ttftMeasurement: snapshot.ttftMeasurement || undefined,
         vramUsedMiB: snapshot.vramUsedMiB ?? null,
         vramTotalMiB: snapshot.vramTotalMiB ?? null,
         numCtx: snapshot.numCtx ?? null,

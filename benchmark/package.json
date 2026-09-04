@@ -14,6 +14,7 @@
     "test": "jest --forceExit --detectOpenHandles",
     "test:unit": "jest --config jest.unit.config.js --forceExit",
     "migrate:exact-artifacts": "node scripts/migrate-exact-artifact-profile-indexes.js",
+    "migrate:model-context-v2": "node scripts/migrate-model-context-profile-v2.js",
     "migrate:benchmark-trust-batches": "node scripts/migrate-benchmark-trust-batch-ids.js"
   },
   "dependencies": {

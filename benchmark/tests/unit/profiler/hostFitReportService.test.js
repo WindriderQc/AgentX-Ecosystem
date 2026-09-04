@@ -45,8 +45,8 @@ describe('hostFitReportService estimator', () => {
   describe('buildThroughputModel (self-calibration)', () => {
     it('calibrates K from measured profiles', () => {
       const measured = [
-        { paramB: 7, quant: 'Q4_K_M', tokensPerSec: 50 },
-        { paramB: 7, quant: 'Q4_K_M', tokensPerSec: 60 }
+        { paramB: 7, quant: 'Q4_K_M', tokensPerSec: 50, spillVerified: true, spillDetected: false },
+        { paramB: 7, quant: 'Q4_K_M', tokensPerSec: 60, spillVerified: true, spillDetected: false }
       ];
       const tm = buildThroughputModel(measured, null);
       expect(tm.source).toBe('profiles');
@@ -67,17 +67,17 @@ describe('hostFitReportService estimator', () => {
       expect(tm.K).toBe(220);
     });
     it('a faster host yields a higher estimate than a slower one', () => {
-      const fast = buildThroughputModel([{ paramB: 7, quant: 'Q4_K_M', tokensPerSec: 120 }], null);
-      const slow = buildThroughputModel([{ paramB: 7, quant: 'Q4_K_M', tokensPerSec: 40 }], null);
+      const fast = buildThroughputModel([{ paramB: 7, quant: 'Q4_K_M', tokensPerSec: 120, spillVerified: true, spillDetected: false }], null);
+      const slow = buildThroughputModel([{ paramB: 7, quant: 'Q4_K_M', tokensPerSec: 40, spillVerified: true, spillDetected: false }], null);
       expect(estTpsFromModel(fast, 14, 'Q4_K_M')).toBeGreaterThan(estTpsFromModel(slow, 14, 'Q4_K_M'));
     });
     it('excludes capacity-bound (near-full) profiles from the fit', () => {
       const withOutlier = buildThroughputModel([
-        { paramB: 7, quant: 'Q4_K_M', tokensPerSec: 100, vramPct: 40 },
-        { paramB: 14, quant: 'Q4_K_M', tokensPerSec: 15, vramPct: 95 }
+        { paramB: 7, quant: 'Q4_K_M', tokensPerSec: 100, vramPct: 40, spillVerified: true, spillDetected: false },
+        { paramB: 14, quant: 'Q4_K_M', tokensPerSec: 15, vramPct: 95, spillVerified: true, spillDetected: false }
       ], null);
       const cleanOnly = buildThroughputModel([
-        { paramB: 7, quant: 'Q4_K_M', tokensPerSec: 100, vramPct: 40 }
+        { paramB: 7, quant: 'Q4_K_M', tokensPerSec: 100, vramPct: 40, spillVerified: true, spillDetected: false }
       ], null);
       expect(withOutlier.nPoints).toBe(1);
       expect(withOutlier.K).toBe(cleanOnly.K);
@@ -87,15 +87,18 @@ describe('hostFitReportService estimator', () => {
   describe('calibrationSet', () => {
     it('keeps clean profiles, drops spill and >85% VRAM', () => {
       const set = calibrationSet([
-        { paramB: 7, tokensPerSec: 90, vramPct: 40, spillDetected: false },
-        { paramB: 14, tokensPerSec: 20, vramPct: 95, spillDetected: false },
-        { paramB: 32, tokensPerSec: 10, spillDetected: true }
+        { paramB: 7, tokensPerSec: 90, vramPct: 40, spillVerified: true, spillDetected: false },
+        { paramB: 14, tokensPerSec: 20, vramPct: 95, spillVerified: true, spillDetected: false },
+        { paramB: 32, tokensPerSec: 10, spillVerified: true, spillDetected: true }
       ]);
       expect(set.map(m => m.paramB)).toEqual([7]);
     });
-    it('falls back to all positive profiles when every one is constrained', () => {
-      const set = calibrationSet([{ paramB: 14, tokensPerSec: 20, vramPct: 95, spillDetected: false }]);
-      expect(set.length).toBe(1);
+    it('never calibrates from constrained or residency-unverified profiles', () => {
+      const set = calibrationSet([
+        { paramB: 14, tokensPerSec: 20, vramPct: 95, spillVerified: true, spillDetected: false },
+        { paramB: 7, tokensPerSec: 40, vramPct: 40, spillVerified: false, spillDetected: null }
+      ]);
+      expect(set).toEqual([]);
     });
   });
 
@@ -136,9 +139,9 @@ describe('hostFitReportService estimator', () => {
   describe('pickRecommended', () => {
     it('picks the largest model that runs without spill', () => {
       const measured = [
-        { modelName: 'a:7b', paramB: 7, tokensPerSec: 90, vramPct: 40, spillDetected: false },
-        { modelName: 'b:14b', paramB: 14, tokensPerSec: 30, vramPct: 80, spillDetected: false },
-        { modelName: 'c:32b', paramB: 32, tokensPerSec: 10, vramPct: 99, spillDetected: true }
+        { modelName: 'a:7b', paramB: 7, tokensPerSec: 90, vramPct: 40, spillVerified: true, spillDetected: false },
+        { modelName: 'b:14b', paramB: 14, tokensPerSec: 30, vramPct: 80, spillVerified: true, spillDetected: false },
+        { modelName: 'c:32b', paramB: 32, tokensPerSec: 10, vramPct: 99, spillVerified: true, spillDetected: true }
       ];
       expect(pickRecommended(measured).modelName).toBe('b:14b');
     });
@@ -150,8 +153,8 @@ describe('hostFitReportService estimator', () => {
   describe('pickBestBenchmarked', () => {
     it('picks the highest benchmark score among clean fits', () => {
       const measured = [
-        { modelName: 'a', paramB: 7, vramPct: 40, spillDetected: false, score: 70 },
-        { modelName: 'b', paramB: 14, vramPct: 80, spillDetected: false, score: 88, bestCategory: 'coding' }
+        { modelName: 'a', paramB: 7, vramPct: 40, spillVerified: true, spillDetected: false, score: 70 },
+        { modelName: 'b', paramB: 14, vramPct: 80, spillVerified: true, spillDetected: false, score: 88, bestCategory: 'coding' }
       ];
       expect(pickBestBenchmarked(measured).modelName).toBe('b');
     });
@@ -171,22 +174,22 @@ describe('hostFitReportService estimator', () => {
       expect(isMoE('qwen2.5:14b', 14)).toBe(false);
     });
     it('estimates MoE throughput from active params (much faster than dense)', () => {
-      const tm = buildThroughputModel([{ modelName: 'qwen2.5:14b', paramB: 14, quant: 'Q4_K_M', tokensPerSec: 30, vramPct: 50 }], null);
+      const tm = buildThroughputModel([{ modelName: 'qwen2.5:14b', paramB: 14, quant: 'Q4_K_M', tokensPerSec: 30, vramPct: 50, spillVerified: true, spillDetected: false }], null);
       const dense = estTpsFromModel(tm, 35, 'Q4_K_M', 'qwen2.5:32b');
       const moe = estTpsFromModel(tm, 35, 'Q4_K_M', 'qwen3.6:35b-a3b');
       expect(moe).toBeGreaterThan(dense * 3);
     });
     it('excludes MoE from the dense throughput calibration', () => {
       const set = calibrationSet([
-        { modelName: 'qwen2.5:14b', paramB: 14, tokensPerSec: 30, vramPct: 50 },
-        { modelName: 'qwen3.6:35b-a3b', paramB: 35, tokensPerSec: 100, vramPct: 50 }
+        { modelName: 'qwen2.5:14b', paramB: 14, tokensPerSec: 30, vramPct: 50, spillVerified: true, spillDetected: false },
+        { modelName: 'qwen3.6:35b-a3b', paramB: 35, tokensPerSec: 100, vramPct: 50, spillVerified: true, spillDetected: false }
       ]);
       expect(set.map(m => m.paramB)).toEqual([14]);
     });
     it('calibrates a separate MoE constant from MoE profiles (matches measured)', () => {
       const tm = buildThroughputModel([
-        { modelName: 'qwen2.5:14b', paramB: 14, quant: 'Q4_K_M', tokensPerSec: 30, vramPct: 50 },
-        { modelName: 'qwen3.6:35b-a3b', paramB: 35, quant: 'Q4_K_M', tokensPerSec: 100, vramPct: 50 }
+        { modelName: 'qwen2.5:14b', paramB: 14, quant: 'Q4_K_M', tokensPerSec: 30, vramPct: 50, spillVerified: true, spillDetected: false },
+        { modelName: 'qwen3.6:35b-a3b', paramB: 35, quant: 'Q4_K_M', tokensPerSec: 100, vramPct: 50, spillVerified: true, spillDetected: false }
       ], null);
       expect(tm.moeNPoints).toBe(1);
       expect(tm.moeSource).toBe('profiles');

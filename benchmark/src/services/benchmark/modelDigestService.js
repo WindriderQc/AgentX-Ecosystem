@@ -22,7 +22,13 @@ function namesEquivalent(a, b) {
         === right.replace(/:latest$/i, '').toLowerCase();
 }
 
-async function loadHostTags(host, { refresh = false } = {}) {
+async function loadHostTags(host, { refresh = false, signal = null } = {}) {
+    if (signal?.aborted) {
+        if (signal.reason instanceof Error) throw signal.reason;
+        const error = new Error('Model digest lookup aborted by caller');
+        error.code = 'CALLER_ABORTED';
+        throw error;
+    }
     const cached = hostCache.get(host);
     const now = Date.now();
     if (!refresh && cached && cached.expiresAt > now) {
@@ -30,11 +36,15 @@ async function loadHostTags(host, { refresh = false } = {}) {
     }
 
     try {
-        const data = await listModels(host, { timeoutMs: LOOKUP_TIMEOUT_MS });
+        const data = await listModels(host, { timeoutMs: LOOKUP_TIMEOUT_MS, signal });
         const models = Array.isArray(data?.models) ? data.models : [];
         hostCache.set(host, { models, expiresAt: now + CACHE_TTL_MS });
         return models;
     } catch (error) {
+        if (signal?.aborted) {
+            if (signal.reason instanceof Error) throw signal.reason;
+            throw error;
+        }
         logger.debug('Model digest lookup failed', { host, error: error.message });
         hostCache.set(host, { models: null, expiresAt: now + CACHE_TTL_MS });
         return null;

@@ -50,7 +50,7 @@ export function _showFeedback(container, modelName, html) {
 const STEPS_BY_DEPTH = {
   quick:    ['Warmup', 'Throughput', 'Spill detection', 'Thinking behavior', 'Save'],
   standard: ['Warmup', 'Throughput', 'Spill detection', 'Thinking behavior', 'Context probe', 'Save'],
-  full:     ['Warmup', 'Throughput', 'Spill detection', 'Thinking behavior', 'Context probe', 'Throughput curve', 'Generation stability', 'Load timing', 'Save'],
+  full:     ['Warmup', 'Throughput', 'Spill detection', 'Thinking behavior', 'Context probe', 'Throughput curve', 'Generation stability', 'Prefill / decode matrix', 'Load timing', 'Save'],
 };
 
 // Nominal wall-clock estimate per depth (seconds) — matches UI hint text
@@ -66,6 +66,7 @@ const STEP_DESCRIPTIONS = {
   'Thinking behavior':     'Checking visible answer safety',
   'Throughput curve':      'Mapping tok/s across contexts',
   'Generation stability':  'Stress-testing long generations',
+  'Prefill / decode matrix':'Validating every workload cell',
   'Load timing':           'Cold vs hot reload timing',
   'Save':                  'Persisting profile to database',
 };
@@ -175,7 +176,7 @@ function _activityLog(entries) {
 function _classifyMessage(msg) {
   const m = (msg || '').toLowerCase();
   if (/reattached|resuming|starting/.test(m)) return 'info';
-  if (/no spill|fully loaded|optimal context|deployed|baseline:|completed|✓/.test(m)) return 'good';
+  if (/no spill|fully loaded|max verified|deployed|baseline:|completed|✓/.test(m)) return 'good';
   if (/spill detected|degradation|fail|timeout|drop|error|✗/.test(m)) return 'warn';
   return null;
 }
@@ -208,10 +209,25 @@ function _heroStat(tokPerSec, baseline) {
 
 function _renderSpillBadge(profile) {
   if (!profile?.spill) return '';
+  if (profile.spill.verified !== true) {
+    return '<span class="mp-spill-warn">GPU residency unknown — no-spill unverified</span>';
+  }
   if (profile.spill.spillDetected) {
-    return `<span class="mp-spill-warn">Spills at ${profile.spill.spillNumCtx || '?'} (safe: ${profile.spill.lastSafeNumCtx || '?'})</span>`;
+    return `<span class="mp-spill-warn">Spills at ${profile.spill.spillNumCtx || '?'}</span>`;
   }
   return '<span class="mp-spill-ok">No spill</span>';
+}
+
+function _formatRepeatedEvidence(statistics) {
+  if (!statistics || !Number(statistics.sampleCount)) return 'unverified';
+  const cv = Number.isFinite(Number(statistics.coefficientOfVariation))
+    ? `${(Number(statistics.coefficientOfVariation) * 100).toFixed(1)}% CV`
+    : 'CV unknown';
+  const ci = statistics.confidenceInterval95;
+  const ciText = Number.isFinite(Number(ci?.low)) && Number.isFinite(Number(ci?.high))
+    ? `95% CI ${Number(ci.low).toFixed(1)}–${Number(ci.high).toFixed(1)}`
+    : '95% CI unknown';
+  return `n=${statistics.sampleCount} · p50 ${Number(statistics.p50).toFixed(1)} · p95 ${Number(statistics.p95).toFixed(1)} · ${cv} · ${ciText}`;
 }
 
 function _renderFullDepthExtras(profile) {
@@ -222,12 +238,27 @@ function _renderFullDepthExtras(profile) {
   if (curve.length) {
     html += `<table class="mp-extras-table">
       <caption>Throughput Curve</caption>
-      <thead><tr><th>Context Fill %</th><th>tok/s</th><th>VRAM (MiB)</th><th>Offloaded</th></tr></thead>
+      <thead><tr><th>Context Fill %</th><th>tok/s</th><th>Evidence</th><th>VRAM (MiB)</th><th>Offloaded</th></tr></thead>
       <tbody>${curve.map(r => `<tr>
         <td>${r.contextFillPct ?? '?'}%</td>
         <td>${(r.tokensPerSec ?? r.tokPerSec) != null ? Number(r.tokensPerSec ?? r.tokPerSec).toFixed(1) : '?'}</td>
+        <td>${_formatRepeatedEvidence(r.throughputStatistics)}</td>
         <td>${r.vramUsedMiB != null ? (r.vramUsedMiB / 1024).toFixed(1) + ' GB' : (r.vramMiB ?? '?')}</td>
-        <td>${(r.gpuOffloaded || r.offloaded) ? 'Yes' : 'No'}</td>
+        <td>${(r.gpuOffloaded ?? r.offloaded) == null ? 'Unknown' : ((r.gpuOffloaded ?? r.offloaded) ? 'Yes' : 'No')}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+
+  const matrix = profile?.prefillDecodeMatrix;
+  if (Array.isArray(matrix?.cells) && matrix.cells.length) {
+    html += `<table class="mp-extras-table">
+      <caption>Prefill / Decode Matrix</caption>
+      <thead><tr><th>Prompt</th><th>Decode</th><th>Prefill tok/s</th><th>Decode tok/s</th><th>Evidence</th><th>Status</th></tr></thead>
+      <tbody>${matrix.cells.map(cell => `<tr>
+        <td>${cell.prefillTokens ?? '?'}</td><td>${cell.decodeTokens ?? '?'}</td>
+        <td>${cell.prefillTokensPerSec ?? '—'}</td><td>${cell.decodeTokensPerSec ?? '—'}</td>
+        <td>prefill ${_formatRepeatedEvidence(cell.prefillStatistics)}<br>decode ${_formatRepeatedEvidence(cell.decodeStatistics)}</td>
+        <td>${cell.status || 'unknown'}</td>
       </tr>`).join('')}</tbody>
     </table>`;
   }
@@ -237,11 +268,12 @@ function _renderFullDepthExtras(profile) {
   if (stability.length) {
     html += `<table class="mp-extras-table">
       <caption>Generation Stability</caption>
-      <thead><tr><th>Num Predict</th><th>tok/s</th><th>Latency (ms)</th></tr></thead>
+      <thead><tr><th>Num Predict</th><th>tok/s</th><th>Latency (ms)</th><th>Evidence</th></tr></thead>
       <tbody>${stability.map(r => `<tr>
         <td>${r.numPredict ?? '?'}</td>
         <td>${(r.tokensPerSec ?? r.tokPerSec) != null ? Number(r.tokensPerSec ?? r.tokPerSec).toFixed(1) : '?'}</td>
         <td>${(r.totalLatencyMs ?? r.latencyMs) != null ? Math.round(r.totalLatencyMs ?? r.latencyMs) : '?'}</td>
+        <td>throughput ${_formatRepeatedEvidence(r.throughputStatistics)}<br>latency ${_formatRepeatedEvidence(r.latencyStatistics)}</td>
       </tr>`).join('')}</tbody>
     </table>`;
   }
@@ -252,6 +284,8 @@ function _renderFullDepthExtras(profile) {
     html += `<div class="mp-load-timing">
       ${(loadTiming.coldLoadMs ?? loadTiming.coldMs) != null ? `<span class="mp-load-timing-item">Cold: <strong>${((loadTiming.coldLoadMs ?? loadTiming.coldMs) / 1000).toFixed(1)}s</strong></span>` : ''}
       ${(loadTiming.hotLoadMs ?? loadTiming.hotMs) != null ? `<span class="mp-load-timing-item">Hot: <strong>${((loadTiming.hotLoadMs ?? loadTiming.hotMs) / 1000).toFixed(1)}s</strong></span>` : ''}
+      <span class="mp-load-timing-item">Cold evidence: ${_formatRepeatedEvidence(loadTiming.coldStatistics)}</span>
+      <span class="mp-load-timing-item">Hot evidence: ${_formatRepeatedEvidence(loadTiming.hotStatistics)}</span>
     </div>`;
   }
 
@@ -307,13 +341,18 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
   function renderMetricsRow() {
     const hero = _heroStat(seenMetrics.tokensPerSec, seenMetrics.baselineTokensPerSec);
     const stats = [];
-    if (seenMetrics.ttftMs != null) {
-      stats.push(_statCard(Math.round(seenMetrics.ttftMs) + ' ms', 'TTFT', '#9d8cff'));
+    if (seenMetrics.ttftMeasurement === 'streamed_wall_clock' && seenMetrics.ttftP50Ms != null) {
+      stats.push(_statCard(Math.round(seenMetrics.ttftP50Ms) + ' ms', 'TTFT p50', '#9d8cff'));
     }
-    if (seenMetrics.optimalNumCtx != null) {
-      const v = seenMetrics.optimalNumCtx;
+    if (seenMetrics.maxVerifiedContext != null) {
+      const v = seenMetrics.maxVerifiedContext;
       const lbl = v >= 1024 ? (v / 1024).toFixed(v % 1024 === 0 ? 0 : 1) + 'k' : v.toString();
-      stats.push(_statCard(lbl, 'optimal ctx', '#58a6ff'));
+      stats.push(_statCard(lbl, 'max verified', '#58a6ff'));
+    }
+    if (seenMetrics.recommendedInteractiveContext != null) {
+      const v = seenMetrics.recommendedInteractiveContext;
+      const lbl = v >= 1024 ? (v / 1024).toFixed(v % 1024 === 0 ? 0 : 1) + 'k' : v.toString();
+      stats.push(_statCard(lbl, 'interactive', '#4ecdc4'));
     }
     if (seenMetrics.degradationPct != null) {
       const accent = seenMetrics.degradationPct > 30 ? '#f85149' : seenMetrics.degradationPct > 10 ? '#d29922' : '#3fb950';
@@ -442,8 +481,13 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
           if (progress.metrics) {
             const m = progress.metrics;
             if (m.tokensPerSec != null) seenMetrics.tokensPerSec = m.tokensPerSec;
-            if (m.ttftMs != null) seenMetrics.ttftMs = m.ttftMs;
-            if (m.optimalNumCtx != null) seenMetrics.optimalNumCtx = m.optimalNumCtx;
+            const ttftP50Ms = m.ttftP50Ms ?? m.measurementQuality?.ttftP50Ms;
+            if (m.ttftMeasurement === 'streamed_wall_clock' && ttftP50Ms != null) {
+              seenMetrics.ttftP50Ms = ttftP50Ms;
+              seenMetrics.ttftMeasurement = m.ttftMeasurement;
+            }
+            if (m.maxVerifiedContext != null) seenMetrics.maxVerifiedContext = m.maxVerifiedContext;
+            if (m.recommendedInteractiveContext != null) seenMetrics.recommendedInteractiveContext = m.recommendedInteractiveContext;
             if (m.degradationPct != null) seenMetrics.degradationPct = m.degradationPct;
             if (m.vramUsedMiB != null) seenMetrics.vramUsedMiB = m.vramUsedMiB;
             if (m.measurementQuality) seenMetrics.measurementQuality = m.measurementQuality;
@@ -482,8 +526,12 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
     // Sync final values into seenMetrics so renderMetricsRow paints the
     // completed-state hero/stats consistently.
     if (p?.tokensPerSec != null) seenMetrics.tokensPerSec = p.tokensPerSec;
-    if (p?.ttftMs != null) seenMetrics.ttftMs = p.ttftMs;
-    if (p?.optimalNumCtx != null) seenMetrics.optimalNumCtx = p.optimalNumCtx;
+    if (p?.ttftMeasurement === 'streamed_wall_clock' && p?.ttftP50Ms != null) {
+      seenMetrics.ttftP50Ms = p.ttftP50Ms;
+      seenMetrics.ttftMeasurement = p.ttftMeasurement;
+    }
+    if (p?.maxVerifiedContext != null) seenMetrics.maxVerifiedContext = p.maxVerifiedContext;
+    if (p?.recommendedInteractiveContext != null) seenMetrics.recommendedInteractiveContext = p.recommendedInteractiveContext;
     if (p?.degradationPct != null) seenMetrics.degradationPct = p.degradationPct;
     if (p?.vramUsedMiB != null) seenMetrics.vramUsedMiB = p.vramUsedMiB;
     if (p?.measurementQuality) seenMetrics.measurementQuality = p.measurementQuality;
@@ -491,7 +539,9 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
     if (p?.spill) {
       const sp = p.spill.spillNumCtx;
       const spLbl = sp >= 1024 ? Math.round(sp / 1024) + 'k' : (sp || '?');
-      seenMetrics.spillState = p.spill.spillDetected
+      seenMetrics.spillState = p.spill.verified === false
+        ? 'Unknown'
+        : p.spill.spillDetected
         ? `Spills @ ${spLbl}`
         : 'None';
     }
@@ -519,22 +569,29 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
 
     const spillBadge = _renderSpillBadge(p);
     const fullExtras = depth === 'full' ? _renderFullDepthExtras(p) : '';
-    const finalMetrics = renderMetricsRow()
+    const benchmarkQualified = p?.benchmarkQualified === true;
+    const unqualifiedFull = depth === 'full' && !benchmarkQualified;
+    const qualification = benchmarkQualified
+      ? '<div class="mp-prof-qualification mp-prof-qualification--ok">Benchmark qualified</div>'
+      : `<div class="mp-prof-qualification mp-prof-qualification--warn">Not benchmark qualified${p?.qualificationFailures?.length ? `: ${p.qualificationFailures.join(', ')}` : ''}</div>`;
+    const finalMetrics = qualification + renderMetricsRow()
       + (spillBadge ? `<div class="mp-prof-spill-row">${spillBadge}</div>` : '')
       + fullExtras;
 
-    pushActivity(`Completed in ${_fmtDuration(elSec())}`);
+    pushActivity(`${unqualifiedFull ? 'Full profile incomplete and not qualified' : 'Completed'} in ${_fmtDuration(elSec())}`);
     heartbeatDone = true;
     clearInterval(heartbeat);
     const doneStatuses = steps.map(() => 'done');
     showPanel(steps.length, null, {
       statuses: doneStatuses,
-      panelCls: ' mp-prof-panel--done',
-      title: `<span class="mp-prof-title-check">✓</span><span class="mp-prof-title-text"><strong>${modelName}</strong> <span class="mp-prof-title-on">profiled on</span> <span class="mp-prof-title-host">${hostName}</span></span><span class="mp-prof-depth-chip">${depth}</span><span class="mp-prof-title-runtime">in ${_fmtDuration(elSec())}</span>`,
+      panelCls: unqualifiedFull ? ' mp-prof-panel--incomplete' : ' mp-prof-panel--done',
+      title: unqualifiedFull
+        ? `<span class="mp-prof-title-text"><strong>${modelName}</strong> <span class="mp-prof-title-on">Full profile incomplete — not qualified on</span> <span class="mp-prof-title-host">${hostName}</span></span><span class="mp-prof-depth-chip">${depth}</span><span class="mp-prof-title-runtime">in ${_fmtDuration(elSec())}</span>`
+        : `<span class="mp-prof-title-check">✓</span><span class="mp-prof-title-text"><strong>${modelName}</strong> <span class="mp-prof-title-on">profiled on</span> <span class="mp-prof-title-host">${hostName}</span></span><span class="mp-prof-depth-chip">${depth}</span><span class="mp-prof-title-runtime">in ${_fmtDuration(elSec())}</span>`,
       metrics: finalMetrics,
       chart
     });
-    if (btn) btn.textContent = 'Profiled ✓';
+    if (btn) btn.textContent = unqualifiedFull ? 'Not qualified' : 'Profiled ✓';
     window.dispatchEvent(new CustomEvent('mp:models-updated'));
   } catch (err) {
     heartbeatDone = true;

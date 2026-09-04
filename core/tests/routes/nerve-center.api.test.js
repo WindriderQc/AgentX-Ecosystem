@@ -11,6 +11,8 @@
 process.env.OLLAMA_HOST = 'http://primary:11434';
 process.env.OLLAMA_HOST_SECONDARY = 'http://secondary:11434';
 process.env.OLLAMA_HOST_TERTIARY = 'http://tertiary:11434';
+const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
+process.env.AGENTX_BENCHMARK_TOKEN = 'nerve-center-benchmark-secret';
 
 const mockRouterTaskOverrideState = new Map();
 
@@ -134,6 +136,17 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
   listBenchmarkClaims: jest.fn()
 }));
 
+jest.mock('../../src/services/runtimeCoordinationService', () => ({
+  assertWorkloadAdmission: jest.fn(() => Promise.resolve({
+    admitted: true,
+    admissionId: 'admission-core',
+    generation: 'admission-generation-core',
+    principal: 'benchmark-service',
+    workloadId: 'b1',
+    hosts: ['http://primary:11434']
+  }))
+}));
+
 const mockGetPortalStatus = jest.fn();
 jest.mock('../../src/services/portalStatusService', () => ({
   getPortalStatus: (...args) => mockGetPortalStatus(...args)
@@ -145,6 +158,7 @@ const request = require('supertest');
 
 const alertService = require('../../src/services/alertService');
 const hostPrefService = require('../../src/services/hostPreferenceService');
+const runtimeCoordinationService = require('../../src/services/runtimeCoordinationService');
 const {
   HOSTS,
   TASK_MODELS,
@@ -162,6 +176,11 @@ app.use('/api/nerve-center', require('../../routes/nerve-center'));
 // ── Test suite ──────────────────────────────────────────────────────────────
 
 describe('Nerve Center API Routes', () => {
+  afterAll(() => {
+    if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
+    else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
+  });
+
   beforeEach(async () => {
     jest.clearAllMocks();
     mockRouterTaskOverrideState.clear();
@@ -1270,6 +1289,49 @@ describe('Nerve Center API Routes', () => {
       expect(Number.isNaN(Date.parse(res.body.data[0].live.observedAt))).toBe(false);
     });
 
+    it('redacts every claim and workload capability from the public host projection', async () => {
+      hostPrefService.getAll.mockResolvedValue([{
+        hostUrl: 'http://primary:11434',
+        hostKey: 'primary',
+        status: 'benchmarking',
+        pinnedModels: [],
+        lastBenchmarkReleaseReceipt: { claimGeneration: 'released-claim-secret' },
+        benchmarkClaim: {
+          batchId: 'batch-public-summary',
+          claimGeneration: 'claim-secret',
+          admissionId: 'admission-secret',
+          admissionGeneration: 'admission-generation-secret',
+          admissionPrincipal: 'benchmark-service',
+          prevStatus: 'ready',
+          finalizeToken: 'finalizer-secret',
+          preClaimRuntime: {
+            exact: true,
+            identityDigest: 'snapshot-secret',
+            residents: [{ model: 'private-resident', digest: 'private-digest' }]
+          }
+        }
+      }]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/host-preferences')
+        .expect(200);
+
+      expect(res.body.data[0].benchmarkClaim).toEqual(expect.objectContaining({
+        batchId: 'batch-public-summary',
+        prevStatus: 'ready',
+        snapshotExact: true,
+        snapshotResidentCount: 1,
+        finalizing: true
+      }));
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('claimGeneration');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('admissionId');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('admissionGeneration');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('admissionPrincipal');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('preClaimRuntime');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('finalizeToken');
+      expect(res.body.data[0]).not.toHaveProperty('lastBenchmarkReleaseReceipt');
+    });
+
     it('normalizes duplicate persisted primary keys to configured active keys', async () => {
       hostPrefService.getAll.mockResolvedValue([
         {
@@ -1322,15 +1384,22 @@ describe('Nerve Center API Routes', () => {
     const HOST_URL = 'http://primary:11434';
     const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
     const path = `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim`;
+    const benchmarkRequest = () => request(app)
+      .post(path)
+      .set('X-AgentX-Benchmark-Token', 'nerve-center-benchmark-secret');
+    const admissionProof = {
+      admissionId: 'admission-core',
+      admissionGeneration: 'admission-generation-core'
+    };
 
     it('returns 400 when batchId missing', async () => {
-      const res = await request(app).post(path).send({}).expect(400);
+      const res = await benchmarkRequest().send({}).expect(400);
       expect(res.body.status).toBe('error');
       expect(res.body.message).toMatch(/batchId/);
     });
 
     it('returns 400 when claimGeneration is missing', async () => {
-      const res = await request(app).post(path).send({ batchId: 'b1' }).expect(400);
+      const res = await benchmarkRequest().send({ batchId: 'b1' }).expect(400);
       expect(res.body.status).toBe('error');
       expect(res.body.message).toMatch(/claimGeneration/);
       expect(hostPrefService.claimBenchmark).not.toHaveBeenCalled();
@@ -1342,9 +1411,8 @@ describe('Nerve Center API Routes', () => {
         pref: { hostUrl: HOST_URL, status: 'benchmarking', benchmarkClaim: { batchId: 'b1', prevStatus: 'ready' } }
       });
 
-      const res = await request(app)
-        .post(path)
-        .send({ batchId: 'b1', claimGeneration: CLAIM_GENERATION, estimatedDurationMs: 60000 })
+      const res = await benchmarkRequest()
+        .send({ batchId: 'b1', claimGeneration: CLAIM_GENERATION, estimatedDurationMs: 60000, ...admissionProof })
         .expect(200);
 
       expect(res.body.status).toBe('success');
@@ -1353,7 +1421,12 @@ describe('Nerve Center API Routes', () => {
         HOST_URL,
         'b1',
         60000,
-        { claimGeneration: CLAIM_GENERATION }
+        {
+          claimGeneration: CLAIM_GENERATION,
+          admissionId: 'admission-core',
+          admissionGeneration: 'admission-generation-core',
+          admissionPrincipal: 'benchmark-service'
+        }
       );
     });
 
@@ -1367,11 +1440,11 @@ describe('Nerve Center API Routes', () => {
         }
       });
 
-      const res = await request(app)
-        .post(path)
+      const res = await benchmarkRequest()
         .send({
           batchId: 'manual-b1',
           claimGeneration: CLAIM_GENERATION,
+          ...admissionProof,
           estimatedDurationMs: 60000,
           source: 'manual',
           owner: 'operator',
@@ -1387,6 +1460,9 @@ describe('Nerve Center API Routes', () => {
         60000,
         {
           claimGeneration: CLAIM_GENERATION,
+          admissionId: 'admission-core',
+          admissionGeneration: 'admission-generation-core',
+          admissionPrincipal: 'benchmark-service',
           source: 'manual',
           owner: 'operator',
           note: 'scout',
@@ -1401,9 +1477,8 @@ describe('Nerve Center API Routes', () => {
         reason: 'host already claimed by batch other'
       });
 
-      const res = await request(app)
-        .post(path)
-        .send({ batchId: 'b2', claimGeneration: CLAIM_GENERATION })
+      const res = await benchmarkRequest()
+        .send({ batchId: 'b2', claimGeneration: CLAIM_GENERATION, ...admissionProof })
         .expect(409);
 
       expect(res.body.status).toBe('error');
@@ -1413,9 +1488,8 @@ describe('Nerve Center API Routes', () => {
     it('returns 500 when service throws', async () => {
       hostPrefService.claimBenchmark.mockRejectedValue(new Error('db down'));
 
-      const res = await request(app)
-        .post(path)
-        .send({ batchId: 'b3', claimGeneration: CLAIM_GENERATION })
+      const res = await benchmarkRequest()
+        .send({ batchId: 'b3', claimGeneration: CLAIM_GENERATION, ...admissionProof })
         .expect(500);
 
       expect(res.body.status).toBe('error');
@@ -1426,6 +1500,10 @@ describe('Nerve Center API Routes', () => {
   describe('POST /host-preferences/:hostUrl/benchmark-claim/:batchId/heartbeat', () => {
     const HOST_URL = 'http://primary:11434';
     const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
+    const heartbeatPath = `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`;
+    const benchmarkRequest = () => request(app)
+      .post(heartbeatPath)
+      .set('X-AgentX-Benchmark-Token', 'nerve-center-benchmark-secret');
 
     it('refreshes an active claim heartbeat', async () => {
       hostPrefService.heartbeatBenchmarkClaim.mockResolvedValue({
@@ -1433,9 +1511,14 @@ describe('Nerve Center API Routes', () => {
         pref: { hostUrl: HOST_URL, status: 'benchmarking', benchmarkClaim: { batchId: 'b1' } }
       });
 
-      const res = await request(app)
-        .post(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`)
-        .send({ claimGeneration: CLAIM_GENERATION, owner: 'operator', heartbeatTtlMs: 30000 })
+      const res = await benchmarkRequest()
+        .send({
+          claimGeneration: CLAIM_GENERATION,
+          admissionId: 'admission-core',
+          admissionGeneration: 'admission-generation-core',
+          owner: 'operator',
+          heartbeatTtlMs: 30000
+        })
         .expect(200);
 
       expect(res.body.status).toBe('success');
@@ -1443,7 +1526,15 @@ describe('Nerve Center API Routes', () => {
       expect(hostPrefService.heartbeatBenchmarkClaim).toHaveBeenCalledWith(
         HOST_URL,
         'b1',
-        expect.objectContaining({ claimGeneration: CLAIM_GENERATION, owner: 'operator', heartbeatTtlMs: 30000 })
+        expect.objectContaining({
+          claimGeneration: CLAIM_GENERATION,
+          admissionId: 'admission-core',
+          admissionGeneration: 'admission-generation-core',
+          admissionPrincipal: 'benchmark-service',
+          requireAdmissionProof: true,
+          owner: 'operator',
+          heartbeatTtlMs: 30000
+        })
       );
     });
 
@@ -1453,9 +1544,12 @@ describe('Nerve Center API Routes', () => {
         reason: 'claim belongs to batch other'
       });
 
-      const res = await request(app)
-        .post(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`)
-        .send({ claimGeneration: CLAIM_GENERATION })
+      const res = await benchmarkRequest()
+        .send({
+          claimGeneration: CLAIM_GENERATION,
+          admissionId: 'admission-core',
+          admissionGeneration: 'admission-generation-core'
+        })
         .expect(409);
 
       expect(res.body.status).toBe('error');
@@ -1466,6 +1560,10 @@ describe('Nerve Center API Routes', () => {
   describe('DELETE /host-preferences/:hostUrl/benchmark-claim/:batchId', () => {
     const HOST_URL = 'http://primary:11434';
     const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
+    const releasePath = (batchId) => `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/${batchId}`;
+    const benchmarkRequest = (batchId) => request(app)
+      .delete(releasePath(batchId))
+      .set('X-AgentX-Benchmark-Token', 'nerve-center-benchmark-secret');
 
     it('releases claim and returns released=true', async () => {
       hostPrefService.releaseBenchmarkClaim.mockResolvedValue({
@@ -1473,9 +1571,12 @@ describe('Nerve Center API Routes', () => {
         pref: { hostUrl: HOST_URL, status: 'ready' }
       });
 
-      const res = await request(app)
-        .delete(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1`)
-        .send({ claimGeneration: CLAIM_GENERATION })
+      const res = await benchmarkRequest('b1')
+        .send({
+          claimGeneration: CLAIM_GENERATION,
+          admissionId: 'admission-core',
+          admissionGeneration: 'admission-generation-core'
+        })
         .expect(200);
 
       expect(res.body.status).toBe('success');
@@ -1483,7 +1584,13 @@ describe('Nerve Center API Routes', () => {
       expect(hostPrefService.releaseBenchmarkClaim).toHaveBeenCalledWith(
         HOST_URL,
         'b1',
-        { claimGeneration: CLAIM_GENERATION }
+        {
+          claimGeneration: CLAIM_GENERATION,
+          admissionId: 'admission-core',
+          admissionGeneration: 'admission-generation-core',
+          admissionPrincipal: 'benchmark-service',
+          requireAdmissionProof: true
+        }
       );
     });
 
@@ -1493,9 +1600,20 @@ describe('Nerve Center API Routes', () => {
         reason: 'claim belongs to batch other'
       });
 
-      const res = await request(app)
-        .delete(`/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/bX`)
-        .send({ claimGeneration: CLAIM_GENERATION })
+      runtimeCoordinationService.assertWorkloadAdmission.mockResolvedValueOnce({
+        admitted: true,
+        admissionId: 'admission-core',
+        generation: 'admission-generation-core',
+        principal: 'benchmark-service',
+        workloadId: 'bX',
+        hosts: [HOST_URL]
+      });
+      const res = await benchmarkRequest('bX')
+        .send({
+          claimGeneration: CLAIM_GENERATION,
+          admissionId: 'admission-core',
+          admissionGeneration: 'admission-generation-core'
+        })
         .expect(200);
 
       expect(res.body.data.released).toBe(false);
@@ -1505,7 +1623,17 @@ describe('Nerve Center API Routes', () => {
   describe('GET /host-preferences/benchmark-claims/active', () => {
     it('returns active claims list', async () => {
       hostPrefService.listBenchmarkClaims.mockResolvedValue([
-        { hostUrl: 'http://primary:11434', batchId: 'b1', prevStatus: 'ready' }
+        {
+          hostUrl: 'http://primary:11434',
+          batchId: 'b1',
+          claimGeneration: 'must-remain-secret',
+          admissionId: 'must-remain-secret',
+          admissionGeneration: 'must-remain-secret',
+          preClaimRuntime: { identityDigest: 'must-remain-secret' },
+          finalizeToken: 'must-remain-secret',
+          prevStatus: 'ready',
+          snapshotExact: true
+        }
       ]);
 
       const res = await request(app)
@@ -1515,6 +1643,12 @@ describe('Nerve Center API Routes', () => {
       expect(res.body.status).toBe('success');
       expect(res.body.data.claims).toHaveLength(1);
       expect(res.body.data.count).toBe(1);
+      expect(res.body.data.claims[0].snapshotExact).toBe(true);
+      expect(res.body.data.claims[0]).not.toHaveProperty('claimGeneration');
+      expect(res.body.data.claims[0]).not.toHaveProperty('admissionId');
+      expect(res.body.data.claims[0]).not.toHaveProperty('admissionGeneration');
+      expect(res.body.data.claims[0]).not.toHaveProperty('preClaimRuntime');
+      expect(res.body.data.claims[0]).not.toHaveProperty('finalizeToken');
     });
   });
 });

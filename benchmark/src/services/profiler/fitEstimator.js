@@ -125,13 +125,15 @@ function measuredFitLevel({ vramPct, spillDetected, reliability }) {
  * Excludes spilled, near-full (>85% VRAM), and MoE profiles: the first two are
  * memory-CAPACITY bound and MoE runs on active (not total) params, so all three
  * would distort a dense bandwidth constant. Falls back to all positive-throughput
- * profiles if filtering leaves nothing (e.g. an all-MoE small-GPU host).
+ * profiles only when GPU residency was positively attested. Unknown residency
+ * is not equivalent to "no spill" and must never calibrate a host model.
  */
 function calibrationSet(measured) {
   const all = (measured || []).filter(m => m.paramB && m.tokensPerSec > 0);
-  const clean = all.filter(m =>
-    !m.spillDetected && (m.vramPct == null || m.vramPct <= 85) && !isMoE(m.modelName, m.paramB));
-  return clean.length ? clean : all;
+  return all.filter(m =>
+    m.spillVerified === true && m.spillDetected === false
+    && (m.vramPct == null || m.vramPct <= 85)
+    && !isMoE(m.modelName, m.paramB));
 }
 
 function _confidence(ks) {
@@ -146,7 +148,8 @@ function _confidence(ks) {
 function moeCalibrationSet(measured) {
   return (measured || []).filter(m =>
     m.paramB && m.tokensPerSec > 0 && isMoE(m.modelName, m.paramB) &&
-    !m.spillDetected && (m.vramPct == null || m.vramPct <= 85));
+    m.spillVerified === true && m.spillDetected === false
+    && (m.vramPct == null || m.vramPct <= 85));
 }
 
 /**
@@ -307,21 +310,22 @@ function compositeScore(dims, useCase) {
 /** Most capable model measured to run cleanly (no spill, not maxed). */
 function pickRecommended(measured) {
   const safe = (measured || [])
-    .filter(m => !m.spillDetected && (m.vramPct == null || m.vramPct <= 90))
+    .filter(m => m.spillVerified === true && m.spillDetected === false && (m.vramPct == null || m.vramPct <= 90))
     .sort((a, b) => (b.paramB || 0) - (a.paramB || 0) || (b.tokensPerSec || 0) - (a.tokensPerSec || 0));
   if (!safe.length) return null;
   const top = safe[0];
   const bits = ['largest model measured to run without spill'];
   if (top.vramPct != null) bits.push(`${top.vramPct}% VRAM`);
   if (top.tokensPerSec != null) bits.push(`${top.tokensPerSec} tok/s`);
-  if (top.optimalNumCtx) bits.push(`up to ${top.optimalNumCtx} ctx`);
+  if (top.recommendedInteractiveContext) bits.push(`interactive ${top.recommendedInteractiveContext} ctx`);
+  if (top.maxVerifiedContext) bits.push(`max verified ${top.maxVerifiedContext} ctx`);
   return { modelName: top.modelName, reason: bits.join(' · ') };
 }
 
 /** Highest benchmark-scored model that also fits cleanly. */
 function pickBestBenchmarked(measured) {
   const scored = (measured || [])
-    .filter(m => !m.spillDetected && (m.vramPct == null || m.vramPct <= 90) && m.score != null)
+    .filter(m => m.spillVerified === true && m.spillDetected === false && (m.vramPct == null || m.vramPct <= 90) && m.score != null)
     .sort((a, b) => (b.score || 0) - (a.score || 0));
   if (!scored.length) return null;
   const top = scored[0];

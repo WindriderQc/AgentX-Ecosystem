@@ -25,6 +25,7 @@ const {
     combineMongoFilters
 } = require('../../src/services/benchmark/resultsExplorerEvidence');
 const { DIVERGENCE_THRESHOLD } = require('../../src/services/benchmark/multiJudge');
+const { runManagedWorkload } = require('../../src/services/benchmark/workloadAdmissionLifecycle');
 
 const ADVANCED_RESULTS_MAX_LIMIT = 5000;
 const ADVANCED_RESULTS_DEFAULT_LIMIT = 1000;
@@ -645,6 +646,14 @@ router.post('/results/:id/rejudge', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Result ID')) return;
 
+        const existingResult = await BenchmarkResult.findById(req.params.id)
+            .select('batch_id trust_candidate_id trust_prompt_id')
+            .lean();
+        if (!existingResult) {
+            return res.status(404).json({ status: 'error', error: 'Result not found' });
+        }
+        if (rejectStrictTrustResultMutation(res, existingResult)) return;
+
         const readiness = await resolveReadyJudgeTarget({
             model: req.body.judge_model,
             host: req.body.judge_host
@@ -659,7 +668,13 @@ router.post('/results/:id/rejudge', async (req, res) => {
 
         logger.info('Re-judging result', { resultId: req.params.id, judgeConfig });
 
-        const result = await judgeResult(req.params.id, judgeConfig);
+        const workloadId = `rejudge-result:${req.params.id}`;
+        const result = await runManagedWorkload(workloadId, {
+            requestId: workloadId,
+            kind: 'judge',
+            batchId: existingResult.batch_id ? String(existingResult.batch_id) : null,
+            hosts: [judgeConfig.host]
+        }, ({ signal }) => judgeResult(req.params.id, { ...judgeConfig, cancelSignal: signal }));
 
         res.json({
             status: 'success',

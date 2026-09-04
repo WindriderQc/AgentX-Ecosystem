@@ -10,6 +10,7 @@ const { getFetchOptions } = require('../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
 const { DEFAULT_SCORING_CATEGORY, normalizeScoringCategory } = require('./scoring/scoringConfigs');
+const { getBenchmarkClaimIdentity } = require('../clients/coreApiClient');
 const {
     createJudgeAbortContext,
     rethrowIfJudgeCancelled,
@@ -48,6 +49,7 @@ function buildGenerateRequest(judgeConfig, prompt, numPredict, callerDetail) {
             responseMode: 'normalized',
             think: resolveThink(judgeConfig),
             callerDetail: callerDetail || 'benchmark-reference-scorer',
+            ...(getBenchmarkClaimIdentity(judgeConfig.host, judgeConfig.batch_id) || {}),
             options: commonOptions
         }
     };

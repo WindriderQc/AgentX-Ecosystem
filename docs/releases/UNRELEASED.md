@@ -6,6 +6,13 @@ v0.1.1.
 
 ## Product trust and experience
 
+- Core now coordinates deployment maintenance and every Benchmark workload
+  through one generation-fenced, mutually exclusive lease record. Exact
+  service authentication, redacted status, idempotent retry, TTL recovery, and
+  identity-bound heartbeat/release receipts close deploy-vs-benchmark races.
+- Benchmark host release now restores and verifies the exact pre-claim Ollama
+  resident set, including digest, artifact/VRAM size, context, and expiry,
+  before clearing the fence, and returns an identity-bound restoration receipt.
 - Core now admits a dedicated runtime-bridge credential only on the exact
   `/api/openclaw-ollama` family. Wrong, absent, or near-prefix credentials fail
   at the public-exposure guard, and the mounted bridge still revalidates the

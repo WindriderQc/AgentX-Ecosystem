@@ -6,6 +6,7 @@ jest.mock('../../config/logger', () => ({
 
 const mockFind = jest.fn();
 const mockFindOneAndUpdate = jest.fn();
+const mockUpdateOne = jest.fn();
 const mockFindOne = jest.fn();
 const mockGetBatch = jest.fn();
 
@@ -14,6 +15,7 @@ jest.mock('../../models/HostPreference', () => {
   Model.find = mockFind;
   Model.findOne = mockFindOne;
   Model.findOneAndUpdate = mockFindOneAndUpdate;
+  Model.updateOne = mockUpdateOne;
   return Model;
 });
 
@@ -24,6 +26,7 @@ jest.mock('../../src/services/benchmarkServiceClient', () => ({
 }));
 
 const svc = require('../../src/services/hostPreferenceService');
+const originalFetch = global.fetch;
 
 function claim({
   hostUrl,
@@ -40,6 +43,7 @@ function claim({
     ? null
     : new Date(Date.now() - heartbeatAgeMinutes * 60 * 1000);
   return {
+    _id: `${hostUrl}-id`,
     hostUrl,
     status: 'benchmarking',
     benchmarkClaim: {
@@ -50,7 +54,18 @@ function claim({
       estimatedDurationMs: estimatedMinutes != null ? estimatedMinutes * 60 * 1000 : null,
       source,
       heartbeatAt,
-      heartbeatTtlMs: heartbeatTtlMinutes != null ? heartbeatTtlMinutes * 60 * 1000 : null
+      heartbeatTtlMs: heartbeatTtlMinutes != null ? heartbeatTtlMinutes * 60 * 1000 : null,
+      preClaimRuntime: claimGeneration ? (() => {
+        const snapshot = {
+        schemaVersion: 1,
+        exact: true,
+        capturedAt: new Date(),
+        source: 'ollama_ps',
+        residents: []
+        };
+        snapshot.identityDigest = svc.benchmarkRuntimeSnapshotIdentity(snapshot);
+        return snapshot;
+      })() : null
     }
   };
 }
@@ -69,8 +84,30 @@ function mockReleaseHappyPath(claims) {
   mockFindOne.mockImplementation((q) => ({
     lean: () => Promise.resolve(byHost.get(q.hostUrl) || null)
   }));
-  mockFindOneAndUpdate.mockImplementation(() => ({
-    lean: () => Promise.resolve({ hostUrl: 'x', status: 'ready' })
+  mockFindOneAndUpdate.mockImplementation((query, update) => ({
+    lean: () => {
+      const current = byHost.get(query.hostUrl);
+      if (update?.$set?.['benchmarkClaim.finalizeToken']) {
+        const renewed = {
+          ...current,
+          benchmarkClaim: {
+            ...current.benchmarkClaim,
+            heartbeatAt: update.$set['benchmarkClaim.heartbeatAt'],
+            heartbeatTtlMs: update.$set['benchmarkClaim.heartbeatTtlMs'],
+            finalizeToken: update.$set['benchmarkClaim.finalizeToken'],
+            finalizingAt: update.$set['benchmarkClaim.finalizingAt']
+          }
+        };
+        byHost.set(query.hostUrl, renewed);
+        return Promise.resolve(renewed);
+      }
+      if (update?.$set?.loadedModels) {
+        const restored = { ...current, ...update.$set };
+        byHost.set(query.hostUrl, restored);
+        return Promise.resolve(restored);
+      }
+      return Promise.resolve({ hostUrl: query.hostUrl, status: 'ready' });
+    }
   }));
 }
 
@@ -78,7 +115,11 @@ describe('reapStaleBenchmarkClaims', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetBatch.mockResolvedValue(null);
+    mockUpdateOne.mockResolvedValue({ matchedCount: 1 });
+    global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ models: [] }) }));
   });
+
+  afterAll(() => { global.fetch = originalFetch; });
 
   it('returns zero reaped when no claims exist', async () => {
     mockFindReturning([]);
@@ -116,7 +157,7 @@ describe('reapStaleBenchmarkClaims', () => {
     );
   });
 
-  it('releases a stale legacy claim without a generation through an exact CAS', async () => {
+  it('keeps a stale legacy claim fenced when no exact runtime snapshot exists', async () => {
     const claims = [claim({
       hostUrl: 'h-legacy',
       batchId: 'b-legacy',
@@ -131,17 +172,20 @@ describe('reapStaleBenchmarkClaims', () => {
     expect(r.reaped).toHaveLength(1);
     expect(r.reaped[0]).toEqual(expect.objectContaining({
       hostUrl: 'h-legacy',
-      released: true,
-      reason: null
+      released: false,
+      reason: expect.stringContaining('Exact pre-claim runtime snapshot is unavailable')
     }));
+    expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         'benchmarkClaim.batchId': 'b-legacy',
         'benchmarkClaim.claimGeneration': null,
         'benchmarkClaim.claimedAt': claims[0].benchmarkClaim.claimedAt
       }),
-      expect.any(Object),
-      expect.any(Object)
+      expect.objectContaining({
+        $set: expect.objectContaining({ 'benchmarkClaim.heartbeatTtlMs': expect.any(Number) })
+      }),
+      { new: true }
     );
   });
 
@@ -275,6 +319,22 @@ describe('reapStaleBenchmarkClaims', () => {
     // graceFactor 1.0 → 20 min grace. Age 22 > 20 → reap.
     const r = await svc.reapStaleBenchmarkClaims({ graceFactor: 1.0 });
     expect(r.reaped).toHaveLength(1);
+  });
+
+  it.each([
+    [{ graceFactor: 0 }, 'graceFactor'],
+    [{ graceFactor: -1 }, 'graceFactor'],
+    [{ graceFactor: 11 }, 'graceFactor'],
+    [{ hardCapMs: 0 }, 'hardCapMs'],
+    [{ hardCapMs: -1000 }, 'hardCapMs'],
+    [{ hardCapMs: 999 }, 'hardCapMs'],
+    [{ hardCapMs: 24 * 60 * 60 * 1000 + 1 }, 'hardCapMs']
+  ])('rejects unsafe reaper bounds %j', async (options, field) => {
+    await expect(svc.reapStaleBenchmarkClaims(options)).rejects.toMatchObject({
+      code: 'BENCHMARK_REAPER_OPTIONS_INVALID',
+      message: expect.stringContaining(field)
+    });
+    expect(mockFind).not.toHaveBeenCalled();
   });
 });
 

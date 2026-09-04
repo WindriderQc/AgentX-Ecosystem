@@ -102,11 +102,22 @@ function benchmarkCredentialPath(pathname, method) {
   }
   if (path === '/api/nerve-center/host-preferences') return verb === 'GET';
   if (path === '/api/nerve-center/host-preferences/benchmark-claims/active') return verb === 'GET';
+  if (path === '/api/nerve-center/workload-admissions') return verb === 'POST';
+  if (/^\/api\/nerve-center\/workload-admissions\/[^/]+\/heartbeat$/.test(path)) {
+    return verb === 'POST';
+  }
+  if (/^\/api\/nerve-center\/workload-admissions\/[^/]+\/release-receipt$/.test(path)) {
+    return verb === 'POST';
+  }
+  if (/^\/api\/nerve-center\/workload-admissions\/[^/]+$/.test(path)) {
+    return verb === 'DELETE';
+  }
   if (!path.startsWith('/api/nerve-center/host-preferences/')) return false;
   return (verb === 'POST' && (
     path.endsWith('/reload')
     || path.endsWith('/benchmark-claim')
     || /\/benchmark-claim\/[^/]+\/heartbeat$/.test(path)
+    || /\/benchmark-claim\/[^/]+\/release-receipt$/.test(path)
   )) || (verb === 'DELETE' && /\/benchmark-claim\/[^/]+$/.test(path));
 }
 

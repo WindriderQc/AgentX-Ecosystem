@@ -298,7 +298,8 @@ const BenchmarkBatchSchema = new mongoose.Schema({
         latency: { type: Number, default: null },
         tokens: { type: Number, default: null },
         tokens_per_sec: { type: Number, default: null },
-        time_to_first_token_ms: { type: Number, default: null }
+        time_to_first_token_ms: { type: Number, default: null },
+        prompt_eval_duration_ms: { type: Number, default: null }
     },
 
     // Detailed execution metrics
@@ -337,10 +338,12 @@ const BenchmarkBatchSchema = new mongoose.Schema({
             hostId: { type: String, default: null },
             status: { type: String, default: 'pass' },
             source: { type: String, default: 'benchmark_host_test' },
+            persistenceReceipt: { type: String, default: null },
             tokensPerSec: { type: Number, default: null },
             promptEvalTokensPerSec: { type: Number, default: null },
             latencyMs: { type: Number, default: null },
             timeToFirstTokenMs: { type: Number, default: null },
+            ttftMeasurement: { type: String, enum: ['streamed_wall_clock'], default: undefined },
             vramUsedMiB: { type: Number, default: null },
             vramTotalMiB: { type: Number, default: null },
             numCtx: { type: Number, default: null },

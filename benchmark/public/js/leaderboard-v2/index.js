@@ -481,7 +481,8 @@ async function enrichWithPerfData(rankings) {
         const rows = result.value?.data?.results || [];
         if (rows.length === 0) return;
 
-        const latestBaseline = rows.find(r => r?.performance_baseline?.timeToFirstTokenMs != null)?.performance_baseline || null;
+        const latestBaseline = rows.find(r => r?.performance_baseline?.ttftMeasurement === 'streamed_wall_clock'
+          && r?.performance_baseline?.timeToFirstTokenMs != null)?.performance_baseline || null;
         entry.hostTtft = latestBaseline?.timeToFirstTokenMs ?? null;
 
         // Derive most frequently used judge model for this entry

@@ -15,8 +15,10 @@ const HostPerformanceSnapshotSchema = new mongoose.Schema({
   hostId:                   String,
   tokensPerSec:             Number,
   promptEvalTokensPerSec:   Number,
+  promptEvalDurationMs:     Number,
   latencyMs:                Number,
   timeToFirstTokenMs:       Number,
+  ttftMeasurement:          { type: String, enum: ['streamed_wall_clock'], default: undefined },
   promptTokens:             Number,
   requestedPromptTokens:    Number,
   promptWorkloadMode:       String,
@@ -24,6 +26,7 @@ const HostPerformanceSnapshotSchema = new mongoose.Schema({
   vramUsedMiB:              Number,
   vramTotalMiB:             Number,
   numCtx:                   Number,
+  observedNumCtx:           Number,
   numCtxSource:             String,
   source:                   { type: String, default: 'benchmark_host_test' },
   testedAt: {

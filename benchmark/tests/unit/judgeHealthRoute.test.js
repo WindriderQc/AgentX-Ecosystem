@@ -3,6 +3,10 @@
 const express = require('express');
 const request = require('supertest');
 
+jest.mock('../../src/services/benchmark/workloadAdmissionLifecycle', () => ({
+  withManagedWorkloadRoute: (_kind, _resolveOptions, handler) => handler
+}));
+
 jest.mock('../../src/services/judgeValidation', () => ({
   runHealthCheck: jest.fn(async () => ({ healthy: true })),
 }));

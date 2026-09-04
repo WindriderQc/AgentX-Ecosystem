@@ -28,7 +28,7 @@ const { benchmarkFetch: fetch } = require('./http');
 const { resolveJudgeHost } = require('./judgeHostResolution');
 const { groupModelsByHost, createCurrentTestPersistenceStrategy } = require('./batchHelpers');
 const { persistSuccessfulResult, persistFailedResult } = require('./batchResultPersistence');
-const { detectDedication, releaseAllDedication, restoreAllDedication } = require('./dedicationLifecycle');
+const { detectDedication, releaseAllDedication } = require('./dedicationLifecycle');
 const { findActiveProfilingForHost } = require('../profiler/activeProfileState');
 const { capturePerformanceBaseline } = require('./performanceBaseline');
 const { evaluateAndPersistEarlyStop, EARLY_STOP_MIN_JUDGED } = require('./earlyStop');
@@ -49,6 +49,7 @@ const { createResumeRevalidation, RESUME_CODES } = require('./resumeRevalidation
 const { checkBatchPreflight, executionModelsFromHostGroups, preflightCounts, runBatchPreflight } = require('./batchPreflightLifecycle');
 const { executionHost, normalizeBatchTargets } = require('../../../../shared/benchmarkTargetContract');
 const { executeHarnessTarget, resolveHarnessTarget } = require('./harnessBrokerClient');
+const { getBenchmarkClaimIdentity, releaseWorkloadAdmission } = require('../../clients/coreApiClient');
 
 // A throughput batch can have one in-flight Core request per host. Keep the
 // controllers grouped by the exact batch id so the stop route can interrupt
@@ -82,7 +83,7 @@ function registerActiveBatchController(batchId, controller) {
     };
 }
 
-function abortActiveBatchRequests(batchId) {
+function abortActiveBatchRequests(batchId, options = {}) {
     const key = String(batchId);
     const controllers = activeBatchControllers.get(key);
     if (!controllers) {
@@ -93,10 +94,15 @@ function abortActiveBatchRequests(batchId) {
     for (const controller of controllers) {
         if (controller.signal.aborted) continue;
 
-        userStoppedControllers.add(controller);
-        const reason = new Error(`Benchmark batch ${key} stopped by user`);
-        reason.name = 'BenchmarkBatchStoppedError';
-        reason.code = 'BENCHMARK_BATCH_STOPPED';
+        const userInitiated = options.userInitiated !== false;
+        if (userInitiated) userStoppedControllers.add(controller);
+        const reason = options.reason instanceof Error
+            ? options.reason
+            : new Error(`Benchmark batch ${key} stopped by user`);
+        if (userInitiated) {
+            reason.name = 'BenchmarkBatchStoppedError';
+            reason.code = 'BENCHMARK_BATCH_STOPPED';
+        }
         controller.abort(reason);
         abortedRequestCount += 1;
     }
@@ -146,6 +152,8 @@ async function runBatchOrchestrator({
         handleGracefulStop = () => {};
     }
     const batchCancellationController = new AbortController();
+    let assertClaimActive = () => true;
+    const claimIdentityFor = hostUrl => getBenchmarkClaimIdentity(hostUrl, String(batchId));
     let unregisterBatchCancellation = () => false;
     let orchestrationCompleted = false;
     const normalizedTargets = normalizeBatchTargets({ host: defaultHost, models, targets });
@@ -337,6 +345,7 @@ async function runBatchOrchestrator({
                 stream: false,
                 responseMode: 'normalized',
                 callerDetail: `benchmark-batch-${batchId}`,
+                ...(claimIdentityFor(hostUrl) || {}),
                 options: ollamaOptions,
                 ...(sendThink ? {
                     suppressThinking: !think,
@@ -388,19 +397,13 @@ async function runBatchOrchestrator({
             const responseText = useChat ? (data.message?.content || '') : (data.response || '');
             const tokenEstimateText = `${responseText || ''}${data.thinking || data.message?.thinking || ''}`;
             const tokens = data.eval_count || Math.ceil(tokenEstimateText.length / 4);
-            // NOTE: this is NOT a true streaming TTFT. We call Ollama with
-            // stream:false, so we cannot observe when the first token actually
-            // arrives over the wire. `prompt_eval_duration` is Ollama's
-            // self-reported time to ingest+evaluate the prompt before
-            // generation begins — a reasonable lower bound for TTFT, but it
-            // excludes queueing, model-load, and network. Field is named
-            // `time_to_first_token_ms` for backwards compatibility with
-            // existing dashboards/leaderboards; treat it as "prompt eval
-            // duration" semantically. Real streaming TTFT requires switching
-            // to stream:true and timing the first chunk — out of scope here.
-            const timeToFirstTokenMs = data.prompt_eval_duration > 0
+            // Non-streamed batch execution cannot observe wall-to-wall TTFT.
+            // Preserve Ollama's prompt evaluation duration under its truthful
+            // name and leave the legacy TTFT field null.
+            const promptEvalDurationMs = data.prompt_eval_duration > 0
                 ? Number((data.prompt_eval_duration / 1e6).toFixed(1))
                 : null;
+            const timeToFirstTokenMs = null;
             const tokensPerSec = (tokens > 0 && latency > 0)
                 ? Number((tokens / (latency / 1000)).toFixed(2))
                 : 0;
@@ -512,7 +515,8 @@ async function runBatchOrchestrator({
                     latency,
                     tokens,
                     tokens_per_sec: tokensPerSec,
-                    time_to_first_token_ms: timeToFirstTokenMs
+                    time_to_first_token_ms: null,
+                    prompt_eval_duration_ms: promptEvalDurationMs
                 }).catch(err => logger.debug('Failed to update responded stage', { error: err.message }));
             }
 
@@ -530,6 +534,7 @@ async function runBatchOrchestrator({
                 tokens,
                 tokensPerSec,
                 timeToFirstTokenMs,
+                promptEvalDurationMs,
                 cleanedResponse,
                 extractedThinking,
                 hasEmptyResponse,
@@ -577,7 +582,9 @@ async function runBatchOrchestrator({
                 repeatGroupId,
                 executionTarget,
                 qualityCohortFingerprint,
-                trustEvidenceContext
+                trustEvidenceContext,
+                signal: batchCancellationController.signal,
+                assertAuthorityActive: assertClaimActive
             });
 
             if (!hasEmptyResponse) {
@@ -628,7 +635,9 @@ async function runBatchOrchestrator({
                 },
                 executionTarget,
                 qualityCohortFingerprint,
-                trustEvidenceContext
+                trustEvidenceContext,
+                signal: batchCancellationController.signal,
+                assertAuthorityActive: assertClaimActive
             });
             if (classified.infra) return { infraError: true };
         }
@@ -767,7 +776,9 @@ async function runBatchOrchestrator({
                                 observedAt: new Date().toISOString()
                             },
                             qualityCohortFingerprint,
-                            trustEvidenceContext
+                            trustEvidenceContext,
+                            signal: batchCancellationController.signal,
+                            assertAuthorityActive: assertClaimActive
                         });
                         if (cleanedResponse.trim()) {
                             if (judgeHostUrl === hostUrl) deferJudgeTask({ hostUrl, judgeHostUrl, model: target.model, prompt, resultId });
@@ -797,7 +808,9 @@ async function runBatchOrchestrator({
                             providerUsage: execution?.receipt?.usage || null,
                             qualityCohortFingerprint,
                             trustEvidenceContext,
-                            promptText: promptHints.promptText
+                            promptText: promptHints.promptText,
+                            signal: batchCancellationController.signal,
+                            assertAuthorityActive: assertClaimActive
                         });
                     } finally {
                         clearTimeout(timeoutId);
@@ -856,8 +869,12 @@ async function runBatchOrchestrator({
             batchId,
             model,
             hostUrl,
-            numCtx: modelExecConfig.num_ctx || null
+            numCtx: modelExecConfig.num_ctx || null,
+            claimIdentity: claimIdentityFor(hostUrl),
+            assertClaimActive,
+            signal: batchCancellationController.signal
         });
+        assertClaimActive();
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping before model warmup because batch is stopped', { batchId, model, host: hostUrl });
             return { stopped: true, cancelled: false };
@@ -872,7 +889,10 @@ async function runBatchOrchestrator({
             num_ctx: modelExecConfig.num_ctx || null,
             warmupTimeoutCold,
             warmupTimeoutLoaded,
-            onPhaseDetail: (detail) => setBatchPhase('warmup', detail)
+            onPhaseDetail: (detail) => setBatchPhase('warmup', detail),
+            claimIdentity: claimIdentityFor(hostUrl),
+            assertClaimActive,
+            signal: batchCancellationController.signal
         });
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping after model warmup because batch is stopped', { batchId, model, host: hostUrl });
@@ -912,6 +932,7 @@ async function runBatchOrchestrator({
                         handleGracefulStop();
                         return { stopped: true, cancelled: false };
                     }
+                    assertClaimActive();
 
                     if (consecutiveInfraErrors >= INFRA_ERROR_CIRCUIT_BREAKER_THRESHOLD) {
                         logger.warn(`Circuit breaker: skipping remaining prompts on ${hostUrl} after ${consecutiveInfraErrors} consecutive infra errors`, {
@@ -980,7 +1001,9 @@ async function runBatchOrchestrator({
                                 timelinePrefix: 'infra_recovery_warmup',
                                 recordTimelineEvent: recordBatchTimelineEvent,
                                 num_ctx: modelExecConfig.num_ctx || null,
-                                onPhaseDetail: (detail) => setBatchPhase('warmup', detail)
+                                onPhaseDetail: (detail) => setBatchPhase('warmup', detail),
+                                claimIdentity: claimIdentityFor(hostUrl),
+                                assertClaimActive
                             });
                             await setBatchPhase('executing', null);
                             logger.info('Model recovered after infra error', { batchId, model, host: hostUrl });
@@ -1188,8 +1211,14 @@ async function runBatchOrchestrator({
     }) + preflightAllowanceMs;
     await setBatchPhase('claiming', `Reserving ${allAffectedHosts.length} host(s) with core…`);
     let claimedHostUrls;
+    let orchestrationError = null;
     try {
-        claimedHostUrls = await acquireBenchmarkClaims(allAffectedHosts, batchId, claimEstimateMs);
+        claimedHostUrls = await acquireBenchmarkClaims(allAffectedHosts, batchId, claimEstimateMs, {
+            kind: harnessTargets.length > 0 || judgeConfig.target?.executionKind === 'harness'
+                ? 'benchmark-cloud'
+                : 'benchmark',
+            source: 'benchmark'
+        });
     } catch (error) {
         if (!isResuming) throw error;
         await resumeRevalidation.fail(error, RESUME_CODES.CLAIM_ACQUISITION_FAILED);
@@ -1197,8 +1226,37 @@ async function runBatchOrchestrator({
     const stopClaimHeartbeat = startBenchmarkClaimHeartbeat(
         claimedHostUrls,
         batchId,
-        claimEstimateMs
+        claimEstimateMs,
+        {
+            onFatal: error => {
+                if (!batchCancellationController.signal.aborted) {
+                    batchCancellationController.abort(error);
+                }
+                // Child Core and harness requests own separate controllers.
+                // Abort the whole registered set immediately on lease loss;
+                // waiting for their next checkpoint would let stale work run.
+                abortActiveBatchRequests(batchId, {
+                    reason: error,
+                    userInitiated: false
+                });
+            }
+        }
     );
+    await stopClaimHeartbeat.ready;
+    try {
+        stopClaimHeartbeat.assertActive();
+    } catch (error) {
+        if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
+        else stopClaimHeartbeat();
+        const cleanup = await releaseBenchmarkClaims(claimedHostUrls, batchId, {
+            releaseWorkloadAdmission: false
+        });
+        if (cleanup.failed === 0) {
+            await releaseWorkloadAdmission(String(batchId)).catch(() => {});
+        }
+        throw error;
+    }
+    assertClaimActive = stopClaimHeartbeat.assertActive;
     await recordBatchTimelineEvent('benchmark_claim_acquired', {
         hosts: claimedHostUrls,
         requested: allAffectedHosts,
@@ -1210,21 +1268,28 @@ async function runBatchOrchestrator({
             return;
         }
         hostLifecycleFinalized = true;
-        stopClaimHeartbeat();
+        if (typeof stopClaimHeartbeat.drainHosts === 'function') await stopClaimHeartbeat.drainHosts();
 
-        const tasks = [];
-        if (claimedHostUrls.length > 0) {
-            tasks.push((async () => {
-                await releaseBenchmarkClaims(claimedHostUrls, batchId);
-                await recordBatchTimelineEvent('benchmark_claim_released', {
-                    hosts: claimedHostUrls
-                }).catch(() => {});
-            })());
+        const release = await releaseBenchmarkClaims(claimedHostUrls, batchId, {
+            releaseWorkloadAdmission: false
+        });
+        if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
+        else stopClaimHeartbeat();
+        await recordBatchTimelineEvent(release.failed > 0 ? 'benchmark_claim_release_failed' : 'benchmark_claim_released', {
+            hosts: claimedHostUrls,
+            ...(release.failed > 0 ? { failed: release.failed } : {})
+        }).catch(() => {});
+        if (release.failed > 0) {
+            const detail = release.details?.find(item => !item.released);
+            const error = new Error(
+                detail?.reason
+                || release.workloadAdmission?.reason
+                || 'Benchmark runtime restore/release failed'
+            );
+            error.code = 'BENCHMARK_RUNTIME_RESTORE_FAILED';
+            error.release = release;
+            throw error;
         }
-        if (dedicationState.size > 0) {
-            tasks.push(restoreAllDedication(dedicationState, { batchId, recordBatchTimelineEvent }));
-        }
-        await Promise.allSettled(tasks);
     };
 
     // Registered only once claim/dedication lifecycle protection exists. From
@@ -1232,6 +1297,7 @@ async function runBatchOrchestrator({
     unregisterBatchCancellation = registerActiveBatchController(batchId, batchCancellationController);
 
     try {
+        assertClaimActive();
         if (dedicationState.size > 0) {
             try {
                 await releaseAllDedication(dedicationState, {
@@ -1254,7 +1320,10 @@ async function runBatchOrchestrator({
             batchId,
             defaultHost,
             setBatchPhase,
-            recordBatchTimelineEvent
+            recordBatchTimelineEvent,
+            assertClaimActive,
+            claimIdentityFor,
+            signal: batchCancellationController.signal
         });
 
         if (!isResuming && requestedHostGroups.length > 0) {
@@ -1320,6 +1389,9 @@ async function runBatchOrchestrator({
         }
         orchestrationCompleted = true;
         return { stopped: false, cancelled: false };
+    } catch (error) {
+        orchestrationError = error;
+        throw error;
     } finally {
         try {
             if (!orchestrationCompleted || executionState.stopped || batchCancellationController.signal.aborted) {
@@ -1330,6 +1402,7 @@ async function runBatchOrchestrator({
         } finally {
             unregisterBatchCancellation();
             await finalizeHostLifecycle();
+            if (orchestrationError) orchestrationError.hostLifecycleRestored = true;
         }
     }
 }

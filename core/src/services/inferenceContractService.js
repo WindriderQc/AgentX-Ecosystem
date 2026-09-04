@@ -266,10 +266,12 @@ async function resolveContextBudget(input, deps = {}) {
     if (deps.resolveContextDetails) {
       resolved = await deps.resolveContextDetails(input.model, {
         targetHost: input.host,
+        workload: input.workload || 'interactive',
         deps: deps.contextDeps
       });
     } else if (canUseDefaultResolver) {
       resolved = await getContextInfo(input.model, input.host, {
+        workload: input.workload || 'interactive',
         artifactIdentity: deps.artifactIdentity || null
       });
     }

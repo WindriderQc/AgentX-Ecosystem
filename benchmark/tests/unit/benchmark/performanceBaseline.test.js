@@ -2,12 +2,15 @@
 
 jest.mock('../../../models/BenchmarkBatch', () => ({ updateOne: jest.fn().mockResolvedValue({}) }));
 jest.mock('../../../models/ModelPerformanceProfile', () => ({ findOne: jest.fn() }));
+jest.mock('../../../models/ModelProfile', () => ({ findOne: jest.fn() }));
 jest.mock('../../../src/services/hostTestService', () => ({ testModelOnHost: jest.fn() }));
 jest.mock('../../../src/helpers/ollamaHostConfig', () => ({
     normalizeHostUrl: jest.fn((hostUrl) => String(hostUrl || '').replace(/\/+$/, '')),
     getConfiguredHosts: jest.fn(() => [{ id: 'host-beta', url: 'http://192.0.2.12:11434' }])
 }));
 jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
+    identitiesMatch: jest.fn((left, right) => left?.digest === right?.digest
+        && left?.runtimeFingerprint === right?.runtimeFingerprint),
     resolveArtifactIdentity: jest.fn(async (model, hostId, hostUrl) => ({
         model,
         hostId,
@@ -25,7 +28,12 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
-const { _getProfilePerformanceBaseline } = require('../../../src/services/benchmark/performanceBaseline');
+const ModelProfile = require('../../../models/ModelProfile');
+const BenchmarkBatch = require('../../../models/BenchmarkBatch');
+const {
+    capturePerformanceBaseline,
+    _getProfilePerformanceBaseline
+} = require('../../../src/services/benchmark/performanceBaseline');
 
 function chainResolved(value) {
     return {
@@ -33,20 +41,60 @@ function chainResolved(value) {
     };
 }
 
+function authority(evidenceId = 'evidence-1') {
+    return {
+        readiness: {
+            'host-beta': {
+                benchmarkQualified: true,
+                stale: false,
+                profileDepth: 'standard',
+                evidenceId,
+                artifact: {
+                    model: 'ax/qwen3.5:9b',
+                    hostId: 'host-beta',
+                    hostUrl: 'http://192.0.2.12:11434',
+                    digest: 'sha256:exact',
+                    runtimeFingerprint: 'runtime-a',
+                    registryQualified: true
+                },
+                authorityReceipt: {
+                    version: 1,
+                    source: 'profiler_pipeline',
+                    evidenceId,
+                    digest: 'a'.repeat(64)
+                }
+            }
+        }
+    };
+}
+
 describe('performanceBaseline', () => {
     beforeEach(() => jest.clearAllMocks());
 
-    it('looks up performance evidence for the exact artifact identity', async () => {
+    function exactEvidence(overrides = {}) {
         const profiledAt = new Date().toISOString();
-        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved({
-            artifact: { registryQualified: true },
+        return {
+            _id: 'evidence-1',
+            artifact: authority().readiness['host-beta'].artifact,
             profile: {
                 tokensPerSec: 74.8,
-                recommendedConfig: { num_ctx: 65536 },
-                profiledAt
+                recommendedInteractiveContext: 65536,
+                requiredRetainedSamples: 5,
+                measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
+                ttftMs: 125,
+                ttftMeasurement: 'streamed_wall_clock',
+                profileDepth: 'standard',
+                profiledAt,
+                ...overrides
             },
             updatedAt: profiledAt
-        }));
+        };
+    }
+
+    it('looks up performance evidence for the exact artifact identity', async () => {
+        const profiledAt = new Date().toISOString();
+        ModelProfile.findOne.mockReturnValue(chainResolved(authority()));
+        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence({ profiledAt })));
 
         const result = await _getProfilePerformanceBaseline(
             'ax/qwen3.5:9b',
@@ -54,6 +102,7 @@ describe('performanceBaseline', () => {
         );
 
         expect(ModelPerformanceProfile.findOne).toHaveBeenCalledWith({
+            _id: 'evidence-1',
             modelName: 'ax/qwen3.5:9b',
             hostId: 'host-beta',
             'artifact.digest': 'sha256:exact',
@@ -70,6 +119,9 @@ describe('performanceBaseline', () => {
     });
 
     it('ignores evidence that is not registry-qualified', async () => {
+        const readiness = authority();
+        readiness.readiness['host-beta'].artifact.registryQualified = false;
+        ModelProfile.findOne.mockReturnValue(chainResolved(readiness));
         ModelPerformanceProfile.findOne.mockReturnValue(chainResolved({
             artifact: { registryQualified: false },
             profile: { tokensPerSec: 34.9 }
@@ -79,5 +131,69 @@ describe('performanceBaseline', () => {
             'ax/qwopus:27b',
             'http://192.0.2.12:11434'
         )).resolves.toBeNull();
+    });
+
+    it.each([
+        ['Quick', { profileDepth: 'quick' }],
+        ['non-qualified', { benchmarkQualified: false }],
+        ['receipt-less', { authorityReceipt: null }]
+    ])('refuses %s readiness even when a performance profile document exists', async (_label, readinessOverride) => {
+        const modelAuthority = authority();
+        Object.assign(modelAuthority.readiness['host-beta'], readinessOverride);
+        ModelProfile.findOne.mockReturnValue(chainResolved(modelAuthority));
+        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence()));
+
+        await expect(_getProfilePerformanceBaseline(
+            'ax/qwen3.5:9b',
+            'http://192.0.2.12:11434'
+        )).resolves.toBeNull();
+    });
+
+    it('refuses authority evidence without a positive interactive recommendation', async () => {
+        ModelProfile.findOne.mockReturnValue(chainResolved(authority()));
+        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence({
+            recommendedInteractiveContext: null
+        })));
+        await expect(_getProfilePerformanceBaseline(
+            'ax/qwen3.5:9b',
+            'http://192.0.2.12:11434'
+        )).resolves.toBeNull();
+    });
+
+    it('refuses baseline persistence without an exact claim proof', async () => {
+        await expect(capturePerformanceBaseline({
+            batchId: 'batch-1',
+            model: 'ax/qwen3.5:9b',
+            hostUrl: 'http://192.0.2.12:11434'
+        })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_IDENTITY_MISSING' });
+        expect(ModelPerformanceProfile.findOne).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('retracts a just-written baseline when claim ownership is lost during the database write', async () => {
+        ModelProfile.findOne.mockReturnValue(chainResolved(authority()));
+        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence()));
+        let checkpoints = 0;
+        const assertClaimActive = jest.fn(() => {
+            checkpoints += 1;
+            if (checkpoints === 3) {
+                throw Object.assign(new Error('claim lost during write'), { code: 'BENCHMARK_CLAIM_LOST' });
+            }
+        });
+
+        await expect(capturePerformanceBaseline({
+            batchId: 'batch-write-race',
+            model: 'ax/qwen3.5:9b',
+            hostUrl: 'http://192.0.2.12:11434',
+            claimIdentity: { claimBatchId: 'batch-write-race', claimGeneration: 'generation-1' },
+            assertClaimActive
+        })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_LOST' });
+
+        expect(BenchmarkBatch.updateOne).toHaveBeenCalledTimes(2);
+        const persisted = BenchmarkBatch.updateOne.mock.calls[0][1].$push.performance_baselines;
+        expect(persisted.persistenceReceipt).toEqual(expect.any(String));
+        expect(BenchmarkBatch.updateOne.mock.calls[1][1]).toEqual({
+            $pull: { performance_baselines: { persistenceReceipt: persisted.persistenceReceipt } }
+        });
     });
 });

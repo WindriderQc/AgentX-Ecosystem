@@ -20,6 +20,23 @@ jest.mock('../../../src/services/benchmark/batchOrchestrator', () => ({
     abortActiveBatchRequests: jest.fn(() => ({ abortedRequestCount: 0 }))
 }));
 
+jest.mock('../../../src/clients/coreApiClient', () => ({
+    acquireWorkloadAdmission: jest.fn(async () => ({ acquired: true, idempotent: true })),
+    heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
+    releaseWorkloadAdmission: jest.fn(async () => ({ released: true }))
+}));
+
+jest.mock('../../../src/services/benchmark/benchmarkClaimLifecycle', () => ({
+    startBenchmarkClaimHeartbeat: jest.fn(() => {
+        const stop = jest.fn();
+        stop.ready = Promise.resolve();
+        stop.drain = jest.fn(async () => {});
+        stop.getFailure = jest.fn(() => null);
+        stop.assertActive = jest.fn(() => true);
+        return stop;
+    })
+}));
+
 // Mock config normalization
 jest.mock('../../../src/services/benchmark/config', () => ({
     normalizeExecutionConfig: jest.fn(cfg => cfg || {}),

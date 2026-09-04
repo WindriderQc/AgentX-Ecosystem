@@ -107,7 +107,8 @@ function flattenToDotPaths(obj, prefix = '', out = {}) {
   return out;
 }
 
-async function upsert(data) {
+async function upsert(data, options = {}) {
+  options.assertAuthorityActive?.();
   const input = { ...data };
   const configuredHost = getConfiguredHost(input.hostId);
   if (configuredHost) {
@@ -142,11 +143,13 @@ async function upsert(data) {
   const operation = { $set: update };
   if (hasDedicatedInput && dedicated == null) operation.$unset = { dedicated: '' };
 
-  return HostProfile.findOneAndUpdate(
+  const updated = await HostProfile.findOneAndUpdate(
     { hostId: input.hostId },
     operation,
-    { upsert: true, new: true, runValidators: true }
+    { upsert: true, new: true, runValidators: true, ...(options.signal ? { signal: options.signal } : {}) }
   );
+  options.assertAuthorityActive?.();
+  return updated;
 }
 
 /**
@@ -215,7 +218,7 @@ async function updateStatus(hostId, status) {
   return HostProfile.findOneAndUpdate({ hostId }, update, { new: true });
 }
 
-async function updateBaseline(hostId, baseline) {
+async function updateBaseline(hostId, baseline, options = {}) {
   return upsert({
     hostId,
     baseline: {
@@ -225,7 +228,7 @@ async function updateBaseline(hostId, baseline) {
       ttftMs: baseline.ttftMs ?? null,
       testedAt: baseline.testedAt || new Date()
     }
-  });
+  }, options);
 }
 
 async function detectCpuCores(hostUrl) {
@@ -246,11 +249,16 @@ async function detectCpuCores(hostUrl) {
  * @param {string} modelName
  * @returns {Promise<{ success: boolean, error?: string }>}
  */
-async function releaseModel(hostUrl, modelName) {
+async function releaseModel(hostUrl, modelName, options = {}) {
   try {
-    await generate(hostUrl, { model: modelName, prompt: '', keep_alive: '0', stream: false }, { timeoutMs: 15000 });
+    await generate(hostUrl, { model: modelName, prompt: '', keep_alive: '0', stream: false }, {
+      timeoutMs: 15000,
+      signal: options.signal
+    });
+    options.assertClaimActive?.();
     return { success: true };
   } catch (err) {
+    if (options.signal?.aborted) throw (options.signal.reason instanceof Error ? options.signal.reason : err);
     return { success: false, error: err.message };
   }
 }

@@ -17,26 +17,11 @@ const { resolveModelNumCtxDetails } = require('../../src/services/modelContextRe
 const liveProbeService = require('../../src/services/profiler/liveProbeService');
 const baselineModelService = require('../../src/services/profiler/baselineModelService');
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
-const { getDedicationStatuses, resolveHostKey, restoreDedication } = require('../../src/clients/coreApiClient');
+const { acquireProfilerClaimLease } = require('../../src/services/profiler/profilerClaimLifecycle');
+const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdmission');
+const { isSameOllamaModel } = require('../../src/helpers/ollamaModelIdentity');
 
 const logger = require('../../config/logger');
-
-// ── Dedication restore helper ───────────────────────────────────────────────
-// After host tests or profiling, restore pinned models that may have been displaced.
-async function _restoreDedicationForHost(hostUrl) {
-  try {
-    const statuses = await getDedicationStatuses();
-    const normalized = hostUrl.replace(/\/+$/, '');
-    const match = statuses.find(s => s.host?.replace(/\/+$/, '') === normalized);
-    if (!match?.pinnedModels?.length) return;
-    const hostKey = await resolveHostKey(hostUrl);
-    if (!hostKey) return;
-    await restoreDedication(hostKey);
-    logger.info('Dedication restored after host test', { host: hostUrl, hostKey, pinnedModels: match.pinnedModels });
-  } catch (err) {
-    logger.debug('Dedication restore skipped', { host: hostUrl, error: err.message });
-  }
-}
 
 // ── In-memory progress tracker for run-all ──────────────────────────────────
 const activeTests = new Map();
@@ -67,22 +52,60 @@ function buildBaselineFromResults(results = [], preferredModel = '') {
     : null;
   const avg = (arr, key) => Number((arr.reduce((s, r) => s + (r[key] || 0), 0) / arr.length).toFixed(2));
   if (preferred) {
+    const hasStreamedTtft = preferred.ttftMeasurement === 'streamed_wall_clock'
+      && Number.isFinite(Number(preferred.timeToFirstTokenMs));
     return {
       referenceModel: preferred.modelName,
       tokensPerSec: preferred.tokensPerSec ?? avg(passing, 'tokensPerSec'),
       latencyMs: preferred.latencyMs ?? avg(passing, 'latencyMs'),
-      ttftMs: preferred.timeToFirstTokenMs ?? avg(passing, 'timeToFirstTokenMs'),
+      ttftMs: hasStreamedTtft ? Number(preferred.timeToFirstTokenMs) : null,
+      ttftMeasurement: hasStreamedTtft ? 'streamed_wall_clock' : undefined,
       testedAt: preferred.testedAt || new Date()
     };
   }
   const newest = [...passing].sort((a, b) => new Date(b.testedAt || 0) - new Date(a.testedAt || 0))[0];
+  const streamedTtft = passing.filter(item => item.ttftMeasurement === 'streamed_wall_clock'
+    && Number.isFinite(Number(item.timeToFirstTokenMs)));
   return {
     referenceModel: newest?.modelName || 'aggregate',
     tokensPerSec: avg(passing, 'tokensPerSec'),
     latencyMs: avg(passing, 'latencyMs'),
-    ttftMs: avg(passing, 'timeToFirstTokenMs'),
+    ttftMs: streamedTtft.length ? avg(streamedTtft, 'timeToFirstTokenMs') : null,
+    ttftMeasurement: streamedTtft.length ? 'streamed_wall_clock' : undefined,
     testedAt: newest?.testedAt || new Date()
   };
+}
+
+async function updateBaselineUnderLease(hostId, baseline, lease) {
+  lease.assertActive();
+  const prior = await hostProfileService.getById(hostId);
+  lease.assertActive();
+  try {
+    const updated = await hostProfileService.updateBaseline(hostId, baseline, {
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
+    lease.assertActive();
+    return updated;
+  } catch (error) {
+    // The write acknowledgement may race lease loss. Restore the last known
+    // projection (or clear a newly-created baseline) without reusing the dead
+    // signal; this compensation only retracts potentially unauthorized data.
+    await hostProfileService.upsert({
+      hostId,
+      baseline: prior?.baseline || null
+    }).catch(compensationError => {
+      error.compensationError = compensationError;
+      logger.error('Host baseline compensation failed', {
+        hostId,
+        error: compensationError.message
+      });
+    });
+    if (error.compensationError && typeof lease.abandon === 'function') {
+      await lease.abandon(error.compensationError);
+    }
+    throw error;
+  }
 }
 
 // ═══ HOST PROFILE — Static routes (MUST come before /:hostId params) ════════
@@ -179,8 +202,17 @@ router.get('/test/hosts-status', async (_req, res) => {
 
 /** POST /test/ensure-baseline — pull the configured baseline when absent. */
 router.post('/test/ensure-baseline', async (req, res) => {
+  let lease;
   try {
-    const data = await baselineModelService.ensureBaselineModel(req.body?.hostId);
+    const target = baselineModelService.resolveConfiguredHost(req.body?.hostId);
+    lease = await acquireProfilerClaimLease([target.url], `profiler-baseline-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
+    const data = await baselineModelService.ensureBaselineModel(req.body?.hostId, {
+      signal: lease.signal,
+      assertClaimActive: lease.assertActive
+    });
+    lease.assertActive();
+    await lease.finalize();
+    lease = null;
     res.json({
       status: 'success',
       data,
@@ -190,7 +222,9 @@ router.post('/test/ensure-baseline', async (req, res) => {
     });
   } catch (err) {
     logger.error('Baseline model preparation failed', { hostId: req.body?.hostId, error: err.message });
-    res.status(err.statusCode || 502).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 502).json({ status: 'error', message: err.message, code: err.code || null });
+  } finally {
+    if (lease) await lease.finalize().catch(error => logger.error('Baseline lease finalization failed', { error: error.message }));
   }
 });
 
@@ -237,6 +271,7 @@ router.get('/test/live-probes/:hostId/status', async (req, res) => {
 
 /** POST /test/run — single model test on a host */
 router.post('/test/run', async (req, res) => {
+  let lease;
   try {
     const { modelName, hostId } = req.body;
     if (!modelName || !hostId) {
@@ -246,28 +281,44 @@ router.post('/test/run', async (req, res) => {
     const baselineModel = await baselineModelService.getBaselineModel();
     const isBaseline = String(modelName).trim().replace(/:latest$/i, '').toLowerCase()
       === String(baselineModel).trim().replace(/:latest$/i, '').toLowerCase();
+    lease = await acquireProfilerClaimLease([configuredHost.url], `profiler-host-test-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
     const preparation = isBaseline && hostId
-      ? await baselineModelService.ensureBaselineModel(hostId)
+      ? await baselineModelService.ensureBaselineModel(hostId, {
+        signal: lease.signal,
+        assertClaimActive: lease.assertActive
+      })
       : null;
     const targetHostUrl = preparation?.hostUrl || configuredHost.url;
-    const snapshot = await testModelOnHost(modelName, targetHostUrl, { hostId });
+    const snapshot = await testModelOnHost(modelName, targetHostUrl, {
+      hostId,
+      benchmarkClaim: lease.identityFor(targetHostUrl),
+      assertClaimActive: lease.assertActive,
+      signal: lease.signal
+    });
+    lease.assertActive();
     if (isBaseline && snapshot?.status === 'pass') {
-      await hostProfileService.updateBaseline(hostId, {
+      lease.assertActive();
+      await updateBaselineUnderLease(hostId, {
         referenceModel: modelName,
         tokensPerSec: snapshot.tokensPerSec,
         latencyMs: snapshot.latencyMs,
         ttftMs: snapshot.timeToFirstTokenMs,
+        ttftMeasurement: snapshot.ttftMeasurement || undefined,
         testedAt: snapshot.testedAt
-      }).catch(err => logger.warn('Failed to update baseline', { hostId, error: err.message }));
+      }, lease);
     }
-    // Restore dedication if the host has pinned models (fire-and-forget)
-    _restoreDedicationForHost(targetHostUrl);
+    await lease.finalize();
+    lease = null;
     res.json({ status: 'success', data: { ...snapshot, preparation } });
   } catch (err) {
     logger.error('Host test run failed', { error: err.message, body: req.body });
     const code = err.statusCode || (err.message.includes('not found') ? 422
       : err.message.includes('unreachable') ? 503 : 500);
-    res.status(code).json({ status: 'error', message: err.message });
+    res.status(code).json({ status: 'error', message: err.message, code: err.code || null });
+  } finally {
+    if (lease) {
+      await lease.finalize().catch(error => logger.error('Host test lease finalization failed', { error: error.message }));
+    }
   }
 });
 
@@ -283,23 +334,39 @@ router.post('/test/run-all', async (req, res) => {
     cleanupStale();
     const testId = crypto.randomBytes(8).toString('hex');
     const tracker = { status: 'running', total: hostCheck.models.length, completed: 0, failed: 0, currentModel: hostCheck.models[0] || null, results: [], startedAt: Date.now() };
+    const lease = await acquireProfilerClaimLease([hostUrl], `profiler-host-all-${testId}`, Math.max(10 * 60 * 1000, hostCheck.models.length * 5 * 60 * 1000), {
+      onFatal: err => { tracker.status = 'failed'; tracker.error = err.message; }
+    });
     activeTests.set(testId, tracker);
     testAllModelsOnHost(hostUrl, {
       hostId,
+      benchmarkClaim: lease.identityFor(hostUrl),
+      assertClaimActive: lease.assertActive,
+      signal: lease.signal,
+      shouldAbort: () => lease.lost,
       onProgress: (modelName, result, index, total) => {
         tracker.completed = index + 1;
         tracker.currentModel = index + 1 < total ? hostCheck.models[index + 1] : null;
         if (result.status !== 'pass') tracker.failed++;
         tracker.results.push({ modelName, ...result });
       }
-    }).then(({ summary }) => {
+    }).then(async ({ summary }) => {
+      lease.assertActive();
       tracker.status = 'completed'; tracker.summary = summary; tracker.currentModel = null;
       const baseline = buildBaselineFromResults(tracker.results, baselineModel);
       if (hostId && baseline) {
-        hostProfileService.updateBaseline(hostId, baseline)
-          .catch(err => logger.warn('Failed to update baseline after run-all', { hostId, error: err.message }));
+        lease.assertActive();
+        await updateBaselineUnderLease(hostId, baseline, lease);
       }
-    }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; });
+    }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; })
+      .finally(async () => {
+        try {
+          await lease.finalize();
+        } catch (error) {
+          tracker.status = 'failed';
+          tracker.error = error.message;
+        }
+      });
     res.json({ status: 'success', data: { testId, totalModels: hostCheck.models.length, models: hostCheck.models } });
   } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message }); }
 });
@@ -367,12 +434,18 @@ router.post('/test/run-fleet', async (req, res) => {
       finishedAt: null,
       error: null
     };
+    const lease = await acquireProfilerClaimLease(
+      queueHosts.filter(item => item.available).map(item => item.host.url),
+      `profiler-fleet-${queueId}`,
+      Math.max(30 * 60 * 1000, queueHosts.reduce((sum, item) => sum + item.models.length, 0) * 5 * 60 * 1000),
+      { onFatal: err => { tracker.cancelled = true; tracker.error = err.message; } }
+    );
     activeFleetQueues.set(queueId, tracker);
 
     // Fire-and-forget driver
     (async () => {
       for (let i = 0; i < tracker.hosts.length; i++) {
-        if (tracker.cancelled) break;
+        if (tracker.cancelled || lease.lost) break;
         const slot = tracker.hosts[i];
         tracker.currentIndex = i;
         if (slot.status === 'offline') continue; // skip unreachable hosts
@@ -382,7 +455,10 @@ router.post('/test/run-fleet', async (req, res) => {
         try {
           const { summary } = await testAllModelsOnHost(slot.hostUrl, {
             hostId: slot.hostId,
-            shouldAbort: () => tracker.cancelled,
+            shouldAbort: () => tracker.cancelled || lease.lost,
+            benchmarkClaim: lease.identityFor(slot.hostUrl),
+            assertClaimActive: lease.assertActive,
+            signal: lease.signal,
             onProgress: (modelName, result, index, total) => {
               slot.completed = index + 1;
               slot.currentModel = index + 1 < total ? slot.models[index + 1] : null;
@@ -390,22 +466,20 @@ router.post('/test/run-fleet', async (req, res) => {
               slot.results.push({ modelName, ...result });
             }
           });
+          lease.assertActive();
           slot.summary = summary;
           slot.status = 'completed';
           slot.currentModel = null;
           // Update host baseline aggregate (same as /test/run-all)
           const baseline = buildBaselineFromResults(slot.results, baselineModel);
           if (slot.hostId && baseline) {
-            hostProfileService.updateBaseline(slot.hostId, baseline)
-              .catch(err => logger.warn('Fleet: baseline update failed', { hostId: slot.hostId, error: err.message }));
+            lease.assertActive();
+            await updateBaselineUnderLease(slot.hostId, baseline, lease);
           }
-          // Restore any pinned model the sweep may have evicted
-          _restoreDedicationForHost(slot.hostUrl);
         } catch (err) {
           slot.status = 'failed';
           slot.error = err.message;
           logger.error('Fleet: host sweep failed', { hostUrl: slot.hostUrl, error: err.message });
-          _restoreDedicationForHost(slot.hostUrl);
         } finally {
           slot.finishedAt = Date.now();
         }
@@ -423,11 +497,13 @@ router.post('/test/run-fleet', async (req, res) => {
            modelsTested: 0, passed: 0, failed: 0 });
       tracker.summary = fleetSummary;
       tracker.status = tracker.cancelled ? 'cancelled' : 'completed';
+      await lease.finalize();
     })().catch(err => {
       tracker.status = 'failed';
       tracker.error = err.message;
       tracker.finishedAt = Date.now();
       logger.error('Fleet queue driver crashed', { queueId, error: err.message });
+      lease.finalize().catch(releaseErr => logger.warn('Fleet claim finalization failed', { queueId, error: releaseErr.message }));
     });
 
     res.json({ status: 'success', data: {
@@ -505,17 +581,35 @@ router.get('/test/run-fleet/active', (_req, res) => {
 
 /** POST /test/compare — test a model across all hosts */
 router.post('/test/compare', async (req, res) => {
+  let lease;
   try {
     const { modelName } = req.body;
     if (!modelName) return res.status(400).json({ status: 'error', message: 'modelName is required' });
-    res.json({ status: 'success', data: await testModelAcrossHosts(modelName) });
-  } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
+    const checks = await Promise.all(getConfiguredHosts().map(async host => ({ host, check: await checkHost(host.url) })));
+    const eligible = checks.filter(item => item.check.available && item.check.models.includes(String(modelName).replace(/:latest$/i, ''))).map(item => item.host.url);
+    if (!eligible.length) return res.status(422).json({ status: 'error', message: 'Model is not installed on any reachable host' });
+    lease = await acquireProfilerClaimLease(eligible, `profiler-compare-${crypto.randomBytes(8).toString('hex')}`, eligible.length * 10 * 60 * 1000);
+    const data = await testModelAcrossHosts(modelName, {
+      assertClaimActive: lease.assertActive,
+      claimIdentityFor: hostUrl => lease.identityFor(hostUrl),
+      signal: lease.signal
+    });
+    await lease.finalize();
+    lease = null;
+    res.json({ status: 'success', data });
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null }); }
+  finally {
+    if (lease) {
+      await lease.finalize().catch(error => logger.error('Host comparison lease finalization failed', { error: error.message }));
+    }
+  }
 });
 
 // ═══ CONTEXT PROBE ══════════════════════════════════════════════════════════
 
 /** POST /test/context-probe/run */
 router.post('/test/context-probe/run', async (req, res) => {
+  let lease;
   try {
     const {
       modelName,
@@ -529,22 +623,36 @@ router.post('/test/context-probe/run', async (req, res) => {
       acknowledgeMaintenance
     } = req.body || {};
     if (!modelName) return res.status(400).json({ status: 'error', message: 'modelName is required' });
+    if (!hostUrl) return res.status(400).json({ status: 'error', message: 'hostUrl is required for a claimed context probe' });
     if (acknowledgeMaintenance !== true) {
       return res.status(400).json({
         status: 'error',
         message: 'acknowledgeMaintenance:true is required — probe evicts KV cache and breaks live traffic on the target host'
       });
     }
-    res.json({ status: 'success', data: await probeModelContext(modelName, {
-      hostUrl,
+    const admittedHostUrl = await admitOllamaTargetResolved(hostUrl, { configuredHosts: getConfiguredHosts() });
+    lease = await acquireProfilerClaimLease([admittedHostUrl], `profiler-context-${crypto.randomBytes(8).toString('hex')}`, 45 * 60 * 1000);
+    const data = await probeModelContext(modelName, {
+      hostUrl: admittedHostUrl,
       timeoutMs,
       minCtx,
       maxCtx,
       contextProbeFillPct: contextProbeFillPct ?? promptFillPct,
       force: !!force,
-      acknowledgeMaintenance: true
-    }) });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message }); }
+      acknowledgeMaintenance: true,
+      assertClaimActive: lease.assertActive,
+      signal: lease.signal
+    });
+    lease.assertActive();
+    await lease.finalize();
+    lease = null;
+    res.json({ status: 'success', data });
+  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null }); }
+  finally {
+    if (lease) {
+      await lease.finalize().catch(error => logger.error('Context probe lease finalization failed', { error: error.message }));
+    }
+  }
 });
 
 /** GET /test/context-probe/status/:modelName */
@@ -593,35 +701,116 @@ router.get('/test/results/:modelName', async (req, res) => {
 
 /** POST /:hostId/release — unload a pinned model from a host */
 router.post('/:hostId/release', async (req, res) => {
+  let lease;
+  let projectionCommitted = false;
+  let host = null;
   try {
-    const host = await hostProfileService.getById(req.params.hostId);
+    host = await hostProfileService.getById(req.params.hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
     if (!host.dedicated?.model) {
       return res.status(400).json({ status: 'error', error: 'Host has no pinned model' });
     }
 
-    const result = await hostProfileService.releaseModel(host.hostUrl, host.dedicated.model);
+    lease = await acquireProfilerClaimLease([host.hostUrl], `profiler-release-${crypto.randomBytes(8).toString('hex')}`, 5 * 60 * 1000);
+    lease.assertActive();
+    const result = await hostProfileService.releaseModel(host.hostUrl, host.dedicated.model, {
+      signal: lease.signal,
+      assertClaimActive: lease.assertActive
+    });
     if (!result.success) {
       return res.status(502).json({ error: `Failed to release model: ${result.error}` });
     }
 
-    // Clear dedicated state
-    await hostProfileService.upsert({ hostId: req.params.hostId, dedicated: null });
-
-    // Re-check status to confirm
+    const releasedModel = host.dedicated.model;
+    // Publish the intended Benchmark projection while both the exact host
+    // claim and its global workload admission are still alive. If this write
+    // has an ambiguous acknowledgement, restore the exact prior projection
+    // before Core restores/releases the pre-claim runtime in finally.
     const status = await hostProfileService.checkStatus(host.hostUrl);
-    await hostProfileService.updateStatus(req.params.hostId, status.status);
-    await hostProfileService.upsert({ hostId: req.params.hostId, dedicated: status.dedicated || null });
+    if (status.dedicated?.model && isSameOllamaModel(status.dedicated.model, releasedModel)) {
+      const error = new Error('Released model became resident again before release verification');
+      error.code = 'PROFILER_RELEASE_NOT_STABLE';
+      error.statusCode = 409;
+      throw error;
+    }
+    const persistenceOptions = {
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    };
+    try {
+      lease.assertActive();
+      await hostProfileService.upsert({
+        hostId: req.params.hostId,
+        status: status.status,
+        dedicated: null
+      }, persistenceOptions);
+      lease.assertActive();
+      projectionCommitted = true;
+    } catch (error) {
+      try {
+        lease.assertActive();
+        await hostProfileService.upsert({
+          hostId: req.params.hostId,
+          status: host.status,
+          dedicated: host.dedicated || null
+        }, persistenceOptions);
+        lease.assertActive();
+      } catch (compensationError) {
+        error.compensationError = compensationError;
+        logger.error('Release-model projection compensation failed under lease', {
+          hostId: req.params.hostId,
+          error: compensationError.message
+        });
+        if (typeof lease.abandon === 'function') {
+          await lease.abandon(compensationError);
+        }
+      }
+      throw error;
+    }
 
-    res.json({ status: 'success', data: {
+    const releaseReceipt = await lease.finalize({
+      byHost: {
+        [host.hostUrl]: { excludedModels: [releasedModel] }
+      }
+    });
+    lease = null;
+    const runtimeRestore = releaseReceipt.details?.[0]?.runtimeRestore;
+    if (runtimeRestore?.verified !== true) {
+      const error = new Error('Core did not verify the requested model remained unloaded');
+      error.code = 'PROFILER_RELEASE_NOT_VERIFIED';
+      error.statusCode = 503;
+      throw error;
+    }
+    const data = {
       success: true,
       hostId: req.params.hostId,
-      releasedModel: host.dedicated.model,
-      dedicated: status.dedicated || null
-    }});
+      releasedModel,
+      dedicated: null,
+      runtimeRestore
+    };
+    res.json({ status: 'success', data });
   } catch (err) {
+    // If Core could not reach its final host-release receipt, restore the
+    // Benchmark projection while the global admission remains fail-closed.
+    // A successful host receipt means the null projection is accurate even if
+    // only the final workload-admission release failed.
+    const hostReleaseSucceeded = err.release?.details?.length > 0
+      && err.release.details.every(detail => detail.released === true);
+    if (projectionCommitted && !hostReleaseSucceeded && host) {
+      await hostProfileService.upsert({
+        hostId: req.params.hostId,
+        status: host.status,
+        dedicated: host.dedicated || null
+      }).catch(compensationError => logger.error('Release-model post-finalize compensation failed', {
+        hostId: req.params.hostId,
+        error: compensationError.message
+      }));
+      projectionCommitted = false;
+    }
     logger.error('Release model failed', { hostId: req.params.hostId, error: err.message });
-    res.status(500).json({ status: 'error', error: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
+  } finally {
+    if (lease) await lease.finalize().catch(error => logger.error('Release-model lease finalization failed', { error: error.message }));
   }
 });
 

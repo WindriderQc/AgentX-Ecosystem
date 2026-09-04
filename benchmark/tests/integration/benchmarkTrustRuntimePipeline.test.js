@@ -25,6 +25,31 @@ jest.mock('../../src/helpers/outboundHttpTransport', () => {
 jest.mock('../../src/clients/buddyEventClient', () => ({
     emitBuddyEvent: jest.fn()
 }));
+jest.mock('../../src/clients/coreApiClient', () => {
+    const actual = jest.requireActual('../../src/clients/coreApiClient');
+    return {
+        ...actual,
+        acquireWorkloadAdmission: jest.fn(async (workloadId, options = {}) => ({
+            acquired: true,
+            admissionId: `admission-${workloadId}`,
+            generation: `generation-${workloadId}`,
+            principal: 'benchmark-service',
+            requestId: options.requestId || `benchmark:${workloadId}`,
+            workloadId,
+            kind: options.kind || 'benchmark',
+            batchId: options.batchId || null
+        })),
+        heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
+        releaseWorkloadAdmission: jest.fn(async () => ({ released: true })),
+        claimHostForBenchmark: jest.fn(async () => ({ claimed: true })),
+        heartbeatBenchmarkClaim: jest.fn(async () => ({ heartbeat: true })),
+        releaseBenchmarkClaim: jest.fn(async () => ({ released: true })),
+        getBenchmarkClaimIdentity: jest.fn((_host, batchId) => ({
+            claimBatchId: batchId,
+            claimGeneration: `generation-${batchId}`
+        }))
+    };
+});
 
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const BenchmarkPrompt = require('../../models/BenchmarkPrompt');
