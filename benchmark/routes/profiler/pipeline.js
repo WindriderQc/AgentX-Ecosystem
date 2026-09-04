@@ -13,11 +13,6 @@ const {
   listActiveProfiles,
   listActiveProfileQueues
 } = require('../../src/services/profiler/activeProfileState');
-const {
-  getDedicationStatuses,
-  resolveHostKey,
-  restoreDedication
-} = require('../../src/clients/coreApiClient');
 const { acquireProfilerClaimLease } = require('../../src/services/profiler/profilerClaimLifecycle');
 const logger = require('../../config/logger');
 
@@ -34,21 +29,6 @@ const ESTIMATED_DURATION_MS_BY_DEPTH = {
   standard: 30 * 60 * 1000,
   full:     45 * 60 * 1000
 };
-
-async function _restoreDedicationForHost(hostUrl) {
-  try {
-    const statuses = await getDedicationStatuses();
-    const normalized = hostUrl.replace(/\/+$/, '');
-    const match = statuses.find(s => s.host?.replace(/\/+$/, '') === normalized);
-    if (!match?.pinnedModels?.length) return;
-    const hostKey = await resolveHostKey(hostUrl);
-    if (!hostKey) return;
-    await restoreDedication(hostKey);
-    logger.info('Dedication restored after profiling', { host: hostUrl, hostKey });
-  } catch (err) {
-    logger.debug('Dedication restore skipped', { host: hostUrl, error: err.message });
-  }
-}
 
 router.post('/scout', async (req, res) => {
   let lease;
@@ -67,15 +47,18 @@ router.post('/scout', async (req, res) => {
       `profiler-scout-${crypto.randomBytes(8).toString('hex')}`,
       ESTIMATED_DURATION_MS_BY_DEPTH.quick
     );
-    res.json({ status: 'success', data: await orchestrator.scout(modelName, admittedHosts, {
+    const data = await orchestrator.scout(modelName, admittedHosts, {
       assertClaimActive: lease.assertActive,
-      claimIdentityFor: hostUrl => lease.identityFor(hostUrl)
-    }) });
+      claimIdentityFor: hostUrl => lease.identityFor(hostUrl),
+      signal: lease.signal
+    });
+    await lease.finalize();
+    lease = null;
+    res.json({ status: 'success', data });
   } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null }); }
   finally {
     if (lease) {
-      const release = await lease.release();
-      if (!lease.lost && release.failed === 0) await Promise.all(lease.hostUrls.map(_restoreDedicationForHost));
+      await lease.finalize().catch(error => logger.error('Scout lease finalization failed', { error: error.message }));
     }
   }
 });
@@ -159,6 +142,7 @@ router.post('/profile', async (req, res) => {
     orchestrator.profile(modelName, hostId, host.hostUrl, chosenDepth, {
       assertClaimActive: lease.assertActive,
       claimIdentity: lease.identityFor(host.hostUrl),
+      signal: lease.signal,
       onProgress: (step, data) => {
         const idx = steps.indexOf(step);
         if (idx >= 0) tracker.stepsCompleted = idx;
@@ -180,13 +164,14 @@ router.post('/profile', async (req, res) => {
       tracker.error = err.message;
       logger.error('Profile job failed', { profileId, modelName, hostId, error: err.message });
     }).finally(async () => {
-      // Release the claim first so the host returns to its prior status
-      // (typically 'ready' with pinned defaults). Then call restoreDedication
-      // to trigger the actual model reload on the host. Both paths run on
-      // success and failure — a failed profile must not leave the host
-      // stuck in 'benchmarking' status.
-      const release = await lease.release();
-      if (!lease.lost && release.failed === 0) await _restoreDedicationForHost(host.hostUrl);
+      // Core performs a fenced restore under this exact lease and releases
+      // only after pinned residency verifies.
+      try {
+        await lease.finalize();
+      } catch (error) {
+        tracker.status = 'failed';
+        tracker.error = error.message;
+      }
     });
 
     res.json({ status: 'success', data: { profileId } });
@@ -254,6 +239,7 @@ async function _queueRunSingleProfile(modelName, hostId, hostUrl, depth, lease) 
     const result = await orchestrator.profile(modelName, hostId, hostUrl, depth, {
       assertClaimActive: lease.assertActive,
       claimIdentity: lease.identityFor(hostUrl),
+      signal: lease.signal,
       onProgress: (step, data) => {
         const idx = steps.indexOf(step);
         if (idx >= 0) tracker.stepsCompleted = idx;
@@ -438,14 +424,13 @@ async function startProfileHostQueue(body = {}) {
     const skipped = tracker.models.filter(m => m.status === 'pending').length;
     tracker.summary = { total: tracker.models.length, completed, failed, skipped };
     tracker.status = tracker.cancelled ? 'cancelled' : (failed && !completed ? 'failed' : 'completed');
-    const release = await lease.release();
-    if (!lease.lost && release.failed === 0) await _restoreDedicationForHost(host.hostUrl);
+    await lease.finalize();
   })().catch(err => {
     tracker.status = 'failed';
     tracker.error = err.message;
     tracker.finishedAt = Date.now();
     logger.error('Profile queue driver crashed', { queueId, error: err.message });
-    lease.release().catch(releaseErr => logger.warn('Profile queue claim release failed', { queueId, error: releaseErr.message }));
+    lease.finalize().catch(releaseErr => logger.warn('Profile queue claim finalization failed', { queueId, error: releaseErr.message }));
   });
 
   return { queueId, hostId, depth: chosenDepth, total: candidates.length, models: candidates, skippedRecent, notOnHost };
@@ -522,15 +507,17 @@ router.post('/full', async (req, res) => {
     );
     const data = await orchestrator.fullPipeline(modelName, onlineHosts, {
       assertClaimActive: lease.assertActive,
-      claimIdentityFor: hostUrl => lease.identityFor(hostUrl)
+      claimIdentityFor: hostUrl => lease.identityFor(hostUrl),
+      signal: lease.signal
     });
     lease.assertActive();
+    await lease.finalize();
+    lease = null;
     res.json({ status: 'success', data });
   } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null }); }
   finally {
     if (lease) {
-      const release = await lease.release();
-      if (!lease.lost && release.failed === 0) await Promise.all(lease.hostUrls.map(_restoreDedicationForHost));
+      await lease.finalize().catch(error => logger.error('Full pipeline lease finalization failed', { error: error.message }));
     }
   }
 });

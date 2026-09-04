@@ -22,6 +22,10 @@ const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const SERVICE_NAME = 'benchmark';
 const DEFAULT_TIMEOUT_MS = 10000;
 const PIN_RESTORE_TIMEOUT_MS = 600000;
+const CLAIM_ACQUIRE_TIMEOUT_MS = Math.max(
+  45_000,
+  (Number(process.env.BENCHMARK_CLAIM_DRAIN_TIMEOUT_MS) || 30_000) + 15_000
+);
 const PROTECTED_CORE_HEADERS = new Set([
   ':authority',
   'content-type',
@@ -82,7 +86,7 @@ const CORE_OPERATION_SPECS = Object.freeze({
   [CORE_OPERATIONS.CLAIM_ACQUIRE]: operation(
     'POST',
     '^/api/nerve-center/host-preferences/[^/]+/benchmark-claim$',
-    { maxRequestBytes: 64 * 1024, maxResponseBytes: 256 * 1024 }
+    { deadlineMs: CLAIM_ACQUIRE_TIMEOUT_MS, maxRequestBytes: 64 * 1024, maxResponseBytes: 256 * 1024 }
   ),
   [CORE_OPERATIONS.CLAIM_HEARTBEAT]: operation(
     'POST',
@@ -365,9 +369,22 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
       operationId: CORE_OPERATIONS.CLAIM_ACQUIRE,
       body: JSON.stringify({ ...claimOptions, batchId, claimGeneration, estimatedDurationMs })
     });
-    const result = data.data || { claimed: true, claimGeneration };
+    const result = data?.data;
+    if (!result || typeof result !== 'object' || typeof result.claimed !== 'boolean') {
+      const error = new Error('Core claim response did not contain an explicit claim decision');
+      error.code = 'BENCHMARK_CLAIM_RECEIPT_INVALID';
+      throw error;
+    }
     const confirmedGeneration = result.claimGeneration || result.pref?.benchmarkClaim?.claimGeneration;
-    if (confirmedGeneration) claimGenerationByOwner.set(ownerKey, confirmedGeneration);
+    const confirmedBatchId = result.batchId || result.pref?.benchmarkClaim?.batchId;
+    if (result.claimed === true
+      && (confirmedBatchId !== batchId || confirmedGeneration !== claimGeneration)) {
+      const error = new Error('Core claim receipt did not attest the requested batch and generation');
+      error.code = 'BENCHMARK_CLAIM_RECEIPT_MISMATCH';
+      throw error;
+    }
+    if (result.claimed === true) claimGenerationByOwner.set(ownerKey, claimGeneration);
+    else claimGenerationByOwner.delete(ownerKey);
     return result;
   } catch (err) {
     // 409 Conflict = already claimed — surface without throwing
@@ -375,8 +392,16 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
       logger.warn('Benchmark claim conflict — host already claimed', {
         hostUrl, batchId, error: err.message
       });
+      claimGenerationByOwner.delete(ownerKey);
       return { claimed: false, reason: err.message };
     }
+    // The request may have reached Core even when its response was lost.
+    // Cleanup is fenced by the locally generated UUID, so it can never clear
+    // another owner or a replacement generation.
+    if (err.code !== 'OUTBOUND_REQUEST_TOO_LARGE') {
+      await releaseBenchmarkClaim(hostUrl, batchId).catch(() => {});
+    }
+    claimGenerationByOwner.delete(ownerKey);
     throw err;
   }
 }
@@ -417,7 +442,12 @@ async function releaseBenchmarkClaim(hostUrl, batchId) {
       claimGeneration: claimGenerationByOwner.get(claimOwnerKey(hostUrl, batchId)) || null
     })
   });
-  const result = data.data || { released: true };
+  const result = data?.data;
+  if (!result || typeof result !== 'object' || typeof result.released !== 'boolean') {
+    const error = new Error('Core release response did not contain an explicit release decision');
+    error.code = 'BENCHMARK_RELEASE_RECEIPT_INVALID';
+    throw error;
+  }
   if (result.released === true) claimGenerationByOwner.delete(claimOwnerKey(hostUrl, batchId));
   return result;
 }
@@ -439,14 +469,8 @@ async function getBenchmarkClaims() {
     operationId: CORE_OPERATIONS.CLAIMS_ACTIVE,
   });
   const claims = data?.data?.claims || [];
-  for (const claim of claims) {
-    if (claim?.hostUrl && claim?.batchId && claim?.claimGeneration) {
-      claimGenerationByOwner.set(
-        claimOwnerKey(claim.hostUrl, claim.batchId),
-        claim.claimGeneration
-      );
-    }
-  }
+  // Discovery is not capability acquisition. Never import claim generations
+  // from this operator-visible list into the local proof map.
   return claims;
 }
 

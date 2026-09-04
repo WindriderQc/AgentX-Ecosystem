@@ -24,6 +24,7 @@ jest.mock('../../src/services/benchmarkServiceClient', () => ({
 }));
 
 const svc = require('../../src/services/hostPreferenceService');
+const originalFetch = global.fetch;
 
 function claim({
   hostUrl,
@@ -40,6 +41,7 @@ function claim({
     ? null
     : new Date(Date.now() - heartbeatAgeMinutes * 60 * 1000);
   return {
+    _id: `${hostUrl}-id`,
     hostUrl,
     status: 'benchmarking',
     benchmarkClaim: {
@@ -50,7 +52,14 @@ function claim({
       estimatedDurationMs: estimatedMinutes != null ? estimatedMinutes * 60 * 1000 : null,
       source,
       heartbeatAt,
-      heartbeatTtlMs: heartbeatTtlMinutes != null ? heartbeatTtlMinutes * 60 * 1000 : null
+      heartbeatTtlMs: heartbeatTtlMinutes != null ? heartbeatTtlMinutes * 60 * 1000 : null,
+      preClaimRuntime: claimGeneration ? {
+        schemaVersion: 1,
+        exact: true,
+        capturedAt: new Date(),
+        source: 'ollama_ps',
+        residents: []
+      } : null
     }
   };
 }
@@ -69,8 +78,10 @@ function mockReleaseHappyPath(claims) {
   mockFindOne.mockImplementation((q) => ({
     lean: () => Promise.resolve(byHost.get(q.hostUrl) || null)
   }));
-  mockFindOneAndUpdate.mockImplementation(() => ({
-    lean: () => Promise.resolve({ hostUrl: 'x', status: 'ready' })
+  mockFindOneAndUpdate.mockImplementation((query, update) => ({
+    lean: () => Promise.resolve(update?.$set?.['benchmarkClaim.heartbeatTtlMs']
+      ? byHost.get(query.hostUrl)
+      : { hostUrl: query.hostUrl, status: 'ready' })
   }));
 }
 
@@ -78,7 +89,10 @@ describe('reapStaleBenchmarkClaims', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetBatch.mockResolvedValue(null);
+    global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ models: [] }) }));
   });
+
+  afterAll(() => { global.fetch = originalFetch; });
 
   it('returns zero reaped when no claims exist', async () => {
     mockFindReturning([]);
@@ -116,7 +130,7 @@ describe('reapStaleBenchmarkClaims', () => {
     );
   });
 
-  it('releases a stale legacy claim without a generation through an exact CAS', async () => {
+  it('keeps a stale legacy claim fenced when no exact runtime snapshot exists', async () => {
     const claims = [claim({
       hostUrl: 'h-legacy',
       batchId: 'b-legacy',
@@ -131,17 +145,20 @@ describe('reapStaleBenchmarkClaims', () => {
     expect(r.reaped).toHaveLength(1);
     expect(r.reaped[0]).toEqual(expect.objectContaining({
       hostUrl: 'h-legacy',
-      released: true,
-      reason: null
+      released: false,
+      reason: expect.stringContaining('Exact pre-claim runtime snapshot is unavailable')
     }));
+    expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         'benchmarkClaim.batchId': 'b-legacy',
         'benchmarkClaim.claimGeneration': null,
         'benchmarkClaim.claimedAt': claims[0].benchmarkClaim.claimedAt
       }),
-      expect.any(Object),
-      expect.any(Object)
+      expect.objectContaining({
+        $set: expect.objectContaining({ 'benchmarkClaim.heartbeatTtlMs': expect.any(Number) })
+      }),
+      { new: true }
     );
   });
 

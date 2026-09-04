@@ -45,7 +45,8 @@ async function runBatchPreflight({
     setBatchPhase,
     recordBatchTimelineEvent,
     assertClaimActive,
-    claimIdentityFor
+    claimIdentityFor,
+    signal
 }) {
     const { profileCount } = preflightCounts(preflightResult);
     if (!profileCount) return;
@@ -88,7 +89,9 @@ async function runBatchPreflight({
             tracker.statusMessage = `Preflight: ${payload?.model || event}`;
             return recordBatchTimelineEvent(event, payload);
         };
-        await profilerOrchestrator.runPreflight(preflightResult, hostMap, { onEvent, assertClaimActive, claimIdentityFor });
+        await profilerOrchestrator.runPreflight(preflightResult, hostMap, {
+            onEvent, assertClaimActive, claimIdentityFor, signal
+        });
         tracker.status = 'completed';
     } catch (error) {
         tracker.status = 'failed';

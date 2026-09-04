@@ -110,7 +110,9 @@ function buildRefinementStages(lowerBound, upperBound, minIncrement) {
 
 function assessProbeStep(step, baselineSpeed) {
   const requestPassed = step.passed;
-  const hasGpuSpill = step.gpuPercent !== null && step.gpuPercent < 100;
+  const gpuResidencyVerified = step.gpuPercent === 100;
+  const contextHonored = Number(step.ollamaContextLength) >= Number(step.numCtx);
+  const promptCoverageVerified = Number(step.promptCoveragePct) >= Number(step.minimumPromptCoveragePct || 70);
   const degradationPct = baselineSpeed > 0
     ? Number(((1 - step.tokensPerSec / baselineSpeed) * 100).toFixed(1))
     : null;
@@ -119,7 +121,7 @@ function assessProbeStep(step, baselineSpeed) {
   // benchmark evidence, but do not turn an arbitrary speed delta into a
   // smaller runtime context contract. Context verification fails only when the
   // request/decode fails or the model spills off GPU.
-  if (requestPassed && !hasGpuSpill) {
+  if (requestPassed && gpuResidencyVerified && contextHonored && promptCoverageVerified) {
     step.passed = true;
     step.degradationPct = degradationPct;
     step.reason = `${step.tokensPerSec} tok/s (${degradationPct}% drop) GPU=${step.gpuPercent ?? '?'}%`;
@@ -128,9 +130,17 @@ function assessProbeStep(step, baselineSpeed) {
 
   step.passed = false;
   step.degradationPct = degradationPct;
-  step.reason = hasGpuSpill
-    ? `GPU spill: ${step.gpuPercent}% on GPU (${step.tokensPerSec} tok/s)`
-    : (step.reason || 'Request failed');
+  step.reason = !requestPassed
+    ? (step.reason || 'Request failed')
+    : step.gpuPercent == null
+      ? 'GPU residency unknown; no-spill is unverified'
+      : !gpuResidencyVerified
+      ? `GPU spill: ${step.gpuPercent}% on GPU (${step.tokensPerSec} tok/s)`
+      : !contextHonored
+        ? `Ollama allocated ${step.ollamaContextLength || 'unknown'} ctx, below requested ${step.numCtx}`
+        : !promptCoverageVerified
+          ? `Prompt eval covered ${step.promptCoveragePct ?? 'unknown'}%, below required ${step.minimumPromptCoveragePct || 70}%`
+          : (step.reason || 'Request failed');
   return step;
 }
 
@@ -176,9 +186,9 @@ async function resolveHostUrl(modelName, explicitHostUrl) {
   return admitOllamaTargetResolved(hostUrl, { configuredHosts: getConfiguredHosts() });
 }
 
-async function fetchModelMetadata(hostUrl, modelName) {
+async function fetchModelMetadata(hostUrl, modelName, options = {}) {
   try {
-    const data = await showModel(hostUrl, modelName);
+    const data = await showModel(hostUrl, modelName, { signal: options.signal });
     const info = data.model_info || {};
     let theoreticalMax = null;
     for (const key of Object.keys(info)) {
@@ -195,6 +205,7 @@ async function fetchModelMetadata(hostUrl, modelName) {
       architecture: info['general.architecture'] || data.details?.family || null
     };
   } catch (err) {
+    if (options.signal?.aborted) throw (options.signal.reason instanceof Error ? options.signal.reason : err);
     logger.warn('Failed to fetch model theoretical max', { hostUrl, modelName, error: err.message });
     return { theoreticalMax: null, modelInfo: {}, family: null, families: [], architecture: null };
   }
@@ -205,7 +216,7 @@ async function fetchModelTheoreticalMax(hostUrl, modelName) {
   return metadata.theoreticalMax;
 }
 
-async function sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs) {
+async function sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs, signal = null) {
   const start = Date.now();
   try {
     const data = await generate(hostUrl, {
@@ -215,9 +226,10 @@ async function sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs) {
       options: {
         num_ctx: numCtx,
         num_predict: PROBE_NUM_PREDICT,
-        temperature: 0.1
+        temperature: 0,
+        seed: 7
       }
-    }, { timeoutMs });
+    }, { timeoutMs, signal });
 
     const latencyMs = Date.now() - start;
     const evalCount = data.eval_count || 0;
@@ -234,6 +246,7 @@ async function sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs) {
       latencyMs
     };
   } catch (err) {
+    if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : err);
     return {
       ok: false,
       tokensPerSec: 0,
@@ -245,21 +258,22 @@ async function sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs) {
   }
 }
 
-async function snapshotVram(hostUrl) {
+async function snapshotVram(hostUrl, signal = null) {
   try {
-    const result = await ollamaVramService.getHostVram(hostUrl);
+    const result = await ollamaVramService.getHostVram(hostUrl, { signal });
     if (result.ok) {
       return { usedMiB: result.memoryUsedMiBTotal, totalMiB: result.memoryTotalMiBTotal };
     }
-  } catch (_) {
+  } catch (error) {
+    if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : error);
     // best effort
   }
   return { usedMiB: null, totalMiB: null };
 }
 
-async function snapshotGpuOffload(hostUrl, modelName) {
+async function snapshotGpuOffload(hostUrl, modelName, signal = null) {
   try {
-    const data = await listRunning(hostUrl);
+    const data = await listRunning(hostUrl, { signal });
     const model = (data.models || []).find((item) =>
       isSameOllamaModel(item.name, modelName) || isSameOllamaModel(item.model, modelName)
     );
@@ -277,15 +291,17 @@ async function snapshotGpuOffload(hostUrl, modelName) {
       sizeVram,
       contextLength: model.context_length || null
     };
-  } catch (_) {
+  } catch (error) {
+    if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : error);
     return { gpuPercent: null, sizeTotal: null, sizeVram: null, contextLength: null };
   }
 }
 
-async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80, modelContext = {}) {
+async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80, modelContext = {}, options = {}) {
   const fillRatio = Math.min(100, Math.max(5, Number(promptFillPct) || 80)) / 100;
-  const { prompt } = generateFillPrompt(Math.floor(numCtx * fillRatio));
-  const probeResult = await sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs);
+  const { prompt, estimatedTokens } = generateFillPrompt(Math.floor(numCtx * fillRatio));
+  const probeResult = await sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs, options.signal);
+  options.assertClaimActive?.();
   const shortCompletion = probeResult.ok && probeResult.completionTokens < MIN_PROBE_COMPLETION_TOKENS;
   const plausibility = probeResult.ok
     ? validateThroughput(probeResult.tokensPerSec)
@@ -293,8 +309,8 @@ async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80
   const invalidThroughput = probeResult.ok && !plausibility.plausible;
   const zeroThroughputBoundary = probeResult.ok && probeResult.tokensPerSec === 0;
   const [vram, offload] = await Promise.all([
-    snapshotVram(hostUrl),
-    snapshotGpuOffload(hostUrl, modelName)
+    snapshotVram(hostUrl, options.signal),
+    snapshotGpuOffload(hostUrl, modelName, options.signal)
   ]);
 
   return {
@@ -302,6 +318,11 @@ async function runStep(hostUrl, modelName, numCtx, timeoutMs, promptFillPct = 80
     requestSucceeded: probeResult.ok,
     tokensPerSec: probeResult.tokensPerSec,
     promptTokens: probeResult.promptTokens,
+    estimatedPromptTokens: estimatedTokens,
+    promptCoveragePct: probeResult.promptTokens > 0 && estimatedTokens > 0
+      ? Number(((probeResult.promptTokens / estimatedTokens) * 100).toFixed(1))
+      : null,
+    minimumPromptCoveragePct: options.minimumPromptCoveragePct || 70,
     completionTokens: probeResult.completionTokens,
     vramUsedMiB: vram.usedMiB,
     vramTotalMiB: vram.totalMiB,
@@ -339,11 +360,17 @@ async function probeModelContext(modelName, options = {}) {
   const minCtx = options.minCtx ?? cfg.minCtx;
   const maxCtx = options.maxCtx ?? cfg.maxCtx;
   const promptFillPct = Math.min(100, Math.max(5, Number(options.contextProbeFillPct ?? options.promptFillPct ?? 80) || 80));
+  const candidateRepeats = Math.max(2, Math.min(5, Number(options.candidateRepeats) || 2));
   const interactiveThreshold = Number.isFinite(Number(options.interactiveDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(options.interactiveDegradationThreshold))) : 15;
   const documentThreshold = Number.isFinite(Number(options.documentDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(options.documentDegradationThreshold))) : 30;
   const checkpoint = typeof options.assertClaimActive === 'function' ? options.assertClaimActive : () => {};
+  const probeOptions = {
+    signal: options.signal,
+    assertClaimActive: checkpoint,
+    minimumPromptCoveragePct: Number(options.minimumPromptCoveragePct) || 70
+  };
   const probeNotify = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   const normalizedModel = normalizeModelName(modelName);
   const hostUrl = await resolveHostUrl(normalizedModel, options.hostUrl);
@@ -362,12 +389,40 @@ async function probeModelContext(modelName, options = {}) {
       targetHost: hostUrl,
       artifactIdentity
     });
-    const metadata = await fetchModelMetadata(hostUrl, normalizedModel);
+    const metadata = await fetchModelMetadata(hostUrl, normalizedModel, { signal: options.signal });
     const theoreticalMax = metadata.theoreticalMax;
     const modelContext = { modelName: normalizedModel, hostUrl, ...metadata };
     const upperBound = Math.max(minCtx, Math.min(theoreticalMax || maxCtx, maxCtx));
     const coarseCandidates = buildCoarseCandidates(minCtx, upperBound);
     const stepCache = new Map();
+
+    async function measureCandidate(numCtx, baselineSpeed = null, seedSteps = []) {
+      const repetitions = [...seedSteps];
+      while (repetitions.length < candidateRepeats) {
+        checkpoint();
+        repetitions.push(await runStep(
+          hostUrl, normalizedModel, numCtx, timeoutMs, promptFillPct, modelContext, probeOptions
+        ));
+      }
+      const speeds = repetitions.map(step => Number(step.tokensPerSec)).filter(value => value > 0);
+      const comparisonSpeed = baselineSpeed || (speeds.length
+        ? [...speeds].sort((a, b) => a - b)[Math.floor(speeds.length / 2)]
+        : 0);
+      const assessed = repetitions.map(step => assessProbeStep(step, comparisonSpeed));
+      const failed = assessed.find(step => !step.passed);
+      const representative = failed || [...assessed].sort((a, b) => Number(a.tokensPerSec) - Number(b.tokensPerSec))[0];
+      return {
+        ...representative,
+        tokensPerSec: speeds.length
+          ? Number((speeds.reduce((sum, value) => sum + value, 0) / speeds.length).toFixed(2))
+          : 0,
+        passed: assessed.every(step => step.passed),
+        reason: failed?.reason || representative?.reason || null,
+        repetitionCount: assessed.length,
+        tokensPerSecMin: speeds.length ? Math.min(...speeds) : null,
+        tokensPerSecMax: speeds.length ? Math.max(...speeds) : null
+      };
+    }
 
     if (coarseCandidates.length === 0) {
       throw new Error(`No valid context candidates for ${normalizedModel}`);
@@ -380,7 +435,7 @@ async function probeModelContext(modelName, options = {}) {
     // that candidate, preserving the existing evidence and pass semantics.
     let residentCandidate = null;
     try {
-      const running = await listRunning(hostUrl, { timeoutMs: 8000 });
+      const running = await listRunning(hostUrl, { timeoutMs: 8000, signal: options.signal });
       const resident = (running.models || []).find(item =>
         isSameOllamaModel(item.name, normalizedModel) || isSameOllamaModel(item.model, normalizedModel)
       );
@@ -398,7 +453,8 @@ async function probeModelContext(modelName, options = {}) {
           residentNumCtx,
           timeoutMs,
           promptFillPct,
-          modelContext
+          modelContext,
+          probeOptions
         );
         probeNotify({
           type: 'resident',
@@ -409,12 +465,13 @@ async function probeModelContext(modelName, options = {}) {
         });
       }
     } catch (err) {
+      if (options.signal?.aborted) throw (options.signal.reason instanceof Error ? options.signal.reason : err);
       logger.debug(`Could not pretest resident context for ${normalizedModel}: ${err.message}`);
     }
 
     probeNotify({ type: 'baseline', numCtx: coarseCandidates[0], tokensPerSec: null });
     checkpoint();
-    const baseline = await runStep(hostUrl, normalizedModel, coarseCandidates[0], timeoutMs, promptFillPct, modelContext);
+    const baseline = await measureCandidate(coarseCandidates[0]);
     steps.push(baseline);
     stepCache.set(baseline.numCtx, baseline);
 
@@ -441,10 +498,11 @@ async function probeModelContext(modelName, options = {}) {
 
       // The fill percentage is fixed for a whole probe run so throughput
       // remains comparable across verified windows.
-      const rawStep = residentCandidate?.numCtx === numCtx
-        ? residentCandidate
-        : await runStep(hostUrl, normalizedModel, numCtx, timeoutMs, promptFillPct, modelContext);
-      const evaluatedStep = assessProbeStep(rawStep, baselineSpeed);
+      const evaluatedStep = await measureCandidate(
+        numCtx,
+        baselineSpeed,
+        residentCandidate?.numCtx === numCtx ? [residentCandidate] : []
+      );
 
       stepCache.set(numCtx, evaluatedStep);
       steps.push(evaluatedStep);
@@ -501,6 +559,7 @@ async function probeModelContext(modelName, options = {}) {
       throw new Error(`Artifact or runtime changed during context probe for ${normalizedModel} on ${hostUrl}`);
     }
 
+    checkpoint();
     const snapshot = await ModelContextProbeSnapshot.create({
       modelName: normalizedModel,
       hostUrl,
@@ -538,6 +597,7 @@ async function probeModelContext(modelName, options = {}) {
 
     const snapshotObject = snapshot.toObject();
     try {
+      checkpoint();
       await modelContextProfileService.updateFromProbeSnapshot(snapshotObject);
     } catch (profileErr) {
       logger.warn('Failed to update model context profile from probe snapshot', {
@@ -546,10 +606,16 @@ async function probeModelContext(modelName, options = {}) {
         snapshotId: snapshotObject._id ? String(snapshotObject._id) : null,
         error: profileErr.message
       });
+      profileErr.code = profileErr.code || 'MODEL_CONTEXT_PROFILE_PERSIST_FAILED';
+      throw profileErr;
     }
 
     return snapshotObject;
   } catch (err) {
+    if (options.signal?.aborted) {
+      throw (options.signal.reason instanceof Error ? options.signal.reason : err);
+    }
+    checkpoint();
     const snapshot = await ModelContextProbeSnapshot.create({
       modelName: normalizedModel,
       hostUrl,

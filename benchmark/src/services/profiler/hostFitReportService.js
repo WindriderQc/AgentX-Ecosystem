@@ -94,14 +94,16 @@ async function buildHostFitReport(hostId) {
     if (p) {
       const modelVramMiB = (p.spill?.sizeTotal ? p.spill.sizeTotal / MIB : null) ?? p.vramUsedMiB ?? null;
       const vramPct = (modelVramMiB && vramTotalMiB) ? est.round((modelVramMiB / vramTotalMiB) * 100) : null;
-      const spillDetected = !!p.spill?.spillDetected;
+      const spillVerified = p.spill?.verified === true;
+      const spillDetected = spillVerified ? !!p.spill?.spillDetected : null;
       const fit = est.measuredFitLevel({ vramPct, spillDetected, reliability: p.measurementQuality?.reliability });
       const tps = est.round(p.tokensPerSec, 1);
       const benchScore = bench.avgCompositeScore != null ? bench.avgCompositeScore : null;
       const activeB = est.parseActiveParams(name);
       const moeActiveB = (activeB && paramB && activeB < paramB) ? activeB : null;
       const dims = est.dimensionScores({
-        tps, vramPct, spillDetected, benchmarkScore: benchScore, paramB, quant, ctx: p.optimalNumCtx || null
+        tps, vramPct, spillDetected, benchmarkScore: benchScore, paramB, quant,
+        ctx: p.recommendedInteractiveContext || null
       });
       measured.push({
         modelName: name,
@@ -111,8 +113,10 @@ async function buildHostFitReport(hostId) {
         tokensPerSec: tps,
         ttftMs: est.round(p.ttftMs),
         reliability: p.measurementQuality?.reliability || null,
-        optimalNumCtx: p.optimalNumCtx || null,
-        safeCtx: p.spill?.lastSafeNumCtx || null,
+        maxVerifiedContext: p.maxVerifiedContext || null,
+        recommendedInteractiveContext: p.recommendedInteractiveContext || null,
+        recommendedDocumentContext: p.recommendedDocumentContext || null,
+        spillVerified,
         spillDetected,
         spillNumCtx: p.spill?.spillNumCtx || null,
         modelVramMiB: est.round(modelVramMiB),

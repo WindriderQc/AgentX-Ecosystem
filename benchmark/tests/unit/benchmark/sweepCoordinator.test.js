@@ -86,8 +86,11 @@ function readyEvidence(model, { vramUsedMiB = 3139 } = {}) {
             hostUrl: HOST.hostUrl,
             artifactDigest: id.digest,
             runtimeFingerprint: id.runtimeFingerprint,
-            recommendedContext: 16384,
-            verifiedMaxContext: 32768,
+            recommendedInteractiveContext: 16384,
+            recommendedDocumentContext: 32768,
+            maxVerifiedContext: 65536,
+            recommendationStatus: 'verified',
+            revalidationRequired: false,
             stale: false
         }
     };
@@ -146,6 +149,34 @@ describe('benchmark sweep coordinator exact-artifact planning', () => {
             hostId: HOST.hostId,
             depth: 'standard',
             modelNames: [model]
+        });
+        expect(plan.payloads.benchmark).toBeNull();
+    });
+
+    it('never authorizes a sweep from a legacy 262K recommendation', async () => {
+        const model = 'qwen-legacy:latest';
+        const evidence = readyEvidence(model);
+        evidence.context = {
+            ...evidence.context,
+            recommendedInteractiveContext: null,
+            recommendedDocumentContext: null,
+            maxVerifiedContext: 262144,
+            recommendedContext: 262144,
+            recommendationStatus: 'unknown',
+            revalidationRequired: true,
+            stale: true
+        };
+        const deps = makeDeps({
+            inventory: [model],
+            profileByName: { [model]: evidence.profile },
+            performanceByName: { [model]: evidence.performance },
+            contextByName: { [model]: evidence.context }
+        });
+
+        const plan = await buildSweepPlan({ hostId: HOST.hostId, candidates: [model] }, deps);
+        expect(plan.candidates[0]).toMatchObject({
+            readiness: 'needs_profile',
+            contextValidated: false
         });
         expect(plan.payloads.benchmark).toBeNull();
     });

@@ -53,13 +53,9 @@ const BENCHMARK_CLAIM_SOURCE = 'benchmark';
  * both `status === 'benchmarking'` and a present `benchmarkClaim.batchId`,
  * so a status drift on either side still trips the guard.
  *
- * Safe paths that should *bypass* this check:
- *   - reapStaleBenchmarkClaims → restorePinnedModels (the claim is being
- *     released for staleness; restoring is correct)
- *   - releaseBenchmarkClaim → restorePinnedModels (the claim was just
- *     cleared by the rightful owner; restoring is correct)
- * Both call restorePinnedModels AFTER releasing the claim, so the check
- * naturally returns false at that point.
+ * The only safe bypass is releaseBenchmarkClaim's fenced restore, which
+ * proves the exact batch and generation and keeps the claim active until
+ * pinned residency has been verified.
  */
 function hasActiveBenchmarkClaim(pref) {
   if (!pref) return false;
@@ -109,6 +105,15 @@ function getBenchmarkClaimReaperIntervalMs() {
 // estimate (e.g., 5h for a 15-min batch) would let a crashed batch lock a
 // host for 8+ hours. 2h ceiling matches the reaper's no-estimate hard cap.
 const CLAIM_DURATION_CAP_MS = 2 * 60 * 60 * 1000;
+const CLAIM_FINALIZE_TTL_MS = 30 * 60 * 1000;
+const CLAIM_SNAPSHOT_WAIT_MS = Math.max(
+  5_000,
+  (Number(process.env.BENCHMARK_CLAIM_DRAIN_TIMEOUT_MS) || 30_000) + 5_000
+);
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function isMongoObjectIdLike(value) {
   return typeof value === 'string' && /^[a-f0-9]{24}$/i.test(value);
@@ -263,6 +268,29 @@ async function claimBenchmark(hostUrl, batchId, estimatedDurationMs = null, opts
         pref: existing
       };
     }
+    // A concurrent retry can observe the claim after the CAS but before its
+    // exact runtime snapshot has been attached. It must not receive a usable
+    // capability early, nor attempt to tear down the in-progress owner.
+    if (existing.benchmarkClaim?.preClaimRuntime?.exact !== true) {
+      const deadline = Date.now() + CLAIM_SNAPSHOT_WAIT_MS;
+      do {
+        await sleep(50);
+        existing = await HostPreference.findOne({ hostUrl }).lean();
+        if (existing?.status !== 'benchmarking'
+          || existing?.benchmarkClaim?.batchId !== batchId
+          || existing?.benchmarkClaim?.claimGeneration !== normalizedOptions.claimGeneration) {
+          return claimConflict(existing, batchId);
+        }
+        if (existing.benchmarkClaim?.preClaimRuntime?.exact === true) break;
+      } while (Date.now() < deadline);
+      if (existing.benchmarkClaim?.preClaimRuntime?.exact !== true) {
+        return {
+          claimed: false,
+          reason: 'exact pre-claim runtime snapshot is still unavailable',
+          pref: existing
+        };
+      }
+    }
     const set = {
       'benchmarkClaim.heartbeatAt': normalizedOptions.heartbeatAt
     };
@@ -346,10 +374,68 @@ async function claimBenchmark(hostUrl, batchId, estimatedDurationMs = null, opts
   ).lean();
 
   if (updated?.benchmarkClaim?.batchId === batchId) {
+    const exactClaim = {
+      batchId,
+      claimGeneration: updated.benchmarkClaim.claimGeneration
+    };
+    let preClaimRuntime;
+    try {
+      // The claim CAS above fences chat/watchdog traffic. Snapshot only after
+      // that fence exists, and do not return ownership to Benchmark until the
+      // snapshot is durably bound to this exact generation.
+      const hostPrefService = require('./hostPreferenceService');
+      preClaimRuntime = await hostPrefService.captureBenchmarkRuntime(hostUrl);
+    } catch (error) {
+      await HostPreference.findOneAndUpdate(
+        {
+          _id: updated._id,
+          hostUrl,
+          status: 'benchmarking',
+          'benchmarkClaim.batchId': batchId,
+          'benchmarkClaim.claimGeneration': exactClaim.claimGeneration
+        },
+        { $set: { status: prevStatus, benchmarkClaim: null } },
+        { new: true }
+      ).lean();
+      return {
+        claimed: false,
+        reason: `exact pre-claim runtime snapshot failed: ${error.message}`,
+        pref: await HostPreference.findOne({ hostUrl }).lean()
+      };
+    }
+    const snapshotted = await HostPreference.findOneAndUpdate(
+      {
+        _id: updated._id,
+        hostUrl,
+        status: 'benchmarking',
+        'benchmarkClaim.batchId': batchId,
+        'benchmarkClaim.claimGeneration': exactClaim.claimGeneration
+      },
+      { $set: { 'benchmarkClaim.preClaimRuntime': preClaimRuntime } },
+      { new: true }
+    ).lean();
+    if (!snapshotted) {
+      // A claim without its exact snapshot is unusable. Clear it only when
+      // this exact generation still owns the fence; otherwise leave the new
+      // owner untouched and report the conflict.
+      await HostPreference.findOneAndUpdate(
+        {
+          _id: updated._id,
+          hostUrl,
+          status: 'benchmarking',
+          'benchmarkClaim.batchId': batchId,
+          'benchmarkClaim.claimGeneration': exactClaim.claimGeneration,
+          'benchmarkClaim.preClaimRuntime.exact': { $ne: true }
+        },
+        { $set: { status: prevStatus, benchmarkClaim: null } },
+        { new: true }
+      ).lean();
+      return claimConflict(await HostPreference.findOne({ hostUrl }).lean(), batchId);
+    }
     return {
       claimed: true,
-      claimGeneration: updated.benchmarkClaim.claimGeneration,
-      pref: updated
+      claimGeneration: snapshotted.benchmarkClaim.claimGeneration,
+      pref: snapshotted
     };
   }
   return claimConflict(await HostPreference.findOne({ hostUrl }).lean(), batchId);
@@ -363,10 +449,8 @@ async function claimBenchmark(hostUrl, batchId, estimatedDurationMs = null, opts
  * @returns {Promise<{ released: boolean, reason?: string, pref?: object }>}
  */
 async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
-  // opts.skipPinRestore — when true, do NOT auto-restore the pin after
-  // release. Used by reapStaleBenchmarkClaims, which calls restorePinnedModels
-  // explicitly with its own logging path. All other callers (the bench's
-  // finally{}, the operator endpoint) want the auto-restore (0175).
+  // opts.skipPinRestore — internal recovery/testing escape hatch. Normal
+  // callers and the reaper restore under the exact claim before releasing.
   const { skipPinRestore = false, allowLegacyMissingGeneration = false } = opts;
   const rawClaimGeneration = opts.claimGeneration ?? opts.claim_generation;
   const claimGeneration = cleanClaimGeneration(rawClaimGeneration);
@@ -386,7 +470,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     return { released: false, reason: 'legacy claim expectedClaimedAt is required' };
   }
 
-  const existing = await HostPreference.findOne({ hostUrl }).lean();
+  let existing = await HostPreference.findOne({ hostUrl }).lean();
   if (!existing) {
     void observeClaimReleaseFailure({
       host: hostUrl,
@@ -439,6 +523,106 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     };
   }
 
+  if (!skipPinRestore && !legacyMissingGeneration
+    && existing.benchmarkClaim?.preClaimRuntime?.exact !== true) {
+    const deadline = Date.now() + CLAIM_SNAPSHOT_WAIT_MS;
+    do {
+      await sleep(50);
+      const current = await HostPreference.findOne({ hostUrl }).lean();
+      const sameClaim = current?.status === 'benchmarking'
+        && current?.benchmarkClaim?.batchId === batchId
+        && (legacyMissingGeneration
+          ? (current?.benchmarkClaim?.claimGeneration ?? null) === null
+            && new Date(current?.benchmarkClaim?.claimedAt).getTime() === expectedLegacyClaimedAt.getTime()
+          : current?.benchmarkClaim?.claimGeneration === claimGeneration);
+      if (!sameClaim) {
+        return {
+          released: false,
+          reason: 'claim changed while awaiting exact pre-claim snapshot',
+          pref: current || undefined
+        };
+      }
+      existing = current;
+      if (existing.benchmarkClaim?.preClaimRuntime?.exact === true) break;
+    } while (Date.now() < deadline);
+    if (existing.benchmarkClaim?.preClaimRuntime?.exact !== true) {
+      return {
+        released: false,
+        reason: 'exact pre-claim runtime snapshot remained unavailable',
+        pref: existing
+      };
+    }
+  }
+
+  // Fenced finalization: restore and verify the exact observable pre-claim
+  // Ollama runtime while this
+  // exact batch+generation still owns the host. Renew the heartbeat from
+  // inside Core so the reaper cannot clear the claim during a cold reload.
+  // If restoration fails, keep the claim in place and fail closed; exposing
+  // the host before its pins are verified would race chat/watchdog traffic.
+  let pinRestore = null;
+  if (!skipPinRestore) {
+    const hostPrefService = require('./hostPreferenceService');
+    const finalizingFilter = {
+      _id: existing._id,
+      hostUrl,
+      status: 'benchmarking',
+      'benchmarkClaim.batchId': batchId,
+      'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration
+    };
+    if (legacyMissingGeneration) finalizingFilter['benchmarkClaim.claimedAt'] = expectedLegacyClaimedAt;
+    const renewed = await HostPreference.findOneAndUpdate(
+      finalizingFilter,
+      { $set: {
+        'benchmarkClaim.heartbeatAt': new Date(),
+        'benchmarkClaim.heartbeatTtlMs': CLAIM_FINALIZE_TTL_MS
+      } },
+      { new: true }
+    ).lean();
+    if (!renewed) {
+      return {
+        released: false,
+        reason: 'claim changed before fenced runtime restore',
+        pref: await HostPreference.findOne({ hostUrl }).lean()
+      };
+    }
+    try {
+      pinRestore = await hostPrefService.restoreBenchmarkRuntime(
+        hostUrl,
+        renewed.benchmarkClaim?.preClaimRuntime,
+        {
+          batchId,
+          claimGeneration: legacyMissingGeneration ? null : claimGeneration
+        }
+      );
+    } catch (err) {
+      pinRestore = {
+        host: hostUrl,
+        status: 'error',
+        verified: false,
+        degraded: err.code === 'BENCHMARK_RUNTIME_SNAPSHOT_MISSING',
+        error: err.message
+      };
+    }
+    if (pinRestore?.status !== 'ready' || pinRestore?.verified !== true) {
+      const error = pinRestore?.error || 'Pre-claim runtime restore did not verify';
+      void observePinRestoreFailure({
+        host: hostUrl,
+        models: (renewed.benchmarkClaim?.preClaimRuntime?.residents || []).map(entry => entry.model),
+        batchId,
+        error,
+        source: 'benchmark-claim-fenced-release'
+      });
+      return {
+        released: false,
+        reason: `fenced runtime restore failed: ${error}`,
+        pinRestore,
+        runtimeRestore: pinRestore,
+        pref: await HostPreference.findOne({ hostUrl }).lean()
+      };
+    }
+  }
+
   const restoreStatus = existing.benchmarkClaim?.prevStatus || 'idle';
   const releaseFilter = {
     _id: existing._id,
@@ -471,7 +655,8 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
             owner: null,
             note: null,
             heartbeatAt: null,
-            heartbeatTtlMs: null
+            heartbeatTtlMs: null,
+            preClaimRuntime: null
           }
         }
       },
@@ -503,33 +688,13 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     };
   }
 
-  // 0175: now that we gate warmHost / restorePinnedModels on active claims,
-  // the bench's pre-release restoreAllDedication call becomes a no-op (good
-  // - that ordering was the trigger for mid-batch reloads). Trigger pin
-  // restoration here so the operator's preferred default still comes back
-  // promptly without waiting up to 60s for the reconciler tick. This now
-  // blocks until the restore path verifies Ollama residency; returning
-  // "released" while a restore silently failed is worse than taking the
-  // extra time at the end of a disruptive benchmark/profiler run. The reaper
-  // passes skipPinRestore=true and runs its own restore so it can attach
-  // reaper-specific logging.
-  let pinRestore = null;
-  if (!skipPinRestore) {
-    // Lazy require to avoid the load-time cycle with hostPreferenceService.
-    const hostPrefService = require('./hostPreferenceService');
-    const entries = hostPrefService.getPinnedEntries(updated);
-    const anyAutoRestore = entries.some(e => e.autoRestore !== false);
-    if (entries.length > 0 && anyAutoRestore) {
-      try {
-        pinRestore = await hostPrefService.restorePinnedModels(hostUrl);
-      } catch (err) {
-        pinRestore = { host: hostUrl, status: 'error', error: err.message };
-        logger.warn(`[HostPreference] post-release pin restore failed on ${hostUrl}: ${err.message}`);
-      }
-    }
-  }
-
-  return { released: true, pref: updated, pinRestore, legacyClaimRecovered: legacyMissingGeneration };
+  return {
+    released: true,
+    pref: updated,
+    pinRestore,
+    runtimeRestore: pinRestore,
+    legacyClaimRecovered: legacyMissingGeneration
+  };
 }
 
 /**
@@ -628,9 +793,6 @@ async function reapStaleBenchmarkClaims(opts = {}) {
   const claims = await HostPreference.find({ status: 'benchmarking' }).lean();
   const reaped = [];
 
-  // Lazy require to avoid the load-time cycle with hostPreferenceService.
-  const hostPrefService = require('./hostPreferenceService');
-
   for (const pref of claims) {
     const claim = pref.benchmarkClaim || {};
     const claimedAt = claim.claimedAt ? new Date(claim.claimedAt).getTime() : 0;
@@ -670,43 +832,12 @@ async function reapStaleBenchmarkClaims(opts = {}) {
     }
     if (!staleReason) continue;
 
-    // Reaper drives its own restore + logging below; ask the release path
-    // not to schedule a duplicate restorePinnedModels call.
     const result = await releaseBenchmarkClaim(pref.hostUrl, claim.batchId, {
-      skipPinRestore: true,
       claimGeneration: claim.claimGeneration,
       allowLegacyMissingGeneration: true,
       expectedClaimedAt: claim.claimedAt
     });
-    // If the reaped batch left pinned models displaced, restore them now.
-    // The batch's own finally{} didn't run (that's why we're reaping), so
-    // nobody else will do it. restorePinnedModels is a no-op if autoRestore
-    // is false on every entry.
-    let pinRestored = false;
-    const entries = hostPrefService.getPinnedEntries(pref);
-    const anyAutoRestore = entries.some(e => e.autoRestore !== false);
-    if (result.released && entries.length > 0 && anyAutoRestore) {
-      try {
-        logger.info('[hostPreferenceService] reaper triggering pin restore', {
-          hostUrl: pref.hostUrl,
-          pinnedModels: entries.map(e => e.model),
-          batchId: claim.batchId
-        });
-        const restoreResult = await hostPrefService.restorePinnedModels(pref.hostUrl);
-        pinRestored = restoreResult?.status !== 'error';
-      } catch (err) {
-        logger.warn('[hostPreferenceService] reaper pin restore failed', {
-          hostUrl: pref.hostUrl, error: err.message
-        });
-        void observePinRestoreFailure({
-          host: pref.hostUrl,
-          models: entries.map(entry => entry.model),
-          batchId: claim.batchId,
-          error: err.message,
-          source: 'benchmark-claim-reaper'
-        });
-      }
-    }
+    const pinRestored = result.pinRestore?.verified === true;
     reaped.push({
       hostUrl: pref.hostUrl,
       batchId: claim.batchId,

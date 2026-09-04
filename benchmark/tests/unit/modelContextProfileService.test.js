@@ -110,6 +110,22 @@ describe('modelContextProfileService', () => {
     }));
   });
 
+  it('marks a legacy 262K recommendation unknown while preserving capacity history', () => {
+    expect(service.normalizeContextProfile({
+      modelName: 'ornith:latest',
+      recommendedContext: 262144,
+      verifiedMaxContext: 262144
+    })).toMatchObject({
+      maxVerifiedContext: 262144,
+      historicalMaxVerifiedContext: 262144,
+      recommendedInteractiveContext: null,
+      recommendedDocumentContext: null,
+      recommendedContext: null,
+      recommendationStatus: 'unknown',
+      revalidationRequired: true
+    });
+  });
+
   it('ignores failed or incomplete snapshots', async () => {
     await expect(service.updateFromProbeSnapshot({
       modelName: 'ax/qwen3.5:9b',

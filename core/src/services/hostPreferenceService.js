@@ -158,6 +158,242 @@ async function unloadModel(hostUrl, model) {
   }
 }
 
+function benchmarkSnapshotKeepAlive(modelInfo, capturedAt) {
+  const expiresAt = modelInfo?.expires_at || modelInfo?.expiresAt;
+  const parsed = expiresAt ? new Date(expiresAt) : null;
+  if (!parsed || !Number.isFinite(parsed.getTime())) {
+    const error = new Error(`Ollama did not expose an expiry for resident model ${modelInfo?.name || modelInfo?.model || 'unknown'}`);
+    error.code = 'BENCHMARK_RUNTIME_SNAPSHOT_INCOMPLETE';
+    throw error;
+  }
+  // Ollama represents an infinite keep-alive with a far-future timestamp.
+  if (parsed.getUTCFullYear() >= 9000) return { keepAlive: -1, expiresAt: parsed };
+  return {
+    keepAlive: Math.max(1, Math.ceil((parsed.getTime() - capturedAt.getTime()) / 1000)),
+    expiresAt: parsed
+  };
+}
+
+/**
+ * Capture the exact observable Ollama residency for a benchmark claim.
+ * Called only after Core has fenced the host, and before claim acquisition is
+ * returned to Benchmark, so no profiler mutation can precede the snapshot.
+ */
+async function captureBenchmarkRuntime(hostUrl) {
+  const drainTimeoutMs = Math.max(1_000, Number(process.env.BENCHMARK_CLAIM_DRAIN_TIMEOUT_MS) || 30_000);
+  const drainDeadline = Date.now() + drainTimeoutMs;
+  while (true) {
+    while (await hostGate.hostHasInflightAnywhere(hostUrl)) {
+      if (Date.now() >= drainDeadline) {
+        const error = new Error(`Timed out draining in-flight inference on ${hostUrl} before benchmark snapshot`);
+        error.code = 'BENCHMARK_HOST_DRAIN_TIMEOUT';
+        throw error;
+      }
+      await sleep(50);
+    }
+    // One quiet interval closes the release-to-next-waiter transition:
+    // requests admitted before the claim may move from queued to in-flight as
+    // the prior request releases, but new requests fail the status fence.
+    await sleep(50);
+    if (!await hostGate.hostHasInflightAnywhere(hostUrl)) break;
+    if (Date.now() >= drainDeadline) {
+      const error = new Error(`Timed out draining in-flight inference on ${hostUrl} before benchmark snapshot`);
+      error.code = 'BENCHMARK_HOST_DRAIN_TIMEOUT';
+      throw error;
+    }
+  }
+  const capturedAt = new Date();
+  const running = await fetchRunningModelInfosStrict(hostUrl);
+  const residents = running.map((entry) => {
+    const model = entry?.name || entry?.model;
+    if (!model) {
+      const error = new Error('Ollama returned a resident model without an identity');
+      error.code = 'BENCHMARK_RUNTIME_SNAPSHOT_INCOMPLETE';
+      throw error;
+    }
+    const contextLength = readLoadedContextLength(entry);
+    if (!contextLength) {
+      const error = new Error(`Ollama did not expose context_length for resident model ${model}`);
+      error.code = 'BENCHMARK_RUNTIME_SNAPSHOT_INCOMPLETE';
+      throw error;
+    }
+    const expiry = benchmarkSnapshotKeepAlive(entry, capturedAt);
+    return {
+      model,
+      contextLength,
+      keepAlive: expiry.keepAlive,
+      expiresAt: expiry.expiresAt
+    };
+  });
+  return {
+    capturedAt,
+    source: 'ollama_ps',
+    exact: true,
+    residents,
+    error: null
+  };
+}
+
+function desiredBenchmarkResidents(snapshot, now = Date.now()) {
+  return (snapshot?.residents || []).filter((entry) => {
+    if (Number(entry.keepAlive) === -1) return true;
+    const expiry = entry.expiresAt ? new Date(entry.expiresAt).getTime() : NaN;
+    return Number.isFinite(expiry) && expiry > now;
+  });
+}
+
+function benchmarkResidentExpiryMatches(target, runningEntry, now = Date.now()) {
+  const actualRaw = runningEntry?.expires_at || runningEntry?.expiresAt;
+  const actual = actualRaw ? new Date(actualRaw) : null;
+  if (!actual || !Number.isFinite(actual.getTime())) return false;
+  if (Number(target.keepAlive) === -1) return actual.getUTCFullYear() >= 9000;
+  const expected = target.expiresAt ? new Date(target.expiresAt).getTime() : NaN;
+  if (!Number.isFinite(expected) || expected <= now) return false;
+  // Ollama exposes second-resolution expiry and reload itself consumes time.
+  return Math.abs(actual.getTime() - expected) <= 5_000;
+}
+
+async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
+  if (!snapshot || snapshot.exact !== true || !Array.isArray(snapshot.residents)) {
+    return {
+      host: hostUrl,
+      status: 'error',
+      code: 'BENCHMARK_RUNTIME_SNAPSHOT_MISSING',
+      verified: false,
+      degraded: true,
+      error: 'Exact pre-claim runtime snapshot is unavailable'
+    };
+  }
+
+  const assertFence = async () => {
+    const current = await HostPreference.findOne({ hostUrl }).lean();
+    if (current?.status !== 'benchmarking'
+      || current?.benchmarkClaim?.batchId !== benchmarkClaim?.batchId
+      || current?.benchmarkClaim?.claimGeneration !== benchmarkClaim?.claimGeneration) {
+      const error = new Error('Benchmark claim no longer owns the host while restoring runtime');
+      error.code = 'BENCHMARK_CLAIM_LOST';
+      throw error;
+    }
+  };
+
+  const desired = desiredBenchmarkResidents(snapshot);
+  const desiredNames = desired.map(entry => entry.model);
+  let running = await fetchRunningModelInfosStrict(hostUrl);
+
+  for (const entry of running) {
+    const loaded = entry.name || entry.model;
+    if (desired.some(target => pinNamesMatch(target.model, loaded))) continue;
+    if (hostGate.inFlightFor(hostUrl, loaded) > 0) {
+      return {
+        host: hostUrl,
+        status: 'busy',
+        verified: false,
+        degraded: false,
+        error: `Cannot restore pre-claim runtime while ${loaded} has active inference`
+      };
+    }
+    await assertFence();
+    const unloaded = await unloadModel(hostUrl, loaded);
+    if (unloaded.status !== 'ok') {
+      return {
+        host: hostUrl,
+        status: 'error',
+        verified: false,
+        degraded: false,
+        error: `Failed to unload post-claim resident ${loaded}: ${unloaded.error}`
+      };
+    }
+  }
+
+  for (const target of desired) {
+    await assertFence();
+    running = await fetchRunningModelInfosStrict(hostUrl);
+    const loaded = findLoadedModelInfo(running, target.model);
+    const loadedCtx = readLoadedContextLength(loaded);
+    if (loaded && target.contextLength && loadedCtx !== target.contextLength) {
+      const unloaded = await unloadModel(hostUrl, loaded.name || loaded.model || target.model);
+      if (unloaded.status !== 'ok') {
+        return {
+          host: hostUrl,
+          status: 'error',
+          verified: false,
+          degraded: false,
+          error: `Failed to reset ${target.model} to pre-claim context: ${unloaded.error}`
+        };
+      }
+    }
+    const remainingKeepAlive = target.keepAlive === -1
+      ? -1
+      : Math.max(1, Math.ceil((new Date(target.expiresAt).getTime() - Date.now()) / 1000));
+    const warmed = await warmDefaultModel(hostUrl, target.model, {
+      keepAlive: remainingKeepAlive,
+      contextSize: target.contextLength || 0
+    });
+    if (warmed.status !== 'ok') {
+      return {
+        host: hostUrl,
+        status: 'error',
+        verified: false,
+        degraded: false,
+        error: `Failed to restore pre-claim resident ${target.model}: ${warmed.error}`
+      };
+    }
+  }
+
+  await assertFence();
+  const verifiedRunning = await fetchRunningModelInfosStrict(hostUrl);
+  const noExtraResidents = verifiedRunning.every(entry => desired.some(target =>
+    pinNamesMatch(target.model, entry.name || entry.model)
+  ));
+  const residentsVerified = desired.every((target) => {
+    const entry = findLoadedModelInfo(verifiedRunning, target.model);
+    if (!entry) return false;
+    return (!target.contextLength || readLoadedContextLength(entry) === target.contextLength)
+      && benchmarkResidentExpiryMatches(target, entry);
+  });
+  const verified = noExtraResidents
+    && residentsVerified
+    && verifiedRunning.length === desired.length;
+  if (!verified) {
+    return {
+      host: hostUrl,
+      status: 'error',
+      verified: false,
+      degraded: false,
+      error: 'Pre-claim runtime restore did not verify exact resident model/context set',
+      expectedResidents: desiredNames,
+      runningResidents: verifiedRunning.map(entry => entry.name || entry.model).filter(Boolean)
+    };
+  }
+
+  const updated = await HostPreference.findOneAndUpdate(
+    {
+      hostUrl,
+      status: 'benchmarking',
+      'benchmarkClaim.batchId': benchmarkClaim.batchId,
+      'benchmarkClaim.claimGeneration': benchmarkClaim.claimGeneration
+    },
+    { $set: {
+      loadedModel: desiredNames[0] || null,
+      loadedModels: desiredNames
+    } },
+    { new: true }
+  ).lean();
+  if (!updated) {
+    const error = new Error('Benchmark claim changed after runtime restore verification');
+    error.code = 'BENCHMARK_CLAIM_LOST';
+    throw error;
+  }
+  return {
+    host: hostUrl,
+    status: 'ready',
+    verified: true,
+    degraded: false,
+    mode: 'exact_runtime_snapshot',
+    residents: desiredNames
+  };
+}
+
 async function prepareExclusiveModel(hostUrl, model) {
   let runningModelInfos;
   try {
@@ -388,20 +624,40 @@ async function removePinnedModel(hostUrl, model) {
   ).lean();
 }
 
-async function updateLoadedModel(hostUrl, model) {
+async function updateLoadedModel(hostUrl, model, options = {}) {
   const pref = await HostPreference.findOne({ hostUrl }).lean();
+  const fencedClaim = options.benchmarkClaim || null;
+  if (fencedClaim && (pref?.status !== 'benchmarking'
+    || pref?.benchmarkClaim?.batchId !== fencedClaim.batchId
+    || pref?.benchmarkClaim?.claimGeneration !== fencedClaim.claimGeneration)) {
+    const error = new Error('Benchmark claim no longer owns the host while restoring pins');
+    error.code = 'BENCHMARK_CLAIM_LOST';
+    throw error;
+  }
   const update = { loadedModel: model };
   const primary = getPrimaryPinnedModel(pref);
-  if (primary && primary === model) {
+  if (!fencedClaim && primary && primary === model) {
     update.status = 'ready';
-  } else if (pref?.status === 'swapping' || pref?.status === 'restoring') {
+  } else if (!fencedClaim && (pref?.status === 'swapping' || pref?.status === 'restoring')) {
     update.status = 'idle';
   }
-  return HostPreference.findOneAndUpdate(
-    { hostUrl },
+  const filter = { hostUrl };
+  if (fencedClaim) {
+    filter.status = 'benchmarking';
+    filter['benchmarkClaim.batchId'] = fencedClaim.batchId;
+    filter['benchmarkClaim.claimGeneration'] = fencedClaim.claimGeneration;
+  }
+  const updated = await HostPreference.findOneAndUpdate(
+    filter,
     { $set: update },
     { new: true }
   ).lean();
+  if (fencedClaim && !updated) {
+    const error = new Error('Benchmark claim changed during fenced pin restore');
+    error.code = 'BENCHMARK_CLAIM_LOST';
+    throw error;
+  }
+  return updated;
 }
 
 async function setHostStatus(hostUrl, status) {
@@ -418,12 +674,16 @@ async function setHostStatus(hostUrl, status) {
  * primary pin, then performs bounded warmups and verifies the pinned models
  * are actually resident before reporting success.
  */
-async function restorePinnedModels(hostUrl) {
-  let restorePromise = activePinRestores.get(hostUrl);
+async function restorePinnedModels(hostUrl, options = {}) {
+  const claim = options.benchmarkClaim || null;
+  const restoreKey = claim
+    ? `${hostUrl}\n${claim.batchId}\n${claim.claimGeneration}`
+    : hostUrl;
+  let restorePromise = activePinRestores.get(restoreKey);
   if (!restorePromise) {
-    restorePromise = restorePinnedModelsInternal(hostUrl)
-      .finally(() => activePinRestores.delete(hostUrl));
-    activePinRestores.set(hostUrl, restorePromise);
+    restorePromise = restorePinnedModelsInternal(hostUrl, options)
+      .finally(() => activePinRestores.delete(restoreKey));
+    activePinRestores.set(restoreKey, restorePromise);
   }
 
   const result = await restorePromise;
@@ -438,20 +698,33 @@ async function restorePinnedModels(hostUrl) {
   return result;
 }
 
-async function restorePinnedModelsInternal(hostUrl) {
+async function restorePinnedModelsInternal(hostUrl, options = {}) {
   const pref = await HostPreference.findOne({ hostUrl }).lean();
   const entries = getPinnedEntries(pref);
   if (entries.length === 0) {
     return { host: hostUrl, status: 'error', error: 'No pinned model configured' };
   }
 
-  // 0175: refuse mid-batch restores. The benchmark batch's run path
-  // explicitly unloads the pin so its target can own VRAM; an external
-  // restore (NerveCenter button, watchdog post-unjam, late-firing release
-  // path) would clobber that. The reaper and the rightful release path
-  // both clear the claim BEFORE calling restorePinnedModels, so they
-  // naturally pass this check.
-  if (hasActiveBenchmarkClaim(pref)) {
+  const claim = options.benchmarkClaim || null;
+  const fencedClaim = hasActiveBenchmarkClaim(pref)
+    && claim
+    && pref.status === 'benchmarking'
+    && pref.benchmarkClaim?.batchId === claim.batchId
+    && pref.benchmarkClaim?.claimGeneration === claim.claimGeneration;
+  if (claim && !fencedClaim) {
+    return {
+      host: hostUrl,
+      pinnedModels: entries.map(e => e.model),
+      status: 'error',
+      code: 'BENCHMARK_CLAIM_LOST',
+      error: 'Benchmark claim no longer owns the host; fenced pin restore refused',
+      verified: false
+    };
+  }
+  // External restores remain forbidden while any claim is active. The exact
+  // claim owner may restore through the fenced release path, which keeps the
+  // host unavailable to chat/watchdog until residency has been verified.
+  if (hasActiveBenchmarkClaim(pref) && !fencedClaim) {
     logger.info(`[HostPreference] restorePinnedModels skipped on ${pref.displayName || hostUrl} — active benchmark claim`, {
       batchId: pref.benchmarkClaim?.batchId || null,
       pinnedModels: entries.map(e => e.model)
@@ -464,10 +737,22 @@ async function restorePinnedModelsInternal(hostUrl) {
     };
   }
 
+  const assertFence = async () => {
+    if (!fencedClaim) return;
+    const current = await HostPreference.findOne({ hostUrl }).lean();
+    if (current?.status !== 'benchmarking'
+      || current?.benchmarkClaim?.batchId !== claim.batchId
+      || current?.benchmarkClaim?.claimGeneration !== claim.claimGeneration) {
+      const error = new Error('Benchmark claim no longer owns the host while restoring pins');
+      error.code = 'BENCHMARK_CLAIM_LOST';
+      throw error;
+    }
+  };
+
   let runningModelInfos = await fetchRunningModelInfos(hostUrl);
   const allAlreadyLoaded = entries.every(entry => entrySatisfiedByLoadedModel(entry, runningModelInfos));
   if (allAlreadyLoaded) {
-    await updateLoadedModel(hostUrl, entries[0].model);
+    await updateLoadedModel(hostUrl, entries[0].model, { benchmarkClaim: fencedClaim ? claim : null });
     return {
       host: hostUrl,
       pinnedModels: entries.map(e => e.model),
@@ -483,7 +768,7 @@ async function restorePinnedModelsInternal(hostUrl) {
     });
   }
 
-  await setHostStatus(hostUrl, 'restoring');
+  if (!fencedClaim) await setHostStatus(hostUrl, 'restoring');
 
   // Unload any currently-loaded model that isn't one of our pinned entries —
   // but skip the explicit unload if the loaded model has active inference.
@@ -502,6 +787,7 @@ async function restorePinnedModelsInternal(hostUrl) {
       logger.info(`[HostPreference] Skipping explicit unload of ${loaded} on ${hostUrl} — active inference`);
       continue;
     }
+    await assertFence();
     const unloadResult = await unloadModel(hostUrl, loaded);
     if (unloadResult.status !== 'ok') {
       logger.warn(`[HostPreference] Failed to unload ${loaded} on ${hostUrl}: ${unloadResult.error}`);
@@ -516,6 +802,7 @@ async function restorePinnedModelsInternal(hostUrl) {
   // warmed to their configured keep_alive.
   const primaryModel = entries[0].model;
   for (const entry of getWarmOrder(entries)) {
+    await assertFence();
     const opts = { keepAlive: entry.keepAlive ?? -1, contextSize: entry.contextSize ?? 0 };
     const isPrimary = entry.model === primaryModel;
     const t0 = Date.now();
@@ -527,7 +814,7 @@ async function restorePinnedModelsInternal(hostUrl) {
         status: 'already_loaded',
         durationMs: Date.now() - t0
       });
-      if (isPrimary) await updateLoadedModel(hostUrl, entry.model);
+      if (isPrimary) await updateLoadedModel(hostUrl, entry.model, { benchmarkClaim: fencedClaim ? claim : null });
       continue;
     }
 
@@ -542,18 +829,18 @@ async function restorePinnedModelsInternal(hostUrl) {
     }
 
     if (result.status === 'ok') {
-      if (isPrimary) await updateLoadedModel(hostUrl, entry.model);
+      if (isPrimary) await updateLoadedModel(hostUrl, entry.model, { benchmarkClaim: fencedClaim ? claim : null });
       runningModelInfos = await fetchRunningModelInfos(hostUrl);
       logger.info(`[HostPreference] Restored pinned model ${entry.model} on ${hostUrl}`);
     } else {
-      if (isPrimary) await setHostStatus(hostUrl, 'offline');
+      if (isPrimary && !fencedClaim) await setHostStatus(hostUrl, 'offline');
       logger.warn(`[HostPreference] Failed to restore pin ${entry.model} on ${hostUrl}: ${result.error}`);
     }
   }
 
   const verification = await verifyPinnedEntriesLoaded(hostUrl, entries);
   if (!verification.verified) {
-    await setHostStatus(hostUrl, 'offline');
+    if (!fencedClaim) await setHostStatus(hostUrl, 'offline');
     logger.warn(`[HostPreference] Pin restore did not verify on ${hostUrl}`, {
       pinnedModels: entries.map(e => e.model),
       runningModels: verification.runningModels,
@@ -570,7 +857,7 @@ async function restorePinnedModelsInternal(hostUrl) {
     };
   }
 
-  await updateLoadedModel(hostUrl, entries[0].model);
+  await updateLoadedModel(hostUrl, entries[0].model, { benchmarkClaim: fencedClaim ? claim : null });
   return {
     host: hostUrl,
     pinnedModels: entries.map(e => e.model),
@@ -658,6 +945,8 @@ module.exports = {
   getPrimaryPinnedModel,
   resolvePinnedRuntimeOptions,
   warmDefaultModel,
+  captureBenchmarkRuntime,
+  restoreBenchmarkRuntime,
   warmHost,
   warmAllDefaults,
   checkAndReloadDefaults: pinReconciler.checkAndReloadDefaults,

@@ -195,6 +195,7 @@ const {
     _getActiveBatchRequestCount: getActiveBatchRequestCount
 } = require('../../../src/services/benchmark/batchOrchestrator');
 const { estimateBenchmarkClaimDurationMs } = require('../../../src/services/benchmark/benchmarkClaimLifecycle');
+const ollamaHostConfig = require('../../../src/helpers/ollamaHostConfig');
 
 function deferred() {
     let resolve;
@@ -256,6 +257,9 @@ function setRunnableBatchLookup() {
 describe('runBatchOrchestrator claim lifecycle', () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        ollamaHostConfig.getConfiguredHosts.mockReturnValue([
+            { id: 'primary', url: 'http://exec:11434' }
+        ]);
 
         mockPreflight.mockResolvedValue({
             profilesNeeded: [],
@@ -282,7 +286,21 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         }));
         mockFindOnePerformanceProfile.mockReturnValue({
             select: jest.fn().mockReturnValue({
-                lean: jest.fn().mockResolvedValue(null)
+                lean: jest.fn().mockResolvedValue({
+                    artifact: { registryQualified: true },
+                    profile: {
+                        tokensPerSec: 123.4,
+                        promptEvalTokensPerSec: 456.7,
+                        ttftMs: 321,
+                        ttftMeasurement: 'streamed_wall_clock',
+                        profileDepth: 'standard',
+                        requiredRetainedSamples: 5,
+                        measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
+                        recommendedInteractiveContext: 4096,
+                        vramUsedMiB: 8192,
+                        profiledAt: new Date()
+                    }
+                })
             })
         });
         mockTestModelOnHost.mockResolvedValue({ status: 'ok', testedAt: new Date('2026-04-19T18:00:00Z') });
@@ -450,11 +468,8 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         releaseDrain.resolve();
         await runPromise;
 
-        expect(mockRestoreAllDedication).toHaveBeenCalledTimes(1);
+        expect(mockRestoreAllDedication).not.toHaveBeenCalled();
         expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith('http://exec:11434', 'batch-judge-phase');
-        expect(mockReleaseBenchmarkClaim.mock.invocationCallOrder[0]).toBeLessThan(
-            mockRestoreAllDedication.mock.invocationCallOrder[0]
-        );
         expect(recordBatchTimelineEvent).toHaveBeenCalledWith('benchmark_claim_released', {
             hosts: ['http://exec:11434']
         });
@@ -470,6 +485,11 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             'http://exec-a:11434': ['model-a'],
             'http://exec-b:11434': ['model-b']
         });
+        ollamaHostConfig.getConfiguredHosts.mockReturnValue([
+            { id: 'exec-a', url: 'http://exec-a:11434' },
+            { id: 'exec-b', url: 'http://exec-b:11434' },
+            { id: 'judge', url: 'http://judge:11434' }
+        ]);
         mockResolveJudgeHost.mockReturnValue({
             judgeHost: 'http://judge:11434',
             resolution: 'explicit'
@@ -553,7 +573,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         await expect(runPromise).resolves.toEqual({ stopped: true, cancelled: true });
 
         expect(mockReleaseBenchmarkClaim).toHaveBeenCalledTimes(3);
-        expect(mockRestoreAllDedication).toHaveBeenCalledTimes(1);
+        expect(mockRestoreAllDedication).not.toHaveBeenCalled();
         const judgeCounterWrites = mockUpdateOne.mock.calls.filter(([, update]) => (
             update?.$inc?.judge_completed
         ));
@@ -635,9 +655,13 @@ describe('runBatchOrchestrator claim lifecycle', () => {
                         tokensPerSec: 123.4,
                         promptEvalTokensPerSec: 456.7,
                         ttftMs: 321,
+                        ttftMeasurement: 'streamed_wall_clock',
+                        profileDepth: 'standard',
+                        requiredRetainedSamples: 5,
+                        measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
                         vramUsedMiB: 8192,
                         profiledAt: new Date(),
-                        recommendedConfig: { num_ctx: 4096 }
+                        recommendedInteractiveContext: 4096
                     }
                 })
             })
@@ -680,7 +704,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         );
     });
 
-    it('passes execution num_ctx into live performance baseline probes', async () => {
+    it('refuses an incompatible execution context instead of inventing a live baseline', async () => {
         mockDrain.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
 
         const executionConfig = {
@@ -714,18 +738,29 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             handleGracefulStop: jest.fn()
         });
 
-        expect(mockTestModelOnHost).toHaveBeenCalledWith(
-            'model-a',
-            'http://exec:11434',
-            expect.objectContaining({
-                _skipHostCheck: false,
-                numCtx: 8192
-            })
-        );
+        expect(mockTestModelOnHost).not.toHaveBeenCalled();
+        expect(mockPersistSuccessfulResult).not.toHaveBeenCalled();
     });
 
     it('omits all thinking controls when the frozen campaign mode is native', async () => {
         mockDrain.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
+        mockFindOnePerformanceProfile.mockReturnValue({
+            select: jest.fn().mockReturnValue({
+                lean: jest.fn().mockResolvedValue({
+                    artifact: { registryQualified: true },
+                    profile: {
+                        tokensPerSec: 123.4,
+                        ttftMs: 321,
+                        ttftMeasurement: 'streamed_wall_clock',
+                        profileDepth: 'standard',
+                        requiredRetainedSamples: 5,
+                        measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
+                        recommendedInteractiveContext: 16384,
+                        profiledAt: new Date()
+                    }
+                })
+            })
+        });
         mockGetFrozenModelExecutionConfig.mockImplementation((_, __, ___, baseConfig) => ({
             ...baseConfig,
             response_max_tokens: 2048,
@@ -1099,7 +1134,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
 
         // Claims and pins are still cleaned up despite the stale claim
         expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith('http://exec:11434', 'batch-resume-stale-claim');
-        expect(mockRestoreAllDedication).toHaveBeenCalledTimes(1);
+        expect(mockRestoreAllDedication).not.toHaveBeenCalled();
         expect(recordBatchTimelineEvent).toHaveBeenCalledWith(
             'inference_contract_resume_blocked',
             expect.objectContaining({
@@ -1198,7 +1233,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             'http://exec:11434',
             'batch-resume-pin-release'
         );
-        expect(mockRestoreAllDedication).toHaveBeenCalledTimes(1);
+        expect(mockRestoreAllDedication).not.toHaveBeenCalled();
         expect(recordBatchTimelineEvent).toHaveBeenCalledWith(
             'inference_contract_resume_blocked',
             expect.objectContaining({
@@ -1282,7 +1317,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             'http://exec:11434',
             'batch-cancel-body'
         );
-        expect(mockRestoreAllDedication).toHaveBeenCalledTimes(1);
+        expect(mockRestoreAllDedication).not.toHaveBeenCalled();
         expect(getActiveBatchRequestCount('batch-cancel-body')).toBe(0);
     });
 

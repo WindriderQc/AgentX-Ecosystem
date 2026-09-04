@@ -195,7 +195,7 @@ function renderFitReport(report, useCase) {
   const measuredRows = measuredM.map(m => {
     const rel = m.reliability ? `<span class="mp-fit-sub">${esc(m.reliability)}</span>` : '';
     const loadTip = [
-      m.spillDetected ? `spills at ${m.spillNumCtx || '?'} (safe ${m.safeCtx || '?'})` : 'no spill',
+      m.spillVerified !== true ? 'GPU residency unknown' : (m.spillDetected ? `spills at ${m.spillNumCtx || '?'}` : 'no spill verified'),
       m.coldLoadMs != null ? `cold load ${m.coldLoadMs}ms` : '',
       m.hotLoadMs != null ? `hot load ${m.hotLoadMs}ms` : '',
       m.modelVramMiB != null ? `${(m.modelVramMiB / 1024).toFixed(1)}GB on GPU` : ''
@@ -210,12 +210,12 @@ function renderFitReport(report, useCase) {
       <td class="mp-fit-name">${fitCompChip(m._comp)}${esc(m.modelName)} ${fitMoeChip(m)}</td>
       <td>${m.tokensPerSec != null ? m.tokensPerSec : '—'} ${rel}</td>
       <td class="mp-fit-vramcell">${vramCell}</td>
-      <td title="safe to ${fmtCtx(m.safeCtx)}">${fmtCtx(m.optimalNumCtx)}</td>
+      <td title="max verified ${fmtCtx(m.maxVerifiedContext)}; document ${fmtCtx(m.recommendedDocumentContext)}">${fmtCtx(m.recommendedInteractiveContext)}</td>
       <td><span class="mp-fit-badge ${fitToneClass(m.fit.tone)}" title="${esc(loadTip)}">${esc(m.fit.label)}</span></td>
     </tr>`;
   }).join('');
   const measuredTable = measuredRows
-    ? `<table class="mp-fit-table"><thead><tr><th>Profiled model</th><th>tok/s</th><th>VRAM</th><th>ctx</th><th>fit</th></tr></thead><tbody>${measuredRows}</tbody></table>`
+    ? `<table class="mp-fit-table"><thead><tr><th>Profiled model</th><th>tok/s</th><th>VRAM</th><th>interactive ctx</th><th>fit</th></tr></thead><tbody>${measuredRows}</tbody></table>`
     : '<div class="mp-fit-empty">No models profiled on this host yet.</div>';
 
   let calib;

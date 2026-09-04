@@ -62,7 +62,7 @@ export function renderMetrics(model, api) {
   if (!p) {
     return `<div class="mp-card-empty-state">
       <div class="mp-card-empty-kicker">No profile yet</div>
-      <div class="mp-card-empty-copy">Run a profile to capture speed, safe context, and spill behavior.</div>
+      <div class="mp-card-empty-copy">Run a profile to capture speed, verified capacity, workload recommendations, and spill behavior.</div>
     </div>`;
   }
 
@@ -99,7 +99,7 @@ export function renderMetrics(model, api) {
   const safeCtx = spill?.lastSafeNumCtx;
   const spillCtx = spill?.spillNumCtx;
   let capacityHtml = '';
-  const maxVerifiedContext = p.maxVerifiedContext ?? p.optimalNumCtx;
+  const maxVerifiedContext = p.maxVerifiedContext;
   if (maxVerifiedContext != null || spill || p.vramUsedMiB != null) {
     const bits = [];
     if (maxVerifiedContext != null) {
@@ -119,8 +119,9 @@ export function renderMetrics(model, api) {
       const safe = safeCtx ? ` (safe ${_fmtCtx(safeCtx)})` : '';
       bits.push(`<span class="mp-strip-spill mp-strip-spill--warn" title="GPU spill detected${at}${safe}">⚠ spills${at}</span>`);
     } else if (spill) {
-      const safe = safeCtx ? `safe to ${_fmtCtx(safeCtx)}` : 'no spill';
-      bits.push(`<span class="mp-strip-spill mp-strip-spill--ok" title="No GPU spill during profiling. Higher context or different load can still spill.">✓ ${safe}</span>`);
+      const noSpill = spill?.verified === true && spill?.spillDetected === false;
+      const label = noSpill ? 'no spill verified' : 'GPU residency unknown';
+      bits.push(`<span class="mp-strip-spill ${noSpill ? 'mp-strip-spill--ok' : ''}" title="${label}">${label}</span>`);
     }
     capacityHtml = `<div class="mp-cap-strip">${bits.join('<span class="mp-strip-sep">·</span>')}</div>`;
   }
@@ -407,7 +408,7 @@ export function renderModelRow(model, api) {
 
   // ctx
   let ctxCell = dash;
-  const maxVerifiedContext = p?.maxVerifiedContext ?? p?.optimalNumCtx;
+  const maxVerifiedContext = p?.maxVerifiedContext;
   if (maxVerifiedContext != null) {
     const recommendations = [
       p.recommendedInteractiveContext != null ? `interactive ${_fmtCtx(p.recommendedInteractiveContext)}` : null,

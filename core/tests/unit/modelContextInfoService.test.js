@@ -139,8 +139,12 @@ describe('modelContextInfoService', () => {
     }));
     mockProfile({
       modelName: 'ax/qwen3.5:9b',
-      recommendedContext: 131072,
+      maxVerifiedContext: 237568,
       verifiedMaxContext: 237568,
+      recommendedInteractiveContext: 65536,
+      recommendedDocumentContext: 131072,
+      recommendationStatus: 'verified',
+      revalidationRequired: false,
       verifiedInputTokens: 190000,
       lastValidatedAt: profiledAt
     });
@@ -155,9 +159,12 @@ describe('modelContextInfoService', () => {
     });
 
     expect(info).toEqual(expect.objectContaining({
-      num_ctx: 237568,
-      source: 'model_context_profile',
+      num_ctx: 65536,
+      source: 'model_context_profile_interactive',
       verifiedMaxContext: 237568,
+      maxVerifiedContext: 237568,
+      recommendedInteractiveContext: 65536,
+      recommendedDocumentContext: 131072,
       verifiedInputTokens: 190000,
       profiledAt,
       matchedName: 'ax/qwen3.5:9b',
@@ -189,9 +196,36 @@ describe('modelContextInfoService', () => {
       model_info: { 'qwen.context_length': 65536 }
     }));
     mockRegistry(null);
-    const info = await svc.getContextInfo('unknown:1b', 'http://host:11434');
+    const info = await svc.getContextInfo('unknown:1b', 'http://host:11434', { workload: 'capacity' });
     expect(info.num_ctx).toBe(65536);
     expect(info.source).toBe('model_capacity');
+  });
+
+  it('keeps a legacy 262K value as historical capacity but never a runtime recommendation', async () => {
+    svc._setFetch(makeFetch({ parameters: '', model_info: {} }));
+    mockProfile({
+      modelName: 'ornith:latest',
+      recommendedContext: 262144,
+      verifiedMaxContext: 262144,
+      recommendationStatus: 'unknown',
+      revalidationRequired: true,
+      stale: false
+    });
+
+    const info = await svc.getContextInfo('ornith:latest', 'http://host:11434', {
+      artifactIdentity: exactArtifact,
+      deps: { ModelContextProfile }
+    });
+
+    expect(info).toMatchObject({
+      num_ctx: null,
+      source: 'unresolved',
+      maxVerifiedContext: 262144,
+      recommendationStatus: 'unknown',
+      revalidationRequired: true
+    });
+    expect(info.recommendedInteractiveContext).toBeUndefined();
+    expect(info.recommendedDocumentContext).toBeUndefined();
   });
 
   it('returns unresolved when everything fails', async () => {

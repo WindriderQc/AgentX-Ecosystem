@@ -17,12 +17,102 @@ jest.mock('../../src/services/laneObservabilityService', () => ({
 
 const HostPreference = require('../../models/HostPreference');
 const service = require('../../src/services/hostPreferenceService');
+const hostGate = require('../../src/services/hostGate');
 
 afterEach(async () => {
   await HostPreference.deleteMany({});
 });
 
 describe('hostPreferenceService', () => {
+  describe('benchmark runtime snapshot exactness', () => {
+    const HOST_URL = 'http://snapshot-host:11434';
+    let originalFetch;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      jest.spyOn(hostGate, 'hostHasInflightAnywhere').mockResolvedValue(false);
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+      jest.restoreAllMocks();
+    });
+
+    it('rejects a resident whose context is not observable', async () => {
+      global.fetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          models: [{ name: 'qwen:latest', expires_at: '9999-12-31T23:59:59Z' }]
+        })
+      }));
+
+      await expect(service.captureBenchmarkRuntime(HOST_URL)).rejects.toMatchObject({
+        code: 'BENCHMARK_RUNTIME_SNAPSHOT_INCOMPLETE'
+      });
+    });
+
+    it('captures resident identity, context and keep-alive expiry exactly', async () => {
+      global.fetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          models: [{
+            name: 'qwen:latest',
+            context_length: 32768,
+            expires_at: '9999-12-31T23:59:59Z'
+          }]
+        })
+      }));
+
+      await expect(service.captureBenchmarkRuntime(HOST_URL)).resolves.toMatchObject({
+        source: 'ollama_ps',
+        exact: true,
+        residents: [{ model: 'qwen:latest', contextLength: 32768, keepAlive: -1 }]
+      });
+    });
+
+    it('fails verification when an infinite pre-claim resident returns with only a finite TTL', async () => {
+      await HostPreference.create({
+        hostUrl: HOST_URL,
+        hostKey: 'primary',
+        status: 'benchmarking',
+        benchmarkClaim: {
+          batchId: 'batch-ttl',
+          claimGeneration: 'generation-ttl',
+          prevStatus: 'ready',
+          claimedAt: new Date()
+        }
+      });
+      global.fetch = jest.fn(async (url) => {
+        if (String(url).endsWith('/api/ps')) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [{
+                name: 'qwen:latest',
+                context_length: 32768,
+                expires_at: new Date(Date.now() + 5 * 60_000).toISOString()
+              }]
+            })
+          };
+        }
+        return { ok: true, text: async () => '' };
+      });
+
+      await expect(service.restoreBenchmarkRuntime(HOST_URL, {
+        exact: true,
+        residents: [{
+          model: 'qwen:latest',
+          contextLength: 32768,
+          keepAlive: -1,
+          expiresAt: new Date('9999-12-31T23:59:59Z')
+        }]
+      }, {
+        batchId: 'batch-ttl',
+        claimGeneration: 'generation-ttl'
+      })).resolves.toMatchObject({ status: 'error', verified: false });
+    });
+  });
+
   describe('host identity normalization', () => {
     let originalEnv;
 

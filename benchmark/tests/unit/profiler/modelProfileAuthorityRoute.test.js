@@ -13,6 +13,7 @@ jest.mock('../../../src/services/profiler/modelPerformanceProfileService', () =>
 }));
 
 const service = require('../../../src/services/profiler/modelProfileService');
+const performanceService = require('../../../src/services/profiler/modelPerformanceProfileService');
 const router = require('../../../routes/profiler/models');
 const app = express();
 app.use(express.json());
@@ -41,6 +42,28 @@ describe('ModelProfile write authority', () => {
     expect(response.body.authority).toBe('metadata_only');
     expect(service.updateMetadata).toHaveBeenCalledWith('model:1', {
       displayName: 'Model One', tags: ['local']
+    });
+  });
+
+  it('exposes max capacity separately from the interactive runtime recommendation', async () => {
+    performanceService.getActiveProfile.mockResolvedValue({
+      artifact: { digest: 'sha256:exact', runtimeFingerprint: 'runtime-a' },
+      profile: {
+        maxVerifiedContext: 262144,
+        recommendedInteractiveContext: 65536,
+        recommendedDocumentContext: 131072
+      }
+    });
+
+    const response = await request(app)
+      .get('/api/profiler/models/qwen%3A9b/config?host=host-beta');
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      maxVerifiedContext: 262144,
+      recommendedInteractiveContext: 65536,
+      recommendedDocumentContext: 131072,
+      config: { num_ctx: 65536 }
     });
   });
 });

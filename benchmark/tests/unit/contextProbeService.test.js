@@ -13,7 +13,7 @@ jest.mock('../../src/clients/ollamaClient', () => ({
   listRunning: jest.fn()
 }));
 jest.mock('../../src/services/contextProbePayload', () => ({
-  generateFillPrompt: jest.fn().mockReturnValue({ prompt: 'fill prompt' })
+  generateFillPrompt: jest.fn((estimatedTokens) => ({ prompt: 'fill prompt', estimatedTokens }))
 }));
 jest.mock('../../src/services/modelContextProfileService', () => ({
   updateFromProbeSnapshot: jest.fn().mockResolvedValue(null)
@@ -170,7 +170,7 @@ describe('contextProbeService', () => {
     ]));
     expect(callOrder[0]).toBe(262144);
     expect(callOrder[1]).toBe(2048);
-    expect(callOrder.filter(numCtx => numCtx === 262144)).toHaveLength(1);
+    expect(callOrder.filter(numCtx => numCtx === 262144)).toHaveLength(2);
   });
 
   it('does not manufacture a smaller window from a throughput threshold', async () => {
@@ -341,6 +341,31 @@ describe('contextProbeService', () => {
       testedNumCtx: 4096,
       atLimitTokensPerSec: 1000000
     }));
+    expect(ollamaClient.generate.mock.calls.length).toBeGreaterThanOrEqual(4);
+    for (const [, payload] of ollamaClient.generate.mock.calls) {
+      expect(payload.options).toMatchObject({ temperature: 0, seed: 7 });
+    }
+  });
+
+  it('keeps the raw snapshot diagnostic but fails the run when context authority persistence fails', async () => {
+    ollamaClient.showModel.mockResolvedValue({ model_info: { 'general.context_length': 2048 } });
+    ollamaClient.listRunning.mockResolvedValue({
+      models: [{ name: 'gemma4:26b', size: 100, size_vram: 100, context_length: 2048 }]
+    });
+    ollamaClient.generate.mockResolvedValue({
+      eval_count: 64,
+      eval_duration: 1e9,
+      prompt_eval_count: 1600
+    });
+    modelContextProfileService.updateFromProbeSnapshot.mockRejectedValueOnce(new Error('mongo unavailable'));
+
+    await expect(contextProbeService.probeModelContext('gemma4:26b', {
+      hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
+      acknowledgeMaintenance: true,
+      maxCtx: 2048
+    })).rejects.toThrow('mongo unavailable');
+    expect(ModelContextProbeSnapshot.create).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
   });
 });
 
@@ -408,6 +433,50 @@ describe('validateThroughput', () => {
     });
     expect(r.plausible).toBe(true);
     expect(r.detail).toBeNull();
+  });
+});
+
+describe('assessProbeStep', () => {
+  const assess = contextProbeService._internal.assessProbeStep;
+
+  it('rejects an Ollama context clamp and a short prompt evaluation', () => {
+    const clamped = assess({
+      passed: true,
+      numCtx: 8192,
+      tokensPerSec: 40,
+      gpuPercent: 100,
+      ollamaContextLength: 4096,
+      promptCoveragePct: 80,
+      minimumPromptCoveragePct: 70
+    }, 50);
+    expect(clamped).toMatchObject({ passed: false });
+    expect(clamped.reason).toContain('below requested 8192');
+
+    const shortPrompt = assess({
+      passed: true,
+      numCtx: 8192,
+      tokensPerSec: 40,
+      gpuPercent: 100,
+      ollamaContextLength: 8192,
+      promptCoveragePct: 40,
+      minimumPromptCoveragePct: 70
+    }, 50);
+    expect(shortPrompt).toMatchObject({ passed: false });
+    expect(shortPrompt.reason).toContain('below required 70%');
+  });
+
+  it('treats missing GPU residency evidence as unknown, never no-spill', () => {
+    const result = assess({
+      passed: true,
+      numCtx: 8192,
+      tokensPerSec: 40,
+      gpuPercent: null,
+      ollamaContextLength: 8192,
+      promptCoveragePct: 80,
+      minimumPromptCoveragePct: 70
+    }, 50);
+    expect(result).toMatchObject({ passed: false });
+    expect(result.reason).toContain('GPU residency unknown');
   });
 });
 

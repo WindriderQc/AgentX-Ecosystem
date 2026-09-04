@@ -156,6 +156,8 @@ describe('profile', () => {
     contextProbeService.probeModelContext.mockResolvedValue({
       status: 'completed',
       testedNumCtx: 32768,
+      recommendedInteractiveContext: 16384,
+      recommendedDocumentContext: 32768,
       degradationPct: 10,
       steps: [
         { numCtx: 2048, passed: true, tokensPerSec: 50 },
@@ -226,6 +228,79 @@ describe('profile', () => {
       HOST_URL,
       expect.objectContaining({ numCtx: 262144, maxNumCtx: 262144 })
     );
+  });
+});
+
+describe('profiler evidence qualification', () => {
+  function qualifiedFullProfile() {
+    return {
+      profileDepth: 'full',
+      maxVerifiedContext: 262144,
+      recommendedInteractiveContext: 65536,
+      recommendedDocumentContext: 131072,
+      requiredRetainedSamples: 10,
+      measurementQuality: { passingSampleCount: 10, reliability: 'medium' },
+      ttftMs: 200,
+      ttftMeasurement: 'streamed_wall_clock',
+      throughputCurve: [10, 25, 50, 75, 90].map(contextFillPct => ({
+        contextFillPct,
+        tokensPerSec: 40,
+        gpuOffloaded: false
+      })),
+      generationStability: [64, 256, 512].map(numPredict => ({
+        numPredict,
+        tokensPerSec: 40,
+        totalLatencyMs: 1000
+      })),
+      prefillDecodeMatrix: { cells: [{ status: 'pass' }] },
+      loadTiming: { coldLoadMs: 5000, hotLoadMs: 100 }
+    };
+  }
+
+  it('requires medium or high reliability', () => {
+    const profile = qualifiedFullProfile();
+    profile.measurementQuality.reliability = 'low';
+    expect(orchestrator.profileQualificationFailures(profile)).toContain('reliability_low');
+  });
+
+  it.each([
+    ['throughput curve', profile => { profile.throughputCurve[2].tokensPerSec = 0; }, 'full_throughput_curve_incomplete'],
+    ['stability', profile => { profile.generationStability[1].totalLatencyMs = 0; }, 'full_generation_stability_incomplete'],
+    ['prefill/decode matrix', profile => { profile.prefillDecodeMatrix.cells[0].status = 'error'; }, 'full_prefill_decode_matrix_incomplete'],
+    ['load timing', profile => { profile.loadTiming.hotLoadMs = null; }, 'full_load_timing_incomplete']
+  ])('fails Full qualification when %s is incomplete', (_label, breakPhase, reason) => {
+    const profile = qualifiedFullProfile();
+    breakPhase(profile);
+    expect(orchestrator.profileQualificationFailures(profile)).toContain(reason);
+  });
+
+  it('qualifies only when every Full phase has positive complete evidence', () => {
+    expect(orchestrator.profileQualificationFailures(qualifiedFullProfile())).toEqual([]);
+  });
+});
+
+describe('throughput statistics', () => {
+  it('excludes discarded samples and uses Student-t for small samples', () => {
+    const summary = orchestrator.summarizeThroughputSamples([
+      { discarded: true, status: 'pass', tokensPerSec: 1000 },
+      { status: 'pass', tokensPerSec: 10, ttftMs: 100, ttftMeasurement: 'streamed_wall_clock' },
+      { status: 'pass', tokensPerSec: 12, ttftMs: 120, ttftMeasurement: 'streamed_wall_clock' },
+      { status: 'pass', tokensPerSec: 11, ttftMs: 110, ttftMeasurement: 'streamed_wall_clock' },
+      { status: 'pass', tokensPerSec: 13, ttftMs: 130, ttftMeasurement: 'streamed_wall_clock' },
+      { status: 'pass', tokensPerSec: 14, ttftMs: 140, ttftMeasurement: 'streamed_wall_clock' }
+    ], { minimumRetainedSamples: 5 });
+
+    expect(summary).toMatchObject({
+      sampleCount: 5,
+      retainedSampleCount: 5,
+      passingSampleCount: 5,
+      tokensPerSecMean: 12,
+      p50: 12,
+      p95: 13.8,
+      ttftP50Ms: 120,
+      confidenceInterval95: { method: 'student_t' }
+    });
+    expect(summary.tokensPerSecMax).toBe(14);
   });
 });
 

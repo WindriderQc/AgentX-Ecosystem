@@ -3,8 +3,9 @@
  *
  * Source priority:
  *   1. Exact-artifact profiler evidence                 — preferred
- *   2. Live host test (testModelOnHost)                  — fallback
- *   3. Synthesized error baseline                        — never crashes the batch
+ * Missing/incompatible profiler evidence is a hard preflight failure. An ad
+ * hoc host test is not equivalent to a statistically qualified baseline and
+ * must never become trust/promotion evidence.
  *
  * The resolved baseline is appended to BenchmarkBatch.performance_baselines
  * and returned to the caller for inclusion in result documents.
@@ -16,7 +17,6 @@
 const logger = require('../../../config/logger');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
-const { testModelOnHost } = require('../hostTestService');
 const { getConfiguredHosts, normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
 const { resolveArtifactIdentity } = require('../profiler/artifactIdentityService');
 const { toPerformanceBaseline } = require('./batchHelpers');
@@ -53,7 +53,7 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
     if (profiledAt) {
         const ageMs = Date.now() - new Date(profiledAt).getTime();
         if (ageMs > PROFILE_TTL_MS) {
-            logger.warn('Exact-artifact profile evidence is stale, falling through to live host test', {
+            logger.warn('Exact-artifact profile evidence is stale', {
                 model,
                 hostId,
                 profiledAt,
@@ -62,6 +62,19 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
             });
             return null;
         }
+    }
+
+    const quality = evidence.profile.measurementQuality || {};
+    const required = Number(evidence.profile.requiredRetainedSamples) || 0;
+    if (evidence.profile.profileDepth === 'quick'
+        || !['medium', 'high'].includes(quality.reliability)
+        || Number(quality.passingSampleCount) < required
+        || evidence.profile.ttftMeasurement !== 'streamed_wall_clock') {
+        logger.warn('Exact-artifact profiler evidence is not benchmark-qualified', {
+            model, hostId, profileDepth: evidence.profile.profileDepth,
+            reliability: quality.reliability || 'unknown'
+        });
+        return null;
     }
 
     return {
@@ -75,14 +88,32 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
         ttftMeasurement: evidence.profile.ttftMeasurement || undefined,
         vramUsedMiB: evidence.profile.vramUsedMiB ?? null,
         vramTotalMiB: null,
-        numCtx: evidence.profile.recommendedConfig?.num_ctx ?? evidence.profile.optimalNumCtx ?? null,
+        numCtx: evidence.profile.recommendedInteractiveContext ?? null,
         numCtxSource: 'exact_artifact_profile',
         testedAt: evidence.profile.profiledAt || evidence.updatedAt || null,
         error: null
     };
 }
 
-async function capturePerformanceBaseline({ batchId, model, hostUrl, numCtx = null }) {
+async function capturePerformanceBaseline({
+    batchId,
+    model,
+    hostUrl,
+    numCtx = null,
+    claimIdentity = null,
+    assertClaimActive = null,
+    signal = null
+}) {
+    if (signal?.aborted) {
+        if (signal.reason instanceof Error) throw signal.reason;
+        throw new Error('Benchmark claim stopped before baseline resolution');
+    }
+    if (!claimIdentity?.claimBatchId || !claimIdentity?.claimGeneration) {
+        const error = new Error('Exact benchmark claim proof is required for performance baseline resolution');
+        error.code = 'BENCHMARK_CLAIM_IDENTITY_MISSING';
+        throw error;
+    }
+    assertClaimActive?.();
     const explicitNumCtx = Number.isFinite(Number(numCtx)) && Number(numCtx) > 0
         ? Math.round(Number(numCtx))
         : null;
@@ -94,6 +125,11 @@ async function capturePerformanceBaseline({ batchId, model, hostUrl, numCtx = nu
             || !Number.isFinite(profileNumCtx)
             || profileNumCtx === explicitNumCtx;
         if (profileBaseline && profileMatchesExecutionCtx) {
+            assertClaimActive?.();
+            if (signal?.aborted) {
+                if (signal.reason instanceof Error) throw signal.reason;
+                throw new Error('Benchmark claim stopped before baseline persistence');
+            }
             const baseline = toPerformanceBaseline(model, hostUrl, profileBaseline);
             await BenchmarkBatch.updateOne(
                 { _id: batchId },
@@ -101,12 +137,12 @@ async function capturePerformanceBaseline({ batchId, model, hostUrl, numCtx = nu
                     $push: { performance_baselines: baseline },
                     $set: { last_activity_at: new Date() }
                 }
-            ).catch((err) => logger.warn('Failed to persist profiler-derived performance baseline on batch', {
-                batchId,
-                model,
-                host: hostUrl,
-                error: err.message
-            }));
+            );
+            assertClaimActive?.();
+            if (signal?.aborted) {
+                if (signal.reason instanceof Error) throw signal.reason;
+                throw new Error('Benchmark claim stopped after baseline persistence');
+            }
             logger.info('Using profiler-derived performance baseline', {
                 batchId,
                 model,
@@ -115,54 +151,19 @@ async function capturePerformanceBaseline({ batchId, model, hostUrl, numCtx = nu
             });
             return baseline;
         }
-        if (profileBaseline && !profileMatchesExecutionCtx) {
-            logger.info('Profiler-derived baseline context differs from execution context; running live baseline', {
-                batchId,
-                model,
-                host: hostUrl,
-                profileNumCtx,
-                executionNumCtx: explicitNumCtx
-            });
-        }
-
-        const snapshot = await testModelOnHost(model, hostUrl, {
-            _skipHostCheck: false,
-            ...(explicitNumCtx ? { numCtx: explicitNumCtx } : {})
-        });
-        const baseline = toPerformanceBaseline(model, hostUrl, snapshot);
-        await BenchmarkBatch.updateOne(
-            { _id: batchId },
-            {
-                $push: { performance_baselines: baseline },
-                $set: { last_activity_at: new Date() }
-            }
-        ).catch((err) => logger.warn('Failed to persist performance baseline on batch', {
-            batchId,
-            model,
-            host: hostUrl,
-            error: err.message
-        }));
-        return baseline;
+        const error = new Error(profileBaseline
+            ? `Exact-artifact profiler baseline context ${profileNumCtx} does not match execution context ${explicitNumCtx}`
+            : `Qualified exact-artifact profiler baseline required for ${model} on ${hostUrl}`);
+        error.code = 'QUALIFIED_PROFILER_BASELINE_REQUIRED';
+        throw error;
     } catch (err) {
-        const baseline = toPerformanceBaseline(model, hostUrl, {
-            status: 'error',
-            testedAt: new Date(),
-            error: err.message
-        });
-        await BenchmarkBatch.updateOne(
-            { _id: batchId },
-            {
-                $push: { performance_baselines: baseline },
-                $set: { last_activity_at: new Date() }
-            }
-        ).catch(() => {});
         logger.warn('Performance baseline capture failed', {
             batchId,
             model,
             host: hostUrl,
             error: err.message
         });
-        return baseline;
+        throw err;
     }
 }
 

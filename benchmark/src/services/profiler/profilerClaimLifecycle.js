@@ -29,8 +29,13 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
     throw err;
   }
 
+  const leaseAbort = new AbortController();
   const heartbeat = startBenchmarkClaimHeartbeat(claimed, operationId, estimatedDurationMs, {
-    onFatal: options.onFatal,
+    intervalMs: options.heartbeatIntervalMs,
+    onFatal: error => {
+      if (!leaseAbort.signal.aborted) leaseAbort.abort(error);
+      options.onFatal?.(error);
+    },
     source: 'profiler',
     owner: 'agentx-profiler'
   });
@@ -44,10 +49,11 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
     throw err;
   }
 
-  let released = false;
+  let releasePromise = null;
   return {
     operationId,
     hostUrls: claimed,
+    signal: leaseAbort.signal,
     assertActive: heartbeat.assertActive,
     get lost() { return Boolean(heartbeat.getFailure()); },
     identityFor(hostUrl) {
@@ -60,10 +66,25 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
       return identity;
     },
     async release() {
-      if (released) return { released: 0, failed: 0, details: [] };
-      released = true;
-      await heartbeat.drain();
-      return releaseBenchmarkClaims(claimed, operationId);
+      if (!releasePromise) {
+        releasePromise = (async () => {
+          await heartbeat.drain();
+          return releaseBenchmarkClaims(claimed, operationId);
+        })();
+      }
+      return releasePromise;
+    },
+    async finalize() {
+      const result = await this.release();
+      if (result.failed > 0) {
+        const detail = result.details?.find(item => !item.released);
+        const error = new Error(detail?.reason || 'Fenced runtime restore/release failed');
+        error.code = 'PROFILER_RUNTIME_RESTORE_FAILED';
+        error.statusCode = 503;
+        error.release = result;
+        throw error;
+      }
+      return result;
     }
   };
 }

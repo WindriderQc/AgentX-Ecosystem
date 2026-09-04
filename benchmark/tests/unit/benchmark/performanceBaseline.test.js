@@ -25,7 +25,11 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
-const { _getProfilePerformanceBaseline } = require('../../../src/services/benchmark/performanceBaseline');
+const BenchmarkBatch = require('../../../models/BenchmarkBatch');
+const {
+    capturePerformanceBaseline,
+    _getProfilePerformanceBaseline
+} = require('../../../src/services/benchmark/performanceBaseline');
 
 function chainResolved(value) {
     return {
@@ -42,7 +46,12 @@ describe('performanceBaseline', () => {
             artifact: { registryQualified: true },
             profile: {
                 tokensPerSec: 74.8,
-                recommendedConfig: { num_ctx: 65536 },
+                recommendedInteractiveContext: 65536,
+                requiredRetainedSamples: 5,
+                measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
+                ttftMs: 125,
+                ttftMeasurement: 'streamed_wall_clock',
+                profileDepth: 'standard',
                 profiledAt
             },
             updatedAt: profiledAt
@@ -79,5 +88,15 @@ describe('performanceBaseline', () => {
             'ax/qwopus:27b',
             'http://192.0.2.12:11434'
         )).resolves.toBeNull();
+    });
+
+    it('refuses baseline persistence without an exact claim proof', async () => {
+        await expect(capturePerformanceBaseline({
+            batchId: 'batch-1',
+            model: 'ax/qwen3.5:9b',
+            hostUrl: 'http://192.0.2.12:11434'
+        })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_IDENTITY_MISSING' });
+        expect(ModelPerformanceProfile.findOne).not.toHaveBeenCalled();
+        expect(BenchmarkBatch.updateOne).not.toHaveBeenCalled();
     });
 });

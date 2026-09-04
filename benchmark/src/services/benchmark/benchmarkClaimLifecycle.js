@@ -70,7 +70,12 @@ async function releaseBenchmarkClaims(hostUrls, batchId) {
             const result = await releaseBenchmarkClaim(hostUrl, batchId);
             if (result?.released === true) {
                 logger.info('Benchmark claim released', { batchId, hostUrl });
-                return { hostUrl, released: true };
+                return {
+                    hostUrl,
+                    released: true,
+                    runtimeRestore: result.runtimeRestore || null,
+                    pinRestore: result.pinRestore || null
+                };
             }
             logger.warn('Benchmark claim release refused', {
                 batchId,
@@ -80,7 +85,9 @@ async function releaseBenchmarkClaims(hostUrls, batchId) {
             return {
                 hostUrl,
                 released: false,
-                reason: result?.reason || 'core_refused_release'
+                reason: result?.reason || 'core_refused_release',
+                runtimeRestore: result?.runtimeRestore || null,
+                pinRestore: result?.pinRestore || null
             };
         } catch (err) {
             logger.warn('Benchmark claim release failed', {

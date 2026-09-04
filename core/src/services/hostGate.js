@@ -566,6 +566,21 @@ function _resetForTests() {
   _exclusiveWaitQueues.clear();
 }
 
+/**
+ * Host-level in-flight check that also observes admissions owned by another
+ * Core process when the shared Mongo gate is enabled. Benchmark snapshotting
+ * must use this form; a process-local zero is not a distributed quiet point.
+ */
+async function hostHasInflightAnywhere(host) {
+  if (!ENABLED || !host) return false;
+  if (hostHasInflight(host)) return true;
+  if (!sharedStateReady()) return false;
+  return Boolean(await _admissionModel().exists({
+    host,
+    expiresAt: { $gt: new Date() }
+  }));
+}
+
 async function _clearSharedAdmissionsForTests() {
   if (mongoose.connection.readyState !== 1) return;
   await _admissionModel().deleteMany({});
@@ -577,6 +592,7 @@ module.exports = {
   stats,
   inFlightFor,
   hostHasInflight,
+  hostHasInflightAnywhere,
   _resetForTests,
   _clearSharedAdmissionsForTests,
   MAX_INFLIGHT,

@@ -33,7 +33,7 @@ describe('profiler retained-sample statistics', () => {
       p95: 13.8
     });
     expect(summary.tokensPerSecMax).toBe(14);
-    expect(summary.confidenceInterval95).toEqual(expect.objectContaining({ method: 'normal_approximation' }));
+    expect(summary.confidenceInterval95).toEqual(expect.objectContaining({ method: 'student_t' }));
     expect(summary.reliability).not.toBe('unknown');
   });
 

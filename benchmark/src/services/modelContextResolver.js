@@ -62,6 +62,9 @@ async function resolveModelNumCtxDetails(modelName, opts = {}) {
   // picked a ctx the host can no longer warm up within the timeout.
   const skipPriorProfileArtifacts = opts.skipPriorProfileArtifacts === true;
   const artifactIdentity = opts.artifactIdentity || {};
+  const workload = ['interactive', 'document', 'capacity'].includes(opts.workload)
+    ? opts.workload
+    : 'interactive';
   const normalizedModel = normalizeModelName(modelName);
 
   if (!normalizedModel) {
@@ -75,19 +78,23 @@ async function resolveModelNumCtxDetails(modelName, opts = {}) {
 
   if (!skipPriorProfileArtifacts) {
     const profile = await findContextProfile(normalizedModel, targetHost, artifactIdentity);
-    const verifiedContext = positiveInteger(profile?.maxVerifiedContext)
-      || positiveInteger(profile?.verifiedMaxContext)
-      || positiveInteger(profile?.recommendedContext);
-    if (verifiedContext) {
+    const maxVerifiedContext = positiveInteger(profile?.maxVerifiedContext)
+      || positiveInteger(profile?.verifiedMaxContext);
+    const runtimeContext = workload === 'capacity'
+      ? maxVerifiedContext
+      : workload === 'document'
+        ? positiveInteger(profile?.recommendedDocumentContext)
+        : positiveInteger(profile?.recommendedInteractiveContext);
+    if (runtimeContext) {
       return {
-        num_ctx: verifiedContext,
-        source: 'model_context_profile',
+        num_ctx: runtimeContext,
+        source: `model_context_profile_${workload}`,
         authoritative: true,
         targetHost: profile.hostUrl || targetHost,
         testedAt: profile.lastValidatedAt || null,
         details: {
-          verifiedMaxContext: verifiedContext,
-          maxVerifiedContext: verifiedContext,
+          verifiedMaxContext: maxVerifiedContext,
+          maxVerifiedContext,
           recommendedInteractiveContext: positiveInteger(profile?.recommendedInteractiveContext),
           recommendedDocumentContext: positiveInteger(profile?.recommendedDocumentContext),
           verifiedInputTokens: positiveInteger(profile.verifiedInputTokens),
@@ -96,17 +103,9 @@ async function resolveModelNumCtxDetails(modelName, opts = {}) {
       };
     }
 
-    const probe = await findLatestProbe(normalizedModel, targetHost, artifactIdentity);
-    if (probe?.testedNumCtx != null && !hasInvalidProbeThroughput(probe)) {
-      return {
-        num_ctx: Number(probe.testedNumCtx),
-        source: 'benchmark_context_probe',
-        authoritative: true,
-        targetHost: probe.hostUrl || targetHost,
-        testedAt: probe.testedAt || null,
-        matchedName: probe.modelName
-      };
-    }
+    // Raw probe snapshots are diagnostic evidence. Runtime policy consumes
+    // only the materialized, exact-artifact context profile so failed/stale
+    // migrations cannot silently turn a historical maximum into a default.
   }
 
   return {

@@ -40,8 +40,11 @@ router.get('/:name/config', async (req, res) => {
         modelName: req.params.name,
         hostId,
         artifact: evidence.artifact,
-        config: evidence.profile?.recommendedConfig || {
-          num_ctx: evidence.profile?.optimalNumCtx || null
+        maxVerifiedContext: evidence.profile?.maxVerifiedContext || null,
+        recommendedInteractiveContext: evidence.profile?.recommendedInteractiveContext || null,
+        recommendedDocumentContext: evidence.profile?.recommendedDocumentContext || null,
+        config: {
+          num_ctx: evidence.profile?.recommendedInteractiveContext || null
         }
       }
     });

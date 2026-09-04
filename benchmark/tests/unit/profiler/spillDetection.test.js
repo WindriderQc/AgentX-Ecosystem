@@ -82,7 +82,7 @@ describe('_detectSpill()', () => {
 
     const result = await orchestrator._detectSpill(HOST_URL, MODEL_NAME);
 
-    expect(result.spillDetected).toBe(false);
+    expect(result.spillDetected).toBeNull();
     expect(result.lastSafeNumCtx).toBeNull();
     expect(result.spillNumCtx).toBeNull();
     expect(result.vramAtSpill).toBeNull();
@@ -95,7 +95,7 @@ describe('_detectSpill()', () => {
 
     const result = await orchestrator._detectSpill(HOST_URL, MODEL_NAME);
 
-    expect(result.spillDetected).toBe(false);
+    expect(result.spillDetected).toBeNull();
     expect(result.lastSafeNumCtx).toBeNull();
     expect(result.spillNumCtx).toBeNull();
     expect(result.vramAtSpill).toBeNull();

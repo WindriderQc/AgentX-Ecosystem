@@ -28,6 +28,12 @@ const ReadinessSchema = new mongoose.Schema({
   profiledAt: Date,
   profileDepth: { type: String, enum: ['quick', 'standard', 'full', null], default: null },
   benchmarkQualified: { type: Boolean, default: false },
+  qualificationReason: { type: String, default: null },
+  measurementReliability: {
+    type: String,
+    enum: ['unknown', 'low', 'medium', 'high', null],
+    default: 'unknown'
+  },
   benchmarkedAt: Date,
   stale: { type: Boolean, default: false },
   staleReason: { type: String, default: null },

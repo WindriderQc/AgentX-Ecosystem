@@ -16,10 +16,18 @@ const DRY_RUN = process.argv.includes('--dry-run');
 function migrationPipeline() {
   return [{
     $set: {
-      maxVerifiedContext: { $ifNull: ['$maxVerifiedContext', { $ifNull: ['$verifiedMaxContext', '$recommendedContext'] }] },
+      maxVerifiedContext: { $ifNull: ['$maxVerifiedContext', '$verifiedMaxContext'] },
       historicalMaxVerifiedContext: { $ifNull: ['$historicalMaxVerifiedContext', { $ifNull: ['$verifiedMaxContext', '$recommendedContext'] }] },
-      recommendedInteractiveContext: { $ifNull: ['$recommendedInteractiveContext', { $ifNull: ['$recommendedContext', '$verifiedMaxContext'] }] },
-      recommendedDocumentContext: { $ifNull: ['$recommendedDocumentContext', { $ifNull: ['$recommendedContext', '$verifiedMaxContext'] }] },
+      // Legacy `recommendedContext` was historically the largest request that
+      // happened to succeed, not a workload recommendation. Preserve it only
+      // as capacity history; recommendations stay unknown until re-profiled.
+      recommendedInteractiveContext: null,
+      recommendedDocumentContext: null,
+      recommendedContext: null,
+      recommendationStatus: 'unknown',
+      revalidationRequired: true,
+      stale: true,
+      staleReason: 'legacy_context_revalidation_required',
       recommendationThresholds: {
         $ifNull: ['$recommendationThresholds', {
           interactiveDegradationPct: 15,
@@ -37,7 +45,9 @@ async function migrate() {
     { maxVerifiedContext: { $exists: false } },
     { historicalMaxVerifiedContext: { $exists: false } },
     { recommendedInteractiveContext: { $exists: false } },
-    { recommendedDocumentContext: { $exists: false } }
+    { recommendedDocumentContext: { $exists: false } },
+    { recommendationStatus: { $exists: false } },
+    { revalidationRequired: { $exists: false } }
   ] };
   const matched = await collection.countDocuments(filter);
   if (DRY_RUN) return { dryRun: true, matched, modified: 0 };

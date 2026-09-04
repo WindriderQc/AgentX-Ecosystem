@@ -33,6 +33,7 @@ const service = require('../../src/services/benchmarkClaimService');
 const hostPrefService = require('../../src/services/hostPreferenceService');
 
 afterEach(async () => {
+  jest.restoreAllMocks();
   await HostPreference.deleteMany({});
 });
 
@@ -61,6 +62,21 @@ describe('benchmarkClaimService', () => {
       hostKey: 'primary',
       pinnedModels: [{ model: 'gemma4:26b' }],
       status: 'ready'
+    });
+    jest.spyOn(hostPrefService, 'captureBenchmarkRuntime').mockResolvedValue({
+      capturedAt: new Date(),
+      source: 'ollama_ps',
+      exact: true,
+      residents: [],
+      error: null
+    });
+    jest.spyOn(hostPrefService, 'restoreBenchmarkRuntime').mockResolvedValue({
+      host: HOST_URL,
+      status: 'ready',
+      verified: true,
+      degraded: false,
+      mode: 'exact_runtime_snapshot',
+      residents: []
     });
   });
 
@@ -254,7 +270,14 @@ describe('benchmarkClaimService', () => {
   });
 
   describe('releaseBenchmarkClaim', () => {
-    it('drains a pre-upgrade generationless stale claim only through the reaper CAS', async () => {
+    it('keeps a pre-upgrade claim fenced when no exact runtime snapshot exists', async () => {
+      hostPrefService.restoreBenchmarkRuntime.mockResolvedValueOnce({
+        host: HOST_URL,
+        status: 'error',
+        verified: false,
+        degraded: true,
+        error: 'Exact pre-claim runtime snapshot is unavailable'
+      });
       const claimedAt = new Date(Date.now() - 10 * 60 * 1000);
       await HostPreference.updateOne(
         { hostUrl: HOST_URL },
@@ -287,10 +310,11 @@ describe('benchmarkClaimService', () => {
 
       const reaped = await service.reapStaleBenchmarkClaims({ hardCapMs: 1000 });
       expect(reaped.reaped).toHaveLength(1);
-      expect(reaped.reaped[0].released).toBe(true);
+      expect(reaped.reaped[0].released).toBe(false);
+      expect(reaped.reaped[0].reason).toContain('Exact pre-claim runtime snapshot is unavailable');
       const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
-      expect(stored.status).toBe('ready');
-      expect(stored.benchmarkClaim.batchId).toBeNull();
+      expect(stored.status).toBe('benchmarking');
+      expect(stored.benchmarkClaim.batchId).toBe('legacy-batch');
     });
 
     // Pass skipPinRestore so the async post-release restore doesn't leak
@@ -374,41 +398,77 @@ describe('benchmarkClaimService', () => {
       expect(mockObserveClaimReleaseFailure).toHaveBeenCalledTimes(1);
     });
 
-    // 0175 / 0215 — auto-restore on legitimate release
-    it('restores and verifies the pin after a successful release', async () => {
-      const originalFetch = global.fetch;
-      let psCalls = 0;
-      global.fetch = jest.fn(async (url) => {
-        if (typeof url === 'string' && url.endsWith('/api/ps')) {
-          psCalls += 1;
-          return {
-            ok: true,
-            json: async () => ({
-              models: psCalls === 1 ? [] : [{ name: 'gemma4:26b' }]
-            })
-          };
-        }
-        return {
-          ok: true,
-          text: async () => '{}'
-        };
+    it('restores and verifies the exact pre-claim runtime before release', async () => {
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
+      });
+      expect(released.released).toBe(true);
+      expect(released.runtimeRestore?.status).toBe('ready');
+      expect(released.runtimeRestore?.verified).toBe(true);
+      expect(hostPrefService.restoreBenchmarkRuntime).toHaveBeenCalledWith(
+        HOST_URL,
+        expect.objectContaining({ exact: true, residents: [] }),
+        { batchId: BATCH_A, claimGeneration: claimed.claimGeneration }
+      );
+
+      const after = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(after.status).toBe('ready');
+      expect(after.benchmarkClaim?.batchId).toBeNull();
+    });
+
+    it('keeps the fence recoverable when exact runtime restoration fails', async () => {
+      hostPrefService.restoreBenchmarkRuntime.mockResolvedValueOnce({
+        host: HOST_URL,
+        status: 'error',
+        verified: false,
+        degraded: false,
+        error: 'resident context verification failed'
+      });
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
       });
 
-      try {
-        const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
-        const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
-          claimGeneration: claimed.claimGeneration
-        });
-        expect(released.released).toBe(true);
-        expect(released.pinRestore?.status).toBe('ready');
-        expect(released.pinRestore?.verified).toBe(true);
+      expect(released).toMatchObject({
+        released: false,
+        runtimeRestore: { verified: false }
+      });
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.status).toBe('benchmarking');
+      expect(stored.benchmarkClaim.batchId).toBe(BATCH_A);
+      expect(stored.benchmarkClaim.claimGeneration).toBe(claimed.claimGeneration);
+    });
 
-        const after = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
-        expect(after.status).toBe('ready');
-        expect(after.benchmarkClaim?.batchId).toBeNull();
-      } finally {
-        global.fetch = originalFetch;
-      }
+    it('linearizes restore and release before a replacement owner can acquire', async () => {
+      let finishRestore;
+      const restoreStarted = new Promise(resolve => {
+        hostPrefService.restoreBenchmarkRuntime.mockImplementationOnce(async () => {
+          resolve();
+          await new Promise(done => { finishRestore = done; });
+          return { host: HOST_URL, status: 'ready', verified: true, degraded: false, residents: [] };
+        });
+      });
+      const first = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const releasing = service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: first.claimGeneration
+      });
+      await restoreStarted;
+
+      await expect(service.claimBenchmark(HOST_URL, BATCH_B)).resolves.toMatchObject({ claimed: false });
+      finishRestore();
+      await expect(releasing).resolves.toMatchObject({ released: true });
+      const second = await service.claimBenchmark(HOST_URL, BATCH_B);
+      expect(second.claimed).toBe(true);
+
+      const stale = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        skipPinRestore: true,
+        claimGeneration: first.claimGeneration
+      });
+      expect(stale.released).toBe(false);
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.benchmarkClaim.batchId).toBe(BATCH_B);
+      expect(stored.benchmarkClaim.claimGeneration).toBe(second.claimGeneration);
     });
 
     it('rejects stale same-batch heartbeat and release after a new generation acquires the host', async () => {

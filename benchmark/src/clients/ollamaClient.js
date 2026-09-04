@@ -98,8 +98,10 @@ async function ollamaFetch(hostUrl, path, opts = {}) {
     const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
     // Honour an external signal
+    const abortFromCaller = () => controller.abort(opts.signal?.reason);
     if (opts.signal) {
-        opts.signal.addEventListener('abort', () => controller.abort(), { once: true });
+        if (opts.signal.aborted) abortFromCaller();
+        else opts.signal.addEventListener('abort', abortFromCaller, { once: true });
     }
 
     const fetchOpts = getFetchOptions(url, {
@@ -121,6 +123,12 @@ async function ollamaFetch(hostUrl, path, opts = {}) {
         return await res.json();
     } catch (err) {
         if (err.name === 'AbortError') {
+            if (opts.signal?.aborted) {
+                if (opts.signal.reason instanceof Error) throw opts.signal.reason;
+                const aborted = new Error(`Ollama ${method} ${path} aborted by caller`);
+                aborted.code = 'CALLER_ABORTED';
+                throw aborted;
+            }
             const timeout = new Error(`Ollama ${method} ${path} timed out after ${timeoutMs}ms`);
             timeout.code = 'ETIMEDOUT';
             throw timeout;
@@ -128,6 +136,7 @@ async function ollamaFetch(hostUrl, path, opts = {}) {
         throw err;
     } finally {
         if (timer) clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', abortFromCaller);
     }
 }
 

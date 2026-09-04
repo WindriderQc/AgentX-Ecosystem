@@ -211,6 +211,21 @@ function createLocalDeadline(timeoutMs, maximumMs) {
     });
 }
 
+function combineAbortSignals(...signals) {
+    const active = signals.filter(Boolean);
+    if (!active.length) return undefined;
+    if (active.length === 1) return active[0];
+    return AbortSignal.any(active);
+}
+
+function throwIfAborted(signal) {
+    if (!signal?.aborted) return;
+    if (signal.reason instanceof Error) throw signal.reason;
+    const error = new Error('Benchmark claim stopped while model warmup was running');
+    error.code = 'BENCHMARK_CLAIM_STOPPED';
+    throw error;
+}
+
 // Models that should NOT be unloaded during pre-warmup (always stay resident):
 //   - embeddings: small, shared across consumers, cheap to keep
 // Callers can extend via options.keepLoaded (e.g., judge model on same host).
@@ -237,7 +252,7 @@ const UNLOAD_TIMEOUT_MS = 5000;
  * the Ollama side, and serialising them on a host with 8+ loaded models
  * was adding ~30–90s to benchmark batch startup for no benefit.
  */
-async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, executor) {
+async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, executor, signal = null) {
     const names = Array.isArray(loadedNames) ? loadedNames : [];
     if (names.length === 0) return [];
 
@@ -259,7 +274,7 @@ async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, execu
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model: name, keep_alive: 0, stream: false }),
-                    signal: deadline.signal
+                    signal: combineAbortSignals(deadline.signal, signal)
                 },
                 executor
             );
@@ -267,6 +282,7 @@ async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, execu
             else await response.cancel();
             return name;
         } catch (err) {
+            throwIfAborted(signal);
             logger.debug('[warmup] unload best-effort failed', { hostUrl, model: name, error: err.message });
             return null;
         } finally {
@@ -287,7 +303,7 @@ function readLoadedContextLength(modelInfo) {
     return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
 }
 
-async function unloadLoadedModel(hostUrl, modelName, executor) {
+async function unloadLoadedModel(hostUrl, modelName, executor, signal = null) {
     const deadline = createLocalDeadline(
         UNLOAD_TIMEOUT_MS,
         MODEL_WARMUP_OPERATION_SPECS[MODEL_WARMUP_OPERATIONS.UNLOAD_ONE].policy.deadlineMs
@@ -300,7 +316,7 @@ async function unloadLoadedModel(hostUrl, modelName, executor) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: modelName, keep_alive: 0, stream: false }),
-                signal: deadline.signal
+                signal: combineAbortSignals(deadline.signal, signal)
             },
             executor
         );
@@ -363,6 +379,7 @@ async function warmupModel(hostUrl, model, options = {}) {
         keepLoaded = [],
         claimIdentity = null,
         assertClaimActive = null,
+        signal = null,
         // Optional callback for sub-phase progress strings (UI visibility).
         onPhaseDetail = null
     } = options;
@@ -409,7 +426,7 @@ async function warmupModel(hostUrl, model, options = {}) {
                     `${hostUrl}/api/ps`,
                     {
                         method: 'GET',
-                        signal: psDeadline.signal
+                        signal: combineAbortSignals(psDeadline.signal, signal)
                     },
                     executor
                 );
@@ -432,6 +449,7 @@ async function warmupModel(hostUrl, model, options = {}) {
                 psDeadline.dispose();
             }
         } catch (psErr) {
+            throwIfAborted(signal);
             logger.debug('Could not check /api/ps', { host: hostUrl, error: psErr.message });
         }
 
@@ -455,7 +473,7 @@ async function warmupModel(hostUrl, model, options = {}) {
             if (typeof onPhaseDetail === 'function') {
                 try { await onPhaseDetail(`Reloading ${model} at ${requestedNumCtx} ctx…`); } catch (_e) {}
             }
-            await unloadLoadedModel(hostUrl, loadedName, executor);
+            await unloadLoadedModel(hostUrl, loadedName, executor, signal);
             loadedModels = loadedModels.filter(name => !isSameOllamaModel(name, model));
             modelAlreadyLoaded = false;
             warmupData.already_loaded = false;
@@ -473,7 +491,7 @@ async function warmupModel(hostUrl, model, options = {}) {
             if (typeof onPhaseDetail === 'function') {
                 try { await onPhaseDetail(`Unloading ${loadedModels.length} other model(s) from ${hostUrl}…`); } catch (_e) {}
             }
-            warmupData.pre_unloaded = await unloadOthers(hostUrl, model, loadedModels, keepLoaded, executor);
+            warmupData.pre_unloaded = await unloadOthers(hostUrl, model, loadedModels, keepLoaded, executor, signal);
         } else {
             warmupData.pre_unloaded = [];
         }
@@ -522,7 +540,7 @@ async function warmupModel(hostUrl, model, options = {}) {
                     method: 'POST',
                     headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify(requestBody),
-                    signal: deadline.signal
+                    signal: combineAbortSignals(deadline.signal, signal)
                 },
                 executor
             );
@@ -532,6 +550,8 @@ async function warmupModel(hostUrl, model, options = {}) {
 
             if (response.ok) {
                 const data = await readBoundedJson(response);
+                checkpoint();
+                throwIfAborted(signal);
                 warmupData.response = data.message?.content || '';
                 warmupData.success = true;
                 logger.info('Model ready', { host: hostUrl, model, durationMs, wasLoaded: modelAlreadyLoaded });
@@ -549,6 +569,7 @@ async function warmupModel(hostUrl, model, options = {}) {
             deadline.dispose();
         }
     } catch (err) {
+        throwIfAborted(signal);
         const durationMs = Date.now() - warmupStart;
         warmupData.latency_ms = durationMs;
         warmupData.error = normalizeWarmupError(err, timeoutMs);

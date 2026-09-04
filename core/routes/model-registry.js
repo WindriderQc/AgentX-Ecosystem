@@ -280,7 +280,10 @@ router.get('/:name/context-info', async (req, res) => {
     const { name } = req.params;
     const { host } = req.query;
     const { getContextInfo } = require('../src/services/modelContextInfoService');
-    const info = await getContextInfo(name, host);
+    const workload = ['interactive', 'document', 'capacity'].includes(req.query.workload)
+      ? req.query.workload
+      : 'interactive';
+    const info = await getContextInfo(name, host, { workload });
     res.json({ status: 'success', data: info });
   } catch (err) {
     logger.error('Failed to resolve model context info', { error: err.message });

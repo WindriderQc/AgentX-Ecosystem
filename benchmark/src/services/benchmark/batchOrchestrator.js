@@ -28,7 +28,7 @@ const { benchmarkFetch: fetch } = require('./http');
 const { resolveJudgeHost } = require('./judgeHostResolution');
 const { groupModelsByHost, createCurrentTestPersistenceStrategy } = require('./batchHelpers');
 const { persistSuccessfulResult, persistFailedResult } = require('./batchResultPersistence');
-const { detectDedication, releaseAllDedication, restoreAllDedication } = require('./dedicationLifecycle');
+const { detectDedication, releaseAllDedication } = require('./dedicationLifecycle');
 const { findActiveProfilingForHost } = require('../profiler/activeProfileState');
 const { capturePerformanceBaseline } = require('./performanceBaseline');
 const { evaluateAndPersistEarlyStop, EARLY_STOP_MIN_JUDGED } = require('./earlyStop');
@@ -856,7 +856,10 @@ async function runBatchOrchestrator({
             batchId,
             model,
             hostUrl,
-            numCtx: modelExecConfig.num_ctx || null
+            numCtx: modelExecConfig.num_ctx || null,
+            claimIdentity: claimIdentityFor(hostUrl),
+            assertClaimActive,
+            signal: batchCancellationController.signal
         });
         assertClaimActive();
         if (await shouldStopBatch(model, { force: true })) {
@@ -875,7 +878,8 @@ async function runBatchOrchestrator({
             warmupTimeoutLoaded,
             onPhaseDetail: (detail) => setBatchPhase('warmup', detail),
             claimIdentity: claimIdentityFor(hostUrl),
-            assertClaimActive
+            assertClaimActive,
+            signal: batchCancellationController.signal
         });
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping after model warmup because batch is stopped', { batchId, model, host: hostUrl });
@@ -1233,20 +1237,23 @@ async function runBatchOrchestrator({
             return;
         }
         hostLifecycleFinalized = true;
-        const claimWasLost = Boolean(stopClaimHeartbeat.getFailure());
         if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
         else stopClaimHeartbeat();
 
         let release = { failed: 0 };
         if (claimedHostUrls.length > 0) {
             release = await releaseBenchmarkClaims(claimedHostUrls, batchId);
-            await recordBatchTimelineEvent('benchmark_claim_released', {
+            await recordBatchTimelineEvent(release.failed > 0 ? 'benchmark_claim_release_failed' : 'benchmark_claim_released', {
                 hosts: claimedHostUrls,
                 ...(release.failed > 0 ? { failed: release.failed } : {})
             }).catch(() => {});
-        }
-        if (!claimWasLost && release.failed === 0 && dedicationState.size > 0) {
-            await restoreAllDedication(dedicationState, { batchId, recordBatchTimelineEvent });
+            if (release.failed > 0) {
+                const detail = release.details?.find(item => !item.released);
+                const error = new Error(detail?.reason || 'Benchmark runtime restore/release failed');
+                error.code = 'BENCHMARK_RUNTIME_RESTORE_FAILED';
+                error.release = release;
+                throw error;
+            }
         }
     };
 
@@ -1280,7 +1287,8 @@ async function runBatchOrchestrator({
             setBatchPhase,
             recordBatchTimelineEvent,
             assertClaimActive,
-            claimIdentityFor
+            claimIdentityFor,
+            signal: batchCancellationController.signal
         });
 
         if (!isResuming && requestedHostGroups.length > 0) {

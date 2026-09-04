@@ -175,7 +175,9 @@ describe('benchmark coordination helpers', () => {
                     details: [{
                         hostUrl: 'http://a:11434',
                         released: false,
-                        reason: 'claim generation changed'
+                        reason: 'claim generation changed',
+                        runtimeRestore: null,
+                        pinRestore: null
                     }]
                 });
         });

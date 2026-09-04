@@ -246,11 +246,16 @@ async function detectCpuCores(hostUrl) {
  * @param {string} modelName
  * @returns {Promise<{ success: boolean, error?: string }>}
  */
-async function releaseModel(hostUrl, modelName) {
+async function releaseModel(hostUrl, modelName, options = {}) {
   try {
-    await generate(hostUrl, { model: modelName, prompt: '', keep_alive: '0', stream: false }, { timeoutMs: 15000 });
+    await generate(hostUrl, { model: modelName, prompt: '', keep_alive: '0', stream: false }, {
+      timeoutMs: 15000,
+      signal: options.signal
+    });
+    options.assertClaimActive?.();
     return { success: true };
   } catch (err) {
+    if (options.signal?.aborted) throw (options.signal.reason instanceof Error ? options.signal.reason : err);
     return { success: false, error: err.message };
   }
 }

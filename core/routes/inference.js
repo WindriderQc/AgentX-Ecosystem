@@ -1202,14 +1202,16 @@ router.post('/inference/generate', async (req, res) => {
     };
     routingTrace.difference = buildRoutingDifference(routingTrace);
 
-    // Admission gate — per-(host, model) semaphore. Streaming bypasses because
-    // long-lived streams would starve the gate for other callers.
+    // Admission gate — per-(host, model) semaphore. Streaming is tracked too:
+    // benchmark claims must drain every already-admitted inference before Core
+    // snapshots and mutates Ollama residency. Bypassing streams made that
+    // snapshot race an unobservable long-running generation.
     //
     // Lane policy:
     //   - direct lane: skip admission (bench/profiler self-sequence per host)
     //   - interactive: KEEP admission — load-bearing for cron fairness
     //   - automated:   keep admission
-    const skipGate = stream || !lane.admit;
+    const skipGate = !lane.admit;
     const disconnect = createInferenceDisconnectSignal(req, res);
     let gateRelease = () => {};
 
@@ -1375,6 +1377,17 @@ router.post('/inference/generate', async (req, res) => {
         if (!skipGate) {
             gateRelease = await hostGate.acquire(target, model, {
                 signal: disconnect.signal,
+            });
+            // A request may have passed the first claim check and then waited
+            // in the admission queue while Benchmark fenced the host. Recheck
+            // after admission and before the Ollama write so no queued request
+            // can start after the pre-claim drain/snapshot boundary.
+            await assertHostAvailableForConsumer(target, {
+                callerDetail: body.callerDetail || null,
+                claimBatchId: body.claimBatchId || null,
+                claimGeneration: body.claimGeneration || null,
+                model,
+                path: '/api/inference/generate:post-admission'
             });
         }
 

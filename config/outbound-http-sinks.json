@@ -182,7 +182,7 @@
       "pathPattern": "^/api/nerve-center/host-preferences/[^/]+/benchmark-claim$",
       "allowSearch": false,
       "responseMode": "json",
-      "deadlineMs": 10000,
+      "deadlineMs": 45000,
       "maxRequestBytes": 65536,
       "maxResponseBytes": 262144,
       "enforcementStatus": "enforced"
@@ -1104,7 +1104,7 @@
     { "id": "core.host-preference.generate", "service": "core", "source": "core/src/services/hostPreferenceService.js", "line": 144, "column": 28, "constructor": "fetch", "policyId": "configured.ollama-lifecycle" },
     { "id": "core.transport.peer-verified-node-fetch", "service": "core", "source": "core/src/helpers/peerVerifiedNodeFetchTransport.js", "line": 172, "column": 24, "constructor": "fetchImpl", "policyId": "canonical.loopback-control" },
     { "id": "core.model-aggregator.tags", "service": "core", "source": "core/src/services/modelAggregator.js", "line": 400, "column": 30, "constructor": "fetch", "policyId": "configured.ollama-observation" },
-    { "id": "core.model-context.show", "service": "core", "source": "core/src/services/modelContextInfoService.js", "line": 61, "column": 23, "constructor": "fetchFn", "policyId": "configured.ollama-observation" },
+    { "id": "core.model-context.show", "service": "core", "source": "core/src/services/modelContextInfoService.js", "line": 62, "column": 23, "constructor": "fetchFn", "policyId": "configured.ollama-observation" },
     { "id": "core.model-router.primary", "service": "core", "source": "core/src/services/modelRouter.js", "line": 217, "column": 32, "constructor": "fetch", "policyId": "configured.ollama-inference" },
     { "id": "core.model-router.fallback", "service": "core", "source": "core/src/services/modelRouter.js", "line": 454, "column": 32, "constructor": "fetch", "policyId": "configured.ollama-inference" },
     { "id": "core.model-sync.tags", "service": "core", "source": "core/src/services/modelSync/syncOrchestrator.js", "line": 169, "column": 26, "constructor": "fetch", "policyId": "configured.ollama-observation" },
@@ -1129,7 +1129,7 @@
     { "id": "benchmark.buddy-event.deliver", "service": "benchmark", "source": "benchmark/src/clients/buddyEventClient.js", "line": 33, "column": 3, "constructor": "fetch", "policyId": "configured.product-telemetry" },
     { "id": "benchmark.transport.peer-verified-node-fetch", "service": "benchmark", "source": "benchmark/src/helpers/outboundHttpTransport.js", "line": 243, "column": 30, "constructor": "fetchImpl", "policyId": "delegated.benchmark-transport" },
     { "id": "benchmark.huggingface.catalog", "service": "benchmark", "source": "benchmark/src/clients/hfClient.js", "line": 12, "column": 17, "constructor": "https.get", "policyId": "canonical.public-model-metadata" },
-    { "id": "benchmark.ollama-client.request", "service": "benchmark", "source": "benchmark/src/clients/ollamaClient.js", "line": 114, "column": 27, "constructor": "fetch", "policyId": "request-admitted.ollama-inference" },
+    { "id": "benchmark.ollama-client.request", "service": "benchmark", "source": "benchmark/src/clients/ollamaClient.js", "line": 116, "column": 27, "constructor": "fetch", "policyId": "request-admitted.ollama-inference" },
     { "id": "benchmark.decomposed-judge.generate", "service": "benchmark", "source": "benchmark/src/services/decomposedJudge.js", "line": 171, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
     { "id": "benchmark.reference.key-point", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 118, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
     { "id": "benchmark.reference.contradiction", "service": "benchmark", "source": "benchmark/src/services/referenceScorer.js", "line": 177, "column": 27, "constructor": "fetch", "policyId": "configured.product-inference" },
@@ -1146,7 +1146,7 @@
     { "id": "benchmark.judge-validator.chat", "service": "benchmark", "source": "benchmark/src/services/benchmark/judgeModelValidator.js", "line": 98, "column": 25, "constructor": "fetch", "policyId": "request-admitted.ollama-inference" },
     { "id": "benchmark.judge-validator.show", "service": "benchmark", "source": "benchmark/src/services/benchmark/judgeModelValidator.js", "line": 211, "column": 25, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.preflight.tags", "service": "benchmark", "source": "benchmark/src/services/benchmark/preflight.js", "line": 284, "column": 32, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
-    { "id": "benchmark.test-execution.generate", "service": "benchmark", "source": "benchmark/src/services/benchmark/testExecution.js", "line": 61, "column": 32, "constructor": "fetch", "policyId": "configured.product-inference" },
+    { "id": "benchmark.test-execution.generate", "service": "benchmark", "source": "benchmark/src/services/benchmark/testExecution.js", "line": 74, "column": 32, "constructor": "fetch", "policyId": "configured.product-inference" },
     { "id": "benchmark.judge-call.generate", "service": "benchmark", "source": "benchmark/src/services/scoring/judgeCall.js", "line": 417, "column": 36, "constructor": "fetch", "policyId": "configured.product-inference" },
 
     { "id": "rag.core-outbound.execute", "service": "rag", "source": "rag/src/clients/coreOutboundClient.js", "line": 279, "column": 30, "constructor": "fetchImpl", "policyId": "configured.qdrant-data" }

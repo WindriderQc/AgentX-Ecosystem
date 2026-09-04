@@ -52,13 +52,16 @@ function recommendationFor(snapshot, threshold, fallback) {
 function normalizeContextProfile(profile) {
   if (!profile) return null;
   const maxVerifiedContext = positiveInteger(profile.maxVerifiedContext)
-    || positiveInteger(profile.verifiedMaxContext)
-    || positiveInteger(profile.recommendedContext);
-  const recommendedDocumentContext = positiveInteger(profile.recommendedDocumentContext)
-    || positiveInteger(profile.recommendedContext)
-    || maxVerifiedContext;
-  const recommendedInteractiveContext = positiveInteger(profile.recommendedInteractiveContext)
-    || recommendedDocumentContext;
+    || positiveInteger(profile.verifiedMaxContext);
+  const recommendationsVerified = profile.recommendationStatus === 'verified'
+    && profile.revalidationRequired !== true
+    && profile.stale !== true;
+  const recommendedDocumentContext = recommendationsVerified
+    ? positiveInteger(profile.recommendedDocumentContext)
+    : null;
+  const recommendedInteractiveContext = recommendationsVerified
+    ? positiveInteger(profile.recommendedInteractiveContext)
+    : null;
   return {
     ...profile,
     maxVerifiedContext,
@@ -66,7 +69,9 @@ function normalizeContextProfile(profile) {
     historicalMaxVerifiedContext: positiveInteger(profile.historicalMaxVerifiedContext) || maxVerifiedContext,
     recommendedInteractiveContext,
     recommendedDocumentContext,
-    recommendedContext: recommendedDocumentContext
+    recommendedContext: recommendedDocumentContext,
+    recommendationStatus: recommendationsVerified ? 'verified' : 'unknown',
+    revalidationRequired: !recommendationsVerified
   };
 }
 
@@ -128,6 +133,8 @@ async function updateFromProbeSnapshot(snapshot) {
         verifiedInputTokens,
         recommendedInteractiveContext,
         recommendedDocumentContext,
+        recommendationStatus: 'verified',
+        revalidationRequired: false,
         recommendationThresholds: {
           interactiveDegradationPct: interactiveThreshold,
           documentDegradationPct: documentThreshold

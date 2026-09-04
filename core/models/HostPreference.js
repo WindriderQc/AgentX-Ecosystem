@@ -30,6 +30,13 @@ const PinnedModelEntrySchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const BenchmarkResidentSnapshotSchema = new mongoose.Schema({
+  model: { type: String, required: true, trim: true },
+  contextLength: { type: Number, default: null },
+  keepAlive: { type: Number, default: null },
+  expiresAt: { type: Date, default: null }
+}, { _id: false });
+
 const HostPreferenceSchema = new mongoose.Schema({
   hostUrl: {
     type: String,
@@ -109,7 +116,17 @@ const HostPreferenceSchema = new mongoose.Schema({
     owner: { type: String, default: null },
     note: { type: String, default: null },
     heartbeatAt: { type: Date, default: null },
-    heartbeatTtlMs: { type: Number, default: null }
+    heartbeatTtlMs: { type: Number, default: null },
+    // Exact Ollama residency captured after the claim CAS succeeds but before
+    // the caller is allowed to mutate the host. Release restores and verifies
+    // this snapshot while the same claim generation is still active.
+    preClaimRuntime: {
+      capturedAt: { type: Date, default: null },
+      source: { type: String, default: null },
+      exact: { type: Boolean, default: false },
+      residents: { type: [BenchmarkResidentSnapshotSchema], default: [] },
+      error: { type: String, default: null }
+    }
   },
   // ── Pin auto-restore grace period (task 0176) ─────────────
   // Timestamp of the first reconciler tick that observed the pinned

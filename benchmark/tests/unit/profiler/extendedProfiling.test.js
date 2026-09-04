@@ -92,7 +92,7 @@ describe('_runThroughputCurve()', () => {
     results.forEach(r => {
       expect(r.tokensPerSec).toBe(0);
       expect(r.vramUsedMiB).toBeNull();
-      expect(r.gpuOffloaded).toBe(false);
+      expect(r.gpuOffloaded).toBeNull();
     });
   });
 

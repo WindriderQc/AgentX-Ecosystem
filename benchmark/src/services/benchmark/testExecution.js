@@ -5,6 +5,7 @@
 
 const logger = require('../../../config/logger');
 const { getFetchOptions } = require('../../helpers/httpAgent');
+const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const BenchmarkPrompt = require('../../../models/BenchmarkPrompt');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const { classifyBenchmarkError } = require('./errorClassifier');
@@ -13,6 +14,7 @@ const { getModelDigest } = require('./modelDigestService');
 const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
 const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmission');
 const crypto = require('crypto');
+const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
 const {
     acquireBenchmarkClaims,
     releaseBenchmarkClaims,
@@ -31,12 +33,15 @@ async function runTest({ model, host, prompt }) {
 
     const claimId = `benchmark-single-${crypto.randomBytes(8).toString('hex')}`;
     const claimedHosts = await acquireBenchmarkClaims([host], claimId, 10 * 60 * 1000);
-    const stopHeartbeat = startBenchmarkClaimHeartbeat(claimedHosts, claimId, 10 * 60 * 1000);
+    const claimAbort = new AbortController();
+    const stopHeartbeat = startBenchmarkClaimHeartbeat(claimedHosts, claimId, 10 * 60 * 1000, {
+        onFatal: error => claimAbort.abort(error)
+    });
     await stopHeartbeat.ready;
     try {
         stopHeartbeat.assertActive();
     } catch (error) {
-        stopHeartbeat();
+        await stopHeartbeat.drain();
         await releaseBenchmarkClaims(claimedHosts, claimId);
         throw error;
     }
@@ -44,18 +49,26 @@ async function runTest({ model, host, prompt }) {
     const start = Date.now();
 
     try {
-        // Use /api/chat for proper chat template application on instruction-tuned models
-        const url = `${host}/api/chat`;
+        // Route through Core's direct Benchmark lane so the exact claim proof
+        // is enforced rather than relying on an unfenced direct Ollama call.
+        const url = `${process.env.CORE_URL || 'http://localhost:3080'}/api/inference/generate`;
+        const claimIdentity = getBenchmarkClaimIdentity(host, claimId);
+        if (!claimIdentity) throw new Error('Missing exact benchmark claim proof');
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 model,
+                host,
                 messages: [{ role: 'user', content: prompt }],
                 stream: false,
+                rawResponse: true,
+                callerDetail: 'benchmark-single-test',
+                ...claimIdentity,
                 options: {}
             }),
             timeout: 600000,
+            signal: claimAbort.signal,
             redirect: 'manual'
         });
         const response = await fetch(url, fetchOptions);
@@ -90,7 +103,8 @@ async function runTest({ model, host, prompt }) {
         const tokensPerSec = (tokens > 0 && latency > 0)
             ? Number((tokens / (latency / 1000)).toFixed(2))
             : 0;
-        const modelDigest = await getModelDigest(host, model);
+        const modelDigest = await getModelDigest(host, model, { signal: claimAbort.signal });
+        stopHeartbeat.assertActive();
 
         const result = new BenchmarkResult({
             model,
@@ -108,6 +122,7 @@ async function runTest({ model, host, prompt }) {
             timestamp: new Date()
         });
 
+        stopHeartbeat.assertActive();
         await result.save();
 
         logger.info('Benchmark test completed', {
@@ -117,8 +132,17 @@ async function runTest({ model, host, prompt }) {
         return result;
 
     } catch (err) {
+        // Claim loss aborts the in-flight Core/Ollama request. Do not start a
+        // digest lookup or persist a result after ownership has been lost.
+        if (claimAbort.signal.aborted || stopHeartbeat.getFailure?.()) {
+            throw (claimAbort.signal.reason instanceof Error
+                ? claimAbort.signal.reason
+                : stopHeartbeat.getFailure?.() || err);
+        }
+        stopHeartbeat.assertActive();
         const classified = classifyBenchmarkError(err);
-        const modelDigest = await getModelDigest(host, model);
+        const modelDigest = await getModelDigest(host, model, { signal: claimAbort.signal });
+        stopHeartbeat.assertActive();
         const result = new BenchmarkResult({
             model,
             model_digest: modelDigest,
@@ -132,13 +156,19 @@ async function runTest({ model, host, prompt }) {
             timestamp: new Date()
         });
 
+        stopHeartbeat.assertActive();
         await result.save();
         logger.error('Benchmark test failed', { model, host, error: err.message });
 
         throw err;
     } finally {
-        stopHeartbeat();
-        await releaseBenchmarkClaims(claimedHosts, claimId);
+        await stopHeartbeat.drain();
+        const release = await releaseBenchmarkClaims(claimedHosts, claimId);
+        if (release.failed > 0) {
+            const error = new Error(release.details?.find(detail => !detail.released)?.reason || 'Benchmark runtime restore/release failed');
+            error.code = 'BENCHMARK_RUNTIME_RESTORE_FAILED';
+            throw error;
+        }
     }
 }
 

@@ -307,21 +307,22 @@ function compositeScore(dims, useCase) {
 /** Most capable model measured to run cleanly (no spill, not maxed). */
 function pickRecommended(measured) {
   const safe = (measured || [])
-    .filter(m => !m.spillDetected && (m.vramPct == null || m.vramPct <= 90))
+    .filter(m => m.spillVerified === true && m.spillDetected === false && (m.vramPct == null || m.vramPct <= 90))
     .sort((a, b) => (b.paramB || 0) - (a.paramB || 0) || (b.tokensPerSec || 0) - (a.tokensPerSec || 0));
   if (!safe.length) return null;
   const top = safe[0];
   const bits = ['largest model measured to run without spill'];
   if (top.vramPct != null) bits.push(`${top.vramPct}% VRAM`);
   if (top.tokensPerSec != null) bits.push(`${top.tokensPerSec} tok/s`);
-  if (top.optimalNumCtx) bits.push(`up to ${top.optimalNumCtx} ctx`);
+  if (top.recommendedInteractiveContext) bits.push(`interactive ${top.recommendedInteractiveContext} ctx`);
+  if (top.maxVerifiedContext) bits.push(`max verified ${top.maxVerifiedContext} ctx`);
   return { modelName: top.modelName, reason: bits.join(' · ') };
 }
 
 /** Highest benchmark-scored model that also fits cleanly. */
 function pickBestBenchmarked(measured) {
   const scored = (measured || [])
-    .filter(m => !m.spillDetected && (m.vramPct == null || m.vramPct <= 90) && m.score != null)
+    .filter(m => m.spillVerified === true && m.spillDetected === false && (m.vramPct == null || m.vramPct <= 90) && m.score != null)
     .sort((a, b) => (b.score || 0) - (a.score || 0));
   if (!scored.length) return null;
   const top = scored[0];

@@ -43,7 +43,9 @@ describe('modelContextResolver exact-artifact evidence', () => {
         contextProfiles.findContextProfile.mockResolvedValue({
             modelName: ARTIFACT.model,
             hostUrl: ARTIFACT.hostUrl,
-            recommendedContext: 65536,
+            recommendedInteractiveContext: 65536,
+            recommendedDocumentContext: 131072,
+            maxVerifiedContext: 237568,
             verifiedMaxContext: 237568,
             verifiedInputTokens: 230000,
             lastValidatedAt: new Date('2026-06-16T00:00:00Z')
@@ -60,15 +62,15 @@ describe('modelContextResolver exact-artifact evidence', () => {
             ARTIFACT
         );
         expect(result).toMatchObject({
-            num_ctx: 237568,
-            source: 'model_context_profile',
+            num_ctx: 65536,
+            source: 'model_context_profile_interactive',
             authoritative: true,
             targetHost: ARTIFACT.hostUrl
         });
         expect(ModelContextProbeSnapshot.findOne).not.toHaveBeenCalled();
     });
 
-    it('uses only raw probe evidence with the same digest and runtime fingerprint', async () => {
+    it('does not promote a raw probe snapshot to runtime authority', async () => {
         ModelContextProbeSnapshot.findOne.mockReturnValue(sortedLean({
             modelName: ARTIFACT.model,
             testedNumCtx: 202752,
@@ -82,17 +84,11 @@ describe('modelContextResolver exact-artifact evidence', () => {
             artifactIdentity: ARTIFACT
         });
 
-        expect(ModelContextProbeSnapshot.findOne).toHaveBeenCalledWith({
-            modelName: { $in: [ARTIFACT.model] },
-            status: 'completed',
-            hostUrl: ARTIFACT.hostUrl,
-            artifactDigest: ARTIFACT.digest,
-            runtimeFingerprint: ARTIFACT.runtimeFingerprint
-        });
+        expect(ModelContextProbeSnapshot.findOne).not.toHaveBeenCalled();
         expect(result).toMatchObject({
-            num_ctx: 202752,
-            source: 'benchmark_context_probe',
-            authoritative: true
+            num_ctx: null,
+            source: 'unresolved',
+            authoritative: false
         });
     });
 

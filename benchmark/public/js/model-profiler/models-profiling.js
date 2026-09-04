@@ -175,7 +175,7 @@ function _activityLog(entries) {
 function _classifyMessage(msg) {
   const m = (msg || '').toLowerCase();
   if (/reattached|resuming|starting/.test(m)) return 'info';
-  if (/no spill|fully loaded|optimal context|deployed|baseline:|completed|✓/.test(m)) return 'good';
+  if (/no spill|fully loaded|max verified|deployed|baseline:|completed|✓/.test(m)) return 'good';
   if (/spill detected|degradation|fail|timeout|drop|error|✗/.test(m)) return 'warn';
   return null;
 }
@@ -208,8 +208,11 @@ function _heroStat(tokPerSec, baseline) {
 
 function _renderSpillBadge(profile) {
   if (!profile?.spill) return '';
+  if (profile.spill.verified !== true) {
+    return '<span class="mp-spill-warn">GPU residency unknown — no-spill unverified</span>';
+  }
   if (profile.spill.spillDetected) {
-    return `<span class="mp-spill-warn">Spills at ${profile.spill.spillNumCtx || '?'} (safe: ${profile.spill.lastSafeNumCtx || '?'})</span>`;
+    return `<span class="mp-spill-warn">Spills at ${profile.spill.spillNumCtx || '?'}</span>`;
   }
   return '<span class="mp-spill-ok">No spill</span>';
 }
@@ -227,7 +230,20 @@ function _renderFullDepthExtras(profile) {
         <td>${r.contextFillPct ?? '?'}%</td>
         <td>${(r.tokensPerSec ?? r.tokPerSec) != null ? Number(r.tokensPerSec ?? r.tokPerSec).toFixed(1) : '?'}</td>
         <td>${r.vramUsedMiB != null ? (r.vramUsedMiB / 1024).toFixed(1) + ' GB' : (r.vramMiB ?? '?')}</td>
-        <td>${(r.gpuOffloaded || r.offloaded) ? 'Yes' : 'No'}</td>
+        <td>${(r.gpuOffloaded ?? r.offloaded) == null ? 'Unknown' : ((r.gpuOffloaded ?? r.offloaded) ? 'Yes' : 'No')}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+
+  const matrix = profile?.prefillDecodeMatrix;
+  if (Array.isArray(matrix?.cells) && matrix.cells.length) {
+    html += `<table class="mp-extras-table">
+      <caption>Prefill / Decode Matrix</caption>
+      <thead><tr><th>Prompt</th><th>Decode</th><th>Prefill tok/s</th><th>Decode tok/s</th><th>Status</th></tr></thead>
+      <tbody>${matrix.cells.map(cell => `<tr>
+        <td>${cell.prefillTokens ?? '?'}</td><td>${cell.decodeTokens ?? '?'}</td>
+        <td>${cell.prefillTokensPerSec ?? '—'}</td><td>${cell.decodeTokensPerSec ?? '—'}</td>
+        <td>${cell.status || 'unknown'}</td>
       </tr>`).join('')}</tbody>
     </table>`;
   }
@@ -310,10 +326,15 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
     if (seenMetrics.ttftMeasurement === 'streamed_wall_clock' && seenMetrics.ttftMs != null) {
       stats.push(_statCard(Math.round(seenMetrics.ttftMs) + ' ms', 'TTFT', '#9d8cff'));
     }
-    if (seenMetrics.optimalNumCtx != null) {
-      const v = seenMetrics.optimalNumCtx;
+    if (seenMetrics.maxVerifiedContext != null) {
+      const v = seenMetrics.maxVerifiedContext;
       const lbl = v >= 1024 ? (v / 1024).toFixed(v % 1024 === 0 ? 0 : 1) + 'k' : v.toString();
-      stats.push(_statCard(lbl, 'optimal ctx', '#58a6ff'));
+      stats.push(_statCard(lbl, 'max verified', '#58a6ff'));
+    }
+    if (seenMetrics.recommendedInteractiveContext != null) {
+      const v = seenMetrics.recommendedInteractiveContext;
+      const lbl = v >= 1024 ? (v / 1024).toFixed(v % 1024 === 0 ? 0 : 1) + 'k' : v.toString();
+      stats.push(_statCard(lbl, 'interactive', '#4ecdc4'));
     }
     if (seenMetrics.degradationPct != null) {
       const accent = seenMetrics.degradationPct > 30 ? '#f85149' : seenMetrics.degradationPct > 10 ? '#d29922' : '#3fb950';
@@ -446,7 +467,8 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
               seenMetrics.ttftMs = m.ttftMs;
               seenMetrics.ttftMeasurement = m.ttftMeasurement;
             }
-            if (m.optimalNumCtx != null) seenMetrics.optimalNumCtx = m.optimalNumCtx;
+            if (m.maxVerifiedContext != null) seenMetrics.maxVerifiedContext = m.maxVerifiedContext;
+            if (m.recommendedInteractiveContext != null) seenMetrics.recommendedInteractiveContext = m.recommendedInteractiveContext;
             if (m.degradationPct != null) seenMetrics.degradationPct = m.degradationPct;
             if (m.vramUsedMiB != null) seenMetrics.vramUsedMiB = m.vramUsedMiB;
             if (m.measurementQuality) seenMetrics.measurementQuality = m.measurementQuality;
@@ -489,7 +511,8 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
       seenMetrics.ttftMs = p.ttftMs;
       seenMetrics.ttftMeasurement = p.ttftMeasurement;
     }
-    if (p?.optimalNumCtx != null) seenMetrics.optimalNumCtx = p.optimalNumCtx;
+    if (p?.maxVerifiedContext != null) seenMetrics.maxVerifiedContext = p.maxVerifiedContext;
+    if (p?.recommendedInteractiveContext != null) seenMetrics.recommendedInteractiveContext = p.recommendedInteractiveContext;
     if (p?.degradationPct != null) seenMetrics.degradationPct = p.degradationPct;
     if (p?.vramUsedMiB != null) seenMetrics.vramUsedMiB = p.vramUsedMiB;
     if (p?.measurementQuality) seenMetrics.measurementQuality = p.measurementQuality;
@@ -497,7 +520,9 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
     if (p?.spill) {
       const sp = p.spill.spillNumCtx;
       const spLbl = sp >= 1024 ? Math.round(sp / 1024) + 'k' : (sp || '?');
-      seenMetrics.spillState = p.spill.spillDetected
+      seenMetrics.spillState = p.spill.verified === false
+        ? 'Unknown'
+        : p.spill.spillDetected
         ? `Spills @ ${spLbl}`
         : 'None';
     }

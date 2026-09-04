@@ -136,9 +136,9 @@ describe('hostFitReportService estimator', () => {
   describe('pickRecommended', () => {
     it('picks the largest model that runs without spill', () => {
       const measured = [
-        { modelName: 'a:7b', paramB: 7, tokensPerSec: 90, vramPct: 40, spillDetected: false },
-        { modelName: 'b:14b', paramB: 14, tokensPerSec: 30, vramPct: 80, spillDetected: false },
-        { modelName: 'c:32b', paramB: 32, tokensPerSec: 10, vramPct: 99, spillDetected: true }
+        { modelName: 'a:7b', paramB: 7, tokensPerSec: 90, vramPct: 40, spillVerified: true, spillDetected: false },
+        { modelName: 'b:14b', paramB: 14, tokensPerSec: 30, vramPct: 80, spillVerified: true, spillDetected: false },
+        { modelName: 'c:32b', paramB: 32, tokensPerSec: 10, vramPct: 99, spillVerified: true, spillDetected: true }
       ];
       expect(pickRecommended(measured).modelName).toBe('b:14b');
     });
@@ -150,8 +150,8 @@ describe('hostFitReportService estimator', () => {
   describe('pickBestBenchmarked', () => {
     it('picks the highest benchmark score among clean fits', () => {
       const measured = [
-        { modelName: 'a', paramB: 7, vramPct: 40, spillDetected: false, score: 70 },
-        { modelName: 'b', paramB: 14, vramPct: 80, spillDetected: false, score: 88, bestCategory: 'coding' }
+        { modelName: 'a', paramB: 7, vramPct: 40, spillVerified: true, spillDetected: false, score: 70 },
+        { modelName: 'b', paramB: 14, vramPct: 80, spillVerified: true, spillDetected: false, score: 88, bestCategory: 'coding' }
       ];
       expect(pickBestBenchmarked(measured).modelName).toBe('b');
     });

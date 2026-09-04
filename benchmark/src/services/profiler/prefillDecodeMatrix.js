@@ -94,7 +94,7 @@ function planMatrix(prefillTokens, decodeTokens, safeNumCtx) {
   return { cells, numCtx };
 }
 
-async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs) {
+async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs, signal = null) {
   const { prefillTokens, decodeTokens } = cellPlan;
   // Ask for far more integers than fit in num_predict so decode always runs
   // to the requested length instead of stopping early at a natural end.
@@ -109,9 +109,10 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs) {
       options: {
         num_ctx: numCtx,
         num_predict: decodeTokens,
-        temperature: 0.1
+        temperature: 0,
+        seed: 7
       }
-    }, { timeoutMs });
+    }, { timeoutMs, signal });
 
     const latencyMs = Date.now() - start;
     const promptEvalCount = data.prompt_eval_count || 0;
@@ -146,6 +147,7 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs) {
         : null
     };
   } catch (err) {
+    if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : err);
     return {
       prefillTokens,
       decodeTokens,
@@ -207,7 +209,8 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
       continue;
     }
 
-    const result = await _runCell(hostUrl, modelName, plan, numCtx, timeoutMs);
+    const result = await _runCell(hostUrl, modelName, plan, numCtx, timeoutMs, options.signal);
+    options.assertClaimActive?.();
     cells.push(result);
     notify({ index, total, cell: result });
 

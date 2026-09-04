@@ -41,12 +41,12 @@ async function setBaselineModel(modelName) {
   return settings.baselineModel;
 }
 
-async function getBaselineState(hostId) {
+async function getBaselineState(hostId, options = {}) {
   const [modelName, host] = await Promise.all([
     getBaselineModel(),
     Promise.resolve(resolveConfiguredHost(hostId))
   ]);
-  const data = await listModels(host.url, { timeoutMs: 8_000 });
+  const data = await listModels(host.url, { timeoutMs: 8_000, signal: options.signal });
   const models = (data.models || []).map(model => model.name).filter(Boolean);
   return {
     hostId: host.id,
@@ -58,8 +58,8 @@ async function getBaselineState(hostId) {
   };
 }
 
-async function ensureBaselineModel(hostId) {
-  const before = await getBaselineState(hostId);
+async function ensureBaselineModel(hostId, options = {}) {
+  const before = await getBaselineState(hostId, options);
   if (before.available) return { ...before, pulled: false };
 
   const timeoutMs = Number.parseInt(process.env.OLLAMA_PULL_TIMEOUT_MS, 10) || 30 * 60 * 1000;
@@ -68,9 +68,10 @@ async function ensureBaselineModel(hostId) {
     hostUrl: before.hostUrl,
     modelName: before.modelName
   });
-  await pullModel(before.hostUrl, before.modelName, { timeoutMs });
+  await pullModel(before.hostUrl, before.modelName, { timeoutMs, signal: options.signal });
 
-  const after = await getBaselineState(hostId);
+  options.assertClaimActive?.();
+  const after = await getBaselineState(hostId, options);
   if (!after.available) {
     const error = new Error(`Ollama reported a completed pull, but ${after.modelName} is still missing on ${after.hostName}`);
     error.statusCode = 502;

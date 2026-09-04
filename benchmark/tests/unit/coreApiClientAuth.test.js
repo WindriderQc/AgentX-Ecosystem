@@ -26,6 +26,7 @@ const fetch = require('node-fetch');
 const {
   claimHostForBenchmark,
   getBenchmarkClaims,
+  getBenchmarkClaimIdentity,
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
   coreRequest,
@@ -286,7 +287,11 @@ describe('Core API client scoped outbound execution', () => {
     const claimGeneration = '11111111-1111-4111-8111-111111111111';
     fetch
       .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: { claimed: true, claimGeneration } }),
+        body: JSON.stringify({ status: 'success', data: {
+          claimed: true,
+          batchId: 'batch-generation',
+          claimGeneration,
+        } }),
       }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({ status: 'success', data: { heartbeat: true } }),
@@ -314,31 +319,61 @@ describe('Core API client scoped outbound execution', () => {
     ]);
   });
 
-  test('hydrates a claim generation from Core before recovery release', async () => {
+  test('does not treat operator claim discovery as a release capability', async () => {
     const claimGeneration = '22222222-2222-4222-8222-222222222222';
+    fetch.mockImplementationOnce(async (url) => response(url, {
+      body: JSON.stringify({
+        status: 'success',
+        data: {
+          claims: [{
+            hostUrl: 'http://recovery-owner:11434',
+            batchId: 'batch-recovery',
+            claimGeneration,
+          }],
+        },
+      }),
+    }));
+
+    await expect(getBenchmarkClaims()).resolves.toHaveLength(1);
+    expect(getBenchmarkClaimIdentity(
+      'http://recovery-owner:11434',
+      'batch-recovery'
+    )).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects a divergent claim receipt and performs only a fenced cleanup', async () => {
+    const requestedGeneration = '33333333-3333-4333-8333-333333333333';
     fetch
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({
           status: 'success',
           data: {
-            claims: [{
-              hostUrl: 'http://recovery-owner:11434',
-              batchId: 'batch-recovery',
-              claimGeneration,
-            }],
+            claimed: true,
+            batchId: 'different-batch',
+            claimGeneration: '44444444-4444-4444-8444-444444444444',
           },
         }),
       }))
       .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: { released: true } }),
+        body: JSON.stringify({ status: 'success', data: { released: false, reason: 'stale' } }),
       }));
 
-    await expect(getBenchmarkClaims()).resolves.toHaveLength(1);
-    await expect(releaseBenchmarkClaim(
-      'http://recovery-owner:11434',
-      'batch-recovery'
-    )).resolves.toMatchObject({ released: true });
-    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ claimGeneration });
+    await expect(claimHostForBenchmark(
+      'http://receipt-mismatch:11434',
+      'batch-receipt',
+      null,
+      { claimGeneration: requestedGeneration }
+    )).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_RECEIPT_MISMATCH' });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+      claimGeneration: requestedGeneration,
+    });
+    expect(getBenchmarkClaimIdentity(
+      'http://receipt-mismatch:11434',
+      'batch-receipt'
+    )).toBeNull();
   });
 
   test('preserves bounded Core status errors for conflict handling', async () => {
