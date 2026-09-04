@@ -304,12 +304,18 @@
     "core/routes/models-unified.js#POST /refresh-cache",
     "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/benchmark-claim/:batchId",
     "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/pin",
+    "core/routes/nerve-center-host-preferences.js#DELETE /maintenance-leases/:leaseId",
+    "core/routes/nerve-center-host-preferences.js#DELETE /workload-admissions/:admissionId",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/reload",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/restore",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/swap",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/benchmark-claims/reap",
+    "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases",
+    "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/heartbeat",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-admissions",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/heartbeat",
     "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/:hostUrl(*)",
     "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/:hostUrl(*)/pin",
     "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/health-check-interval",
@@ -669,6 +675,48 @@
       "enforcementStatus": "enforced",
       "note": "The scoped Benchmark token is path-admitted at Core and revalidated before claim release can mutate host state.",
       "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-host-control-mount"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The exact operator credential is revalidated at the maintenance route; Core derives the principal and mints the lease generation.",
+      "evidence": ["core-maintenance-lease-operator-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/heartbeat": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Maintenance heartbeat requires the route-validated operator principal plus the Core-minted lease id and generation.",
+      "evidence": ["core-maintenance-lease-operator-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#DELETE /maintenance-leases/:leaseId": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Maintenance release requires the route-validated operator principal plus the exact Core-minted lease proof.",
+      "evidence": ["core-maintenance-lease-operator-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-admissions": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The scoped Benchmark token is path-admitted and revalidated before Core mints a workload admission generation.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/heartbeat": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Workload heartbeat requires the scoped Benchmark principal plus the exact Core-minted admission proof.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#DELETE /workload-admissions/:admissionId": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Workload release requires the scoped Benchmark principal plus the exact Core-minted admission proof.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
     },
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/reload": {
       "scopedMachineCredential": "validated-at-route",
@@ -1031,6 +1079,8 @@
       "contains": [
         "function benchmarkCredentialPath(pathname, method)",
         "path === '/api/inference/contract/resolve'",
+        "path === '/api/nerve-center/workload-admissions'",
+        "/^\\/api\\/nerve-center\\/workload-admissions\\/[^/]+\\/heartbeat$/",
         "path.endsWith('/benchmark-claim')",
         "path.endsWith('/reload')"
       ]
@@ -1055,6 +1105,25 @@
         "router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', requireBenchmarkServiceAccess",
         "router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkServiceAccess",
         "router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAccess"
+      ]
+    },
+    "core-maintenance-lease-operator-validator": {
+      "file": "core/routes/nerve-center-host-preferences.js",
+      "contains": [
+        "router.post('/maintenance-leases', requireOperatorAccess",
+        "router.post('/maintenance-leases/:leaseId/heartbeat', requireOperatorAccess",
+        "router.delete('/maintenance-leases/:leaseId', requireOperatorAccess",
+        "principal: operatorRequestIdentity(req)"
+      ]
+    },
+    "core-workload-admission-validator": {
+      "file": "core/routes/nerve-center-host-preferences.js",
+      "contains": [
+        "function requireBenchmarkCoordinationAccess(req, res, next)",
+        "if (benchmarkTokenAllowed(req)) return next();",
+        "router.post('/workload-admissions', requireBenchmarkCoordinationAccess",
+        "router.post('/workload-admissions/:admissionId/heartbeat', requireBenchmarkCoordinationAccess",
+        "router.delete('/workload-admissions/:admissionId', requireBenchmarkCoordinationAccess"
       ]
     },
     "benchmark-core-contract-auth-caller": {
