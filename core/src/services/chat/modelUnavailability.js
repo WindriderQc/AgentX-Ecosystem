@@ -16,7 +16,7 @@
 const fetch = require('node-fetch');
 const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
 const hostPreferenceService = require('../hostPreferenceService');
-const { getFetchOptions } = require('../../helpers/httpAgent');
+const { createOperationsHealthClient } = require('../operationsHealthClient');
 
 const TAGS_TIMEOUT_MS = 1500;
 
@@ -39,16 +39,18 @@ function reservationReason(preference) {
   return null;
 }
 
-async function installedModelInventory(host, fetchImpl) {
+async function installedModelInventory(host, fetchImpl, transportAdapter) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TAGS_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(`${host.url}/api/tags`, {
-      ...getFetchOptions(`${host.url}/api/tags`),
-      signal: controller.signal
+    const client = createOperationsHealthClient({
+      fetchImpl,
+      ollamaUrl: host.url,
+      transportAdapter
     });
-    if (!response.ok) return { verified: false, names: [], reason: 'inventory probe failed' };
-    const body = await response.json().catch(() => ({}));
+    const result = await client.getOllamaTags({ signal: controller.signal });
+    if (!result.ok) return { verified: false, names: [], reason: 'inventory probe failed' };
+    const body = result.data || {};
     return {
       verified: true,
       names: (Array.isArray(body?.models) ? body.models : [])
@@ -80,6 +82,7 @@ async function explainModelUnavailability(error, options = {}) {
   const hosts = options.hosts || getConfiguredHosts();
   const preferenceLookup = options.getPreference
     || (url => hostPreferenceService.getByHost(url).catch(() => null));
+  const transportAdapter = options.transportAdapter;
   const model = String(error?.model || '').trim();
   const triedOrigin = hostOrigin(error?.upstreamUrl);
   const triedHost = hosts.find(host => hostOrigin(host.url) === triedOrigin) || null;
@@ -88,7 +91,9 @@ async function explainModelUnavailability(error, options = {}) {
   const unknownHosts = [];
   if (model) {
     const others = hosts.filter(host => host !== triedHost);
-    const inventories = await Promise.all(others.map(host => installedModelInventory(host, fetchImpl)));
+    const inventories = await Promise.all(others.map(
+      host => installedModelInventory(host, fetchImpl, transportAdapter)
+    ));
     for (const [index, host] of others.entries()) {
       const inventory = inventories[index];
       if (!inventory.verified) {
