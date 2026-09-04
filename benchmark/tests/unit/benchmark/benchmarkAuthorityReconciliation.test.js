@@ -4,6 +4,7 @@ const mockReconciliationFindOneAndUpdate = jest.fn();
 const mockReconciliationUpdateOne = jest.fn();
 const mockReconciliationFindOne = jest.fn();
 const mockReconciliationCountDocuments = jest.fn();
+const mockReconciliationFind = jest.fn();
 const mockBatchUpdateOne = jest.fn();
 const mockResultFindOneAndUpdate = jest.fn();
 const mockHostSnapshotFindOneAndUpdate = jest.fn();
@@ -29,7 +30,7 @@ jest.mock('../../../models/BenchmarkAuthorityReconciliation', () => ({
   updateOne: (...args) => mockReconciliationUpdateOne(...args),
   findOne: (...args) => mockReconciliationFindOne(...args),
   countDocuments: (...args) => mockReconciliationCountDocuments(...args),
-  find: jest.fn(),
+  find: (...args) => mockReconciliationFind(...args),
   findById: jest.fn()
 }));
 jest.mock('../../../models/BenchmarkBatch', () => ({
@@ -508,4 +509,35 @@ test('baseline recovery fences the receipt before restoring the prior value', as
     { $set: { baseline: { referenceModel: 'old-model', tokensPerSec: 10 } } },
     undefined
   ]);
+});
+
+test('the restart sweep gives every profiler projection write a stale-owner grace window', async () => {
+  const leanQuery = jest.fn().mockResolvedValue([]);
+  const limitQuery = jest.fn(() => ({ lean: leanQuery }));
+  const sortQuery = jest.fn(() => ({ limit: limitQuery }));
+  mockReconciliationFind.mockReturnValue({ sort: sortQuery });
+
+  await expect(service.reconcilePendingResultInvalidations({ limit: 5 }))
+    .resolves.toMatchObject({ inspected: 0, resolved: 0, pending: 0 });
+
+  expect(mockReconciliationFind).toHaveBeenCalledWith({
+    state: { $ne: 'resolved' },
+    $or: [
+      { kind: { $nin: [
+        'profiler_evidence_write',
+        'profiler_baseline_write',
+        'profiler_snapshot_write',
+        'profiler_context_write'
+      ] } },
+      {
+        kind: { $in: [
+          'profiler_evidence_write',
+          'profiler_baseline_write',
+          'profiler_snapshot_write',
+          'profiler_context_write'
+        ] },
+        startedAt: { $lte: expect.any(Date) }
+      }
+    ]
+  });
 });

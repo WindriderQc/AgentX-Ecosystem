@@ -1046,7 +1046,12 @@ async function reconcilePendingResultInvalidations(options = {}) {
   if (running) return { skipped: true, reason: 'authority reconciliation already running' };
   running = true;
   try {
-    const profilerKinds = ['profiler_evidence_write', 'profiler_baseline_write', 'profiler_snapshot_write'];
+    const profilerKinds = [
+      'profiler_evidence_write',
+      'profiler_baseline_write',
+      'profiler_snapshot_write',
+      'profiler_context_write'
+    ];
     const rows = await BenchmarkAuthorityReconciliation.find({
       state: { $ne: 'resolved' },
       $or: [
