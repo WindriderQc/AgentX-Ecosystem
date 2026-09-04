@@ -28,10 +28,12 @@ describe('explainModelUnavailability', () => {
       }
     );
 
-    expect(detail.tried).toEqual({ hostKey: 'tertiary', name: 'UGFrank', url: 'http://192.168.2.99:11434' });
+    expect(detail.tried).toEqual({ hostKey: 'tertiary', name: 'UGFrank' });
     expect(detail.installedOn).toEqual([
-      { hostKey: 'primary', name: 'UGAlien', url: 'http://192.168.2.199:11434', status: 'benchmarking', unavailableBecause: 'reserved by a benchmark claim' }
+      { hostKey: 'primary', name: 'UGAlien', status: 'benchmarking', unavailableBecause: 'reserved by a benchmark claim' }
     ]);
+    expect(detail.unknownHosts).toEqual([]);
+    expect(JSON.stringify(detail)).not.toContain('192.168.2.');
     expect(detail.message).toMatch(/not installed on UGFrank \(tertiary/);
     expect(detail.message).toMatch(/installed on: UGAlien \(primary\) — currently reserved by a benchmark claim/);
     expect(detail.message).toMatch(/Retry once that host is released/);
@@ -46,12 +48,16 @@ describe('explainModelUnavailability', () => {
     expect(detail.message).toMatch(/not found on any other configured Ollama host/);
   });
 
-  test('survives inventory probes that fail or time out', async () => {
+  test('reports failed inventory probes as unknown instead of claiming global absence', async () => {
     const detail = await explainModelUnavailability(
       { model: 'x:1b', upstreamUrl: 'http://192.168.2.199:11434/api/chat' },
       { hosts, fetch: jest.fn(async () => { throw new Error('ECONNREFUSED'); }), getPreference: async () => null }
     );
     expect(detail.installedOn).toEqual([]);
-    expect(detail.message).toMatch(/Model x:1b is not installed/);
+    expect(detail.unknownHosts).toEqual([
+      { hostKey: 'tertiary', name: 'UGFrank', status: 'unknown', reason: 'inventory probe unavailable' }
+    ]);
+    expect(detail.message).toMatch(/Availability could not be verified/);
+    expect(detail.message).not.toMatch(/not found on any other/);
   });
 });

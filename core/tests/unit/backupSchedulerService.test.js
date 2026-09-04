@@ -166,6 +166,50 @@ describe('backupSchedulerService retry discipline', () => {
     expect(service.createBackup).toHaveBeenCalledTimes(1);
   });
 
+  test('a retry preserves a different non-retryable layer failure', async () => {
+    let mongoAttempts = 0;
+    const service = fakeBackupService({
+      createBackup: jest.fn(async () => {
+        mongoAttempts += 1;
+        if (mongoAttempts === 1) throw new Error('temporary mongo outage');
+        return { name: 'mongo.tar.gz' };
+      }),
+      createQdrantBackup: jest.fn(async () => {
+        throw Object.assign(new Error('Recovery snapshot authorization is not configured'), {
+          code: 'RECOVERY_AUTH_REQUIRED'
+        });
+      })
+    });
+    const { scheduler, callbacks, delays } = harness(service);
+
+    await callbacks.shift()(); // full cycle: Mongo retryable, Qdrant blocked
+    expect(scheduler.getStatus().lastFailures.map(entry => entry.name)).toEqual(['mongo', 'qdrant']);
+    expect(delays).toEqual([1000, 2000]);
+
+    await callbacks.shift()(); // retry Mongo only
+    const status = scheduler.getStatus();
+    expect(service.createBackup).toHaveBeenCalledTimes(2);
+    expect(service.createConfigBackup).toHaveBeenCalledTimes(1);
+    expect(service.createQdrantBackup).toHaveBeenCalledTimes(1);
+    expect(status.lastCycleMode).toBe('retry');
+    expect(status.lastStatus).toBe('partial');
+    expect(status.results.map(result => [result.name, result.status, result.carriedForward === true])).toEqual([
+      ['mongo', 'success', false],
+      ['config', 'success', true],
+      ['qdrant', 'error', true]
+    ]);
+    expect(status.lastFailures).toEqual([
+      {
+        name: 'qdrant',
+        error: 'Recovery snapshot authorization is not configured',
+        code: 'RECOVERY_AUTH_REQUIRED',
+        retryable: false
+      }
+    ]);
+    expect(status.nextRunReason).toBe('non-retryable-failure');
+    expect(delays).toEqual([1000, 2000, 9000]);
+  });
+
   test('the retry budget is bounded and then falls back to the normal cadence', async () => {
     const service = fakeBackupService({
       createQdrantBackup: jest.fn(async () => { throw new Error('rag unreachable'); })

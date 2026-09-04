@@ -64,8 +64,8 @@ function projectBackupPolicy(config = {}, schedule = {}, observedAt = new Date()
   const lastFailures = projectFailures(schedule.lastFailures);
   const nextRunReason = SAFE_NEXT_RUN_REASONS.has(schedule.nextRunReason) ? schedule.nextRunReason : null;
   const blockedLayers = lastFailures.filter(entry => entry.retryable === false);
+  if (lastFailures.length > 0 && level === 'low') level = 'watch';
   if (blockedLayers.length > 0) {
-    if (level === 'low') level = 'watch';
     reasons.push(
       `${blockedLayers.map(entry => entry.name).join(', ')} backup${blockedLayers.length > 1 ? 's are' : ' is'} failing with a non-retryable error; automatic retries are suspended for that layer until an operator fixes the configuration.`
     );

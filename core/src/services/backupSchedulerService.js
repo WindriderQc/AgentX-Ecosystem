@@ -155,11 +155,13 @@ function createBackupScheduler(options = {}) {
     }
 
     if (isRetry) {
-      // Carry forward the layers that succeeded in the previous cycle so the
-      // cycle status still describes the whole backup set.
+      // Carry forward every layer that was not re-run so the cycle status still
+      // describes the whole backup set. This deliberately includes a previous
+      // non-retryable failure: a successful retry of another layer must not
+      // erase an operator-action-required failure from status/evidence.
       const rerun = new Set(state.results.map(result => result.name));
       for (const previous of previousResults) {
-        if (!rerun.has(previous.name) && previous.status === 'success') {
+        if (!rerun.has(previous.name)) {
           state.results.push({ ...previous, carriedForward: true });
         }
       }

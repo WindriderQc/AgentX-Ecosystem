@@ -118,4 +118,23 @@ describe('backupEvidenceService failure evidence', () => {
     expect(policy.growthRisk.reasons.join(' ')).toMatch(/qdrant backup is failing with a non-retryable error/);
     expect(policy.growthRisk.warnings.join(' ')).toMatch(/RECOVERY_AUTH_REQUIRED/);
   });
+
+  test('never labels a retryable partial cycle as low risk', () => {
+    const policy = project(
+      { retentionDays: 30, retentionDaysSource: 'env' },
+      {
+        enabled: true,
+        intervalMs: 24 * 60 * 60 * 1000,
+        retryDelayMs: 60 * 60 * 1000,
+        lastStatus: 'partial',
+        nextRunReason: 'retry',
+        lastFailures: [
+          { name: 'mongo', error: 'temporary mongo outage', retryable: true }
+        ]
+      }
+    );
+
+    expect(policy.growthRisk.level).toBe('watch');
+    expect(policy.growthRisk.warnings.join(' ')).toMatch(/without a fresh artifact/);
+  });
 });

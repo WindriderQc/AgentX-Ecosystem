@@ -25,7 +25,7 @@ function hostOrigin(url) {
 }
 
 function describeHost(host) {
-  return host ? `${host.name} (${host.id}, ${host.url})` : 'the routed host';
+  return host ? `${host.name} (${host.id})` : 'the routed host';
 }
 
 function reservationReason(preference) {
@@ -39,7 +39,7 @@ function reservationReason(preference) {
   return null;
 }
 
-async function installedModelNames(host, fetchImpl) {
+async function installedModelInventory(host, fetchImpl) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TAGS_TIMEOUT_MS);
   try {
@@ -47,16 +47,32 @@ async function installedModelNames(host, fetchImpl) {
       ...getFetchOptions(`${host.url}/api/tags`),
       signal: controller.signal
     });
-    if (!response.ok) return [];
+    if (!response.ok) return { verified: false, names: [], reason: 'inventory probe failed' };
     const body = await response.json().catch(() => ({}));
-    return (Array.isArray(body?.models) ? body.models : [])
-      .map(entry => String(entry?.name || entry?.model || '').trim())
-      .filter(Boolean);
-  } catch {
-    return [];
+    return {
+      verified: true,
+      names: (Array.isArray(body?.models) ? body.models : [])
+        .map(entry => String(entry?.name || entry?.model || '').trim())
+        .filter(Boolean),
+      reason: null
+    };
+  } catch (error) {
+    return {
+      verified: false,
+      names: [],
+      reason: error?.name === 'AbortError' ? 'inventory probe timed out' : 'inventory probe unavailable'
+    };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function publicHost(host, fields = {}) {
+  return {
+    hostKey: host?.id || null,
+    name: host?.name || null,
+    ...fields
+  };
 }
 
 async function explainModelUnavailability(error, options = {}) {
@@ -69,31 +85,37 @@ async function explainModelUnavailability(error, options = {}) {
   const triedHost = hosts.find(host => hostOrigin(host.url) === triedOrigin) || null;
 
   const installedOn = [];
+  const unknownHosts = [];
   if (model) {
     const others = hosts.filter(host => host !== triedHost);
-    const inventories = await Promise.all(others.map(host => installedModelNames(host, fetchImpl)));
+    const inventories = await Promise.all(others.map(host => installedModelInventory(host, fetchImpl)));
     for (const [index, host] of others.entries()) {
-      if (!inventories[index].includes(model)) continue;
+      const inventory = inventories[index];
+      if (!inventory.verified) {
+        unknownHosts.push(publicHost(host, { status: 'unknown', reason: inventory.reason }));
+        continue;
+      }
+      if (!inventory.names.includes(model)) continue;
       const preference = await preferenceLookup(host.url);
-      installedOn.push({
-        hostKey: host.id,
-        name: host.name,
-        url: host.url,
-        status: preference?.status || null,
+      installedOn.push(publicHost(host, {
+        status: typeof preference?.status === 'string' ? preference.status.slice(0, 40) : null,
         unavailableBecause: reservationReason(preference)
-      });
+      }));
     }
   }
 
   const tried = triedHost
-    ? { hostKey: triedHost.id, name: triedHost.name, url: triedHost.url }
-    : (triedOrigin ? { hostKey: null, name: null, url: triedOrigin } : null);
+    ? publicHost(triedHost)
+    : (triedOrigin ? publicHost(null) : null);
 
   let message;
   if (!model) {
     message = 'The requested model is not installed on the host that served this request.';
-  } else if (installedOn.length === 0) {
+  } else if (installedOn.length === 0 && unknownHosts.length === 0) {
     message = `Model ${model} is not installed on ${describeHost(triedHost)} and was not found on any other configured Ollama host.`;
+  } else if (installedOn.length === 0) {
+    const unknownNames = unknownHosts.map(entry => `${entry.name || 'configured host'} (${entry.hostKey || 'unknown'})`).join('; ');
+    message = `Model ${model} is not installed on ${describeHost(triedHost)}. Availability could not be verified on: ${unknownNames}.`;
   } else {
     const where = installedOn.map(entry => {
       const reason = entry.unavailableBecause ? ` — currently ${entry.unavailableBecause}` : '';
@@ -109,6 +131,7 @@ async function explainModelUnavailability(error, options = {}) {
     model: model || null,
     tried,
     installedOn,
+    unknownHosts,
     message
   };
 }
@@ -116,5 +139,6 @@ async function explainModelUnavailability(error, options = {}) {
 module.exports = {
   explainModelUnavailability,
   reservationReason,
+  installedModelInventory,
   TAGS_TIMEOUT_MS
 };
