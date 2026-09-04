@@ -9,6 +9,7 @@ jest.mock('../../src/services/profiler/hostProfileService', () => ({
   updateStatus: jest.fn(),
   upsert: jest.fn(),
   updateBaseline: jest.fn(),
+  invalidateBaselineReceipt: jest.fn(),
   releaseModel: jest.fn(),
 }));
 jest.mock('../../src/services/hostTestService', () => ({
@@ -29,6 +30,7 @@ jest.mock('../../src/services/profiler/profilerClaimLifecycle', () => ({
 
 const hostProfileService = require('../../src/services/profiler/hostProfileService');
 const { testModelOnHost } = require('../../src/services/hostTestService');
+const baselineModelService = require('../../src/services/profiler/baselineModelService');
 const { acquireProfilerClaimLease } = require('../../src/services/profiler/profilerClaimLifecycle');
 const router = require('../../routes/profiler/hosts');
 
@@ -41,23 +43,30 @@ describe('Profiler host status read/refresh split', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    hostProfileService.upsert.mockReset().mockResolvedValue({});
+    hostProfileService.invalidateBaselineReceipt.mockResolvedValue({ invalidated: true });
     lease = {
       signal: new AbortController().signal,
       assertActive: jest.fn(() => true),
       identityFor: jest.fn(() => ({ claimBatchId: 'profile-test', claimGeneration: 'generation-1' })),
       abandoned: false,
       abandon: jest.fn(async () => { lease.abandoned = true; }),
-      finalize: jest.fn(async () => {
+      finalize: jest.fn(async (options = {}) => {
         if (lease.abandoned) {
           throw Object.assign(new Error('held for TTL recovery'), { code: 'PROFILER_RUNTIME_RESTORE_FAILED' });
         }
-        return {
+        const receipt = {
           failed: 0,
           details: [{
             released: true,
-            runtimeRestore: { verified: true, status: 'ready', mode: 'exact_runtime_snapshot' }
+            runtimeRestore: { verified: true, status: 'ready', mode: 'exact_runtime_snapshot' },
+            releaseReceipt: { contract: 'agentx.benchmark-claim-release/v1' }
           }]
         };
+        if (typeof options.beforeWorkloadRelease === 'function') {
+          await options.beforeWorkloadRelease(receipt);
+        }
+        return receipt;
       })
     };
     acquireProfilerClaimLease.mockResolvedValue(lease);
@@ -107,26 +116,38 @@ describe('Profiler host status read/refresh split', () => {
     const response = await request(app).post('/api/profiler/hosts/primary/release');
 
     expect(response.status).toBe(200);
-    expect(hostProfileService.upsert).toHaveBeenCalledWith({
+    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(1, expect.objectContaining({
       hostId: 'primary',
-      status: 'online',
-      dedicated: null
-    }, {
+      reconciliation: expect.objectContaining({
+        state: 'pending_reconciliation',
+        operation: 'release_model',
+        model: 'qwen:7b'
+      })
+    }), {
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
     });
+    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      hostId: 'primary',
+      status: 'online',
+      dedicated: null,
+      reconciliation: expect.objectContaining({
+        state: 'resolved',
+        releaseReceipt: { contract: 'agentx.benchmark-claim-release/v1' }
+      })
+    }), { assertAuthorityActive: lease.assertActive });
     expect(hostProfileService.upsert.mock.invocationCallOrder[0])
       .toBeLessThan(lease.finalize.mock.invocationCallOrder[0]);
-    expect(lease.finalize).toHaveBeenCalledWith({
+    expect(lease.finalize).toHaveBeenCalledWith(expect.objectContaining({
       byHost: {
         'http://localhost:11434': { excludedModels: ['qwen:7b'] }
-      }
-    });
+      },
+      beforeWorkloadRelease: expect.any(Function)
+    }));
   });
 
-  test('compensates an ambiguous projection write before restoring and releasing the lease', async () => {
+  test('does not mutate runtime when the durable reconciliation marker cannot be written', async () => {
     const priorDedicated = { model: 'qwen:7b', expiresAt: new Date('2099-01-01T00:00:00.000Z') };
-    let storedProjection = { status: 'online', dedicated: priorDedicated };
     hostProfileService.getById.mockResolvedValue({
       hostId: 'primary',
       hostUrl: 'http://localhost:11434',
@@ -136,29 +157,13 @@ describe('Profiler host status read/refresh split', () => {
     hostProfileService.releaseModel.mockResolvedValue({ success: true });
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
     hostProfileService.upsert
-      .mockImplementationOnce(async data => {
-        storedProjection = { status: data.status, dedicated: data.dedicated };
-        throw new Error('ambiguous projection acknowledgement');
-      })
-      .mockImplementationOnce(async data => {
-        storedProjection = { status: data.status, dedicated: data.dedicated };
-        return data;
-      });
+      .mockRejectedValueOnce(new Error('ambiguous reconciliation acknowledgement'));
 
     const response = await request(app).post('/api/profiler/hosts/primary/release');
 
     expect(response.status).toBe(500);
-    expect(storedProjection).toEqual({ status: 'online', dedicated: priorDedicated });
-    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(2, {
-      hostId: 'primary',
-      status: 'online',
-      dedicated: priorDedicated
-    }, {
-      signal: lease.signal,
-      assertAuthorityActive: lease.assertActive
-    });
-    expect(hostProfileService.upsert.mock.invocationCallOrder[1])
-      .toBeLessThan(lease.finalize.mock.invocationCallOrder[0]);
+    expect(hostProfileService.releaseModel).not.toHaveBeenCalled();
+    expect(hostProfileService.upsert).toHaveBeenCalledTimes(1);
     expect(lease.finalize).toHaveBeenCalledWith();
   });
 
@@ -198,17 +203,22 @@ describe('Profiler host status read/refresh split', () => {
     expect(response.status).toBe(500);
     expect(hostProfileService.updateBaseline).toHaveBeenCalledWith(
       'primary',
-      expect.objectContaining({ referenceModel: 'baseline:model', tokensPerSec: 40 }),
+      expect.objectContaining({
+        referenceModel: 'baseline:model',
+        tokensPerSec: 40,
+        persistenceReceipt: expect.any(String)
+      }),
       { signal: lease.signal, assertAuthorityActive: lease.assertActive }
     );
-    expect(hostProfileService.upsert).toHaveBeenCalledWith({
-      hostId: 'primary',
-      baseline: priorBaseline
-    });
+    expect(hostProfileService.invalidateBaselineReceipt).toHaveBeenCalledWith(
+      'primary',
+      expect.any(String),
+      priorBaseline
+    );
     expect(lease.finalize).toHaveBeenCalled();
   });
 
-  test('holds the lease for TTL recovery when release projection compensation fails', async () => {
+  test('leaves durable reconciliation pending when the post-restore projection commit fails', async () => {
     hostProfileService.getById.mockResolvedValue({
       hostId: 'primary',
       hostUrl: 'http://localhost:11434',
@@ -217,16 +227,17 @@ describe('Profiler host status read/refresh split', () => {
     });
     hostProfileService.releaseModel.mockResolvedValue({ success: true });
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
-    const compensationFailure = new Error('projection compensation unavailable');
     hostProfileService.upsert
-      .mockRejectedValueOnce(new Error('ambiguous projection acknowledgement'))
-      .mockRejectedValueOnce(compensationFailure);
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('projection commit unavailable'));
 
     const response = await request(app).post('/api/profiler/hosts/primary/release');
 
     expect(response.status).toBe(500);
-    expect(lease.abandon).toHaveBeenCalledWith(compensationFailure);
-    expect(lease.abandoned).toBe(true);
+    expect(hostProfileService.upsert).toHaveBeenCalledTimes(2);
+    expect(hostProfileService.upsert.mock.calls[0][0].reconciliation.state).toBe('pending_reconciliation');
+    expect(hostProfileService.upsert.mock.calls[1][0].reconciliation.state).toBe('resolved');
+    expect(lease.abandon).not.toHaveBeenCalled();
     expect(lease.finalize).toHaveBeenCalled();
   });
 
@@ -255,7 +266,7 @@ describe('Profiler host status read/refresh split', () => {
       return { baseline: { referenceModel: 'baseline:model' } };
     });
     const compensationFailure = new Error('baseline compensation unavailable');
-    hostProfileService.upsert.mockRejectedValue(compensationFailure);
+    hostProfileService.invalidateBaselineReceipt.mockRejectedValue(compensationFailure);
 
     const response = await request(app)
       .post('/api/profiler/hosts/test/run')
@@ -264,6 +275,23 @@ describe('Profiler host status read/refresh split', () => {
     expect(response.status).toBe(500);
     expect(lease.abandon).toHaveBeenCalledWith(compensationFailure);
     expect(lease.abandoned).toBe(true);
-    expect(lease.finalize).toHaveBeenCalled();
+    expect(lease.finalize).not.toHaveBeenCalled();
+  });
+
+  test('retains the host claim and workload admission when a baseline pull outcome is ambiguous', async () => {
+    const pending = Object.assign(new Error('pull may still complete'), {
+      code: 'BASELINE_PULL_RECONCILIATION_PENDING',
+      retainAdmission: true
+    });
+    baselineModelService.ensureBaselineModel.mockRejectedValueOnce(pending);
+
+    const response = await request(app)
+      .post('/api/profiler/hosts/test/run')
+      .send({ modelName: 'baseline:model', hostId: 'primary' });
+
+    expect(response.status).toBe(500);
+    expect(lease.abandon).toHaveBeenCalledWith(pending);
+    expect(lease.finalize).not.toHaveBeenCalled();
+    expect(testModelOnHost).not.toHaveBeenCalled();
   });
 });

@@ -144,7 +144,7 @@ async function upsert(data, options = {}) {
   if (hasDedicatedInput && dedicated == null) operation.$unset = { dedicated: '' };
 
   const updated = await HostProfile.findOneAndUpdate(
-    { hostId: input.hostId },
+    { hostId: input.hostId, ...(options.filter || {}) },
     operation,
     { upsert: true, new: true, runValidators: true, ...(options.signal ? { signal: options.signal } : {}) }
   );
@@ -219,6 +219,7 @@ async function updateStatus(hostId, status) {
 }
 
 async function updateBaseline(hostId, baseline, options = {}) {
+  const persistenceReceipt = String(baseline.persistenceReceipt || '').trim() || null;
   return upsert({
     hostId,
     baseline: {
@@ -226,9 +227,36 @@ async function updateBaseline(hostId, baseline, options = {}) {
       tokensPerSec: baseline.tokensPerSec ?? null,
       latencyMs: baseline.latencyMs ?? null,
       ttftMs: baseline.ttftMs ?? null,
-      testedAt: baseline.testedAt || new Date()
+      ttftMeasurement: baseline.ttftMeasurement || undefined,
+      testedAt: baseline.testedAt || new Date(),
+      persistenceReceipt
     }
-  }, options);
+  }, {
+    ...options,
+    ...(persistenceReceipt
+      ? { filter: { rejectedBaselineReceipts: { $ne: persistenceReceipt } } }
+      : {})
+  });
+}
+
+async function invalidateBaselineReceipt(hostId, persistenceReceipt, priorBaseline = null) {
+  const receipt = String(persistenceReceipt || '').trim();
+  if (!receipt) throw new Error('baseline persistence receipt is required');
+  const fenced = await HostProfile.updateOne(
+    { hostId },
+    { $addToSet: { rejectedBaselineReceipts: receipt } }
+  );
+  if (Number(fenced?.matchedCount) !== 1) {
+    throw new Error(`Host profile ${hostId} was not found while fencing a baseline receipt`);
+  }
+  const replacement = priorBaseline
+    ? { $set: { baseline: priorBaseline } }
+    : { $unset: { baseline: '' } };
+  await HostProfile.updateOne(
+    { hostId, 'baseline.persistenceReceipt': receipt },
+    replacement
+  );
+  return { invalidated: true, persistenceReceipt: receipt };
 }
 
 async function detectCpuCores(hostUrl) {
@@ -275,4 +303,4 @@ function isDedicatedConflict(host, modelName) {
   return !models.includes(modelName);
 }
 
-module.exports = { getAll, getById, getByUrl, upsert, checkStatus, updateStatus, updateBaseline, detectCpuCores, releaseModel, detectDedicated, isDedicatedConflict, hostIdentityChanged };
+module.exports = { getAll, getById, getByUrl, upsert, checkStatus, updateStatus, updateBaseline, invalidateBaselineReceipt, detectCpuCores, releaseModel, detectDedicated, isDedicatedConflict, hostIdentityChanged };

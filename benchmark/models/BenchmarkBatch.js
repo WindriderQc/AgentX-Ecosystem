@@ -174,6 +174,13 @@ const BenchmarkBatchSchema = new mongoose.Schema({
         default: 'pending',
         index: true
     },
+    authority_state: {
+        type: String,
+        enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+        default: 'authoritative',
+        index: true
+    },
+    authority_reconciliation_reason: { type: String, default: null },
     // Captured when a batch lands in a terminal failure status. Null otherwise.
     // Populated by markAsCompleted(status, reason) at batch finalization (0209).
     // Known values: 'zero_cells_executed' | 'incomplete_cells' | 'high_failure_rate' | null.

@@ -17,7 +17,8 @@ jest.mock('../../config/logger', () => ({
 jest.mock('../../models/JudgeGovernanceRun', () => {
     const create = jest.fn();
     const getLatest = jest.fn();
-    return { create, getLatest };
+    const updateOne = jest.fn();
+    return { create, getLatest, updateOne };
 });
 
 jest.mock('../../models/BenchmarkBatch', () => ({
@@ -34,7 +35,8 @@ jest.mock('../../models/JudgeGroundTruth', () => ({
 }));
 
 jest.mock('../../models/JudgeAccuracyMatrix', () => ({
-    create: jest.fn()
+    create: jest.fn(),
+    updateOne: jest.fn()
 }));
 
 // Service mocks ------------------------------------------------------------
@@ -304,6 +306,55 @@ describe('judgeGovernance — orchestrator', () => {
         expect(persisted.sub_steps).toHaveLength(5);
         expect(persisted.headline).toBeDefined();
         expect(out._id).toBe('gov-run-1');
+    });
+
+    it('invalidates a summary create that races workload admission loss', async () => {
+        mockNoBatch();
+        defaultFeedback();
+        mockDriftAggregates(null, null);
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('governance admission lost'), { code: 'BENCHMARK_CLAIM_LOST' });
+        JudgeGovernanceRun.create.mockImplementationOnce(async documents => {
+            controller.abort(lost);
+            return [{ ...documents[0], _id: 'gov-lost' }];
+        });
+        JudgeGovernanceRun.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+        await expect(runJudgeGovernanceLoop({
+            persist: true,
+            cancelSignal: controller.signal
+        })).rejects.toMatchObject({
+            code: 'BENCHMARK_BATCH_STOPPED',
+            authorityCompensated: true
+        });
+
+        expect(JudgeGovernanceRun.updateOne).toHaveBeenCalledWith(
+            expect.objectContaining({ _id: expect.any(mongoose.Types.ObjectId) }),
+            { $set: expect.objectContaining({ status: 'failed', authority_state: 'authority_invalidated' }) },
+            { upsert: true }
+        );
+    });
+
+    it('retains admission when a raced governance summary cannot be invalidated', async () => {
+        mockNoBatch();
+        defaultFeedback();
+        mockDriftAggregates(null, null);
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('governance admission lost'), { code: 'BENCHMARK_CLAIM_LOST' });
+        JudgeGovernanceRun.create.mockImplementationOnce(async documents => {
+            controller.abort(lost);
+            return [{ ...documents[0], _id: 'gov-lost' }];
+        });
+        JudgeGovernanceRun.updateOne.mockRejectedValueOnce(new Error('summary invalidation unavailable'));
+
+        await expect(runJudgeGovernanceLoop({
+            persist: true,
+            cancelSignal: controller.signal
+        })).rejects.toMatchObject({
+            code: 'JUDGE_GOVERNANCE_RECONCILIATION_PENDING',
+            retainAdmission: true,
+            compensationError: expect.any(Error)
+        });
     });
 });
 

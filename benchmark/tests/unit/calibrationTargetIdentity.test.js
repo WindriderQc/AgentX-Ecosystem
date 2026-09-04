@@ -14,7 +14,7 @@ jest.mock('../../src/services/benchmark/calibrationRunner', () => ({
 }));
 jest.mock('../../models/JudgeAccuracyMatrix', () => ({
     create: jest.fn(),
-    deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 })
+    updateOne: jest.fn().mockResolvedValue({ matchedCount: 1, upsertedCount: 0 })
 }));
 jest.mock('../../src/services/benchmark/driftDetector', () => ({}));
 jest.mock('../../src/services/benchmark/retroCalibration', () => ({}));
@@ -90,7 +90,7 @@ describe('POST /judge/matrix-calibrate target identity', () => {
         expect(runCalibrationBatch).not.toHaveBeenCalled();
     });
 
-    test('deletes an ambiguously created calibration when admission is lost during persistence', async () => {
+    test('tombstones an ambiguously created calibration when admission is lost during persistence', async () => {
         JudgeAccuracyMatrix.create.mockImplementationOnce(async ([payload]) => {
             mockAdmissionController.abort(new Error('heartbeat rejected'));
             return [payload];
@@ -111,7 +111,11 @@ describe('POST /judge/matrix-calibrate target identity', () => {
             [expect.objectContaining({ _id: expect.anything(), judge_model: 'judge:14b' })],
             { signal: mockAdmissionController.signal }
         );
-        expect(JudgeAccuracyMatrix.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
+        expect(JudgeAccuracyMatrix.updateOne).toHaveBeenCalledWith(
+            { _id: expect.anything() },
+            { $set: expect.objectContaining({ authority_state: 'authority_invalidated' }) },
+            { upsert: true }
+        );
         expect(mockAdmissionAssert).toHaveBeenCalledTimes(2);
     });
 });

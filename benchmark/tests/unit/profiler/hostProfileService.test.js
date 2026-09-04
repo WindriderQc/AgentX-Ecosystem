@@ -299,6 +299,8 @@ describe('hostProfileService', () => {
           'baseline.tokensPerSec': 42.5,
           'baseline.latencyMs': 875,
           'baseline.ttftMs': 133,
+          'baseline.ttftMeasurement': undefined,
+          'baseline.persistenceReceipt': null,
           'baseline.testedAt': baseline.testedAt
         } },
         { upsert: true, new: true, runValidators: true }
@@ -332,6 +334,49 @@ describe('hostProfileService', () => {
         { upsert: true, new: true, runValidators: true }
       );
       expect(HostProfile.findOneAndUpdate.mock.calls[0][1].$set.baseline).toBeUndefined();
+    });
+
+    it('fences a rejected persistence receipt before conditionally restoring the prior baseline', async () => {
+      HostProfile.updateOne
+        .mockResolvedValueOnce({ matchedCount: 1 })
+        .mockResolvedValueOnce({ matchedCount: 1 });
+      const prior = { referenceModel: 'old:model', tokensPerSec: 10 };
+
+      await expect(service.invalidateBaselineReceipt('primary', 'receipt-1', prior))
+        .resolves.toEqual({ invalidated: true, persistenceReceipt: 'receipt-1' });
+
+      expect(HostProfile.updateOne).toHaveBeenNthCalledWith(1,
+        { hostId: 'primary' },
+        { $addToSet: { rejectedBaselineReceipts: 'receipt-1' } }
+      );
+      expect(HostProfile.updateOne).toHaveBeenNthCalledWith(2,
+        { hostId: 'primary', 'baseline.persistenceReceipt': 'receipt-1' },
+        { $set: { baseline: prior } }
+      );
+    });
+
+    it('refuses to publish a baseline whose persistence receipt was previously rejected', async () => {
+      HostProfile.findOneAndUpdate.mockResolvedValue(null);
+      HostProfile.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+
+      await service.updateBaseline('primary', {
+        referenceModel: 'reference:model',
+        tokensPerSec: 21,
+        persistenceReceipt: 'receipt-rejected'
+      });
+
+      expect(HostProfile.findOneAndUpdate).toHaveBeenCalledWith(
+        {
+          hostId: 'primary',
+          rejectedBaselineReceipts: { $ne: 'receipt-rejected' }
+        },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            'baseline.persistenceReceipt': 'receipt-rejected'
+          })
+        }),
+        expect.objectContaining({ upsert: true, new: true, runValidators: true })
+      );
     });
   });
 });

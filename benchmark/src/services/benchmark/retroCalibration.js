@@ -13,6 +13,7 @@ const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const JudgeGroundTruth = require('../../../models/JudgeGroundTruth');
 const { scoreResponse } = require('../qualityScorer');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
+const { throwIfJudgeCancelled } = require('../scoring/judgeCall');
 const {
     verifyStoredAttestedHumanGroundTruth
 } = require('./humanGroundTruthImport');
@@ -99,11 +100,18 @@ async function buildStratifiedSample(batchId, perCell = 3) {
  */
 async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
     const { dryRun = false, skipExisting = true } = options;
+    const cancellationConfig = {
+        ...referenceJudgeConfig,
+        cancelSignal: options.cancelSignal || referenceJudgeConfig.cancelSignal || null
+    };
+    const assertAuthorityActive = options.assertAuthorityActive || null;
     let created = 0;
     let skipped = 0;
     let errors = 0;
 
     for (const sample of samples) {
+        throwIfJudgeCancelled(cancellationConfig);
+        assertAuthorityActive?.();
         const name = `retro-${sample.batch_id}-${sample._id}`;
 
         // Skip if ground truth already exists for this result
@@ -132,8 +140,10 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
                     scoring_type: normalizeScoringCategory(sample.prompt_category, DEFAULT_SCORING_CATEGORY),
                     level: sample.prompt_level
                 },
-                judgeConfig: referenceJudgeConfig
+                judgeConfig: cancellationConfig
             });
+            throwIfJudgeCancelled(cancellationConfig);
+            assertAuthorityActive?.();
 
             if (result.quality_score === null) {
                 logger.warn('Reference judge returned null score', {
@@ -156,7 +166,9 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
                 continue;
             }
 
-            await JudgeGroundTruth.create({
+            const id = new mongoose.Types.ObjectId();
+            const payload = {
+                _id: id,
                 name,
                 prompt: sample.prompt,
                 response: sample.response,
@@ -173,7 +185,40 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
                 difficulty: sample.prompt_level || 3,
                 tags: ['retro', 'auto-generated', `batch:${sample.batch_id}`],
                 active: true
-            });
+            };
+            try {
+                if (cancellationConfig.cancelSignal) {
+                    await JudgeGroundTruth.create([payload], { signal: cancellationConfig.cancelSignal });
+                } else {
+                    await JudgeGroundTruth.create(payload);
+                }
+                throwIfJudgeCancelled(cancellationConfig);
+                assertAuthorityActive?.();
+            } catch (writeError) {
+                if (cancellationConfig.cancelSignal?.aborted
+                    || writeError?.code === 'BENCHMARK_CLAIM_LOST'
+                    || writeError?.code === 'BENCHMARK_CLAIM_STOPPED') {
+                    try {
+                        await JudgeGroundTruth.updateOne(
+                            { _id: id },
+                            {
+                                $set: {
+                                    active: false,
+                                    authority_state: 'authority_invalidated',
+                                    authority_reconciliation_reason: 'retro-calibration raced workload admission loss'
+                                }
+                            },
+                            { upsert: true }
+                        );
+                        writeError.authorityCompensated = true;
+                    } catch (compensationError) {
+                        writeError.compensationError = compensationError;
+                        writeError.retainAdmission = true;
+                        writeError.code = 'GROUND_TRUTH_RECONCILIATION_PENDING';
+                    }
+                }
+                throw writeError;
+            }
 
             created++;
 
@@ -185,6 +230,12 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
                 original_score: sample._original_score
             });
         } catch (err) {
+            if (cancellationConfig.cancelSignal?.aborted
+                || err?.code === 'BENCHMARK_CLAIM_LOST'
+                || err?.code === 'BENCHMARK_CLAIM_STOPPED'
+                || err?.retainAdmission === true) {
+                throw err;
+            }
             // Handle duplicate key gracefully
             if (err.code === 11000) {
                 skipped++;
@@ -211,7 +262,10 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
  * @returns {Object} { samples, results }
  */
 async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) {
-    const { perCell = 3, dryRun = false } = options;
+    const { perCell = 3, dryRun = false, cancelSignal = null, assertAuthorityActive = null } = options;
+    const cancellationConfig = { ...referenceJudgeConfig, cancelSignal };
+    throwIfJudgeCancelled(cancellationConfig);
+    assertAuthorityActive?.();
 
     const batch = await BenchmarkBatch.findById(batchId)
         .select('trust_campaign_spec_id +trust_evidence_context')
@@ -230,6 +284,8 @@ async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) 
     }
 
     const samples = await buildStratifiedSample(batchId, perCell);
+    throwIfJudgeCancelled(cancellationConfig);
+    assertAuthorityActive?.();
 
     if (samples.length === 0) {
         return {
@@ -239,7 +295,11 @@ async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) 
         };
     }
 
-    const results = await scoreAndPromote(samples, referenceJudgeConfig, { dryRun });
+    const results = await scoreAndPromote(samples, cancellationConfig, {
+        dryRun,
+        cancelSignal,
+        assertAuthorityActive
+    });
 
     return {
         samples: samples.length,

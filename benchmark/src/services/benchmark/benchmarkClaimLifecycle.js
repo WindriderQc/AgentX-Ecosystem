@@ -58,13 +58,25 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, cl
             const cleanup = await releaseBenchmarkClaims(acquired, batchId, {
                 releaseWorkloadAdmission: false
             });
-            if (cleanup.failed === 0) {
-                await releaseWorkloadAdmission(batchId).catch(() => {});
+            let admissionReleaseError = null;
+            if (cleanup.failed === 0 && err.retainAdmission !== true) {
+                try {
+                    const release = await releaseWorkloadAdmission(batchId);
+                    if (release?.released !== true) {
+                        admissionReleaseError = new Error(release?.reason || 'Workload admission cleanup was not verified');
+                    }
+                } catch (error) {
+                    admissionReleaseError = error;
+                }
             }
             const wrapped = new Error(`Unable to reserve benchmark host ${hostUrl}: ${err.message}`);
             wrapped.hostUrl = hostUrl;
             wrapped.cause = err;
             wrapped.acquired = acquired;
+            wrapped.retainAdmission = err.retainAdmission === true
+                || cleanup.failed > 0
+                || admissionReleaseError !== null;
+            if (admissionReleaseError) wrapped.admissionReleaseError = admissionReleaseError;
             throw wrapped;
         }
     }

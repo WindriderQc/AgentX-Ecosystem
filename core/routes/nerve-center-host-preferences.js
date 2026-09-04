@@ -24,6 +24,7 @@ const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkSe
 const { benchmarkTokenAllowed } = require('../src/services/routing/inferenceCallerAccess');
 const { requireOperatorAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
 const runtimeCoordinationService = require('../src/services/runtimeCoordinationService');
+const { projectHostPreferenceForRead } = require('../src/services/hostPreferencePublicProjection');
 
 function coordinationPrincipal(req) {
   return benchmarkTokenAllowed(req) ? 'benchmark-service' : operatorRequestIdentity(req);
@@ -36,35 +37,6 @@ function requireBenchmarkCoordinationAccess(req, res, next) {
     code: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     message: 'Exact Benchmark service authentication is required for runtime workload admission.'
   });
-}
-
-function redactBenchmarkClaimCapabilities(pref) {
-  if (!pref) return pref;
-  const {
-    lastBenchmarkReleaseReceipt: _releaseReceipt,
-    ...safePref
-  } = pref;
-  if (!safePref.benchmarkClaim) return safePref;
-  const claim = safePref.benchmarkClaim;
-  return {
-    ...safePref,
-    benchmarkClaim: {
-      batchId: claim.batchId || null,
-      prevStatus: claim.prevStatus || null,
-      claimedAt: claim.claimedAt || null,
-      estimatedDurationMs: claim.estimatedDurationMs || null,
-      source: claim.source || null,
-      owner: claim.owner || null,
-      note: claim.note || null,
-      heartbeatAt: claim.heartbeatAt || null,
-      heartbeatTtlMs: claim.heartbeatTtlMs || null,
-      snapshotExact: claim.preClaimRuntime?.exact === true,
-      snapshotResidentCount: Array.isArray(claim.preClaimRuntime?.residents)
-        ? claim.preClaimRuntime.residents.length
-        : null,
-      finalizing: Boolean(claim.finalizeToken)
-    }
-  };
 }
 
 function resolveHostPreferenceUrl(req, res) {
@@ -93,7 +65,7 @@ router.get('/host-preferences', async (_req, res) => {
   try {
     const prefs = await hostPrefService.getAll();
     const hostIdentityDrift = hostPrefService.detectHostPreferenceIdentityDrift(prefs);
-    const normalizedPrefs = prefs.map((pref) => redactBenchmarkClaimCapabilities(
+    const normalizedPrefs = prefs.map((pref) => projectHostPreferenceForRead(
       hostPrefService.normalizeHostPreferenceIdentity(pref)
     ));
 

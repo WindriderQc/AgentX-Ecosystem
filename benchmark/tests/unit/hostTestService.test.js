@@ -2,7 +2,8 @@
 
 jest.mock('../../models/HostPerformanceSnapshot', () => ({
   create: jest.fn(),
-  deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 })
+  deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
+  updateOne: jest.fn().mockResolvedValue({ matchedCount: 1 })
 }));
 
 jest.mock('../../src/services/ollamaVramService', () => ({
@@ -148,7 +149,7 @@ describe('hostTestService config helpers', () => {
     }));
   });
 
-  it('removes an ambiguously committed host snapshot when the claim is lost after save', async () => {
+  it('tombstones an ambiguously committed host snapshot when the claim is lost after save', async () => {
     const controller = new AbortController();
     HostPerformanceSnapshot.create.mockImplementationOnce(async ([payload]) => [payload]);
     let checkpointCount = 0;
@@ -167,6 +168,10 @@ describe('hostTestService config helpers', () => {
       [expect.objectContaining({ _id: expect.anything(), modelName: 'model-a' })],
       { signal: controller.signal }
     );
-    expect(HostPerformanceSnapshot.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
+    expect(HostPerformanceSnapshot.updateOne).toHaveBeenCalledWith(
+      { _id: expect.anything() },
+      { $set: expect.objectContaining({ authorityState: 'authority_invalidated' }) },
+      { upsert: true }
+    );
   });
 });

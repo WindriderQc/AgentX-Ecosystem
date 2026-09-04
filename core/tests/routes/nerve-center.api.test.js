@@ -350,6 +350,56 @@ describe('Nerve Center API Routes', () => {
       expect(res.body.data).toHaveProperty('recentRouting');
     });
 
+    it.each([
+      ['/api/nerve-center/intelligence', body => body.data.hostPreferences[0]],
+      ['/api/nerve-center/status', body => body.data.hostPreferences[0]],
+      ['/api/nerve-center/ecosystem', body => body.data.hostPreferences[0]]
+    ])('redacts coordination bearer evidence from %s', async (path, selectPreference) => {
+      hostPrefService.getAll.mockResolvedValue([{
+        hostUrl: 'http://primary:11434',
+        hostKey: 'primary',
+        status: 'benchmarking',
+        pinnedModels: [],
+        lastBenchmarkReleaseReceipt: { finalizeToken: 'released-secret' },
+        benchmarkClaim: {
+          batchId: 'public-batch',
+          claimGeneration: 'claim-secret',
+          admissionId: 'admission-secret',
+          admissionGeneration: 'admission-generation-secret',
+          admissionPrincipal: 'benchmark-service',
+          prevStatus: 'ready',
+          finalizeToken: 'finalizer-secret',
+          preClaimRuntime: {
+            exact: true,
+            identityDigest: 'snapshot-secret',
+            residents: [{ model: 'private-resident', digest: 'private-digest' }]
+          }
+        }
+      }]);
+
+      const res = await request(app).get(path).expect(200);
+      const preference = selectPreference(res.body);
+      expect(preference.benchmarkClaim).toEqual(expect.objectContaining({
+        batchId: 'public-batch',
+        prevStatus: 'ready',
+        snapshotExact: true,
+        snapshotResidentCount: 1,
+        finalizing: true
+      }));
+      const serialized = JSON.stringify(preference);
+      for (const secret of [
+        'claim-secret',
+        'admission-secret',
+        'admission-generation-secret',
+        'finalizer-secret',
+        'snapshot-secret',
+        'private-digest',
+        'released-secret'
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
+    });
+
     it('returns 500 when getAllModelsHealth throws', async () => {
       // node-fetch is used by getAllModelsHealth → getModelHealth → checkHostHealth
       // Force fetch to throw to trigger the error path

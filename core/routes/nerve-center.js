@@ -41,6 +41,7 @@ const {
 const { describeHost } = require('../src/services/hostIdentityService');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { projectHealthFeed } = require('../src/services/alertFeedProjection');
+const { projectHostPreferencesForRead } = require('../src/services/hostPreferencePublicProjection');
 
 // ========================================
 // Helpers
@@ -70,7 +71,7 @@ async function buildIntelligenceSummary() {
   return {
     cluster: clusterHealth,
     routing: failoverStatus,
-    hostPreferences,
+    hostPreferences: projectHostPreferencesForRead(hostPreferences),
     alerts: activeAlertSnapshot.alerts,
     alertSummary: activeAlertSnapshot.summary,
     recentRouting: projectInferenceLogs(routingLog)

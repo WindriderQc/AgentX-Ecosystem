@@ -17,6 +17,7 @@ const {
   readBoundedJson,
   readBoundedText,
 } = require('../../../shared/outboundHttpExecutor');
+const { normalizeModelTag } = require('../../../shared/modelNames');
 
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const SERVICE_NAME = 'benchmark';
@@ -145,6 +146,66 @@ function isSha256Hex(value) {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
 
+function canonicalRuntimeResident(entry) {
+  const expiryMs = entry?.expiresAt ? Date.parse(entry.expiresAt) : NaN;
+  return {
+    model: entry?.model,
+    digest: entry?.digest,
+    artifactSize: Number(entry?.artifactSize),
+    sizeVram: Number(entry?.sizeVram),
+    contextLength: Number(entry?.contextLength),
+    keepAlive: Number(entry?.keepAlive),
+    expiresAt: Number.isFinite(expiryMs) ? new Date(expiryMs).toISOString() : null,
+  };
+}
+
+function runtimeSnapshotIdentity(snapshot, residents = snapshot?.residents || []) {
+  const canonicalResidents = residents.map(canonicalRuntimeResident)
+    .sort((left, right) => left.model.localeCompare(right.model));
+  return crypto.createHash('sha256').update(JSON.stringify({
+    capturedAt: snapshot?.capturedAt ? new Date(snapshot.capturedAt).toISOString() : null,
+    source: snapshot?.source || null,
+    exact: snapshot?.exact === true,
+    residents: canonicalResidents,
+  })).digest('hex');
+}
+
+function modelIdentityKey(value) {
+  return normalizeModelTag(String(value || '')).toLowerCase();
+}
+
+function runtimeResidentComplete(entry) {
+  const keepAlive = Number(entry?.keepAlive);
+  const expiryMs = entry?.expiresAt ? Date.parse(entry.expiresAt) : NaN;
+  const infiniteExpiry = Number.isFinite(expiryMs)
+    && new Date(expiryMs).getUTCFullYear() >= 9000;
+  return typeof entry?.model === 'string' && entry.model.length > 0
+    && typeof entry?.digest === 'string' && entry.digest.length > 0
+    && Number.isFinite(Number(entry.artifactSize)) && Number(entry.artifactSize) > 0
+    && Number.isFinite(Number(entry.sizeVram)) && Number(entry.sizeVram) >= 0
+    && Number.isInteger(Number(entry.contextLength)) && Number(entry.contextLength) > 0
+    && (keepAlive === -1 || (Number.isFinite(keepAlive) && keepAlive > 0))
+    && Number.isFinite(expiryMs)
+    && (keepAlive !== -1 || infiniteExpiry);
+}
+
+function exactRuntimeSnapshot(snapshot) {
+  const capturedAtMs = Date.parse(snapshot?.capturedAt);
+  const residents = snapshot?.residents;
+  const residentKeys = Array.isArray(residents)
+    ? residents.map(entry => modelIdentityKey(entry?.model))
+    : [];
+  return snapshot?.exact === true
+    && snapshot?.source === 'ollama_ps'
+    && Number.isFinite(capturedAtMs)
+    && Array.isArray(residents)
+    && residents.every(runtimeResidentComplete)
+    && residentKeys.every(Boolean)
+    && new Set(residentKeys).size === residentKeys.length
+    && isSha256Hex(snapshot?.identityDigest)
+    && snapshot.identityDigest === runtimeSnapshotIdentity(snapshot);
+}
+
 function exactBenchmarkReleaseReceipt(result, expected) {
   const receipt = result?.releaseReceipt;
   const snapshot = receipt?.snapshot;
@@ -158,20 +219,42 @@ function exactBenchmarkReleaseReceipt(result, expected) {
   const expiredModels = Array.isArray(snapshot?.expiredModels)
     ? [...new Set(snapshot.expiredModels.map(String))].sort()
     : null;
-  const residentsComplete = Array.isArray(residents) && residents.every((entry) => (
-    typeof entry?.model === 'string' && entry.model.length > 0
-    && typeof entry?.digest === 'string' && entry.digest.length > 0
-    && Number.isFinite(Number(entry.artifactSize)) && Number(entry.artifactSize) > 0
-    && Number.isFinite(Number(entry.sizeVram)) && Number(entry.sizeVram) >= 0
-    && Number.isInteger(Number(entry.contextLength)) && Number(entry.contextLength) > 0
-    && Number.isFinite(Number(entry.keepAlive))
-    && (entry.expiresAt === null || Number.isFinite(Date.parse(entry.expiresAt)))
-  ));
+  const originalSnapshot = expected.preClaimRuntime;
+  const filterEvaluatedAtMs = Date.parse(snapshot?.filterEvaluatedAt);
+  const releasedAtMs = Date.parse(receipt?.releasedAt);
+  const expectedExcludedKeys = new Set(expectedExclusions.map(modelIdentityKey));
+  const afterExplicitExclusions = exactRuntimeSnapshot(originalSnapshot)
+    ? originalSnapshot.residents.filter(entry => !expectedExcludedKeys.has(modelIdentityKey(entry.model)))
+    : [];
+  const expectedExpired = afterExplicitExclusions
+    .filter(entry => Number(entry.keepAlive) !== -1 && Date.parse(entry.expiresAt) <= filterEvaluatedAtMs)
+    .map(entry => entry.model)
+    .sort();
+  const expectedResidents = afterExplicitExclusions
+    .filter(entry => Number(entry.keepAlive) === -1 || Date.parse(entry.expiresAt) > filterEvaluatedAtMs)
+    .map(canonicalRuntimeResident)
+    .sort((left, right) => left.model.localeCompare(right.model));
+  const actualResidents = Array.isArray(residents)
+    ? residents.map(canonicalRuntimeResident).sort((left, right) => left.model.localeCompare(right.model))
+    : null;
+  const residentsComplete = Array.isArray(residents)
+    && residents.every(runtimeResidentComplete)
+    && new Set(residents.map(entry => modelIdentityKey(entry.model))).size === residents.length;
   const identityChainExact = isSha256Hex(snapshot?.identityDigest)
     && isSha256Hex(snapshot?.appliedIdentityDigest)
+    && exactRuntimeSnapshot(originalSnapshot)
+    && snapshot.identityDigest === originalSnapshot.identityDigest
+    && snapshot.identityDigest === expected.snapshotIdentity
+    && snapshot.capturedAt === new Date(originalSnapshot.capturedAt).toISOString()
+    && snapshot.source === originalSnapshot.source
+    && Number.isFinite(filterEvaluatedAtMs)
+    && filterEvaluatedAtMs >= Date.parse(originalSnapshot.capturedAt)
+    && Number.isFinite(releasedAtMs)
+    && releasedAtMs >= filterEvaluatedAtMs
+    && snapshot.appliedIdentityDigest === runtimeSnapshotIdentity(originalSnapshot, residents)
     && verification?.snapshotIdentity === snapshot.appliedIdentityDigest
-    && (expectedExclusions.length > 0 || (expiredModels?.length || 0) > 0
-      || snapshot.identityDigest === snapshot.appliedIdentityDigest);
+    && JSON.stringify(actualResidents) === JSON.stringify(expectedResidents)
+    && JSON.stringify(expiredModels) === JSON.stringify(expectedExpired);
 
   return result?.released === true
     && receipt?.contract === 'agentx.benchmark-claim-release/v1'
@@ -183,6 +266,8 @@ function exactBenchmarkReleaseReceipt(result, expected) {
     && residentsComplete
     && identityChainExact
     && JSON.stringify(actualExclusions) === JSON.stringify(expectedExclusions)
+    && snapshot.excludedModels.length === actualExclusions.length
+    && snapshot.expiredModels.length === expiredModels.length
     && Array.isArray(expiredModels)
     && verification?.status === 'ready'
     && verification?.ready === true
@@ -192,7 +277,7 @@ function exactBenchmarkReleaseReceipt(result, expected) {
     && state?.restoredStatus === expected.prevStatus
     && state?.claimCleared === true
     && state?.finalizerCleared === true
-    && Number.isFinite(Date.parse(receipt.releasedAt));
+    && Number.isFinite(releasedAtMs);
 }
 
 function configuredCoreOrigin() {
@@ -481,6 +566,7 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
     const snapshotIdentity = result.snapshotIdentity
       || result.pref?.benchmarkClaim?.preClaimRuntime?.identityDigest;
     const nestedClaim = result.pref?.benchmarkClaim;
+    const preClaimRuntime = nestedClaim?.preClaimRuntime;
     if (result.claimed === true
       && (confirmedBatchId !== batchId || confirmedGeneration !== claimGeneration)) {
       const error = new Error('Core claim receipt did not attest the requested batch and generation');
@@ -498,13 +584,29 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
       throw error;
     }
     if (result.claimed === true
-      && (typeof prevStatus !== 'string' || !prevStatus || !snapshotExact || !isSha256Hex(snapshotIdentity))) {
+      && (typeof prevStatus !== 'string'
+        || !prevStatus
+        || !snapshotExact
+        || !isSha256Hex(snapshotIdentity)
+        || !exactRuntimeSnapshot(preClaimRuntime)
+        || preClaimRuntime.identityDigest !== snapshotIdentity)) {
       const error = new Error('Core claim receipt did not attest an exact pre-claim runtime snapshot');
       error.code = 'BENCHMARK_CLAIM_RECEIPT_MISMATCH';
       throw error;
     }
     if (result.claimed === true) {
-      claimProofByOwner.set(ownerKey, { claimGeneration, prevStatus, snapshotIdentity });
+      claimProofByOwner.set(ownerKey, {
+        claimGeneration,
+        prevStatus,
+        snapshotIdentity,
+        preClaimRuntime: {
+          capturedAt: new Date(preClaimRuntime.capturedAt).toISOString(),
+          source: preClaimRuntime.source,
+          exact: true,
+          identityDigest: preClaimRuntime.identityDigest,
+          residents: preClaimRuntime.residents.map(canonicalRuntimeResident),
+        },
+      });
     } else claimProofByOwner.delete(ownerKey);
     return result;
   } catch (err) {
@@ -520,7 +622,21 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
     // Cleanup is fenced by the locally generated UUID, so it can never clear
     // another owner or a replacement generation.
     if (err.code !== 'OUTBOUND_REQUEST_TOO_LARGE') {
-      await releaseBenchmarkClaim(hostUrl, batchId).catch(() => {});
+      try {
+        const cleanup = await releaseBenchmarkClaim(hostUrl, batchId);
+        if (cleanup?.released !== true) {
+          const cleanupError = new Error(cleanup?.reason || 'Ambiguous claim cleanup was not verified');
+          cleanupError.code = 'BENCHMARK_CLAIM_CLEANUP_UNVERIFIED';
+          err.cleanupError = cleanupError;
+          err.retainAdmission = true;
+          throw err;
+        }
+      } catch (cleanupError) {
+        if (cleanupError === err) throw err;
+        err.cleanupError = cleanupError;
+        err.retainAdmission = true;
+        throw err;
+      }
     }
     claimProofByOwner.delete(ownerKey);
     throw err;
@@ -632,6 +748,8 @@ async function releaseBenchmarkClaim(hostUrl, batchId, options = {}) {
     batchId,
     claimGeneration: proof?.claimGeneration || null,
     prevStatus: proof?.prevStatus || null,
+    snapshotIdentity: proof?.snapshotIdentity || null,
+    preClaimRuntime: proof?.preClaimRuntime || null,
     excludedModels
   })) {
     return {
@@ -857,5 +975,7 @@ module.exports = {
     configuredCoreOrigin,
     CORE_OPERATION_SPECS,
     normalizeCallerHeaders,
+    exactBenchmarkReleaseReceipt,
+    runtimeSnapshotIdentity,
   },
 };

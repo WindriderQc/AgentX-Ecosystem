@@ -157,7 +157,8 @@ async function getLatestHardwareSnapshotsForModels(modelNames = []) {
     }
 
     const snapshots = await HostPerformanceSnapshot.find({
-        modelName: { $in: normalizedNames }
+        modelName: { $in: normalizedNames },
+        authorityState: { $nin: ['authority_invalidated', 'pending_reconciliation'] }
     })
         .sort({ testedAt: -1 })
         .lean();

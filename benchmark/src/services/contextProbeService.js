@@ -75,7 +75,31 @@ async function persistProbeSnapshot(data, { signal, checkpoint } = {}) {
     checkpoint?.();
     return saved;
   } catch (error) {
-    await ModelContextProbeSnapshot.deleteOne({ _id: payload._id }).catch(() => {});
+    try {
+      await ModelContextProbeSnapshot.updateOne(
+        { _id: payload._id },
+        {
+          $setOnInsert: {
+            modelName: payload.modelName,
+            hostUrl: payload.hostUrl,
+            hostId: payload.hostId,
+            artifactDigest: payload.artifactDigest,
+            runtimeFingerprint: payload.runtimeFingerprint,
+            status: 'failed'
+          },
+          $set: {
+            authorityStatus: 'rejected',
+            authorityError: 'probe snapshot persistence raced profiler claim loss'
+          }
+        },
+        { upsert: true }
+      );
+      error.authorityCompensated = true;
+    } catch (compensationError) {
+      error.compensationError = compensationError;
+      error.retainAdmission = true;
+      error.code = 'CONTEXT_PROBE_SNAPSHOT_RECONCILIATION_PENDING';
+    }
     throw error;
   }
 }
@@ -669,16 +693,23 @@ async function probeModelContext(modelName, options = {}) {
       );
       checkpoint();
     } catch (profileErr) {
-      await modelContextProfileService.invalidateIfSnapshot(
-        snapshotObject,
-        profileErr.code === 'BENCHMARK_CLAIM_LOST'
-          ? 'claim_lost_during_context_authority_write'
-          : 'context_authority_write_failed'
-      ).catch(() => {});
-      await ModelContextProbeSnapshot.updateOne(
-        { _id: snapshotObject._id },
-        { $set: { authorityStatus: 'rejected', authorityError: profileErr.message } }
-      ).catch(() => {});
+      try {
+        await modelContextProfileService.invalidateIfSnapshot(
+          snapshotObject,
+          profileErr.code === 'BENCHMARK_CLAIM_LOST'
+            ? 'claim_lost_during_context_authority_write'
+            : 'context_authority_write_failed'
+        );
+        await ModelContextProbeSnapshot.updateOne(
+          { _id: snapshotObject._id },
+          { $set: { authorityStatus: 'rejected', authorityError: profileErr.message } }
+        );
+        profileErr.authorityCompensated = true;
+      } catch (compensationError) {
+        profileErr.compensationError = compensationError;
+        profileErr.retainAdmission = true;
+        profileErr.code = 'MODEL_CONTEXT_PROFILE_RECONCILIATION_PENDING';
+      }
       logger.warn('Failed to update model context profile from probe snapshot', {
         modelName: normalizedModel,
         hostUrl,
@@ -691,8 +722,16 @@ async function probeModelContext(modelName, options = {}) {
 
     return { ...snapshotObject, authorityStatus: 'committed', authorityError: null };
   } catch (err) {
+    if (err?.retainAdmission === true
+      || err?.code === 'MODEL_CONTEXT_PROFILE_RECONCILIATION_PENDING') {
+      throw err;
+    }
     if (options.signal?.aborted) {
-      throw (options.signal.reason instanceof Error ? options.signal.reason : err);
+      const authorityError = options.signal.reason instanceof Error ? options.signal.reason : err;
+      if (err?.compensationError) authorityError.compensationError = err.compensationError;
+      if (err?.authorityCompensated === true) authorityError.authorityCompensated = true;
+      if (err?.retainAdmission === true) authorityError.retainAdmission = true;
+      throw authorityError;
     }
     checkpoint();
     const snapshot = await persistProbeSnapshot({

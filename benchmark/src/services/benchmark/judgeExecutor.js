@@ -14,7 +14,7 @@ function cancellationSignal(config = {}) {
 }
 
 async function invalidateAmbiguousJudgeWrite(resultId, phase) {
-    await BenchmarkResult.updateOne(
+    const receipt = await BenchmarkResult.updateOne(
         { _id: resultId },
         {
             $set: {
@@ -25,8 +25,15 @@ async function invalidateAmbiguousJudgeWrite(resultId, phase) {
                 composite_score: null,
                 review_reason: `Judge authority was lost during ${phase}; result requires a fenced rejudge`
             }
-        }
-    ).catch(() => {});
+        },
+        { upsert: true }
+    );
+    if (Number(receipt?.matchedCount) === 0 && Number(receipt?.upsertedCount) !== 1) {
+        const error = new Error(`Cannot invalidate judge result ${resultId}: result was not found`);
+        error.code = 'JUDGE_AUTHORITY_INVALIDATION_MISSING';
+        throw error;
+    }
+    return receipt;
 }
 
 async function persistJudgeUpdate(resultId, update, cancellationConfig, phase) {
@@ -40,7 +47,16 @@ async function persistJudgeUpdate(resultId, update, cancellationConfig, phase) {
         );
         throwIfJudgeCancelled(cancellationConfig);
     } catch (error) {
-        if (signal?.aborted) await invalidateAmbiguousJudgeWrite(resultId, phase);
+        if (signal?.aborted || error?.code === 'BENCHMARK_CLAIM_LOST' || error?.code === 'BENCHMARK_CLAIM_STOPPED') {
+            try {
+                await invalidateAmbiguousJudgeWrite(resultId, phase);
+                error.authorityCompensated = true;
+            } catch (compensationError) {
+                error.compensationError = compensationError;
+                error.retainAdmission = true;
+                error.code = 'JUDGE_AUTHORITY_RECONCILIATION_PENDING';
+            }
+        }
         throw error;
     }
 }

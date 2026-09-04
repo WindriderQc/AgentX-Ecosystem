@@ -21,6 +21,25 @@ describe('benchmark claim release v1 shared fixture', () => {
     const receipt = entry.releaseReceipt;
     expect(hostPreferenceService.benchmarkRuntimeSnapshotIdentity(acquire)).toBe(acquire.identityDigest);
     expect(receipt.snapshot.identityDigest).toBe(acquire.identityDigest);
+    expect(receipt.snapshot.capturedAt).toBe(acquire.capturedAt);
+    expect(receipt.snapshot.source).toBe(acquire.source);
+    const filterAt = Date.parse(receipt.snapshot.filterEvaluatedAt);
+    expect(Number.isFinite(filterAt)).toBe(true);
+    const afterExclusions = acquire.residents.filter(entry =>
+      !receipt.snapshot.excludedModels.some(model => hostPreferenceService.pinNamesMatch(model, entry.model)));
+    const expectedResidents = hostPreferenceService.desiredBenchmarkResidents(
+      { ...acquire, residents: afterExclusions },
+      filterAt
+    );
+    const expectedExpired = afterExclusions
+      .filter(entry => !expectedResidents.includes(entry))
+      .map(entry => entry.model);
+    expect(receipt.snapshot.expiredModels).toEqual(expectedExpired);
+    expect(receipt.snapshot.residents).toEqual(expectedResidents);
+    expect(hostPreferenceService.benchmarkRuntimeSnapshotIdentity({
+      ...acquire,
+      residents: receipt.snapshot.residents
+    })).toBe(receipt.snapshot.appliedIdentityDigest);
     expect(receipt.verification.snapshotIdentity).toBe(receipt.snapshot.appliedIdentityDigest);
     expect(receipt.snapshot.residentCount).toBe(receipt.snapshot.residents.length);
     expect(receipt.verification).toMatchObject({

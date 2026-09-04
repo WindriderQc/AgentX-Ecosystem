@@ -98,7 +98,7 @@ describe('managed benchmark workload admission lifecycle', () => {
             batchId: 'batch-1',
             hosts: ['http://judge:11434']
         }));
-        expect(order).toEqual(['task', 'drain', 'release']);
+        expect(order).toEqual(['task', 'release', 'drain']);
     });
 
     test('heartbeat rejection aborts the shared signal and retains admission for TTL recovery', async () => {
@@ -136,7 +136,7 @@ describe('managed benchmark workload admission lifecycle', () => {
 
         await wrapped({ body: {} }, res, jest.fn());
 
-        expect(order).toEqual(['handler', 'drain', 'release', 'send:success']);
+        expect(order).toEqual(['handler', 'release', 'drain', 'send:success']);
         expect(res.statusCode).toBe(200);
     });
 
@@ -155,5 +155,6 @@ describe('managed benchmark workload admission lifecycle', () => {
             status: 'error',
             code: 'WORKLOAD_ADMISSION_RELEASE_FAILED'
         }));
+        expect(heartbeat.drain).not.toHaveBeenCalled();
     });
 });

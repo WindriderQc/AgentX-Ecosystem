@@ -440,6 +440,9 @@ describe('benchmarkClaimService', () => {
           identityDigest: claimed.pref.benchmarkClaim.preClaimRuntime.identityDigest,
           appliedIdentityDigest: claimed.pref.benchmarkClaim.preClaimRuntime.identityDigest,
           exact: true,
+          capturedAt: claimed.pref.benchmarkClaim.preClaimRuntime.capturedAt,
+          source: 'ollama_ps',
+          filterEvaluatedAt: expect.any(Date),
           residentCount: 0
         },
         verification: {
@@ -560,6 +563,10 @@ describe('benchmarkClaimService', () => {
       });
       expect(released.releaseReceipt.snapshot.appliedIdentityDigest)
         .not.toBe(released.releaseReceipt.snapshot.identityDigest);
+      expect(released.releaseReceipt.snapshot.filterEvaluatedAt.getTime())
+        .toBeGreaterThanOrEqual(expiringSnapshot.capturedAt.getTime());
+      expect(released.releaseReceipt.releasedAt.getTime())
+        .toBeGreaterThanOrEqual(released.releaseReceipt.snapshot.filterEvaluatedAt.getTime());
       expect(released.releaseReceipt.verification.snapshotIdentity)
         .toBe(released.releaseReceipt.snapshot.appliedIdentityDigest);
     });

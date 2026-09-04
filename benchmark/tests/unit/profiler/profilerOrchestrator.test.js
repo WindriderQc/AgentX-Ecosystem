@@ -259,7 +259,7 @@ describe('profile', () => {
 describe('profiler evidence qualification', () => {
   function qualifiedFullProfile() {
     const stats = value => ({
-      sampleCount: 3,
+      sampleCount: 5,
       mean: value,
       p50: value,
       p95: value,
@@ -270,12 +270,19 @@ describe('profiler evidence qualification', () => {
     });
     return {
       profileDepth: 'full',
-      requiredFullPhaseSamples: 3,
+      requiredFullPhaseSamples: 5,
       maxVerifiedContext: 262144,
       recommendedInteractiveContext: 65536,
       recommendedDocumentContext: 131072,
       requiredRetainedSamples: 10,
-      measurementQuality: { passingSampleCount: 10, ttftSampleCount: 10, reliability: 'medium' },
+      measurementQuality: {
+        passingSampleCount: 10,
+        ttftSampleCount: 10,
+        reliability: 'medium',
+        tokensPerSecMean: 40,
+        coefficientOfVariation: 0.05,
+        confidenceInterval95: { low: 38, high: 42, method: 'student_t' }
+      },
       ttftMs: 200,
       ttftMeasurement: 'streamed_wall_clock',
       spill: { verified: true, spillDetected: false },
@@ -283,14 +290,14 @@ describe('profiler evidence qualification', () => {
         contextFillPct,
         tokensPerSec: 40,
         gpuOffloaded: false,
-        passingSampleCount: 3,
+        passingSampleCount: 5,
         throughputStatistics: stats(40)
       })),
       generationStability: [64, 256, 512].map(numPredict => ({
         numPredict,
         tokensPerSec: 40,
         totalLatencyMs: 1000,
-        passingSampleCount: 3,
+        passingSampleCount: 5,
         throughputStatistics: stats(40),
         latencyStatistics: stats(1000)
       })),
@@ -310,7 +317,7 @@ describe('profiler evidence qualification', () => {
           promptEvalDurationMs: 500,
           evalDurationMs: 500,
           runtimeContextLength: 1024,
-          passingSampleCount: 3,
+          passingSampleCount: 5,
           prefillStatistics: stats(1000),
           decodeStatistics: stats(128),
           prefillTokensPerSec: 1000,
@@ -321,7 +328,7 @@ describe('profiler evidence qualification', () => {
         coldLoadMs: 5000,
         hotLoadMs: 100,
         unloadVerified: true,
-        passingSampleCount: 3,
+        passingSampleCount: 5,
         coldStatistics: stats(5000),
         hotStatistics: stats(100)
       }
@@ -366,6 +373,16 @@ describe('profiler evidence qualification', () => {
 
   it('qualifies only when every Full phase has positive complete evidence', () => {
     expect(orchestrator.profileQualificationFailures(qualifiedFullProfile())).toEqual([]);
+  });
+
+  it.each([
+    ['high CV', stats => { stats.coefficientOfVariation = 0.3; stats.reliability = 'low'; }],
+    ['wide relative CI', stats => { stats.confidenceInterval95 = { low: 10, high: 70, method: 'student_t' }; }],
+    ['too few samples', stats => { stats.sampleCount = 4; stats.reliability = 'unknown'; }]
+  ])('fails Full qualification when one phase has %s', (_label, mutate) => {
+    const profile = qualifiedFullProfile();
+    mutate(profile.throughputCurve[0].throughputStatistics);
+    expect(orchestrator.profileQualificationFailures(profile)).toContain('full_throughput_curve_incomplete');
   });
 
   it('never qualifies workload recommendations above the verified capacity ceiling', () => {

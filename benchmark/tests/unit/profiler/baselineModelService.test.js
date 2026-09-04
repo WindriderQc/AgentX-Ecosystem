@@ -2,7 +2,7 @@
 
 const mockListModels = jest.fn();
 const mockPullModel = jest.fn();
-const mockDeleteModel = jest.fn();
+const mockHostProfileUpsert = jest.fn();
 const mockGetAll = jest.fn();
 const mockSave = jest.fn();
 
@@ -15,8 +15,11 @@ jest.mock('../../../src/helpers/ollamaHostConfig', () => ({
 
 jest.mock('../../../src/clients/ollamaClient', () => ({
   listModels: (...args) => mockListModels(...args),
-  pullModel: (...args) => mockPullModel(...args),
-  deleteModel: (...args) => mockDeleteModel(...args)
+  pullModel: (...args) => mockPullModel(...args)
+}));
+
+jest.mock('../../../src/services/profiler/hostProfileService', () => ({
+  upsert: (...args) => mockHostProfileUpsert(...args)
 }));
 
 jest.mock('../../../src/services/profiler/settingsService', () => ({
@@ -34,11 +37,11 @@ describe('baselineModelService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetAll.mockResolvedValue({ baselineModel: 'qwen2.5:3b' });
-    process.env.PROFILER_PULL_COMPENSATION_SETTLE_MS = '0';
+    mockHostProfileUpsert.mockResolvedValue({});
   });
 
   afterEach(() => {
-    delete process.env.PROFILER_PULL_COMPENSATION_SETTLE_MS;
+    delete process.env.OLLAMA_PULL_TIMEOUT_MS;
   });
 
   it('does not pull when the configured baseline is already installed', async () => {
@@ -69,6 +72,13 @@ describe('baselineModelService', () => {
       hostId: 'tertiary',
       hostName: 'Host Gamma'
     });
+    expect(mockHostProfileUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostId: 'tertiary',
+        reconciliation: expect.objectContaining({ state: 'pending_reconciliation', operation: 'baseline_pull' })
+      }),
+      expect.any(Object)
+    );
   });
 
   it('rejects hosts outside the configured fleet before calling Ollama', async () => {
@@ -77,51 +87,38 @@ describe('baselineModelService', () => {
     expect(mockPullModel).not.toHaveBeenCalled();
   });
 
-  it('inventories and removes an artifact that arrives after an aborted pull', async () => {
+  it('persists durable pending reconciliation instead of treating short polling as terminal proof', async () => {
     const authorityLoss = Object.assign(new Error('workload heartbeat rejected'), { code: 'BENCHMARK_CLAIM_LOST' });
-    mockListModels
-      .mockResolvedValueOnce({ models: [] })
-      .mockResolvedValueOnce({ models: [] })
-      .mockResolvedValueOnce({ models: [{ name: 'qwen2.5:3b' }] })
-      .mockResolvedValueOnce({ models: [] })
-      .mockResolvedValueOnce({ models: [] });
+    mockListModels.mockResolvedValueOnce({ models: [] });
     mockPullModel.mockRejectedValue(authorityLoss);
-    mockDeleteModel.mockResolvedValue({ status: 'success' });
 
-    await expect(service.ensureBaselineModel('primary')).rejects.toBe(authorityLoss);
-
-    expect(mockDeleteModel).toHaveBeenCalledWith(
-      'http://primary:11434',
-      'qwen2.5:3b',
-      expect.objectContaining({ timeoutMs: 120_000 })
-    );
-    expect(mockListModels).toHaveBeenCalledTimes(5);
-  });
-
-  it('removes a newly installed artifact when claim authority is lost after pull acknowledgement', async () => {
-    const authorityLoss = Object.assign(new Error('claim lost after pull acknowledgement'), { code: 'BENCHMARK_CLAIM_LOST' });
-    mockListModels
-      .mockResolvedValueOnce({ models: [] })
-      .mockResolvedValueOnce({ models: [{ name: 'qwen2.5:3b' }] })
-      .mockResolvedValueOnce({ models: [] })
-      .mockResolvedValueOnce({ models: [] })
-      .mockResolvedValueOnce({ models: [] });
-    mockPullModel.mockResolvedValue({ status: 'success' });
-    mockDeleteModel.mockResolvedValue({ status: 'success' });
-    let assertionCount = 0;
-    const assertClaimActive = jest.fn(() => {
-      assertionCount += 1;
-      if (assertionCount === 4) throw authorityLoss;
+    await expect(service.ensureBaselineModel('primary')).rejects.toMatchObject({
+      code: 'BASELINE_PULL_RECONCILIATION_PENDING',
+      retainAdmission: true,
+      cause: authorityLoss
     });
 
-    await expect(service.ensureBaselineModel('primary', { assertClaimActive })).rejects.toBe(authorityLoss);
+    expect(mockHostProfileUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ reconciliation: expect.objectContaining({ state: 'pending_reconciliation' }) }),
+      expect.any(Object)
+    );
+    expect(mockListModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the reconciliation pending when authority is lost after pull acknowledgement', async () => {
+    const authorityLoss = Object.assign(new Error('claim lost after pull acknowledgement'), { code: 'BENCHMARK_CLAIM_LOST' });
+    mockListModels.mockResolvedValueOnce({ models: [] });
+    let pulled = false;
+    mockPullModel.mockImplementation(async () => { pulled = true; return { status: 'success' }; });
+    const assertClaimActive = jest.fn(() => { if (pulled) throw authorityLoss; });
+
+    await expect(service.ensureBaselineModel('primary', { assertClaimActive })).rejects.toMatchObject({
+      code: 'BASELINE_PULL_RECONCILIATION_PENDING',
+      retainAdmission: true,
+      cause: authorityLoss
+    });
 
     expect(mockPullModel).toHaveBeenCalledTimes(1);
-    expect(mockDeleteModel).toHaveBeenCalledWith(
-      'http://primary:11434',
-      'qwen2.5:3b',
-      expect.objectContaining({ timeoutMs: 120_000 })
-    );
-    expect(mockListModels).toHaveBeenCalledTimes(5);
+    expect(mockListModels).toHaveBeenCalledTimes(1);
   });
 });

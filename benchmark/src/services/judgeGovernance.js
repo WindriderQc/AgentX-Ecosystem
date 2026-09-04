@@ -38,15 +38,18 @@ const { runRetroCalibration } = require('./benchmark/retroCalibration');
 const { runCalibrationBatch, buildAccuracyMatrix } = require('./benchmark/calibrationRunner');
 const { detectDrift } = require('./benchmark/driftDetector');
 const { buildStrictTrustResultExclusion } = require('./benchmark/publicReadPrivacy');
+const { throwIfJudgeCancelled } = require('./scoring/judgeCall');
 
 /**
  * Execute one sub-step, capturing timing + errors without throwing upward.
  */
-async function runSubStep(name, fn) {
+async function runSubStep(name, fn, cancelSignal = null) {
     const started = Date.now();
     const startedAt = new Date(started);
     try {
+        throwIfJudgeCancelled({ cancelSignal });
         const output = await fn();
+        throwIfJudgeCancelled({ cancelSignal });
         const finished = Date.now();
         return {
             name,
@@ -60,6 +63,12 @@ async function runSubStep(name, fn) {
                 : output
         };
     } catch (err) {
+        if (cancelSignal?.aborted
+            || err?.code === 'BENCHMARK_CLAIM_LOST'
+            || err?.code === 'BENCHMARK_CLAIM_STOPPED'
+            || err?.retainAdmission === true) {
+            throw err;
+        }
         const finished = Date.now();
         logger.warn(`Governance sub-step failed: ${name}`, { error: err.message });
         return {
@@ -165,8 +174,11 @@ async function computeDrift({ batchId, judgeModel }) {
  * JudgeAccuracyMatrix, and return the saved doc.
  */
 async function computeMatrixCalibration({
-    judgeModel, judgeHost, referenceModel, referenceHost, passThreshold = 1.5
+    judgeModel, judgeHost, referenceModel, referenceHost, passThreshold = 1.5,
+    cancelSignal = null, assertAuthorityActive = null
 }) {
+    throwIfJudgeCancelled({ cancelSignal });
+    assertAuthorityActive?.();
     if (!judgeModel || !judgeHost || !referenceModel || !referenceHost) {
         return skipped('missing judge/reference model or host');
     }
@@ -178,16 +190,22 @@ async function computeMatrixCalibration({
 
     const referenceScores = await runCalibrationBatch(entries, {
         model: referenceModel,
-        host: referenceHost
+        host: referenceHost,
+        cancelSignal
     });
     const challengerScores = await runCalibrationBatch(entries, {
         model: judgeModel,
-        host: judgeHost
+        host: judgeHost,
+        cancelSignal
     });
+    throwIfJudgeCancelled({ cancelSignal });
+    assertAuthorityActive?.();
 
     const matrix = buildAccuracyMatrix(referenceScores, challengerScores, passThreshold);
 
-    const saved = await JudgeAccuracyMatrix.create({
+    const id = new mongoose.Types.ObjectId();
+    const payload = {
+        _id: id,
         judge_model: judgeModel,
         judge_host: judgeHost,
         reference_model: referenceModel,
@@ -197,7 +215,41 @@ async function computeMatrixCalibration({
         cells: matrix.cells,
         overall_avg_deviation: matrix.overall_avg_deviation,
         pass_rate: matrix.pass_rate
-    });
+    };
+    let saved;
+    try {
+        if (cancelSignal) {
+            const created = await JudgeAccuracyMatrix.create([payload], { signal: cancelSignal });
+            saved = Array.isArray(created) ? created[0] : created;
+        } else {
+            saved = await JudgeAccuracyMatrix.create(payload);
+        }
+        throwIfJudgeCancelled({ cancelSignal });
+        assertAuthorityActive?.();
+    } catch (error) {
+        if (cancelSignal?.aborted
+            || error?.code === 'BENCHMARK_CLAIM_LOST'
+            || error?.code === 'BENCHMARK_CLAIM_STOPPED') {
+            try {
+                await JudgeAccuracyMatrix.updateOne(
+                    { _id: id },
+                    {
+                        $set: {
+                            authority_state: 'authority_invalidated',
+                            authority_reconciliation_reason: 'matrix calibration raced workload admission loss'
+                        }
+                    },
+                    { upsert: true }
+                );
+                error.authorityCompensated = true;
+            } catch (compensationError) {
+                error.compensationError = compensationError;
+                error.retainAdmission = true;
+                error.code = 'JUDGE_MATRIX_RECONCILIATION_PENDING';
+            }
+        }
+        throw error;
+    }
 
     return {
         matrix_id: saved._id.toString(),
@@ -288,8 +340,13 @@ async function runJudgeGovernanceLoop(options = {}) {
         retroPerCell = 3,
         retroDryRun = false,
         persist = true,
-        triggeredBy = 'manual'
+        triggeredBy = 'manual',
+        cancelSignal = null,
+        assertAuthorityActive = null
     } = options;
+
+    throwIfJudgeCancelled({ cancelSignal });
+    assertAuthorityActive?.();
 
     const startedAt = new Date();
     const t0 = Date.now();
@@ -314,8 +371,11 @@ async function runJudgeGovernanceLoop(options = {}) {
 
     const subSteps = [];
 
-    subSteps.push(await runSubStep('feedback_stats', () => getJudgeFeedbackStats()));
-    subSteps.push(await runSubStep('auto_promote', () => autoPromoteGroundTruth()));
+    subSteps.push(await runSubStep('feedback_stats', () => getJudgeFeedbackStats(), cancelSignal));
+    subSteps.push(await runSubStep('auto_promote', () => autoPromoteGroundTruth({
+        cancelSignal,
+        assertAuthorityActive
+    }), cancelSignal));
 
     subSteps.push(await runSubStep('retro_calibration', async () => {
         if (!shouldRunRetro) return skipped('retro calibration not requested');
@@ -326,19 +386,18 @@ async function runJudgeGovernanceLoop(options = {}) {
         return runRetroCalibration(
             batchId,
             { model: referenceModel, host: referenceHost },
-            { perCell: retroPerCell, dryRun: retroDryRun }
+            { perCell: retroPerCell, dryRun: retroDryRun, cancelSignal, assertAuthorityActive }
         );
-    }));
+    }, cancelSignal));
 
     subSteps.push(await runSubStep('matrix_calibration', () =>
         computeMatrixCalibration({
-            judgeModel, judgeHost, referenceModel, referenceHost, passThreshold
-        })
-    ));
+            judgeModel, judgeHost, referenceModel, referenceHost, passThreshold,
+            cancelSignal, assertAuthorityActive
+        }), cancelSignal));
 
     subSteps.push(await runSubStep('drift_detection', () =>
-        computeDrift({ batchId, judgeModel })
-    ));
+        computeDrift({ batchId, judgeModel }), cancelSignal));
 
     const finishedAt = new Date();
     const duration_ms = Date.now() - t0;
@@ -368,7 +427,45 @@ async function runJudgeGovernanceLoop(options = {}) {
 
     if (!persist) return doc;
 
-    const saved = await JudgeGovernanceRun.create(doc);
+    throwIfJudgeCancelled({ cancelSignal });
+    assertAuthorityActive?.();
+    const id = new mongoose.Types.ObjectId();
+    let saved;
+    try {
+        const payload = { _id: id, ...doc };
+        if (cancelSignal) {
+            const created = await JudgeGovernanceRun.create([payload], { signal: cancelSignal });
+            saved = Array.isArray(created) ? created[0] : created;
+        } else {
+            saved = await JudgeGovernanceRun.create(payload);
+        }
+        throwIfJudgeCancelled({ cancelSignal });
+        assertAuthorityActive?.();
+    } catch (error) {
+        if (cancelSignal?.aborted
+            || error?.code === 'BENCHMARK_CLAIM_LOST'
+            || error?.code === 'BENCHMARK_CLAIM_STOPPED') {
+            try {
+                await JudgeGovernanceRun.updateOne(
+                    { _id: id },
+                    {
+                        $set: {
+                            status: 'failed',
+                            authority_state: 'authority_invalidated',
+                            authority_reconciliation_reason: 'governance summary raced workload admission loss'
+                        }
+                    },
+                    { upsert: true }
+                );
+                error.authorityCompensated = true;
+            } catch (compensationError) {
+                error.compensationError = compensationError;
+                error.retainAdmission = true;
+                error.code = 'JUDGE_GOVERNANCE_RECONCILIATION_PENDING';
+            }
+        }
+        throw error;
+    }
 
     logger.info('Governance loop complete', {
         run_id: saved._id.toString(),

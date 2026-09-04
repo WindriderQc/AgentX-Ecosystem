@@ -32,6 +32,13 @@ const SubStepSchema = new mongoose.Schema({
 }, { _id: false });
 
 const JudgeGovernanceRunSchema = new mongoose.Schema({
+    authority_state: {
+        type: String,
+        enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+        default: 'authoritative',
+        index: true
+    },
+    authority_reconciliation_reason: { type: String, default: null },
     batch_id: { type: String, default: null, index: true },
     judge_model: { type: String, default: null, index: true },
     judge_host: { type: String, default: null },
@@ -77,7 +84,10 @@ JudgeGovernanceRunSchema.index({ judge_model: 1, started_at: -1 });
  * Get the most recent governance run (optionally filtered by judge model).
  */
 JudgeGovernanceRunSchema.statics.getLatest = function (judgeModel = null) {
-    const query = judgeModel ? { judge_model: judgeModel } : {};
+    const query = {
+        ...(judgeModel ? { judge_model: judgeModel } : {}),
+        authority_state: { $nin: ['authority_invalidated', 'pending_reconciliation'] }
+    };
     return this.findOne(query).sort({ started_at: -1 });
 };
 

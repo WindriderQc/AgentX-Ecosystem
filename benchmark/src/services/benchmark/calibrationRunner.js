@@ -7,6 +7,7 @@ const logger = require('../../../config/logger');
 const { scoreResponse } = require('../qualityScorer');
 const { resolveJudgeConfig } = require('../scoring/resolveJudgeConfig');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
+const { throwIfJudgeCancelled } = require('../scoring/judgeCall');
 
 /**
  * Score a batch of ground truth entries using a specific judge config.
@@ -20,6 +21,7 @@ async function runCalibrationBatch(entries, judgeConfig) {
 
     for (const entry of entries) {
         try {
+            throwIfJudgeCancelled(resolvedJudgeConfig);
             const result = await scoreResponse({
                 response: entry.response,
                 prompt: {
@@ -33,6 +35,7 @@ async function runCalibrationBatch(entries, judgeConfig) {
                 },
                 judgeConfig: resolvedJudgeConfig
             });
+            throwIfJudgeCancelled(resolvedJudgeConfig);
 
             results.push({
                 entry: { _id: entry._id, category: entry.category, difficulty: entry.difficulty },
@@ -41,6 +44,7 @@ async function runCalibrationBatch(entries, judgeConfig) {
                 error: null
             });
         } catch (err) {
+            if (resolvedJudgeConfig.cancelSignal?.aborted || resolvedJudgeConfig.signal?.aborted) throw err;
             logger.warn('Calibration scoring failed for entry', {
                 entry_id: entry._id, error: err.message
             });

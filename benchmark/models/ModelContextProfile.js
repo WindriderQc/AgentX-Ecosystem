@@ -48,6 +48,9 @@ const ModelContextProfileSchema = new mongoose.Schema({
   source: { type: String, default: 'context_probe' },
   stale: { type: Boolean, default: false },
   staleReason: { type: String, default: null },
+  // Durable tombstones for probe writes whose acknowledgement raced lease
+  // loss. The guarded upsert refuses to publish any rejected snapshot later.
+  rejectedEvidenceIds: { type: [String], default: [] },
   lastValidatedAt: { type: Date, default: null, index: true },
   latestEvidence: { type: LatestEvidenceSchema, default: () => ({}) }
 }, {

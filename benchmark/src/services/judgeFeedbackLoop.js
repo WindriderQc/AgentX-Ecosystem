@@ -8,7 +8,9 @@
 const BenchmarkResult = require('../../models/BenchmarkResult');
 const JudgeGroundTruth = require('../../models/JudgeGroundTruth');
 const logger = require('../../config/logger');
+const mongoose = require('mongoose');
 const { buildStrictTrustResultExclusion } = require('./benchmark/publicReadPrivacy');
+const { throwIfJudgeCancelled } = require('./scoring/judgeCall');
 
 const DIVERGENCE_THRESHOLD = 2.0;
 
@@ -79,7 +81,13 @@ async function getJudgeFeedbackStats() {
  *
  * @returns {{ promoted: number, skipped: number }}
  */
-async function autoPromoteGroundTruth() {
+async function autoPromoteGroundTruth(options = {}) {
+    const cancellationConfig = {
+        cancelSignal: options.cancelSignal || options.signal || null
+    };
+    const assertAuthorityActive = options.assertAuthorityActive || null;
+    throwIfJudgeCancelled(cancellationConfig);
+    assertAuthorityActive?.();
     const candidates = await BenchmarkResult.find({
         human_score: { $ne: null },
         quality_score: { $ne: null },
@@ -102,6 +110,8 @@ async function autoPromoteGroundTruth() {
     let skipped = 0;
 
     for (const r of candidates) {
+        throwIfJudgeCancelled(cancellationConfig);
+        assertAuthorityActive?.();
         const judgeScore = r.judge_quality_score ?? r.quality_score;
         const dev = Math.abs(judgeScore - r.human_score);
         if (dev < DIVERGENCE_THRESHOLD) { skipped++; continue; }
@@ -109,8 +119,10 @@ async function autoPromoteGroundTruth() {
         const name = `auto_${r.prompt_name || 'unknown'}_${r.model || 'unknown'}_${r._id}`;
         if (existingNames.has(name)) { skipped++; continue; }
 
+        const id = new mongoose.Types.ObjectId();
         try {
-            await JudgeGroundTruth.create({
+            const payload = {
+                _id: id,
                 name,
                 prompt: typeof r.prompt === 'object' ? JSON.stringify(r.prompt) : String(r.prompt),
                 response: String(r.response).slice(0, 50000),
@@ -119,9 +131,39 @@ async function autoPromoteGroundTruth() {
                 expert_rationale: r.human_notes || `Auto-promoted: judge=${judgeScore}, human=${r.human_score} (Δ${dev.toFixed(1)})`,
                 created_by: 'auto-feedback-loop',
                 tags: ['auto-promoted']
-            });
+            };
+            if (cancellationConfig.cancelSignal) {
+                await JudgeGroundTruth.create([payload], { signal: cancellationConfig.cancelSignal });
+            } else {
+                await JudgeGroundTruth.create(payload);
+            }
+            throwIfJudgeCancelled(cancellationConfig);
+            assertAuthorityActive?.();
             promoted++;
         } catch (err) {
+            if (cancellationConfig.cancelSignal?.aborted
+                || err?.code === 'BENCHMARK_CLAIM_LOST'
+                || err?.code === 'BENCHMARK_CLAIM_STOPPED') {
+                try {
+                    await JudgeGroundTruth.updateOne(
+                        { _id: id },
+                        {
+                            $set: {
+                                active: false,
+                                authority_state: 'authority_invalidated',
+                                authority_reconciliation_reason: 'auto-promotion raced workload admission loss'
+                            }
+                        },
+                        { upsert: true }
+                    );
+                    err.authorityCompensated = true;
+                } catch (compensationError) {
+                    err.compensationError = compensationError;
+                    err.retainAdmission = true;
+                    err.code = 'GROUND_TRUTH_RECONCILIATION_PENDING';
+                }
+                throw err;
+            }
             logger.debug('Auto-promote failed', { name, error: err.message });
             skipped++;
         }

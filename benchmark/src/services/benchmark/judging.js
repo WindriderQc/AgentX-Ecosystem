@@ -128,6 +128,14 @@ async function reconcileJudgeCounters(batchId) {
 
 async function judgeBatch(batchId, options = {}) {
     const { judgeConfig = {}, concurrency = 2, force = false, multiJudge = null } = options;
+    const cancelSignal = judgeConfig.cancelSignal || judgeConfig.signal || null;
+    const assertAuthorityActive = () => {
+        if (!cancelSignal?.aborted) return;
+        if (cancelSignal.reason instanceof Error) throw cancelSignal.reason;
+        const error = new Error(`Judge workload admission lost for batch ${batchId}`);
+        error.code = 'BENCHMARK_CLAIM_LOST';
+        throw error;
+    };
 
     if (activeJudgingJobs.has(batchId)) {
         throw new Error('Judging is already running for this batch');
@@ -149,6 +157,7 @@ async function judgeBatch(batchId, options = {}) {
         return { judged: 0, failed: 0, timedOut: false };
     }
 
+    assertAuthorityActive();
     const lockUpdate = await BenchmarkBatch.updateOne(
         { _id: batchId, judge_status: { $ne: 'running' } },
         {
@@ -159,8 +168,10 @@ async function judgeBatch(batchId, options = {}) {
                 judge_failed: 0,
                 last_activity_at: new Date()
             }
-        }
+        },
+        cancelSignal ? { signal: cancelSignal } : undefined
     );
+    assertAuthorityActive();
 
     if (!lockUpdate || lockUpdate.matchedCount === 0) {
         throw new Error('Judging is already running for this batch');
@@ -202,17 +213,20 @@ async function judgeBatch(batchId, options = {}) {
         const batchHardwareSnapshot = null; // hardware detection removed — handled by profiler pipeline
 
         for (const result of pendingResults) {
+            assertAuthorityActive();
             if (job.stopped) {
                 break;
             }
 
             queue.add(async () => {
+                assertAuthorityActive();
                 if (job.stopped) {
                     return;
                 }
 
                 try {
                     await judgeResult(result._id.toString(), judgeConfig, batchHardwareSnapshot, multiJudge);
+                    assertAuthorityActive();
                     judged++;
 
                     await BenchmarkBatch.updateOne(
@@ -220,9 +234,12 @@ async function judgeBatch(batchId, options = {}) {
                         {
                             $inc: { judge_completed: 1 },
                             $set: { last_activity_at: new Date() }
-                        }
+                        },
+                        cancelSignal ? { signal: cancelSignal } : undefined
                     );
+                    assertAuthorityActive();
                 } catch (error) {
+                    if (cancelSignal?.aborted || error?.code === 'BENCHMARK_CLAIM_LOST') throw error;
                     failed++;
                     logger.warn('Judge failed for result', {
                         batchId,
@@ -240,15 +257,20 @@ async function judgeBatch(batchId, options = {}) {
                                 quality_explanation: error.message,
                                 judge_model: judgeConfig.model || JUDGE_CONFIG.model
                             }
-                        }
-                    ).catch(() => {});
+                        },
+                        cancelSignal ? { signal: cancelSignal } : undefined
+                    );
+                    assertAuthorityActive();
 
                     await BenchmarkBatch.updateOne(
                         { _id: batchId },
-                        { $inc: { judge_completed: 1, judge_failed: 1 } }
+                        { $inc: { judge_completed: 1, judge_failed: 1 } },
+                        cancelSignal ? { signal: cancelSignal } : undefined
                     );
+                    assertAuthorityActive();
                 }
             }).catch(async (enqueueError) => {
+                if (cancelSignal?.aborted || enqueueError?.code === 'BENCHMARK_CLAIM_LOST') throw enqueueError;
                 failed++;
                 logger.error('Failed to enqueue judge task', {
                     batchId,
@@ -258,8 +280,10 @@ async function judgeBatch(batchId, options = {}) {
 
                 await BenchmarkBatch.updateOne(
                     { _id: batchId },
-                    { $inc: { judge_completed: 1, judge_failed: 1 } }
-                ).catch(() => {});
+                    { $inc: { judge_completed: 1, judge_failed: 1 } },
+                    cancelSignal ? { signal: cancelSignal } : undefined
+                );
+                assertAuthorityActive();
             });
         }
 
@@ -278,6 +302,9 @@ async function judgeBatch(batchId, options = {}) {
         await persistJudgeCounters(batchId, {
             judge_status: finalStatus,
             ...authoritative
+        }, {
+            signal: cancelSignal,
+            assertAuthorityActive
         });
 
         logger.info('Standalone judging completed', {
@@ -311,23 +338,35 @@ async function judgeBatch(batchId, options = {}) {
             stack: error.stack
         });
 
-        const authoritative = await getAuthoritativeJudgeCounters(batchId).catch(() => ({
-            judge_total: 0,
-            judge_completed: 0,
-            judge_failed: failed
-        }));
-
-        await persistJudgeCounters(batchId, {
-            judge_status: finalStatus,
-            judge_total: authoritative.judge_total,
-            judge_completed: authoritative.judge_completed,
-            judge_failed: authoritative.judge_failed
-        }).catch((persistError) => {
-            logger.error('Failed to persist judge crash state', {
-                batchId,
-                error: persistError.message
+        try {
+            const authoritative = await getAuthoritativeJudgeCounters(batchId);
+            await persistJudgeCounters(batchId, {
+                judge_status: finalStatus,
+                judge_total: authoritative.judge_total,
+                judge_completed: authoritative.judge_completed,
+                judge_failed: authoritative.judge_failed,
+                authority_state: cancelSignal?.aborted ? 'authority_invalidated' : 'authoritative'
             });
-        });
+            error.authorityCompensated = true;
+        } catch (persistError) {
+            try {
+                await BenchmarkBatch.updateOne(
+                    { _id: batchId },
+                    {
+                        $set: {
+                            authority_state: 'pending_reconciliation',
+                            authority_reconciliation_reason: `judge terminal persistence unverified: ${persistError.message}`
+                        }
+                    }
+                );
+                error.authorityInvalidated = true;
+            } catch (invalidationError) {
+                error.compensationError = persistError;
+                error.invalidationError = invalidationError;
+                error.retainAdmission = true;
+                error.code = 'JUDGE_BATCH_RECONCILIATION_PENDING';
+            }
+        }
 
         throw error;
     } finally {
@@ -363,7 +402,8 @@ async function startManagedJudgeBatch(batchId, options = {}) {
     }, async error => {
         // A failed or cancelled judge may have an uncertain terminal write.
         // Drain requests but retain the admission for Core TTL recovery.
-        await lifecycle.abandon();
+        if (error?.retainAdmission === true) await lifecycle.retainForRecovery(error);
+        else await lifecycle.abandon();
         throw error;
     });
     return { workloadId, completion };

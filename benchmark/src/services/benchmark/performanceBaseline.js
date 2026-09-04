@@ -168,10 +168,34 @@ async function capturePerformanceBaseline({
                     throw new Error('Benchmark claim stopped after baseline persistence');
                 }
             } catch (authorityError) {
-                await BenchmarkBatch.updateOne(
-                    { _id: batchId },
-                    { $pull: { performance_baselines: { persistenceReceipt: baseline.persistenceReceipt } } }
-                ).catch(() => {});
+                try {
+                    const compensation = await BenchmarkBatch.updateOne(
+                        { _id: batchId },
+                        { $pull: { performance_baselines: { persistenceReceipt: baseline.persistenceReceipt } } }
+                    );
+                    if (Number(compensation?.matchedCount) === 0) {
+                        throw new Error(`Benchmark batch ${batchId} was not found during baseline compensation`);
+                    }
+                    authorityError.authorityCompensated = true;
+                } catch (compensationError) {
+                    authorityError.compensationError = compensationError;
+                    try {
+                        await BenchmarkBatch.updateOne(
+                            { _id: batchId },
+                            {
+                                $set: {
+                                    authority_state: 'pending_reconciliation',
+                                    authority_reconciliation_reason: 'performance baseline compensation could not be verified'
+                                }
+                            }
+                        );
+                        authorityError.authorityInvalidated = true;
+                    } catch (invalidationError) {
+                        authorityError.invalidationError = invalidationError;
+                        authorityError.retainAdmission = true;
+                        authorityError.code = 'PERFORMANCE_BASELINE_RECONCILIATION_PENDING';
+                    }
+                }
                 throw authorityError;
             }
             logger.info('Using profiler-derived performance baseline', {

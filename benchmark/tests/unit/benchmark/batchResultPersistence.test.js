@@ -6,14 +6,21 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 const savedDocs = [];
-jest.mock('../../../models/BenchmarkResult', () => jest.fn().mockImplementation(function BenchmarkResult(doc) {
-    Object.assign(this, doc);
-    this._id = 'result-id';
-    this.save = jest.fn(async () => {
-        savedDocs.push(this);
-        return this;
+let mockResultSaveHook = null;
+const mockResultUpdateOne = jest.fn();
+jest.mock('../../../models/BenchmarkResult', () => {
+    const Model = jest.fn().mockImplementation(function BenchmarkResult(doc) {
+        Object.assign(this, doc);
+        this._id = 'result-id';
+        this.save = jest.fn(async () => {
+            savedDocs.push(this);
+            if (mockResultSaveHook) await mockResultSaveHook(this);
+            return this;
+        });
     });
-}));
+    Model.updateOne = (...args) => mockResultUpdateOne(...args);
+    return Model;
+});
 
 const {
     persistSuccessfulResult,
@@ -108,6 +115,8 @@ function baseArgs(overrides = {}) {
 describe('batchResultPersistence truncation quarantine', () => {
     beforeEach(() => {
         savedDocs.length = 0;
+        mockResultSaveHook = null;
+        mockResultUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 });
     });
 
     it('does not persist an unlabeled prompt-eval duration as TTFT', async () => {
@@ -380,5 +389,49 @@ describe('batchResultPersistence truncation quarantine', () => {
             code: 'BENCHMARK_TRUST_EXECUTION_RECEIPT_REQUIRED'
         });
         expect(savedDocs).toHaveLength(0);
+    });
+
+    it('tombstones a result whose save acknowledgement races workload admission loss', async () => {
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('workload admission lost after save'), {
+            code: 'BENCHMARK_CLAIM_LOST'
+        });
+        mockResultSaveHook = async () => controller.abort(lost);
+
+        await expect(persistSuccessfulResult(baseArgs({
+            signal: controller.signal,
+            assertAuthorityActive: () => {
+                if (controller.signal.aborted) throw lost;
+            }
+        }))).rejects.toMatchObject({
+            code: 'BENCHMARK_CLAIM_LOST',
+            authorityInvalidated: true
+        });
+
+        expect(mockResultUpdateOne).toHaveBeenCalledWith(
+            { _id: 'result-id' },
+            { $set: expect.objectContaining({ scoring_method: 'authority_invalidated' }) },
+            { upsert: true }
+        );
+    });
+
+    it('marks admission retention when an ambiguous result cannot be tombstoned', async () => {
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('workload admission lost after save'), {
+            code: 'BENCHMARK_CLAIM_LOST'
+        });
+        mockResultSaveHook = async () => controller.abort(lost);
+        mockResultUpdateOne.mockRejectedValue(new Error('tombstone unavailable'));
+
+        await expect(persistSuccessfulResult(baseArgs({
+            signal: controller.signal,
+            assertAuthorityActive: () => {
+                if (controller.signal.aborted) throw lost;
+            }
+        }))).rejects.toMatchObject({
+            code: 'BENCHMARK_RESULT_RECONCILIATION_PENDING',
+            retainAdmission: true,
+            compensationError: expect.any(Error)
+        });
     });
 });

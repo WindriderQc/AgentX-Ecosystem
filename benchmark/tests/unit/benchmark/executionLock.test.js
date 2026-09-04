@@ -117,6 +117,7 @@ const {
     clearActiveBatch
 } = require('../../../src/services/benchmark/execution');
 const { runBatchOrchestrator, abortActiveBatchRequests } = require('../../../src/services/benchmark/batchOrchestrator');
+const coreApiClient = require('../../../src/clients/coreApiClient');
 const logger = require('../../../config/logger');
 
 const BATCH_ID = 'batch-test-001';
@@ -414,6 +415,29 @@ describe('Batch lifecycle', () => {
             ([, update]) => update?.$set?.status === 'failed'
         );
         expect(failCall).toBeDefined();
+    });
+
+    it('retains the workload admission when crash-state persistence is unavailable', async () => {
+        BenchmarkBatch.findOneAndUpdate.mockResolvedValueOnce(makeBatchDoc());
+        runBatchOrchestrator.mockRejectedValueOnce(new Error('orchestrator crash'));
+        BenchmarkBatch.updateOne.mockImplementation(async (_filter, update) => {
+            if (update?.$set?.status === 'failed') throw new Error('terminal write unavailable');
+            return { matchedCount: 1 };
+        });
+
+        await expect(
+            executeBatch(BATCH_ID, DEFAULT_HOST, MODELS, PROMPTS, {})
+        ).rejects.toMatchObject({
+            code: 'BATCH_TERMINAL_RECONCILIATION_PENDING',
+            retainAdmission: true,
+            compensationError: expect.any(Error)
+        });
+
+        expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+        expect(logger.error).toHaveBeenCalledWith(
+            'Retaining workload admission for durable reconciliation',
+            expect.objectContaining({ workloadId: BATCH_ID, phase: 'terminal_reconciliation' })
+        );
     });
 
     it('does not overwrite or misreport a stop that wins the crash transition', async () => {

@@ -44,7 +44,10 @@ describe('JudgeAccuracyMatrix', () => {
         jest.spyOn(JudgeAccuracyMatrix, 'findOne').mockReturnValue({ sort });
 
         const latest = await JudgeAccuracyMatrix.getLatest('qwen2.5:7b-instruct-q5_K_M');
-        expect(JudgeAccuracyMatrix.findOne).toHaveBeenCalledWith({ judge_model: 'qwen2.5:7b-instruct-q5_K_M' });
+        expect(JudgeAccuracyMatrix.findOne).toHaveBeenCalledWith({
+            judge_model: 'qwen2.5:7b-instruct-q5_K_M',
+            authority_state: { $nin: ['authority_invalidated', 'pending_reconciliation'] }
+        });
         expect(sort).toHaveBeenCalledWith({ calibrated_at: -1 });
         expect(latest.overall_avg_deviation).toBe(1.0);
     });

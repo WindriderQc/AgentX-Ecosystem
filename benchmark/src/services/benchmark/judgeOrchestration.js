@@ -59,6 +59,31 @@ function createJudgeOrchestrator({
     const isCancellationError = (error) => isCancelled()
         || error?.code === 'BENCHMARK_BATCH_STOPPED'
         || error?.code === 'QUEUE_CANCELLED';
+    const invalidateBatchAuthority = async (reason) => {
+        const cancellationError = cancellationReason();
+        try {
+            await BenchmarkBatch.updateOne(
+                { _id: batchId, status: { $in: ['pending', 'running', 'judging'] } },
+                {
+                    $set: {
+                        status: 'interrupted',
+                        failure_reason: reason,
+                        authority_state: 'authority_invalidated',
+                        authority_reconciliation_reason: reason,
+                        last_activity_at: new Date(),
+                        active_slot: null,
+                        execution_pid: null
+                    }
+                }
+            );
+            cancellationError.authorityCompensated = true;
+        } catch (compensationError) {
+            cancellationError.compensationError = compensationError;
+            cancellationError.retainAdmission = true;
+            cancellationError.code = 'JUDGE_ORCHESTRATION_RECONCILIATION_PENDING';
+        }
+        return cancellationError;
+    };
     const guardedBatchUpdate = async (filter, update) => {
         if (isCancelled()) throw cancellationReason();
         try {
@@ -70,19 +95,7 @@ function createJudgeOrchestrator({
             if (isCancelled()) throw cancellationReason();
         } catch (error) {
             if (isCancelled()) {
-                await BenchmarkBatch.updateOne(
-                    { _id: batchId, status: { $in: ['pending', 'running', 'judging'] } },
-                    {
-                        $set: {
-                            status: 'interrupted',
-                            failure_reason: 'authority_lost_during_judge_counter_write',
-                            last_activity_at: new Date(),
-                            active_slot: null,
-                            execution_pid: null
-                        }
-                    }
-                ).catch(() => {});
-                throw cancellationReason();
+                throw await invalidateBatchAuthority('authority_lost_during_judge_counter_write');
             }
             throw error;
         }
@@ -149,7 +162,7 @@ function createJudgeOrchestrator({
             const judgeModel = judgeConfig.model || JUDGE_CONFIG.model;
             const judgeNumCtx = await resolveJudgeNumCtx(judgeModel, judgeHostUrl, judgeConfig);
             await _setPhase('judge_warmup', `Warming judge ${judgeModel} on ${judgeHostUrl}…`);
-            await BenchmarkBatch.findOneAndUpdate({ _id: batchId }, {
+            await guardedBatchUpdate({ _id: batchId }, {
                 $set: {
                     current_test: { model: judgeModel, stage: 'warmup', phase: 'judge_warmup', phase_detail: `Warming judge ${judgeModel} on ${judgeHostUrl}`, prompt_name: judgeHostUrl, started_at: new Date() }
                 }
@@ -168,7 +181,7 @@ function createJudgeOrchestrator({
                 });
                 logger.info('Judge model ready on configured host', { host: judgeHostUrl, model: judgeModel, num_ctx: judgeNumCtx });
             } finally {
-                await BenchmarkBatch.findOneAndUpdate({ _id: batchId }, { $set: { 'current_test.stage': 'idle' } });
+                await guardedBatchUpdate({ _id: batchId }, { $set: { 'current_test.stage': 'idle' } });
                 await _setPhase('executing', null);
             }
         }
@@ -193,7 +206,7 @@ function createJudgeOrchestrator({
         await judgeQueue.waitForCapacity(10);
         judgeQueue.add(async () => {
             if (isCancelled()) throw cancellationReason();
-            if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'running', startedAt: new Date() } }).catch(() => {});
+            if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'running', startedAt: new Date() } });
             const judgeStart = Date.now();
             try {
                 // Record judge_start timeline event
@@ -227,7 +240,7 @@ function createJudgeOrchestrator({
                     duration_ms: judgeDuration,
                     tokens_per_sec: judgeOutcome?.quality_score ?? null,
                     success: true
-                }).catch(() => {}); // best-effort
+                }).catch(error => logger.debug('Failed to record judge_complete event', { error: error.message }));
 
                 await guardedBatchUpdate(
                     { _id: batchId },
@@ -236,7 +249,7 @@ function createJudgeOrchestrator({
                         $set: { last_activity_at: new Date() }
                     }
                 );
-                if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'completed', completedAt: new Date() } }).catch(() => {});
+                if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'completed', completedAt: new Date() } });
             } catch (scoreErr) {
                 if (isCancellationError(scoreErr)) {
                     throw cancellationReason();
@@ -263,14 +276,10 @@ function createJudgeOrchestrator({
                             judge_model: capturedJudgeConfig.model || JUDGE_CONFIG.model,
                             judge_host: capturedJudgeConfig.host || null
                         }
-                    }
-                ).catch((persistErr) => {
-                    logger.warn('Failed to persist pipelined judge failure result', {
-                        batchId,
-                        resultId: capturedResultId,
-                        error: persistErr.message
-                    });
-                });
+                    },
+                    cancelSignal ? { signal: cancelSignal } : undefined
+                );
+                if (isCancelled()) throw await invalidateBatchAuthority('authority_lost_after_judge_failure_write');
 
                 BenchmarkTimelineEntry.create({
                     batchId,
@@ -282,7 +291,7 @@ function createJudgeOrchestrator({
                     duration_ms: judgeDuration,
                     success: false,
                     error: scoreErr.message
-                }).catch(() => {}); // best-effort
+                }).catch(error => logger.debug('Failed to record failed judge_complete event', { error: error.message }));
 
                 await guardedBatchUpdate(
                     { _id: batchId },
@@ -291,7 +300,7 @@ function createJudgeOrchestrator({
                         $set: { last_activity_at: new Date() }
                     }
                 );
-                if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'failed', completedAt: new Date(), error: scoreErr.message } }).catch(() => {});
+                if (queueEntry) await JudgeQueueEntry.updateOne({ _id: queueEntry._id }, { $set: { status: 'failed', completedAt: new Date(), error: scoreErr.message } });
             }
         }).catch(async (enqueueErr) => {
             if (isCancellationError(enqueueErr)) return;
@@ -305,9 +314,7 @@ function createJudgeOrchestrator({
             await guardedBatchUpdate(
                 { _id: batchId },
                 { $inc: { judge_completed: 1, judge_failed: 1 } }
-            ).catch(error => {
-                if (isCancellationError(error)) throw error;
-            });
+            );
         });
     }
 
@@ -346,7 +353,7 @@ function createJudgeOrchestrator({
             if (judgeConfig.target?.executionKind !== 'harness' && !warmedJudgeHosts.has(warmupKey)) {
                 const judgeNumCtx = await resolveJudgeNumCtx(judgeModel, judgeHostUrl, judgeConfig);
                 await _setPhase('judge_warmup', `Warming judge ${judgeModel} on ${judgeHostUrl} (deferred phase)…`);
-                await BenchmarkBatch.findOneAndUpdate({ _id: batchId }, {
+                await guardedBatchUpdate({ _id: batchId }, {
                     $set: {
                         current_test: {
                             model: judgeModel,
@@ -378,7 +385,7 @@ function createJudgeOrchestrator({
                         num_ctx: judgeNumCtx
                     });
                 } finally {
-                    await BenchmarkBatch.findOneAndUpdate(
+                    await guardedBatchUpdate(
                         { _id: batchId },
                         { $set: { 'current_test.stage': 'idle' } }
                     );
@@ -400,7 +407,7 @@ function createJudgeOrchestrator({
         };
         const judgeableCount = await BenchmarkResult.countDocuments(judgeableFilter);
 
-        await BenchmarkBatch.updateOne(
+        await guardedBatchUpdate(
             { _id: batchId },
             { $set: { generated_at: new Date(), judge_total: judgeableCount, judge_status: 'running' } }
         );
@@ -428,7 +435,7 @@ function createJudgeOrchestrator({
             logger.error('Judge queue drain timed out', { batchId, reason: drainResult.reason });
         }
 
-        await BenchmarkBatch.updateOne(
+        await guardedBatchUpdate(
             { _id: batchId },
             {
                 $set: {
@@ -471,7 +478,7 @@ function createJudgeOrchestrator({
                             error: 'BENCHMARK_BATCH_STOPPED'
                         }
                     }
-                ).catch(() => {});
+                );
                 if (cancelSignal) cancelSignal.removeEventListener('abort', onCancel);
                 return drainResult;
             })();

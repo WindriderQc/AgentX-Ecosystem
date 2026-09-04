@@ -1,5 +1,7 @@
 'use strict';
 
+const logger = require('../../../config/logger');
+
 const {
   acquireBenchmarkClaims,
   releaseBenchmarkClaims,
@@ -52,7 +54,11 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
     // fenced for recovery. If every host restored, close the admission now so
     // an initial heartbeat failure does not leak it until TTL expiry.
     if (cleanup.failed === 0) {
-      await releaseWorkloadAdmission(operationId).catch(() => {});
+      try {
+        await releaseWorkloadAdmission(operationId);
+      } catch (releaseError) {
+        err.releaseError = releaseError;
+      }
     }
     err.statusCode = 503;
     throw err;
@@ -61,6 +67,31 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
   let releasePromise = null;
   let abandonPromise = null;
   let abandoned = false;
+  const retainHeartbeatForRecovery = reason => {
+    if (abandonPromise) return abandonPromise;
+    abandoned = true;
+    if (!leaseAbort.signal.aborted) {
+      leaseAbort.abort(reason || new Error('Profiler lease retained for reconciliation'));
+    }
+    const configuredHoldMs = Number.parseInt(process.env.PROFILER_RECONCILIATION_HOLD_MS, 10);
+    const holdMs = Number.isFinite(configuredHoldMs) && configuredHoldMs > 0
+      ? Math.min(configuredHoldMs, 30 * 60 * 1000)
+      : Math.min(Math.max(Number(estimatedDurationMs) || 300_000, 300_000), 30 * 60 * 1000);
+    const timer = setTimeout(() => heartbeat.drain().catch(error => logger.error(
+      'Retained profiler heartbeat drain failed',
+      { operationId, error: error.message }
+    )), holdMs);
+    timer.unref?.();
+    abandonPromise = Promise.resolve({
+      abandoned: true,
+      released: 0,
+      failed: claimed.length + 1,
+      holdMs,
+      details: claimed.map(hostUrl => ({ hostUrl, released: false, reason: 'held under heartbeat for durable recovery' })),
+      workloadAdmission: { released: false, reason: 'held under heartbeat for durable recovery' }
+    });
+    return abandonPromise;
+  };
   return {
     operationId,
     hostUrls: claimed,
@@ -79,20 +110,7 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
     async abandon(reason = null) {
       if (releasePromise) return releasePromise;
       if (!abandonPromise) {
-        abandoned = true;
-        if (!leaseAbort.signal.aborted) {
-          leaseAbort.abort(reason || new Error('Profiler lease abandoned for TTL recovery'));
-        }
-        abandonPromise = (async () => {
-          await heartbeat.drain();
-          return {
-            abandoned: true,
-            released: 0,
-            failed: claimed.length + 1,
-            details: claimed.map(hostUrl => ({ hostUrl, released: false, reason: 'held for TTL recovery' })),
-            workloadAdmission: { released: false, reason: 'held for TTL recovery' }
-          };
-        })();
+        retainHeartbeatForRecovery(reason || new Error('Profiler lease abandoned for TTL recovery'));
       }
       return abandonPromise;
     },
@@ -100,20 +118,47 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
       if (abandoned) return abandonPromise;
       if (!releasePromise) {
         releasePromise = (async () => {
+          const { beforeWorkloadRelease = null, ...claimReleaseOptions } = options;
           if (typeof heartbeat.drainHosts === 'function') await heartbeat.drainHosts();
           const result = await releaseBenchmarkClaims(claimed, operationId, {
-            ...options,
+            ...claimReleaseOptions,
             releaseWorkloadAdmission: false
           });
-          await heartbeat.drain();
           if (result.failed === 0) {
-            result.workloadAdmission = await releaseWorkloadAdmission(operationId);
-            if (result.workloadAdmission?.released !== true) result.failed += 1;
+            if (typeof beforeWorkloadRelease === 'function') {
+              try {
+                heartbeat.assertActive();
+                await beforeWorkloadRelease(result);
+                heartbeat.assertActive();
+              } catch (error) {
+                error.retainAdmission = true;
+                error.code = error.code || 'PROFILER_PROJECTION_RECONCILIATION_PENDING';
+                retainHeartbeatForRecovery(error);
+                throw error;
+              }
+            }
+            try {
+              result.workloadAdmission = await releaseWorkloadAdmission(operationId);
+              if (result.workloadAdmission?.released !== true) {
+                throw new Error(result.workloadAdmission?.reason || 'Profiler workload admission release was not acknowledged');
+              }
+              await heartbeat.drain();
+            } catch (error) {
+              result.failed += 1;
+              result.workloadAdmission = {
+                released: false,
+                reason: error.message,
+                reconciliationPending: true
+              };
+              retainHeartbeatForRecovery(error);
+            }
           } else {
             result.workloadAdmission = {
               released: false,
-              reason: 'held because fenced host restoration failed'
+              reason: 'held because fenced host restoration failed',
+              reconciliationPending: true
             };
+            retainHeartbeatForRecovery(new Error('Fenced host restoration failed'));
           }
           return result;
         })();

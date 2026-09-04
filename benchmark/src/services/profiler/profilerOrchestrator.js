@@ -304,11 +304,26 @@ function summarizePositiveMeasurements(values, { minimumSamples = 3 } = {}) {
   };
 }
 
-function completeRepeatedStatistics(statistics, minimumSamples) {
+function completeRepeatedStatistics(statistics, minimumSamples, options = {}) {
+  const maxCv = Number.isFinite(Number(options.maxCoefficientOfVariation))
+    ? Number(options.maxCoefficientOfVariation)
+    : 0.12;
+  const maxRelativeCiWidth = Number.isFinite(Number(options.maxRelativeCi95Width))
+    ? Number(options.maxRelativeCi95Width)
+    : 0.30;
+  const mean = Number(statistics?.mean);
+  const low = Number(statistics?.confidenceInterval95?.low);
+  const high = Number(statistics?.confidenceInterval95?.high);
+  const relativeCiWidth = mean > 0 && Number.isFinite(low) && Number.isFinite(high)
+    ? (high - low) / mean
+    : Infinity;
   return Number(statistics?.sampleCount) >= minimumSamples
+    && ['medium', 'high'].includes(statistics?.reliability)
     && Number.isFinite(Number(statistics?.coefficientOfVariation))
-    && Number.isFinite(Number(statistics?.confidenceInterval95?.low))
-    && Number.isFinite(Number(statistics?.confidenceInterval95?.high));
+    && Number(statistics.coefficientOfVariation) <= maxCv
+    && Number.isFinite(low)
+    && Number.isFinite(high)
+    && relativeCiWidth <= maxRelativeCiWidth;
 }
 
 function hasProfilerAuthorityReceipt(readiness) {
@@ -335,6 +350,19 @@ function profileQualificationFailures(profileData) {
   }
   if (Number(quality.passingSampleCount) < required) failures.push('retained_sample_minimum_not_met');
   if (!['medium', 'high'].includes(quality.reliability)) failures.push(`reliability_${quality.reliability || 'unknown'}`);
+  const mainMean = Number(quality.tokensPerSecMean);
+  const mainLow = Number(quality.confidenceInterval95?.low);
+  const mainHigh = Number(quality.confidenceInterval95?.high);
+  const maxCv = Number(profileData.fullMaxCoefficientOfVariation ?? 0.12);
+  const maxRelativeCi95Width = Number(profileData.fullMaxRelativeCi95Width ?? 0.30);
+  if (profileData.profileDepth === 'full'
+    && (!(Number(quality.coefficientOfVariation) <= maxCv)
+      || !(mainMean > 0)
+      || !Number.isFinite(mainLow)
+      || !Number.isFinite(mainHigh)
+      || ((mainHigh - mainLow) / mainMean) > maxRelativeCi95Width)) {
+    failures.push('full_primary_measurement_uncertain');
+  }
   if (profileData.ttftMeasurement !== 'streamed_wall_clock'
     || !Number.isFinite(Number(profileData.ttftMs))
     || Number(profileData.ttftMs) < 0) failures.push('streamed_ttft_missing');
@@ -345,7 +373,11 @@ function profileQualificationFailures(profileData) {
   if (profileData.spill?.verified !== true) failures.push('gpu_residency_unverified');
 
   if (profileData.profileDepth === 'full') {
-    const requiredFullSamples = Math.max(3, Number(profileData.requiredFullPhaseSamples) || 3);
+    const requiredFullSamples = Math.max(5, Number(profileData.requiredFullPhaseSamples) || 5);
+    const fullStatOptions = {
+      maxCoefficientOfVariation: maxCv,
+      maxRelativeCi95Width
+    };
     const curve = Array.isArray(profileData.throughputCurve) ? profileData.throughputCurve : [];
     const curveCoverage = [...new Set(curve.map(point => Number(point.contextFillPct)))].sort((a, b) => a - b);
     if (curve.length !== 5
@@ -353,7 +385,7 @@ function profileQualificationFailures(profileData) {
       || curve.some(point => !(Number(point.tokensPerSec) > 0)
         || point.gpuOffloaded !== false
         || Number(point.passingSampleCount) < requiredFullSamples
-        || !completeRepeatedStatistics(point.throughputStatistics, requiredFullSamples))) {
+        || !completeRepeatedStatistics(point.throughputStatistics, requiredFullSamples, fullStatOptions))) {
       failures.push('full_throughput_curve_incomplete');
     }
     const stability = Array.isArray(profileData.generationStability) ? profileData.generationStability : [];
@@ -363,8 +395,8 @@ function profileQualificationFailures(profileData) {
       || stability.some(point => !(Number(point.tokensPerSec) > 0)
         || !(Number(point.totalLatencyMs) > 0)
         || Number(point.passingSampleCount) < requiredFullSamples
-        || !completeRepeatedStatistics(point.throughputStatistics, requiredFullSamples)
-        || !completeRepeatedStatistics(point.latencyStatistics, requiredFullSamples))) {
+        || !completeRepeatedStatistics(point.throughputStatistics, requiredFullSamples, fullStatOptions)
+        || !completeRepeatedStatistics(point.latencyStatistics, requiredFullSamples, fullStatOptions))) {
       failures.push('full_generation_stability_incomplete');
     }
     const matrix = profileData.prefillDecodeMatrix;
@@ -385,8 +417,8 @@ function profileQualificationFailures(profileData) {
         && Number(cell.evalDurationMs) > 0
         && Number(cell.runtimeContextLength) === Number(matrix.numCtx)
         && Number(cell.passingSampleCount) >= requiredFullSamples
-        && completeRepeatedStatistics(cell.prefillStatistics, requiredFullSamples)
-        && completeRepeatedStatistics(cell.decodeStatistics, requiredFullSamples)
+        && completeRepeatedStatistics(cell.prefillStatistics, requiredFullSamples, fullStatOptions)
+        && completeRepeatedStatistics(cell.decodeStatistics, requiredFullSamples, fullStatOptions)
         && Number.isFinite(Number(cell.prefillTokensPerSec))
         && Number(cell.prefillTokensPerSec) > 0
         && Number.isFinite(Number(cell.decodeTokensPerSec))
@@ -398,8 +430,8 @@ function profileQualificationFailures(profileData) {
       || !(Number(profileData.loadTiming?.hotLoadMs) > 0)
       || profileData.loadTiming?.unloadVerified !== true
       || Number(profileData.loadTiming?.passingSampleCount) < requiredFullSamples
-      || !completeRepeatedStatistics(profileData.loadTiming?.coldStatistics, requiredFullSamples)
-      || !completeRepeatedStatistics(profileData.loadTiming?.hotStatistics, requiredFullSamples)) {
+      || !completeRepeatedStatistics(profileData.loadTiming?.coldStatistics, requiredFullSamples, fullStatOptions)
+      || !completeRepeatedStatistics(profileData.loadTiming?.hotStatistics, requiredFullSamples, fullStatOptions)) {
       failures.push('full_load_timing_incomplete');
     }
   }
@@ -762,8 +794,10 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     requiredRetainedSamples: minimumRetainedSamples,
     requiredTtftSamples: minimumRetainedSamples,
     requiredFullPhaseSamples: depth === 'full'
-      ? Math.max(3, Number(settings.fullPhaseRepeats) || 3)
+      ? Math.max(5, Number(settings.fullPhaseRepeats) || 5)
       : null,
+    fullMaxCoefficientOfVariation: Number(settings.fullMaxCoefficientOfVariation) || 0.12,
+    fullMaxRelativeCi95Width: Number(settings.fullMaxRelativeCi95Width) || 0.30,
     spill: {
       ...spill,
       // /api/ps reports offload, not the context that caused it. Attribute a
@@ -877,7 +911,12 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     timeoutMs: Math.max(120000, (Number(settings.testTimeoutSec) || 60) * 1000),
     assertClaimActive: checkpoint,
     signal,
-    repeats: Math.max(3, Number(settings.fullPhaseRepeats) || 3),
+    repeats: Math.max(5, Number(settings.fullPhaseRepeats) || 5),
+    captureTelemetry: ({ prefillTokens, decodeTokens, repeat }) => _captureHardwareSnapshot(
+      hostId,
+      `matrix_${prefillTokens}p_${decodeTokens}d_r${repeat}`,
+      settings
+    ),
     onProgress: ({ index, total, cell }) => {
       const label = `${cell.prefillTokens}p/${cell.decodeTokens}d`;
       const detail = cell.status === 'pass'
@@ -1100,7 +1139,7 @@ async function _detectSpill(hostUrl, modelName, signal = null) {
  */
 async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify, { checkpoint = () => {}, claimIdentity = null, signal = null } = {}) {
   const percentages = [10, 25, 50, 75, 90];
-  const minimumSamples = Math.max(3, Number(settings.fullPhaseRepeats) || 3);
+  const minimumSamples = Math.max(5, Number(settings.fullPhaseRepeats) || 5);
   const results = [];
 
   for (const pct of percentages) {
@@ -1169,7 +1208,7 @@ async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify,
  */
 async function _runGenerationStability(hostUrl, modelName, numCtx, settings, notify, { checkpoint = () => {}, claimIdentity = null, signal = null } = {}) {
   const targets = [64, 256, 512];
-  const minimumSamples = Math.max(3, Number(settings.fullPhaseRepeats) || 3);
+  const minimumSamples = Math.max(5, Number(settings.fullPhaseRepeats) || 5);
   const results = [];
 
   for (const target of targets) {

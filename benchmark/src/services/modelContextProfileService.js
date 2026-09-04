@@ -104,6 +104,7 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
   }
 
   const identityFilter = { modelName, hostUrl, artifactDigest, runtimeFingerprint };
+  const snapshotId = snapshot._id ? String(snapshot._id) : null;
   const existingQuery = ModelContextProfile.findOne(identityFilter);
   if (options.signal && typeof existingQuery.setOptions === 'function') existingQuery.setOptions({ signal: options.signal });
   const existing = await existingQuery.lean();
@@ -141,7 +142,7 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
   const evidenceTokensPerSec = Number(step?.tokensPerSec ?? snapshot.atLimitTokensPerSec ?? 0) || null;
 
   const updated = await ModelContextProfile.findOneAndUpdate(
-    identityFilter,
+    snapshotId ? { ...identityFilter, rejectedEvidenceIds: { $ne: snapshotId } } : identityFilter,
     {
       $set: {
         modelName,
@@ -209,14 +210,20 @@ async function findContextProfile(modelName, hostUrl, artifact = {}) {
 
 async function invalidateIfSnapshot(snapshot, reason = 'claim_lost_during_context_authority_write') {
   if (!snapshot?._id) return { modifiedCount: 0 };
-  return ModelContextProfile.updateOne(
-    {
-      modelName: String(snapshot.modelName || '').trim().replace(/:latest$/i, ''),
-      hostUrl: normalizeHostUrl(snapshot.hostUrl),
-      artifactDigest: snapshot.artifactDigest,
-      runtimeFingerprint: snapshot.runtimeFingerprint,
-      'latestEvidence.snapshotId': String(snapshot._id)
-    },
+  const snapshotId = String(snapshot._id);
+  const identityFilter = {
+    modelName: String(snapshot.modelName || '').trim().replace(/:latest$/i, ''),
+    hostUrl: normalizeHostUrl(snapshot.hostUrl),
+    artifactDigest: snapshot.artifactDigest,
+    runtimeFingerprint: snapshot.runtimeFingerprint
+  };
+  const fence = await ModelContextProfile.updateOne(
+    identityFilter,
+    { $addToSet: { rejectedEvidenceIds: snapshotId } },
+    { upsert: true }
+  );
+  const invalidated = await ModelContextProfile.updateOne(
+    { ...identityFilter, 'latestEvidence.snapshotId': snapshotId },
     {
       $set: {
         recommendationStatus: 'unknown',
@@ -229,6 +236,7 @@ async function invalidateIfSnapshot(snapshot, reason = 'claim_lost_during_contex
       }
     }
   );
+  return { fence, invalidated };
 }
 
 module.exports = {

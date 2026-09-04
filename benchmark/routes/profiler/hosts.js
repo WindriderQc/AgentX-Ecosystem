@@ -80,27 +80,37 @@ async function updateBaselineUnderLease(hostId, baseline, lease) {
   lease.assertActive();
   const prior = await hostProfileService.getById(hostId);
   lease.assertActive();
+  const persistenceReceipt = crypto.randomUUID();
   try {
-    const updated = await hostProfileService.updateBaseline(hostId, baseline, {
+    const updated = await hostProfileService.updateBaseline(hostId, {
+      ...baseline,
+      persistenceReceipt
+    }, {
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
     });
     lease.assertActive();
     return updated;
   } catch (error) {
-    // The write acknowledgement may race lease loss. Restore the last known
-    // projection (or clear a newly-created baseline) without reusing the dead
-    // signal; this compensation only retracts potentially unauthorized data.
-    await hostProfileService.upsert({
-      hostId,
-      baseline: prior?.baseline || null
-    }).catch(compensationError => {
+    // Fence the preallocated receipt before restoring the prior value. A late
+    // Mongo acknowledgement can no longer republish this unauthorized
+    // baseline, and the receipt predicate cannot clobber a newer valid write.
+    try {
+      await hostProfileService.invalidateBaselineReceipt(
+        hostId,
+        persistenceReceipt,
+        prior?.baseline || null
+      );
+      error.authorityCompensated = true;
+    } catch (compensationError) {
       error.compensationError = compensationError;
+      error.retainAdmission = true;
+      error.code = 'HOST_BASELINE_RECONCILIATION_PENDING';
       logger.error('Host baseline compensation failed', {
         hostId,
         error: compensationError.message
       });
-    });
+    }
     if (error.compensationError && typeof lease.abandon === 'function') {
       await lease.abandon(error.compensationError);
     }
@@ -205,13 +215,21 @@ router.post('/test/ensure-baseline', async (req, res) => {
   let lease;
   try {
     const target = baselineModelService.resolveConfiguredHost(req.body?.hostId);
-    lease = await acquireProfilerClaimLease([target.url], `profiler-baseline-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
+    const operationId = `profiler-baseline-${crypto.randomBytes(8).toString('hex')}`;
+    lease = await acquireProfilerClaimLease([target.url], operationId, 30 * 60 * 1000);
     const data = await baselineModelService.ensureBaselineModel(req.body?.hostId, {
       signal: lease.signal,
-      assertClaimActive: lease.assertActive
+      assertClaimActive: lease.assertActive,
+      operationId
     });
     lease.assertActive();
-    await lease.finalize();
+    await lease.finalize(data.pulled ? {
+      beforeWorkloadRelease: () => baselineModelService.resolveBaselineReconciliation(
+        req.body?.hostId,
+        data.reconciliation,
+        { assertClaimActive: lease.assertActive }
+      )
+    } : {});
     lease = null;
     res.json({
       status: 'success',
@@ -221,6 +239,10 @@ router.post('/test/ensure-baseline', async (req, res) => {
         : `${data.modelName} is already installed on ${data.hostName}.`
     });
   } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
     logger.error('Baseline model preparation failed', { hostId: req.body?.hostId, error: err.message });
     res.status(err.statusCode || 502).json({ status: 'error', message: err.message, code: err.code || null });
   } finally {
@@ -272,6 +294,7 @@ router.get('/test/live-probes/:hostId/status', async (req, res) => {
 /** POST /test/run — single model test on a host */
 router.post('/test/run', async (req, res) => {
   let lease;
+  let operationId = null;
   try {
     const { modelName, hostId } = req.body;
     if (!modelName || !hostId) {
@@ -281,11 +304,13 @@ router.post('/test/run', async (req, res) => {
     const baselineModel = await baselineModelService.getBaselineModel();
     const isBaseline = String(modelName).trim().replace(/:latest$/i, '').toLowerCase()
       === String(baselineModel).trim().replace(/:latest$/i, '').toLowerCase();
-    lease = await acquireProfilerClaimLease([configuredHost.url], `profiler-host-test-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
+    operationId = `profiler-host-test-${crypto.randomBytes(8).toString('hex')}`;
+    lease = await acquireProfilerClaimLease([configuredHost.url], operationId, 30 * 60 * 1000);
     const preparation = isBaseline && hostId
       ? await baselineModelService.ensureBaselineModel(hostId, {
         signal: lease.signal,
-        assertClaimActive: lease.assertActive
+        assertClaimActive: lease.assertActive,
+        operationId
       })
       : null;
     const targetHostUrl = preparation?.hostUrl || configuredHost.url;
@@ -311,6 +336,10 @@ router.post('/test/run', async (req, res) => {
     lease = null;
     res.json({ status: 'success', data: { ...snapshot, preparation } });
   } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
     logger.error('Host test run failed', { error: err.message, body: req.body });
     const code = err.statusCode || (err.message.includes('not found') ? 422
       : err.message.includes('unreachable') ? 503 : 500);
@@ -676,7 +705,9 @@ router.get('/test/results', async (req, res) => {
   try {
     const { hostUrl, hostId, limit: rawLimit } = req.query;
     const limit = Math.min(parseInt(rawLimit, 10) || 100, 500);
-    const filter = {};
+    const filter = {
+      authorityState: { $nin: ['authority_invalidated', 'pending_reconciliation'] }
+    };
     if (hostUrl) filter.hostUrl = hostUrl;
     if (hostId) filter.hostId = hostId;
     const results = await HostPerformanceSnapshot.find(filter).sort({ testedAt: -1 }).limit(limit).lean();
@@ -694,7 +725,10 @@ router.get('/test/results', async (req, res) => {
 /** GET /test/results/:modelName — performance history for a model */
 router.get('/test/results/:modelName', async (req, res) => {
   try {
-    const snapshots = await HostPerformanceSnapshot.find({ modelName: req.params.modelName }).sort({ testedAt: -1 }).lean();
+    const snapshots = await HostPerformanceSnapshot.find({
+      modelName: req.params.modelName,
+      authorityState: { $nin: ['authority_invalidated', 'pending_reconciliation'] }
+    }).sort({ testedAt: -1 }).lean();
     res.json({ status: 'success', data: { modelName: req.params.modelName, snapshots, total: snapshots.length } });
   } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
 });
@@ -702,8 +736,8 @@ router.get('/test/results/:modelName', async (req, res) => {
 /** POST /:hostId/release — unload a pinned model from a host */
 router.post('/:hostId/release', async (req, res) => {
   let lease;
-  let projectionCommitted = false;
   let host = null;
+  let operationId = null;
   try {
     host = await hostProfileService.getById(req.params.hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
@@ -711,7 +745,25 @@ router.post('/:hostId/release', async (req, res) => {
       return res.status(400).json({ status: 'error', error: 'Host has no pinned model' });
     }
 
-    lease = await acquireProfilerClaimLease([host.hostUrl], `profiler-release-${crypto.randomBytes(8).toString('hex')}`, 5 * 60 * 1000);
+    operationId = `profiler-release-${crypto.randomBytes(8).toString('hex')}`;
+    lease = await acquireProfilerClaimLease([host.hostUrl], operationId, 5 * 60 * 1000);
+    lease.assertActive();
+    await hostProfileService.upsert({
+      hostId: req.params.hostId,
+      reconciliation: {
+        state: 'pending_reconciliation',
+        operation: 'release_model',
+        operationId,
+        model: host.dedicated.model,
+        priorDedicated: host.dedicated,
+        desiredDedicated: null,
+        reason: 'awaiting fenced Core runtime restore receipt',
+        startedAt: new Date()
+      }
+    }, {
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
     lease.assertActive();
     const result = await hostProfileService.releaseModel(host.hostUrl, host.dedicated.model, {
       signal: lease.signal,
@@ -722,55 +774,37 @@ router.post('/:hostId/release', async (req, res) => {
     }
 
     const releasedModel = host.dedicated.model;
-    // Publish the intended Benchmark projection while both the exact host
-    // claim and its global workload admission are still alive. If this write
-    // has an ambiguous acknowledgement, restore the exact prior projection
-    // before Core restores/releases the pre-claim runtime in finally.
-    const status = await hostProfileService.checkStatus(host.hostUrl);
-    if (status.dedicated?.model && isSameOllamaModel(status.dedicated.model, releasedModel)) {
-      const error = new Error('Released model became resident again before release verification');
-      error.code = 'PROFILER_RELEASE_NOT_STABLE';
-      error.statusCode = 409;
-      throw error;
-    }
-    const persistenceOptions = {
-      signal: lease.signal,
-      assertAuthorityActive: lease.assertActive
-    };
-    try {
-      lease.assertActive();
-      await hostProfileService.upsert({
-        hostId: req.params.hostId,
-        status: status.status,
-        dedicated: null
-      }, persistenceOptions);
-      lease.assertActive();
-      projectionCommitted = true;
-    } catch (error) {
-      try {
-        lease.assertActive();
-        await hostProfileService.upsert({
-          hostId: req.params.hostId,
-          status: host.status,
-          dedicated: host.dedicated || null
-        }, persistenceOptions);
-        lease.assertActive();
-      } catch (compensationError) {
-        error.compensationError = compensationError;
-        logger.error('Release-model projection compensation failed under lease', {
-          hostId: req.params.hostId,
-          error: compensationError.message
-        });
-        if (typeof lease.abandon === 'function') {
-          await lease.abandon(compensationError);
-        }
-      }
-      throw error;
-    }
-
     const releaseReceipt = await lease.finalize({
       byHost: {
         [host.hostUrl]: { excludedModels: [releasedModel] }
+      },
+      beforeWorkloadRelease: async hostRelease => {
+        const status = await hostProfileService.checkStatus(host.hostUrl);
+        if (status.dedicated?.model && isSameOllamaModel(status.dedicated.model, releasedModel)) {
+          const error = new Error('Released model became resident again before projection commit');
+          error.code = 'PROFILER_RELEASE_NOT_STABLE';
+          error.statusCode = 409;
+          throw error;
+        }
+        await hostProfileService.upsert({
+          hostId: req.params.hostId,
+          status: status.status,
+          dedicated: null,
+          reconciliation: {
+            state: 'resolved',
+            operation: 'release_model',
+            operationId,
+            model: releasedModel,
+            priorDedicated: host.dedicated,
+            desiredDedicated: null,
+            releaseReceipt: hostRelease.details?.[0]?.releaseReceipt || null,
+            reason: null,
+            startedAt: new Date(),
+            resolvedAt: new Date()
+          }
+        }, {
+          assertAuthorityActive: lease.assertActive
+        });
       }
     });
     lease = null;
@@ -790,27 +824,23 @@ router.post('/:hostId/release', async (req, res) => {
     };
     res.json({ status: 'success', data });
   } catch (err) {
-    // If Core could not reach its final host-release receipt, restore the
-    // Benchmark projection while the global admission remains fail-closed.
-    // A successful host receipt means the null projection is accurate even if
-    // only the final workload-admission release failed.
-    const hostReleaseSucceeded = err.release?.details?.length > 0
-      && err.release.details.every(detail => detail.released === true);
-    if (projectionCommitted && !hostReleaseSucceeded && host) {
-      await hostProfileService.upsert({
-        hostId: req.params.hostId,
-        status: host.status,
-        dedicated: host.dedicated || null
-      }).catch(compensationError => logger.error('Release-model post-finalize compensation failed', {
-        hostId: req.params.hostId,
-        error: compensationError.message
-      }));
-      projectionCommitted = false;
-    }
+    // The reconciliation marker is written before unloading. If Core restore
+    // or the projection commit fails, leave it pending and keep the global
+    // admission fenced for recovery; never issue an unfenced compensating
+    // write after finalization.
     logger.error('Release model failed', { hostId: req.params.hostId, error: err.message });
     res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
   } finally {
-    if (lease) await lease.finalize().catch(error => logger.error('Release-model lease finalization failed', { error: error.message }));
+    if (lease) {
+      try {
+        await lease.finalize();
+      } catch (error) {
+        logger.error('Release-model lease finalization failed; reconciliation remains pending', {
+          operationId,
+          error: error.message
+        });
+      }
+    }
   }
 });
 

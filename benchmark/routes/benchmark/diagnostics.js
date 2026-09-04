@@ -71,8 +71,26 @@ async function persistCalibrationUnderAdmission(payload, req) {
         req.assertWorkloadAdmissionActive?.();
         return Array.isArray(created) ? created[0] : created;
     } catch (error) {
-        if (req.workloadAdmissionSignal?.aborted) {
-            await JudgeAccuracyMatrix.deleteOne({ _id: id }).catch(() => {});
+        if (req.workloadAdmissionSignal?.aborted
+            || error?.code === 'BENCHMARK_CLAIM_LOST'
+            || error?.code === 'BENCHMARK_CLAIM_STOPPED') {
+            try {
+                await JudgeAccuracyMatrix.updateOne(
+                    { _id: id },
+                    {
+                        $set: {
+                            authority_state: 'authority_invalidated',
+                            authority_reconciliation_reason: 'diagnostic calibration raced workload admission loss'
+                        }
+                    },
+                    { upsert: true }
+                );
+                error.authorityCompensated = true;
+            } catch (compensationError) {
+                error.compensationError = compensationError;
+                error.retainAdmission = true;
+                error.code = 'JUDGE_MATRIX_RECONCILIATION_PENDING';
+            }
         }
         throw error;
     }
@@ -858,11 +876,13 @@ router.post('/judge/retro-calibrate', withManagedWorkloadRoute('judge-retro-cali
         }, {
             perCell: per_cell || 3,
             dryRun: dry_run || false,
-            cancelSignal: req.workloadAdmissionSignal
+            cancelSignal: req.workloadAdmissionSignal,
+            assertAuthorityActive: req.assertWorkloadAdmissionActive
         });
 
         res.json({ status: 'success', data: result });
     } catch (err) {
+        if (err.retainAdmission === true) req.workloadAdmissionReconciliationError = err;
         logger.error('Retro-calibration failed', { error: err.message });
         res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
@@ -900,15 +920,19 @@ router.get('/judge/feedback-stats', async (req, res) => {
  * POST /api/benchmark/judge/auto-promote
  * Auto-promote high-divergence human-reviewed results to ground truth
  */
-router.post('/judge/auto-promote', async (req, res) => {
+router.post('/judge/auto-promote', withManagedWorkloadRoute('judge-auto-promote', diagnosticWorkloadOptions, async (req, res) => {
     try {
-        const result = await autoPromoteGroundTruth();
+        const result = await autoPromoteGroundTruth({
+            cancelSignal: req.workloadAdmissionSignal,
+            assertAuthorityActive: req.assertWorkloadAdmissionActive
+        });
         res.json({ status: 'success', data: result });
     } catch (err) {
+        if (err.retainAdmission === true) req.workloadAdmissionReconciliationError = err;
         logger.error('Auto-promote failed', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 // ============ Governance Loop Endpoints (TODO 0125) ============
 
@@ -971,11 +995,13 @@ router.post('/judge/governance-run', withManagedWorkloadRoute('judge-governance'
             retroPerCell: retro_per_cell || 3,
             retroDryRun: !!retro_dry_run,
             triggeredBy: triggered_by || 'api',
-            cancelSignal: req.workloadAdmissionSignal
+            cancelSignal: req.workloadAdmissionSignal,
+            assertAuthorityActive: req.assertWorkloadAdmissionActive
         });
 
         res.json({ status: 'success', data: summary });
     } catch (err) {
+        if (err.retainAdmission === true) req.workloadAdmissionReconciliationError = err;
         logger.error('Governance loop failed', { error: err.message });
         res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }

@@ -25,8 +25,10 @@ const HostProfileSchema = new mongoose.Schema({
     latencyMs: Number,
     ttftMs: Number,
     ttftMeasurement: { type: String, enum: ['streamed_wall_clock'], default: undefined },
-    testedAt: Date
+    testedAt: Date,
+    persistenceReceipt: { type: String, default: null, select: false }
   },
+  rejectedBaselineReceipts: { type: [String], default: [], select: false },
   status: {
     type: String,
     enum: ['online', 'offline', 'unknown'],
@@ -42,6 +44,23 @@ const HostProfileSchema = new mongoose.Schema({
     expiresAt: Date,
     vramUsedMiB: Number,
     detectedAt: Date
+  },
+  reconciliation: {
+    state: { type: String, enum: ['pending_reconciliation', 'resolved'], default: undefined },
+    operation: String,
+    operationId: String,
+    model: String,
+    priorDedicated: mongoose.Schema.Types.Mixed,
+    desiredDedicated: mongoose.Schema.Types.Mixed,
+    priorAvailable: Boolean,
+    timeoutAt: Date,
+    quietSince: Date,
+    lastObservedAt: Date,
+    attempts: Number,
+    releaseReceipt: mongoose.Schema.Types.Mixed,
+    reason: String,
+    startedAt: Date,
+    resolvedAt: Date
   }
 }, { collection: 'hostprofiles', timestamps: true });
 

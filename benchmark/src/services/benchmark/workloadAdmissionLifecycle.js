@@ -39,11 +39,16 @@ async function beginManagedWorkload(workloadId, options = {}) {
         // No host claim exists in this lifecycle, so there is no runtime
         // restoration to protect. Release the failed initial admission rather
         // than leaving every standalone judge surface blocked until TTL.
-        await releaseWorkloadAdmission(id).catch(() => {});
+        try {
+            await releaseWorkloadAdmission(id);
+        } catch (releaseError) {
+            error.releaseError = releaseError;
+        }
         throw error;
     }
 
     let closed = false;
+    let retentionTimer = null;
     return {
         workloadId: id,
         signal: controller.signal,
@@ -53,20 +58,46 @@ async function beginManagedWorkload(workloadId, options = {}) {
             closed = true;
             await heartbeat.drain();
         },
+        async retainForRecovery(reason = null) {
+            if (closed) return { retained: true, reason: 'managed workload already retained' };
+            closed = true;
+            if (!controller.signal.aborted) {
+                controller.abort(reason || new Error('Authority reconciliation requires retained admission'));
+            }
+            const configuredHoldMs = Number.parseInt(process.env.WORKLOAD_RECONCILIATION_HOLD_MS, 10);
+            const holdMs = Number.isFinite(configuredHoldMs) && configuredHoldMs > 0
+                ? Math.min(configuredHoldMs, ttlMs)
+                : Math.min(ttlMs, 5 * 60 * 1000);
+            retentionTimer = setTimeout(() => {
+                heartbeat.drain().catch(error => logger.error('Retained workload heartbeat drain failed', {
+                    workloadId: id,
+                    error: error.message
+                }));
+            }, holdMs);
+            retentionTimer.unref?.();
+            return { retained: true, holdMs, reason: reason?.message || String(reason || 'reconciliation pending') };
+        },
         async complete() {
             if (closed) return { released: false, reason: 'managed workload already closed' };
-            closed = true;
             heartbeat.assertActive();
-            await heartbeat.drain();
-            const heartbeatFailure = heartbeat.getFailure();
-            if (heartbeatFailure) throw heartbeatFailure;
-            const released = await releaseWorkloadAdmission(id);
-            if (released?.released !== true) {
-                const error = new Error(released?.reason || 'Core workload admission release failed');
-                error.code = 'WORKLOAD_ADMISSION_RELEASE_FAILED';
+            try {
+                const released = await releaseWorkloadAdmission(id);
+                if (released?.released !== true) {
+                    const error = new Error(released?.reason || 'Core workload admission release failed');
+                    error.code = 'WORKLOAD_ADMISSION_RELEASE_FAILED';
+                    throw error;
+                }
+                closed = true;
+                await heartbeat.drain();
+                return released;
+            } catch (error) {
+                // Keep renewing the exact admission if DELETE/recovery could
+                // not prove the terminal CAS. The outer lifecycle will call
+                // retainForRecovery rather than silently falling back to TTL.
+                error.retainAdmission = true;
+                error.code = error.code || 'WORKLOAD_ADMISSION_RELEASE_RECONCILIATION_PENDING';
                 throw error;
             }
-            return released;
         }
     };
 }
@@ -82,7 +113,8 @@ async function runManagedWorkload(workloadId, options, task) {
         await lifecycle.complete();
         return result;
     } catch (error) {
-        await lifecycle.abandon();
+        if (error?.retainAdmission === true) await lifecycle.retainForRecovery(error);
+        else await lifecycle.abandon();
         throw error;
     }
 }
@@ -117,7 +149,11 @@ function withManagedWorkloadRoute(kind, resolveOptions, handler) {
             };
             await handler(req, res, next);
             if (res.statusCode >= 500) {
-                await lifecycle.abandon();
+                if (req.workloadAdmissionReconciliationError?.retainAdmission === true) {
+                    await lifecycle.retainForRecovery(req.workloadAdmissionReconciliationError);
+                } else {
+                    await lifecycle.abandon();
+                }
                 res.json = originalJson;
                 if (pendingJson) return res.status(pendingJson.statusCode).json(pendingJson.body);
                 return;
@@ -127,7 +163,14 @@ function withManagedWorkloadRoute(kind, resolveOptions, handler) {
             res.json = originalJson;
             if (pendingJson) return res.status(pendingJson.statusCode).json(pendingJson.body);
         } catch (error) {
-            if (lifecycle) await lifecycle.abandon().catch(() => {});
+            if (lifecycle) {
+                try {
+                    if (error?.retainAdmission === true) await lifecycle.retainForRecovery(error);
+                    else await lifecycle.abandon();
+                } catch (lifecycleError) {
+                    error.lifecycleError = lifecycleError;
+                }
+            }
             res.json = originalJson;
             if (res.headersSent) {
                 logger.error('Managed judge workload failed after response', { kind, error: error.message });

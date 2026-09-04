@@ -67,4 +67,68 @@ describe('judgeResult cancellation persistence boundary', () => {
 
         expect(BenchmarkResult.updateOne).not.toHaveBeenCalled();
     });
+
+    it('invalidates a judge score whose database write races cancellation', async () => {
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('judge workload admission lost'), {
+            code: 'BENCHMARK_CLAIM_LOST'
+        });
+        scoreResponse.mockResolvedValue({
+            quality_score: 8,
+            scoring_method: 'llm_judge',
+            scoring_type: 'knowledge',
+            explanation: 'score',
+            breakdown: { overall: 8 },
+            judge_confidence: 0.9
+        });
+        BenchmarkResult.updateOne
+            .mockImplementationOnce(async () => {
+                controller.abort(lost);
+                return { matchedCount: 1 };
+            })
+            .mockResolvedValueOnce({ matchedCount: 1 });
+
+        await expect(judgeResult(
+            '507f1f77bcf86cd799439011',
+            { host: 'http://judge:11434', model: 'judge:test', cancelSignal: controller.signal }
+        )).rejects.toMatchObject({
+            code: 'BENCHMARK_BATCH_STOPPED',
+            authorityCompensated: true
+        });
+
+        expect(BenchmarkResult.updateOne).toHaveBeenCalledTimes(2);
+        expect(BenchmarkResult.updateOne.mock.calls[1][1]).toEqual({
+            $set: expect.objectContaining({ scoring_method: 'authority_invalidated' })
+        });
+    });
+
+    it('retains admission when an ambiguous judge write cannot be invalidated', async () => {
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('judge workload admission lost'), {
+            code: 'BENCHMARK_CLAIM_LOST'
+        });
+        scoreResponse.mockResolvedValue({
+            quality_score: 8,
+            scoring_method: 'llm_judge',
+            scoring_type: 'knowledge',
+            explanation: 'score',
+            breakdown: { overall: 8 },
+            judge_confidence: 0.9
+        });
+        BenchmarkResult.updateOne
+            .mockImplementationOnce(async () => {
+                controller.abort(lost);
+                return { matchedCount: 1 };
+            })
+            .mockRejectedValueOnce(new Error('invalidation unavailable'));
+
+        await expect(judgeResult(
+            '507f1f77bcf86cd799439011',
+            { host: 'http://judge:11434', model: 'judge:test', cancelSignal: controller.signal }
+        )).rejects.toMatchObject({
+            code: 'JUDGE_AUTHORITY_RECONCILIATION_PENDING',
+            retainAdmission: true,
+            compensationError: expect.any(Error)
+        });
+    });
 });

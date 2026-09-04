@@ -632,6 +632,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
   let pinRestore = null;
   let restoredSnapshot = null;
   let expiredModels = [];
+  let filterEvaluatedAt = null;
   const hostPrefService = require('./hostPreferenceService');
   const finalizeToken = crypto.randomUUID();
   const finalizingFilter = {
@@ -679,10 +680,14 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     const originalSnapshot = renewed.benchmarkClaim?.preClaimRuntime;
     const afterExplicitExclusions = (originalSnapshot?.residents || []).filter(entry =>
       !excludedModels.some(model => hostPrefService.pinNamesMatch(model, entry.model)));
+    // Freeze the TTL decision once and attest that instant in the durable
+    // receipt. Consumers can then independently recompute which residents
+    // were naturally expired instead of trusting Core's projected arrays.
+    filterEvaluatedAt = new Date();
     const applicableResidents = hostPrefService.desiredBenchmarkResidents({
       ...originalSnapshot,
       residents: afterExplicitExclusions
-    });
+    }, filterEvaluatedAt.getTime());
     expiredModels = afterExplicitExclusions
       .filter(entry => !applicableResidents.includes(entry))
       .map(entry => entry.model);
@@ -779,6 +784,9 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       identityDigest: renewed.benchmarkClaim?.preClaimRuntime?.identityDigest || null,
       appliedIdentityDigest: restoredSnapshot?.identityDigest || null,
       exact: renewed.benchmarkClaim?.preClaimRuntime?.exact === true,
+      capturedAt: renewed.benchmarkClaim?.preClaimRuntime?.capturedAt || null,
+      source: renewed.benchmarkClaim?.preClaimRuntime?.source || null,
+      filterEvaluatedAt,
       residentCount: restoredSnapshot?.residents?.length || 0,
       residents: (restoredSnapshot?.residents || []).map(entry => ({
         model: entry.model,

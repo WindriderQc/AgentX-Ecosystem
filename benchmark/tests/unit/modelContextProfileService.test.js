@@ -2,7 +2,8 @@
 
 jest.mock('../../models/ModelContextProfile', () => ({
   findOne: jest.fn(),
-  findOneAndUpdate: jest.fn()
+  findOneAndUpdate: jest.fn(),
+  updateOne: jest.fn()
 }));
 
 jest.mock('../../src/helpers/ollamaHostConfig', () => ({
@@ -26,6 +27,7 @@ describe('modelContextProfileService', () => {
     ]);
     ModelContextProfile.findOne.mockReturnValue(mockLean(null));
     ModelContextProfile.findOneAndUpdate.mockImplementation((_filter, update) => mockLean(update.$set));
+    ModelContextProfile.updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
   });
 
   it('materializes a recommended profile from a completed probe snapshot', async () => {
@@ -79,6 +81,9 @@ describe('modelContextProfileService', () => {
       tokensPerSec: 71.2,
       completionTokens: 64
     }));
+    expect(ModelContextProfile.findOneAndUpdate.mock.calls[0][0]).toEqual(expect.objectContaining({
+      rejectedEvidenceIds: { $ne: 'snapshot-1' }
+    }));
   });
 
   it('lowers the current ceiling while retaining the historical maximum', async () => {
@@ -125,6 +130,28 @@ describe('modelContextProfileService', () => {
       recommendationStatus: 'unknown',
       revalidationRequired: true
     });
+  });
+
+  it('persists a rejected snapshot fence before invalidating its projected authority', async () => {
+    const snapshot = {
+      _id: 'snapshot-rejected',
+      modelName: 'ax/qwen3.5:9b',
+      hostUrl: 'http://192.0.2.12:11434/',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a'
+    };
+
+    await service.invalidateIfSnapshot(snapshot, 'claim_lost');
+
+    expect(ModelContextProfile.updateOne).toHaveBeenNthCalledWith(1,
+      expect.objectContaining({ modelName: 'ax/qwen3.5:9b', hostUrl: 'http://192.0.2.12:11434' }),
+      { $addToSet: { rejectedEvidenceIds: 'snapshot-rejected' } },
+      { upsert: true }
+    );
+    expect(ModelContextProfile.updateOne).toHaveBeenNthCalledWith(2,
+      expect.objectContaining({ 'latestEvidence.snapshotId': 'snapshot-rejected' }),
+      { $set: expect.objectContaining({ stale: true, recommendationStatus: 'unknown' }) }
+    );
   });
 
   it('does not turn max verified capacity into a recommendation when degradation evidence is absent', async () => {

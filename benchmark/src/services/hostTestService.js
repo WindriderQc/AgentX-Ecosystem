@@ -598,7 +598,23 @@ async function persistHostSnapshot(modelName, snapshot, { signal, checkpoint } =
     checkpoint?.();
     return saved;
   } catch (error) {
-    await HostPerformanceSnapshot.deleteOne({ _id: payload._id }).catch(() => {});
+    try {
+      await HostPerformanceSnapshot.updateOne(
+        { _id: payload._id },
+        {
+          $set: {
+            authorityState: 'authority_invalidated',
+            authorityReconciliationReason: 'host snapshot save raced profiler claim loss'
+          }
+        },
+        { upsert: true }
+      );
+      error.authorityInvalidated = true;
+    } catch (invalidationError) {
+      error.invalidationError = invalidationError;
+      error.retainAdmission = true;
+      error.code = 'HOST_SNAPSHOT_RECONCILIATION_PENDING';
+    }
     throw error;
   }
 }

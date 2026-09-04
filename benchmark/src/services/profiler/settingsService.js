@@ -15,6 +15,9 @@ const DEFAULTS = {
   throughputSamples: 3,
   standardRetainedSamples: 5,
   fullRetainedSamples: 10,
+  fullPhaseRepeats: 5,
+  fullMaxCoefficientOfVariation: 0.12,
+  fullMaxRelativeCi95Width: 0.30,
   interactiveDegradationThreshold: 15,
   documentDegradationThreshold: 30,
   thinkingProbeEnabled: true,
@@ -35,6 +38,9 @@ const ENV_MAP = {
   throughputSamples: 'PROFILER_THROUGHPUT_SAMPLES',
   standardRetainedSamples: 'PROFILER_STANDARD_RETAINED_SAMPLES',
   fullRetainedSamples: 'PROFILER_FULL_RETAINED_SAMPLES',
+  fullPhaseRepeats: 'PROFILER_FULL_PHASE_REPEATS',
+  fullMaxCoefficientOfVariation: 'PROFILER_FULL_MAX_CV',
+  fullMaxRelativeCi95Width: 'PROFILER_FULL_MAX_RELATIVE_CI95_WIDTH',
   interactiveDegradationThreshold: 'PROFILER_INTERACTIVE_DEGRADATION_PCT',
   documentDegradationThreshold: 'PROFILER_DOCUMENT_DEGRADATION_PCT',
   thinkingProbeEnabled: 'PROFILER_THINKING_PROBE_ENABLED',
@@ -55,7 +61,7 @@ function coerce(raw, defaultVal) {
     return String(raw).toLowerCase() === 'true';
   }
   if (typeof defaultVal === 'number') {
-    const n = parseInt(raw, 10);
+    const n = Number(raw);
     return Number.isNaN(n) ? undefined : n;
   }
   return raw;

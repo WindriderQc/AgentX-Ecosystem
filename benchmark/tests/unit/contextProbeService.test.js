@@ -393,7 +393,7 @@ describe('contextProbeService', () => {
     );
   });
 
-  it('deletes an ambiguously committed snapshot when authority is lost after the write', async () => {
+  it('tombstones an ambiguously committed snapshot when authority is lost after the write', async () => {
     const controller = new AbortController();
     let checkpointCount = 0;
     const lost = Object.assign(new Error('claim heartbeat rejected'), { code: 'BENCHMARK_CLAIM_LOST' });
@@ -412,7 +412,13 @@ describe('contextProbeService', () => {
       [expect.objectContaining({ _id: expect.anything(), status: 'completed' })],
       { signal: controller.signal }
     );
-    expect(ModelContextProbeSnapshot.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
+    expect(ModelContextProbeSnapshot.updateOne).toHaveBeenCalledWith(
+      { _id: expect.anything() },
+      expect.objectContaining({
+        $set: expect.objectContaining({ authorityStatus: 'rejected' })
+      }),
+      { upsert: true }
+    );
   });
 });
 

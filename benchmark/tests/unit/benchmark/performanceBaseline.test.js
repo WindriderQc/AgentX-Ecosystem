@@ -196,4 +196,33 @@ describe('performanceBaseline', () => {
             $pull: { performance_baselines: { persistenceReceipt: persisted.persistenceReceipt } }
         });
     });
+
+    it('retains admission when neither baseline compensation nor durable invalidation can be confirmed', async () => {
+        ModelProfile.findOne.mockReturnValue(chainResolved(authority()));
+        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence()));
+        let checkpoints = 0;
+        const assertClaimActive = jest.fn(() => {
+            checkpoints += 1;
+            if (checkpoints === 3) {
+                throw Object.assign(new Error('claim lost during write'), { code: 'BENCHMARK_CLAIM_LOST' });
+            }
+        });
+        BenchmarkBatch.updateOne
+            .mockResolvedValueOnce({ matchedCount: 1 })
+            .mockRejectedValueOnce(new Error('pull compensation unavailable'))
+            .mockRejectedValueOnce(new Error('authority invalidation unavailable'));
+
+        await expect(capturePerformanceBaseline({
+            batchId: 'batch-write-race',
+            model: 'ax/qwen3.5:9b',
+            hostUrl: 'http://192.0.2.12:11434',
+            claimIdentity: { claimBatchId: 'batch-write-race', claimGeneration: 'generation-1' },
+            assertClaimActive
+        })).rejects.toMatchObject({
+            code: 'PERFORMANCE_BASELINE_RECONCILIATION_PENDING',
+            retainAdmission: true,
+            compensationError: expect.any(Error),
+            invalidationError: expect.any(Error)
+        });
+    });
 });
