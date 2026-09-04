@@ -53,6 +53,15 @@
   h1 .sub { color: var(--muted); font-weight: 400; font-size: 14px; letter-spacing: 0; }
   .meta { color: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.3px; }
   .meta .sep { opacity: 0.4; margin: 0 6px; }
+  .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+  .host-home-link {
+    color: var(--muted-hi); border: 1px solid var(--border-hi); border-radius: 8px;
+    padding: 6px 10px; font-size: 12px; font-weight: 600;
+    transition: color .12s ease, border-color .12s ease, background .12s ease;
+  }
+  .host-home-link:hover, .host-home-link:focus-visible {
+    color: var(--text); border-color: var(--accent); background: rgba(106,166,255,0.08);
+  }
 
   /* ── System Pulse bar (live status) ───────────────────────── */
   .pulse {
@@ -236,10 +245,13 @@
       <span class="logo">AX</span>
       AgentX <span class="sub">product portal</span>
     </h1>
-    <div class="meta">
-      core <code style="color:var(--muted-hi);font-size:10.5px">:3080</code>
-      <span class="sep">·</span>bench <code style="color:var(--muted-hi);font-size:10.5px">:3081</code>
-      <span class="sep">·</span>rag <code style="color:var(--muted-hi);font-size:10.5px">:3082</code>
+    <div class="header-actions">
+      <a id="host-home-link" class="host-home-link" href="/" hidden>Back to host</a>
+      <div class="meta">
+        core <code style="color:var(--muted-hi);font-size:10.5px">:3080</code>
+        <span class="sep">·</span>bench <code style="color:var(--muted-hi);font-size:10.5px">:3081</code>
+        <span class="sep">·</span>rag <code style="color:var(--muted-hi);font-size:10.5px">:3082</code>
+      </div>
     </div>
   </header>
 
@@ -360,10 +372,12 @@
 // Core links intentionally stay relative so an HTTPS front door stays HTTPS.
 (async () => {
   let publicUrls = {};
+  let hostHome = null;
   try {
     const res = await fetch('/api/config', { credentials: 'include' });
     const cfg = await res.json();
     publicUrls = cfg?.publicUrls || {};
+    hostHome = cfg?.hostHome || null;
   } catch { /* keep safe same-origin fallbacks */ }
   document.querySelectorAll('[data-public-service]').forEach((a) => {
     const service = a.dataset.publicService;
@@ -375,6 +389,13 @@
     const base = String(publicUrls[service] || '').replace(/\/+$/, '');
     if (base) a.setAttribute('href', base + path);
   });
+  const hostHomeLink = document.getElementById('host-home-link');
+  const hostHomeUrl = String(hostHome?.url || '').trim();
+  if (hostHomeLink && /^\/(?!\/)/.test(hostHomeUrl) && !hostHomeUrl.includes('\\')) {
+    hostHomeLink.setAttribute('href', hostHomeUrl);
+    hostHomeLink.textContent = String(hostHome?.label || 'Back to host');
+    hostHomeLink.hidden = false;
+  }
 })();
 
 // Live Portal — same-origin status from core /api/portal/health (no CORS).

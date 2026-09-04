@@ -149,4 +149,14 @@ describe('shared navigation public URL contract', () => {
     expect(source).not.toContain('PORT_TO_SERVICE');
     expect(source).not.toMatch(/href="https?:\/\/(?:localhost|127\.0\.0\.1)/);
   });
+
+  test('portal reveals only the optional normalized host-home contract', () => {
+    const source = fs.readFileSync(portalPath, 'utf8');
+    expect(source).toContain('id="host-home-link"');
+    expect(source).toContain('hostHome = cfg?.hostHome || null');
+    expect(source).toContain("hostHomeLink.textContent = String(hostHome?.label || 'Back to host')");
+    expect(source).toContain('hostHomeLink.hidden = false');
+    expect(source).not.toContain('192.168.2.99');
+    expect(source).not.toContain('Mon écosystème');
+  });
 });
