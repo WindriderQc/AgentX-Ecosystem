@@ -19,6 +19,7 @@ const baselineModelService = require('../../src/services/profiler/baselineModelS
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
 const { acquireProfilerClaimLease } = require('../../src/services/profiler/profilerClaimLifecycle');
 const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdmission');
+const { isSameOllamaModel } = require('../../src/helpers/ollamaModelIdentity');
 
 const logger = require('../../config/logger');
 
@@ -682,22 +683,40 @@ router.post('/:hostId/release', async (req, res) => {
       return res.status(502).json({ error: `Failed to release model: ${result.error}` });
     }
 
-    // Clear dedicated state
-    await hostProfileService.upsert({ hostId: req.params.hostId, dedicated: null });
-
-    // Re-check status to confirm
+    const releasedModel = host.dedicated.model;
+    const releaseReceipt = await lease.finalize({
+      byHost: {
+        [host.hostUrl]: { excludedModels: [releasedModel] }
+      }
+    });
+    lease = null;
+    const runtimeRestore = releaseReceipt.details?.[0]?.runtimeRestore;
+    if (runtimeRestore?.verified !== true) {
+      const error = new Error('Core did not verify the requested model remained unloaded');
+      error.code = 'PROFILER_RELEASE_NOT_VERIFIED';
+      error.statusCode = 503;
+      throw error;
+    }
+    // Core's fenced receipt is the commit point. Only after it confirms the
+    // target was excluded from the restored resident set do we publish the
+    // Benchmark-side dedicated state. A fresh status read prevents a false 200
+    // if another controller immediately made the target resident again.
     const status = await hostProfileService.checkStatus(host.hostUrl);
+    if (status.dedicated?.model && isSameOllamaModel(status.dedicated.model, releasedModel)) {
+      const error = new Error('Released model became resident again before release verification');
+      error.code = 'PROFILER_RELEASE_NOT_STABLE';
+      error.statusCode = 409;
+      throw error;
+    }
     await hostProfileService.updateStatus(req.params.hostId, status.status);
-    await hostProfileService.upsert({ hostId: req.params.hostId, dedicated: status.dedicated || null });
-
+    await hostProfileService.upsert({ hostId: req.params.hostId, dedicated: null });
     const data = {
       success: true,
       hostId: req.params.hostId,
-      releasedModel: host.dedicated.model,
-      dedicated: status.dedicated || null
+      releasedModel,
+      dedicated: null,
+      runtimeRestore
     };
-    await lease.finalize();
-    lease = null;
     res.json({ status: 'success', data });
   } catch (err) {
     logger.error('Release model failed', { hostId: req.params.hostId, error: err.message });

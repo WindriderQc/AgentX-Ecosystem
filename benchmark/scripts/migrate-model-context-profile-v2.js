@@ -14,20 +14,50 @@ const MONGO_URI = process.env.MONGODB_URI || 'mongodb://192.0.2.33:27017/agentx'
 const DRY_RUN = process.argv.includes('--dry-run');
 
 function migrationPipeline() {
+  const hasVerifiedV2Recommendations = {
+    $and: [
+      { $eq: ['$recommendationStatus', 'verified'] },
+      { $ne: ['$revalidationRequired', true] },
+      { $ne: ['$stale', true] },
+      { $gt: ['$recommendedInteractiveContext', 0] },
+      { $gt: ['$recommendedDocumentContext', 0] }
+    ]
+  };
   return [{
     $set: {
       maxVerifiedContext: { $ifNull: ['$maxVerifiedContext', '$verifiedMaxContext'] },
-      historicalMaxVerifiedContext: { $ifNull: ['$historicalMaxVerifiedContext', { $ifNull: ['$verifiedMaxContext', '$recommendedContext'] }] },
+      historicalMaxVerifiedContext: {
+        $ifNull: [
+          '$historicalMaxVerifiedContext',
+          { $ifNull: ['$maxVerifiedContext', { $ifNull: ['$verifiedMaxContext', '$recommendedContext'] }] }
+        ]
+      },
       // Legacy `recommendedContext` was historically the largest request that
       // happened to succeed, not a workload recommendation. Preserve it only
       // as capacity history; recommendations stay unknown until re-profiled.
-      recommendedInteractiveContext: null,
-      recommendedDocumentContext: null,
-      recommendedContext: null,
-      recommendationStatus: 'unknown',
-      revalidationRequired: true,
-      stale: true,
-      staleReason: 'legacy_context_revalidation_required',
+      recommendedInteractiveContext: {
+        $cond: [hasVerifiedV2Recommendations, '$recommendedInteractiveContext', null]
+      },
+      recommendedDocumentContext: {
+        $cond: [hasVerifiedV2Recommendations, '$recommendedDocumentContext', null]
+      },
+      recommendedContext: {
+        $cond: [
+          hasVerifiedV2Recommendations,
+          { $ifNull: ['$recommendedContext', '$recommendedDocumentContext'] },
+          null
+        ]
+      },
+      recommendationStatus: { $cond: [hasVerifiedV2Recommendations, 'verified', 'unknown'] },
+      revalidationRequired: { $cond: [hasVerifiedV2Recommendations, false, true] },
+      stale: { $cond: [hasVerifiedV2Recommendations, { $ifNull: ['$stale', false] }, true] },
+      staleReason: {
+        $cond: [
+          hasVerifiedV2Recommendations,
+          { $ifNull: ['$staleReason', null] },
+          'legacy_context_revalidation_required'
+        ]
+      },
       recommendationThresholds: {
         $ifNull: ['$recommendationThresholds', {
           interactiveDegradationPct: 15,

@@ -30,7 +30,8 @@ async function assertHostAvailableForConsumer(hostUrl, {
   claimGeneration = null,
   model = null,
   path = null,
-  allowBenchmarkCallers = true
+  allowBenchmarkCallers = true,
+  benchmarkAuthorized = false
 } = {}) {
   const claim = await getActiveBenchmarkClaim(hostUrl);
   if (!claim) {
@@ -45,6 +46,7 @@ async function assertHostAvailableForConsumer(hostUrl, {
   }
 
   const hasExactProof = allowBenchmarkCallers
+    && benchmarkAuthorized === true
     && typeof claimBatchId === 'string'
     && typeof claimGeneration === 'string'
     && claimBatchId === claim.batchId

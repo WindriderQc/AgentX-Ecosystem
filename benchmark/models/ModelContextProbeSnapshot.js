@@ -8,6 +8,24 @@
 
 const mongoose = require('mongoose');
 
+const ProbeSampleSchema = new mongoose.Schema({
+  requestSucceeded: Boolean,
+  tokensPerSec: Number,
+  promptTokens: Number,
+  estimatedPromptTokens: Number,
+  promptCoveragePct: Number,
+  completionTokens: Number,
+  latencyMs: Number,
+  vramUsedMiB: Number,
+  vramTotalMiB: Number,
+  gpuPercent: Number,
+  gpuSizeTotal: Number,
+  gpuSizeVram: Number,
+  ollamaContextLength: Number,
+  passed: Boolean,
+  reason: String
+}, { _id: false });
+
 const ProbeStepSchema = new mongoose.Schema({
   numCtx: Number,
   requestSucceeded: Boolean,
@@ -19,6 +37,9 @@ const ProbeStepSchema = new mongoose.Schema({
   repetitionCount: Number,
   tokensPerSecMin: Number,
   tokensPerSecMax: Number,
+  tokensPerSecStdDev: Number,
+  tokensPerSecCvPct: Number,
+  samples: { type: [ProbeSampleSchema], default: [] },
   completionTokens: Number,
   vramUsedMiB: Number,
   vramTotalMiB: Number,
@@ -68,6 +89,12 @@ const ModelContextProbeSnapshotSchema = new mongoose.Schema({
     default: 'completed'
   },
   error: String,
+  authorityStatus: {
+    type: String,
+    enum: ['pending', 'committed', 'rejected'],
+    default: 'pending'
+  },
+  authorityError: { type: String, default: null },
   steps: {
     type:    [ProbeStepSchema],
     default: []

@@ -1505,7 +1505,13 @@ describe('Nerve Center API Routes', () => {
   describe('GET /host-preferences/benchmark-claims/active', () => {
     it('returns active claims list', async () => {
       hostPrefService.listBenchmarkClaims.mockResolvedValue([
-        { hostUrl: 'http://primary:11434', batchId: 'b1', prevStatus: 'ready' }
+        {
+          hostUrl: 'http://primary:11434',
+          batchId: 'b1',
+          claimGeneration: 'must-remain-secret',
+          prevStatus: 'ready',
+          snapshotExact: true
+        }
       ]);
 
       const res = await request(app)
@@ -1515,6 +1521,8 @@ describe('Nerve Center API Routes', () => {
       expect(res.body.status).toBe('success');
       expect(res.body.data.claims).toHaveLength(1);
       expect(res.body.data.count).toBe(1);
+      expect(res.body.data.claims[0].snapshotExact).toBe(true);
+      expect(res.body.data.claims[0]).not.toHaveProperty('claimGeneration');
     });
   });
 });

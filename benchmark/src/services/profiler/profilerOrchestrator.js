@@ -278,6 +278,12 @@ function profileQualificationFailures(profileData) {
   if (!(Number(profileData.maxVerifiedContext) > 0)) failures.push('max_context_unverified');
   if (!(Number(profileData.recommendedInteractiveContext) > 0)) failures.push('interactive_context_unverified');
   if (!(Number(profileData.recommendedDocumentContext) > 0)) failures.push('document_context_unverified');
+  if (Number(profileData.recommendedInteractiveContext) > Number(profileData.maxVerifiedContext)) {
+    failures.push('interactive_context_exceeds_verified_max');
+  }
+  if (Number(profileData.recommendedDocumentContext) > Number(profileData.maxVerifiedContext)) {
+    failures.push('document_context_exceeds_verified_max');
+  }
   if (Number(quality.passingSampleCount) < required) failures.push('retained_sample_minimum_not_met');
   if (!['medium', 'high'].includes(quality.reliability)) failures.push(`reliability_${quality.reliability || 'unknown'}`);
   if (profileData.ttftMeasurement !== 'streamed_wall_clock'
@@ -286,18 +292,34 @@ function profileQualificationFailures(profileData) {
 
   if (profileData.profileDepth === 'full') {
     const curve = Array.isArray(profileData.throughputCurve) ? profileData.throughputCurve : [];
-    if (curve.length !== 5 || curve.some(point => !(Number(point.tokensPerSec) > 0) || point.gpuOffloaded !== false)) {
+    const curveCoverage = [...new Set(curve.map(point => Number(point.contextFillPct)))].sort((a, b) => a - b);
+    if (curve.length !== 5
+      || JSON.stringify(curveCoverage) !== JSON.stringify([10, 25, 50, 75, 90])
+      || curve.some(point => !(Number(point.tokensPerSec) > 0) || point.gpuOffloaded !== false)) {
       failures.push('full_throughput_curve_incomplete');
     }
     const stability = Array.isArray(profileData.generationStability) ? profileData.generationStability : [];
-    if (stability.length !== 3 || stability.some(point => !(Number(point.tokensPerSec) > 0) || !(Number(point.totalLatencyMs) > 0))) {
+    const stabilityCoverage = [...new Set(stability.map(point => Number(point.numPredict)))].sort((a, b) => a - b);
+    if (stability.length !== 3
+      || JSON.stringify(stabilityCoverage) !== JSON.stringify([64, 256, 512])
+      || stability.some(point => !(Number(point.tokensPerSec) > 0) || !(Number(point.totalLatencyMs) > 0))) {
       failures.push('full_generation_stability_incomplete');
     }
     const matrix = profileData.prefillDecodeMatrix;
-    const measuredCells = Array.isArray(matrix?.cells)
-      ? matrix.cells.filter(cell => cell.status !== 'skipped')
-      : [];
-    if (!measuredCells.length || measuredCells.some(cell => cell.status !== 'pass')) {
+    const cells = Array.isArray(matrix?.cells) ? matrix.cells : [];
+    const expectedCellCount = Array.isArray(matrix?.prefillTokens) && Array.isArray(matrix?.decodeTokens)
+      ? matrix.prefillTokens.length * matrix.decodeTokens.length
+      : 0;
+    const completeMatrix = expectedCellCount > 0
+      && cells.length === expectedCellCount
+      && Number(matrix.cellCount) === expectedCellCount
+      && Number(matrix.passCount) === expectedCellCount
+      && Number(matrix.skippedCount || 0) === 0
+      && cells.every(cell => cell.status === 'pass'
+        && Number(cell.promptTokens) > 0
+        && Number(cell.requestedPromptTokens) > 0
+        && Number(cell.promptCoveragePct) >= Number(cell.minimumPromptCoveragePct || 80));
+    if (!completeMatrix) {
       failures.push('full_prefill_decode_matrix_incomplete');
     }
     if (!(Number(profileData.loadTiming?.coldLoadMs) > 0) || !(Number(profileData.loadTiming?.hotLoadMs) > 0)) {
@@ -332,47 +354,93 @@ async function scout(modelName, hosts, { assertClaimActive, claimIdentityFor, si
   return results;
 }
 
-async function persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData }) {
-  const currentArtifact = await resolveArtifactIdentity(modelName, hostId, hostUrl, { refresh: true });
-  if (!identitiesMatch(artifact, currentArtifact)) {
-    throw new Error(`Artifact or runtime changed while profiling ${modelName} on ${hostUrl}; discard this run and retry`);
-  }
-  const evidence = await modelPerformanceProfileService.saveProfile({
-    modelName,
-    hostId,
-    artifact: currentArtifact,
-    profile: { ...profileData, artifact: currentArtifact }
-  });
-  const required = Number(profileData.requiredRetainedSamples) || 0;
-  const quality = profileData.measurementQuality || {};
-  const qualificationFailures = profileQualificationFailures(profileData);
-  const benchmarkQualified = qualificationFailures.length === 0;
-  const authorityReceipt = {
-    version: 1,
-    source: 'profiler_pipeline',
-    evidenceId: evidence?._id ? String(evidence._id) : null,
-    digest: crypto.createHash('sha256').update(JSON.stringify({
-      modelName, hostId, artifact: currentArtifact,
-      profileDepth: profileData.profileDepth,
-      required, passing: quality.passingSampleCount || 0
-    })).digest('hex'),
-    issuedAt: new Date()
+async function persistProfileEvidence({
+  modelName,
+  hostId,
+  hostUrl,
+  artifact,
+  profileData,
+  assertClaimActive,
+  signal
+}) {
+  const checkpoint = () => {
+    if (signal?.aborted) {
+      const error = signal.reason instanceof Error ? signal.reason : new Error('Profiler authority write aborted');
+      error.code = error.code || 'BENCHMARK_CLAIM_STOPPED';
+      throw error;
+    }
+    assertClaimActive?.();
   };
-  await modelProfileService.updateReadiness(modelName, hostId, 'profiled', {
-    [`readiness.${hostId}.artifact`]: currentArtifact,
-    [`readiness.${hostId}.evidenceId`]: evidence?._id || null,
-    [`readiness.${hostId}.profileDepth`]: profileData.profileDepth,
-    [`readiness.${hostId}.benchmarkQualified`]: benchmarkQualified,
-    [`readiness.${hostId}.qualificationReason`]: benchmarkQualified ? null : qualificationFailures.join(','),
-    [`readiness.${hostId}.measurementReliability`]: quality.reliability || 'unknown',
-    [`readiness.${hostId}.authorityReceipt`]: authorityReceipt,
-    [`readiness.${hostId}.stale`]: false,
-    [`readiness.${hostId}.staleReason`]: null
-  });
-  if (profileData.thinking) {
-    await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking);
+  let evidence = null;
+  try {
+    checkpoint();
+    const currentArtifact = await resolveArtifactIdentity(modelName, hostId, hostUrl, { refresh: true });
+    checkpoint();
+    if (!identitiesMatch(artifact, currentArtifact)) {
+      throw new Error(`Artifact or runtime changed while profiling ${modelName} on ${hostUrl}; discard this run and retry`);
+    }
+    evidence = await modelPerformanceProfileService.saveProfile({
+      modelName,
+      hostId,
+      artifact: currentArtifact,
+      profile: { ...profileData, artifact: currentArtifact }
+    });
+    checkpoint();
+    const required = Number(profileData.requiredRetainedSamples) || 0;
+    const quality = profileData.measurementQuality || {};
+    const qualificationFailures = profileQualificationFailures(profileData);
+    const benchmarkQualified = qualificationFailures.length === 0;
+    const authorityReceipt = {
+      version: 1,
+      source: 'profiler_pipeline',
+      evidenceId: evidence?._id ? String(evidence._id) : null,
+      digest: crypto.createHash('sha256').update(JSON.stringify({
+        modelName, hostId, artifact: currentArtifact,
+        profileDepth: profileData.profileDepth,
+        required, passing: quality.passingSampleCount || 0
+      })).digest('hex'),
+      issuedAt: new Date()
+    };
+    checkpoint();
+    await modelProfileService.updateReadiness(modelName, hostId, 'profiled', {
+      [`readiness.${hostId}.artifact`]: currentArtifact,
+      [`readiness.${hostId}.evidenceId`]: evidence?._id || null,
+      [`readiness.${hostId}.profileDepth`]: profileData.profileDepth,
+      [`readiness.${hostId}.benchmarkQualified`]: benchmarkQualified,
+      [`readiness.${hostId}.qualificationReason`]: benchmarkQualified ? null : qualificationFailures.join(','),
+      [`readiness.${hostId}.measurementReliability`]: quality.reliability || 'unknown',
+      [`readiness.${hostId}.authorityReceipt`]: authorityReceipt,
+      [`readiness.${hostId}.stale`]: false,
+      [`readiness.${hostId}.staleReason`]: null
+    });
+    checkpoint();
+    if (profileData.thinking) {
+      await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking);
+      checkpoint();
+    }
+    await modelPerformanceProfileService.retireSupersededProfiles({
+      modelName,
+      hostId,
+      evidenceId: evidence?._id,
+      assertAuthorityActive: checkpoint
+    });
+    checkpoint();
+    return evidence;
+  } catch (error) {
+    if (evidence?._id) {
+      const reason = error.code === 'BENCHMARK_CLAIM_LOST' || error.code === 'BENCHMARK_CLAIM_STOPPED'
+        ? 'claim_lost_during_profiler_authority_write'
+        : 'profiler_authority_write_failed';
+      await Promise.allSettled([
+        modelPerformanceProfileService.invalidateProfile(evidence._id, reason),
+        modelProfileService.invalidateReadinessIfEvidence(modelName, hostId, evidence._id, reason),
+        ...(profileData.thinking
+          ? [modelProfileService.invalidateThinkingCapability(modelName, hostId, reason)]
+          : [])
+      ]);
+    }
+    throw error;
   }
-  return evidence;
 }
 
 async function profile(modelName, hostId, hostUrl, depth = 'standard', {
@@ -522,7 +590,9 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     .sort((left, right) => Math.abs(Number(left.tokensPerSec) - representativeTokensPerSec)
       - Math.abs(Number(right.tokensPerSec) - representativeTokensPerSec))[0];
   const tpsStr = Number(representativeTokensPerSec).toFixed(1);
-  const ttftStr = representativeSample?.ttftMs ? ` · TTFT ${Math.round(representativeSample.ttftMs)}ms` : '';
+  const ttftStr = measurementQuality.ttftP50Ms != null
+    ? ` · TTFT p50 ${Math.round(measurementQuality.ttftP50Ms)}ms`
+    : '';
   const pevalStr = testResult.promptEvalTokensPerSec ? ` · prompt eval ${Number(testResult.promptEvalTokensPerSec).toFixed(0)} tok/s` : '';
   notify('throughput', {
     message: `Throughput: ${tpsStr} tok/s${ttftStr}${pevalStr} · reliability ${measurementQuality.reliability}`,
@@ -586,8 +656,10 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     tokensPerSec: representativeTokensPerSec,
     promptEvalTokensPerSec: representativeSample?.promptEvalTokensPerSec || null,
     promptEvalDurationMs: representativeSample?.promptEvalDurationMs || null,
-    ttftMs: representativeSample?.ttftMs || null,
-    ttftMeasurement: representativeSample?.ttftMeasurement || null,
+    ttftMs: measurementQuality.ttftP50Ms ?? null,
+    ttftP50Ms: measurementQuality.ttftP50Ms ?? null,
+    ttftP95Ms: measurementQuality.ttftP95Ms ?? null,
+    ttftMeasurement: measurementQuality.ttftP50Ms != null ? 'streamed_wall_clock' : null,
     comparisonPromptTokens: representativeSample?.promptTokens || null,
     comparisonPromptTargetTokens: testResult.requestedPromptTokens || null,
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
@@ -618,7 +690,9 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
   if (depth === 'quick') {
     notify('saving', { message: 'Saving profile to database…' });
     checkpoint();
-    const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
+    const evidence = await persistProfileEvidence({
+      modelName, hostId, hostUrl, artifact, profileData, assertClaimActive: checkpoint, signal
+    });
     return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
   }
 
@@ -687,7 +761,9 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
   if (depth === 'standard') {
     notify('saving', { message: 'Saving profile to database…' });
     checkpoint();
-    const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
+    const evidence = await persistProfileEvidence({
+      modelName, hostId, hostUrl, artifact, profileData, assertClaimActive: checkpoint, signal
+    });
     notify('saved', { message: `Profile saved for exact artifact ${modelName}` });
     return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
   }
@@ -724,7 +800,9 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
 
   notify('saving', { message: 'Saving profile to database…' });
   checkpoint();
-  const evidence = await persistProfileEvidence({ modelName, hostId, hostUrl, artifact, profileData });
+  const evidence = await persistProfileEvidence({
+    modelName, hostId, hostUrl, artifact, profileData, assertClaimActive: checkpoint, signal
+  });
   notify('saved', { message: `Profile saved for exact artifact ${modelName}` });
   return { modelName, hostId, artifact, evidenceId: evidence?._id || null, profile: profileData };
 }

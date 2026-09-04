@@ -90,7 +90,7 @@ describe('planMatrix', () => {
 describe('runPrefillDecodeMatrix', () => {
   test('runs every fitting cell and computes separate prefill/decode throughput', async () => {
     generate.mockImplementation((host, body) => Promise.resolve(ollamaResponse({
-      promptTokens: 500,
+      promptTokens: body.options.num_ctx,
       completionTokens: body.options.num_predict,
       prefillTps: 800,
       decodeTps: 120
@@ -137,7 +137,7 @@ describe('runPrefillDecodeMatrix', () => {
   });
 
   test('flags short completions as invalid decode samples', async () => {
-    generate.mockResolvedValue(ollamaResponse({ promptTokens: 400, completionTokens: 10 }));
+    generate.mockResolvedValue(ollamaResponse({ promptTokens: 512, completionTokens: 10 }));
 
     const result = await runPrefillDecodeMatrix('http://host:11434', 'm', {
       prefillTokens: [512],
@@ -152,7 +152,7 @@ describe('runPrefillDecodeMatrix', () => {
   test('records per-cell errors without aborting the matrix', async () => {
     generate
       .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValue(ollamaResponse({ promptTokens: 400, completionTokens: 64 }));
+      .mockResolvedValue(ollamaResponse({ promptTokens: 1024, completionTokens: 64 }));
 
     const result = await runPrefillDecodeMatrix('http://host:11434', 'm', {
       prefillTokens: [512, 1024],

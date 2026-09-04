@@ -46,12 +46,32 @@ describe('ModelProfile write authority', () => {
   });
 
   it('exposes max capacity separately from the interactive runtime recommendation', async () => {
+    const evidenceId = '68b8af284f953a0bd8931038';
+    const artifact = { digest: 'sha256:exact', runtimeFingerprint: 'runtime-a' };
     performanceService.getActiveProfile.mockResolvedValue({
-      artifact: { digest: 'sha256:exact', runtimeFingerprint: 'runtime-a' },
+      _id: evidenceId,
+      artifact,
       profile: {
         maxVerifiedContext: 262144,
         recommendedInteractiveContext: 65536,
         recommendedDocumentContext: 131072
+      }
+    });
+    service.getByName.mockResolvedValue({
+      readiness: {
+        'host-beta': {
+          benchmarkQualified: true,
+          stale: false,
+          profileDepth: 'standard',
+          evidenceId,
+          artifact,
+          authorityReceipt: {
+            source: 'profiler_pipeline',
+            version: 1,
+            digest: 'a'.repeat(64),
+            evidenceId
+          }
+        }
       }
     });
 

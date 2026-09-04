@@ -27,6 +27,18 @@ const logger = require('../../../config/logger');
 
 const MIB = est.MIB;
 
+function hasProfilerAuthority(readiness, evidence) {
+  const receipt = readiness?.authorityReceipt;
+  return readiness?.benchmarkQualified === true
+    && readiness?.stale !== true
+    && ['standard', 'full'].includes(readiness?.profileDepth)
+    && receipt?.source === 'profiler_pipeline'
+    && Number(receipt.version) === 1
+    && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
+    && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '')
+    && String(readiness?.evidenceId || '') === String(evidence?._id || '');
+}
+
 /**
  * Build the full fit report for one host.
  * @param {string} hostId
@@ -86,9 +98,11 @@ async function buildHostFitReport(hostId) {
       && evidence.artifact.digest === readiness.artifact.digest
       && evidence.artifact.runtimeFingerprint === readiness.artifact.runtimeFingerprint
       && evidence.artifact.registryQualified === true
-      && readiness.stale !== true
+      && hasProfilerAuthority(readiness, evidence)
     );
-    const p = artifactMatches ? evidence.profile : null;
+    const p = artifactMatches && Number(evidence.profile?.recommendedInteractiveContext) > 0
+      ? evidence.profile
+      : null;
     const bench = meta.benchmarkStats || {};
 
     if (p) {
@@ -111,7 +125,7 @@ async function buildHostFitReport(hostId) {
         moeActiveB,
         quant,
         tokensPerSec: tps,
-        ttftMs: est.round(p.ttftMs),
+        ttftMs: est.round(p.ttftP50Ms),
         reliability: p.measurementQuality?.reliability || null,
         maxVerifiedContext: p.maxVerifiedContext || null,
         recommendedInteractiveContext: p.recommendedInteractiveContext || null,

@@ -26,4 +26,14 @@ describe('profiler UI evidence semantics', () => {
     expect(profiling).toContain("? 'Unknown'");
     expect(profiling).not.toMatch(/optimal ctx/i);
   });
+
+  test('renders only aggregate streamed TTFT p50 instead of a representative throughput sample', () => {
+    const render = publicSource('models-render.js');
+    const profiling = publicSource('models-profiling.js');
+    expect(render).toContain('p.ttftP50Ms');
+    expect(render).toContain("p.ttftMeasurement === 'streamed_wall_clock'");
+    expect(profiling).toContain('measurementQuality?.ttftP50Ms');
+    expect(profiling).toContain('TTFT p50');
+    expect(render).not.toContain('p.ttftMs');
+  });
 });

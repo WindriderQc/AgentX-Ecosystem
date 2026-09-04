@@ -32,8 +32,33 @@ router.get('/:name/config', async (req, res) => {
     const hostId = req.query.host;
     if (!hostId) return res.status(400).json({ status: 'error', error: 'host query param required' });
     if (!validateHostId(hostId, res)) return;
-    const evidence = await modelPerformanceProfileService.getActiveProfile(req.params.name, hostId);
+    const [evidence, model] = await Promise.all([
+      modelPerformanceProfileService.getActiveProfile(req.params.name, hostId),
+      modelProfileService.getByName(req.params.name)
+    ]);
     if (!evidence) return res.status(404).json({ status: 'error', error: 'No exact-artifact profile evidence found' });
+    const readiness = model?.readiness instanceof Map
+      ? model.readiness.get(hostId)
+      : model?.readiness?.[hostId];
+    const receipt = readiness?.authorityReceipt;
+    const authoritative = readiness?.benchmarkQualified === true
+      && readiness?.stale !== true
+      && ['standard', 'full'].includes(readiness?.profileDepth)
+      && receipt?.source === 'profiler_pipeline'
+      && Number(receipt.version) === 1
+      && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
+      && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '')
+      && String(readiness?.evidenceId || '') === String(evidence?._id || '')
+      && evidence.artifact?.digest === readiness?.artifact?.digest
+      && evidence.artifact?.runtimeFingerprint === readiness?.artifact?.runtimeFingerprint
+      && Number(evidence.profile?.recommendedInteractiveContext) > 0;
+    if (!authoritative) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'PROFILE_AUTHORITY_REQUIRED',
+        error: 'A benchmark-qualified exact-artifact profiler receipt is required before using this runtime config'
+      });
+    }
     res.json({
       status: 'success',
       data: {

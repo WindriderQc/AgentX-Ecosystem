@@ -83,7 +83,7 @@ function registerActiveBatchController(batchId, controller) {
     };
 }
 
-function abortActiveBatchRequests(batchId) {
+function abortActiveBatchRequests(batchId, options = {}) {
     const key = String(batchId);
     const controllers = activeBatchControllers.get(key);
     if (!controllers) {
@@ -94,10 +94,15 @@ function abortActiveBatchRequests(batchId) {
     for (const controller of controllers) {
         if (controller.signal.aborted) continue;
 
-        userStoppedControllers.add(controller);
-        const reason = new Error(`Benchmark batch ${key} stopped by user`);
-        reason.name = 'BenchmarkBatchStoppedError';
-        reason.code = 'BENCHMARK_BATCH_STOPPED';
+        const userInitiated = options.userInitiated !== false;
+        if (userInitiated) userStoppedControllers.add(controller);
+        const reason = options.reason instanceof Error
+            ? options.reason
+            : new Error(`Benchmark batch ${key} stopped by user`);
+        if (userInitiated) {
+            reason.name = 'BenchmarkBatchStoppedError';
+            reason.code = 'BENCHMARK_BATCH_STOPPED';
+        }
         controller.abort(reason);
         abortedRequestCount += 1;
     }
@@ -1199,7 +1204,12 @@ async function runBatchOrchestrator({
     await setBatchPhase('claiming', `Reserving ${allAffectedHosts.length} host(s) with core…`);
     let claimedHostUrls;
     try {
-        claimedHostUrls = await acquireBenchmarkClaims(allAffectedHosts, batchId, claimEstimateMs);
+        claimedHostUrls = await acquireBenchmarkClaims(allAffectedHosts, batchId, claimEstimateMs, {
+            kind: harnessTargets.length > 0 || judgeConfig.target?.executionKind === 'harness'
+                ? 'benchmark-cloud'
+                : 'benchmark',
+            source: 'benchmark'
+        });
     } catch (error) {
         if (!isResuming) throw error;
         await resumeRevalidation.fail(error, RESUME_CODES.CLAIM_ACQUISITION_FAILED);
@@ -1213,6 +1223,13 @@ async function runBatchOrchestrator({
                 if (!batchCancellationController.signal.aborted) {
                     batchCancellationController.abort(error);
                 }
+                // Child Core and harness requests own separate controllers.
+                // Abort the whole registered set immediately on lease loss;
+                // waiting for their next checkpoint would let stale work run.
+                abortActiveBatchRequests(batchId, {
+                    reason: error,
+                    userInitiated: false
+                });
             }
         }
     );
@@ -1240,20 +1257,21 @@ async function runBatchOrchestrator({
         if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
         else stopClaimHeartbeat();
 
-        let release = { failed: 0 };
-        if (claimedHostUrls.length > 0) {
-            release = await releaseBenchmarkClaims(claimedHostUrls, batchId);
-            await recordBatchTimelineEvent(release.failed > 0 ? 'benchmark_claim_release_failed' : 'benchmark_claim_released', {
-                hosts: claimedHostUrls,
-                ...(release.failed > 0 ? { failed: release.failed } : {})
-            }).catch(() => {});
-            if (release.failed > 0) {
-                const detail = release.details?.find(item => !item.released);
-                const error = new Error(detail?.reason || 'Benchmark runtime restore/release failed');
-                error.code = 'BENCHMARK_RUNTIME_RESTORE_FAILED';
-                error.release = release;
-                throw error;
-            }
+        const release = await releaseBenchmarkClaims(claimedHostUrls, batchId);
+        await recordBatchTimelineEvent(release.failed > 0 ? 'benchmark_claim_release_failed' : 'benchmark_claim_released', {
+            hosts: claimedHostUrls,
+            ...(release.failed > 0 ? { failed: release.failed } : {})
+        }).catch(() => {});
+        if (release.failed > 0) {
+            const detail = release.details?.find(item => !item.released);
+            const error = new Error(
+                detail?.reason
+                || release.workloadAdmission?.reason
+                || 'Benchmark runtime restore/release failed'
+            );
+            error.code = 'BENCHMARK_RUNTIME_RESTORE_FAILED';
+            error.release = release;
+            throw error;
         }
     };
 

@@ -27,12 +27,22 @@ describe('benchmarkClaimGuard claim proof', () => {
     await expect(assertHostAvailableForConsumer('http://host:11434', {
       callerDetail: 'benchmark-batch-1',
       claimBatchId: 'batch-1',
-      claimGeneration: 'generation-1'
+      claimGeneration: 'generation-1',
+      benchmarkAuthorized: true
     })).resolves.toMatchObject({ batchId: 'batch-1' });
 
     await expect(assertHostAvailableForConsumer('http://host:11434', {
       claimBatchId: 'batch-1',
       claimGeneration: 'generation-stale'
+    })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_ACTIVE' });
+  });
+
+  it('rejects replay of an exact proof without authenticated Benchmark principal', async () => {
+    await expect(assertHostAvailableForConsumer('http://host:11434', {
+      callerDetail: 'benchmark-batch-1',
+      claimBatchId: 'batch-1',
+      claimGeneration: 'generation-1',
+      benchmarkAuthorized: false
     })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_ACTIVE' });
   });
 

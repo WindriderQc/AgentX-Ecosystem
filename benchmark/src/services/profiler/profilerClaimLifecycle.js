@@ -65,17 +65,17 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
       }
       return identity;
     },
-    async release() {
+    async release(options = {}) {
       if (!releasePromise) {
         releasePromise = (async () => {
           await heartbeat.drain();
-          return releaseBenchmarkClaims(claimed, operationId);
+          return releaseBenchmarkClaims(claimed, operationId, options);
         })();
       }
       return releasePromise;
     },
-    async finalize() {
-      const result = await this.release();
+    async finalize(options = {}) {
+      const result = await this.release(options);
       if (result.failed > 0) {
         const detail = result.details?.find(item => !item.released);
         const error = new Error(detail?.reason || 'Fenced runtime restore/release failed');

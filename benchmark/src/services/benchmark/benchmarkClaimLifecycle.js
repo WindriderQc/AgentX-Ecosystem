@@ -7,7 +7,10 @@ const { DEFAULT_EXECUTION_CONFIG } = require('./config');
 const {
     claimHostForBenchmark,
     heartbeatBenchmarkClaim,
-    releaseBenchmarkClaim
+    releaseBenchmarkClaim,
+    acquireWorkloadAdmission,
+    heartbeatWorkloadAdmission,
+    releaseWorkloadAdmission
 } = require('../../clients/coreApiClient');
 
 const PHASE_BUDGET_PER_TEST_MS = 30_000;
@@ -26,6 +29,13 @@ const CLAIM_HEARTBEAT_INTERVAL_MS = 30_000;
  */
 async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, claimOptions = {}) {
     const acquired = [];
+    await acquireWorkloadAdmission(batchId, {
+        requestId: claimOptions.requestId || `benchmark:${batchId}`,
+        kind: claimOptions.kind || (claimOptions.source === 'profiler' ? 'profiler' : 'benchmark'),
+        batchId: claimOptions.source === 'benchmark' || !claimOptions.source ? batchId : null,
+        hosts: hostUrls,
+        ttlMs: estimatedDurationMs
+    });
     for (const hostUrl of hostUrls) {
         try {
             const result = await claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs, {
@@ -45,9 +55,7 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, cl
             logger.warn('Benchmark claim acquisition failed — aborting batch', {
                 batchId, hostUrl, error: err.message
             });
-            if (acquired.length > 0) {
-                await releaseBenchmarkClaims(acquired, batchId);
-            }
+            await releaseBenchmarkClaims(acquired, batchId);
             const wrapped = new Error(`Unable to reserve benchmark host ${hostUrl}: ${err.message}`);
             wrapped.hostUrl = hostUrl;
             wrapped.cause = err;
@@ -64,17 +72,23 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, cl
  * original error.
  * @returns {Promise<{released: number, failed: number, details: object[]}>}
  */
-async function releaseBenchmarkClaims(hostUrls, batchId) {
+async function releaseBenchmarkClaims(hostUrls, batchId, options = {}) {
     const details = await Promise.all(hostUrls.map(async (hostUrl) => {
         try {
-            const result = await releaseBenchmarkClaim(hostUrl, batchId);
+            const hostOptions = options.byHost
+                ? (options.byHost[hostUrl] || {})
+                : options;
+            const result = Object.keys(hostOptions).length > 0
+                ? await releaseBenchmarkClaim(hostUrl, batchId, hostOptions)
+                : await releaseBenchmarkClaim(hostUrl, batchId);
             if (result?.released === true) {
                 logger.info('Benchmark claim released', { batchId, hostUrl });
                 return {
                     hostUrl,
                     released: true,
                     runtimeRestore: result.runtimeRestore || null,
-                    pinRestore: result.pinRestore || null
+                    pinRestore: result.pinRestore || null,
+                    releaseReceipt: result.releaseReceipt || null
                 };
             }
             logger.warn('Benchmark claim release refused', {
@@ -87,7 +101,8 @@ async function releaseBenchmarkClaims(hostUrls, batchId) {
                 released: false,
                 reason: result?.reason || 'core_refused_release',
                 runtimeRestore: result?.runtimeRestore || null,
-                pinRestore: result?.pinRestore || null
+                pinRestore: result?.pinRestore || null,
+                releaseReceipt: result?.releaseReceipt || null
             };
         } catch (err) {
             logger.warn('Benchmark claim release failed', {
@@ -96,10 +111,17 @@ async function releaseBenchmarkClaims(hostUrls, batchId) {
             return { hostUrl, released: false, reason: err.message };
         }
     }));
+    let workloadAdmission = null;
+    try {
+        workloadAdmission = await releaseWorkloadAdmission(batchId);
+    } catch (error) {
+        workloadAdmission = { released: false, reason: error.message };
+    }
     return {
         released: details.filter(detail => detail.released).length,
-        failed: details.filter(detail => !detail.released).length,
-        details
+        failed: details.filter(detail => !detail.released).length + (workloadAdmission?.released === true ? 0 : 1),
+        details,
+        workloadAdmission
     };
 }
 
@@ -128,6 +150,11 @@ function startBenchmarkClaimHeartbeat(hostUrls, batchId, estimatedDurationMs, op
         running = true;
         inFlight = (async () => {
             try {
+                const workload = await heartbeatWorkloadAdmission(batchId, estimatedDurationMs);
+                if (workload?.heartbeat === false) {
+                    fail(null, workload.reason || 'workload admission ownership rejected');
+                    return;
+                }
                 await Promise.all(hostUrls.map(async (hostUrl) => {
                     const result = await heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs, {
                         source: options.source || 'benchmark',

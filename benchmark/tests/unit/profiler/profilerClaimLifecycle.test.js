@@ -1,6 +1,9 @@
 'use strict';
 
 jest.mock('../../../src/clients/coreApiClient', () => ({
+  acquireWorkloadAdmission: jest.fn().mockResolvedValue({ acquired: true }),
+  heartbeatWorkloadAdmission: jest.fn().mockResolvedValue({ heartbeat: true }),
+  releaseWorkloadAdmission: jest.fn().mockResolvedValue({ released: true }),
   claimHostForBenchmark: jest.fn().mockResolvedValue({ claimed: true }),
   heartbeatBenchmarkClaim: jest.fn(),
   releaseBenchmarkClaim: jest.fn().mockResolvedValue({
@@ -25,6 +28,9 @@ const { acquireProfilerClaimLease } = require('../../../src/services/profiler/pr
 describe('profiler claim lease cancellation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    coreApiClient.acquireWorkloadAdmission.mockResolvedValue({ acquired: true });
+    coreApiClient.heartbeatWorkloadAdmission.mockResolvedValue({ heartbeat: true });
+    coreApiClient.releaseWorkloadAdmission.mockResolvedValue({ released: true });
     coreApiClient.claimHostForBenchmark.mockResolvedValue({ claimed: true });
     coreApiClient.heartbeatBenchmarkClaim
       .mockResolvedValueOnce({ heartbeat: true })

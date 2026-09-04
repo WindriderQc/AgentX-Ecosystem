@@ -47,6 +47,7 @@ describe('modelContextProfileService', () => {
       steps: [{
         numCtx: 237568,
         passed: true,
+        degradationPct: 12.5,
         tokensPerSec: 71.2,
         promptTokens: 190000,
         vramUsedMiB: 12000,
@@ -94,7 +95,7 @@ describe('modelContextProfileService', () => {
       status: 'completed',
       testedNumCtx: 131072,
       testedAt: new Date('2026-06-16T01:00:00Z'),
-      steps: [{ numCtx: 131072, passed: true, tokensPerSec: 73.59 }]
+      steps: [{ numCtx: 131072, passed: true, tokensPerSec: 73.59, degradationPct: 10 }]
     });
 
     expect(profile).toEqual(expect.objectContaining({
@@ -123,6 +124,30 @@ describe('modelContextProfileService', () => {
       recommendedContext: null,
       recommendationStatus: 'unknown',
       revalidationRequired: true
+    });
+  });
+
+  it('does not turn max verified capacity into a recommendation when degradation evidence is absent', async () => {
+    const profile = await service.updateFromProbeSnapshot({
+      _id: 'snapshot-capacity-only',
+      modelName: 'ornith:latest',
+      hostUrl: 'http://192.0.2.12:11434',
+      artifactDigest: 'sha256:ornith',
+      runtimeFingerprint: 'runtime-a',
+      status: 'completed',
+      testedNumCtx: 262144,
+      steps: [{ numCtx: 262144, passed: true, tokensPerSec: 12.5 }]
+    });
+
+    expect(profile).toMatchObject({
+      maxVerifiedContext: 262144,
+      recommendedInteractiveContext: null,
+      recommendedDocumentContext: null,
+      recommendedContext: null,
+      recommendationStatus: 'unknown',
+      revalidationRequired: true,
+      stale: true,
+      staleReason: 'context_recommendation_unavailable'
     });
   });
 
@@ -187,8 +212,8 @@ describe('modelContextProfileService', () => {
       baselineTokensPerSec: 50,
       atLimitTokensPerSec: 30,
       steps: [
-        { numCtx: 2048, passed: true, tokensPerSec: 50 },
-        { numCtx: 32768, passed: true, tokensPerSec: 30, promptTokens: 26000 },
+        { numCtx: 2048, passed: true, tokensPerSec: 50, degradationPct: 0 },
+        { numCtx: 32768, passed: true, tokensPerSec: 30, promptTokens: 26000, degradationPct: 25 },
         { numCtx: 65536, requestSucceeded: true, passed: false, tokensPerSec: 0 }
       ]
     });

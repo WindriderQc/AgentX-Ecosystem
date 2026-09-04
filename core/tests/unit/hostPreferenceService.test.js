@@ -51,12 +51,32 @@ describe('hostPreferenceService', () => {
       });
     });
 
+    it.each([
+      ['digest', { size: 8_000_000_000, size_vram: 7_500_000_000, context_length: 32768 }],
+      ['artifact size', { digest: 'sha256:qwen', size_vram: 7_500_000_000, context_length: 32768 }],
+      ['VRAM size', { digest: 'sha256:qwen', size: 8_000_000_000, context_length: 32768 }]
+    ])('rejects a resident whose %s is not observable', async (_field, resident) => {
+      global.fetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          models: [{ name: 'qwen:latest', expires_at: '9999-12-31T23:59:59Z', ...resident }]
+        })
+      }));
+
+      await expect(service.captureBenchmarkRuntime(HOST_URL)).rejects.toMatchObject({
+        code: 'BENCHMARK_RUNTIME_SNAPSHOT_INCOMPLETE'
+      });
+    });
+
     it('captures resident identity, context and keep-alive expiry exactly', async () => {
       global.fetch = jest.fn(async () => ({
         ok: true,
         json: async () => ({
           models: [{
             name: 'qwen:latest',
+            digest: 'sha256:qwen',
+            size: 8_000_000_000,
+            size_vram: 7_500_000_000,
             context_length: 32768,
             expires_at: '9999-12-31T23:59:59Z'
           }]
@@ -66,7 +86,15 @@ describe('hostPreferenceService', () => {
       await expect(service.captureBenchmarkRuntime(HOST_URL)).resolves.toMatchObject({
         source: 'ollama_ps',
         exact: true,
-        residents: [{ model: 'qwen:latest', contextLength: 32768, keepAlive: -1 }]
+        identityDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        residents: [{
+          model: 'qwen:latest',
+          digest: 'sha256:qwen',
+          artifactSize: 8_000_000_000,
+          sizeVram: 7_500_000_000,
+          contextLength: 32768,
+          keepAlive: -1
+        }]
       });
     });
 
@@ -89,6 +117,9 @@ describe('hostPreferenceService', () => {
             json: async () => ({
               models: [{
                 name: 'qwen:latest',
+                digest: 'sha256:qwen',
+                size: 8_000_000_000,
+                size_vram: 7_500_000_000,
                 context_length: 32768,
                 expires_at: new Date(Date.now() + 5 * 60_000).toISOString()
               }]
@@ -98,15 +129,22 @@ describe('hostPreferenceService', () => {
         return { ok: true, text: async () => '' };
       });
 
-      await expect(service.restoreBenchmarkRuntime(HOST_URL, {
+      const snapshot = {
+        capturedAt: new Date(),
+        source: 'ollama_ps',
         exact: true,
         residents: [{
           model: 'qwen:latest',
+          digest: 'sha256:qwen',
+          artifactSize: 8_000_000_000,
+          sizeVram: 7_500_000_000,
           contextLength: 32768,
           keepAlive: -1,
           expiresAt: new Date('9999-12-31T23:59:59Z')
         }]
-      }, {
+      };
+      snapshot.identityDigest = service.benchmarkRuntimeSnapshotIdentity(snapshot);
+      await expect(service.restoreBenchmarkRuntime(HOST_URL, snapshot, {
         batchId: 'batch-ttl',
         claimGeneration: 'generation-ttl'
       })).resolves.toMatchObject({ status: 'error', verified: false });

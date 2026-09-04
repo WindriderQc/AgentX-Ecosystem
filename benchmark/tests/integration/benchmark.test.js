@@ -49,6 +49,34 @@ jest.mock('../../src/services/benchmark/preflight', () => ({
     }))
 }));
 
+// Runtime coordination is covered against Core by focused contract suites.
+// This integration suite owns only Benchmark's local persistence lifecycle.
+jest.mock('../../src/clients/coreApiClient', () => {
+    const actual = jest.requireActual('../../src/clients/coreApiClient');
+    return {
+        ...actual,
+        acquireWorkloadAdmission: jest.fn(async (workloadId, options = {}) => ({
+            acquired: true,
+            admissionId: `admission-${workloadId}`,
+            generation: `generation-${workloadId}`,
+            principal: 'benchmark-service',
+            requestId: options.requestId || `benchmark:${workloadId}`,
+            workloadId,
+            kind: options.kind || 'benchmark',
+            batchId: options.batchId || null
+        })),
+        heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
+        releaseWorkloadAdmission: jest.fn(async () => ({ released: true })),
+        claimHostForBenchmark: jest.fn(async () => ({ claimed: true })),
+        heartbeatBenchmarkClaim: jest.fn(async () => ({ heartbeat: true })),
+        releaseBenchmarkClaim: jest.fn(async () => ({ released: true })),
+        getBenchmarkClaimIdentity: jest.fn((_host, batchId) => ({
+            claimBatchId: batchId,
+            claimGeneration: `generation-${batchId}`
+        }))
+    };
+});
+
 jest.mock('../../src/services/benchmark/judgeReadiness', () => {
     const actual = jest.requireActual('../../src/services/benchmark/judgeReadiness');
     const publicReadiness = {

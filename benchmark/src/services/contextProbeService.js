@@ -411,16 +411,40 @@ async function probeModelContext(modelName, options = {}) {
       const assessed = repetitions.map(step => assessProbeStep(step, comparisonSpeed));
       const failed = assessed.find(step => !step.passed);
       const representative = failed || [...assessed].sort((a, b) => Number(a.tokensPerSec) - Number(b.tokensPerSec))[0];
+      const mean = speeds.length
+        ? speeds.reduce((sum, value) => sum + value, 0) / speeds.length
+        : 0;
+      const variance = speeds.length > 1
+        ? speeds.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (speeds.length - 1)
+        : 0;
+      const stdDev = Math.sqrt(variance);
       return {
         ...representative,
-        tokensPerSec: speeds.length
-          ? Number((speeds.reduce((sum, value) => sum + value, 0) / speeds.length).toFixed(2))
-          : 0,
+        tokensPerSec: speeds.length ? Number(mean.toFixed(2)) : 0,
         passed: assessed.every(step => step.passed),
         reason: failed?.reason || representative?.reason || null,
         repetitionCount: assessed.length,
         tokensPerSecMin: speeds.length ? Math.min(...speeds) : null,
-        tokensPerSecMax: speeds.length ? Math.max(...speeds) : null
+        tokensPerSecMax: speeds.length ? Math.max(...speeds) : null,
+        tokensPerSecStdDev: speeds.length ? Number(stdDev.toFixed(3)) : null,
+        tokensPerSecCvPct: mean > 0 ? Number(((stdDev / mean) * 100).toFixed(2)) : null,
+        samples: assessed.map(step => ({
+          requestSucceeded: step.requestSucceeded,
+          tokensPerSec: step.tokensPerSec,
+          promptTokens: step.promptTokens,
+          estimatedPromptTokens: step.estimatedPromptTokens,
+          promptCoveragePct: step.promptCoveragePct,
+          completionTokens: step.completionTokens,
+          latencyMs: step.latencyMs,
+          vramUsedMiB: step.vramUsedMiB,
+          vramTotalMiB: step.vramTotalMiB,
+          gpuPercent: step.gpuPercent,
+          gpuSizeTotal: step.gpuSizeTotal,
+          gpuSizeVram: step.gpuSizeVram,
+          ollamaContextLength: step.ollamaContextLength,
+          passed: step.passed,
+          reason: step.reason || null
+        }))
       };
     }
 
@@ -585,6 +609,8 @@ async function probeModelContext(modelName, options = {}) {
       testDurationMs: Date.now() - probeStart,
       status: 'completed',
       error: null,
+      authorityStatus: 'pending',
+      authorityError: null,
       steps
     });
 
@@ -598,8 +624,29 @@ async function probeModelContext(modelName, options = {}) {
     const snapshotObject = snapshot.toObject();
     try {
       checkpoint();
-      await modelContextProfileService.updateFromProbeSnapshot(snapshotObject);
+      const contextAuthority = await modelContextProfileService.updateFromProbeSnapshot(snapshotObject);
+      if (!contextAuthority) {
+        const error = new Error('Model context profile rejected completed probe evidence');
+        error.code = 'MODEL_CONTEXT_PROFILE_PERSIST_FAILED';
+        throw error;
+      }
+      checkpoint();
+      await ModelContextProbeSnapshot.updateOne(
+        { _id: snapshotObject._id, authorityStatus: 'pending' },
+        { $set: { authorityStatus: 'committed', authorityError: null } }
+      );
+      checkpoint();
     } catch (profileErr) {
+      await modelContextProfileService.invalidateIfSnapshot(
+        snapshotObject,
+        profileErr.code === 'BENCHMARK_CLAIM_LOST'
+          ? 'claim_lost_during_context_authority_write'
+          : 'context_authority_write_failed'
+      ).catch(() => {});
+      await ModelContextProbeSnapshot.updateOne(
+        { _id: snapshotObject._id },
+        { $set: { authorityStatus: 'rejected', authorityError: profileErr.message } }
+      ).catch(() => {});
       logger.warn('Failed to update model context profile from probe snapshot', {
         modelName: normalizedModel,
         hostUrl,
@@ -610,7 +657,7 @@ async function probeModelContext(modelName, options = {}) {
       throw profileErr;
     }
 
-    return snapshotObject;
+    return { ...snapshotObject, authorityStatus: 'committed', authorityError: null };
   } catch (err) {
     if (options.signal?.aborted) {
       throw (options.signal.reason instanceof Error ? options.signal.reason : err);
@@ -627,6 +674,8 @@ async function probeModelContext(modelName, options = {}) {
       testDurationMs: Date.now() - probeStart,
       status: 'failed',
       error: err.message,
+      authorityStatus: 'rejected',
+      authorityError: err.message,
       promptFillPct,
       steps
     });

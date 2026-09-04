@@ -338,6 +338,7 @@ const BenchmarkBatchSchema = new mongoose.Schema({
             hostId: { type: String, default: null },
             status: { type: String, default: 'pass' },
             source: { type: String, default: 'benchmark_host_test' },
+            persistenceReceipt: { type: String, default: null },
             tokensPerSec: { type: Number, default: null },
             promptEvalTokensPerSec: { type: Number, default: null },
             latencyMs: { type: Number, default: null },

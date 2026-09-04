@@ -43,10 +43,12 @@ function bestStepForSnapshot(snapshot) {
     || null;
 }
 
-function recommendationFor(snapshot, threshold, fallback) {
+function recommendationFor(snapshot, threshold) {
   return (Array.isArray(snapshot?.steps) ? snapshot.steps : [])
-    .filter(step => step?.passed && Number(step.degradationPct) <= threshold)
-    .reduce((max, step) => Math.max(max, positiveInteger(step.numCtx) || 0), 0) || fallback;
+    .filter(step => step?.passed
+      && Number.isFinite(Number(step.degradationPct))
+      && Number(step.degradationPct) <= threshold)
+    .reduce((max, step) => Math.max(max, positiveInteger(step.numCtx) || 0), 0) || null;
 }
 
 function normalizeContextProfile(profile) {
@@ -109,10 +111,19 @@ async function updateFromProbeSnapshot(snapshot) {
     ? Math.min(100, Math.max(0, Number(snapshot.interactiveDegradationThreshold))) : 15;
   const documentThreshold = Number.isFinite(Number(snapshot.documentDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(snapshot.documentDegradationThreshold))) : 30;
-  const recommendedInteractiveContext = positiveInteger(snapshot.recommendedInteractiveContext)
-    || recommendationFor(snapshot, interactiveThreshold, tested);
-  const recommendedDocumentContext = positiveInteger(snapshot.recommendedDocumentContext)
-    || recommendationFor(snapshot, documentThreshold, tested);
+  const boundedRecommendation = value => {
+    const recommendation = positiveInteger(value);
+    return recommendation ? Math.min(recommendation, maxVerifiedContext) : null;
+  };
+  const recommendedInteractiveContext = boundedRecommendation(
+    positiveInteger(snapshot.recommendedInteractiveContext)
+      || recommendationFor(snapshot, interactiveThreshold)
+  );
+  const recommendedDocumentContext = boundedRecommendation(
+    positiveInteger(snapshot.recommendedDocumentContext)
+      || recommendationFor(snapshot, documentThreshold)
+  );
+  const recommendationsVerified = Boolean(recommendedInteractiveContext && recommendedDocumentContext);
   const recommendedContext = recommendedDocumentContext;
   const step = bestStepForSnapshot(snapshot);
   const verifiedInputTokens = positiveInteger(step?.promptTokens) || null;
@@ -133,8 +144,8 @@ async function updateFromProbeSnapshot(snapshot) {
         verifiedInputTokens,
         recommendedInteractiveContext,
         recommendedDocumentContext,
-        recommendationStatus: 'verified',
-        revalidationRequired: false,
+        recommendationStatus: recommendationsVerified ? 'verified' : 'unknown',
+        revalidationRequired: !recommendationsVerified,
         recommendationThresholds: {
           interactiveDegradationPct: interactiveThreshold,
           documentDegradationPct: documentThreshold
@@ -142,8 +153,8 @@ async function updateFromProbeSnapshot(snapshot) {
         recommendedContext,
         modelTheoreticalMax: positiveInteger(snapshot.modelTheoreticalMax),
         source: 'context_probe',
-        stale: false,
-        staleReason: null,
+        stale: !recommendationsVerified,
+        staleReason: recommendationsVerified ? null : 'context_recommendation_unavailable',
         lastValidatedAt: snapshot.testedAt || new Date(),
         latestEvidence: {
           snapshotId: snapshot._id ? String(snapshot._id) : null,
@@ -182,11 +193,36 @@ async function findContextProfile(modelName, hostUrl, artifact = {}) {
   return normalizeContextProfile(profile);
 }
 
+async function invalidateIfSnapshot(snapshot, reason = 'claim_lost_during_context_authority_write') {
+  if (!snapshot?._id) return { modifiedCount: 0 };
+  return ModelContextProfile.updateOne(
+    {
+      modelName: String(snapshot.modelName || '').trim().replace(/:latest$/i, ''),
+      hostUrl: normalizeHostUrl(snapshot.hostUrl),
+      artifactDigest: snapshot.artifactDigest,
+      runtimeFingerprint: snapshot.runtimeFingerprint,
+      'latestEvidence.snapshotId': String(snapshot._id)
+    },
+    {
+      $set: {
+        recommendationStatus: 'unknown',
+        revalidationRequired: true,
+        stale: true,
+        staleReason: reason,
+        recommendedInteractiveContext: null,
+        recommendedDocumentContext: null,
+        recommendedContext: null
+      }
+    }
+  );
+}
+
 module.exports = {
   findContextProfile,
   hasValidThroughputEvidence,
   isValidTokensPerSec,
   modelNameCandidates,
   normalizeContextProfile,
-  updateFromProbeSnapshot
+  updateFromProbeSnapshot,
+  invalidateIfSnapshot
 };

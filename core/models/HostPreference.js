@@ -32,6 +32,9 @@ const PinnedModelEntrySchema = new mongoose.Schema({
 
 const BenchmarkResidentSnapshotSchema = new mongoose.Schema({
   model: { type: String, required: true, trim: true },
+  digest: { type: String, required: true, trim: true },
+  artifactSize: { type: Number, required: true, min: 0 },
+  sizeVram: { type: Number, required: true, min: 0 },
   contextLength: { type: Number, default: null },
   keepAlive: { type: Number, default: null },
   expiresAt: { type: Date, default: null }
@@ -117,6 +120,11 @@ const HostPreferenceSchema = new mongoose.Schema({
     note: { type: String, default: null },
     heartbeatAt: { type: Date, default: null },
     heartbeatTtlMs: { type: Number, default: null },
+    // A release first acquires this single-writer finalization fence. Runtime
+    // restoration and the terminal claim clear are both bound to the token so
+    // two release/reaper paths cannot mutate the same host concurrently.
+    finalizeToken: { type: String, default: null },
+    finalizingAt: { type: Date, default: null },
     // Exact Ollama residency captured after the claim CAS succeeds but before
     // the caller is allowed to mutate the host. Release restores and verifies
     // this snapshot while the same claim generation is still active.
@@ -124,6 +132,7 @@ const HostPreferenceSchema = new mongoose.Schema({
       capturedAt: { type: Date, default: null },
       source: { type: String, default: null },
       exact: { type: Boolean, default: false },
+      identityDigest: { type: String, default: null },
       residents: { type: [BenchmarkResidentSnapshotSchema], default: [] },
       error: { type: String, default: null }
     }

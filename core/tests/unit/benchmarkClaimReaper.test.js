@@ -6,6 +6,7 @@ jest.mock('../../config/logger', () => ({
 
 const mockFind = jest.fn();
 const mockFindOneAndUpdate = jest.fn();
+const mockUpdateOne = jest.fn();
 const mockFindOne = jest.fn();
 const mockGetBatch = jest.fn();
 
@@ -14,6 +15,7 @@ jest.mock('../../models/HostPreference', () => {
   Model.find = mockFind;
   Model.findOne = mockFindOne;
   Model.findOneAndUpdate = mockFindOneAndUpdate;
+  Model.updateOne = mockUpdateOne;
   return Model;
 });
 
@@ -53,13 +55,17 @@ function claim({
       source,
       heartbeatAt,
       heartbeatTtlMs: heartbeatTtlMinutes != null ? heartbeatTtlMinutes * 60 * 1000 : null,
-      preClaimRuntime: claimGeneration ? {
+      preClaimRuntime: claimGeneration ? (() => {
+        const snapshot = {
         schemaVersion: 1,
         exact: true,
         capturedAt: new Date(),
         source: 'ollama_ps',
         residents: []
-      } : null
+        };
+        snapshot.identityDigest = svc.benchmarkRuntimeSnapshotIdentity(snapshot);
+        return snapshot;
+      })() : null
     }
   };
 }
@@ -79,9 +85,29 @@ function mockReleaseHappyPath(claims) {
     lean: () => Promise.resolve(byHost.get(q.hostUrl) || null)
   }));
   mockFindOneAndUpdate.mockImplementation((query, update) => ({
-    lean: () => Promise.resolve(update?.$set?.['benchmarkClaim.heartbeatTtlMs']
-      ? byHost.get(query.hostUrl)
-      : { hostUrl: query.hostUrl, status: 'ready' })
+    lean: () => {
+      const current = byHost.get(query.hostUrl);
+      if (update?.$set?.['benchmarkClaim.finalizeToken']) {
+        const renewed = {
+          ...current,
+          benchmarkClaim: {
+            ...current.benchmarkClaim,
+            heartbeatAt: update.$set['benchmarkClaim.heartbeatAt'],
+            heartbeatTtlMs: update.$set['benchmarkClaim.heartbeatTtlMs'],
+            finalizeToken: update.$set['benchmarkClaim.finalizeToken'],
+            finalizingAt: update.$set['benchmarkClaim.finalizingAt']
+          }
+        };
+        byHost.set(query.hostUrl, renewed);
+        return Promise.resolve(renewed);
+      }
+      if (update?.$set?.loadedModels) {
+        const restored = { ...current, ...update.$set };
+        byHost.set(query.hostUrl, restored);
+        return Promise.resolve(restored);
+      }
+      return Promise.resolve({ hostUrl: query.hostUrl, status: 'ready' });
+    }
   }));
 }
 
@@ -89,6 +115,7 @@ describe('reapStaleBenchmarkClaims', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetBatch.mockResolvedValue(null);
+    mockUpdateOne.mockResolvedValue({ matchedCount: 1 });
     global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ models: [] }) }));
   });
 

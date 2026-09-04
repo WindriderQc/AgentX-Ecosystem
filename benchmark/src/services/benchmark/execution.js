@@ -4,6 +4,7 @@
  */
 
 const logger = require('../../../config/logger');
+const mongoose = require('mongoose');
 const BenchmarkPrompt = require('../../../models/BenchmarkPrompt');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
@@ -23,6 +24,10 @@ const {
     setBatchPhase: _setBatchPhase
 } = require('./batchHelpers');
 const { emitBuddyEvent } = require('../../clients/buddyEventClient');
+const {
+    acquireWorkloadAdmission,
+    releaseWorkloadAdmission
+} = require('../../clients/coreApiClient');
 const {
     buildOllamaTarget,
     buildQualityCohortFingerprint,
@@ -132,6 +137,15 @@ async function startBatch({
     if (judgeTarget.mode === 'native_agent' || !judgeTarget.capabilities.judge) {
         throw new Error('Only direct_model or isolated_model targets may be used as judge');
     }
+    const plannedBatchId = new mongoose.Types.ObjectId();
+    await acquireWorkloadAdmission(plannedBatchId.toString(), {
+        requestId: `benchmark:${plannedBatchId}`,
+        kind: normalizedTargets.some(target => target.executionKind !== 'ollama') ? 'benchmark-cloud' : 'benchmark',
+        batchId: plannedBatchId.toString(),
+        hosts: normalizedTargets.map(target => target.host).filter(Boolean),
+        ttlMs: execution_config?.estimated_duration_ms || null
+    });
+    try {
     if (trust_campaign_spec) {
         assertConfiguredProductManifest(trust_campaign_spec, trust_runtime_env);
         normalizedTargets = await Promise.all(
@@ -207,6 +221,7 @@ async function startBatch({
     });
     plan.batch_contract_fingerprint = batchContractFingerprint;
     let batch = new BenchmarkBatch({
+        _id: plannedBatchId,
         host: defaultHost,
         models: displayModels,
         targets: normalizedTargets,
@@ -316,6 +331,10 @@ async function startBatch({
             trust_source_batch_id: batch.trust_batch_id
         } : {})
     };
+    } catch (error) {
+        await releaseWorkloadAdmission(plannedBatchId.toString()).catch(() => {});
+        throw error;
+    }
 }
 
 async function startTrustBatch(specId, options = {}) {
@@ -968,6 +987,14 @@ async function resumeBatch(batchId, options = {}) {
         approval: options.paidApproval || null
     });
 
+    await acquireWorkloadAdmission(batchId, {
+        requestId: `benchmark:${batchId}`,
+        kind: normalizedTargets.some(target => target.executionKind !== 'ollama') ? 'benchmark-cloud' : 'benchmark',
+        batchId,
+        hosts: normalizedTargets.map(target => target.host).filter(Boolean),
+        ttlMs: batch.execution_config?.estimated_duration_ms || null
+    });
+
     // Commit the resumed state only after any paid plan has been explicitly
     // approved and signed. A refusal therefore happens before the first call
     // and leaves the stopped batch resumable.
@@ -977,7 +1004,12 @@ async function resumeBatch(batchId, options = {}) {
     batch.active_slot = 'benchmark_singleton';
     batch.execution_started_at = null;
     batch.execution_pid = null;
-    await batch.save();
+    try {
+        await batch.save();
+    } catch (error) {
+        await releaseWorkloadAdmission(batchId).catch(() => {});
+        throw error;
+    }
 
     if (process.env.NODE_ENV !== 'test') {
         executeBatch(batchId, batch.host, batch.models, selectedPrompts, {

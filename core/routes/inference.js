@@ -787,6 +787,8 @@ router.post('/inference/generate', async (req, res) => {
     const { name: laneName, policy: lane } = lanePolicy.resolvePolicyLane(
         callerContext.effectivePolicy
     );
+    const benchmarkClaimAuthorized = callerContext.principal === 'benchmark-service'
+        && laneName === 'direct';
     const routeManaged = lane.route === true && !hostOverride;
 
     let model = requestedModel;
@@ -1028,6 +1030,7 @@ router.post('/inference/generate', async (req, res) => {
             callerDetail: body.callerDetail || null,
             claimBatchId: body.claimBatchId || null,
             claimGeneration: body.claimGeneration || null,
+            benchmarkAuthorized: benchmarkClaimAuthorized,
             model,
             path: '/api/inference/generate'
         });
@@ -1374,22 +1377,20 @@ router.post('/inference/generate', async (req, res) => {
     });
 
     try {
-        if (!skipGate) {
-            gateRelease = await hostGate.acquire(target, model, {
+        gateRelease = await (skipGate ? hostGate.track : hostGate.acquire)(target, model, {
                 signal: disconnect.signal,
             });
-            // A request may have passed the first claim check and then waited
-            // in the admission queue while Benchmark fenced the host. Recheck
-            // after admission and before the Ollama write so no queued request
-            // can start after the pre-claim drain/snapshot boundary.
-            await assertHostAvailableForConsumer(target, {
-                callerDetail: body.callerDetail || null,
-                claimBatchId: body.claimBatchId || null,
-                claimGeneration: body.claimGeneration || null,
-                model,
-                path: '/api/inference/generate:post-admission'
-            });
-        }
+        // A request may have passed the first claim check and then waited in
+        // admission (or entered passive direct-lane tracking) while Benchmark
+        // fenced the host. Recheck before the Ollama write.
+        await assertHostAvailableForConsumer(target, {
+            callerDetail: body.callerDetail || null,
+            claimBatchId: body.claimBatchId || null,
+            claimGeneration: body.claimGeneration || null,
+            benchmarkAuthorized: benchmarkClaimAuthorized,
+            model,
+            path: '/api/inference/generate:post-admission'
+        });
 
         const primaryAttempt = await executeOllamaAttempt({
             hostUrl: target,

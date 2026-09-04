@@ -24,6 +24,7 @@
  */
 
 const HostPreference = require('../../models/HostPreference');
+const crypto = require('crypto');
 const hostGate = require('./hostGate');
 const logger = require('../../config/logger');
 const { observePinRestoreFailure } = require('./laneObservabilityService');
@@ -174,6 +175,24 @@ function benchmarkSnapshotKeepAlive(modelInfo, capturedAt) {
   };
 }
 
+function benchmarkRuntimeSnapshotIdentity(snapshot) {
+  const residents = (snapshot?.residents || []).map(entry => ({
+    model: entry.model,
+    digest: entry.digest,
+    artifactSize: Number(entry.artifactSize),
+    sizeVram: Number(entry.sizeVram),
+    contextLength: Number(entry.contextLength),
+    keepAlive: Number(entry.keepAlive),
+    expiresAt: entry.expiresAt ? new Date(entry.expiresAt).toISOString() : null
+  })).sort((left, right) => left.model.localeCompare(right.model));
+  return crypto.createHash('sha256').update(JSON.stringify({
+    capturedAt: snapshot?.capturedAt ? new Date(snapshot.capturedAt).toISOString() : null,
+    source: snapshot?.source || null,
+    exact: snapshot?.exact === true,
+    residents
+  })).digest('hex');
+}
+
 /**
  * Capture the exact observable Ollama residency for a benchmark claim.
  * Called only after Core has fenced the host, and before claim acquisition is
@@ -217,21 +236,37 @@ async function captureBenchmarkRuntime(hostUrl) {
       error.code = 'BENCHMARK_RUNTIME_SNAPSHOT_INCOMPLETE';
       throw error;
     }
+    const digest = typeof entry?.digest === 'string' && entry.digest.trim()
+      ? entry.digest.trim()
+      : null;
+    const artifactSize = Number(entry?.size ?? entry?.artifact_size ?? entry?.artifactSize);
+    const sizeVram = Number(entry?.size_vram ?? entry?.sizeVram);
+    if (!digest
+      || !Number.isFinite(artifactSize) || artifactSize <= 0
+      || !Number.isFinite(sizeVram) || sizeVram < 0) {
+      const error = new Error(`Ollama did not expose digest/size/size_vram for resident model ${model}`);
+      error.code = 'BENCHMARK_RUNTIME_SNAPSHOT_INCOMPLETE';
+      throw error;
+    }
     const expiry = benchmarkSnapshotKeepAlive(entry, capturedAt);
     return {
       model,
+      digest,
+      artifactSize,
+      sizeVram,
       contextLength,
       keepAlive: expiry.keepAlive,
       expiresAt: expiry.expiresAt
     };
   });
-  return {
+  const snapshot = {
     capturedAt,
     source: 'ollama_ps',
     exact: true,
     residents,
     error: null
   };
+  return { ...snapshot, identityDigest: benchmarkRuntimeSnapshotIdentity(snapshot) };
 }
 
 function desiredBenchmarkResidents(snapshot, now = Date.now()) {
@@ -254,7 +289,18 @@ function benchmarkResidentExpiryMatches(target, runningEntry, now = Date.now()) 
 }
 
 async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
-  if (!snapshot || snapshot.exact !== true || !Array.isArray(snapshot.residents)) {
+  const snapshotIdentityValid = /^[a-f0-9]{64}$/i.test(String(snapshot?.identityDigest || ''))
+    && snapshot.identityDigest === benchmarkRuntimeSnapshotIdentity(snapshot);
+  const residentsComplete = Array.isArray(snapshot?.residents)
+    && snapshot.residents.every(entry => typeof entry?.model === 'string'
+      && typeof entry?.digest === 'string'
+      && entry.digest.trim()
+      && Number.isFinite(Number(entry?.artifactSize))
+      && Number(entry.artifactSize) > 0
+      && Number.isFinite(Number(entry?.sizeVram))
+      && Number(entry.sizeVram) >= 0
+      && positiveInteger(entry?.contextLength));
+  if (!snapshot || snapshot.exact !== true || !snapshotIdentityValid || !residentsComplete) {
     return {
       host: hostUrl,
       status: 'error',
@@ -269,7 +315,9 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
     const current = await HostPreference.findOne({ hostUrl }).lean();
     if (current?.status !== 'benchmarking'
       || current?.benchmarkClaim?.batchId !== benchmarkClaim?.batchId
-      || current?.benchmarkClaim?.claimGeneration !== benchmarkClaim?.claimGeneration) {
+      || current?.benchmarkClaim?.claimGeneration !== benchmarkClaim?.claimGeneration
+      || (benchmarkClaim?.finalizeToken
+        && current?.benchmarkClaim?.finalizeToken !== benchmarkClaim.finalizeToken)) {
       const error = new Error('Benchmark claim no longer owns the host while restoring runtime');
       error.code = 'BENCHMARK_CLAIM_LOST';
       throw error;
@@ -348,7 +396,10 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
   const residentsVerified = desired.every((target) => {
     const entry = findLoadedModelInfo(verifiedRunning, target.model);
     if (!entry) return false;
-    return (!target.contextLength || readLoadedContextLength(entry) === target.contextLength)
+    return String(entry.digest || '').trim() === String(target.digest || '').trim()
+      && Number(entry.size ?? entry.artifact_size ?? entry.artifactSize) === Number(target.artifactSize)
+      && Number(entry.size_vram ?? entry.sizeVram) === Number(target.sizeVram)
+      && readLoadedContextLength(entry) === target.contextLength
       && benchmarkResidentExpiryMatches(target, entry);
   });
   const verified = noExtraResidents
@@ -371,7 +422,10 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
       hostUrl,
       status: 'benchmarking',
       'benchmarkClaim.batchId': benchmarkClaim.batchId,
-      'benchmarkClaim.claimGeneration': benchmarkClaim.claimGeneration
+      'benchmarkClaim.claimGeneration': benchmarkClaim.claimGeneration,
+      ...(benchmarkClaim.finalizeToken
+        ? { 'benchmarkClaim.finalizeToken': benchmarkClaim.finalizeToken }
+        : {})
     },
     { $set: {
       loadedModel: desiredNames[0] || null,
@@ -384,13 +438,23 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
     error.code = 'BENCHMARK_CLAIM_LOST';
     throw error;
   }
+  const observedResidents = verifiedRunning.map(entry => ({
+    model: entry.name || entry.model,
+    digest: entry.digest || null,
+    artifactSize: Number(entry.size ?? entry.artifact_size ?? entry.artifactSize),
+    sizeVram: Number(entry.size_vram ?? entry.sizeVram),
+    contextLength: readLoadedContextLength(entry),
+    expiresAt: entry.expires_at || entry.expiresAt || null
+  }));
   return {
     host: hostUrl,
     status: 'ready',
     verified: true,
     degraded: false,
     mode: 'exact_runtime_snapshot',
-    residents: desiredNames
+    snapshotIdentity: snapshot.identityDigest || benchmarkRuntimeSnapshotIdentity(snapshot),
+    residents: desired,
+    observedResidents
   };
 }
 
@@ -945,6 +1009,7 @@ module.exports = {
   getPrimaryPinnedModel,
   resolvePinnedRuntimeOptions,
   warmDefaultModel,
+  benchmarkRuntimeSnapshotIdentity,
   captureBenchmarkRuntime,
   restoreBenchmarkRuntime,
   warmHost,

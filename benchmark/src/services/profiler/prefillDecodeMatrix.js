@@ -39,6 +39,7 @@ const CELL_CTX_MARGIN = 256;
 // A decode sample shorter than this fraction of the requested num_predict is
 // not a valid sustained-decode measurement (model stopped early).
 const MIN_COMPLETION_RATIO = 0.5;
+const MIN_PROMPT_COVERAGE_RATIO = 0.8;
 
 function _parseTokenList(raw, fallback) {
   if (!raw) return [...fallback];
@@ -130,21 +131,29 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs, signal 
       ? Number((promptEvalDuration / 1e6).toFixed(1))
       : null;
 
+    const minimumPromptTokens = Math.max(1, Math.floor(prefillTokens * MIN_PROMPT_COVERAGE_RATIO));
+    const promptCoveragePct = Number(((promptEvalCount / prefillTokens) * 100).toFixed(1));
+    const shortPrompt = promptEvalCount < minimumPromptTokens;
     const shortCompletion = evalCount < Math.max(1, Math.floor(decodeTokens * MIN_COMPLETION_RATIO));
 
     return {
       prefillTokens,
       decodeTokens,
-      status: shortCompletion ? 'short_completion' : 'pass',
+      status: shortPrompt ? 'prompt_underfill' : shortCompletion ? 'short_completion' : 'pass',
+      requestedPromptTokens: prefillTokens,
       promptTokens: promptEvalCount,
+      promptCoveragePct,
+      minimumPromptCoveragePct: MIN_PROMPT_COVERAGE_RATIO * 100,
       completionTokens: evalCount,
       prefillTokensPerSec,
       decodeTokensPerSec,
       promptEvalDurationMs,
       latencyMs,
-      error: shortCompletion
-        ? `Completion ${evalCount}/${decodeTokens} tokens — decode sample invalid`
-        : null
+      error: shortPrompt
+        ? `Prompt evaluation ${promptEvalCount}/${prefillTokens} tokens — prefill sample invalid`
+        : shortCompletion
+          ? `Completion ${evalCount}/${decodeTokens} tokens — decode sample invalid`
+          : null
     };
   } catch (err) {
     if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : err);
@@ -152,7 +161,10 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs, signal 
       prefillTokens,
       decodeTokens,
       status: 'error',
+      requestedPromptTokens: prefillTokens,
       promptTokens: null,
+      promptCoveragePct: null,
+      minimumPromptCoveragePct: MIN_PROMPT_COVERAGE_RATIO * 100,
       completionTokens: null,
       prefillTokensPerSec: null,
       decodeTokensPerSec: null,
@@ -196,7 +208,10 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
         prefillTokens: plan.prefillTokens,
         decodeTokens: plan.decodeTokens,
         status: 'skipped',
+        requestedPromptTokens: plan.prefillTokens,
         promptTokens: null,
+        promptCoveragePct: null,
+        minimumPromptCoveragePct: MIN_PROMPT_COVERAGE_RATIO * 100,
         completionTokens: null,
         prefillTokensPerSec: null,
         decodeTokensPerSec: null,
@@ -243,5 +258,6 @@ module.exports = {
   DEFAULT_PREFILL_TOKENS,
   DEFAULT_DECODE_TOKENS,
   CELL_CTX_MARGIN,
+  MIN_PROMPT_COVERAGE_RATIO,
   _internal: { _parseTokenList, _runCell }
 };

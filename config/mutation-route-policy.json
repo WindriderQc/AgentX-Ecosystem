@@ -128,6 +128,12 @@
       "POST /host-preferences/:hostUrl(*)/benchmark-claim": "scoped-machine-call",
       "POST /host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat": "scoped-machine-call",
       "DELETE /host-preferences/:hostUrl(*)/benchmark-claim/:batchId": "scoped-machine-call",
+      "POST /maintenance-leases": "scoped-machine-call",
+      "POST /maintenance-leases/:leaseId/heartbeat": "scoped-machine-call",
+      "DELETE /maintenance-leases/:leaseId": "scoped-machine-call",
+      "POST /workload-admissions": "scoped-machine-call",
+      "POST /workload-admissions/:admissionId/heartbeat": "scoped-machine-call",
+      "DELETE /workload-admissions/:admissionId": "scoped-machine-call",
       "POST /host-preferences/benchmark-claims/reap": "destructive-mutation",
       "PUT /host-preferences/:hostUrl(*)": "user-mutation",
       "POST /host-preferences/:hostUrl(*)/reload": "scoped-machine-call"

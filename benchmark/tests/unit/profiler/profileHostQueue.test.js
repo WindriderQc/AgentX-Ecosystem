@@ -19,6 +19,9 @@ jest.mock('../../../src/services/hostTestService', () => ({
   checkHost: jest.fn()
 }));
 jest.mock('../../../src/clients/coreApiClient', () => ({
+  acquireWorkloadAdmission: jest.fn().mockResolvedValue({ acquired: true }),
+  heartbeatWorkloadAdmission: jest.fn().mockResolvedValue({ heartbeat: true }),
+  releaseWorkloadAdmission: jest.fn().mockResolvedValue({ released: true }),
   getDedicationStatuses: jest.fn().mockResolvedValue([]),
   resolveHostKey: jest.fn(),
   restoreDedication: jest.fn().mockResolvedValue(undefined),
@@ -65,6 +68,9 @@ describe('profile-host queue depth selection', () => {
     });
     modelProfileService.getAll.mockResolvedValue([]);
     orchestrator.profile.mockResolvedValue({ ok: true });
+    coreApiClient.acquireWorkloadAdmission.mockResolvedValue({ acquired: true });
+    coreApiClient.heartbeatWorkloadAdmission.mockResolvedValue({ heartbeat: true });
+    coreApiClient.releaseWorkloadAdmission.mockResolvedValue({ released: true });
   });
 
   afterEach(() => {
@@ -139,6 +145,9 @@ describe('full pipeline claim and depth contract', () => {
     coreApiClient.claimHostForBenchmark.mockResolvedValue({ claimed: true });
     coreApiClient.heartbeatBenchmarkClaim.mockResolvedValue({ heartbeat: true });
     coreApiClient.releaseBenchmarkClaim.mockResolvedValue({ released: true });
+    coreApiClient.acquireWorkloadAdmission.mockResolvedValue({ acquired: true });
+    coreApiClient.heartbeatWorkloadAdmission.mockResolvedValue({ heartbeat: true });
+    coreApiClient.releaseWorkloadAdmission.mockResolvedValue({ released: true });
   });
   it('claims every online host and delegates to the Full pipeline', async () => {
     const response = await request(pipelineApp)

@@ -175,7 +175,9 @@ function buildBenchmarkClaim(batchId, prevStatus, normalizedOptions) {
     owner: normalizedOptions.owner,
     note: normalizedOptions.note,
     heartbeatAt: normalizedOptions.heartbeatAt,
-    heartbeatTtlMs: normalizedOptions.heartbeatTtlMs
+    heartbeatTtlMs: normalizedOptions.heartbeatTtlMs,
+    finalizeToken: null,
+    finalizingAt: null
   };
 }
 
@@ -310,7 +312,8 @@ async function claimBenchmark(hostUrl, batchId, estimatedDurationMs = null, opts
         hostUrl,
         status: 'benchmarking',
         'benchmarkClaim.batchId': batchId,
-        'benchmarkClaim.claimGeneration': normalizedOptions.claimGeneration
+        'benchmarkClaim.claimGeneration': normalizedOptions.claimGeneration,
+        'benchmarkClaim.finalizeToken': null
       },
       { $set: set },
       { new: true }
@@ -318,7 +321,11 @@ async function claimBenchmark(hostUrl, batchId, estimatedDurationMs = null, opts
     if (updated) {
       return {
         claimed: true,
+        batchId,
         claimGeneration: updated.benchmarkClaim.claimGeneration,
+        prevStatus: updated.benchmarkClaim.prevStatus,
+        snapshotExact: updated.benchmarkClaim.preClaimRuntime?.exact === true,
+        snapshotIdentity: updated.benchmarkClaim.preClaimRuntime?.identityDigest || null,
         pref: updated,
         reason: 'already claimed by this batch'
       };
@@ -434,7 +441,11 @@ async function claimBenchmark(hostUrl, batchId, estimatedDurationMs = null, opts
     }
     return {
       claimed: true,
+      batchId,
       claimGeneration: snapshotted.benchmarkClaim.claimGeneration,
+      prevStatus: snapshotted.benchmarkClaim.prevStatus,
+      snapshotExact: snapshotted.benchmarkClaim.preClaimRuntime?.exact === true,
+      snapshotIdentity: snapshotted.benchmarkClaim.preClaimRuntime?.identityDigest || null,
       pref: snapshotted
     };
   }
@@ -459,6 +470,14 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
   const expectedLegacyClaimedAt = legacyMissingGeneration && opts.expectedClaimedAt
     ? new Date(opts.expectedClaimedAt)
     : null;
+  const expectedHeartbeatAt = opts.expectedHeartbeatAt === null
+    ? null
+    : opts.expectedHeartbeatAt
+      ? new Date(opts.expectedHeartbeatAt)
+      : undefined;
+  const excludedModels = [...new Set((Array.isArray(opts.excludedModels) ? opts.excludedModels : [])
+    .map(cleanString)
+    .filter(Boolean))];
   if (!hostUrl || !batchId) {
     return { released: false, reason: 'hostUrl and batchId required' };
   }
@@ -468,6 +487,9 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
   if (legacyMissingGeneration
     && (!expectedLegacyClaimedAt || !Number.isFinite(expectedLegacyClaimedAt.getTime()))) {
     return { released: false, reason: 'legacy claim expectedClaimedAt is required' };
+  }
+  if (expectedHeartbeatAt instanceof Date && !Number.isFinite(expectedHeartbeatAt.getTime())) {
+    return { released: false, reason: 'expectedHeartbeatAt is invalid' };
   }
 
   let existing = await HostPreference.findOne({ hostUrl }).lean();
@@ -522,6 +544,21 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       pref: existing
     };
   }
+  if (expectedHeartbeatAt !== undefined) {
+    const currentHeartbeat = existing.benchmarkClaim.heartbeatAt
+      ? new Date(existing.benchmarkClaim.heartbeatAt).getTime()
+      : null;
+    const expectedHeartbeat = expectedHeartbeatAt
+      ? expectedHeartbeatAt.getTime()
+      : null;
+    if (currentHeartbeat !== expectedHeartbeat) {
+      return {
+        released: false,
+        reason: 'claim heartbeat changed since reaper scan',
+        pref: existing
+      };
+    }
+  }
 
   if (!skipPinRestore && !legacyMissingGeneration
     && existing.benchmarkClaim?.preClaimRuntime?.exact !== true) {
@@ -561,38 +598,73 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
   // If restoration fails, keep the claim in place and fail closed; exposing
   // the host before its pins are verified would race chat/watchdog traffic.
   let pinRestore = null;
-  if (!skipPinRestore) {
-    const hostPrefService = require('./hostPreferenceService');
-    const finalizingFilter = {
-      _id: existing._id,
-      hostUrl,
-      status: 'benchmarking',
-      'benchmarkClaim.batchId': batchId,
-      'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration
+  let restoredSnapshot = null;
+  const hostPrefService = require('./hostPreferenceService');
+  const finalizeToken = crypto.randomUUID();
+  const finalizingFilter = {
+    _id: existing._id,
+    hostUrl,
+    status: 'benchmarking',
+    'benchmarkClaim.batchId': batchId,
+    'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration,
+    $or: [
+      { 'benchmarkClaim.finalizeToken': null },
+      { 'benchmarkClaim.finalizingAt': { $lte: new Date(Date.now() - CLAIM_FINALIZE_TTL_MS) } }
+    ]
+  };
+  if (legacyMissingGeneration) finalizingFilter['benchmarkClaim.claimedAt'] = expectedLegacyClaimedAt;
+  if (expectedHeartbeatAt !== undefined) finalizingFilter['benchmarkClaim.heartbeatAt'] = expectedHeartbeatAt;
+  const renewed = await HostPreference.findOneAndUpdate(
+    finalizingFilter,
+    { $set: {
+      'benchmarkClaim.heartbeatAt': new Date(),
+      'benchmarkClaim.heartbeatTtlMs': CLAIM_FINALIZE_TTL_MS,
+      'benchmarkClaim.finalizeToken': finalizeToken,
+      'benchmarkClaim.finalizingAt': new Date()
+    } },
+    { new: true }
+  ).lean();
+  if (!renewed) {
+    const current = await HostPreference.findOne({ hostUrl }).lean();
+    const currentOwnerChanged = current?.benchmarkClaim?.batchId
+      && current.benchmarkClaim.batchId !== batchId;
+    return {
+      released: false,
+      reason: currentOwnerChanged
+        ? `claim belongs to batch ${current.benchmarkClaim.batchId}, not ${batchId}`
+        : expectedHeartbeatAt !== undefined
+        && (current?.benchmarkClaim?.heartbeatAt
+          ? new Date(current.benchmarkClaim.heartbeatAt).getTime()
+          : null) !== (expectedHeartbeatAt ? expectedHeartbeatAt.getTime() : null)
+        ? 'claim heartbeat changed since reaper scan'
+        : 'claim changed or another finalizer owns runtime restoration',
+      pref: current || undefined
     };
-    if (legacyMissingGeneration) finalizingFilter['benchmarkClaim.claimedAt'] = expectedLegacyClaimedAt;
-    const renewed = await HostPreference.findOneAndUpdate(
-      finalizingFilter,
-      { $set: {
-        'benchmarkClaim.heartbeatAt': new Date(),
-        'benchmarkClaim.heartbeatTtlMs': CLAIM_FINALIZE_TTL_MS
-      } },
-      { new: true }
-    ).lean();
-    if (!renewed) {
-      return {
-        released: false,
-        reason: 'claim changed before fenced runtime restore',
-        pref: await HostPreference.findOne({ hostUrl }).lean()
+  }
+
+  if (!skipPinRestore) {
+    let restoreSnapshot = excludedModels.length > 0
+      ? {
+          ...renewed.benchmarkClaim?.preClaimRuntime,
+          residents: (renewed.benchmarkClaim?.preClaimRuntime?.residents || []).filter(entry =>
+            !excludedModels.some(model => hostPrefService.pinNamesMatch(model, entry.model)))
+        }
+      : renewed.benchmarkClaim?.preClaimRuntime;
+    if (excludedModels.length > 0) {
+      restoreSnapshot = {
+        ...restoreSnapshot,
+        identityDigest: hostPrefService.benchmarkRuntimeSnapshotIdentity(restoreSnapshot)
       };
     }
+    restoredSnapshot = restoreSnapshot;
     try {
       pinRestore = await hostPrefService.restoreBenchmarkRuntime(
         hostUrl,
-        renewed.benchmarkClaim?.preClaimRuntime,
+        restoreSnapshot,
         {
           batchId,
-          claimGeneration: legacyMissingGeneration ? null : claimGeneration
+          claimGeneration: legacyMissingGeneration ? null : claimGeneration,
+          finalizeToken
         }
       );
     } catch (err) {
@@ -604,7 +676,11 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
         error: err.message
       };
     }
-    if (pinRestore?.status !== 'ready' || pinRestore?.verified !== true) {
+    if (pinRestore?.status !== 'ready'
+      || pinRestore?.verified !== true
+      || pinRestore?.degraded !== false
+      || pinRestore?.mode !== 'exact_runtime_snapshot'
+      || pinRestore?.snapshotIdentity !== restoreSnapshot.identityDigest) {
       const error = pinRestore?.error || 'Pre-claim runtime restore did not verify';
       void observePinRestoreFailure({
         host: hostUrl,
@@ -613,6 +689,20 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
         error,
         source: 'benchmark-claim-fenced-release'
       });
+      await HostPreference.updateOne(
+        {
+          _id: renewed._id,
+          hostUrl,
+          status: 'benchmarking',
+          'benchmarkClaim.batchId': batchId,
+          'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration,
+          'benchmarkClaim.finalizeToken': finalizeToken
+        },
+        { $set: {
+          'benchmarkClaim.finalizeToken': null,
+          'benchmarkClaim.finalizingAt': null
+        } }
+      );
       return {
         released: false,
         reason: `fenced runtime restore failed: ${error}`,
@@ -623,13 +713,14 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     }
   }
 
-  const restoreStatus = existing.benchmarkClaim?.prevStatus || 'idle';
+  const restoreStatus = renewed.benchmarkClaim?.prevStatus || 'idle';
   const releaseFilter = {
     _id: existing._id,
     hostUrl,
     status: 'benchmarking',
     'benchmarkClaim.batchId': batchId,
-    'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration
+    'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration,
+    'benchmarkClaim.finalizeToken': finalizeToken
   };
   // The reaper is the only caller allowed to drain a pre-generation claim.
   // Bind its exact timestamp as well as batch and null/missing generation so a
@@ -656,6 +747,8 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
             note: null,
             heartbeatAt: null,
             heartbeatTtlMs: null,
+            finalizeToken: null,
+            finalizingAt: null,
             preClaimRuntime: null
           }
         }
@@ -688,11 +781,70 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     };
   }
 
+  const claimCleared = !updated.benchmarkClaim?.batchId
+    && !updated.benchmarkClaim?.claimGeneration
+    && !updated.benchmarkClaim?.preClaimRuntime;
+  const finalizerCleared = !updated.benchmarkClaim?.finalizeToken
+    && !updated.benchmarkClaim?.finalizingAt;
+  const verifiedRestore = pinRestore
+    ? pinRestore.status === 'ready'
+      && pinRestore.verified === true
+      && pinRestore.degraded === false
+      && pinRestore.mode === 'exact_runtime_snapshot'
+    : false;
+  const releaseReceipt = {
+    contract: 'agentx.benchmark-claim-release/v1',
+    hostUrl,
+    batchId,
+    claimGeneration: legacyMissingGeneration ? null : claimGeneration,
+    snapshot: {
+      identityDigest: renewed.benchmarkClaim?.preClaimRuntime?.identityDigest || null,
+      appliedIdentityDigest: restoredSnapshot?.identityDigest || null,
+      exact: renewed.benchmarkClaim?.preClaimRuntime?.exact === true,
+      residentCount: restoredSnapshot?.residents?.length || 0,
+      residents: (restoredSnapshot?.residents || []).map(entry => ({
+        model: entry.model,
+        digest: entry.digest,
+        artifactSize: Number(entry.artifactSize),
+        sizeVram: Number(entry.sizeVram),
+        contextLength: Number(entry.contextLength),
+        keepAlive: Number(entry.keepAlive),
+        expiresAt: entry.expiresAt || null
+      })),
+      excludedModels
+    },
+    verification: {
+      status: pinRestore?.status || (skipPinRestore ? 'skipped' : 'unknown'),
+      ready: pinRestore?.status === 'ready',
+      verified: pinRestore?.verified === true,
+      degraded: pinRestore?.degraded !== false,
+      mode: pinRestore?.mode || null,
+      snapshotIdentity: pinRestore?.snapshotIdentity || null
+    },
+    state: {
+      restoredStatus: updated.status,
+      claimCleared,
+      finalizerCleared
+    },
+    releasedAt: new Date()
+  };
+  if ((!skipPinRestore && !verifiedRestore) || !claimCleared || !finalizerCleared) {
+    return {
+      released: false,
+      reason: 'final benchmark release receipt did not verify restored runtime and cleared fences',
+      pref: updated,
+      pinRestore,
+      runtimeRestore: pinRestore,
+      releaseReceipt
+    };
+  }
+
   return {
     released: true,
     pref: updated,
     pinRestore,
     runtimeRestore: pinRestore,
+    releaseReceipt,
     legacyClaimRecovered: legacyMissingGeneration
   };
 }
@@ -755,7 +907,8 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, opts = {}) {
       hostUrl,
       status: 'benchmarking',
       'benchmarkClaim.batchId': batchId,
-      'benchmarkClaim.claimGeneration': claimGeneration
+      'benchmarkClaim.claimGeneration': claimGeneration,
+      'benchmarkClaim.finalizeToken': null
     },
     { $set: set },
     { new: true }
@@ -771,7 +924,15 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, opts = {}) {
       pref: current || undefined
     };
   }
-  return { heartbeat: true, pref: updated };
+  return {
+    heartbeat: true,
+    batchId,
+    claimGeneration: updated.benchmarkClaim.claimGeneration,
+    prevStatus: updated.benchmarkClaim.prevStatus,
+    snapshotExact: updated.benchmarkClaim.preClaimRuntime?.exact === true,
+    snapshotIdentity: updated.benchmarkClaim.preClaimRuntime?.identityDigest || null,
+    pref: updated
+  };
 }
 
 /**
@@ -827,7 +988,8 @@ async function reapStaleBenchmarkClaims(opts = {}) {
       }
     }
 
-    if (!staleReason && ageMs > maxAgeMs) {
+    const idleAgeMs = now - Math.max(claimedAt, heartbeatAt || 0);
+    if (!staleReason && idleAgeMs > maxAgeMs) {
       staleReason = 'claim age exceeded max age';
     }
     if (!staleReason) continue;
@@ -835,7 +997,8 @@ async function reapStaleBenchmarkClaims(opts = {}) {
     const result = await releaseBenchmarkClaim(pref.hostUrl, claim.batchId, {
       claimGeneration: claim.claimGeneration,
       allowLegacyMissingGeneration: true,
-      expectedClaimedAt: claim.claimedAt
+      expectedClaimedAt: claim.claimedAt,
+      expectedHeartbeatAt: claim.heartbeatAt || null
     });
     const pinRestored = result.pinRestore?.verified === true;
     reaped.push({
@@ -905,7 +1068,12 @@ async function listBenchmarkClaims() {
     owner: p.benchmarkClaim?.owner || null,
     note: p.benchmarkClaim?.note || null,
     heartbeatAt: p.benchmarkClaim?.heartbeatAt || null,
-    heartbeatTtlMs: p.benchmarkClaim?.heartbeatTtlMs || null
+    heartbeatTtlMs: p.benchmarkClaim?.heartbeatTtlMs || null,
+    snapshotExact: p.benchmarkClaim?.preClaimRuntime?.exact === true,
+    snapshotResidentCount: Array.isArray(p.benchmarkClaim?.preClaimRuntime?.residents)
+      ? p.benchmarkClaim.preClaimRuntime.residents.length
+      : null,
+    finalizing: Boolean(p.benchmarkClaim?.finalizeToken)
   }));
 }
 

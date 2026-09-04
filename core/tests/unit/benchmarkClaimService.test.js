@@ -63,19 +63,22 @@ describe('benchmarkClaimService', () => {
       pinnedModels: [{ model: 'gemma4:26b' }],
       status: 'ready'
     });
-    jest.spyOn(hostPrefService, 'captureBenchmarkRuntime').mockResolvedValue({
+    const runtimeSnapshot = {
       capturedAt: new Date(),
       source: 'ollama_ps',
       exact: true,
       residents: [],
       error: null
-    });
+    };
+    runtimeSnapshot.identityDigest = hostPrefService.benchmarkRuntimeSnapshotIdentity(runtimeSnapshot);
+    jest.spyOn(hostPrefService, 'captureBenchmarkRuntime').mockResolvedValue(runtimeSnapshot);
     jest.spyOn(hostPrefService, 'restoreBenchmarkRuntime').mockResolvedValue({
       host: HOST_URL,
       status: 'ready',
       verified: true,
       degraded: false,
       mode: 'exact_runtime_snapshot',
+      snapshotIdentity: runtimeSnapshot.identityDigest,
       residents: []
     });
   });
@@ -90,6 +93,12 @@ describe('benchmarkClaimService', () => {
       expect(result.pref.benchmarkClaim.estimatedDurationMs).toBe(300_000);
       expect(result.pref.benchmarkClaim.source).toBe('manual');
       expect(result.pref.benchmarkClaim.heartbeatAt).toBeTruthy();
+      expect(result).toMatchObject({
+        batchId: BATCH_A,
+        prevStatus: 'ready',
+        snapshotExact: true,
+        snapshotIdentity: result.pref.benchmarkClaim.preClaimRuntime.identityDigest
+      });
     });
 
     it('stores explicit claim source, owner, note, and heartbeat ttl', async () => {
@@ -254,6 +263,13 @@ describe('benchmarkClaimService', () => {
       });
 
       expect(heartbeat.heartbeat).toBe(true);
+      expect(heartbeat).toMatchObject({
+        batchId: BATCH_A,
+        claimGeneration: claimed.claimGeneration,
+        prevStatus: 'ready',
+        snapshotExact: true,
+        snapshotIdentity: claimed.snapshotIdentity
+      });
       expect(new Date(heartbeat.pref.benchmarkClaim.heartbeatAt).getTime()).toBeGreaterThanOrEqual(before);
       expect(heartbeat.pref.benchmarkClaim.owner).toBe('heartbeat-owner');
       expect(heartbeat.pref.benchmarkClaim.heartbeatTtlMs).toBe(90_000);
@@ -409,8 +425,31 @@ describe('benchmarkClaimService', () => {
       expect(hostPrefService.restoreBenchmarkRuntime).toHaveBeenCalledWith(
         HOST_URL,
         expect.objectContaining({ exact: true, residents: [] }),
-        { batchId: BATCH_A, claimGeneration: claimed.claimGeneration }
+        expect.objectContaining({
+          batchId: BATCH_A,
+          claimGeneration: claimed.claimGeneration,
+          finalizeToken: expect.any(String)
+        })
       );
+      expect(released.releaseReceipt).toMatchObject({
+        contract: 'agentx.benchmark-claim-release/v1',
+        hostUrl: HOST_URL,
+        batchId: BATCH_A,
+        claimGeneration: claimed.claimGeneration,
+        snapshot: {
+          identityDigest: claimed.pref.benchmarkClaim.preClaimRuntime.identityDigest,
+          appliedIdentityDigest: claimed.pref.benchmarkClaim.preClaimRuntime.identityDigest,
+          exact: true,
+          residentCount: 0
+        },
+        verification: {
+          ready: true,
+          verified: true,
+          degraded: false,
+          mode: 'exact_runtime_snapshot'
+        },
+        state: { restoredStatus: 'ready', claimCleared: true, finalizerCleared: true }
+      });
 
       const after = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
       expect(after.status).toBe('ready');
@@ -440,16 +479,54 @@ describe('benchmarkClaimService', () => {
       expect(stored.benchmarkClaim.claimGeneration).toBe(claimed.claimGeneration);
     });
 
+    it('keeps the fence when a restore claims success for a different snapshot identity', async () => {
+      hostPrefService.restoreBenchmarkRuntime.mockResolvedValueOnce({
+        host: HOST_URL,
+        status: 'ready',
+        verified: true,
+        degraded: false,
+        mode: 'exact_runtime_snapshot',
+        snapshotIdentity: 'f'.repeat(64),
+        residents: []
+      });
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
+      });
+
+      expect(released).toMatchObject({ released: false });
+      expect(released.reason).toContain('restore failed');
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored).toMatchObject({
+        status: 'benchmarking',
+        benchmarkClaim: {
+          batchId: BATCH_A,
+          claimGeneration: claimed.claimGeneration,
+          finalizeToken: null
+        }
+      });
+    });
+
     it('linearizes restore and release before a replacement owner can acquire', async () => {
       let finishRestore;
+      let expectedSnapshotIdentity;
       const restoreStarted = new Promise(resolve => {
         hostPrefService.restoreBenchmarkRuntime.mockImplementationOnce(async () => {
           resolve();
           await new Promise(done => { finishRestore = done; });
-          return { host: HOST_URL, status: 'ready', verified: true, degraded: false, residents: [] };
+          return {
+            host: HOST_URL,
+            status: 'ready',
+            verified: true,
+            degraded: false,
+            mode: 'exact_runtime_snapshot',
+            snapshotIdentity: expectedSnapshotIdentity,
+            residents: []
+          };
         });
       });
       const first = await service.claimBenchmark(HOST_URL, BATCH_A);
+      expectedSnapshotIdentity = first.pref.benchmarkClaim.preClaimRuntime.identityDigest;
       const releasing = service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
         claimGeneration: first.claimGeneration
       });

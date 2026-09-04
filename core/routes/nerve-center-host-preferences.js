@@ -21,6 +21,22 @@ const { validateHostUrl } = require('../src/helpers/ollamaHostConfig');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
+const { benchmarkTokenAllowed } = require('../src/services/routing/inferenceCallerAccess');
+const { requireOperatorAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
+const runtimeCoordinationService = require('../src/services/runtimeCoordinationService');
+
+function coordinationPrincipal(req) {
+  return benchmarkTokenAllowed(req) ? 'benchmark-service' : operatorRequestIdentity(req);
+}
+
+function requireBenchmarkCoordinationAccess(req, res, next) {
+  if (benchmarkTokenAllowed(req)) return next();
+  return res.status(403).json({
+    status: 'error',
+    code: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    message: 'Exact Benchmark service authentication is required for runtime workload admission.'
+  });
+}
 
 function resolveHostPreferenceUrl(req, res) {
   let rawHostUrl;
@@ -320,8 +336,11 @@ router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireB
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     const batchId = req.params.batchId;
-    const { claimGeneration } = req.body || {};
-    const result = await hostPrefService.releaseBenchmarkClaim(hostUrl, batchId, { claimGeneration });
+    const { claimGeneration, excludedModels } = req.body || {};
+    const result = await hostPrefService.releaseBenchmarkClaim(hostUrl, batchId, {
+      claimGeneration,
+      excludedModels
+    });
     if (!result.released) {
       // Still 200 — release is idempotent; caller just learns the reason
       return res.json({ status: 'success', data: result });
@@ -337,10 +356,109 @@ router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireB
 router.get('/host-preferences/benchmark-claims/active', async (_req, res) => {
   try {
     const claims = await hostPrefService.listBenchmarkClaims();
-    res.json({ status: 'success', data: { claims, count: claims.length } });
+    // Claim generations are bearer capabilities for the direct inference
+    // lane. This operator/status projection must never disclose them.
+    const publicClaims = claims.map(({ claimGeneration: _secret, ...claim }) => claim);
+    res.json({ status: 'success', data: { claims: publicClaims, count: publicClaims.length } });
   } catch (err) {
     logger.error('[NerveCenter] listing benchmark claims failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Runtime-wide maintenance/workload exclusion. Generations are minted only by
+// Core and are returned solely to the authenticated acquiring principal.
+router.post('/maintenance-leases', requireOperatorAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.acquireMaintenance({
+      principal: operatorRequestIdentity(req),
+      requestId: req.body?.requestId || req.body?.idempotencyKey,
+      scope: req.body?.scope,
+      ttl: req.body?.ttlMs
+    });
+    return res.status(result.acquired ? 200 : 409).json({ status: result.acquired ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'MAINTENANCE_LEASE_FAILED', message: error.message });
+  }
+});
+
+router.post('/maintenance-leases/:leaseId/heartbeat', requireOperatorAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.heartbeat('maintenance', {
+      id: req.params.leaseId,
+      generation: req.body?.generation,
+      principal: operatorRequestIdentity(req),
+      ttl: req.body?.ttlMs
+    });
+    return res.status(result.heartbeat ? 200 : 409).json({ status: result.heartbeat ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'MAINTENANCE_HEARTBEAT_FAILED', message: error.message });
+  }
+});
+
+router.delete('/maintenance-leases/:leaseId', requireOperatorAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.release('maintenance', {
+      id: req.params.leaseId,
+      generation: req.body?.generation,
+      principal: operatorRequestIdentity(req)
+    });
+    return res.status(result.released ? 200 : 409).json({ status: result.released ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'MAINTENANCE_RELEASE_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-admissions', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.acquireWorkload({
+      principal: coordinationPrincipal(req),
+      requestId: req.body?.requestId || req.body?.idempotencyKey,
+      workloadId: req.body?.workloadId,
+      kind: req.body?.kind,
+      batchId: req.body?.batchId,
+      hosts: req.body?.hosts,
+      ttl: req.body?.ttlMs
+    });
+    return res.status(result.acquired ? 200 : 409).json({ status: result.acquired ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_ADMISSION_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-admissions/:admissionId/heartbeat', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.heartbeat('workload', {
+      id: req.params.admissionId,
+      generation: req.body?.generation,
+      principal: coordinationPrincipal(req),
+      ttl: req.body?.ttlMs
+    });
+    return res.status(result.heartbeat ? 200 : 409).json({ status: result.heartbeat ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_HEARTBEAT_FAILED', message: error.message });
+  }
+});
+
+router.delete('/workload-admissions/:admissionId', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.release('workload', {
+      id: req.params.admissionId,
+      generation: req.body?.generation,
+      principal: coordinationPrincipal(req)
+    });
+    return res.status(result.released ? 200 : 409).json({ status: result.released ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RELEASE_FAILED', message: error.message });
+  }
+});
+
+router.get('/runtime-coordination/active', requireOperatorAccess, async (_req, res) => {
+  try {
+    const data = await runtimeCoordinationService.listActive();
+    return res.json({ status: 'success', data });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'RUNTIME_COORDINATION_STATUS_FAILED', message: error.message });
   }
 });
 

@@ -286,6 +286,9 @@ async function assertExpectedActiveClaim({ core, host, claimId }, deps = {}) {
   if (!match || match.batchId !== claimId) {
     throw new Error(`live qualification requires active claim ${claimId} on ${host}`);
   }
+  if (match.snapshotExact !== true) {
+    throw new Error(`live qualification refuses legacy claim ${claimId}: exact pre-claim runtime snapshot is missing`);
+  }
   return match;
 }
 

@@ -16,7 +16,8 @@ jest.mock('../../src/services/contextProbePayload', () => ({
   generateFillPrompt: jest.fn((estimatedTokens) => ({ prompt: 'fill prompt', estimatedTokens }))
 }));
 jest.mock('../../src/services/modelContextProfileService', () => ({
-  updateFromProbeSnapshot: jest.fn().mockResolvedValue(null)
+  updateFromProbeSnapshot: jest.fn().mockResolvedValue({ recommendationStatus: 'verified' }),
+  invalidateIfSnapshot: jest.fn().mockResolvedValue({ modifiedCount: 1 })
 }));
 jest.mock('../../src/services/profiler/artifactIdentityService', () => ({
   identitiesMatch: jest.fn((left, right) => (
@@ -39,7 +40,8 @@ jest.mock('../../models/ModelProfile', () => ({
   findOne: jest.fn()
 }));
 jest.mock('../../models/ModelContextProbeSnapshot', () => ({
-  create: jest.fn()
+  create: jest.fn(),
+  updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 })
 }));
 jest.mock('../../config/logger', () => ({
   info: jest.fn(),
@@ -76,6 +78,7 @@ describe('contextProbeService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     artifactIdentityService.resolveArtifactIdentity.mockResolvedValue(ARTIFACT);
+    modelContextProfileService.updateFromProbeSnapshot.mockResolvedValue({ recommendationStatus: 'verified' });
     ModelContextProbeSnapshot.create.mockImplementation(async (data) => buildSnapshotDoc(data));
     ollamaClient.showModel.mockResolvedValue({
       model_info: {
@@ -168,6 +171,17 @@ describe('contextProbeService', () => {
       131072,
       262144
     ]));
+    const maximumStep = result.steps.find((step) => step.numCtx === 262144);
+    expect(maximumStep).toMatchObject({
+      repetitionCount: 2,
+      tokensPerSecStdDev: expect.any(Number),
+      tokensPerSecCvPct: expect.any(Number),
+      samples: [
+        expect.objectContaining({ promptCoveragePct: expect.any(Number), ollamaContextLength: 262144 }),
+        expect.objectContaining({ promptCoveragePct: expect.any(Number), ollamaContextLength: 262144 })
+      ]
+    });
+    expect(result.authorityStatus).toBe('committed');
     expect(callOrder[0]).toBe(262144);
     expect(callOrder[1]).toBe(2048);
     expect(callOrder.filter(numCtx => numCtx === 262144)).toHaveLength(2);

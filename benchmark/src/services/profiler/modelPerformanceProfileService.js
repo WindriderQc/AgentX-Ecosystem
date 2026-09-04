@@ -13,11 +13,16 @@ async function saveProfile({ modelName, hostId, artifact, profile }) {
     { $set: { artifact, profile, active: true, stale: false, staleReason: null } },
     { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
   );
+  return saved;
+}
+
+async function retireSupersededProfiles({ modelName, hostId, evidenceId, assertAuthorityActive }) {
+  assertAuthorityActive?.();
   await ModelPerformanceProfile.updateMany(
-    { _id: { $ne: saved._id }, modelName, hostId, active: true },
+    { _id: { $ne: evidenceId }, modelName, hostId, active: true },
     { $set: { active: false, stale: true, staleReason: 'superseded' } }
   );
-  return saved;
+  assertAuthorityActive?.();
 }
 
 async function getActiveProfile(modelName, hostId) {
@@ -33,4 +38,18 @@ async function getRoster(filter = {}) {
   return ModelPerformanceProfile.find(query).sort({ updatedAt: -1 }).lean();
 }
 
-module.exports = { getActiveProfile, getRoster, saveProfile };
+async function invalidateProfile(evidenceId, reason = 'authority_write_failed') {
+  if (!evidenceId) return { modifiedCount: 0 };
+  return ModelPerformanceProfile.updateOne(
+    { _id: evidenceId },
+    { $set: { active: false, stale: true, staleReason: reason } }
+  );
+}
+
+module.exports = {
+  getActiveProfile,
+  getRoster,
+  invalidateProfile,
+  retireSupersededProfiles,
+  saveProfile
+};

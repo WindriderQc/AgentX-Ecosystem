@@ -4,9 +4,15 @@ jest.mock('../../../src/services/hostTestService', () => ({ testModelOnHost: jes
 jest.mock('../../../src/services/contextProbeService', () => ({ probeModelContext: jest.fn() }));
 jest.mock('../../../src/services/profiler/modelProfileService', () => ({
   updateReadiness: jest.fn(),
-  updateThinkingCapability: jest.fn()
+  updateThinkingCapability: jest.fn(),
+  invalidateReadinessIfEvidence: jest.fn(),
+  invalidateThinkingCapability: jest.fn()
 }));
-jest.mock('../../../src/services/profiler/modelPerformanceProfileService', () => ({ saveProfile: jest.fn() }));
+jest.mock('../../../src/services/profiler/modelPerformanceProfileService', () => ({
+  saveProfile: jest.fn(),
+  retireSupersededProfiles: jest.fn(),
+  invalidateProfile: jest.fn()
+}));
 jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
   identitiesMatch: jest.fn((left, right) => left?.digest === right?.digest && left?.runtimeFingerprint === right?.runtimeFingerprint),
   resolveArtifactIdentity: jest.fn()
@@ -252,7 +258,20 @@ describe('profiler evidence qualification', () => {
         tokensPerSec: 40,
         totalLatencyMs: 1000
       })),
-      prefillDecodeMatrix: { cells: [{ status: 'pass' }] },
+      prefillDecodeMatrix: {
+        prefillTokens: [512],
+        decodeTokens: [64],
+        cellCount: 1,
+        passCount: 1,
+        skippedCount: 0,
+        cells: [{
+          status: 'pass',
+          requestedPromptTokens: 512,
+          promptTokens: 500,
+          promptCoveragePct: 97.7,
+          minimumPromptCoveragePct: 80
+        }]
+      },
       loadTiming: { coldLoadMs: 5000, hotLoadMs: 100 }
     };
   }
@@ -265,8 +284,16 @@ describe('profiler evidence qualification', () => {
 
   it.each([
     ['throughput curve', profile => { profile.throughputCurve[2].tokensPerSec = 0; }, 'full_throughput_curve_incomplete'],
+    ['throughput curve coverage', profile => { profile.throughputCurve[4].contextFillPct = 75; }, 'full_throughput_curve_incomplete'],
     ['stability', profile => { profile.generationStability[1].totalLatencyMs = 0; }, 'full_generation_stability_incomplete'],
+    ['stability coverage', profile => { profile.generationStability[2].numPredict = 256; }, 'full_generation_stability_incomplete'],
     ['prefill/decode matrix', profile => { profile.prefillDecodeMatrix.cells[0].status = 'error'; }, 'full_prefill_decode_matrix_incomplete'],
+    ['skipped matrix cell', profile => {
+      profile.prefillDecodeMatrix.cells[0].status = 'skipped';
+      profile.prefillDecodeMatrix.passCount = 0;
+      profile.prefillDecodeMatrix.skippedCount = 1;
+    }, 'full_prefill_decode_matrix_incomplete'],
+    ['underfilled matrix prompt', profile => { profile.prefillDecodeMatrix.cells[0].promptCoveragePct = 40; }, 'full_prefill_decode_matrix_incomplete'],
     ['load timing', profile => { profile.loadTiming.hotLoadMs = null; }, 'full_load_timing_incomplete']
   ])('fails Full qualification when %s is incomplete', (_label, breakPhase, reason) => {
     const profile = qualifiedFullProfile();
@@ -276,6 +303,16 @@ describe('profiler evidence qualification', () => {
 
   it('qualifies only when every Full phase has positive complete evidence', () => {
     expect(orchestrator.profileQualificationFailures(qualifiedFullProfile())).toEqual([]);
+  });
+
+  it('never qualifies workload recommendations above the verified capacity ceiling', () => {
+    const profile = qualifiedFullProfile();
+    profile.recommendedInteractiveContext = 524288;
+    profile.recommendedDocumentContext = 524288;
+    expect(orchestrator.profileQualificationFailures(profile)).toEqual(expect.arrayContaining([
+      'interactive_context_exceeds_verified_max',
+      'document_context_exceeds_verified_max'
+    ]));
   });
 });
 

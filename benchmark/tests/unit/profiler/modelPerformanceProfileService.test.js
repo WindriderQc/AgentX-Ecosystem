@@ -8,7 +8,7 @@ const service = require('../../../src/services/profiler/modelPerformanceProfileS
 describe('modelPerformanceProfileService', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('activates exact evidence before retiring older evidence', async () => {
+  it('activates exact evidence and retires older evidence only after authority commit', async () => {
     const saved = { _id: 'evidence-new' };
     ModelPerformanceProfile.findOneAndUpdate.mockResolvedValue(saved);
     ModelPerformanceProfile.updateMany.mockResolvedValue({ modifiedCount: 1 });
@@ -33,6 +33,13 @@ describe('modelPerformanceProfileService', () => {
       { $set: expect.objectContaining({ active: true, stale: false }) },
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
     );
+    expect(ModelPerformanceProfile.updateMany).not.toHaveBeenCalled();
+
+    await service.retireSupersededProfiles({
+      modelName: 'qwen3.5:9b',
+      hostId: 'host-alpha',
+      evidenceId: 'evidence-new'
+    });
     expect(ModelPerformanceProfile.updateMany).toHaveBeenCalledWith(
       {
         _id: { $ne: 'evidence-new' },

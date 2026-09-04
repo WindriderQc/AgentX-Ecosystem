@@ -80,8 +80,8 @@ export function renderMetrics(model, api) {
         ? `Fixed speed run targeted ${_fmtCtx(comparisonPromptTargetTokens)} prompt tokens but clipped to ${_fmtCtx(comparisonPromptTokens || comparisonPromptTargetTokens)} by active context.`
         : `Fixed speed run using ~${_fmtCtx(comparisonPromptTargetTokens)} prompt tokens.`
       : 'Throughput from the profiler speed run.';
-    const ttft = p.ttftMeasurement === 'streamed_wall_clock' && p.ttftMs != null
-      ? `<span class="mp-hero-aux"><span class="mp-hero-aux__val">${Math.round(p.ttftMs)}</span><span class="mp-hero-aux__unit">ms TTFT</span></span>`
+    const ttft = p.ttftMeasurement === 'streamed_wall_clock' && p.ttftP50Ms != null
+      ? `<span class="mp-hero-aux"><span class="mp-hero-aux__val">${Math.round(p.ttftP50Ms)}</span><span class="mp-hero-aux__unit">ms TTFT p50</span></span>`
       : '';
     heroHtml = `<div class="mp-card-hero" title="${escAttr(heroTitle)}">
       <div class="mp-hero-main">
@@ -402,8 +402,8 @@ export function renderModelRow(model, api) {
 
   // TTFT
   let ttftCell = dash;
-  if (p?.ttftMeasurement === 'streamed_wall_clock' && p?.ttftMs != null) {
-    ttftCell = `<span class="mp-list-num">${Math.round(p.ttftMs)}</span><span class="mp-list-sub">ms</span>`;
+  if (p?.ttftMeasurement === 'streamed_wall_clock' && p?.ttftP50Ms != null) {
+    ttftCell = `<span class="mp-list-num">${Math.round(p.ttftP50Ms)}</span><span class="mp-list-sub">ms p50</span>`;
   }
 
   // ctx

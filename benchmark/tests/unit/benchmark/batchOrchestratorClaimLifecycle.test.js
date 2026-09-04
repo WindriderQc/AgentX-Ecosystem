@@ -24,9 +24,15 @@ jest.mock('../../../src/helpers/ollamaHostConfig', () => ({
 const mockClaimHostForBenchmark = jest.fn();
 const mockHeartbeatBenchmarkClaim = jest.fn();
 const mockReleaseBenchmarkClaim = jest.fn();
+const mockAcquireWorkloadAdmission = jest.fn();
+const mockHeartbeatWorkloadAdmission = jest.fn();
+const mockReleaseWorkloadAdmission = jest.fn();
 const mockGetBenchmarkClaims = jest.fn();
 const mockGetBenchmarkClaimIdentity = jest.fn();
 jest.mock('../../../src/clients/coreApiClient', () => ({
+    acquireWorkloadAdmission: (...args) => mockAcquireWorkloadAdmission(...args),
+    heartbeatWorkloadAdmission: (...args) => mockHeartbeatWorkloadAdmission(...args),
+    releaseWorkloadAdmission: (...args) => mockReleaseWorkloadAdmission(...args),
     claimHostForBenchmark: (...args) => mockClaimHostForBenchmark(...args),
     heartbeatBenchmarkClaim: (...args) => mockHeartbeatBenchmarkClaim(...args),
     releaseBenchmarkClaim: (...args) => mockReleaseBenchmarkClaim(...args),
@@ -91,6 +97,15 @@ jest.mock('../../../src/services/modelContextResolver', () => ({
 }));
 
 jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
+    identitiesMatch: jest.fn((left, right) => Boolean(
+        left && right
+        && left.model === right.model
+        && left.hostId === right.hostId
+        && left.hostUrl === right.hostUrl
+        && left.digest === right.digest
+        && left.runtimeFingerprint === right.runtimeFingerprint
+        && right.registryQualified === true
+    )),
     resolveArtifactIdentity: jest.fn(async (model, hostId, hostUrl) => ({
         model,
         hostId,
@@ -154,6 +169,11 @@ jest.mock('../../../models/BenchmarkResult', () => ({
 const mockFindOnePerformanceProfile = jest.fn();
 jest.mock('../../../models/ModelPerformanceProfile', () => ({
     findOne: (...args) => mockFindOnePerformanceProfile(...args)
+}));
+
+const mockFindOneModelProfile = jest.fn();
+jest.mock('../../../models/ModelProfile', () => ({
+    findOne: (...args) => mockFindOneModelProfile(...args)
 }));
 
 const mockFindById = jest.fn();
@@ -268,6 +288,9 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         });
         mockRunPreflight.mockResolvedValue(undefined);
         mockClaimHostForBenchmark.mockResolvedValue({ claimed: true });
+        mockAcquireWorkloadAdmission.mockResolvedValue({ acquired: true });
+        mockHeartbeatWorkloadAdmission.mockResolvedValue({ heartbeat: true });
+        mockReleaseWorkloadAdmission.mockResolvedValue({ released: true });
         mockHeartbeatBenchmarkClaim.mockResolvedValue({ heartbeat: true });
         mockGetBenchmarkClaimIdentity.mockImplementation((_host, batchId) => ({
             claimBatchId: String(batchId),
@@ -284,10 +307,25 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             judgeHost: hostUrl,
             resolution: 'default'
         }));
-        mockFindOnePerformanceProfile.mockReturnValue({
+        const urlByHostId = {
+            primary: 'http://exec:11434',
+            'exec-a': 'http://exec-a:11434',
+            'exec-b': 'http://exec-b:11434',
+            judge: 'http://judge:11434'
+        };
+        const evidenceIdFor = (model, hostId) => `evidence-${model}-${hostId}`;
+        const artifactFor = (model, hostId) => ({
+            model,
+            hostId,
+            hostUrl: urlByHostId[hostId] || `http://${hostId}:11434`,
+            digest: 'sha256:exact',
+            runtimeFingerprint: 'runtime-a',
+            registryQualified: true
+        });
+        mockFindOnePerformanceProfile.mockImplementation((query) => ({
             select: jest.fn().mockReturnValue({
                 lean: jest.fn().mockResolvedValue({
-                    artifact: { registryQualified: true },
+                    artifact: artifactFor(query.modelName, query.hostId),
                     profile: {
                         tokensPerSec: 123.4,
                         promptEvalTokensPerSec: 456.7,
@@ -302,7 +340,29 @@ describe('runBatchOrchestrator claim lifecycle', () => {
                     }
                 })
             })
-        });
+        }));
+        mockFindOneModelProfile.mockImplementation((query) => ({
+            select: jest.fn().mockReturnValue({
+                lean: jest.fn().mockResolvedValue({
+                    readiness: Object.fromEntries(Object.keys(urlByHostId).map((hostId) => {
+                        const evidenceId = evidenceIdFor(query.name, hostId);
+                        return [hostId, {
+                            evidenceId,
+                            benchmarkQualified: true,
+                            stale: false,
+                            profileDepth: 'standard',
+                            artifact: artifactFor(query.name, hostId),
+                            authorityReceipt: {
+                                source: 'profiler_pipeline',
+                                version: 1,
+                                digest: 'a'.repeat(64),
+                                evidenceId
+                            }
+                        }];
+                    }))
+                })
+            })
+        }));
         mockTestModelOnHost.mockResolvedValue({ status: 'ok', testedAt: new Date('2026-04-19T18:00:00Z') });
         mockToPerformanceBaseline.mockReturnValue({ baseline: true });
         mockGroupModelsByHost.mockImplementation((defaultHost, models) => ({
@@ -650,7 +710,10 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         mockFindOnePerformanceProfile.mockReturnValue({
             select: jest.fn().mockReturnValue({
                 lean: jest.fn().mockResolvedValue({
-                    artifact: { registryQualified: true },
+                    artifact: {
+                        model: 'model-a', hostId: 'primary', hostUrl: 'http://exec:11434',
+                        digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
+                    },
                     profile: {
                         tokensPerSec: 123.4,
                         promptEvalTokensPerSec: 456.7,
@@ -747,7 +810,10 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         mockFindOnePerformanceProfile.mockReturnValue({
             select: jest.fn().mockReturnValue({
                 lean: jest.fn().mockResolvedValue({
-                    artifact: { registryQualified: true },
+                    artifact: {
+                        model: 'model-a', hostId: 'primary', hostUrl: 'http://exec:11434',
+                        digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
+                    },
                     profile: {
                         tokensPerSec: 123.4,
                         ttftMs: 321,

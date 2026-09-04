@@ -50,7 +50,16 @@ function _key(host, model) {
 function _getStats(key) {
   let s = _stats.get(key);
   if (!s) {
-    s = { inFlight: 0, peak: 0, totalAcquired: 0, totalReleased: 0, waiters: 0, maxWaiters: 0 };
+    s = {
+      inFlight: 0,
+      trackedInFlight: 0,
+      peak: 0,
+      totalAcquired: 0,
+      totalReleased: 0,
+      totalTracked: 0,
+      waiters: 0,
+      maxWaiters: 0
+    };
     _stats.set(key, s);
   }
   return s;
@@ -60,7 +69,7 @@ function _hostInFlight(host) {
   const prefix = `${host}::`;
   let total = 0;
   for (const [key, s] of _stats.entries()) {
-    if (key.startsWith(prefix)) total += s.inFlight;
+    if (key.startsWith(prefix)) total += s.inFlight + (s.trackedInFlight || 0);
   }
   return total;
 }
@@ -138,8 +147,9 @@ async function acquire(host, model, { signal } = {}) {
   throwIfAdmissionAborted(signal);
 
   if (!ENABLED) {
-    // No-op release — gate disabled
-    return () => {};
+    // Disabled means no concurrency throttling, not invisible traffic. Claims
+    // still need a complete in-flight set before taking their runtime snapshot.
+    return track(host, model, { signal });
   }
 
   if (sharedStateReady()) {
@@ -162,6 +172,55 @@ async function acquireLocal(host, model, { signal } = {}) {
   }
 
   return _enqueueLocalWaiter(key, host, s, signal);
+}
+
+/**
+ * Passively track an inference without applying the semaphore. The direct
+ * Benchmark/Profiler lane self-sequences, but it must remain observable to the
+ * pre-claim drain so a request admitted just before the claim CAS cannot race
+ * the residency snapshot.
+ */
+async function track(host, model, { signal } = {}) {
+  throwIfAdmissionAborted(signal);
+  const key = _key(host, model);
+  const s = _getStats(key);
+  if (sharedStateReady()) {
+    const ownerId = `${SHARED_OWNER_ID}:track:${randomUUID()}`;
+    const slotId = `${key}::track::${ownerId}`;
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + SHARED_SLOT_TTL_MS);
+    await _admissionModel().create({
+      _id: slotId,
+      key: slotId,
+      host: host || 'unknown',
+      model: model || 'unknown',
+      slot: 0,
+      ownerId,
+      acquiredAt: now,
+      expiresAt
+    });
+    if (signal?.aborted) {
+      await releaseSharedSlotWonAfterAbort(key, slotId, ownerId);
+      throw createAdmissionAbortError();
+    }
+    s.trackedInFlight++;
+    s.totalTracked++;
+    return _makeSharedTrackingRelease(key, slotId, ownerId);
+  }
+  s.trackedInFlight++;
+  s.totalTracked++;
+  return _makeTrackingRelease(key, host);
+}
+
+function _makeTrackingRelease(key, host) {
+  let released = false;
+  return function release() {
+    if (released) return;
+    released = true;
+    const s = _getStats(key);
+    s.trackedInFlight = Math.max(0, (s.trackedInFlight || 0) - 1);
+    _drainHost(host);
+  };
 }
 
 function _enqueueLocalWaiter(key, host, s, signal) {
@@ -509,15 +568,38 @@ function _makeSharedRelease(key, slotId, ownerId) {
   };
 }
 
+function _makeSharedTrackingRelease(key, slotId, ownerId) {
+  let released = false;
+  const Admission = _admissionModel();
+  const renewEveryMs = Math.max(10_000, Math.floor(SHARED_SLOT_TTL_MS / 3));
+  const renewTimer = setInterval(() => {
+    const expiresAt = new Date(Date.now() + SHARED_SLOT_TTL_MS);
+    Admission.updateOne({ _id: slotId, ownerId }, { $set: { expiresAt } }).catch(err => {
+      logger.warn('[HostGate] shared tracking renewal failed', { key, error: err.message });
+    });
+  }, renewEveryMs);
+  if (typeof renewTimer.unref === 'function') renewTimer.unref();
+
+  return function release() {
+    if (released) return;
+    released = true;
+    clearInterval(renewTimer);
+    const s = _getStats(key);
+    s.trackedInFlight = Math.max(0, (s.trackedInFlight || 0) - 1);
+    Admission.deleteOne({ _id: slotId, ownerId }).catch(err => {
+      logger.warn('[HostGate] shared tracking release failed', { key, error: err.message });
+    });
+  };
+}
+
 /**
  * Current in-flight count for a specific (host, model). Returns 0 if the
  * gate is disabled or the key has never been touched. Used by reload/unload
  * paths to avoid killing active inference.
  */
 function inFlightFor(host, model) {
-  if (!ENABLED) return 0;
   const s = _stats.get(_key(host, model));
-  return s ? s.inFlight : 0;
+  return s ? s.inFlight + (s.trackedInFlight || 0) : 0;
 }
 
 /**
@@ -526,10 +608,10 @@ function inFlightFor(host, model) {
  * swap and disrupt the active caller.
  */
 function hostHasInflight(host) {
-  if (!ENABLED || !host) return false;
+  if (!host) return false;
   const prefix = `${host}::`;
   for (const [key, s] of _stats.entries()) {
-    if (key.startsWith(prefix) && s.inFlight > 0) return true;
+    if (key.startsWith(prefix) && s.inFlight + (s.trackedInFlight || 0) > 0) return true;
   }
   return false;
 }
@@ -541,11 +623,14 @@ function stats() {
     out[key] = {
       host,
       model,
-      inFlight: s.inFlight,
+      inFlight: s.inFlight + (s.trackedInFlight || 0),
+      admittedInFlight: s.inFlight,
+      trackedInFlight: s.trackedInFlight || 0,
       peak: s.peak,
       waiters: s.waiters,
       maxWaiters: s.maxWaiters,
       totalAcquired: s.totalAcquired,
+      totalTracked: s.totalTracked || 0,
       totalReleased: s.totalReleased
     };
   }
@@ -572,7 +657,7 @@ function _resetForTests() {
  * must use this form; a process-local zero is not a distributed quiet point.
  */
 async function hostHasInflightAnywhere(host) {
-  if (!ENABLED || !host) return false;
+  if (!host) return false;
   if (hostHasInflight(host)) return true;
   if (!sharedStateReady()) return false;
   return Boolean(await _admissionModel().exists({
@@ -588,6 +673,7 @@ async function _clearSharedAdmissionsForTests() {
 
 module.exports = {
   acquire,
+  track,
   acquireExclusive,
   stats,
   inFlightFor,

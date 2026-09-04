@@ -112,6 +112,40 @@ async function updateHostAvailability(modelName, hostId, available) {
   );
 }
 
+async function invalidateReadinessIfEvidence(modelName, hostId, evidenceId, reason = 'authority_write_failed') {
+  if (!evidenceId) return { modifiedCount: 0 };
+  return ModelProfile.updateOne(
+    {
+      name: modelName,
+      [`readiness.${hostId}.evidenceId`]: evidenceId
+    },
+    {
+      $set: {
+        [`readiness.${hostId}.benchmarkQualified`]: false,
+        [`readiness.${hostId}.qualificationReason`]: reason,
+        [`readiness.${hostId}.stale`]: true,
+        [`readiness.${hostId}.staleReason`]: reason,
+        [`readiness.${hostId}.authorityReceipt`]: null
+      }
+    }
+  );
+}
+
+async function invalidateThinkingCapability(modelName, hostId, reason = 'authority_write_failed') {
+  return ModelProfile.updateOne(
+    { name: modelName },
+    {
+      $set: {
+        'capabilities.thinking': false,
+        'capabilities.thinkingPolicy': 'unknown',
+        [`thinkingProfiles.${hostId}.supported`]: false,
+        [`thinkingProfiles.${hostId}.recommendedPolicy`]: 'unknown',
+        [`thinkingProfiles.${hostId}.recommendationReason`]: reason
+      }
+    }
+  );
+}
+
 async function getStalenessReport() {
   return ModelPerformanceProfile.find({ stale: true }).lean();
 }
@@ -144,6 +178,8 @@ module.exports = {
   updateReadiness,
   updateThinkingCapability,
   updateHostAvailability,
+  invalidateReadinessIfEvidence,
+  invalidateThinkingCapability,
   getStalenessReport,
   getReadinessFunnel,
   getBenchmarkedModelNames

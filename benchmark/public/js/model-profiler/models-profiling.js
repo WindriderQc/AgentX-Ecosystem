@@ -323,8 +323,8 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
   function renderMetricsRow() {
     const hero = _heroStat(seenMetrics.tokensPerSec, seenMetrics.baselineTokensPerSec);
     const stats = [];
-    if (seenMetrics.ttftMeasurement === 'streamed_wall_clock' && seenMetrics.ttftMs != null) {
-      stats.push(_statCard(Math.round(seenMetrics.ttftMs) + ' ms', 'TTFT', '#9d8cff'));
+    if (seenMetrics.ttftMeasurement === 'streamed_wall_clock' && seenMetrics.ttftP50Ms != null) {
+      stats.push(_statCard(Math.round(seenMetrics.ttftP50Ms) + ' ms', 'TTFT p50', '#9d8cff'));
     }
     if (seenMetrics.maxVerifiedContext != null) {
       const v = seenMetrics.maxVerifiedContext;
@@ -463,8 +463,9 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
           if (progress.metrics) {
             const m = progress.metrics;
             if (m.tokensPerSec != null) seenMetrics.tokensPerSec = m.tokensPerSec;
-            if (m.ttftMeasurement === 'streamed_wall_clock' && m.ttftMs != null) {
-              seenMetrics.ttftMs = m.ttftMs;
+            const ttftP50Ms = m.ttftP50Ms ?? m.measurementQuality?.ttftP50Ms;
+            if (m.ttftMeasurement === 'streamed_wall_clock' && ttftP50Ms != null) {
+              seenMetrics.ttftP50Ms = ttftP50Ms;
               seenMetrics.ttftMeasurement = m.ttftMeasurement;
             }
             if (m.maxVerifiedContext != null) seenMetrics.maxVerifiedContext = m.maxVerifiedContext;
@@ -507,8 +508,8 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
     // Sync final values into seenMetrics so renderMetricsRow paints the
     // completed-state hero/stats consistently.
     if (p?.tokensPerSec != null) seenMetrics.tokensPerSec = p.tokensPerSec;
-    if (p?.ttftMeasurement === 'streamed_wall_clock' && p?.ttftMs != null) {
-      seenMetrics.ttftMs = p.ttftMs;
+    if (p?.ttftMeasurement === 'streamed_wall_clock' && p?.ttftP50Ms != null) {
+      seenMetrics.ttftP50Ms = p.ttftP50Ms;
       seenMetrics.ttftMeasurement = p.ttftMeasurement;
     }
     if (p?.maxVerifiedContext != null) seenMetrics.maxVerifiedContext = p.maxVerifiedContext;

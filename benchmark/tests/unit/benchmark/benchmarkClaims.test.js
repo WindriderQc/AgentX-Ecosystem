@@ -21,6 +21,9 @@ jest.mock('../../../config/logger', () => ({
 
 // Mock the core API client so we can control claim/release outcomes
 jest.mock('../../../src/clients/coreApiClient', () => ({
+    acquireWorkloadAdmission: jest.fn(),
+    heartbeatWorkloadAdmission: jest.fn(),
+    releaseWorkloadAdmission: jest.fn(),
     claimHostForBenchmark: jest.fn(),
     heartbeatBenchmarkClaim: jest.fn(),
     releaseBenchmarkClaim: jest.fn(),
@@ -43,6 +46,9 @@ describe('benchmark coordination helpers', () => {
         coreApiClient.claimHostForBenchmark.mockReset();
         coreApiClient.releaseBenchmarkClaim.mockReset();
         coreApiClient.heartbeatBenchmarkClaim.mockReset();
+        coreApiClient.acquireWorkloadAdmission.mockReset().mockResolvedValue({ acquired: true });
+        coreApiClient.heartbeatWorkloadAdmission.mockReset().mockResolvedValue({ heartbeat: true });
+        coreApiClient.releaseWorkloadAdmission.mockReset().mockResolvedValue({ released: true });
     });
 
     describe('startBenchmarkClaimHeartbeat', () => {
@@ -61,6 +67,25 @@ describe('benchmark coordination helpers', () => {
             const stop = startBenchmarkClaimHeartbeat(['http://a:11434'], 'batch-error', 30_000, { intervalMs: 60_000 });
             await stop.ready;
             expect(() => stop.assertActive()).toThrow(/core unavailable/);
+            stop();
+        });
+
+        it('makes loss of the runtime workload admission fatal before host heartbeats', async () => {
+            const onFatal = jest.fn();
+            coreApiClient.heartbeatWorkloadAdmission.mockResolvedValue({
+                heartbeat: false,
+                reason: 'maintenance took ownership'
+            });
+            const stop = startBenchmarkClaimHeartbeat(
+                ['http://a:11434'],
+                'batch-workload-lost',
+                30_000,
+                { onFatal, intervalMs: 60_000 }
+            );
+            await stop.ready;
+            expect(() => stop.assertActive()).toThrow(expect.objectContaining({ code: 'BENCHMARK_CLAIM_LOST' }));
+            expect(coreApiClient.heartbeatBenchmarkClaim).not.toHaveBeenCalled();
+            expect(onFatal).toHaveBeenCalledTimes(1);
             stop();
         });
     });
@@ -124,6 +149,17 @@ describe('benchmark coordination helpers', () => {
             const acquired = await acquireBenchmarkClaims([], BATCH, 30_000);
             expect(acquired).toEqual([]);
             expect(coreApiClient.claimHostForBenchmark).not.toHaveBeenCalled();
+            expect(coreApiClient.acquireWorkloadAdmission).toHaveBeenCalledWith(BATCH, expect.objectContaining({
+                batchId: BATCH,
+                hosts: []
+            }));
+        });
+
+        it('refuses before any host claim when runtime maintenance blocks admission', async () => {
+            coreApiClient.acquireWorkloadAdmission.mockRejectedValue(new Error('maintenance active'));
+            await expect(acquireBenchmarkClaims(['http://a:11434'], BATCH, 30_000))
+                .rejects.toThrow('maintenance active');
+            expect(coreApiClient.claimHostForBenchmark).not.toHaveBeenCalled();
         });
     });
 
@@ -156,10 +192,30 @@ describe('benchmark coordination helpers', () => {
             expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledTimes(2);
         });
 
-        it('no-ops on empty list', async () => {
+        it('releases the workload admission even when there are no host claims', async () => {
             await expect(releaseBenchmarkClaims([], BATCH))
-                .resolves.toEqual({ released: 0, failed: 0, details: [] });
+                .resolves.toEqual({
+                    released: 0,
+                    failed: 0,
+                    details: [],
+                    workloadAdmission: { released: true }
+                });
             expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
+            expect(coreApiClient.releaseWorkloadAdmission).toHaveBeenCalledWith(BATCH);
+        });
+
+        it('releases host fences before releasing runtime workload admission', async () => {
+            const order = [];
+            coreApiClient.releaseBenchmarkClaim.mockImplementation(async () => {
+                order.push('host');
+                return { released: true };
+            });
+            coreApiClient.releaseWorkloadAdmission.mockImplementation(async () => {
+                order.push('workload');
+                return { released: true };
+            });
+            await releaseBenchmarkClaims(['http://a:11434'], BATCH);
+            expect(order).toEqual(['host', 'workload']);
         });
 
         it('reports released=false honestly without claiming success', async () => {
@@ -177,8 +233,11 @@ describe('benchmark coordination helpers', () => {
                         released: false,
                         reason: 'claim generation changed',
                         runtimeRestore: null,
-                        pinRestore: null
+                        pinRestore: null,
+                        releaseReceipt: null
                     }]
+                    ,
+                    workloadAdmission: { released: true }
                 });
         });
     });

@@ -30,6 +30,17 @@ jest.mock('../../../src/services/benchmark/harnessBrokerClient', () => ({
     resolveHarnessTarget: jest.fn(async target => target)
 }));
 
+jest.mock('../../../src/clients/coreApiClient', () => ({
+    acquireWorkloadAdmission: jest.fn(async (workloadId, options = {}) => ({
+        acquired: true,
+        admissionId: `admission-${workloadId}`,
+        generation: `generation-${workloadId}`,
+        requestId: options.requestId,
+        workloadId
+    })),
+    releaseWorkloadAdmission: jest.fn(async () => ({ released: true }))
+}));
+
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const BenchmarkPrompt = require('../../../models/BenchmarkPrompt');
 const { startBatch } = require('../../../src/services/benchmark/execution');
