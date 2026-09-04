@@ -169,6 +169,12 @@ all provider configuration, executable pins, profiles, sessions and secrets.
 - Live qualification and maintenance scripts require their target host, model,
   context, and external service endpoints explicitly. Fixed benchmark matrices
   remain valid when the fixed values are the experiment being measured.
+- Native-tool support follows the fail-closed
+  [exact-artifact qualification contract](NATIVE_TOOL_QUALIFICATION.md).
+  Benchmark alone persists repeated mocked-tool evidence; Core consumes its
+  bounded projection. Legacy booleans remain inventory hints, and missing,
+  interrupted, inconclusive, expired, or identity/version-drifted evidence can
+  never become an `unsupported` conclusion.
 - Playground renders a conversational cockpit over the same routing and host
   controls used by chat. It may display bounded health, fleet, and route
   evidence, but it does not own a second router, host registry, service-health

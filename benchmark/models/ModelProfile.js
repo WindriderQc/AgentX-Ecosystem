@@ -99,7 +99,9 @@ const ModelProfileSchema = new mongoose.Schema({
   capabilities: {
     maxContext: Number,
     vision: { type: Boolean, default: false },
-    tools: { type: Boolean, default: false },
+    // Legacy booleans are inventory hints only. Exact native-tool support is
+    // qualified in ToolCapabilityQualification; absence must stay unknown.
+    tools: { type: Boolean, default: null },
     thinking: { type: Boolean, default: false },
     thinkingPolicy: {
       type: String,
