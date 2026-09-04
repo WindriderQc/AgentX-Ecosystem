@@ -38,6 +38,7 @@ jest.mock('../../../src/clients/coreApiClient', () => ({
         requestId: options.requestId,
         workloadId
     })),
+    heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
     releaseWorkloadAdmission: jest.fn(async () => ({ released: true }))
 }));
 

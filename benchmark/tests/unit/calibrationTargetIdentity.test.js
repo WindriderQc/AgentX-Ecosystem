@@ -26,6 +26,13 @@ jest.mock('../../src/services/benchmark/judgeReadiness', () => ({
     })),
     judgeUnavailablePayload: jest.fn()
 }));
+jest.mock('../../src/services/benchmark/workloadAdmissionLifecycle', () => {
+    const actual = jest.requireActual('../../src/services/benchmark/workloadAdmissionLifecycle');
+    return {
+        ...actual,
+        withManagedWorkloadRoute: (_kind, _options, handler) => handler
+    };
+});
 
 const { runCalibrationBatch } = require('../../src/services/benchmark/calibrationRunner');
 const diagnosticsRouter = require('../../routes/benchmark/diagnostics');

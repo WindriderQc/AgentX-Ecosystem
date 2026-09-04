@@ -158,6 +158,9 @@ function normalizeClaimOptions(estimatedDurationMs, opts = {}) {
     source: cleanString(opts.source),
     owner: cleanString(opts.owner),
     note: cleanString(opts.note),
+    admissionId: cleanString(opts.admissionId),
+    admissionGeneration: cleanString(opts.admissionGeneration),
+    admissionPrincipal: cleanString(opts.admissionPrincipal),
     claimGeneration: cleanClaimGeneration(opts.claimGeneration ?? opts.claim_generation),
     heartbeatTtlMs: positiveInteger(opts.heartbeatTtlMs ?? opts.heartbeat_ttl_ms),
     heartbeatAt: opts.heartbeatAt ? new Date(opts.heartbeatAt) : new Date()
@@ -168,6 +171,9 @@ function buildBenchmarkClaim(batchId, prevStatus, normalizedOptions) {
   return {
     batchId,
     claimGeneration: normalizedOptions.claimGeneration || crypto.randomUUID(),
+    admissionId: normalizedOptions.admissionId,
+    admissionGeneration: normalizedOptions.admissionGeneration,
+    admissionPrincipal: normalizedOptions.admissionPrincipal,
     prevStatus,
     claimedAt: new Date(),
     estimatedDurationMs: normalizedOptions.estimatedDurationMs,
@@ -267,6 +273,22 @@ async function claimBenchmark(hostUrl, batchId, estimatedDurationMs = null, opts
       return {
         claimed: false,
         reason: 'claim generation no longer owns the host',
+        pref: existing
+      };
+    }
+    const existingHasAdmission = Boolean(existing.benchmarkClaim.admissionId
+      || existing.benchmarkClaim.admissionGeneration
+      || existing.benchmarkClaim.admissionPrincipal);
+    const requestHasAdmission = Boolean(normalizedOptions.admissionId
+      || normalizedOptions.admissionGeneration
+      || normalizedOptions.admissionPrincipal);
+    if ((existingHasAdmission || requestHasAdmission)
+      && (normalizedOptions.admissionId !== existing.benchmarkClaim.admissionId
+        || normalizedOptions.admissionGeneration !== existing.benchmarkClaim.admissionGeneration
+        || normalizedOptions.admissionPrincipal !== existing.benchmarkClaim.admissionPrincipal)) {
+      return {
+        claimed: false,
+        reason: 'workload admission proof no longer matches the host claim',
         pref: existing
       };
     }
@@ -544,6 +566,16 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       pref: existing
     };
   }
+  if (opts.requireAdmissionProof === true
+    && (cleanString(opts.admissionId) !== existing.benchmarkClaim.admissionId
+      || cleanString(opts.admissionGeneration) !== existing.benchmarkClaim.admissionGeneration
+      || cleanString(opts.admissionPrincipal) !== existing.benchmarkClaim.admissionPrincipal)) {
+    return {
+      released: false,
+      reason: 'workload admission proof no longer matches the host claim',
+      pref: existing
+    };
+  }
   if (expectedHeartbeatAt !== undefined) {
     const currentHeartbeat = existing.benchmarkClaim.heartbeatAt
       ? new Date(existing.benchmarkClaim.heartbeatAt).getTime()
@@ -599,6 +631,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
   // the host before its pins are verified would race chat/watchdog traffic.
   let pinRestore = null;
   let restoredSnapshot = null;
+  let expiredModels = [];
   const hostPrefService = require('./hostPreferenceService');
   const finalizeToken = crypto.randomUUID();
   const finalizingFilter = {
@@ -643,14 +676,21 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
   }
 
   if (!skipPinRestore) {
-    let restoreSnapshot = excludedModels.length > 0
-      ? {
-          ...renewed.benchmarkClaim?.preClaimRuntime,
-          residents: (renewed.benchmarkClaim?.preClaimRuntime?.residents || []).filter(entry =>
-            !excludedModels.some(model => hostPrefService.pinNamesMatch(model, entry.model)))
-        }
-      : renewed.benchmarkClaim?.preClaimRuntime;
-    if (excludedModels.length > 0) {
+    const originalSnapshot = renewed.benchmarkClaim?.preClaimRuntime;
+    const afterExplicitExclusions = (originalSnapshot?.residents || []).filter(entry =>
+      !excludedModels.some(model => hostPrefService.pinNamesMatch(model, entry.model)));
+    const applicableResidents = hostPrefService.desiredBenchmarkResidents({
+      ...originalSnapshot,
+      residents: afterExplicitExclusions
+    });
+    expiredModels = afterExplicitExclusions
+      .filter(entry => !applicableResidents.includes(entry))
+      .map(entry => entry.model);
+    let restoreSnapshot = {
+      ...originalSnapshot,
+      residents: applicableResidents
+    };
+    if (excludedModels.length > 0 || expiredModels.length > 0) {
       restoreSnapshot = {
         ...restoreSnapshot,
         identityDigest: hostPrefService.benchmarkRuntimeSnapshotIdentity(restoreSnapshot)
@@ -664,7 +704,8 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
         {
           batchId,
           claimGeneration: legacyMissingGeneration ? null : claimGeneration,
-          finalizeToken
+          finalizeToken,
+          snapshotAlreadyFiltered: true
         }
       );
     } catch (err) {
@@ -739,6 +780,9 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
           benchmarkClaim: {
             batchId: null,
             claimGeneration: null,
+            admissionId: null,
+            admissionGeneration: null,
+            admissionPrincipal: null,
             prevStatus: null,
             claimedAt: null,
             estimatedDurationMs: null,
@@ -811,7 +855,8 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
         keepAlive: Number(entry.keepAlive),
         expiresAt: entry.expiresAt || null
       })),
-      excludedModels
+      excludedModels,
+      expiredModels
     },
     verification: {
       status: pinRestore?.status || (skipPinRestore ? 'skipped' : 'unknown'),
@@ -886,6 +931,16 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, opts = {}) {
       pref: existing
     };
   }
+  if (opts.requireAdmissionProof === true
+    && (cleanString(opts.admissionId) !== existing.benchmarkClaim.admissionId
+      || cleanString(opts.admissionGeneration) !== existing.benchmarkClaim.admissionGeneration
+      || cleanString(opts.admissionPrincipal) !== existing.benchmarkClaim.admissionPrincipal)) {
+    return {
+      heartbeat: false,
+      reason: 'workload admission proof no longer matches the host claim',
+      pref: existing
+    };
+  }
 
   const normalizedOptions = normalizeClaimOptions(opts);
   const set = {
@@ -908,6 +963,11 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, opts = {}) {
       status: 'benchmarking',
       'benchmarkClaim.batchId': batchId,
       'benchmarkClaim.claimGeneration': claimGeneration,
+      ...(opts.requireAdmissionProof === true ? {
+        'benchmarkClaim.admissionId': cleanString(opts.admissionId),
+        'benchmarkClaim.admissionGeneration': cleanString(opts.admissionGeneration),
+        'benchmarkClaim.admissionPrincipal': cleanString(opts.admissionPrincipal)
+      } : {}),
       'benchmarkClaim.finalizeToken': null
     },
     { $set: set },
@@ -947,8 +1007,16 @@ async function heartbeatBenchmarkClaim(hostUrl, batchId, opts = {}) {
  * @returns {Promise<{ reaped: Array, now: string }>}
  */
 async function reapStaleBenchmarkClaims(opts = {}) {
-  const graceFactor = Number(opts.graceFactor) || 1.5;
-  const hardCapMs = Number(opts.hardCapMs) || (2 * 60 * 60 * 1000);
+  const rawGraceFactor = opts.graceFactor == null ? 1.5 : Number(opts.graceFactor);
+  const rawHardCapMs = opts.hardCapMs == null ? (2 * 60 * 60 * 1000) : Number(opts.hardCapMs);
+  if (!Number.isFinite(rawGraceFactor) || rawGraceFactor <= 0 || rawGraceFactor > 10
+    || !Number.isFinite(rawHardCapMs) || rawHardCapMs < 1_000 || rawHardCapMs > 24 * 60 * 60 * 1000) {
+    const error = new Error('graceFactor must be > 0 and <= 10; hardCapMs must be between 1000 and 86400000');
+    error.code = 'BENCHMARK_REAPER_OPTIONS_INVALID';
+    throw error;
+  }
+  const graceFactor = rawGraceFactor;
+  const hardCapMs = Math.round(rawHardCapMs);
   const now = Date.now();
 
   const claims = await HostPreference.find({ status: 'benchmarking' }).lean();

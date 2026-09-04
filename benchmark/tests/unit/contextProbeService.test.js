@@ -41,6 +41,7 @@ jest.mock('../../models/ModelProfile', () => ({
 }));
 jest.mock('../../models/ModelContextProbeSnapshot', () => ({
   create: jest.fn(),
+  deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
   updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 })
 }));
 jest.mock('../../config/logger', () => ({
@@ -79,7 +80,11 @@ describe('contextProbeService', () => {
     jest.clearAllMocks();
     artifactIdentityService.resolveArtifactIdentity.mockResolvedValue(ARTIFACT);
     modelContextProfileService.updateFromProbeSnapshot.mockResolvedValue({ recommendationStatus: 'verified' });
-    ModelContextProbeSnapshot.create.mockImplementation(async (data) => buildSnapshotDoc(data));
+    ModelContextProbeSnapshot.create.mockImplementation(async (data) => {
+      const value = Array.isArray(data) ? data[0] : data;
+      const doc = buildSnapshotDoc(value);
+      return Array.isArray(data) ? [doc] : doc;
+    });
     ollamaClient.showModel.mockResolvedValue({
       model_info: {
         'general.context_length': 262144
@@ -164,7 +169,8 @@ describe('contextProbeService', () => {
         hostUrl: 'http://192.0.2.66:11434',
         testedNumCtx: 262144,
         status: 'completed'
-      })
+      }),
+      expect.objectContaining({ assertAuthorityActive: expect.any(Function) })
     );
     expect(result.modelTheoreticalMax).toBe(262144);
     expect(result.steps.map((step) => step.numCtx)).toEqual(expect.arrayContaining([
@@ -290,7 +296,8 @@ describe('contextProbeService', () => {
       reason: 'Ollama POST /api/generate timed out after 120000ms'
     });
     expect(modelContextProfileService.updateFromProbeSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ testedNumCtx: 2048, status: 'completed' })
+      expect.objectContaining({ testedNumCtx: 2048, status: 'completed' }),
+      expect.objectContaining({ assertAuthorityActive: expect.any(Function) })
     );
   });
 
@@ -325,7 +332,8 @@ describe('contextProbeService', () => {
       reason: 'Context ceiling: 0 tok/s'
     });
     expect(modelContextProfileService.updateFromProbeSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ testedNumCtx: 2048, status: 'completed' })
+      expect.objectContaining({ testedNumCtx: 2048, status: 'completed' }),
+      expect.objectContaining({ assertAuthorityActive: expect.any(Function) })
     );
   });
 
@@ -379,7 +387,32 @@ describe('contextProbeService', () => {
       acknowledgeMaintenance: true,
       maxCtx: 2048
     })).rejects.toThrow('mongo unavailable');
-    expect(ModelContextProbeSnapshot.create).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
+    expect(ModelContextProbeSnapshot.create).toHaveBeenCalledWith(
+      [expect.objectContaining({ status: 'completed' })],
+      undefined
+    );
+  });
+
+  it('deletes an ambiguously committed snapshot when authority is lost after the write', async () => {
+    const controller = new AbortController();
+    let checkpointCount = 0;
+    const lost = Object.assign(new Error('claim heartbeat rejected'), { code: 'BENCHMARK_CLAIM_LOST' });
+    const checkpoint = jest.fn(() => {
+      checkpointCount += 1;
+      if (checkpointCount === 2) throw lost;
+    });
+
+    await expect(contextProbeService._internal.persistProbeSnapshot({
+      modelName: 'gemma4:26b',
+      hostUrl: ARTIFACT.hostUrl,
+      status: 'completed'
+    }, { signal: controller.signal, checkpoint })).rejects.toBe(lost);
+
+    expect(ModelContextProbeSnapshot.create).toHaveBeenCalledWith(
+      [expect.objectContaining({ _id: expect.anything(), status: 'completed' })],
+      { signal: controller.signal }
+    );
+    expect(ModelContextProbeSnapshot.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
   });
 });
 

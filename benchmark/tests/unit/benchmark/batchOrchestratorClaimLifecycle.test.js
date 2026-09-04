@@ -529,7 +529,10 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         await runPromise;
 
         expect(mockRestoreAllDedication).not.toHaveBeenCalled();
-        expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith('http://exec:11434', 'batch-judge-phase');
+        expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith(
+            'http://exec:11434',
+            'batch-judge-phase'
+        );
         expect(recordBatchTimelineEvent).toHaveBeenCalledWith('benchmark_claim_released', {
             hosts: ['http://exec:11434']
         });
@@ -1199,7 +1202,10 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         })).rejects.toThrow('Resume blocked: host claim lost for model-a on http://exec:11434');
 
         // Claims and pins are still cleaned up despite the stale claim
-        expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith('http://exec:11434', 'batch-resume-stale-claim');
+        expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith(
+            'http://exec:11434',
+            'batch-resume-stale-claim'
+        );
         expect(mockRestoreAllDedication).not.toHaveBeenCalled();
         expect(recordBatchTimelineEvent).toHaveBeenCalledWith(
             'inference_contract_resume_blocked',

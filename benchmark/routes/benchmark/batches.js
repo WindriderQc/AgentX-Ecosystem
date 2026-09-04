@@ -7,7 +7,7 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../../config/logger');
 const benchmarkService = require('../../src/services/benchmark');
-const { judgeBatch, preflightJudgeBatch, stopJudging, stopPersistedJudging, getJudgingStatus } = require('../../src/services/benchmark/judging');
+const { startManagedJudgeBatch, preflightJudgeBatch, stopJudging, stopPersistedJudging, getJudgingStatus } = require('../../src/services/benchmark/judging');
 const { resolveMultiJudge } = require('../../src/services/benchmark/resolveMultiJudge');
 const {
     resolveReadyJudgeTarget,
@@ -427,12 +427,13 @@ router.post('/batch/:id/rejudge-pending', async (req, res) => {
         });
 
         // Start judging in background, return immediately
-        judgeBatch(req.params.id, {
+        const { completion } = await startManagedJudgeBatch(req.params.id, {
             judgeConfig,
             concurrency,
             force: false,
             multiJudge
-        }).catch(err => {
+        });
+        completion.catch(err => {
             logger.error('Background rejudge failed', { batchId: req.params.id, error: err.message });
         });
 
@@ -485,7 +486,8 @@ router.post('/batch/:id/judge', async (req, res) => {
         };
 
         // Start judging in background
-        judgeBatch(req.params.id, options).catch(err => {
+        const { completion } = await startManagedJudgeBatch(req.params.id, options);
+        completion.catch(err => {
             logger.error('Background judging failed', { batchId: req.params.id, error: err.message });
         });
 

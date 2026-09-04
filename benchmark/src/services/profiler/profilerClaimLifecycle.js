@@ -6,6 +6,7 @@ const {
   startBenchmarkClaimHeartbeat
 } = require('../benchmark/benchmarkClaimLifecycle');
 const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
+const { releaseWorkloadAdmission } = require('../../clients/coreApiClient');
 
 async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDurationMs, options = {}) {
   const uniqueHosts = [...new Set((hostUrls || []).filter(Boolean))];
@@ -68,8 +69,22 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
     async release(options = {}) {
       if (!releasePromise) {
         releasePromise = (async () => {
+          if (typeof heartbeat.drainHosts === 'function') await heartbeat.drainHosts();
+          const result = await releaseBenchmarkClaims(claimed, operationId, {
+            ...options,
+            releaseWorkloadAdmission: false
+          });
           await heartbeat.drain();
-          return releaseBenchmarkClaims(claimed, operationId, options);
+          if (result.failed === 0) {
+            result.workloadAdmission = await releaseWorkloadAdmission(operationId);
+            if (result.workloadAdmission?.released !== true) result.failed += 1;
+          } else {
+            result.workloadAdmission = {
+              released: false,
+              reason: 'held because fenced host restoration failed'
+            };
+          }
+          return result;
         })();
       }
       return releasePromise;

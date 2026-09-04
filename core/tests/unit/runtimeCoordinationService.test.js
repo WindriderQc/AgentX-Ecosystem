@@ -151,14 +151,27 @@ describe('runtime maintenance and benchmark workload coordination', () => {
       requestId: 'bound-workload-request',
       workloadId: 'batch-original',
       kind: 'benchmark',
-      batchId: 'batch-original'
+      batchId: 'batch-original',
+      hosts: ['http://host-a:11434']
     })).resolves.toMatchObject({ acquired: true });
     await expect(service.acquireWorkload({
       principal: 'benchmark-service',
       requestId: 'bound-workload-request',
       workloadId: 'batch-forged',
       kind: 'benchmark-cloud',
-      batchId: 'batch-forged'
+      batchId: 'batch-forged',
+      hosts: ['http://host-a:11434']
+    })).resolves.toMatchObject({
+      acquired: false,
+      reason: expect.stringContaining('different workload intent')
+    });
+    await expect(service.acquireWorkload({
+      principal: 'benchmark-service',
+      requestId: 'bound-workload-request',
+      workloadId: 'batch-original',
+      kind: 'benchmark',
+      batchId: 'batch-original',
+      hosts: ['http://host-b:11434']
     })).resolves.toMatchObject({
       acquired: false,
       reason: expect.stringContaining('different workload intent')
@@ -207,6 +220,35 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     );
     await service.reapExpired(new Date());
     expect((await RuntimeCoordination.findById('runtime').lean()).workloads).toHaveLength(0);
+  });
+
+  test('assertion fails closed after expiry and outside the admission host intent', async () => {
+    const admission = await service.acquireWorkload({
+      principal: 'benchmark-service',
+      requestId: 'host-bound-request',
+      workloadId: 'host-bound-workload',
+      hosts: ['http://host-a:11434']
+    });
+
+    await expect(service.assertWorkloadAdmission({
+      id: admission.admissionId,
+      generation: admission.generation,
+      principal: admission.principal,
+      workloadId: admission.workloadId,
+      host: 'http://host-b:11434'
+    })).resolves.toMatchObject({ admitted: false });
+
+    await RuntimeCoordination.updateOne(
+      { _id: 'runtime', 'workloads.admissionId': admission.admissionId },
+      { $set: { 'workloads.$.expiresAt': new Date(Date.now() - 1_000) } }
+    );
+    await expect(service.assertWorkloadAdmission({
+      id: admission.admissionId,
+      generation: admission.generation,
+      principal: admission.principal,
+      workloadId: admission.workloadId,
+      host: 'http://host-a:11434'
+    })).resolves.toMatchObject({ admitted: false });
   });
 
   test('operator status is redacted and never exposes generations or request ids', async () => {

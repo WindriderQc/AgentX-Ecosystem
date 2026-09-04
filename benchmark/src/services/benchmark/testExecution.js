@@ -47,6 +47,22 @@ async function runTest({ model, host, prompt }) {
     }
 
     const start = Date.now();
+    let persistedResult = null;
+
+    const persistResultWithFence = async (result) => {
+        stopHeartbeat.assertActive();
+        try {
+            await result.save({ signal: claimAbort.signal });
+            persistedResult = result;
+            stopHeartbeat.assertActive();
+            return result;
+        } catch (error) {
+            if (persistedResult?._id || result?._id) {
+                await BenchmarkResult.deleteOne({ _id: persistedResult?._id || result._id }).catch(() => {});
+            }
+            throw error;
+        }
+    };
 
     try {
         // Route through Core's direct Benchmark lane so the exact claim proof
@@ -122,8 +138,7 @@ async function runTest({ model, host, prompt }) {
             timestamp: new Date()
         });
 
-        stopHeartbeat.assertActive();
-        await result.save();
+        await persistResultWithFence(result);
 
         logger.info('Benchmark test completed', {
             model, host, latency, tokens_per_sec: result.tokens_per_sec
@@ -156,16 +171,37 @@ async function runTest({ model, host, prompt }) {
             timestamp: new Date()
         });
 
-        stopHeartbeat.assertActive();
-        await result.save();
+        await persistResultWithFence(result);
         logger.error('Benchmark test failed', { model, host, error: err.message });
 
         throw err;
     } finally {
+        if (typeof stopHeartbeat.drainHosts === 'function') await stopHeartbeat.drainHosts();
+        const release = await releaseBenchmarkClaims(claimedHosts, claimId, {
+            releaseWorkloadAdmission: false
+        });
         await stopHeartbeat.drain();
-        const release = await releaseBenchmarkClaims(claimedHosts, claimId);
+        if (release.failed === 0) {
+            const workload = await require('../../clients/coreApiClient').releaseWorkloadAdmission(claimId);
+            if (workload?.released !== true) {
+                release.failed += 1;
+                release.workloadAdmission = workload;
+            }
+        }
         if (release.failed > 0) {
-            const error = new Error(release.details?.find(detail => !detail.released)?.reason || 'Benchmark runtime restore/release failed');
+            // The test evidence is only authoritative when the exact host
+            // snapshot was restored and the linked workload admission could
+            // be released. Invalidate any possibly committed result before
+            // surfacing a failed lifecycle receipt.
+            if (persistedResult?._id) {
+                await BenchmarkResult.deleteOne({ _id: persistedResult._id }).catch(() => {});
+                persistedResult = null;
+            }
+            const error = new Error(
+                release.details?.find(detail => !detail.released)?.reason
+                || release.workloadAdmission?.reason
+                || 'Benchmark runtime restore/release failed'
+            );
             error.code = 'BENCHMARK_RUNTIME_RESTORE_FAILED';
             throw error;
         }

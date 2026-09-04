@@ -32,10 +32,13 @@ function sameMaintenanceIntent(existing, { scope }) {
   return existing?.scope === scope;
 }
 
-function sameWorkloadIntent(existing, { workloadId, kind, batchId }) {
+function sameWorkloadIntent(existing, { workloadId, kind, batchId, hosts }) {
+  const existingHosts = normalizedHosts(existing?.hosts);
+  const requestedHosts = normalizedHosts(hosts);
   return existing?.workloadId === workloadId
     && existing?.kind === kind
-    && (existing?.batchId || null) === (batchId || null);
+    && (existing?.batchId || null) === (batchId || null)
+    && JSON.stringify(existingHosts) === JSON.stringify(requestedHosts);
 }
 
 async function ensureDocument() {
@@ -217,7 +220,44 @@ async function heartbeat(kind, { id, generation, principal, ttl } = {}) {
     workloadId: owned.workloadId,
     kind: owned.kind,
     batchId: owned.batchId,
+    hosts: normalizedHosts(owned.hosts),
     heartbeatAt: owned.heartbeatAt,
+    expiresAt: owned.expiresAt
+  };
+}
+
+async function assertWorkloadAdmission({ id, generation, principal, workloadId, host } = {}) {
+  id = clean(id);
+  generation = clean(generation);
+  principal = clean(principal);
+  workloadId = clean(workloadId);
+  host = clean(host, 500);
+  if (!id || !generation || !principal || !workloadId) {
+    return { admitted: false, reason: 'exact workload admission proof required' };
+  }
+  await reapExpired();
+  const state = await RuntimeCoordination.findOne({
+    _id: 'runtime',
+    workloads: { $elemMatch: {
+      admissionId: id,
+      generation,
+      principal,
+      workloadId,
+      expiresAt: { $gt: new Date() },
+      ...(host ? { hosts: host } : {})
+    } }
+  }).lean();
+  if (!state) return { admitted: false, reason: 'workload admission proof is absent, expired, or does not cover this host' };
+  const owned = state.workloads.find(item => item.admissionId === id && item.generation === generation);
+  return {
+    admitted: true,
+    admissionId: owned.admissionId,
+    generation: owned.generation,
+    principal: owned.principal,
+    workloadId: owned.workloadId,
+    kind: owned.kind,
+    batchId: owned.batchId,
+    hosts: normalizedHosts(owned.hosts),
     expiresAt: owned.expiresAt
   };
 }
@@ -257,6 +297,7 @@ async function release(kind, { id, generation, principal } = {}) {
     workloadId: owned.workloadId,
     kind: owned.kind,
     batchId: owned.batchId,
+    hosts: normalizedHosts(owned.hosts),
     releasedAt
   };
 }
@@ -291,6 +332,7 @@ async function listActive() {
 module.exports = {
   acquireMaintenance,
   acquireWorkload,
+  assertWorkloadAdmission,
   heartbeat,
   release,
   listActive,

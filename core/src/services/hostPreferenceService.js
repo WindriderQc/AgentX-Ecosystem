@@ -324,7 +324,9 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
     }
   };
 
-  const desired = desiredBenchmarkResidents(snapshot);
+  const desired = benchmarkClaim?.snapshotAlreadyFiltered === true
+    ? (snapshot?.residents || [])
+    : desiredBenchmarkResidents(snapshot);
   const desiredNames = desired.map(entry => entry.model);
   let running = await fetchRunningModelInfosStrict(hostUrl);
 
@@ -1010,6 +1012,7 @@ module.exports = {
   resolvePinnedRuntimeOptions,
   warmDefaultModel,
   benchmarkRuntimeSnapshotIdentity,
+  desiredBenchmarkResidents,
   captureBenchmarkRuntime,
   restoreBenchmarkRuntime,
   warmHost,
@@ -1038,6 +1041,7 @@ module.exports = {
   unloadModel,
   prepareExclusiveModel,
   restorePinnedModels,
+  pinNamesMatch,
   swapModel,
   claimBenchmark: benchmarkClaimService.claimBenchmark,
   heartbeatBenchmarkClaim: benchmarkClaimService.heartbeatBenchmarkClaim,

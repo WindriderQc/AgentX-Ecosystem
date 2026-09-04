@@ -1,6 +1,12 @@
 const ModelContextProfile = require('../../models/ModelContextProfile');
 const { getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 
+// v3 is deliberately distinct from the first additive migration draft. That
+// draft could stamp legacy 262K maxima as if they were degradation-derived
+// recommendations. Only a fresh probe written by this implementation may
+// carry current recommendation authority.
+const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v3';
+
 function positiveInteger(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -56,6 +62,7 @@ function normalizeContextProfile(profile) {
   const maxVerifiedContext = positiveInteger(profile.maxVerifiedContext)
     || positiveInteger(profile.verifiedMaxContext);
   const recommendationsVerified = profile.recommendationStatus === 'verified'
+    && profile.recommendationEvidenceVersion === RECOMMENDATION_EVIDENCE_VERSION
     && profile.revalidationRequired !== true
     && profile.stale !== true;
   const recommendedDocumentContext = recommendationsVerified
@@ -82,7 +89,8 @@ function hostIdForUrl(hostUrl) {
   return getConfiguredHosts().find((host) => normalizeHostUrl(host.url) === normalized)?.id || null;
 }
 
-async function updateFromProbeSnapshot(snapshot) {
+async function updateFromProbeSnapshot(snapshot, options = {}) {
+  options.assertAuthorityActive?.();
   const tested = positiveInteger(snapshot?.testedNumCtx);
   const modelName = String(snapshot?.modelName || '').trim().replace(/:latest$/i, '');
   const hostUrl = normalizeHostUrl(snapshot?.hostUrl);
@@ -96,7 +104,10 @@ async function updateFromProbeSnapshot(snapshot) {
   }
 
   const identityFilter = { modelName, hostUrl, artifactDigest, runtimeFingerprint };
-  const existing = await ModelContextProfile.findOne(identityFilter).lean();
+  const existingQuery = ModelContextProfile.findOne(identityFilter);
+  if (options.signal && typeof existingQuery.setOptions === 'function') existingQuery.setOptions({ signal: options.signal });
+  const existing = await existingQuery.lean();
+  options.assertAuthorityActive?.();
   // The current ceiling follows the latest valid revalidation and may move
   // down. The historical maximum remains audit evidence, never runtime policy.
   const maxVerifiedContext = tested;
@@ -129,7 +140,7 @@ async function updateFromProbeSnapshot(snapshot) {
   const verifiedInputTokens = positiveInteger(step?.promptTokens) || null;
   const evidenceTokensPerSec = Number(step?.tokensPerSec ?? snapshot.atLimitTokensPerSec ?? 0) || null;
 
-  return ModelContextProfile.findOneAndUpdate(
+  const updated = await ModelContextProfile.findOneAndUpdate(
     identityFilter,
     {
       $set: {
@@ -145,6 +156,7 @@ async function updateFromProbeSnapshot(snapshot) {
         recommendedInteractiveContext,
         recommendedDocumentContext,
         recommendationStatus: recommendationsVerified ? 'verified' : 'unknown',
+        recommendationEvidenceVersion: RECOMMENDATION_EVIDENCE_VERSION,
         revalidationRequired: !recommendationsVerified,
         recommendationThresholds: {
           interactiveDegradationPct: interactiveThreshold,
@@ -174,8 +186,10 @@ async function updateFromProbeSnapshot(snapshot) {
         }
       }
     },
-    { upsert: true, new: true }
+    { upsert: true, new: true, ...(options.signal ? { signal: options.signal } : {}) }
   ).lean();
+  options.assertAuthorityActive?.();
+  return updated;
 }
 
 async function findContextProfile(modelName, hostUrl, artifact = {}) {
@@ -224,5 +238,6 @@ module.exports = {
   modelNameCandidates,
   normalizeContextProfile,
   updateFromProbeSnapshot,
-  invalidateIfSnapshot
+  invalidateIfSnapshot,
+  RECOMMENDATION_EVIDENCE_VERSION
 };

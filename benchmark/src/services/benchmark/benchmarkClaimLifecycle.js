@@ -55,7 +55,12 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, cl
             logger.warn('Benchmark claim acquisition failed — aborting batch', {
                 batchId, hostUrl, error: err.message
             });
-            await releaseBenchmarkClaims(acquired, batchId);
+            const cleanup = await releaseBenchmarkClaims(acquired, batchId, {
+                releaseWorkloadAdmission: false
+            });
+            if (cleanup.failed === 0) {
+                await releaseWorkloadAdmission(batchId).catch(() => {});
+            }
             const wrapped = new Error(`Unable to reserve benchmark host ${hostUrl}: ${err.message}`);
             wrapped.hostUrl = hostUrl;
             wrapped.cause = err;
@@ -73,11 +78,16 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, cl
  * @returns {Promise<{released: number, failed: number, details: object[]}>}
  */
 async function releaseBenchmarkClaims(hostUrls, batchId, options = {}) {
+    const {
+        releaseWorkloadAdmission: _releaseWorkloadAdmission,
+        byHost,
+        ...defaultHostOptions
+    } = options;
     const details = await Promise.all(hostUrls.map(async (hostUrl) => {
         try {
-            const hostOptions = options.byHost
-                ? (options.byHost[hostUrl] || {})
-                : options;
+            const hostOptions = byHost
+                ? (byHost[hostUrl] || {})
+                : defaultHostOptions;
             const result = Object.keys(hostOptions).length > 0
                 ? await releaseBenchmarkClaim(hostUrl, batchId, hostOptions)
                 : await releaseBenchmarkClaim(hostUrl, batchId);
@@ -112,14 +122,17 @@ async function releaseBenchmarkClaims(hostUrls, batchId, options = {}) {
         }
     }));
     let workloadAdmission = null;
-    try {
-        workloadAdmission = await releaseWorkloadAdmission(batchId);
-    } catch (error) {
-        workloadAdmission = { released: false, reason: error.message };
+    if (options.releaseWorkloadAdmission !== false) {
+        try {
+            workloadAdmission = await releaseWorkloadAdmission(batchId);
+        } catch (error) {
+            workloadAdmission = { released: false, reason: error.message };
+        }
     }
     return {
         released: details.filter(detail => detail.released).length,
-        failed: details.filter(detail => !detail.released).length + (workloadAdmission?.released === true ? 0 : 1),
+        failed: details.filter(detail => !detail.released).length
+            + (options.releaseWorkloadAdmission !== false && workloadAdmission?.released !== true ? 1 : 0),
         details,
         workloadAdmission
     };
@@ -130,6 +143,7 @@ function startBenchmarkClaimHeartbeat(hostUrls, batchId, estimatedDurationMs, op
         ? Number(options.intervalMs)
         : CLAIM_HEARTBEAT_INTERVAL_MS;
     let stopped = false;
+    let hostHeartbeatsEnabled = true;
     let running = false;
     let inFlight = Promise.resolve();
     let failure = null;
@@ -155,6 +169,7 @@ function startBenchmarkClaimHeartbeat(hostUrls, batchId, estimatedDurationMs, op
                     fail(null, workload.reason || 'workload admission ownership rejected');
                     return;
                 }
+                if (!hostHeartbeatsEnabled) return;
                 await Promise.all(hostUrls.map(async (hostUrl) => {
                     const result = await heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs, {
                         source: options.source || 'benchmark',
@@ -188,6 +203,14 @@ function startBenchmarkClaimHeartbeat(hostUrls, batchId, estimatedDurationMs, op
         clearInterval(interval);
     };
     stop.ready = ready;
+    // Host release is a fenced Core finalizer. Stop and drain host heartbeats
+    // before entering it so no client heartbeat races the finalizer CAS, while
+    // continuing to renew the global workload admission until every host has
+    // been restored and the durable terminal write has completed.
+    stop.drainHosts = async () => {
+        hostHeartbeatsEnabled = false;
+        await inFlight;
+    };
     stop.drain = async () => {
         stop();
         await inFlight;

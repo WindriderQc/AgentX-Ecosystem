@@ -19,6 +19,14 @@ jest.mock('../../src/services/benchmark/judgeReadiness', () => ({
     judgeUnavailablePayload: jest.fn()
 }));
 
+jest.mock('../../src/services/benchmark/workloadAdmissionLifecycle', () => {
+    const actual = jest.requireActual('../../src/services/benchmark/workloadAdmissionLifecycle');
+    return {
+        ...actual,
+        withManagedWorkloadRoute: (_kind, _options, handler) => handler
+    };
+});
+
 const app = express();
 app.use(express.json());
 app.use('/api/benchmark', require('../../routes/benchmark'));

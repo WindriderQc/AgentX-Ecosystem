@@ -456,6 +456,74 @@ describe('benchmarkClaimService', () => {
       expect(after.benchmarkClaim?.batchId).toBeNull();
     });
 
+    it('attests only the resident set actually restored after finite TTL expiry', async () => {
+      const expiringSnapshot = {
+        capturedAt: new Date(),
+        source: 'ollama_ps',
+        exact: true,
+        residents: [{
+          model: 'finite:latest',
+          digest: 'sha256:finite',
+          artifactSize: 8_000_000_000,
+          sizeVram: 7_500_000_000,
+          contextLength: 32768,
+          keepAlive: 1,
+          expiresAt: new Date(Date.now() + 10)
+        }],
+        error: null
+      };
+      expiringSnapshot.identityDigest = hostPrefService.benchmarkRuntimeSnapshotIdentity(expiringSnapshot);
+      hostPrefService.captureBenchmarkRuntime.mockResolvedValueOnce(expiringSnapshot);
+      hostPrefService.restoreBenchmarkRuntime.mockImplementationOnce(async (_host, applied) => ({
+        host: HOST_URL,
+        status: 'ready',
+        verified: true,
+        degraded: false,
+        mode: 'exact_runtime_snapshot',
+        snapshotIdentity: applied.identityDigest,
+        residents: applied.residents
+      }));
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
+      });
+
+      expect(released.released).toBe(true);
+      expect(hostPrefService.restoreBenchmarkRuntime).toHaveBeenCalledWith(
+        HOST_URL,
+        expect.objectContaining({ exact: true, residents: [] }),
+        expect.objectContaining({ snapshotAlreadyFiltered: true })
+      );
+      expect(released.releaseReceipt).toMatchObject({
+        snapshot: {
+          identityDigest: expiringSnapshot.identityDigest,
+          appliedIdentityDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          residentCount: 0,
+          residents: [],
+          excludedModels: [],
+          expiredModels: ['finite:latest']
+        },
+        verification: {
+          status: 'ready',
+          ready: true,
+          verified: true,
+          degraded: false,
+          mode: 'exact_runtime_snapshot'
+        },
+        state: {
+          restoredStatus: 'ready',
+          claimCleared: true,
+          finalizerCleared: true
+        }
+      });
+      expect(released.releaseReceipt.snapshot.appliedIdentityDigest)
+        .not.toBe(released.releaseReceipt.snapshot.identityDigest);
+      expect(released.releaseReceipt.verification.snapshotIdentity)
+        .toBe(released.releaseReceipt.snapshot.appliedIdentityDigest);
+    });
+
     it('keeps the fence recoverable when exact runtime restoration fails', async () => {
       hostPrefService.restoreBenchmarkRuntime.mockResolvedValueOnce({
         host: HOST_URL,

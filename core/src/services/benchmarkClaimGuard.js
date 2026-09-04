@@ -24,6 +24,19 @@ async function getActiveBenchmarkClaim(hostUrl) {
   return hostPrefService.hasActiveBenchmarkClaim(pref) ? (pref.benchmarkClaim || {}) : null;
 }
 
+async function claimWorkloadAdmissionIsActive(hostUrl, claim) {
+  if (!claim?.admissionId || !claim?.admissionGeneration || !claim?.admissionPrincipal) return false;
+  const runtimeCoordinationService = require('./runtimeCoordinationService');
+  const admission = await runtimeCoordinationService.assertWorkloadAdmission({
+    id: claim.admissionId,
+    generation: claim.admissionGeneration,
+    principal: claim.admissionPrincipal,
+    workloadId: claim.batchId,
+    host: hostUrl
+  });
+  return admission?.admitted === true;
+}
+
 async function assertHostAvailableForConsumer(hostUrl, {
   callerDetail = null,
   claimBatchId = null,
@@ -45,12 +58,16 @@ async function assertHostAvailableForConsumer(hostUrl, {
     return null;
   }
 
-  const hasExactProof = allowBenchmarkCallers
+  const proofShapeMatches = allowBenchmarkCallers
     && benchmarkAuthorized === true
     && typeof claimBatchId === 'string'
     && typeof claimGeneration === 'string'
     && claimBatchId === claim.batchId
     && claimGeneration === claim.claimGeneration;
+  const admissionActive = proofShapeMatches
+    ? await claimWorkloadAdmissionIsActive(hostUrl, claim)
+    : false;
+  const hasExactProof = proofShapeMatches && admissionActive;
   if (hasExactProof) return claim;
 
   logger.info('[benchmark-claim-guard] blocked consumer inference on claimed host', {

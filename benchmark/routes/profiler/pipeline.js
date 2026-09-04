@@ -513,6 +513,13 @@ router.post('/full', async (req, res) => {
     lease.assertActive();
     await lease.finalize();
     lease = null;
+    if (data?.completed !== true) {
+      return res.status(422).json({
+        status: 'incomplete',
+        code: 'FULL_PROFILE_INCOMPLETE',
+        data
+      });
+    }
     res.json({ status: 'success', data });
   } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null }); }
   finally {

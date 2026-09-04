@@ -6,7 +6,12 @@ const request = require('supertest');
 jest.mock('../../../src/services/profiler/profilerOrchestrator', () => ({
   profile: jest.fn().mockResolvedValue({ ok: true }),
   scout: jest.fn().mockResolvedValue([]),
-  fullPipeline: jest.fn().mockResolvedValue([])
+  fullPipeline: jest.fn().mockResolvedValue({
+    completed: true,
+    benchmarkQualified: true,
+    results: [],
+    failures: []
+  })
 }));
 jest.mock('../../../src/services/profiler/hostProfileService', () => ({
   getById: jest.fn(),
@@ -119,7 +124,10 @@ describe('profile-host queue depth selection', () => {
 
     const tracker = activeProfileQueues.get(started.queueId);
     expect(tracker.models[0].status).toBe('completed');
-    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledWith('http://localhost:11434', expect.stringMatching(/^profiler-queue-/));
+    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledWith(
+      'http://localhost:11434',
+      expect.stringMatching(/^profiler-queue-/)
+    );
   });
 
   it('honors explicit full depth for a per-host profile queue', async () => {

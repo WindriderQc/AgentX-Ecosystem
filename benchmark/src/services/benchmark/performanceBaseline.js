@@ -158,7 +158,8 @@ async function capturePerformanceBaseline({
                 {
                     $push: { performance_baselines: baseline },
                     $set: { last_activity_at: new Date() }
-                }
+                },
+                signal ? { signal } : undefined
             );
             try {
                 assertClaimActive?.();

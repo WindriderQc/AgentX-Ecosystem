@@ -173,6 +173,7 @@ function summarizeThroughputSamples(samples, { minimumRetainedSamples = 2 } = {}
       p95: null,
       ttftP50Ms: null,
       ttftP95Ms: null,
+      ttftSampleCount: 0,
       promptEvalP50Ms: null,
       promptEvalP95Ms: null,
       confidenceInterval95: null,
@@ -198,6 +199,8 @@ function summarizeThroughputSamples(samples, { minimumRetainedSamples = 2 } = {}
       p95: _round(mean),
       ttftP50Ms: Number.isFinite(Number(passing[0]?.ttftMs)) ? _round(passing[0].ttftMs) : null,
       ttftP95Ms: Number.isFinite(Number(passing[0]?.ttftMs)) ? _round(passing[0].ttftMs) : null,
+      ttftSampleCount: passing[0]?.ttftMeasurement === 'streamed_wall_clock'
+        && Number.isFinite(Number(passing[0]?.ttftMs)) ? 1 : 0,
       promptEvalP50Ms: Number.isFinite(Number(passing[0]?.promptEvalDurationMs)) ? _round(passing[0].promptEvalDurationMs) : null,
       promptEvalP95Ms: Number.isFinite(Number(passing[0]?.promptEvalDurationMs)) ? _round(passing[0].promptEvalDurationMs) : null,
       confidenceInterval95: null,
@@ -232,6 +235,7 @@ function summarizeThroughputSamples(samples, { minimumRetainedSamples = 2 } = {}
     p95: _round(_quantile(values, 0.95)),
     ttftP50Ms: streamedTtft.length ? _round(_quantile(streamedTtft, 0.5)) : null,
     ttftP95Ms: streamedTtft.length ? _round(_quantile(streamedTtft, 0.95)) : null,
+    ttftSampleCount: streamedTtft.length,
     promptEvalP50Ms: promptEvalDurations.length ? _round(_quantile(promptEvalDurations, 0.5)) : null,
     promptEvalP95Ms: promptEvalDurations.length ? _round(_quantile(promptEvalDurations, 0.95)) : null,
     confidenceInterval95: {
@@ -289,6 +293,11 @@ function profileQualificationFailures(profileData) {
   if (profileData.ttftMeasurement !== 'streamed_wall_clock'
     || !Number.isFinite(Number(profileData.ttftMs))
     || Number(profileData.ttftMs) < 0) failures.push('streamed_ttft_missing');
+  const requiredTtftSamples = Number(profileData.requiredTtftSamples) || required;
+  if (requiredTtftSamples > 0 && Number(quality.ttftSampleCount) < requiredTtftSamples) {
+    failures.push('streamed_ttft_sample_minimum_not_met');
+  }
+  if (profileData.spill?.verified !== true) failures.push('gpu_residency_unverified');
 
   if (profileData.profileDepth === 'full') {
     const curve = Array.isArray(profileData.throughputCurve) ? profileData.throughputCurve : [];
@@ -379,17 +388,22 @@ async function persistProfileEvidence({
     if (!identitiesMatch(artifact, currentArtifact)) {
       throw new Error(`Artifact or runtime changed while profiling ${modelName} on ${hostUrl}; discard this run and retry`);
     }
+    const required = Number(profileData.requiredRetainedSamples) || 0;
+    const quality = profileData.measurementQuality || {};
+    const qualificationFailures = profileQualificationFailures(profileData);
+    const benchmarkQualified = qualificationFailures.length === 0;
+    profileData.benchmarkQualified = benchmarkQualified;
+    profileData.qualificationFailures = qualificationFailures;
     evidence = await modelPerformanceProfileService.saveProfile({
       modelName,
       hostId,
       artifact: currentArtifact,
       profile: { ...profileData, artifact: currentArtifact }
+    }, {
+      signal,
+      assertAuthorityActive: checkpoint
     });
     checkpoint();
-    const required = Number(profileData.requiredRetainedSamples) || 0;
-    const quality = profileData.measurementQuality || {};
-    const qualificationFailures = profileQualificationFailures(profileData);
-    const benchmarkQualified = qualificationFailures.length === 0;
     const authorityReceipt = {
       version: 1,
       source: 'profiler_pipeline',
@@ -412,17 +426,18 @@ async function persistProfileEvidence({
       [`readiness.${hostId}.authorityReceipt`]: authorityReceipt,
       [`readiness.${hostId}.stale`]: false,
       [`readiness.${hostId}.staleReason`]: null
-    });
+    }, { signal });
     checkpoint();
     if (profileData.thinking) {
-      await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking);
+      await modelProfileService.updateThinkingCapability(modelName, hostId, profileData.thinking, { signal });
       checkpoint();
     }
     await modelPerformanceProfileService.retireSupersededProfiles({
       modelName,
       hostId,
       evidenceId: evidence?._id,
-      assertAuthorityActive: checkpoint
+      assertAuthorityActive: checkpoint,
+      signal
     });
     checkpoint();
     return evidence;
@@ -669,6 +684,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     throughputSamples,
     measurementQuality,
     requiredRetainedSamples: minimumRetainedSamples,
+    requiredTtftSamples: minimumRetainedSamples,
     spill: {
       ...spill,
       // /api/ps reports offload, not the context that caused it. Attribute a
@@ -823,13 +839,26 @@ async function fullPipeline(modelName, hosts, { assertClaimActive, claimIdentity
         claimIdentity: claimIdentityFor?.(host.hostUrl) || null,
         signal
       });
-      results.push({ ...host, profileResult, success: true });
+      results.push({
+        ...host,
+        profileResult,
+        success: true,
+        benchmarkQualified: profileResult?.profile?.benchmarkQualified === true
+      });
     } catch (err) {
       if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
       results.push({ ...host, success: false, error: err.message });
     }
   }
-  return results;
+  const failures = results.filter(result => result.success !== true);
+  return {
+    completed: failures.length === 0 && results.length === hosts.length,
+    benchmarkQualified: failures.length === 0
+      && results.length === hosts.length
+      && results.every(result => result.benchmarkQualified === true),
+    results,
+    failures: failures.map(result => ({ hostId: result.hostId, error: result.error }))
+  };
 }
 
 async function preflight(batchConfig) {

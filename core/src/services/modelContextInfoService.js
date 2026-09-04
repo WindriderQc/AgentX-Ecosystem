@@ -24,6 +24,7 @@ const { resolveArtifactIdentity } = require('./artifactIdentityService');
 const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v3';
 const cache = new Map(); // key `${host}::${model}` → { value, expiresAt }
 let _fetch = null;
 
@@ -112,7 +113,7 @@ async function fromContextProfile(model, hostUrl, artifact, deps = {}, workload 
         runtimeFingerprint: artifact.runtimeFingerprint,
         stale: { $ne: true }
       })
-        .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext recommendedInteractiveContext recommendedDocumentContext recommendationStatus revalidationRequired maxVerifiedContext verifiedMaxContext historicalMaxVerifiedContext verifiedInputTokens lastValidatedAt source stale')
+        .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext recommendedInteractiveContext recommendedDocumentContext recommendationStatus recommendationEvidenceVersion revalidationRequired maxVerifiedContext verifiedMaxContext historicalMaxVerifiedContext verifiedInputTokens lastValidatedAt source stale')
         .lean();
     } else {
       const client = deps.benchmarkClient || getBenchmarkServiceClient();
@@ -125,6 +126,7 @@ async function fromContextProfile(model, hostUrl, artifact, deps = {}, workload 
     const verified = Number(profile?.maxVerifiedContext || profile?.verifiedMaxContext);
     if (!Number.isFinite(verified) || verified <= 0) return null;
     const recommendationsVerified = profile?.recommendationStatus === 'verified'
+      && profile?.recommendationEvidenceVersion === RECOMMENDATION_EVIDENCE_VERSION
       && profile?.revalidationRequired !== true
       && profile?.stale !== true;
     const interactive = recommendationsVerified ? Number(profile?.recommendedInteractiveContext) : null;

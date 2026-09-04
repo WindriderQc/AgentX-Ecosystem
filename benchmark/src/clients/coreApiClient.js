@@ -143,6 +143,9 @@ function exactBenchmarkReleaseReceipt(result, expected) {
     ? [...new Set(snapshot.excludedModels.map(String))].sort()
     : null;
   const expectedExclusions = [...new Set(expected.excludedModels.map(String))].sort();
+  const expiredModels = Array.isArray(snapshot?.expiredModels)
+    ? [...new Set(snapshot.expiredModels.map(String))].sort()
+    : null;
   const residentsComplete = Array.isArray(residents) && residents.every((entry) => (
     typeof entry?.model === 'string' && entry.model.length > 0
     && typeof entry?.digest === 'string' && entry.digest.length > 0
@@ -155,7 +158,7 @@ function exactBenchmarkReleaseReceipt(result, expected) {
   const identityChainExact = isSha256Hex(snapshot?.identityDigest)
     && isSha256Hex(snapshot?.appliedIdentityDigest)
     && verification?.snapshotIdentity === snapshot.appliedIdentityDigest
-    && (expectedExclusions.length > 0
+    && (expectedExclusions.length > 0 || (expiredModels?.length || 0) > 0
       || snapshot.identityDigest === snapshot.appliedIdentityDigest);
 
   return result?.released === true
@@ -168,6 +171,7 @@ function exactBenchmarkReleaseReceipt(result, expected) {
     && residentsComplete
     && identityChainExact
     && JSON.stringify(actualExclusions) === JSON.stringify(expectedExclusions)
+    && Array.isArray(expiredModels)
     && verification?.status === 'ready'
     && verification?.ready === true
     && verification?.verified === true
@@ -431,12 +435,25 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
   const claimGeneration = claimOptions.claimGeneration
     || claimProofByOwner.get(ownerKey)?.claimGeneration
     || crypto.randomUUID();
+  const admission = workloadAdmissionById.get(String(batchId));
+  if (!admission?.admissionId || !admission?.generation) {
+    const error = new Error('Exact workload admission proof is required before claiming a host');
+    error.code = 'WORKLOAD_ADMISSION_REQUIRED';
+    throw error;
+  }
   claimProofByOwner.set(ownerKey, { claimGeneration });
   try {
     const data = await coreRequest(path, {
       method: 'POST',
       operationId: CORE_OPERATIONS.CLAIM_ACQUIRE,
-      body: JSON.stringify({ ...claimOptions, batchId, claimGeneration, estimatedDurationMs })
+      body: JSON.stringify({
+        ...claimOptions,
+        batchId,
+        claimGeneration,
+        admissionId: admission.admissionId,
+        admissionGeneration: admission.generation,
+        estimatedDurationMs
+      })
     });
     const result = data?.data;
     if (!result || typeof result !== 'object' || typeof result.claimed !== 'boolean') {
@@ -501,12 +518,18 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
 async function heartbeatBenchmarkClaim(hostUrl, batchId, estimatedDurationMs = null, claimOptions = {}) {
   const path = `/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/benchmark-claim/${encodeURIComponent(batchId)}/heartbeat`;
   const proof = claimProofByOwner.get(claimOwnerKey(hostUrl, batchId));
+  const admission = workloadAdmissionById.get(String(batchId));
+  if (!admission?.admissionId || !admission?.generation) {
+    return { heartbeat: false, reason: 'exact workload admission proof missing' };
+  }
   try {
     const data = await coreRequest(path, {
       method: 'POST',
       operationId: CORE_OPERATIONS.CLAIM_HEARTBEAT,
       body: JSON.stringify({
         claimGeneration: proof?.claimGeneration || null,
+        admissionId: admission.admissionId,
+        admissionGeneration: admission.generation,
         estimatedDurationMs,
         source: claimOptions.source || 'benchmark',
         owner: claimOptions.owner || 'agentx-benchmark'
@@ -539,6 +562,10 @@ async function releaseBenchmarkClaim(hostUrl, batchId, options = {}) {
   const path = `/api/nerve-center/host-preferences/${encodeURIComponent(hostUrl)}/benchmark-claim/${encodeURIComponent(batchId)}`;
   const ownerKey = claimOwnerKey(hostUrl, batchId);
   const proof = claimProofByOwner.get(ownerKey);
+  const admission = workloadAdmissionById.get(String(batchId));
+  if (!admission?.admissionId || !admission?.generation) {
+    return { released: false, reason: 'exact workload admission proof missing' };
+  }
   const excludedModels = Array.isArray(options.excludedModels) ? options.excludedModels : [];
   const data = await coreRequest(path, {
     method: 'DELETE',
@@ -546,6 +573,8 @@ async function releaseBenchmarkClaim(hostUrl, batchId, options = {}) {
     timeout: PIN_RESTORE_TIMEOUT_MS,
     body: JSON.stringify({
       claimGeneration: proof?.claimGeneration || null,
+      admissionId: admission.admissionId,
+      admissionGeneration: admission.generation,
       ...(excludedModels.length > 0
         ? { excludedModels }
         : {})
@@ -580,16 +609,28 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
   const expectedKind = options.kind || 'benchmark';
   const expectedBatchId = options.batchId || null;
   const requestId = options.requestId || `benchmark:${key}`;
+  const expectedHosts = [...new Set((Array.isArray(options.hosts) ? options.hosts : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean))].sort();
   const existing = workloadAdmissionById.get(key);
   if (existing) {
     if (existing.requestId !== requestId
       || existing.kind !== expectedKind
-      || (existing.batchId || null) !== expectedBatchId) {
+      || (existing.batchId || null) !== expectedBatchId
+      || JSON.stringify(existing.hosts || []) !== JSON.stringify(expectedHosts)) {
       const error = new Error('Local workload id already binds a different admission intent');
       error.code = 'WORKLOAD_ADMISSION_CONFLICT';
       throw error;
     }
-    return { acquired: true, ...existing, idempotent: true };
+    // A local receipt is only an identity hint, never current authority. Core
+    // may have expired/reaped it and granted maintenance since our last call.
+    // Re-attest the exact generation before allowing another mutation to use
+    // this workload id.
+    const renewed = await heartbeatWorkloadAdmission(key, options.ttlMs || null);
+    if (renewed?.heartbeat === true) {
+      return { acquired: true, ...existing, expiresAt: renewed.expiresAt || existing.expiresAt, idempotent: true };
+    }
+    workloadAdmissionById.delete(key);
   }
   const request = async () => coreRequest('/api/nerve-center/workload-admissions', {
     method: 'POST',
@@ -599,7 +640,7 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
       workloadId: key,
       kind: expectedKind,
       batchId: expectedBatchId,
-      hosts: Array.isArray(options.hosts) ? options.hosts : [],
+      hosts: expectedHosts,
       ttlMs: options.ttlMs || null
     })
   });
@@ -621,7 +662,8 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
     || result.workloadId !== key
     || result.requestId !== requestId
     || result.kind !== expectedKind
-    || (result.batchId || null) !== expectedBatchId) {
+    || (result.batchId || null) !== expectedBatchId
+    || JSON.stringify([...(result.hosts || [])].sort()) !== JSON.stringify(expectedHosts)) {
     const error = new Error(result?.reason || 'Core workload admission receipt is invalid');
     error.code = 'WORKLOAD_ADMISSION_REJECTED';
     throw error;
@@ -634,6 +676,7 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
     workloadId: key,
     kind: expectedKind,
     batchId: expectedBatchId,
+    hosts: expectedHosts,
     expiresAt: result.expiresAt || null
   };
   workloadAdmissionById.set(key, receipt);
@@ -658,7 +701,8 @@ async function heartbeatWorkloadAdmission(workloadId, ttlMs = null) {
       && result.requestId === receipt.requestId
       && result.workloadId === receipt.workloadId
       && result.kind === receipt.kind
-      && (result.batchId || null) === (receipt.batchId || null);
+      && (result.batchId || null) === (receipt.batchId || null)
+      && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || []);
     if (!exact) {
       return { heartbeat: false, reason: result?.reason || 'Core workload heartbeat receipt is invalid' };
     }
@@ -688,6 +732,7 @@ async function releaseWorkloadAdmission(workloadId) {
     && result.workloadId === receipt.workloadId
     && result.kind === receipt.kind
     && (result.batchId || null) === (receipt.batchId || null)
+    && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || [])
     && Number.isFinite(Date.parse(result.releasedAt));
   if (!exact) return { released: false, reason: result?.reason || 'Core workload release receipt is invalid' };
   workloadAdmissionById.delete(key);

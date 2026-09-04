@@ -35,6 +35,14 @@ jest.mock('../../src/services/judgeValidation', () => ({
     runFailureModeAnalysis: jest.fn(async () => ({}))
 }));
 
+jest.mock('../../src/services/benchmark/workloadAdmissionLifecycle', () => {
+    const actual = jest.requireActual('../../src/services/benchmark/workloadAdmissionLifecycle');
+    return {
+        ...actual,
+        withManagedWorkloadRoute: (_kind, _options, handler) => handler
+    };
+});
+
 const app = require('../../server');
 const JudgeGroundTruth = require('../../models/JudgeGroundTruth');
 const JudgeAccuracyMatrix = require('../../models/JudgeAccuracyMatrix');

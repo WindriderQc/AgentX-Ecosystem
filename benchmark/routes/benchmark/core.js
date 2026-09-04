@@ -25,6 +25,7 @@ const buddySurface = require('../../src/services/benchmark/buddySurfaceEvents');
 const { resolveJudgeHost } = require('../../src/services/benchmark/judgeHostResolution');
 const { resolveMultiJudge } = require('../../src/services/benchmark/resolveMultiJudge');
 const { releaseBenchmarkClaim } = require('../../src/clients/coreApiClient');
+const { withManagedWorkloadRoute } = require('../../src/services/benchmark/workloadAdmissionLifecycle');
 const {
     filterJudgeDefaultsForExecutionHost,
     resolveBatchMultiJudgeInput
@@ -49,6 +50,9 @@ const fs = require('fs');
 // An operator may explicitly configure a secondary judge artifact. There is no
 // product-wide fallback model because installed inventory is deployment state.
 const JUDGE_FALLBACK_MODEL = String(process.env.JUDGE_FALLBACK_MODEL || '').trim() || null;
+const judgeWorkloadOptions = req => ({
+    hosts: [req.body?.host, req.body?.judge_host, req.body?.reference_host].filter(Boolean)
+});
 
 function readJudgeDefaults() {
     try {
@@ -975,7 +979,7 @@ router.post('/batch/:id/rerun-invalid', async (req, res) => {
  * POST /api/benchmark/validate-judge
  * Pre-flight check: validate judge model availability and output capability
  */
-router.post('/validate-judge', async (req, res) => {
+router.post('/validate-judge', withManagedWorkloadRoute('judge-validation', judgeWorkloadOptions, async (req, res) => {
     const { host, model } = req.body || {};
 
     try {
@@ -989,9 +993,9 @@ router.post('/validate-judge', async (req, res) => {
         // admission authority may reach the outbound validation sinks.
         const judgeHost = admission.target.host;
         const judgeModel = admission.target.model;
-        const validation = await validateJudgeModel(judgeHost, judgeModel);
+        const validation = await validateJudgeModel(judgeHost, judgeModel, { signal: req.workloadAdmissionSignal });
         if (validation.valid) {
-            const probe = await probeJudgeCapability(judgeHost, judgeModel);
+            const probe = await probeJudgeCapability(judgeHost, judgeModel, { signal: req.workloadAdmissionSignal });
             res.json({
                 status: 'success',
                 data: {
@@ -1018,7 +1022,7 @@ router.post('/validate-judge', async (req, res) => {
         logger.error('Judge validation failed', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * GET /api/benchmark/judge/calibration-protocol
@@ -1037,7 +1041,7 @@ router.get('/judge/calibration-protocol', (req, res) => {
  * POST /api/benchmark/judge/calibrate
  * Quick calibration of judge model JSON reliability, consistency, and latency.
  */
-router.post('/judge/calibrate', async (req, res) => {
+router.post('/judge/calibrate', withManagedWorkloadRoute('judge-calibration', judgeWorkloadOptions, async (req, res) => {
     const { host, model } = req.body || {};
     const readiness = await resolveReadyJudgeTarget({ host, model });
     if (!readiness.ready) {
@@ -1059,7 +1063,8 @@ router.post('/judge/calibrate', async (req, res) => {
                 timeout: 20000,
                 max_retries: 1,
                 temperature: 0.1,
-                num_predict: 120
+                num_predict: 120,
+                cancelSignal: req.workloadAdmissionSignal
             });
             const latencyMs = Date.now() - startedAt;
 
@@ -1109,14 +1114,14 @@ router.post('/judge/calibrate', async (req, res) => {
         logger.error('Judge calibration failed', { error: err.message, host: judgeHost, model: judgeModel });
         return res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * POST /api/benchmark/judge/calibrate-accuracy
  * Test judge accuracy against gold-standard scored responses.
  * Returns Pearson correlation, MAE, and per-tier breakdown.
  */
-router.post('/judge/calibrate-accuracy', async (req, res) => {
+router.post('/judge/calibrate-accuracy', withManagedWorkloadRoute('judge-accuracy-calibration', judgeWorkloadOptions, async (req, res) => {
     const { host, model } = req.body || {};
     const readiness = await resolveReadyJudgeTarget({ host, model });
     if (!readiness.ready) {
@@ -1140,7 +1145,7 @@ router.post('/judge/calibrate-accuracy', async (req, res) => {
                         category: item.category,
                         expected_answer: item.expected_answer
                     },
-                    judgeConfig: { host: judgeHost, model: judgeModel }
+                    judgeConfig: { host: judgeHost, model: judgeModel, cancelSignal: req.workloadAdmissionSignal }
                 });
 
                 results.push({
@@ -1246,7 +1251,7 @@ router.post('/judge/calibrate-accuracy', async (req, res) => {
         logger.error('Judge accuracy calibration failed', { error: err.message, host: judgeHost, model: judgeModel });
         return res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * POST /api/benchmark/preflight

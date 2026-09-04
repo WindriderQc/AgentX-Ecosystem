@@ -15,6 +15,7 @@
  *   HOST_TEST_WARMUP           - Enable warm-up (default true)
  */
 
+const mongoose = require('mongoose');
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
 const ollamaVramService        = require('./ollamaVramService');
 const nodeFetch                = require('node-fetch');
@@ -585,8 +586,25 @@ async function snapshotVram(hostUrl, signal = null) {
   return { usedMiB: null, totalMiB: null };
 }
 
-async function persistFailureSnapshot(modelName, snapshot) {
-  await HostPerformanceSnapshot.create({
+async function persistHostSnapshot(modelName, snapshot, { signal, checkpoint } = {}) {
+  const payload = { _id: new mongoose.Types.ObjectId(), modelName, ...snapshot };
+  checkpoint?.();
+  try {
+    const created = await HostPerformanceSnapshot.create(
+      [payload],
+      signal ? { signal } : undefined
+    );
+    const saved = Array.isArray(created) ? created[0] : created;
+    checkpoint?.();
+    return saved;
+  } catch (error) {
+    await HostPerformanceSnapshot.deleteOne({ _id: payload._id }).catch(() => {});
+    throw error;
+  }
+}
+
+async function persistFailureSnapshot(modelName, snapshot, options = {}) {
+  return persistHostSnapshot(modelName, {
     modelName,
     hostId:      null,
     tokensPerSec: 0,
@@ -596,7 +614,25 @@ async function persistFailureSnapshot(modelName, snapshot) {
     status:       'error',
     error:        null,
     ...snapshot
-  });
+  }, options);
+}
+
+async function verifyAppliedContext(hostUrl, modelName, expectedNumCtx, signal = null, executor = hostTestExecutor) {
+  const resident = await getLoadedModelInfo(hostUrl, modelName, executor, signal);
+  const observedNumCtx = readLoadedContextLength(resident);
+  if (!observedNumCtx) {
+    const error = new Error(`Ollama /api/ps did not attest context_length=${expectedNumCtx} for ${modelName}`);
+    error.code = 'HOST_TEST_CONTEXT_UNVERIFIED';
+    throw error;
+  }
+  if (Number(observedNumCtx) !== Number(expectedNumCtx)) {
+    const error = new Error(`Ollama applied context_length=${observedNumCtx}, requested ${expectedNumCtx} for ${modelName}`);
+    error.code = 'HOST_TEST_CONTEXT_CLAMPED';
+    error.observedNumCtx = observedNumCtx;
+    error.requestedNumCtx = Number(expectedNumCtx);
+    throw error;
+  }
+  return observedNumCtx;
 }
 
 function combineAbortSignals(...signals) {
@@ -684,7 +720,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       };
       checkpoint();
       throwIfAborted(signal);
-      await persistFailureSnapshot(normalizedModelName, snapshot);
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
       return snapshot;
     }
   }
@@ -740,7 +776,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       };
       checkpoint();
       throwIfAborted(signal);
-      await persistFailureSnapshot(normalizedModelName, snapshot);
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
       return snapshot;
     }
   }
@@ -790,7 +826,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
       };
       checkpoint();
       throwIfAborted(signal);
-      await persistFailureSnapshot(normalizedModelName, snapshot);
+      await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
       return snapshot;
     }
 
@@ -799,6 +835,9 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     probeData = streamed.data;
     probeData._latencyMs = Date.now() - start;
     probeData._timeToFirstTokenMs = streamed.timeToFirstTokenMs;
+    checkpoint();
+    probeData._observedNumCtx = await verifyAppliedContext(hostUrl, normalizedModelName, numCtx, signal);
+    checkpoint();
   } catch (err) {
     throwIfAborted(signal);
     circuitBreaker.recordFailure(hostUrl);
@@ -820,7 +859,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     };
     checkpoint();
     throwIfAborted(signal);
-    await persistFailureSnapshot(normalizedModelName, snapshot);
+    await persistFailureSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
     return snapshot;
   } finally {
     probeDeadline.dispose();
@@ -870,6 +909,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     vramUsedMiB:            vram.usedMiB,
     vramTotalMiB:           vram.totalMiB,
     numCtx,
+    observedNumCtx:          probeData._observedNumCtx,
     numCtxSource,
     testedAt:               new Date(),
     status:                 'pass',
@@ -879,7 +919,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
 
   checkpoint();
   throwIfAborted(signal);
-  await HostPerformanceSnapshot.create({ modelName: normalizedModelName, ...snapshot });
+  await persistHostSnapshot(normalizedModelName, snapshot, { signal, checkpoint });
   circuitBreaker.recordSuccess(hostUrl);
 
   logger.info('Host test completed', {
@@ -1018,6 +1058,8 @@ module.exports = {
     combineAbortSignals,
     throwIfAborted,
     getLoadedModelInfo,
+    persistHostSnapshot,
+    verifyAppliedContext,
     hostTestRequest,
     operationMatches,
     unloadCurrentModel,

@@ -59,7 +59,9 @@ async function getBaselineState(hostId, options = {}) {
 }
 
 async function ensureBaselineModel(hostId, options = {}) {
+  options.assertClaimActive?.();
   const before = await getBaselineState(hostId, options);
+  options.assertClaimActive?.();
   if (before.available) return { ...before, pulled: false };
 
   const timeoutMs = Number.parseInt(process.env.OLLAMA_PULL_TIMEOUT_MS, 10) || 30 * 60 * 1000;
@@ -68,10 +70,12 @@ async function ensureBaselineModel(hostId, options = {}) {
     hostUrl: before.hostUrl,
     modelName: before.modelName
   });
+  options.assertClaimActive?.();
   await pullModel(before.hostUrl, before.modelName, { timeoutMs, signal: options.signal });
 
   options.assertClaimActive?.();
   const after = await getBaselineState(hostId, options);
+  options.assertClaimActive?.();
   if (!after.available) {
     const error = new Error(`Ollama reported a completed pull, but ${after.modelName} is still missing on ${after.hostName}`);
     error.statusCode = 502;

@@ -50,7 +50,7 @@ export function _showFeedback(container, modelName, html) {
 const STEPS_BY_DEPTH = {
   quick:    ['Warmup', 'Throughput', 'Spill detection', 'Thinking behavior', 'Save'],
   standard: ['Warmup', 'Throughput', 'Spill detection', 'Thinking behavior', 'Context probe', 'Save'],
-  full:     ['Warmup', 'Throughput', 'Spill detection', 'Thinking behavior', 'Context probe', 'Throughput curve', 'Generation stability', 'Load timing', 'Save'],
+  full:     ['Warmup', 'Throughput', 'Spill detection', 'Thinking behavior', 'Context probe', 'Throughput curve', 'Generation stability', 'Prefill / decode matrix', 'Load timing', 'Save'],
 };
 
 // Nominal wall-clock estimate per depth (seconds) — matches UI hint text
@@ -66,6 +66,7 @@ const STEP_DESCRIPTIONS = {
   'Thinking behavior':     'Checking visible answer safety',
   'Throughput curve':      'Mapping tok/s across contexts',
   'Generation stability':  'Stress-testing long generations',
+  'Prefill / decode matrix':'Validating every workload cell',
   'Load timing':           'Cold vs hot reload timing',
   'Save':                  'Persisting profile to database',
 };
@@ -551,7 +552,10 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
 
     const spillBadge = _renderSpillBadge(p);
     const fullExtras = depth === 'full' ? _renderFullDepthExtras(p) : '';
-    const finalMetrics = renderMetricsRow()
+    const qualification = p?.benchmarkQualified === true
+      ? '<div class="mp-prof-qualification mp-prof-qualification--ok">Benchmark qualified</div>'
+      : `<div class="mp-prof-qualification mp-prof-qualification--warn">Not benchmark qualified${p?.qualificationFailures?.length ? `: ${p.qualificationFailures.join(', ')}` : ''}</div>`;
+    const finalMetrics = qualification + renderMetricsRow()
       + (spillBadge ? `<div class="mp-prof-spill-row">${spillBadge}</div>` : '')
       + fullExtras;
 

@@ -251,7 +251,10 @@ router.post('/test/run', async (req, res) => {
       === String(baselineModel).trim().replace(/:latest$/i, '').toLowerCase();
     lease = await acquireProfilerClaimLease([configuredHost.url], `profiler-host-test-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
     const preparation = isBaseline && hostId
-      ? await baselineModelService.ensureBaselineModel(hostId)
+      ? await baselineModelService.ensureBaselineModel(hostId, {
+        signal: lease.signal,
+        assertClaimActive: lease.assertActive
+      })
       : null;
     const targetHostUrl = preparation?.hostUrl || configuredHost.url;
     const snapshot = await testModelOnHost(modelName, targetHostUrl, {
@@ -262,6 +265,7 @@ router.post('/test/run', async (req, res) => {
     });
     lease.assertActive();
     if (isBaseline && snapshot?.status === 'pass') {
+      lease.assertActive();
       await hostProfileService.updateBaseline(hostId, {
         referenceModel: modelName,
         tokensPerSec: snapshot.tokensPerSec,
@@ -269,7 +273,8 @@ router.post('/test/run', async (req, res) => {
         ttftMs: snapshot.timeToFirstTokenMs,
         ttftMeasurement: snapshot.ttftMeasurement || undefined,
         testedAt: snapshot.testedAt
-      }).catch(err => logger.warn('Failed to update baseline', { hostId, error: err.message }));
+      }, { signal: lease.signal, assertAuthorityActive: lease.assertActive });
+      lease.assertActive();
     }
     await lease.finalize();
     lease = null;
@@ -314,13 +319,17 @@ router.post('/test/run-all', async (req, res) => {
         if (result.status !== 'pass') tracker.failed++;
         tracker.results.push({ modelName, ...result });
       }
-    }).then(({ summary }) => {
+    }).then(async ({ summary }) => {
       lease.assertActive();
       tracker.status = 'completed'; tracker.summary = summary; tracker.currentModel = null;
       const baseline = buildBaselineFromResults(tracker.results, baselineModel);
       if (hostId && baseline) {
-        hostProfileService.updateBaseline(hostId, baseline)
-          .catch(err => logger.warn('Failed to update baseline after run-all', { hostId, error: err.message }));
+        lease.assertActive();
+        await hostProfileService.updateBaseline(hostId, baseline, {
+          signal: lease.signal,
+          assertAuthorityActive: lease.assertActive
+        });
+        lease.assertActive();
       }
     }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; })
       .finally(async () => {
@@ -437,8 +446,12 @@ router.post('/test/run-fleet', async (req, res) => {
           // Update host baseline aggregate (same as /test/run-all)
           const baseline = buildBaselineFromResults(slot.results, baselineModel);
           if (slot.hostId && baseline) {
-            hostProfileService.updateBaseline(slot.hostId, baseline)
-              .catch(err => logger.warn('Fleet: baseline update failed', { hostId: slot.hostId, error: err.message }));
+            lease.assertActive();
+            await hostProfileService.updateBaseline(slot.hostId, baseline, {
+              signal: lease.signal,
+              assertAuthorityActive: lease.assertActive
+            });
+            lease.assertActive();
           }
         } catch (err) {
           slot.status = 'failed';

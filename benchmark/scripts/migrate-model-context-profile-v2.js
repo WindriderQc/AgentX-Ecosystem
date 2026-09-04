@@ -12,11 +12,14 @@ const mongoose = require('mongoose');
 
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb://192.0.2.33:27017/agentx';
 const DRY_RUN = process.argv.includes('--dry-run');
+const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v3';
+const LEGACY_EVIDENCE_VERSION = 'legacy-unverified';
 
 function migrationPipeline() {
-  const hasVerifiedV2Recommendations = {
+  const hasVerifiedCurrentRecommendations = {
     $and: [
       { $eq: ['$recommendationStatus', 'verified'] },
+      { $eq: ['$recommendationEvidenceVersion', RECOMMENDATION_EVIDENCE_VERSION] },
       { $ne: ['$revalidationRequired', true] },
       { $ne: ['$stale', true] },
       { $gt: ['$recommendedInteractiveContext', 0] },
@@ -36,24 +39,27 @@ function migrationPipeline() {
       // happened to succeed, not a workload recommendation. Preserve it only
       // as capacity history; recommendations stay unknown until re-profiled.
       recommendedInteractiveContext: {
-        $cond: [hasVerifiedV2Recommendations, '$recommendedInteractiveContext', null]
+        $cond: [hasVerifiedCurrentRecommendations, '$recommendedInteractiveContext', null]
       },
       recommendedDocumentContext: {
-        $cond: [hasVerifiedV2Recommendations, '$recommendedDocumentContext', null]
+        $cond: [hasVerifiedCurrentRecommendations, '$recommendedDocumentContext', null]
       },
       recommendedContext: {
         $cond: [
-          hasVerifiedV2Recommendations,
+          hasVerifiedCurrentRecommendations,
           { $ifNull: ['$recommendedContext', '$recommendedDocumentContext'] },
           null
         ]
       },
-      recommendationStatus: { $cond: [hasVerifiedV2Recommendations, 'verified', 'unknown'] },
-      revalidationRequired: { $cond: [hasVerifiedV2Recommendations, false, true] },
-      stale: { $cond: [hasVerifiedV2Recommendations, { $ifNull: ['$stale', false] }, true] },
+      recommendationStatus: { $cond: [hasVerifiedCurrentRecommendations, 'verified', 'unknown'] },
+      recommendationEvidenceVersion: {
+        $cond: [hasVerifiedCurrentRecommendations, RECOMMENDATION_EVIDENCE_VERSION, LEGACY_EVIDENCE_VERSION]
+      },
+      revalidationRequired: { $cond: [hasVerifiedCurrentRecommendations, false, true] },
+      stale: { $cond: [hasVerifiedCurrentRecommendations, { $ifNull: ['$stale', false] }, true] },
       staleReason: {
         $cond: [
-          hasVerifiedV2Recommendations,
+          hasVerifiedCurrentRecommendations,
           { $ifNull: ['$staleReason', null] },
           'legacy_context_revalidation_required'
         ]
@@ -71,18 +77,23 @@ function migrationPipeline() {
 async function migrate() {
   await mongoose.connect(MONGO_URI);
   const collection = mongoose.connection.collection('modelcontextprofiles');
-  const filter = { $or: [
+  const filter = migrationFilter();
+  const matched = await collection.countDocuments(filter);
+  if (DRY_RUN) return { dryRun: true, matched, modified: 0 };
+  const result = await collection.updateMany(filter, migrationPipeline());
+  return { dryRun: false, matched, modified: result.modifiedCount };
+}
+
+function migrationFilter() {
+  return { $or: [
     { maxVerifiedContext: { $exists: false } },
     { historicalMaxVerifiedContext: { $exists: false } },
     { recommendedInteractiveContext: { $exists: false } },
     { recommendedDocumentContext: { $exists: false } },
     { recommendationStatus: { $exists: false } },
-    { revalidationRequired: { $exists: false } }
+    { revalidationRequired: { $exists: false } },
+    { recommendationEvidenceVersion: { $nin: [RECOMMENDATION_EVIDENCE_VERSION, LEGACY_EVIDENCE_VERSION] } }
   ] };
-  const matched = await collection.countDocuments(filter);
-  if (DRY_RUN) return { dryRun: true, matched, modified: 0 };
-  const result = await collection.updateMany(filter, migrationPipeline());
-  return { dryRun: false, matched, modified: result.modifiedCount };
 }
 
 if (require.main === module) {
@@ -92,4 +103,4 @@ if (require.main === module) {
     .finally(() => mongoose.disconnect());
 }
 
-module.exports = { migrate, migrationPipeline };
+module.exports = { migrate, migrationFilter, migrationPipeline };

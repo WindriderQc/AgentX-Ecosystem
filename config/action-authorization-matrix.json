@@ -676,6 +676,12 @@
       "note": "The scoped Benchmark token is path-admitted at Core and revalidated before claim release can mutate host state.",
       "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-host-control-mount"]
     },
+    "core/routes/nerve-center-host-preferences.js#POST /host-preferences/benchmark-claims/reap": {
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The destructive stale-claim reaper requires exact operator access and rejects unsafe timing overrides.",
+      "evidence": ["core-benchmark-claim-reaper-operator-validator"]
+    },
     "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases": {
       "scopedMachineCredential": "validated-at-route",
       "routeLocalValidator": "enforced",
@@ -1101,9 +1107,9 @@
     "core-benchmark-host-control-mount": {
       "file": "core/routes/nerve-center-host-preferences.js",
       "contains": [
-        "router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkServiceAccess",
-        "router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', requireBenchmarkServiceAccess",
-        "router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkServiceAccess",
+        "router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkCoordinationAccess",
+        "router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', requireBenchmarkCoordinationAccess",
+        "router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkCoordinationAccess",
         "router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAccess"
       ]
     },
@@ -1114,6 +1120,13 @@
         "router.post('/maintenance-leases/:leaseId/heartbeat', requireOperatorAccess",
         "router.delete('/maintenance-leases/:leaseId', requireOperatorAccess",
         "principal: operatorRequestIdentity(req)"
+      ]
+    },
+    "core-benchmark-claim-reaper-operator-validator": {
+      "file": "core/routes/nerve-center-host-preferences.js",
+      "contains": [
+        "router.post('/host-preferences/benchmark-claims/reap', requireOperatorAccess",
+        "BENCHMARK_REAPER_OPTIONS_INVALID"
       ]
     },
     "core-workload-admission-validator": {

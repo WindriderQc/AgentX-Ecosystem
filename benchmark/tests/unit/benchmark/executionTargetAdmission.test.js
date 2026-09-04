@@ -17,7 +17,8 @@ jest.mock('../../../src/clients/coreApiClient', () => ({
   getBenchmarkClaimIdentity: jest.fn((_host, batchId) => ({
     claimBatchId: batchId,
     claimGeneration: 'generation-single-1'
-  }))
+  })),
+  releaseWorkloadAdmission: jest.fn(async () => ({ released: true }))
 }));
 jest.mock('../../../src/services/benchmark/benchmarkClaimLifecycle', () => ({
   acquireBenchmarkClaims: jest.fn(async hosts => hosts),
@@ -66,7 +67,9 @@ describe('benchmark execution target admission', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     getModelDigest.mockResolvedValue('sha256:model-digest');
+    BenchmarkResult.deleteOne = jest.fn().mockResolvedValue({ deletedCount: 1 });
     BenchmarkResult.mockImplementation(data => ({
+      _id: 'result-single-1',
       ...data,
       save: jest.fn().mockResolvedValue(undefined)
     }));
@@ -149,5 +152,30 @@ describe('benchmark execution target admission', () => {
       success: false,
       error: 'HTTP 409: stale benchmark claim'
     }));
+  });
+
+  test('invalidates a committed single-test result when exact runtime restoration fails', async () => {
+    benchmarkFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        message: { content: 'answer' },
+        eval_count: 2,
+        prompt_eval_duration: 2_000_000
+      })
+    });
+    claimLifecycle.releaseBenchmarkClaims.mockResolvedValueOnce({
+      released: 0,
+      failed: 1,
+      details: [{ hostUrl: 'http://ollama:11434', released: false, reason: 'restore verification failed' }]
+    });
+
+    await expect(runTest({
+      model: 'qwen:7b',
+      host: 'http://ollama:11434',
+      prompt: 'hello'
+    })).rejects.toMatchObject({ code: 'BENCHMARK_RUNTIME_RESTORE_FAILED' });
+
+    expect(BenchmarkResult.deleteOne).toHaveBeenCalledWith({ _id: 'result-single-1' });
   });
 });

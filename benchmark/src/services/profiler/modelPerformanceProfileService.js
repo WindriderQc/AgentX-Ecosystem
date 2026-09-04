@@ -2,7 +2,8 @@
 
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 
-async function saveProfile({ modelName, hostId, artifact, profile }) {
+async function saveProfile({ modelName, hostId, artifact, profile }, options = {}) {
+  options.assertAuthorityActive?.();
   const saved = await ModelPerformanceProfile.findOneAndUpdate(
     {
       modelName,
@@ -11,17 +12,24 @@ async function saveProfile({ modelName, hostId, artifact, profile }) {
       'artifact.runtimeFingerprint': artifact.runtimeFingerprint
     },
     { $set: { artifact, profile, active: true, stale: false, staleReason: null } },
-    { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+    {
+      upsert: true,
+      new: true,
+      runValidators: true,
+      setDefaultsOnInsert: true,
+      ...(options.signal ? { signal: options.signal } : {})
+    }
   );
+  options.assertAuthorityActive?.();
   return saved;
 }
 
-async function retireSupersededProfiles({ modelName, hostId, evidenceId, assertAuthorityActive }) {
+async function retireSupersededProfiles({ modelName, hostId, evidenceId, assertAuthorityActive, signal }) {
   assertAuthorityActive?.();
-  await ModelPerformanceProfile.updateMany(
-    { _id: { $ne: evidenceId }, modelName, hostId, active: true },
-    { $set: { active: false, stale: true, staleReason: 'superseded' } }
-  );
+  const filter = { _id: { $ne: evidenceId }, modelName, hostId, active: true };
+  const update = { $set: { active: false, stale: true, staleReason: 'superseded' } };
+  if (signal) await ModelPerformanceProfile.updateMany(filter, update, { signal });
+  else await ModelPerformanceProfile.updateMany(filter, update);
   assertAuthorityActive?.();
 }
 

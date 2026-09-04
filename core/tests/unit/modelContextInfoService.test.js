@@ -144,6 +144,7 @@ describe('modelContextInfoService', () => {
       recommendedInteractiveContext: 65536,
       recommendedDocumentContext: 131072,
       recommendationStatus: 'verified',
+      recommendationEvidenceVersion: 'context-probe-degradation-v3',
       revalidationRequired: false,
       verifiedInputTokens: 190000,
       lastValidatedAt: profiledAt
@@ -207,8 +208,11 @@ describe('modelContextInfoService', () => {
       modelName: 'ornith:latest',
       recommendedContext: 262144,
       verifiedMaxContext: 262144,
-      recommendationStatus: 'unknown',
-      revalidationRequired: true,
+      recommendedInteractiveContext: 262144,
+      recommendedDocumentContext: 262144,
+      recommendationStatus: 'verified',
+      recommendationEvidenceVersion: 'context-probe-degradation-v2',
+      revalidationRequired: false,
       stale: false
     });
 

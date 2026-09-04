@@ -63,6 +63,24 @@ function response(url, {
   };
 }
 
+function workloadAcquireBody(workloadId, hosts = []) {
+  return {
+    status: 'success',
+    data: {
+      acquired: true,
+      admissionId: `admission-${workloadId}`,
+      generation: `generation-${workloadId}`,
+      principal: 'benchmark-service',
+      requestId: `benchmark:${workloadId}`,
+      workloadId,
+      kind: 'benchmark',
+      batchId: null,
+      hosts: [...hosts].sort(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    }
+  };
+}
+
 describe('Core API client scoped outbound execution', () => {
   const originalToken = process.env.AGENTX_BENCHMARK_TOKEN;
 
@@ -277,6 +295,11 @@ describe('Core API client scoped outbound execution', () => {
   });
 
   test('enforces the claim request cap before dispatch', async () => {
+    fetch.mockImplementationOnce(async (url) => response(url, {
+      body: JSON.stringify(workloadAcquireBody('batch-1', ['http://ollama:11434']))
+    }));
+    await acquireWorkloadAdmission('batch-1', { hosts: ['http://ollama:11434'] });
+    fetch.mockClear();
     await expect(claimHostForBenchmark(
       'http://ollama:11434',
       'batch-1',
@@ -291,7 +314,11 @@ describe('Core API client scoped outbound execution', () => {
 
   test('carries one cryptographic claim generation across acquire, heartbeat, and refused release', async () => {
     const claimGeneration = '11111111-1111-4111-8111-111111111111';
+    const hostUrl = 'http://claim-owner:11434';
     fetch
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify(workloadAcquireBody('batch-generation', [hostUrl]))
+      }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({ status: 'success', data: {
           claimed: true,
@@ -326,14 +353,15 @@ describe('Core API client scoped outbound execution', () => {
         } }),
       }));
 
-    await claimHostForBenchmark('http://claim-owner:11434', 'batch-generation', null, {
+    await acquireWorkloadAdmission('batch-generation', { hosts: [hostUrl] });
+    await claimHostForBenchmark(hostUrl, 'batch-generation', null, {
       claimGeneration,
     });
-    await heartbeatBenchmarkClaim('http://claim-owner:11434', 'batch-generation', 30_000);
-    await releaseBenchmarkClaim('http://claim-owner:11434', 'batch-generation');
-    await heartbeatBenchmarkClaim('http://claim-owner:11434', 'batch-generation', 60_000);
+    await heartbeatBenchmarkClaim(hostUrl, 'batch-generation', 30_000);
+    await releaseBenchmarkClaim(hostUrl, 'batch-generation');
+    await heartbeatBenchmarkClaim(hostUrl, 'batch-generation', 60_000);
 
-    const bodies = fetch.mock.calls.map(([, init]) => JSON.parse(init.body));
+    const bodies = fetch.mock.calls.slice(1).map(([, init]) => JSON.parse(init.body));
     expect(bodies.map(body => body.claimGeneration)).toEqual([
       claimGeneration,
       claimGeneration,
@@ -389,7 +417,8 @@ describe('Core API client scoped outbound execution', () => {
           keepAlive: -1,
           expiresAt: '9999-12-31T23:59:59.000Z'
         }],
-        excludedModels: []
+        excludedModels: [],
+        expiredModels: []
       },
       verification: {
         status: 'ready',
@@ -407,6 +436,9 @@ describe('Core API client scoped outbound execution', () => {
       releasedAt: new Date().toISOString()
     };
     fetch
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify(workloadAcquireBody(batchId, [hostUrl]))
+      }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({ status: 'success', data: {
           claimed: true,
@@ -440,12 +472,13 @@ describe('Core API client scoped outbound execution', () => {
         } })
       }));
 
+    await acquireWorkloadAdmission(batchId, { hosts: [hostUrl] });
     await expect(claimHostForBenchmark(hostUrl, batchId, null, { claimGeneration }))
       .resolves.toMatchObject({ claimed: true, snapshotExact: true });
     await expect(releaseBenchmarkClaim(hostUrl, batchId))
       .resolves.toMatchObject({ released: false, reason: expect.stringContaining('receipt is invalid') });
     await heartbeatBenchmarkClaim(hostUrl, batchId);
-    expect(JSON.parse(fetch.mock.calls[2][1].body).claimGeneration).toBe(claimGeneration);
+    expect(JSON.parse(fetch.mock.calls[3][1].body).claimGeneration).toBe(claimGeneration);
     await expect(releaseBenchmarkClaim(hostUrl, batchId))
       .resolves.toMatchObject({ released: true, releaseReceipt: exactReceipt });
     expect(getBenchmarkClaimIdentity(hostUrl, batchId)).toBeNull();
@@ -453,7 +486,11 @@ describe('Core API client scoped outbound execution', () => {
 
   test('rejects a successful claim receipt without exact pre-claim snapshot evidence', async () => {
     const claimGeneration = '66666666-6666-4666-8666-666666666666';
+    const hostUrl = 'http://legacy-claim:11434';
     fetch
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify(workloadAcquireBody('batch-legacy-claim', [hostUrl]))
+      }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({ status: 'success', data: {
           claimed: true,
@@ -468,13 +505,14 @@ describe('Core API client scoped outbound execution', () => {
         body: JSON.stringify({ status: 'success', data: { released: false, reason: 'legacy claim' } })
       }));
 
+    await acquireWorkloadAdmission('batch-legacy-claim', { hosts: [hostUrl] });
     await expect(claimHostForBenchmark(
-      'http://legacy-claim:11434',
+      hostUrl,
       'batch-legacy-claim',
       null,
       { claimGeneration }
     )).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_RECEIPT_MISMATCH' });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   test('accepts only an exact Core-minted workload receipt and carries it through heartbeat and release', async () => {
@@ -613,9 +651,50 @@ describe('Core API client scoped outbound execution', () => {
       .resolves.toMatchObject({ released: false, reason: expect.stringContaining('local') });
   });
 
+  test('re-attests cached proof, reacquires after expiry, and never rebinds host intent locally', async () => {
+    const workloadId = 'workload-expiry-reacquire';
+    const hosts = ['http://host-a:11434'];
+    fetch
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify(workloadAcquireBody(workloadId, hosts))
+      }))
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify({ status: 'error', data: {
+          heartbeat: false,
+          reason: 'lease proof no longer owns coordination state'
+        } })
+      }))
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify({ status: 'success', data: {
+          ...workloadAcquireBody(workloadId, hosts).data,
+          admissionId: 'admission-reacquired',
+          generation: 'generation-reacquired'
+        } })
+      }));
+
+    await expect(acquireWorkloadAdmission(workloadId, { hosts }))
+      .resolves.toMatchObject({ admissionId: `admission-${workloadId}` });
+    await expect(acquireWorkloadAdmission(workloadId, { hosts }))
+      .resolves.toMatchObject({ admissionId: 'admission-reacquired', generation: 'generation-reacquired' });
+    expect(fetch.mock.calls.map(call => new URL(call[0]).pathname)).toEqual([
+      '/api/nerve-center/workload-admissions',
+      `/api/nerve-center/workload-admissions/admission-${workloadId}/heartbeat`,
+      '/api/nerve-center/workload-admissions'
+    ]);
+
+    await expect(acquireWorkloadAdmission(workloadId, {
+      hosts: ['http://host-b:11434']
+    })).rejects.toMatchObject({ code: 'WORKLOAD_ADMISSION_CONFLICT' });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
   test('rejects a divergent claim receipt and performs only a fenced cleanup', async () => {
     const requestedGeneration = '33333333-3333-4333-8333-333333333333';
+    const hostUrl = 'http://receipt-mismatch:11434';
     fetch
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify(workloadAcquireBody('batch-receipt', [hostUrl]))
+      }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({
           status: 'success',
@@ -630,16 +709,19 @@ describe('Core API client scoped outbound execution', () => {
         body: JSON.stringify({ status: 'success', data: { released: false, reason: 'stale' } }),
       }));
 
+    await acquireWorkloadAdmission('batch-receipt', { hosts: [hostUrl] });
     await expect(claimHostForBenchmark(
-      'http://receipt-mismatch:11434',
+      hostUrl,
       'batch-receipt',
       null,
       { claimGeneration: requestedGeneration }
     )).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_RECEIPT_MISMATCH' });
 
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual({
       claimGeneration: requestedGeneration,
+      admissionId: 'admission-batch-receipt',
+      admissionGeneration: 'generation-batch-receipt'
     });
     expect(getBenchmarkClaimIdentity(
       'http://receipt-mismatch:11434',

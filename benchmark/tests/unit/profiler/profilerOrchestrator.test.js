@@ -116,7 +116,7 @@ describe('profile', () => {
       modelName: MODEL,
       hostId: HOST_ID,
       artifact: ARTIFACT
-    }));
+    }), expect.objectContaining({ assertAuthorityActive: expect.any(Function) }));
     expect(modelProfileService.updateReadiness).toHaveBeenCalledWith(
       MODEL,
       HOST_ID,
@@ -124,7 +124,8 @@ describe('profile', () => {
       expect.objectContaining({
         [`readiness.${HOST_ID}.benchmarkQualified`]: false,
         [`readiness.${HOST_ID}.artifact`]: ARTIFACT
-      })
+      }),
+      expect.objectContaining({ signal: undefined })
     );
     expect(result).toMatchObject({ modelName: MODEL, artifact: ARTIFACT, evidenceId: 'evidence-1' });
   });
@@ -187,7 +188,8 @@ describe('profile', () => {
         [`readiness.${HOST_ID}.benchmarkQualified`]: true,
         [`readiness.${HOST_ID}.stale`]: false,
         [`readiness.${HOST_ID}.artifact`]: ARTIFACT
-      })
+      }),
+      expect.objectContaining({ signal: undefined })
     );
   });
 
@@ -245,9 +247,10 @@ describe('profiler evidence qualification', () => {
       recommendedInteractiveContext: 65536,
       recommendedDocumentContext: 131072,
       requiredRetainedSamples: 10,
-      measurementQuality: { passingSampleCount: 10, reliability: 'medium' },
+      measurementQuality: { passingSampleCount: 10, ttftSampleCount: 10, reliability: 'medium' },
       ttftMs: 200,
       ttftMeasurement: 'streamed_wall_clock',
+      spill: { verified: true, spillDetected: false },
       throughputCurve: [10, 25, 50, 75, 90].map(contextFillPct => ({
         contextFillPct,
         tokensPerSec: 40,
@@ -280,6 +283,12 @@ describe('profiler evidence qualification', () => {
     const profile = qualifiedFullProfile();
     profile.measurementQuality.reliability = 'low';
     expect(orchestrator.profileQualificationFailures(profile)).toContain('reliability_low');
+  });
+
+  it('does not treat unknown GPU residency as verified no-spill evidence', () => {
+    const profile = qualifiedFullProfile();
+    profile.spill = { verified: false, spillDetected: null };
+    expect(orchestrator.profileQualificationFailures(profile)).toContain('gpu_residency_unverified');
   });
 
   it.each([

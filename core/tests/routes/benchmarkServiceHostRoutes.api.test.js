@@ -16,11 +16,13 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
   releaseBenchmarkClaim: jest.fn(),
   getByHost: jest.fn(),
   getPinnedEntries: jest.fn(pref => pref?.pinnedModels || []),
-  warmHost: jest.fn()
+  warmHost: jest.fn(),
+  reapStaleBenchmarkClaims: jest.fn()
 }));
 jest.mock('../../src/services/buddyEvents', () => ({ emit: jest.fn() }));
 jest.mock('../../src/services/runtimeCoordinationService', () => ({
   acquireWorkload: jest.fn(),
+  assertWorkloadAdmission: jest.fn(),
   heartbeat: jest.fn(),
   release: jest.fn(),
   acquireMaintenance: jest.fn(),
@@ -76,7 +78,13 @@ const ROUTES = [
     label: 'claim acquisition',
     method: 'post',
     path: `/api/nerve-center/host-preferences/${ENCODED_HOST}/benchmark-claim`,
-    body: { batchId: 'batch-1', claimGeneration: '11111111-1111-4111-8111-111111111111' },
+    body: {
+      batchId: 'batch-1',
+      claimGeneration: '11111111-1111-4111-8111-111111111111',
+      admissionId: 'admission-core',
+      admissionGeneration: 'generation-core'
+    },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.claimBenchmark]
   },
   {
@@ -85,15 +93,23 @@ const ROUTES = [
     path: `/api/nerve-center/host-preferences/${ENCODED_HOST}/benchmark-claim/batch-1/heartbeat`,
     body: {
       claimGeneration: '11111111-1111-4111-8111-111111111111',
+      admissionId: 'admission-core',
+      admissionGeneration: 'generation-core',
       estimatedDurationMs: 60000
     },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.heartbeatBenchmarkClaim]
   },
   {
     label: 'claim release',
     method: 'delete',
     path: `/api/nerve-center/host-preferences/${ENCODED_HOST}/benchmark-claim/batch-1`,
-    body: { claimGeneration: '11111111-1111-4111-8111-111111111111' },
+    body: {
+      claimGeneration: '11111111-1111-4111-8111-111111111111',
+      admissionId: 'admission-core',
+      admissionGeneration: 'generation-core'
+    },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.releaseBenchmarkClaim]
   },
   {
@@ -142,6 +158,7 @@ describe('Benchmark service identity on Core host-control routes', () => {
     });
     hostPrefService.getPinnedEntries.mockImplementation(pref => pref?.pinnedModels || []);
     hostPrefService.warmHost.mockResolvedValue([{ model: 'model-a', status: 'loaded' }]);
+    hostPrefService.reapStaleBenchmarkClaims.mockResolvedValue({ reaped: [], now: new Date().toISOString() });
     runtimeCoordinationService.acquireWorkload.mockResolvedValue({
       acquired: true,
       admissionId: 'admission-core',
@@ -151,6 +168,14 @@ describe('Benchmark service identity on Core host-control routes', () => {
       workloadId: 'batch-1',
       kind: 'benchmark',
       batchId: null
+    });
+    runtimeCoordinationService.assertWorkloadAdmission.mockResolvedValue({
+      admitted: true,
+      admissionId: 'admission-core',
+      generation: 'generation-core',
+      principal: 'benchmark-service',
+      workloadId: 'batch-1',
+      hosts: [HOST_URL]
     });
     runtimeCoordinationService.heartbeat.mockResolvedValue({
       heartbeat: true,
@@ -212,7 +237,7 @@ describe('Benchmark service identity on Core host-control routes', () => {
     for (const sideEffect of routeCase.sideEffects) expect(sideEffect).not.toHaveBeenCalled();
   });
 
-  it('preserves the explicit trusted internal-machine path', async () => {
+  it('does not let the secret-free trusted-machine fallback claim a host', async () => {
     delete process.env.AGENTX_BENCHMARK_TOKEN;
     try {
       const claimRoute = ROUTES.find(item => item.label === 'claim acquisition');
@@ -221,8 +246,8 @@ describe('Benchmark service identity on Core host-control routes', () => {
         .set('X-Forwarded-For', '172.30.0.8')
         .send(claimRoute.body);
 
-      expect(response.status).toBe(200);
-      expect(hostPrefService.claimBenchmark).toHaveBeenCalled();
+      expect(response.status).toBe(403);
+      expect(hostPrefService.claimBenchmark).not.toHaveBeenCalled();
     } finally {
       process.env.AGENTX_BENCHMARK_TOKEN = 'benchmark-secret';
     }
@@ -358,5 +383,29 @@ describe('Benchmark service identity on Core host-control routes', () => {
 
     expect(response.status).toBe(200);
     expect(hostPrefService.warmHost).toHaveBeenCalledWith(HOST_URL);
+  });
+
+  it('requires operator authority for the destructive reaper and rejects invalid bounds', async () => {
+    const path = '/api/nerve-center/host-preferences/benchmark-claims/reap';
+    const missing = await request(app)
+      .post(path)
+      .set('Host', 'remote-aiops.example')
+      .set('X-Forwarded-For', '203.0.113.30')
+      .send({ graceFactor: 1.5, hardCapMs: 60_000 });
+    expect(missing.status).toBe(403);
+    expect(hostPrefService.reapStaleBenchmarkClaims).not.toHaveBeenCalled();
+
+    const boundedError = Object.assign(new Error('graceFactor must be > 0'), {
+      code: 'BENCHMARK_REAPER_OPTIONS_INVALID'
+    });
+    hostPrefService.reapStaleBenchmarkClaims.mockRejectedValueOnce(boundedError);
+    const invalid = await request(app)
+      .post(path)
+      .set('Host', 'remote-aiops.example')
+      .set('X-Forwarded-For', '203.0.113.30')
+      .set('Authorization', 'Bearer operator-secret')
+      .send({ graceFactor: -1, hardCapMs: -1 });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.code).toBe('BENCHMARK_REAPER_OPTIONS_INVALID');
   });
 });

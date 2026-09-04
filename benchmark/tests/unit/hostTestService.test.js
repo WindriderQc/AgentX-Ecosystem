@@ -1,7 +1,8 @@
 'use strict';
 
 jest.mock('../../models/HostPerformanceSnapshot', () => ({
-  create: jest.fn()
+  create: jest.fn(),
+  deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 })
 }));
 
 jest.mock('../../src/services/ollamaVramService', () => ({
@@ -39,7 +40,13 @@ jest.mock('../../config/logger', () => ({
   debug: jest.fn()
 }));
 
-const { getConfig, buildProbePlan, buildWarmupRequest } = require('../../src/services/hostTestService');
+const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
+const {
+  getConfig,
+  buildProbePlan,
+  buildWarmupRequest,
+  _internal: { persistHostSnapshot }
+} = require('../../src/services/hostTestService');
 
 describe('hostTestService config helpers', () => {
   const ORIGINAL_ENV = { ...process.env };
@@ -139,5 +146,27 @@ describe('hostTestService config helpers', () => {
       callerDetail: 'benchmark-host-test-warmup',
       host: 'http://192.0.2.199:11434'
     }));
+  });
+
+  it('removes an ambiguously committed host snapshot when the claim is lost after save', async () => {
+    const controller = new AbortController();
+    HostPerformanceSnapshot.create.mockImplementationOnce(async ([payload]) => [payload]);
+    let checkpointCount = 0;
+    const lost = Object.assign(new Error('claim lost after write'), { code: 'BENCHMARK_CLAIM_LOST' });
+    const checkpoint = jest.fn(() => {
+      checkpointCount += 1;
+      if (checkpointCount === 2) throw lost;
+    });
+
+    await expect(persistHostSnapshot('model-a', {
+      hostUrl: 'http://host:11434',
+      status: 'success'
+    }, { signal: controller.signal, checkpoint })).rejects.toBe(lost);
+
+    expect(HostPerformanceSnapshot.create).toHaveBeenCalledWith(
+      [expect.objectContaining({ _id: expect.anything(), modelName: 'model-a' })],
+      { signal: controller.signal }
+    );
+    expect(HostPerformanceSnapshot.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
   });
 });

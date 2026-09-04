@@ -26,6 +26,7 @@ const HostPerformanceSnapshotSchema = new mongoose.Schema({
   vramUsedMiB:              Number,
   vramTotalMiB:             Number,
   numCtx:                   Number,
+  observedNumCtx:           Number,
   numCtxSource:             String,
   source:                   { type: String, default: 'benchmark_host_test' },
   testedAt: {

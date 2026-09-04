@@ -36,6 +36,7 @@ const ModelContextProfileSchema = new mongoose.Schema({
     enum: ['verified', 'unknown'],
     default: 'unknown'
   },
+  recommendationEvidenceVersion: { type: String, default: null },
   revalidationRequired: { type: Boolean, default: true },
   recommendationThresholds: {
     interactiveDegradationPct: { type: Number, default: 15 },

@@ -1203,6 +1203,7 @@ async function runBatchOrchestrator({
     }) + preflightAllowanceMs;
     await setBatchPhase('claiming', `Reserving ${allAffectedHosts.length} host(s) with core…`);
     let claimedHostUrls;
+    let orchestrationError = null;
     try {
         claimedHostUrls = await acquireBenchmarkClaims(allAffectedHosts, batchId, claimEstimateMs, {
             kind: harnessTargets.length > 0 || judgeConfig.target?.executionKind === 'harness'
@@ -1239,7 +1240,9 @@ async function runBatchOrchestrator({
     } catch (error) {
         if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
         else stopClaimHeartbeat();
-        await releaseBenchmarkClaims(claimedHostUrls, batchId);
+        await releaseBenchmarkClaims(claimedHostUrls, batchId, {
+            releaseWorkloadAdmission: false
+        });
         throw error;
     }
     assertClaimActive = stopClaimHeartbeat.assertActive;
@@ -1254,10 +1257,13 @@ async function runBatchOrchestrator({
             return;
         }
         hostLifecycleFinalized = true;
+        if (typeof stopClaimHeartbeat.drainHosts === 'function') await stopClaimHeartbeat.drainHosts();
+
+        const release = await releaseBenchmarkClaims(claimedHostUrls, batchId, {
+            releaseWorkloadAdmission: false
+        });
         if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
         else stopClaimHeartbeat();
-
-        const release = await releaseBenchmarkClaims(claimedHostUrls, batchId);
         await recordBatchTimelineEvent(release.failed > 0 ? 'benchmark_claim_release_failed' : 'benchmark_claim_released', {
             hosts: claimedHostUrls,
             ...(release.failed > 0 ? { failed: release.failed } : {})
@@ -1372,6 +1378,9 @@ async function runBatchOrchestrator({
         }
         orchestrationCompleted = true;
         return { stopped: false, cancelled: false };
+    } catch (error) {
+        orchestrationError = error;
+        throw error;
     } finally {
         try {
             if (!orchestrationCompleted || executionState.stopped || batchCancellationController.signal.aborted) {
@@ -1382,6 +1391,7 @@ async function runBatchOrchestrator({
         } finally {
             unregisterBatchCancellation();
             await finalizeHostLifecycle();
+            if (orchestrationError) orchestrationError.hostLifecycleRestored = true;
         }
     }
 }

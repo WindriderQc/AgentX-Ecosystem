@@ -42,7 +42,7 @@ async function updateMetadata(name, metadata = {}) {
   );
 }
 
-async function updateReadiness(modelName, hostId, stage, extraFields = {}) {
+async function updateReadiness(modelName, hostId, stage, extraFields = {}, options = {}) {
   if (!['available', 'profiled', 'benchmarked'].includes(stage)) {
     throw new RangeError(`Unsupported readiness stage: ${stage}`);
   }
@@ -53,11 +53,11 @@ async function updateReadiness(modelName, hostId, stage, extraFields = {}) {
   return ModelProfile.findOneAndUpdate(
     { name: modelName },
     { $set: setFields },
-    { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+    { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true, ...(options.signal ? { signal: options.signal } : {}) }
   );
 }
 
-async function updateThinkingCapability(modelName, hostId, thinkingProfile = {}) {
+async function updateThinkingCapability(modelName, hostId, thinkingProfile = {}, options = {}) {
   const policy = thinkingProfile.recommendedPolicy || 'unknown';
   const supported = !!thinkingProfile.supported;
   const profiledAt = thinkingProfile.profiledAt || new Date();
@@ -95,7 +95,7 @@ async function updateThinkingCapability(modelName, hostId, thinkingProfile = {})
         [`thinkingProfiles.${hostId}`]: capability
       }
     },
-    { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+    { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true, ...(options.signal ? { signal: options.signal } : {}) }
   );
 }
 

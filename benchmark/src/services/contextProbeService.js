@@ -5,6 +5,7 @@
  * to benchmark-owned storage instead of writing back into modelregistries.
  */
 
+const mongoose = require('mongoose');
 const ModelProfile = require('../../models/ModelProfile');
 const ModelContextProbeSnapshot = require('../../models/ModelContextProbeSnapshot');
 const ollamaVramService = require('./ollamaVramService');
@@ -59,6 +60,24 @@ function validateThroughput(tokensPerSec) {
 
 function findInvalidThroughputStep(steps = []) {
   return steps.find((step) => !validateThroughput(step?.tokensPerSec).plausible);
+}
+
+async function persistProbeSnapshot(data, { signal, checkpoint } = {}) {
+  const payload = { _id: new mongoose.Types.ObjectId(), ...data };
+  checkpoint?.();
+  let saved = null;
+  try {
+    const created = await ModelContextProbeSnapshot.create(
+      [payload],
+      signal ? { signal } : undefined
+    );
+    saved = Array.isArray(created) ? created[0] : created;
+    checkpoint?.();
+    return saved;
+  } catch (error) {
+    await ModelContextProbeSnapshot.deleteOne({ _id: payload._id }).catch(() => {});
+    throw error;
+  }
 }
 
 function getConfig() {
@@ -365,7 +384,16 @@ async function probeModelContext(modelName, options = {}) {
     ? Math.min(100, Math.max(0, Number(options.interactiveDegradationThreshold))) : 15;
   const documentThreshold = Number.isFinite(Number(options.documentDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(options.documentDegradationThreshold))) : 30;
-  const checkpoint = typeof options.assertClaimActive === 'function' ? options.assertClaimActive : () => {};
+  const checkpoint = () => {
+    if (options.signal?.aborted) {
+      const error = options.signal.reason instanceof Error
+        ? options.signal.reason
+        : new Error('Context probe authority stopped');
+      error.code = error.code || 'BENCHMARK_CLAIM_STOPPED';
+      throw error;
+    }
+    options.assertClaimActive?.();
+  };
   const probeOptions = {
     signal: options.signal,
     assertClaimActive: checkpoint,
@@ -584,7 +612,7 @@ async function probeModelContext(modelName, options = {}) {
     }
 
     checkpoint();
-    const snapshot = await ModelContextProbeSnapshot.create({
+    const snapshot = await persistProbeSnapshot({
       modelName: normalizedModel,
       hostUrl,
       hostId: currentArtifact.hostId,
@@ -612,7 +640,7 @@ async function probeModelContext(modelName, options = {}) {
       authorityStatus: 'pending',
       authorityError: null,
       steps
-    });
+    }, { signal: options.signal, checkpoint });
 
     logger.info('Benchmark context probe completed', {
       modelName: normalizedModel,
@@ -624,7 +652,10 @@ async function probeModelContext(modelName, options = {}) {
     const snapshotObject = snapshot.toObject();
     try {
       checkpoint();
-      const contextAuthority = await modelContextProfileService.updateFromProbeSnapshot(snapshotObject);
+      const contextAuthority = await modelContextProfileService.updateFromProbeSnapshot(snapshotObject, {
+        signal: options.signal,
+        assertAuthorityActive: checkpoint
+      });
       if (!contextAuthority) {
         const error = new Error('Model context profile rejected completed probe evidence');
         error.code = 'MODEL_CONTEXT_PROFILE_PERSIST_FAILED';
@@ -633,7 +664,8 @@ async function probeModelContext(modelName, options = {}) {
       checkpoint();
       await ModelContextProbeSnapshot.updateOne(
         { _id: snapshotObject._id, authorityStatus: 'pending' },
-        { $set: { authorityStatus: 'committed', authorityError: null } }
+        { $set: { authorityStatus: 'committed', authorityError: null } },
+        options.signal ? { signal: options.signal } : undefined
       );
       checkpoint();
     } catch (profileErr) {
@@ -663,7 +695,7 @@ async function probeModelContext(modelName, options = {}) {
       throw (options.signal.reason instanceof Error ? options.signal.reason : err);
     }
     checkpoint();
-    const snapshot = await ModelContextProbeSnapshot.create({
+    const snapshot = await persistProbeSnapshot({
       modelName: normalizedModel,
       hostUrl,
       hostId: artifactIdentity.hostId,
@@ -678,7 +710,7 @@ async function probeModelContext(modelName, options = {}) {
       authorityError: err.message,
       promptFillPct,
       steps
-    });
+    }, { signal: options.signal, checkpoint });
     logger.error('Benchmark context probe failed', { modelName: normalizedModel, hostUrl, error: err.message });
     throw Object.assign(new Error(err.message), {
       snapshotId: snapshot?._id ? snapshot._id.toString() : null
@@ -712,6 +744,7 @@ module.exports = {
     runStep,
     MIN_PROBE_COMPLETION_TOKENS,
     PROBE_NUM_PREDICT,
+    persistProbeSnapshot,
     findInvalidThroughputStep,
     validateThroughput,
     isValidTokensPerSec

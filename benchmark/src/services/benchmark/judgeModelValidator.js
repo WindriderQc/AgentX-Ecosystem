@@ -8,6 +8,26 @@ const { benchmarkFetch: fetch } = require('./http');
 
 const VALIDATION_TIMEOUT_MS = 30000;
 
+function combinedSignal(timeoutSignal, externalSignal) {
+    if (!externalSignal) return timeoutSignal;
+    if (typeof AbortSignal.any === 'function') return AbortSignal.any([timeoutSignal, externalSignal]);
+    const controller = new AbortController();
+    const forward = signal => controller.abort(signal.reason);
+    for (const signal of [timeoutSignal, externalSignal]) {
+        if (signal.aborted) forward(signal);
+        else signal.addEventListener('abort', () => forward(signal), { once: true });
+    }
+    return controller.signal;
+}
+
+function throwIfExternalAborted(signal) {
+    if (!signal?.aborted) return;
+    if (signal.reason instanceof Error) throw signal.reason;
+    const error = new Error('Judge validation workload authority stopped');
+    error.code = 'BENCHMARK_CLAIM_STOPPED';
+    throw error;
+}
+
 /**
  * Validate that a judge model is available and can produce structured JSON output.
  *
@@ -25,6 +45,7 @@ const VALIDATION_TIMEOUT_MS = 30000;
 async function validateJudgeModel(host, model, options = {}) {
     const _fetch = options._fetch || fetch;
     const start = Date.now();
+    throwIfExternalAborted(options.signal);
 
     if (!host || !model) {
         return {
@@ -44,7 +65,7 @@ async function validateJudgeModel(host, model, options = {}) {
         try {
             res = await _fetch(`${host}/api/tags`, {
                 method: 'GET',
-                signal: controller.signal,
+                signal: combinedSignal(controller.signal, options.signal),
                 redirect: 'manual'
             });
         } finally {
@@ -75,6 +96,7 @@ async function validateJudgeModel(host, model, options = {}) {
             };
         }
     } catch (err) {
+        throwIfExternalAborted(options.signal);
         const msg = err.name === 'AbortError' ? 'Host unreachable (timeout)' : err.message;
         return {
             valid: false,
@@ -108,7 +130,7 @@ async function validateJudgeModel(host, model, options = {}) {
                     think: false,
                     options: { num_predict: 100, temperature: 0.1 }
                 }),
-                signal: controller.signal,
+                signal: combinedSignal(controller.signal, options.signal),
                 redirect: 'manual'
             });
         } finally {
@@ -172,6 +194,7 @@ async function validateJudgeModel(host, model, options = {}) {
             latency_ms: Date.now() - start
         };
     } catch (err) {
+        throwIfExternalAborted(options.signal);
         if (err.name === 'AbortError') {
             // Timeout = model is cold-loading. Still valid — warmup handles this.
             logger.info('Judge model validation: generation timed out (cold start), model is registered — treating as valid', {
@@ -212,7 +235,7 @@ async function probeJudgeCapability(host, model, options = {}) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model }),
-                signal: controller.signal,
+                signal: combinedSignal(controller.signal, options.signal),
                 redirect: 'manual'
             });
         } finally {
@@ -239,6 +262,7 @@ async function probeJudgeCapability(host, model, options = {}) {
 
         return { ok: true, context_length: contextLength, parameter_size: parameterSize };
     } catch (err) {
+        throwIfExternalAborted(options.signal);
         return { ok: false, error: err.name === 'AbortError' ? 'timeout' : err.message };
     }
 }

@@ -281,15 +281,30 @@ router.post('/host-preferences/:hostUrl(*)/swap', async (req, res) => {
 // 'benchmarking' so other consumers can route around the host.
 // ========================================
 
-router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkServiceAccess, async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkCoordinationAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
-    const { batchId, claimGeneration, estimatedDurationMs, source, owner, note, heartbeatTtlMs } = req.body || {};
+    const { batchId, claimGeneration, admissionId, admissionGeneration, estimatedDurationMs, source, owner, note, heartbeatTtlMs } = req.body || {};
     if (!batchId || !claimGeneration) {
       return res.status(400).json({ status: 'error', message: 'batchId and claimGeneration are required' });
     }
-    const claimOptions = { claimGeneration };
+    const admission = await runtimeCoordinationService.assertWorkloadAdmission({
+      id: admissionId,
+      generation: admissionGeneration,
+      principal: coordinationPrincipal(req),
+      workloadId: batchId,
+      host: hostUrl
+    });
+    if (!admission.admitted) {
+      return res.status(409).json({ status: 'error', code: 'WORKLOAD_ADMISSION_REQUIRED', message: admission.reason });
+    }
+    const claimOptions = {
+      claimGeneration,
+      admissionId: admission.admissionId,
+      admissionGeneration: admission.generation,
+      admissionPrincipal: admission.principal
+    };
     if (source !== undefined) claimOptions.source = source;
     if (owner !== undefined) claimOptions.owner = owner;
     if (note !== undefined) claimOptions.note = note;
@@ -306,14 +321,28 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkSer
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', requireBenchmarkServiceAccess, async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', requireBenchmarkCoordinationAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     const batchId = req.params.batchId;
-    const { claimGeneration, estimatedDurationMs, source, owner, note, heartbeatTtlMs } = req.body || {};
+    const { claimGeneration, admissionId, admissionGeneration, estimatedDurationMs, source, owner, note, heartbeatTtlMs } = req.body || {};
+    const admission = await runtimeCoordinationService.assertWorkloadAdmission({
+      id: admissionId,
+      generation: admissionGeneration,
+      principal: coordinationPrincipal(req),
+      workloadId: batchId,
+      host: hostUrl
+    });
+    if (!admission.admitted) {
+      return res.status(409).json({ status: 'error', code: 'WORKLOAD_ADMISSION_REQUIRED', message: admission.reason });
+    }
     const result = await hostPrefService.heartbeatBenchmarkClaim(hostUrl, batchId, {
       claimGeneration,
+      admissionId: admission.admissionId,
+      admissionGeneration: admission.generation,
+      admissionPrincipal: admission.principal,
+      requireAdmissionProof: true,
       estimatedDurationMs,
       source,
       owner,
@@ -331,14 +360,28 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', 
   }
 });
 
-router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkServiceAccess, async (req, res) => {
+router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkCoordinationAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     const batchId = req.params.batchId;
-    const { claimGeneration, excludedModels } = req.body || {};
+    const { claimGeneration, admissionId, admissionGeneration, excludedModels } = req.body || {};
+    const admission = await runtimeCoordinationService.assertWorkloadAdmission({
+      id: admissionId,
+      generation: admissionGeneration,
+      principal: coordinationPrincipal(req),
+      workloadId: batchId,
+      host: hostUrl
+    });
+    if (!admission.admitted) {
+      return res.status(409).json({ status: 'error', code: 'WORKLOAD_ADMISSION_REQUIRED', message: admission.reason });
+    }
     const result = await hostPrefService.releaseBenchmarkClaim(hostUrl, batchId, {
       claimGeneration,
+      admissionId: admission.admissionId,
+      admissionGeneration: admission.generation,
+      admissionPrincipal: admission.principal,
+      requireAdmissionProof: true,
       excludedModels
     });
     if (!result.released) {
@@ -468,13 +511,17 @@ router.get('/runtime-coordination/active', requireOperatorAccess, async (_req, r
  * server.js; this endpoint is for operator-initiated recovery.
  * Optional body: { graceFactor, hardCapMs }
  */
-router.post('/host-preferences/benchmark-claims/reap', async (req, res) => {
+router.post('/host-preferences/benchmark-claims/reap', requireOperatorAccess, async (req, res) => {
   try {
     const result = await hostPrefService.reapStaleBenchmarkClaims(req.body || {});
     res.json({ status: 'success', data: result });
   } catch (err) {
     logger.error('[NerveCenter] benchmark claim reap failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.code === 'BENCHMARK_REAPER_OPTIONS_INVALID' ? 400 : 500).json({
+      status: 'error',
+      code: err.code || 'BENCHMARK_CLAIM_REAP_FAILED',
+      message: err.message
+    });
   }
 });
 

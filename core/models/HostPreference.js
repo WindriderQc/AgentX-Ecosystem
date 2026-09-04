@@ -112,6 +112,9 @@ const HostPreferenceSchema = new mongoose.Schema({
   benchmarkClaim: {
     batchId: { type: String, default: null },
     claimGeneration: { type: String, default: null },
+    admissionId: { type: String, default: null },
+    admissionGeneration: { type: String, default: null },
+    admissionPrincipal: { type: String, default: null },
     prevStatus: { type: String, default: null },
     claimedAt: { type: Date, default: null },
     estimatedDurationMs: { type: Number, default: null },

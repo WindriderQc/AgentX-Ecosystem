@@ -28,6 +28,7 @@ const {
     acquireWorkloadAdmission,
     releaseWorkloadAdmission
 } = require('../../clients/coreApiClient');
+const { startBenchmarkClaimHeartbeat } = require('./benchmarkClaimLifecycle');
 const {
     buildOllamaTarget,
     buildQualityCohortFingerprint,
@@ -138,13 +139,30 @@ async function startBatch({
         throw new Error('Only direct_model or isolated_model targets may be used as judge');
     }
     const plannedBatchId = new mongoose.Types.ObjectId();
+    const plannedBatchKey = plannedBatchId.toString();
+    const workloadTtlMs = execution_config?.estimated_duration_ms || null;
     await acquireWorkloadAdmission(plannedBatchId.toString(), {
         requestId: `benchmark:${plannedBatchId}`,
         kind: normalizedTargets.some(target => target.executionKind !== 'ollama') ? 'benchmark-cloud' : 'benchmark',
         batchId: plannedBatchId.toString(),
         hosts: normalizedTargets.map(target => target.host).filter(Boolean),
-        ttlMs: execution_config?.estimated_duration_ms || null
+        ttlMs: workloadTtlMs
     });
+    const creationAbort = new AbortController();
+    const creationHeartbeat = startBenchmarkClaimHeartbeat([], plannedBatchKey, workloadTtlMs, {
+        source: 'benchmark',
+        onFatal: error => {
+            if (!creationAbort.signal.aborted) creationAbort.abort(error);
+        }
+    });
+    await creationHeartbeat.ready;
+    try {
+        creationHeartbeat.assertActive();
+    } catch (error) {
+        await creationHeartbeat.drain();
+        throw error;
+    }
+    let admissionHandedOff = false;
     try {
     if (trust_campaign_spec) {
         assertConfiguredProductManifest(trust_campaign_spec, trust_runtime_env);
@@ -260,8 +278,14 @@ async function startBatch({
 
     batch.captureSystemSnapshot();
     try {
-        await batch.save();
+        creationHeartbeat.assertActive();
+        await batch.save({ signal: creationAbort.signal });
+        creationHeartbeat.assertActive();
     } catch (error) {
+        // The ObjectId is allocated before admission, so cleanup is exact even
+        // when the driver committed the insert but the acknowledgement or
+        // post-write heartbeat checkpoint was lost.
+        await BenchmarkBatch.deleteOne({ _id: plannedBatchId }).catch(() => {});
         if (trust_campaign_spec && error?.code === 11000
             && (error?.keyPattern?.trust_campaign_spec_id || error?.keyValue?.trust_campaign_spec_id)) {
             const consumed = new Error('Benchmark Trust CampaignSpec has already been consumed');
@@ -275,6 +299,7 @@ async function startBatch({
     let trustEvidenceContext = null;
     if (trust_campaign_spec) {
         try {
+            creationHeartbeat.assertActive();
             trustEvidenceContext = buildTrustSourceContext({
                 batch,
                 targets: normalizedTargets,
@@ -287,6 +312,7 @@ async function startBatch({
                 env: trust_runtime_env
             });
             await BenchmarkBatch.commitAndStartTrustEvidenceBatch(batch._id, trustEvidenceContext);
+            creationHeartbeat.assertActive();
             batch = await BenchmarkBatch.findById(batch._id).select('+trust_evidence_context');
         } catch (error) {
             await BenchmarkBatch.updateOne({
@@ -308,6 +334,19 @@ async function startBatch({
     }
 
     if (process.env.NODE_ENV !== 'test') {
+        let resolveAdmissionReady;
+        let rejectAdmissionReady;
+        let admissionReadySettled = false;
+        const admissionReady = new Promise((resolve, reject) => {
+            resolveAdmissionReady = () => {
+                admissionReadySettled = true;
+                resolve();
+            };
+            rejectAdmissionReady = error => {
+                admissionReadySettled = true;
+                reject(error);
+            };
+        });
         executeBatch(batchId, defaultHost, displayModels, selectedPrompts, {
             targets: normalizedTargets,
             spend_grant: spendGrant,
@@ -316,10 +355,27 @@ async function startBatch({
             judge_config,
             execution_config: normalizedExecutionConfig,
             execution_mode,
-            trust_evidence_context: trustEvidenceContext
+            trust_evidence_context: trustEvidenceContext,
+            onAdmissionReady: resolveAdmissionReady
         }).catch((err) => {
+            if (!admissionReadySettled) rejectAdmissionReady(err);
             logger.error('Batch execution failed', { batchId, error: err.message });
         });
+        // Keep the creation admission heartbeat alive until executeBatch has
+        // re-attested the same Core-owned token and started its own heartbeat.
+        await admissionReady;
+        admissionHandedOff = true;
+        await creationHeartbeat.drain();
+    } else {
+        // Tests deliberately do not spawn the background executor. Avoid
+        // leaving a phantom global workload after the durable creation check.
+        await creationHeartbeat.drain();
+        const released = await releaseWorkloadAdmission(plannedBatchKey);
+        if (released?.released !== true) {
+            const error = new Error(released?.reason || 'Workload admission release failed after test batch creation');
+            error.code = 'WORKLOAD_ADMISSION_RELEASE_FAILED';
+            throw error;
+        }
     }
 
     return {
@@ -332,7 +388,10 @@ async function startBatch({
         } : {})
     };
     } catch (error) {
-        await releaseWorkloadAdmission(plannedBatchId.toString()).catch(() => {});
+        await creationHeartbeat.drain().catch(() => {});
+        if (!admissionHandedOff) {
+            await releaseWorkloadAdmission(plannedBatchKey).catch(() => {});
+        }
         throw error;
     }
 }
@@ -377,13 +436,52 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
     const judgeConfig = { ...(options.judge_config || {}), think: false };
     const executionMode = options.execution_mode || 'latency';
 
+    // Re-attest the Core-owned global admission before the first execution
+    // lock write. The receipt cached by startBatch/resumeBatch may have expired
+    // and maintenance may have acquired the exclusive lease meanwhile.
+    const executionTargets = normalizeBatchTargets({
+        host: defaultHost,
+        models,
+        targets: options.targets || null
+    });
+    const executionAdmission = await acquireWorkloadAdmission(String(batchId), {
+        requestId: `benchmark:${batchId}`,
+        kind: executionTargets.some(target => target.executionKind !== 'ollama') ? 'benchmark-cloud' : 'benchmark',
+        batchId: String(batchId),
+        hosts: executionTargets.map(target => target.host).filter(Boolean),
+        ttlMs: options.execution_config?.estimated_duration_ms || null
+    });
+    const admissionAbort = new AbortController();
+    const admissionHeartbeat = startBenchmarkClaimHeartbeat(
+        [],
+        String(batchId),
+        options.execution_config?.estimated_duration_ms || null,
+        {
+            source: 'benchmark',
+            onFatal: error => {
+                if (!admissionAbort.signal.aborted) admissionAbort.abort(error);
+                abortActiveBatchRequests(batchId, { reason: error, userInitiated: false });
+            }
+        }
+    );
+    await admissionHeartbeat.ready;
+    try {
+        admissionHeartbeat.assertActive();
+    } catch (error) {
+        await admissionHeartbeat.drain();
+        throw error;
+    }
+    options.onAdmissionReady?.();
+
     const now = new Date();
     const lockTimeoutMs = 10 * 60 * 1000;  // 10 minutes
     const activityTimeoutMs = 5 * 60 * 1000; // 5 minutes
     const lockTimeout = new Date(now - lockTimeoutMs);
     const activityTimeout = new Date(now - activityTimeoutMs);
 
-    const batch = await BenchmarkBatch.findOneAndUpdate(
+    let batch;
+    try {
+        batch = await BenchmarkBatch.findOneAndUpdate(
         {
             _id: batchId,
             $or: [
@@ -401,10 +499,16 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                 last_activity_at: now
             }
         },
-        { new: true, select: '+trust_evidence_context' }
-    );
+            { new: true, select: '+trust_evidence_context', signal: admissionAbort.signal }
+        );
+        admissionHeartbeat.assertActive();
+    } catch (error) {
+        await admissionHeartbeat.drain();
+        throw error;
+    }
 
     if (!batch) {
+        await admissionHeartbeat.drain();
         const existingBatch = await BenchmarkBatch.findById(batchId);
         if (!existingBatch) {
             logger.error('Batch not found', { batchId });
@@ -414,6 +518,9 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                 pid: process.pid,
                 lockedBy: existingBatch.execution_pid
             });
+        }
+        if (executionAdmission?.idempotent !== true) {
+            await releaseWorkloadAdmission(String(batchId)).catch(() => {});
         }
         return;
     }
@@ -438,6 +545,8 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
     const trustEvidenceContext = options.trust_evidence_context || batch.trust_evidence_context || null;
     activeBatchId = batchId;
     let heartbeatInterval = null;
+    let hostLifecycleRestored = false;
+    let terminalStatePersisted = false;
 
     const stopHeartbeat = () => {
         const interval = heartbeatInterval;
@@ -556,6 +665,7 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
     }
 
     try {
+        admissionHeartbeat.assertActive();
         await recordBatchTimelineEvent('prep_start', {
             model: judgeConfig.model || JUDGE_CONFIG.model,
             success: true
@@ -583,8 +693,19 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
         const plannedRepeats = Math.max(1, Math.min(5, Number(executionConfig.repeats) || 1));
         const plannedTotalTests = models.length * prompts.length * plannedRepeats;
         if (plannedTotalTests > 0) {
+            const priorTotalTests = batch.total_tests;
             batch.total_tests = plannedTotalTests;
-            await batch.save();
+            admissionHeartbeat.assertActive();
+            try {
+                await batch.save({ signal: admissionAbort.signal });
+                admissionHeartbeat.assertActive();
+            } catch (error) {
+                await BenchmarkBatch.updateOne(
+                    { _id: batchId, total_tests: plannedTotalTests },
+                    { $set: { total_tests: priorTotalTests } }
+                ).catch(() => {});
+                throw error;
+            }
         }
 
         const orchestrationOutcome = await runBatchOrchestrator({
@@ -606,10 +727,14 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             setBatchPhase,
             handleGracefulStop: clearActiveState
         });
+        hostLifecycleRestored = true;
+        admissionHeartbeat.assertActive();
 
         await flushBatchProgress(true);
 
         if (orchestrationOutcome?.stopped) {
+            const stoppedSnapshot = await BenchmarkBatch.findById(batchId).select('status').lean();
+            terminalStatePersisted = ['stopped', 'failed', 'completed', 'interrupted'].includes(stoppedSnapshot?.status);
             return orchestrationOutcome;
         }
 
@@ -626,6 +751,7 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                     status: outcome.status,
                     failureReason: outcome.failureReason || null
                 });
+                terminalStatePersisted = true;
                 logger.info('Strict Trust batch finalized with immutable evidence', {
                     batchId,
                     status: finalBatch.status,
@@ -666,8 +792,11 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                 logger.info('Skipped batch finalization because a terminal transition already won', {
                     batchId
                 });
+                const terminalSnapshot = await BenchmarkBatch.findById(batchId).select('status').lean();
+                terminalStatePersisted = ['stopped', 'failed', 'completed', 'interrupted'].includes(terminalSnapshot?.status);
                 return;
             }
+            terminalStatePersisted = true;
 
             if (outcome.failureReason === 'zero_cells_executed') {
                 logger.error('Batch finalized with zero cells executed — host or model orchestration silently failed (0212 root cause)', {
@@ -701,6 +830,16 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             }
         }
     } catch (err) {
+        hostLifecycleRestored = err?.hostLifecycleRestored === true;
+        const authorityLost = admissionAbort.signal.aborted
+            || admissionHeartbeat.getFailure?.()
+            || err?.code === 'BENCHMARK_CLAIM_LOST'
+            || err?.code === 'BENCHMARK_CLAIM_STOPPED';
+        if (authorityLost) {
+            throw (admissionAbort.signal.reason instanceof Error
+                ? admissionAbort.signal.reason
+                : admissionHeartbeat.getFailure?.() || err);
+        }
         await flushBatchProgress(true).catch((flushErr) => {
             logger.warn('Failed to flush pending batch progress after crash', {
                 batchId,
@@ -771,11 +910,15 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                 terminalBatch = null;
             }
             if (terminalBatch?.status === 'stopped') {
+                terminalStatePersisted = true;
                 logger.info('Suppressed batch crash because user stop won the terminal race', {
                     batchId
                 });
                 return { stopped: true, cancelled: true };
             }
+        }
+        if (failureTransition && failureTransition.matchedCount !== 0) {
+            terminalStatePersisted = true;
         }
 
         logger.error('Batch execution crashed', {
@@ -801,12 +944,35 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
 
         throw err;
     } finally {
-        await flushBatchProgress(true).catch((flushErr) => {
-            logger.warn('Failed to flush pending batch progress during cleanup', {
-                batchId,
-                error: flushErr.message
+        const authorityLost = admissionAbort.signal.aborted || admissionHeartbeat.getFailure?.();
+        if (!authorityLost) {
+            await flushBatchProgress(true).catch((flushErr) => {
+                logger.warn('Failed to flush pending batch progress during cleanup', {
+                    batchId,
+                    error: flushErr.message
+                });
             });
-        });
+        }
+        // Maintenance may proceed only after every claimed host has been
+        // restored under its fence and the terminal batch transition is
+        // durable. A failed restore or failed terminal write intentionally
+        // leaves the global admission recoverable until its TTL/reaper path.
+        if (!authorityLost && hostLifecycleRestored && terminalStatePersisted) {
+            admissionHeartbeat.assertActive();
+            await admissionHeartbeat.drain();
+            const released = await releaseWorkloadAdmission(String(batchId)).catch(error => ({
+                released: false,
+                reason: error.message
+            }));
+            if (released?.released !== true) {
+                logger.error('Benchmark terminal state persisted but workload admission release failed', {
+                    batchId,
+                    reason: released?.reason || 'unknown'
+                });
+            }
+        } else {
+            await admissionHeartbeat.drain();
+        }
         clearActiveState();
     }
 }
@@ -987,17 +1153,42 @@ async function resumeBatch(batchId, options = {}) {
         approval: options.paidApproval || null
     });
 
+    const resumeTtlMs = batch.execution_config?.estimated_duration_ms || null;
     await acquireWorkloadAdmission(batchId, {
         requestId: `benchmark:${batchId}`,
         kind: normalizedTargets.some(target => target.executionKind !== 'ollama') ? 'benchmark-cloud' : 'benchmark',
         batchId,
         hosts: normalizedTargets.map(target => target.host).filter(Boolean),
-        ttlMs: batch.execution_config?.estimated_duration_ms || null
+        ttlMs: resumeTtlMs
     });
+    const resumeAbort = new AbortController();
+    const resumeHeartbeat = startBenchmarkClaimHeartbeat([], String(batchId), resumeTtlMs, {
+        source: 'benchmark',
+        onFatal: error => {
+            if (!resumeAbort.signal.aborted) resumeAbort.abort(error);
+        }
+    });
+    await resumeHeartbeat.ready;
+    try {
+        resumeHeartbeat.assertActive();
+    } catch (error) {
+        await resumeHeartbeat.drain().catch(() => {});
+        await releaseWorkloadAdmission(batchId).catch(() => {});
+        throw error;
+    }
+    let admissionHandedOff = false;
 
     // Commit the resumed state only after any paid plan has been explicitly
     // approved and signed. A refusal therefore happens before the first call
     // and leaves the stopped batch resumable.
+    const priorResumeState = {
+        spend_grant: batch.spend_grant,
+        batch_contract_fingerprint: batch.batch_contract_fingerprint,
+        status: batch.status,
+        active_slot: batch.active_slot,
+        execution_started_at: batch.execution_started_at,
+        execution_pid: batch.execution_pid
+    };
     batch.spend_grant = renewedSpendGrant;
     batch.batch_contract_fingerprint = batchContractFingerprint;
     batch.status = 'running';
@@ -1005,13 +1196,42 @@ async function resumeBatch(batchId, options = {}) {
     batch.execution_started_at = null;
     batch.execution_pid = null;
     try {
-        await batch.save();
+        resumeHeartbeat.assertActive();
+        await batch.save({ signal: resumeAbort.signal });
+        resumeHeartbeat.assertActive();
     } catch (error) {
+        // A lost acknowledgement or post-write lease can leave the resume
+        // transition committed. Revert only the exact state written by this
+        // attempt so a concurrent terminal transition is never overwritten.
+        await BenchmarkBatch.updateOne({
+            _id: batchId,
+            status: 'running',
+            active_slot: 'benchmark_singleton',
+            execution_started_at: null,
+            execution_pid: null,
+            batch_contract_fingerprint: batchContractFingerprint
+        }, {
+            $set: priorResumeState
+        }).catch(() => {});
+        await resumeHeartbeat.drain().catch(() => {});
         await releaseWorkloadAdmission(batchId).catch(() => {});
         throw error;
     }
 
     if (process.env.NODE_ENV !== 'test') {
+        let resolveAdmissionReady;
+        let rejectAdmissionReady;
+        let admissionReadySettled = false;
+        const admissionReady = new Promise((resolve, reject) => {
+            resolveAdmissionReady = () => {
+                admissionReadySettled = true;
+                resolve();
+            };
+            rejectAdmissionReady = error => {
+                admissionReadySettled = true;
+                reject(error);
+            };
+        });
         executeBatch(batchId, batch.host, batch.models, selectedPrompts, {
             targets: normalizedTargets,
             spend_grant: renewedSpendGrant,
@@ -1019,8 +1239,29 @@ async function resumeBatch(batchId, options = {}) {
             batch_contract_fingerprint: batchContractFingerprint,
             judge_config: batch.judge_config || {},
             execution_config: batch.execution_config || {},
-            execution_mode: batch.execution_mode || 'latency'
+            execution_mode: batch.execution_mode || 'latency',
+            onAdmissionReady: resolveAdmissionReady
+        }).catch(error => {
+            if (!admissionReadySettled) rejectAdmissionReady(error);
+            logger.error('Resumed batch execution failed', { batchId, error: error.message });
         });
+        try {
+            await admissionReady;
+            admissionHandedOff = true;
+            await resumeHeartbeat.drain();
+        } catch (error) {
+            await resumeHeartbeat.drain().catch(() => {});
+            if (!admissionHandedOff) await releaseWorkloadAdmission(batchId).catch(() => {});
+            throw error;
+        }
+    } else {
+        await resumeHeartbeat.drain();
+        const released = await releaseWorkloadAdmission(batchId);
+        if (released?.released !== true) {
+            const error = new Error(released?.reason || 'Workload admission release failed after test batch resume');
+            error.code = 'WORKLOAD_ADMISSION_RELEASE_FAILED';
+            throw error;
+        }
     }
 
     return { batch_id: batchId, status: 'resumed', checkpoint: batch.checkpoint };

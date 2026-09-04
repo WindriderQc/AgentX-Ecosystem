@@ -320,6 +320,22 @@ describe('reapStaleBenchmarkClaims', () => {
     const r = await svc.reapStaleBenchmarkClaims({ graceFactor: 1.0 });
     expect(r.reaped).toHaveLength(1);
   });
+
+  it.each([
+    [{ graceFactor: 0 }, 'graceFactor'],
+    [{ graceFactor: -1 }, 'graceFactor'],
+    [{ graceFactor: 11 }, 'graceFactor'],
+    [{ hardCapMs: 0 }, 'hardCapMs'],
+    [{ hardCapMs: -1000 }, 'hardCapMs'],
+    [{ hardCapMs: 999 }, 'hardCapMs'],
+    [{ hardCapMs: 24 * 60 * 60 * 1000 + 1 }, 'hardCapMs']
+  ])('rejects unsafe reaper bounds %j', async (options, field) => {
+    await expect(svc.reapStaleBenchmarkClaims(options)).rejects.toMatchObject({
+      code: 'BENCHMARK_REAPER_OPTIONS_INVALID',
+      message: expect.stringContaining(field)
+    });
+    expect(mockFind).not.toHaveBeenCalled();
+  });
 });
 
 describe('benchmark claim reaper scheduler', () => {
