@@ -8,6 +8,9 @@ describe('Backup trust UI', () => {
   const script = fs.readFileSync(path.join(__dirname, '../../public/js/backup.js'), 'utf8');
 
   test('shows cadence, retry, retention enforcement, and growth risk evidence', () => {
+    expect(view).toContain('id="backupControlRoom"');
+    expect(view).toContain('id="backupIncidentPanel"');
+    expect(view).toContain('id="cfgLayerCoverage"');
     expect(view).toContain('id="cfgScheduleStatus"');
     expect(view).toContain('id="cfgScheduleDetail"');
     expect(view).toContain('id="cfgRetentionPolicy"');
@@ -15,6 +18,8 @@ describe('Backup trust UI', () => {
     expect(view).toMatch(/does not delete anything immediately/i);
     expect(script).toMatch(/After partial\/failed cycles only/);
     expect(script).toMatch(/complete all-time inventory, paginated locally/);
+    expect(script).toMatch(/One or more backup layers are blocked/);
+    expect(script).toMatch(/operator action required/);
   });
 
   test('provides a count-evidence target for every backup inventory', () => {
@@ -30,7 +35,7 @@ describe('Backup trust UI', () => {
     }
     expect(view).toContain('id="backupConfirmDialog"');
     expect(view).toContain('id="backupConfirmExpected"');
-    expect(script).toContain('const PAGE_SIZE = 25');
+    expect(script).toContain('const PAGE_SIZE = 10');
     expect(script).toMatch(/X-AgentX-Confirm/);
     expect(script).not.toMatch(/\bconfirm\s*\(/);
     expect(script).not.toContain('?confirm=true');
@@ -44,5 +49,12 @@ describe('Backup trust UI', () => {
     expect(script).toContain('Restore unavailable');
     expect(script).not.toMatch(/data-action="restore-/);
     expect(`${view}\n${script}`).not.toMatch(/id="(?:mongoRoot|qdrantRoot|configRoot|cfgBackupDir|cfgQdrantDir|cfgMongoUri|cfgRagUrl)"/);
+  });
+
+  test('keeps large inventories behind progressive disclosure', () => {
+    expect((view.match(/<details class="backup-inventory">/g) || [])).toHaveLength(3);
+    expect(view).toMatch(/Browse MongoDB recovery artifacts/);
+    expect(view).toMatch(/Browse Qdrant snapshots/);
+    expect(view).toMatch(/Browse configuration artifacts/);
   });
 });

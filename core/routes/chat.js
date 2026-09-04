@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const logger = require('../config/logger');
+const { explainModelUnavailability } = require('../src/services/chat/modelUnavailability');
 const Conversation = require('../models/Conversation');
 const { getUserId } = require('../src/helpers/userHelpers');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
@@ -40,6 +41,28 @@ function sendTurnActionError(res, error) {
     code: isContractError ? error.code : 'TURN_ACTION_VALIDATION_FAILED',
     message: isContractError ? error.message : 'Unable to validate turn action provenance.'
   });
+}
+
+async function projectChatError(error, options = {}) {
+  const body = {
+    status: 'error',
+    message: error.message
+  };
+  if (error.code) body.code = error.code;
+  if (error.notImplemented) body.notImplemented = true;
+  if (options.includeStatusCode && Number.isInteger(error.statusCode)) {
+    body.statusCode = error.statusCode;
+  }
+  if (error.code === 'MODEL_UNAVAILABLE') {
+    // The bounded projection contains logical host identity and readiness only:
+    // no internal URLs, credentials, or unverified "absent everywhere" claim.
+    try {
+      const detail = await explainModelUnavailability(error);
+      body.detail = detail;
+      body.message = detail.message;
+    } catch { /* keep the upstream message */ }
+  }
+  return body;
 }
 
 // CHAT: Delegated to chatService
@@ -154,12 +177,7 @@ router.post('/chat', async (req, res) => {
     } else {
       logger.error('Chat error', { error: err.message, stack: err.stack });
     }
-    const body = {
-      status: 'error',
-      message: err.message
-    };
-    if (err.code) body.code = err.code;
-    if (err.notImplemented) body.notImplemented = true;
+    const body = await projectChatError(err);
     res.status(statusCode).json(body);
   }
 });
@@ -256,6 +274,7 @@ const handleChatStreamRequest = async (req, res, payload) => {
   let streamTerminal = false;
   let clientDisconnected = false;
   let heartbeat = null;
+  let terminalWork = null;
 
   // Helper to send SSE event
   const sendEvent = (event, data) => {
@@ -300,6 +319,14 @@ const handleChatStreamRequest = async (req, res, payload) => {
     clearStreamResources();
     res.end();
     return true;
+  };
+
+  const finishStreamError = async (error) => {
+    if (abortController.signal.aborted) return false;
+    const errorPayload = await projectChatError(error, { includeStatusCode: true });
+    const finished = finishStream('error', errorPayload);
+    if (finished) emitBuddyEvent('error', 'chat', 'Chat stream error', 'normal');
+    return finished;
   };
 
   heartbeat = setInterval(() => {
@@ -356,15 +383,11 @@ const handleChatStreamRequest = async (req, res, payload) => {
       },
       onError: (error) => {
         if (abortController.signal.aborted) return;
-        const errorPayload = { message: error.message };
-        if (error.code) errorPayload.code = error.code;
-        if (Number.isInteger(error.statusCode)) errorPayload.statusCode = error.statusCode;
-        if (finishStream('error', errorPayload)) {
-          emitBuddyEvent('error', 'chat', 'Chat stream error', 'normal');
-        }
+        terminalWork = finishStreamError(error);
       }
     });
 
+    if (terminalWork) await terminalWork;
     if (!streamTerminal && !clientDisconnected && !abortController.signal.aborted) {
       const err = new Error('Chat stream ended without a terminal event');
       logger.error('Chat streaming lifecycle error', { error: err.message });
@@ -373,11 +396,12 @@ const handleChatStreamRequest = async (req, res, payload) => {
 
   } catch (err) {
     if (clientDisconnected || abortController.signal.aborted || streamTerminal) return;
+    if (terminalWork) {
+      await terminalWork;
+      return;
+    }
     logger.error('Chat streaming error', { error: err.message, stack: err.stack });
-    const errorPayload = { message: err.message };
-    if (err.code) errorPayload.code = err.code;
-    if (Number.isInteger(err.statusCode)) errorPayload.statusCode = err.statusCode;
-    finishStream('error', errorPayload);
+    await finishStreamError(err);
   } finally {
     if (streamTerminal || clientDisconnected || res.writableEnded || res.destroyed) {
       clearStreamResources();
