@@ -24,19 +24,19 @@ const { normalizeModelName } = require('../modelContextResolver');
 const { parseParameterCount, parseQuantization } = require('../parameterDetection');
 const est = require('./fitEstimator');
 const logger = require('../../../config/logger');
+const { resolveArtifactIdentity, identitiesMatch } = require('./artifactIdentityService');
+const { verifyProfilerAuthorityReceipt } = require('./profilerAuthorityReceipt');
 
 const MIB = est.MIB;
 
 function hasProfilerAuthority(readiness, evidence) {
-  const receipt = readiness?.authorityReceipt;
   return readiness?.benchmarkQualified === true
     && readiness?.stale !== true
     && ['standard', 'full'].includes(readiness?.profileDepth)
-    && receipt?.source === 'profiler_pipeline'
-    && Number(receipt.version) === 1
-    && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
-    && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '')
-    && String(readiness?.evidenceId || '') === String(evidence?._id || '');
+    && verifyProfilerAuthorityReceipt(readiness, evidence, {
+      modelName: evidence?.modelName,
+      hostId: evidence?.hostId
+    });
 }
 
 /**
@@ -68,8 +68,25 @@ async function buildHostFitReport(hostId) {
   // Measured profiles for this host, keyed by normalized model name.
   const evidenceRecords = await ModelPerformanceProfile.find({ hostId, active: true, stale: { $ne: true } }).lean();
   const profileByModel = new Map();
+  const liveArtifactByModel = new Map();
   for (const evidence of evidenceRecords) {
-    if (evidence?.profile) profileByModel.set(normalizeModelName(evidence.modelName), evidence);
+    if (!evidence?.profile) continue;
+    const normalized = normalizeModelName(evidence.modelName);
+    profileByModel.set(normalized, evidence);
+    try {
+      liveArtifactByModel.set(normalized, await resolveArtifactIdentity(
+        evidence.modelName,
+        hostId,
+        host.hostUrl,
+        { refresh: true }
+      ));
+    } catch (error) {
+      logger.warn(`fit-report: exact artifact refresh failed for ${evidence.modelName}`, {
+        hostId,
+        error: error.message
+      });
+      liveArtifactByModel.set(normalized, null);
+    }
   }
 
   // Registry metadata (params/quant/family/benchmark scores) for installed models.
@@ -89,6 +106,7 @@ async function buildHostFitReport(hostId) {
     const paramB = parseParameterCount(meta.parameters) || parseParameterCount(name);
     const quant = parseQuantization(meta.quantization) || parseQuantization(name);
     const evidence = profileByModel.get(norm);
+    const liveArtifact = liveArtifactByModel.get(norm);
     const readiness = meta?.readiness instanceof Map
       ? meta.readiness.get(hostId)
       : meta?.readiness?.[hostId];
@@ -98,6 +116,7 @@ async function buildHostFitReport(hostId) {
       && evidence.artifact.digest === readiness.artifact.digest
       && evidence.artifact.runtimeFingerprint === readiness.artifact.runtimeFingerprint
       && evidence.artifact.registryQualified === true
+      && identitiesMatch(evidence.artifact, liveArtifact)
       && hasProfilerAuthority(readiness, evidence)
     );
     const p = artifactMatches && Number(evidence.profile?.recommendedInteractiveContext) > 0

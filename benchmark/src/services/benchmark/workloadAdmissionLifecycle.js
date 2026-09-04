@@ -48,7 +48,6 @@ async function beginManagedWorkload(workloadId, options = {}) {
     }
 
     let closed = false;
-    let retentionTimer = null;
     return {
         workloadId: id,
         signal: controller.signal,
@@ -64,18 +63,28 @@ async function beginManagedWorkload(workloadId, options = {}) {
             if (!controller.signal.aborted) {
                 controller.abort(reason || new Error('Authority reconciliation requires retained admission'));
             }
-            const configuredHoldMs = Number.parseInt(process.env.WORKLOAD_RECONCILIATION_HOLD_MS, 10);
-            const holdMs = Number.isFinite(configuredHoldMs) && configuredHoldMs > 0
-                ? Math.min(configuredHoldMs, ttlMs)
-                : Math.min(ttlMs, 5 * 60 * 1000);
-            retentionTimer = setTimeout(() => {
-                heartbeat.drain().catch(error => logger.error('Retained workload heartbeat drain failed', {
+            if (reason?.reconciliationPromise) {
+                Promise.resolve(reason.reconciliationPromise).then(async result => {
+                    if (result?.resolved !== true) return;
+                    const released = await releaseWorkloadAdmission(id);
+                    if (released?.released !== true) {
+                        throw new Error(released?.reason || 'Recovered admission release was not acknowledged');
+                    }
+                    await heartbeat.drain();
+                }).catch(error => logger.error('Recovered workload admission remains retained', {
                     workloadId: id,
                     error: error.message
                 }));
-            }, holdMs);
-            retentionTimer.unref?.();
-            return { retained: true, holdMs, reason: reason?.message || String(reason || 'reconciliation pending') };
+            }
+            // There is deliberately no timer here. An admission protecting an
+            // ambiguous authority write is renewed until a durable recovery
+            // receipt resolves it (or process crash hands recovery to Core TTL
+            // plus the persisted reconciliation worker).
+            return {
+                retained: true,
+                holdMs: null,
+                reason: reason?.message || String(reason || 'reconciliation pending')
+            };
         },
         async complete() {
             if (closed) return { released: false, reason: 'managed workload already closed' };

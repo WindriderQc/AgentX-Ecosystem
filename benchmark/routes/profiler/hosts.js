@@ -769,8 +769,31 @@ router.post('/:hostId/release', async (req, res) => {
       signal: lease.signal,
       assertClaimActive: lease.assertActive
     });
-    if (!result.success) {
-      return res.status(502).json({ error: `Failed to release model: ${result.error}` });
+    try {
+      await hostProfileService.upsert({
+        hostId: req.params.hostId,
+        reconciliation: {
+          state: 'pending_reconciliation',
+          operation: 'release_model',
+          operationId,
+          model: host.dedicated.model,
+          priorDedicated: host.dedicated,
+          desiredDedicated: null,
+          serverTerminalObserved: result.serverTerminalObserved === true,
+          serverTerminalAt: result.serverTerminalAt || new Date(),
+          reason: 'awaiting fenced Core runtime restore receipt',
+          startedAt: new Date()
+        }
+      }, {
+        signal: lease.signal,
+        assertAuthorityActive: lease.assertActive
+      });
+    } catch (projectionError) {
+      projectionError.code = 'PROFILER_RELEASE_RECONCILIATION_PENDING';
+      projectionError.statusCode = 503;
+      projectionError.retainAdmission = true;
+      projectionError.serverTerminalObserved = true;
+      throw projectionError;
     }
 
     const releasedModel = host.dedicated.model;
@@ -803,6 +826,7 @@ router.post('/:hostId/release', async (req, res) => {
             resolvedAt: new Date()
           }
         }, {
+          signal: lease.signal,
           assertAuthorityActive: lease.assertActive
         });
       }
@@ -829,6 +853,10 @@ router.post('/:hostId/release', async (req, res) => {
     // admission fenced for recovery; never issue an unfenced compensating
     // write after finalization.
     logger.error('Release model failed', { hostId: req.params.hostId, error: err.message });
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
     res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
   } finally {
     if (lease) {

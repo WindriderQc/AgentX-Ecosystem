@@ -73,20 +73,11 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
     if (!leaseAbort.signal.aborted) {
       leaseAbort.abort(reason || new Error('Profiler lease retained for reconciliation'));
     }
-    const configuredHoldMs = Number.parseInt(process.env.PROFILER_RECONCILIATION_HOLD_MS, 10);
-    const holdMs = Number.isFinite(configuredHoldMs) && configuredHoldMs > 0
-      ? Math.min(configuredHoldMs, 30 * 60 * 1000)
-      : Math.min(Math.max(Number(estimatedDurationMs) || 300_000, 300_000), 30 * 60 * 1000);
-    const timer = setTimeout(() => heartbeat.drain().catch(error => logger.error(
-      'Retained profiler heartbeat drain failed',
-      { operationId, error: error.message }
-    )), holdMs);
-    timer.unref?.();
     abandonPromise = Promise.resolve({
       abandoned: true,
       released: 0,
       failed: claimed.length + 1,
-      holdMs,
+      holdMs: null,
       details: claimed.map(hostUrl => ({ hostUrl, released: false, reason: 'held under heartbeat for durable recovery' })),
       workloadAdmission: { released: false, reason: 'held under heartbeat for durable recovery' }
     });
@@ -108,10 +99,21 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
       return identity;
     },
     async abandon(reason = null) {
-      if (releasePromise) return releasePromise;
-      if (!abandonPromise) {
-        retainHeartbeatForRecovery(reason || new Error('Profiler lease abandoned for TTL recovery'));
+      // A failed release can already have switched the lease into durable
+      // recovery from inside beforeWorkloadRelease. Prefer that retained
+      // receipt over the rejected release promise so route error handlers can
+      // acknowledge the recovery state without rethrowing the original write.
+      if (abandonPromise) return abandonPromise;
+      if (releasePromise) {
+        try {
+          return await releasePromise;
+        } catch (error) {
+          if (abandonPromise) return abandonPromise;
+          retainHeartbeatForRecovery(reason || error);
+          return abandonPromise;
+        }
       }
+      retainHeartbeatForRecovery(reason || new Error('Profiler lease abandoned for TTL recovery'));
       return abandonPromise;
     },
     async release(options = {}) {

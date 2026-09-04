@@ -11,9 +11,16 @@ jest.mock('../../../src/services/profiler/modelProfileService', () => ({
 jest.mock('../../../src/services/profiler/modelPerformanceProfileService', () => ({
   getActiveProfile: jest.fn()
 }));
+jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
+  resolveArtifactIdentity: jest.fn(),
+  identitiesMatch: jest.fn((left, right) => left?.digest === right?.digest
+    && left?.runtimeFingerprint === right?.runtimeFingerprint)
+}));
 
 const service = require('../../../src/services/profiler/modelProfileService');
 const performanceService = require('../../../src/services/profiler/modelPerformanceProfileService');
+const artifactIdentityService = require('../../../src/services/profiler/artifactIdentityService');
+const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 const router = require('../../../routes/profiler/models');
 const app = express();
 app.use(express.json());
@@ -47,11 +54,20 @@ describe('ModelProfile write authority', () => {
 
   it('exposes max capacity separately from the interactive runtime recommendation', async () => {
     const evidenceId = '68b8af284f953a0bd8931038';
-    const artifact = { digest: 'sha256:exact', runtimeFingerprint: 'runtime-a' };
+    const artifact = {
+      model: 'qwen:9b', hostId: 'host-beta', hostUrl: 'http://host-beta:11434',
+      digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
+    };
+    artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...artifact });
     performanceService.getActiveProfile.mockResolvedValue({
       _id: evidenceId,
+      modelName: 'qwen:9b',
+      hostId: 'host-beta',
       artifact,
       profile: {
+        profileDepth: 'standard',
+        requiredRetainedSamples: 5,
+        measurementQuality: { passingSampleCount: 5 },
         maxVerifiedContext: 262144,
         recommendedInteractiveContext: 65536,
         recommendedDocumentContext: 131072
@@ -68,7 +84,10 @@ describe('ModelProfile write authority', () => {
           authorityReceipt: {
             source: 'profiler_pipeline',
             version: 1,
-            digest: 'a'.repeat(64),
+            digest: receiptDigest({
+              modelName: 'qwen:9b', hostId: 'host-beta', artifact,
+              profileDepth: 'standard', required: 5, passing: 5
+            }),
             evidenceId
           }
         }
@@ -85,5 +104,37 @@ describe('ModelProfile write authority', () => {
       recommendedDocumentContext: 131072,
       config: { num_ctx: 65536 }
     });
+  });
+
+  it('refuses a profile after the installed tag digest changes', async () => {
+    const evidenceId = '68b8af284f953a0bd8931038';
+    const artifact = {
+      model: 'qwen:9b', hostId: 'host-beta', hostUrl: 'http://host-beta:11434',
+      digest: 'sha256:old', runtimeFingerprint: 'runtime-a', registryQualified: true
+    };
+    const profile = {
+      profileDepth: 'standard', requiredRetainedSamples: 5,
+      measurementQuality: { passingSampleCount: 5 }, recommendedInteractiveContext: 32768
+    };
+    performanceService.getActiveProfile.mockResolvedValue({
+      _id: evidenceId, modelName: 'qwen:9b', hostId: 'host-beta', artifact, profile
+    });
+    service.getByName.mockResolvedValue({ readiness: { 'host-beta': {
+      benchmarkQualified: true, stale: false, profileDepth: 'standard', evidenceId, artifact,
+      authorityReceipt: {
+        version: 1, source: 'profiler_pipeline', evidenceId,
+        digest: receiptDigest({
+          modelName: 'qwen:9b', hostId: 'host-beta', artifact,
+          profileDepth: 'standard', required: 5, passing: 5
+        })
+      }
+    } } });
+    artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...artifact, digest: 'sha256:new' });
+
+    const response = await request(app)
+      .get('/api/profiler/models/qwen%3A9b/config?host=host-beta');
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('PROFILE_AUTHORITY_REQUIRED');
   });
 });

@@ -22,7 +22,11 @@ const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
 const { benchmarkTokenAllowed } = require('../src/services/routing/inferenceCallerAccess');
-const { requireOperatorAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
+const {
+  requireOperatorAccess,
+  requireOperatorUiAccess,
+  operatorRequestIdentity
+} = require('../src/middleware/operatorAccess');
 const runtimeCoordinationService = require('../src/services/runtimeCoordinationService');
 const { projectHostPreferenceForRead } = require('../src/services/hostPreferencePublicProjection');
 
@@ -603,7 +607,7 @@ router.post('/host-preferences/benchmark-claims/reap', requireOperatorAccess, as
 // PUT /host-preferences/:hostUrl — update host preference
 // ========================================
 
-router.put('/host-preferences/:hostUrl(*)', async (req, res) => {
+router.put('/host-preferences/:hostUrl(*)', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -632,7 +636,7 @@ router.put('/host-preferences/:hostUrl(*)', async (req, res) => {
     const data = await hostPrefService.updatePreference(hostUrl, filtered);
     emitBuddyEvent('host_preference_updated', 'infrastructure', `Host preference updated: ${data.displayName || hostUrl}`, 'normal');
     logger.info('[NerveCenter] Host preference updated', { hostUrl, updates: Object.keys(filtered) });
-    res.json({ status: 'success', data });
+    res.json({ status: 'success', data: projectHostPreferenceForRead(data) });
   } catch (err) {
     logger.error('[NerveCenter] host preference update failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });

@@ -10,8 +10,9 @@ const { getModelDigest } = require('./modelDigestService');
 const { classifyBenchmarkError } = require('./errorClassifier');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
 const { resolveTrustCellIdentity } = require('./benchmarkTrustCampaignRuntime');
+const authorityReconciliation = require('./benchmarkAuthorityReconciliation');
 
-async function retractAmbiguousResult(resultId, authorityError, phase) {
+async function retractAmbiguousResult(resultId, batchId, authorityError, phase) {
     try {
         // Upsert a tombstone instead of deleting. A Mongo write may finish on
         // the server after its client acknowledgement is lost; reserving the
@@ -36,6 +37,22 @@ async function retractAmbiguousResult(resultId, authorityError, phase) {
         authorityError.compensationError = invalidationError;
         authorityError.retainAdmission = true;
         authorityError.code = 'BENCHMARK_RESULT_RECONCILIATION_PENDING';
+        try {
+            const reconciliation = await authorityReconciliation.enqueueResultInvalidation({
+                resultId,
+                batchId,
+                phase,
+                reason: invalidationError.message
+            });
+            authorityError.reconciliationId = String(reconciliation._id);
+            authorityError.reconciliationPersisted = true;
+            authorityError.reconciliationPromise = authorityReconciliation.waitForResultInvalidation(
+                reconciliation._id
+            );
+        } catch (reconciliationError) {
+            authorityError.reconciliationError = reconciliationError;
+            authorityError.reconciliationPersisted = false;
+        }
     }
 }
 
@@ -289,7 +306,7 @@ async function persistSuccessfulResult({
         // preallocated _id is a safe retraction and prevents a late row from
         // becoming leaderboard evidence under a newer maintenance owner.
         if (signal?.aborted || error?.code === 'BENCHMARK_CLAIM_LOST') {
-            await retractAmbiguousResult(result._id, error, 'successful result save');
+            await retractAmbiguousResult(result._id, batchId, error, 'successful result save');
         }
         throw error;
     }
@@ -405,7 +422,7 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
             assertAuthorityActive?.();
         } catch (error) {
             if (signal?.aborted || error?.code === 'BENCHMARK_CLAIM_LOST') {
-                await retractAmbiguousResult(result._id, error, 'failed result save');
+                await retractAmbiguousResult(result._id, batchId, error, 'failed result save');
             }
             throw error;
         }

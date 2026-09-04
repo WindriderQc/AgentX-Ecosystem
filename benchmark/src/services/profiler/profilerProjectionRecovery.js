@@ -19,6 +19,12 @@ function positiveMs(value, fallback) {
 }
 
 async function reconcileReleaseProjection(profile) {
+  if (profile.reconciliation?.serverTerminalObserved !== true) {
+    const error = new Error('The original Ollama unload has no server-terminal receipt; runtime fence must remain retained');
+    error.code = 'PROFILER_MUTATION_TERMINAL_UNPROVEN';
+    error.retainAdmission = true;
+    throw error;
+  }
   const operationId = `profiler-release-recovery-${crypto.randomBytes(8).toString('hex')}`;
   const lease = await acquireProfilerClaimLease([profile.hostUrl], operationId, 5 * 60 * 1000);
   try {
@@ -45,6 +51,7 @@ async function reconcileReleaseProjection(profile) {
             resolvedAt: new Date()
           }
         }, {
+          signal: lease.signal,
           assertAuthorityActive: lease.assertActive
         });
       }
@@ -61,6 +68,12 @@ async function reconcileReleaseProjection(profile) {
 }
 
 async function reconcileBaselinePull(profile, options = {}) {
+  if (profile.reconciliation?.serverTerminalObserved !== true) {
+    const error = new Error('The original Ollama pull has no server-terminal receipt; runtime fence must remain retained');
+    error.code = 'PROFILER_MUTATION_TERMINAL_UNPROVEN';
+    error.retainAdmission = true;
+    throw error;
+  }
   const operationId = `profiler-baseline-recovery-${crypto.randomBytes(8).toString('hex')}`;
   const configuredStableMs = positiveMs(
     options.stableWindowMs ?? process.env.PROFILER_BASELINE_RECOVERY_STABLE_MS,
@@ -169,7 +182,7 @@ async function reconcileBaselinePull(profile, options = {}) {
             reason: null,
             resolvedAt: new Date()
           }
-        }, { assertAuthorityActive: lease.assertActive });
+        }, { signal: lease.signal, assertAuthorityActive: lease.assertActive });
       }
     });
     finalized = true;

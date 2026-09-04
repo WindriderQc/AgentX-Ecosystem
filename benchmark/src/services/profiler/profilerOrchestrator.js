@@ -1,6 +1,10 @@
 'use strict';
 
 const crypto = require('crypto');
+const {
+  createProfilerAuthorityReceipt,
+  verifyProfilerAuthorityReceipt
+} = require('./profilerAuthorityReceipt');
 const hostTestService = require('../hostTestService');
 const contextProbeService = require('../contextProbeService');
 const modelProfileService = require('./modelProfileService');
@@ -15,6 +19,7 @@ const { resolveModelNumCtxDetails } = require('../modelContextResolver');
 const { listRunning, generate, showModel } = require('../../clients/ollamaClient');
 const { isSameOllamaModel } = require('../../helpers/ollamaModelIdentity');
 const ModelProfile = require('../../../models/ModelProfile');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const logger = require('../../../config/logger');
 const buddySurface = require('../benchmark/buddySurfaceEvents');
 
@@ -326,12 +331,14 @@ function completeRepeatedStatistics(statistics, minimumSamples, options = {}) {
     && relativeCiWidth <= maxRelativeCiWidth;
 }
 
-function hasProfilerAuthorityReceipt(readiness) {
-  const receipt = readiness?.authorityReceipt;
-  return receipt?.source === 'profiler_pipeline'
-    && Number(receipt.version) === 1
-    && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
-    && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '');
+function contextProbeRepeatsForDepth(depth, settings = {}) {
+  return depth === 'full'
+    ? Math.min(20, Math.max(5, Number(settings.fullPhaseRepeats) || 5))
+    : 2;
+}
+
+function hasProfilerAuthorityReceipt(readiness, evidence, identity = {}) {
+  return verifyProfilerAuthorityReceipt(readiness, evidence, identity);
 }
 
 function profileQualificationFailures(profileData) {
@@ -378,6 +385,21 @@ function profileQualificationFailures(profileData) {
       maxCoefficientOfVariation: maxCv,
       maxRelativeCi95Width
     };
+    const authoritativeContexts = [...new Set([
+      profileData.maxVerifiedContext,
+      profileData.recommendedInteractiveContext,
+      profileData.recommendedDocumentContext
+    ].map(Number).filter(value => value > 0))];
+    const contextSteps = Array.isArray(profileData.probeSteps) ? profileData.probeSteps : [];
+    const contextEvidenceComplete = Number(profileData.contextProbeCandidateRepeats) >= requiredFullSamples
+      && authoritativeContexts.length > 0
+      && authoritativeContexts.every(numCtx => {
+        const step = contextSteps.find(candidate => Number(candidate.numCtx) === numCtx && candidate.passed === true);
+        return step
+          && Number(step.repetitionCount) >= requiredFullSamples
+          && completeRepeatedStatistics(step.throughputStatistics, requiredFullSamples, fullStatOptions);
+      });
+    if (!contextEvidenceComplete) failures.push('full_context_probe_incomplete');
     const curve = Array.isArray(profileData.throughputCurve) ? profileData.throughputCurve : [];
     const curveCoverage = [...new Set(curve.map(point => Number(point.contextFillPct)))].sort((a, b) => a - b);
     if (curve.length !== 5
@@ -504,17 +526,13 @@ async function persistProfileEvidence({
       assertAuthorityActive: checkpoint
     });
     checkpoint();
-    const authorityReceipt = {
-      version: 1,
-      source: 'profiler_pipeline',
-      evidenceId: evidence?._id ? String(evidence._id) : null,
-      digest: crypto.createHash('sha256').update(JSON.stringify({
-        modelName, hostId, artifact: currentArtifact,
-        profileDepth: profileData.profileDepth,
-        required, passing: quality.passingSampleCount || 0
-      })).digest('hex'),
-      issuedAt: new Date()
-    };
+    const authorityReceipt = createProfilerAuthorityReceipt({
+      modelName,
+      hostId,
+      artifact: currentArtifact,
+      profile: profileData,
+      evidenceId: evidence?._id
+    });
     checkpoint();
     await modelProfileService.updateReadiness(modelName, hostId, 'profiled', {
       [`readiness.${hostId}.artifact`]: currentArtifact,
@@ -834,6 +852,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
     interactiveDegradationThreshold: Number(settings.interactiveDegradationThreshold),
     documentDegradationThreshold: Number(settings.documentDegradationThreshold),
+    candidateRepeats: contextProbeRepeatsForDepth(depth, settings),
     assertClaimActive: checkpoint,
     signal,
     onProgress: (info) => {
@@ -864,9 +883,13 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
   profileData.recommendedInteractiveContext = probeResult.recommendedInteractiveContext || null;
   profileData.recommendedDocumentContext = probeResult.recommendedDocumentContext || null;
   profileData.degradationPct = probeResult.degradationPct || null;
+  profileData.contextProbeCandidateRepeats = contextProbeRepeatsForDepth(depth, settings);
   profileData.probeSteps = (probeResult.steps || []).map(s => ({
     numCtx: s.numCtx, tokPerSec: s.tokensPerSec, vramMiB: s.vramMiB,
-    degradationPct: s.degradationPct, passed: s.passed
+    degradationPct: s.degradationPct, passed: s.passed,
+    repetitionCount: s.repetitionCount,
+    throughputStatistics: s.throughputStatistics || null,
+    samples: Array.isArray(s.samples) ? s.samples : []
   }));
   const contextHardware = await _captureHardwareSnapshot(hostId, 'after_context_probe', settings);
   if (contextHardware) {
@@ -1027,9 +1050,21 @@ async function preflight(batchConfig) {
     const readinessForHost = profile?.readiness instanceof Map
       ? profile.readiness.get(hostId)
       : profile?.readiness?.[hostId] || null;
+    const performanceEvidence = readinessForHost?.evidenceId
+      ? await ModelPerformanceProfile.findOne({
+        _id: readinessForHost.evidenceId,
+        modelName: artifact.model,
+        hostId,
+        active: true,
+        stale: { $ne: true }
+      }).lean()
+      : null;
     const hasProfile = ['standard', 'full'].includes(readinessForHost?.profileDepth)
       && readinessForHost?.benchmarkQualified === true
-      && hasProfilerAuthorityReceipt(readinessForHost);
+      && hasProfilerAuthorityReceipt(readinessForHost, performanceEvidence, {
+        modelName: artifact.model,
+        hostId
+      });
 
     if (!hasProfile || !identitiesMatch(readinessForHost?.artifact, artifact)) {
       profilesNeeded.push({
@@ -1338,5 +1373,6 @@ module.exports = {
   summarizeThroughputSamples,
   summarizePositiveMeasurements,
   hasProfilerAuthorityReceipt,
-  profileQualificationFailures
+  profileQualificationFailures,
+  _contextProbeRepeatsForDepth: contextProbeRepeatsForDepth
 };

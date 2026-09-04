@@ -216,6 +216,7 @@ const {
 } = require('../../../src/services/benchmark/batchOrchestrator');
 const { estimateBenchmarkClaimDurationMs } = require('../../../src/services/benchmark/benchmarkClaimLifecycle');
 const ollamaHostConfig = require('../../../src/helpers/ollamaHostConfig');
+const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 
 function deferred() {
     let resolve;
@@ -322,23 +323,30 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             runtimeFingerprint: 'runtime-a',
             registryQualified: true
         });
+        const profileFor = () => ({
+            tokensPerSec: 123.4,
+            promptEvalTokensPerSec: 456.7,
+            ttftMs: 321,
+            ttftMeasurement: 'streamed_wall_clock',
+            profileDepth: 'standard',
+            requiredRetainedSamples: 5,
+            measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
+            recommendedInteractiveContext: 4096,
+            vramUsedMiB: 8192,
+            profiledAt: new Date()
+        });
         mockFindOnePerformanceProfile.mockImplementation((query) => ({
             select: jest.fn().mockReturnValue({
-                lean: jest.fn().mockResolvedValue({
-                    artifact: artifactFor(query.modelName, query.hostId),
-                    profile: {
-                        tokensPerSec: 123.4,
-                        promptEvalTokensPerSec: 456.7,
-                        ttftMs: 321,
-                        ttftMeasurement: 'streamed_wall_clock',
-                        profileDepth: 'standard',
-                        requiredRetainedSamples: 5,
-                        measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
-                        recommendedInteractiveContext: 4096,
-                        vramUsedMiB: 8192,
-                        profiledAt: new Date()
-                    }
-                })
+                lean: jest.fn().mockResolvedValue((() => {
+                    const evidenceId = evidenceIdFor(query.modelName, query.hostId);
+                    return {
+                        _id: evidenceId,
+                        modelName: query.modelName,
+                        hostId: query.hostId,
+                        artifact: artifactFor(query.modelName, query.hostId),
+                        profile: profileFor()
+                    };
+                })())
             })
         }));
         mockFindOneModelProfile.mockImplementation((query) => ({
@@ -355,7 +363,14 @@ describe('runBatchOrchestrator claim lifecycle', () => {
                             authorityReceipt: {
                                 source: 'profiler_pipeline',
                                 version: 1,
-                                digest: 'a'.repeat(64),
+                                digest: receiptDigest({
+                                    modelName: query.name,
+                                    hostId,
+                                    artifact: artifactFor(query.name, hostId),
+                                    profileDepth: 'standard',
+                                    required: 5,
+                                    passing: 5
+                                }),
                                 evidenceId
                             }
                         }];
@@ -713,6 +728,9 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         mockFindOnePerformanceProfile.mockReturnValue({
             select: jest.fn().mockReturnValue({
                 lean: jest.fn().mockResolvedValue({
+                    _id: 'evidence-model-a-primary',
+                    modelName: 'model-a',
+                    hostId: 'primary',
                     artifact: {
                         model: 'model-a', hostId: 'primary', hostUrl: 'http://exec:11434',
                         digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
@@ -813,6 +831,9 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         mockFindOnePerformanceProfile.mockReturnValue({
             select: jest.fn().mockReturnValue({
                 lean: jest.fn().mockResolvedValue({
+                    _id: 'evidence-model-a-primary',
+                    modelName: 'model-a',
+                    hostId: 'primary',
                     artifact: {
                         model: 'model-a', hostId: 'primary', hostUrl: 'http://exec:11434',
                         digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true

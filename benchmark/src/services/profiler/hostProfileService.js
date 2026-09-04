@@ -280,14 +280,22 @@ async function detectCpuCores(hostUrl) {
 async function releaseModel(hostUrl, modelName, options = {}) {
   try {
     await generate(hostUrl, { model: modelName, prompt: '', keep_alive: '0', stream: false }, {
-      timeoutMs: 15000,
+      // A client timeout is not a server-terminal unload receipt. Hold the
+      // fenced request until Ollama acknowledges completion.
+      timeoutMs: 0,
       signal: options.signal
     });
     options.assertClaimActive?.();
-    return { success: true };
+    return { success: true, serverTerminalObserved: true, serverTerminalAt: new Date() };
   } catch (err) {
-    if (options.signal?.aborted) throw (options.signal.reason instanceof Error ? options.signal.reason : err);
-    return { success: false, error: err.message };
+    const error = options.signal?.aborted && options.signal.reason instanceof Error
+      ? options.signal.reason
+      : err;
+    error.code = error.code || 'PROFILER_RELEASE_RECONCILIATION_PENDING';
+    error.statusCode = error.statusCode || 503;
+    error.retainAdmission = true;
+    error.serverTerminalObserved = false;
+    throw error;
   }
 }
 

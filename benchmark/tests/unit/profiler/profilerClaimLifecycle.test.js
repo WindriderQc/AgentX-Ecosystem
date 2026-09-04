@@ -147,4 +147,27 @@ describe('profiler claim lease cancellation', () => {
     await new Promise(resolve => setTimeout(resolve, 30));
     expect(coreApiClient.heartbeatWorkloadAdmission.mock.calls.length).toBeGreaterThan(1);
   });
+
+  test('returns the retained recovery receipt after a fenced projection commit rejects', async () => {
+    coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({ heartbeat: true });
+    const lease = await acquireProfilerClaimLease(
+      ['http://gpu:11434'],
+      'profiler-projection-write-ambiguous',
+      60_000,
+      { heartbeatIntervalMs: 5 }
+    );
+    const projectionError = new Error('projection acknowledgement unavailable');
+
+    await expect(lease.finalize({
+      beforeWorkloadRelease: jest.fn().mockRejectedValue(projectionError)
+    })).rejects.toBe(projectionError);
+    await expect(lease.abandon(projectionError)).resolves.toMatchObject({
+      abandoned: true,
+      workloadAdmission: expect.objectContaining({ released: false })
+    });
+
+    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledTimes(1);
+    expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+    expect(lease.signal.aborted).toBe(true);
+  });
 });

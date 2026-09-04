@@ -369,6 +369,42 @@ describe('contextProbeService', () => {
     }
   });
 
+  it('retains five deterministic samples with Student-t confidence for Full candidates', async () => {
+    ollamaClient.showModel.mockResolvedValue({ model_info: { 'general.context_length': 2048 } });
+    ollamaClient.listRunning.mockResolvedValue({
+      models: [{ name: 'gemma4:26b', size: 100, size_vram: 100, context_length: 2048 }]
+    });
+    const speeds = [40, 41, 39, 40, 40];
+    ollamaClient.generate.mockImplementation(async () => {
+      const speed = speeds.shift();
+      return { eval_count: 40, eval_duration: (40 / speed) * 1e9, prompt_eval_count: 1600 };
+    });
+
+    const result = await contextProbeService.probeModelContext('gemma4:26b', {
+      hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
+      acknowledgeMaintenance: true,
+      maxCtx: 2048,
+      candidateRepeats: 5
+    });
+
+    expect(ollamaClient.generate).toHaveBeenCalledTimes(5);
+    expect(result.steps[0]).toEqual(expect.objectContaining({
+      repetitionCount: 5,
+      samples: expect.arrayContaining([expect.objectContaining({ passed: true })]),
+      throughputStatistics: expect.objectContaining({
+        attemptedSampleCount: 5,
+        sampleCount: 5,
+        minimumSamples: 5,
+        p50: expect.any(Number),
+        p95: expect.any(Number),
+        coefficientOfVariation: expect.any(Number),
+        confidenceInterval95: expect.objectContaining({ method: 'student_t' }),
+        reliability: 'high'
+      })
+    }));
+  });
+
   it('keeps the raw snapshot diagnostic but fails the run when context authority persistence fails', async () => {
     ollamaClient.showModel.mockResolvedValue({ model_info: { 'general.context_length': 2048 } });
     ollamaClient.listRunning.mockResolvedValue({

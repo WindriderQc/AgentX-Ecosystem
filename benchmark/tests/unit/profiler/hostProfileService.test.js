@@ -2,6 +2,11 @@
 
 jest.mock('../../../models/HostProfile');
 jest.mock('../../../src/services/ollamaVramService');
+const mockGenerate = jest.fn();
+jest.mock('../../../src/clients/ollamaClient', () => ({
+  ...jest.requireActual('../../../src/clients/ollamaClient'),
+  generate: (...args) => mockGenerate(...args)
+}));
 jest.mock('../../../src/helpers/ollamaHostConfig', () => ({
   getConfiguredHosts: jest.fn(() => []),
   normalizeHostUrl: jest.fn(value => String(value || '').trim().replace(/\/+$/, ''))
@@ -14,6 +19,7 @@ const service = require('../../../src/services/profiler/hostProfileService');
 beforeEach(() => {
   jest.clearAllMocks();
   getConfiguredHosts.mockReturnValue([]);
+  mockGenerate.mockReset();
 });
 
 describe('hostProfileService', () => {
@@ -377,6 +383,40 @@ describe('hostProfileService', () => {
         }),
         expect.objectContaining({ upsert: true, new: true, runValidators: true })
       );
+    });
+  });
+
+  describe('releaseModel()', () => {
+    it('waits for the Ollama server terminal acknowledgement without a client deadline', async () => {
+      mockGenerate.mockResolvedValue({ done: true });
+      const assertClaimActive = jest.fn();
+
+      await expect(service.releaseModel('http://192.0.2.66:11434', 'qwen:7b', {
+        signal: new AbortController().signal,
+        assertClaimActive
+      })).resolves.toMatchObject({
+        success: true,
+        serverTerminalObserved: true,
+        serverTerminalAt: expect.any(Date)
+      });
+
+      expect(mockGenerate).toHaveBeenCalledWith(
+        'http://192.0.2.66:11434',
+        { model: 'qwen:7b', prompt: '', keep_alive: '0', stream: false },
+        expect.objectContaining({ timeoutMs: 0 })
+      );
+      expect(assertClaimActive).toHaveBeenCalledTimes(1);
+    });
+
+    it('marks a lost unload acknowledgement as non-terminal and retains the admission', async () => {
+      mockGenerate.mockRejectedValue(Object.assign(new Error('transport closed'), { code: 'ETIMEDOUT' }));
+
+      await expect(service.releaseModel('http://192.0.2.66:11434', 'qwen:7b'))
+        .rejects.toMatchObject({
+          code: 'ETIMEDOUT',
+          retainAdmission: true,
+          serverTerminalObserved: false
+        });
     });
   });
 });

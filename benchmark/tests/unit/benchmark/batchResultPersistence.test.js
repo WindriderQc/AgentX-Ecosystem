@@ -8,6 +8,8 @@ jest.mock('../../../config/logger', () => ({
 const savedDocs = [];
 let mockResultSaveHook = null;
 const mockResultUpdateOne = jest.fn();
+const mockEnqueueResultInvalidation = jest.fn();
+const mockWaitForResultInvalidation = jest.fn();
 jest.mock('../../../models/BenchmarkResult', () => {
     const Model = jest.fn().mockImplementation(function BenchmarkResult(doc) {
         Object.assign(this, doc);
@@ -21,6 +23,10 @@ jest.mock('../../../models/BenchmarkResult', () => {
     Model.updateOne = (...args) => mockResultUpdateOne(...args);
     return Model;
 });
+jest.mock('../../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+    enqueueResultInvalidation: (...args) => mockEnqueueResultInvalidation(...args),
+    waitForResultInvalidation: (...args) => mockWaitForResultInvalidation(...args)
+}));
 
 const {
     persistSuccessfulResult,
@@ -117,6 +123,8 @@ describe('batchResultPersistence truncation quarantine', () => {
         savedDocs.length = 0;
         mockResultSaveHook = null;
         mockResultUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 });
+        mockEnqueueResultInvalidation.mockReset().mockResolvedValue({ _id: 'reconciliation-id' });
+        mockWaitForResultInvalidation.mockReset().mockReturnValue(Promise.resolve({ resolved: true }));
     });
 
     it('does not persist an unlabeled prompt-eval duration as TTFT', async () => {
@@ -431,7 +439,16 @@ describe('batchResultPersistence truncation quarantine', () => {
         }))).rejects.toMatchObject({
             code: 'BENCHMARK_RESULT_RECONCILIATION_PENDING',
             retainAdmission: true,
-            compensationError: expect.any(Error)
+            compensationError: expect.any(Error),
+            reconciliationId: 'reconciliation-id',
+            reconciliationPersisted: true,
+            reconciliationPromise: expect.any(Promise)
+        });
+        expect(mockEnqueueResultInvalidation).toHaveBeenCalledWith({
+            resultId: 'result-id',
+            batchId: 'batch-id',
+            phase: 'successful result save',
+            reason: 'tombstone unavailable'
         });
     });
 });

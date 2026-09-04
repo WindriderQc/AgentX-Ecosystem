@@ -755,6 +755,12 @@
       "note": "The scoped Benchmark token is path-admitted at Core and revalidated before remote reload; same-origin UI and operator access remain available for the interactive action.",
       "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-host-control-mount"]
     },
+    "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/:hostUrl(*)": {
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Updating host pins or runtime preferences requires a route-local same-origin UI, loopback operator, or exact operator credential; the response is projected without coordination capabilities.",
+      "evidence": ["core-host-preference-operator-validator"]
+    },
     "core/routes/nestor-consumer-v1.js#POST /inference": {
       "scopedMachineCredential": "validated-at-route",
       "routeLocalValidator": "enforced",
@@ -1154,6 +1160,13 @@
       "contains": [
         "router.post('/host-preferences/benchmark-claims/reap', requireOperatorAccess",
         "BENCHMARK_REAPER_OPTIONS_INVALID"
+      ]
+    },
+    "core-host-preference-operator-validator": {
+      "file": "core/routes/nerve-center-host-preferences.js",
+      "contains": [
+        "router.put('/host-preferences/:hostUrl(*)', requireOperatorUiAccess",
+        "data: projectHostPreferenceForRead(data)"
       ]
     },
     "core-workload-admission-validator": {

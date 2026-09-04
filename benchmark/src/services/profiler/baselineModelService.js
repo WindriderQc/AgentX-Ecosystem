@@ -80,6 +80,7 @@ async function resolveBaselineReconciliation(hostId, reconciliation, options = {
       resolvedAt: new Date()
     }
   }, {
+    signal: options.signal,
     assertAuthorityActive: options.assertClaimActive
   });
 }
@@ -90,7 +91,10 @@ async function ensureBaselineModel(hostId, options = {}) {
   options.assertClaimActive?.();
   if (before.available) return { ...before, pulled: false };
 
-  const timeoutMs = Number.parseInt(process.env.OLLAMA_PULL_TIMEOUT_MS, 10) || 30 * 60 * 1000;
+  // A client deadline can close the socket while Ollama continues installing
+  // the artifact. Keep the fenced request open until Ollama emits a terminal
+  // response; the exact claim signal remains the only cancellation source.
+  const timeoutMs = 0;
   const operationId = String(options.operationId || `baseline-pull-${Date.now()}`);
   const reconciliation = {
     state: 'pending_reconciliation',
@@ -119,6 +123,20 @@ async function ensureBaselineModel(hostId, options = {}) {
     throw pendingBaselinePullError(pullError, reconciliation);
   }
 
+  const terminalReconciliation = {
+    ...reconciliation,
+    serverTerminalObserved: true,
+    serverTerminalAt: new Date()
+  };
+  try {
+    await hostProfileService.upsert({ hostId: before.hostId, reconciliation: terminalReconciliation }, {
+      signal: options.signal,
+      assertAuthorityActive: options.assertClaimActive
+    });
+  } catch (terminalReceiptError) {
+    throw pendingBaselinePullError(terminalReceiptError, terminalReconciliation);
+  }
+
   try {
     options.assertClaimActive?.();
     const after = await getBaselineState(hostId, options);
@@ -134,9 +152,9 @@ async function ensureBaselineModel(hostId, options = {}) {
       hostUrl: after.hostUrl,
       modelName: after.modelName
     });
-    return { ...after, pulled: true, reconciliation };
+    return { ...after, pulled: true, reconciliation: terminalReconciliation };
   } catch (postPullError) {
-    throw pendingBaselinePullError(postPullError, reconciliation);
+    throw pendingBaselinePullError(postPullError, terminalReconciliation);
   }
 }
 

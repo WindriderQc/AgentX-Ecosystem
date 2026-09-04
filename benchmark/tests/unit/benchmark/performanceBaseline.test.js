@@ -34,6 +34,7 @@ const {
     capturePerformanceBaseline,
     _getProfilePerformanceBaseline
 } = require('../../../src/services/benchmark/performanceBaseline');
+const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 
 function chainResolved(value) {
     return {
@@ -61,7 +62,21 @@ function authority(evidenceId = 'evidence-1') {
                     version: 1,
                     source: 'profiler_pipeline',
                     evidenceId,
-                    digest: 'a'.repeat(64)
+                    digest: receiptDigest({
+                        modelName: 'ax/qwen3.5:9b',
+                        hostId: 'host-beta',
+                        artifact: {
+                            model: 'ax/qwen3.5:9b',
+                            hostId: 'host-beta',
+                            hostUrl: 'http://192.0.2.12:11434',
+                            digest: 'sha256:exact',
+                            runtimeFingerprint: 'runtime-a',
+                            registryQualified: true
+                        },
+                        profileDepth: 'standard',
+                        required: 5,
+                        passing: 5
+                    })
                 }
             }
         }
@@ -154,6 +169,18 @@ describe('performanceBaseline', () => {
         ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence({
             recommendedInteractiveContext: null
         })));
+        await expect(_getProfilePerformanceBaseline(
+            'ax/qwen3.5:9b',
+            'http://192.0.2.12:11434'
+        )).resolves.toBeNull();
+    });
+
+    it('refuses a syntactically valid but forged authority digest', async () => {
+        const forged = authority();
+        forged.readiness['host-beta'].authorityReceipt.digest = '0'.repeat(64);
+        ModelProfile.findOne.mockReturnValue(chainResolved(forged));
+        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence()));
+
         await expect(_getProfilePerformanceBaseline(
             'ax/qwen3.5:9b',
             'http://192.0.2.12:11434'

@@ -55,7 +55,10 @@ test('release recovery observes runtime and commits the converged projection bef
   const profile = {
     hostId: 'primary',
     hostUrl: 'http://primary:11434',
-    reconciliation: { state: 'pending_reconciliation', operation: 'release_model', operationId: 'old-op' }
+    reconciliation: {
+      state: 'pending_reconciliation', operation: 'release_model', operationId: 'old-op',
+      serverTerminalObserved: true
+    }
   };
 
   await expect(service._reconcileReleaseProjection(profile)).resolves.toMatchObject({ recovered: true });
@@ -65,7 +68,7 @@ test('release recovery observes runtime and commits the converged projection bef
     hostId: 'primary',
     dedicated: expect.objectContaining({ model: 'qwen:7b' }),
     reconciliation: expect.objectContaining({ state: 'resolved' })
-  }), { assertAuthorityActive: ownedLease.assertActive });
+  }), { signal: ownedLease.signal, assertAuthorityActive: ownedLease.assertActive });
 });
 
 test('baseline recovery deletes a late artifact and holds one fence through the complete quiet window', async () => {
@@ -83,6 +86,7 @@ test('baseline recovery deletes a late artifact and holds one fence through the 
       operation: 'baseline_pull',
       operationId: 'pull-op',
       model: 'qwen2.5:3b',
+      serverTerminalObserved: true,
       timeoutAt: new Date('2026-09-04T00:00:00.000Z')
     }
   };
@@ -102,7 +106,7 @@ test('baseline recovery deletes a late artifact and holds one fence through the 
   }));
   expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({
     reconciliation: expect.objectContaining({ state: 'resolved', quietSince: expect.any(Date) })
-  }), { assertAuthorityActive: ownedLease.assertActive });
+  }), { signal: ownedLease.signal, assertAuthorityActive: ownedLease.assertActive });
 });
 
 test('baseline recovery ignores a pre-lease quiet timestamp and proves a new continuous quiet window', async () => {
@@ -117,6 +121,7 @@ test('baseline recovery ignores a pre-lease quiet timestamp and proves a new con
       operation: 'baseline_pull',
       operationId: 'pull-op-stable',
       model: 'qwen2.5:3b',
+      serverTerminalObserved: true,
       timeoutAt: new Date('2026-09-04T00:00:00.000Z'),
       quietSince: new Date(Date.now() - 5_000),
       attempts: 2
@@ -130,7 +135,7 @@ test('baseline recovery ignores a pre-lease quiet timestamp and proves a new con
   expect(mockListModels.mock.calls.length).toBeGreaterThanOrEqual(2);
   expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({
     reconciliation: expect.objectContaining({ state: 'resolved', attempts: expect.any(Number) })
-  }), { assertAuthorityActive: ownedLease.assertActive });
+  }), { signal: ownedLease.signal, assertAuthorityActive: ownedLease.assertActive });
   const resolved = mockUpsert.mock.calls.find(call => call[0]?.reconciliation?.state === 'resolved');
   expect(resolved[0].reconciliation.attempts).toBeGreaterThan(2);
 });
@@ -145,7 +150,8 @@ test('baseline recovery retains the lease when inventory cannot be proven quiet'
     reconciliation: {
       state: 'pending_reconciliation',
       operation: 'baseline_pull',
-      model: 'qwen2.5:3b'
+      model: 'qwen2.5:3b',
+      serverTerminalObserved: true
     }
   };
 
@@ -155,3 +161,29 @@ test('baseline recovery retains the lease when inventory cannot be proven quiet'
   expect(ownedLease.abandon).toHaveBeenCalledWith(expect.any(Error));
   expect(ownedLease.finalize).not.toHaveBeenCalled();
 });
+
+test.each(['release_model', 'baseline_pull'])(
+  'never acquires or releases a new fence when %s lacks a server-terminal receipt',
+  async operation => {
+    const profile = {
+      hostId: 'primary',
+      hostUrl: 'http://primary:11434',
+      reconciliation: {
+        state: 'pending_reconciliation',
+        operation,
+        model: 'qwen2.5:3b',
+        serverTerminalObserved: false
+      }
+    };
+    const recovery = operation === 'baseline_pull'
+      ? service._reconcileBaselinePull(profile, { stableWindowMs: 5, pollIntervalMs: 1 })
+      : service._reconcileReleaseProjection(profile);
+
+    await expect(recovery).rejects.toMatchObject({
+      code: 'PROFILER_MUTATION_TERMINAL_UNPROVEN',
+      retainAdmission: true
+    });
+    expect(mockAcquireLease).not.toHaveBeenCalled();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  }
+);

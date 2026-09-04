@@ -53,6 +53,8 @@ const HostProfileSchema = new mongoose.Schema({
     priorDedicated: mongoose.Schema.Types.Mixed,
     desiredDedicated: mongoose.Schema.Types.Mixed,
     priorAvailable: Boolean,
+    serverTerminalObserved: Boolean,
+    serverTerminalAt: Date,
     timeoutAt: Date,
     quietSince: Date,
     lastObservedAt: Date,

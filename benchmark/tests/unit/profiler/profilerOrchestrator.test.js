@@ -28,6 +28,7 @@ jest.mock('../../../src/clients/ollamaClient', () => ({
   showModel: jest.fn()
 }));
 jest.mock('../../../models/ModelProfile', () => ({ findOne: jest.fn() }));
+jest.mock('../../../models/ModelPerformanceProfile', () => ({ findOne: jest.fn() }));
 jest.mock('../../../src/services/benchmark/buddySurfaceEvents', () => ({ emitLifecycle: jest.fn() }));
 
 const hostTestService = require('../../../src/services/hostTestService');
@@ -41,6 +42,8 @@ const liveProbeService = require('../../../src/services/profiler/liveProbeServic
 const thinkingProfileService = require('../../../src/services/profiler/thinkingProfileService');
 const ollamaClient = require('../../../src/clients/ollamaClient');
 const ModelProfile = require('../../../models/ModelProfile');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
+const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 const orchestrator = require('../../../src/services/profiler/profilerOrchestrator');
 
 const MODEL = 'owner/model:8b-q4';
@@ -57,6 +60,17 @@ const ARTIFACT = {
 };
 
 function readiness(overrides = {}) {
+  const evidence = {
+    _id: 'evidence-1',
+    modelName: MODEL,
+    hostId: HOST_ID,
+    artifact: ARTIFACT,
+    profile: {
+      profileDepth: 'standard',
+      requiredRetainedSamples: 5,
+      measurementQuality: { passingSampleCount: 5 }
+    }
+  };
   return {
     stage: 'profiled',
     profileDepth: 'standard',
@@ -66,7 +80,14 @@ function readiness(overrides = {}) {
       version: 1,
       source: 'profiler_pipeline',
       evidenceId: 'evidence-1',
-      digest: 'a'.repeat(64),
+      digest: receiptDigest({
+        modelName: MODEL,
+        hostId: HOST_ID,
+        artifact: ARTIFACT,
+        profileDepth: evidence.profile.profileDepth,
+        required: evidence.profile.requiredRetainedSamples,
+        passing: evidence.profile.measurementQuality.passingSampleCount
+      }),
       issuedAt: new Date('2026-09-03T00:00:00Z')
     },
     stale: false,
@@ -105,6 +126,15 @@ beforeEach(() => {
     vramUsedMiB: 4096
   });
   performanceProfiles.saveProfile.mockResolvedValue({ _id: 'evidence-1' });
+  ModelPerformanceProfile.findOne.mockReturnValue({
+    lean: jest.fn().mockResolvedValue({
+      _id: 'evidence-1', modelName: MODEL, hostId: HOST_ID, artifact: ARTIFACT,
+      profile: {
+        profileDepth: 'standard', requiredRetainedSamples: 5,
+        measurementQuality: { passingSampleCount: 5 }
+      }
+    })
+  });
 });
 
 describe('profile', () => {
@@ -257,6 +287,13 @@ describe('profile', () => {
 });
 
 describe('profiler evidence qualification', () => {
+  it('uses at least five context candidate repetitions for Full and keeps Standard diagnostic', () => {
+    expect(orchestrator._contextProbeRepeatsForDepth('standard', { fullPhaseRepeats: 10 })).toBe(2);
+    expect(orchestrator._contextProbeRepeatsForDepth('full', { fullPhaseRepeats: 3 })).toBe(5);
+    expect(orchestrator._contextProbeRepeatsForDepth('full', { fullPhaseRepeats: 10 })).toBe(10);
+    expect(orchestrator._contextProbeRepeatsForDepth('full', { fullPhaseRepeats: 99 })).toBe(20);
+  });
+
   function qualifiedFullProfile() {
     const stats = value => ({
       sampleCount: 5,
@@ -286,6 +323,14 @@ describe('profiler evidence qualification', () => {
       ttftMs: 200,
       ttftMeasurement: 'streamed_wall_clock',
       spill: { verified: true, spillDetected: false },
+      contextProbeCandidateRepeats: 5,
+      probeSteps: [262144, 65536, 131072].map(numCtx => ({
+        numCtx,
+        passed: true,
+        repetitionCount: 5,
+        throughputStatistics: stats(40),
+        samples: Array.from({ length: 5 }, () => ({ passed: true, tokensPerSec: 40 }))
+      })),
       throughputCurve: [10, 25, 50, 75, 90].map(contextFillPct => ({
         contextFillPct,
         tokensPerSec: 40,
@@ -373,6 +418,18 @@ describe('profiler evidence qualification', () => {
 
   it('qualifies only when every Full phase has positive complete evidence', () => {
     expect(orchestrator.profileQualificationFailures(qualifiedFullProfile())).toEqual([]);
+  });
+
+  it.each([
+    ['fewer than five candidate repeats', profile => { profile.probeSteps[0].repetitionCount = 4; }],
+    ['unknown candidate reliability', profile => { profile.probeSteps[0].throughputStatistics.reliability = 'unknown'; }],
+    ['wide candidate confidence interval', profile => {
+      profile.probeSteps[0].throughputStatistics.confidenceInterval95 = { low: 10, high: 70, method: 'student_t' };
+    }]
+  ])('fails Full qualification for context evidence with %s', (_label, mutate) => {
+    const profile = qualifiedFullProfile();
+    mutate(profile);
+    expect(orchestrator.profileQualificationFailures(profile)).toContain('full_context_probe_incomplete');
   });
 
   it.each([

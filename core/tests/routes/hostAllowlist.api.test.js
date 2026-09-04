@@ -299,6 +299,64 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
 
   // ── /api/nerve-center/host-preferences ──────────────────────────────────
   describe('Nerve Center host preference allowlist', () => {
+    it('403 — rejects a cross-origin host preference mutation before changing pins', async () => {
+      const hostUrl = encodeURIComponent('http://192.0.2.66:11434');
+      const res = await request(app)
+        .put(`/api/nerve-center/host-preferences/${hostUrl}`)
+        .set('Host', '127.0.0.1')
+        .set('Origin', 'https://attacker.example')
+        .set('Sec-Fetch-Site', 'cross-site')
+        .send({ pinnedModels: [{ model: 'attacker-model:latest' }] });
+
+      expect(res.status).toBe(403);
+      expect(hostPrefService.updatePreference).not.toHaveBeenCalled();
+    });
+
+    it('projects a same-origin host preference mutation response without claim capabilities', async () => {
+      const hostUrl = encodeURIComponent('http://192.0.2.66:11434');
+      hostPrefService.updatePreference.mockResolvedValueOnce({
+        hostUrl: 'http://192.0.2.66:11434',
+        displayName: 'Primary',
+        pinnedModels: [{ model: 'approved-model:latest' }],
+        lastBenchmarkReleaseReceipt: { claimGeneration: 'released-secret' },
+        benchmarkClaim: {
+          batchId: 'active-batch',
+          claimGeneration: 'claim-secret',
+          admissionId: 'admission-secret',
+          admissionGeneration: 'admission-generation-secret',
+          admissionPrincipal: 'benchmark-service',
+          finalizeToken: 'finalizer-secret',
+          preClaimRuntime: {
+            exact: true,
+            identityDigest: 'snapshot-secret',
+            residents: [{ model: 'private-resident', digest: 'private-digest' }]
+          }
+        }
+      });
+
+      const res = await request(app)
+        .put(`/api/nerve-center/host-preferences/${hostUrl}`)
+        .set('Host', '127.0.0.1')
+        .set('Origin', 'http://127.0.0.1')
+        .set('Sec-Fetch-Site', 'same-origin')
+        .send({ pinnedModels: [{ model: 'approved-model:latest' }] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.benchmarkClaim).toEqual(expect.objectContaining({
+        batchId: 'active-batch',
+        snapshotExact: true,
+        snapshotResidentCount: 1,
+        finalizing: true
+      }));
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('claimGeneration');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('admissionId');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('admissionGeneration');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('admissionPrincipal');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('preClaimRuntime');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('finalizeToken');
+      expect(res.body.data).not.toHaveProperty('lastBenchmarkReleaseReceipt');
+    });
+
     it('400 — rejects unknown host path before updating preferences', async () => {
       const hostUrl = encodeURIComponent('http://192.0.2.77:11434');
       const res = await request(app)

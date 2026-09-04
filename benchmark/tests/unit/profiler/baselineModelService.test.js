@@ -64,7 +64,7 @@ describe('baselineModelService', () => {
     expect(mockPullModel).toHaveBeenCalledWith(
       'http://tertiary:11434',
       'qwen2.5:3b',
-      expect.objectContaining({ timeoutMs: expect.any(Number) })
+      expect.objectContaining({ timeoutMs: 0 })
     );
     expect(result).toMatchObject({
       available: true,
@@ -79,6 +79,12 @@ describe('baselineModelService', () => {
       }),
       expect.any(Object)
     );
+    expect(mockHostProfileUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      reconciliation: expect.objectContaining({
+        serverTerminalObserved: true,
+        serverTerminalAt: expect.any(Date)
+      })
+    }), expect.objectContaining({ signal: undefined, assertAuthorityActive: undefined }));
   });
 
   it('rejects hosts outside the configured fleet before calling Ollama', async () => {
@@ -116,6 +122,24 @@ describe('baselineModelService', () => {
       code: 'BASELINE_PULL_RECONCILIATION_PENDING',
       retainAdmission: true,
       cause: authorityLoss
+    });
+
+    expect(mockPullModel).toHaveBeenCalledTimes(1);
+    expect(mockListModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains authority when the terminal pull receipt cannot be durably recorded', async () => {
+    mockListModels.mockResolvedValueOnce({ models: [] });
+    mockPullModel.mockResolvedValue({ status: 'success' });
+    mockHostProfileUpsert
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('terminal receipt acknowledgement lost'));
+
+    await expect(service.ensureBaselineModel('primary')).rejects.toMatchObject({
+      code: 'BASELINE_PULL_RECONCILIATION_PENDING',
+      retainAdmission: true,
+      cause: expect.objectContaining({ message: 'terminal receipt acknowledgement lost' }),
+      reconciliation: expect.objectContaining({ serverTerminalObserved: true })
     });
 
     expect(mockPullModel).toHaveBeenCalledTimes(1);

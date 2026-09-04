@@ -62,10 +62,15 @@ describe('Profiler host status read/refresh split', () => {
             runtimeRestore: { verified: true, status: 'ready', mode: 'exact_runtime_snapshot' },
             releaseReceipt: { contract: 'agentx.benchmark-claim-release/v1' }
           }]
-        };
-        if (typeof options.beforeWorkloadRelease === 'function') {
-          await options.beforeWorkloadRelease(receipt);
-        }
+      };
+      if (typeof options.beforeWorkloadRelease === 'function') {
+          try {
+            await options.beforeWorkloadRelease(receipt);
+          } catch (error) {
+            error.retainAdmission = true;
+            throw error;
+          }
+      }
         return receipt;
       })
     };
@@ -109,7 +114,11 @@ describe('Profiler host status read/refresh split', () => {
       status: 'online',
       dedicated: { model: 'qwen:7b', expiresAt: new Date('2099-01-01T00:00:00.000Z') }
     });
-    hostProfileService.releaseModel.mockResolvedValue({ success: true });
+    hostProfileService.releaseModel.mockResolvedValue({
+      success: true,
+      serverTerminalObserved: true,
+      serverTerminalAt: new Date('2026-09-04T00:00:00.000Z')
+    });
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
     hostProfileService.upsert.mockResolvedValue({ status: 'online' });
 
@@ -128,6 +137,15 @@ describe('Profiler host status read/refresh split', () => {
       assertAuthorityActive: lease.assertActive
     });
     expect(hostProfileService.upsert).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      reconciliation: expect.objectContaining({
+        state: 'pending_reconciliation',
+        serverTerminalObserved: true
+      })
+    }), {
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
+    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(3, expect.objectContaining({
       hostId: 'primary',
       status: 'online',
       dedicated: null,
@@ -135,7 +153,7 @@ describe('Profiler host status read/refresh split', () => {
         state: 'resolved',
         releaseReceipt: { contract: 'agentx.benchmark-claim-release/v1' }
       })
-    }), { assertAuthorityActive: lease.assertActive });
+    }), { signal: lease.signal, assertAuthorityActive: lease.assertActive });
     expect(hostProfileService.upsert.mock.invocationCallOrder[0])
       .toBeLessThan(lease.finalize.mock.invocationCallOrder[0]);
     expect(lease.finalize).toHaveBeenCalledWith(expect.objectContaining({
@@ -154,7 +172,7 @@ describe('Profiler host status read/refresh split', () => {
       status: 'online',
       dedicated: priorDedicated
     });
-    hostProfileService.releaseModel.mockResolvedValue({ success: true });
+    hostProfileService.releaseModel.mockResolvedValue({ success: true, serverTerminalObserved: true });
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
     hostProfileService.upsert
       .mockRejectedValueOnce(new Error('ambiguous reconciliation acknowledgement'));
@@ -225,20 +243,21 @@ describe('Profiler host status read/refresh split', () => {
       status: 'online',
       dedicated: { model: 'qwen:7b', expiresAt: new Date('2099-01-01T00:00:00.000Z') }
     });
-    hostProfileService.releaseModel.mockResolvedValue({ success: true });
+    hostProfileService.releaseModel.mockResolvedValue({ success: true, serverTerminalObserved: true });
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
     hostProfileService.upsert
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error('projection commit unavailable'));
 
     const response = await request(app).post('/api/profiler/hosts/primary/release');
 
     expect(response.status).toBe(500);
-    expect(hostProfileService.upsert).toHaveBeenCalledTimes(2);
+    expect(hostProfileService.upsert).toHaveBeenCalledTimes(3);
     expect(hostProfileService.upsert.mock.calls[0][0].reconciliation.state).toBe('pending_reconciliation');
-    expect(hostProfileService.upsert.mock.calls[1][0].reconciliation.state).toBe('resolved');
-    expect(lease.abandon).not.toHaveBeenCalled();
-    expect(lease.finalize).toHaveBeenCalled();
+    expect(hostProfileService.upsert.mock.calls[2][0].reconciliation.state).toBe('resolved');
+    expect(lease.abandon).toHaveBeenCalledWith(expect.objectContaining({ retainAdmission: true }));
+    expect(lease.finalize).toHaveBeenCalledTimes(1);
   });
 
   test('holds the lease for TTL recovery when baseline projection compensation fails', async () => {
@@ -293,5 +312,60 @@ describe('Profiler host status read/refresh split', () => {
     expect(lease.abandon).toHaveBeenCalledWith(pending);
     expect(lease.finalize).not.toHaveBeenCalled();
     expect(testModelOnHost).not.toHaveBeenCalled();
+  });
+
+  test('retains the exact fence and never finalizes after an unacknowledged unload', async () => {
+    hostProfileService.getById.mockResolvedValue({
+      hostId: 'primary',
+      hostUrl: 'http://localhost:11434',
+      status: 'online',
+      dedicated: { model: 'qwen:7b', expiresAt: new Date('2099-01-01T00:00:00.000Z') }
+    });
+    hostProfileService.releaseModel.mockRejectedValue(Object.assign(
+      new Error('Ollama unload acknowledgement lost'),
+      {
+        code: 'PROFILER_RELEASE_RECONCILIATION_PENDING',
+        retainAdmission: true,
+        serverTerminalObserved: false
+      }
+    ));
+
+    const response = await request(app).post('/api/profiler/hosts/primary/release');
+
+    expect(response.status).toBe(500);
+    expect(lease.abandon).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'PROFILER_RELEASE_RECONCILIATION_PENDING',
+      retainAdmission: true
+    }));
+    expect(lease.finalize).not.toHaveBeenCalled();
+    expect(hostProfileService.checkStatus).not.toHaveBeenCalled();
+  });
+
+  test('retains the exact fence when the server-terminal unload receipt cannot be persisted', async () => {
+    hostProfileService.getById.mockResolvedValue({
+      hostId: 'primary',
+      hostUrl: 'http://localhost:11434',
+      status: 'online',
+      dedicated: { model: 'qwen:7b', expiresAt: new Date('2099-01-01T00:00:00.000Z') }
+    });
+    hostProfileService.releaseModel.mockResolvedValue({
+      success: true,
+      serverTerminalObserved: true,
+      serverTerminalAt: new Date('2026-09-04T00:00:00.000Z')
+    });
+    hostProfileService.upsert
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('terminal receipt acknowledgement lost'));
+
+    const response = await request(app).post('/api/profiler/hosts/primary/release');
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('PROFILER_RELEASE_RECONCILIATION_PENDING');
+    expect(lease.abandon).toHaveBeenCalledWith(expect.objectContaining({
+      retainAdmission: true,
+      serverTerminalObserved: true
+    }));
+    expect(lease.finalize).not.toHaveBeenCalled();
+    expect(hostProfileService.checkStatus).not.toHaveBeenCalled();
   });
 });

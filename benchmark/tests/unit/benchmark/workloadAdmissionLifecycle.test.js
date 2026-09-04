@@ -157,4 +157,26 @@ describe('managed benchmark workload admission lifecycle', () => {
         }));
         expect(heartbeat.drain).not.toHaveBeenCalled();
     });
+
+    test('renews an ambiguous admission until durable reconciliation resolves, then releases it', async () => {
+        let resolveRecovery;
+        const reconciliationPromise = new Promise(resolve => { resolveRecovery = resolve; });
+        const lifecycle = await beginManagedWorkload('judge-recovery', { hosts: ['http://judge:11434'] });
+        const reason = Object.assign(new Error('result invalidation pending'), {
+            retainAdmission: true,
+            reconciliationPromise
+        });
+
+        const retained = await lifecycle.retainForRecovery(reason);
+        expect(retained).toMatchObject({ retained: true, holdMs: null });
+        expect(mockReleaseWorkloadAdmission).not.toHaveBeenCalled();
+        expect(heartbeat.drain).not.toHaveBeenCalled();
+
+        resolveRecovery({ resolved: true });
+        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(mockReleaseWorkloadAdmission).toHaveBeenCalledWith('judge-recovery');
+        expect(heartbeat.drain).toHaveBeenCalledTimes(1);
+    });
 });

@@ -62,6 +62,83 @@ function findInvalidThroughputStep(steps = []) {
   return steps.find((step) => !validateThroughput(step?.tokensPerSec).plausible);
 }
 
+function quantile(values, q) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = (sorted.length - 1) * q;
+  const lower = Math.floor(position);
+  const fraction = position - lower;
+  return sorted[lower + 1] === undefined
+    ? sorted[lower]
+    : sorted[lower] + fraction * (sorted[lower + 1] - sorted[lower]);
+}
+
+function studentTCritical95(sampleCount) {
+  const byDf = [null, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262,
+    2.228, 2.201, 2.179, 2.16, 2.145, 2.131, 2.12, 2.11, 2.101, 2.093, 2.086,
+    2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042];
+  const df = Math.max(1, Math.floor(sampleCount) - 1);
+  return byDf[Math.min(df, 30)] || 1.96;
+}
+
+function summarizeCandidateThroughput(samples = [], minimumSamples = 2) {
+  const passing = samples.filter(sample => sample?.passed === true
+    && Number.isFinite(Number(sample.tokensPerSec))
+    && Number(sample.tokensPerSec) > 0);
+  const values = passing.map(sample => Number(sample.tokensPerSec));
+  if (!values.length) {
+    return {
+      attemptedSampleCount: samples.length,
+      sampleCount: 0,
+      minimumSamples,
+      mean: null,
+      p50: null,
+      p95: null,
+      standardDeviation: null,
+      coefficientOfVariation: null,
+      confidenceInterval95: null,
+      reliability: 'unknown'
+    };
+  }
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  if (values.length < 2) {
+    return {
+      attemptedSampleCount: samples.length,
+      sampleCount: values.length,
+      minimumSamples,
+      mean: Number(mean.toFixed(3)),
+      p50: Number(mean.toFixed(3)),
+      p95: Number(mean.toFixed(3)),
+      standardDeviation: null,
+      coefficientOfVariation: null,
+      confidenceInterval95: null,
+      reliability: 'unknown'
+    };
+  }
+  const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (values.length - 1);
+  const standardDeviation = Math.sqrt(variance);
+  const cv = mean > 0 ? standardDeviation / mean : null;
+  const margin = studentTCritical95(values.length) * standardDeviation / Math.sqrt(values.length);
+  return {
+    attemptedSampleCount: samples.length,
+    sampleCount: values.length,
+    minimumSamples,
+    mean: Number(mean.toFixed(3)),
+    p50: Number(quantile(values, 0.5).toFixed(3)),
+    p95: Number(quantile(values, 0.95).toFixed(3)),
+    standardDeviation: Number(standardDeviation.toFixed(3)),
+    coefficientOfVariation: cv == null ? null : Number(cv.toFixed(4)),
+    confidenceInterval95: {
+      low: Number(Math.max(0, mean - margin).toFixed(3)),
+      high: Number((mean + margin).toFixed(3)),
+      method: 'student_t'
+    },
+    reliability: values.length < minimumSamples || cv == null
+      ? 'unknown'
+      : cv <= 0.05 ? 'high' : cv <= 0.12 ? 'medium' : 'low'
+  };
+}
+
 async function persistProbeSnapshot(data, { signal, checkpoint } = {}) {
   const payload = { _id: new mongoose.Types.ObjectId(), ...data };
   checkpoint?.();
@@ -403,7 +480,7 @@ async function probeModelContext(modelName, options = {}) {
   const minCtx = options.minCtx ?? cfg.minCtx;
   const maxCtx = options.maxCtx ?? cfg.maxCtx;
   const promptFillPct = Math.min(100, Math.max(5, Number(options.contextProbeFillPct ?? options.promptFillPct ?? 80) || 80));
-  const candidateRepeats = Math.max(2, Math.min(5, Number(options.candidateRepeats) || 2));
+  const candidateRepeats = Math.max(2, Math.min(20, Number(options.candidateRepeats) || 2));
   const interactiveThreshold = Number.isFinite(Number(options.interactiveDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(options.interactiveDegradationThreshold))) : 15;
   const documentThreshold = Number.isFinite(Number(options.documentDegradationThreshold))
@@ -463,13 +540,8 @@ async function probeModelContext(modelName, options = {}) {
       const assessed = repetitions.map(step => assessProbeStep(step, comparisonSpeed));
       const failed = assessed.find(step => !step.passed);
       const representative = failed || [...assessed].sort((a, b) => Number(a.tokensPerSec) - Number(b.tokensPerSec))[0];
-      const mean = speeds.length
-        ? speeds.reduce((sum, value) => sum + value, 0) / speeds.length
-        : 0;
-      const variance = speeds.length > 1
-        ? speeds.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (speeds.length - 1)
-        : 0;
-      const stdDev = Math.sqrt(variance);
+      const throughputStatistics = summarizeCandidateThroughput(assessed, candidateRepeats);
+      const mean = Number(throughputStatistics.mean) || 0;
       return {
         ...representative,
         tokensPerSec: speeds.length ? Number(mean.toFixed(2)) : 0,
@@ -478,8 +550,11 @@ async function probeModelContext(modelName, options = {}) {
         repetitionCount: assessed.length,
         tokensPerSecMin: speeds.length ? Math.min(...speeds) : null,
         tokensPerSecMax: speeds.length ? Math.max(...speeds) : null,
-        tokensPerSecStdDev: speeds.length ? Number(stdDev.toFixed(3)) : null,
-        tokensPerSecCvPct: mean > 0 ? Number(((stdDev / mean) * 100).toFixed(2)) : null,
+        tokensPerSecStdDev: throughputStatistics.standardDeviation,
+        tokensPerSecCvPct: throughputStatistics.coefficientOfVariation == null
+          ? null
+          : Number((throughputStatistics.coefficientOfVariation * 100).toFixed(2)),
+        throughputStatistics,
         samples: assessed.map(step => ({
           requestSucceeded: step.requestSucceeded,
           tokensPerSec: step.tokensPerSec,
@@ -785,6 +860,7 @@ module.exports = {
     PROBE_NUM_PREDICT,
     persistProbeSnapshot,
     findInvalidThroughputStep,
+    summarizeCandidateThroughput,
     validateThroughput,
     isValidTokensPerSec
   }

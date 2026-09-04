@@ -4,6 +4,8 @@ const express = require('express');
 const router = express.Router();
 const modelProfileService = require('../../src/services/profiler/modelProfileService');
 const modelPerformanceProfileService = require('../../src/services/profiler/modelPerformanceProfileService');
+const { resolveArtifactIdentity, identitiesMatch } = require('../../src/services/profiler/artifactIdentityService');
+const { verifyProfilerAuthorityReceipt } = require('../../src/services/profiler/profilerAuthorityReceipt');
 
 function validateHostId(hostId, res) {
   if (/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(String(hostId || ''))) return true;
@@ -40,17 +42,15 @@ router.get('/:name/config', async (req, res) => {
     const readiness = model?.readiness instanceof Map
       ? model.readiness.get(hostId)
       : model?.readiness?.[hostId];
-    const receipt = readiness?.authorityReceipt;
+    const liveArtifact = await resolveArtifactIdentity(req.params.name, hostId, evidence.artifact?.hostUrl, {
+      refresh: true
+    });
     const authoritative = readiness?.benchmarkQualified === true
       && readiness?.stale !== true
       && ['standard', 'full'].includes(readiness?.profileDepth)
-      && receipt?.source === 'profiler_pipeline'
-      && Number(receipt.version) === 1
-      && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
-      && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '')
-      && String(readiness?.evidenceId || '') === String(evidence?._id || '')
-      && evidence.artifact?.digest === readiness?.artifact?.digest
-      && evidence.artifact?.runtimeFingerprint === readiness?.artifact?.runtimeFingerprint
+      && verifyProfilerAuthorityReceipt(readiness, evidence, { modelName: evidence.modelName, hostId })
+      && identitiesMatch(evidence.artifact, readiness?.artifact)
+      && identitiesMatch(evidence.artifact, liveArtifact)
       && Number(evidence.profile?.recommendedInteractiveContext) > 0;
     if (!authoritative) {
       return res.status(409).json({

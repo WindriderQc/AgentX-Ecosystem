@@ -11,9 +11,34 @@ jest.mock('../../../models/ModelProfile', () => ({ find: (...args) => mockModelF
 jest.mock('../../../src/services/profiler/hostProfileService', () => ({ getById: (...args) => mockGetHost(...args) }));
 jest.mock('../../../src/services/profiler/liveProbeService', () => ({ getLiveProbeStatus: (...args) => mockGetLiveProbe(...args) }));
 jest.mock('../../../src/services/hostTestService', () => ({ checkHost: (...args) => mockCheckHost(...args) }));
+jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
+  resolveArtifactIdentity: jest.fn(),
+  identitiesMatch: jest.fn((left, right) => left?.digest === right?.digest
+    && left?.runtimeFingerprint === right?.runtimeFingerprint)
+}));
 jest.mock('../../../config/logger', () => ({ debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() }));
 
 const { buildHostFitReport } = require('../../../src/services/profiler/hostFitReportService');
+const artifactIdentityService = require('../../../src/services/profiler/artifactIdentityService');
+const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+
+const ARTIFACT = {
+  model: 'qwen:7b', hostId: 'host-a', hostUrl: 'http://host-a:11434',
+  digest: 'sha256:model', runtimeFingerprint: 'runtime-a', registryQualified: true
+};
+
+function evidence() {
+  return {
+    _id: 'evidence-1', modelName: 'qwen:7b', hostId: 'host-a', artifact: ARTIFACT,
+    profile: {
+      profileDepth: 'standard', requiredRetainedSamples: 5,
+      tokensPerSec: 50, recommendedInteractiveContext: 32768,
+      recommendedDocumentContext: 65536, maxVerifiedContext: 262144,
+      measurementQuality: { reliability: 'high', passingSampleCount: 5 },
+      spill: { verified: true, spillDetected: false, sizeTotal: 8 * 1024 * 1024 * 1024 }
+    }
+  };
+}
 
 function leanResult(value) {
   return { lean: jest.fn().mockResolvedValue(value) };
@@ -25,7 +50,7 @@ function selectLean(value) {
 
 function readiness(overrides = {}) {
   return {
-    artifact: { digest: 'sha256:model', runtimeFingerprint: 'runtime-a', registryQualified: true },
+    artifact: ARTIFACT,
     evidenceId: 'evidence-1',
     profileDepth: 'standard',
     benchmarkQualified: true,
@@ -34,7 +59,10 @@ function readiness(overrides = {}) {
       version: 1,
       source: 'profiler_pipeline',
       evidenceId: 'evidence-1',
-      digest: 'a'.repeat(64)
+      digest: receiptDigest({
+        modelName: 'qwen:7b', hostId: 'host-a', artifact: ARTIFACT,
+        profileDepth: 'standard', required: 5, passing: 5
+      })
     },
     ...overrides
   };
@@ -53,20 +81,8 @@ describe('Host Fit authority gate', () => {
     });
     mockGetLiveProbe.mockResolvedValue({ telemetry: { vramTotalMiB: 24576 } });
     mockCheckHost.mockResolvedValue({ available: true, models: ['qwen:7b'] });
-    mockEvidenceFind.mockReturnValue(leanResult([{
-      _id: 'evidence-1',
-      modelName: 'qwen:7b',
-      artifact: { digest: 'sha256:model', runtimeFingerprint: 'runtime-a', registryQualified: true },
-      profile: {
-        profileDepth: 'standard',
-        tokensPerSec: 50,
-        recommendedInteractiveContext: 32768,
-        recommendedDocumentContext: 65536,
-        maxVerifiedContext: 262144,
-        measurementQuality: { reliability: 'high' },
-        spill: { verified: true, spillDetected: false, sizeTotal: 8 * 1024 * 1024 * 1024 }
-      }
-    }]));
+    artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...ARTIFACT });
+    mockEvidenceFind.mockReturnValue(leanResult([evidence()]));
   });
 
   test.each([
@@ -101,5 +117,17 @@ describe('Host Fit authority gate', () => {
       recommendedInteractiveContext: 32768,
       recommendedDocumentContext: 65536
     })]);
+  });
+
+  test('treats a repointed installed tag as unprofiled even when the stored receipt is valid', async () => {
+    artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...ARTIFACT, digest: 'sha256:new' });
+    mockModelFind.mockReturnValue(selectLean([{
+      name: 'qwen:7b', parameters: '7B', quantization: 'Q4_K_M',
+      readiness: { 'host-a': readiness() }
+    }]));
+
+    const report = await buildHostFitReport('host-a');
+    expect(report.measured).toHaveLength(0);
+    expect(report.estimated).toHaveLength(1);
   });
 });

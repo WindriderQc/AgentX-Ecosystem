@@ -39,6 +39,7 @@ const ProbeStepSchema = new mongoose.Schema({
   tokensPerSecMax: Number,
   tokensPerSecStdDev: Number,
   tokensPerSecCvPct: Number,
+  throughputStatistics: { type: mongoose.Schema.Types.Mixed, default: null },
   samples: { type: [ProbeSampleSchema], default: [] },
   completionTokens: Number,
   vramUsedMiB: Number,
