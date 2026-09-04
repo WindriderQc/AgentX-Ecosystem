@@ -79,5 +79,6 @@ describe('Health Check API', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toHaveProperty('ollama');
     expect(res.body.ollama).toHaveProperty('host');
+    expect(res.body).toHaveProperty('hostHome', null);
   });
 });

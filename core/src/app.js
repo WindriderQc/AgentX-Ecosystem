@@ -11,6 +11,7 @@ const logger = require('../config/logger');
 const { requestLogger, errorLogger } = require('./middleware/logging');
 const systemHealth = require('./systemHealth');
 const { normalizeHostUrl } = require('./helpers/ollamaHostConfig');
+const { getHostHomeLink } = require('./helpers/hostHomeLink');
 const { refreshOllamaHealth } = require('./services/ollamaHealthProbe');
 const { normalizePublicUrls } = require('../../shared/browserPublicUrls');
 const { createServiceIdentity } = require('../../shared/serviceIdentity');
@@ -44,6 +45,7 @@ const app = express();
 const agentxProfile = currentAgentXProfile();
 // Expose browser-reachable service URLs to all rendered views.
 app.locals.publicUrls = getPublicUrls();
+app.locals.hostHome = getHostHomeLink();
 app.locals.agentxProfile = agentxProfile;
 const IN_PROD = process.env.NODE_ENV === 'production';
 const IN_TEST = process.env.NODE_ENV === 'test';
@@ -598,7 +600,10 @@ app.get('/api/config', (_req, res) => {
     // Browser-reachable URLs for cross-service navigation. Public JS
     // and EJS pages use these instead of hardcoded localhost:<port>
     // so remote browsers reach the right host. (0208)
-    publicUrls: app.locals.publicUrls
+    publicUrls: app.locals.publicUrls,
+    // Optional same-origin return path supplied by the composing host. It is
+    // absent by default so standalone and shareable Product remain neutral.
+    hostHome: app.locals.hostHome
   });
 });
 
