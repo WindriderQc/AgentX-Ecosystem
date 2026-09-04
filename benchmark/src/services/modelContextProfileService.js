@@ -1,11 +1,14 @@
 const ModelContextProfile = require('../../models/ModelContextProfile');
 const { getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 
-// v3 is deliberately distinct from the first additive migration draft. That
+// v4 is deliberately distinct from the first additive migration draft. That
 // draft could stamp legacy 262K maxima as if they were degradation-derived
 // recommendations. Only a fresh probe written by this implementation may
 // carry current recommendation authority.
-const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v3';
+const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v4';
+const MIN_RECOMMENDATION_SAMPLES = 5;
+const MAX_RECOMMENDATION_CV = 0.12;
+const MAX_RECOMMENDATION_RELATIVE_CI95_WIDTH = 0.30;
 
 function positiveInteger(value) {
   const n = Number(value);
@@ -55,6 +58,35 @@ function recommendationFor(snapshot, threshold) {
       && Number.isFinite(Number(step.degradationPct))
       && Number(step.degradationPct) <= threshold)
     .reduce((max, step) => Math.max(max, positiveInteger(step.numCtx) || 0), 0) || null;
+}
+
+function stepHasRecommendationEvidence(step) {
+  const stats = step?.throughputStatistics || {};
+  const sampleCount = Number(stats.sampleCount ?? step?.repetitionCount);
+  const mean = Number(stats.mean ?? step?.tokensPerSec);
+  const cv = Number(stats.coefficientOfVariation);
+  const low = Number(stats.confidenceInterval95?.low);
+  const high = Number(stats.confidenceInterval95?.high);
+  const relativeCiWidth = mean > 0 && Number.isFinite(low) && Number.isFinite(high)
+    ? (high - low) / mean
+    : Infinity;
+  return sampleCount >= MIN_RECOMMENDATION_SAMPLES
+    && ['medium', 'high'].includes(stats.reliability)
+    && Number.isFinite(cv)
+    && cv <= MAX_RECOMMENDATION_CV
+    && relativeCiWidth <= MAX_RECOMMENDATION_RELATIVE_CI95_WIDTH;
+}
+
+function recommendationEvidenceQualified(snapshot, contexts) {
+  if (snapshot?.profileDepth !== 'full' || Number(snapshot?.candidateRepeats) < MIN_RECOMMENDATION_SAMPLES) {
+    return false;
+  }
+  const steps = Array.isArray(snapshot?.steps) ? snapshot.steps : [];
+  return contexts.every(context => steps.some(step => (
+    positiveInteger(step?.numCtx) === context
+    && step?.passed === true
+    && stepHasRecommendationEvidence(step)
+  )));
 }
 
 function normalizeContextProfile(profile) {
@@ -151,8 +183,15 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
     positiveInteger(snapshot.performanceKneeContext)
       || recommendationFor(snapshot, performanceKneeThreshold)
   );
-  const recommendationsVerified = Boolean(recommendedInteractiveContext && recommendedDocumentContext);
-  const recommendedContext = recommendedDocumentContext;
+  const recommendationsVerified = Boolean(
+    recommendedInteractiveContext
+    && recommendedDocumentContext
+    && recommendationEvidenceQualified(snapshot, [recommendedInteractiveContext, recommendedDocumentContext])
+  );
+  const persistedInteractiveContext = recommendationsVerified ? recommendedInteractiveContext : null;
+  const persistedDocumentContext = recommendationsVerified ? recommendedDocumentContext : null;
+  const persistedPerformanceKneeContext = recommendationsVerified ? performanceKneeContext : null;
+  const recommendedContext = persistedDocumentContext;
   const step = bestStepForSnapshot(snapshot);
   const verifiedInputTokens = positiveInteger(step?.promptTokens) || null;
   const evidenceTokensPerSec = Number(step?.tokensPerSec ?? snapshot.atLimitTokensPerSec ?? 0) || null;
@@ -166,13 +205,15 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
         hostId: snapshot.hostId || hostIdForUrl(hostUrl),
         artifactDigest,
         runtimeFingerprint,
+        profileDepth: snapshot.profileDepth || 'standard',
+        contextProbeCandidateRepeats: positiveInteger(snapshot.candidateRepeats),
         maxVerifiedContext,
         verifiedMaxContext: maxVerifiedContext,
         historicalMaxVerifiedContext,
         verifiedInputTokens,
-        recommendedInteractiveContext,
-        recommendedDocumentContext,
-        performanceKneeContext,
+        recommendedInteractiveContext: persistedInteractiveContext,
+        recommendedDocumentContext: persistedDocumentContext,
+        performanceKneeContext: persistedPerformanceKneeContext,
         performanceKneeDegradationPct: performanceKneeThreshold,
         qualityVerifiedContext: null,
         qualityContextStatus: 'unknown',
@@ -192,6 +233,8 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
         lastValidatedAt: snapshot.testedAt || new Date(),
         latestEvidence: {
           snapshotId: snapshot._id ? String(snapshot._id) : null,
+          profileDepth: snapshot.profileDepth || 'standard',
+          candidateRepeats: positiveInteger(snapshot.candidateRepeats),
           testedNumCtx: tested,
           promptFillPct: positiveInteger(snapshot.promptFillPct),
           promptTokens: positiveInteger(step?.promptTokens),

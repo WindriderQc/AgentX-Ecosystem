@@ -113,7 +113,7 @@ function benchmarkCredentialPath(pathname, method) {
   if (/^\/api\/nerve-center\/workload-admissions\/[^/]+\/recovery$/.test(path)) {
     return verb === 'POST';
   }
-  if (/^\/api\/nerve-center\/workload-recoveries\/[^/]+\/(adopt|assert|transition|restore-hosts)$/.test(path)) {
+  if (/^\/api\/nerve-center\/workload-recoveries\/[^/]+\/(adopt|heartbeat|assert|transition|restore-hosts)$/.test(path)) {
     return verb === 'POST';
   }
   if (/^\/api\/nerve-center\/workload-recoveries\/[^/]+$/.test(path)) {

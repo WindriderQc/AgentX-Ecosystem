@@ -45,6 +45,8 @@ const WorkloadAdmissionSchema = new mongoose.Schema({
   recoveryOwnerId: { type: String, default: null },
   recoveryArmedAt: { type: Date, default: null },
   recoveryAdoptedAt: { type: Date, default: null },
+  recoveryHeartbeatAt: { type: Date, default: null },
+  recoveryExpiresAt: { type: Date, default: null },
   recoveryState: {
     type: String,
     enum: ['PREPARED', 'MUTATING', 'UNKNOWN', 'VERIFIED', 'RESTORED'],

@@ -9,6 +9,14 @@ const OLLAMA_ABORT_SOURCE = Object.freeze({
   TIMEOUT: 'timeout',
 });
 
+function hasTerminalOllamaFrame(raw) {
+  const frames = String(raw || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (frames.length === 0) return false;
+  return frames.some(frame => {
+    try { return JSON.parse(frame)?.done === true; } catch { return false; }
+  });
+}
+
 function createAttemptAbortBridge({ externalSignal, stream, timeoutMs }) {
   const ownsTimeout = stream !== true;
   if (!ownsTimeout && !externalSignal) {
@@ -79,6 +87,13 @@ async function executeOllamaAttempt({
       ...(abortBridge.signal && { signal: abortBridge.signal }),
     });
     const raw = await response.text();
+    if (stream === true && response.ok && !hasTerminalOllamaFrame(raw)) {
+      const error = new Error('Ollama stream ended without a terminal done frame');
+      error.code = 'OLLAMA_STREAM_INCOMPLETE';
+      error.isOllamaAttemptError = true;
+      error.ollamaTerminalObserved = false;
+      throw error;
+    }
     let data;
     try { data = JSON.parse(raw); } catch { data = { response: raw }; }
     return {
@@ -187,6 +202,7 @@ async function resolveVerifiedFallbackModel({
 module.exports = {
   OLLAMA_ABORT_SOURCE,
   createAttemptAbortBridge,
+  hasTerminalOllamaFrame,
   executeAdmittedOllamaAttempt,
   executeOllamaAttempt,
   modelExistsOnHost,

@@ -914,6 +914,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     documentDegradationThreshold: Number(settings.documentDegradationThreshold),
     performanceKneeDegradationThreshold: Number(settings.performanceKneeDegradationThreshold),
     candidateRepeats: contextProbeRepeatsForDepth(depth, settings),
+    profileDepth: depth,
     assertClaimActive: checkpoint,
     signal,
     onProgress: (info) => {

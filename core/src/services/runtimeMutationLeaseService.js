@@ -144,16 +144,17 @@ async function runRuntimeMutation(options, operation) {
   const lifecycle = await beginRuntimeMutation(options);
   try {
     lifecycle.assertActive();
+    // This generic wrapper cannot observe the first persistence write inside
+    // an arbitrary callback. Treat entry into the callback as dispatch: a
+    // thrown/connection-lost outcome may have followed a partial write and
+    // must therefore quarantine instead of reopening runtime authority.
+    lifecycle.markDispatched();
     const result = await operation({
       leaseId: lifecycle.leaseId,
       generation: lifecycle.generation,
       principal: lifecycle.principal,
       signal: lifecycle.signal
     });
-    // The application mutation has now returned an acknowledgement. Mark it
-    // dispatched before releasing so an ambiguous release fails closed into
-    // the durable maintenance quarantine instead of reopening the runtime.
-    lifecycle.markDispatched();
     await lifecycle.complete();
     return result;
   } catch (error) {

@@ -23,6 +23,7 @@ const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const SERVICE_NAME = 'benchmark';
 const DEFAULT_TIMEOUT_MS = 10000;
 const PIN_RESTORE_TIMEOUT_MS = 600000;
+const RECOVERY_OWNER_TTL_MS = PIN_RESTORE_TIMEOUT_MS + 60_000;
 const CLAIM_ACQUIRE_TIMEOUT_MS = Math.max(
   45_000,
   (Number(process.env.BENCHMARK_CLAIM_DRAIN_TIMEOUT_MS) || 30_000) + 15_000
@@ -52,6 +53,7 @@ const CORE_OPERATIONS = Object.freeze({
   WORKLOAD_RELEASE_RECOVERY: 'benchmark.core-api.workload-release-recovery',
   WORKLOAD_RECOVERY_ARM: 'benchmark.core-api.workload-recovery-arm',
   WORKLOAD_RECOVERY_ADOPT: 'benchmark.core-api.workload-recovery-adopt',
+  WORKLOAD_RECOVERY_HEARTBEAT: 'benchmark.core-api.workload-recovery-heartbeat',
   WORKLOAD_RECOVERY_ASSERT: 'benchmark.core-api.workload-recovery-assert',
   WORKLOAD_RECOVERY_TRANSITION: 'benchmark.core-api.workload-recovery-transition',
   WORKLOAD_RECOVERY_HOST_RESTORE: 'benchmark.core-api.workload-recovery-host-restore',
@@ -148,6 +150,11 @@ const CORE_OPERATION_SPECS = Object.freeze({
   [CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT]: operation(
     'POST',
     '^/api/nerve-center/workload-recoveries/[^/]+/adopt$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_HEARTBEAT]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/heartbeat$',
     { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
   ),
   [CORE_OPERATIONS.WORKLOAD_RECOVERY_ASSERT]: operation(
@@ -810,6 +817,7 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
   const expectedKind = options.kind || 'benchmark';
   const expectedBatchId = options.batchId || null;
   const requestId = options.requestId || `benchmark:${key}`;
+  const recoveryRequestId = `recovery:${requestId}`;
   const expectedHosts = [...new Set((Array.isArray(options.hosts) ? options.hosts : [])
     .map(value => String(value || '').trim())
     .filter(Boolean))].sort();
@@ -842,6 +850,7 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
       kind: expectedKind,
       batchId: expectedBatchId,
       hosts: expectedHosts,
+      recoveryRequestId,
       ttlMs: options.ttlMs || null
     })
   });
@@ -880,7 +889,6 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
     hosts: expectedHosts,
     expiresAt: result.expiresAt || null
   };
-  const recoveryRequestId = `recovery:${requestId}`;
   const arm = async () => coreRequest(
     `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}/recovery`,
     {
@@ -1118,7 +1126,7 @@ async function adoptWorkloadRecovery({ workloadId, recoveryId, recoveryRequestId
     {
       method: 'POST',
       operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT,
-      body: JSON.stringify({ recoveryRequestId, ownerId })
+      body: JSON.stringify({ recoveryRequestId, ownerId, ttlMs: RECOVERY_OWNER_TTL_MS })
     }
   );
   const result = data?.data;
@@ -1134,6 +1142,35 @@ async function adoptWorkloadRecovery({ workloadId, recoveryId, recoveryRequestId
     throw error;
   }
   workloadAdmissionById.set(String(workloadId), { ...result });
+  return result;
+}
+
+async function heartbeatWorkloadRecovery(workloadId, ttlMs = RECOVERY_OWNER_TTL_MS) {
+  const key = String(workloadId || '');
+  const receipt = workloadAdmissionById.get(key);
+  if (!receipt?.recoveryRequired || !receipt.recoveryOwnerId) {
+    return { heartbeat: false, reason: 'adopted local recovery proof missing' };
+  }
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}/heartbeat`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_HEARTBEAT,
+      body: JSON.stringify({
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId,
+        ttlMs
+      })
+    }
+  );
+  const result = data?.data;
+  const exact = result?.heartbeat === true
+    && result.recoveryId === receipt.recoveryId
+    && result.recoveryGeneration === receipt.recoveryGeneration
+    && result.recoveryOwnerId === receipt.recoveryOwnerId;
+  if (!exact) return { heartbeat: false, reason: result?.reason || 'Core recovery heartbeat receipt is invalid' };
+  receipt.recoveryHeartbeatAt = result.recoveryHeartbeatAt || receipt.recoveryHeartbeatAt;
+  receipt.recoveryExpiresAt = result.recoveryExpiresAt || receipt.recoveryExpiresAt;
   return result;
 }
 
@@ -1292,6 +1329,7 @@ module.exports = {
   releaseWorkloadAdmission,
   getWorkloadRecoveryIdentity,
   adoptWorkloadRecovery,
+  heartbeatWorkloadRecovery,
   assertWorkloadRecovery,
   transitionWorkloadRecovery,
   recoverWorkloadAdmissionRelease,

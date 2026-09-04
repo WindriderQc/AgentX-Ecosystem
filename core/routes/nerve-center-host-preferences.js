@@ -201,7 +201,7 @@ router.get('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
   }
 });
 
-router.put('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
+router.put('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -209,30 +209,41 @@ router.put('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
     if (!model) {
       return res.status(400).json({ status: 'error', message: 'model is required' });
     }
-    const pref = await hostPrefService.setPinnedModel(hostUrl, model);
+    const pref = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `host-pin:set:${hostUrl}`
+    }, async () => {
+      const updated = await hostPrefService.setPinnedModel(hostUrl, model);
+      if (updated?.status === 'restoring') {
+        const restored = await hostPrefService.restorePinnedModels(hostUrl);
+        if (restored?.status === 'error' || restored?.verified === false) {
+          throw new Error(restored?.error || 'Pinned model restoration was not verified');
+        }
+        return { ...updated, status: restored.status || updated.status };
+      }
+      return updated;
+    });
     if (!pref) {
       return res.status(404).json({ status: 'error', message: 'Host preference not found. Configure the host first.' });
-    }
-    if (pref.status === 'restoring') {
-      hostPrefService.restorePinnedModels(hostUrl).catch(err => {
-        logger.warn(`[NerveCenter] Background pin warmup failed: ${err.message}`);
-      });
     }
     emitBuddyEvent('model_pinned', 'infrastructure', `Pinned ${model} on ${pref.displayName || hostUrl}`, 'normal');
     logger.info('[NerveCenter] Model pinned', { hostUrl, model });
     res.json({ status: 'success', data: { pinnedModels: pref.pinnedModels || [], status: pref.status } });
   } catch (err) {
     logger.error('[NerveCenter] pin set failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_PIN_SET_FAILED', message: err.message });
   }
 });
 
-router.delete('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
+router.delete('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     if (!requireTypedConfirmation(req, res, 'CLEAR HOST PIN', hostUrl)) return;
-    const pref = await hostPrefService.clearPinnedModel(hostUrl);
+    const pref = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `host-pin:clear:${hostUrl}`
+    }, () => hostPrefService.clearPinnedModel(hostUrl));
     if (!pref) {
       return res.status(404).json({ status: 'error', message: 'Host preference not found' });
     }
@@ -241,15 +252,18 @@ router.delete('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
     res.json({ status: 'success', data: { pinnedModels: [], status: pref.status } });
   } catch (err) {
     logger.error('[NerveCenter] pin clear failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_PIN_CLEAR_FAILED', message: err.message });
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/restore', async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/restore', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
-    const result = await hostPrefService.restorePinnedModels(hostUrl);
+    const result = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `host-pin:restore:${hostUrl}`
+    }, () => hostPrefService.restorePinnedModels(hostUrl));
     if (result.status === 'error') {
       return res.status(400).json({ status: 'error', message: result.error });
     }
@@ -259,11 +273,11 @@ router.post('/host-preferences/:hostUrl(*)/restore', async (req, res) => {
     res.json({ status: 'success', data: result });
   } catch (err) {
     logger.error('[NerveCenter] pin restore failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_PIN_RESTORE_FAILED', message: err.message });
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/swap', async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/swap', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -271,13 +285,16 @@ router.post('/host-preferences/:hostUrl(*)/swap', async (req, res) => {
     if (!model) {
       return res.status(400).json({ status: 'error', message: 'model is required' });
     }
-    const result = await hostPrefService.swapModel(hostUrl, model);
+    const result = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `host-model:swap:${hostUrl}:${model}`
+    }, () => hostPrefService.swapModel(hostUrl, model));
     emitBuddyEvent('model_swapping', 'infrastructure', `Swapping to ${model} on ${hostUrl}`, 'normal');
     logger.info('[NerveCenter] Model swap triggered', { hostUrl, model });
     res.json({ status: 'success', data: result });
   } catch (err) {
     logger.error('[NerveCenter] model swap failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_MODEL_SWAP_FAILED', message: err.message });
   }
 });
 
@@ -567,6 +584,7 @@ router.post('/workload-admissions', requireBenchmarkCoordinationAccess, async (r
       kind: req.body?.kind,
       batchId: req.body?.batchId,
       hosts: req.body?.hosts,
+      recoveryRequestId: req.body?.recoveryRequestId,
       ttl: req.body?.ttlMs
     });
     return res.status(result.acquired ? 200 : 409).json({ status: result.acquired ? 'success' : 'error', data: result });
@@ -609,11 +627,27 @@ router.post('/workload-recoveries/:recoveryId/adopt', requireBenchmarkCoordinati
       recoveryId: req.params.recoveryId,
       principal: coordinationPrincipal(req),
       recoveryRequestId: req.body?.recoveryRequestId,
-      ownerId: req.body?.ownerId
+      ownerId: req.body?.ownerId,
+      ttl: req.body?.ttlMs
     });
     return res.status(result.adopted ? 200 : 409).json({ status: result.adopted ? 'success' : 'error', data: result });
   } catch (error) {
     return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_ADOPT_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/heartbeat', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.heartbeatWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId,
+      ttl: req.body?.ttlMs
+    });
+    return res.status(result.heartbeat ? 200 : 409).json({ status: result.heartbeat ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_HEARTBEAT_FAILED', message: error.message });
   }
 });
 
@@ -805,13 +839,16 @@ router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAcces
     if (!entries.length) {
       return res.status(400).json({ status: 'error', message: 'No pinned models configured for this host' });
     }
-    const results = await hostPrefService.warmHost(hostUrl);
+    const results = await runRuntimeMutation({
+      principal: coordinationPrincipal(req),
+      scope: `host-pin:reload:${hostUrl}`
+    }, () => hostPrefService.warmHost(hostUrl));
     emitBuddyEvent('host_defaults_reloaded', 'infrastructure', `Reloaded pins on ${pref.displayName || hostUrl}`, 'normal');
     logger.info('[NerveCenter] Host pinned models reloaded', { hostUrl, results });
     res.json({ status: 'success', data: results });
   } catch (err) {
     logger.error('[NerveCenter] host preference reload failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_PIN_RELOAD_FAILED', message: err.message });
   }
 });
 

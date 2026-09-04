@@ -481,6 +481,9 @@ async function probeModelContext(modelName, options = {}) {
   const maxCtx = options.maxCtx ?? cfg.maxCtx;
   const promptFillPct = Math.min(100, Math.max(5, Number(options.contextProbeFillPct ?? options.promptFillPct ?? 80) || 80));
   const candidateRepeats = Math.max(2, Math.min(20, Number(options.candidateRepeats) || 2));
+  const profileDepth = ['quick', 'standard', 'full'].includes(options.profileDepth)
+    ? options.profileDepth
+    : 'standard';
   const interactiveThreshold = Number.isFinite(Number(options.interactiveDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(options.interactiveDegradationThreshold))) : 15;
   const documentThreshold = Number.isFinite(Number(options.documentDegradationThreshold))
@@ -722,6 +725,8 @@ async function probeModelContext(modelName, options = {}) {
       hostId: currentArtifact.hostId,
       artifactDigest: currentArtifact.digest,
       runtimeFingerprint: currentArtifact.runtimeFingerprint,
+      profileDepth,
+      candidateRepeats,
       testedNumCtx,
       baselineTokensPerSec: baselineSpeed,
       atLimitTokensPerSec: bestStep.tokensPerSec,

@@ -11,6 +11,7 @@ const JudgeGroundTruth = require('../../../models/JudgeGroundTruth');
 const {
   getWorkloadRecoveryIdentity,
   adoptWorkloadRecovery,
+  heartbeatWorkloadRecovery,
   assertWorkloadRecovery,
   transitionWorkloadRecovery,
   restoreWorkloadRecoveryHosts,
@@ -321,6 +322,12 @@ async function adoptAndAssert(record, ownerId) {
     recoveryRequestId: record.recoveryRequestId,
     ownerId
   });
+  const heartbeat = await heartbeatWorkloadRecovery(record.workloadId);
+  if (heartbeat?.heartbeat !== true) {
+    const error = new Error(heartbeat?.reason || 'Core recovery owner heartbeat was rejected');
+    error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+    throw error;
+  }
   const core = await assertWorkloadRecovery(record.workloadId);
   if (core?.owned !== true || core.recoveryOwnerId !== ownerId) {
     const error = new Error(core?.reason || 'Core recovery quarantine ownership was lost');
@@ -372,6 +379,9 @@ async function reconcileOwnedRecord(ownership) {
   await assertJournalOwner(record._id, ownerId, ownerEpoch, ['pending_reconciliation', 'verified', 'releasing']);
 
   if (record.state === 'pending_reconciliation') {
+    await heartbeatWorkloadRecovery(record.workloadId).then(result => {
+      if (result?.heartbeat !== true) throw new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+    });
     const core = await assertWorkloadRecovery(record.workloadId);
     if (new Set(['PREPARED', 'MUTATING']).has(core.recoveryState)) {
       await transitionWorkloadRecovery(record.workloadId, 'UNKNOWN', {
@@ -379,6 +389,9 @@ async function reconcileOwnedRecord(ownership) {
       });
     }
     const compensationReceipt = await invalidateResource(record);
+    await heartbeatWorkloadRecovery(record.workloadId).then(result => {
+      if (result?.heartbeat !== true) throw new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+    });
     await assertWorkloadRecovery(record.workloadId).then(result => {
       if (result?.owned !== true || result.recoveryOwnerId !== ownerId) {
         throw new Error(result?.reason || 'Core recovery ownership was lost after compensation');
@@ -399,6 +412,9 @@ async function reconcileOwnedRecord(ownership) {
     }
     const afterVerified = await assertWorkloadRecovery(record.workloadId);
     if (afterVerified.recoveryState !== 'RESTORED') {
+      await heartbeatWorkloadRecovery(record.workloadId).then(result => {
+        if (result?.heartbeat !== true) throw new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+      });
       const hostRestore = await restoreWorkloadRecoveryHosts(record.workloadId);
       if (hostRestore?.restored !== true) {
         throw new Error(hostRestore?.reason || 'Core host restoration under recovery quarantine failed');
@@ -423,6 +439,9 @@ async function reconcileOwnedRecord(ownership) {
     return { resolved: false, resultId: record.resultId, reason: 'other authority reconciliations remain pending' };
   }
   await assertJournalOwner(record._id, ownerId, ownerEpoch, ['releasing']);
+  await heartbeatWorkloadRecovery(record.workloadId).then(result => {
+    if (result?.heartbeat !== true) throw new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+  });
   const released = await releaseWorkloadAdmission(record.workloadId);
   if (released?.released !== true) throw new Error(released?.reason || 'Recovery quarantine release was not acknowledged');
   const resolvedAt = new Date();

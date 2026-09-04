@@ -8,6 +8,7 @@ const mockBatchUpdateOne = jest.fn();
 const mockResultFindOneAndUpdate = jest.fn();
 const mockGetRecoveryIdentity = jest.fn();
 const mockAdoptRecovery = jest.fn();
+const mockHeartbeatRecovery = jest.fn();
 const mockAssertRecovery = jest.fn();
 const mockTransitionRecovery = jest.fn();
 const mockRestoreRecoveryHosts = jest.fn();
@@ -35,6 +36,7 @@ jest.mock('../../../models/JudgeGroundTruth', () => ({ findOneAndUpdate: jest.fn
 jest.mock('../../../src/clients/coreApiClient', () => ({
   getWorkloadRecoveryIdentity: (...args) => mockGetRecoveryIdentity(...args),
   adoptWorkloadRecovery: (...args) => mockAdoptRecovery(...args),
+  heartbeatWorkloadRecovery: (...args) => mockHeartbeatRecovery(...args),
   assertWorkloadRecovery: (...args) => mockAssertRecovery(...args),
   transitionWorkloadRecovery: (...args) => mockTransitionRecovery(...args),
   restoreWorkloadRecoveryHosts: (...args) => mockRestoreRecoveryHosts(...args),
@@ -72,6 +74,7 @@ beforeEach(() => {
   mockReconciliationUpdateOne.mockResolvedValue({ matchedCount: 1 });
   mockReconciliationCountDocuments.mockResolvedValue(0);
   mockRecoverRelease.mockResolvedValue({ recovered: false, released: false });
+  mockHeartbeatRecovery.mockResolvedValue({ heartbeat: true });
   mockRestoreRecoveryHosts.mockResolvedValue({ restored: true, details: [] });
 });
 

@@ -5,6 +5,7 @@ const mockAcquireLease = jest.fn();
 const mockUpsert = jest.fn();
 const mockListModels = jest.fn();
 const mockAdoptRecovery = jest.fn();
+const mockHeartbeatRecovery = jest.fn();
 const mockAssertRecovery = jest.fn();
 const mockTransitionRecovery = jest.fn();
 const mockRestoreHosts = jest.fn();
@@ -19,6 +20,7 @@ jest.mock('../../../src/services/profiler/hostProfileService', () => ({ upsert: 
 jest.mock('../../../src/clients/ollamaClient', () => ({ listModels: (...args) => mockListModels(...args) }));
 jest.mock('../../../src/clients/coreApiClient', () => ({
   adoptWorkloadRecovery: (...args) => mockAdoptRecovery(...args),
+  heartbeatWorkloadRecovery: (...args) => mockHeartbeatRecovery(...args),
   assertWorkloadRecovery: (...args) => mockAssertRecovery(...args),
   transitionWorkloadRecovery: (...args) => mockTransitionRecovery(...args),
   restoreWorkloadRecoveryHosts: (...args) => mockRestoreHosts(...args),
@@ -76,6 +78,7 @@ beforeEach(() => {
   mockHostProfile.updateOne.mockResolvedValue({ modifiedCount: 1 });
   mockUpsert.mockResolvedValue({});
   mockListModels.mockResolvedValue({ models: [] });
+  mockHeartbeatRecovery.mockResolvedValue({ heartbeat: true });
   mockRestoreHosts.mockResolvedValue({ restored: true });
   mockTransitionRecovery.mockResolvedValue({ transitioned: true });
   mockReleaseAdmission.mockResolvedValue({ released: true, recoveryReceipt: { contract: 'agentx.workload-recovery/v1' } });

@@ -141,6 +141,7 @@
       "POST /workload-admissions/:admissionId/release-receipt": "scoped-machine-call",
       "DELETE /workload-admissions/:admissionId": "scoped-machine-call",
       "POST /workload-recoveries/:recoveryId/adopt": "scoped-machine-call",
+      "POST /workload-recoveries/:recoveryId/heartbeat": "scoped-machine-call",
       "POST /workload-recoveries/:recoveryId/assert": "scoped-machine-call",
       "POST /workload-recoveries/:recoveryId/transition": "scoped-machine-call",
       "POST /workload-recoveries/:recoveryId/restore-hosts": "scoped-machine-call",

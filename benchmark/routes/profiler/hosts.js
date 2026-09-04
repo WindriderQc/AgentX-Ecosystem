@@ -1047,9 +1047,37 @@ router.get('/:hostId/fit-report', async (req, res) => {
   }
 });
 
-router.put('/:hostId', async (req, res) => {
+router.put('/:hostId', requireOperatorAccess, async (req, res) => {
   try {
-    res.json({ status: 'success', data: await hostProfileService.upsert({ ...req.body, hostId: req.params.hostId }) }); }
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const allowedTopLevel = new Set(['displayName', 'cpu']);
+    const rejectedTopLevel = Object.keys(body).filter(field => !allowedTopLevel.has(field));
+    const cpu = body.cpu && typeof body.cpu === 'object' && !Array.isArray(body.cpu) ? body.cpu : {};
+    const rejectedCpu = Object.keys(cpu).filter(field => field !== 'threadOverride');
+    if (rejectedTopLevel.length || rejectedCpu.length) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'HOST_PROFILE_FIELD_NOT_WRITABLE',
+        error: 'Only displayName and cpu.threadOverride may be changed through this route',
+        fields: [...rejectedTopLevel, ...rejectedCpu.map(field => `cpu.${field}`)]
+      });
+    }
+    const updates = {};
+    if (Object.prototype.hasOwnProperty.call(body, 'displayName')) {
+      const displayName = String(body.displayName || '').trim();
+      if (!displayName) {
+        return res.status(400).json({ status: 'error', code: 'HOST_PROFILE_DISPLAY_NAME_INVALID', error: 'displayName must be non-empty' });
+      }
+      updates.displayName = displayName;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'cpu')) {
+      const threadOverride = Number(cpu.threadOverride);
+      if (!Number.isInteger(threadOverride) || threadOverride <= 0 || threadOverride > 1024) {
+        return res.status(400).json({ status: 'error', code: 'HOST_PROFILE_THREAD_OVERRIDE_INVALID', error: 'cpu.threadOverride must be an integer from 1 to 1024' });
+      }
+      updates.cpu = { threadOverride };
+    }
+    res.json({ status: 'success', data: await hostProfileService.upsert({ ...updates, hostId: req.params.hostId }) }); }
   catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message }); }
 });
 

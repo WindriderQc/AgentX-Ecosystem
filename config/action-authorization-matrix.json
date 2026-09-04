@@ -329,6 +329,7 @@
     "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/recovery",
     "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/release-receipt",
     "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/adopt",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/heartbeat",
     "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/assert",
     "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/restore-hosts",
     "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/transition",
@@ -836,6 +837,13 @@
       "note": "Recovery adoption requires the scoped Benchmark principal, the recovery request secret, and a Core-minted owner generation acquired by CAS.",
       "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
     },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/heartbeat": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Recovery owner heartbeat requires the scoped Benchmark principal and the exact live Core-minted recovery generation.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
     "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/assert": {
       "scopedMachineCredential": "validated-at-route",
       "routeLocalValidator": "enforced",
@@ -1273,7 +1281,7 @@
         "/^\\/api\\/nerve-center\\/workload-admissions\\/[^/]+\\/heartbeat$/",
         "/^\\/api\\/nerve-center\\/workload-admissions\\/[^/]+\\/release-receipt$/",
         "/^\\/api\\/nerve-center\\/workload-admissions\\/[^/]+\\/recovery$/",
-        "/^\\/api\\/nerve-center\\/workload-recoveries\\/[^/]+\\/(adopt|assert|transition|restore-hosts)$/",
+        "/^\\/api\\/nerve-center\\/workload-recoveries\\/[^/]+\\/(adopt|heartbeat|assert|transition|restore-hosts)$/",
         "/^\\/api\\/nerve-center\\/workload-recoveries\\/[^/]+$/",
         "path.endsWith('/benchmark-claim')",
         "path.endsWith('/reload')"
@@ -1369,6 +1377,15 @@
         "safeTokenMatch(process.env.AGENTX_OPERATOR_TOKEN || process.env.AGENTX_ADMIN_TOKEN, presented)",
         "router.post('/test/recovery/:hostId/confirm-runtime-restart', requireOperatorAccess",
         "req.body?.confirmation !== 'RUNTIME_RESTARTED_AND_OLLAMA_REQUESTS_TERMINATED'"
+      ]
+    },
+    "benchmark-profiler-host-profile-write-validator": {
+      "file": "benchmark/routes/profiler/hosts.js",
+      "contains": [
+        "router.put('/:hostId', requireOperatorAccess",
+        "const allowedTopLevel = new Set(['displayName', 'cpu']);",
+        "field !== 'threadOverride'",
+        "code: 'HOST_PROFILE_FIELD_NOT_WRITABLE'"
       ]
     },
     "benchmark-core-contract-auth-caller": {

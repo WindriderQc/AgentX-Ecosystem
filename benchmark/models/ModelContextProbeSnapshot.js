@@ -63,6 +63,8 @@ const ModelContextProbeSnapshotSchema = new mongoose.Schema({
   hostId:                 { type: String, required: true, index: true },
   artifactDigest:         { type: String, required: true, index: true },
   runtimeFingerprint:     { type: String, required: true },
+  profileDepth:           { type: String, enum: ['quick', 'standard', 'full'], default: 'standard' },
+  candidateRepeats:       { type: Number, default: 2 },
   testedNumCtx:           Number,
   baselineTokensPerSec:   Number,
   atLimitTokensPerSec:    Number,

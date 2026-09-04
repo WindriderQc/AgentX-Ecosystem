@@ -339,4 +339,60 @@ describe('inferenceAttemptExecutor cancellation', () => {
     expect(lifecycle.complete).not.toHaveBeenCalled();
     expect(lifecycle.abandon).toHaveBeenCalledTimes(1);
   });
+
+  test('stream EOF without an Ollama done frame abandons the distributed admission', async () => {
+    const lifecycle = {
+      signal: new AbortController().signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn().mockResolvedValue({ released: true }),
+      abandon: jest.fn().mockResolvedValue({ quarantined: true })
+    };
+    beginInferenceAdmission.mockResolvedValueOnce(lifecycle);
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"response":"partial","done":false}\n'
+    });
+
+    await expect(executeAdmittedOllamaAttempt({
+      hostUrl: 'http://ollama.test:11434',
+      model: 'model-a',
+      payload: { model: 'model-a', prompt: 'hello', stream: true },
+      useChat: false,
+      stream: true,
+      timeoutMs: 60_000
+    })).rejects.toMatchObject({ code: 'OLLAMA_STREAM_INCOMPLETE' });
+
+    expect(lifecycle.complete).not.toHaveBeenCalled();
+    expect(lifecycle.abandon).toHaveBeenCalledTimes(1);
+  });
+
+  test('stream terminal done frame permits exact admission release', async () => {
+    const lifecycle = {
+      signal: new AbortController().signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn().mockResolvedValue({ released: true }),
+      abandon: jest.fn().mockResolvedValue({ quarantined: true })
+    };
+    beginInferenceAdmission.mockResolvedValueOnce(lifecycle);
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"response":"partial","done":false}\n{"response":"done","done":true}\n'
+    });
+
+    await expect(executeAdmittedOllamaAttempt({
+      hostUrl: 'http://ollama.test:11434',
+      model: 'model-a',
+      payload: { model: 'model-a', prompt: 'hello', stream: true },
+      useChat: false,
+      stream: true,
+      timeoutMs: 60_000
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(lifecycle.complete).toHaveBeenCalledTimes(1);
+    expect(lifecycle.abandon).not.toHaveBeenCalled();
+  });
 });

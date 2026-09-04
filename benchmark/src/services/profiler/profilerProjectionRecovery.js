@@ -8,6 +8,7 @@ const { listModels } = require('../../clients/ollamaClient');
 const { isSameOllamaModel } = require('../../helpers/ollamaModelIdentity');
 const {
   adoptWorkloadRecovery,
+  heartbeatWorkloadRecovery,
   assertWorkloadRecovery,
   transitionWorkloadRecovery,
   restoreWorkloadRecoveryHosts,
@@ -165,9 +166,17 @@ async function reconcileOwnedProfile(ownership) {
     return reconcileLegacyTerminalProfile(profile);
   }
   await adoptWorkloadRecovery({ ...identity, ownerId });
+  const adoptedHeartbeat = await heartbeatWorkloadRecovery(identity.workloadId);
+  if (adoptedHeartbeat?.heartbeat !== true) {
+    throw new Error(adoptedHeartbeat?.reason || 'Core recovery owner heartbeat was rejected');
+  }
   await assertOwnership(ownership);
 
   const inventory = await listModels(profile.hostUrl, { timeoutMs: 30_000 });
+  const inventoryHeartbeat = await heartbeatWorkloadRecovery(identity.workloadId);
+  if (inventoryHeartbeat?.heartbeat !== true) {
+    throw new Error(inventoryHeartbeat?.reason || 'Core recovery owner heartbeat was rejected');
+  }
   await assertOwnership(ownership);
   const modelName = reconciliation.model;
   const available = (inventory.models || []).some(model => isSameOllamaModel(model.name, modelName));
@@ -176,6 +185,10 @@ async function reconcileOwnedProfile(ownership) {
     ? { [profile.hostUrl]: [modelName] }
     : {});
   if (hostRestore?.restored !== true) throw new Error(hostRestore?.reason || 'Core host restore failed');
+  const restoreHeartbeat = await heartbeatWorkloadRecovery(identity.workloadId);
+  if (restoreHeartbeat?.heartbeat !== true) {
+    throw new Error(restoreHeartbeat?.reason || 'Core recovery owner heartbeat was rejected');
+  }
   await assertOwnership(ownership);
 
   const core = await assertWorkloadRecovery(identity.workloadId);

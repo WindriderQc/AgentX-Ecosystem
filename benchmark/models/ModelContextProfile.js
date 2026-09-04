@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 
 const LatestEvidenceSchema = new mongoose.Schema({
   snapshotId: String,
+  profileDepth: { type: String, enum: ['quick', 'standard', 'full'] },
+  candidateRepeats: Number,
   testedNumCtx: Number,
   promptFillPct: Number,
   promptTokens: Number,
@@ -23,6 +25,8 @@ const ModelContextProfileSchema = new mongoose.Schema({
   hostId: { type: String, default: null, index: true },
   artifactDigest: { type: String, required: true, index: true },
   runtimeFingerprint: { type: String, required: true },
+  profileDepth: { type: String, enum: ['quick', 'standard', 'full'], default: 'standard' },
+  contextProbeCandidateRepeats: { type: Number, default: null },
 
   maxVerifiedContext: { type: Number, default: null },
   // Backward-compatible alias for readers deployed before maxVerifiedContext.

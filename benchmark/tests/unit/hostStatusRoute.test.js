@@ -49,6 +49,7 @@ app.use('/api/profiler/hosts', router);
 
 describe('Profiler host status read/refresh split', () => {
   let lease;
+  const originalOperatorToken = process.env.AGENTX_OPERATOR_TOKEN;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -90,6 +91,48 @@ describe('Profiler host status read/refresh split', () => {
       status: 'online',
       lastSeenAt: new Date('2026-08-28T00:00:00.000Z'),
       dedicated: null,
+    });
+    process.env.AGENTX_OPERATOR_TOKEN = 'test-operator-token';
+  });
+
+  afterAll(() => {
+    if (originalOperatorToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
+    else process.env.AGENTX_OPERATOR_TOKEN = originalOperatorToken;
+  });
+
+  test('PUT host profile rejects arbitrary evidence and runtime fields', async () => {
+    const response = await request(app)
+      .put('/api/profiler/hosts/primary')
+      .set('authorization', 'Bearer test-operator-token')
+      .send({
+        displayName: 'Primary',
+        baseline: { tokensPerSec: 999999 },
+        dedicated: { model: 'untrusted:model' },
+        reconciliation: { state: 'resolved' }
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      code: 'HOST_PROFILE_FIELD_NOT_WRITABLE'
+    });
+    expect(response.body.fields).toEqual(expect.arrayContaining(['baseline', 'dedicated', 'reconciliation']));
+    expect(hostProfileService.upsert).not.toHaveBeenCalled();
+  });
+
+  test('PUT host profile accepts only bounded operator-owned display and thread fields', async () => {
+    hostProfileService.upsert.mockResolvedValue({ hostId: 'primary', displayName: 'Primary', cpu: { threadOverride: 8 } });
+
+    const response = await request(app)
+      .put('/api/profiler/hosts/primary')
+      .set('authorization', 'Bearer test-operator-token')
+      .send({ displayName: ' Primary ', cpu: { threadOverride: 8 } });
+
+    expect(response.status).toBe(200);
+    expect(hostProfileService.upsert).toHaveBeenCalledWith({
+      displayName: 'Primary',
+      cpu: { threadOverride: 8 },
+      hostId: 'primary'
     });
   });
 

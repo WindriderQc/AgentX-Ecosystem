@@ -102,15 +102,16 @@ describe('runtime mutation maintenance lifecycle', () => {
     expect(runtime.markMaintenanceUnknown).not.toHaveBeenCalled();
   });
 
-  test('releases a failed application mutation but quarantines an unverified terminal release', async () => {
+  test('quarantines a failed application mutation and an unverified terminal release', async () => {
     const writeError = new Error('validation rejected');
     await expect(runRuntimeMutation({
       principal: 'operator-token', requestId: 'request-a', scope: 'host-preference:update'
     }, async () => { throw writeError; })).rejects.toBe(writeError);
-    expect(runtime.release).toHaveBeenCalledWith('maintenance', {
-      id: 'lease-a', generation: 'generation-a', principal: 'operator-token'
-    });
-    expect(runtime.markMaintenanceUnknown).not.toHaveBeenCalled();
+    expect(runtime.release).not.toHaveBeenCalled();
+    expect(runtime.markMaintenanceUnknown).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'lease-a', generation: 'generation-a', principal: 'operator-token',
+      reason: 'validation rejected'
+    }));
 
     jest.clearAllMocks();
     runtime.acquireMaintenance.mockResolvedValue({

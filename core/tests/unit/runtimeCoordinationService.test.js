@@ -193,7 +193,7 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     });
   });
 
-  test('heartbeat never resurrects expired proof and reaper removes it', async () => {
+  test('heartbeat never resurrects expired proof and reaper quarantines it', async () => {
     const admission = await service.acquireWorkload({
       principal: 'benchmark-service',
       requestId: 'expiry-request',
@@ -212,7 +212,14 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     });
     expect(renewed).toMatchObject({ heartbeat: false });
     await service.reapExpired(new Date());
-    expect((await RuntimeCoordination.findById('runtime').lean()).workloads).toHaveLength(0);
+    expect((await RuntimeCoordination.findById('runtime').lean()).workloads).toEqual([
+      expect.objectContaining({
+        admissionId: admission.admissionId,
+        recoveryRequired: true,
+        recoveryState: 'UNKNOWN',
+        recoveryReceipt: expect.objectContaining({ event: 'workload-heartbeat-expired' })
+      })
+    ]);
   });
 
   test('maintenance heartbeat cannot revive an expired lease and expiry stays quarantined', async () => {
@@ -494,7 +501,7 @@ describe('runtime maintenance and benchmark workload coordination', () => {
       recoveryId: armed.recoveryId,
       recoveryGeneration: armed.recoveryGeneration,
       principal: admission.principal
-    })).resolves.toMatchObject({ released: false, reason: expect.stringContaining('VERIFIED and RESTORED') });
+    })).resolves.toMatchObject({ released: false, reason: expect.stringContaining('no longer owns') });
   });
 
   test('recovery adoption is single-writer and old generations cannot write after restart', async () => {
@@ -539,6 +546,26 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     const loser = [first, second].find(item => !item.adopted);
     expect(winner).toMatchObject({ adopted: true, recoveryState: 'MUTATING', recoveryVersion: 1 });
     expect(loser).toMatchObject({ adopted: false });
+    await expect(service.adoptWorkloadRecovery({
+      recoveryId: armed.recoveryId,
+      principal: admission.principal,
+      recoveryRequestId: 'recovery:crash-request',
+      ownerId: loser === first ? 'worker-a' : 'worker-b'
+    })).resolves.toMatchObject({
+      adopted: false,
+      reason: expect.stringContaining('lease remains live')
+    });
+    await expect(service.heartbeatWorkloadRecovery({
+      recoveryId: winner.recoveryId,
+      recoveryGeneration: winner.recoveryGeneration,
+      principal: admission.principal,
+      ownerId: winner.recoveryOwnerId,
+      ttl: 60_000
+    })).resolves.toMatchObject({
+      heartbeat: true,
+      recoveryGeneration: winner.recoveryGeneration,
+      recoveryOwnerId: winner.recoveryOwnerId
+    });
     await expect(service.transitionWorkloadRecovery({
       recoveryId: armed.recoveryId,
       recoveryGeneration: mutating.recoveryGeneration,

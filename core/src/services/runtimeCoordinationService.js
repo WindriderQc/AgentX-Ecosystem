@@ -122,16 +122,33 @@ async function ensureDocument() {
 
 async function reapExpired(now = new Date()) {
   await ensureDocument();
+  // Workloads are born with a durable recovery identity. Expiry therefore
+  // means the owner outcome is unknown; it never proves that an external
+  // database or Ollama effect stopped. Preserve the admission and force an
+  // adopted recovery generation to reconcile it.
   await RuntimeCoordination.updateOne(
-    { _id: 'runtime' },
     {
-      $pull: {
-        workloads: {
-          expiresAt: { $lte: now },
-          recoveryRequired: { $ne: true }
+      _id: 'runtime',
+      workloads: { $elemMatch: {
+        recoveryRequired: true,
+        recoveryState: { $in: ['PREPARED', 'MUTATING'] },
+        expiresAt: { $lte: now }
+      } }
+    },
+    {
+      $set: {
+        'workloads.$[entry].recoveryState': 'UNKNOWN',
+        'workloads.$[entry].recoveryReceipt': {
+          contract: 'agentx.workload-recovery/v1',
+          event: 'workload-heartbeat-expired'
         }
       }
-    }
+    },
+    { arrayFilters: [{
+      'entry.recoveryRequired': true,
+      'entry.recoveryState': { $in: ['PREPARED', 'MUTATING'] },
+      'entry.expiresAt': { $lte: now }
+    }] }
   );
   // Never infer that an Ollama request terminated merely because its Core
   // process stopped heartbeating. Preserve a non-expiring quarantine so
@@ -648,12 +665,13 @@ async function hostHasActiveInferences(host) {
   }));
 }
 
-async function acquireWorkload({ principal, requestId, workloadId, kind, batchId, hosts, ttl } = {}) {
+async function acquireWorkload({ principal, requestId, workloadId, kind, batchId, hosts, recoveryRequestId, ttl } = {}) {
   principal = clean(principal);
   requestId = clean(requestId);
   workloadId = clean(workloadId);
   kind = clean(kind) || 'benchmark';
   batchId = clean(batchId);
+  recoveryRequestId = clean(recoveryRequestId) || (requestId ? `recovery:${requestId}` : null);
   hosts = normalizedHosts(hosts);
   if (!principal || !requestId || !workloadId) {
     return { acquired: false, reason: 'principal, requestId, and workloadId required' };
@@ -674,6 +692,8 @@ async function acquireWorkload({ principal, requestId, workloadId, kind, batchId
   }
   const now = new Date();
   const duration = ttlMs(ttl);
+  const recoveryId = secret();
+  const recoveryGeneration = secret();
   const admission = {
     admissionId: secret(),
     generation: secret(),
@@ -685,7 +705,19 @@ async function acquireWorkload({ principal, requestId, workloadId, kind, batchId
     hosts,
     acquiredAt: now,
     heartbeatAt: now,
-    expiresAt: new Date(now.getTime() + duration)
+    expiresAt: new Date(now.getTime() + duration),
+    recoveryRequired: true,
+    recoveryId,
+    recoveryGeneration,
+    recoveryRequestId,
+    recoveryOwnerId: null,
+    recoveryArmedAt: now,
+    recoveryAdoptedAt: null,
+    recoveryHeartbeatAt: null,
+    recoveryExpiresAt: null,
+    recoveryState: 'PREPARED',
+    recoveryVersion: 0,
+    recoveryReceipt: null
   };
   const updated = await RuntimeCoordination.findOneAndUpdate(
     {
@@ -870,7 +902,7 @@ async function armWorkloadRecovery({ id, generation, principal, recoveryRequestI
   };
 }
 
-async function adoptWorkloadRecovery({ recoveryId, principal, recoveryRequestId, ownerId } = {}) {
+async function adoptWorkloadRecovery({ recoveryId, principal, recoveryRequestId, ownerId, ttl } = {}) {
   recoveryId = clean(recoveryId);
   principal = clean(principal);
   recoveryRequestId = clean(recoveryRequestId);
@@ -884,7 +916,13 @@ async function adoptWorkloadRecovery({ recoveryId, principal, recoveryRequestId,
   if (!existing || existing.principal !== principal || existing.recoveryRequestId !== recoveryRequestId) {
     return { adopted: false, reason: 'recovery identity no longer owns coordination state' };
   }
-  if (existing.recoveryOwnerId === ownerId) {
+  const adoptedAt = new Date();
+  const ownerExpiresAt = existing.recoveryExpiresAt
+    ? new Date(existing.recoveryExpiresAt)
+    : null;
+  if (existing.recoveryOwnerId === ownerId
+    && ownerExpiresAt
+    && ownerExpiresAt.getTime() > adoptedAt.getTime()) {
     return {
       adopted: true,
       admissionId: existing.admissionId,
@@ -900,16 +938,23 @@ async function adoptWorkloadRecovery({ recoveryId, principal, recoveryRequestId,
       recoveryGeneration: existing.recoveryGeneration,
       recoveryRequestId: existing.recoveryRequestId,
       recoveryOwnerId: existing.recoveryOwnerId,
+      recoveryHeartbeatAt: existing.recoveryHeartbeatAt,
+      recoveryExpiresAt: existing.recoveryExpiresAt,
       recoveryState: existing.recoveryState,
       recoveryVersion: existing.recoveryVersion,
       idempotent: true
     };
   }
-  if (new Date(existing.expiresAt).getTime() > Date.now()) {
+  if (new Date(existing.expiresAt).getTime() > adoptedAt.getTime()) {
     return { adopted: false, retryable: true, reason: 'original workload owner remains live' };
   }
+  if (existing.recoveryOwnerId
+    && ownerExpiresAt
+    && ownerExpiresAt.getTime() > adoptedAt.getTime()) {
+    return { adopted: false, retryable: true, reason: 'recovery owner lease remains live' };
+  }
   const nextGeneration = secret();
-  const adoptedAt = new Date();
+  const recoveryExpiresAt = new Date(adoptedAt.getTime() + ttlMs(ttl));
   const updated = await RuntimeCoordination.findOneAndUpdate(
     {
       _id: 'runtime',
@@ -921,14 +966,23 @@ async function adoptWorkloadRecovery({ recoveryId, principal, recoveryRequestId,
         recoveryId,
         recoveryGeneration: existing.recoveryGeneration,
         recoveryRequestId,
-        expiresAt: { $lte: adoptedAt }
+        expiresAt: { $lte: adoptedAt },
+        $or: [
+          { recoveryOwnerId: null },
+          { recoveryOwnerId: { $exists: false } },
+          { recoveryExpiresAt: null },
+          { recoveryExpiresAt: { $exists: false } },
+          { recoveryExpiresAt: { $lte: adoptedAt } }
+        ]
       } }
     },
     {
       $set: {
         'workloads.$.recoveryGeneration': nextGeneration,
         'workloads.$.recoveryOwnerId': ownerId,
-        'workloads.$.recoveryAdoptedAt': adoptedAt
+        'workloads.$.recoveryAdoptedAt': adoptedAt,
+        'workloads.$.recoveryHeartbeatAt': adoptedAt,
+        'workloads.$.recoveryExpiresAt': recoveryExpiresAt
       }
     },
     { new: true }
@@ -951,6 +1005,52 @@ async function adoptWorkloadRecovery({ recoveryId, principal, recoveryRequestId,
     recoveryRequestId: owned.recoveryRequestId,
     recoveryOwnerId: owned.recoveryOwnerId,
     recoveryAdoptedAt: owned.recoveryAdoptedAt,
+    recoveryHeartbeatAt: owned.recoveryHeartbeatAt,
+    recoveryExpiresAt: owned.recoveryExpiresAt,
+    recoveryState: owned.recoveryState,
+    recoveryVersion: owned.recoveryVersion
+  };
+}
+
+async function heartbeatWorkloadRecovery({ recoveryId, recoveryGeneration, principal, ownerId, ttl } = {}) {
+  recoveryId = clean(recoveryId);
+  recoveryGeneration = clean(recoveryGeneration);
+  principal = clean(principal);
+  ownerId = clean(ownerId);
+  if (!recoveryId || !recoveryGeneration || !principal || !ownerId) {
+    return { heartbeat: false, reason: 'exact recovery proof and ownerId required' };
+  }
+  const now = new Date();
+  const recoveryExpiresAt = new Date(now.getTime() + ttlMs(ttl));
+  const updated = await RuntimeCoordination.findOneAndUpdate(
+    {
+      _id: 'runtime',
+      workloads: { $elemMatch: {
+        recoveryRequired: true,
+        recoveryId,
+        recoveryGeneration,
+        principal,
+        recoveryOwnerId: ownerId,
+        recoveryExpiresAt: { $gt: now }
+      } }
+    },
+    {
+      $set: {
+        'workloads.$.recoveryHeartbeatAt': now,
+        'workloads.$.recoveryExpiresAt': recoveryExpiresAt
+      }
+    },
+    { new: true }
+  ).lean();
+  if (!updated) return { heartbeat: false, reason: 'recovery owner lease no longer owns quarantine' };
+  const owned = updated.workloads.find(item => item.recoveryId === recoveryId);
+  return {
+    heartbeat: true,
+    recoveryId: owned.recoveryId,
+    recoveryGeneration: owned.recoveryGeneration,
+    recoveryOwnerId: owned.recoveryOwnerId,
+    recoveryHeartbeatAt: owned.recoveryHeartbeatAt,
+    recoveryExpiresAt: owned.recoveryExpiresAt,
     recoveryState: owned.recoveryState,
     recoveryVersion: owned.recoveryVersion
   };
@@ -984,10 +1084,16 @@ async function transitionWorkloadRecovery({
   }
   const current = await RuntimeCoordination.findById('runtime').lean();
   const existing = (current?.workloads || []).find(item => item.recoveryId === recoveryId);
+  const now = new Date();
+  const ownerLeaseLive = existing?.recoveryOwnerId
+    ? ownerId === existing.recoveryOwnerId
+      && existing.recoveryExpiresAt
+      && new Date(existing.recoveryExpiresAt).getTime() > now.getTime()
+    : existing?.expiresAt && new Date(existing.expiresAt).getTime() > now.getTime();
   if (!existing
     || existing.recoveryGeneration !== recoveryGeneration
     || existing.principal !== principal
-    || (existing.recoveryOwnerId && existing.recoveryOwnerId !== ownerId)) {
+    || !ownerLeaseLive) {
     return { transitioned: false, reason: 'recovery proof no longer owns quarantine' };
   }
   if (existing.recoveryState === state && Number(existing.recoveryVersion) === version + 1) {
@@ -1015,7 +1121,9 @@ async function transitionWorkloadRecovery({
         principal,
         recoveryVersion: version,
         recoveryState: existing.recoveryState,
-        ...(existing.recoveryOwnerId ? { recoveryOwnerId: ownerId } : {})
+        ...(existing.recoveryOwnerId
+          ? { recoveryOwnerId: ownerId, recoveryExpiresAt: { $gt: now } }
+          : { expiresAt: { $gt: now } }),
       } }
     },
     {
@@ -1048,6 +1156,7 @@ async function assertWorkloadRecovery({ recoveryId, recoveryGeneration, principa
   if (!recoveryId || !recoveryGeneration || !principal) {
     return { owned: false, reason: 'exact recovery proof required' };
   }
+  const now = new Date();
   const state = await RuntimeCoordination.findOne({
     _id: 'runtime',
     workloads: { $elemMatch: {
@@ -1055,7 +1164,9 @@ async function assertWorkloadRecovery({ recoveryId, recoveryGeneration, principa
       recoveryId,
       recoveryGeneration,
       principal,
-      ...(ownerId ? { recoveryOwnerId: ownerId } : {})
+      ...(ownerId
+        ? { recoveryOwnerId: ownerId, recoveryExpiresAt: { $gt: now } }
+        : { recoveryOwnerId: null, expiresAt: { $gt: now } })
     } }
   }).lean();
   if (!state) return { owned: false, reason: 'recovery proof no longer owns quarantine' };
@@ -1069,6 +1180,8 @@ async function assertWorkloadRecovery({ recoveryId, recoveryGeneration, principa
     recoveryId: owned.recoveryId,
     recoveryGeneration: owned.recoveryGeneration,
     recoveryOwnerId: owned.recoveryOwnerId || null,
+    recoveryHeartbeatAt: owned.recoveryHeartbeatAt || null,
+    recoveryExpiresAt: owned.recoveryExpiresAt || null,
     recoveryState: owned.recoveryState,
     recoveryVersion: owned.recoveryVersion
   };
@@ -1200,7 +1313,7 @@ async function release(kind, { id, generation, principal } = {}) {
       reason: 'maintenance lease is quarantined pending operator reconciliation'
     };
   }
-  if (!isMaintenance && owned.recoveryRequired === true) {
+  if (!isMaintenance && owned.recoveryRequired === true && owned.recoveryState !== 'PREPARED') {
     return { released: false, reason: 'workload is protected by durable recovery quarantine' };
   }
   const releasedAt = new Date();
@@ -1380,6 +1493,7 @@ module.exports = {
   hostHasActiveInferences,
   armWorkloadRecovery,
   adoptWorkloadRecovery,
+  heartbeatWorkloadRecovery,
   assertWorkloadRecovery,
   transitionWorkloadRecovery,
   resolveWorkloadRecovery,

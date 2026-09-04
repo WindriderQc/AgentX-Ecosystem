@@ -126,6 +126,14 @@ jest.mock('../../src/services/ragServiceClient', () => ({
   getRagServiceClient: jest.fn(() => ({}))
 }));
 
+jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
+  runRuntimeMutation: jest.fn(async (_options, operation) => operation({
+    leaseId: 'route-test-lease',
+    generation: 'route-test-generation',
+    principal: 'same-origin-ui'
+  }))
+}));
+
 const app = express();
 app.use(express.json());
 app.use('/api', require('../../routes/api'));

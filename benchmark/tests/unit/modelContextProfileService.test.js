@@ -19,6 +19,16 @@ function mockLean(value) {
   return { lean: jest.fn().mockResolvedValue(value) };
 }
 
+function stableThroughputStatistics(mean) {
+  return {
+    sampleCount: 5,
+    mean,
+    coefficientOfVariation: 0.01,
+    confidenceInterval95: { low: mean * 0.98, high: mean * 1.02 },
+    reliability: 'high'
+  };
+}
+
 describe('modelContextProfileService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -40,6 +50,8 @@ describe('modelContextProfileService', () => {
       artifactDigest: 'sha256:exact',
       runtimeFingerprint: 'runtime-a',
       status: 'completed',
+      profileDepth: 'full',
+      candidateRepeats: 5,
       testedNumCtx: 237568,
       promptFillPct: 80,
       modelTheoreticalMax: 262144,
@@ -51,6 +63,7 @@ describe('modelContextProfileService', () => {
         passed: true,
         degradationPct: 12.5,
         tokensPerSec: 71.2,
+        throughputStatistics: stableThroughputStatistics(71.2),
         promptTokens: 190000,
         vramUsedMiB: 12000,
         gpuPercent: 100,
@@ -66,6 +79,8 @@ describe('modelContextProfileService', () => {
       artifactDigest: 'sha256:exact',
       runtimeFingerprint: 'runtime-a',
       hostId: 'secondary',
+      profileDepth: 'full',
+      contextProbeCandidateRepeats: 5,
       maxVerifiedContext: 237568,
       verifiedMaxContext: 237568,
       historicalMaxVerifiedContext: 237568,
@@ -82,6 +97,8 @@ describe('modelContextProfileService', () => {
     }));
     expect(profile.latestEvidence).toEqual(expect.objectContaining({
       snapshotId: 'snapshot-1',
+      profileDepth: 'full',
+      candidateRepeats: 5,
       testedNumCtx: 237568,
       promptTokens: 190000,
       tokensPerSec: 71.2,
@@ -113,7 +130,9 @@ describe('modelContextProfileService', () => {
       maxVerifiedContext: 131072,
       verifiedMaxContext: 131072,
       historicalMaxVerifiedContext: 237568,
-      recommendedContext: 131072
+      recommendedContext: null,
+      recommendationStatus: 'unknown',
+      revalidationRequired: true
     }));
     expect(profile.latestEvidence).toEqual(expect.objectContaining({
       snapshotId: 'snapshot-2',
@@ -259,7 +278,8 @@ describe('modelContextProfileService', () => {
       modelName: 'gemma4:12b-it-qat',
       hostId: 'secondary',
       verifiedMaxContext: 32768,
-      recommendedContext: 32768
+      recommendedContext: null,
+      recommendationStatus: 'unknown'
     }));
     expect(ModelContextProfile.findOneAndUpdate).toHaveBeenCalled();
   });

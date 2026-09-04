@@ -338,6 +338,7 @@ describe('Core API client scoped outbound execution', () => {
       ['POST', '/api/nerve-center/workload-admissions/admission-1/release-receipt', CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY],
       ['POST', '/api/nerve-center/workload-admissions/admission-1/recovery', CORE_OPERATIONS.WORKLOAD_RECOVERY_ARM],
       ['POST', '/api/nerve-center/workload-recoveries/recovery-1/adopt', CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT],
+      ['POST', '/api/nerve-center/workload-recoveries/recovery-1/heartbeat', CORE_OPERATIONS.WORKLOAD_RECOVERY_HEARTBEAT],
       ['POST', '/api/nerve-center/workload-recoveries/recovery-1/assert', CORE_OPERATIONS.WORKLOAD_RECOVERY_ASSERT],
       ['POST', '/api/nerve-center/workload-recoveries/recovery-1/transition', CORE_OPERATIONS.WORKLOAD_RECOVERY_TRANSITION],
       ['POST', '/api/nerve-center/workload-recoveries/recovery-1/restore-hosts', CORE_OPERATIONS.WORKLOAD_RECOVERY_HOST_RESTORE],

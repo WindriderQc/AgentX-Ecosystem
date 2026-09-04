@@ -26,6 +26,7 @@ jest.mock('../../src/services/runtimeCoordinationService', () => ({
   acquireWorkload: jest.fn(),
   armWorkloadRecovery: jest.fn(),
   adoptWorkloadRecovery: jest.fn(),
+  heartbeatWorkloadRecovery: jest.fn(),
   assertWorkloadRecovery: jest.fn(),
   transitionWorkloadRecovery: jest.fn(),
   resolveWorkloadRecovery: jest.fn(),
@@ -36,6 +37,13 @@ jest.mock('../../src/services/runtimeCoordinationService', () => ({
   acquireMaintenance: jest.fn(),
   markMaintenanceUnknown: jest.fn(),
   listActive: jest.fn()
+}));
+jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
+  runRuntimeMutation: jest.fn(async (_options, operation) => operation({
+    leaseId: 'route-test-lease',
+    generation: 'route-test-generation',
+    principal: 'benchmark-service'
+  }))
 }));
 
 const hostPrefService = require('../../src/services/hostPreferenceService');
@@ -106,6 +114,14 @@ const ROUTES = [
     body: { recoveryRequestId: 'recovery-request-core', ownerId: 'worker-a' },
     expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.adoptWorkloadRecovery]
+  },
+  {
+    label: 'runtime workload recovery heartbeat',
+    method: 'post',
+    path: '/api/nerve-center/workload-recoveries/recovery-core/heartbeat',
+    body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a', ttlMs: 60_000 },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [runtimeCoordinationService.heartbeatWorkloadRecovery]
   },
   {
     label: 'runtime workload recovery assertion',
@@ -273,6 +289,10 @@ describe('Benchmark service identity on Core host-control routes', () => {
       adopted: true, recoveryId: 'recovery-core', recoveryGeneration: 'recovery-generation-core',
       recoveryRequestId: 'recovery-request-core', recoveryOwnerId: 'worker-a', workloadId: 'batch-1'
     });
+    runtimeCoordinationService.heartbeatWorkloadRecovery.mockResolvedValue({
+      heartbeat: true, recoveryId: 'recovery-core', recoveryGeneration: 'recovery-generation-core',
+      recoveryOwnerId: 'worker-a', recoveryState: 'MUTATING', recoveryVersion: 2
+    });
     runtimeCoordinationService.assertWorkloadRecovery.mockResolvedValue({
       owned: true, recoveryId: 'recovery-core', recoveryGeneration: 'recovery-generation-core',
       recoveryOwnerId: 'worker-a', workloadId: 'batch-1', recoveryState: 'MUTATING', recoveryVersion: 2
@@ -393,6 +413,7 @@ describe('Benchmark service identity on Core host-control routes', () => {
       kind: 'benchmark',
       batchId: undefined,
       hosts: undefined,
+      recoveryRequestId: undefined,
       ttl: undefined
     });
     expect(response.body.data.generation).toBe('generation-core');
