@@ -6,6 +6,7 @@ const HostProfile = require('../../models/HostProfile');
 const ModelProfile = require('../../models/ModelProfile');
 const performanceProfiles = require('../../src/services/profiler/modelPerformanceProfileService');
 const contextProfiles = require('../../src/services/modelContextProfileService');
+const toolQualifications = require('../../src/services/qualification/toolCapabilityQualificationService');
 const { normalizeHostUrl } = require('../../../shared/artifactIdentity');
 const { normalizeModelTag } = require('../../../shared/modelNames');
 
@@ -21,6 +22,31 @@ function serializeModelProfile(profile) {
     thinkingProfiles: mapToObject(profile.thinkingProfiles),
     readiness: mapToObject(profile.readiness),
     updatedAt: profile.updatedAt || null
+  };
+}
+
+function toolIdentityFromQuery(modelName, hostUrl, query = {}) {
+  const identity = {
+    modelName,
+    hostUrl,
+    hostId: String(query.hostId || '').trim(),
+    artifactDigest: String(query.artifactDigest || '').trim(),
+    runtimeFingerprint: String(query.runtimeFingerprint || '').trim()
+  };
+  return identity.hostId && identity.artifactDigest && identity.runtimeFingerprint
+    ? identity
+    : null;
+}
+
+function missingToolEvidence() {
+  return {
+    contract: toolQualifications.QUALIFICATION_SCHEMA_VERSION,
+    state: 'unknown',
+    supported: null,
+    qualified: false,
+    reasons: ['artifact_identity_required'],
+    expected: toolQualifications.currentEvidenceContract(),
+    evidence: null
   };
 }
 
@@ -65,19 +91,24 @@ router.get('/inference/:modelName', async (req, res) => {
     if (!modelName || !hostUrl) {
       return res.status(400).json({ status: 'error', error: 'modelName and hostUrl are required' });
     }
-    const [hostProfile, modelProfile] = await Promise.all([
+    const toolIdentity = toolIdentityFromQuery(modelName, hostUrl, req.query);
+    const [hostProfile, modelProfile, toolQualification] = await Promise.all([
       HostProfile.findOne({ hostUrl })
         .select('hostId hostUrl displayName gpu ollama cpu')
         .lean(),
       ModelProfile.findOne({ name: modelName })
         .select('name capabilities thinkingProfiles readiness updatedAt')
-        .lean()
+        .lean(),
+      toolIdentity
+        ? toolQualifications.resolveQualification(toolIdentity)
+        : missingToolEvidence()
     ]);
     return res.json({
       status: 'success',
       data: {
         hostProfile: hostProfile || null,
-        modelProfile: serializeModelProfile(modelProfile)
+        modelProfile: serializeModelProfile(modelProfile),
+        toolQualification
       }
     });
   } catch (err) {
