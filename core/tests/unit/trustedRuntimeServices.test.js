@@ -6,13 +6,13 @@ const {
   executeRoutedInference
 } = require('../../src/extensions/trustedRuntimeServices');
 
-function response({ ok = true, status = 200, body = {}, stream = null } = {}) {
+function response({ ok = true, status = 200, body = {}, raw = null, stream = null } = {}) {
   return {
     ok,
     status,
     headers: new Map(),
     body: stream,
-    text: jest.fn(async () => JSON.stringify(body))
+    text: jest.fn(async () => raw == null ? JSON.stringify(body) : raw)
   };
 }
 
@@ -88,6 +88,74 @@ describe('trusted runtime services', () => {
     expect(Object.isFrozen(result.metadata)).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
     expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({ caller: 'proxy' }));
+  });
+
+  test.each([
+    [
+      'a contradictory embed success and error',
+      response({ body: { embeddings: [[1]], error: 'failed' } }),
+      'embed',
+      'OLLAMA_EMBED_RESPONSE_INVALID'
+    ],
+    [
+      'a non-Ollama HTTP rejection',
+      response({ ok: false, status: 500, raw: 'proxy failure' }),
+      'generate',
+      'OLLAMA_REJECTION_UNVERIFIED'
+    ]
+  ])('quarantines admission after %s', async (_label, upstream, mode, causeCode) => {
+    const lifecycle = [];
+    const complete = jest.fn(async () => lifecycle.push('complete'));
+    const abandon = jest.fn(async () => lifecycle.push('abandon'));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(() => lifecycle.push('dispatched')),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => upstream)
+    });
+    const request = mode === 'embed'
+      ? { mode, model: 'model-a', input: 'hello' }
+      : { mode, model: 'model-a', prompt: 'hello' };
+
+    await expect(executeRoutedInference(deps, request)).rejects.toMatchObject({
+      code: 'INFERENCE_UPSTREAM_UNAVAILABLE',
+      cause: { code: causeCode }
+    });
+    expect(lifecycle).toEqual(['dispatched', 'abandon']);
+    expect(complete).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalledWith(expect.objectContaining({ code: causeCode }));
+  });
+
+  test('releases admission after an exact Ollama HTTP rejection', async () => {
+    const lifecycle = [];
+    const complete = jest.fn(async () => lifecycle.push('complete'));
+    const abandon = jest.fn(async () => lifecycle.push('abandon'));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(() => lifecycle.push('dispatched')),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => response({
+        ok: false,
+        status: 404,
+        body: { error: 'model not found' }
+      }))
+    });
+
+    const result = await executeRoutedInference(deps, {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 404, body: { error: 'model not found' } });
+    expect(lifecycle).toEqual(['dispatched', 'complete']);
+    expect(abandon).not.toHaveBeenCalled();
   });
 
   test('relays a stream and aborts it when the caller disconnects', async () => {

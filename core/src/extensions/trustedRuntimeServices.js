@@ -4,8 +4,7 @@ const fetch = require('node-fetch');
 const { StringDecoder } = require('string_decoder');
 const { Transform } = require('stream');
 const {
-  createOllamaStreamTerminalValidator,
-  hasTerminalOllamaResponse
+  createOllamaStreamTerminalValidator
 } = require('../services/routing/inferenceAttemptExecutor');
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -246,6 +245,15 @@ function createAbortBridge(signal, timeoutMs) {
 function safeJson(raw) {
   if (!raw) return {};
   try { return JSON.parse(raw); } catch { return { error: raw }; }
+}
+
+function exactJsonObject(raw) {
+  try {
+    const value = JSON.parse(String(raw || ''));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function releaseOnce(release) {
@@ -790,16 +798,24 @@ async function executeRoutedInference(deps, request, options = {}) {
 
     const raw = await response.text();
     const data = safeJson(raw);
-    const exactTerminal = request.mode === 'embed'
-      ? Array.isArray(data?.embeddings) || Array.isArray(data?.embedding)
-      : hasTerminalOllamaResponse(raw);
-    if (response.ok && !exactTerminal) {
-      const error = new Error(request.mode === 'embed'
-        ? 'Trusted runtime embed response was not an exact embedding object'
-        : 'Trusted runtime response ended without an exact terminal done object');
-      error.code = request.mode === 'embed'
-        ? 'OLLAMA_EMBED_RESPONSE_INVALID'
-        : 'OLLAMA_RESPONSE_INCOMPLETE';
+    const terminal = exactJsonObject(raw);
+    const hasError = typeof terminal?.error === 'string';
+    const hasSuccess = request.mode === 'embed'
+      ? Array.isArray(terminal?.embeddings) || Array.isArray(terminal?.embedding)
+      : terminal?.done === true;
+    const successTerminal = response.ok && hasSuccess && !hasError;
+    const rejectionTerminal = !response.ok && hasError && !hasSuccess;
+    if (!successTerminal && !rejectionTerminal) {
+      const error = new Error(response.ok
+        ? (request.mode === 'embed'
+          ? 'Trusted runtime embed response was not an exact error-free embedding object'
+          : 'Trusted runtime response ended without an exact error-free terminal done object')
+        : 'Trusted runtime rejection was not an exact Ollama error object');
+      error.code = !response.ok
+        ? 'OLLAMA_REJECTION_UNVERIFIED'
+        : (request.mode === 'embed'
+          ? 'OLLAMA_EMBED_RESPONSE_INVALID'
+          : 'OLLAMA_RESPONSE_INCOMPLETE');
       throw error;
     }
     await inferenceAdmission.complete();
