@@ -20,7 +20,8 @@ const DEFAULT_SETTINGS = {
   numPredict: 64,
   warmup: true,
   testTimeoutSec: 60,
-  baselineModel: 'qwen2.5:3b'
+  baselineModel: 'qwen2.5:3b',
+  fullPhaseRepeats: 3
 };
 
 // ---------------------------------------------------------------------------
@@ -54,7 +55,7 @@ describe('_runThroughputCurve()', () => {
     const results = await orchestrator._runThroughputCurve(HOST_URL, MODEL_NAME, maxCtx, DEFAULT_SETTINGS);
 
     expect(results).toHaveLength(5);
-    expect(hostTestService.testModelOnHost).toHaveBeenCalledTimes(5);
+    expect(hostTestService.testModelOnHost).toHaveBeenCalledTimes(15);
 
     const expectedPcts = [10, 25, 50, 75, 90];
     results.forEach((r, i) => {
@@ -63,6 +64,8 @@ describe('_runThroughputCurve()', () => {
       expect(r.tokensPerSec).toBe(40);
       expect(r.vramUsedMiB).toBe(5000);
       expect(r.gpuOffloaded).toBe(false);
+      expect(r.passingSampleCount).toBe(3);
+      expect(r.throughputStatistics.confidenceInterval95.method).toBe('student_t');
     });
   });
 
@@ -124,7 +127,7 @@ describe('_runGenerationStability()', () => {
     const results = await orchestrator._runGenerationStability(HOST_URL, MODEL_NAME, 8192, DEFAULT_SETTINGS);
 
     expect(results).toHaveLength(3);
-    expect(hostTestService.testModelOnHost).toHaveBeenCalledTimes(3);
+    expect(hostTestService.testModelOnHost).toHaveBeenCalledTimes(9);
 
     const expectedTargets = [64, 256, 512];
     results.forEach((r, i) => {
@@ -135,7 +138,7 @@ describe('_runGenerationStability()', () => {
 
     // Verify each call passed the correct numPredict
     expectedTargets.forEach((target, i) => {
-      expect(hostTestService.testModelOnHost.mock.calls[i][2]).toMatchObject({
+      expect(hostTestService.testModelOnHost.mock.calls[i * 3][2]).toMatchObject({
         maxPromptTokens: 2048,
         numPredict: target,
         numCtx: 8192,
@@ -178,29 +181,31 @@ describe('_runLoadTiming()', () => {
     // Mock Date.now to control timing
     let callCount = 0;
     const mockNow = jest.spyOn(Date, 'now');
-    // Unload completes, then:
-    // coldStart = 1000, after cold fetch = 4500 (3500ms cold)
-    // hotStart  = 4500, after hot fetch  = 4700 (200ms hot)
-    mockNow
-      .mockReturnValueOnce(1000)   // cold start timestamp
-      .mockReturnValueOnce(4500)   // cold end timestamp
-      .mockReturnValueOnce(4500)   // hot start timestamp
-      .mockReturnValueOnce(4700);  // hot end timestamp
+    for (let repeat = 0; repeat < 3; repeat += 1) {
+      mockNow
+        .mockReturnValueOnce(1000)
+        .mockReturnValueOnce(4500)
+        .mockReturnValueOnce(4500)
+        .mockReturnValueOnce(4700);
+    }
 
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ response: '' })
+      json: async () => ({ models: [] })
     });
 
     // Run the async function, advancing timers for the 2s setTimeout
     const promise = orchestrator._runLoadTiming(HOST_URL, MODEL_NAME);
     // Advance past the 2-second wait
-    await jest.advanceTimersByTimeAsync(2000);
+    await jest.runAllTimersAsync();
     const result = await promise;
 
     expect(result.coldLoadMs).toBe(3500);
     expect(result.hotLoadMs).toBe(200);
-    expect(global.fetch).toHaveBeenCalledTimes(3); // unload + cold + hot
+    expect(result.passingSampleCount).toBe(3);
+    expect(result.unloadVerified).toBe(true);
+    expect(result.coldStatistics.confidenceInterval95.method).toBe('student_t');
+    expect(global.fetch).toHaveBeenCalledTimes(12); // 3 x (unload + ps attest + cold + hot)
 
     // Verify unload call
     const unloadCall = global.fetch.mock.calls[0];

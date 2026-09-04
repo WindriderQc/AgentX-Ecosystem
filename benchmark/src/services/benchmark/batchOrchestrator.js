@@ -49,7 +49,7 @@ const { createResumeRevalidation, RESUME_CODES } = require('./resumeRevalidation
 const { checkBatchPreflight, executionModelsFromHostGroups, preflightCounts, runBatchPreflight } = require('./batchPreflightLifecycle');
 const { executionHost, normalizeBatchTargets } = require('../../../../shared/benchmarkTargetContract');
 const { executeHarnessTarget, resolveHarnessTarget } = require('./harnessBrokerClient');
-const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
+const { getBenchmarkClaimIdentity, releaseWorkloadAdmission } = require('../../clients/coreApiClient');
 
 // A throughput batch can have one in-flight Core request per host. Keep the
 // controllers grouped by the exact batch id so the stop route can interrupt
@@ -582,7 +582,9 @@ async function runBatchOrchestrator({
                 repeatGroupId,
                 executionTarget,
                 qualityCohortFingerprint,
-                trustEvidenceContext
+                trustEvidenceContext,
+                signal: batchCancellationController.signal,
+                assertAuthorityActive: assertClaimActive
             });
 
             if (!hasEmptyResponse) {
@@ -633,7 +635,9 @@ async function runBatchOrchestrator({
                 },
                 executionTarget,
                 qualityCohortFingerprint,
-                trustEvidenceContext
+                trustEvidenceContext,
+                signal: batchCancellationController.signal,
+                assertAuthorityActive: assertClaimActive
             });
             if (classified.infra) return { infraError: true };
         }
@@ -772,7 +776,9 @@ async function runBatchOrchestrator({
                                 observedAt: new Date().toISOString()
                             },
                             qualityCohortFingerprint,
-                            trustEvidenceContext
+                            trustEvidenceContext,
+                            signal: batchCancellationController.signal,
+                            assertAuthorityActive: assertClaimActive
                         });
                         if (cleanedResponse.trim()) {
                             if (judgeHostUrl === hostUrl) deferJudgeTask({ hostUrl, judgeHostUrl, model: target.model, prompt, resultId });
@@ -802,7 +808,9 @@ async function runBatchOrchestrator({
                             providerUsage: execution?.receipt?.usage || null,
                             qualityCohortFingerprint,
                             trustEvidenceContext,
-                            promptText: promptHints.promptText
+                            promptText: promptHints.promptText,
+                            signal: batchCancellationController.signal,
+                            assertAuthorityActive: assertClaimActive
                         });
                     } finally {
                         clearTimeout(timeoutId);
@@ -1240,9 +1248,12 @@ async function runBatchOrchestrator({
     } catch (error) {
         if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
         else stopClaimHeartbeat();
-        await releaseBenchmarkClaims(claimedHostUrls, batchId, {
+        const cleanup = await releaseBenchmarkClaims(claimedHostUrls, batchId, {
             releaseWorkloadAdmission: false
         });
+        if (cleanup.failed === 0) {
+            await releaseWorkloadAdmission(String(batchId)).catch(() => {});
+        }
         throw error;
     }
     assertClaimActive = stopClaimHeartbeat.assertActive;

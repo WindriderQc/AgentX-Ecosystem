@@ -24,6 +24,8 @@ describe('profiler UI evidence semantics', () => {
     expect(profiling).toContain('Prefill / Decode Matrix');
     expect(profiling).toContain('profile?.prefillDecodeMatrix');
     expect(profiling).toContain("? 'Unknown'");
+    expect(profiling).toContain('95% CI');
+    expect(profiling).toContain('coefficientOfVariation');
     expect(profiling).not.toMatch(/optimal ctx/i);
   });
 
@@ -35,5 +37,26 @@ describe('profiler UI evidence semantics', () => {
     expect(profiling).toContain('measurementQuality?.ttftP50Ms');
     expect(profiling).toContain('TTFT p50');
     expect(render).not.toContain('p.ttftMs');
+  });
+
+  test('renders an unqualified Full run as incomplete instead of successful', () => {
+    const profiling = publicSource('models-profiling.js');
+    expect(profiling).toContain("const unqualifiedFull = depth === 'full' && !benchmarkQualified");
+    expect(profiling).toContain('Full profile incomplete — not qualified on');
+    expect(profiling).toContain("unqualifiedFull ? 'Not qualified' : 'Profiled ✓'");
+  });
+
+  test('rebuilds persistent authority badges and masks non-authoritative recommendations on reload', () => {
+    const models = publicSource('models.js');
+    const helpers = publicSource('models-helpers.js');
+    const render = publicSource('models-render.js');
+    expect(models).toContain('classifyProfileEvidence(profile, evidence, selectedHostId)');
+    expect(models).toContain('evidenceProfile.recommendedInteractiveContext = null');
+    expect(models).toContain('evidenceProfile.recommendedDocumentContext = null');
+    expect(helpers).toContain("status: stale ? 'stale' : qualified ? 'qualified'");
+    expect(render).toContain("{ label: 'Qualified', tone: 'qualified' }");
+    expect(render).toContain("{ label: 'Not qualified', tone: 'unqualified' }");
+    expect(render).toContain("{ label: 'Stale', tone: 'stale' }");
+    expect(render).toContain('recommendationsAuthoritative === true');
   });
 });

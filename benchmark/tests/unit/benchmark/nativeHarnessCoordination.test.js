@@ -166,4 +166,47 @@ describe('native harness runtime coordination', () => {
         expect(mockOrder.indexOf('authority:invalidated')).toBeLessThan(mockOrder.indexOf('heartbeat:drained'));
         expect(mockOrder.indexOf('heartbeat:drained')).toBeLessThan(mockOrder.indexOf('admission:released'));
     });
+
+    test('does not return success until workload admission release is verified', async () => {
+        mockReleaseBenchmarkClaims.mockImplementation(async () => {
+            mockOrder.push('admission:release-refused');
+            return {
+                released: 0,
+                failed: 1,
+                details: [],
+                workloadAdmission: { released: false, reason: 'stale generation' }
+            };
+        });
+
+        const response = await api.post('/api/benchmark/harness-campaigns').send(requestBody());
+
+        expect(response.status).toBe(503);
+        expect(response.body).toMatchObject({
+            status: 'error',
+            code: 'WORKLOAD_ADMISSION_RELEASE_UNVERIFIED'
+        });
+        expect(mockCampaignUpdateOne).toHaveBeenCalled();
+        expect(mockOrder.indexOf('heartbeat:drained')).toBeLessThan(mockOrder.indexOf('admission:release-refused'));
+        expect(mockOrder.indexOf('admission:release-refused')).toBeLessThan(mockOrder.indexOf('authority:invalidated'));
+    });
+
+    test('still returns the fail-closed release verdict when authority invalidation also fails', async () => {
+        mockReleaseBenchmarkClaims.mockResolvedValue({
+            released: 0,
+            failed: 1,
+            details: [],
+            workloadAdmission: { released: false, reason: 'release receipt unavailable' }
+        });
+        mockCampaignUpdateOne.mockRejectedValue(new Error('database unavailable during invalidation'));
+
+        const response = await api.post('/api/benchmark/harness-campaigns').send(requestBody());
+
+        expect(response.status).toBe(503);
+        expect(response.body).toEqual({
+            status: 'error',
+            code: 'WORKLOAD_ADMISSION_RELEASE_UNVERIFIED',
+            error: 'release receipt unavailable'
+        });
+        expect(mockCampaignUpdateOne).toHaveBeenCalledTimes(1);
+    });
 });

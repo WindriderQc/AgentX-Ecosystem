@@ -140,6 +140,14 @@ const HostPreferenceSchema = new mongoose.Schema({
       error: { type: String, default: null }
     }
   },
+  // Durable, service-authenticated recovery receipt for an ambiguous HTTP
+  // release response. Hidden from ordinary/operator preference reads because
+  // claim generations are bearer capabilities.
+  lastBenchmarkReleaseReceipt: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+    select: false
+  },
   // ── Pin auto-restore grace period (task 0176) ─────────────
   // Timestamp of the first reconciler tick that observed the pinned
   // model(s) displaced on this host. The reconciler sets this on the tick

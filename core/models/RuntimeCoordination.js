@@ -30,7 +30,12 @@ const WorkloadAdmissionSchema = new mongoose.Schema({
 const RuntimeCoordinationSchema = new mongoose.Schema({
   _id: { type: String, default: 'runtime' },
   maintenance: { type: MaintenanceLeaseSchema, default: null },
-  workloads: { type: [WorkloadAdmissionSchema], default: [] }
+  workloads: { type: [WorkloadAdmissionSchema], default: [] },
+  releaseReceipts: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: [],
+    select: false
+  }
 }, {
   collection: 'runtime_coordination',
   timestamps: true

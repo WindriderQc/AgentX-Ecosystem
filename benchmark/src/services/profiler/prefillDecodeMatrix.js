@@ -25,9 +25,11 @@
  *    have verified architecture metadata.)
  */
 
-const { generate } = require('../../clients/ollamaClient');
+const { generate, listRunning } = require('../../clients/ollamaClient');
 const { generateFillPrompt } = require('../contextProbePayload');
 const logger = require('../../../config/logger');
+
+const DEFAULT_REPEATS = 3;
 
 // Fixed absolute defaults — identical for every model/host so results are
 // directly comparable. Env-overridable as comma-separated token counts.
@@ -40,6 +42,10 @@ const CELL_CTX_MARGIN = 256;
 // not a valid sustained-decode measurement (model stopped early).
 const MIN_COMPLETION_RATIO = 0.5;
 const MIN_PROMPT_COVERAGE_RATIO = 0.8;
+
+function normalizeModelName(value) {
+  return String(value || '').trim().replace(/:latest$/i, '').toLowerCase();
+}
 
 function _parseTokenList(raw, fallback) {
   if (!raw) return [...fallback];
@@ -115,6 +121,19 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs, signal 
       }
     }, { timeoutMs, signal });
 
+    // Ollama can clamp or reuse a different resident context without failing
+    // the generation. A Full matrix is capacity evidence only when /api/ps
+    // independently attests the exact shared num_ctx after every cell.
+    const running = await listRunning(hostUrl, { timeoutMs: Math.min(timeoutMs, 30_000), signal });
+    const resident = (running?.models || []).find(entry =>
+      normalizeModelName(entry?.name || entry?.model) === normalizeModelName(modelName));
+    const runtimeContextLength = Number(resident?.context_length ?? resident?.contextLength);
+    if (!resident || !Number.isInteger(runtimeContextLength) || runtimeContextLength !== Number(numCtx)) {
+      const error = new Error(`Ollama runtime context attestation failed: requested ${numCtx}, observed ${Number.isFinite(runtimeContextLength) ? runtimeContextLength : 'unknown'}`);
+      error.code = 'MATRIX_RUNTIME_CONTEXT_MISMATCH';
+      throw error;
+    }
+
     const latencyMs = Date.now() - start;
     const promptEvalCount = data.prompt_eval_count || 0;
     const promptEvalDuration = data.prompt_eval_duration || 0; // ns
@@ -130,16 +149,28 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs, signal 
     const promptEvalDurationMs = promptEvalDuration > 0
       ? Number((promptEvalDuration / 1e6).toFixed(1))
       : null;
+    const evalDurationMs = evalDuration > 0
+      ? Number((evalDuration / 1e6).toFixed(1))
+      : null;
 
     const minimumPromptTokens = Math.max(1, Math.floor(prefillTokens * MIN_PROMPT_COVERAGE_RATIO));
     const promptCoveragePct = Number(((promptEvalCount / prefillTokens) * 100).toFixed(1));
     const shortPrompt = promptEvalCount < minimumPromptTokens;
     const shortCompletion = evalCount < Math.max(1, Math.floor(decodeTokens * MIN_COMPLETION_RATIO));
+    const invalidDurations = !(Number(promptEvalDuration) > 0) || !(Number(evalDuration) > 0);
+    const invalidThroughput = !(Number.isFinite(prefillTokensPerSec) && prefillTokensPerSec > 0)
+      || !(Number.isFinite(decodeTokensPerSec) && decodeTokensPerSec > 0);
 
     return {
       prefillTokens,
       decodeTokens,
-      status: shortPrompt ? 'prompt_underfill' : shortCompletion ? 'short_completion' : 'pass',
+      status: shortPrompt
+        ? 'prompt_underfill'
+        : shortCompletion
+          ? 'short_completion'
+          : invalidDurations || invalidThroughput
+            ? 'invalid_timing'
+            : 'pass',
       requestedPromptTokens: prefillTokens,
       promptTokens: promptEvalCount,
       promptCoveragePct,
@@ -148,12 +179,18 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs, signal 
       prefillTokensPerSec,
       decodeTokensPerSec,
       promptEvalDurationMs,
+      evalDurationMs,
+      runtimeContextLength,
       latencyMs,
       error: shortPrompt
         ? `Prompt evaluation ${promptEvalCount}/${prefillTokens} tokens — prefill sample invalid`
         : shortCompletion
           ? `Completion ${evalCount}/${decodeTokens} tokens — decode sample invalid`
-          : null
+          : invalidDurations
+            ? 'Ollama returned a non-positive prompt/decode duration; throughput sample invalid'
+            : invalidThroughput
+              ? 'Ollama returned non-finite or non-positive prefill/decode throughput'
+              : null
     };
   } catch (err) {
     if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : err);
@@ -169,10 +206,98 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs, signal 
       prefillTokensPerSec: null,
       decodeTokensPerSec: null,
       promptEvalDurationMs: null,
+      evalDurationMs: null,
+      runtimeContextLength: null,
       latencyMs: Date.now() - start,
       error: err.message
     };
   }
+}
+
+function _quantile(values, q) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = (sorted.length - 1) * q;
+  const lower = Math.floor(position);
+  const fraction = position - lower;
+  return sorted[lower + 1] === undefined
+    ? sorted[lower]
+    : sorted[lower] + fraction * (sorted[lower + 1] - sorted[lower]);
+}
+
+function _studentTCritical95(sampleCount) {
+  const byDf = [null, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262,
+    2.228, 2.201, 2.179, 2.16, 2.145, 2.131, 2.12, 2.11, 2.101, 2.093, 2.086,
+    2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042];
+  const df = Math.max(1, Math.floor(sampleCount) - 1);
+  return byDf[Math.min(df, 30)] || 1.96;
+}
+
+function summarizeMetric(values) {
+  const finite = values.map(Number).filter(value => Number.isFinite(value) && value > 0);
+  if (!finite.length) return {
+    sampleCount: 0, mean: null, p50: null, p95: null, standardDeviation: null,
+    coefficientOfVariation: null, confidenceInterval95: null
+  };
+  const round = (value, places = 2) => Number(value.toFixed(places));
+  const mean = finite.reduce((sum, value) => sum + value, 0) / finite.length;
+  if (finite.length < 2) return {
+    sampleCount: finite.length,
+    mean: round(mean),
+    p50: round(mean),
+    p95: round(mean),
+    standardDeviation: null,
+    coefficientOfVariation: null,
+    confidenceInterval95: null
+  };
+  const variance = finite.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (finite.length - 1);
+  const standardDeviation = Math.sqrt(variance);
+  const margin = _studentTCritical95(finite.length) * standardDeviation / Math.sqrt(finite.length);
+  return {
+    sampleCount: finite.length,
+    mean: round(mean),
+    p50: round(_quantile(finite, 0.5)),
+    p95: round(_quantile(finite, 0.95)),
+    standardDeviation: round(standardDeviation),
+    coefficientOfVariation: mean > 0 ? round(standardDeviation / mean, 4) : null,
+    confidenceInterval95: {
+      low: round(Math.max(0, mean - margin)),
+      high: round(mean + margin),
+      method: 'student_t'
+    }
+  };
+}
+
+function aggregateCellSamples(samples, plan, numCtx, minimumSamples) {
+  const passing = samples.filter(sample => sample.status === 'pass');
+  const representative = passing[Math.floor(passing.length / 2)] || samples[0] || {};
+  const prefillStatistics = summarizeMetric(passing.map(sample => sample.prefillTokensPerSec));
+  const decodeStatistics = summarizeMetric(passing.map(sample => sample.decodeTokensPerSec));
+  const complete = samples.length === minimumSamples
+    && passing.length === minimumSamples
+    && prefillStatistics.sampleCount === minimumSamples
+    && decodeStatistics.sampleCount === minimumSamples;
+  return {
+    ...representative,
+    prefillTokens: plan.prefillTokens,
+    decodeTokens: plan.decodeTokens,
+    status: complete ? 'pass' : (samples.find(sample => sample.status !== 'pass')?.status || 'error'),
+    prefillTokensPerSec: prefillStatistics.p50,
+    decodeTokensPerSec: decodeStatistics.p50,
+    promptEvalDurationMs: summarizeMetric(passing.map(sample => sample.promptEvalDurationMs)).p50,
+    evalDurationMs: summarizeMetric(passing.map(sample => sample.evalDurationMs)).p50,
+    latencyMs: summarizeMetric(passing.map(sample => sample.latencyMs)).p50,
+    runtimeContextLength: complete && passing.every(sample => Number(sample.runtimeContextLength) === Number(numCtx))
+      ? Number(numCtx)
+      : null,
+    sampleCount: samples.length,
+    passingSampleCount: passing.length,
+    minimumSamples,
+    samples,
+    prefillStatistics,
+    decodeStatistics,
+    error: complete ? null : (samples.find(sample => sample.status !== 'pass')?.error || 'Matrix repetitions incomplete')
+  };
 }
 
 /**
@@ -194,6 +319,7 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
     ? Number(options.timeoutMs)
     : 120000;
   const notify = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+  const repeats = Math.max(1, Math.min(10, Number.parseInt(options.repeats, 10) || DEFAULT_REPEATS));
 
   const { cells: plannedCells, numCtx } = planMatrix(prefillTokens, decodeTokens, options.safeNumCtx);
   const cells = [];
@@ -216,6 +342,8 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
         prefillTokensPerSec: null,
         decodeTokensPerSec: null,
         promptEvalDurationMs: null,
+        evalDurationMs: null,
+        runtimeContextLength: null,
         latencyMs: null,
         error: `Requires ${plan.requiredCtx} ctx > safe ${options.safeNumCtx}`
       };
@@ -224,8 +352,15 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
       continue;
     }
 
-    const result = await _runCell(hostUrl, modelName, plan, numCtx, timeoutMs, options.signal);
-    options.assertClaimActive?.();
+    const samples = [];
+    for (let repeat = 1; repeat <= repeats; repeat += 1) {
+      options.assertClaimActive?.();
+      const sample = await _runCell(hostUrl, modelName, plan, numCtx, timeoutMs, options.signal);
+      options.assertClaimActive?.();
+      samples.push({ ...sample, repeat });
+      if (sample.status !== 'pass') break;
+    }
+    const result = aggregateCellSamples(samples, plan, numCtx, repeats);
     cells.push(result);
     notify({ index, total, cell: result });
 
@@ -242,6 +377,7 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
   return {
     measuredAt: new Date(),
     numCtx,
+    repeats,
     prefillTokens,
     decodeTokens,
     cellCount: cells.length,
@@ -259,5 +395,6 @@ module.exports = {
   DEFAULT_DECODE_TOKENS,
   CELL_CTX_MARGIN,
   MIN_PROMPT_COVERAGE_RATIO,
-  _internal: { _parseTokenList, _runCell }
+  DEFAULT_REPEATS,
+  _internal: { _parseTokenList, _runCell, summarizeMetric, aggregateCellSamples }
 };

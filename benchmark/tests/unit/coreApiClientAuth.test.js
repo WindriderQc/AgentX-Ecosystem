@@ -140,7 +140,7 @@ describe('Core API client scoped outbound execution', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  test('keeps all twelve logical operations closed over their exact method/path families', () => {
+  test('keeps all logical operations closed over their exact method/path families', () => {
     expect(Object.keys(CORE_OPERATION_SPECS).sort()).toEqual(Object.values(CORE_OPERATIONS).sort());
     expect([
       ['GET', '/api/models/registry?status=active', CORE_OPERATIONS.MODEL_REGISTRIES],
@@ -151,10 +151,12 @@ describe('Core API client scoped outbound execution', () => {
       ['POST', '/api/nerve-center/host-preferences/ollama/benchmark-claim', CORE_OPERATIONS.CLAIM_ACQUIRE],
       ['POST', '/api/nerve-center/host-preferences/ollama/benchmark-claim/batch-1/heartbeat', CORE_OPERATIONS.CLAIM_HEARTBEAT],
       ['DELETE', '/api/nerve-center/host-preferences/ollama/benchmark-claim/batch-1', CORE_OPERATIONS.CLAIM_RELEASE],
+      ['POST', '/api/nerve-center/host-preferences/ollama/benchmark-claim/batch-1/release-receipt', CORE_OPERATIONS.CLAIM_RELEASE_RECOVERY],
       ['GET', '/api/nerve-center/host-preferences/benchmark-claims/active', CORE_OPERATIONS.CLAIMS_ACTIVE],
       ['POST', '/api/nerve-center/workload-admissions', CORE_OPERATIONS.WORKLOAD_ACQUIRE],
       ['POST', '/api/nerve-center/workload-admissions/admission-1/heartbeat', CORE_OPERATIONS.WORKLOAD_HEARTBEAT],
       ['DELETE', '/api/nerve-center/workload-admissions/admission-1', CORE_OPERATIONS.WORKLOAD_RELEASE],
+      ['POST', '/api/nerve-center/workload-admissions/admission-1/release-receipt', CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY],
     ].map(([method, path, operationId]) => classifyCoreOperation(path, method)))
       .toEqual(Object.values(CORE_OPERATIONS));
     expect(() => classifyCoreOperation('/api/nerve-center/host-preferences', 'POST'))
@@ -484,6 +486,98 @@ describe('Core API client scoped outbound execution', () => {
     expect(getBenchmarkClaimIdentity(hostUrl, batchId)).toBeNull();
   });
 
+  test('recovers a durable exact receipt when the release response is lost', async () => {
+    const hostUrl = 'http://ambiguous-release:11434';
+    const batchId = 'batch-ambiguous-release';
+    const claimGeneration = '77777777-7777-4777-8777-777777777777';
+    const snapshotIdentity = 'c'.repeat(64);
+    const releaseReceipt = {
+      contract: 'agentx.benchmark-claim-release/v1',
+      hostUrl,
+      batchId,
+      claimGeneration,
+      snapshot: {
+        identityDigest: snapshotIdentity,
+        appliedIdentityDigest: snapshotIdentity,
+        exact: true,
+        residentCount: 0,
+        residents: [],
+        excludedModels: [],
+        expiredModels: []
+      },
+      verification: {
+        status: 'ready', ready: true, verified: true, degraded: false,
+        mode: 'exact_runtime_snapshot', snapshotIdentity
+      },
+      state: { restoredStatus: 'idle', claimCleared: true, finalizerCleared: true },
+      releasedAt: new Date().toISOString()
+    };
+    fetch
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify(workloadAcquireBody(batchId, [hostUrl]))
+      }))
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify({ status: 'success', data: {
+          claimed: true, batchId, claimGeneration, prevStatus: 'idle', snapshotExact: true, snapshotIdentity
+        } })
+      }))
+      .mockImplementationOnce(async (url) => response(url, {
+        status: 500,
+        body: JSON.stringify({ status: 'error', code: 'RESPONSE_LOST' })
+      }))
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify({ status: 'success', data: {
+          recovered: true, released: true, releaseReceipt
+        } })
+      }));
+
+    await acquireWorkloadAdmission(batchId, { hosts: [hostUrl] });
+    await claimHostForBenchmark(hostUrl, batchId, null, { claimGeneration });
+    await expect(releaseBenchmarkClaim(hostUrl, batchId)).resolves.toMatchObject({
+      released: true,
+      releaseReceipt
+    });
+    expect(fetch.mock.calls[3][0]).toContain('/release-receipt');
+    expect(getBenchmarkClaimIdentity(hostUrl, batchId)).toBeNull();
+  });
+
+  test('retries a release only when Core reattests the same active generation as safe', async () => {
+    const hostUrl = 'http://safe-release-retry:11434';
+    const batchId = 'batch-safe-release-retry';
+    const claimGeneration = '88888888-8888-4888-8888-888888888888';
+    const snapshotIdentity = 'd'.repeat(64);
+    const releaseReceipt = {
+      contract: 'agentx.benchmark-claim-release/v1', hostUrl, batchId, claimGeneration,
+      snapshot: {
+        identityDigest: snapshotIdentity, appliedIdentityDigest: snapshotIdentity,
+        exact: true, residentCount: 0, residents: [], excludedModels: [], expiredModels: []
+      },
+      verification: {
+        status: 'ready', ready: true, verified: true, degraded: false,
+        mode: 'exact_runtime_snapshot', snapshotIdentity
+      },
+      state: { restoredStatus: 'idle', claimCleared: true, finalizerCleared: true },
+      releasedAt: new Date().toISOString()
+    };
+    fetch
+      .mockImplementationOnce(async (url) => response(url, { body: JSON.stringify(workloadAcquireBody(batchId, [hostUrl])) }))
+      .mockImplementationOnce(async (url) => response(url, { body: JSON.stringify({ status: 'success', data: {
+        claimed: true, batchId, claimGeneration, prevStatus: 'idle', snapshotExact: true, snapshotIdentity
+      } }) }))
+      .mockImplementationOnce(async (url) => response(url, { status: 500, body: JSON.stringify({ status: 'error' }) }))
+      .mockImplementationOnce(async (url) => response(url, { body: JSON.stringify({ status: 'success', data: {
+        recovered: true, released: false, retryable: true, finalizing: false
+      } }) }))
+      .mockImplementationOnce(async (url) => response(url, { body: JSON.stringify({ status: 'success', data: {
+        released: true, releaseReceipt
+      } }) }));
+
+    await acquireWorkloadAdmission(batchId, { hosts: [hostUrl] });
+    await claimHostForBenchmark(hostUrl, batchId, null, { claimGeneration });
+    await expect(releaseBenchmarkClaim(hostUrl, batchId)).resolves.toMatchObject({ released: true });
+    expect(fetch.mock.calls.map(call => call[0]).filter(url => url.endsWith(`/benchmark-claim/${batchId}`))).toHaveLength(2);
+  });
+
   test('rejects a successful claim receipt without exact pre-claim snapshot evidence', async () => {
     const claimGeneration = '66666666-6666-4666-8666-666666666666';
     const hostUrl = 'http://legacy-claim:11434';
@@ -609,6 +703,87 @@ describe('Core API client scoped outbound execution', () => {
     }));
     await expect(acquireWorkloadAdmission('workload-divergent', { requestId: 'request-divergent' }))
       .rejects.toMatchObject({ code: 'WORKLOAD_ADMISSION_REJECTED' });
+  });
+
+  test('recovers the exact durable workload receipt when the release response is lost', async () => {
+    const workloadId = 'workload-lost-release-response';
+    const identity = {
+      admissionId: `admission-${workloadId}`,
+      generation: `generation-${workloadId}`,
+      principal: 'benchmark-service',
+      requestId: `benchmark:${workloadId}`,
+      workloadId,
+      kind: 'benchmark',
+      batchId: null,
+      hosts: []
+    };
+    const releasedAt = new Date().toISOString();
+    fetch
+      .mockImplementationOnce(async url => response(url, {
+        body: JSON.stringify({ status: 'success', data: { acquired: true, ...identity } })
+      }))
+      .mockRejectedValueOnce(new Error('connection reset after release commit'))
+      .mockImplementationOnce(async url => response(url, {
+        body: JSON.stringify({
+          status: 'success',
+          data: { recovered: true, released: true, coordinationKind: 'workload', ...identity, releasedAt }
+        })
+      }));
+
+    await acquireWorkloadAdmission(workloadId);
+    await expect(releaseWorkloadAdmission(workloadId)).resolves.toMatchObject({
+      recovered: true,
+      released: true,
+      ...identity,
+      releasedAt
+    });
+    expect(fetch.mock.calls.map(call => new URL(call[0]).pathname)).toEqual([
+      '/api/nerve-center/workload-admissions',
+      `/api/nerve-center/workload-admissions/${identity.admissionId}`,
+      `/api/nerve-center/workload-admissions/${identity.admissionId}/release-receipt`
+    ]);
+    await expect(releaseWorkloadAdmission(workloadId))
+      .resolves.toMatchObject({ released: false, reason: expect.stringContaining('local') });
+  });
+
+  test('retries release only after Core reattests the exact active workload proof', async () => {
+    const workloadId = 'workload-active-release-retry';
+    const identity = {
+      admissionId: `admission-${workloadId}`,
+      generation: `generation-${workloadId}`,
+      principal: 'benchmark-service',
+      requestId: `benchmark:${workloadId}`,
+      workloadId,
+      kind: 'benchmark',
+      batchId: null,
+      hosts: []
+    };
+    fetch
+      .mockImplementationOnce(async url => response(url, {
+        body: JSON.stringify({ status: 'success', data: { acquired: true, ...identity } })
+      }))
+      .mockRejectedValueOnce(new Error('safe transport failure before release'))
+      .mockImplementationOnce(async url => response(url, {
+        body: JSON.stringify({
+          status: 'success',
+          data: { recovered: true, released: false, retryable: true, ...identity }
+        })
+      }))
+      .mockImplementationOnce(async url => response(url, {
+        body: JSON.stringify({
+          status: 'success',
+          data: { released: true, ...identity, releasedAt: new Date().toISOString() }
+        })
+      }));
+
+    await acquireWorkloadAdmission(workloadId);
+    await expect(releaseWorkloadAdmission(workloadId)).resolves.toMatchObject({ released: true, ...identity });
+    expect(fetch.mock.calls.map(call => new URL(call[0]).pathname)).toEqual([
+      '/api/nerve-center/workload-admissions',
+      `/api/nerve-center/workload-admissions/${identity.admissionId}`,
+      `/api/nerve-center/workload-admissions/${identity.admissionId}/release-receipt`,
+      `/api/nerve-center/workload-admissions/${identity.admissionId}`
+    ]);
   });
 
   test('keeps the local workload proof when heartbeat identity diverges and clears it only on an exact release receipt', async () => {

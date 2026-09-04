@@ -8,7 +8,7 @@
  *  - Error normalisation
  *  - Logging
  *
- * Endpoints:  /api/generate, /api/chat, /api/tags, /api/show, /api/ps, /api/create, /api/pull
+ * Endpoints:  /api/generate, /api/chat, /api/tags, /api/show, /api/ps, /api/create, /api/pull, /api/delete
  */
 
 const { getFetchOptions } = require('../helpers/httpAgent');
@@ -173,6 +173,15 @@ const pullModel = (host, name, opts) =>
         ...opts
     });
 
+/** DELETE /api/delete — remove an exact model artifact. */
+const deleteModel = (host, name, opts) =>
+    ollamaFetch(host, '/api/delete', {
+        method: 'DELETE',
+        body: { name },
+        timeoutMs: 120_000,
+        ...opts
+    });
+
 module.exports = {
     ollamaFetch,
     listModels,
@@ -182,6 +191,7 @@ module.exports = {
     chat,
     createModel,
     pullModel,
+    deleteModel,
     normalizeCreateBody,
     DEFAULT_TIMEOUT_MS
 };

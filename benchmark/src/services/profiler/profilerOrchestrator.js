@@ -266,6 +266,51 @@ function _sampleFromResult(result, sample, opts = {}) {
   };
 }
 
+function summarizePositiveMeasurements(values, { minimumSamples = 3 } = {}) {
+  const samples = values.map(Number).filter(value => Number.isFinite(value) && value > 0);
+  if (!samples.length) return {
+    sampleCount: 0, minimumSamples, mean: null, p50: null, p95: null,
+    standardDeviation: null, coefficientOfVariation: null,
+    confidenceInterval95: null, reliability: 'unknown'
+  };
+  const mean = samples.reduce((sum, value) => sum + value, 0) / samples.length;
+  if (samples.length < 2) return {
+    sampleCount: samples.length,
+    minimumSamples,
+    mean: _round(mean), p50: _round(mean), p95: _round(mean),
+    standardDeviation: null, coefficientOfVariation: null,
+    confidenceInterval95: null, reliability: 'unknown'
+  };
+  const variance = samples.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (samples.length - 1);
+  const standardDeviation = Math.sqrt(variance);
+  const cv = mean > 0 ? standardDeviation / mean : null;
+  const margin = _studentTCritical95(samples.length) * standardDeviation / Math.sqrt(samples.length);
+  return {
+    sampleCount: samples.length,
+    minimumSamples,
+    mean: _round(mean),
+    p50: _round(_quantile(samples, 0.5)),
+    p95: _round(_quantile(samples, 0.95)),
+    standardDeviation: _round(standardDeviation),
+    coefficientOfVariation: cv == null ? null : _round(cv, 4),
+    confidenceInterval95: {
+      low: _round(Math.max(0, mean - margin)),
+      high: _round(mean + margin),
+      method: 'student_t'
+    },
+    reliability: samples.length < minimumSamples || cv == null
+      ? 'unknown'
+      : cv <= 0.05 ? 'high' : cv <= 0.12 ? 'medium' : 'low'
+  };
+}
+
+function completeRepeatedStatistics(statistics, minimumSamples) {
+  return Number(statistics?.sampleCount) >= minimumSamples
+    && Number.isFinite(Number(statistics?.coefficientOfVariation))
+    && Number.isFinite(Number(statistics?.confidenceInterval95?.low))
+    && Number.isFinite(Number(statistics?.confidenceInterval95?.high));
+}
+
 function hasProfilerAuthorityReceipt(readiness) {
   const receipt = readiness?.authorityReceipt;
   return receipt?.source === 'profiler_pipeline'
@@ -300,18 +345,26 @@ function profileQualificationFailures(profileData) {
   if (profileData.spill?.verified !== true) failures.push('gpu_residency_unverified');
 
   if (profileData.profileDepth === 'full') {
+    const requiredFullSamples = Math.max(3, Number(profileData.requiredFullPhaseSamples) || 3);
     const curve = Array.isArray(profileData.throughputCurve) ? profileData.throughputCurve : [];
     const curveCoverage = [...new Set(curve.map(point => Number(point.contextFillPct)))].sort((a, b) => a - b);
     if (curve.length !== 5
       || JSON.stringify(curveCoverage) !== JSON.stringify([10, 25, 50, 75, 90])
-      || curve.some(point => !(Number(point.tokensPerSec) > 0) || point.gpuOffloaded !== false)) {
+      || curve.some(point => !(Number(point.tokensPerSec) > 0)
+        || point.gpuOffloaded !== false
+        || Number(point.passingSampleCount) < requiredFullSamples
+        || !completeRepeatedStatistics(point.throughputStatistics, requiredFullSamples))) {
       failures.push('full_throughput_curve_incomplete');
     }
     const stability = Array.isArray(profileData.generationStability) ? profileData.generationStability : [];
     const stabilityCoverage = [...new Set(stability.map(point => Number(point.numPredict)))].sort((a, b) => a - b);
     if (stability.length !== 3
       || JSON.stringify(stabilityCoverage) !== JSON.stringify([64, 256, 512])
-      || stability.some(point => !(Number(point.tokensPerSec) > 0) || !(Number(point.totalLatencyMs) > 0))) {
+      || stability.some(point => !(Number(point.tokensPerSec) > 0)
+        || !(Number(point.totalLatencyMs) > 0)
+        || Number(point.passingSampleCount) < requiredFullSamples
+        || !completeRepeatedStatistics(point.throughputStatistics, requiredFullSamples)
+        || !completeRepeatedStatistics(point.latencyStatistics, requiredFullSamples))) {
       failures.push('full_generation_stability_incomplete');
     }
     const matrix = profileData.prefillDecodeMatrix;
@@ -327,11 +380,26 @@ function profileQualificationFailures(profileData) {
       && cells.every(cell => cell.status === 'pass'
         && Number(cell.promptTokens) > 0
         && Number(cell.requestedPromptTokens) > 0
-        && Number(cell.promptCoveragePct) >= Number(cell.minimumPromptCoveragePct || 80));
+        && Number(cell.promptCoveragePct) >= Number(cell.minimumPromptCoveragePct || 80)
+        && Number(cell.promptEvalDurationMs) > 0
+        && Number(cell.evalDurationMs) > 0
+        && Number(cell.runtimeContextLength) === Number(matrix.numCtx)
+        && Number(cell.passingSampleCount) >= requiredFullSamples
+        && completeRepeatedStatistics(cell.prefillStatistics, requiredFullSamples)
+        && completeRepeatedStatistics(cell.decodeStatistics, requiredFullSamples)
+        && Number.isFinite(Number(cell.prefillTokensPerSec))
+        && Number(cell.prefillTokensPerSec) > 0
+        && Number.isFinite(Number(cell.decodeTokensPerSec))
+        && Number(cell.decodeTokensPerSec) > 0);
     if (!completeMatrix) {
       failures.push('full_prefill_decode_matrix_incomplete');
     }
-    if (!(Number(profileData.loadTiming?.coldLoadMs) > 0) || !(Number(profileData.loadTiming?.hotLoadMs) > 0)) {
+    if (!(Number(profileData.loadTiming?.coldLoadMs) > 0)
+      || !(Number(profileData.loadTiming?.hotLoadMs) > 0)
+      || profileData.loadTiming?.unloadVerified !== true
+      || Number(profileData.loadTiming?.passingSampleCount) < requiredFullSamples
+      || !completeRepeatedStatistics(profileData.loadTiming?.coldStatistics, requiredFullSamples)
+      || !completeRepeatedStatistics(profileData.loadTiming?.hotStatistics, requiredFullSamples)) {
       failures.push('full_load_timing_incomplete');
     }
   }
@@ -446,13 +514,21 @@ async function persistProfileEvidence({
       const reason = error.code === 'BENCHMARK_CLAIM_LOST' || error.code === 'BENCHMARK_CLAIM_STOPPED'
         ? 'claim_lost_during_profiler_authority_write'
         : 'profiler_authority_write_failed';
-      await Promise.allSettled([
+      const invalidations = await Promise.allSettled([
         modelPerformanceProfileService.invalidateProfile(evidence._id, reason),
         modelProfileService.invalidateReadinessIfEvidence(modelName, hostId, evidence._id, reason),
         ...(profileData.thinking
           ? [modelProfileService.invalidateThinkingCapability(modelName, hostId, reason)]
           : [])
       ]);
+      const invalidationFailures = invalidations
+        .filter(result => result.status === 'rejected')
+        .map(result => result.reason);
+      if (invalidationFailures.length > 0) {
+        error.authorityInvalidationFailed = true;
+        error.invalidationErrors = invalidationFailures;
+        error.code = error.code || 'PROFILER_AUTHORITY_INVALIDATION_FAILED';
+      }
     }
     throw error;
   }
@@ -685,6 +761,9 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     measurementQuality,
     requiredRetainedSamples: minimumRetainedSamples,
     requiredTtftSamples: minimumRetainedSamples,
+    requiredFullPhaseSamples: depth === 'full'
+      ? Math.max(3, Number(settings.fullPhaseRepeats) || 3)
+      : null,
     spill: {
       ...spill,
       // /api/ps reports offload, not the context that caused it. Attribute a
@@ -798,6 +877,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     timeoutMs: Math.max(120000, (Number(settings.testTimeoutSec) || 60) * 1000),
     assertClaimActive: checkpoint,
     signal,
+    repeats: Math.max(3, Number(settings.fullPhaseRepeats) || 3),
     onProgress: ({ index, total, cell }) => {
       const label = `${cell.prefillTokens}p/${cell.decodeTokens}d`;
       const detail = cell.status === 'pass'
@@ -807,7 +887,11 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     }
   });
   notify('load_timing', { message: 'Measuring cold and hot load timing…' });
-  profileData.loadTiming = await _runLoadTiming(hostUrl, modelName, { checkpoint, signal });
+  profileData.loadTiming = await _runLoadTiming(hostUrl, modelName, {
+    checkpoint,
+    signal,
+    minimumSamples: profileData.requiredFullPhaseSamples
+  });
   const fullHardware = await _captureHardwareSnapshot(hostId, 'after_full_profile', settings);
   if (fullHardware) {
     hardwareSnapshots.push(fullHardware);
@@ -846,7 +930,9 @@ async function fullPipeline(modelName, hosts, { assertClaimActive, claimIdentity
         benchmarkQualified: profileResult?.profile?.benchmarkQualified === true
       });
     } catch (err) {
-      if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
+      if (err.authorityInvalidationFailed === true
+        || err.code === 'BENCHMARK_CLAIM_LOST'
+        || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
       results.push({ ...host, success: false, error: err.message });
     }
   }
@@ -1014,44 +1100,64 @@ async function _detectSpill(hostUrl, modelName, signal = null) {
  */
 async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify, { checkpoint = () => {}, claimIdentity = null, signal = null } = {}) {
   const percentages = [10, 25, 50, 75, 90];
+  const minimumSamples = Math.max(3, Number(settings.fullPhaseRepeats) || 3);
   const results = [];
 
   for (const pct of percentages) {
     checkpoint();
     const numCtx = Math.max(512, Math.round(maxCtx * pct / 100));
     if (notify) notify('throughput_curve', { message: `Throughput curve: testing ${pct}% fill (${_formatCtx(numCtx)} ctx)…` });
-    try {
-      const testResult = await hostTestService.testModelOnHost(modelName, hostUrl, {
-        numPredict: settings.numPredict,
-        contextFillPct: pct,
-        numCtx,
-        promptWorkloadMode: 'scaled',
-        timeoutMs: settings.testTimeoutSec * 1000,
-        benchmarkClaim: claimIdentity,
-        assertClaimActive: checkpoint,
-        signal
-      });
-      checkpoint();
-      const spillCheck = await _detectSpill(hostUrl, modelName, signal);
-      checkpoint();
-      results.push({
-        contextFillPct: pct,
-        numCtx,
-        tokensPerSec: testResult.tokensPerSec,
-        vramUsedMiB: testResult.vramUsedMiB,
-        gpuOffloaded: spillCheck.spillDetected
-      });
-    } catch (err) {
-      if (signal?.aborted || err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
-      logger.warn(`_runThroughputCurve: ${pct}% failed for ${modelName} — ${err.message}`);
-      results.push({
-        contextFillPct: pct,
-        numCtx,
-        tokensPerSec: 0,
-        vramUsedMiB: null,
-        gpuOffloaded: null
-      });
+    const samples = [];
+    for (let repeat = 1; repeat <= minimumSamples; repeat += 1) {
+      try {
+        checkpoint();
+        const testResult = await hostTestService.testModelOnHost(modelName, hostUrl, {
+          numPredict: settings.numPredict,
+          contextFillPct: pct,
+          numCtx,
+          promptWorkloadMode: 'scaled',
+          timeoutMs: settings.testTimeoutSec * 1000,
+          benchmarkClaim: claimIdentity,
+          assertClaimActive: checkpoint,
+          signal
+        });
+        checkpoint();
+        const spillCheck = await _detectSpill(hostUrl, modelName, signal);
+        checkpoint();
+        samples.push({
+          repeat,
+          status: testResult.status === 'pass' ? 'pass' : 'error',
+          tokensPerSec: testResult.tokensPerSec,
+          vramUsedMiB: testResult.vramUsedMiB,
+          gpuOffloaded: spillCheck.verified === true ? spillCheck.spillDetected : null,
+          error: testResult.status === 'pass' ? null : (testResult.error || testResult.status)
+        });
+      } catch (err) {
+        if (signal?.aborted || err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
+        logger.warn(`_runThroughputCurve: ${pct}% repeat ${repeat} failed for ${modelName} — ${err.message}`);
+        samples.push({ repeat, status: 'error', tokensPerSec: null, vramUsedMiB: null, gpuOffloaded: null, error: err.message });
+      }
     }
+    const passing = samples.filter(sample => sample.status === 'pass'
+      && Number(sample.tokensPerSec) > 0);
+    const throughputStatistics = summarizePositiveMeasurements(
+      passing.map(sample => sample.tokensPerSec),
+      { minimumSamples }
+    );
+    results.push({
+      contextFillPct: pct,
+      numCtx,
+      tokensPerSec: throughputStatistics.p50 || 0,
+      vramUsedMiB: _median(passing.map(sample => Number(sample.vramUsedMiB)).filter(Number.isFinite)),
+      gpuOffloaded: samples.every(sample => sample.gpuOffloaded === false)
+        ? false
+        : samples.some(sample => sample.gpuOffloaded === true) ? true : null,
+      sampleCount: samples.length,
+      passingSampleCount: passing.length,
+      minimumSamples,
+      samples,
+      throughputStatistics
+    });
   }
 
   return results;
@@ -1063,37 +1169,56 @@ async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify,
  */
 async function _runGenerationStability(hostUrl, modelName, numCtx, settings, notify, { checkpoint = () => {}, claimIdentity = null, signal = null } = {}) {
   const targets = [64, 256, 512];
+  const minimumSamples = Math.max(3, Number(settings.fullPhaseRepeats) || 3);
   const results = [];
 
   for (const target of targets) {
     checkpoint();
     if (notify) notify('generation_stability', { message: `Stability: generating ${target} tokens…` });
-    try {
-      const testResult = await hostTestService.testModelOnHost(modelName, hostUrl, {
-        maxPromptTokens: settings.maxPromptTokens,
-        numPredict: target,
-        numCtx,
-        promptWorkloadMode: 'fixed',
-        timeoutMs: settings.testTimeoutSec * 1000,
-        benchmarkClaim: claimIdentity,
-        assertClaimActive: checkpoint,
-        signal
-      });
-      checkpoint();
-      results.push({
-        numPredict: target,
-        tokensPerSec: testResult.tokensPerSec,
-        totalLatencyMs: testResult.latencyMs || 0
-      });
-    } catch (err) {
-      if (signal?.aborted || err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
-      logger.warn(`_runGenerationStability: ${target} tokens failed for ${modelName} — ${err.message}`);
-      results.push({
-        numPredict: target,
-        tokensPerSec: 0,
-        totalLatencyMs: 0
-      });
+    const samples = [];
+    for (let repeat = 1; repeat <= minimumSamples; repeat += 1) {
+      try {
+        checkpoint();
+        const testResult = await hostTestService.testModelOnHost(modelName, hostUrl, {
+          maxPromptTokens: settings.maxPromptTokens,
+          numPredict: target,
+          numCtx,
+          promptWorkloadMode: 'fixed',
+          timeoutMs: settings.testTimeoutSec * 1000,
+          benchmarkClaim: claimIdentity,
+          assertClaimActive: checkpoint,
+          signal
+        });
+        checkpoint();
+        samples.push({
+          repeat,
+          status: testResult.status === 'pass' ? 'pass' : 'error',
+          tokensPerSec: testResult.tokensPerSec,
+          totalLatencyMs: testResult.latencyMs,
+          error: testResult.status === 'pass' ? null : (testResult.error || testResult.status)
+        });
+      } catch (err) {
+        if (signal?.aborted || err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
+        logger.warn(`_runGenerationStability: ${target} tokens repeat ${repeat} failed for ${modelName} — ${err.message}`);
+        samples.push({ repeat, status: 'error', tokensPerSec: null, totalLatencyMs: null, error: err.message });
+      }
     }
+    const passing = samples.filter(sample => sample.status === 'pass'
+      && Number(sample.tokensPerSec) > 0
+      && Number(sample.totalLatencyMs) > 0);
+    const throughputStatistics = summarizePositiveMeasurements(passing.map(sample => sample.tokensPerSec), { minimumSamples });
+    const latencyStatistics = summarizePositiveMeasurements(passing.map(sample => sample.totalLatencyMs), { minimumSamples });
+    results.push({
+      numPredict: target,
+      tokensPerSec: throughputStatistics.p50 || 0,
+      totalLatencyMs: latencyStatistics.p50 || 0,
+      sampleCount: samples.length,
+      passingSampleCount: passing.length,
+      minimumSamples,
+      samples,
+      throughputStatistics,
+      latencyStatistics
+    });
   }
 
   return results;
@@ -1106,15 +1231,10 @@ async function _runGenerationStability(hostUrl, modelName, numCtx, settings, not
  * 3. Cold start: timed generate call
  * 4. Hot start: immediate second generate call
  */
-async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signal = null } = {}) {
-  try {
-    // Unload model
-    checkpoint();
-    await generate(hostUrl, { model: modelName, keep_alive: 0, stream: false }, { timeoutMs: 10000, signal });
-    checkpoint();
-
-    // Wait 2 seconds for unload to settle
-    await new Promise((resolve, reject) => {
+async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signal = null, minimumSamples: requestedSamples = 3 } = {}) {
+  const minimumSamples = Math.max(3, Number(requestedSamples) || 3);
+  const samples = [];
+  const abortableDelay = () => new Promise((resolve, reject) => {
       let settled = false;
       const cleanup = () => signal?.removeEventListener('abort', abort);
       const finish = (callback) => {
@@ -1131,33 +1251,53 @@ async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signa
       if (signal?.aborted) abort();
       else signal?.addEventListener('abort', abort, { once: true });
     });
+  for (let repeat = 1; repeat <= minimumSamples; repeat += 1) {
+    try {
+      checkpoint();
+      await generate(hostUrl, { model: modelName, keep_alive: 0, stream: false }, { timeoutMs: 10000, signal });
+      checkpoint();
+      await abortableDelay();
+      checkpoint();
+      const afterUnload = await listRunning(hostUrl, { timeoutMs: 10000, signal });
+      const stillResident = (afterUnload?.models || []).some(entry => isSameOllamaModel(entry?.name || entry?.model, modelName));
+      if (stillResident) throw Object.assign(new Error('Cold-load sample invalid: model remained resident after unload'), { code: 'COLD_UNLOAD_NOT_ATTESTED' });
 
-    // Cold start
-    checkpoint();
-    const coldStart = Date.now();
-    await generate(hostUrl, { model: modelName, prompt: 'Hi', stream: false, options: { num_predict: 1, temperature: 0, seed: 7 } }, { timeoutMs: 120000, signal });
-    checkpoint();
-    const coldLoadMs = Date.now() - coldStart;
-
-    // Hot start
-    checkpoint();
-    const hotStart = Date.now();
-    await generate(hostUrl, { model: modelName, prompt: 'Hi', stream: false, options: { num_predict: 1, temperature: 0, seed: 7 } }, { timeoutMs: 30000, signal });
-    checkpoint();
-    const hotLoadMs = Date.now() - hotStart;
-
-    return { coldLoadMs, hotLoadMs };
-  } catch (err) {
-    if (signal?.aborted || err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
-    logger.warn(`_runLoadTiming: failed for ${modelName} — ${err.message}`);
-    return { coldLoadMs: null, hotLoadMs: null };
+      const coldStart = Date.now();
+      await generate(hostUrl, { model: modelName, prompt: 'Hi', stream: false, options: { num_predict: 1, temperature: 0, seed: 7 } }, { timeoutMs: 120000, signal });
+      checkpoint();
+      const coldLoadMs = Date.now() - coldStart;
+      const hotStart = Date.now();
+      await generate(hostUrl, { model: modelName, prompt: 'Hi', stream: false, options: { num_predict: 1, temperature: 0, seed: 7 } }, { timeoutMs: 30000, signal });
+      checkpoint();
+      const hotLoadMs = Date.now() - hotStart;
+      samples.push({ repeat, status: 'pass', unloadVerified: true, coldLoadMs, hotLoadMs });
+    } catch (err) {
+      if (signal?.aborted || err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
+      logger.warn(`_runLoadTiming: repeat ${repeat} failed for ${modelName} — ${err.message}`);
+      samples.push({ repeat, status: 'error', unloadVerified: false, coldLoadMs: null, hotLoadMs: null, error: err.message });
+    }
   }
+  const passing = samples.filter(sample => sample.status === 'pass' && sample.unloadVerified === true);
+  const coldStatistics = summarizePositiveMeasurements(passing.map(sample => sample.coldLoadMs), { minimumSamples });
+  const hotStatistics = summarizePositiveMeasurements(passing.map(sample => sample.hotLoadMs), { minimumSamples });
+  return {
+    coldLoadMs: coldStatistics.p50,
+    hotLoadMs: hotStatistics.p50,
+    unloadVerified: passing.length === minimumSamples,
+    sampleCount: samples.length,
+    passingSampleCount: passing.length,
+    minimumSamples,
+    samples,
+    coldStatistics,
+    hotStatistics
+  };
 }
 
 module.exports = {
   scout, profile, adapt, fullPipeline, preflight, runPreflight,
   _detectSpill, _runThroughputCurve, _runGenerationStability, _runLoadTiming,
   summarizeThroughputSamples,
+  summarizePositiveMeasurements,
   hasProfilerAuthorityReceipt,
   profileQualificationFailures
 };

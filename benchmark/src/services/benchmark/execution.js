@@ -656,7 +656,35 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             };
         }
 
-        await BenchmarkBatch.updateOne({ _id: batchId }, update);
+        try {
+            admissionHeartbeat.assertActive();
+            await BenchmarkBatch.updateOne(
+                { _id: batchId },
+                update,
+                { signal: admissionAbort.signal }
+            );
+            admissionHeartbeat.assertActive();
+        } catch (error) {
+            if (admissionAbort.signal.aborted || admissionHeartbeat.getFailure?.()) {
+                // Counter acknowledgement is ambiguous at lease loss. Mark the
+                // projection non-terminal and recoverable from result rows;
+                // never publish it as completed evidence.
+                await BenchmarkBatch.updateOne(
+                    { _id: batchId, status: { $in: ['pending', 'running', 'judging'] } },
+                    {
+                        $set: {
+                            status: 'interrupted',
+                            failure_reason: 'authority_lost_during_progress_write',
+                            last_activity_at: new Date(),
+                            current_test: buildIdleCurrentTest(),
+                            active_slot: null,
+                            execution_pid: null
+                        }
+                    }
+                ).catch(() => {});
+            }
+            throw error;
+        }
 
         pendingBatchProgress.completed = 0;
         pendingBatchProgress.failed = 0;

@@ -193,7 +193,7 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     });
   });
 
-  test('reaper cannot delete a renewed workload and removes only still-expired proof', async () => {
+  test('heartbeat never resurrects expired proof and reaper removes it', async () => {
     const admission = await service.acquireWorkload({
       principal: 'benchmark-service',
       requestId: 'expiry-request',
@@ -210,16 +210,102 @@ describe('runtime maintenance and benchmark workload coordination', () => {
       principal: 'benchmark-service',
       ttl: 60_000
     });
-    expect(renewed.heartbeat).toBe(true);
-    await service.reapExpired(new Date());
-    expect((await RuntimeCoordination.findById('runtime').lean()).workloads).toHaveLength(1);
-
-    await RuntimeCoordination.updateOne(
-      { _id: 'runtime', 'workloads.admissionId': admission.admissionId },
-      { $set: { 'workloads.$.expiresAt': new Date(Date.now() - 1_000) } }
-    );
+    expect(renewed).toMatchObject({ heartbeat: false });
     await service.reapExpired(new Date());
     expect((await RuntimeCoordination.findById('runtime').lean()).workloads).toHaveLength(0);
+  });
+
+  test('maintenance heartbeat cannot revive an expired lease', async () => {
+    const lease = await service.acquireMaintenance({
+      principal: 'operator-token',
+      requestId: 'expired-maintenance',
+      scope: 'deploy'
+    });
+    await RuntimeCoordination.updateOne(
+      { _id: 'runtime', 'maintenance.leaseId': lease.leaseId },
+      { $set: { 'maintenance.expiresAt': new Date(Date.now() - 1_000) } }
+    );
+
+    await expect(service.heartbeat('maintenance', {
+      id: lease.leaseId,
+      generation: lease.generation,
+      principal: lease.principal,
+      ttl: 60_000
+    })).resolves.toMatchObject({ heartbeat: false });
+  });
+
+  test('atomically persists identity-bound release receipts for lost maintenance and workload responses', async () => {
+    const maintenance = await service.acquireMaintenance({
+      principal: 'operator-token',
+      requestId: 'lost-maintenance-release',
+      scope: 'force-recreate'
+    });
+    const maintenanceReleased = await service.release('maintenance', {
+      id: maintenance.leaseId,
+      generation: maintenance.generation,
+      principal: maintenance.principal
+    });
+    await expect(service.recoverRelease('maintenance', {
+      id: maintenance.leaseId,
+      generation: maintenance.generation,
+      principal: maintenance.principal
+    })).resolves.toMatchObject({
+      recovered: true,
+      ...maintenanceReleased
+    });
+
+    const workload = await service.acquireWorkload({
+      principal: 'benchmark-service',
+      requestId: 'lost-workload-release',
+      workloadId: 'batch-lost-release',
+      kind: 'benchmark-cloud',
+      batchId: 'batch-lost-release',
+      hosts: ['http://host-b:11434', 'http://host-a:11434']
+    });
+    const workloadReleased = await service.release('workload', {
+      id: workload.admissionId,
+      generation: workload.generation,
+      principal: workload.principal
+    });
+    await expect(service.recoverRelease('workload', {
+      id: workload.admissionId,
+      generation: workload.generation,
+      principal: workload.principal
+    })).resolves.toMatchObject({
+      recovered: true,
+      ...workloadReleased,
+      hosts: ['http://host-a:11434', 'http://host-b:11434']
+    });
+    await expect(service.recoverRelease('workload', {
+      id: workload.admissionId,
+      generation: workload.generation,
+      principal: 'forged-principal'
+    })).resolves.toMatchObject({ recovered: false, released: false, retryable: false });
+  });
+
+  test('release recovery reattests an exact active proof before allowing a bounded retry', async () => {
+    const workload = await service.acquireWorkload({
+      principal: 'benchmark-service',
+      requestId: 'retry-workload-release',
+      workloadId: 'batch-retry-release',
+      hosts: ['http://host-a:11434']
+    });
+    await expect(service.recoverRelease('workload', {
+      id: workload.admissionId,
+      generation: workload.generation,
+      principal: workload.principal
+    })).resolves.toMatchObject({
+      recovered: true,
+      released: false,
+      retryable: true,
+      admissionId: workload.admissionId,
+      generation: workload.generation,
+      principal: workload.principal,
+      requestId: workload.requestId,
+      workloadId: workload.workloadId,
+      kind: workload.kind,
+      hosts: ['http://host-a:11434']
+    });
   });
 
   test('assertion fails closed after expiry and outside the admission host intent', async () => {

@@ -43,10 +43,12 @@ const CORE_OPERATIONS = Object.freeze({
   CLAIM_ACQUIRE: 'benchmark.core-api.claim-acquire',
   CLAIM_HEARTBEAT: 'benchmark.core-api.claim-heartbeat',
   CLAIM_RELEASE: 'benchmark.core-api.claim-release',
+  CLAIM_RELEASE_RECOVERY: 'benchmark.core-api.claim-release-recovery',
   CLAIMS_ACTIVE: 'benchmark.core-api.claims-active',
   WORKLOAD_ACQUIRE: 'benchmark.core-api.workload-acquire',
   WORKLOAD_HEARTBEAT: 'benchmark.core-api.workload-heartbeat',
   WORKLOAD_RELEASE: 'benchmark.core-api.workload-release',
+  WORKLOAD_RELEASE_RECOVERY: 'benchmark.core-api.workload-release-recovery',
 });
 
 function operation(method, pathPattern, {
@@ -105,6 +107,11 @@ const CORE_OPERATION_SPECS = Object.freeze({
     'GET',
     '^/api/nerve-center/host-preferences/benchmark-claims/active$'
   ),
+  [CORE_OPERATIONS.CLAIM_RELEASE_RECOVERY]: operation(
+    'POST',
+    '^/api/nerve-center/host-preferences/[^/]+/benchmark-claim/[^/]+/release-receipt$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
   [CORE_OPERATIONS.WORKLOAD_ACQUIRE]: operation(
     'POST',
     '^/api/nerve-center/workload-admissions$',
@@ -118,6 +125,11 @@ const CORE_OPERATION_SPECS = Object.freeze({
   [CORE_OPERATIONS.WORKLOAD_RELEASE]: operation(
     'DELETE',
     '^/api/nerve-center/workload-admissions/[^/]+$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY]: operation(
+    'POST',
+    '^/api/nerve-center/workload-admissions/[^/]+/release-receipt$',
     { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
   ),
 });
@@ -567,20 +579,49 @@ async function releaseBenchmarkClaim(hostUrl, batchId, options = {}) {
     return { released: false, reason: 'exact workload admission proof missing' };
   }
   const excludedModels = Array.isArray(options.excludedModels) ? options.excludedModels : [];
-  const data = await coreRequest(path, {
-    method: 'DELETE',
-    operationId: CORE_OPERATIONS.CLAIM_RELEASE,
-    timeout: PIN_RESTORE_TIMEOUT_MS,
-    body: JSON.stringify({
+  const releaseBody = {
       claimGeneration: proof?.claimGeneration || null,
       admissionId: admission.admissionId,
       admissionGeneration: admission.generation,
       ...(excludedModels.length > 0
         ? { excludedModels }
         : {})
-    })
-  });
-  const result = data?.data;
+  };
+  const requestRelease = async () => {
+    const data = await coreRequest(path, {
+      method: 'DELETE',
+      operationId: CORE_OPERATIONS.CLAIM_RELEASE,
+      timeout: PIN_RESTORE_TIMEOUT_MS,
+      body: JSON.stringify(releaseBody)
+    });
+    return data?.data;
+  };
+  let result;
+  try {
+    result = await requestRelease();
+  } catch (releaseError) {
+    // A transport failure or 5xx after Core's terminal CAS is ambiguous. Ask
+    // the same authenticated authority for the durable exact receipt before
+    // deciding whether to retry or retain the local fence for recovery.
+    try {
+      const recovery = await coreRequest(`${path}/release-receipt`, {
+        method: 'POST',
+        operationId: CORE_OPERATIONS.CLAIM_RELEASE_RECOVERY,
+        body: JSON.stringify({
+          claimGeneration: proof?.claimGeneration || null,
+          admissionId: admission.admissionId,
+          admissionGeneration: admission.generation
+        })
+      });
+      const recovered = recovery?.data;
+      if (recovered?.released === true) result = recovered;
+      else if (recovered?.retryable === true && recovered?.finalizing !== true) result = await requestRelease();
+      else throw releaseError;
+    } catch (recoveryError) {
+      if (recoveryError !== releaseError) releaseError.recoveryError = recoveryError;
+      throw releaseError;
+    }
+  }
   if (!result || typeof result !== 'object' || typeof result.released !== 'boolean') {
     const error = new Error('Core release response did not contain an explicit release decision');
     error.code = 'BENCHMARK_RELEASE_RECEIPT_INVALID';
@@ -718,22 +759,55 @@ async function releaseWorkloadAdmission(workloadId) {
   const key = String(workloadId || '');
   const receipt = workloadAdmissionById.get(key);
   if (!receipt) return { released: false, reason: 'local workload admission proof missing' };
-  const data = await coreRequest(`/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`, {
-    method: 'DELETE',
-    operationId: CORE_OPERATIONS.WORKLOAD_RELEASE,
-    body: JSON.stringify({ generation: receipt.generation })
-  });
-  const result = data?.data;
-  const exact = result?.released === true
-    && result.admissionId === receipt.admissionId
+  const exactIdentity = result => result?.admissionId === receipt.admissionId
     && result.generation === receipt.generation
     && result.principal === receipt.principal
     && result.requestId === receipt.requestId
     && result.workloadId === receipt.workloadId
     && result.kind === receipt.kind
     && (result.batchId || null) === (receipt.batchId || null)
-    && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || [])
+    && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || []);
+  const exactRelease = result => result?.released === true
+    && exactIdentity(result)
     && Number.isFinite(Date.parse(result.releasedAt));
+  const requestRelease = () => coreRequest(
+    `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`,
+    {
+      method: 'DELETE',
+      operationId: CORE_OPERATIONS.WORKLOAD_RELEASE,
+      body: JSON.stringify({ generation: receipt.generation })
+    }
+  );
+  let data;
+  try {
+    data = await requestRelease();
+  } catch (originalError) {
+    try {
+      const recovery = await coreRequest(
+        `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}/release-receipt`,
+        {
+          method: 'POST',
+          operationId: CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY,
+          body: JSON.stringify({ generation: receipt.generation })
+        }
+      );
+      const recovered = recovery?.data;
+      if (recovered?.recovered === true && exactRelease(recovered)) {
+        data = recovery;
+      } else if (recovered?.recovered === true
+        && recovered?.released === false
+        && recovered?.retryable === true
+        && exactIdentity(recovered)) {
+        data = await requestRelease();
+      } else {
+        throw originalError;
+      }
+    } catch {
+      throw originalError;
+    }
+  }
+  const result = data?.data;
+  const exact = exactRelease(result);
   if (!exact) return { released: false, reason: result?.reason || 'Core workload release receipt is invalid' };
   workloadAdmissionById.delete(key);
   return result;

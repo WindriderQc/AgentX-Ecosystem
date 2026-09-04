@@ -12,6 +12,7 @@ import { openProfileHostDialog } from './components/profile-host-dialog.js';
 import { showToast } from '../components/toast.js';
 import {
   getReadinessForHost,
+  classifyProfileEvidence,
   applyFilters,
 } from './models-helpers.js';
 import {
@@ -372,7 +373,31 @@ export async function renderModels(container, state, api) {
     const hostRoster = selectedHostId
       ? roster.filter(a => a.hostId === selectedHostId)
       : roster;
-    const evidenceMap = new Map(hostRoster.map(a => [a.modelName, a]));
+    // Roster is newest-first. Preserve the first exact row per model instead
+    // of letting an older duplicate win through Map's last-write semantics.
+    const evidenceMap = new Map();
+    for (const evidence of hostRoster) {
+      if (!evidenceMap.has(evidence.modelName)) evidenceMap.set(evidence.modelName, evidence);
+    }
+
+    const attachEvidence = (profile, evidence) => {
+      const authority = classifyProfileEvidence(profile, evidence, selectedHostId);
+      profile._profileAuthority = authority;
+      if (!evidence?.profile) return profile;
+      const evidenceProfile = {
+        ...evidence.profile,
+        _showHardwareDiagnostics: settings.showHardwareDiagnostics !== false,
+        _recommendationsAuthoritative: authority.recommendationsAuthoritative
+      };
+      if (!authority.recommendationsAuthoritative) {
+        evidenceProfile.recommendedInteractiveContext = null;
+        evidenceProfile.recommendedDocumentContext = null;
+        evidenceProfile.contextInsight = null;
+      }
+      profile.profile = evidenceProfile;
+      profile._evidence = evidence;
+      return profile;
+    };
 
     // Build model list: host models enriched with exact-artifact profile evidence.
     if (hostModels.length) {
@@ -383,9 +408,7 @@ export async function renderModels(container, state, api) {
           readiness: getReadinessForHost(storedProfile.readiness, selectedHostId)
         };
         const evidence = evidenceMap.get(name);
-        if (evidence?.profile) profile.profile = { ...evidence.profile, _showHardwareDiagnostics: settings.showHardwareDiagnostics !== false };
-        if (evidence) profile._evidence = evidence;
-        return { name, ...profile };
+        return { name, ...attachEvidence(profile, evidence) };
       });
     } else {
       // Fallback: show all registered models if no host selected
@@ -395,9 +418,7 @@ export async function renderModels(container, state, api) {
           ...profile,
           readiness: getReadinessForHost(profile.readiness, selectedHostId)
         };
-        if (evidence?.profile) next.profile = { ...evidence.profile, _showHardwareDiagnostics: settings.showHardwareDiagnostics !== false };
-        if (evidence) next._evidence = evidence;
-        return next;
+        return attachEvidence(next, evidence);
       });
     }
   } catch (err) {

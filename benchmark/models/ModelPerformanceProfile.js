@@ -18,6 +18,7 @@ const ModelPerformanceProfileSchema = new mongoose.Schema({
   hostId: { type: String, required: true, index: true },
   artifact: { type: ArtifactIdentitySchema, required: true },
   profile: { type: mongoose.Schema.Types.Mixed, required: true },
+  authorityWriteId: { type: String, default: null },
   active: { type: Boolean, default: true, index: true },
   stale: { type: Boolean, default: false },
   staleReason: { type: String, default: null }

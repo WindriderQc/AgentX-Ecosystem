@@ -130,6 +130,23 @@ describe('profile', () => {
     expect(result).toMatchObject({ modelName: MODEL, artifact: ARTIFACT, evidenceId: 'evidence-1' });
   });
 
+  it('surfaces failed evidence invalidation so the route can retain runtime fences', async () => {
+    modelProfileService.updateReadiness.mockRejectedValueOnce(new Error('readiness acknowledgement lost'));
+    performanceProfiles.invalidateProfile.mockRejectedValueOnce(new Error('profile invalidation unavailable'));
+
+    const error = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick').catch(caught => caught);
+
+    expect(error).toMatchObject({
+      authorityInvalidationFailed: true,
+      invalidationErrors: [expect.any(Error)]
+    });
+    expect(performanceProfiles.invalidateProfile).toHaveBeenCalledWith(
+      'evidence-1',
+      'profiler_authority_write_failed'
+    );
+    expect(modelProfileService.invalidateReadinessIfEvidence).toHaveBeenCalled();
+  });
+
   it.each([
     ['the measured throughput context', 16384, 16384],
     ['no context when throughput omitted it', undefined, null]
@@ -241,8 +258,19 @@ describe('profile', () => {
 
 describe('profiler evidence qualification', () => {
   function qualifiedFullProfile() {
+    const stats = value => ({
+      sampleCount: 3,
+      mean: value,
+      p50: value,
+      p95: value,
+      standardDeviation: 0,
+      coefficientOfVariation: 0,
+      confidenceInterval95: { low: value, high: value, method: 'student_t' },
+      reliability: 'high'
+    });
     return {
       profileDepth: 'full',
+      requiredFullPhaseSamples: 3,
       maxVerifiedContext: 262144,
       recommendedInteractiveContext: 65536,
       recommendedDocumentContext: 131072,
@@ -254,14 +282,20 @@ describe('profiler evidence qualification', () => {
       throughputCurve: [10, 25, 50, 75, 90].map(contextFillPct => ({
         contextFillPct,
         tokensPerSec: 40,
-        gpuOffloaded: false
+        gpuOffloaded: false,
+        passingSampleCount: 3,
+        throughputStatistics: stats(40)
       })),
       generationStability: [64, 256, 512].map(numPredict => ({
         numPredict,
         tokensPerSec: 40,
-        totalLatencyMs: 1000
+        totalLatencyMs: 1000,
+        passingSampleCount: 3,
+        throughputStatistics: stats(40),
+        latencyStatistics: stats(1000)
       })),
       prefillDecodeMatrix: {
+        numCtx: 1024,
         prefillTokens: [512],
         decodeTokens: [64],
         cellCount: 1,
@@ -272,10 +306,25 @@ describe('profiler evidence qualification', () => {
           requestedPromptTokens: 512,
           promptTokens: 500,
           promptCoveragePct: 97.7,
-          minimumPromptCoveragePct: 80
+          minimumPromptCoveragePct: 80,
+          promptEvalDurationMs: 500,
+          evalDurationMs: 500,
+          runtimeContextLength: 1024,
+          passingSampleCount: 3,
+          prefillStatistics: stats(1000),
+          decodeStatistics: stats(128),
+          prefillTokensPerSec: 1000,
+          decodeTokensPerSec: 128
         }]
       },
-      loadTiming: { coldLoadMs: 5000, hotLoadMs: 100 }
+      loadTiming: {
+        coldLoadMs: 5000,
+        hotLoadMs: 100,
+        unloadVerified: true,
+        passingSampleCount: 3,
+        coldStatistics: stats(5000),
+        hotStatistics: stats(100)
+      }
     };
   }
 
@@ -303,6 +352,11 @@ describe('profiler evidence qualification', () => {
       profile.prefillDecodeMatrix.skippedCount = 1;
     }, 'full_prefill_decode_matrix_incomplete'],
     ['underfilled matrix prompt', profile => { profile.prefillDecodeMatrix.cells[0].promptCoveragePct = 40; }, 'full_prefill_decode_matrix_incomplete'],
+    ['missing matrix prefill duration', profile => { profile.prefillDecodeMatrix.cells[0].promptEvalDurationMs = null; }, 'full_prefill_decode_matrix_incomplete'],
+    ['missing matrix decode duration', profile => { profile.prefillDecodeMatrix.cells[0].evalDurationMs = null; }, 'full_prefill_decode_matrix_incomplete'],
+    ['mismatched matrix resident context', profile => { profile.prefillDecodeMatrix.cells[0].runtimeContextLength = 2048; }, 'full_prefill_decode_matrix_incomplete'],
+    ['missing matrix prefill throughput', profile => { profile.prefillDecodeMatrix.cells[0].prefillTokensPerSec = null; }, 'full_prefill_decode_matrix_incomplete'],
+    ['missing matrix decode throughput', profile => { profile.prefillDecodeMatrix.cells[0].decodeTokensPerSec = null; }, 'full_prefill_decode_matrix_incomplete'],
     ['load timing', profile => { profile.loadTiming.hotLoadMs = null; }, 'full_load_timing_incomplete']
   ])('fails Full qualification when %s is incomplete', (_label, breakPhase, reason) => {
     const profile = qualifiedFullProfile();

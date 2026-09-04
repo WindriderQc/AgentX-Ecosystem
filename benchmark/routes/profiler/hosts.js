@@ -76,6 +76,38 @@ function buildBaselineFromResults(results = [], preferredModel = '') {
   };
 }
 
+async function updateBaselineUnderLease(hostId, baseline, lease) {
+  lease.assertActive();
+  const prior = await hostProfileService.getById(hostId);
+  lease.assertActive();
+  try {
+    const updated = await hostProfileService.updateBaseline(hostId, baseline, {
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
+    lease.assertActive();
+    return updated;
+  } catch (error) {
+    // The write acknowledgement may race lease loss. Restore the last known
+    // projection (or clear a newly-created baseline) without reusing the dead
+    // signal; this compensation only retracts potentially unauthorized data.
+    await hostProfileService.upsert({
+      hostId,
+      baseline: prior?.baseline || null
+    }).catch(compensationError => {
+      error.compensationError = compensationError;
+      logger.error('Host baseline compensation failed', {
+        hostId,
+        error: compensationError.message
+      });
+    });
+    if (error.compensationError && typeof lease.abandon === 'function') {
+      await lease.abandon(error.compensationError);
+    }
+    throw error;
+  }
+}
+
 // ═══ HOST PROFILE — Static routes (MUST come before /:hostId params) ════════
 
 router.get('/', async (req, res) => {
@@ -266,15 +298,14 @@ router.post('/test/run', async (req, res) => {
     lease.assertActive();
     if (isBaseline && snapshot?.status === 'pass') {
       lease.assertActive();
-      await hostProfileService.updateBaseline(hostId, {
+      await updateBaselineUnderLease(hostId, {
         referenceModel: modelName,
         tokensPerSec: snapshot.tokensPerSec,
         latencyMs: snapshot.latencyMs,
         ttftMs: snapshot.timeToFirstTokenMs,
         ttftMeasurement: snapshot.ttftMeasurement || undefined,
         testedAt: snapshot.testedAt
-      }, { signal: lease.signal, assertAuthorityActive: lease.assertActive });
-      lease.assertActive();
+      }, lease);
     }
     await lease.finalize();
     lease = null;
@@ -325,11 +356,7 @@ router.post('/test/run-all', async (req, res) => {
       const baseline = buildBaselineFromResults(tracker.results, baselineModel);
       if (hostId && baseline) {
         lease.assertActive();
-        await hostProfileService.updateBaseline(hostId, baseline, {
-          signal: lease.signal,
-          assertAuthorityActive: lease.assertActive
-        });
-        lease.assertActive();
+        await updateBaselineUnderLease(hostId, baseline, lease);
       }
     }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; })
       .finally(async () => {
@@ -447,11 +474,7 @@ router.post('/test/run-fleet', async (req, res) => {
           const baseline = buildBaselineFromResults(slot.results, baselineModel);
           if (slot.hostId && baseline) {
             lease.assertActive();
-            await hostProfileService.updateBaseline(slot.hostId, baseline, {
-              signal: lease.signal,
-              assertAuthorityActive: lease.assertActive
-            });
-            lease.assertActive();
+            await updateBaselineUnderLease(slot.hostId, baseline, lease);
           }
         } catch (err) {
           slot.status = 'failed';
@@ -679,8 +702,10 @@ router.get('/test/results/:modelName', async (req, res) => {
 /** POST /:hostId/release — unload a pinned model from a host */
 router.post('/:hostId/release', async (req, res) => {
   let lease;
+  let projectionCommitted = false;
+  let host = null;
   try {
-    const host = await hostProfileService.getById(req.params.hostId);
+    host = await hostProfileService.getById(req.params.hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
     if (!host.dedicated?.model) {
       return res.status(400).json({ status: 'error', error: 'Host has no pinned model' });
@@ -697,6 +722,52 @@ router.post('/:hostId/release', async (req, res) => {
     }
 
     const releasedModel = host.dedicated.model;
+    // Publish the intended Benchmark projection while both the exact host
+    // claim and its global workload admission are still alive. If this write
+    // has an ambiguous acknowledgement, restore the exact prior projection
+    // before Core restores/releases the pre-claim runtime in finally.
+    const status = await hostProfileService.checkStatus(host.hostUrl);
+    if (status.dedicated?.model && isSameOllamaModel(status.dedicated.model, releasedModel)) {
+      const error = new Error('Released model became resident again before release verification');
+      error.code = 'PROFILER_RELEASE_NOT_STABLE';
+      error.statusCode = 409;
+      throw error;
+    }
+    const persistenceOptions = {
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    };
+    try {
+      lease.assertActive();
+      await hostProfileService.upsert({
+        hostId: req.params.hostId,
+        status: status.status,
+        dedicated: null
+      }, persistenceOptions);
+      lease.assertActive();
+      projectionCommitted = true;
+    } catch (error) {
+      try {
+        lease.assertActive();
+        await hostProfileService.upsert({
+          hostId: req.params.hostId,
+          status: host.status,
+          dedicated: host.dedicated || null
+        }, persistenceOptions);
+        lease.assertActive();
+      } catch (compensationError) {
+        error.compensationError = compensationError;
+        logger.error('Release-model projection compensation failed under lease', {
+          hostId: req.params.hostId,
+          error: compensationError.message
+        });
+        if (typeof lease.abandon === 'function') {
+          await lease.abandon(compensationError);
+        }
+      }
+      throw error;
+    }
+
     const releaseReceipt = await lease.finalize({
       byHost: {
         [host.hostUrl]: { excludedModels: [releasedModel] }
@@ -710,19 +781,6 @@ router.post('/:hostId/release', async (req, res) => {
       error.statusCode = 503;
       throw error;
     }
-    // Core's fenced receipt is the commit point. Only after it confirms the
-    // target was excluded from the restored resident set do we publish the
-    // Benchmark-side dedicated state. A fresh status read prevents a false 200
-    // if another controller immediately made the target resident again.
-    const status = await hostProfileService.checkStatus(host.hostUrl);
-    if (status.dedicated?.model && isSameOllamaModel(status.dedicated.model, releasedModel)) {
-      const error = new Error('Released model became resident again before release verification');
-      error.code = 'PROFILER_RELEASE_NOT_STABLE';
-      error.statusCode = 409;
-      throw error;
-    }
-    await hostProfileService.updateStatus(req.params.hostId, status.status);
-    await hostProfileService.upsert({ hostId: req.params.hostId, dedicated: null });
     const data = {
       success: true,
       hostId: req.params.hostId,
@@ -732,6 +790,23 @@ router.post('/:hostId/release', async (req, res) => {
     };
     res.json({ status: 'success', data });
   } catch (err) {
+    // If Core could not reach its final host-release receipt, restore the
+    // Benchmark projection while the global admission remains fail-closed.
+    // A successful host receipt means the null projection is accurate even if
+    // only the final workload-admission release failed.
+    const hostReleaseSucceeded = err.release?.details?.length > 0
+      && err.release.details.every(detail => detail.released === true);
+    if (projectionCommitted && !hostReleaseSucceeded && host) {
+      await hostProfileService.upsert({
+        hostId: req.params.hostId,
+        status: host.status,
+        dedicated: host.dedicated || null
+      }).catch(compensationError => logger.error('Release-model post-finalize compensation failed', {
+        hostId: req.params.hostId,
+        error: compensationError.message
+      }));
+      projectionCommitted = false;
+    }
     logger.error('Release model failed', { hostId: req.params.hostId, error: err.message });
     res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
   } finally {

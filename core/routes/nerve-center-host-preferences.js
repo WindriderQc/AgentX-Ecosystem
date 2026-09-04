@@ -38,6 +38,35 @@ function requireBenchmarkCoordinationAccess(req, res, next) {
   });
 }
 
+function redactBenchmarkClaimCapabilities(pref) {
+  if (!pref) return pref;
+  const {
+    lastBenchmarkReleaseReceipt: _releaseReceipt,
+    ...safePref
+  } = pref;
+  if (!safePref.benchmarkClaim) return safePref;
+  const claim = safePref.benchmarkClaim;
+  return {
+    ...safePref,
+    benchmarkClaim: {
+      batchId: claim.batchId || null,
+      prevStatus: claim.prevStatus || null,
+      claimedAt: claim.claimedAt || null,
+      estimatedDurationMs: claim.estimatedDurationMs || null,
+      source: claim.source || null,
+      owner: claim.owner || null,
+      note: claim.note || null,
+      heartbeatAt: claim.heartbeatAt || null,
+      heartbeatTtlMs: claim.heartbeatTtlMs || null,
+      snapshotExact: claim.preClaimRuntime?.exact === true,
+      snapshotResidentCount: Array.isArray(claim.preClaimRuntime?.residents)
+        ? claim.preClaimRuntime.residents.length
+        : null,
+      finalizing: Boolean(claim.finalizeToken)
+    }
+  };
+}
+
 function resolveHostPreferenceUrl(req, res) {
   let rawHostUrl;
   try {
@@ -64,7 +93,9 @@ router.get('/host-preferences', async (_req, res) => {
   try {
     const prefs = await hostPrefService.getAll();
     const hostIdentityDrift = hostPrefService.detectHostPreferenceIdentityDrift(prefs);
-    const normalizedPrefs = prefs.map((pref) => hostPrefService.normalizeHostPreferenceIdentity(pref));
+    const normalizedPrefs = prefs.map((pref) => redactBenchmarkClaimCapabilities(
+      hostPrefService.normalizeHostPreferenceIdentity(pref)
+    ));
 
     // Build set of models referenced by TASK_MODELS per host key, then map to URLs
     const taskRoutedByUrl = new Map();
@@ -360,6 +391,30 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', 
   }
 });
 
+router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/release-receipt', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const hostUrl = resolveHostPreferenceUrl(req, res);
+    if (!hostUrl) return;
+    const batchId = req.params.batchId;
+    const { claimGeneration, admissionId, admissionGeneration } = req.body || {};
+    const admission = await runtimeCoordinationService.assertWorkloadAdmission({
+      id: admissionId,
+      generation: admissionGeneration,
+      principal: coordinationPrincipal(req),
+      workloadId: batchId,
+      host: hostUrl
+    });
+    if (!admission.admitted) {
+      return res.status(409).json({ status: 'error', code: 'WORKLOAD_ADMISSION_REQUIRED', message: admission.reason });
+    }
+    const result = await hostPrefService.recoverBenchmarkClaimRelease(hostUrl, batchId, { claimGeneration });
+    return res.json({ status: 'success', data: result });
+  } catch (err) {
+    logger.error('[NerveCenter] benchmark claim release receipt recovery failed', { error: err.message });
+    return res.status(500).json({ status: 'error', code: 'BENCHMARK_RELEASE_RECOVERY_FAILED', message: err.message });
+  }
+});
+
 router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkCoordinationAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
@@ -401,7 +456,14 @@ router.get('/host-preferences/benchmark-claims/active', async (_req, res) => {
     const claims = await hostPrefService.listBenchmarkClaims();
     // Claim generations are bearer capabilities for the direct inference
     // lane. This operator/status projection must never disclose them.
-    const publicClaims = claims.map(({ claimGeneration: _secret, ...claim }) => claim);
+    const publicClaims = claims.map(({
+      claimGeneration: _claimSecret,
+      admissionId: _admissionId,
+      admissionGeneration: _admissionSecret,
+      preClaimRuntime: _runtimeSecret,
+      finalizeToken: _finalizerSecret,
+      ...claim
+    }) => claim);
     res.json({ status: 'success', data: { claims: publicClaims, count: publicClaims.length } });
   } catch (err) {
     logger.error('[NerveCenter] listing benchmark claims failed', { error: err.message });
@@ -452,6 +514,26 @@ router.delete('/maintenance-leases/:leaseId', requireOperatorAccess, async (req,
   }
 });
 
+router.post('/maintenance-leases/:leaseId/release-receipt', requireOperatorAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.recoverRelease('maintenance', {
+      id: req.params.leaseId,
+      generation: req.body?.generation,
+      principal: operatorRequestIdentity(req)
+    });
+    return res.status(result.recovered ? 200 : 409).json({
+      status: result.recovered ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      code: 'MAINTENANCE_RELEASE_RECOVERY_FAILED',
+      message: error.message
+    });
+  }
+});
+
 router.post('/workload-admissions', requireBenchmarkCoordinationAccess, async (req, res) => {
   try {
     const result = await runtimeCoordinationService.acquireWorkload({
@@ -493,6 +575,26 @@ router.delete('/workload-admissions/:admissionId', requireBenchmarkCoordinationA
     return res.status(result.released ? 200 : 409).json({ status: result.released ? 'success' : 'error', data: result });
   } catch (error) {
     return res.status(500).json({ status: 'error', code: 'WORKLOAD_RELEASE_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-admissions/:admissionId/release-receipt', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.recoverRelease('workload', {
+      id: req.params.admissionId,
+      generation: req.body?.generation,
+      principal: coordinationPrincipal(req)
+    });
+    return res.status(result.recovered ? 200 : 409).json({
+      status: result.recovered ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      code: 'WORKLOAD_RELEASE_RECOVERY_FAILED',
+      message: error.message
+    });
   }
 });
 

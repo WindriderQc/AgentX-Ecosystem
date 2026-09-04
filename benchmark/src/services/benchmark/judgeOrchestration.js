@@ -59,6 +59,34 @@ function createJudgeOrchestrator({
     const isCancellationError = (error) => isCancelled()
         || error?.code === 'BENCHMARK_BATCH_STOPPED'
         || error?.code === 'QUEUE_CANCELLED';
+    const guardedBatchUpdate = async (filter, update) => {
+        if (isCancelled()) throw cancellationReason();
+        try {
+            await BenchmarkBatch.updateOne(
+                filter,
+                update,
+                cancelSignal ? { signal: cancelSignal } : undefined
+            );
+            if (isCancelled()) throw cancellationReason();
+        } catch (error) {
+            if (isCancelled()) {
+                await BenchmarkBatch.updateOne(
+                    { _id: batchId, status: { $in: ['pending', 'running', 'judging'] } },
+                    {
+                        $set: {
+                            status: 'interrupted',
+                            failure_reason: 'authority_lost_during_judge_counter_write',
+                            last_activity_at: new Date(),
+                            active_slot: null,
+                            execution_pid: null
+                        }
+                    }
+                ).catch(() => {});
+                throw cancellationReason();
+            }
+            throw error;
+        }
+    };
     const onCancel = () => {
         deferredJudgeTasks.splice(0);
         judgeQueue.cancel(cancellationReason());
@@ -201,7 +229,7 @@ function createJudgeOrchestrator({
                     success: true
                 }).catch(() => {}); // best-effort
 
-                await BenchmarkBatch.updateOne(
+                await guardedBatchUpdate(
                     { _id: batchId },
                     {
                         $inc: { judge_completed: 1 },
@@ -256,7 +284,7 @@ function createJudgeOrchestrator({
                     error: scoreErr.message
                 }).catch(() => {}); // best-effort
 
-                await BenchmarkBatch.updateOne(
+                await guardedBatchUpdate(
                     { _id: batchId },
                     {
                         $inc: { judge_completed: 1, judge_failed: 1 },
@@ -274,10 +302,12 @@ function createJudgeOrchestrator({
                 error: enqueueErr.message
             });
 
-            await BenchmarkBatch.updateOne(
+            await guardedBatchUpdate(
                 { _id: batchId },
                 { $inc: { judge_completed: 1, judge_failed: 1 } }
-            ).catch(() => {});
+            ).catch(error => {
+                if (isCancellationError(error)) throw error;
+            });
         });
     }
 

@@ -70,6 +70,51 @@ export function getReadinessForHost(readiness, hostId) {
   return readiness[hostId] ? { [hostId]: readiness[hostId] } : {};
 }
 
+function readinessEntryForHost(readiness, hostId) {
+  if (!readiness) return null;
+  if (readiness instanceof Map) {
+    if (hostId) return readiness.get(hostId) || null;
+    return readiness.values().next().value || null;
+  }
+  if (hostId) return readiness[hostId] || null;
+  return Object.values(readiness)[0] || null;
+}
+
+/**
+ * Rebuild the profile-authority decision after every page load. Persisted
+ * performance rows are evidence, but only the matching ModelProfile receipt
+ * may authorize Standard/Full recommendations.
+ */
+export function classifyProfileEvidence(model, evidence, hostId) {
+  const readiness = readinessEntryForHost(model?.readiness, hostId);
+  const depth = evidence?.profile?.profileDepth || readiness?.profileDepth || null;
+  const receipt = readiness?.authorityReceipt;
+  const stale = readiness?.stale === true || evidence?.stale === true || evidence?.active === false;
+  const evidenceId = String(evidence?._id || '');
+  const readinessEvidenceId = String(readiness?.evidenceId || '');
+  const qualified = !stale
+    && ['standard', 'full'].includes(depth)
+    && readiness?.benchmarkQualified === true
+    && receipt?.source === 'profiler_pipeline'
+    && Number(receipt?.version) === 1
+    && /^[a-f0-9]{64}$/i.test(String(receipt?.digest || ''))
+    && evidenceId !== ''
+    && evidenceId === readinessEvidenceId
+    && String(receipt?.evidenceId || '') === readinessEvidenceId
+    && evidence?.artifact?.digest === readiness?.artifact?.digest
+    && evidence?.artifact?.runtimeFingerprint === readiness?.artifact?.runtimeFingerprint;
+
+  return {
+    status: stale ? 'stale' : qualified ? 'qualified' : ['standard', 'full'].includes(depth) ? 'not_qualified' : 'diagnostic',
+    benchmarkQualified: qualified,
+    recommendationsAuthoritative: qualified,
+    profileDepth: depth,
+    reason: stale
+      ? readiness?.staleReason || evidence?.staleReason || 'stale_profile_evidence'
+      : qualified ? null : readiness?.qualificationReason || 'profiler_authority_receipt_missing_or_mismatched'
+  };
+}
+
 /**
  * Count how many hosts are at or above the given stage.
  * (Any host whose stage appears earlier in STAGE_ORDER counts.)

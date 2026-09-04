@@ -144,6 +144,24 @@ describe('profile-host queue depth selection', () => {
       expect.any(Object)
     );
   });
+
+  it('holds queue fences when profiler authority invalidation is ambiguous', async () => {
+    orchestrator.profile.mockRejectedValue(Object.assign(new Error('authority invalidation unavailable'), {
+      authorityInvalidationFailed: true,
+      code: 'PROFILER_AUTHORITY_INVALIDATION_FAILED'
+    }));
+
+    const started = await startProfileHostQueue({ hostId: 'host-beta', skipRecentDays: 0 });
+    await flushPromises();
+    await flushPromises();
+
+    expect(activeProfileQueues.get(started.queueId)).toMatchObject({
+      status: 'failed',
+      cancelled: true
+    });
+    expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
+    expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+  });
 });
 
 describe('full pipeline claim and depth contract', () => {
@@ -169,6 +187,46 @@ describe('full pipeline claim and depth contract', () => {
       expect.objectContaining({ assertClaimActive: expect.any(Function), claimIdentityFor: expect.any(Function) })
     );
     expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalled();
+  });
+
+  it('returns a non-success incomplete envelope when Full evidence is not qualified', async () => {
+    orchestrator.fullPipeline.mockResolvedValueOnce({
+      completed: true,
+      benchmarkQualified: false,
+      results: [{ hostId: 'host-beta', success: true, benchmarkQualified: false }],
+      failures: []
+    });
+
+    const response = await request(pipelineApp)
+      .post('/api/profiler/pipeline/full')
+      .send({ modelName: 'qwen:7b' });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual(expect.objectContaining({
+      status: 'incomplete',
+      code: 'FULL_PROFILE_INCOMPLETE',
+      data: expect.objectContaining({ completed: true, benchmarkQualified: false })
+    }));
+    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalled();
+  });
+
+  it('holds Full-pipeline fences when authority invalidation is ambiguous', async () => {
+    orchestrator.fullPipeline.mockRejectedValueOnce(Object.assign(new Error('authority invalidation unavailable'), {
+      authorityInvalidationFailed: true,
+      code: 'PROFILER_AUTHORITY_INVALIDATION_FAILED'
+    }));
+
+    const response = await request(pipelineApp)
+      .post('/api/profiler/pipeline/full')
+      .send({ modelName: 'qwen:7b' });
+
+    expect(response.status).toBe(500);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      code: 'PROFILER_AUTHORITY_INVALIDATION_FAILED'
+    });
+    expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
+    expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
   });
 });
 

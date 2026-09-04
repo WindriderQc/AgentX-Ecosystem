@@ -45,12 +45,22 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
     heartbeat.assertActive();
   } catch (err) {
     await heartbeat.drain();
-    await releaseBenchmarkClaims(claimed, operationId);
+    const cleanup = await releaseBenchmarkClaims(claimed, operationId, {
+      releaseWorkloadAdmission: false
+    });
+    // A failed exact host restore intentionally keeps the global admission
+    // fenced for recovery. If every host restored, close the admission now so
+    // an initial heartbeat failure does not leak it until TTL expiry.
+    if (cleanup.failed === 0) {
+      await releaseWorkloadAdmission(operationId).catch(() => {});
+    }
     err.statusCode = 503;
     throw err;
   }
 
   let releasePromise = null;
+  let abandonPromise = null;
+  let abandoned = false;
   return {
     operationId,
     hostUrls: claimed,
@@ -66,7 +76,28 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
       }
       return identity;
     },
+    async abandon(reason = null) {
+      if (releasePromise) return releasePromise;
+      if (!abandonPromise) {
+        abandoned = true;
+        if (!leaseAbort.signal.aborted) {
+          leaseAbort.abort(reason || new Error('Profiler lease abandoned for TTL recovery'));
+        }
+        abandonPromise = (async () => {
+          await heartbeat.drain();
+          return {
+            abandoned: true,
+            released: 0,
+            failed: claimed.length + 1,
+            details: claimed.map(hostUrl => ({ hostUrl, released: false, reason: 'held for TTL recovery' })),
+            workloadAdmission: { released: false, reason: 'held for TTL recovery' }
+          };
+        })();
+      }
+      return abandonPromise;
+    },
     async release(options = {}) {
+      if (abandoned) return abandonPromise;
       if (!releasePromise) {
         releasePromise = (async () => {
           if (typeof heartbeat.drainHosts === 'function') await heartbeat.drainHosts();

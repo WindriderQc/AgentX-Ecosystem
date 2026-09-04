@@ -85,6 +85,8 @@ router.post('/harness-campaigns', async (req, res) => {
     let campaign = null;
     let lifecycleId = null;
     let stopHeartbeat = null;
+    let responseStatus = 200;
+    let responseBody = null;
     try {
         if (req.body?.confirmation_no_secrets !== true) {
             return res.status(422).json({
@@ -177,10 +179,10 @@ router.post('/harness-campaigns', async (req, res) => {
         campaign.completed_at = new Date();
         await campaign.save();
         stopHeartbeat.assertActive();
-        return res.json({
+        responseBody = {
             status: 'success',
             data: { campaign: campaign.toObject(), output: execution.output }
-        });
+        };
     } catch (error) {
         // A lost workload lease means another owner may already hold runtime
         // maintenance. Never write a terminal authority result after that
@@ -201,13 +203,45 @@ router.post('/harness-campaigns', async (req, res) => {
                 await invalidateHarnessAuthority(campaign, authorityError);
             }
         }
-        return res.status(Number(error.statusCode) || 500).json({
+        responseStatus = Number(error.statusCode) || 500;
+        responseBody = {
             status: 'error', code: error.code || 'HARNESS_EXECUTION_FAILED', error: error.message
-        });
+        };
     } finally {
         if (stopHeartbeat) await stopHeartbeat.drain().catch(() => {});
-        if (lifecycleId) await releaseBenchmarkClaims([], lifecycleId).catch(() => {});
+        if (lifecycleId) {
+            let release = null;
+            try {
+                release = await releaseBenchmarkClaims([], lifecycleId);
+            } catch (error) {
+                release = { failed: 1, workloadAdmission: { released: false, reason: error.message } };
+            }
+            if (release?.failed !== 0 || release?.workloadAdmission?.released !== true) {
+                const releaseError = new Error(release?.workloadAdmission?.reason || 'Workload admission release was not verified');
+                releaseError.code = 'WORKLOAD_ADMISSION_RELEASE_UNVERIFIED';
+                if (campaign) {
+                    try {
+                        await invalidateHarnessAuthority(campaign, releaseError);
+                    } catch (invalidationError) {
+                        releaseError.invalidationError = invalidationError;
+                        logger.error('Harness authority invalidation failed after admission release failure', {
+                            campaignId: String(campaign._id),
+                            error: invalidationError.message
+                        });
+                    }
+                }
+                responseStatus = 503;
+                responseBody = {
+                    status: 'error',
+                    code: releaseError.code,
+                    error: releaseError.message
+                };
+            }
+        }
     }
+    return res.status(responseStatus).json(responseBody || {
+        status: 'error', code: 'HARNESS_EXECUTION_FAILED', error: 'Harness campaign produced no terminal result'
+    });
 });
 
 function respond(res, operation) {

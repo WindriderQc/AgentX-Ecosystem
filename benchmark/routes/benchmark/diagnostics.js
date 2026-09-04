@@ -60,6 +60,24 @@ function calibrationTargetKey(target) {
     return `${host}@@${model}`;
 }
 
+async function persistCalibrationUnderAdmission(payload, req) {
+    const id = new mongoose.Types.ObjectId();
+    req.assertWorkloadAdmissionActive?.();
+    try {
+        const created = await JudgeAccuracyMatrix.create(
+            [{ _id: id, ...payload }],
+            req.workloadAdmissionSignal ? { signal: req.workloadAdmissionSignal } : undefined
+        );
+        req.assertWorkloadAdmissionActive?.();
+        return Array.isArray(created) ? created[0] : created;
+    } catch (error) {
+        if (req.workloadAdmissionSignal?.aborted) {
+            await JudgeAccuracyMatrix.deleteOne({ _id: id }).catch(() => {});
+        }
+        throw error;
+    }
+}
+
 // ============ Judge Validation Endpoints ============
 
 /**
@@ -636,7 +654,7 @@ router.post('/judge/matrix-calibrate', withManagedWorkloadRoute('judge-matrix-ca
 
         const matrix = buildAccuracyMatrix(referenceScores, challengerScores, threshold);
 
-        const saved = await JudgeAccuracyMatrix.create({
+        const saved = await persistCalibrationUnderAdmission({
             judge_model: judgeReadiness.target.model,
             judge_host: String(judgeReadiness.target.host || judge_host).trim().replace(/\/+$/, ''),
             reference_model: referenceReadiness.target.model,
@@ -649,7 +667,7 @@ router.post('/judge/matrix-calibrate', withManagedWorkloadRoute('judge-matrix-ca
             cell_pass_rate: matrix.cell_pass_rate,
             scored_entry_count: matrix.scored_entry_count,
             comparison_kind: 'reference_judge_agreement'
-        });
+        }, req);
 
         logger.info('Calibration complete', {
             judge_model,

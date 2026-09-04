@@ -159,7 +159,12 @@ router.post('/profile', async (req, res) => {
       tracker.stepsCompleted = steps.length;
       tracker.currentStep = null;
       tracker.result = result;
-    }).catch(err => {
+    }).catch(async err => {
+      if (err.authorityInvalidationFailed === true) {
+        await lease.abandon(err).catch(abandonError => logger.error('Profile integrity fence abandon failed', {
+          profileId, error: abandonError.message
+        }));
+      }
       tracker.status = 'failed';
       tracker.error = err.message;
       logger.error('Profile job failed', { profileId, modelName, hostId, error: err.message });
@@ -405,7 +410,14 @@ async function startProfileHostQueue(body = {}) {
       } catch (err) {
         slot.status = 'failed';
         slot.error = err.message;
-        if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') {
+        if (err.authorityInvalidationFailed === true) {
+          await lease.abandon(err);
+          tracker.error = err.message;
+          tracker.cancelled = true;
+          logger.error('Profile queue: authority invalidation failed, holding fences for TTL recovery', {
+            hostId, model: slot.name, error: err.message
+          });
+        } else if (err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') {
           // The host is reserved by another job; every remaining model targets
           // the same host, so stop instead of failing them one by one.
           tracker.error = err.message;
@@ -513,7 +525,7 @@ router.post('/full', async (req, res) => {
     lease.assertActive();
     await lease.finalize();
     lease = null;
-    if (data?.completed !== true) {
+    if (data?.completed !== true || data?.benchmarkQualified !== true) {
       return res.status(422).json({
         status: 'incomplete',
         code: 'FULL_PROFILE_INCOMPLETE',
@@ -521,7 +533,12 @@ router.post('/full', async (req, res) => {
       });
     }
     res.json({ status: 'success', data });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null }); }
+  } catch (err) {
+    if (err.authorityInvalidationFailed === true && lease) {
+      await lease.abandon(err).catch(error => logger.error('Full pipeline integrity fence abandon failed', { error: error.message }));
+    }
+    res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
+  }
   finally {
     if (lease) {
       await lease.finalize().catch(error => logger.error('Full pipeline lease finalization failed', { error: error.message }));

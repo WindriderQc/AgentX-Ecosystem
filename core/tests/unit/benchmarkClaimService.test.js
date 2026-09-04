@@ -456,6 +456,46 @@ describe('benchmarkClaimService', () => {
       expect(after.benchmarkClaim?.batchId).toBeNull();
     });
 
+    it('recovers the exact durable receipt after a release response is lost', async () => {
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      const released = await service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
+      });
+
+      const recovered = await service.recoverBenchmarkClaimRelease(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
+      });
+
+      expect(recovered).toMatchObject({
+        recovered: true,
+        released: true,
+        releaseReceipt: {
+          contract: 'agentx.benchmark-claim-release/v1',
+          batchId: BATCH_A,
+          claimGeneration: claimed.claimGeneration
+        }
+      });
+      expect(recovered.releaseReceipt.releasedAt.toISOString())
+        .toBe(released.releaseReceipt.releasedAt.toISOString());
+    });
+
+    it('reports an exact active generation as retryable without clearing it', async () => {
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+
+      const recovered = await service.recoverBenchmarkClaimRelease(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
+      });
+
+      expect(recovered).toMatchObject({
+        recovered: true,
+        released: false,
+        retryable: true,
+        finalizing: false
+      });
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.benchmarkClaim.claimGeneration).toBe(claimed.claimGeneration);
+    });
+
     it('attests only the resident set actually restored after finite TTL expiry', async () => {
       const expiringSnapshot = {
         capturedAt: new Date(),

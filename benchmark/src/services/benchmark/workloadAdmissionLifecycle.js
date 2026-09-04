@@ -36,6 +36,10 @@ async function beginManagedWorkload(workloadId, options = {}) {
         heartbeat.assertActive();
     } catch (error) {
         await heartbeat.drain();
+        // No host claim exists in this lifecycle, so there is no runtime
+        // restoration to protect. Release the failed initial admission rather
+        // than leaving every standalone judge surface blocked until TTL.
+        await releaseWorkloadAdmission(id).catch(() => {});
         throw error;
     }
 
@@ -99,6 +103,7 @@ function withManagedWorkloadRoute(kind, resolveOptions, handler) {
                 ttlMs: options.ttlMs || null
             });
             req.workloadAdmissionSignal = lifecycle.signal;
+            req.assertWorkloadAdmissionActive = lifecycle.assertActive;
 
             // Do not acknowledge a mutating route before Core has accepted the
             // exact admission release. Express normally flushes json()

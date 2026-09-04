@@ -106,6 +106,9 @@ function benchmarkCredentialPath(pathname, method) {
   if (/^\/api\/nerve-center\/workload-admissions\/[^/]+\/heartbeat$/.test(path)) {
     return verb === 'POST';
   }
+  if (/^\/api\/nerve-center\/workload-admissions\/[^/]+\/release-receipt$/.test(path)) {
+    return verb === 'POST';
+  }
   if (/^\/api\/nerve-center\/workload-admissions\/[^/]+$/.test(path)) {
     return verb === 'DELETE';
   }
@@ -114,6 +117,7 @@ function benchmarkCredentialPath(pathname, method) {
     path.endsWith('/reload')
     || path.endsWith('/benchmark-claim')
     || /\/benchmark-claim\/[^/]+\/heartbeat$/.test(path)
+    || /\/benchmark-claim\/[^/]+\/release-receipt$/.test(path)
   )) || (verb === 'DELETE' && /\/benchmark-claim\/[^/]+$/.test(path));
 }
 

@@ -1289,6 +1289,49 @@ describe('Nerve Center API Routes', () => {
       expect(Number.isNaN(Date.parse(res.body.data[0].live.observedAt))).toBe(false);
     });
 
+    it('redacts every claim and workload capability from the public host projection', async () => {
+      hostPrefService.getAll.mockResolvedValue([{
+        hostUrl: 'http://primary:11434',
+        hostKey: 'primary',
+        status: 'benchmarking',
+        pinnedModels: [],
+        lastBenchmarkReleaseReceipt: { claimGeneration: 'released-claim-secret' },
+        benchmarkClaim: {
+          batchId: 'batch-public-summary',
+          claimGeneration: 'claim-secret',
+          admissionId: 'admission-secret',
+          admissionGeneration: 'admission-generation-secret',
+          admissionPrincipal: 'benchmark-service',
+          prevStatus: 'ready',
+          finalizeToken: 'finalizer-secret',
+          preClaimRuntime: {
+            exact: true,
+            identityDigest: 'snapshot-secret',
+            residents: [{ model: 'private-resident', digest: 'private-digest' }]
+          }
+        }
+      }]);
+
+      const res = await request(app)
+        .get('/api/nerve-center/host-preferences')
+        .expect(200);
+
+      expect(res.body.data[0].benchmarkClaim).toEqual(expect.objectContaining({
+        batchId: 'batch-public-summary',
+        prevStatus: 'ready',
+        snapshotExact: true,
+        snapshotResidentCount: 1,
+        finalizing: true
+      }));
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('claimGeneration');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('admissionId');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('admissionGeneration');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('admissionPrincipal');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('preClaimRuntime');
+      expect(res.body.data[0].benchmarkClaim).not.toHaveProperty('finalizeToken');
+      expect(res.body.data[0]).not.toHaveProperty('lastBenchmarkReleaseReceipt');
+    });
+
     it('normalizes duplicate persisted primary keys to configured active keys', async () => {
       hostPrefService.getAll.mockResolvedValue([
         {
@@ -1584,6 +1627,10 @@ describe('Nerve Center API Routes', () => {
           hostUrl: 'http://primary:11434',
           batchId: 'b1',
           claimGeneration: 'must-remain-secret',
+          admissionId: 'must-remain-secret',
+          admissionGeneration: 'must-remain-secret',
+          preClaimRuntime: { identityDigest: 'must-remain-secret' },
+          finalizeToken: 'must-remain-secret',
           prevStatus: 'ready',
           snapshotExact: true
         }
@@ -1598,6 +1645,10 @@ describe('Nerve Center API Routes', () => {
       expect(res.body.data.count).toBe(1);
       expect(res.body.data.claims[0].snapshotExact).toBe(true);
       expect(res.body.data.claims[0]).not.toHaveProperty('claimGeneration');
+      expect(res.body.data.claims[0]).not.toHaveProperty('admissionId');
+      expect(res.body.data.claims[0]).not.toHaveProperty('admissionGeneration');
+      expect(res.body.data.claims[0]).not.toHaveProperty('preClaimRuntime');
+      expect(res.body.data.claims[0]).not.toHaveProperty('finalizeToken');
     });
   });
 });

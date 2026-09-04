@@ -14,6 +14,7 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
   claimBenchmark: jest.fn(),
   heartbeatBenchmarkClaim: jest.fn(),
   releaseBenchmarkClaim: jest.fn(),
+  recoverBenchmarkClaimRelease: jest.fn(),
   getByHost: jest.fn(),
   getPinnedEntries: jest.fn(pref => pref?.pinnedModels || []),
   warmHost: jest.fn(),
@@ -25,6 +26,7 @@ jest.mock('../../src/services/runtimeCoordinationService', () => ({
   assertWorkloadAdmission: jest.fn(),
   heartbeat: jest.fn(),
   release: jest.fn(),
+  recoverRelease: jest.fn(),
   acquireMaintenance: jest.fn(),
   listActive: jest.fn()
 }));
@@ -75,6 +77,14 @@ const ROUTES = [
     sideEffects: [runtimeCoordinationService.release]
   },
   {
+    label: 'runtime workload release receipt recovery',
+    method: 'post',
+    path: '/api/nerve-center/workload-admissions/admission-core/release-receipt',
+    body: { generation: 'generation-core' },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [runtimeCoordinationService.recoverRelease]
+  },
+  {
     label: 'claim acquisition',
     method: 'post',
     path: `/api/nerve-center/host-preferences/${ENCODED_HOST}/benchmark-claim`,
@@ -99,6 +109,18 @@ const ROUTES = [
     },
     expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.heartbeatBenchmarkClaim]
+  },
+  {
+    label: 'claim release receipt recovery',
+    method: 'post',
+    path: `/api/nerve-center/host-preferences/${ENCODED_HOST}/benchmark-claim/batch-1/release-receipt`,
+    body: {
+      claimGeneration: '11111111-1111-4111-8111-111111111111',
+      admissionId: 'admission-core',
+      admissionGeneration: 'generation-core'
+    },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [hostPrefService.recoverBenchmarkClaimRelease]
   },
   {
     label: 'claim release',
@@ -152,6 +174,7 @@ describe('Benchmark service identity on Core host-control routes', () => {
     hostPrefService.claimBenchmark.mockResolvedValue({ claimed: true });
     hostPrefService.heartbeatBenchmarkClaim.mockResolvedValue({ heartbeat: true });
     hostPrefService.releaseBenchmarkClaim.mockResolvedValue({ released: true });
+    hostPrefService.recoverBenchmarkClaimRelease.mockResolvedValue({ recovered: true, released: true });
     hostPrefService.getByHost.mockResolvedValue({
       displayName: 'Primary',
       pinnedModels: [{ model: 'model-a' }]
@@ -190,6 +213,18 @@ describe('Benchmark service identity on Core host-control routes', () => {
       expiresAt: new Date(Date.now() + 60_000)
     });
     runtimeCoordinationService.release.mockResolvedValue({
+      released: true,
+      admissionId: 'admission-core',
+      generation: 'generation-core',
+      principal: 'benchmark-service',
+      requestId: 'request-batch-1',
+      workloadId: 'batch-1',
+      kind: 'benchmark',
+      batchId: null,
+      releasedAt: new Date()
+    });
+    runtimeCoordinationService.recoverRelease.mockResolvedValue({
+      recovered: true,
       released: true,
       admissionId: 'admission-core',
       generation: 'generation-core',
@@ -303,6 +338,21 @@ describe('Benchmark service identity on Core host-control routes', () => {
       generation: 'generation-core',
       principal: 'benchmark-service'
     });
+
+    const recoveryRoute = ROUTES.find(item => item.label === 'runtime workload release receipt recovery');
+    const recoveryResponse = await machineRequest(recoveryRoute, 'benchmark-secret');
+    expect(recoveryResponse.body.data).toMatchObject({
+      recovered: true,
+      released: true,
+      admissionId: 'admission-core',
+      generation: 'generation-core',
+      principal: 'benchmark-service'
+    });
+    expect(runtimeCoordinationService.recoverRelease).toHaveBeenCalledWith('workload', {
+      id: 'admission-core',
+      generation: 'generation-core',
+      principal: 'benchmark-service'
+    });
   });
 
   it('does not grant workload admission to the secret-free trusted-machine fallback', async () => {
@@ -339,6 +389,12 @@ describe('Benchmark service identity on Core host-control routes', () => {
       ...proof,
       releasedAt: new Date()
     });
+    runtimeCoordinationService.recoverRelease.mockResolvedValueOnce({
+      recovered: true,
+      released: true,
+      ...proof,
+      releasedAt: new Date()
+    });
 
     const acquire = await request(app)
       .post('/api/nerve-center/maintenance-leases')
@@ -371,6 +427,20 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .send({ generation: proof.generation });
     expect(release.body.data).toMatchObject({ released: true, ...proof });
     expect(Number.isFinite(Date.parse(release.body.data.releasedAt))).toBe(true);
+
+    const recovered = await request(app)
+      .post(`/api/nerve-center/maintenance-leases/${proof.leaseId}/release-receipt`)
+      .set('Host', 'remote-aiops.example')
+      .set('X-Forwarded-For', '203.0.113.30')
+      .set('Authorization', 'Bearer operator-secret')
+      .send({ generation: proof.generation });
+    expect(recovered.status).toBe(200);
+    expect(recovered.body.data).toMatchObject({ recovered: true, released: true, ...proof });
+    expect(runtimeCoordinationService.recoverRelease).toHaveBeenCalledWith('maintenance', {
+      id: proof.leaseId,
+      generation: proof.generation,
+      principal: proof.principal
+    });
   });
 
   it('preserves same-origin UI access to host reload without the Benchmark token', async () => {

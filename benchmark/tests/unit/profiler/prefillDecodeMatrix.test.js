@@ -1,10 +1,11 @@
 'use strict';
 
 jest.mock('../../../src/clients/ollamaClient', () => ({
-  generate: jest.fn()
+  generate: jest.fn(),
+  listRunning: jest.fn()
 }));
 
-const { generate } = require('../../../src/clients/ollamaClient');
+const { generate, listRunning } = require('../../../src/clients/ollamaClient');
 const {
   runPrefillDecodeMatrix,
   getMatrixConfig,
@@ -28,6 +29,15 @@ afterEach(() => {
   jest.clearAllMocks();
   delete process.env.PROFILER_MATRIX_PREFILL_TOKENS;
   delete process.env.PROFILER_MATRIX_DECODE_TOKENS;
+});
+
+beforeEach(() => {
+  listRunning.mockImplementation(async () => ({
+    models: [{
+      name: 'm:latest',
+      context_length: generate.mock.calls.at(-1)?.[1]?.options?.num_ctx
+    }]
+  }));
 });
 
 describe('getMatrixConfig', () => {
@@ -105,7 +115,7 @@ describe('runPrefillDecodeMatrix', () => {
     expect(result.cellCount).toBe(4);
     expect(result.passCount).toBe(4);
     expect(result.skippedCount).toBe(0);
-    expect(generate).toHaveBeenCalledTimes(4);
+    expect(generate).toHaveBeenCalledTimes(12);
 
     // Single shared num_ctx across all calls
     const ctxs = generate.mock.calls.map(([, body]) => body.options.num_ctx);
@@ -116,6 +126,9 @@ describe('runPrefillDecodeMatrix', () => {
     expect(cell.prefillTokensPerSec).toBeCloseTo(800, 0);
     expect(cell.decodeTokensPerSec).toBeCloseTo(120, 0);
     expect(cell.promptEvalDurationMs).toBeGreaterThan(0);
+    expect(cell.runtimeContextLength).toBe(ctxs[0]);
+    expect(cell.passingSampleCount).toBe(3);
+    expect(cell.prefillStatistics.confidenceInterval95.method).toBe('student_t');
     expect(cell).not.toHaveProperty('ttftMs');
     expect(cell.status).toBe('pass');
   });
@@ -149,6 +162,28 @@ describe('runPrefillDecodeMatrix', () => {
     expect(result.passCount).toBe(0);
   });
 
+  test.each([
+    ['prompt', { prompt_eval_duration: 0 }],
+    ['decode', { eval_duration: 0 }]
+  ])('rejects a %s timing sample even when token counts are sufficient', async (_label, override) => {
+    generate.mockResolvedValue({
+      ...ollamaResponse({ promptTokens: 512, completionTokens: 64 }),
+      ...override
+    });
+
+    const result = await runPrefillDecodeMatrix('http://host:11434', 'm', {
+      prefillTokens: [512],
+      decodeTokens: [64],
+      safeNumCtx: 8192
+    });
+
+    expect(result.cells[0]).toEqual(expect.objectContaining({
+      status: 'invalid_timing',
+      error: expect.stringMatching(/duration|throughput/i)
+    }));
+    expect(result.passCount).toBe(0);
+  });
+
   test('records per-cell errors without aborting the matrix', async () => {
     generate
       .mockRejectedValueOnce(new Error('boom'))
@@ -163,6 +198,25 @@ describe('runPrefillDecodeMatrix', () => {
     expect(result.cells[0].status).toBe('error');
     expect(result.cells[0].error).toBe('boom');
     expect(result.cells[1].status).toBe('pass');
+    expect(generate).toHaveBeenCalledTimes(4);
+  });
+
+  test('rejects a cell when Ollama does not attest the requested resident context', async () => {
+    generate.mockResolvedValue(ollamaResponse({ promptTokens: 512, completionTokens: 64 }));
+    listRunning.mockResolvedValue({ models: [{ name: 'm', context_length: 2048 }] });
+
+    const result = await runPrefillDecodeMatrix('http://host:11434', 'm', {
+      prefillTokens: [512],
+      decodeTokens: [64],
+      safeNumCtx: 8192
+    });
+
+    expect(result.cells[0]).toEqual(expect.objectContaining({
+      status: 'error',
+      runtimeContextLength: null,
+      error: expect.stringMatching(/requested .* observed 2048/i)
+    }));
+    expect(result.passCount).toBe(0);
   });
 
   test('reports progress for every cell including skipped ones', async () => {

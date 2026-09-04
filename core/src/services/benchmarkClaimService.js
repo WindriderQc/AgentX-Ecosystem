@@ -770,6 +770,44 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     releaseFilter['benchmarkClaim.claimedAt'] = expectedLegacyClaimedAt;
   }
 
+  const releaseReceipt = {
+    contract: 'agentx.benchmark-claim-release/v1',
+    hostUrl,
+    batchId,
+    claimGeneration: legacyMissingGeneration ? null : claimGeneration,
+    snapshot: {
+      identityDigest: renewed.benchmarkClaim?.preClaimRuntime?.identityDigest || null,
+      appliedIdentityDigest: restoredSnapshot?.identityDigest || null,
+      exact: renewed.benchmarkClaim?.preClaimRuntime?.exact === true,
+      residentCount: restoredSnapshot?.residents?.length || 0,
+      residents: (restoredSnapshot?.residents || []).map(entry => ({
+        model: entry.model,
+        digest: entry.digest,
+        artifactSize: Number(entry.artifactSize),
+        sizeVram: Number(entry.sizeVram),
+        contextLength: Number(entry.contextLength),
+        keepAlive: Number(entry.keepAlive),
+        expiresAt: entry.expiresAt || null
+      })),
+      excludedModels,
+      expiredModels
+    },
+    verification: {
+      status: pinRestore?.status || (skipPinRestore ? 'skipped' : 'unknown'),
+      ready: pinRestore?.status === 'ready',
+      verified: pinRestore?.verified === true,
+      degraded: pinRestore?.degraded !== false,
+      mode: pinRestore?.mode || null,
+      snapshotIdentity: pinRestore?.snapshotIdentity || null
+    },
+    state: {
+      restoredStatus: restoreStatus,
+      claimCleared: true,
+      finalizerCleared: true
+    },
+    releasedAt: new Date()
+  };
+
   let updated;
   try {
     updated = await HostPreference.findOneAndUpdate(
@@ -777,6 +815,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       {
         $set: {
           status: restoreStatus,
+          lastBenchmarkReleaseReceipt: releaseReceipt,
           benchmarkClaim: {
             batchId: null,
             claimGeneration: null,
@@ -836,43 +875,6 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       && pinRestore.degraded === false
       && pinRestore.mode === 'exact_runtime_snapshot'
     : false;
-  const releaseReceipt = {
-    contract: 'agentx.benchmark-claim-release/v1',
-    hostUrl,
-    batchId,
-    claimGeneration: legacyMissingGeneration ? null : claimGeneration,
-    snapshot: {
-      identityDigest: renewed.benchmarkClaim?.preClaimRuntime?.identityDigest || null,
-      appliedIdentityDigest: restoredSnapshot?.identityDigest || null,
-      exact: renewed.benchmarkClaim?.preClaimRuntime?.exact === true,
-      residentCount: restoredSnapshot?.residents?.length || 0,
-      residents: (restoredSnapshot?.residents || []).map(entry => ({
-        model: entry.model,
-        digest: entry.digest,
-        artifactSize: Number(entry.artifactSize),
-        sizeVram: Number(entry.sizeVram),
-        contextLength: Number(entry.contextLength),
-        keepAlive: Number(entry.keepAlive),
-        expiresAt: entry.expiresAt || null
-      })),
-      excludedModels,
-      expiredModels
-    },
-    verification: {
-      status: pinRestore?.status || (skipPinRestore ? 'skipped' : 'unknown'),
-      ready: pinRestore?.status === 'ready',
-      verified: pinRestore?.verified === true,
-      degraded: pinRestore?.degraded !== false,
-      mode: pinRestore?.mode || null,
-      snapshotIdentity: pinRestore?.snapshotIdentity || null
-    },
-    state: {
-      restoredStatus: updated.status,
-      claimCleared,
-      finalizerCleared
-    },
-    releasedAt: new Date()
-  };
   if ((!skipPinRestore && !verifiedRestore) || !claimCleared || !finalizerCleared) {
     return {
       released: false,
@@ -1145,11 +1147,56 @@ async function listBenchmarkClaims() {
   }));
 }
 
+async function recoverBenchmarkClaimRelease(hostUrl, batchId, opts = {}) {
+  const claimGeneration = cleanClaimGeneration(opts.claimGeneration ?? opts.claim_generation);
+  if (!hostUrl || !batchId || !claimGeneration) {
+    return { recovered: false, released: false, reason: 'hostUrl, batchId and claimGeneration are required' };
+  }
+  const existing = await HostPreference.findOne({ hostUrl })
+    .select('+lastBenchmarkReleaseReceipt')
+    .lean();
+  if (!existing) return { recovered: false, released: false, reason: 'host preference not found' };
+  const receipt = existing.lastBenchmarkReleaseReceipt;
+  if (receipt?.contract === 'agentx.benchmark-claim-release/v1'
+    && receipt.hostUrl === hostUrl
+    && receipt.batchId === batchId
+    && receipt.claimGeneration === claimGeneration
+    && receipt.state?.claimCleared === true
+    && receipt.state?.finalizerCleared === true) {
+    return {
+      recovered: true,
+      released: true,
+      releaseReceipt: receipt,
+      pinRestore: receipt.verification,
+      runtimeRestore: receipt.verification
+    };
+  }
+  const claim = existing.benchmarkClaim;
+  if (claim?.batchId === batchId && claim?.claimGeneration === claimGeneration) {
+    return {
+      recovered: true,
+      released: false,
+      retryable: !claim.finalizeToken,
+      finalizing: Boolean(claim.finalizeToken),
+      reason: claim.finalizeToken
+        ? 'exact claim release is still finalizing'
+        : 'exact claim remains active and can be released again'
+    };
+  }
+  return {
+    recovered: false,
+    released: false,
+    retryable: false,
+    reason: claim?.batchId ? 'host is owned by another claim' : 'no matching release receipt or active claim'
+  };
+}
+
 module.exports = {
   hasActiveBenchmarkClaim,
   claimBenchmark,
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
+  recoverBenchmarkClaimRelease,
   listBenchmarkClaims,
   summarizeBenchmarkClaimReaps,
   reapStaleBenchmarkClaims,

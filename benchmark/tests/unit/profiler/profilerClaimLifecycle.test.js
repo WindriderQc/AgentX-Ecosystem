@@ -72,4 +72,27 @@ describe('profiler claim lease cancellation', () => {
     expect(coreApiClient.releaseBenchmarkClaim.mock.invocationCallOrder[0])
       .toBeGreaterThan(coreApiClient.heartbeatBenchmarkClaim.mock.invocationCallOrder[1]);
   });
+
+  test('abandons an ambiguous projection under the existing fences for TTL recovery', async () => {
+    coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({ heartbeat: true });
+    const lease = await acquireProfilerClaimLease(
+      ['http://gpu:11434'],
+      'profiler-operation-ambiguous-projection',
+      60_000
+    );
+    const ambiguity = new Error('projection compensation failed');
+
+    await expect(lease.abandon(ambiguity)).resolves.toMatchObject({
+      abandoned: true,
+      failed: 2,
+      workloadAdmission: { released: false, reason: 'held for TTL recovery' }
+    });
+    expect(lease.signal.aborted).toBe(true);
+    expect(lease.signal.reason).toBe(ambiguity);
+    await expect(lease.finalize()).rejects.toMatchObject({
+      code: 'PROFILER_RUNTIME_RESTORE_FAILED'
+    });
+    expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
+    expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+  });
 });

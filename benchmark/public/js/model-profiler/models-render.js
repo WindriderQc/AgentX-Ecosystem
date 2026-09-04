@@ -69,6 +69,7 @@ export function renderMetrics(model, api) {
   const comparisonPromptTokens = p.comparisonPromptTokens ?? null;
   const comparisonPromptTargetTokens = p.comparisonPromptTargetTokens ?? comparisonPromptTokens;
   const comparisonWorkloadMode = p.comparisonWorkloadMode || 'fixed';
+  const recommendationsAuthoritative = model?._profileAuthority?.recommendationsAuthoritative === true;
 
   // ── Hero throughput ──────────────────────────────────────────────────
   let heroHtml = '';
@@ -105,10 +106,10 @@ export function renderMetrics(model, api) {
     if (maxVerifiedContext != null) {
       bits.push(`<span class="mp-strip-num">${_fmtCtx(maxVerifiedContext)}</span><span class="mp-strip-unit">max verified</span>`);
     }
-    if (p.recommendedInteractiveContext != null) {
+    if (recommendationsAuthoritative && p.recommendedInteractiveContext != null) {
       bits.push(`<span class="mp-strip-num">${_fmtCtx(p.recommendedInteractiveContext)}</span><span class="mp-strip-unit">interactive</span>`);
     }
-    if (p.recommendedDocumentContext != null) {
+    if (recommendationsAuthoritative && p.recommendedDocumentContext != null) {
       bits.push(`<span class="mp-strip-num">${_fmtCtx(p.recommendedDocumentContext)}</span><span class="mp-strip-unit">document</span>`);
     }
     if (p.vramUsedMiB != null) {
@@ -177,6 +178,17 @@ export function renderMetrics(model, api) {
   </div>`;
 }
 
+function renderProfileAuthorityBadge(model) {
+  const authority = model?._profileAuthority;
+  if (!authority || !['standard', 'full'].includes(authority.profileDepth)) return '';
+  const status = authority.status === 'qualified'
+    ? { label: 'Qualified', tone: 'qualified' }
+    : authority.status === 'stale'
+      ? { label: 'Stale', tone: 'stale' }
+      : { label: 'Not qualified', tone: 'unqualified' };
+  return `<span class="mp-profile-authority-badge mp-profile-authority-badge--${status.tone}" title="${escAttr(authority.reason || status.label)}">${status.label}</span>`;
+}
+
 // ─── Card renderer ────────────────────────────────────────────────────────────
 
 export function renderModelCard(model, api) {
@@ -210,6 +222,7 @@ export function renderModelCard(model, api) {
       </label>
       <span class="mp-card-title">${escAttr(model.name)}</span>
       ${renderBadge(highestStage, total > 0 ? hostCount : null, total > 0 ? total : null)}
+      ${renderProfileAuthorityBadge(model)}
     </div>
 
     <div class="mp-card-subhead">${meta}</div>
@@ -411,8 +424,8 @@ export function renderModelRow(model, api) {
   const maxVerifiedContext = p?.maxVerifiedContext;
   if (maxVerifiedContext != null) {
     const recommendations = [
-      p.recommendedInteractiveContext != null ? `interactive ${_fmtCtx(p.recommendedInteractiveContext)}` : null,
-      p.recommendedDocumentContext != null ? `document ${_fmtCtx(p.recommendedDocumentContext)}` : null
+      model?._profileAuthority?.recommendationsAuthoritative === true && p.recommendedInteractiveContext != null ? `interactive ${_fmtCtx(p.recommendedInteractiveContext)}` : null,
+      model?._profileAuthority?.recommendationsAuthoritative === true && p.recommendedDocumentContext != null ? `document ${_fmtCtx(p.recommendedDocumentContext)}` : null
     ].filter(Boolean).join(' · ');
     ctxCell = `<span class="mp-list-context" title="Maximum verified context${recommendations ? `; ${recommendations}` : ''}">
       <span class="mp-list-context__value">${_fmtCtx(maxVerifiedContext)}</span>
@@ -444,6 +457,8 @@ export function renderModelRow(model, api) {
   const profiledStr = p?.profiledAt ? _formatProfileDate(p.profiledAt) : null;
   if (profiledStr) metaBits.push(`<span class="mp-list-when">${profiledStr}</span>`);
   if (stalenessInfo.stale) metaBits.push(`<span class="mp-stale-badge">stale</span>`);
+  const authorityBadge = renderProfileAuthorityBadge(model);
+  if (authorityBadge) metaBits.push(authorityBadge);
   const ci = p?.contextInsight;
   if (ci?.upgradeAvailable) {
     metaBits.push(`<span class="mp-insight-chip mp-insight-chip--up" title="${ci.upgradeFactor}× ctx headroom (${_fmtCtx(ci.previousNumCtx)} → ${_fmtCtx(ci.discoveredNumCtx)})">▲ ${ci.upgradeFactor}×</span>`);
