@@ -8,7 +8,12 @@
  */
 
 const logger = require('../../../config/logger');
-const { getDedicationStatuses, resolveHostKey, restoreDedication } = require('../../clients/coreApiClient');
+const {
+    getDedicationStatuses,
+    resolveHostKey,
+    restoreDedication,
+    generateWithWorkloadAdmission
+} = require('../../clients/coreApiClient');
 const { benchmarkFetch: fetch } = require('./http');
 const { normalizeModelTag: normalizeModelName } = require('../../../../shared/modelNames');
 
@@ -33,24 +38,18 @@ async function getRunningModels(hostUrl) {
     }
 }
 
-async function unloadModel(hostUrl, modelName) {
-    const res = await fetch(`${hostUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            model: modelName,
-            prompt: '',
-            keep_alive: 0,
-            stream: false
-        }),
-        timeout: 30000
-    });
-
-    if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        throw new Error(`Ollama unload ${res.status}: ${body.slice(0, 200)}`);
+async function unloadModel(hostUrl, modelName, batchId, { signal } = {}) {
+    const result = await generateWithWorkloadAdmission(batchId, {
+        model: modelName,
+        host: hostUrl,
+        prompt: '',
+        keep_alive: 0,
+        stream: false,
+        callerDetail: 'benchmark-dedication-release'
+    }, { signal });
+    if (result?.status === 'error') {
+        throw new Error(result.message || 'Core refused benchmark dedication unload');
     }
-    await res.text().catch(() => {});
 }
 
 /**
@@ -104,7 +103,8 @@ async function detectDedication(hostUrls, { batchId, recordBatchTimelineEvent, f
 async function releaseAllDedication(dedicationState, {
     batchId,
     recordBatchTimelineEvent,
-    failClosed = false
+    failClosed = false,
+    signal
 }) {
     for (const [hostUrl, { hostKey, pinnedModels }] of dedicationState) {
         const runningModels = await getRunningModels(hostUrl);
@@ -126,7 +126,7 @@ async function releaseAllDedication(dedicationState, {
                     logger.info('Releasing pinned model for benchmark', {
                         batchId, host: hostUrl, hostKey, pinnedModel, unloadModel: candidate
                     });
-                    await unloadModel(hostUrl, candidate);
+                    await unloadModel(hostUrl, candidate, batchId, { signal });
                     await recordBatchTimelineEvent('dedication_released', {
                         host: hostUrl, hostKey, pinnedModel, unloadModel: candidate
                     });

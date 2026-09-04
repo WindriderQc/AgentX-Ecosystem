@@ -71,6 +71,12 @@ function normalizeContextProfile(profile) {
   const recommendedInteractiveContext = recommendationsVerified
     ? positiveInteger(profile.recommendedInteractiveContext)
     : null;
+  const performanceKneeContext = recommendationsVerified
+    ? positiveInteger(profile.performanceKneeContext)
+    : null;
+  const qualityVerifiedContext = profile.qualityContextStatus === 'verified'
+    ? positiveInteger(profile.qualityVerifiedContext)
+    : null;
   return {
     ...profile,
     maxVerifiedContext,
@@ -78,6 +84,10 @@ function normalizeContextProfile(profile) {
     historicalMaxVerifiedContext: positiveInteger(profile.historicalMaxVerifiedContext) || maxVerifiedContext,
     recommendedInteractiveContext,
     recommendedDocumentContext,
+    performanceKneeContext,
+    performanceKneeDegradationPct: Number(profile.performanceKneeDegradationPct) || 15,
+    qualityVerifiedContext,
+    qualityContextStatus: qualityVerifiedContext ? 'verified' : 'unknown',
     recommendedContext: recommendedDocumentContext,
     recommendationStatus: recommendationsVerified ? 'verified' : 'unknown',
     revalidationRequired: !recommendationsVerified
@@ -123,6 +133,8 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
     ? Math.min(100, Math.max(0, Number(snapshot.interactiveDegradationThreshold))) : 15;
   const documentThreshold = Number.isFinite(Number(snapshot.documentDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(snapshot.documentDegradationThreshold))) : 30;
+  const performanceKneeThreshold = Number.isFinite(Number(snapshot.performanceKneeDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(snapshot.performanceKneeDegradationThreshold))) : 15;
   const boundedRecommendation = value => {
     const recommendation = positiveInteger(value);
     return recommendation ? Math.min(recommendation, maxVerifiedContext) : null;
@@ -134,6 +146,10 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
   const recommendedDocumentContext = boundedRecommendation(
     positiveInteger(snapshot.recommendedDocumentContext)
       || recommendationFor(snapshot, documentThreshold)
+  );
+  const performanceKneeContext = boundedRecommendation(
+    positiveInteger(snapshot.performanceKneeContext)
+      || recommendationFor(snapshot, performanceKneeThreshold)
   );
   const recommendationsVerified = Boolean(recommendedInteractiveContext && recommendedDocumentContext);
   const recommendedContext = recommendedDocumentContext;
@@ -156,12 +172,17 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
         verifiedInputTokens,
         recommendedInteractiveContext,
         recommendedDocumentContext,
+        performanceKneeContext,
+        performanceKneeDegradationPct: performanceKneeThreshold,
+        qualityVerifiedContext: null,
+        qualityContextStatus: 'unknown',
         recommendationStatus: recommendationsVerified ? 'verified' : 'unknown',
         recommendationEvidenceVersion: RECOMMENDATION_EVIDENCE_VERSION,
         revalidationRequired: !recommendationsVerified,
         recommendationThresholds: {
           interactiveDegradationPct: interactiveThreshold,
-          documentDegradationPct: documentThreshold
+          documentDegradationPct: documentThreshold,
+          performanceKneeDegradationPct: performanceKneeThreshold
         },
         recommendedContext,
         modelTheoreticalMax: positiveInteger(snapshot.modelTheoreticalMax),
@@ -232,6 +253,9 @@ async function invalidateIfSnapshot(snapshot, reason = 'claim_lost_during_contex
         staleReason: reason,
         recommendedInteractiveContext: null,
         recommendedDocumentContext: null,
+        performanceKneeContext: null,
+        qualityVerifiedContext: null,
+        qualityContextStatus: 'unknown',
         recommendedContext: null
       }
     }

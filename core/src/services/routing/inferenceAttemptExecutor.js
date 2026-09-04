@@ -2,6 +2,7 @@
 
 const fetch = require('node-fetch');
 const hostGate = require('../hostGate');
+const { beginInferenceAdmission } = require('../inferenceAdmissionService');
 
 const OLLAMA_ABORT_SOURCE = Object.freeze({
   CALLER: 'caller',
@@ -102,25 +103,51 @@ async function executeOllamaAttempt({
 }
 
 async function executeAdmittedOllamaAttempt(options) {
+  const distributed = await beginInferenceAdmission({
+    host: options.hostUrl,
+    model: options.model,
+    kind: options.admissionKind || (options.stream ? 'inference-stream' : 'inference'),
+    principal: options.principal || 'core-service',
+    requestId: options.requestId,
+    workloadAdmissionId: options.workloadAdmissionId || null,
+    workloadGeneration: options.workloadGeneration || null,
+    runtimeOptions: options.payload?.options || null,
+    ...(Object.prototype.hasOwnProperty.call(options.payload || {}, 'keep_alive')
+      && { keepAlive: options.payload.keep_alive }),
+    ttlMs: options.admissionTtlMs,
+    signal: options.signal,
+  });
   let release = () => {};
+  let dispatched = false;
   try {
     if (!options.skipGate) {
       release = await hostGate.acquire(options.hostUrl, options.model, {
-        signal: options.signal,
+        signal: distributed.signal,
+      });
+    } else {
+      release = await hostGate.track(options.hostUrl, options.model, {
+        signal: distributed.signal,
       });
     }
+    await options.afterAdmission?.();
+    distributed.assertActive();
+    distributed.markDispatched();
+    dispatched = true;
+    const result = await executeOllamaAttempt({ ...options, signal: distributed.signal });
+    distributed.assertActive();
+    await distributed.complete();
+    return result;
   } catch (err) {
-    if (options.signal?.aborted) {
+    await distributed.abandon(err).catch(quarantineError => {
+      err.inferenceQuarantineError = quarantineError;
+    });
+    if (options.signal?.aborted || (!dispatched && distributed.signal.aborted)) {
       err.isCallerCancellation = true;
       err.isOllamaTimeout = false;
     }
     throw err;
-  }
-
-  try {
-    return await executeOllamaAttempt(options);
   } finally {
-    release();
+    await release();
   }
 }
 

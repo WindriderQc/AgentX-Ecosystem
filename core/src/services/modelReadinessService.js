@@ -38,6 +38,13 @@ function resolveTimestamp(entry) {
 function normalizeReadinessEntry(entry, hostId = null, scope = 'missing') {
   const normalized = entry && typeof entry === 'object' ? entry : {};
   const profileDepth = normalized.profileDepth || null;
+  const authorityVerified = normalized.authorityVerified === true
+    && normalized.authority?.contract === 'agentx.profiler-readiness/v2'
+    && normalized.authority?.verified === true
+    && Number(normalized.authority?.receiptVersion) === 2
+    && normalized.authority?.receiptVerified === true
+    && normalized.authority?.liveIdentityVerified === true
+    && normalized.authority?.evidenceQualified === true;
   return {
     stage: normalizeStage(normalized.stage),
     profiledAt: normalized.profiledAt || null,
@@ -45,11 +52,15 @@ function normalizeReadinessEntry(entry, hostId = null, scope = 'missing') {
     benchmarkQualified: normalized.benchmarkQualified === true,
     benchmarkedAt: normalized.benchmarkedAt || null,
     stale: normalized.stale === true,
+    staleReason: normalized.staleReason || null,
+    authorityVerified,
+    authority: normalized.authority || null,
     hostId: hostId || null,
     scope,
     isReady: ['standard', 'full'].includes(profileDepth)
       && normalized.benchmarkQualified === true
       && normalized.stale !== true
+      && authorityVerified
   };
 }
 
@@ -58,6 +69,7 @@ function compareReadiness(left, right) {
     ['standard', 'full'].includes(entry?.profileDepth)
     && entry?.benchmarkQualified === true
     && entry?.stale !== true
+    && entry?.authorityVerified === true
   );
   if (ready(left) !== ready(right)) return ready(left) ? -1 : 1;
 

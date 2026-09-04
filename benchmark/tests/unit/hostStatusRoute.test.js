@@ -27,6 +27,15 @@ jest.mock('../../src/services/profiler/baselineModelService', () => ({
 jest.mock('../../src/services/profiler/profilerClaimLifecycle', () => ({
   acquireProfilerClaimLease: jest.fn()
 }));
+jest.mock('../../src/clients/coreApiClient', () => ({
+  getWorkloadRecoveryIdentity: jest.fn(() => ({
+    admissionId: 'admission-profiler',
+    generation: 'admission-generation-profiler',
+    principal: 'benchmark-service',
+    recoveryId: 'recovery-profiler',
+    recoveryRequestId: 'recovery-request-profiler'
+  }))
+}));
 
 const hostProfileService = require('../../src/services/profiler/hostProfileService');
 const { testModelOnHost } = require('../../src/services/hostTestService');
@@ -128,7 +137,7 @@ describe('Profiler host status read/refresh split', () => {
     expect(hostProfileService.upsert).toHaveBeenNthCalledWith(1, expect.objectContaining({
       hostId: 'primary',
       reconciliation: expect.objectContaining({
-        state: 'pending_reconciliation',
+        state: 'prepared',
         operation: 'release_model',
         model: 'qwen:7b'
       })
@@ -138,14 +147,22 @@ describe('Profiler host status read/refresh split', () => {
     });
     expect(hostProfileService.upsert).toHaveBeenNthCalledWith(2, expect.objectContaining({
       reconciliation: expect.objectContaining({
-        state: 'pending_reconciliation',
-        serverTerminalObserved: true
+        state: 'mutating'
       })
     }), {
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
     });
     expect(hostProfileService.upsert).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      reconciliation: expect.objectContaining({
+        state: 'verified',
+        serverTerminalObserved: true
+      })
+    }), {
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
+    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(4, expect.objectContaining({
       hostId: 'primary',
       status: 'online',
       dedicated: null,
@@ -248,14 +265,15 @@ describe('Profiler host status read/refresh split', () => {
     hostProfileService.upsert
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error('projection commit unavailable'));
 
     const response = await request(app).post('/api/profiler/hosts/primary/release');
 
     expect(response.status).toBe(500);
-    expect(hostProfileService.upsert).toHaveBeenCalledTimes(3);
-    expect(hostProfileService.upsert.mock.calls[0][0].reconciliation.state).toBe('pending_reconciliation');
-    expect(hostProfileService.upsert.mock.calls[2][0].reconciliation.state).toBe('resolved');
+    expect(hostProfileService.upsert).toHaveBeenCalledTimes(4);
+    expect(hostProfileService.upsert.mock.calls[0][0].reconciliation.state).toBe('prepared');
+    expect(hostProfileService.upsert.mock.calls[3][0].reconciliation.state).toBe('resolved');
     expect(lease.abandon).toHaveBeenCalledWith(expect.objectContaining({ retainAdmission: true }));
     expect(lease.finalize).toHaveBeenCalledTimes(1);
   });
@@ -354,6 +372,7 @@ describe('Profiler host status read/refresh split', () => {
       serverTerminalAt: new Date('2026-09-04T00:00:00.000Z')
     });
     hostProfileService.upsert
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error('terminal receipt acknowledgement lost'));
 

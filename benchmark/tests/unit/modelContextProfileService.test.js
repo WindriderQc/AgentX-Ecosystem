@@ -71,8 +71,14 @@ describe('modelContextProfileService', () => {
       historicalMaxVerifiedContext: 237568,
       verifiedInputTokens: 190000,
       recommendedContext: 237568,
+      performanceKneeContext: 237568,
+      performanceKneeDegradationPct: 15,
       source: 'context_probe',
       stale: false
+    }));
+    expect(profile).toEqual(expect.objectContaining({
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown'
     }));
     expect(profile.latestEvidence).toEqual(expect.objectContaining({
       snapshotId: 'snapshot-1',
@@ -126,7 +132,11 @@ describe('modelContextProfileService', () => {
       historicalMaxVerifiedContext: 262144,
       recommendedInteractiveContext: null,
       recommendedDocumentContext: null,
+      performanceKneeContext: null,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown',
       recommendedContext: null,
+      performanceKneeContext: null,
       recommendationStatus: 'unknown',
       revalidationRequired: true
     });

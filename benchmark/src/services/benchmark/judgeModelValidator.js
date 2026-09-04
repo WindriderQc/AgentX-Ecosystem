@@ -5,6 +5,7 @@
 
 const logger = require('../../../config/logger');
 const { benchmarkFetch: fetch } = require('./http');
+const { generateWithWorkloadAdmission } = require('../../clients/coreApiClient');
 
 const VALIDATION_TIMEOUT_MS = 30000;
 
@@ -17,6 +18,7 @@ function combinedSignal(timeoutSignal, externalSignal) {
         if (signal.aborted) forward(signal);
         else signal.addEventListener('abort', () => forward(signal), { once: true });
     }
+
     return controller.signal;
 }
 
@@ -106,6 +108,16 @@ async function validateJudgeModel(host, model, options = {}) {
         };
     }
 
+    if (options.metadataOnly === true || !options.signal?.workloadId) {
+        return {
+            valid: true,
+            warning: 'Generation smoke-test deferred until an exact workload admission is active.',
+            available_models: availableModels,
+            latency_ms: Date.now() - start,
+            generation_deferred: true
+        };
+    }
+
     // Step 2 (SOFT): Verify model can produce a response. This is a connectivity
     // smoke-test only — if the host is busy, VRAM-constrained, or the model is
     // cold-loading, errors here should NOT block batch start. The benchmark warmup
@@ -117,22 +129,25 @@ async function validateJudgeModel(host, model, options = {}) {
 
         const testPrompt = 'Rate this response on a scale of 0-10. Respond ONLY with JSON: {"score": 5, "reason": "test"}';
         try {
-            res = await _fetch(`${host}/api/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+            const generated = await (options._generate || generateWithWorkloadAdmission)(
+                options.signal.workloadId,
+                {
+                    host,
                     model,
                     messages: [{ role: 'user', content: testPrompt }],
                     stream: false,
-                    // Keep the smoke-test aligned with the real judge path.
-                    // Thinking models can spend the whole 100-token allowance
-                    // in message.thinking and return an empty visible answer.
+                    rawResponse: true,
+                    callerDetail: 'benchmark-judge-validation',
                     think: false,
                     options: { num_predict: 100, temperature: 0.1 }
-                }),
-                signal: combinedSignal(controller.signal, options.signal),
-                redirect: 'manual'
-            });
+                },
+                { signal: combinedSignal(controller.signal, options.signal) }
+            );
+            res = {
+                ok: generated?.status === 'success' || generated?.data != null,
+                status: generated?.statusCode || 200,
+                json: async () => generated?.data || generated
+            };
         } finally {
             clearTimeout(timeoutId);
         }

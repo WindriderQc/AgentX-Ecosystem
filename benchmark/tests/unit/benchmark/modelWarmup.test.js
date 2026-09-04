@@ -386,7 +386,7 @@ describe('modelWarmup', () => {
         });
     });
 
-    it('maps AbortError to timeout message instead of user-aborted wording', async () => {
+    it('treats a warmup timeout as unknown server terminality even outside strict mode', async () => {
         jest.useFakeTimers();
         let markWarmupDispatched;
         const warmupDispatched = new Promise(resolve => { markWarmupDispatched = resolve; });
@@ -409,16 +409,16 @@ describe('modelWarmup', () => {
             _fetch,
             preUnloadOthers: false
         });
+        const assertion = expect(resultPromise).rejects.toMatchObject({
+            code: expect.stringMatching(/CALLER_ABORTED|DEADLINE_EXCEEDED|OLLAMA_WARMUP_TERMINALITY_UNKNOWN/),
+            retainAdmission: true
+        });
         await warmupDispatched;
         await jest.advanceTimersByTimeAsync(90_001);
-        const result = await resultPromise;
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Warmup timed out after 90s');
-        expect(result.error).not.toContain('user aborted');
+        await assertion;
     });
 
-    it('throws normalized timeout message in strict mode', async () => {
+    it('retains admission on an unacknowledged warmup timeout in strict mode', async () => {
         jest.useFakeTimers();
         let markWarmupDispatched;
         const warmupDispatched = new Promise(resolve => { markWarmupDispatched = resolve; });
@@ -440,7 +440,7 @@ describe('modelWarmup', () => {
             'qwen2.5:14b-instruct-q5_K_M',
             { _fetch, strict: true, preUnloadOthers: false }
         );
-        const assertion = expect(resultPromise).rejects.toThrow('Warmup timed out after 90s');
+        const assertion = expect(resultPromise).rejects.toMatchObject({ retainAdmission: true });
         await warmupDispatched;
         await jest.advanceTimersByTimeAsync(90_001);
         await assertion;

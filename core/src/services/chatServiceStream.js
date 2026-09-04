@@ -14,6 +14,7 @@ const hostPreferenceService = require('./hostPreferenceService');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const logger = require('../../config/logger');
 const fetch = require('node-fetch');
+const { beginInferenceAdmission } = require('./inferenceAdmissionService');
 
 // Extracted modules
 const { getActivePrompt, buildSystemPrompt } = require('./chat/chatPromptHelpers');
@@ -96,6 +97,7 @@ const handleChatRequestStream = async ({
     let streamTelemetry = null;
     let upstreamTimeout = null;
     let upstreamTimeoutTriggered = false;
+    let inferenceAdmission = null;
 
     logger.info('DEBUG_STREAM: handleChatRequestStream called', {
         userId, conversationId
@@ -231,13 +233,24 @@ const handleChatRequestStream = async ({
 
         let response;
         try {
+            inferenceAdmission = await beginInferenceAdmission({
+                host: resolvedHost,
+                model: effectiveModel,
+                kind: 'chat-stream',
+                principal: 'core-chat',
+                runtimeOptions: ollamaPayload.options,
+                ...(Object.prototype.hasOwnProperty.call(ollamaPayload, 'keep_alive')
+                    && { keepAlive: ollamaPayload.keep_alive }),
+                signal: controller.signal
+            });
+            inferenceAdmission.markDispatched();
             inferenceDispatched = true;
             inferenceStartedAt = Date.now();
             response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(ollamaPayload),
-                signal: controller.signal
+                signal: inferenceAdmission.signal
             });
             if (!response.ok) {
                 const errDetail = await readOllamaErrorDetail(response);
@@ -320,6 +333,8 @@ const handleChatRequestStream = async ({
             terminalError.code = 'OLLAMA_STREAM_INCOMPLETE';
             throw terminalError;
         }
+        await inferenceAdmission.complete();
+        inferenceAdmission = null;
         clearTimeout(upstreamTimeout);
         upstreamTimeout = null;
 
@@ -408,6 +423,12 @@ const handleChatRequestStream = async ({
         }
 
     } catch (err) {
+        if (inferenceAdmission) {
+            await inferenceAdmission.abandon(err).catch(quarantineError => {
+                err.inferenceQuarantineError = quarantineError;
+            });
+            inferenceAdmission = null;
+        }
         if (upstreamTimeoutTriggered && err.name === 'AbortError') {
             const timeoutError = new Error('Ollama request timed out (5m limit).');
             timeoutError.name = 'AbortError';

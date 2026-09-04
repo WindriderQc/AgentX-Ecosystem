@@ -6,6 +6,7 @@ const { listModels, pullModel } = require('../../clients/ollamaClient');
 const settingsService = require('./settingsService');
 const hostProfileService = require('./hostProfileService');
 const logger = require('../../../config/logger');
+const { getWorkloadRecoveryIdentity } = require('../../clients/coreApiClient');
 
 function resolveConfiguredHost(hostId) {
   const id = String(hostId || '').trim();
@@ -96,10 +97,23 @@ async function ensureBaselineModel(hostId, options = {}) {
   // response; the exact claim signal remains the only cancellation source.
   const timeoutMs = 0;
   const operationId = String(options.operationId || `baseline-pull-${Date.now()}`);
+  const recovery = getWorkloadRecoveryIdentity(operationId);
+  if (!recovery?.recoveryId || !recovery?.admissionId) {
+    const error = new Error('Baseline pull requires a durable Core recovery quarantine');
+    error.code = 'BASELINE_PULL_RECOVERY_QUARANTINE_REQUIRED';
+    error.statusCode = 503;
+    throw error;
+  }
   const reconciliation = {
-    state: 'pending_reconciliation',
+    state: 'prepared',
     operation: 'baseline_pull',
     operationId,
+    workloadId: operationId,
+    admissionId: recovery.admissionId,
+    admissionGeneration: recovery.generation,
+    admissionPrincipal: recovery.principal,
+    recoveryId: recovery.recoveryId,
+    recoveryRequestId: recovery.recoveryRequestId,
     model: before.modelName,
     priorAvailable: false,
     timeoutAt: new Date(Date.now() + timeoutMs),
@@ -117,14 +131,25 @@ async function ensureBaselineModel(hostId, options = {}) {
     modelName: before.modelName
   });
   options.assertClaimActive?.();
+  const mutatingReconciliation = {
+    ...reconciliation,
+    state: 'mutating',
+    reason: 'Ollama pull request is in flight without a terminal server receipt'
+  };
+  await hostProfileService.upsert({ hostId: before.hostId, reconciliation: mutatingReconciliation }, {
+    signal: options.signal,
+    assertAuthorityActive: options.assertClaimActive
+  });
+  options.assertClaimActive?.();
   try {
     await pullModel(before.hostUrl, before.modelName, { timeoutMs, signal: options.signal });
   } catch (pullError) {
-    throw pendingBaselinePullError(pullError, reconciliation);
+    throw pendingBaselinePullError(pullError, { ...mutatingReconciliation, state: 'unknown' });
   }
 
   const terminalReconciliation = {
-    ...reconciliation,
+    ...mutatingReconciliation,
+    state: 'verified',
     serverTerminalObserved: true,
     serverTerminalAt: new Date()
   };

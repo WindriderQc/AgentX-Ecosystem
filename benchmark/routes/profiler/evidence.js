@@ -7,6 +7,11 @@ const ModelProfile = require('../../models/ModelProfile');
 const performanceProfiles = require('../../src/services/profiler/modelPerformanceProfileService');
 const contextProfiles = require('../../src/services/modelContextProfileService');
 const toolQualifications = require('../../src/services/qualification/toolCapabilityQualificationService');
+const ModelPerformanceProfile = require('../../models/ModelPerformanceProfile');
+const {
+  projectReadinessEntry,
+  projectReadinessProfiles
+} = require('../../src/services/profiler/profilerReadinessProjectionService');
 const { normalizeHostUrl } = require('../../../shared/artifactIdentity');
 const { normalizeModelTag } = require('../../../shared/modelNames');
 
@@ -55,13 +60,11 @@ router.get('/readiness', async (_req, res) => {
     const profiles = await ModelProfile.find({})
       .select({ name: 1, readiness: 1, _id: 0 })
       .lean();
+    const projected = await projectReadinessProfiles(profiles);
     res.json({
       status: 'success',
       data: {
-        profiles: profiles.map((profile) => ({
-          name: profile.name,
-          readiness: mapToObject(profile.readiness)
-        }))
+        profiles: projected
       }
     });
   } catch (err) {
@@ -103,11 +106,29 @@ router.get('/inference/:modelName', async (req, res) => {
         ? toolQualifications.resolveQualification(toolIdentity)
         : missingToolEvidence()
     ]);
+    let serializedModelProfile = serializeModelProfile(modelProfile);
+    const hostId = hostProfile?.hostId || null;
+    const rawReadiness = hostId ? mapToObject(modelProfile?.readiness)?.[hostId] : null;
+    if (serializedModelProfile && hostId && rawReadiness) {
+      const evidence = rawReadiness.evidenceId
+        ? await ModelPerformanceProfile.findOne({ _id: rawReadiness.evidenceId }).lean()
+        : null;
+      const projected = await projectReadinessEntry(
+        modelName,
+        hostId,
+        rawReadiness,
+        new Map(evidence ? [[String(evidence._id), evidence]] : [])
+      );
+      serializedModelProfile = {
+        ...serializedModelProfile,
+        readiness: { [hostId]: projected }
+      };
+    }
     return res.json({
       status: 'success',
       data: {
         hostProfile: hostProfile || null,
-        modelProfile: serializeModelProfile(modelProfile),
+        modelProfile: serializedModelProfile,
         toolQualification
       }
     });
@@ -160,3 +181,4 @@ router.get('/:modelName/:hostId', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.projectReadinessEntry = projectReadinessEntry;

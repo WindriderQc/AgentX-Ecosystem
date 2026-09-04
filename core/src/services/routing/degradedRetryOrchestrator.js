@@ -239,7 +239,7 @@ async function tryDegradedRetry(options) {
 
     if (!prepared.length) return { retried: false, reason: REFUSAL_REASONS.ARTIFACT_NOT_VERIFIED };
     if (requestContext.signal?.aborted) return { retried: false, reason: 'caller_cancelled' };
-    if (typeof beforeAttempt === 'function') beforeAttempt();
+    if (typeof beforeAttempt === 'function') await beforeAttempt();
 
     const outcome = await runDegradedRetry({
       attemptState,
@@ -256,6 +256,10 @@ async function tryDegradedRetry(options) {
             skipGate: requestContext.skipGate,
             timeoutMs: requestContext.timeoutMs,
             signal: requestContext.signal,
+            principal: requestContext.principal,
+            workloadAdmissionId: requestContext.workloadAdmissionId,
+            workloadGeneration: requestContext.workloadGeneration,
+            admissionKind: `inference-${requestContext.laneName || 'fallback'}-fallback`,
           });
           return {
             ...result,

@@ -41,6 +41,13 @@ jest.mock('../../src/clients/coreApiClient', () => {
         })),
         heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
         releaseWorkloadAdmission: jest.fn(async () => ({ released: true })),
+        getWorkloadRecoveryIdentity: jest.fn(workloadId => ({
+            recoveryId: `recovery-${workloadId}`,
+            recoveryRequestId: `recovery-request-${workloadId}`,
+            admissionId: `admission-${workloadId}`,
+            generation: `generation-${workloadId}`,
+            principal: 'benchmark-service'
+        })),
         claimHostForBenchmark: jest.fn(async () => ({ claimed: true })),
         heartbeatBenchmarkClaim: jest.fn(async () => ({ heartbeat: true })),
         releaseBenchmarkClaim: jest.fn(async () => ({ released: true })),

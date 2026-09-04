@@ -1304,7 +1304,8 @@ async function runBatchOrchestrator({
                 await releaseAllDedication(dedicationState, {
                     batchId,
                     recordBatchTimelineEvent,
-                    failClosed: isResuming
+                    failClosed: isResuming,
+                    signal: batchCancellationController.signal
                 });
             } catch (error) {
                 if (!isResuming) throw error;

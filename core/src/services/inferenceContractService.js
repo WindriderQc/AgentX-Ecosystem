@@ -289,11 +289,17 @@ async function resolveCapabilities(model, host, deps = {}) {
   const thinkingProfile = mapValue(profile?.thinkingProfiles, identity.hostId);
   const readiness = mapValue(profile?.readiness, identity.hostId);
   const stage = readiness?.stage || (thinkingProfile ? 'profiled' : 'unknown');
-  const exactProfile = profileMatchesArtifact(readiness?.artifact, exactArtifact);
+  const authorityVerified = readiness?.authorityVerified === true
+    && readiness?.authority?.contract === 'agentx.profiler-readiness/v2'
+    && readiness?.authority?.verified === true
+    && readiness?.authority?.liveIdentityVerified === true;
+  const exactProfile = authorityVerified
+    && (!exactArtifact || profileMatchesArtifact(readiness?.artifact, exactArtifact));
   const qualified = PROFILED_STAGES.has(stage)
     && !!identity.hostId
     && readiness?.benchmarkQualified === true
     && readiness?.stale !== true
+    && authorityVerified
     && exactProfile;
 
   let thinking = unknownThinkingCapability();
@@ -348,6 +354,7 @@ async function resolveCapabilities(model, host, deps = {}) {
       qualified,
       stale: readiness?.stale === true,
       exactArtifact: exactProfile,
+      authorityVerified,
       source: profile ? 'benchmark_model_profile' : 'fallback'
     },
     thinking,

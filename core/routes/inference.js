@@ -54,7 +54,7 @@ const {
     fingerprintRuntimeOptions,
 } = require('../src/services/routing/routeDecision');
 const { tryAndRespondDegraded } = require('../src/services/routing/degradedRetryResponse');
-const { executeOllamaAttempt } = require('../src/services/routing/inferenceAttemptExecutor');
+const { executeAdmittedOllamaAttempt } = require('../src/services/routing/inferenceAttemptExecutor');
 const {
     buildInferenceClientData,
     classifyHttpRetryFailure,
@@ -74,6 +74,7 @@ const {
     resolveInferenceContractSnapshot
 } = require('../src/services/inferenceContractService');
 const { telemetryContextFromRequest } = require('../src/helpers/llmTelemetryContext');
+const { beginInferenceAdmission } = require('../src/services/inferenceAdmissionService');
 const { trustedNestorConsumer } = require('../src/services/nestorConsumerAttribution');
 const alertService = require('../src/services/alertService');
 const { summarizeOllamaOutcome } = require('../src/services/laneObservabilityService');
@@ -433,6 +434,7 @@ router.post('/inference/embed', async (req, res) => {
     let attemptTarget = target;
     let lastError = null;
     let lastFailureReason = null;
+    let embedAdmission = null;
 
     try {
         for (const [candidateIndex, candidate] of candidates.entries()) {
@@ -485,6 +487,15 @@ router.post('/inference/embed', async (req, res) => {
 
             try {
                 const keepAlive = await resolveEmbeddingKeepAlive(candidate, model);
+                embedAdmission = await beginInferenceAdmission({
+                    host: candidate,
+                    model,
+                    kind: 'embedding',
+                    principal: resolveInferenceRequestCaller(req).principal,
+                    ...(keepAlive !== undefined && { keepAlive }),
+                    signal: controller.signal
+                });
+                embedAdmission.markDispatched();
                 response = await fetch(`${candidate}/api/embeddings`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -493,9 +504,13 @@ router.post('/inference/embed', async (req, res) => {
                         prompt,
                         ...(keepAlive !== undefined && { keep_alive: keepAlive })
                     }),
-                    signal: controller.signal
+                    signal: embedAdmission.signal
                 });
             } catch (err) {
+                if (embedAdmission) {
+                    await embedAdmission.abandon(err);
+                    embedAdmission = null;
+                }
                 const failureReason = err.name === 'AbortError'
                     ? 'pre_response_timeout'
                     : 'connection_failure';
@@ -570,7 +585,17 @@ router.post('/inference/embed', async (req, res) => {
             reasonCode,
         });
 
-        raw = await response.text();
+        try {
+            raw = await response.text();
+            await embedAdmission.complete();
+            embedAdmission = null;
+        } catch (error) {
+            if (embedAdmission) {
+                await embedAdmission.abandon(error);
+                embedAdmission = null;
+            }
+            throw error;
+        }
         if (raw) {
             try {
                 data = JSON.parse(raw);
@@ -661,6 +686,12 @@ router.post('/inference/embed', async (req, res) => {
             embedding: data.embedding
         });
     } catch (err) {
+        if (embedAdmission) {
+            await embedAdmission.abandon(err).catch(quarantineError => {
+                err.inferenceQuarantineError = quarantineError;
+            });
+            embedAdmission = null;
+        }
         // Terminal failure — usually every candidate was rejected. The
         // decision still gets built so the exhausted-fleet case is attributed,
         // with the rejection list carrying which hosts were tried and why.
@@ -789,6 +820,14 @@ router.post('/inference/generate', async (req, res) => {
     );
     const benchmarkClaimAuthorized = callerContext.principal === 'benchmark-service'
         && laneName === 'direct';
+    if (callerContext.principal === 'benchmark-service'
+        && (!body.workloadAdmissionId || !body.workloadGeneration)) {
+        return res.status(403).json({
+            status: 'error',
+            code: 'BENCHMARK_WORKLOAD_PROOF_REQUIRED',
+            message: 'Benchmark inference requires an exact Core-minted workload admission id and generation'
+        });
+    }
     const routeManaged = lane.route === true && !hostOverride;
 
     let model = requestedModel;
@@ -1030,6 +1069,8 @@ router.post('/inference/generate', async (req, res) => {
             callerDetail: body.callerDetail || null,
             claimBatchId: body.claimBatchId || null,
             claimGeneration: body.claimGeneration || null,
+            workloadAdmissionId: body.workloadAdmissionId || null,
+            workloadGeneration: body.workloadGeneration || null,
             benchmarkAuthorized: benchmarkClaimAuthorized,
             model,
             path: '/api/inference/generate'
@@ -1374,31 +1415,33 @@ router.post('/inference/generate', async (req, res) => {
         timeoutMs: INFERENCE_FETCH_TIMEOUT_MS,
         routeManaged,
         signal: disconnect.signal,
+        callerPrincipal: callerContext.principal,
     });
 
     try {
-        gateRelease = await (skipGate ? hostGate.track : hostGate.acquire)(target, model, {
-                signal: disconnect.signal,
-            });
-        // A request may have passed the first claim check and then waited in
-        // admission (or entered passive direct-lane tracking) while Benchmark
-        // fenced the host. Recheck before the Ollama write.
-        await assertHostAvailableForConsumer(target, {
-            callerDetail: body.callerDetail || null,
-            claimBatchId: body.claimBatchId || null,
-            claimGeneration: body.claimGeneration || null,
-            benchmarkAuthorized: benchmarkClaimAuthorized,
-            model,
-            path: '/api/inference/generate:post-admission'
-        });
-
-        const primaryAttempt = await executeOllamaAttempt({
+        const primaryAttempt = await executeAdmittedOllamaAttempt({
             hostUrl: target,
+            model,
             payload: ollamaPayload,
             useChat,
             stream,
+            skipGate,
             timeoutMs: INFERENCE_FETCH_TIMEOUT_MS,
             signal: disconnect.signal,
+            principal: callerContext.principal,
+            workloadAdmissionId: body.workloadAdmissionId || null,
+            workloadGeneration: body.workloadGeneration || null,
+            admissionKind: `inference-${laneName}${stream ? '-stream' : ''}`,
+            afterAdmission: () => assertHostAvailableForConsumer(target, {
+                callerDetail: body.callerDetail || null,
+                claimBatchId: body.claimBatchId || null,
+                claimGeneration: body.claimGeneration || null,
+                workloadAdmissionId: body.workloadAdmissionId || null,
+                workloadGeneration: body.workloadGeneration || null,
+                benchmarkAuthorized: benchmarkClaimAuthorized,
+                model,
+                path: '/api/inference/generate:post-admission'
+            })
         });
         const { response, raw, data } = primaryAttempt;
 

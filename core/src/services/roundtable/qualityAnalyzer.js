@@ -11,6 +11,7 @@ const fetch = require('node-fetch');
 const logger = require('../../../config/logger');
 const Roundtable = require('../../../models/Roundtable');
 const { getTargetForModel } = require('../modelRouter');
+const { beginInferenceAdmission } = require('../inferenceAdmissionService');
 
 const { PRODUCT_DEFAULT_MODEL } = require('../modelRouterDefaults');
 const JUDGE_MODEL = process.env.ROUNDTABLE_JUDGE_MODEL || PRODUCT_DEFAULT_MODEL;
@@ -79,22 +80,40 @@ async function callJudge(prompt) {
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), JUDGE_TIMEOUT_MS);
+  let inferenceAdmission = null;
   try {
+    inferenceAdmission = await beginInferenceAdmission({
+      host: target,
+      model: JUDGE_MODEL,
+      kind: 'council-quality-judge',
+      principal: 'core-council',
+      runtimeOptions: { temperature: 0.2 },
+      signal: controller.signal
+    });
+    inferenceAdmission.markDispatched();
     const resp = await fetch(`${target}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: JUDGE_MODEL, prompt, stream: false, options: { temperature: 0.2 } }),
-      signal: controller.signal
+      signal: inferenceAdmission.signal
     });
+    const data = await resp.json();
+    await inferenceAdmission.complete();
+    inferenceAdmission = null;
     clearTimeout(timer);
     if (!resp.ok) {
       return { success: false, error: `Judge ${resp.status}` };
     }
-    const data = await resp.json();
     const scores = extractJson(data.response || '');
     if (!scores) return { success: false, error: 'Failed to parse judge JSON' };
     return { success: true, scores };
   } catch (err) {
+    if (inferenceAdmission) {
+      await inferenceAdmission.abandon(err).catch(quarantineError => {
+        err.inferenceQuarantineError = quarantineError;
+      });
+      inferenceAdmission = null;
+    }
     clearTimeout(timer);
     return { success: false, error: err.name === 'AbortError' ? `Timeout after ${JUDGE_TIMEOUT_MS}ms` : err.message };
   }

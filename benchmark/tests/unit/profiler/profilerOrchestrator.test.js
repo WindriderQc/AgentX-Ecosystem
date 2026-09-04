@@ -43,7 +43,7 @@ const thinkingProfileService = require('../../../src/services/profiler/thinkingP
 const ollamaClient = require('../../../src/clients/ollamaClient');
 const ModelProfile = require('../../../models/ModelProfile');
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
-const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+const { createProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 const orchestrator = require('../../../src/services/profiler/profilerOrchestrator');
 
 const MODEL = 'owner/model:8b-q4';
@@ -71,29 +71,26 @@ function readiness(overrides = {}) {
       measurementQuality: { passingSampleCount: 5 }
     }
   };
-  return {
+  const value = {
     stage: 'profiled',
     profileDepth: 'standard',
     benchmarkQualified: true,
     evidenceId: 'evidence-1',
-    authorityReceipt: {
-      version: 1,
-      source: 'profiler_pipeline',
-      evidenceId: 'evidence-1',
-      digest: receiptDigest({
-        modelName: MODEL,
-        hostId: HOST_ID,
-        artifact: ARTIFACT,
-        profileDepth: evidence.profile.profileDepth,
-        required: evidence.profile.requiredRetainedSamples,
-        passing: evidence.profile.measurementQuality.passingSampleCount
-      }),
-      issuedAt: new Date('2026-09-03T00:00:00Z')
-    },
     stale: false,
     artifact: ARTIFACT,
     ...overrides
   };
+  value.authorityReceipt = overrides.authorityReceipt === null
+    ? null
+    : createProfilerAuthorityReceipt({
+      modelName: MODEL,
+      hostId: HOST_ID,
+      artifact: evidence.artifact,
+      profile: evidence.profile,
+      evidenceId: evidence._id,
+      issuedAt: new Date('2026-09-03T00:00:00Z')
+    });
+  return value;
 }
 
 beforeEach(() => {
@@ -287,6 +284,19 @@ describe('profile', () => {
 });
 
 describe('profiler evidence qualification', () => {
+  it('declares concurrent goodput/fairness and semantic quality non-authoritative until measured', () => {
+    expect(orchestrator._buildProfilerCapabilities('full', null)).toMatchObject({
+      qualificationScope: 'single_request_exact_artifact_runtime',
+      concurrentServing: {
+        status: 'unknown',
+        authority: 'none',
+        metrics: { goodput: null, latencyP95Ms: null, fairness: null, saturationConcurrency: null }
+      },
+      responseQuality: { status: 'not_measured', authority: 'none' },
+      productionServingQualification: { qualified: false }
+    });
+  });
+
   it('uses at least five context candidate repetitions for Full and keeps Standard diagnostic', () => {
     expect(orchestrator._contextProbeRepeatsForDepth('standard', { fullPhaseRepeats: 10 })).toBe(2);
     expect(orchestrator._contextProbeRepeatsForDepth('full', { fullPhaseRepeats: 3 })).toBe(5);

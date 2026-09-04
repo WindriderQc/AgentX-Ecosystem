@@ -23,7 +23,15 @@ jest.mock('../../../src/services/benchmark/batchOrchestrator', () => ({
 jest.mock('../../../src/clients/coreApiClient', () => ({
     acquireWorkloadAdmission: jest.fn(async () => ({ acquired: true, idempotent: true })),
     heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
-    releaseWorkloadAdmission: jest.fn(async () => ({ released: true }))
+    releaseWorkloadAdmission: jest.fn(async () => ({ released: true })),
+    getWorkloadRecoveryIdentity: jest.fn(workloadId => ({
+        recoveryId: `recovery-${workloadId}`,
+        recoveryRequestId: `recovery-request-${workloadId}`,
+        admissionId: `admission-${workloadId}`,
+        generation: `generation-${workloadId}`,
+        principal: 'benchmark-service'
+    })),
+    transitionWorkloadRecovery: jest.fn(async () => ({ transitioned: true }))
 }));
 
 jest.mock('../../../src/services/benchmark/benchmarkClaimLifecycle', () => ({
@@ -435,7 +443,7 @@ describe('Batch lifecycle', () => {
 
         expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
         expect(logger.error).toHaveBeenCalledWith(
-            'Retaining workload admission for durable reconciliation',
+            'Workload admission moved to durable Core recovery quarantine',
             expect.objectContaining({ workloadId: BATCH_ID, phase: 'terminal_reconciliation' })
         );
     });

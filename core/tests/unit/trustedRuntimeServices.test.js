@@ -18,6 +18,13 @@ function response({ ok = true, status = 200, body = {}, stream = null } = {}) {
 
 function inferenceDeps(overrides = {}) {
   return {
+    beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+      signal: signal || new AbortController().signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn(async () => ({ released: true })),
+      abandon: jest.fn(async () => ({ released: true }))
+    })),
     getAdvisoryModelForTask: jest.fn(),
     getTargetForModel: jest.fn(() => 'http://ollama.test:11434'),
     resolveHostKey: jest.fn(() => 'primary'),
@@ -168,7 +175,7 @@ describe('trusted runtime services', () => {
     expect(result.ok).toBe(true);
     expect(deps.hostGate.acquire).not.toHaveBeenCalled();
     expect(deps.hostGate.acquireExclusive).toHaveBeenCalledWith(
-      'http://ollama.test:11434', 'open-model', { signal: undefined }
+      'http://ollama.test:11434', 'open-model', { signal: expect.any(AbortSignal) }
     );
     expect(deps.hostPreferenceService.prepareExclusiveModel).toHaveBeenCalledWith(
       'http://ollama.test:11434', 'open-model'
@@ -265,6 +272,7 @@ describe('trusted runtime services', () => {
     for (const chunk of expected) upstream.write(chunk);
     upstream.end();
     await ended;
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(Buffer.concat(received).toString('utf8')).toBe(expected.join(''));
     expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({

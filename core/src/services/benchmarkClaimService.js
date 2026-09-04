@@ -1034,6 +1034,18 @@ async function reapStaleBenchmarkClaims(opts = {}) {
 
   for (const pref of claims) {
     const claim = pref.benchmarkClaim || {};
+    if (claim.admissionId && claim.admissionGeneration && claim.admissionPrincipal) {
+      const runtimeCoordinationService = require('./runtimeCoordinationService');
+      const quarantined = await runtimeCoordinationService.isWorkloadRecoveryRequired({
+        id: claim.admissionId,
+        generation: claim.admissionGeneration,
+        principal: claim.admissionPrincipal
+      });
+      // A recovery quarantine is durable precisely because ordinary TTL and
+      // claim reapers cannot expose the host after the originating process
+      // dies. Only the fenced recovery owner may resolve it.
+      if (quarantined) continue;
+    }
     const claimedAt = claim.claimedAt ? new Date(claim.claimedAt).getTime() : 0;
     if (!claimedAt) continue; // unexpectedly missing timestamp — leave alone
     const est = Number(claim.estimatedDurationMs) || 0;
@@ -1155,6 +1167,58 @@ async function listBenchmarkClaims() {
   }));
 }
 
+async function restoreClaimsForWorkloadRecovery({
+  recoveryId,
+  recoveryGeneration,
+  principal,
+  ownerId,
+  excludedModelsByHost = {}
+} = {}) {
+  const runtimeCoordinationService = require('./runtimeCoordinationService');
+  const ownership = await runtimeCoordinationService.assertWorkloadRecovery({
+    recoveryId,
+    recoveryGeneration,
+    principal,
+    ownerId
+  });
+  if (ownership.owned !== true) {
+    return { restored: false, reason: ownership.reason || 'recovery quarantine ownership required', details: [] };
+  }
+  const preferences = await HostPreference.find({
+    'benchmarkClaim.admissionId': ownership.admissionId,
+    'benchmarkClaim.admissionGeneration': ownership.generation,
+    'benchmarkClaim.admissionPrincipal': principal,
+    'benchmarkClaim.batchId': ownership.workloadId
+  }).lean();
+  const details = [];
+  for (const pref of preferences) {
+    const claim = pref.benchmarkClaim;
+    const result = await releaseBenchmarkClaim(pref.hostUrl, claim.batchId, {
+      claimGeneration: claim.claimGeneration,
+      admissionId: ownership.admissionId,
+      admissionGeneration: ownership.generation,
+      admissionPrincipal: principal,
+      requireAdmissionProof: true,
+      excludedModels: Array.isArray(excludedModelsByHost?.[pref.hostUrl])
+        ? excludedModelsByHost[pref.hostUrl]
+        : []
+    });
+    details.push({ hostUrl: pref.hostUrl, ...result });
+    if (result.released !== true) {
+      return { restored: false, reason: result.reason || `host restore failed for ${pref.hostUrl}`, details };
+    }
+  }
+  return {
+    restored: true,
+    admissionId: ownership.admissionId,
+    workloadId: ownership.workloadId,
+    recoveryId,
+    recoveryGeneration,
+    recoveryOwnerId: ownership.recoveryOwnerId || null,
+    details
+  };
+}
+
 async function recoverBenchmarkClaimRelease(hostUrl, batchId, opts = {}) {
   const claimGeneration = cleanClaimGeneration(opts.claimGeneration ?? opts.claim_generation);
   if (!hostUrl || !batchId || !claimGeneration) {
@@ -1205,6 +1269,7 @@ module.exports = {
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
   recoverBenchmarkClaimRelease,
+  restoreClaimsForWorkloadRecovery,
   listBenchmarkClaims,
   summarizeBenchmarkClaimReaps,
   reapStaleBenchmarkClaims,

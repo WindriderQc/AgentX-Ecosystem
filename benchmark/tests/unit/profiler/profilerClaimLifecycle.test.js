@@ -4,6 +4,7 @@ jest.mock('../../../src/clients/coreApiClient', () => ({
   acquireWorkloadAdmission: jest.fn().mockResolvedValue({ acquired: true }),
   heartbeatWorkloadAdmission: jest.fn().mockResolvedValue({ heartbeat: true }),
   releaseWorkloadAdmission: jest.fn().mockResolvedValue({ released: true }),
+  transitionWorkloadRecovery: jest.fn().mockResolvedValue({ transitioned: true }),
   claimHostForBenchmark: jest.fn().mockResolvedValue({ claimed: true }),
   heartbeatBenchmarkClaim: jest.fn(),
   releaseBenchmarkClaim: jest.fn().mockResolvedValue({
@@ -88,7 +89,7 @@ describe('profiler claim lease cancellation', () => {
     await expect(lease.abandon(ambiguity)).resolves.toMatchObject({
       abandoned: true,
       failed: 2,
-      workloadAdmission: { released: false, reason: 'held under heartbeat for durable recovery' }
+      workloadAdmission: { released: false, reason: 'held in durable Core recovery quarantine' }
     });
     expect(lease.signal.aborted).toBe(true);
     expect(lease.signal.reason).toBe(ambiguity);
@@ -98,7 +99,12 @@ describe('profiler claim lease cancellation', () => {
     expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
     expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
     await new Promise(resolve => setTimeout(resolve, 30));
-    expect(coreApiClient.heartbeatBenchmarkClaim.mock.calls.length).toBeGreaterThan(1);
+    expect(coreApiClient.transitionWorkloadRecovery).toHaveBeenCalledWith(
+      'profiler-operation-ambiguous-projection',
+      'UNKNOWN',
+      expect.objectContaining({ receipt: expect.objectContaining({ contract: 'agentx.workload-recovery/v1' }) })
+    );
+    expect(coreApiClient.heartbeatBenchmarkClaim).toHaveBeenCalledTimes(1);
   });
 
   test('retains the global admission when the first heartbeat and exact runtime restore both fail', async () => {
@@ -121,7 +127,7 @@ describe('profiler claim lease cancellation', () => {
     expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
   });
 
-  test('retains the heartbeat when host restore succeeds but workload release is ambiguous', async () => {
+  test('hands off to durable recovery when host restore succeeds but workload release is ambiguous', async () => {
     process.env.PROFILER_RECONCILIATION_HOLD_MS = '20';
     coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({ heartbeat: true });
     coreApiClient.releaseWorkloadAdmission.mockRejectedValue(new Error('release receipt unavailable'));
@@ -145,7 +151,12 @@ describe('profiler claim lease cancellation', () => {
     expect(lease.signal.aborted).toBe(true);
     expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledTimes(1);
     await new Promise(resolve => setTimeout(resolve, 30));
-    expect(coreApiClient.heartbeatWorkloadAdmission.mock.calls.length).toBeGreaterThan(1);
+    expect(coreApiClient.transitionWorkloadRecovery).toHaveBeenCalledWith(
+      'profiler-workload-release-ambiguous',
+      'UNKNOWN',
+      expect.objectContaining({ receipt: expect.objectContaining({ contract: 'agentx.workload-recovery/v1' }) })
+    );
+    expect(coreApiClient.heartbeatWorkloadAdmission).toHaveBeenCalledTimes(1);
   });
 
   test('returns the retained recovery receipt after a fenced projection commit rejects', async () => {

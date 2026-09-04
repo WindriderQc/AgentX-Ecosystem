@@ -14,6 +14,7 @@ const JudgeGroundTruth = require('../../../models/JudgeGroundTruth');
 const { scoreResponse } = require('../qualityScorer');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
 const { throwIfJudgeCancelled } = require('../scoring/judgeCall');
+const authorityReconciliation = require('./benchmarkAuthorityReconciliation');
 const {
     verifyStoredAttestedHumanGroundTruth
 } = require('./humanGroundTruthImport');
@@ -215,6 +216,28 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
                         writeError.compensationError = compensationError;
                         writeError.retainAdmission = true;
                         writeError.code = 'GROUND_TRUTH_RECONCILIATION_PENDING';
+                        writeError.reconciliationPersistedPromise = authorityReconciliation.enqueueAuthorityInvalidation({
+                            kind: 'ground_truth_invalidation',
+                            resultId: id,
+                            batchId: options.batchId || sample.batch_id,
+                            workloadId: options.workloadId,
+                            phase: 'retro-calibration ground truth creation',
+                            reason: compensationError.message
+                        }).then(record => {
+                            writeError.reconciliationId = String(record._id);
+                            writeError.reconciliationPersisted = true;
+                            writeError.reconciliationPromise = authorityReconciliation.waitForResultInvalidation(record._id);
+                            return record;
+                        }).catch(reconciliationError => {
+                            writeError.reconciliationError = reconciliationError;
+                            writeError.reconciliationPersisted = false;
+                            logger.error('Ground-truth authority recovery journal failed; Core quarantine remains armed', {
+                                resultId: String(id),
+                                workloadId: options.workloadId || null,
+                                error: reconciliationError.message
+                            });
+                            return null;
+                        });
                     }
                 }
                 throw writeError;
@@ -262,7 +285,7 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
  * @returns {Object} { samples, results }
  */
 async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) {
-    const { perCell = 3, dryRun = false, cancelSignal = null, assertAuthorityActive = null } = options;
+    const { perCell = 3, dryRun = false, cancelSignal = null, assertAuthorityActive = null, workloadId = null } = options;
     const cancellationConfig = { ...referenceJudgeConfig, cancelSignal };
     throwIfJudgeCancelled(cancellationConfig);
     assertAuthorityActive?.();
@@ -298,7 +321,9 @@ async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) 
     const results = await scoreAndPromote(samples, cancellationConfig, {
         dryRun,
         cancelSignal,
-        assertAuthorityActive
+        assertAuthorityActive,
+        workloadId,
+        batchId
     });
 
     return {

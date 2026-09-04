@@ -25,7 +25,26 @@ function evidence() {
     profile: {
       profileDepth: 'full',
       requiredRetainedSamples: 10,
-      measurementQuality: { passingSampleCount: 10 }
+      benchmarkQualified: true,
+      qualificationFailures: [],
+      measurementQuality: {
+        passingSampleCount: 10,
+        reliability: 'high',
+        coefficientOfVariation: 0.04,
+        confidence95: { low: 41, high: 44 }
+      },
+      tokensPerSec: 42.5,
+      ttftP50Ms: 180,
+      ttftP95Ms: 230,
+      maxVerifiedContext: 262144,
+      recommendedInteractiveContext: 8192,
+      recommendedDocumentContext: 32768,
+      gpu: { spillStatus: 'no_spill', sizeVram: 20_000_000_000 },
+      throughputCurve: [{ concurrency: 1, tokensPerSec: 42.5 }],
+      generationStability: { coefficientOfVariation: 0.03 },
+      prefillDecodeMatrix: [{ promptTokens: 1024, decodeTokens: 128, prefillTokensPerSec: 700, decodeTokensPerSec: 42 }],
+      loadTiming: { coldMs: 1800, warmMs: 120 },
+      artifact: ARTIFACT
     }
   };
 }
@@ -50,6 +69,15 @@ describe('profilerAuthorityReceipt', () => {
     ['well-formed forged digest', receipt => { receipt.digest = '0'.repeat(64); }],
     ['changed artifact digest', (_receipt, record) => { record.artifact = { ...record.artifact, digest: 'sha256:model-b' }; }],
     ['changed sample authority', (_receipt, record) => { record.profile.measurementQuality.passingSampleCount = 9; }],
+    ['changed qualification decision', (_receipt, record) => { record.profile.benchmarkQualified = false; }],
+    ['changed context recommendation', (_receipt, record) => { record.profile.recommendedInteractiveContext = 262144; }],
+    ['changed context maximum', (_receipt, record) => { record.profile.maxVerifiedContext = 8192; }],
+    ['changed throughput', (_receipt, record) => { record.profile.tokensPerSec = 999; }],
+    ['changed TTFT distribution', (_receipt, record) => { record.profile.ttftP95Ms = 9999; }],
+    ['changed confidence interval', (_receipt, record) => { record.profile.measurementQuality.confidence95.high = 99; }],
+    ['changed GPU spill evidence', (_receipt, record) => { record.profile.gpu.spillStatus = 'unknown'; }],
+    ['changed matrix evidence', (_receipt, record) => { record.profile.prefillDecodeMatrix[0].decodeTokensPerSec = 99; }],
+    ['changed load timing', (_receipt, record) => { record.profile.loadTiming.coldMs = 99; }],
     ['changed evidence identity', receipt => { receipt.evidenceId = 'evidence-b'; }]
   ])('rejects %s', (_label, mutate) => {
     const record = evidence();

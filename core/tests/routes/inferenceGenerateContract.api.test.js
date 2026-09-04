@@ -62,6 +62,16 @@ jest.mock('../../src/services/modelReadinessService', () => ({
   })),
 }));
 
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+    signal: signal || new AbortController().signal,
+    markDispatched: jest.fn(),
+    assertActive: jest.fn(),
+    complete: jest.fn(async () => ({ released: true })),
+    abandon: jest.fn(async () => ({ released: true })),
+  })),
+}));
+
 jest.mock('../../src/services/hostPreferenceService', () => ({
   getAll: jest.fn(async () => []),
   getByHost: jest.fn(async () => null),
@@ -112,7 +122,6 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
     req.headers.host = 'localhost:3180';
     req.headers.origin = 'http://localhost:3180';
     req.headers['sec-fetch-site'] = 'same-origin';
-    req.headers['x-agentx-benchmark-token'] = 'test-benchmark-token';
     next();
   });
   app.use('/api', apiRoutes);
@@ -308,7 +317,14 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       mockOllamaOk();
       await request(app)
         .post('/api/inference/generate')
-        .send({ model: 'test-model', prompt: 'hello', callerDetail: 'benchmark-batch-abc123' })
+        .set('x-agentx-benchmark-token', 'test-benchmark-token')
+        .send({
+          model: 'test-model',
+          prompt: 'hello',
+          callerDetail: 'benchmark-batch-abc123',
+          workloadAdmissionId: 'workload-admission-abc123',
+          workloadGeneration: 'workload-generation-abc123'
+        })
         .expect(200);
 
       // Bench/profiler self-sequence per host, but passive tracking is required

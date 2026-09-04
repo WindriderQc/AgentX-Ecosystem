@@ -69,6 +69,16 @@ jest.mock('../../src/services/modelReadinessService', () => ({
   isReadyStage: jest.fn(() => true),
 }));
 
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+    signal: signal || new AbortController().signal,
+    markDispatched: jest.fn(),
+    assertActive: jest.fn(),
+    complete: jest.fn(async () => ({ released: true })),
+    abandon: jest.fn(async () => ({ released: true })),
+  })),
+}));
+
 const HOST_PREFS = [
   {
     hostUrl: 'http://primary:11434', hostKey: 'primary', status: 'ready',
@@ -490,7 +500,7 @@ describe('degraded retry wiring (0523)', () => {
     expect(recordInference).toHaveBeenCalledTimes(1);
   });
 
-  test('a direct profiler caller cannot opt out of exact-model execution', async () => {
+  test('a direct profiler caller without exact workload proof is rejected before fallback', async () => {
     process.env.DEGRADED_FALLBACK = 'true';
     process.env.AGENTX_BENCHMARK_TOKEN = 'direct-lane-test-token';
     mockPrimaryDownQualifiedCrossModelUp();
@@ -504,10 +514,13 @@ describe('degraded retry wiring (0523)', () => {
         callerDetail: 'profiler-host-secondary',
         allowCrossModelFallback: true,
       })
-      .expect(502);
+      .expect(403)
+      .expect(({ body }) => {
+        expect(body.code).toBe('BENCHMARK_WORKLOAD_PROOF_REQUIRED');
+      });
 
     expect(fetch.mock.calls.some(([url]) => String(url).includes('secondary'))).toBe(false);
-    expect(recordInference).toHaveBeenCalledTimes(1);
+    expect(recordInference).not.toHaveBeenCalled();
   });
 
   test('opted-in proxy uses only an operator-pinned, exact-qualified alternate and labels it', async () => {

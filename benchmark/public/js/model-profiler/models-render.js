@@ -27,7 +27,14 @@ export function renderHardwareTelemetry(p) {
   if (p?._showHardwareDiagnostics === false) return '';
   const hw = p?.hardwareTelemetry;
   const latest = hw?.latest;
-  if (!latest?.ok) return '';
+  const capability = hw?.capability || latest?.capability;
+  if (!latest?.ok) {
+    if (!capability) return '';
+    return `<div class="mp-hw-strip mp-hw-strip--warn" title="No deployment telemetry collector supplied the lab-grade GPU metrics required by agentx.profiler-hardware-collector/v1.">
+      <span class="mp-hw-strip__label">hardware</span>
+      <span>lab GPU telemetry unknown</span>
+    </div>`;
+  }
 
   const diag = hw.diagnostics || latest.diagnostics || {};
   const bits = [];
@@ -40,7 +47,12 @@ export function renderHardwareTelemetry(p) {
   }
   if (latest.powerDrawW != null) bits.push(`<span><strong>${Math.round(latest.powerDrawW)}W</strong></span>`);
   if (latest.temperature != null) bits.push(`<span><strong>${Math.round(latest.temperature)}C</strong></span>`);
-  if (!bits.length) return '';
+  if (!bits.length) {
+    return `<div class="mp-hw-strip mp-hw-strip--warn" title="Ollama residency is visible, but temperature, power, clocks, throttling, PCIe, topology, and multi-GPU balance remain unknown without a collector.">
+      <span class="mp-hw-strip__label">hardware</span>
+      <span>advanced metrics unknown</span>
+    </div>`;
+  }
 
   const tone = diag.pcieWarning || diag.thermalWarning || (diag.vramPressurePct != null && diag.vramPressurePct >= 90)
     ? 'warn'
@@ -112,6 +124,13 @@ export function renderMetrics(model, api) {
     if (recommendationsAuthoritative && p.recommendedDocumentContext != null) {
       bits.push(`<span class="mp-strip-num">${_fmtCtx(p.recommendedDocumentContext)}</span><span class="mp-strip-unit">document</span>`);
     }
+    if (recommendationsAuthoritative && p.performanceKneeContext != null) {
+      bits.push(`<span class="mp-strip-num">${_fmtCtx(p.performanceKneeContext)}</span><span class="mp-strip-unit">performance knee ≤${p.performanceKneeDegradationPct ?? 15}% loss</span>`);
+    }
+    const qualityContext = p.qualityContextStatus === 'verified' && p.qualityVerifiedContext != null
+      ? _fmtCtx(p.qualityVerifiedContext)
+      : 'unknown';
+    bits.push(`<span class="mp-strip-unit">quality-verified context ${qualityContext}</span>`);
     if (p.vramUsedMiB != null) {
       bits.push(`<span class="mp-strip-num">${(p.vramUsedMiB / 1024).toFixed(1)}</span><span class="mp-strip-unit">GB</span>`);
     }
@@ -425,7 +444,9 @@ export function renderModelRow(model, api) {
   if (maxVerifiedContext != null) {
     const recommendations = [
       model?._profileAuthority?.recommendationsAuthoritative === true && p.recommendedInteractiveContext != null ? `interactive ${_fmtCtx(p.recommendedInteractiveContext)}` : null,
-      model?._profileAuthority?.recommendationsAuthoritative === true && p.recommendedDocumentContext != null ? `document ${_fmtCtx(p.recommendedDocumentContext)}` : null
+      model?._profileAuthority?.recommendationsAuthoritative === true && p.recommendedDocumentContext != null ? `document ${_fmtCtx(p.recommendedDocumentContext)}` : null,
+      model?._profileAuthority?.recommendationsAuthoritative === true && p.performanceKneeContext != null ? `performance knee ${_fmtCtx(p.performanceKneeContext)} at ≤${p.performanceKneeDegradationPct ?? 15}% loss` : null,
+      `quality-verified context ${p.qualityContextStatus === 'verified' && p.qualityVerifiedContext != null ? _fmtCtx(p.qualityVerifiedContext) : 'unknown'}`
     ].filter(Boolean).join(' · ');
     ctxCell = `<span class="mp-list-context" title="Maximum verified context${recommendations ? `; ${recommendations}` : ''}">
       <span class="mp-list-context__value">${_fmtCtx(maxVerifiedContext)}</span>

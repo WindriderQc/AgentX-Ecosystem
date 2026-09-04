@@ -13,6 +13,20 @@ const {
   loadReadinessIndex
 } = require('../../src/services/modelReadinessService');
 
+function profilerV2Authority() {
+  return {
+    authorityVerified: true,
+    authority: {
+      contract: 'agentx.profiler-readiness/v2',
+      verified: true,
+      receiptVersion: 2,
+      receiptVerified: true,
+      liveIdentityVerified: true,
+      evidenceQualified: true
+    }
+  };
+}
+
 describe('exact artifact identity', () => {
   it('preserves namespaces while accepting only the implicit latest alias', () => {
     expect(exactModelNamesMatch('owner/model:latest', 'owner/model')).toBe(true);
@@ -43,10 +57,12 @@ describe('exact artifact identity', () => {
 
   it('marks only current benchmark-qualified readiness as ready', () => {
     expect(_normalizeReadinessEntry({
-      stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false
+      stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false,
+      ...profilerV2Authority()
     }).isReady).toBe(true);
     expect(_normalizeReadinessEntry({
-      stage: 'available', profileDepth: 'full', benchmarkQualified: true, stale: false
+      stage: 'available', profileDepth: 'full', benchmarkQualified: true, stale: false,
+      ...profilerV2Authority()
     }).isReady).toBe(true);
     expect(_normalizeReadinessEntry({
       stage: 'profiled', profileDepth: 'quick', benchmarkQualified: false, stale: false
@@ -62,7 +78,8 @@ describe('exact artifact identity', () => {
         stage: 'benchmarked', profileDepth: 'full', benchmarkQualified: true, stale: true
       },
       'host-current': {
-        stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false
+        stage: 'profiled', profileDepth: 'standard', benchmarkQualified: true, stale: false,
+        ...profilerV2Authority()
       }
     })).toMatchObject({ hostId: 'host-current', isReady: true });
   });
@@ -77,7 +94,8 @@ describe('exact artifact identity', () => {
             stage: 'profiled',
             profileDepth: 'standard',
             benchmarkQualified: true,
-            stale: false
+            stale: false,
+            ...profilerV2Authority()
           }
         }
       }])

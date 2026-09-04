@@ -20,7 +20,7 @@ jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
 const service = require('../../../src/services/profiler/modelProfileService');
 const performanceService = require('../../../src/services/profiler/modelPerformanceProfileService');
 const artifactIdentityService = require('../../../src/services/profiler/artifactIdentityService');
-const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+const { createProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 const router = require('../../../routes/profiler/models');
 const app = express();
 app.use(express.json());
@@ -59,19 +59,24 @@ describe('ModelProfile write authority', () => {
       digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
     };
     artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...artifact });
+    const profile = {
+      profileDepth: 'standard',
+      requiredRetainedSamples: 5,
+      measurementQuality: { passingSampleCount: 5 },
+      maxVerifiedContext: 262144,
+      recommendedInteractiveContext: 65536,
+      recommendedDocumentContext: 131072,
+      performanceKneeContext: 65536,
+      performanceKneeDegradationPct: 15,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown'
+    };
     performanceService.getActiveProfile.mockResolvedValue({
       _id: evidenceId,
       modelName: 'qwen:9b',
       hostId: 'host-beta',
       artifact,
-      profile: {
-        profileDepth: 'standard',
-        requiredRetainedSamples: 5,
-        measurementQuality: { passingSampleCount: 5 },
-        maxVerifiedContext: 262144,
-        recommendedInteractiveContext: 65536,
-        recommendedDocumentContext: 131072
-      }
+      profile
     });
     service.getByName.mockResolvedValue({
       readiness: {
@@ -81,15 +86,9 @@ describe('ModelProfile write authority', () => {
           profileDepth: 'standard',
           evidenceId,
           artifact,
-          authorityReceipt: {
-            source: 'profiler_pipeline',
-            version: 1,
-            digest: receiptDigest({
-              modelName: 'qwen:9b', hostId: 'host-beta', artifact,
-              profileDepth: 'standard', required: 5, passing: 5
-            }),
-            evidenceId
-          }
+          authorityReceipt: createProfilerAuthorityReceipt({
+            modelName: 'qwen:9b', hostId: 'host-beta', artifact, profile, evidenceId
+          })
         }
       }
     });
@@ -102,6 +101,9 @@ describe('ModelProfile write authority', () => {
       maxVerifiedContext: 262144,
       recommendedInteractiveContext: 65536,
       recommendedDocumentContext: 131072,
+      performanceKneeContext: 65536,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown',
       config: { num_ctx: 65536 }
     });
   });
@@ -121,13 +123,9 @@ describe('ModelProfile write authority', () => {
     });
     service.getByName.mockResolvedValue({ readiness: { 'host-beta': {
       benchmarkQualified: true, stale: false, profileDepth: 'standard', evidenceId, artifact,
-      authorityReceipt: {
-        version: 1, source: 'profiler_pipeline', evidenceId,
-        digest: receiptDigest({
-          modelName: 'qwen:9b', hostId: 'host-beta', artifact,
-          profileDepth: 'standard', required: 5, passing: 5
-        })
-      }
+      authorityReceipt: createProfilerAuthorityReceipt({
+        modelName: 'qwen:9b', hostId: 'host-beta', artifact, profile, evidenceId
+      })
     } } });
     artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...artifact, digest: 'sha256:new' });
 

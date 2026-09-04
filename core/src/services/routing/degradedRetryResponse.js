@@ -64,6 +64,9 @@ async function tryAndRespondDegraded(context) {
       skipGate,
       timeoutMs,
       signal,
+      principal: context.callerPrincipal,
+      workloadAdmissionId: body.workloadAdmissionId || null,
+      workloadGeneration: body.workloadGeneration || null,
     },
   });
 

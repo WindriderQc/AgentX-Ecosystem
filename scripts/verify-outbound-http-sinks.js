@@ -90,14 +90,12 @@ const LEGACY_DIRECT_SINK_IDS = new Set(Object.freeze([
   'benchmark.buddy-event.deliver',
   'benchmark.cloud-lane.transport',
   'benchmark.decomposed-judge.generate',
-  'benchmark.dedication.generate',
   'benchmark.dedication.ps',
   'benchmark.execution-host.tags',
   'benchmark.huggingface.catalog',
   'benchmark.inference-contract.resolve',
   'benchmark.judge-call.generate',
   'benchmark.judge-readiness.tags',
-  'benchmark.judge-validator.chat',
   'benchmark.judge-validator.show',
   'benchmark.judge-validator.tags',
   'benchmark.ollama-client.request',
@@ -153,7 +151,7 @@ const LEGACY_DIRECT_SINK_IDS = new Set(Object.freeze([
   'core.trusted-runtime.forward',
   'core.web-search.query',
 ]));
-const LEGACY_DIRECT_FINGERPRINT_SHA256 = '9ead7d9efd7d84cb79e10e383a3c1aeacca86f9269034108ae782ad0da8f6a2e';
+const LEGACY_DIRECT_FINGERPRINT_SHA256 = '9d740d671783d46a1f872b7e63be1776e9f8e391e8093269b93c465b8b4e5a59';
 
 function required(condition, message) {
   if (!condition) throw new Error(message);

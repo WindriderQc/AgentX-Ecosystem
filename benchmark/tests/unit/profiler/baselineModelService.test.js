@@ -27,6 +27,16 @@ jest.mock('../../../src/services/profiler/settingsService', () => ({
   save: (...args) => mockSave(...args)
 }));
 
+jest.mock('../../../src/clients/coreApiClient', () => ({
+  getWorkloadRecoveryIdentity: jest.fn(operationId => ({
+    admissionId: `admission-${operationId}`,
+    generation: `generation-${operationId}`,
+    principal: 'benchmark-service',
+    recoveryId: `recovery-${operationId}`,
+    recoveryRequestId: `recovery-request-${operationId}`
+  }))
+}));
+
 jest.mock('../../../config/logger', () => ({
   info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn()
 }));
@@ -75,7 +85,7 @@ describe('baselineModelService', () => {
     expect(mockHostProfileUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
         hostId: 'tertiary',
-        reconciliation: expect.objectContaining({ state: 'pending_reconciliation', operation: 'baseline_pull' })
+        reconciliation: expect.objectContaining({ state: 'prepared', operation: 'baseline_pull' })
       }),
       expect.any(Object)
     );
@@ -105,7 +115,7 @@ describe('baselineModelService', () => {
     });
 
     expect(mockHostProfileUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ reconciliation: expect.objectContaining({ state: 'pending_reconciliation' }) }),
+      expect.objectContaining({ reconciliation: expect.objectContaining({ state: 'mutating' }) }),
       expect.any(Object)
     );
     expect(mockListModels).toHaveBeenCalledTimes(1);
@@ -132,6 +142,7 @@ describe('baselineModelService', () => {
     mockListModels.mockResolvedValueOnce({ models: [] });
     mockPullModel.mockResolvedValue({ status: 'success' });
     mockHostProfileUpsert
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error('terminal receipt acknowledgement lost'));
 

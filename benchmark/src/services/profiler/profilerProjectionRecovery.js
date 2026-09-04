@@ -4,12 +4,21 @@ const crypto = require('crypto');
 const HostProfile = require('../../../models/HostProfile');
 const hostProfileService = require('./hostProfileService');
 const { acquireProfilerClaimLease } = require('./profilerClaimLifecycle');
-const { listModels, deleteModel } = require('../../clients/ollamaClient');
+const { listModels } = require('../../clients/ollamaClient');
 const { isSameOllamaModel } = require('../../helpers/ollamaModelIdentity');
+const {
+  adoptWorkloadRecovery,
+  assertWorkloadRecovery,
+  transitionWorkloadRecovery,
+  restoreWorkloadRecoveryHosts,
+  releaseWorkloadAdmission,
+  recoverWorkloadAdmissionRelease
+} = require('../../clients/coreApiClient');
 const logger = require('../../../config/logger');
 
-const DEFAULT_RECOVERY_DELAY_MS = 6 * 60 * 1000;
-const DEFAULT_RECOVERY_INTERVAL_MS = 60 * 1000;
+const DEFAULT_RECOVERY_DELAY_MS = 60_000;
+const DEFAULT_RECOVERY_INTERVAL_MS = 60_000;
+const OWNER_STALE_MS = 60_000;
 let interval = null;
 let running = false;
 
@@ -18,195 +27,259 @@ function positiveMs(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function reconcileReleaseProjection(profile) {
+function recoveryIdentity(profile) {
+  const value = profile?.reconciliation || {};
+  return {
+    workloadId: value.workloadId || value.operationId,
+    recoveryId: value.recoveryId,
+    recoveryRequestId: value.recoveryRequestId
+  };
+}
+
+async function reconcileLegacyTerminalProfile(profile) {
   if (profile.reconciliation?.serverTerminalObserved !== true) {
-    const error = new Error('The original Ollama unload has no server-terminal receipt; runtime fence must remain retained');
-    error.code = 'PROFILER_MUTATION_TERMINAL_UNPROVEN';
-    error.retainAdmission = true;
-    throw error;
+    return { hostId: profile.hostId, recovered: false, pending: true, operatorRequired: true };
   }
-  const operationId = `profiler-release-recovery-${crypto.randomBytes(8).toString('hex')}`;
+  const operationId = `profiler-legacy-recovery-${crypto.randomBytes(8).toString('hex')}`;
   const lease = await acquireProfilerClaimLease([profile.hostUrl], operationId, 5 * 60 * 1000);
   try {
     lease.assertActive();
-    const observed = await hostProfileService.checkStatus(profile.hostUrl);
+    const inventory = await listModels(profile.hostUrl, { timeoutMs: 30_000, signal: lease.signal });
     lease.assertActive();
-    if (observed.status !== 'online') {
-      const error = new Error(`Host ${profile.hostId} is not observable for release projection recovery`);
-      error.code = 'PROFILER_PROJECTION_RECOVERY_HOST_UNAVAILABLE';
-      throw error;
-    }
-    const recoveredDedicated = observed.dedicated || null;
-    await lease.finalize({
-      beforeWorkloadRelease: async () => {
-        await hostProfileService.upsert({
-          hostId: profile.hostId,
-          status: observed.status,
-          dedicated: recoveredDedicated,
-          reconciliation: {
-            ...profile.reconciliation,
-            state: 'resolved',
-            desiredDedicated: recoveredDedicated,
-            reason: null,
-            resolvedAt: new Date()
-          }
-        }, {
-          signal: lease.signal,
-          assertAuthorityActive: lease.assertActive
-        });
-      }
-    });
-    return { hostId: profile.hostId, recovered: true, dedicated: recoveredDedicated };
-  } catch (error) {
-    try {
-      await lease.finalize();
-    } catch (finalizeError) {
-      error.finalizeError = finalizeError;
-    }
-    throw error;
-  }
-}
-
-async function reconcileBaselinePull(profile, options = {}) {
-  if (profile.reconciliation?.serverTerminalObserved !== true) {
-    const error = new Error('The original Ollama pull has no server-terminal receipt; runtime fence must remain retained');
-    error.code = 'PROFILER_MUTATION_TERMINAL_UNPROVEN';
-    error.retainAdmission = true;
-    throw error;
-  }
-  const operationId = `profiler-baseline-recovery-${crypto.randomBytes(8).toString('hex')}`;
-  const configuredStableMs = positiveMs(
-    options.stableWindowMs ?? process.env.PROFILER_BASELINE_RECOVERY_STABLE_MS,
-    30 * 60 * 1000
-  );
-  const pollIntervalMs = Math.min(
-    configuredStableMs,
-    positiveMs(options.pollIntervalMs ?? process.env.PROFILER_BASELINE_RECOVERY_POLL_MS, 5_000)
-  );
-  const lease = await acquireProfilerClaimLease(
-    [profile.hostUrl],
-    operationId,
-    configuredStableMs + (5 * 60 * 1000)
-  );
-  let finalized = false;
-  try {
     const modelName = profile.reconciliation?.model;
-    const inventory = async () => {
-      lease.assertActive();
-      const data = await listModels(profile.hostUrl, { timeoutMs: 8_000, signal: lease.signal });
-      lease.assertActive();
-      return (data.models || []).some(model => isSameOllamaModel(model.name, modelName));
-    };
-    const delay = ms => new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = callback => {
-        if (settled) return;
-        settled = true;
-        lease.signal?.removeEventListener('abort', onAbort);
-        callback();
-      };
-      const timer = setTimeout(() => finish(resolve), ms);
-      const onAbort = () => {
-        clearTimeout(timer);
-        finish(() => reject(lease.signal.reason instanceof Error
-          ? lease.signal.reason
-          : new Error('Profiler baseline recovery lease stopped')));
-      };
-      if (lease.signal?.aborted) onAbort();
-      else lease.signal?.addEventListener('abort', onAbort, { once: true });
-    });
-
-    // A quiet observation made before this exact recovery lease is not
-    // continuity evidence: maintenance could have run in the gap. Hold one
-    // admission/host fence for the complete quiet window and compensate every
-    // late artifact that appears before exposing the host again.
-    let quietSince = null;
-    let lastObservedAt = null;
-    let excludedModel = false;
-    let attempts = Number(profile.reconciliation?.attempts) || 0;
-    while (true) {
-      lease.assertActive();
-      const observedAt = new Date();
-      lastObservedAt = observedAt;
-      attempts += 1;
-      const artifactObserved = await inventory();
-      if (artifactObserved) {
-        excludedModel = true;
-        quietSince = null;
-        await deleteModel(profile.hostUrl, modelName, { timeoutMs: 120_000, signal: lease.signal });
-        lease.assertActive();
-        if (await inventory()) {
-          const error = new Error(`Late baseline artifact ${modelName} remained installed after fenced cleanup`);
-          error.code = 'BASELINE_PULL_STILL_MUTATING';
-          throw error;
-        }
-      }
-      if (!quietSince) quietSince = new Date();
-      const quietForMs = Date.now() - quietSince.getTime();
-      if (quietForMs >= configuredStableMs) break;
-
-      await hostProfileService.upsert({
-        hostId: profile.hostId,
-        reconciliation: {
-          ...profile.reconciliation,
-          state: 'pending_reconciliation',
-          quietSince,
-          lastObservedAt,
-          attempts,
-          reason: 'Durable recovery is holding the workload fence while monitoring for late pull completion',
-          resolvedAt: null
-        }
-      }, {
-        signal: lease.signal,
-        assertAuthorityActive: lease.assertActive
-      });
-      await delay(Math.max(1, Math.min(pollIntervalMs, configuredStableMs - quietForMs)));
-    }
-
+    const available = (inventory.models || []).some(model => isSameOllamaModel(model.name, modelName));
+    const isRelease = profile.reconciliation?.operation === 'release_model';
     await lease.finalize({
-      ...(excludedModel ? { byHost: { [profile.hostUrl]: { excludedModels: [modelName] } } } : {}),
-      beforeWorkloadRelease: async () => {
-        if (await inventory()) {
-          const error = new Error(`Late baseline artifact ${modelName} is still present after fenced cleanup`);
-          error.code = 'BASELINE_PULL_STILL_MUTATING';
-          throw error;
-        }
+      ...(isRelease ? { byHost: { [profile.hostUrl]: { excludedModels: [modelName] } } } : {}),
+      beforeWorkloadRelease: async result => {
         await hostProfileService.upsert({
           hostId: profile.hostId,
+          ...(isRelease ? { dedicated: null } : {}),
           reconciliation: {
             ...profile.reconciliation,
             state: 'resolved',
-            quietSince,
-            lastObservedAt,
-            attempts,
             reason: null,
-            resolvedAt: new Date()
+            releaseReceipt: result,
+            resolvedAt: new Date(),
+            ownerId: null,
+            ownerEpoch: null,
+            ownerClaimedAt: null
           }
         }, { signal: lease.signal, assertAuthorityActive: lease.assertActive });
       }
     });
-    finalized = true;
+    return { hostId: profile.hostId, recovered: true, pending: false, legacy: true, available };
+  } catch (error) {
+    await lease.abandon(error);
+    throw error;
+  }
+}
+
+async function claimProfileRecovery(profile, ownerId) {
+  const ownerEpoch = crypto.randomUUID();
+  const claimed = await HostProfile.findOneAndUpdate(
+    {
+      _id: profile._id,
+      'reconciliation.state': { $in: ['prepared', 'mutating', 'unknown', 'pending_reconciliation', 'verified'] },
+      $or: [
+        { 'reconciliation.ownerId': null },
+        { 'reconciliation.ownerId': { $exists: false } },
+        { 'reconciliation.ownerClaimedAt': { $lte: new Date(Date.now() - OWNER_STALE_MS) } }
+      ]
+    },
+    { $set: {
+      'reconciliation.ownerId': ownerId,
+      'reconciliation.ownerEpoch': ownerEpoch,
+      'reconciliation.ownerClaimedAt': new Date()
+    } },
+    { new: true }
+  ).lean();
+  return claimed ? { profile: claimed, ownerId, ownerEpoch } : null;
+}
+
+async function assertOwnership(ownership) {
+  const { profile, ownerId, ownerEpoch } = ownership;
+  const journal = await HostProfile.findOne({
+    _id: profile._id,
+    'reconciliation.ownerId': ownerId,
+    'reconciliation.ownerEpoch': ownerEpoch,
+    'reconciliation.state': { $ne: 'resolved' }
+  }).lean();
+  if (!journal) throw new Error('Profiler recovery journal ownership was lost');
+  const core = await assertWorkloadRecovery(recoveryIdentity(profile).workloadId);
+  if (core?.owned !== true || core.recoveryOwnerId !== ownerId) {
+    throw new Error(core?.reason || 'Core profiler recovery quarantine ownership was lost');
+  }
+  return core;
+}
+
+async function reconcileOwnedProfile(ownership) {
+  const { profile, ownerId, ownerEpoch } = ownership;
+  const reconciliation = profile.reconciliation || {};
+  if (reconciliation.state === 'verified'
+    && reconciliation.admissionId
+    && reconciliation.admissionGeneration
+    && reconciliation.admissionPrincipal) {
+    const recoveredRelease = await recoverWorkloadAdmissionRelease({
+      admissionId: reconciliation.admissionId,
+      generation: reconciliation.admissionGeneration,
+      principal: reconciliation.admissionPrincipal,
+      workloadId: reconciliation.workloadId || reconciliation.operationId,
+      recoveryId: reconciliation.recoveryId
+    });
+    if (recoveredRelease?.released === true) {
+      const resolvedAt = new Date();
+      const resolved = await HostProfile.findOneAndUpdate(
+        {
+          _id: profile._id,
+          'reconciliation.ownerId': ownerId,
+          'reconciliation.ownerEpoch': ownerEpoch,
+          'reconciliation.state': 'verified'
+        },
+        { $set: {
+          'reconciliation.state': 'resolved',
+          'reconciliation.reason': null,
+          'reconciliation.resolvedAt': resolvedAt,
+          'reconciliation.releaseReceipt': recoveredRelease,
+          'reconciliation.ownerId': null,
+          'reconciliation.ownerEpoch': null,
+          'reconciliation.ownerClaimedAt': null
+        } },
+        { new: true }
+      ).lean();
+      if (!resolved) throw new Error('Recovered profiler release receipt projection CAS was lost');
+      return { hostId: profile.hostId, recovered: true, pending: false, resolvedAt, releaseRecovered: true };
+    }
+  }
+  if (reconciliation.serverTerminalObserved !== true) {
     return {
       hostId: profile.hostId,
-      recovered: true,
-      pending: false,
-      model: modelName,
-      available: false,
-      quietSince,
-      stableWindowMs: configuredStableMs
+      recovered: false,
+      pending: true,
+      operatorRequired: true,
+      reason: 'Ollama mutation has no terminal server receipt; controlled runtime restart attestation is required'
     };
-  } catch (error) {
-    if (!finalized) {
-      try {
-        // Never expose maintenance while a timed-out Ollama pull may still
-        // mutate inventory. Keep renewing the exact admission for bounded
-        // recovery; Core TTL/reaper remains the crash-safe fallback.
-        await lease.abandon(error);
-      } catch (abandonError) {
-        error.abandonError = abandonError;
+  }
+  const identity = recoveryIdentity(profile);
+  if (!identity.workloadId || !identity.recoveryId || !identity.recoveryRequestId) {
+    return reconcileLegacyTerminalProfile(profile);
+  }
+  await adoptWorkloadRecovery({ ...identity, ownerId });
+  await assertOwnership(ownership);
+
+  const inventory = await listModels(profile.hostUrl, { timeoutMs: 30_000 });
+  await assertOwnership(ownership);
+  const modelName = reconciliation.model;
+  const available = (inventory.models || []).some(model => isSameOllamaModel(model.name, modelName));
+  const isRelease = reconciliation.operation === 'release_model';
+  const hostRestore = await restoreWorkloadRecoveryHosts(identity.workloadId, isRelease
+    ? { [profile.hostUrl]: [modelName] }
+    : {});
+  if (hostRestore?.restored !== true) throw new Error(hostRestore?.reason || 'Core host restore failed');
+  await assertOwnership(ownership);
+
+  const core = await assertWorkloadRecovery(identity.workloadId);
+  if (!new Set(['VERIFIED', 'RESTORED']).has(core.recoveryState)) {
+    await transitionWorkloadRecovery(identity.workloadId, 'VERIFIED', {
+      receipt: {
+        contract: 'agentx.profiler-runtime-compensation/v1',
+        operation: reconciliation.operation,
+        model: modelName,
+        serverTerminalObserved: true,
+        inventoryAvailable: available,
+        hostRestoreVerified: true
       }
+    });
+  }
+
+  const updated = await HostProfile.findOneAndUpdate(
+    {
+      _id: profile._id,
+      'reconciliation.ownerId': ownerId,
+      'reconciliation.ownerEpoch': ownerEpoch,
+      'reconciliation.state': { $ne: 'resolved' }
+    },
+    { $set: {
+      ...(isRelease ? { dedicated: null } : {}),
+      reconciliation: {
+        ...reconciliation,
+        state: 'verified',
+        ownerId,
+        ownerEpoch,
+        ownerClaimedAt: new Date(),
+        desiredDedicated: isRelease ? null : reconciliation.desiredDedicated,
+        reason: null,
+        releaseReceipt: hostRestore,
+        lastObservedAt: new Date(),
+        attempts: (Number(reconciliation.attempts) || 0) + 1
+      }
+    } },
+    { new: true }
+  ).lean();
+  if (!updated) throw new Error('Profiler recovery projection CAS was lost');
+  await assertOwnership({ ...ownership, profile: updated });
+
+  await transitionWorkloadRecovery(identity.workloadId, 'RESTORED', {
+    receipt: {
+      contract: 'agentx.workload-recovery/v1',
+      event: 'profiler-runtime-restored',
+      operation: reconciliation.operation,
+      hostRestore
     }
-    throw error;
+  });
+  const released = await releaseWorkloadAdmission(identity.workloadId);
+  if (released?.released !== true) throw new Error(released?.reason || 'Profiler recovery quarantine release failed');
+
+  const resolvedAt = new Date();
+  const resolved = await HostProfile.findOneAndUpdate(
+    {
+      _id: profile._id,
+      'reconciliation.ownerId': ownerId,
+      'reconciliation.ownerEpoch': ownerEpoch,
+      'reconciliation.state': 'verified'
+    },
+    { $set: {
+      'reconciliation.state': 'resolved',
+      'reconciliation.reason': null,
+      'reconciliation.resolvedAt': resolvedAt,
+      'reconciliation.releaseReceipt': released,
+      'reconciliation.ownerId': null,
+      'reconciliation.ownerEpoch': null,
+      'reconciliation.ownerClaimedAt': null
+    } },
+    { new: true }
+  ).lean();
+  if (!resolved) {
+    // Core release receipt is durable. Leave the verified journal visible so
+    // the next sweep can reconcile its projection without another mutation.
+    throw new Error('Profiler recovery terminal journal receipt CAS was lost');
+  }
+  return {
+    hostId: profile.hostId,
+    recovered: true,
+    pending: false,
+    model: modelName,
+    available,
+    resolvedAt
+  };
+}
+
+async function releaseProfileOwnership(profile, ownerId, error) {
+  try {
+    await HostProfile.updateOne(
+      { _id: profile._id, 'reconciliation.ownerId': ownerId, 'reconciliation.state': { $ne: 'resolved' } },
+      { $set: {
+        'reconciliation.ownerId': null,
+        'reconciliation.ownerEpoch': null,
+        'reconciliation.ownerClaimedAt': null,
+        'reconciliation.reason': error.message
+      } }
+    );
+  } catch (updateError) {
+    logger.error('Profiler recovery journal ownership release failed', {
+      hostId: profile.hostId,
+      error: updateError.message
+    });
   }
 }
 
@@ -215,33 +288,30 @@ async function recoverPendingHostProjections(options = {}) {
   running = true;
   try {
     const delayMs = positiveMs(options.delayMs ?? process.env.PROFILER_RECONCILIATION_DELAY_MS, DEFAULT_RECOVERY_DELAY_MS);
-    const before = new Date(Date.now() - delayMs);
     const profiles = await HostProfile.find({
-      'reconciliation.state': 'pending_reconciliation',
-      $or: [
-        {
-          'reconciliation.operation': 'release_model',
-          'reconciliation.startedAt': { $lte: before }
-        },
-        {
-          'reconciliation.operation': 'baseline_pull',
-          'reconciliation.timeoutAt': { $lte: new Date() }
-        }
-      ]
+      'reconciliation.state': { $in: ['prepared', 'mutating', 'unknown', 'pending_reconciliation', 'verified'] },
+      'reconciliation.startedAt': { $lte: new Date(Date.now() - delayMs) }
     }).limit(25).lean();
     const results = [];
+    const workerId = String(options.workerId || `profiler-recovery:${process.pid}`);
     for (const profile of profiles) {
       try {
-        results.push(profile.reconciliation?.operation === 'baseline_pull'
-          ? await reconcileBaselinePull(profile, options)
-          : await reconcileReleaseProjection(profile));
+        const ownership = await claimProfileRecovery(profile, workerId);
+        if (!ownership) {
+          results.push({ hostId: profile.hostId, recovered: false, pending: true, reason: 'owned by another worker' });
+          continue;
+        }
+        const result = await reconcileOwnedProfile(ownership);
+        if (result.operatorRequired) await releaseProfileOwnership(profile, workerId, new Error(result.reason));
+        results.push(result);
       } catch (error) {
-        logger.warn('Profiler release projection remains pending reconciliation', {
+        await releaseProfileOwnership(profile, workerId, error);
+        logger.warn('Profiler projection remains in durable Core quarantine', {
           hostId: profile.hostId,
           operationId: profile.reconciliation?.operationId || null,
           error: error.message
         });
-        results.push({ hostId: profile.hostId, recovered: false, error: error.message });
+        results.push({ hostId: profile.hostId, recovered: false, pending: true, error: error.message });
       }
     }
     return {
@@ -258,10 +328,7 @@ async function recoverPendingHostProjections(options = {}) {
 
 function startProfilerProjectionRecovery(options = {}) {
   if (interval) return interval;
-  const intervalMs = positiveMs(
-    options.intervalMs ?? process.env.PROFILER_RECONCILIATION_INTERVAL_MS,
-    DEFAULT_RECOVERY_INTERVAL_MS
-  );
+  const intervalMs = positiveMs(options.intervalMs ?? process.env.PROFILER_RECONCILIATION_INTERVAL_MS, DEFAULT_RECOVERY_INTERVAL_MS);
   const run = () => recoverPendingHostProjections(options)
     .catch(error => logger.warn('Profiler projection recovery sweep failed', { error: error.message }));
   run();
@@ -279,6 +346,14 @@ module.exports = {
   recoverPendingHostProjections,
   startProfilerProjectionRecovery,
   stopProfilerProjectionRecovery,
-  _reconcileReleaseProjection: reconcileReleaseProjection,
-  _reconcileBaselinePull: reconcileBaselinePull
+  _claimProfileRecovery: claimProfileRecovery,
+  _reconcileOwnedProfile: reconcileOwnedProfile,
+  _reconcileReleaseProjection: async profile => {
+    const ownership = await claimProfileRecovery(profile, `profiler-recovery:${process.pid}:release`);
+    return ownership ? reconcileOwnedProfile(ownership) : { recovered: false, pending: true };
+  },
+  _reconcileBaselinePull: async profile => {
+    const ownership = await claimProfileRecovery(profile, `profiler-recovery:${process.pid}:baseline`);
+    return ownership ? reconcileOwnedProfile(ownership) : { recovered: false, pending: true };
+  }
 };

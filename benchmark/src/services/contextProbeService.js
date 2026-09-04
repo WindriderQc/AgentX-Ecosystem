@@ -485,6 +485,8 @@ async function probeModelContext(modelName, options = {}) {
     ? Math.min(100, Math.max(0, Number(options.interactiveDegradationThreshold))) : 15;
   const documentThreshold = Number.isFinite(Number(options.documentDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(options.documentDegradationThreshold))) : 30;
+  const performanceKneeThreshold = Number.isFinite(Number(options.performanceKneeDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(options.performanceKneeDegradationThreshold))) : 15;
   const checkpoint = () => {
     if (options.signal?.aborted) {
       const error = options.signal.reason instanceof Error
@@ -692,6 +694,9 @@ async function probeModelContext(modelName, options = {}) {
       .reduce((max, step) => Math.max(max, Number(step.numCtx) || 0), 0) || baseline.numCtx;
     const recommendedInteractiveContext = recommendedFor(interactiveThreshold);
     const recommendedDocumentContext = recommendedFor(documentThreshold);
+    // The knee is the largest measured/passing point whose throughput loss is
+    // within the configured threshold. It says nothing about answer quality.
+    const performanceKneeContext = recommendedFor(performanceKneeThreshold);
     probeNotify({ type: 'result', testedNumCtx, degradationPct: degradation });
 
     const invalidStep = findInvalidThroughputStep(steps);
@@ -724,8 +729,12 @@ async function probeModelContext(modelName, options = {}) {
       degradationThreshold: documentThreshold,
       interactiveDegradationThreshold: interactiveThreshold,
       documentDegradationThreshold: documentThreshold,
+      performanceKneeDegradationThreshold: performanceKneeThreshold,
       recommendedInteractiveContext,
       recommendedDocumentContext,
+      performanceKneeContext,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown',
       promptFillPct,
       vramAtLimitMiB: bestStep.vramUsedMiB ?? null,
       gpuPercentAtLimit: bestStep.gpuPercent ?? null,

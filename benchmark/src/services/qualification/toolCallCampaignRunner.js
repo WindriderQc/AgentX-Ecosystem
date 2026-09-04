@@ -22,6 +22,7 @@ const {
   identitiesMatch: artifactIdentitiesMatch,
   resolveArtifactIdentity
 } = require('../profiler/artifactIdentityService');
+const { beginManagedWorkload } = require('../benchmark/workloadAdmissionLifecycle');
 
 const CONFIRMATION_TOKEN = 'RUN_NATIVE_TOOL_QUALIFICATION';
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -244,6 +245,7 @@ function defaultDependencies(overrides = {}) {
     assertFrozenArtifactDigest,
     resolveArtifactIdentity,
     runHarness,
+    beginManagedWorkload,
     beginQualification: qualificationStore.beginQualification,
     recordRepetition: qualificationStore.recordRepetition,
     finalizeQualification: qualificationStore.finalizeQualification,
@@ -261,6 +263,7 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
   const estimatedDurationMs = Math.min(2 * 60 * 60 * 1000, Math.max(10 * 60 * 1000, repetitions * 10 * 60 * 1000));
   let connected = false;
   let claimReceipt = null;
+  let workload = null;
   let heartbeat = null;
   let identity = null;
   let persistenceStarted = false;
@@ -275,6 +278,14 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
     await deps.connectDB();
     connected = true;
     pinBefore = await captureHostGuard(host, deps);
+    workload = await deps.beginManagedWorkload(campaignId, {
+      requestId: `tool-capability:${campaignId}`,
+      kind: 'tool-capability-qualification',
+      batchId: campaignId,
+      hosts: [host],
+      ttlMs: estimatedDurationMs
+    });
+    workload.assertActive();
     const claimResult = await deps.claimHostForBenchmark(host, campaignId, estimatedDurationMs, {
       source: 'tool-capability-qualification',
       owner: 'agentx-benchmark',
@@ -328,7 +339,11 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
       // The same frozen contract and exact mocked toolbox are reused for every
       // repetition. Production tools are never inputs to runHarness.
       // eslint-disable-next-line no-await-in-loop
-      const frozenTransport = (input) => options.transport({ ...input, execution: frozenExecution });
+      const frozenTransport = (input) => options.transport({
+        ...input,
+        execution: frozenExecution,
+        signal: workload.signal
+      });
       const report = await deps.runHarness(frozenTransport, {
         artifact: {
           model: identity.modelName,
@@ -370,6 +385,14 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
         }
         pinAfter = await captureHostGuard(host, deps);
         assertHostGuardRestored(pinBefore, pinAfter);
+      } catch (error) {
+        failure = failure || error;
+      }
+    }
+    if (workload) {
+      try {
+        if (failure) await workload.retainForRecovery(failure);
+        else await workload.complete();
       } catch (error) {
         failure = failure || error;
       }

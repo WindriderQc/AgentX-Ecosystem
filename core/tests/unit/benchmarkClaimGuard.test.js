@@ -37,12 +37,17 @@ describe('benchmarkClaimGuard claim proof', () => {
       callerDetail: 'benchmark-batch-1',
       claimBatchId: 'batch-1',
       claimGeneration: 'generation-1',
+      workloadAdmissionId: 'admission-1',
+      workloadGeneration: 'admission-generation-1',
       benchmarkAuthorized: true
     })).resolves.toMatchObject({ batchId: 'batch-1' });
 
     await expect(assertHostAvailableForConsumer('http://host:11434', {
       claimBatchId: 'batch-1',
-      claimGeneration: 'generation-stale'
+      claimGeneration: 'generation-stale',
+      workloadAdmissionId: 'admission-1',
+      workloadGeneration: 'admission-generation-1',
+      benchmarkAuthorized: true
     })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_ACTIVE' });
   });
 
@@ -51,6 +56,8 @@ describe('benchmarkClaimGuard claim proof', () => {
       callerDetail: 'benchmark-batch-1',
       claimBatchId: 'batch-1',
       claimGeneration: 'generation-1',
+      workloadAdmissionId: 'admission-1',
+      workloadGeneration: 'admission-generation-1',
       benchmarkAuthorized: false
     })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_ACTIVE' });
   });
@@ -64,6 +71,8 @@ describe('benchmarkClaimGuard claim proof', () => {
     await expect(assertHostAvailableForConsumer('http://host:11434', {
       claimBatchId: 'batch-1',
       claimGeneration: 'generation-1',
+      workloadAdmissionId: 'admission-1',
+      workloadGeneration: 'admission-generation-1',
       benchmarkAuthorized: true
     })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_ACTIVE' });
   });

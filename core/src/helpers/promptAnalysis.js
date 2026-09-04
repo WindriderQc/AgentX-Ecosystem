@@ -4,6 +4,7 @@
  */
 
 const logger = require('../../config/logger');
+const { beginInferenceAdmission } = require('../services/inferenceAdmissionService');
 
 /**
  * Analyze failure patterns from negative conversations
@@ -150,6 +151,7 @@ async function callOllamaForAnalysis(prompt, analysis, sampleConversations, olla
   if (!ollamaHost) {
       throw new Error('OLLAMA_HOST environment variable is required for prompt analysis');
   }
+  let inferenceAdmission = null;
   try {
     // Prepare analysis prompt for LLM
     const analysisPrompt = `You are an expert prompt engineer. Analyze the following system prompt and its failure patterns to suggest improvements.
@@ -213,6 +215,17 @@ Be specific and actionable. Focus on changes that directly address the identifie
     const fetch = (await import('node-fetch')).default;
 
     // Call Ollama with analysis model (configurable)
+    inferenceAdmission = await beginInferenceAdmission({
+      host: ollamaHost,
+      model: analysisModel,
+      kind: 'prompt-analysis',
+      principal: 'core-prompt-analysis',
+      runtimeOptions: {
+        temperature: 0.7,
+        num_predict: 2000
+      }
+    });
+    inferenceAdmission.markDispatched();
     const response = await fetch(`${ollamaHost}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -227,11 +240,12 @@ Be specific and actionable. Focus on changes that directly address the identifie
       })
     });
 
+    const result = await response.json();
+    await inferenceAdmission.complete();
+    inferenceAdmission = null;
     if (!response.ok) {
       throw new Error(`Ollama API error: ${response.status}`);
     }
-
-    const result = await response.json();
     let analysisText = result.response;
 
     // Try to extract JSON from response
@@ -265,6 +279,12 @@ Be specific and actionable. Focus on changes that directly address the identifie
     };
 
   } catch (error) {
+    if (inferenceAdmission) {
+      await inferenceAdmission.abandon(error).catch(quarantineError => {
+        error.inferenceQuarantineError = quarantineError;
+      });
+      inferenceAdmission = null;
+    }
     logger.error('Ollama analysis failed', { error: error.message });
     return {
       success: false,

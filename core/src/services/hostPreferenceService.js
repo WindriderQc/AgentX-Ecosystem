@@ -1046,6 +1046,8 @@ module.exports = {
   claimBenchmark: benchmarkClaimService.claimBenchmark,
   heartbeatBenchmarkClaim: benchmarkClaimService.heartbeatBenchmarkClaim,
   releaseBenchmarkClaim: benchmarkClaimService.releaseBenchmarkClaim,
+  recoverBenchmarkClaimRelease: benchmarkClaimService.recoverBenchmarkClaimRelease,
+  restoreClaimsForWorkloadRecovery: benchmarkClaimService.restoreClaimsForWorkloadRecovery,
   listBenchmarkClaims: benchmarkClaimService.listBenchmarkClaims,
   summarizeBenchmarkClaimReaps: benchmarkClaimService.summarizeBenchmarkClaimReaps,
   reapStaleBenchmarkClaims: benchmarkClaimService.reapStaleBenchmarkClaims

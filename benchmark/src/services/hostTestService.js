@@ -465,7 +465,9 @@ async function unloadCurrentModel(hostUrl, targetModelName, executor = hostTestE
     }
   } catch (err) {
     throwIfAborted(signal);
-    logger.debug('Pre-warmup unload best-effort failed', { hostUrl, error: err.message });
+    err.retainAdmission = true;
+    err.code = err.code || 'OLLAMA_UNLOAD_TERMINALITY_UNKNOWN';
+    throw err;
   }
 }
 
@@ -508,7 +510,9 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
       await unloadOneModel(hostUrl, loadedName, executor, signal);
     } catch (err) {
       throwIfAborted(signal);
-      logger.debug('Context-mismatch unload best-effort failed', { hostUrl, modelName, error: err.message });
+      err.retainAdmission = true;
+      err.code = err.code || 'OLLAMA_UNLOAD_TERMINALITY_UNKNOWN';
+      throw err;
     }
     alreadyLoaded = false;
   }

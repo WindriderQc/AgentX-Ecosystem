@@ -259,6 +259,7 @@ function createStreamingTelemetryObserver() {
   let discardingOversizedLine = false;
   let tokensIn = 0;
   let tokensOut = 0;
+  let terminalObserved = false;
 
   const observeLine = (rawLine) => {
     let line = rawLine.trim();
@@ -267,6 +268,7 @@ function createStreamingTelemetryObserver() {
     if (!line || line === '[DONE]') return;
 
     const data = safeJson(line);
+    if (data?.done === true || data?.event === 'done') terminalObserved = true;
     const observedTokensIn = Number(data?.prompt_eval_count ?? data?.usage?.prompt_tokens);
     const observedTokensOut = Number(data?.eval_count ?? data?.usage?.completion_tokens);
     if (Number.isFinite(observedTokensIn) && observedTokensIn >= 0) tokensIn = observedTokensIn;
@@ -312,12 +314,12 @@ function createStreamingTelemetryObserver() {
       consume(decoder.end(), true);
     },
     snapshot() {
-      return { prompt_eval_count: tokensIn, eval_count: tokensOut };
+      return { prompt_eval_count: tokensIn, eval_count: tokensOut, terminalObserved };
     }
   };
 }
 
-function attachStreamLifecycle(stream, { abortBridge, release, onComplete }) {
+function attachStreamLifecycle(stream, { abortBridge, release, inferenceAdmission, onComplete }) {
   const observer = createStreamingTelemetryObserver();
   const relay = new Transform({
     transform(chunk, encoding, callback) {
@@ -332,7 +334,13 @@ function attachStreamLifecycle(stream, { abortBridge, release, onComplete }) {
   const finish = releaseOnce(() => {
     abortBridge.cleanup();
     release();
-    onComplete(observer.snapshot());
+    const snapshot = observer.snapshot();
+    const settle = snapshot.terminalObserved === true && !abortBridge.signal.aborted
+      ? inferenceAdmission.complete()
+      : inferenceAdmission.abandon(new Error('Trusted runtime stream ended without a verified terminal record'));
+    void Promise.resolve(settle)
+      .then(() => onComplete(snapshot))
+      .catch(error => onComplete({ ...snapshot, admissionError: error.message }));
   });
   stream.once('error', (error) => relay.destroy(error));
   stream.once('close', () => {
@@ -589,6 +597,7 @@ async function executeRoutedInference(deps, request, options = {}) {
   const headers = { 'Content-Type': 'application/json' };
   let payload;
   let release = () => {};
+  let inferenceAdmission = null;
   let inferenceContract = null;
   let runtimeOptions = validatedLocalOptions(request.options || {});
   const localOptionAliases = {
@@ -656,10 +665,6 @@ async function executeRoutedInference(deps, request, options = {}) {
   }
   upstreamUrl = `${hostUrl}/api/${request.mode === 'embed' ? 'embed' : request.mode}`;
   payload = buildLocalPayload(request, model, runtimeOptions, keepAlive);
-  release = request.exclusiveHost === true
-    ? await deps.hostGate.acquireExclusive(hostUrl, model, { signal: options.signal })
-    : await deps.hostGate.acquire(hostUrl, model, { signal: options.signal });
-
   const metadata = frozenCopy({
     requestedModel: requestedModel || null,
     taskType: taskType || null,
@@ -675,9 +680,23 @@ async function executeRoutedInference(deps, request, options = {}) {
   });
   const timeoutMs = boundedTimeout(request.timeoutMs);
   const abortBridge = createAbortBridge(options.signal, timeoutMs);
-  const releaseGate = releaseOnce(release);
+  let releaseGate = releaseOnce(release);
 
   try {
+    inferenceAdmission = await deps.beginInferenceAdmission({
+      host: hostUrl,
+      model,
+      kind: request.stream === true ? 'trusted-runtime-stream' : 'trusted-runtime',
+      mode: request.exclusiveHost === true ? 'exclusive' : 'shared',
+      principal: 'core-trusted-runtime',
+      runtimeOptions: payload.options,
+      ...(Object.prototype.hasOwnProperty.call(payload, 'keep_alive') && { keepAlive: payload.keep_alive }),
+      signal: abortBridge.signal
+    });
+    release = request.exclusiveHost === true
+      ? await deps.hostGate.acquireExclusive(hostUrl, model, { signal: inferenceAdmission.signal })
+      : await deps.hostGate.acquire(hostUrl, model, { signal: inferenceAdmission.signal });
+    releaseGate = releaseOnce(release);
     if (request.exclusiveHost === true) {
       const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model);
       if (prepared?.status !== 'ready') {
@@ -689,17 +708,19 @@ async function executeRoutedInference(deps, request, options = {}) {
         });
       }
     }
+    inferenceAdmission.markDispatched();
     const response = await deps.fetch(upstreamUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
-      signal: abortBridge.signal
+      signal: inferenceAdmission.signal
     });
 
     if (request.stream === true && response.ok && response.body) {
       const stream = attachStreamLifecycle(response.body, {
         abortBridge,
         release: releaseGate,
+        inferenceAdmission,
         onComplete: (data) => {
           void deps.recordInference(telemetryEntry(request, metadata, startedAt,
             abortBridge.signal.aborted ? 'error' : 'success', data,
@@ -717,6 +738,8 @@ async function executeRoutedInference(deps, request, options = {}) {
 
     const raw = await response.text();
     const data = safeJson(raw);
+    await inferenceAdmission.complete();
+    inferenceAdmission = null;
     abortBridge.cleanup();
     releaseGate();
     void deps.recordInference(telemetryEntry(
@@ -732,6 +755,12 @@ async function executeRoutedInference(deps, request, options = {}) {
       metadata
     });
   } catch (error) {
+    if (inferenceAdmission) {
+      await inferenceAdmission.abandon(error).catch(quarantineError => {
+        error.inferenceQuarantineError = quarantineError;
+      });
+      inferenceAdmission = null;
+    }
     abortBridge.cleanup();
     releaseGate();
     const cancelled = options.signal?.aborted === true;
@@ -761,6 +790,7 @@ function defaultDependencies() {
   const { resolveInferenceContract } = require('../services/inferenceContractService');
   const { applyContractOutputLimit } = require('../services/inferenceRuntimePolicy');
   const { assertHostAvailableForConsumer } = require('../services/benchmarkClaimGuard');
+  const { beginInferenceAdmission } = require('../services/inferenceAdmissionService');
   const { modelsMatch } = require('../helpers/modelNameNormalization');
   const hostGate = require('../services/hostGate');
   const { validateHostUrl } = require('../helpers/ollamaHostConfig');
@@ -776,6 +806,7 @@ function defaultDependencies() {
     resolveInferenceContract,
     applyContractOutputLimit,
     assertHostAvailableForConsumer,
+    beginInferenceAdmission,
     modelsMatch,
     hostGate,
     validateHostUrl,

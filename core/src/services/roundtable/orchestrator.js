@@ -17,6 +17,7 @@ const { buildOllamaPayload, buildOllamaStats, extractResponse } = require('../..
 const { getTargetForModel } = require('../modelRouter');
 const hostPreferenceService = require('../hostPreferenceService');
 const { getFetchOptions } = require('../../helpers/httpAgent');
+const { beginInferenceAdmission } = require('../inferenceAdmissionService');
 const {
   DEFAULT_PANEL,
   DEFAULT_SYNTHESIZER,
@@ -148,22 +149,37 @@ async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const payload = await buildPinnedAgentPayload(agent, messages, target);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let inferenceAdmission = null;
 
   try {
+    inferenceAdmission = await beginInferenceAdmission({
+      host: target,
+      model: agent.model,
+      kind: 'council',
+      principal: 'core-council',
+      runtimeOptions: payload.options,
+      ...(Object.prototype.hasOwnProperty.call(payload, 'keep_alive') && { keepAlive: payload.keep_alive }),
+      signal: controller.signal
+    });
     const fetchOpts = getFetchOptions(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: controller.signal
+      signal: inferenceAdmission.signal
     });
+    inferenceAdmission.markDispatched();
     const res = await fetch(url, fetchOpts);
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      await inferenceAdmission.complete();
+      inferenceAdmission = null;
       throw new Error(`Ollama ${res.status}: ${body.substring(0, 200)}`);
     }
 
     const data = await res.json();
+    await inferenceAdmission.complete();
+    inferenceAdmission = null;
     clearTimeout(timer);
     const parsed = extractResponse(data, agent.model);
     const completedAt = new Date();
@@ -179,6 +195,12 @@ async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
       error: null, target, hostName, startedAt, completedAt
     };
   } catch (err) {
+    if (inferenceAdmission) {
+      await inferenceAdmission.abandon(err).catch(quarantineError => {
+        err.inferenceQuarantineError = quarantineError;
+      });
+      inferenceAdmission = null;
+    }
     clearTimeout(timer);
     const completedAt = new Date();
     const isTimeout = err.name === 'AbortError';
@@ -213,18 +235,31 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
   const payload = await buildPinnedAgentPayload(agent, messages, target, true);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let inferenceAdmission = null;
 
   try {
+    inferenceAdmission = await beginInferenceAdmission({
+      host: target,
+      model: agent.model,
+      kind: 'council-stream',
+      principal: 'core-council',
+      runtimeOptions: payload.options,
+      ...(Object.prototype.hasOwnProperty.call(payload, 'keep_alive') && { keepAlive: payload.keep_alive }),
+      signal: controller.signal
+    });
     const fetchOpts = getFetchOptions(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: controller.signal
+      signal: inferenceAdmission.signal
     });
+    inferenceAdmission.markDispatched();
     const res = await fetch(url, fetchOpts);
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      await inferenceAdmission.complete();
+      inferenceAdmission = null;
       throw new Error(`Ollama ${res.status}: ${body.substring(0, 200)}`);
     }
 
@@ -261,6 +296,8 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
     if (finalData?.done !== true) {
       throw new Error('Ollama stream ended before its terminal record');
     }
+    await inferenceAdmission.complete();
+    inferenceAdmission = null;
     clearTimeout(timer);
 
     const completedAt = new Date();
@@ -279,6 +316,12 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
       error: null, target, hostName, startedAt, completedAt
     };
   } catch (err) {
+    if (inferenceAdmission) {
+      await inferenceAdmission.abandon(err).catch(quarantineError => {
+        err.inferenceQuarantineError = quarantineError;
+      });
+      inferenceAdmission = null;
+    }
     clearTimeout(timer);
     const completedAt = new Date();
     const isTimeout = err.name === 'AbortError';

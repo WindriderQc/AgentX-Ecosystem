@@ -67,6 +67,13 @@ jest.mock('../../src/clients/coreApiClient', () => {
         })),
         heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
         releaseWorkloadAdmission: jest.fn(async () => ({ released: true })),
+        getWorkloadRecoveryIdentity: jest.fn(workloadId => ({
+            recoveryId: `recovery-${workloadId}`,
+            recoveryRequestId: `recovery-request-${workloadId}`,
+            admissionId: `admission-${workloadId}`,
+            generation: `generation-${workloadId}`,
+            principal: 'benchmark-service'
+        })),
         claimHostForBenchmark: jest.fn(async () => ({ claimed: true })),
         heartbeatBenchmarkClaim: jest.fn(async () => ({ heartbeat: true })),
         releaseBenchmarkClaim: jest.fn(async () => ({ released: true })),
@@ -868,7 +875,8 @@ describe('Benchmark System - Integration Tests', () => {
             expect(response.status).toBe(200);
             expect(validateJudgeModel).toHaveBeenCalledWith(
                 'http://judge-host:11434',
-                'qwen2.5:14b-instruct'
+                'qwen2.5:14b-instruct',
+                { metadataOnly: true }
             );
             expect(runPreflight).toHaveBeenCalledWith(expect.objectContaining({
                 judgeConfig: expect.objectContaining({

@@ -81,8 +81,11 @@ function parseArgs(argv) {
 function buildLiveTransport({ model, host, fetchImpl, timeoutMs = DEFAULT_LIVE_TIMEOUT_MS }) {
   // Lazy import so the dry-run path never touches node-fetch.
   const fetch = fetchImpl || require('node-fetch');
-  return async function liveTransport({ messages, tools, execution = {} }) {
-    const signal = AbortSignal.timeout(timeoutMs);
+  return async function liveTransport({ messages, tools, execution = {}, signal: admissionSignal }) {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = admissionSignal && typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([admissionSignal, timeoutSignal])
+      : (admissionSignal || timeoutSignal);
     const ollamaOptions = {};
     if (Number.isInteger(execution.numCtx) && execution.numCtx > 0) ollamaOptions.num_ctx = execution.numCtx;
     if (Number.isInteger(execution.numPredict) && execution.numPredict > 0) ollamaOptions.num_predict = execution.numPredict;

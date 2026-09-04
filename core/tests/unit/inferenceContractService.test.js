@@ -89,8 +89,18 @@ describe('inferenceContractService', () => {
           readiness: {
             'host-alpha': {
               stage: 'profiled',
+              profileDepth: 'standard',
               stale: false,
               benchmarkQualified: true,
+              authorityVerified: true,
+              authority: {
+                contract: 'agentx.profiler-readiness/v2',
+                receiptVersion: 2,
+                receiptVerified: true,
+                liveIdentityVerified: true,
+                evidenceQualified: true,
+                verified: true
+              },
               artifact: {
                 model: 'ax/plain-custom-model',
                 hostId: 'host-alpha',

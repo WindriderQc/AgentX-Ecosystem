@@ -50,6 +50,13 @@ const CORE_OPERATIONS = Object.freeze({
   WORKLOAD_HEARTBEAT: 'benchmark.core-api.workload-heartbeat',
   WORKLOAD_RELEASE: 'benchmark.core-api.workload-release',
   WORKLOAD_RELEASE_RECOVERY: 'benchmark.core-api.workload-release-recovery',
+  WORKLOAD_RECOVERY_ARM: 'benchmark.core-api.workload-recovery-arm',
+  WORKLOAD_RECOVERY_ADOPT: 'benchmark.core-api.workload-recovery-adopt',
+  WORKLOAD_RECOVERY_ASSERT: 'benchmark.core-api.workload-recovery-assert',
+  WORKLOAD_RECOVERY_TRANSITION: 'benchmark.core-api.workload-recovery-transition',
+  WORKLOAD_RECOVERY_HOST_RESTORE: 'benchmark.core-api.workload-recovery-host-restore',
+  WORKLOAD_RECOVERY_RELEASE: 'benchmark.core-api.workload-recovery-release',
+  INFERENCE_GENERATE: 'benchmark.core-api.inference-generate',
 });
 
 function operation(method, pathPattern, {
@@ -132,6 +139,41 @@ const CORE_OPERATION_SPECS = Object.freeze({
     'POST',
     '^/api/nerve-center/workload-admissions/[^/]+/release-receipt$',
     { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_ARM]: operation(
+    'POST',
+    '^/api/nerve-center/workload-admissions/[^/]+/recovery$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/adopt$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_ASSERT]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/assert$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_TRANSITION]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/transition$',
+    { maxRequestBytes: 64 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_HOST_RESTORE]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/restore-hosts$',
+    { deadlineMs: PIN_RESTORE_TIMEOUT_MS, maxRequestBytes: 64 * 1024, maxResponseBytes: 512 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_RELEASE]: operation(
+    'DELETE',
+    '^/api/nerve-center/workload-recoveries/[^/]+$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.INFERENCE_GENERATE]: operation(
+    'POST',
+    '^/api/inference/generate$',
+    { deadlineMs: PIN_RESTORE_TIMEOUT_MS, maxRequestBytes: 2 * 1024 * 1024, maxResponseBytes: 8 * 1024 * 1024 }
   ),
 });
 
@@ -838,7 +880,74 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
     hosts: expectedHosts,
     expiresAt: result.expiresAt || null
   };
+  const recoveryRequestId = `recovery:${requestId}`;
+  const arm = async () => coreRequest(
+    `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}/recovery`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ARM,
+      body: JSON.stringify({ generation: receipt.generation, recoveryRequestId })
+    }
+  );
+  let armData;
+  try {
+    armData = await arm();
+  } catch (error) {
+    try {
+      armData = await arm();
+    } catch {
+      // The caller never receives an admission before recovery quarantine is
+      // durably armed, so no Product mutation can start in this gap.
+      try {
+        await coreRequest(`/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`, {
+          method: 'DELETE',
+          operationId: CORE_OPERATIONS.WORKLOAD_RELEASE,
+          body: JSON.stringify({ generation: receipt.generation })
+        });
+      } catch (cleanupError) {
+        logger.error('Unarmed workload admission cleanup was not acknowledged', {
+          workloadId: key,
+          admissionId: receipt.admissionId,
+          error: cleanupError.message
+        });
+        error.cleanupError = cleanupError;
+      }
+      throw error;
+    }
+  }
+  const armed = armData?.data;
+  const exactArm = armed?.armed === true
+    && armed.admissionId === receipt.admissionId
+    && armed.generation === receipt.generation
+    && armed.principal === receipt.principal
+    && armed.requestId === receipt.requestId
+    && armed.workloadId === receipt.workloadId
+    && armed.kind === receipt.kind
+    && (armed.batchId || null) === (receipt.batchId || null)
+    && JSON.stringify([...(armed.hosts || [])].sort()) === JSON.stringify(receipt.hosts || [])
+    && armed.recoveryRequired === true
+    && typeof armed.recoveryId === 'string'
+    && typeof armed.recoveryGeneration === 'string'
+    && armed.recoveryRequestId === recoveryRequestId;
+  if (!exactArm) {
+    throw Object.assign(new Error(armed?.reason || 'Core recovery quarantine receipt is invalid'), {
+      code: 'WORKLOAD_RECOVERY_ARM_REJECTED',
+      retainAdmission: true
+    });
+  }
+  Object.assign(receipt, {
+    recoveryRequired: true,
+    recoveryId: armed.recoveryId,
+    recoveryGeneration: armed.recoveryGeneration,
+    recoveryRequestId,
+    recoveryOwnerId: armed.recoveryOwnerId || null,
+    recoveryState: armed.recoveryState,
+    recoveryVersion: armed.recoveryVersion
+  });
   workloadAdmissionById.set(key, receipt);
+  await transitionWorkloadRecovery(key, 'MUTATING', {
+    receipt: { contract: 'agentx.workload-recovery/v1', event: 'mutation-started', workloadId: key }
+  });
   return { acquired: true, ...receipt };
 }
 
@@ -861,7 +970,12 @@ async function heartbeatWorkloadAdmission(workloadId, ttlMs = null) {
       && result.workloadId === receipt.workloadId
       && result.kind === receipt.kind
       && (result.batchId || null) === (receipt.batchId || null)
-      && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || []);
+      && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || [])
+      && result.recoveryRequired === receipt.recoveryRequired
+      && result.recoveryId === receipt.recoveryId
+      && result.recoveryGeneration === receipt.recoveryGeneration
+      && result.recoveryState === receipt.recoveryState
+      && result.recoveryVersion === receipt.recoveryVersion;
     if (!exact) {
       return { heartbeat: false, reason: result?.reason || 'Core workload heartbeat receipt is invalid' };
     }
@@ -877,6 +991,18 @@ async function releaseWorkloadAdmission(workloadId) {
   const key = String(workloadId || '');
   const receipt = workloadAdmissionById.get(key);
   if (!receipt) return { released: false, reason: 'local workload admission proof missing' };
+  if (receipt.recoveryRequired && receipt.recoveryState !== 'RESTORED') {
+    if (!new Set(['VERIFIED', 'RESTORED']).has(receipt.recoveryState)) {
+      await transitionWorkloadRecovery(key, 'VERIFIED', {
+        receipt: { contract: 'agentx.workload-recovery/v1', event: 'workload-terminal', workloadId: key }
+      });
+    }
+    if (receipt.recoveryState !== 'RESTORED') {
+      await transitionWorkloadRecovery(key, 'RESTORED', {
+        receipt: { contract: 'agentx.workload-recovery/v1', event: 'authority-restored', workloadId: key }
+      });
+    }
+  }
   const exactIdentity = result => result?.admissionId === receipt.admissionId
     && result.generation === receipt.generation
     && result.principal === receipt.principal
@@ -884,16 +1010,29 @@ async function releaseWorkloadAdmission(workloadId) {
     && result.workloadId === receipt.workloadId
     && result.kind === receipt.kind
     && (result.batchId || null) === (receipt.batchId || null)
-    && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || []);
+    && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || [])
+    && (!receipt.recoveryRequired || (
+      result.recoveryId === receipt.recoveryId
+      && result.recoveryGeneration === receipt.recoveryGeneration
+      && result.recoveryState === 'RESTORED'
+      && result.recoveryReceipt?.contract === 'agentx.workload-recovery/v1'
+    ));
   const exactRelease = result => result?.released === true
     && exactIdentity(result)
     && Number.isFinite(Date.parse(result.releasedAt));
   const requestRelease = () => coreRequest(
-    `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`,
+    receipt.recoveryRequired
+      ? `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}`
+      : `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`,
     {
       method: 'DELETE',
-      operationId: CORE_OPERATIONS.WORKLOAD_RELEASE,
-      body: JSON.stringify({ generation: receipt.generation })
+      operationId: receipt.recoveryRequired
+        ? CORE_OPERATIONS.WORKLOAD_RECOVERY_RELEASE
+        : CORE_OPERATIONS.WORKLOAD_RELEASE,
+      body: JSON.stringify(receipt.recoveryRequired ? {
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId || null
+      } : { generation: receipt.generation })
     }
   );
   let data;
@@ -931,10 +1070,190 @@ async function releaseWorkloadAdmission(workloadId) {
   return result;
 }
 
+function getWorkloadRecoveryIdentity(workloadId) {
+  const receipt = workloadAdmissionById.get(String(workloadId || ''));
+  if (!receipt?.recoveryRequired) return null;
+  return { ...receipt };
+}
+
+async function transitionWorkloadRecovery(workloadId, state, options = {}) {
+  const key = String(workloadId || '');
+  const receipt = workloadAdmissionById.get(key);
+  if (!receipt?.recoveryRequired) return { transitioned: false, reason: 'local recovery proof missing' };
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}/transition`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_TRANSITION,
+      body: JSON.stringify({
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId || null,
+        expectedVersion: receipt.recoveryVersion,
+        state,
+        receipt: options.receipt || null
+      })
+    }
+  );
+  const result = data?.data;
+  const exact = result?.transitioned === true
+    && result.recoveryId === receipt.recoveryId
+    && result.recoveryGeneration === receipt.recoveryGeneration
+    && (result.recoveryOwnerId || null) === (receipt.recoveryOwnerId || null)
+    && result.recoveryState === state
+    && result.recoveryVersion === receipt.recoveryVersion + 1;
+  if (!exact) {
+    const error = new Error(result?.reason || 'Core recovery transition receipt is invalid');
+    error.code = 'WORKLOAD_RECOVERY_TRANSITION_REJECTED';
+    error.retainAdmission = true;
+    throw error;
+  }
+  receipt.recoveryState = result.recoveryState;
+  receipt.recoveryVersion = result.recoveryVersion;
+  return result;
+}
+
+async function adoptWorkloadRecovery({ workloadId, recoveryId, recoveryRequestId, ownerId }) {
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(recoveryId)}/adopt`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT,
+      body: JSON.stringify({ recoveryRequestId, ownerId })
+    }
+  );
+  const result = data?.data;
+  if (result?.adopted !== true
+    || result.workloadId !== String(workloadId)
+    || result.recoveryId !== recoveryId
+    || result.recoveryRequestId !== recoveryRequestId
+    || result.recoveryOwnerId !== ownerId
+    || !result.recoveryGeneration) {
+    const error = new Error(result?.reason || 'Core recovery adoption receipt is invalid');
+    error.code = 'WORKLOAD_RECOVERY_ADOPTION_REJECTED';
+    error.retryable = result?.retryable === true;
+    throw error;
+  }
+  workloadAdmissionById.set(String(workloadId), { ...result });
+  return result;
+}
+
+async function assertWorkloadRecovery(workloadId) {
+  const receipt = workloadAdmissionById.get(String(workloadId || ''));
+  if (!receipt?.recoveryRequired) return { owned: false, reason: 'local recovery proof missing' };
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}/assert`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ASSERT,
+      body: JSON.stringify({
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId || null
+      })
+    }
+  );
+  const result = data?.data;
+  return result?.owned === true
+    && result.recoveryId === receipt.recoveryId
+    && result.recoveryGeneration === receipt.recoveryGeneration
+    ? result
+    : { owned: false, reason: result?.reason || 'Core recovery ownership is invalid' };
+}
+
+async function recoverWorkloadAdmissionRelease(identity = {}) {
+  const data = await coreRequest(
+    `/api/nerve-center/workload-admissions/${encodeURIComponent(identity.admissionId || '')}/release-receipt`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY,
+      body: JSON.stringify({ generation: identity.generation })
+    }
+  );
+  const result = data?.data;
+  const exact = result?.recovered === true
+    && result.released === true
+    && result.admissionId === identity.admissionId
+    && result.generation === identity.generation
+    && result.principal === identity.principal
+    && result.workloadId === identity.workloadId
+    && result.recoveryId === identity.recoveryId
+    && result.recoveryState === 'RESTORED'
+    && result.recoveryReceipt?.contract === 'agentx.workload-recovery/v1';
+  return exact ? result : {
+    recovered: result?.recovered === true,
+    released: false,
+    retryable: result?.retryable === true,
+    reason: result?.reason || 'Core workload recovery receipt is invalid'
+  };
+}
+
+async function restoreWorkloadRecoveryHosts(workloadId, excludedModelsByHost = {}) {
+  const receipt = workloadAdmissionById.get(String(workloadId || ''));
+  if (!receipt?.recoveryRequired || !receipt.recoveryOwnerId) {
+    return { restored: false, reason: 'adopted local recovery proof missing' };
+  }
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}/restore-hosts`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_HOST_RESTORE,
+      body: JSON.stringify({
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId,
+        excludedModelsByHost
+      })
+    }
+  );
+  const result = data?.data;
+  return result?.restored === true
+    && result.recoveryId === receipt.recoveryId
+    && result.recoveryGeneration === receipt.recoveryGeneration
+    && result.recoveryOwnerId === receipt.recoveryOwnerId
+    ? result
+    : { restored: false, reason: result?.reason || 'Core recovery host restore receipt is invalid' };
+}
+
 function getBenchmarkClaimIdentity(hostUrl, batchId) {
   const claimGeneration = claimProofByOwner.get(claimOwnerKey(hostUrl, batchId))?.claimGeneration;
-  if (!claimGeneration) return null;
-  return { claimBatchId: batchId, claimGeneration };
+  const admission = workloadAdmissionById.get(String(batchId || ''));
+  if (!claimGeneration || !admission?.admissionId || !admission?.generation) return null;
+  return {
+    claimBatchId: batchId,
+    claimGeneration,
+    workloadAdmissionId: admission.admissionId,
+    workloadGeneration: admission.generation
+  };
+}
+
+function getWorkloadAdmissionIdentity(workloadId) {
+  const admission = workloadAdmissionById.get(String(workloadId || ''));
+  if (!admission?.admissionId || !admission?.generation) return null;
+  return {
+    workloadAdmissionId: admission.admissionId,
+    workloadGeneration: admission.generation
+  };
+}
+
+async function generateWithWorkloadAdmission(workloadId, request, { signal } = {}) {
+  const proof = getWorkloadAdmissionIdentity(workloadId);
+  if (!proof) {
+    const error = new Error(`Exact workload admission proof is unavailable for ${workloadId || 'unknown'}`);
+    error.code = 'WORKLOAD_ADMISSION_REQUIRED';
+    throw error;
+  }
+  const requestedHost = typeof request?.host === 'string' ? request.host.trim() : '';
+  const claimProof = requestedHost ? getBenchmarkClaimIdentity(requestedHost, workloadId) : null;
+  if (requestedHost && !claimProof) {
+    const error = new Error(`Exact benchmark host claim proof is unavailable for ${requestedHost}`);
+    error.code = 'BENCHMARK_HOST_CLAIM_REQUIRED';
+    throw error;
+  }
+  const data = await coreRequest('/api/inference/generate', {
+    method: 'POST',
+    operationId: CORE_OPERATIONS.INFERENCE_GENERATE,
+    signal,
+    body: JSON.stringify({ ...request, ...proof, ...(claimProof || {}) })
+  });
+  return data;
 }
 
 /**
@@ -965,10 +1284,18 @@ module.exports = {
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
   getBenchmarkClaimIdentity,
+  getWorkloadAdmissionIdentity,
+  generateWithWorkloadAdmission,
   getBenchmarkClaims,
   acquireWorkloadAdmission,
   heartbeatWorkloadAdmission,
   releaseWorkloadAdmission,
+  getWorkloadRecoveryIdentity,
+  adoptWorkloadRecovery,
+  assertWorkloadRecovery,
+  transitionWorkloadRecovery,
+  recoverWorkloadAdmissionRelease,
+  restoreWorkloadRecoveryHosts,
   CORE_OPERATIONS,
   _internal: {
     classifyCoreOperation,

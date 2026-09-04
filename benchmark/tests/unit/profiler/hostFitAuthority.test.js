@@ -20,7 +20,7 @@ jest.mock('../../../config/logger', () => ({ debug: jest.fn(), info: jest.fn(), 
 
 const { buildHostFitReport } = require('../../../src/services/profiler/hostFitReportService');
 const artifactIdentityService = require('../../../src/services/profiler/artifactIdentityService');
-const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+const { createProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 
 const ARTIFACT = {
   model: 'qwen:7b', hostId: 'host-a', hostUrl: 'http://host-a:11434',
@@ -34,6 +34,8 @@ function evidence() {
       profileDepth: 'standard', requiredRetainedSamples: 5,
       tokensPerSec: 50, recommendedInteractiveContext: 32768,
       recommendedDocumentContext: 65536, maxVerifiedContext: 262144,
+      performanceKneeContext: 32768, performanceKneeDegradationPct: 15,
+      qualityVerifiedContext: null, qualityContextStatus: 'unknown',
       measurementQuality: { reliability: 'high', passingSampleCount: 5 },
       spill: { verified: true, spillDetected: false, sizeTotal: 8 * 1024 * 1024 * 1024 }
     }
@@ -49,21 +51,20 @@ function selectLean(value) {
 }
 
 function readiness(overrides = {}) {
+  const exactEvidence = evidence();
   return {
     artifact: ARTIFACT,
     evidenceId: 'evidence-1',
     profileDepth: 'standard',
     benchmarkQualified: true,
     stale: false,
-    authorityReceipt: {
-      version: 1,
-      source: 'profiler_pipeline',
-      evidenceId: 'evidence-1',
-      digest: receiptDigest({
-        modelName: 'qwen:7b', hostId: 'host-a', artifact: ARTIFACT,
-        profileDepth: 'standard', required: 5, passing: 5
-      })
-    },
+    authorityReceipt: createProfilerAuthorityReceipt({
+      modelName: 'qwen:7b',
+      hostId: 'host-a',
+      artifact: ARTIFACT,
+      profile: exactEvidence.profile,
+      evidenceId: exactEvidence._id
+    }),
     ...overrides
   };
 }
@@ -115,7 +116,11 @@ describe('Host Fit authority gate', () => {
       modelName: 'qwen:7b',
       maxVerifiedContext: 262144,
       recommendedInteractiveContext: 32768,
-      recommendedDocumentContext: 65536
+      recommendedDocumentContext: 65536,
+      performanceKneeContext: 32768,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown',
+      qualitySignal: expect.objectContaining({ authoritative: false })
     })]);
   });
 

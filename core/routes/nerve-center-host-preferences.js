@@ -477,6 +477,27 @@ router.post('/maintenance-leases/:leaseId/heartbeat', requireOperatorAccess, asy
   }
 });
 
+router.post('/maintenance-leases/:leaseId/mark-unknown', requireOperatorAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.markMaintenanceUnknown({
+      id: req.params.leaseId,
+      generation: req.body?.generation,
+      principal: operatorRequestIdentity(req),
+      reason: req.body?.reason
+    });
+    return res.status(result.quarantined ? 200 : 409).json({
+      status: result.quarantined ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      code: 'MAINTENANCE_QUARANTINE_FAILED',
+      message: error.message
+    });
+  }
+});
+
 router.delete('/maintenance-leases/:leaseId', requireOperatorAccess, async (req, res) => {
   try {
     const result = await runtimeCoordinationService.release('maintenance', {
@@ -510,6 +531,32 @@ router.post('/maintenance-leases/:leaseId/release-receipt', requireOperatorAcces
   }
 });
 
+router.post('/maintenance-leases/:leaseId/recover', requireOperatorAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.recoverMaintenanceAfterOperatorReconciliation({
+      id: req.params.leaseId,
+      generation: req.body?.generation,
+      principal: operatorRequestIdentity(req),
+      receipt: {
+        contract: req.body?.contract,
+        maintenanceReconciled: req.body?.maintenanceReconciled,
+        confirmation: req.body?.confirmation,
+        reconciledAt: req.body?.reconciledAt
+      }
+    });
+    return res.status(result.recovered ? 200 : 409).json({
+      status: result.recovered ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      code: 'MAINTENANCE_RECOVERY_FAILED',
+      message: error.message
+    });
+  }
+});
+
 router.post('/workload-admissions', requireBenchmarkCoordinationAccess, async (req, res) => {
   try {
     const result = await runtimeCoordinationService.acquireWorkload({
@@ -538,6 +585,100 @@ router.post('/workload-admissions/:admissionId/heartbeat', requireBenchmarkCoord
     return res.status(result.heartbeat ? 200 : 409).json({ status: result.heartbeat ? 'success' : 'error', data: result });
   } catch (error) {
     return res.status(500).json({ status: 'error', code: 'WORKLOAD_HEARTBEAT_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-admissions/:admissionId/recovery', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.armWorkloadRecovery({
+      id: req.params.admissionId,
+      generation: req.body?.generation,
+      principal: coordinationPrincipal(req),
+      recoveryRequestId: req.body?.recoveryRequestId
+    });
+    return res.status(result.armed ? 200 : 409).json({ status: result.armed ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_ARM_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/adopt', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.adoptWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      principal: coordinationPrincipal(req),
+      recoveryRequestId: req.body?.recoveryRequestId,
+      ownerId: req.body?.ownerId
+    });
+    return res.status(result.adopted ? 200 : 409).json({ status: result.adopted ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_ADOPT_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/assert', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.assertWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId
+    });
+    return res.status(result.owned ? 200 : 409).json({ status: result.owned ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_ASSERT_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/transition', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.transitionWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId,
+      expectedVersion: req.body?.expectedVersion,
+      state: req.body?.state,
+      receipt: req.body?.receipt
+    });
+    return res.status(result.transitioned ? 200 : 409).json({
+      status: result.transitioned ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_TRANSITION_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/restore-hosts', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await hostPrefService.restoreClaimsForWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId,
+      excludedModelsByHost: req.body?.excludedModelsByHost || {}
+    });
+    return res.status(result.restored ? 200 : 409).json({
+      status: result.restored ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_HOST_RESTORE_FAILED', message: error.message });
+  }
+});
+
+router.delete('/workload-recoveries/:recoveryId', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.resolveWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId
+    });
+    return res.status(result.released ? 200 : 409).json({ status: result.released ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_RELEASE_FAILED', message: error.message });
   }
 });
 

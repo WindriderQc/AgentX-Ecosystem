@@ -447,6 +447,7 @@ describe('batchResultPersistence truncation quarantine', () => {
         expect(mockEnqueueResultInvalidation).toHaveBeenCalledWith({
             resultId: 'result-id',
             batchId: 'batch-id',
+            workloadId: 'batch-id',
             phase: 'successful result save',
             reason: 'tombstone unavailable'
         });

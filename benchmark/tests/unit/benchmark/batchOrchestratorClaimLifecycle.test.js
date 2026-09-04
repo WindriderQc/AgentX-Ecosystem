@@ -216,7 +216,7 @@ const {
 } = require('../../../src/services/benchmark/batchOrchestrator');
 const { estimateBenchmarkClaimDurationMs } = require('../../../src/services/benchmark/benchmarkClaimLifecycle');
 const ollamaHostConfig = require('../../../src/helpers/ollamaHostConfig');
-const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+const { createProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 
 function deferred() {
     let resolve;
@@ -333,7 +333,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
             recommendedInteractiveContext: 4096,
             vramUsedMiB: 8192,
-            profiledAt: new Date()
+            profiledAt: new Date('2026-09-04T12:00:00.000Z')
         });
         mockFindOnePerformanceProfile.mockImplementation((query) => ({
             select: jest.fn().mockReturnValue({
@@ -360,19 +360,13 @@ describe('runBatchOrchestrator claim lifecycle', () => {
                             stale: false,
                             profileDepth: 'standard',
                             artifact: artifactFor(query.name, hostId),
-                            authorityReceipt: {
-                                source: 'profiler_pipeline',
-                                version: 1,
-                                digest: receiptDigest({
-                                    modelName: query.name,
-                                    hostId,
-                                    artifact: artifactFor(query.name, hostId),
-                                    profileDepth: 'standard',
-                                    required: 5,
-                                    passing: 5
-                                }),
+                            authorityReceipt: createProfilerAuthorityReceipt({
+                                modelName: query.name,
+                                hostId,
+                                artifact: artifactFor(query.name, hostId),
+                                profile: profileFor(),
                                 evidenceId
-                            }
+                            })
                         }];
                     }))
                 })
@@ -725,31 +719,6 @@ describe('runBatchOrchestrator claim lifecycle', () => {
 
     it('reuses exact-artifact profile baseline instead of running host test again', async () => {
         mockDrain.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
-        mockFindOnePerformanceProfile.mockReturnValue({
-            select: jest.fn().mockReturnValue({
-                lean: jest.fn().mockResolvedValue({
-                    _id: 'evidence-model-a-primary',
-                    modelName: 'model-a',
-                    hostId: 'primary',
-                    artifact: {
-                        model: 'model-a', hostId: 'primary', hostUrl: 'http://exec:11434',
-                        digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
-                    },
-                    profile: {
-                        tokensPerSec: 123.4,
-                        promptEvalTokensPerSec: 456.7,
-                        ttftMs: 321,
-                        ttftMeasurement: 'streamed_wall_clock',
-                        profileDepth: 'standard',
-                        requiredRetainedSamples: 5,
-                        measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
-                        vramUsedMiB: 8192,
-                        profiledAt: new Date(),
-                        recommendedInteractiveContext: 4096
-                    }
-                })
-            })
-        });
 
         await runBatchOrchestrator({
             batchId: 'batch-profiler-baseline',
@@ -828,33 +797,10 @@ describe('runBatchOrchestrator claim lifecycle', () => {
 
     it('omits all thinking controls when the frozen campaign mode is native', async () => {
         mockDrain.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
-        mockFindOnePerformanceProfile.mockReturnValue({
-            select: jest.fn().mockReturnValue({
-                lean: jest.fn().mockResolvedValue({
-                    _id: 'evidence-model-a-primary',
-                    modelName: 'model-a',
-                    hostId: 'primary',
-                    artifact: {
-                        model: 'model-a', hostId: 'primary', hostUrl: 'http://exec:11434',
-                        digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
-                    },
-                    profile: {
-                        tokensPerSec: 123.4,
-                        ttftMs: 321,
-                        ttftMeasurement: 'streamed_wall_clock',
-                        profileDepth: 'standard',
-                        requiredRetainedSamples: 5,
-                        measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
-                        recommendedInteractiveContext: 16384,
-                        profiledAt: new Date()
-                    }
-                })
-            })
-        });
         mockGetFrozenModelExecutionConfig.mockImplementation((_, __, ___, baseConfig) => ({
             ...baseConfig,
             response_max_tokens: 2048,
-            num_ctx: 16384,
+            num_ctx: 4096,
             think: null,
             send_think: false,
             think_mode: 'native',
@@ -892,7 +838,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         expect(requestBody).not.toHaveProperty('think');
         expect(requestBody).not.toHaveProperty('includeThinking');
         expect(requestBody).not.toHaveProperty('suppressThinking');
-        expect(requestBody.options).toMatchObject({ num_ctx: 16384, num_predict: 2048 });
+        expect(requestBody.options).toMatchObject({ num_ctx: 4096, num_predict: 2048 });
     });
 
     // 0212 regression: a model whose warmup throws must NOT skip subsequent

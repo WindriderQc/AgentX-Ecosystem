@@ -149,6 +149,12 @@ async function buildHostFitReport(hostId) {
         maxVerifiedContext: p.maxVerifiedContext || null,
         recommendedInteractiveContext: p.recommendedInteractiveContext || null,
         recommendedDocumentContext: p.recommendedDocumentContext || null,
+        performanceKneeContext: p.performanceKneeContext || null,
+        performanceKneeDegradationPct: p.performanceKneeDegradationPct || null,
+        qualityVerifiedContext: p.qualityContextStatus === 'verified'
+          ? (p.qualityVerifiedContext || null)
+          : null,
+        qualityContextStatus: p.qualityContextStatus === 'verified' ? 'verified' : 'unknown',
         spillVerified,
         spillDetected,
         spillNumCtx: p.spill?.spillNumCtx || null,
@@ -161,6 +167,13 @@ async function buildHostFitReport(hostId) {
         score: benchScore,
         bestCategory: bench.bestCategory || null,
         dims,
+        heuristicDimensions: dims,
+        qualitySignal: {
+          status: benchScore != null ? 'advisory_summary' : 'heuristic',
+          source: benchScore != null ? 'model_profile_benchmark_summary' : 'parameter_quantization_heuristic',
+          authoritative: false,
+          reason: 'host_fit_does_not_prove_semantic_response_quality'
+        },
         fit
       });
     } else {
@@ -192,6 +205,13 @@ async function buildHostFitReport(hostId) {
       score: benchScore,
       bestCategory: bench.bestCategory || null,
       dims,
+      heuristicDimensions: dims,
+      qualitySignal: {
+        status: 'heuristic',
+        source: 'parameter_quantization_heuristic',
+        authoritative: false,
+        reason: 'unprofiled_host_fit_estimate'
+      },
       ...ef
     };
   });
@@ -226,6 +246,13 @@ async function buildHostFitReport(hostId) {
   };
 
   return {
+    contract: 'agentx.host-fit-report/v2',
+    authority: {
+      status: 'advisory',
+      recommendationAuthority: false,
+      qualityAuthority: false,
+      label: 'Heuristic host fit; not model quality evidence'
+    },
     host: {
       hostId: host.hostId,
       displayName: host.displayName || host.hostId,

@@ -41,6 +41,7 @@ async function retractAmbiguousResult(resultId, batchId, authorityError, phase) 
             const reconciliation = await authorityReconciliation.enqueueResultInvalidation({
                 resultId,
                 batchId,
+                workloadId: batchId,
                 phase,
                 reason: invalidationError.message
             });

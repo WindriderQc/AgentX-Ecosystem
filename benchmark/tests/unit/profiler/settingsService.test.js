@@ -44,6 +44,7 @@ describe('settingsService', () => {
         fullMaxRelativeCi95Width: 0.30,
         interactiveDegradationThreshold: 15,
         documentDegradationThreshold: 30,
+        performanceKneeDegradationThreshold: 15,
         thinkingProbeEnabled: true,
         warmup: true,
         testTimeoutSec: 60,

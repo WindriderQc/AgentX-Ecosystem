@@ -17,6 +17,7 @@ const { tokenAllowed: mcpTokenAllowed } = require('../helpers/mcpToken');
 
 const PROTECTED_PATH_PREFIXES = ['/api/', '/mcp', '/api/mcp'];
 const RUNTIME_BRIDGE_PATH_PREFIX = '/api/openclaw-ollama';
+const INFERENCE_ADMISSION_BRIDGE_PATH_PREFIX = '/api/runtime/inference-admissions';
 // These names exist only on the product-owned container network. They preserve
 // secret-free default service-to-service calls while browser-shaped requests
 // to the same Host values still have to prove exact same-origin access.
@@ -109,6 +110,15 @@ function benchmarkCredentialPath(pathname, method) {
   if (/^\/api\/nerve-center\/workload-admissions\/[^/]+\/release-receipt$/.test(path)) {
     return verb === 'POST';
   }
+  if (/^\/api\/nerve-center\/workload-admissions\/[^/]+\/recovery$/.test(path)) {
+    return verb === 'POST';
+  }
+  if (/^\/api\/nerve-center\/workload-recoveries\/[^/]+\/(adopt|assert|transition|restore-hosts)$/.test(path)) {
+    return verb === 'POST';
+  }
+  if (/^\/api\/nerve-center\/workload-recoveries\/[^/]+$/.test(path)) {
+    return verb === 'DELETE';
+  }
   if (/^\/api\/nerve-center\/workload-admissions\/[^/]+$/.test(path)) {
     return verb === 'DELETE';
   }
@@ -135,6 +145,24 @@ function runtimeBridgeCredentialAllowed(req) {
     : '';
   const presented = bearer || String(req.get?.('x-agentx-openclaw-token') || '').trim();
   return tokensMatch(process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN, presented);
+}
+
+function inferenceAdmissionBridgeCredentialPath(pathname, method) {
+  const path = String(pathname || '').split('?')[0].toLowerCase();
+  const verb = String(method || 'GET').toUpperCase();
+  if (verb !== 'POST') return false;
+  if (path === INFERENCE_ADMISSION_BRIDGE_PATH_PREFIX) return true;
+  return new RegExp(`^${INFERENCE_ADMISSION_BRIDGE_PATH_PREFIX}/[^/]+/(heartbeat|complete|mark-unknown)$`)
+    .test(path);
+}
+
+function inferenceAdmissionBridgeCredentialAllowed(req) {
+  if (!inferenceAdmissionBridgeCredentialPath(req.originalUrl || req.path, req.method)) return false;
+  const authorization = String(req.get?.('authorization') || '');
+  const bearer = authorization.toLowerCase().startsWith('bearer ')
+    ? authorization.slice(7).trim()
+    : '';
+  return tokensMatch(process.env.AGENTX_RUNTIME_BRIDGE_TOKEN, bearer);
 }
 
 function workflowMachineCredential(pathname, method) {
@@ -221,6 +249,10 @@ function scopedMachineCredentialAllowed(req) {
   // revalidates this same credential before serving discovery or inference.
   if (runtimeBridgeCredentialAllowed(req)) return true;
 
+  // Runtime sidecars receive only shared inference coordination. This token
+  // cannot reach workload/maintenance/claim/status or operator recovery APIs.
+  if (inferenceAdmissionBridgeCredentialAllowed(req)) return true;
+
   const workflowCredential = workflowMachineCredential(pathname, method);
   if (workflowCredential && tokensMatch(
     process.env[workflowCredential.environmentVariable],
@@ -287,10 +319,13 @@ module.exports = {
   INTERNAL_CORE_HOSTS,
   LOOPBACK_PUBLISHED_HOSTS,
   RUNTIME_BRIDGE_PATH_PREFIX,
+  INFERENCE_ADMISSION_BRIDGE_PATH_PREFIX,
   benchmarkCredentialPath,
   requestHost,
   isProtectedPath,
   publicExposureGuard,
+  inferenceAdmissionBridgeCredentialAllowed,
+  inferenceAdmissionBridgeCredentialPath,
   runtimeBridgeCredentialAllowed,
   runtimeBridgeCredentialPath,
   scopedMachineCredentialAllowed,

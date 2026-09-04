@@ -403,6 +403,12 @@ describe('contextProbeService', () => {
         reliability: 'high'
       })
     }));
+    expect(result).toEqual(expect.objectContaining({
+      performanceKneeContext: 2048,
+      performanceKneeDegradationThreshold: 15,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown'
+    }));
   });
 
   it('keeps the raw snapshot diagnostic but fails the run when context authority persistence fails', async () => {

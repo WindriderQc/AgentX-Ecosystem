@@ -2,8 +2,12 @@
 
 const fetch = require('node-fetch');
 const hostGate = require('../../src/services/hostGate');
+const { beginInferenceAdmission } = require('../../src/services/inferenceAdmissionService');
 
 jest.mock('node-fetch');
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: jest.fn()
+}));
 
 const {
   executeAdmittedOllamaAttempt,
@@ -27,6 +31,13 @@ describe('inferenceAttemptExecutor cancellation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    beginInferenceAdmission.mockImplementation(async ({ signal }) => ({
+      signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn().mockResolvedValue({ released: true }),
+      abandon: jest.fn().mockResolvedValue({ released: true })
+    }));
   });
 
   afterEach(() => {
@@ -184,9 +195,24 @@ describe('inferenceAttemptExecutor cancellation', () => {
   test('admission receives the caller signal and aborts before transport dispatch', async () => {
     const caller = new AbortController();
     let admissionSignal;
+    let admissionStartedResolve;
+    const admissionStarted = new Promise(resolve => { admissionStartedResolve = resolve; });
+    beginInferenceAdmission.mockImplementationOnce(async ({ signal }) => {
+      const controller = new AbortController();
+      if (signal?.aborted) controller.abort();
+      else signal?.addEventListener('abort', () => controller.abort(), { once: true });
+      return {
+        signal: controller.signal,
+        markDispatched: jest.fn(),
+        assertActive: jest.fn(),
+        complete: jest.fn().mockResolvedValue({ released: true }),
+        abandon: jest.fn().mockResolvedValue({ released: true })
+      };
+    });
     const acquireSpy = jest.spyOn(hostGate, 'acquire').mockImplementation(
       (_host, _model, options) => {
         admissionSignal = options.signal;
+        admissionStartedResolve();
         return new Promise((_resolve, reject) => {
           const onAbort = () => {
             const error = new Error('Host gate admission cancelled');
@@ -210,7 +236,10 @@ describe('inferenceAttemptExecutor cancellation', () => {
         signal: caller.signal,
       }).catch((error) => error);
 
-      expect(admissionSignal).toBe(caller.signal);
+      await admissionStarted;
+      expect(admissionSignal).toBeDefined();
+      expect(admissionSignal).not.toBe(caller.signal);
+      expect(admissionSignal.aborted).toBe(false);
       caller.abort();
       const error = await attempt;
 
@@ -224,5 +253,90 @@ describe('inferenceAttemptExecutor cancellation', () => {
     } finally {
       acquireSpy.mockRestore();
     }
+  });
+
+  test('distributed admission remains held until the response body reaches EOF', async () => {
+    let bodyStartedResolve;
+    let finishBody;
+    const bodyStarted = new Promise(resolve => { bodyStartedResolve = resolve; });
+    const bodyFinished = new Promise(resolve => { finishBody = resolve; });
+    const lifecycle = {
+      signal: new AbortController().signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn().mockResolvedValue({ released: true }),
+      abandon: jest.fn().mockResolvedValue({ released: false })
+    };
+    beginInferenceAdmission.mockResolvedValueOnce(lifecycle);
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => {
+        bodyStartedResolve();
+        await bodyFinished;
+        return JSON.stringify({ response: 'terminal' });
+      }
+    });
+
+    const attempt = executeAdmittedOllamaAttempt({
+      hostUrl: 'http://ollama.test:11434',
+      model: 'model-a',
+      payload: { model: 'model-a', prompt: 'hello' },
+      useChat: false,
+      timeoutMs: 60_000
+    });
+    await bodyStarted;
+    expect(lifecycle.markDispatched).toHaveBeenCalledTimes(1);
+    expect(lifecycle.complete).not.toHaveBeenCalled();
+
+    finishBody();
+    await expect(attempt).resolves.toMatchObject({ data: { response: 'terminal' } });
+    expect(lifecycle.complete).toHaveBeenCalledTimes(1);
+    expect(lifecycle.abandon).not.toHaveBeenCalled();
+  });
+
+  test('disconnect after dispatch aborts transport and abandons into quarantine', async () => {
+    const caller = new AbortController();
+    let transportSignal;
+    let bodyStartedResolve;
+    const bodyStarted = new Promise(resolve => { bodyStartedResolve = resolve; });
+    const lifecycleController = new AbortController();
+    caller.signal.addEventListener('abort', () => lifecycleController.abort(new Error('caller disconnected')), { once: true });
+    const lifecycle = {
+      signal: lifecycleController.signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn().mockResolvedValue({ released: true }),
+      abandon: jest.fn().mockResolvedValue({ quarantined: true })
+    };
+    beginInferenceAdmission.mockResolvedValueOnce(lifecycle);
+    fetch.mockImplementation(async (_url, options) => {
+      transportSignal = options.signal;
+      return {
+        ok: true,
+        status: 200,
+        text: () => {
+          bodyStartedResolve();
+          return rejectWhenAborted(transportSignal);
+        }
+      };
+    });
+
+    const attempt = executeAdmittedOllamaAttempt({
+      hostUrl: 'http://ollama.test:11434',
+      model: 'model-a',
+      payload: { model: 'model-a', prompt: 'hello' },
+      useChat: false,
+      stream: true,
+      signal: caller.signal
+    }).catch(error => error);
+    await bodyStarted;
+    caller.abort();
+    const error = await attempt;
+
+    expect(error).toMatchObject({ name: 'AbortError', isCallerCancellation: true });
+    expect(lifecycle.markDispatched).toHaveBeenCalledTimes(1);
+    expect(lifecycle.complete).not.toHaveBeenCalled();
+    expect(lifecycle.abandon).toHaveBeenCalledTimes(1);
   });
 });

@@ -58,6 +58,16 @@ function _compactHardwareSnapshot(status, phase) {
     capturedAt: new Date(),
     ok: !!telemetry.ok,
     source: telemetry.source || 'none',
+    capability: telemetry.capability || {
+      contract: 'agentx.profiler-hardware-capability/v1',
+      status: 'unavailable',
+      qualificationAuthority: 'none',
+      collector: {
+        requiredContract: 'agentx.profiler-hardware-collector/v1',
+        status: 'not_configured',
+        ownershipBoundary: 'deployment_extension'
+      }
+    },
     gpuName: telemetry.gpuName || '',
     gpuCount: telemetry.gpuCount || (telemetry.gpus?.length || null),
     utilization: telemetry.utilization ?? null,
@@ -122,6 +132,7 @@ function _buildHardwareTelemetry(snapshots) {
   return {
     enabled: true,
     source: latest.source || 'none',
+    capability: latest.capability || null,
     capturedAt: latest.capturedAt || new Date(),
     latest,
     diagnostics: latest.diagnostics || null,
@@ -134,6 +145,49 @@ function _median(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function _buildProfilerCapabilities(depth, hardwareTelemetry) {
+  const hardwareCapability = hardwareTelemetry?.capability
+    || hardwareTelemetry?.latest?.capability
+    || {
+      contract: 'agentx.profiler-hardware-capability/v1',
+      status: 'unavailable',
+      qualificationAuthority: 'none',
+      collector: {
+        requiredContract: 'agentx.profiler-hardware-collector/v1',
+        status: 'not_configured',
+        ownershipBoundary: 'deployment_extension'
+      }
+    };
+  return {
+    contract: 'agentx.profiler-capability-coverage/v1',
+    profileDepth: depth,
+    qualificationScope: 'single_request_exact_artifact_runtime',
+    singleRequestPerformance: { status: 'measured', authority: 'profiler_pipeline' },
+    contextCapacity: { status: depth === 'quick' ? 'unknown' : 'measured', authority: depth === 'quick' ? 'none' : 'profiler_pipeline' },
+    hardwareTelemetry: hardwareCapability,
+    concurrentServing: {
+      status: 'unknown',
+      authority: 'none',
+      reason: 'concurrency_not_measured_by_current_profiler',
+      metrics: {
+        goodput: null,
+        latencyP95Ms: null,
+        fairness: null,
+        saturationConcurrency: null
+      }
+    },
+    responseQuality: {
+      status: 'not_measured',
+      authority: 'none',
+      reason: 'profiler_measures_runtime_performance_not_semantic_quality'
+    },
+    productionServingQualification: {
+      qualified: false,
+      reason: 'concurrency_goodput_fairness_and_long_context_quality_not_measured'
+    }
+  };
 }
 
 function _quantile(values, q) {
@@ -530,7 +584,7 @@ async function persistProfileEvidence({
       modelName,
       hostId,
       artifact: currentArtifact,
-      profile: profileData,
+      profile: { ...profileData, artifact: currentArtifact },
       evidenceId: evidence?._id
     });
     checkpoint();
@@ -793,6 +847,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     }
   }
 
+  const initialHardwareTelemetry = _buildHardwareTelemetry(hardwareSnapshots);
   const profileData = {
     tokensPerSec: representativeTokensPerSec,
     promptEvalTokensPerSec: representativeSample?.promptEvalTokensPerSec || null,
@@ -806,6 +861,10 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
     comparisonWorkloadMode: testResult.promptWorkloadMode || 'fixed',
     optimalNumCtx: testResult.numCtx || null,
+    performanceKneeContext: null,
+    performanceKneeDegradationPct: Number(settings.performanceKneeDegradationThreshold) || 15,
+    qualityVerifiedContext: null,
+    qualityContextStatus: 'unknown',
     vramUsedMiB: testResult.vramUsedMiB || null,
     throughputSamples,
     measurementQuality,
@@ -830,7 +889,8 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     profiledAt: new Date(),
     profileDepth: depth,
     thinking: thinkingProfile,
-    hardwareTelemetry: _buildHardwareTelemetry(hardwareSnapshots)
+    hardwareTelemetry: initialHardwareTelemetry,
+    profilerCapabilities: _buildProfilerCapabilities(depth, initialHardwareTelemetry)
   };
 
   // --- quick: done here ---
@@ -852,6 +912,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
     interactiveDegradationThreshold: Number(settings.interactiveDegradationThreshold),
     documentDegradationThreshold: Number(settings.documentDegradationThreshold),
+    performanceKneeDegradationThreshold: Number(settings.performanceKneeDegradationThreshold),
     candidateRepeats: contextProbeRepeatsForDepth(depth, settings),
     assertClaimActive: checkpoint,
     signal,
@@ -882,6 +943,14 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
   profileData.maxVerifiedContext = probeResult.testedNumCtx || null;
   profileData.recommendedInteractiveContext = probeResult.recommendedInteractiveContext || null;
   profileData.recommendedDocumentContext = probeResult.recommendedDocumentContext || null;
+  profileData.performanceKneeContext = probeResult.performanceKneeContext || null;
+  profileData.performanceKneeDegradationPct = Number(probeResult.performanceKneeDegradationThreshold)
+    || Number(settings.performanceKneeDegradationThreshold)
+    || 15;
+  // Profiler measures runtime behavior only. Long-context semantic quality is
+  // populated exclusively by a separately qualified Benchmark campaign.
+  profileData.qualityVerifiedContext = null;
+  profileData.qualityContextStatus = 'unknown';
   profileData.degradationPct = probeResult.degradationPct || null;
   profileData.contextProbeCandidateRepeats = contextProbeRepeatsForDepth(depth, settings);
   profileData.probeSteps = (probeResult.steps || []).map(s => ({
@@ -895,6 +964,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
   if (contextHardware) {
     hardwareSnapshots.push(contextHardware);
     profileData.hardwareTelemetry = _buildHardwareTelemetry(hardwareSnapshots);
+    profileData.profilerCapabilities = _buildProfilerCapabilities(depth, profileData.hardwareTelemetry);
   }
   // The context probe already records the largest passing point. Preserve the
   // measured value exactly; arbitrary percentage margins create a second,
@@ -958,6 +1028,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
   if (fullHardware) {
     hardwareSnapshots.push(fullHardware);
     profileData.hardwareTelemetry = _buildHardwareTelemetry(hardwareSnapshots);
+    profileData.profilerCapabilities = _buildProfilerCapabilities(depth, profileData.hardwareTelemetry);
   }
 
   notify('saving', { message: 'Saving profile to database…' });
@@ -1326,9 +1397,12 @@ async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signa
       else signal?.addEventListener('abort', abort, { once: true });
     });
   for (let repeat = 1; repeat <= minimumSamples; repeat += 1) {
+    let unloadPending = false;
     try {
       checkpoint();
+      unloadPending = true;
       await generate(hostUrl, { model: modelName, keep_alive: 0, stream: false }, { timeoutMs: 10000, signal });
+      unloadPending = false;
       checkpoint();
       await abortableDelay();
       checkpoint();
@@ -1347,6 +1421,11 @@ async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signa
       samples.push({ repeat, status: 'pass', unloadVerified: true, coldLoadMs, hotLoadMs });
     } catch (err) {
       if (signal?.aborted || err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
+      if (unloadPending) {
+        err.retainAdmission = true;
+        err.code = err.code || 'OLLAMA_UNLOAD_TERMINALITY_UNKNOWN';
+        throw err;
+      }
       logger.warn(`_runLoadTiming: repeat ${repeat} failed for ${modelName} — ${err.message}`);
       samples.push({ repeat, status: 'error', unloadVerified: false, coldLoadMs: null, hotLoadMs: null, error: err.message });
     }
@@ -1374,5 +1453,6 @@ module.exports = {
   summarizePositiveMeasurements,
   hasProfilerAuthorityReceipt,
   profileQualificationFailures,
-  _contextProbeRepeatsForDepth: contextProbeRepeatsForDepth
+  _contextProbeRepeatsForDepth: contextProbeRepeatsForDepth,
+  _buildProfilerCapabilities
 };

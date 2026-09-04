@@ -586,7 +586,7 @@ router.post('/batch', async (req, res) => {
         }
 
         if (!harnessJudgeTarget && actualJudgeHost && judgeModel) {
-            let validation = await validateJudgeModel(actualJudgeHost, judgeModel);
+            let validation = await validateJudgeModel(actualJudgeHost, judgeModel, { metadataOnly: true });
 
             // 0219 tiered judge: if the resolved default judge isn't on this host
             // and the caller did NOT pin a model, fall back to the lighter judge
@@ -598,7 +598,7 @@ router.post('/batch', async (req, res) => {
             const callerPinnedModel = !!(judge_config && judge_config.model);
             if (!validation.valid && !callerPinnedModel
                 && JUDGE_FALLBACK_MODEL && JUDGE_FALLBACK_MODEL !== judgeModel) {
-                const fallbackValidation = await validateJudgeModel(actualJudgeHost, JUDGE_FALLBACK_MODEL);
+                const fallbackValidation = await validateJudgeModel(actualJudgeHost, JUDGE_FALLBACK_MODEL, { metadataOnly: true });
                 if (fallbackValidation.valid) {
                     logger.warn('Judge model unavailable on host; falling back to lighter judge (0219)', {
                         host: actualJudgeHost,

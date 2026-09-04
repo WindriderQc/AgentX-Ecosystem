@@ -6,6 +6,7 @@ const modelProfileService = require('../../src/services/profiler/modelProfileSer
 const modelPerformanceProfileService = require('../../src/services/profiler/modelPerformanceProfileService');
 const { resolveArtifactIdentity, identitiesMatch } = require('../../src/services/profiler/artifactIdentityService');
 const { verifyProfilerAuthorityReceipt } = require('../../src/services/profiler/profilerAuthorityReceipt');
+const { projectReadinessProfiles } = require('../../src/services/profiler/profilerReadinessProjectionService');
 
 function validateHostId(hostId, res) {
   if (/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(String(hostId || ''))) return true;
@@ -17,7 +18,8 @@ router.get('/', async (req, res) => {
   try {
     const filter = {};
     if (req.query.stage) filter.stage = req.query.stage;
-    res.json({ status: 'success', data: await modelProfileService.getAll(filter) });
+    const profiles = await modelProfileService.getAll(filter);
+    res.json({ status: 'success', data: await projectReadinessProfiles(profiles) });
   } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
 });
 
@@ -25,7 +27,8 @@ router.get('/:name', async (req, res) => {
   try {
     const model = await modelProfileService.getByName(req.params.name);
     if (!model) return res.status(404).json({ status: 'error', error: 'Model not found' });
-    res.json({ status: 'success', data: model });
+    const [projected] = await projectReadinessProfiles([model]);
+    res.json({ status: 'success', data: projected });
   } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
 });
 
@@ -68,6 +71,10 @@ router.get('/:name/config', async (req, res) => {
         maxVerifiedContext: evidence.profile?.maxVerifiedContext || null,
         recommendedInteractiveContext: evidence.profile?.recommendedInteractiveContext || null,
         recommendedDocumentContext: evidence.profile?.recommendedDocumentContext || null,
+        performanceKneeContext: evidence.profile?.performanceKneeContext || null,
+        performanceKneeDegradationPct: evidence.profile?.performanceKneeDegradationPct || null,
+        qualityVerifiedContext: evidence.profile?.qualityVerifiedContext || null,
+        qualityContextStatus: evidence.profile?.qualityContextStatus || 'unknown',
         config: {
           num_ctx: evidence.profile?.recommendedInteractiveContext || null
         }

@@ -8,7 +8,7 @@ const {
   startBenchmarkClaimHeartbeat
 } = require('../benchmark/benchmarkClaimLifecycle');
 const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
-const { releaseWorkloadAdmission } = require('../../clients/coreApiClient');
+const { releaseWorkloadAdmission, transitionWorkloadRecovery } = require('../../clients/coreApiClient');
 
 async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDurationMs, options = {}) {
   const uniqueHosts = [...new Set((hostUrls || []).filter(Boolean))];
@@ -73,14 +73,31 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
     if (!leaseAbort.signal.aborted) {
       leaseAbort.abort(reason || new Error('Profiler lease retained for reconciliation'));
     }
-    abandonPromise = Promise.resolve({
-      abandoned: true,
-      released: 0,
-      failed: claimed.length + 1,
-      holdMs: null,
-      details: claimed.map(hostUrl => ({ hostUrl, released: false, reason: 'held under heartbeat for durable recovery' })),
-      workloadAdmission: { released: false, reason: 'held under heartbeat for durable recovery' }
-    });
+    abandonPromise = (async () => {
+      try {
+        await transitionWorkloadRecovery(operationId, 'UNKNOWN', {
+          receipt: {
+            contract: 'agentx.workload-recovery/v1',
+            event: 'profiler-runtime-mutation-terminality-unknown',
+            reason: reason?.code || reason?.message || 'reconciliation pending'
+          }
+        });
+      } catch (error) {
+        logger.error('Profiler recovery handoff failed; existing Core quarantine remains armed', {
+          operationId,
+          error: error.message
+        });
+      }
+      await heartbeat.drain();
+      return {
+        abandoned: true,
+        released: 0,
+        failed: claimed.length + 1,
+        holdMs: null,
+        details: claimed.map(hostUrl => ({ hostUrl, released: false, reason: 'held in durable Core recovery quarantine' })),
+        workloadAdmission: { released: false, reason: 'held in durable Core recovery quarantine' }
+      };
+    })();
     return abandonPromise;
   };
   return {

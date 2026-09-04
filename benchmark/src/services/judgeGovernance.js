@@ -39,6 +39,25 @@ const { runCalibrationBatch, buildAccuracyMatrix } = require('./benchmark/calibr
 const { detectDrift } = require('./benchmark/driftDetector');
 const { buildStrictTrustResultExclusion } = require('./benchmark/publicReadPrivacy');
 const { throwIfJudgeCancelled } = require('./scoring/judgeCall');
+const authorityReconciliation = require('./benchmark/benchmarkAuthorityReconciliation');
+
+function journalAuthorityFailure(error, { kind, resultId, batchId, workloadId, phase }) {
+    error.reconciliationPersistedPromise = authorityReconciliation.enqueueAuthorityInvalidation({
+        kind, resultId, batchId, workloadId, phase, reason: error.compensationError?.message || error.message
+    }).then(record => {
+        error.reconciliationId = String(record._id);
+        error.reconciliationPersisted = true;
+        error.reconciliationPromise = authorityReconciliation.waitForResultInvalidation(record._id);
+        return record;
+    }).catch(reconciliationError => {
+        error.reconciliationError = reconciliationError;
+        error.reconciliationPersisted = false;
+        logger.error('Judge authority recovery journal failed; Core quarantine remains armed', {
+            kind, resultId: String(resultId), workloadId, error: reconciliationError.message
+        });
+        return null;
+    });
+}
 
 /**
  * Execute one sub-step, capturing timing + errors without throwing upward.
@@ -175,7 +194,7 @@ async function computeDrift({ batchId, judgeModel }) {
  */
 async function computeMatrixCalibration({
     judgeModel, judgeHost, referenceModel, referenceHost, passThreshold = 1.5,
-    cancelSignal = null, assertAuthorityActive = null
+    cancelSignal = null, assertAuthorityActive = null, workloadId = null, batchId = null
 }) {
     throwIfJudgeCancelled({ cancelSignal });
     assertAuthorityActive?.();
@@ -246,6 +265,13 @@ async function computeMatrixCalibration({
                 error.compensationError = compensationError;
                 error.retainAdmission = true;
                 error.code = 'JUDGE_MATRIX_RECONCILIATION_PENDING';
+                journalAuthorityFailure(error, {
+                    kind: 'judge_matrix_invalidation',
+                    resultId: id,
+                    batchId,
+                    workloadId,
+                    phase: 'judge matrix calibration'
+                });
             }
         }
         throw error;
@@ -341,6 +367,7 @@ async function runJudgeGovernanceLoop(options = {}) {
         retroDryRun = false,
         persist = true,
         triggeredBy = 'manual',
+        workloadId = null,
         cancelSignal = null,
         assertAuthorityActive = null
     } = options;
@@ -386,14 +413,14 @@ async function runJudgeGovernanceLoop(options = {}) {
         return runRetroCalibration(
             batchId,
             { model: referenceModel, host: referenceHost },
-            { perCell: retroPerCell, dryRun: retroDryRun, cancelSignal, assertAuthorityActive }
+            { perCell: retroPerCell, dryRun: retroDryRun, cancelSignal, assertAuthorityActive, workloadId }
         );
     }, cancelSignal));
 
     subSteps.push(await runSubStep('matrix_calibration', () =>
         computeMatrixCalibration({
             judgeModel, judgeHost, referenceModel, referenceHost, passThreshold,
-            cancelSignal, assertAuthorityActive
+            cancelSignal, assertAuthorityActive, workloadId, batchId
         }), cancelSignal));
 
     subSteps.push(await runSubStep('drift_detection', () =>
@@ -462,6 +489,13 @@ async function runJudgeGovernanceLoop(options = {}) {
                 error.compensationError = compensationError;
                 error.retainAdmission = true;
                 error.code = 'JUDGE_GOVERNANCE_RECONCILIATION_PENDING';
+                journalAuthorityFailure(error, {
+                    kind: 'judge_governance_invalidation',
+                    resultId: id,
+                    batchId,
+                    workloadId,
+                    phase: 'judge governance summary'
+                });
             }
         }
         throw error;

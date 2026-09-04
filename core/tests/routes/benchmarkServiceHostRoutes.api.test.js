@@ -15,6 +15,7 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
   heartbeatBenchmarkClaim: jest.fn(),
   releaseBenchmarkClaim: jest.fn(),
   recoverBenchmarkClaimRelease: jest.fn(),
+  restoreClaimsForWorkloadRecovery: jest.fn(),
   getByHost: jest.fn(),
   getPinnedEntries: jest.fn(pref => pref?.pinnedModels || []),
   warmHost: jest.fn(),
@@ -23,11 +24,17 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
 jest.mock('../../src/services/buddyEvents', () => ({ emit: jest.fn() }));
 jest.mock('../../src/services/runtimeCoordinationService', () => ({
   acquireWorkload: jest.fn(),
+  armWorkloadRecovery: jest.fn(),
+  adoptWorkloadRecovery: jest.fn(),
+  assertWorkloadRecovery: jest.fn(),
+  transitionWorkloadRecovery: jest.fn(),
+  resolveWorkloadRecovery: jest.fn(),
   assertWorkloadAdmission: jest.fn(),
   heartbeat: jest.fn(),
   release: jest.fn(),
   recoverRelease: jest.fn(),
   acquireMaintenance: jest.fn(),
+  markMaintenanceUnknown: jest.fn(),
   listActive: jest.fn()
 }));
 
@@ -83,6 +90,54 @@ const ROUTES = [
     body: { generation: 'generation-core' },
     expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.recoverRelease]
+  },
+  {
+    label: 'runtime workload recovery arm',
+    method: 'post',
+    path: '/api/nerve-center/workload-admissions/admission-core/recovery',
+    body: { generation: 'generation-core', recoveryRequestId: 'recovery-request-core' },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [runtimeCoordinationService.armWorkloadRecovery]
+  },
+  {
+    label: 'runtime workload recovery adoption',
+    method: 'post',
+    path: '/api/nerve-center/workload-recoveries/recovery-core/adopt',
+    body: { recoveryRequestId: 'recovery-request-core', ownerId: 'worker-a' },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [runtimeCoordinationService.adoptWorkloadRecovery]
+  },
+  {
+    label: 'runtime workload recovery assertion',
+    method: 'post',
+    path: '/api/nerve-center/workload-recoveries/recovery-core/assert',
+    body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a' },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [runtimeCoordinationService.assertWorkloadRecovery]
+  },
+  {
+    label: 'runtime workload recovery transition',
+    method: 'post',
+    path: '/api/nerve-center/workload-recoveries/recovery-core/transition',
+    body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a', expectedVersion: 2, state: 'VERIFIED' },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [runtimeCoordinationService.transitionWorkloadRecovery]
+  },
+  {
+    label: 'runtime workload recovery host restore',
+    method: 'post',
+    path: '/api/nerve-center/workload-recoveries/recovery-core/restore-hosts',
+    body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a', excludedModelsByHost: {} },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [hostPrefService.restoreClaimsForWorkloadRecovery]
+  },
+  {
+    label: 'runtime workload recovery release',
+    method: 'delete',
+    path: '/api/nerve-center/workload-recoveries/recovery-core',
+    body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a' },
+    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
+    sideEffects: [runtimeCoordinationService.resolveWorkloadRecovery]
   },
   {
     label: 'claim acquisition',
@@ -175,6 +230,12 @@ describe('Benchmark service identity on Core host-control routes', () => {
     hostPrefService.heartbeatBenchmarkClaim.mockResolvedValue({ heartbeat: true });
     hostPrefService.releaseBenchmarkClaim.mockResolvedValue({ released: true });
     hostPrefService.recoverBenchmarkClaimRelease.mockResolvedValue({ recovered: true, released: true });
+    hostPrefService.restoreClaimsForWorkloadRecovery.mockResolvedValue({
+      restored: true,
+      recoveryId: 'recovery-core',
+      recoveryGeneration: 'recovery-generation-core',
+      recoveryOwnerId: 'worker-a'
+    });
     hostPrefService.getByHost.mockResolvedValue({
       displayName: 'Primary',
       pinnedModels: [{ model: 'model-a' }]
@@ -191,6 +252,39 @@ describe('Benchmark service identity on Core host-control routes', () => {
       workloadId: 'batch-1',
       kind: 'benchmark',
       batchId: null
+    });
+    runtimeCoordinationService.armWorkloadRecovery.mockResolvedValue({
+      armed: true,
+      admissionId: 'admission-core',
+      generation: 'generation-core',
+      principal: 'benchmark-service',
+      requestId: 'request-batch-1',
+      workloadId: 'batch-1',
+      kind: 'benchmark',
+      batchId: null,
+      recoveryRequired: true,
+      recoveryId: 'recovery-core',
+      recoveryGeneration: 'recovery-generation-core',
+      recoveryRequestId: 'recovery-request-core',
+      recoveryState: 'PREPARED',
+      recoveryVersion: 0
+    });
+    runtimeCoordinationService.adoptWorkloadRecovery.mockResolvedValue({
+      adopted: true, recoveryId: 'recovery-core', recoveryGeneration: 'recovery-generation-core',
+      recoveryRequestId: 'recovery-request-core', recoveryOwnerId: 'worker-a', workloadId: 'batch-1'
+    });
+    runtimeCoordinationService.assertWorkloadRecovery.mockResolvedValue({
+      owned: true, recoveryId: 'recovery-core', recoveryGeneration: 'recovery-generation-core',
+      recoveryOwnerId: 'worker-a', workloadId: 'batch-1', recoveryState: 'MUTATING', recoveryVersion: 2
+    });
+    runtimeCoordinationService.transitionWorkloadRecovery.mockResolvedValue({
+      transitioned: true, recoveryId: 'recovery-core', recoveryGeneration: 'recovery-generation-core',
+      recoveryOwnerId: 'worker-a', recoveryState: 'VERIFIED', recoveryVersion: 3
+    });
+    runtimeCoordinationService.resolveWorkloadRecovery.mockResolvedValue({
+      released: true, recoveryId: 'recovery-core', recoveryGeneration: 'recovery-generation-core',
+      recoveryOwnerId: 'worker-a', recoveryState: 'RESTORED', recoveryVersion: 4,
+      recoveryReceipt: { contract: 'agentx.workload-recovery/v1' }, releasedAt: new Date()
     });
     runtimeCoordinationService.assertWorkloadAdmission.mockResolvedValue({
       admitted: true,
@@ -389,6 +483,15 @@ describe('Benchmark service identity on Core host-control routes', () => {
       ...proof,
       releasedAt: new Date()
     });
+    runtimeCoordinationService.markMaintenanceUnknown.mockResolvedValueOnce({
+      contract: 'agentx.maintenance-quarantine/v1',
+      coordinationKind: 'maintenance',
+      quarantined: true,
+      ...proof,
+      state: 'UNKNOWN',
+      unknownAt: new Date(),
+      reason: 'child outcome unknown'
+    });
     runtimeCoordinationService.recoverRelease.mockResolvedValueOnce({
       recovered: true,
       released: true,
@@ -419,6 +522,27 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .send({ generation: proof.generation, ttlMs: 60_000 });
     expect(heartbeat.body.data).toMatchObject({ heartbeat: true, ...proof });
 
+    const quarantined = await request(app)
+      .post(`/api/nerve-center/maintenance-leases/${proof.leaseId}/mark-unknown`)
+      .set('Host', 'remote-aiops.example')
+      .set('X-Forwarded-For', '203.0.113.30')
+      .set('Authorization', 'Bearer operator-secret')
+      .send({ generation: proof.generation, reason: 'child outcome unknown' });
+    expect(quarantined.status).toBe(200);
+    expect(quarantined.body.data).toMatchObject({
+      contract: 'agentx.maintenance-quarantine/v1',
+      quarantined: true,
+      ...proof,
+      state: 'UNKNOWN',
+      reason: 'child outcome unknown'
+    });
+    expect(runtimeCoordinationService.markMaintenanceUnknown).toHaveBeenCalledWith({
+      id: proof.leaseId,
+      generation: proof.generation,
+      principal: proof.principal,
+      reason: 'child outcome unknown'
+    });
+
     const release = await request(app)
       .delete(`/api/nerve-center/maintenance-leases/${proof.leaseId}`)
       .set('Host', 'remote-aiops.example')
@@ -441,6 +565,17 @@ describe('Benchmark service identity on Core host-control routes', () => {
       generation: proof.generation,
       principal: proof.principal
     });
+  });
+
+  it('rejects maintenance quarantine without the exact operator credential', async () => {
+    const response = await request(app)
+      .post('/api/nerve-center/maintenance-leases/lease-core/mark-unknown')
+      .set('Host', 'remote-aiops.example')
+      .set('X-Forwarded-For', '203.0.113.30')
+      .set('Authorization', 'Bearer wrong-token')
+      .send({ generation: 'maintenance-generation-core', reason: 'unknown child outcome' });
+    expect(response.status).toBe(403);
+    expect(runtimeCoordinationService.markMaintenanceUnknown).not.toHaveBeenCalled();
   });
 
   it('preserves same-origin UI access to host reload without the Benchmark token', async () => {

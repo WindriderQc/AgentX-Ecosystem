@@ -65,10 +65,21 @@ function migrationPipeline() {
         ]
       },
       recommendationThresholds: {
-        $ifNull: ['$recommendationThresholds', {
+        $mergeObjects: [{
           interactiveDegradationPct: 15,
-          documentDegradationPct: 30
-        }]
+          documentDegradationPct: 30,
+          performanceKneeDegradationPct: 15
+        }, { $ifNull: ['$recommendationThresholds', {}] }]
+      },
+      performanceKneeContext: { $ifNull: ['$performanceKneeContext', null] },
+      performanceKneeDegradationPct: { $ifNull: ['$performanceKneeDegradationPct', 15] },
+      qualityVerifiedContext: { $ifNull: ['$qualityVerifiedContext', null] },
+      qualityContextStatus: {
+        $cond: [
+          { $and: [{ $eq: ['$qualityContextStatus', 'verified'] }, { $gt: ['$qualityVerifiedContext', 0] }] },
+          'verified',
+          'unknown'
+        ]
       }
     }
   }];
@@ -91,6 +102,8 @@ function migrationFilter() {
     { recommendedInteractiveContext: { $exists: false } },
     { recommendedDocumentContext: { $exists: false } },
     { recommendationStatus: { $exists: false } },
+    { performanceKneeContext: { $exists: false } },
+    { qualityContextStatus: { $exists: false } },
     { revalidationRequired: { $exists: false } },
     { recommendationEvidenceVersion: { $nin: [RECOMMENDATION_EVIDENCE_VERSION, LEGACY_EVIDENCE_VERSION] } }
   ] };

@@ -876,6 +876,7 @@ router.post('/judge/retro-calibrate', withManagedWorkloadRoute('judge-retro-cali
         }, {
             perCell: per_cell || 3,
             dryRun: dry_run || false,
+            workloadId: req.workloadAdmissionId,
             cancelSignal: req.workloadAdmissionSignal,
             assertAuthorityActive: req.assertWorkloadAdmissionActive
         });
@@ -995,6 +996,7 @@ router.post('/judge/governance-run', withManagedWorkloadRoute('judge-governance'
             retroPerCell: retro_per_cell || 3,
             retroDryRun: !!retro_dry_run,
             triggeredBy: triggered_by || 'api',
+            workloadId: req.workloadAdmissionId,
             cancelSignal: req.workloadAdmissionSignal,
             assertAuthorityActive: req.assertWorkloadAdmissionActive
         });

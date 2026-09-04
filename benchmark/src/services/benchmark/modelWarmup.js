@@ -283,8 +283,9 @@ async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, execu
             return name;
         } catch (err) {
             throwIfAborted(signal);
-            logger.debug('[warmup] unload best-effort failed', { hostUrl, model: name, error: err.message });
-            return null;
+            err.retainAdmission = true;
+            err.code = err.code || 'OLLAMA_UNLOAD_TERMINALITY_UNKNOWN';
+            throw err;
         } finally {
             deadline.dispose();
         }
@@ -574,6 +575,17 @@ async function warmupModel(hostUrl, model, options = {}) {
         warmupData.latency_ms = durationMs;
         warmupData.error = normalizeWarmupError(err, timeoutMs);
         logger.warn('Model warmup failed', { host: hostUrl, model, error: warmupData.error, durationMs });
+
+        const terminalityUnknown = err?.name === 'AbortError'
+            || err?.type === 'aborted'
+            || err?.code === OUTBOUND_ERROR_CODES.CALLER_ABORTED
+            || err?.code === OUTBOUND_ERROR_CODES.DEADLINE_EXCEEDED
+            || /timeout|aborted|aborterror/i.test(String(err?.message || ''));
+        if (terminalityUnknown) {
+            err.retainAdmission = true;
+            err.code = err.code || 'OLLAMA_WARMUP_TERMINALITY_UNKNOWN';
+            throw err;
+        }
 
         if (timelinePrefix && recordTimelineEvent) {
             await recordTimelineEvent(`${timelinePrefix}_complete`, {

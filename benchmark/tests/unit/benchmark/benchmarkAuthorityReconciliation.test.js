@@ -2,19 +2,44 @@
 
 const mockReconciliationFindOneAndUpdate = jest.fn();
 const mockReconciliationUpdateOne = jest.fn();
+const mockReconciliationFindOne = jest.fn();
+const mockReconciliationCountDocuments = jest.fn();
 const mockBatchUpdateOne = jest.fn();
-const mockResultCollectionUpdateOne = jest.fn();
+const mockResultFindOneAndUpdate = jest.fn();
+const mockGetRecoveryIdentity = jest.fn();
+const mockAdoptRecovery = jest.fn();
+const mockAssertRecovery = jest.fn();
+const mockTransitionRecovery = jest.fn();
+const mockRestoreRecoveryHosts = jest.fn();
+const mockReleaseAdmission = jest.fn();
+const mockRecoverRelease = jest.fn();
 
 jest.mock('../../../models/BenchmarkAuthorityReconciliation', () => ({
   findOneAndUpdate: (...args) => mockReconciliationFindOneAndUpdate(...args),
   updateOne: (...args) => mockReconciliationUpdateOne(...args),
-  find: jest.fn()
+  findOne: (...args) => mockReconciliationFindOne(...args),
+  countDocuments: (...args) => mockReconciliationCountDocuments(...args),
+  find: jest.fn(),
+  findById: jest.fn()
 }));
 jest.mock('../../../models/BenchmarkBatch', () => ({
-  updateOne: (...args) => mockBatchUpdateOne(...args)
+  updateOne: (...args) => mockBatchUpdateOne(...args),
+  findOneAndUpdate: jest.fn()
 }));
 jest.mock('../../../models/BenchmarkResult', () => ({
-  collection: { updateOne: (...args) => mockResultCollectionUpdateOne(...args) }
+  findOneAndUpdate: (...args) => mockResultFindOneAndUpdate(...args)
+}));
+jest.mock('../../../models/JudgeAccuracyMatrix', () => ({ findOneAndUpdate: jest.fn() }));
+jest.mock('../../../models/JudgeGovernanceRun', () => ({ findOneAndUpdate: jest.fn() }));
+jest.mock('../../../models/JudgeGroundTruth', () => ({ findOneAndUpdate: jest.fn() }));
+jest.mock('../../../src/clients/coreApiClient', () => ({
+  getWorkloadRecoveryIdentity: (...args) => mockGetRecoveryIdentity(...args),
+  adoptWorkloadRecovery: (...args) => mockAdoptRecovery(...args),
+  assertWorkloadRecovery: (...args) => mockAssertRecovery(...args),
+  transitionWorkloadRecovery: (...args) => mockTransitionRecovery(...args),
+  restoreWorkloadRecoveryHosts: (...args) => mockRestoreRecoveryHosts(...args),
+  releaseWorkloadAdmission: (...args) => mockReleaseAdmission(...args),
+  recoverWorkloadAdmissionRelease: (...args) => mockRecoverRelease(...args)
 }));
 jest.mock('../../../config/logger', () => ({
   info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn()
@@ -22,94 +47,180 @@ jest.mock('../../../config/logger', () => ({
 
 const service = require('../../../src/services/benchmark/benchmarkAuthorityReconciliation');
 
-function leanResult(value) {
+function lean(value) {
   return { lean: jest.fn().mockResolvedValue(value) };
 }
 
+const proof = {
+  admissionId: 'admission-1',
+  generation: 'admission-generation-1',
+  principal: 'benchmark-service',
+  workloadId: 'batch-1',
+  recoveryRequired: true,
+  recoveryId: 'recovery-1',
+  recoveryGeneration: 'recovery-generation-1',
+  recoveryRequestId: 'recovery:benchmark:batch-1',
+  recoveryOwnerId: null,
+  recoveryState: 'MUTATING',
+  recoveryVersion: 1
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
-  mockReconciliationFindOneAndUpdate.mockReturnValue(leanResult({ _id: 'reconciliation-1' }));
-  mockReconciliationUpdateOne.mockResolvedValue({ matchedCount: 1 });
+  mockGetRecoveryIdentity.mockReturnValue(proof);
   mockBatchUpdateOne.mockResolvedValue({ matchedCount: 1 });
-  mockResultCollectionUpdateOne.mockResolvedValue({ matchedCount: 1 });
+  mockReconciliationUpdateOne.mockResolvedValue({ matchedCount: 1 });
+  mockReconciliationCountDocuments.mockResolvedValue(0);
+  mockRecoverRelease.mockResolvedValue({ recovered: false, released: false });
+  mockRestoreRecoveryHosts.mockResolvedValue({ restored: true, details: [] });
 });
 
-test('journals an ambiguous result before handing it to recovery', async () => {
+test('journals the Core quarantine identity before handing ambiguous authority to recovery', async () => {
+  mockReconciliationFindOneAndUpdate.mockReturnValueOnce(lean({ _id: 'journal-1' }));
   await expect(service.enqueueResultInvalidation({
     resultId: 'result-1',
     batchId: 'batch-1',
+    workloadId: 'batch-1',
     phase: 'successful result save',
     reason: 'acknowledgement lost'
-  })).resolves.toMatchObject({ _id: 'reconciliation-1' });
+  })).resolves.toMatchObject({ _id: 'journal-1' });
 
   expect(mockReconciliationFindOneAndUpdate).toHaveBeenCalledWith(
     { resultId: 'result-1' },
-    expect.objectContaining({
-      $setOnInsert: expect.objectContaining({
-        kind: 'result_invalidation',
-        batchId: 'batch-1',
-        state: 'pending_reconciliation'
-      })
-    }),
+    expect.objectContaining({ $setOnInsert: expect.objectContaining({
+      state: 'pending_reconciliation',
+      workloadId: 'batch-1',
+      admissionId: proof.admissionId,
+      admissionGeneration: proof.generation,
+      admissionPrincipal: proof.principal,
+      recoveryId: proof.recoveryId,
+      recoveryRequestId: proof.recoveryRequestId
+    }) }),
     { upsert: true, new: true }
   );
-  expect(mockBatchUpdateOne).toHaveBeenCalledWith(
-    expect.objectContaining({ _id: 'batch-1' }),
-    { $set: expect.objectContaining({ authority_state: 'pending_reconciliation' }) }
-  );
 });
 
-test('terminal reconciliation tombstones the result and invalidates its batch before resolving', async () => {
-  const row = {
-    _id: 'reconciliation-1',
-    resultId: 'result-1',
-    batchId: 'batch-1',
-    phase: 'successful result save'
+test('restart worker adopts Core quarantine before compensation and persists afterVersion before release', async () => {
+  const calls = [];
+  const ownership = {
+    ownerId: 'worker-restart',
+    ownerEpoch: 'epoch-1',
+    record: {
+      _id: 'journal-1',
+      kind: 'result_invalidation',
+      resourceType: 'BenchmarkResult',
+      resultId: 'result-1',
+      batchId: 'batch-1',
+      workloadId: 'batch-1',
+      admissionId: proof.admissionId,
+      admissionGeneration: proof.generation,
+      admissionPrincipal: proof.principal,
+      recoveryId: proof.recoveryId,
+      recoveryRequestId: proof.recoveryRequestId,
+      phase: 'result save',
+      state: 'pending_reconciliation'
+    }
   };
-
-  await expect(service._reconcileResultInvalidation(row)).resolves.toMatchObject({
-    resolved: true,
-    resultId: 'result-1'
+  let coreState = 'MUTATING';
+  let coreVersion = 1;
+  mockAdoptRecovery.mockImplementation(async () => {
+    calls.push('adopt');
+    return { ...proof, adopted: true, recoveryOwnerId: ownership.ownerId };
+  });
+  mockAssertRecovery.mockImplementation(async () => ({
+    owned: true,
+    recoveryOwnerId: ownership.ownerId,
+    recoveryState: coreState,
+    recoveryVersion: coreVersion
+  }));
+  mockTransitionRecovery.mockImplementation(async (_workloadId, state) => {
+    calls.push(`transition:${state}`);
+    coreState = state;
+    coreVersion += 1;
+    return { transitioned: true, recoveryState: state, recoveryVersion: coreVersion };
+  });
+  mockReconciliationFindOne.mockImplementation(() => lean({ _id: 'journal-1' }));
+  mockResultFindOneAndUpdate.mockImplementation(() => {
+    calls.push('invalidate');
+    return lean({ _id: 'result-1', __v: 7 });
+  });
+  mockReconciliationFindOneAndUpdate
+    .mockImplementationOnce(() => lean({ ...ownership.record, state: 'verified', compensationReceipt: {
+      contract: 'agentx.authority-compensation/v1', afterVersion: 7
+    } }))
+    .mockImplementationOnce(() => lean({ ...ownership.record, state: 'releasing', compensationReceipt: {
+      contract: 'agentx.authority-compensation/v1', afterVersion: 7
+    } }))
+    .mockImplementationOnce(() => lean({ ...ownership.record, state: 'resolved' }));
+  mockReleaseAdmission.mockImplementation(async () => {
+    calls.push('release');
+    return {
+      released: true,
+      recoveryState: 'RESTORED',
+      recoveryReceipt: { contract: 'agentx.workload-recovery/v1' }
+    };
   });
 
-  expect(mockResultCollectionUpdateOne).toHaveBeenCalledWith(
-    { _id: 'result-1' },
-    { $set: expect.objectContaining({
-      excluded_from_leaderboard: true,
-      scoring_method: 'authority_invalidated'
-    }) },
-    { upsert: true }
-  );
-  expect(mockBatchUpdateOne).toHaveBeenCalledWith(
-    { _id: 'batch-1' },
-    { $set: expect.objectContaining({ authority_state: 'authority_invalidated' }) }
-  );
-  expect(mockReconciliationUpdateOne).toHaveBeenCalledWith(
-    { _id: 'reconciliation-1', state: 'pending_reconciliation' },
-    expect.objectContaining({
-      $set: expect.objectContaining({ state: 'resolved', resolvedAt: expect.any(Date) }),
-      $inc: { attempts: 1 }
-    })
+  await expect(service._reconcileOwnedRecord(ownership)).resolves.toMatchObject({ resolved: true });
+  expect(calls.indexOf('adopt')).toBeLessThan(calls.indexOf('invalidate'));
+  expect(calls.indexOf('invalidate')).toBeLessThan(calls.indexOf('transition:VERIFIED'));
+  expect(calls.indexOf('transition:RESTORED')).toBeLessThan(calls.indexOf('release'));
+  expect(mockRestoreRecoveryHosts).toHaveBeenCalledWith('batch-1');
+  expect(mockReconciliationFindOneAndUpdate).toHaveBeenCalledWith(
+    expect.objectContaining({ ownerId: ownership.ownerId, ownerEpoch: ownership.ownerEpoch }),
+    expect.objectContaining({ $set: expect.objectContaining({
+      state: 'verified',
+      compensationReceipt: expect.objectContaining({ afterVersion: 7 })
+    }) }),
+    { new: true }
   );
 });
 
-test('keeps the durable journal pending when result invalidation still fails', async () => {
-  const failure = new Error('Mongo acknowledgement unavailable');
-  mockResultCollectionUpdateOne.mockRejectedValue(failure);
+test('two recovery workers cannot both claim one journal epoch', async () => {
+  const row = { _id: 'journal-race', state: 'pending_reconciliation' };
+  mockReconciliationFindOneAndUpdate
+    .mockReturnValueOnce(lean({ ...row, ownerId: 'worker-a', ownerEpoch: 'epoch-a' }))
+    .mockReturnValueOnce(lean(null));
+  const [a, b] = await Promise.all([
+    service._claimRecoveryRecord(row, 'worker-a'),
+    service._claimRecoveryRecord(row, 'worker-b')
+  ]);
+  expect(a).toMatchObject({ ownerId: 'worker-a', record: { ownerId: 'worker-a' } });
+  expect(b).toBeNull();
+});
 
-  await expect(service._reconcileResultInvalidation({
-    _id: 'reconciliation-1',
-    resultId: 'result-1',
-    batchId: 'batch-1',
-    phase: 'failed result save'
-  })).rejects.toBe(failure);
-
-  expect(mockReconciliationUpdateOne).toHaveBeenCalledWith(
-    { _id: 'reconciliation-1', state: 'pending_reconciliation' },
-    {
-      $set: expect.objectContaining({ lastError: failure.message, lastAttemptAt: expect.any(Date) }),
-      $inc: { attempts: 1 }
+test('a releasing journal recovers the durable Core receipt after a crash without another write', async () => {
+  const released = {
+    recovered: true,
+    released: true,
+    admissionId: proof.admissionId,
+    generation: proof.generation,
+    principal: proof.principal,
+    workloadId: proof.workloadId,
+    recoveryId: proof.recoveryId,
+    recoveryState: 'RESTORED',
+    recoveryReceipt: { contract: 'agentx.workload-recovery/v1' }
+  };
+  mockRecoverRelease.mockResolvedValue(released);
+  mockReconciliationFindOneAndUpdate.mockReturnValueOnce(lean({ state: 'resolved' }));
+  const ownership = {
+    ownerId: 'worker-restart',
+    ownerEpoch: 'epoch-2',
+    record: {
+      _id: 'journal-2',
+      state: 'releasing',
+      resultId: 'result-2',
+      workloadId: proof.workloadId,
+      admissionId: proof.admissionId,
+      admissionGeneration: proof.generation,
+      admissionPrincipal: proof.principal,
+      recoveryId: proof.recoveryId
     }
-  );
-  expect(mockBatchUpdateOne).not.toHaveBeenCalled();
+  };
+  await expect(service._reconcileOwnedRecord(ownership)).resolves.toMatchObject({
+    resolved: true,
+    recovered: true
+  });
+  expect(mockAdoptRecovery).not.toHaveBeenCalled();
+  expect(mockResultFindOneAndUpdate).not.toHaveBeenCalled();
 });

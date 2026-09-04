@@ -34,7 +34,30 @@ const {
     capturePerformanceBaseline,
     _getProfilePerformanceBaseline
 } = require('../../../src/services/benchmark/performanceBaseline');
-const { receiptDigest } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+const { createProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+
+const ARTIFACT = {
+    model: 'ax/qwen3.5:9b',
+    hostId: 'host-beta',
+    hostUrl: 'http://192.0.2.12:11434',
+    digest: 'sha256:exact',
+    runtimeFingerprint: 'runtime-a',
+    registryQualified: true
+};
+
+function exactProfile(overrides = {}) {
+    return {
+        tokensPerSec: 74.8,
+        recommendedInteractiveContext: 65536,
+        requiredRetainedSamples: 5,
+        measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
+        ttftMs: 125,
+        ttftMeasurement: 'streamed_wall_clock',
+        profileDepth: 'standard',
+        profiledAt: '2026-09-04T12:00:00.000Z',
+        ...overrides
+    };
+}
 
 function chainResolved(value) {
     return {
@@ -42,7 +65,8 @@ function chainResolved(value) {
     };
 }
 
-function authority(evidenceId = 'evidence-1') {
+function authority(evidenceId = 'evidence-1', profile = exactProfile()) {
+    const artifact = { ...ARTIFACT };
     return {
         readiness: {
             'host-beta': {
@@ -50,34 +74,14 @@ function authority(evidenceId = 'evidence-1') {
                 stale: false,
                 profileDepth: 'standard',
                 evidenceId,
-                artifact: {
-                    model: 'ax/qwen3.5:9b',
+                artifact,
+                authorityReceipt: createProfilerAuthorityReceipt({
+                    modelName: 'ax/qwen3.5:9b',
                     hostId: 'host-beta',
-                    hostUrl: 'http://192.0.2.12:11434',
-                    digest: 'sha256:exact',
-                    runtimeFingerprint: 'runtime-a',
-                    registryQualified: true
-                },
-                authorityReceipt: {
-                    version: 1,
-                    source: 'profiler_pipeline',
-                    evidenceId,
-                    digest: receiptDigest({
-                        modelName: 'ax/qwen3.5:9b',
-                        hostId: 'host-beta',
-                        artifact: {
-                            model: 'ax/qwen3.5:9b',
-                            hostId: 'host-beta',
-                            hostUrl: 'http://192.0.2.12:11434',
-                            digest: 'sha256:exact',
-                            runtimeFingerprint: 'runtime-a',
-                            registryQualified: true
-                        },
-                        profileDepth: 'standard',
-                        required: 5,
-                        passing: 5
-                    })
-                }
+                    artifact,
+                    profile,
+                    evidenceId
+                })
             }
         }
     };
@@ -87,28 +91,21 @@ describe('performanceBaseline', () => {
     beforeEach(() => jest.clearAllMocks());
 
     function exactEvidence(overrides = {}) {
-        const profiledAt = new Date().toISOString();
+        const profile = exactProfile(overrides);
         return {
             _id: 'evidence-1',
-            artifact: authority().readiness['host-beta'].artifact,
-            profile: {
-                tokensPerSec: 74.8,
-                recommendedInteractiveContext: 65536,
-                requiredRetainedSamples: 5,
-                measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
-                ttftMs: 125,
-                ttftMeasurement: 'streamed_wall_clock',
-                profileDepth: 'standard',
-                profiledAt,
-                ...overrides
-            },
-            updatedAt: profiledAt
+            modelName: 'ax/qwen3.5:9b',
+            hostId: 'host-beta',
+            artifact: { ...ARTIFACT },
+            profile,
+            updatedAt: profile.profiledAt
         };
     }
 
     it('looks up performance evidence for the exact artifact identity', async () => {
         const profiledAt = new Date().toISOString();
-        ModelProfile.findOne.mockReturnValue(chainResolved(authority()));
+        const profile = exactProfile({ profiledAt });
+        ModelProfile.findOne.mockReturnValue(chainResolved(authority('evidence-1', profile)));
         ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence({ profiledAt })));
 
         const result = await _getProfilePerformanceBaseline(

@@ -2,15 +2,25 @@
 
 const mockAcquireWorkloadAdmission = jest.fn();
 const mockReleaseWorkloadAdmission = jest.fn();
+const mockTransitionWorkloadRecovery = jest.fn();
 const mockStartHeartbeat = jest.fn();
+const mockPrepareWorkloadAuthority = jest.fn();
+const mockVerifyWorkloadAuthority = jest.fn();
+const mockResolveWorkloadAuthority = jest.fn();
 
 jest.mock('../../../src/clients/coreApiClient', () => ({
     acquireWorkloadAdmission: (...args) => mockAcquireWorkloadAdmission(...args),
-    releaseWorkloadAdmission: (...args) => mockReleaseWorkloadAdmission(...args)
+    releaseWorkloadAdmission: (...args) => mockReleaseWorkloadAdmission(...args),
+    transitionWorkloadRecovery: (...args) => mockTransitionWorkloadRecovery(...args)
 }));
 
 jest.mock('../../../src/services/benchmark/benchmarkClaimLifecycle', () => ({
     startBenchmarkClaimHeartbeat: (...args) => mockStartHeartbeat(...args)
+}));
+jest.mock('../../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+    prepareWorkloadAuthority: (...args) => mockPrepareWorkloadAuthority(...args),
+    verifyWorkloadAuthority: (...args) => mockVerifyWorkloadAuthority(...args),
+    resolveWorkloadAuthority: (...args) => mockResolveWorkloadAuthority(...args)
 }));
 
 jest.mock('../../../config/logger', () => ({
@@ -65,6 +75,10 @@ describe('managed benchmark workload admission lifecycle', () => {
         heartbeatOptions = null;
         mockAcquireWorkloadAdmission.mockResolvedValue({ acquired: true });
         mockReleaseWorkloadAdmission.mockResolvedValue({ released: true });
+        mockTransitionWorkloadRecovery.mockResolvedValue({ transitioned: true });
+        mockPrepareWorkloadAuthority.mockResolvedValue({ _id: 'authority-guard-1' });
+        mockVerifyWorkloadAuthority.mockResolvedValue({ state: 'verified' });
+        mockResolveWorkloadAuthority.mockResolvedValue({ state: 'resolved' });
         mockStartHeartbeat.mockImplementation((_hosts, _id, _ttl, options) => {
             heartbeatOptions = options;
             return heartbeat;
@@ -155,10 +169,15 @@ describe('managed benchmark workload admission lifecycle', () => {
             status: 'error',
             code: 'WORKLOAD_ADMISSION_RELEASE_FAILED'
         }));
-        expect(heartbeat.drain).not.toHaveBeenCalled();
+        expect(mockTransitionWorkloadRecovery).toHaveBeenCalledWith(
+            expect.stringMatching(/^judge-health:/),
+            'UNKNOWN',
+            expect.objectContaining({ receipt: expect.any(Object) })
+        );
+        expect(heartbeat.drain).toHaveBeenCalledTimes(1);
     });
 
-    test('renews an ambiguous admission until durable reconciliation resolves, then releases it', async () => {
+    test('hands an ambiguous admission to durable Core recovery and drains the crashed owner heartbeat', async () => {
         let resolveRecovery;
         const reconciliationPromise = new Promise(resolve => { resolveRecovery = resolve; });
         const lifecycle = await beginManagedWorkload('judge-recovery', { hosts: ['http://judge:11434'] });
@@ -170,13 +189,18 @@ describe('managed benchmark workload admission lifecycle', () => {
         const retained = await lifecycle.retainForRecovery(reason);
         expect(retained).toMatchObject({ retained: true, holdMs: null });
         expect(mockReleaseWorkloadAdmission).not.toHaveBeenCalled();
-        expect(heartbeat.drain).not.toHaveBeenCalled();
+        expect(mockTransitionWorkloadRecovery).toHaveBeenCalledWith(
+            'judge-recovery',
+            'UNKNOWN',
+            expect.objectContaining({ receipt: expect.any(Object) })
+        );
+        expect(heartbeat.drain).toHaveBeenCalledTimes(1);
 
         resolveRecovery({ resolved: true });
         await new Promise(resolve => setImmediate(resolve));
         await new Promise(resolve => setImmediate(resolve));
 
-        expect(mockReleaseWorkloadAdmission).toHaveBeenCalledWith('judge-recovery');
+        expect(mockReleaseWorkloadAdmission).not.toHaveBeenCalled();
         expect(heartbeat.drain).toHaveBeenCalledTimes(1);
     });
 });

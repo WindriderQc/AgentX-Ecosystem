@@ -216,13 +216,12 @@ describe('_runLoadTiming()', () => {
     mockNow.mockRestore();
   });
 
-  it('returns null values on fetch failure', async () => {
+  it('retains admission when unload terminality cannot be proved', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('Connection refused'));
 
-    const promise = orchestrator._runLoadTiming(HOST_URL, MODEL_NAME);
-    const result = await promise;
-
-    expect(result.coldLoadMs).toBeNull();
-    expect(result.hotLoadMs).toBeNull();
+    await expect(orchestrator._runLoadTiming(HOST_URL, MODEL_NAME)).rejects.toMatchObject({
+      code: 'OLLAMA_UNLOAD_TERMINALITY_UNKNOWN',
+      retainAdmission: true
+    });
   });
 });

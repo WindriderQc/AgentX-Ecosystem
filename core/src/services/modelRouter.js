@@ -11,6 +11,7 @@ const alertService = require('./alertService');
 const { getFetchOptions } = require('../helpers/httpAgent');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const { characterizeRouteRequest } = require('./routing/routeDecision');
+const { beginInferenceAdmission } = require('./inferenceAdmissionService');
 // Telemetry lives in routing/inferenceTelemetry.js (task 0519); re-exported below
 // for symbol stability, matching the benchmarkClaimService precedent.
 const { recordInference } = require('./routing/inferenceTelemetry');
@@ -189,6 +190,7 @@ async function classifyQuery(message, timeout = 10000) {
     // not leak as an open handle (e.g., during tests where fetch is mocked
     // to reject immediately). Cleared in the finally block below.
     const timeoutId = setTimeout(() => controller.abort(), timeout);
+    let inferenceAdmission = null;
 
     try {
         await assertHostAvailableForConsumer(classificationHost, {
@@ -198,6 +200,17 @@ async function classifyQuery(message, timeout = 10000) {
         });
 
         const url = `${classificationHost}/api/generate`;
+        inferenceAdmission = await beginInferenceAdmission({
+            host: classificationHost,
+            model: classificationModel,
+            kind: 'classifier',
+            principal: 'core-classifier',
+            runtimeOptions: {
+                temperature: 0.1,
+                num_predict: 20
+            },
+            signal: controller.signal
+        });
         const fetchOptions = getFetchOptions(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -212,15 +225,21 @@ async function classifyQuery(message, timeout = 10000) {
                     // Prior hardcode of 4096 evicted the KV cache on every routing decision.
                 }
             }),
-            signal: controller.signal
+            signal: inferenceAdmission.signal
         });
+        inferenceAdmission.markDispatched();
         const response = await fetch(url, fetchOptions);
 
         if (!response.ok) {
+            await response.text().catch(() => '');
+            await inferenceAdmission.complete();
+            inferenceAdmission = null;
             throw new Error(`Classification failed: ${response.statusText}`);
         }
 
         const data = await response.json();
+        await inferenceAdmission.complete();
+        inferenceAdmission = null;
         const classification = data.response?.trim().toLowerCase().replace(/[^a-z_]/g, '') || 'general_chat';
 
         // Validate classification — must be in the CLASSIFIABLE subset.
@@ -247,6 +266,12 @@ async function classifyQuery(message, timeout = 10000) {
         return 'general_chat';
 
     } catch (err) {
+        if (inferenceAdmission) {
+            await inferenceAdmission.abandon(err).catch(quarantineError => {
+                err.inferenceQuarantineError = quarantineError;
+            });
+            inferenceAdmission = null;
+        }
         if (err.name === 'AbortError') {
             logger.warn('Classification timed out, using default');
         } else {

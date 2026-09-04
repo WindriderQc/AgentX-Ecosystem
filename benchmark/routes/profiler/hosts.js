@@ -17,11 +17,28 @@ const { resolveModelNumCtxDetails } = require('../../src/services/modelContextRe
 const liveProbeService = require('../../src/services/profiler/liveProbeService');
 const baselineModelService = require('../../src/services/profiler/baselineModelService');
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
+const HostProfile = require('../../models/HostProfile');
 const { acquireProfilerClaimLease } = require('../../src/services/profiler/profilerClaimLifecycle');
 const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdmission');
 const { isSameOllamaModel } = require('../../src/helpers/ollamaModelIdentity');
+const { getWorkloadRecoveryIdentity } = require('../../src/clients/coreApiClient');
+const { safeTokenMatch } = require('../../../shared/apiHostGuard');
 
 const logger = require('../../config/logger');
+
+function requireOperatorAccess(req, res, next) {
+  const authorization = String(req.get?.('authorization') || '');
+  const bearer = authorization.toLowerCase().startsWith('bearer ') ? authorization.slice(7).trim() : '';
+  const presented = bearer || req.get?.('x-agentx-operator-token') || '';
+  if (!safeTokenMatch(process.env.AGENTX_OPERATOR_TOKEN || process.env.AGENTX_ADMIN_TOKEN, presented)) {
+    return res.status(403).json({
+      status: 'error',
+      code: 'PROFILER_OPERATOR_AUTH_REQUIRED',
+      error: 'Exact Product operator authentication is required'
+    });
+  }
+  next();
+}
 
 // ── In-memory progress tracker for run-all ──────────────────────────────────
 const activeTests = new Map();
@@ -700,6 +717,68 @@ router.get('/test/context-probe/resolve/:modelName', async (req, res) => {
 
 // ═══ PERFORMANCE RESULTS ════════════════════════════════════════════════════
 
+/**
+ * Explicit recovery for an Ollama request whose client connection ended
+ * without a terminal server response. Silence is never accepted as proof.
+ * An operator may attest a controlled runtime restart, which terminates every
+ * request from the prior runtime instance; the durable worker then performs
+ * exact host restoration before releasing Core quarantine.
+ */
+router.post('/test/recovery/:hostId/confirm-runtime-restart', requireOperatorAccess, async (req, res) => {
+  try {
+    const operationId = String(req.body?.operationId || '');
+    const runtimeInstanceId = String(req.body?.runtimeInstanceId || '');
+    const restartedAt = new Date(req.body?.restartedAt);
+    if (req.body?.confirmation !== 'RUNTIME_RESTARTED_AND_OLLAMA_REQUESTS_TERMINATED'
+      || !operationId
+      || !runtimeInstanceId
+      || !Number.isFinite(restartedAt.getTime())) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'PROFILER_RUNTIME_RESTART_RECEIPT_INVALID',
+        error: 'Exact operationId, runtimeInstanceId, restartedAt and typed confirmation are required'
+      });
+    }
+    const current = await HostProfile.findOne({
+      hostId: req.params.hostId,
+      'reconciliation.operationId': operationId,
+      'reconciliation.state': { $in: ['prepared', 'mutating', 'unknown', 'pending_reconciliation'] },
+      'reconciliation.serverTerminalObserved': { $ne: true }
+    }).lean();
+    if (!current) {
+      return res.status(409).json({ status: 'error', code: 'PROFILER_RECOVERY_INTENT_NOT_FOUND', error: 'No matching unresolved recovery intent' });
+    }
+    const receipt = {
+      contract: 'agentx.ollama-runtime-restart/v1',
+      operationId,
+      runtimeInstanceId,
+      restartedAt,
+      confirmedAt: new Date()
+    };
+    const updated = await HostProfile.findOneAndUpdate(
+      {
+        _id: current._id,
+        'reconciliation.operationId': operationId,
+        'reconciliation.serverTerminalObserved': { $ne: true }
+      },
+      { $set: {
+        'reconciliation.state': 'unknown',
+        'reconciliation.serverTerminalObserved': true,
+        'reconciliation.serverTerminalAt': restartedAt,
+        'reconciliation.operatorTerminalReceipt': receipt,
+        'reconciliation.reason': 'Runtime restart attested; awaiting exact fenced restoration'
+      } },
+      { new: true }
+    ).lean();
+    if (!updated) {
+      return res.status(409).json({ status: 'error', code: 'PROFILER_RECOVERY_INTENT_CHANGED', error: 'Recovery intent changed concurrently' });
+    }
+    return res.json({ status: 'success', data: { accepted: true, hostId: updated.hostId, operationId, receipt } });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'PROFILER_RUNTIME_RESTART_RECOVERY_FAILED', error: error.message });
+  }
+});
+
 /** GET /test/results — query host performance snapshots */
 router.get('/test/results', async (req, res) => {
   try {
@@ -747,13 +826,26 @@ router.post('/:hostId/release', async (req, res) => {
 
     operationId = `profiler-release-${crypto.randomBytes(8).toString('hex')}`;
     lease = await acquireProfilerClaimLease([host.hostUrl], operationId, 5 * 60 * 1000);
+    const recovery = getWorkloadRecoveryIdentity(operationId);
+    if (!recovery?.recoveryId || !recovery?.admissionId) {
+      const error = new Error('Release-model requires a durable Core recovery quarantine');
+      error.code = 'PROFILER_RELEASE_RECOVERY_QUARANTINE_REQUIRED';
+      error.statusCode = 503;
+      throw error;
+    }
     lease.assertActive();
     await hostProfileService.upsert({
       hostId: req.params.hostId,
       reconciliation: {
-        state: 'pending_reconciliation',
+        state: 'prepared',
         operation: 'release_model',
         operationId,
+        workloadId: operationId,
+        admissionId: recovery.admissionId,
+        admissionGeneration: recovery.generation,
+        admissionPrincipal: recovery.principal,
+        recoveryId: recovery.recoveryId,
+        recoveryRequestId: recovery.recoveryRequestId,
         model: host.dedicated.model,
         priorDedicated: host.dedicated,
         desiredDedicated: null,
@@ -765,6 +857,27 @@ router.post('/:hostId/release', async (req, res) => {
       assertAuthorityActive: lease.assertActive
     });
     lease.assertActive();
+    await hostProfileService.upsert({
+      hostId: req.params.hostId,
+      reconciliation: {
+        ...host.reconciliation,
+        state: 'mutating',
+        operation: 'release_model',
+        operationId,
+        workloadId: operationId,
+        admissionId: recovery.admissionId,
+        admissionGeneration: recovery.generation,
+        admissionPrincipal: recovery.principal,
+        recoveryId: recovery.recoveryId,
+        recoveryRequestId: recovery.recoveryRequestId,
+        model: host.dedicated.model,
+        priorDedicated: host.dedicated,
+        desiredDedicated: null,
+        reason: 'Ollama unload request is in flight without a terminal server receipt',
+        startedAt: new Date()
+      }
+    }, { signal: lease.signal, assertAuthorityActive: lease.assertActive });
+    lease.assertActive();
     const result = await hostProfileService.releaseModel(host.hostUrl, host.dedicated.model, {
       signal: lease.signal,
       assertClaimActive: lease.assertActive
@@ -773,9 +886,15 @@ router.post('/:hostId/release', async (req, res) => {
       await hostProfileService.upsert({
         hostId: req.params.hostId,
         reconciliation: {
-          state: 'pending_reconciliation',
+          state: 'verified',
           operation: 'release_model',
           operationId,
+          workloadId: operationId,
+          admissionId: recovery.admissionId,
+          admissionGeneration: recovery.generation,
+          admissionPrincipal: recovery.principal,
+          recoveryId: recovery.recoveryId,
+          recoveryRequestId: recovery.recoveryRequestId,
           model: host.dedicated.model,
           priorDedicated: host.dedicated,
           desiredDedicated: null,
@@ -817,6 +936,12 @@ router.post('/:hostId/release', async (req, res) => {
             state: 'resolved',
             operation: 'release_model',
             operationId,
+            workloadId: operationId,
+            admissionId: recovery.admissionId,
+            admissionGeneration: recovery.generation,
+            admissionPrincipal: recovery.principal,
+            recoveryId: recovery.recoveryId,
+            recoveryRequestId: recovery.recoveryRequestId,
             model: releasedModel,
             priorDedicated: host.dedicated,
             desiredDedicated: null,

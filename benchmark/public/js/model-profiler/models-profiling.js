@@ -354,6 +354,20 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
       const lbl = v >= 1024 ? (v / 1024).toFixed(v % 1024 === 0 ? 0 : 1) + 'k' : v.toString();
       stats.push(_statCard(lbl, 'interactive', '#4ecdc4'));
     }
+    if (seenMetrics.performanceKneeContext != null) {
+      const v = seenMetrics.performanceKneeContext;
+      const lbl = v >= 1024 ? (v / 1024).toFixed(v % 1024 === 0 ? 0 : 1) + 'k' : v.toString();
+      stats.push(_statCard(lbl, `performance knee ≤${seenMetrics.performanceKneeDegradationPct ?? 15}% loss`, '#58a6ff'));
+    }
+    stats.push(_statCard(
+      seenMetrics.qualityContextStatus === 'verified' && seenMetrics.qualityVerifiedContext != null
+        ? (seenMetrics.qualityVerifiedContext >= 1024
+          ? `${(seenMetrics.qualityVerifiedContext / 1024).toFixed(seenMetrics.qualityVerifiedContext % 1024 === 0 ? 0 : 1)}k`
+          : String(seenMetrics.qualityVerifiedContext))
+        : 'unknown',
+      'quality-verified context',
+      '#d29922'
+    ));
     if (seenMetrics.degradationPct != null) {
       const accent = seenMetrics.degradationPct > 30 ? '#f85149' : seenMetrics.degradationPct > 10 ? '#d29922' : '#3fb950';
       stats.push(_statCard(seenMetrics.degradationPct + '%', 'degradation', accent));
@@ -488,6 +502,10 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
             }
             if (m.maxVerifiedContext != null) seenMetrics.maxVerifiedContext = m.maxVerifiedContext;
             if (m.recommendedInteractiveContext != null) seenMetrics.recommendedInteractiveContext = m.recommendedInteractiveContext;
+            if (m.performanceKneeContext != null) seenMetrics.performanceKneeContext = m.performanceKneeContext;
+            if (m.performanceKneeDegradationPct != null) seenMetrics.performanceKneeDegradationPct = m.performanceKneeDegradationPct;
+            if (m.qualityVerifiedContext != null) seenMetrics.qualityVerifiedContext = m.qualityVerifiedContext;
+            seenMetrics.qualityContextStatus = m.qualityContextStatus || 'unknown';
             if (m.degradationPct != null) seenMetrics.degradationPct = m.degradationPct;
             if (m.vramUsedMiB != null) seenMetrics.vramUsedMiB = m.vramUsedMiB;
             if (m.measurementQuality) seenMetrics.measurementQuality = m.measurementQuality;
@@ -532,6 +550,10 @@ export async function _runProfiling(container, btn, modelName, hostId, depth, ap
     }
     if (p?.maxVerifiedContext != null) seenMetrics.maxVerifiedContext = p.maxVerifiedContext;
     if (p?.recommendedInteractiveContext != null) seenMetrics.recommendedInteractiveContext = p.recommendedInteractiveContext;
+    if (p?.performanceKneeContext != null) seenMetrics.performanceKneeContext = p.performanceKneeContext;
+    if (p?.performanceKneeDegradationPct != null) seenMetrics.performanceKneeDegradationPct = p.performanceKneeDegradationPct;
+    if (p?.qualityVerifiedContext != null) seenMetrics.qualityVerifiedContext = p.qualityVerifiedContext;
+    seenMetrics.qualityContextStatus = p?.qualityContextStatus || 'unknown';
     if (p?.degradationPct != null) seenMetrics.degradationPct = p.degradationPct;
     if (p?.vramUsedMiB != null) seenMetrics.vramUsedMiB = p.vramUsedMiB;
     if (p?.measurementQuality) seenMetrics.measurementQuality = p.measurementQuality;

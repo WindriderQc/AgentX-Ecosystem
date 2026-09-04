@@ -99,8 +99,16 @@ router.post('/chat', async (req, res) => {
       options.ragCompress = ragCompress === true;
   }
 
+  const abortController = new AbortController();
+  const handleRequestAborted = () => abortController.abort(new Error('Client disconnected'));
+  const handleResponseClose = () => {
+    if (!res.writableEnded) abortController.abort(new Error('Client disconnected'));
+  };
+  req.once('aborted', handleRequestAborted);
+  res.once('close', handleResponseClose);
+
   try {
-        const { handleChatRequest } = require('../src/services/chatService');
+    const { handleChatRequest } = require('../src/services/chatService');
     const result = await handleChatRequest({
         userId,
         model,
@@ -122,7 +130,8 @@ router.post('/chat', async (req, res) => {
         enableWebSearch,
         think,
         thinkingMode: thinkingMode ?? thinking_mode,
-        turnAction
+        turnAction,
+        abortSignal: abortController.signal
     });
 
     const responseData = turnAction ? { ...result, turnAction } : result;
@@ -161,6 +170,9 @@ router.post('/chat', async (req, res) => {
     if (err.code) body.code = err.code;
     if (err.notImplemented) body.notImplemented = true;
     res.status(statusCode).json(body);
+  } finally {
+    req.removeListener('aborted', handleRequestAborted);
+    res.removeListener('close', handleResponseClose);
   }
 });
 

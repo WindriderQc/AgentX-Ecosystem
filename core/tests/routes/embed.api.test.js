@@ -53,6 +53,16 @@ jest.mock('../../src/services/modelReadinessService', () => ({
   }))
 }));
 
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+    signal: signal || new AbortController().signal,
+    markDispatched: jest.fn(),
+    assertActive: jest.fn(),
+    complete: jest.fn(async () => ({ released: true })),
+    abandon: jest.fn(async () => ({ released: true })),
+  })),
+}));
+
 jest.mock('../../src/services/hostPreferenceService', () => ({
   getAll: jest.fn(async () => []),
   getByHost: jest.fn(async () => null),
