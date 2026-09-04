@@ -212,10 +212,13 @@ router.put('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (
     const pref = await runRuntimeMutation({
       principal: operatorRequestIdentity(req),
       scope: `host-pin:set:${hostUrl}`
-    }, async () => {
+    }, async ({ signal, assertActive }) => {
       const updated = await hostPrefService.setPinnedModel(hostUrl, model);
       if (updated?.status === 'restoring') {
-        const restored = await hostPrefService.restorePinnedModels(hostUrl);
+        const restored = await hostPrefService.restorePinnedModels(hostUrl, {
+          signal,
+          assertAuthorityActive: assertActive
+        });
         if (restored?.status === 'error' || restored?.verified === false) {
           throw new Error(restored?.error || 'Pinned model restoration was not verified');
         }
@@ -263,7 +266,10 @@ router.post('/host-preferences/:hostUrl(*)/restore', requireOperatorUiAccess, as
     const result = await runRuntimeMutation({
       principal: operatorRequestIdentity(req),
       scope: `host-pin:restore:${hostUrl}`
-    }, () => hostPrefService.restorePinnedModels(hostUrl));
+    }, ({ signal, assertActive }) => hostPrefService.restorePinnedModels(hostUrl, {
+      signal,
+      assertAuthorityActive: assertActive
+    }));
     if (result.status === 'error') {
       return res.status(400).json({ status: 'error', message: result.error });
     }
@@ -288,7 +294,10 @@ router.post('/host-preferences/:hostUrl(*)/swap', requireOperatorUiAccess, async
     const result = await runRuntimeMutation({
       principal: operatorRequestIdentity(req),
       scope: `host-model:swap:${hostUrl}:${model}`
-    }, () => hostPrefService.swapModel(hostUrl, model));
+    }, ({ signal, assertActive }) => hostPrefService.swapModel(hostUrl, model, {
+      signal,
+      assertAuthorityActive: assertActive
+    }));
     emitBuddyEvent('model_swapping', 'infrastructure', `Swapping to ${model} on ${hostUrl}`, 'normal');
     logger.info('[NerveCenter] Model swap triggered', { hostUrl, model });
     res.json({ status: 'success', data: result });
@@ -842,7 +851,10 @@ router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAcces
     const results = await runRuntimeMutation({
       principal: coordinationPrincipal(req),
       scope: `host-pin:reload:${hostUrl}`
-    }, () => hostPrefService.warmHost(hostUrl));
+    }, ({ signal, assertActive }) => hostPrefService.warmHost(hostUrl, {
+      signal,
+      assertAuthorityActive: assertActive
+    }));
     emitBuddyEvent('host_defaults_reloaded', 'infrastructure', `Reloaded pins on ${pref.displayName || hostUrl}`, 'normal');
     logger.info('[NerveCenter] Host pinned models reloaded', { hostUrl, results });
     res.json({ status: 'success', data: results });

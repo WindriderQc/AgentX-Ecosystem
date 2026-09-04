@@ -31,7 +31,6 @@ const { createNodeFetchPeerTransport } = require('../helpers/outboundHttpTranspo
 const {
   OUTBOUND_ERROR_CODES,
   createOutboundHttpExecutor,
-  discardBoundedResponse,
   readBoundedJson,
   readBoundedText
 } = require('../../../shared/outboundHttpExecutor');
@@ -99,19 +98,19 @@ const HOST_TEST_OPERATION_SPECS = Object.freeze({
     deadlineMs: 15_000,
     maxRequestBytes: 64 * 1024,
     maxResponseBytes: 64 * 1024,
-    responseMode: 'discard'
+    responseMode: 'json'
   }),
   [HOST_TEST_OPERATIONS.UNLOAD_ONE]: operation('POST', '^/api/generate$', {
     deadlineMs: 15_000,
     maxRequestBytes: 64 * 1024,
     maxResponseBytes: 64 * 1024,
-    responseMode: 'discard'
+    responseMode: 'json'
   }),
   [HOST_TEST_OPERATIONS.WARMUP]: operation('POST', '^/api/(?:inference/)?generate$', {
     deadlineMs: 600_000,
     maxRequestBytes: 1024 * 1024,
     maxResponseBytes: 1024 * 1024,
-    responseMode: 'text'
+    responseMode: 'json'
   }),
   [HOST_TEST_OPERATIONS.PROBE]: operation('POST', '^/api/generate$', {
     deadlineMs: 600_000,
@@ -431,6 +430,24 @@ function buildWarmupRequest(hostUrl, modelName, alreadyLoaded, numCtx) {
   };
 }
 
+async function readExactGenerateTerminal(response, action) {
+  if (!response.ok) {
+    await response.cancel();
+    const error = new Error(`Ollama ${action} returned HTTP ${response.status}`);
+    error.code = 'OLLAMA_GENERATE_REJECTED';
+    error.status = response.status;
+    throw error;
+  }
+  const terminal = await readBoundedJson(response);
+  if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)
+    || terminal.done !== true || typeof terminal.error === 'string') {
+    const error = new Error(`Ollama ${action} ended without an exact terminal done object`);
+    error.code = 'OLLAMA_RESPONSE_INCOMPLETE';
+    throw error;
+  }
+  return terminal;
+}
+
 /**
  * Unload whatever model is currently occupying VRAM so the target model
  * can load cleanly without Ollama juggling both simultaneously.
@@ -461,7 +478,7 @@ async function unloadCurrentModel(hostUrl, targetModelName, executor = hostTestE
         body: JSON.stringify({ model: m.name, keep_alive: 0, stream: false }),
         signal
       }, executor);
-      await discardBoundedResponse(unloadResponse);
+      await readExactGenerateTerminal(unloadResponse, 'pre-warmup unload');
     }
   } catch (err) {
     throwIfAborted(signal);
@@ -479,7 +496,7 @@ async function unloadOneModel(hostUrl, modelName, executor = hostTestExecutor, s
     body: JSON.stringify({ model: modelName, keep_alive: 0, stream: false }),
     signal
   }, executor);
-  await discardBoundedResponse(response);
+  await readExactGenerateTerminal(response, 'context-reload unload');
 }
 
 /**
@@ -550,11 +567,7 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
       body: JSON.stringify(request.body),
       signal: combineAbortSignals(deadline.signal, signal)
     }, executor);
-    if (!response.ok) {
-      const detail = await readBoundedText(response).catch(() => '');
-      throw new Error(`HTTP ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
-    }
-    await discardBoundedResponse(response);
+    await readExactGenerateTerminal(response, `${request.phase} warm-up`);
   } catch (err) {
     throwIfAborted(signal);
     const errorMessage = deadline.expired
@@ -568,7 +581,12 @@ async function warmUp(hostUrl, modelName, _timeoutMs, numCtx, executor = hostTes
       timeoutMs: request.timeoutMs,
       error: errorMessage
     });
-    throw new Error(`Warm-up failed during ${request.phase}: ${errorMessage}`);
+    const failure = new Error(`Warm-up failed during ${request.phase}: ${errorMessage}`);
+    failure.code = err?.code || 'HOST_TEST_WARMUP_FAILED';
+    if (err?.retainAdmission === true || err?.code === 'OLLAMA_RESPONSE_INCOMPLETE') {
+      failure.retainAdmission = true;
+    }
+    throw failure;
   } finally {
     deadline.dispose();
   }
@@ -689,6 +707,26 @@ async function readOllamaGenerateStream(response, startedAt, now = Date.now) {
   const consumeLine = (line) => {
     if (!line.trim()) return;
     const event = JSON.parse(line);
+    if (!event || typeof event !== 'object' || Array.isArray(event)) {
+      const error = new Error('Ollama stream emitted a non-object frame');
+      error.code = 'OLLAMA_STREAM_INVALID_FRAME';
+      throw error;
+    }
+    if (terminal) {
+      const error = new Error('Ollama stream emitted data after its terminal frame');
+      error.code = 'OLLAMA_STREAM_POST_TERMINAL_DATA';
+      throw error;
+    }
+    if (typeof event.error === 'string') {
+      const error = new Error('Ollama stream emitted an error frame');
+      error.code = 'OLLAMA_STREAM_ERROR';
+      throw error;
+    }
+    if (event.done !== false && event.done !== true) {
+      const error = new Error('Ollama stream frame omitted its explicit done state');
+      error.code = 'OLLAMA_STREAM_INVALID_FRAME';
+      throw error;
+    }
     if (typeof event.response === 'string' && event.response.length > 0) {
       if (timeToFirstTokenMs === null) timeToFirstTokenMs = Math.max(0, now() - startedAt);
       output += event.response;
@@ -705,7 +743,11 @@ async function readOllamaGenerateStream(response, startedAt, now = Date.now) {
     }
   }
   if (buffer.trim()) consumeLine(buffer);
-  if (!terminal) throw new Error('Ollama stream ended without a terminal metrics event');
+  if (!terminal) {
+    const error = new Error('Ollama stream ended without a terminal metrics event');
+    error.code = 'OLLAMA_STREAM_INCOMPLETE';
+    throw error;
+  }
   return { data: { ...terminal, response: output }, timeToFirstTokenMs };
 }
 
@@ -1082,6 +1124,7 @@ module.exports = {
     verifyAppliedContext,
     hostTestRequest,
     operationMatches,
+    readExactGenerateTerminal,
     unloadCurrentModel,
     unloadOneModel,
     warmUp,

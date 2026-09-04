@@ -3,13 +3,24 @@
 jest.mock('../../../src/clients/coreApiClient', () => ({ getModelRegistryByName: jest.fn() }));
 jest.mock('../../../src/services/benchmark/modelDigestService', () => ({ getModelDigest: jest.fn() }));
 jest.mock('../../../src/services/profiler/hostProfileService', () => ({ getById: jest.fn() }));
+jest.mock('../../../src/clients/ollamaClient', () => ({
+  getVersion: jest.fn(),
+  listModels: jest.fn(),
+  listRunning: jest.fn()
+}));
 
 const { getModelRegistryByName } = require('../../../src/clients/coreApiClient');
 const { getModelDigest } = require('../../../src/services/benchmark/modelDigestService');
 const hostProfiles = require('../../../src/services/profiler/hostProfileService');
-const { resolveArtifactIdentity } = require('../../../src/services/profiler/artifactIdentityService');
+const ollama = require('../../../src/clients/ollamaClient');
+const {
+  resolveArtifactIdentity,
+  resolveRuntimeArtifactReceipt
+} = require('../../../src/services/profiler/artifactIdentityService');
 
 const HOST_URL = 'http://host-a:11434';
+const RAW_DIGEST = 'a'.repeat(64);
+const EXACT_DIGEST = `sha256:${RAW_DIGEST}`;
 
 describe('profiler artifact identity service', () => {
   beforeEach(() => {
@@ -65,5 +76,68 @@ describe('profiler artifact identity service', () => {
 
     await expect(resolveArtifactIdentity('owner/model:8b-q4', 'host-a', HOST_URL))
       .rejects.toThrow(/registry is missing or stale/i);
+  });
+
+  it('publishes a fresh canonical runtime receipt entirely from live server evidence', async () => {
+    getModelDigest.mockResolvedValue(RAW_DIGEST);
+    getModelRegistryByName.mockResolvedValue({
+      _id: 'registry-a',
+      modelName: 'owner/model:8b-q4',
+      installations: [{ hostUrl: HOST_URL, digest: EXACT_DIGEST, status: 'active', isActive: true }]
+    });
+    ollama.listModels.mockResolvedValue({
+      models: [{ name: 'owner/model:8b-q4', digest: RAW_DIGEST, size: 9_000_000_000 }]
+    });
+    ollama.listRunning.mockResolvedValue({
+      models: [{
+        name: 'owner/model:8b-q4',
+        size: 8_500_000_000,
+        size_vram: 8_500_000_000,
+        context_length: 32_768
+      }]
+    });
+    ollama.getVersion.mockResolvedValue({ version: '0.11.10' });
+
+    const receipt = await resolveRuntimeArtifactReceipt(
+      'owner/model:8b-q4',
+      'host-a',
+      HOST_URL,
+      { observedAt: '2026-09-04T18:00:00.000Z' }
+    );
+
+    expect(receipt).toMatchObject({
+      contract: 'agentx.runtime-artifact-identity/v1',
+      model: 'owner/model:8b-q4',
+      tag: 'owner/model:8b-q4',
+      hostId: 'host-a',
+      hostUrl: HOST_URL,
+      digest: EXACT_DIGEST,
+      artifactSize: 9_000_000_000,
+      residentSize: 8_500_000_000,
+      sizeVram: 8_500_000_000,
+      fullVram: true,
+      contextLength: 32_768,
+      runtimeVersion: '0.11.10',
+      freshness: { state: 'fresh', observedAt: '2026-09-04T18:00:00.000Z' },
+      provenance: { authority: 'agentx-product-benchmark', mode: 'live_server_observation' }
+    });
+    expect(receipt.runtimeFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(receipt.receiptId).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('fails closed when residency cannot prove live VRAM and context', async () => {
+    getModelDigest.mockResolvedValue(EXACT_DIGEST);
+    getModelRegistryByName.mockResolvedValue({
+      modelName: 'owner/model:8b-q4',
+      installations: [{ hostUrl: HOST_URL, digest: EXACT_DIGEST, isActive: true }]
+    });
+    ollama.listModels.mockResolvedValue({
+      models: [{ name: 'owner/model:8b-q4', digest: EXACT_DIGEST, size: 9_000_000_000 }]
+    });
+    ollama.listRunning.mockResolvedValue({ models: [] });
+    ollama.getVersion.mockResolvedValue({ version: '0.11.10' });
+
+    await expect(resolveRuntimeArtifactReceipt('owner/model:8b-q4', 'host-a', HOST_URL))
+      .rejects.toThrow(/not resident/i);
   });
 });

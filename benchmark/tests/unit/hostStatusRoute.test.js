@@ -6,8 +6,9 @@ const request = require('supertest');
 jest.mock('../../src/services/profiler/hostProfileService', () => ({
   getById: jest.fn(),
   checkStatus: jest.fn(),
-  updateStatus: jest.fn(),
-  upsert: jest.fn(),
+  updateStatusMetadata: jest.fn(),
+  upsertMetadata: jest.fn(),
+  upsertAuthority: jest.fn(),
   updateBaseline: jest.fn(),
   invalidateBaselineReceipt: jest.fn(),
   releaseModel: jest.fn(),
@@ -53,12 +54,18 @@ describe('Profiler host status read/refresh split', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    hostProfileService.upsert.mockReset().mockResolvedValue({});
+    hostProfileService.upsertMetadata.mockReset().mockResolvedValue({});
+    hostProfileService.upsertAuthority.mockReset().mockResolvedValue({});
     hostProfileService.invalidateBaselineReceipt.mockResolvedValue({ invalidated: true });
     lease = {
       signal: new AbortController().signal,
       assertActive: jest.fn(() => true),
       identityFor: jest.fn(() => ({ claimBatchId: 'profile-test', claimGeneration: 'generation-1' })),
+      authorityProof: jest.fn(() => ({
+        admissionId: 'admission-profiler',
+        generation: 'admission-generation-profiler',
+        principal: 'benchmark-service'
+      })),
       abandoned: false,
       abandon: jest.fn(async () => { lease.abandoned = true; }),
       finalize: jest.fn(async (options = {}) => {
@@ -117,11 +124,12 @@ describe('Profiler host status read/refresh split', () => {
       code: 'HOST_PROFILE_FIELD_NOT_WRITABLE'
     });
     expect(response.body.fields).toEqual(expect.arrayContaining(['baseline', 'dedicated', 'reconciliation']));
-    expect(hostProfileService.upsert).not.toHaveBeenCalled();
+    expect(hostProfileService.upsertMetadata).not.toHaveBeenCalled();
+    expect(hostProfileService.upsertAuthority).not.toHaveBeenCalled();
   });
 
   test('PUT host profile accepts only bounded operator-owned display and thread fields', async () => {
-    hostProfileService.upsert.mockResolvedValue({ hostId: 'primary', displayName: 'Primary', cpu: { threadOverride: 8 } });
+    hostProfileService.upsertMetadata.mockResolvedValue({ hostId: 'primary', displayName: 'Primary', cpu: { threadOverride: 8 } });
 
     const response = await request(app)
       .put('/api/profiler/hosts/primary')
@@ -129,7 +137,7 @@ describe('Profiler host status read/refresh split', () => {
       .send({ displayName: ' Primary ', cpu: { threadOverride: 8 } });
 
     expect(response.status).toBe(200);
-    expect(hostProfileService.upsert).toHaveBeenCalledWith({
+    expect(hostProfileService.upsertMetadata).toHaveBeenCalledWith({
       displayName: 'Primary',
       cpu: { threadOverride: 8 },
       hostId: 'primary'
@@ -142,21 +150,21 @@ describe('Profiler host status read/refresh split', () => {
     expect(response.status).toBe(200);
     expect(response.body.data.status).toBe('online');
     expect(hostProfileService.checkStatus).not.toHaveBeenCalled();
-    expect(hostProfileService.updateStatus).not.toHaveBeenCalled();
-    expect(hostProfileService.upsert).not.toHaveBeenCalled();
+    expect(hostProfileService.updateStatusMetadata).not.toHaveBeenCalled();
+    expect(hostProfileService.upsertMetadata).not.toHaveBeenCalled();
+    expect(hostProfileService.upsertAuthority).not.toHaveBeenCalled();
   });
 
   test('POST refresh owns the live probe and evidence update', async () => {
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
-    hostProfileService.updateStatus.mockResolvedValue();
-    hostProfileService.upsert.mockResolvedValue();
+    hostProfileService.updateStatusMetadata.mockResolvedValue();
 
     const response = await request(app).post('/api/profiler/hosts/primary/status/refresh');
 
     expect(response.status).toBe(200);
     expect(hostProfileService.checkStatus).toHaveBeenCalledWith('http://localhost:11434');
-    expect(hostProfileService.updateStatus).toHaveBeenCalledWith('primary', 'online');
-    expect(hostProfileService.upsert).toHaveBeenCalled();
+    expect(hostProfileService.updateStatusMetadata).toHaveBeenCalledWith('primary', 'online');
+    expect(hostProfileService.upsertAuthority).not.toHaveBeenCalled();
   });
 
   test('persists the released projection under the lease before final release', async () => {
@@ -172,40 +180,43 @@ describe('Profiler host status read/refresh split', () => {
       serverTerminalAt: new Date('2026-09-04T00:00:00.000Z')
     });
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
-    hostProfileService.upsert.mockResolvedValue({ status: 'online' });
+    hostProfileService.upsertAuthority.mockResolvedValue({ status: 'online' });
 
     const response = await request(app).post('/api/profiler/hosts/primary/release');
 
     expect(response.status).toBe(200);
-    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(hostProfileService.upsertAuthority).toHaveBeenNthCalledWith(1, expect.objectContaining({
       hostId: 'primary',
       reconciliation: expect.objectContaining({
         state: 'prepared',
         operation: 'release_model',
         model: 'qwen:7b'
       })
-    }), {
+    }), expect.objectContaining({
+      authorityService: 'profiler-release',
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
-    });
-    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(2, expect.objectContaining({
+    }));
+    expect(hostProfileService.upsertAuthority).toHaveBeenNthCalledWith(2, expect.objectContaining({
       reconciliation: expect.objectContaining({
         state: 'mutating'
       })
-    }), {
+    }), expect.objectContaining({
+      authorityService: 'profiler-release',
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
-    });
-    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(3, expect.objectContaining({
+    }));
+    expect(hostProfileService.upsertAuthority).toHaveBeenNthCalledWith(3, expect.objectContaining({
       reconciliation: expect.objectContaining({
         state: 'verified',
         serverTerminalObserved: true
       })
-    }), {
+    }), expect.objectContaining({
+      authorityService: 'profiler-release',
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
-    });
-    expect(hostProfileService.upsert).toHaveBeenNthCalledWith(4, expect.objectContaining({
+    }));
+    expect(hostProfileService.upsertAuthority).toHaveBeenNthCalledWith(4, expect.objectContaining({
       hostId: 'primary',
       status: 'online',
       dedicated: null,
@@ -213,8 +224,12 @@ describe('Profiler host status read/refresh split', () => {
         state: 'resolved',
         releaseReceipt: { contract: 'agentx.benchmark-claim-release/v1' }
       })
-    }), { signal: lease.signal, assertAuthorityActive: lease.assertActive });
-    expect(hostProfileService.upsert.mock.invocationCallOrder[0])
+    }), expect.objectContaining({
+      authorityService: 'profiler-release',
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    }));
+    expect(hostProfileService.upsertAuthority.mock.invocationCallOrder[0])
       .toBeLessThan(lease.finalize.mock.invocationCallOrder[0]);
     expect(lease.finalize).toHaveBeenCalledWith(expect.objectContaining({
       byHost: {
@@ -234,14 +249,14 @@ describe('Profiler host status read/refresh split', () => {
     });
     hostProfileService.releaseModel.mockResolvedValue({ success: true, serverTerminalObserved: true });
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
-    hostProfileService.upsert
+    hostProfileService.upsertAuthority
       .mockRejectedValueOnce(new Error('ambiguous reconciliation acknowledgement'));
 
     const response = await request(app).post('/api/profiler/hosts/primary/release');
 
     expect(response.status).toBe(500);
     expect(hostProfileService.releaseModel).not.toHaveBeenCalled();
-    expect(hostProfileService.upsert).toHaveBeenCalledTimes(1);
+    expect(hostProfileService.upsertAuthority).toHaveBeenCalledTimes(1);
     expect(lease.finalize).toHaveBeenCalledWith();
   });
 
@@ -272,7 +287,7 @@ describe('Profiler host status read/refresh split', () => {
       authorityLost = true;
       return { baseline: { referenceModel: 'baseline:model' } };
     });
-    hostProfileService.upsert.mockResolvedValue({ baseline: priorBaseline });
+    hostProfileService.upsertAuthority.mockResolvedValue({ baseline: priorBaseline });
 
     const response = await request(app)
       .post('/api/profiler/hosts/test/run')
@@ -286,7 +301,13 @@ describe('Profiler host status read/refresh split', () => {
         tokensPerSec: 40,
         persistenceReceipt: expect.any(String)
       }),
-      { signal: lease.signal, assertAuthorityActive: lease.assertActive }
+      expect.objectContaining({
+        authorityService: 'profiler-baseline',
+        authorityProof: expect.any(Object),
+        expectedAuthorityGeneration: null,
+        signal: lease.signal,
+        assertAuthorityActive: lease.assertActive
+      })
     );
     expect(hostProfileService.invalidateBaselineReceipt).toHaveBeenCalledWith(
       'primary',
@@ -305,7 +326,7 @@ describe('Profiler host status read/refresh split', () => {
     });
     hostProfileService.releaseModel.mockResolvedValue({ success: true, serverTerminalObserved: true });
     hostProfileService.checkStatus.mockResolvedValue({ status: 'online', dedicated: null });
-    hostProfileService.upsert
+    hostProfileService.upsertAuthority
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
@@ -314,9 +335,9 @@ describe('Profiler host status read/refresh split', () => {
     const response = await request(app).post('/api/profiler/hosts/primary/release');
 
     expect(response.status).toBe(500);
-    expect(hostProfileService.upsert).toHaveBeenCalledTimes(4);
-    expect(hostProfileService.upsert.mock.calls[0][0].reconciliation.state).toBe('prepared');
-    expect(hostProfileService.upsert.mock.calls[3][0].reconciliation.state).toBe('resolved');
+    expect(hostProfileService.upsertAuthority).toHaveBeenCalledTimes(4);
+    expect(hostProfileService.upsertAuthority.mock.calls[0][0].reconciliation.state).toBe('prepared');
+    expect(hostProfileService.upsertAuthority.mock.calls[3][0].reconciliation.state).toBe('resolved');
     expect(lease.abandon).toHaveBeenCalledWith(expect.objectContaining({ retainAdmission: true }));
     expect(lease.finalize).toHaveBeenCalledTimes(1);
   });
@@ -414,7 +435,7 @@ describe('Profiler host status read/refresh split', () => {
       serverTerminalObserved: true,
       serverTerminalAt: new Date('2026-09-04T00:00:00.000Z')
     });
-    hostProfileService.upsert
+    hostProfileService.upsertAuthority
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error('terminal receipt acknowledgement lost'));

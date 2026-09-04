@@ -112,11 +112,9 @@ const LEGACY_DIRECT_SINK_IDS = new Set(Object.freeze([
   'core.backup.rag-request',
   'core.backup.snapshot-download',
   'core.benchmark-proxy.request',
-  'core.chat.generate',
   'core.chat.stream',
   'core.cluster-live.ps',
   'core.cross-service.request',
-  'core.custom-model.create',
   'core.host-pin.ps',
   'core.host-preference.generate',
   'core.host-preference.inventory',
@@ -127,7 +125,6 @@ const LEGACY_DIRECT_SINK_IDS = new Set(Object.freeze([
   'core.model-aggregator.tags',
   'core.model-context.show',
   'core.model-router.fallback',
-  'core.model-router.primary',
   'core.model-sync.tags',
   'core.nerve-center.rag-documents',
   'core.nerve-center.rag-refresh',
@@ -140,10 +137,7 @@ const LEGACY_DIRECT_SINK_IDS = new Set(Object.freeze([
   'core.ollama-model-operation',
   'core.pin-reconciler.ps',
   'core.portal-status.probe',
-  'core.prompt-analysis.generate',
   'core.roundtable.agent',
-  'core.roundtable.agent-stream',
-  'core.roundtable.quality',
   'core.roundtable.runtime-participant',
   'core.routing.execute',
   'core.routing.show',
@@ -151,7 +145,7 @@ const LEGACY_DIRECT_SINK_IDS = new Set(Object.freeze([
   'core.trusted-runtime.forward',
   'core.web-search.query',
 ]));
-const LEGACY_DIRECT_FINGERPRINT_SHA256 = '9d740d671783d46a1f872b7e63be1776e9f8e391e8093269b93c465b8b4e5a59';
+const LEGACY_DIRECT_FINGERPRINT_SHA256 = '65b145862f686c3ac485dec3fb104332b616de4b62ee1970af452bfaf1b4a134';
 
 function required(condition, message) {
   if (!condition) throw new Error(message);

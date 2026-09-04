@@ -1,3 +1,4 @@
+const { PassThrough } = require('node:stream');
 const mockFetch = jest.fn();
 const mockGetActivePrompt = jest.fn();
 const mockBuildSystemPrompt = jest.fn();
@@ -180,7 +181,8 @@ describe('chatServiceStream', () => {
       ok: true,
       body: (async function* stream() {
         yield Buffer.from(JSON.stringify({
-          message: { content: 'Hello' }
+          message: { content: 'Hello' },
+          done: false
         }) + '\n');
         yield Buffer.from(JSON.stringify({
           done: true,
@@ -267,7 +269,8 @@ describe('chatServiceStream', () => {
       ok: true,
       body: (async function* stream() {
         yield Buffer.from(JSON.stringify({
-          message: { content: 'Hello' }
+          message: { content: 'Hello' },
+          done: false
         }) + '\n');
         yield Buffer.from(JSON.stringify({ done: true, eval_count: 2 }) + '\n');
       })()
@@ -338,7 +341,8 @@ describe('chatServiceStream', () => {
       ok: true,
       body: (async function* stream() {
         yield Buffer.from(JSON.stringify({
-          message: { content: 'Hello' }
+          message: { content: 'Hello' },
+          done: false
         }) + '\n');
         yield Buffer.from(JSON.stringify({
           done: true,
@@ -383,7 +387,7 @@ describe('chatServiceStream', () => {
     mockFetch.mockResolvedValue({
       ok: true,
       body: (async function* stream() {
-        yield Buffer.from(JSON.stringify({ message: { content: 'Done' } }) + '\n');
+        yield Buffer.from(JSON.stringify({ message: { content: 'Done' }, done: false }) + '\n');
         yield Buffer.from(JSON.stringify({
           done: true,
           eval_count: 1,
@@ -428,7 +432,7 @@ describe('chatServiceStream', () => {
     mockFetch.mockResolvedValue({
       ok: true,
       body: (async function* stream() {
-        const line = JSON.stringify({ message: { content: 'Bonjour.' } }) + '\n';
+        const line = JSON.stringify({ message: { content: 'Bonjour.' }, done: false }) + '\n';
         yield Buffer.from(line.slice(0, 17));
         yield Buffer.from(line.slice(17));
         yield Buffer.from(JSON.stringify({
@@ -517,38 +521,56 @@ describe('chatServiceStream', () => {
     }));
   });
 
-  it('finishes at the terminal NDJSON record even when the upstream body does not close', async () => {
-    let requestedNextChunk = false;
+  it('waits for EOF before accepting a terminal NDJSON record', async () => {
+    const body = new PassThrough();
     mockFetch.mockResolvedValue({
       ok: true,
-      body: (async function* stream() {
-        yield Buffer.from(JSON.stringify({ message: { content: 'Done' } }) + '\n' + JSON.stringify({
-          done: true,
-          eval_count: 1,
-          total_duration: 1000000,
-          eval_duration: 1000000
-        }) + '\n');
-        requestedNextChunk = true;
-        await new Promise(() => {});
-      })()
+      body
     });
     const onComplete = jest.fn();
 
-    await handleChatRequestStream({
+    const pending = handleChatRequestStream({
       userId: 'user-1', model: 'qwen3:14b', message: 'finish cleanly',
       target: 'http://192.0.2.66:11434', onToken: jest.fn(), onThinking: jest.fn(),
       onComplete, onError: jest.fn()
     });
+    body.write(JSON.stringify({ message: { content: 'Done' }, done: false }) + '\n');
+    body.write(JSON.stringify({ done: true, eval_count: 1, total_duration: 1000000, eval_duration: 1000000 }) + '\n');
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(onComplete).not.toHaveBeenCalled();
+    body.end();
+    await pending;
 
     expect(onComplete).toHaveBeenCalledTimes(1);
-    expect(requestedNextChunk).toBe(false);
+  });
+
+  it('rejects data after a terminal NDJSON record', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: (async function* stream() {
+        yield Buffer.from(JSON.stringify({ done: true }) + '\n');
+        yield Buffer.from(JSON.stringify({ message: { content: 'late' }, done: false }) + '\n');
+      })()
+    });
+    const onComplete = jest.fn();
+    const onError = jest.fn();
+
+    await handleChatRequestStream({
+      userId: 'user-1', model: 'qwen3:14b', message: 'reject late data',
+      target: 'http://192.0.2.66:11434',
+      onToken: jest.fn(), onThinking: jest.fn(), onComplete, onError
+    });
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'OLLAMA_STREAM_INCOMPLETE' }));
   });
 
   it('rejects a closed stream without an Ollama terminal record', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       body: (async function* stream() {
-        yield Buffer.from(JSON.stringify({ message: { content: '(stopped)' } }) + '\n');
+        yield Buffer.from(JSON.stringify({ message: { content: '(stopped)' }, done: false }) + '\n');
       })()
     });
     const onComplete = jest.fn();

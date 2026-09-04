@@ -484,6 +484,7 @@ async function getModelRegistryByName(name, options = {}) {
     const qs = params.toString();
     const data = await coreRequest(`/api/models/registry/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`, {
       operationId: CORE_OPERATIONS.MODEL_REGISTRY,
+      signal: options.signal,
     });
     return data.data?.model || data.data || null;
   } catch (err) {
@@ -995,18 +996,20 @@ async function heartbeatWorkloadAdmission(workloadId, ttlMs = null) {
   }
 }
 
-async function releaseWorkloadAdmission(workloadId) {
+async function releaseWorkloadAdmission(workloadId, options = {}) {
   const key = String(workloadId || '');
   const receipt = workloadAdmissionById.get(key);
   if (!receipt) return { released: false, reason: 'local workload admission proof missing' };
   if (receipt.recoveryRequired && receipt.recoveryState !== 'RESTORED') {
     if (!new Set(['VERIFIED', 'RESTORED']).has(receipt.recoveryState)) {
       await transitionWorkloadRecovery(key, 'VERIFIED', {
+        signal: options.signal,
         receipt: { contract: 'agentx.workload-recovery/v1', event: 'workload-terminal', workloadId: key }
       });
     }
     if (receipt.recoveryState !== 'RESTORED') {
       await transitionWorkloadRecovery(key, 'RESTORED', {
+        signal: options.signal,
         receipt: { contract: 'agentx.workload-recovery/v1', event: 'authority-restored', workloadId: key }
       });
     }
@@ -1037,6 +1040,7 @@ async function releaseWorkloadAdmission(workloadId) {
       operationId: receipt.recoveryRequired
         ? CORE_OPERATIONS.WORKLOAD_RECOVERY_RELEASE
         : CORE_OPERATIONS.WORKLOAD_RELEASE,
+      signal: options.signal,
       body: JSON.stringify(receipt.recoveryRequired ? {
         recoveryGeneration: receipt.recoveryGeneration,
         ownerId: receipt.recoveryOwnerId || null
@@ -1053,6 +1057,7 @@ async function releaseWorkloadAdmission(workloadId) {
         {
           method: 'POST',
           operationId: CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY,
+          signal: options.signal,
           body: JSON.stringify({ generation: receipt.generation })
         }
       );
@@ -1093,6 +1098,7 @@ async function transitionWorkloadRecovery(workloadId, state, options = {}) {
     {
       method: 'POST',
       operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_TRANSITION,
+      signal: options.signal,
       body: JSON.stringify({
         recoveryGeneration: receipt.recoveryGeneration,
         ownerId: receipt.recoveryOwnerId || null,
@@ -1120,12 +1126,13 @@ async function transitionWorkloadRecovery(workloadId, state, options = {}) {
   return result;
 }
 
-async function adoptWorkloadRecovery({ workloadId, recoveryId, recoveryRequestId, ownerId }) {
+async function adoptWorkloadRecovery({ workloadId, recoveryId, recoveryRequestId, ownerId, signal }) {
   const data = await coreRequest(
     `/api/nerve-center/workload-recoveries/${encodeURIComponent(recoveryId)}/adopt`,
     {
       method: 'POST',
       operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT,
+      signal,
       body: JSON.stringify({ recoveryRequestId, ownerId, ttlMs: RECOVERY_OWNER_TTL_MS })
     }
   );
@@ -1145,7 +1152,7 @@ async function adoptWorkloadRecovery({ workloadId, recoveryId, recoveryRequestId
   return result;
 }
 
-async function heartbeatWorkloadRecovery(workloadId, ttlMs = RECOVERY_OWNER_TTL_MS) {
+async function heartbeatWorkloadRecovery(workloadId, ttlMs = RECOVERY_OWNER_TTL_MS, options = {}) {
   const key = String(workloadId || '');
   const receipt = workloadAdmissionById.get(key);
   if (!receipt?.recoveryRequired || !receipt.recoveryOwnerId) {
@@ -1156,6 +1163,7 @@ async function heartbeatWorkloadRecovery(workloadId, ttlMs = RECOVERY_OWNER_TTL_
     {
       method: 'POST',
       operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_HEARTBEAT,
+      signal: options.signal,
       body: JSON.stringify({
         recoveryGeneration: receipt.recoveryGeneration,
         ownerId: receipt.recoveryOwnerId,
@@ -1174,7 +1182,7 @@ async function heartbeatWorkloadRecovery(workloadId, ttlMs = RECOVERY_OWNER_TTL_
   return result;
 }
 
-async function assertWorkloadRecovery(workloadId) {
+async function assertWorkloadRecovery(workloadId, options = {}) {
   const receipt = workloadAdmissionById.get(String(workloadId || ''));
   if (!receipt?.recoveryRequired) return { owned: false, reason: 'local recovery proof missing' };
   const data = await coreRequest(
@@ -1182,6 +1190,7 @@ async function assertWorkloadRecovery(workloadId) {
     {
       method: 'POST',
       operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ASSERT,
+      signal: options.signal,
       body: JSON.stringify({
         recoveryGeneration: receipt.recoveryGeneration,
         ownerId: receipt.recoveryOwnerId || null
@@ -1196,12 +1205,13 @@ async function assertWorkloadRecovery(workloadId) {
     : { owned: false, reason: result?.reason || 'Core recovery ownership is invalid' };
 }
 
-async function recoverWorkloadAdmissionRelease(identity = {}) {
+async function recoverWorkloadAdmissionRelease(identity = {}, options = {}) {
   const data = await coreRequest(
     `/api/nerve-center/workload-admissions/${encodeURIComponent(identity.admissionId || '')}/release-receipt`,
     {
       method: 'POST',
       operationId: CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY,
+      signal: options.signal,
       body: JSON.stringify({ generation: identity.generation })
     }
   );
@@ -1223,7 +1233,7 @@ async function recoverWorkloadAdmissionRelease(identity = {}) {
   };
 }
 
-async function restoreWorkloadRecoveryHosts(workloadId, excludedModelsByHost = {}) {
+async function restoreWorkloadRecoveryHosts(workloadId, excludedModelsByHost = {}, options = {}) {
   const receipt = workloadAdmissionById.get(String(workloadId || ''));
   if (!receipt?.recoveryRequired || !receipt.recoveryOwnerId) {
     return { restored: false, reason: 'adopted local recovery proof missing' };
@@ -1233,6 +1243,7 @@ async function restoreWorkloadRecoveryHosts(workloadId, excludedModelsByHost = {
     {
       method: 'POST',
       operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_HOST_RESTORE,
+      signal: options.signal,
       body: JSON.stringify({
         recoveryGeneration: receipt.recoveryGeneration,
         ownerId: receipt.recoveryOwnerId,

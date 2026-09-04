@@ -22,6 +22,13 @@ jest.mock('../../src/helpers/peerVerifiedNodeFetchTransport', () => ({
   })
 }));
 
+jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
+  runRuntimeMutation: jest.fn(async (_options, operation) => operation({
+    signal: new AbortController().signal,
+    assertActive: jest.fn()
+  }))
+}));
+
 const { getConfiguredHosts } = require('../../src/helpers/ollamaHostConfig');
 const watchdog = require('../../src/services/ollamaWatchdogService');
 const hostGate = require('../../src/services/hostGate');
@@ -278,7 +285,7 @@ describe('forceUnjam + hostGate in-flight guard', () => {
       }),
       '/api/generate': (_url, opts) => {
         generateBodies.push(JSON.parse(opts.body));
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        return { ok: true, status: 200, json: async () => ({ done: true }) };
       }
     }));
 
@@ -303,7 +310,7 @@ describe('forceUnjam + hostGate in-flight guard', () => {
         ok: true,
         json: async () => ({ models: [{ name: 'a' }, { name: 'b' }] })
       }),
-      '/api/generate': () => ({ ok: true, status: 200, json: async () => ({}), text: async () => '' })
+      '/api/generate': () => ({ ok: true, status: 200, json: async () => ({ done: true }) })
     }));
 
     const result = await watchdog.forceUnjam(MOCK_HOST.url);

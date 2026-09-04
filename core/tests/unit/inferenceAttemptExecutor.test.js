@@ -12,6 +12,8 @@ jest.mock('../../src/services/inferenceAdmissionService', () => ({
 const {
   executeAdmittedOllamaAttempt,
   executeOllamaAttempt,
+  hasTerminalOllamaFrame,
+  hasTerminalOllamaResponse,
   OLLAMA_ABORT_SOURCE,
 } = require('../../src/services/routing/inferenceAttemptExecutor');
 
@@ -144,7 +146,7 @@ describe('inferenceAttemptExecutor cancellation', () => {
       return {
         ok: true,
         status: 200,
-        text: async () => JSON.stringify({ response: 'done' }),
+        text: async () => JSON.stringify({ response: 'done', done: true }),
       };
     });
 
@@ -274,7 +276,7 @@ describe('inferenceAttemptExecutor cancellation', () => {
       text: async () => {
         bodyStartedResolve();
         await bodyFinished;
-        return JSON.stringify({ response: 'terminal' });
+        return JSON.stringify({ response: 'terminal', done: true });
       }
     });
 
@@ -290,7 +292,7 @@ describe('inferenceAttemptExecutor cancellation', () => {
     expect(lifecycle.complete).not.toHaveBeenCalled();
 
     finishBody();
-    await expect(attempt).resolves.toMatchObject({ data: { response: 'terminal' } });
+    await expect(attempt).resolves.toMatchObject({ data: { response: 'terminal', done: true } });
     expect(lifecycle.complete).toHaveBeenCalledTimes(1);
     expect(lifecycle.abandon).not.toHaveBeenCalled();
   });
@@ -394,5 +396,78 @@ describe('inferenceAttemptExecutor cancellation', () => {
 
     expect(lifecycle.complete).toHaveBeenCalledTimes(1);
     expect(lifecycle.abandon).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['', 'empty EOF'],
+    ['not-json', 'malformed JSON'],
+    ['{"response":"partial","done":false}', 'done false'],
+    ['{"response":"done","done":true} trailing', 'garbage after JSON'],
+  ])('non-stream %s fails closed without completing admission (%s)', async (raw) => {
+    const lifecycle = {
+      signal: new AbortController().signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn().mockResolvedValue({ released: true }),
+      abandon: jest.fn().mockResolvedValue({ quarantined: true })
+    };
+    beginInferenceAdmission.mockResolvedValueOnce(lifecycle);
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => raw
+    });
+
+    await expect(executeAdmittedOllamaAttempt({
+      hostUrl: 'http://ollama.test:11434',
+      model: 'model-a',
+      payload: { model: 'model-a', prompt: 'hello', stream: false },
+      useChat: false,
+      stream: false,
+      timeoutMs: 60_000
+    })).rejects.toMatchObject({
+      code: 'OLLAMA_RESPONSE_INCOMPLETE',
+      isOllamaAttemptError: true,
+      ollamaTerminalObserved: false
+    });
+
+    expect(lifecycle.complete).not.toHaveBeenCalled();
+    expect(lifecycle.abandon).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ['{"response":"done","done":true}\n{"response":"late","done":false}\n', 'data after done'],
+    ['{"response":"done","done":true}\ngarbage\n', 'garbage after done'],
+    ['{"response":"done","done":true}\n{"response":"duplicate","done":true}\n', 'a duplicate terminal frame'],
+    ['{"response":"partial","done":false}\ngarbage\n{"response":"done","done":true}\n', 'a malformed earlier frame'],
+    ['{"response":"partial"}\n{"response":"done","done":true}\n', 'a frame without explicit done state'],
+    ['{"error":"failed","done":true}\n', 'an error disguised as a done frame'],
+  ])('stream fails closed when it contains %s (%s)', async (raw) => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => raw
+    });
+
+    await expect(executeOllamaAttempt({
+      hostUrl: 'http://ollama.test:11434',
+      payload: { model: 'model-a', prompt: 'hello', stream: true },
+      useChat: false,
+      stream: true,
+      timeoutMs: 60_000
+    })).rejects.toMatchObject({
+      code: 'OLLAMA_STREAM_INCOMPLETE',
+      isOllamaAttemptError: true,
+      ollamaTerminalObserved: false
+    });
+  });
+
+  test('terminal validators accept only exact completed Ollama payloads', () => {
+    expect(hasTerminalOllamaResponse('{"response":"done","done":true}')).toBe(true);
+    expect(hasTerminalOllamaResponse('{"response":"done","done":true}\n')).toBe(true);
+    expect(hasTerminalOllamaResponse('{"response":"done","done":true} trailing')).toBe(false);
+    expect(hasTerminalOllamaResponse('{"error":"failed","done":true}')).toBe(false);
+    expect(hasTerminalOllamaFrame('{"response":"partial","done":false}\n{"response":"done","done":true}\n')).toBe(true);
+    expect(hasTerminalOllamaFrame('{"response":"done","done":true}\n{"response":"late","done":false}\n')).toBe(false);
   });
 });

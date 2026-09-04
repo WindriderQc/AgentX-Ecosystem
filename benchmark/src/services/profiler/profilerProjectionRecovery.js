@@ -16,6 +16,7 @@ const {
   recoverWorkloadAdmissionRelease
 } = require('../../clients/coreApiClient');
 const logger = require('../../../config/logger');
+const { startRecoveryOwnershipHeartbeat } = require('../recoveryOwnershipHeartbeat');
 
 const DEFAULT_RECOVERY_DELAY_MS = 60_000;
 const DEFAULT_RECOVERY_INTERVAL_MS = 60_000;
@@ -50,14 +51,18 @@ async function reconcileLegacyTerminalProfile(profile) {
     const modelName = profile.reconciliation?.model;
     const available = (inventory.models || []).some(model => isSameOllamaModel(model.name, modelName));
     const isRelease = profile.reconciliation?.operation === 'release_model';
+    const authorityProof = lease.authorityProof();
     await lease.finalize({
       ...(isRelease ? { byHost: { [profile.hostUrl]: { excludedModels: [modelName] } } } : {}),
       beforeWorkloadRelease: async result => {
-        await hostProfileService.upsert({
+        await hostProfileService.upsertAuthority({
           hostId: profile.hostId,
           ...(isRelease ? { dedicated: null } : {}),
           reconciliation: {
             ...profile.reconciliation,
+            admissionId: authorityProof.admissionId,
+            admissionGeneration: authorityProof.generation,
+            admissionPrincipal: authorityProof.principal,
             state: 'resolved',
             reason: null,
             releaseReceipt: result,
@@ -66,7 +71,17 @@ async function reconcileLegacyTerminalProfile(profile) {
             ownerEpoch: null,
             ownerClaimedAt: null
           }
-        }, { signal: lease.signal, assertAuthorityActive: lease.assertActive });
+        }, {
+          authorityService: 'profiler-recovery',
+          authorityProof,
+          authorityFilter: {
+            'reconciliation.state': profile.reconciliation.state,
+            'reconciliation.operationId': profile.reconciliation.operationId,
+            'reconciliation.serverTerminalObserved': true
+          },
+          signal: lease.signal,
+          assertAuthorityActive: lease.assertActive
+        });
       }
     });
     return { hostId: profile.hostId, recovered: true, pending: false, legacy: true, available };
@@ -98,25 +113,56 @@ async function claimProfileRecovery(profile, ownerId) {
   return claimed ? { profile: claimed, ownerId, ownerEpoch } : null;
 }
 
-async function assertOwnership(ownership) {
+async function assertOwnership(ownership, options = {}) {
   const { profile, ownerId, ownerEpoch } = ownership;
   const journal = await HostProfile.findOne({
     _id: profile._id,
     'reconciliation.ownerId': ownerId,
     'reconciliation.ownerEpoch': ownerEpoch,
     'reconciliation.state': { $ne: 'resolved' }
-  }).lean();
-  if (!journal) throw new Error('Profiler recovery journal ownership was lost');
-  const core = await assertWorkloadRecovery(recoveryIdentity(profile).workloadId);
+  }, null, options.signal ? { signal: options.signal } : undefined).lean();
+  if (!journal) {
+    const error = new Error('Profiler recovery journal ownership was lost');
+    error.code = 'PROFILER_RECOVERY_OWNERSHIP_LOST';
+    throw error;
+  }
+  const core = await assertWorkloadRecovery(recoveryIdentity(profile).workloadId, options);
   if (core?.owned !== true || core.recoveryOwnerId !== ownerId) {
-    throw new Error(core?.reason || 'Core profiler recovery quarantine ownership was lost');
+    const error = new Error(core?.reason || 'Core profiler recovery quarantine ownership was lost');
+    error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+    throw error;
   }
   return core;
+}
+
+async function refreshProfileOwner(ownership, { signal } = {}) {
+  const { profile, ownerId, ownerEpoch } = ownership;
+  const result = await HostProfile.updateOne(
+    {
+      _id: profile._id,
+      'reconciliation.ownerId': ownerId,
+      'reconciliation.ownerEpoch': ownerEpoch,
+      'reconciliation.state': { $ne: 'resolved' }
+    },
+    { $set: { 'reconciliation.ownerClaimedAt': new Date() } },
+    { signal }
+  );
+  if (Number(result?.matchedCount ?? result?.modifiedCount) !== 1) {
+    const error = new Error('Profiler recovery journal ownership was lost');
+    error.code = 'PROFILER_RECOVERY_OWNERSHIP_LOST';
+    throw error;
+  }
 }
 
 async function reconcileOwnedProfile(ownership) {
   const { profile, ownerId, ownerEpoch } = ownership;
   const reconciliation = profile.reconciliation || {};
+  const ownershipHeartbeat = startRecoveryOwnershipHeartbeat({
+    refreshOwner: options => refreshProfileOwner(ownership, options)
+  });
+
+  try {
+  await ownershipHeartbeat.ready;
   if (reconciliation.state === 'verified'
     && reconciliation.admissionId
     && reconciliation.admissionGeneration
@@ -127,7 +173,8 @@ async function reconcileOwnedProfile(ownership) {
       principal: reconciliation.admissionPrincipal,
       workloadId: reconciliation.workloadId || reconciliation.operationId,
       recoveryId: reconciliation.recoveryId
-    });
+    }, { signal: ownershipHeartbeat.signal });
+    ownershipHeartbeat.assertActive();
     if (recoveredRelease?.released === true) {
       const resolvedAt = new Date();
       const resolved = await HostProfile.findOneAndUpdate(
@@ -146,7 +193,7 @@ async function reconcileOwnedProfile(ownership) {
           'reconciliation.ownerEpoch': null,
           'reconciliation.ownerClaimedAt': null
         } },
-        { new: true }
+        { new: true, signal: ownershipHeartbeat.signal }
       ).lean();
       if (!resolved) throw new Error('Recovered profiler release receipt projection CAS was lost');
       return { hostId: profile.hostId, recovered: true, pending: false, resolvedAt, releaseRecovered: true };
@@ -165,35 +212,58 @@ async function reconcileOwnedProfile(ownership) {
   if (!identity.workloadId || !identity.recoveryId || !identity.recoveryRequestId) {
     return reconcileLegacyTerminalProfile(profile);
   }
-  await adoptWorkloadRecovery({ ...identity, ownerId });
-  const adoptedHeartbeat = await heartbeatWorkloadRecovery(identity.workloadId);
-  if (adoptedHeartbeat?.heartbeat !== true) {
-    throw new Error(adoptedHeartbeat?.reason || 'Core recovery owner heartbeat was rejected');
-  }
-  await assertOwnership(ownership);
+  await adoptWorkloadRecovery({ ...identity, ownerId, signal: ownershipHeartbeat.signal });
+  ownershipHeartbeat.setCoreHeartbeat(({ signal }) => heartbeatWorkloadRecovery(
+    identity.workloadId,
+    undefined,
+    { signal }
+  ));
+  await ownershipHeartbeat.heartbeatOnce();
+  await assertOwnership(ownership, { signal: ownershipHeartbeat.signal });
 
-  const inventory = await listModels(profile.hostUrl, { timeoutMs: 30_000 });
-  const inventoryHeartbeat = await heartbeatWorkloadRecovery(identity.workloadId);
+  ownershipHeartbeat.assertActive();
+  const inventory = await listModels(profile.hostUrl, {
+    timeoutMs: 30_000,
+    signal: ownershipHeartbeat.signal
+  });
+  ownershipHeartbeat.assertActive();
+  const inventoryHeartbeat = await heartbeatWorkloadRecovery(
+    identity.workloadId,
+    undefined,
+    { signal: ownershipHeartbeat.signal }
+  );
   if (inventoryHeartbeat?.heartbeat !== true) {
-    throw new Error(inventoryHeartbeat?.reason || 'Core recovery owner heartbeat was rejected');
+    const error = new Error(inventoryHeartbeat?.reason || 'Core recovery owner heartbeat was rejected');
+    error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+    throw error;
   }
-  await assertOwnership(ownership);
+  await assertOwnership(ownership, { signal: ownershipHeartbeat.signal });
   const modelName = reconciliation.model;
   const available = (inventory.models || []).some(model => isSameOllamaModel(model.name, modelName));
   const isRelease = reconciliation.operation === 'release_model';
-  const hostRestore = await restoreWorkloadRecoveryHosts(identity.workloadId, isRelease
-    ? { [profile.hostUrl]: [modelName] }
-    : {});
+  const hostRestore = await restoreWorkloadRecoveryHosts(
+    identity.workloadId,
+    isRelease ? { [profile.hostUrl]: [modelName] } : {},
+    { signal: ownershipHeartbeat.signal }
+  );
+  ownershipHeartbeat.assertActive();
   if (hostRestore?.restored !== true) throw new Error(hostRestore?.reason || 'Core host restore failed');
-  const restoreHeartbeat = await heartbeatWorkloadRecovery(identity.workloadId);
+  const restoreHeartbeat = await heartbeatWorkloadRecovery(
+    identity.workloadId,
+    undefined,
+    { signal: ownershipHeartbeat.signal }
+  );
   if (restoreHeartbeat?.heartbeat !== true) {
-    throw new Error(restoreHeartbeat?.reason || 'Core recovery owner heartbeat was rejected');
+    const error = new Error(restoreHeartbeat?.reason || 'Core recovery owner heartbeat was rejected');
+    error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+    throw error;
   }
-  await assertOwnership(ownership);
+  await assertOwnership(ownership, { signal: ownershipHeartbeat.signal });
 
-  const core = await assertWorkloadRecovery(identity.workloadId);
+  const core = await assertWorkloadRecovery(identity.workloadId, { signal: ownershipHeartbeat.signal });
   if (!new Set(['VERIFIED', 'RESTORED']).has(core.recoveryState)) {
     await transitionWorkloadRecovery(identity.workloadId, 'VERIFIED', {
+      signal: ownershipHeartbeat.signal,
       receipt: {
         contract: 'agentx.profiler-runtime-compensation/v1',
         operation: reconciliation.operation,
@@ -227,12 +297,20 @@ async function reconcileOwnedProfile(ownership) {
         attempts: (Number(reconciliation.attempts) || 0) + 1
       }
     } },
-    { new: true }
+    { new: true, signal: ownershipHeartbeat.signal }
   ).lean();
-  if (!updated) throw new Error('Profiler recovery projection CAS was lost');
-  await assertOwnership({ ...ownership, profile: updated });
+  if (!updated) {
+    const error = new Error('Profiler recovery projection CAS was lost');
+    error.code = 'PROFILER_RECOVERY_OWNERSHIP_LOST';
+    throw error;
+  }
+  await assertOwnership(
+    { ...ownership, profile: updated },
+    { signal: ownershipHeartbeat.signal }
+  );
 
   await transitionWorkloadRecovery(identity.workloadId, 'RESTORED', {
+    signal: ownershipHeartbeat.signal,
     receipt: {
       contract: 'agentx.workload-recovery/v1',
       event: 'profiler-runtime-restored',
@@ -240,7 +318,12 @@ async function reconcileOwnedProfile(ownership) {
       hostRestore
     }
   });
-  const released = await releaseWorkloadAdmission(identity.workloadId);
+  ownershipHeartbeat.assertActive();
+  const released = await releaseWorkloadAdmission(identity.workloadId, {
+    signal: ownershipHeartbeat.signal
+  });
+  ownershipHeartbeat.setCoreHeartbeat(null);
+  ownershipHeartbeat.assertActive();
   if (released?.released !== true) throw new Error(released?.reason || 'Profiler recovery quarantine release failed');
 
   const resolvedAt = new Date();
@@ -260,7 +343,7 @@ async function reconcileOwnedProfile(ownership) {
       'reconciliation.ownerEpoch': null,
       'reconciliation.ownerClaimedAt': null
     } },
-    { new: true }
+    { new: true, signal: ownershipHeartbeat.signal }
   ).lean();
   if (!resolved) {
     // Core release receipt is durable. Leave the verified journal visible so
@@ -275,12 +358,30 @@ async function reconcileOwnedProfile(ownership) {
     available,
     resolvedAt
   };
+  } finally {
+    await ownershipHeartbeat.stop();
+  }
 }
 
-async function releaseProfileOwnership(profile, ownerId, error) {
+function isRecoveryOwnershipLoss(error) {
+  return new Set([
+    'PROFILER_RECOVERY_OWNERSHIP_LOST',
+    'RECOVERY_OWNERSHIP_LOST',
+    'WORKLOAD_RECOVERY_OWNERSHIP_LOST'
+  ]).has(error?.code);
+}
+
+async function releaseProfileOwnership(ownership, error) {
+  if (!ownership || isRecoveryOwnershipLoss(error)) return;
+  const { profile, ownerId, ownerEpoch } = ownership;
   try {
     await HostProfile.updateOne(
-      { _id: profile._id, 'reconciliation.ownerId': ownerId, 'reconciliation.state': { $ne: 'resolved' } },
+      {
+        _id: profile._id,
+        'reconciliation.ownerId': ownerId,
+        'reconciliation.ownerEpoch': ownerEpoch,
+        'reconciliation.state': { $ne: 'resolved' }
+      },
       { $set: {
         'reconciliation.ownerId': null,
         'reconciliation.ownerEpoch': null,
@@ -308,17 +409,18 @@ async function recoverPendingHostProjections(options = {}) {
     const results = [];
     const workerId = String(options.workerId || `profiler-recovery:${process.pid}`);
     for (const profile of profiles) {
+      let ownership = null;
       try {
-        const ownership = await claimProfileRecovery(profile, workerId);
+        ownership = await claimProfileRecovery(profile, workerId);
         if (!ownership) {
           results.push({ hostId: profile.hostId, recovered: false, pending: true, reason: 'owned by another worker' });
           continue;
         }
         const result = await reconcileOwnedProfile(ownership);
-        if (result.operatorRequired) await releaseProfileOwnership(profile, workerId, new Error(result.reason));
+        if (result.operatorRequired) await releaseProfileOwnership(ownership, new Error(result.reason));
         results.push(result);
       } catch (error) {
-        await releaseProfileOwnership(profile, workerId, error);
+        await releaseProfileOwnership(ownership, error);
         logger.warn('Profiler projection remains in durable Core quarantine', {
           hostId: profile.hostId,
           operationId: profile.reconciliation?.operationId || null,

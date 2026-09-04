@@ -26,13 +26,25 @@ process.env.OLLAMA_HOST_3 = 'http://localhost:11434';
 // Mock node-fetch so allowed hosts return 200 instead of trying to dial real
 // Ollama. The disallowed-host assertions return BEFORE fetch is called, so
 // they don't depend on this mock.
-jest.mock('node-fetch', () => jest.fn(async () => ({
-  ok: true,
-  status: 200,
-  statusText: 'OK',
-  text: async () => '{"embedding":[0.1,0.2,0.3]}',
-  json: async () => ({ status: 'ok', embedding: [0.1, 0.2, 0.3] })
-})));
+jest.mock('node-fetch', () => jest.fn(async (url) => {
+  const endpoint = new URL(String(url)).pathname;
+  const bodies = {
+    '/api/pull': { raw: '{"status":"success"}', data: { status: 'success' } },
+    '/api/generate': { raw: '{"response":"","done":true}', data: { response: '', done: true } },
+    '/api/delete': { raw: '', data: {} }
+  };
+  const body = bodies[endpoint] || {
+    raw: '{"embedding":[0.1,0.2,0.3]}',
+    data: { status: 'ok', embedding: [0.1, 0.2, 0.3] }
+  };
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: async () => body.raw,
+    json: async () => body.data
+  };
+}));
 const fetch = require('node-fetch');
 
 jest.mock('../../src/services/chatService', () => ({
@@ -248,6 +260,24 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/allowlist/i);
       expect(customModelService.deployToOllama).not.toHaveBeenCalled();
+    });
+
+    it('409 — keeps the legacy deployment path hard-disabled on an allowed host', async () => {
+      customModelService.deployToOllama.mockRejectedValueOnce(Object.assign(
+        new Error('Custom model deployment is disabled until coordinated runtime mutation receipts are implemented'),
+        { code: 'CUSTOM_MODEL_DEPLOY_DISABLED', statusCode: 409 }
+      ));
+
+      const res = await request(app)
+        .post('/api/custom-models/demo-model/deploy')
+        .send({ ollamaHost: 'http://192.0.2.66:11434' });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({
+        success: false,
+        code: 'CUSTOM_MODEL_DEPLOY_DISABLED'
+      });
+      expect(customModelService.deployToOllama).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -26,7 +26,10 @@ const HostProfileSchema = new mongoose.Schema({
     ttftMs: Number,
     ttftMeasurement: { type: String, enum: ['streamed_wall_clock'], default: undefined },
     testedAt: Date,
-    persistenceReceipt: { type: String, default: null, select: false }
+    persistenceReceipt: { type: String, default: null, select: false },
+    authorityAdmissionId: { type: String, default: null, select: false },
+    authorityGeneration: { type: String, default: null },
+    authorityPrincipal: { type: String, default: null, select: false }
   },
   rejectedBaselineReceipts: { type: [String], default: [], select: false },
   status: {

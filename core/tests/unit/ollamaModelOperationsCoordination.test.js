@@ -25,17 +25,17 @@ describe('Ollama model mutations use durable runtime coordination', () => {
   });
 
   test.each([
-    ['pull', () => operations.pullModel('http://host:11434', 'model-a', { principal: 'operator-token' }), '/api/pull'],
-    ['start', () => operations.startModel('http://host:11434', 'model-a', '5m', { principal: 'operator-token' }), '/api/generate'],
-    ['stop', () => operations.stopModel('http://host:11434', 'model-a', { principal: 'operator-token' }), '/api/generate'],
-    ['delete', () => operations.deleteModel('http://host:11434', 'model-a', { principal: 'operator-token' }), '/api/delete']
-  ])('%s holds maintenance through the full response body', async (_action, invoke, path) => {
+    ['pull', () => operations.pullModel('http://host:11434', 'model-a', { principal: 'operator-token' }), '/api/pull', '{"status":"success"}'],
+    ['start', () => operations.startModel('http://host:11434', 'model-a', '5m', { principal: 'operator-token' }), '/api/generate', '{"done":true}'],
+    ['stop', () => operations.stopModel('http://host:11434', 'model-a', { principal: 'operator-token' }), '/api/generate', '{"done":true}'],
+    ['delete', () => operations.deleteModel('http://host:11434', 'model-a', { principal: 'operator-token' }), '/api/delete', '']
+  ])('%s holds maintenance through the full response body', async (_action, invoke, path, terminalBody) => {
     const lease = lifecycle();
     beginRuntimeMutation.mockResolvedValueOnce(lease);
     fetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: jest.fn(async () => ({ done: true }))
+      text: jest.fn(async () => terminalBody)
     });
     await invoke();
     expect(beginRuntimeMutation).toHaveBeenCalledWith(expect.objectContaining({ principal: 'operator-token' }));
@@ -54,6 +54,22 @@ describe('Ollama model mutations use durable runtime coordination', () => {
     await expect(operations.pullModel('http://host:11434', 'model-a', { principal: 'operator-token' }))
       .rejects.toBe(failure);
     expect(lease.abandon).toHaveBeenCalledWith(failure);
+    expect(lease.complete).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['pull', () => operations.pullModel('http://host:11434', 'model-a'), '{"status":"downloading"}'],
+    ['start', () => operations.startModel('http://host:11434', 'model-a'), '{"done":false}'],
+    ['stop', () => operations.stopModel('http://host:11434', 'model-a'), 'not-json'],
+    ['delete', () => operations.deleteModel('http://host:11434', 'model-a'), '{"status":"success"}']
+  ])('%s quarantines a non-terminal success response', async (_action, invoke, terminalBody) => {
+    const lease = lifecycle();
+    beginRuntimeMutation.mockResolvedValueOnce(lease);
+    fetch.mockResolvedValueOnce({ ok: true, status: 200, text: jest.fn(async () => terminalBody) });
+
+    await expect(invoke()).rejects.toMatchObject({ code: 'OLLAMA_MUTATION_TERMINAL_INVALID' });
+
+    expect(lease.abandon).toHaveBeenCalledTimes(1);
     expect(lease.complete).not.toHaveBeenCalled();
   });
 });

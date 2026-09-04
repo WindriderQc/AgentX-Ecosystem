@@ -3,6 +3,10 @@
 const fetch = require('node-fetch');
 const { StringDecoder } = require('string_decoder');
 const { Transform } = require('stream');
+const {
+  createOllamaStreamTerminalValidator,
+  hasTerminalOllamaResponse
+} = require('../services/routing/inferenceAttemptExecutor');
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const MIN_TIMEOUT_MS = 1_000;
@@ -259,16 +263,17 @@ function createStreamingTelemetryObserver() {
   let discardingOversizedLine = false;
   let tokensIn = 0;
   let tokensOut = 0;
-  let terminalObserved = false;
+  const terminalValidator = createOllamaStreamTerminalValidator();
 
   const observeLine = (rawLine) => {
     let line = rawLine.trim();
     if (!line) return;
     if (line.startsWith('data:')) line = line.slice(5).trim();
-    if (!line || line === '[DONE]') return;
+    if (!line) return;
 
-    const data = safeJson(line);
-    if (data?.done === true || data?.event === 'done') terminalObserved = true;
+    const observed = terminalValidator.observe(line);
+    if (!observed.accepted) return;
+    const data = observed.data;
     const observedTokensIn = Number(data?.prompt_eval_count ?? data?.usage?.prompt_tokens);
     const observedTokensOut = Number(data?.eval_count ?? data?.usage?.completion_tokens);
     if (Number.isFinite(observedTokensIn) && observedTokensIn >= 0) tokensIn = observedTokensIn;
@@ -314,7 +319,14 @@ function createStreamingTelemetryObserver() {
       consume(decoder.end(), true);
     },
     snapshot() {
-      return { prompt_eval_count: tokensIn, eval_count: tokensOut, terminalObserved };
+      const terminal = terminalValidator.snapshot();
+      return {
+        prompt_eval_count: tokensIn,
+        eval_count: tokensOut,
+        terminalObserved: terminal.terminalObserved,
+        terminalComplete: terminal.complete,
+        terminalInvalid: terminal.invalid
+      };
     }
   };
 }
@@ -328,6 +340,13 @@ function attachStreamLifecycle(stream, { abortBridge, release, inferenceAdmissio
     },
     flush(callback) {
       observer.end();
+      const snapshot = observer.snapshot();
+      if (snapshot.terminalComplete !== true) {
+        const error = new Error('Trusted runtime stream ended without a verified exact terminal record');
+        error.code = 'OLLAMA_STREAM_INCOMPLETE';
+        callback(error);
+        return;
+      }
       callback();
     }
   });
@@ -335,12 +354,16 @@ function attachStreamLifecycle(stream, { abortBridge, release, inferenceAdmissio
     abortBridge.cleanup();
     release();
     const snapshot = observer.snapshot();
-    const settle = snapshot.terminalObserved === true && !abortBridge.signal.aborted
+    const settle = snapshot.terminalComplete === true && !abortBridge.signal.aborted
       ? inferenceAdmission.complete()
       : inferenceAdmission.abandon(new Error('Trusted runtime stream ended without a verified terminal record'));
     void Promise.resolve(settle)
-      .then(() => onComplete(snapshot))
-      .catch(error => onComplete({ ...snapshot, admissionError: error.message }));
+      .then(() => onComplete({ ...snapshot, completed: true }))
+      .catch(error => onComplete({
+        ...snapshot,
+        completed: false,
+        admissionError: error.message
+      }));
   });
   stream.once('error', (error) => relay.destroy(error));
   stream.once('close', () => {
@@ -722,9 +745,13 @@ async function executeRoutedInference(deps, request, options = {}) {
         release: releaseGate,
         inferenceAdmission,
         onComplete: (data) => {
+          const completed = data?.completed === true && data?.terminalComplete === true;
           void deps.recordInference(telemetryEntry(request, metadata, startedAt,
-            abortBridge.signal.aborted ? 'error' : 'success', data,
-            abortBridge.signal.aborted ? 'cancelled' : null, attribution));
+            completed && !abortBridge.signal.aborted ? 'success' : 'error', data,
+            abortBridge.signal.aborted
+              ? 'cancelled'
+              : (completed ? null : (data?.admissionError || 'terminal_record_unverified')),
+            attribution));
         }
       });
       return Object.freeze({
@@ -738,6 +765,18 @@ async function executeRoutedInference(deps, request, options = {}) {
 
     const raw = await response.text();
     const data = safeJson(raw);
+    const exactTerminal = request.mode === 'embed'
+      ? Array.isArray(data?.embeddings) || Array.isArray(data?.embedding)
+      : hasTerminalOllamaResponse(raw);
+    if (response.ok && !exactTerminal) {
+      const error = new Error(request.mode === 'embed'
+        ? 'Trusted runtime embed response was not an exact embedding object'
+        : 'Trusted runtime response ended without an exact terminal done object');
+      error.code = request.mode === 'embed'
+        ? 'OLLAMA_EMBED_RESPONSE_INVALID'
+        : 'OLLAMA_RESPONSE_INCOMPLETE';
+      throw error;
+    }
     await inferenceAdmission.complete();
     inferenceAdmission = null;
     abortBridge.cleanup();

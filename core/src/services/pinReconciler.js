@@ -35,6 +35,7 @@ const logger = require('../../config/logger');
 const HostPreference = require('../../models/HostPreference');
 const { hasActiveBenchmarkClaim } = require('./benchmarkClaimService');
 const { observePinRestoreFailure } = require('./laneObservabilityService');
+const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
 const {
   getPinnedEntries,
   getWarmOrder,
@@ -222,43 +223,53 @@ async function checkAndReloadDefaults() {
         continue;
       }
 
-      if (primaryDisplaced) await setHostStatus(pref.hostUrl, 'restoring');
+      await runRuntimeMutation({
+        principal: 'core-pin-reconciler',
+        scope: `pin-reconcile:${pref.hostUrl}`
+      }, async ({ signal, assertActive }) => {
+        if (primaryDisplaced) await setHostStatus(pref.hostUrl, 'restoring');
+        assertActive();
 
-      let anyWarmOk = false;
-      for (const entry of getWarmOrder(displaced)) {
-        const opts = { keepAlive: entry.keepAlive ?? -1, contextSize: entry.contextSize ?? 0 };
-        const result = await warmDefaultModel(pref.hostUrl, entry.model, opts);
-        if (result.status === 'ok') {
-          anyWarmOk = true;
-          logger.info(`[HostPreference] Reloaded ${entry.model} on ${pref.displayName || pref.hostUrl}`);
-          if (entry.model === primary.model) {
-            await updateLoadedModel(pref.hostUrl, entry.model);
-          }
-        } else {
-          logger.warn(`[HostPreference] Failed to reload ${entry.model} on ${pref.hostUrl}: ${result.error}`);
-          void observePinRestoreFailure({
-            host: pref.hostUrl,
-            model: entry.model,
-            error: result.error,
-            source: 'pin-reconciler'
-          });
-          if (entry.model === primary.model) {
-            await setHostStatus(pref.hostUrl, 'idle');
+        let anyWarmOk = false;
+        for (const entry of getWarmOrder(displaced)) {
+          const opts = {
+            keepAlive: entry.keepAlive ?? -1,
+            contextSize: entry.contextSize ?? 0,
+            signal,
+            assertAuthorityActive: assertActive
+          };
+          const result = await warmDefaultModel(pref.hostUrl, entry.model, opts);
+          assertActive();
+          if (result.status === 'ok') {
+            anyWarmOk = true;
+            logger.info(`[HostPreference] Reloaded ${entry.model} on ${pref.displayName || pref.hostUrl}`);
+            if (entry.model === primary.model) {
+              await updateLoadedModel(pref.hostUrl, entry.model);
+              assertActive();
+            }
+          } else {
+            const error = new Error(`Pin restore for ${entry.model} was not terminally verified: ${result.error}`);
+            error.code = 'PIN_RESTORE_UNVERIFIED';
+            throw error;
           }
         }
-      }
 
-      // Task 0176 — clear the grace stamp after a successful restore tick
-      // so the next displacement starts a fresh grace window. We clear on
-      // any-warm-ok rather than all-ok so a partial success still resets;
-      // the next reconciler tick will re-stamp if displacement persists.
-      if (anyWarmOk) {
-        await HostPreference.findOneAndUpdate(
-          { hostUrl: pref.hostUrl },
-          { $set: { pinFirstDisplacedAt: null } }
-        );
-      }
+        if (anyWarmOk) {
+          await HostPreference.findOneAndUpdate(
+            { hostUrl: pref.hostUrl },
+            { $set: { pinFirstDisplacedAt: null } },
+            { signal }
+          );
+          assertActive();
+        }
+      });
     } catch (err) {
+      void observePinRestoreFailure({
+        host: pref.hostUrl,
+        model: getPinnedEntries(pref)[0]?.model || null,
+        error: err.message,
+        source: 'pin-reconciler'
+      });
       logger.warn(`[HostPreference] Health check failed for ${pref.hostUrl}: ${err.message}`);
     }
   }

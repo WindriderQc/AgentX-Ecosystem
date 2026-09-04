@@ -207,7 +207,7 @@ describe('POST /api/inference/generate — fetch timeout', () => {
       transportSignal = options.signal;
       return Promise.resolve({
         ok: true,
-        text: () => Promise.resolve(JSON.stringify({ response: 'hi' }))
+        text: () => Promise.resolve(JSON.stringify({ response: 'hi', done: true }))
       });
     });
 

@@ -76,99 +76,14 @@ class CustomModelService {
   /**
    * Deploy model to Ollama host
    */
-  async deployToOllama(modelId, ollamaHost = null) {
-    try {
-      const model = await CustomModel.findOne({ modelId });
-
-      if (!model) {
-        throw new Error(`Model not found: ${modelId}`);
-      }
-
-      const targetHost = ollamaHost || model.ollamaHost || process.env.OLLAMA_HOST;
-
-      // Validate modelfile
-      if (!model.modelfileContent) {
-        throw new Error('Modelfile content is required for deployment');
-      }
-
-      const validation = await this.validateModelfile(model.modelfileContent);
-      if (!validation.valid) {
-        throw new Error(`Invalid Modelfile: ${validation.error}`);
-      }
-
-      // Prepare Modelfile with parameters
-      let finalModelfile = model.modelfileContent;
-      if (model.parameters) {
-        if (model.parameters.num_ctx) finalModelfile += `\nPARAMETER num_ctx ${model.parameters.num_ctx}`;
-        if (model.parameters.num_gpu) finalModelfile += `\nPARAMETER num_gpu ${model.parameters.num_gpu}`;
-        if (model.parameters.num_thread) finalModelfile += `\nPARAMETER num_thread ${model.parameters.num_thread}`;
-      }
-
-      // Deploy to Ollama using API
-      const deployResult = await this._deployToOllamaAPI(
-        targetHost,
-        model.modelId,
-        finalModelfile
-      );
-
-      // Update model status
-      await model.markAsDeployed(targetHost);
-
-      logger.info('Model deployed to Ollama', {
-        modelId: model.modelId,
-        host: targetHost
-      });
-
-      return {
-        success: true,
-        model,
-        deployment: deployResult
-      };
-    } catch (error) {
-      logger.error('Failed to deploy model to Ollama', {
-        error: error.message,
-        modelId
-      });
-
-      // Update model status to failed
-      await this.updateModelStatus(modelId, 'failed', {
-        notes: `Deployment failed: ${error.message}`
-      });
-
-      throw error;
-    }
-  }
-
-  /**
-   * Deploy model via Ollama API
-   */
-  async _deployToOllamaAPI(host, modelName, modelfileContent) {
-    try {
-      const response = await fetch(`${host}/api/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: modelName,
-          modelfile: modelfileContent,
-          stream: false
-        })
-      });
-
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Ollama API error: ${error}`);
-      }
-
-      const result = await response.json();
-      return result;
-    } catch (error) {
-      logger.error('Ollama API deployment failed', {
-        error: error.message,
-        host,
-        modelName
-      });
-      throw error;
-    }
+  async deployToOllama() {
+    // Model creation changes Ollama residency and may continue after a socket
+    // disconnect. Keep this legacy path unavailable until it is implemented on
+    // the fenced runtime-mutation primitive with an exact terminal receipt.
+    const error = new Error('Custom model deployment is disabled until coordinated runtime mutation receipts are implemented');
+    error.code = 'CUSTOM_MODEL_DEPLOY_DISABLED';
+    error.statusCode = 409;
+    throw error;
   }
 
   /**

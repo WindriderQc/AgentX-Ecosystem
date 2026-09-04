@@ -153,7 +153,8 @@ async function runRuntimeMutation(options, operation) {
       leaseId: lifecycle.leaseId,
       generation: lifecycle.generation,
       principal: lifecycle.principal,
-      signal: lifecycle.signal
+      signal: lifecycle.signal,
+      assertActive: () => lifecycle.assertActive()
     });
     await lifecycle.complete();
     return result;

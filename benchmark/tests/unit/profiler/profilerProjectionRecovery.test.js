@@ -16,7 +16,7 @@ jest.mock('../../../models/HostProfile', () => mockHostProfile);
 jest.mock('../../../src/services/profiler/profilerClaimLifecycle', () => ({
   acquireProfilerClaimLease: (...args) => mockAcquireLease(...args),
 }));
-jest.mock('../../../src/services/profiler/hostProfileService', () => ({ upsert: (...args) => mockUpsert(...args) }));
+jest.mock('../../../src/services/profiler/hostProfileService', () => ({ upsertAuthority: (...args) => mockUpsert(...args) }));
 jest.mock('../../../src/clients/ollamaClient', () => ({ listModels: (...args) => mockListModels(...args) }));
 jest.mock('../../../src/clients/coreApiClient', () => ({
   adoptWorkloadRecovery: (...args) => mockAdoptRecovery(...args),
@@ -40,6 +40,11 @@ function lease() {
   return {
     signal: new AbortController().signal,
     assertActive,
+    authorityProof: jest.fn(() => ({
+      admissionId: 'fresh-admission',
+      generation: 'fresh-generation',
+      principal: 'benchmark-service'
+    })),
     abandon: jest.fn(async () => ({ abandoned: true })),
     finalize: jest.fn(async options => {
       if (typeof options?.beforeWorkloadRelease === 'function') {
@@ -111,13 +116,20 @@ test('startup recovery adopts Core quarantine, restores exact claims, and persis
 
   await expect(service._reconcileReleaseProjection(profile)).resolves.toMatchObject({ recovered: true, pending: false, model: 'qwen:7b' });
   expect(mockAdoptRecovery).toHaveBeenCalledWith(expect.objectContaining({ workloadId: 'release-op', recoveryId: 'recovery-1' }));
-  expect(mockRestoreHosts).toHaveBeenCalledWith('release-op', { 'http://primary:11434': ['qwen:7b'] });
+  expect(mockRestoreHosts).toHaveBeenCalledWith(
+    'release-op',
+    { 'http://primary:11434': ['qwen:7b'] },
+    expect.objectContaining({ signal: expect.any(AbortSignal) })
+  );
   expect(mockTransitionRecovery.mock.calls.map(call => call[1])).toEqual(['VERIFIED', 'RESTORED']);
-  expect(mockReleaseAdmission).toHaveBeenCalledWith('release-op');
+  expect(mockReleaseAdmission).toHaveBeenCalledWith(
+    'release-op',
+    expect.objectContaining({ signal: expect.any(AbortSignal) })
+  );
   expect(mockHostProfile.findOneAndUpdate).toHaveBeenCalledWith(
     expect.objectContaining({ 'reconciliation.state': 'verified' }),
     expect.objectContaining({ $set: expect.objectContaining({ 'reconciliation.state': 'resolved' }) }),
-    { new: true },
+    expect.objectContaining({ new: true, signal: expect.any(AbortSignal) }),
   );
 });
 

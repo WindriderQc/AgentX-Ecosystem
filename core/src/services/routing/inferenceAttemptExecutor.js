@@ -10,11 +10,68 @@ const OLLAMA_ABORT_SOURCE = Object.freeze({
 });
 
 function hasTerminalOllamaFrame(raw) {
-  const frames = String(raw || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  if (frames.length === 0) return false;
-  return frames.some(frame => {
-    try { return JSON.parse(frame)?.done === true; } catch { return false; }
-  });
+  const validator = createOllamaStreamTerminalValidator();
+  String(raw || '').split(/\r?\n/).forEach(frame => validator.observe(frame));
+  return validator.isComplete();
+}
+
+function createOllamaStreamTerminalValidator() {
+  let terminalObserved = false;
+  let invalid = false;
+  let frameCount = 0;
+
+  return {
+    observe(rawFrame) {
+      const frame = String(rawFrame || '').trim();
+      if (!frame) return { accepted: true, empty: true, terminal: false, data: null };
+      frameCount += 1;
+      if (terminalObserved) {
+        invalid = true;
+        return { accepted: false, terminal: false, data: null };
+      }
+      let data;
+      try {
+        data = JSON.parse(frame);
+      } catch {
+        invalid = true;
+        return { accepted: false, terminal: false, data: null };
+      }
+      if (!data || typeof data !== 'object' || Array.isArray(data)
+        || typeof data.done !== 'boolean' || typeof data.error === 'string') {
+        invalid = true;
+        return { accepted: false, terminal: false, data: null };
+      }
+      const terminal = data?.done === true;
+      if (terminal) terminalObserved = true;
+      return { accepted: true, terminal, data };
+    },
+    isComplete() {
+      return frameCount > 0 && terminalObserved && !invalid;
+    },
+    snapshot() {
+      return { frameCount, terminalObserved, invalid, complete: this.isComplete() };
+    }
+  };
+}
+
+function hasTerminalOllamaResponse(raw) {
+  try {
+    const data = JSON.parse(String(raw || ''));
+    return Boolean(data && typeof data === 'object' && !Array.isArray(data)
+      && data.done === true && typeof data.error !== 'string');
+  } catch {
+    return false;
+  }
+}
+
+function createIncompleteOllamaResponseError(stream) {
+  const error = new Error(stream
+    ? 'Ollama stream ended without an exact terminal done frame'
+    : 'Ollama response ended without an exact terminal done object');
+  error.code = stream ? 'OLLAMA_STREAM_INCOMPLETE' : 'OLLAMA_RESPONSE_INCOMPLETE';
+  error.isOllamaAttemptError = true;
+  error.ollamaTerminalObserved = false;
+  return error;
 }
 
 function createAttemptAbortBridge({ externalSignal, stream, timeoutMs }) {
@@ -87,12 +144,11 @@ async function executeOllamaAttempt({
       ...(abortBridge.signal && { signal: abortBridge.signal }),
     });
     const raw = await response.text();
-    if (stream === true && response.ok && !hasTerminalOllamaFrame(raw)) {
-      const error = new Error('Ollama stream ended without a terminal done frame');
-      error.code = 'OLLAMA_STREAM_INCOMPLETE';
-      error.isOllamaAttemptError = true;
-      error.ollamaTerminalObserved = false;
-      throw error;
+    if (response.ok) {
+      const terminalObserved = stream === true
+        ? hasTerminalOllamaFrame(raw)
+        : hasTerminalOllamaResponse(raw);
+      if (!terminalObserved) throw createIncompleteOllamaResponseError(stream === true);
     }
     let data;
     try { data = JSON.parse(raw); } catch { data = { response: raw }; }
@@ -202,7 +258,9 @@ async function resolveVerifiedFallbackModel({
 module.exports = {
   OLLAMA_ABORT_SOURCE,
   createAttemptAbortBridge,
+  createOllamaStreamTerminalValidator,
   hasTerminalOllamaFrame,
+  hasTerminalOllamaResponse,
   executeAdmittedOllamaAttempt,
   executeOllamaAttempt,
   modelExistsOnHost,

@@ -124,6 +124,12 @@ function buildLiveTransport({ model, host, fetchImpl, timeoutMs = DEFAULT_LIVE_T
       maxBytes: MAX_LIVE_RESPONSE_BYTES,
       signal
     });
+    if (!data || typeof data !== 'object' || Array.isArray(data)
+      || data.done !== true || typeof data.error === 'string') {
+      const error = new Error('Ollama tool qualification response ended without an exact terminal done object');
+      error.code = 'OLLAMA_RESPONSE_INCOMPLETE';
+      throw error;
+    }
     const msg = data.message || {};
     if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       return {

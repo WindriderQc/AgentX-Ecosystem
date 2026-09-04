@@ -7,8 +7,7 @@ const { recordInference } = require('./modelRouter');
 const hostPreferenceService = require('./hostPreferenceService');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const logger = require('../../config/logger');
-const fetch = require('node-fetch');
-const { beginInferenceAdmission } = require('./inferenceAdmissionService');
+const { executeAdmittedOllamaAttempt } = require('./routing/inferenceAttemptExecutor');
 
 // Extracted modules
 const { getActivePrompt, buildSystemPrompt } = require('./chat/chatPromptHelpers');
@@ -25,7 +24,6 @@ const {
     ROUTE_OUTCOME_STAGES
 } = require('./routing/routeDecision');
 const {
-    readOllamaErrorDetail,
     buildOllamaStatusError,
     wrapOllamaFetchError
 } = require('./chat/chatUpstreamErrors');
@@ -160,7 +158,6 @@ const handleChatRequest = async ({
     let sanitized = {};
     let numCtxSource = null;
     let inferenceDispatched = false;
-    let inferenceAdmission = null;
     const inferenceStartedAt = Date.now();
     try {
         sanitized = sanitizeOptions(options) || {};
@@ -201,42 +198,29 @@ const handleChatRequest = async ({
             think: thinkingPolicy.think
         });
 
-        const url = `${resolveTarget(effectiveTarget)}/api/chat`;
-        const controller = new AbortController();
-        const abortFromCaller = () => controller.abort(abortSignal?.reason);
-        if (abortSignal?.aborted) abortFromCaller();
-        else abortSignal?.addEventListener?.('abort', abortFromCaller, { once: true });
-        const timeout = setTimeout(() => controller.abort(new Error('Ollama chat timeout')), 300000);
+        const resolvedTarget = resolveTarget(effectiveTarget);
+        const url = `${resolvedTarget}/api/chat`;
 
-        let response;
         try {
-            inferenceAdmission = await beginInferenceAdmission({
-                host: resolvedHost,
+            const attempt = await executeAdmittedOllamaAttempt({
+                hostUrl: resolvedHost,
                 model: effectiveModel,
-                kind: 'chat',
+                payload: ollamaPayload,
+                useChat: true,
+                stream: false,
+                timeoutMs: 300_000,
+                signal: abortSignal,
+                admissionKind: 'chat',
                 principal: 'core-chat',
-                runtimeOptions: ollamaPayload.options,
-                ...(Object.prototype.hasOwnProperty.call(ollamaPayload, 'keep_alive')
-                    && { keepAlive: ollamaPayload.keep_alive }),
-                signal: controller.signal
+                afterAdmission: () => { inferenceDispatched = true; }
             });
-            inferenceAdmission.markDispatched();
-            inferenceDispatched = true;
-            response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(ollamaPayload),
-                signal: inferenceAdmission.signal
-            });
+            const { response, data, raw } = attempt;
             if (!response.ok) {
-                const errDetail = await readOllamaErrorDetail(response);
-                await inferenceAdmission.complete();
-                inferenceAdmission = null;
+                const errDetail = typeof data?.error === 'string'
+                    ? data.error
+                    : (raw || response.statusText || `HTTP ${response.status}`);
                 throw buildOllamaStatusError({ url, response, detail: errDetail, model: effectiveModel });
             }
-            const data = await response.json();
-            await inferenceAdmission.complete();
-            inferenceAdmission = null;
             observabilityOutcome = summarizeOllamaOutcome(data);
 
             const extracted = extractResponse(data, effectiveModel, {
@@ -255,17 +239,8 @@ const handleChatRequest = async ({
                 model: effectiveModel,
                 timeoutMessage: 'Ollama request timed out (2m limit).'
             });
-        } finally {
-            clearTimeout(timeout);
-            abortSignal?.removeEventListener?.('abort', abortFromCaller);
         }
     } catch (err) {
-        if (inferenceAdmission) {
-            await inferenceAdmission.abandon(err).catch(quarantineError => {
-                err.inferenceQuarantineError = quarantineError;
-            });
-            inferenceAdmission = null;
-        }
         logger.error('Model request failed', { model: effectiveModel, error: err.message });
         const terminalStatus = err.code === 'OLLAMA_TIMEOUT' || err.name === 'AbortError'
             ? 'timeout'

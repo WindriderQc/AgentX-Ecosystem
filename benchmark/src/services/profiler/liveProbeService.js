@@ -124,7 +124,7 @@ async function detectOllamaHost({ hostUrl, displayName } = {}) {
     || parseUrlHost(normalized)
     || 'Ollama host';
 
-  const profile = await hostProfileService.upsert({
+  const profile = await hostProfileService.upsertMetadata({
     hostId,
     hostUrl: normalized,
     displayName: name,

@@ -4,7 +4,11 @@ const express = require('express');
 const router = express.Router();
 const modelProfileService = require('../../src/services/profiler/modelProfileService');
 const modelPerformanceProfileService = require('../../src/services/profiler/modelPerformanceProfileService');
-const { resolveArtifactIdentity, identitiesMatch } = require('../../src/services/profiler/artifactIdentityService');
+const {
+  resolveArtifactIdentity,
+  resolveRuntimeArtifactReceipt,
+  identitiesMatch
+} = require('../../src/services/profiler/artifactIdentityService');
 const { verifyProfilerAuthorityReceipt } = require('../../src/services/profiler/profilerAuthorityReceipt');
 const { projectReadinessProfiles } = require('../../src/services/profiler/profilerReadinessProjectionService');
 
@@ -62,12 +66,26 @@ router.get('/:name/config', async (req, res) => {
         error: 'A benchmark-qualified exact-artifact profiler receipt is required before using this runtime config'
       });
     }
+    let runtimeArtifactReceipt;
+    try {
+      runtimeArtifactReceipt = await resolveRuntimeArtifactReceipt(
+        req.params.name,
+        hostId,
+        evidence.artifact?.hostUrl
+      );
+    } catch (error) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'RUNTIME_ARTIFACT_IDENTITY_UNAVAILABLE',
+        error: error.message
+      });
+    }
     res.json({
       status: 'success',
       data: {
         modelName: req.params.name,
         hostId,
-        artifact: evidence.artifact,
+        artifact: runtimeArtifactReceipt,
         maxVerifiedContext: evidence.profile?.maxVerifiedContext || null,
         recommendedInteractiveContext: evidence.profile?.recommendedInteractiveContext || null,
         recommendedDocumentContext: evidence.profile?.recommendedDocumentContext || null,

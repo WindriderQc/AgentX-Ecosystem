@@ -13,6 +13,7 @@ jest.mock('../../../src/services/profiler/modelPerformanceProfileService', () =>
 }));
 jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
   resolveArtifactIdentity: jest.fn(),
+  resolveRuntimeArtifactReceipt: jest.fn(),
   identitiesMatch: jest.fn((left, right) => left?.digest === right?.digest
     && left?.runtimeFingerprint === right?.runtimeFingerprint)
 }));
@@ -59,6 +60,18 @@ describe('ModelProfile write authority', () => {
       digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
     };
     artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...artifact });
+    const runtimeReceipt = {
+      contract: 'agentx.runtime-artifact-identity/v1',
+      tag: 'qwen:9b',
+      digest: `sha256:${'a'.repeat(64)}`,
+      artifactSize: 9_000_000_000,
+      sizeVram: 8_500_000_000,
+      fullVram: true,
+      contextLength: 65_536,
+      runtimeVersion: '0.11.10',
+      runtimeFingerprint: 'b'.repeat(64)
+    };
+    artifactIdentityService.resolveRuntimeArtifactReceipt.mockResolvedValue(runtimeReceipt);
     const profile = {
       profileDepth: 'standard',
       requiredRetainedSamples: 5,
@@ -104,6 +117,7 @@ describe('ModelProfile write authority', () => {
       performanceKneeContext: 65536,
       qualityVerifiedContext: null,
       qualityContextStatus: 'unknown',
+      artifact: runtimeReceipt,
       config: { num_ctx: 65536 }
     });
   });
@@ -134,5 +148,37 @@ describe('ModelProfile write authority', () => {
 
     expect(response.status).toBe(409);
     expect(response.body.code).toBe('PROFILE_AUTHORITY_REQUIRED');
+    expect(artifactIdentityService.resolveRuntimeArtifactReceipt).not.toHaveBeenCalled();
+  });
+
+  it('refuses to publish config when live runtime identity is incomplete', async () => {
+    const evidenceId = '68b8af284f953a0bd8931038';
+    const artifact = {
+      model: 'qwen:9b', hostId: 'host-beta', hostUrl: 'http://host-beta:11434',
+      digest: 'sha256:exact', runtimeFingerprint: 'runtime-a', registryQualified: true
+    };
+    const profile = {
+      profileDepth: 'standard', requiredRetainedSamples: 5,
+      measurementQuality: { passingSampleCount: 5 }, recommendedInteractiveContext: 32768
+    };
+    performanceService.getActiveProfile.mockResolvedValue({
+      _id: evidenceId, modelName: 'qwen:9b', hostId: 'host-beta', artifact, profile
+    });
+    service.getByName.mockResolvedValue({ readiness: { 'host-beta': {
+      benchmarkQualified: true, stale: false, profileDepth: 'standard', evidenceId, artifact,
+      authorityReceipt: createProfilerAuthorityReceipt({
+        modelName: 'qwen:9b', hostId: 'host-beta', artifact, profile, evidenceId
+      })
+    } } });
+    artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...artifact });
+    artifactIdentityService.resolveRuntimeArtifactReceipt.mockRejectedValue(
+      new Error('Exact model is not resident')
+    );
+
+    const response = await request(app)
+      .get('/api/profiler/models/qwen%3A9b/config?host=host-beta');
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('RUNTIME_ARTIFACT_IDENTITY_UNAVAILABLE');
   });
 });

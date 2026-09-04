@@ -8,7 +8,11 @@ const {
   startBenchmarkClaimHeartbeat
 } = require('../benchmark/benchmarkClaimLifecycle');
 const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
-const { releaseWorkloadAdmission, transitionWorkloadRecovery } = require('../../clients/coreApiClient');
+const {
+  getWorkloadRecoveryIdentity,
+  releaseWorkloadAdmission,
+  transitionWorkloadRecovery
+} = require('../../clients/coreApiClient');
 
 async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDurationMs, options = {}) {
   const uniqueHosts = [...new Set((hostUrls || []).filter(Boolean))];
@@ -114,6 +118,19 @@ async function acquireProfilerClaimLease(hostUrls, operationId, estimatedDuratio
         throw err;
       }
       return identity;
+    },
+    authorityProof() {
+      const recovery = getWorkloadRecoveryIdentity(operationId);
+      if (!recovery?.admissionId || !recovery?.generation || !recovery?.principal) {
+        const err = new Error('Missing workload authority generation for profiler projection write');
+        err.code = 'PROFILER_AUTHORITY_PROOF_MISSING';
+        throw err;
+      }
+      return Object.freeze({
+        admissionId: recovery.admissionId,
+        generation: recovery.generation,
+        principal: recovery.principal
+      });
     },
     async abandon(reason = null) {
       // A failed release can already have switched the lease into durable

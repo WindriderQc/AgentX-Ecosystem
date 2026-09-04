@@ -11,7 +11,7 @@ const alertService = require('./alertService');
 const { getFetchOptions } = require('../helpers/httpAgent');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const { characterizeRouteRequest } = require('./routing/routeDecision');
-const { beginInferenceAdmission } = require('./inferenceAdmissionService');
+const { executeAdmittedOllamaAttempt } = require('./routing/inferenceAttemptExecutor');
 // Telemetry lives in routing/inferenceTelemetry.js (task 0519); re-exported below
 // for symbol stability, matching the benchmarkClaimService precedent.
 const { recordInference } = require('./routing/inferenceTelemetry');
@@ -190,8 +190,6 @@ async function classifyQuery(message, timeout = 10000) {
     // not leak as an open handle (e.g., during tests where fetch is mocked
     // to reject immediately). Cleared in the finally block below.
     const timeoutId = setTimeout(() => controller.abort(), timeout);
-    let inferenceAdmission = null;
-
     try {
         await assertHostAvailableForConsumer(classificationHost, {
             callerDetail: 'classification',
@@ -199,47 +197,32 @@ async function classifyQuery(message, timeout = 10000) {
             path: '/api/generate'
         });
 
-        const url = `${classificationHost}/api/generate`;
-        inferenceAdmission = await beginInferenceAdmission({
-            host: classificationHost,
+        const payload = {
             model: classificationModel,
-            kind: 'classifier',
-            principal: 'core-classifier',
-            runtimeOptions: {
+            prompt: CLASSIFICATION_PROMPT + message,
+            stream: false,
+            options: {
                 temperature: 0.1,
                 num_predict: 20
-            },
+            }
+        };
+        const attempt = await executeAdmittedOllamaAttempt({
+            hostUrl: classificationHost,
+            model: classificationModel,
+            payload,
+            useChat: false,
+            stream: false,
+            timeoutMs: timeout,
+            admissionKind: 'classifier',
+            principal: 'core-classifier',
             signal: controller.signal
         });
-        const fetchOptions = getFetchOptions(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: classificationModel,
-                prompt: CLASSIFICATION_PROMPT + message,
-                stream: false,
-                options: {
-                    temperature: 0.1,  // Low temp for consistent classification
-                    num_predict: 20    // Short response expected
-                    // num_ctx intentionally omitted — Modelfile governs (see docs/LLM_USAGE.md).
-                    // Prior hardcode of 4096 evicted the KV cache on every routing decision.
-                }
-            }),
-            signal: inferenceAdmission.signal
-        });
-        inferenceAdmission.markDispatched();
-        const response = await fetch(url, fetchOptions);
+        const { response, data } = attempt;
 
         if (!response.ok) {
-            await response.text().catch(() => '');
-            await inferenceAdmission.complete();
-            inferenceAdmission = null;
             throw new Error(`Classification failed: ${response.statusText}`);
         }
 
-        const data = await response.json();
-        await inferenceAdmission.complete();
-        inferenceAdmission = null;
         const classification = data.response?.trim().toLowerCase().replace(/[^a-z_]/g, '') || 'general_chat';
 
         // Validate classification — must be in the CLASSIFIABLE subset.
@@ -266,12 +249,6 @@ async function classifyQuery(message, timeout = 10000) {
         return 'general_chat';
 
     } catch (err) {
-        if (inferenceAdmission) {
-            await inferenceAdmission.abandon(err).catch(quarantineError => {
-                err.inferenceQuarantineError = quarantineError;
-            });
-            inferenceAdmission = null;
-        }
         if (err.name === 'AbortError') {
             logger.warn('Classification timed out, using default');
         } else {

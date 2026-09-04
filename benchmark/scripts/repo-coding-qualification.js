@@ -10,20 +10,10 @@
  * public + hidden tests, and score PURELY from exit codes (executableRepoGrader).
  * Aggregated with the unbiased pass@k estimator. No judge model anywhere.
  *
- * Offline-first: `--dry-run` grades each task's golden solution.diff instead of
- * calling a model, so the whole runner is provable (pass@1 = 1.0) before any GPU
- * spend. Do NOT run the live campaign without the operator's go.
- *
- * Live runs are disruptive (they load big models on a shared host), so wrap this
- * in the benchmark host-claim lifecycle rather than calling a host cold:
- *
- *   node scripts/with-agentx-claim.js \
- *     --host <ollama-url> \
- *     --owner claude-code --batch repo-coding-qual-$(date +%Y%m%d%H%M%S) \
- *     --estimate-ms 3600000 -- \
- *     node benchmark/scripts/repo-coding-qualification.js \
- *       --host <ollama-url> --core <core-url> \
- *       --models <model-a,model-b> --attempts 3
+ * This CLI is deliberately offline-only. `--dry-run` grades each task's golden
+ * solution.diff without calling a model. The former live mode could outlive its
+ * host claim without a durable workload/inference proof, so it is hard-disabled
+ * until it is rebuilt on the shared admission lifecycle.
  *
  * Verify offline first:
  *   node benchmark/scripts/repo-coding-qualification.js --dry-run
@@ -73,6 +63,7 @@ const DEFAULT_GRADE_TIMEOUT_MS = 30_000;
 const CORE_CLAIM_TIMEOUT_MS = 10_000;
 const MAX_CORE_CLAIM_RESPONSE_BYTES = 1024 * 1024;
 const DEFAULT_OUTPUT_ROOT = path.join(__dirname, '..', '.agentx', 'reports', 'repo-coding-qualification');
+const LIVE_DISABLED_CODE = 'REPO_CODING_LIVE_DISABLED';
 
 function parseList(value) {
   return String(value).split(',').map((s) => s.trim()).filter(Boolean);
@@ -197,8 +188,8 @@ Options:
   --ks <1,3,5>              pass@k values to report (default: ${DEFAULT_KS.join(',')}).
   --out <dir>               Report directory (default under .agentx/reports/).
 
-Live runs are disruptive: wrap with scripts/with-agentx-claim.js and get the
-operator's go before spending GPU.
+Live execution is hard-disabled until this runner uses durable workload and
+per-inference admission receipts. Only --dry-run is supported.
 `);
 }
 
@@ -206,59 +197,20 @@ function safeRunId() {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
-/** Build the real Ollama model caller from the already-frozen campaign. */
-function buildOllamaCallModel({ host, modelConfigs, timeoutMs }) {
-  const url = `${host.replace(/\/+$/, '')}/api/chat`;
-  return async function callModel({ model, prompt, seed }) {
-    const config = modelConfigs.get(model);
-    if (!config) throw new Error(`missing frozen execution config for ${model}`);
-    const payload = {
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      stream: false,
-      options: {
-        num_ctx: config.num_ctx,
-        num_predict: config.response_max_tokens,
-        temperature: config.temperature,
-        top_p: config.top_p,
-        top_k: config.top_k,
-        repeat_penalty: config.repeat_penalty,
-        seed
-      }
-    };
-    if (config.send_think && typeof config.think === 'boolean') payload.think = config.think;
-    const startedAt = Date.now();
-    const options = getFetchOptions(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      timeout: timeoutMs
-    });
-    const response = await benchmarkFetch(url, options);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText} from ${url}`);
-    }
-    const data = await response.json();
-    // Return the structured reply. `content` is the FINAL answer (the only
-    // executable channel); `thinking` is the separate reasoning channel and is
-    // NEVER used as a diff substitute; `doneReason` lets the contract detect a
-    // truncated (output-capped) generation. The response contract in the runner
-    // decides pass/fail — the caller does not salvage a patch from `thinking`.
-    const message = data.message || {};
-    return {
-      content: message.content || '',
-      thinking: message.thinking || '',
-      doneReason: data.done_reason || null,
-      metrics: {
-        latencyMs: Date.now() - startedAt,
-        promptTokens: Number(data.prompt_eval_count) || 0,
-        outputTokens: Number(data.eval_count) || 0,
-        tokensPerSecond: Number(data.eval_duration) > 0
-          ? (Number(data.eval_count) || 0) / (Number(data.eval_duration) / 1e9)
-          : null
-      }
-    };
-  };
+function liveDisabledError() {
+  const error = new Error('Live repository coding qualification is disabled until it uses durable workload and inference admissions');
+  error.code = LIVE_DISABLED_CODE;
+  return error;
+}
+
+function assertLiveExecutionAllowed(args) {
+  if (args?.dryRun === true) return;
+  throw liveDisabledError();
+}
+
+/** Retained export for callers that previously constructed the unsafe direct client. */
+function buildOllamaCallModel() {
+  throw liveDisabledError();
 }
 
 async function requestJson(url, fetchImpl = benchmarkFetch) {
@@ -347,6 +299,7 @@ function resolveMode(args) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { usage(); return; }
+  assertLiveExecutionAllowed(args);
 
   const allTasks = loadRepoTasks();
   const tasks = selectTasks(allTasks, args.tasks);
@@ -547,8 +500,10 @@ if (require.main === module) {
 module.exports = {
   CORE_CLAIM_TIMEOUT_MS,
   MAX_CORE_CLAIM_RESPONSE_BYTES,
+  LIVE_DISABLED_CODE,
   parseArgs,
   buildOllamaCallModel,
+  assertLiveExecutionAllowed,
   requestJson,
   assertExpectedActiveClaim,
   assertExactFrozenSettings,

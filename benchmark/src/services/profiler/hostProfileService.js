@@ -7,6 +7,22 @@ const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmissi
 const logger = require('../../../config/logger');
 
 const STATUS_TIMEOUT_MS = 4000;
+const METADATA_FIELDS = new Set([
+  'hostId', 'hostUrl', 'displayName', 'gpu', 'ollama', 'status', 'lastSeenAt', 'cpu', 'modelCount'
+]);
+const AUTHORITY_FIELDS = new Set(['baseline', 'dedicated', 'reconciliation']);
+const AUTHORITY_SERVICES = new Set([
+  'profiler-baseline',
+  'profiler-release',
+  'profiler-recovery'
+]);
+
+function hostProfileWriteError(message, code, statusCode = 409) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
 
 function normalizeHostUrlForCompare(hostUrl) {
   return String(hostUrl || '').trim().replace(/\/+$/, '').toLowerCase();
@@ -107,7 +123,7 @@ function flattenToDotPaths(obj, prefix = '', out = {}) {
   return out;
 }
 
-async function upsert(data, options = {}) {
+async function writeProfile(data, options = {}) {
   options.assertAuthorityActive?.();
   const input = { ...data };
   const configuredHost = getConfiguredHost(input.hostId);
@@ -131,25 +147,130 @@ async function upsert(data, options = {}) {
   // as dedicated.detectedAt into those legacy rows makes MongoDB reject the
   // whole findAndModify. Replace the complete value atomically instead.
   if (hasDedicatedInput && dedicated != null) update.dedicated = dedicated;
-  const hasHostIdentityInput = Boolean(data?.hostUrl || data?.gpu?.vramTotalMiB);
-
-  if (input?.hostId && hasHostIdentityInput) {
-    const existing = await HostProfile.findOne({ hostId: input.hostId }).lean();
-    if (hostIdentityChanged(existing, input) && !Object.prototype.hasOwnProperty.call(input, 'baseline')) {
-      update.baseline = null;
-    }
-  }
-
   const operation = { $set: update };
   if (hasDedicatedInput && dedicated == null) operation.$unset = { dedicated: '' };
 
   const updated = await HostProfile.findOneAndUpdate(
     { hostId: input.hostId, ...(options.filter || {}) },
     operation,
-    { upsert: true, new: true, runValidators: true, ...(options.signal ? { signal: options.signal } : {}) }
+    {
+      upsert: options.upsert !== false,
+      new: true,
+      runValidators: true,
+      ...(options.signal ? { signal: options.signal } : {})
+    }
   );
   options.assertAuthorityActive?.();
   return updated;
+}
+
+function assertAllowedFields(data, allowed, code) {
+  const rejected = Object.keys(data || {}).filter(field => !allowed.has(field));
+  if (rejected.length) {
+    throw hostProfileWriteError(
+      `Host profile fields are not writable through this service: ${rejected.join(', ')}`,
+      code,
+      400
+    );
+  }
+}
+
+function immutableAuthorityProof(data, options) {
+  if (!AUTHORITY_SERVICES.has(options.authorityService)) {
+    throw hostProfileWriteError(
+      'Host profile authority writes require an allowlisted internal service',
+      'HOST_PROFILE_AUTHORITY_SERVICE_REQUIRED',
+      403
+    );
+  }
+  if (!(options.signal instanceof AbortSignal) || typeof options.assertAuthorityActive !== 'function') {
+    throw hostProfileWriteError(
+      'Host profile authority writes require a live fenced signal and assertion',
+      'HOST_PROFILE_AUTHORITY_FENCE_REQUIRED'
+    );
+  }
+  const reconciliation = data?.reconciliation || {};
+  const supplied = options.authorityProof || {};
+  const proof = Object.freeze({
+    admissionId: String(supplied.admissionId || reconciliation.admissionId || '').trim(),
+    generation: String(supplied.generation || reconciliation.admissionGeneration || '').trim(),
+    principal: String(supplied.principal || reconciliation.admissionPrincipal || '').trim()
+  });
+  if (!proof.admissionId || !proof.generation || !proof.principal) {
+    throw hostProfileWriteError(
+      'Host profile authority proof is incomplete',
+      'HOST_PROFILE_AUTHORITY_PROOF_REQUIRED'
+    );
+  }
+  if (data?.reconciliation && (
+    String(reconciliation.admissionId || '') !== proof.admissionId
+    || String(reconciliation.admissionGeneration || '') !== proof.generation
+    || String(reconciliation.admissionPrincipal || '') !== proof.principal
+  )) {
+    throw hostProfileWriteError(
+      'Host profile reconciliation proof does not match the fenced authority',
+      'HOST_PROFILE_AUTHORITY_PROOF_MISMATCH'
+    );
+  }
+  return proof;
+}
+
+function reconciliationCas(reconciliation, proof) {
+  const exact = {
+    'reconciliation.admissionId': proof.admissionId,
+    'reconciliation.admissionGeneration': proof.generation,
+    'reconciliation.admissionPrincipal': proof.principal
+  };
+  if (reconciliation?.state !== 'prepared') return exact;
+  return {
+    $or: [
+      exact,
+      { 'reconciliation.state': 'resolved' },
+      { 'reconciliation.state': { $exists: false } }
+    ]
+  };
+}
+
+async function upsertMetadata(data) {
+  assertAllowedFields(data, METADATA_FIELDS, 'HOST_PROFILE_METADATA_FIELD_FORBIDDEN');
+  return writeProfile(data);
+}
+
+async function upsertAuthority(data, options = {}) {
+  assertAllowedFields(data, new Set([...METADATA_FIELDS, ...AUTHORITY_FIELDS]), 'HOST_PROFILE_AUTHORITY_FIELD_FORBIDDEN');
+  const proof = immutableAuthorityProof(data, options);
+  const authorityFilter = options.authorityFilter || (data?.reconciliation
+    ? reconciliationCas(data.reconciliation, proof)
+    : null);
+  if (!authorityFilter || typeof authorityFilter !== 'object' || Array.isArray(authorityFilter)) {
+    throw hostProfileWriteError(
+      'Host profile authority writes require an exact generation CAS',
+      'HOST_PROFILE_AUTHORITY_CAS_REQUIRED'
+    );
+  }
+  try {
+    const updated = await writeProfile(data, {
+      ...options,
+      filter: { ...authorityFilter, ...(options.filter || {}) },
+      upsert: data?.reconciliation?.state === 'prepared'
+        || (Boolean(data?.baseline) && options.expectedAuthorityGeneration == null)
+    });
+    if (!updated) {
+      throw hostProfileWriteError(
+        'Host profile authority generation changed before the write committed',
+        'HOST_PROFILE_AUTHORITY_CAS_FAILED'
+      );
+    }
+    return updated;
+  } catch (error) {
+    if (error?.code === 11000) {
+      throw hostProfileWriteError(
+        'Host profile authority generation changed before the write committed',
+        'HOST_PROFILE_AUTHORITY_CAS_FAILED'
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -213,14 +334,18 @@ async function detectHardware(hostUrl) {
   }
 }
 
-async function updateStatus(hostId, status) {
+async function updateStatusMetadata(hostId, status) {
   const update = { status, lastSeenAt: status === 'online' ? new Date() : undefined };
   return HostProfile.findOneAndUpdate({ hostId }, update, { new: true });
 }
 
 async function updateBaseline(hostId, baseline, options = {}) {
   const persistenceReceipt = String(baseline.persistenceReceipt || '').trim() || null;
-  return upsert({
+  const proof = immutableAuthorityProof(null, options);
+  const expectedGeneration = options.expectedAuthorityGeneration == null
+    ? null
+    : String(options.expectedAuthorityGeneration);
+  return upsertAuthority({
     hostId,
     baseline: {
       referenceModel: baseline.referenceModel || null,
@@ -229,10 +354,17 @@ async function updateBaseline(hostId, baseline, options = {}) {
       ttftMs: baseline.ttftMs ?? null,
       ttftMeasurement: baseline.ttftMeasurement || undefined,
       testedAt: baseline.testedAt || new Date(),
-      persistenceReceipt
+      persistenceReceipt,
+      authorityAdmissionId: proof.admissionId,
+      authorityGeneration: proof.generation,
+      authorityPrincipal: proof.principal
     }
   }, {
     ...options,
+    authorityProof: proof,
+    authorityFilter: expectedGeneration
+      ? { 'baseline.authorityGeneration': expectedGeneration }
+      : { 'baseline.authorityGeneration': { $exists: false } },
     ...(persistenceReceipt
       ? { filter: { rejectedBaselineReceipts: { $ne: persistenceReceipt } } }
       : {})
@@ -311,4 +443,25 @@ function isDedicatedConflict(host, modelName) {
   return !models.includes(modelName);
 }
 
-module.exports = { getAll, getById, getByUrl, upsert, checkStatus, updateStatus, updateBaseline, invalidateBaselineReceipt, detectCpuCores, releaseModel, detectDedicated, isDedicatedConflict, hostIdentityChanged };
+module.exports = {
+  getAll,
+  getById,
+  getByUrl,
+  upsertMetadata,
+  upsertAuthority,
+  checkStatus,
+  updateStatusMetadata,
+  updateBaseline,
+  invalidateBaselineReceipt,
+  detectCpuCores,
+  releaseModel,
+  detectDedicated,
+  isDedicatedConflict,
+  hostIdentityChanged,
+  _internal: {
+    AUTHORITY_SERVICES,
+    METADATA_FIELDS,
+    immutableAuthorityProof,
+    reconciliationCas
+  }
+};

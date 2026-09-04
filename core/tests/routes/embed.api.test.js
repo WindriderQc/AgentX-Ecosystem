@@ -345,7 +345,7 @@ describe('POST /api/inference/generate', () => {
       }
       return Promise.resolve({
         ok: true,
-        text: () => Promise.resolve(JSON.stringify({ response: 'expanded query' }))
+        text: () => Promise.resolve(JSON.stringify({ response: 'expanded query', done: true }))
       });
     });
 
@@ -392,7 +392,7 @@ describe('POST /api/inference/generate', () => {
       }
       return Promise.resolve({
         ok: true,
-        text: () => Promise.resolve(JSON.stringify({ response: 'hello there' }))
+        text: () => Promise.resolve(JSON.stringify({ response: 'hello there', done: true }))
       });
     });
 

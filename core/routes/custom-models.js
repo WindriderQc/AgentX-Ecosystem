@@ -212,8 +212,9 @@ router.post('/:id/deploy', async (req, res) => {
     });
   } catch (error) {
     logger.error('Failed to deploy model', { error: error.message });
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
+      code: error.code || 'CUSTOM_MODEL_DEPLOY_FAILED',
       error: error.message
     });
   }

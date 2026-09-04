@@ -28,6 +28,7 @@ function response(body, status = 200, declaredLength) {
 describe('toolcall qualification live transport bounds', () => {
   test('owns redirects, deadline, and response size for a successful tool call', async () => {
     const fetchImpl = jest.fn(async () => response({
+      done: true,
       message: {
         tool_calls: [{ function: { name: 'lookup', arguments: { id: 7 } } }]
       }
@@ -98,6 +99,21 @@ describe('toolcall qualification live transport bounds', () => {
 
     await expect(transport({ messages: [], tools: [] }))
       .resolves.toEqual({ toolSupport: false });
+  });
+
+  test('rejects a successful HTTP response without Ollama terminal evidence', async () => {
+    const fetchImpl = jest.fn(async () => response({
+      message: { tool_calls: [{ function: { name: 'lookup', arguments: {} } }] }
+    }));
+    const transport = buildLiveTransport({
+      model: 'candidate',
+      host: 'http://ollama:11434',
+      fetchImpl,
+      timeoutMs: 1000
+    });
+
+    await expect(transport({ messages: [], tools: [] }))
+      .rejects.toMatchObject({ code: 'OLLAMA_RESPONSE_INCOMPLETE' });
   });
 
   test('parses the typed campaign token and mandatory repetition count', () => {

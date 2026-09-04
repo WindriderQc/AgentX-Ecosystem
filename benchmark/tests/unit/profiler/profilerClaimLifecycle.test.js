@@ -4,6 +4,7 @@ jest.mock('../../../src/clients/coreApiClient', () => ({
   acquireWorkloadAdmission: jest.fn().mockResolvedValue({ acquired: true }),
   heartbeatWorkloadAdmission: jest.fn().mockResolvedValue({ heartbeat: true }),
   releaseWorkloadAdmission: jest.fn().mockResolvedValue({ released: true }),
+  getWorkloadRecoveryIdentity: jest.fn(),
   transitionWorkloadRecovery: jest.fn().mockResolvedValue({ transitioned: true }),
   claimHostForBenchmark: jest.fn().mockResolvedValue({ claimed: true }),
   heartbeatBenchmarkClaim: jest.fn(),
@@ -33,6 +34,11 @@ describe('profiler claim lease cancellation', () => {
     coreApiClient.acquireWorkloadAdmission.mockResolvedValue({ acquired: true });
     coreApiClient.heartbeatWorkloadAdmission.mockResolvedValue({ heartbeat: true });
     coreApiClient.releaseWorkloadAdmission.mockResolvedValue({ released: true });
+    coreApiClient.getWorkloadRecoveryIdentity.mockReturnValue({
+      admissionId: 'admission-profiler-1',
+      generation: 'authority-generation-1',
+      principal: 'benchmark-profiler'
+    });
     coreApiClient.claimHostForBenchmark.mockResolvedValue({ claimed: true });
     coreApiClient.heartbeatBenchmarkClaim
       .mockResolvedValueOnce({ heartbeat: true })
@@ -41,6 +47,28 @@ describe('profiler claim lease cancellation', () => {
       released: true,
       runtimeRestore: { verified: true },
     });
+  });
+
+  test('exposes only the immutable Core workload authority proof for projection writes', async () => {
+    coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({ heartbeat: true });
+    const lease = await acquireProfilerClaimLease(
+      ['http://gpu:11434'],
+      'profiler-authority-proof',
+      60_000,
+      { heartbeatIntervalMs: 5 }
+    );
+
+    const proof = lease.authorityProof();
+
+    expect(proof).toEqual({
+      admissionId: 'admission-profiler-1',
+      generation: 'authority-generation-1',
+      principal: 'benchmark-profiler'
+    });
+    expect(Object.isFrozen(proof)).toBe(true);
+    expect(coreApiClient.getWorkloadRecoveryIdentity)
+      .toHaveBeenCalledWith('profiler-authority-proof');
+    await expect(lease.finalize()).resolves.toMatchObject({ released: 1, failed: 0 });
   });
 
   test('aborts an in-flight Ollama operation on heartbeat loss and drains before release', async () => {

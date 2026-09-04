@@ -97,12 +97,16 @@ async function updateBaselineUnderLease(hostId, baseline, lease) {
   lease.assertActive();
   const prior = await hostProfileService.getById(hostId);
   lease.assertActive();
+  const authorityProof = lease.authorityProof();
   const persistenceReceipt = crypto.randomUUID();
   try {
     const updated = await hostProfileService.updateBaseline(hostId, {
       ...baseline,
       persistenceReceipt
     }, {
+      authorityService: 'profiler-baseline',
+      authorityProof,
+      expectedAuthorityGeneration: prior?.baseline?.authorityGeneration || null,
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
     });
@@ -150,7 +154,7 @@ router.post('/discover', async (req, res) => {
     for (const h of configured) {
       const status = await hostProfileService.checkStatus(h.url);
       const models = status.models || [];
-      const profile = await hostProfileService.upsert({
+      const profile = await hostProfileService.upsertMetadata({
         hostId: h.id,
         hostUrl: h.url,
         displayName: h.name,
@@ -158,12 +162,11 @@ router.post('/discover', async (req, res) => {
         status: status.status,
         lastSeenAt: status.status === 'online' ? new Date() : undefined,
         modelCount: models.length,
-        dedicated: status.dedicated || null,
       });
       // Detect CPU cores for local hosts
       const cpuCores = await hostProfileService.detectCpuCores(h.url);
       if (cpuCores) {
-        await hostProfileService.upsert({ hostId: h.id, cpu: { cores: cpuCores } });
+        await hostProfileService.upsertMetadata({ hostId: h.id, cpu: { cores: cpuCores } });
       }
       results.push(profile);
     }
@@ -834,7 +837,7 @@ router.post('/:hostId/release', async (req, res) => {
       throw error;
     }
     lease.assertActive();
-    await hostProfileService.upsert({
+    await hostProfileService.upsertAuthority({
       hostId: req.params.hostId,
       reconciliation: {
         state: 'prepared',
@@ -853,11 +856,12 @@ router.post('/:hostId/release', async (req, res) => {
         startedAt: new Date()
       }
     }, {
+      authorityService: 'profiler-release',
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
     });
     lease.assertActive();
-    await hostProfileService.upsert({
+    await hostProfileService.upsertAuthority({
       hostId: req.params.hostId,
       reconciliation: {
         ...host.reconciliation,
@@ -876,14 +880,18 @@ router.post('/:hostId/release', async (req, res) => {
         reason: 'Ollama unload request is in flight without a terminal server receipt',
         startedAt: new Date()
       }
-    }, { signal: lease.signal, assertAuthorityActive: lease.assertActive });
+    }, {
+      authorityService: 'profiler-release',
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
     lease.assertActive();
     const result = await hostProfileService.releaseModel(host.hostUrl, host.dedicated.model, {
       signal: lease.signal,
       assertClaimActive: lease.assertActive
     });
     try {
-      await hostProfileService.upsert({
+      await hostProfileService.upsertAuthority({
         hostId: req.params.hostId,
         reconciliation: {
           state: 'verified',
@@ -904,6 +912,7 @@ router.post('/:hostId/release', async (req, res) => {
           startedAt: new Date()
         }
       }, {
+        authorityService: 'profiler-release',
         signal: lease.signal,
         assertAuthorityActive: lease.assertActive
       });
@@ -928,7 +937,7 @@ router.post('/:hostId/release', async (req, res) => {
           error.statusCode = 409;
           throw error;
         }
-        await hostProfileService.upsert({
+        await hostProfileService.upsertAuthority({
           hostId: req.params.hostId,
           status: status.status,
           dedicated: null,
@@ -951,6 +960,7 @@ router.post('/:hostId/release', async (req, res) => {
             resolvedAt: new Date()
           }
         }, {
+          authorityService: 'profiler-release',
           signal: lease.signal,
           assertAuthorityActive: lease.assertActive
         });
@@ -1027,11 +1037,7 @@ router.post('/:hostId/status/refresh', async (req, res) => {
     const host = await hostProfileService.getById(req.params.hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
     const status = await hostProfileService.checkStatus(host.hostUrl);
-    await hostProfileService.updateStatus(req.params.hostId, status.status);
-    await hostProfileService.upsert({
-      hostId: req.params.hostId,
-      dedicated: status.dedicated || null
-    });
+    await hostProfileService.updateStatusMetadata(req.params.hostId, status.status);
     res.json({ status: 'success', data: { hostId: req.params.hostId, ...status } });
   } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
 });
@@ -1077,7 +1083,7 @@ router.put('/:hostId', requireOperatorAccess, async (req, res) => {
       }
       updates.cpu = { threadOverride };
     }
-    res.json({ status: 'success', data: await hostProfileService.upsert({ ...updates, hostId: req.params.hostId }) }); }
+    res.json({ status: 'success', data: await hostProfileService.upsertMetadata({ ...updates, hostId: req.params.hostId }) }); }
   catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message }); }
 });
 

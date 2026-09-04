@@ -20,7 +20,6 @@ const { createNodeFetchPeerTransport } = require('../../helpers/outboundHttpTran
 const {
     OUTBOUND_ERROR_CODES,
     createOutboundHttpExecutor,
-    discardBoundedResponse,
     readBoundedJson,
     readBoundedText
 } = require('../../../../shared/outboundHttpExecutor');
@@ -69,7 +68,7 @@ const MODEL_WARMUP_OPERATION_SPECS = Object.freeze({
             deadlineMs: 5_000,
             maxRequestBytes: 64 * 1024,
             maxResponseBytes: 64 * 1024,
-            responseMode: 'discard'
+            responseMode: 'json'
         }
     ),
     [MODEL_WARMUP_OPERATIONS.UNLOAD_ONE]: operation(
@@ -80,7 +79,7 @@ const MODEL_WARMUP_OPERATION_SPECS = Object.freeze({
             deadlineMs: 5_000,
             maxRequestBytes: 64 * 1024,
             maxResponseBytes: 64 * 1024,
-            responseMode: 'discard'
+            responseMode: 'json'
         }
     ),
     [MODEL_WARMUP_OPERATIONS.PS]: operation(
@@ -243,6 +242,24 @@ function shouldKeepLoaded(modelName, keepList = []) {
 
 const UNLOAD_TIMEOUT_MS = 5000;
 
+async function readExactGenerateTerminal(response, action) {
+    if (!response.ok) {
+        await response.cancel();
+        const error = new Error(`Ollama ${action} returned HTTP ${response.status}`);
+        error.code = 'OLLAMA_UNLOAD_REJECTED';
+        error.status = response.status;
+        throw error;
+    }
+    const terminal = await readBoundedJson(response);
+    if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)
+        || terminal.done !== true || typeof terminal.error === 'string') {
+        const error = new Error(`Ollama ${action} ended without an exact terminal done object`);
+        error.code = 'OLLAMA_RESPONSE_INCOMPLETE';
+        throw error;
+    }
+    return terminal;
+}
+
 /**
  * Unload every listed model except the target and any caller-kept ones.
  * `loadedNames` comes from the caller's single /api/ps probe — we don't
@@ -278,8 +295,7 @@ async function unloadOthers(hostUrl, targetModel, loadedNames, keepLoaded, execu
                 },
                 executor
             );
-            if (response.ok) await discardBoundedResponse(response);
-            else await response.cancel();
+            await readExactGenerateTerminal(response, 'pre-warmup unload');
             return name;
         } catch (err) {
             throwIfAborted(signal);
@@ -321,8 +337,12 @@ async function unloadLoadedModel(hostUrl, modelName, executor, signal = null) {
             },
             executor
         );
-        if (response.ok) await discardBoundedResponse(response);
-        else await response.cancel();
+        await readExactGenerateTerminal(response, 'context-reload unload');
+    } catch (err) {
+        throwIfAborted(signal);
+        err.retainAdmission = true;
+        err.code = err.code || 'OLLAMA_UNLOAD_TERMINALITY_UNKNOWN';
+        throw err;
     } finally {
         deadline.dispose();
     }
@@ -576,7 +596,8 @@ async function warmupModel(hostUrl, model, options = {}) {
         warmupData.error = normalizeWarmupError(err, timeoutMs);
         logger.warn('Model warmup failed', { host: hostUrl, model, error: warmupData.error, durationMs });
 
-        const terminalityUnknown = err?.name === 'AbortError'
+        const terminalityUnknown = err?.retainAdmission === true
+            || err?.name === 'AbortError'
             || err?.type === 'aborted'
             || err?.code === OUTBOUND_ERROR_CODES.CALLER_ABORTED
             || err?.code === OUTBOUND_ERROR_CODES.DEADLINE_EXCEEDED
@@ -612,6 +633,7 @@ module.exports = {
         createModelWarmupExecutor,
         modelWarmupRequest,
         normalizeWarmupError,
-        operationMatches
+        operationMatches,
+        readExactGenerateTerminal
     }
 };

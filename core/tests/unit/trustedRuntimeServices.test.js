@@ -282,6 +282,36 @@ describe('trusted runtime services', () => {
     }));
   });
 
+  test('rejects and quarantines a stream that sends bytes after done:true', async () => {
+    const upstream = new PassThrough();
+    const abandon = jest.fn(async () => ({ quarantined: true }));
+    const complete = jest.fn(async () => ({ released: true }));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => response({ stream: upstream }))
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    });
+    const streamError = new Promise(resolve => result.stream.once('error', resolve));
+
+    upstream.end(`${JSON.stringify({ done: true })}\n${JSON.stringify({ message: { content: 'late' } })}\n`);
+    await expect(streamError).resolves.toMatchObject({ code: 'OLLAMA_STREAM_INCOMPLETE' });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalled();
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      error: expect.stringMatching(/terminal/i)
+    }));
+  });
+
   test('returns a bounded timeout error and releases admission', async () => {
     const release = jest.fn();
     const deps = inferenceDeps({

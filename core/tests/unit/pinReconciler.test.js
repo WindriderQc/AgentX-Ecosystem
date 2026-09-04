@@ -30,6 +30,14 @@ jest.mock('../../src/services/laneObservabilityService', () => ({
   observePinRestoreFailure: (...args) => mockObservePinRestoreFailure(...args)
 }));
 
+const mockRunRuntimeMutation = jest.fn(async (_options, operation) => operation({
+  signal: new AbortController().signal,
+  assertActive: jest.fn()
+}));
+jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
+  runRuntimeMutation: (...args) => mockRunRuntimeMutation(...args)
+}));
+
 const HostPreference = require('../../models/HostPreference');
 const reconciler = require('../../src/services/pinReconciler');
 
@@ -58,7 +66,7 @@ describe('pinReconciler — pin auto-restore grace period (0176)', () => {
       // succeeded and clears the grace stamp.
       return {
         ok: true,
-        text: async () => '{}'
+        text: async () => '{"done":true}'
       };
     });
   }
@@ -141,6 +149,10 @@ describe('pinReconciler — pin auto-restore grace period (0176)', () => {
       c => typeof c[0] === 'string' && c[0].endsWith('/api/generate')
     );
     expect(generateCalls.length).toBeGreaterThanOrEqual(1);
+    expect(mockRunRuntimeMutation).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: 'core-pin-reconciler' }),
+      expect.any(Function)
+    );
     expect(after.pinFirstDisplacedAt).toBeFalsy();
   });
 

@@ -7,11 +7,10 @@
  * reached, so roundtable completion is never blocked by scoring failure.
  */
 
-const fetch = require('node-fetch');
 const logger = require('../../../config/logger');
 const Roundtable = require('../../../models/Roundtable');
 const { getTargetForModel } = require('../modelRouter');
-const { beginInferenceAdmission } = require('../inferenceAdmissionService');
+const { executeAdmittedOllamaAttempt } = require('../routing/inferenceAttemptExecutor');
 
 const { PRODUCT_DEFAULT_MODEL } = require('../modelRouterDefaults');
 const JUDGE_MODEL = process.env.ROUNDTABLE_JUDGE_MODEL || PRODUCT_DEFAULT_MODEL;
@@ -78,44 +77,37 @@ async function callJudge(prompt) {
   if (!target) {
     return { success: false, error: `No host for judge model ${JUDGE_MODEL}` };
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), JUDGE_TIMEOUT_MS);
-  let inferenceAdmission = null;
   try {
-    inferenceAdmission = await beginInferenceAdmission({
-      host: target,
+    const attempt = await executeAdmittedOllamaAttempt({
+      hostUrl: target,
       model: JUDGE_MODEL,
-      kind: 'council-quality-judge',
+      payload: {
+        model: JUDGE_MODEL,
+        prompt,
+        stream: false,
+        options: { temperature: 0.2 }
+      },
+      useChat: false,
+      stream: false,
+      timeoutMs: JUDGE_TIMEOUT_MS,
+      admissionKind: 'council-quality-judge',
       principal: 'core-council',
-      runtimeOptions: { temperature: 0.2 },
-      signal: controller.signal
+      runtimeOptions: { temperature: 0.2 }
     });
-    inferenceAdmission.markDispatched();
-    const resp = await fetch(`${target}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: JUDGE_MODEL, prompt, stream: false, options: { temperature: 0.2 } }),
-      signal: inferenceAdmission.signal
-    });
-    const data = await resp.json();
-    await inferenceAdmission.complete();
-    inferenceAdmission = null;
-    clearTimeout(timer);
-    if (!resp.ok) {
-      return { success: false, error: `Judge ${resp.status}` };
+    if (!attempt.ok) {
+      return { success: false, error: `Judge ${attempt.status}` };
     }
+    const data = attempt.data;
     const scores = extractJson(data.response || '');
     if (!scores) return { success: false, error: 'Failed to parse judge JSON' };
     return { success: true, scores };
   } catch (err) {
-    if (inferenceAdmission) {
-      await inferenceAdmission.abandon(err).catch(quarantineError => {
-        err.inferenceQuarantineError = quarantineError;
-      });
-      inferenceAdmission = null;
-    }
-    clearTimeout(timer);
-    return { success: false, error: err.name === 'AbortError' ? `Timeout after ${JUDGE_TIMEOUT_MS}ms` : err.message };
+    return {
+      success: false,
+      error: err.isOllamaTimeout === true || err.name === 'AbortError'
+        ? `Timeout after ${JUDGE_TIMEOUT_MS}ms`
+        : err.message
+    };
   }
 }
 
@@ -212,4 +204,9 @@ async function analyzeQuality(roundtableId) {
   return qualityScores;
 }
 
-module.exports = { analyzeQuality, AGENT_DIMENSIONS, SYNTHESIS_DIMENSIONS };
+module.exports = {
+  analyzeQuality,
+  AGENT_DIMENSIONS,
+  SYNTHESIS_DIMENSIONS,
+  _internal: { callJudge }
+};

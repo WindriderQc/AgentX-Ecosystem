@@ -30,6 +30,7 @@ const {
   peerVerifiedNodeFetchTransport
 } = require('../helpers/peerVerifiedNodeFetchTransport');
 const hostGate = require('./hostGate');
+const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
 
 let _fetch = nodeFetch;
 let _outboundExecutor = null;
@@ -106,13 +107,13 @@ const WATCHDOG_OPERATION_SPECS = Object.freeze({
     deadlineMs: UNJAM_TIMEOUT_MS,
     maxRequestBytes: GENERATE_MAX_REQUEST_BYTES,
     maxResponseBytes: GENERATE_MAX_RESPONSE_BYTES,
-    responseMode: 'discard'
+    responseMode: 'json'
   }),
   [WATCHDOG_OPERATIONS.RESTORE]: operation('POST', '^/api/generate$', {
     deadlineMs: RESTORE_TIMEOUT_MS,
     maxRequestBytes: GENERATE_MAX_REQUEST_BYTES,
     maxResponseBytes: GENERATE_MAX_RESPONSE_BYTES,
-    responseMode: 'discard'
+    responseMode: 'json'
   })
 });
 
@@ -336,39 +337,51 @@ async function unjamHost(host, models, executor = getWatchdogExecutor()) {
   const errors = [];
   const skipped = [];
 
-  for (const model of models) {
-    if (hostGate.inFlightFor(host.url, model) > 0) {
-      skipped.push(model);
-      logger.info(`[Watchdog] Skipping unload of ${model} on ${host.name} — active inference in hostGate`);
-      continue;
-    }
+  try {
+    await runRuntimeMutation({
+      principal: 'core-watchdog',
+      scope: `watchdog-unjam:${configuredOrigin(host.url)}`,
+      ttlMs: Math.max(UNJAM_TIMEOUT_MS * Math.max(1, models.length), 120_000)
+    }, async ({ signal, assertActive }) => {
+      for (const model of models) {
+        assertActive();
+        if (hostGate.inFlightFor(host.url, model) > 0) {
+          skipped.push(model);
+          logger.info(`[Watchdog] Skipping unload of ${model} on ${host.name} — active inference in hostGate`);
+          continue;
+        }
 
-    try {
-      const res = await watchdogRequest(
-        WATCHDOG_OPERATIONS.UNJAM,
-        hostTarget(host, '/api/generate'),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, keep_alive: 0 })
-        },
-        executor
-      );
-      const status = res.status;
-      const accepted = res.ok || status < 500;
-      await res.cancel();
-
-      if (accepted) {
+        const res = await watchdogRequest(
+          WATCHDOG_OPERATIONS.UNJAM,
+          hostTarget(host, '/api/generate'),
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, keep_alive: 0 }),
+            signal
+          },
+          executor
+        );
+        const terminal = await readBoundedJson(res);
+        assertActive();
+        if (!res.ok || terminal?.done !== true) {
+          const error = new Error(!res.ok
+            ? `HTTP ${res.status}`
+            : 'Ollama unload ended without an exact terminal done object');
+          error.code = 'WATCHDOG_UNJAM_UNVERIFIED';
+          errors.push(`${model}: ${error.message}`);
+          throw error;
+        }
         unloaded.push(model);
-      } else {
-        errors.push(`${model}: HTTP ${status}`);
       }
-    } catch (err) {
-      errors.push(`${model}: ${err.message}`);
-    }
+      assertActive();
+    });
+  } catch (err) {
+    if (errors.length === 0) errors.push(err.message);
+    return { success: false, unloaded, errors, skipped, quarantined: true };
   }
 
-  return { success: unloaded.length > 0, unloaded, errors, skipped };
+  return { success: unloaded.length > 0, unloaded, errors, skipped, quarantined: false };
 }
 
 /**
@@ -376,28 +389,62 @@ async function unjamHost(host, models, executor = getWatchdogExecutor()) {
  */
 async function reloadModel(host, model, executor = getWatchdogExecutor()) {
   try {
-    const res = await watchdogRequest(
-      WATCHDOG_OPERATIONS.RESTORE,
-      hostTarget(host, '/api/generate'),
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          prompt: 'warmup',
-          stream: false,
-          options: { num_predict: 1 }
-        })
-      },
-      executor
-    );
-    // Legacy restore treats every completed response as success regardless of
-    // HTTP status. Close its unused body immediately and keep that contract.
-    await res.cancel();
+    await runRuntimeMutation({
+      principal: 'core-watchdog',
+      scope: `watchdog-restore:${configuredOrigin(host.url)}:${model}`,
+      ttlMs: RESTORE_TIMEOUT_MS
+    }, async ({ signal, assertActive }) => {
+      assertActive();
+      const res = await watchdogRequest(
+        WATCHDOG_OPERATIONS.RESTORE,
+        hostTarget(host, '/api/generate'),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            prompt: 'warmup',
+            stream: false,
+            options: { num_predict: 1 }
+          }),
+          signal
+        },
+        executor
+      );
+      const terminal = await readBoundedJson(res);
+      assertActive();
+      if (!res.ok || terminal?.done !== true) {
+        const error = new Error(!res.ok
+          ? `HTTP ${res.status}`
+          : 'Ollama restore ended without an exact terminal done object');
+        error.code = 'WATCHDOG_RESTORE_UNVERIFIED';
+        throw error;
+      }
+    });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, quarantined: true };
   }
+}
+
+async function restorePinnedModel(host, hostPrefService, primaryPin) {
+  return runRuntimeMutation({
+    principal: 'core-watchdog',
+    scope: `watchdog-pin-restore:${configuredOrigin(host.url)}:${primaryPin}`,
+    ttlMs: RESTORE_TIMEOUT_MS
+  }, async ({ signal, assertActive }) => {
+    const result = await hostPrefService.restorePinnedModels(host.url, {
+      signal,
+      assertAuthorityActive: assertActive
+    });
+    assertActive();
+    if (result?.status !== 'ready' || result?.verified !== true) {
+      const error = new Error(result?.error || 'Pinned model restore did not produce a verified terminal receipt');
+      error.code = 'WATCHDOG_PIN_RESTORE_UNVERIFIED';
+      throw error;
+    }
+    return result;
+  });
 }
 
 /**
@@ -544,13 +591,16 @@ async function probeCycle() {
           const pinStatus = await hostPrefService.getPinStatus(host.url);
           const primaryPin = pinStatus.pinnedModels?.[0]?.model || null;
           if (primaryPin) {
-            logger.info(`[Watchdog] Restoring pinned model ${primaryPin} on ${host.name}`);
-            await hostPrefService.restorePinnedModels(host.url);
-            recordEvent('pin_restore_triggered', host, { model: primaryPin });
             pinRestored = true;
+            logger.info(`[Watchdog] Restoring pinned model ${primaryPin} on ${host.name}`);
+            await restorePinnedModel(host, hostPrefService, primaryPin);
+            recordEvent('pin_restore_triggered', host, { model: primaryPin });
           }
-        } catch {
-          // hostPreferenceService not available — fall through to legacy reload
+        } catch (error) {
+          if (pinRestored) {
+            logger.warn(`[Watchdog] Failed to restore pinned model on ${host.name}: ${error.message}`);
+            recordEvent('pin_restore_failed', host, { error: error.message });
+          }
         }
 
         if (!pinRestored) {
@@ -655,12 +705,14 @@ async function forceUnjam(hostUrl) {
       const pinStatus = await hostPrefService.getPinStatus(host.url);
       const primaryPin = pinStatus.pinnedModels?.[0]?.model || null;
       if (primaryPin) {
-        await hostPrefService.restorePinnedModels(host.url);
-        recordEvent('pin_restore_triggered', host, { model: primaryPin });
         pinRestored = true;
+        await restorePinnedModel(host, hostPrefService, primaryPin);
+        recordEvent('pin_restore_triggered', host, { model: primaryPin });
       }
-    } catch {
-      // Fall through to legacy reload
+    } catch (error) {
+      if (pinRestored) {
+        recordEvent('pin_restore_failed', host, { error: error.message });
+      }
     }
 
     if (!pinRestored) {
@@ -699,6 +751,7 @@ module.exports = {
     createWatchdogExecutor,
     operationMatches,
     reloadModel,
+    restorePinnedModel,
     unjamHost,
     watchdogRequest
   }

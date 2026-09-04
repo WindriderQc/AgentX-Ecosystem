@@ -36,14 +36,18 @@ jest.mock('../../../src/services/profiler/artifactIdentityService', () => ({
     digest: 'sha256:live',
     runtimeFingerprint: 'runtime-live',
     registryQualified: true
-  }))
+  })),
+  resolveRuntimeArtifactReceipt: jest.fn()
 }));
 
 const HostProfile = require('../../../models/HostProfile');
 const ModelProfile = require('../../../models/ModelProfile');
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const { verifyProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
-const { resolveArtifactIdentity } = require('../../../src/services/profiler/artifactIdentityService');
+const {
+  resolveArtifactIdentity,
+  resolveRuntimeArtifactReceipt
+} = require('../../../src/services/profiler/artifactIdentityService');
 const contextProfiles = require('../../../src/services/modelContextProfileService');
 const toolQualifications = require('../../../src/services/qualification/toolCapabilityQualificationService');
 const evidenceRouter = require('../../../routes/profiler/evidence');
@@ -243,6 +247,54 @@ describe('profiler evidence ownership API', () => {
       state: 'supported',
       supported: true,
       evidence: { campaignId: 'campaign-a' }
+    });
+  });
+
+  it('publishes the server-owned canonical runtime artifact receipt for sidecars', async () => {
+    const receipt = {
+      contract: 'agentx.runtime-artifact-identity/v1',
+      tag: 'owner/model:8b',
+      digest: `sha256:${'a'.repeat(64)}`,
+      artifactSize: 9_000_000_000,
+      residentSize: 8_500_000_000,
+      sizeVram: 8_500_000_000,
+      fullVram: true,
+      contextLength: 32_768,
+      runtimeVersion: '0.11.10',
+      runtimeFingerprint: 'b'.repeat(64),
+      freshness: { state: 'fresh' },
+      provenance: { authority: 'agentx-product-benchmark' }
+    };
+    resolveRuntimeArtifactReceipt.mockResolvedValue(receipt);
+
+    const response = await api
+      .get('/api/profiler/evidence/runtime/owner%2Fmodel%3A8b')
+      .query({ hostId: 'host-a', hostUrl: 'http://host-a:11434' })
+      .expect(200);
+
+    expect(resolveRuntimeArtifactReceipt).toHaveBeenCalledWith(
+      'owner/model:8b',
+      'host-a',
+      'http://host-a:11434'
+    );
+    expect(response.body.data.receipt).toEqual(receipt);
+  });
+
+  it('fails the runtime receipt closed when selectors or live evidence are incomplete', async () => {
+    await api
+      .get('/api/profiler/evidence/runtime/owner%2Fmodel%3A8b')
+      .query({ hostId: 'host-a' })
+      .expect(400);
+
+    resolveRuntimeArtifactReceipt.mockRejectedValueOnce(new Error('Exact model is not resident'));
+    const response = await api
+      .get('/api/profiler/evidence/runtime/owner%2Fmodel%3A8b')
+      .query({ hostId: 'host-a', hostUrl: 'http://host-a:11434' })
+      .expect(409);
+
+    expect(response.body).toMatchObject({
+      status: 'error',
+      code: 'RUNTIME_ARTIFACT_IDENTITY_UNAVAILABLE'
     });
   });
 

@@ -19,7 +19,7 @@ jest.mock('../../../src/clients/ollamaClient', () => ({
 }));
 
 jest.mock('../../../src/services/profiler/hostProfileService', () => ({
-  upsert: (...args) => mockHostProfileUpsert(...args)
+  upsertAuthority: (...args) => mockHostProfileUpsert(...args)
 }));
 
 jest.mock('../../../src/services/profiler/settingsService', () => ({

@@ -41,6 +41,7 @@ const {
     createHostTestExecutor,
     hostTestRequest,
     operationMatches,
+    readExactGenerateTerminal,
     warmUp,
     verifyAppliedContext
   }
@@ -309,7 +310,7 @@ describe('hostTestService governed outbound operations', () => {
           })
         });
       }
-      return response(url);
+      return response(url, { body: JSON.stringify({ done: true }) });
     });
     const executor = createTestExecutor(fetchImpl);
 
@@ -329,6 +330,32 @@ describe('hostTestService governed outbound operations', () => {
       host: 'http://ollama:11434',
       model: 'model-a'
     });
+  });
+
+  test('requires an exact done terminal for direct or delegated warm-up responses', async () => {
+    const incompleteExecutor = createTestExecutor(jest.fn(async (url) => response(url, {
+      body: JSON.stringify({ response: 'ready' })
+    })));
+    const incomplete = await hostTestRequest(
+      HOST_TEST_OPERATIONS.WARMUP,
+      'http://ollama:11434/api/generate',
+      { method: 'POST', body: '{}' },
+      incompleteExecutor
+    );
+    await expect(readExactGenerateTerminal(incomplete, 'cold_preload warm-up'))
+      .rejects.toMatchObject({ code: 'OLLAMA_RESPONSE_INCOMPLETE' });
+
+    const completeExecutor = createTestExecutor(jest.fn(async (url) => response(url, {
+      body: JSON.stringify({ done: true, response: 'ready' })
+    })));
+    const complete = await hostTestRequest(
+      HOST_TEST_OPERATIONS.WARMUP,
+      'http://ollama:11434/api/generate',
+      { method: 'POST', body: '{}' },
+      completeExecutor
+    );
+    await expect(readExactGenerateTerminal(complete, 'cold_preload warm-up'))
+      .resolves.toMatchObject({ done: true });
   });
 
   test('requires /api/ps to attest the exact applied context after a probe', async () => {

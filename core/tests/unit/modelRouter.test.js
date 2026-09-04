@@ -111,7 +111,10 @@ describe('Model Router Service', () => {
         it('should classify query strings using LLM', async () => {
             fetch.mockResolvedValueOnce({
                 ok: true,
-                json: () => Promise.resolve({ response: 'code_generation' })
+                text: () => Promise.resolve(JSON.stringify({
+                    response: 'code_generation',
+                    done: true
+                }))
             });
 
             const classification = await modelRouter.classifyQuery('write me a function');

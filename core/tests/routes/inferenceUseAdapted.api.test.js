@@ -130,7 +130,7 @@ function mockOllama() {
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ response: 'ok', eval_count: 1, prompt_eval_count: 1 })
+      text: async () => JSON.stringify({ response: 'ok', done: true, eval_count: 1, prompt_eval_count: 1 })
     };
   });
   return calls;

@@ -189,10 +189,10 @@ describe('_runLoadTiming()', () => {
         .mockReturnValueOnce(4700);
     }
 
-    global.fetch = jest.fn().mockResolvedValue({
+    global.fetch = jest.fn().mockImplementation(async (url) => ({
       ok: true,
-      json: async () => ({ models: [] })
-    });
+      json: async () => url.endsWith('/api/ps') ? { models: [] } : { done: true }
+    }));
 
     // Run the async function, advancing timers for the 2s setTimeout
     const promise = orchestrator._runLoadTiming(HOST_URL, MODEL_NAME);

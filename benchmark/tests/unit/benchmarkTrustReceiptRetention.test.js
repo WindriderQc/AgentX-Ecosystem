@@ -180,6 +180,16 @@ describe('BenchmarkTrustReceipt retention protection', () => {
         });
     });
 
+    test('archive never reports success when external timeline deletion fails', async () => {
+        mockBatchFind({ stale: [staleBatch('batch-open')] });
+        BenchmarkResult.countDocuments.mockResolvedValue(1);
+        BenchmarkResult.deleteMany.mockResolvedValue({ deletedCount: 1 });
+        BenchmarkTimelineEntry.deleteMany.mockRejectedValue(new Error('timeline store unavailable'));
+
+        await expect(archiveOldResults(90, false)).rejects.toThrow('timeline store unavailable');
+        expect(BenchmarkBatch.updateOne).not.toHaveBeenCalled();
+    });
+
     test('archive preserves a sealed batch even when crash recovery has not produced a receipt', async () => {
         mockBatchFind({
             stale: [staleBatch('batch-sealed')],

@@ -608,7 +608,10 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .set('X-Forwarded-For', '127.0.0.1');
 
     expect(response.status).toBe(200);
-    expect(hostPrefService.warmHost).toHaveBeenCalledWith(HOST_URL);
+    expect(hostPrefService.warmHost).toHaveBeenCalledWith(HOST_URL, {
+      signal: undefined,
+      assertAuthorityActive: undefined
+    });
   });
 
   it('requires operator authority for the destructive reaper and rejects invalid bounds', async () => {

@@ -98,8 +98,19 @@ async function deletePreference(hostUrl) {
 
 // ── Warmup ──────────────────────────────────────────────────
 
-async function warmDefaultModel(hostUrl, model, { keepAlive = -1, contextSize = 0 } = {}) {
+function combineRuntimeSignal(signal, timeoutMs) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
+async function warmDefaultModel(hostUrl, model, {
+  keepAlive = -1,
+  contextSize = 0,
+  signal = null,
+  assertAuthorityActive = null
+} = {}) {
   try {
+    assertAuthorityActive?.();
     const isEmbedding = isEmbeddingModelName(model);
     const endpoint = isEmbedding ? 'embeddings' : 'generate';
     const payload = isEmbedding
@@ -127,34 +138,62 @@ async function warmDefaultModel(hostUrl, model, { keepAlive = -1, contextSize = 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(pinWarmTimeoutMs)
+      signal: combineRuntimeSignal(signal, pinWarmTimeoutMs)
     });
     if (!response.ok) {
       const text = await response.text();
       return { host: hostUrl, model, status: 'error', error: text };
     }
-    await response.text();
+    const raw = await response.text();
+    assertAuthorityActive?.();
+    let terminal;
+    try { terminal = JSON.parse(raw); } catch { terminal = null; }
+    const exactTerminal = isEmbedding
+      ? (Array.isArray(terminal?.embedding) || Array.isArray(terminal?.embeddings))
+      : terminal?.done === true;
+    if (!exactTerminal) {
+      throw Object.assign(new Error(isEmbedding
+        ? 'Ollama embedding warmup ended without a terminal embedding array'
+        : 'Ollama warmup ended without an exact terminal done object'), {
+        code: 'OLLAMA_RESPONSE_INCOMPLETE'
+      });
+    }
     return { host: hostUrl, model, status: 'ok' };
   } catch (err) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : err;
+    }
     return { host: hostUrl, model, status: 'error', error: err.message };
   }
 }
 
-async function unloadModel(hostUrl, model) {
+async function unloadModel(hostUrl, model, options = {}) {
   try {
+    options.assertAuthorityActive?.();
     const response = await fetch(`${hostUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, keep_alive: 0 }),
-      signal: AbortSignal.timeout(30_000)
+      signal: combineRuntimeSignal(options.signal, 30_000)
     });
     if (!response.ok) {
       const text = await response.text();
       return { host: hostUrl, model, status: 'error', error: text };
     }
-    await response.text();
+    const raw = await response.text();
+    options.assertAuthorityActive?.();
+    let terminal;
+    try { terminal = JSON.parse(raw); } catch { terminal = null; }
+    if (terminal?.done !== true) {
+      throw Object.assign(new Error('Ollama unload ended without an exact terminal done object'), {
+        code: 'OLLAMA_RESPONSE_INCOMPLETE'
+      });
+    }
     return { host: hostUrl, model, status: 'ok' };
   } catch (err) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason instanceof Error ? options.signal.reason : err;
+    }
     return { host: hostUrl, model, status: 'error', error: err.message };
   }
 }
@@ -496,7 +535,8 @@ async function prepareExclusiveModel(hostUrl, model) {
  * Warm every pinned model on a single host. Skips entries whose model is
  * already loaded. Updates loadedModel/status where appropriate.
  */
-async function warmHost(hostUrl) {
+async function warmHost(hostUrl, options = {}) {
+  options.assertAuthorityActive?.();
   const pref = await HostPreference.findOne({ hostUrl }).lean();
   if (!pref) return [];
   const entries = getPinnedEntries(pref);
@@ -533,6 +573,7 @@ async function warmHost(hostUrl) {
 
     const loadedStatus = getLoadedEntryStatus(entry, runningModelInfos);
     if (entrySatisfiedByLoadedModel(entry, runningModelInfos)) {
+      options.assertAuthorityActive?.();
       await updateLoadedModel(hostUrl, entry.model);
       results.push({
         host: hostUrl, model: entry.model, status: 'already_loaded',
@@ -553,14 +594,16 @@ async function warmHost(hostUrl) {
     // Mark host as restoring while we warm. If there are multiple entries we
     // only care about the primary for status — secondary warmups inherit.
     if (entries[0].model === entry.model) {
+      options.assertAuthorityActive?.();
       await setHostStatus(hostUrl, 'restoring');
     }
     const opts = { keepAlive: entry.keepAlive ?? -1, contextSize: entry.contextSize ?? 0 };
-    const result = await warmDefaultModel(hostUrl, entry.model, opts);
+    const result = await warmDefaultModel(hostUrl, entry.model, { ...opts, ...options });
     result.durationMs = Date.now() - t0;
     results.push(result);
 
     if (result.status === 'ok' && entries[0].model === entry.model) {
+      options.assertAuthorityActive?.();
       await updateLoadedModel(hostUrl, entry.model);
       runningModelInfos = await fetchRunningModelInfos(hostUrl);
     } else if (result.status !== 'ok' && entries[0].model === entry.model) {
@@ -765,6 +808,7 @@ async function restorePinnedModels(hostUrl, options = {}) {
 }
 
 async function restorePinnedModelsInternal(hostUrl, options = {}) {
+  options.assertAuthorityActive?.();
   const pref = await HostPreference.findOne({ hostUrl }).lean();
   const entries = getPinnedEntries(pref);
   if (entries.length === 0) {
@@ -804,6 +848,7 @@ async function restorePinnedModelsInternal(hostUrl, options = {}) {
   }
 
   const assertFence = async () => {
+    options.assertAuthorityActive?.();
     if (!fencedClaim) return;
     const current = await HostPreference.findOne({ hostUrl }).lean();
     if (current?.status !== 'benchmarking'
@@ -854,7 +899,7 @@ async function restorePinnedModelsInternal(hostUrl, options = {}) {
       continue;
     }
     await assertFence();
-    const unloadResult = await unloadModel(hostUrl, loaded);
+    const unloadResult = await unloadModel(hostUrl, loaded, options);
     if (unloadResult.status !== 'ok') {
       logger.warn(`[HostPreference] Failed to unload ${loaded} on ${hostUrl}: ${unloadResult.error}`);
     }
@@ -886,7 +931,7 @@ async function restorePinnedModelsInternal(hostUrl, options = {}) {
 
     let result;
     try {
-      result = await warmDefaultModel(hostUrl, entry.model, opts);
+      result = await warmDefaultModel(hostUrl, entry.model, { ...opts, ...options });
       result.durationMs = Date.now() - t0;
       results.push(result);
     } catch (err) {
@@ -905,6 +950,7 @@ async function restorePinnedModelsInternal(hostUrl, options = {}) {
   }
 
   const verification = await verifyPinnedEntriesLoaded(hostUrl, entries);
+  options.assertAuthorityActive?.();
   if (!verification.verified) {
     if (!fencedClaim) await setHostStatus(hostUrl, 'offline');
     logger.warn(`[HostPreference] Pin restore did not verify on ${hostUrl}`, {
@@ -923,6 +969,7 @@ async function restorePinnedModelsInternal(hostUrl, options = {}) {
     };
   }
 
+  options.assertAuthorityActive?.();
   await updateLoadedModel(hostUrl, entries[0].model, { benchmarkClaim: fencedClaim ? claim : null });
   return {
     host: hostUrl,
@@ -934,12 +981,16 @@ async function restorePinnedModelsInternal(hostUrl, options = {}) {
   };
 }
 
-async function swapModel(hostUrl, model) {
+async function swapModel(hostUrl, model, options = {}) {
+  options.assertAuthorityActive?.();
   const pref = await HostPreference.findOne({ hostUrl }).lean();
 
   // Guard: skip if already swapping
   if (pref?.status === 'swapping') {
-    return { host: hostUrl, model, status: 'swapping' };
+    const error = new Error(`Host ${hostUrl} has an unresolved model swap`);
+    error.code = 'HOST_MODEL_SWAP_IN_PROGRESS';
+    error.statusCode = 409;
+    throw error;
   }
 
   await setHostStatus(hostUrl, 'swapping');
@@ -956,7 +1007,7 @@ async function swapModel(hostUrl, model) {
       logger.info(`[HostPreference] Skipping explicit unload of ${loaded} on ${hostUrl} during swap — active inference`);
       continue;
     }
-    const unloadResult = await unloadModel(hostUrl, loaded);
+    const unloadResult = await unloadModel(hostUrl, loaded, options);
     if (unloadResult.status !== 'ok') {
       logger.warn(`[HostPreference] Failed to unload ${loaded} on ${hostUrl}: ${unloadResult.error}`);
     }
@@ -970,20 +1021,24 @@ async function swapModel(hostUrl, model) {
   const opts = matchingPin
     ? { keepAlive: matchingPin.keepAlive ?? -1, contextSize: matchingPin.contextSize ?? 0 }
     : { keepAlive: 0, contextSize: 0 };
-  warmDefaultModel(hostUrl, model, opts).then(async (result) => {
-    if (result.status === 'ok') {
-      await updateLoadedModel(hostUrl, model);
-      logger.info(`[HostPreference] Swapped to ${model} on ${hostUrl}`);
-    } else {
-      await setHostStatus(hostUrl, 'idle');
-      logger.warn(`[HostPreference] Failed to swap to ${model} on ${hostUrl}: ${result.error}`);
-    }
-  }).catch(async (err) => {
-    await setHostStatus(hostUrl, 'idle');
-    logger.warn(`[HostPreference] Swap error on ${hostUrl}: ${err.message}`);
-  });
+  const result = await warmDefaultModel(hostUrl, model, { ...opts, ...options });
+  options.assertAuthorityActive?.();
+  if (result.status === 'ok') {
+    await updateLoadedModel(hostUrl, model);
+    options.assertAuthorityActive?.();
+    logger.info(`[HostPreference] Swapped to ${model} on ${hostUrl}`);
+    return { host: hostUrl, model, status: 'ready' };
+  }
 
-  return { host: hostUrl, model, status: 'swapping' };
+  try {
+    await setHostStatus(hostUrl, 'idle');
+  } finally {
+    options.assertAuthorityActive?.();
+  }
+  logger.warn(`[HostPreference] Failed to swap to ${model} on ${hostUrl}: ${result.error}`);
+  const error = new Error(result.error || `Swap to ${model} was not terminally verified`);
+  error.code = 'HOST_MODEL_SWAP_UNVERIFIED';
+  throw error;
 }
 
 // ── Exports ─────────────────────────────────────────────────

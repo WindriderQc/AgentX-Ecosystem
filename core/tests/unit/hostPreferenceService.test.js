@@ -15,6 +15,13 @@ jest.mock('../../src/services/laneObservabilityService', () => ({
   observePinRestoreFailure: (...args) => mockObservePinRestoreFailure(...args)
 }));
 
+jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
+  runRuntimeMutation: jest.fn(async (_options, operation) => operation({
+    signal: new AbortController().signal,
+    assertActive: jest.fn()
+  }))
+}));
+
 const HostPreference = require('../../models/HostPreference');
 const service = require('../../src/services/hostPreferenceService');
 const hostGate = require('../../src/services/hostGate');
@@ -268,7 +275,7 @@ describe('hostPreferenceService', () => {
       const originalFetch = global.fetch;
       global.fetch = jest.fn(async () => ({
         ok: true,
-        text: async () => '{}'
+        text: async () => '{"done":true}'
       }));
 
       try {
@@ -324,6 +331,101 @@ describe('hostPreferenceService', () => {
       }
     });
 
+    it('keeps the swap promise fenced until warmup and projection are terminal', async () => {
+      const originalFetch = global.fetch;
+      const hostUrl = 'http://swap-await-host:11434';
+      await HostPreference.create({
+        hostUrl,
+        hostKey: 'primary',
+        pinnedModels: [],
+        loadedModel: null,
+        loadedModels: [],
+        status: 'idle'
+      });
+      let releaseWarmup;
+      global.fetch = jest.fn(() => new Promise(resolve => {
+        releaseWarmup = () => resolve({ ok: true, text: async () => '{"done":true}' });
+      }));
+      const assertAuthorityActive = jest.fn();
+      let settled = false;
+
+      try {
+        const pending = service.swapModel(hostUrl, 'new:model', {
+          signal: new AbortController().signal,
+          assertAuthorityActive
+        }).then(value => {
+          settled = true;
+          return value;
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect((await HostPreference.findOne({ hostUrl }).lean()).status).toBe('swapping');
+
+        releaseWarmup();
+        await expect(pending).resolves.toEqual({ host: hostUrl, model: 'new:model', status: 'ready' });
+        const stored = await HostPreference.findOne({ hostUrl }).lean();
+        expect(stored.loadedModel).toBe('new:model');
+        expect(assertAuthorityActive).toHaveBeenCalled();
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('does not publish a completed swap after its durable fence is aborted', async () => {
+      const originalFetch = global.fetch;
+      const hostUrl = 'http://swap-lost-host:11434';
+      await HostPreference.create({
+        hostUrl,
+        hostKey: 'primary',
+        pinnedModels: [],
+        loadedModel: null,
+        loadedModels: [],
+        status: 'idle'
+      });
+      const controller = new AbortController();
+      global.fetch = jest.fn((_url, options) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      }));
+
+      try {
+        const pending = service.swapModel(hostUrl, 'new:model', {
+          signal: controller.signal,
+          assertAuthorityActive: () => {
+            if (controller.signal.aborted) throw controller.signal.reason;
+          }
+        });
+        await new Promise(resolve => setImmediate(resolve));
+        const lost = Object.assign(new Error('maintenance generation changed'), {
+          code: 'RUNTIME_MUTATION_LEASE_LOST'
+        });
+        controller.abort(lost);
+
+        await expect(pending).rejects.toBe(lost);
+        const stored = await HostPreference.findOne({ hostUrl }).lean();
+        expect(stored.loadedModel).not.toBe('new:model');
+        expect(stored.status).toBe('swapping');
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('fails closed instead of accepting a stale swapping projection as terminal', async () => {
+      const hostUrl = 'http://stale-swap-host:11434';
+      await HostPreference.create({
+        hostUrl,
+        hostKey: 'primary',
+        pinnedModels: [],
+        loadedModel: null,
+        loadedModels: [],
+        status: 'swapping'
+      });
+
+      await expect(service.swapModel(hostUrl, 'new:model')).rejects.toMatchObject({
+        code: 'HOST_MODEL_SWAP_IN_PROGRESS',
+        statusCode: 409
+      });
+    });
+
     it('releases an idle resident pin for an exclusive cross-model handoff without deleting the pin', async () => {
       const originalFetch = global.fetch;
       const hostUrl = 'http://exclusive-host:11434';
@@ -339,7 +441,7 @@ describe('hostPreferenceService', () => {
         if (String(url).endsWith('/api/ps')) {
           return { ok: true, json: async () => ({ models: [{ name: 'normal-model' }] }) };
         }
-        return { ok: true, text: async () => '{}' };
+        return { ok: true, text: async () => '{"done":true}' };
       });
 
       try {
@@ -395,7 +497,7 @@ describe('hostPreferenceService', () => {
         }
         return {
           ok: true,
-          text: async () => '{}'
+          text: async () => '{"done":true}'
         };
       });
 
@@ -431,7 +533,12 @@ describe('hostPreferenceService', () => {
         if (typeof url === 'string' && url.endsWith('/api/ps')) {
           return { ok: true, json: async () => ({ models: [] }) };
         }
-        return { ok: true, text: async () => '{}' };
+        return {
+          ok: true,
+          text: async () => String(url).endsWith('/api/embeddings')
+            ? '{"embedding":[0]}'
+            : '{"done":true}'
+        };
       });
 
       try {
@@ -473,7 +580,7 @@ describe('hostPreferenceService', () => {
         }
         return {
           ok: true,
-          text: async () => '{}'
+          text: async () => '{"done":true}'
         };
       });
 
@@ -560,7 +667,7 @@ describe('hostPreferenceService', () => {
         }
         return {
           ok: true,
-          text: async () => '{}'
+          text: async () => '{"done":true}'
         };
       });
 
@@ -763,7 +870,7 @@ describe('hostPreferenceService', () => {
         // warm succeeded and clears the grace stamp.
         return {
           ok: true,
-          text: async () => '{}'
+          text: async () => '{"done":true}'
         };
       });
     }
@@ -969,7 +1076,7 @@ describe('hostPreferenceService', () => {
     });
 
     it('warms a bge pin via the embeddings endpoint, never generate', async () => {
-      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: async () => '{}' });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: async () => '{"embedding":[0]}' });
       const result = await service.warmDefaultModel(HOST_URL, 'qllama/bge-m3:f16', { keepAlive: -1, contextSize: 0 });
       expect(result.status).toBe('ok');
       expect(global.fetch).toHaveBeenCalledTimes(1);
@@ -984,14 +1091,14 @@ describe('hostPreferenceService', () => {
     });
 
     it('keeps the seconds-string form for positive embedding keep-alives', async () => {
-      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: async () => '{}' });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: async () => '{"embedding":[0]}' });
       await service.warmDefaultModel(HOST_URL, 'nomic-embed-text:v1.5', { keepAlive: 31536000 });
       const payload = JSON.parse(global.fetch.mock.calls[0][1].body);
       expect(payload.keep_alive).toBe('31536000s');
     });
 
     it('still warms generative models via generate with raw keep_alive', async () => {
-      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: async () => '{}' });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: async () => '{"done":true}' });
       await service.warmDefaultModel(HOST_URL, 'ax/gemma4:26b-a4b-it-qat', { keepAlive: -1, contextSize: 83558 });
       const [url, init] = global.fetch.mock.calls[0];
       expect(url).toBe(`${HOST_URL}/api/generate`);

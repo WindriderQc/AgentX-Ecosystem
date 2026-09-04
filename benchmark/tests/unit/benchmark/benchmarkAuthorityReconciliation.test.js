@@ -168,14 +168,18 @@ test('restart worker adopts Core quarantine before compensation and persists aft
   expect(calls.indexOf('adopt')).toBeLessThan(calls.indexOf('invalidate'));
   expect(calls.indexOf('invalidate')).toBeLessThan(calls.indexOf('transition:VERIFIED'));
   expect(calls.indexOf('transition:RESTORED')).toBeLessThan(calls.indexOf('release'));
-  expect(mockRestoreRecoveryHosts).toHaveBeenCalledWith('batch-1');
+  expect(mockRestoreRecoveryHosts).toHaveBeenCalledWith(
+    'batch-1',
+    {},
+    expect.objectContaining({ signal: expect.any(AbortSignal) })
+  );
   expect(mockReconciliationFindOneAndUpdate).toHaveBeenCalledWith(
     expect.objectContaining({ ownerId: ownership.ownerId, ownerEpoch: ownership.ownerEpoch }),
     expect.objectContaining({ $set: expect.objectContaining({
       state: 'verified',
       compensationReceipt: expect.objectContaining({ afterVersion: 7 })
     }) }),
-    { new: true }
+    expect.objectContaining({ new: true, signal: expect.any(AbortSignal) })
   );
 });
 

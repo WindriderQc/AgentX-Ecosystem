@@ -2,7 +2,7 @@
 
 jest.mock('../../../src/services/profiler/hostProfileService', () => ({
   getByUrl: jest.fn(),
-  upsert: jest.fn()
+  upsertMetadata: jest.fn()
 }));
 jest.mock('../../../src/services/hostTestService', () => ({
   checkHost: jest.fn()
@@ -35,13 +35,13 @@ describe('live profiler target admission', () => {
 
     expect(checkHost).not.toHaveBeenCalled();
     expect(hostProfileService.getByUrl).not.toHaveBeenCalled();
-    expect(hostProfileService.upsert).not.toHaveBeenCalled();
+    expect(hostProfileService.upsertMetadata).not.toHaveBeenCalled();
   });
 
   test('admits and normalizes a Docker Ollama service before probing and persistence', async () => {
     checkHost.mockResolvedValue({ available: true, latency: 12, models: ['qwen:7b'] });
     hostProfileService.getByUrl.mockResolvedValue(null);
-    hostProfileService.upsert.mockImplementation(async (value) => value);
+    hostProfileService.upsertMetadata.mockImplementation(async (value) => value);
 
     const result = await detectOllamaHost({
       hostUrl: 'ollama:11434/',
@@ -49,7 +49,7 @@ describe('live profiler target admission', () => {
     });
 
     expect(checkHost).toHaveBeenCalledWith('http://ollama:11434');
-    expect(hostProfileService.upsert).toHaveBeenCalledWith(expect.objectContaining({
+    expect(hostProfileService.upsertMetadata).toHaveBeenCalledWith(expect.objectContaining({
       hostUrl: 'http://ollama:11434',
       displayName: 'Compose Ollama',
       status: 'online'

@@ -72,7 +72,7 @@ function pendingBaselinePullError(pullError, reconciliation) {
 
 async function resolveBaselineReconciliation(hostId, reconciliation, options = {}) {
   options.assertClaimActive?.();
-  return hostProfileService.upsert({
+  return hostProfileService.upsertAuthority({
     hostId,
     reconciliation: {
       ...reconciliation,
@@ -81,6 +81,7 @@ async function resolveBaselineReconciliation(hostId, reconciliation, options = {
       resolvedAt: new Date()
     }
   }, {
+    authorityService: 'profiler-baseline',
     signal: options.signal,
     assertAuthorityActive: options.assertClaimActive
   });
@@ -120,7 +121,8 @@ async function ensureBaselineModel(hostId, options = {}) {
     reason: 'Ollama pull has not reached a server-terminal observation',
     startedAt: new Date()
   };
-  await hostProfileService.upsert({ hostId: before.hostId, reconciliation }, {
+  await hostProfileService.upsertAuthority({ hostId: before.hostId, reconciliation }, {
+    authorityService: 'profiler-baseline',
     signal: options.signal,
     assertAuthorityActive: options.assertClaimActive
   });
@@ -136,7 +138,8 @@ async function ensureBaselineModel(hostId, options = {}) {
     state: 'mutating',
     reason: 'Ollama pull request is in flight without a terminal server receipt'
   };
-  await hostProfileService.upsert({ hostId: before.hostId, reconciliation: mutatingReconciliation }, {
+  await hostProfileService.upsertAuthority({ hostId: before.hostId, reconciliation: mutatingReconciliation }, {
+    authorityService: 'profiler-baseline',
     signal: options.signal,
     assertAuthorityActive: options.assertClaimActive
   });
@@ -154,7 +157,8 @@ async function ensureBaselineModel(hostId, options = {}) {
     serverTerminalAt: new Date()
   };
   try {
-    await hostProfileService.upsert({ hostId: before.hostId, reconciliation: terminalReconciliation }, {
+    await hostProfileService.upsertAuthority({ hostId: before.hostId, reconciliation: terminalReconciliation }, {
+      authorityService: 'profiler-baseline',
       signal: options.signal,
       assertAuthorityActive: options.assertClaimActive
     });

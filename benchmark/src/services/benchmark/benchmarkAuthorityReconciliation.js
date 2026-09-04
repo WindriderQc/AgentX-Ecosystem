@@ -19,6 +19,7 @@ const {
   recoverWorkloadAdmissionRelease
 } = require('../../clients/coreApiClient');
 const logger = require('../../../config/logger');
+const { startRecoveryOwnershipHeartbeat } = require('../recoveryOwnershipHeartbeat');
 
 const DEFAULT_INTERVAL_MS = 5_000;
 const OWNER_STALE_MS = 60_000;
@@ -216,31 +217,41 @@ function enqueueResultInvalidation(input) {
   return enqueueAuthorityInvalidation({ ...input, kind: 'result_invalidation' });
 }
 
-async function invalidateResource(record) {
+async function invalidateResource(record, options = {}) {
+  options.assertActive?.();
   if (record.kind === 'workload_invalidation') {
     const batchId = record.batchId || null;
     const fields = authorityInvalidationFields(record);
     const [batch, results, matrices, governance, groundTruth] = await Promise.all([
       batchId
-        ? BenchmarkBatch.findOneAndUpdate({ _id: objectId(batchId) }, { $set: fields, $inc: { __v: 1 } }, { new: true }).lean()
+        ? BenchmarkBatch.findOneAndUpdate(
+          { _id: objectId(batchId) },
+          { $set: fields, $inc: { __v: 1 } },
+          { new: true, ...(options.signal ? { signal: options.signal } : {}) }
+        ).lean()
         : null,
       batchId ? BenchmarkResult.updateMany(
         { $or: [{ batch_id: String(batchId) }, { batchId: String(batchId) }] },
-        { $set: authorityInvalidationFields({ ...record, kind: 'result_invalidation' }), $inc: { __v: 1 } }
+        { $set: authorityInvalidationFields({ ...record, kind: 'result_invalidation' }), $inc: { __v: 1 } },
+        options.signal ? { signal: options.signal } : undefined
       ) : null,
       batchId ? JudgeAccuracyMatrix.updateMany(
         { batch_id: String(batchId) },
-        { $set: authorityInvalidationFields({ ...record, kind: 'judge_matrix_invalidation' }), $inc: { __v: 1 } }
+        { $set: authorityInvalidationFields({ ...record, kind: 'judge_matrix_invalidation' }), $inc: { __v: 1 } },
+        options.signal ? { signal: options.signal } : undefined
       ) : null,
       batchId ? JudgeGovernanceRun.updateMany(
         { batch_id: String(batchId) },
-        { $set: authorityInvalidationFields({ ...record, kind: 'judge_governance_invalidation' }), $inc: { __v: 1 } }
+        { $set: authorityInvalidationFields({ ...record, kind: 'judge_governance_invalidation' }), $inc: { __v: 1 } },
+        options.signal ? { signal: options.signal } : undefined
       ) : null,
       batchId ? JudgeGroundTruth.updateMany(
         { tags: `batch:${String(batchId)}` },
-        { $set: authorityInvalidationFields({ ...record, kind: 'ground_truth_invalidation' }), $inc: { __v: 1 } }
+        { $set: authorityInvalidationFields({ ...record, kind: 'ground_truth_invalidation' }), $inc: { __v: 1 } },
+        options.signal ? { signal: options.signal } : undefined
       ) : null
     ]);
+    options.assertActive?.();
     return {
       contract: 'agentx.authority-compensation/v1',
       resourceType: record.resourceType,
@@ -263,15 +274,21 @@ async function invalidateResource(record) {
   if (!Model) throw new Error(`Unsupported authority reconciliation kind: ${record.kind}`);
   const id = objectId(record.resultId);
   const update = { $set: authorityInvalidationFields(record), $inc: { __v: 1 } };
-  const query = Model.findOneAndUpdate({ _id: id }, update, { upsert: true, new: true });
+  const query = Model.findOneAndUpdate(
+    { _id: id },
+    update,
+    { upsert: true, new: true, ...(options.signal ? { signal: options.signal } : {}) }
+  );
   const updated = typeof query?.lean === 'function' ? await query.lean() : await query;
   if (!updated) throw new Error(`Authority invalidation did not return ${record.resourceType} ${record.resultId}`);
   if (record.kind === 'result_invalidation' && record.batchId) {
     await BenchmarkBatch.updateOne(
       { _id: record.batchId },
-      { $set: authorityInvalidationFields({ ...record, kind: 'batch_invalidation' }), $inc: { __v: 1 } }
+      { $set: authorityInvalidationFields({ ...record, kind: 'batch_invalidation' }), $inc: { __v: 1 } },
+      options.signal ? { signal: options.signal } : undefined
     );
   }
+  options.assertActive?.();
   return {
     contract: 'agentx.authority-compensation/v1',
     resourceType: record.resourceType,
@@ -300,13 +317,13 @@ async function claimRecoveryRecord(record, ownerId) {
   return claimed ? { record: claimed, ownerId, ownerEpoch } : null;
 }
 
-async function assertJournalOwner(recordId, ownerId, ownerEpoch, states) {
+async function assertJournalOwner(recordId, ownerId, ownerEpoch, states, options = {}) {
   const journal = await BenchmarkAuthorityReconciliation.findOne({
     _id: recordId,
     state: { $in: states },
     ownerId,
     ownerEpoch
-  }).lean();
+  }, null, options.signal ? { signal: options.signal } : undefined).lean();
   if (!journal) {
     const error = new Error('Authority reconciliation journal ownership was lost');
     error.code = 'AUTHORITY_RECONCILIATION_OWNERSHIP_LOST';
@@ -315,20 +332,35 @@ async function assertJournalOwner(recordId, ownerId, ownerEpoch, states) {
   return journal;
 }
 
-async function adoptAndAssert(record, ownerId) {
+async function refreshJournalOwner(ownership, { signal } = {}) {
+  const { record, ownerId, ownerEpoch } = ownership;
+  const result = await BenchmarkAuthorityReconciliation.updateOne(
+    { _id: record._id, state: { $ne: 'resolved' }, ownerId, ownerEpoch },
+    { $set: { ownerClaimedAt: new Date() } },
+    { signal }
+  );
+  if (Number(result?.matchedCount ?? result?.modifiedCount) !== 1) {
+    const error = new Error('Authority reconciliation journal ownership was lost');
+    error.code = 'AUTHORITY_RECONCILIATION_OWNERSHIP_LOST';
+    throw error;
+  }
+}
+
+async function adoptAndAssert(record, ownerId, options = {}) {
   await adoptWorkloadRecovery({
     workloadId: record.workloadId,
     recoveryId: record.recoveryId,
     recoveryRequestId: record.recoveryRequestId,
-    ownerId
+    ownerId,
+    signal: options.signal
   });
-  const heartbeat = await heartbeatWorkloadRecovery(record.workloadId);
+  const heartbeat = await heartbeatWorkloadRecovery(record.workloadId, undefined, options);
   if (heartbeat?.heartbeat !== true) {
     const error = new Error(heartbeat?.reason || 'Core recovery owner heartbeat was rejected');
     error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
     throw error;
   }
-  const core = await assertWorkloadRecovery(record.workloadId);
+  const core = await assertWorkloadRecovery(record.workloadId, options);
   if (core?.owned !== true || core.recoveryOwnerId !== ownerId) {
     const error = new Error(core?.reason || 'Core recovery quarantine ownership was lost');
     error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
@@ -337,14 +369,20 @@ async function adoptAndAssert(record, ownerId) {
   return core;
 }
 
-async function persistJournalState(ownership, fromStates, state, fields = {}) {
+async function persistJournalState(ownership, fromStates, state, fields = {}, options = {}) {
+  options.assertActive?.();
   const { record, ownerId, ownerEpoch } = ownership;
   const updated = await BenchmarkAuthorityReconciliation.findOneAndUpdate(
     { _id: record._id, state: { $in: fromStates }, ownerId, ownerEpoch },
     { $set: { state, ...fields, lastAttemptAt: new Date() }, $inc: { attempts: 1 } },
-    { new: true }
+    { new: true, ...(options.signal ? { signal: options.signal } : {}) }
   ).lean();
-  if (!updated) throw new Error(`Authority reconciliation ${state} receipt CAS was lost`);
+  if (!updated) {
+    const error = new Error(`Authority reconciliation ${state} receipt CAS was lost`);
+    error.code = 'AUTHORITY_RECONCILIATION_OWNERSHIP_LOST';
+    throw error;
+  }
+  options.assertActive?.();
   ownership.record = updated;
   return updated;
 }
@@ -352,15 +390,23 @@ async function persistJournalState(ownership, fromStates, state, fields = {}) {
 async function reconcileOwnedRecord(ownership) {
   let { record } = ownership;
   const { ownerId, ownerEpoch } = ownership;
+  const ownershipHeartbeat = startRecoveryOwnershipHeartbeat({
+    refreshOwner: options => refreshJournalOwner(ownership, options)
+  });
+
+  try {
+  await ownershipHeartbeat.ready;
 
   if (record.state === 'verified' || record.state === 'releasing') {
+    ownershipHeartbeat.assertActive();
     const recovered = await recoverWorkloadAdmissionRelease({
       admissionId: record.admissionId,
       generation: record.admissionGeneration,
       principal: record.admissionPrincipal,
       workloadId: record.workloadId,
       recoveryId: record.recoveryId
-    });
+    }, { signal: ownershipHeartbeat.signal });
+    ownershipHeartbeat.assertActive();
     if (recovered?.released === true) {
       const resolvedAt = new Date();
       await persistJournalState(ownership, ['verified', 'releasing'], 'resolved', {
@@ -370,56 +416,97 @@ async function reconcileOwnedRecord(ownership) {
         ownerId: null,
         ownerEpoch: null,
         ownerClaimedAt: null
-      });
+      }, { signal: ownershipHeartbeat.signal, assertActive: ownershipHeartbeat.assertActive });
       return { resolved: true, resultId: record.resultId, resolvedAt, recovered: true };
     }
   }
 
-  await adoptAndAssert(record, ownerId);
-  await assertJournalOwner(record._id, ownerId, ownerEpoch, ['pending_reconciliation', 'verified', 'releasing']);
+  await adoptAndAssert(record, ownerId, { signal: ownershipHeartbeat.signal });
+  ownershipHeartbeat.setCoreHeartbeat(({ signal }) => heartbeatWorkloadRecovery(
+    record.workloadId,
+    undefined,
+    { signal }
+  ));
+  await ownershipHeartbeat.heartbeatOnce();
+  ownershipHeartbeat.assertActive();
+  await assertJournalOwner(
+    record._id,
+    ownerId,
+    ownerEpoch,
+    ['pending_reconciliation', 'verified', 'releasing'],
+    { signal: ownershipHeartbeat.signal }
+  );
 
   if (record.state === 'pending_reconciliation') {
-    await heartbeatWorkloadRecovery(record.workloadId).then(result => {
-      if (result?.heartbeat !== true) throw new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+    await heartbeatWorkloadRecovery(record.workloadId, undefined, { signal: ownershipHeartbeat.signal }).then(result => {
+      if (result?.heartbeat !== true) {
+        const error = new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+        error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+        throw error;
+      }
     });
-    const core = await assertWorkloadRecovery(record.workloadId);
+    const core = await assertWorkloadRecovery(record.workloadId, { signal: ownershipHeartbeat.signal });
     if (new Set(['PREPARED', 'MUTATING']).has(core.recoveryState)) {
       await transitionWorkloadRecovery(record.workloadId, 'UNKNOWN', {
+        signal: ownershipHeartbeat.signal,
         receipt: { contract: 'agentx.workload-recovery/v1', event: 'ambiguous-authority-write' }
       });
     }
-    const compensationReceipt = await invalidateResource(record);
-    await heartbeatWorkloadRecovery(record.workloadId).then(result => {
-      if (result?.heartbeat !== true) throw new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+    ownershipHeartbeat.assertActive();
+    const compensationReceipt = await invalidateResource(record, {
+      signal: ownershipHeartbeat.signal,
+      assertActive: ownershipHeartbeat.assertActive
     });
-    await assertWorkloadRecovery(record.workloadId).then(result => {
+    ownershipHeartbeat.assertActive();
+    await heartbeatWorkloadRecovery(record.workloadId, undefined, { signal: ownershipHeartbeat.signal }).then(result => {
+      if (result?.heartbeat !== true) {
+        const error = new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+        error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+        throw error;
+      }
+    });
+    await assertWorkloadRecovery(record.workloadId, { signal: ownershipHeartbeat.signal }).then(result => {
       if (result?.owned !== true || result.recoveryOwnerId !== ownerId) {
-        throw new Error(result?.reason || 'Core recovery ownership was lost after compensation');
+        const error = new Error(result?.reason || 'Core recovery ownership was lost after compensation');
+        error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+        throw error;
       }
     });
     record = await persistJournalState(ownership, ['pending_reconciliation'], 'verified', {
       compensationReceipt,
       lastError: null
-    });
+    }, { signal: ownershipHeartbeat.signal, assertActive: ownershipHeartbeat.assertActive });
   }
 
   if (record.state === 'verified') {
-    const core = await assertWorkloadRecovery(record.workloadId);
+    const core = await assertWorkloadRecovery(record.workloadId, { signal: ownershipHeartbeat.signal });
     if (core.recoveryState !== 'VERIFIED' && core.recoveryState !== 'RESTORED') {
       await transitionWorkloadRecovery(record.workloadId, 'VERIFIED', {
+        signal: ownershipHeartbeat.signal,
         receipt: record.compensationReceipt
       });
     }
-    const afterVerified = await assertWorkloadRecovery(record.workloadId);
+    const afterVerified = await assertWorkloadRecovery(record.workloadId, { signal: ownershipHeartbeat.signal });
     if (afterVerified.recoveryState !== 'RESTORED') {
-      await heartbeatWorkloadRecovery(record.workloadId).then(result => {
-        if (result?.heartbeat !== true) throw new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+      await heartbeatWorkloadRecovery(record.workloadId, undefined, { signal: ownershipHeartbeat.signal }).then(result => {
+        if (result?.heartbeat !== true) {
+          const error = new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+          error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+          throw error;
+        }
       });
-      const hostRestore = await restoreWorkloadRecoveryHosts(record.workloadId);
+      ownershipHeartbeat.assertActive();
+      const hostRestore = await restoreWorkloadRecoveryHosts(
+        record.workloadId,
+        {},
+        { signal: ownershipHeartbeat.signal }
+      );
+      ownershipHeartbeat.assertActive();
       if (hostRestore?.restored !== true) {
         throw new Error(hostRestore?.reason || 'Core host restoration under recovery quarantine failed');
       }
       await transitionWorkloadRecovery(record.workloadId, 'RESTORED', {
+        signal: ownershipHeartbeat.signal,
         receipt: {
           contract: 'agentx.workload-recovery/v1',
           event: 'authority-restored',
@@ -427,22 +514,43 @@ async function reconcileOwnedRecord(ownership) {
         }
       });
     }
-    record = await persistJournalState(ownership, ['verified'], 'releasing', { lastError: null });
+    record = await persistJournalState(
+      ownership,
+      ['verified'],
+      'releasing',
+      { lastError: null },
+      { signal: ownershipHeartbeat.signal, assertActive: ownershipHeartbeat.assertActive }
+    );
   }
 
+  ownershipHeartbeat.assertActive();
   const remaining = await BenchmarkAuthorityReconciliation.countDocuments({
     workloadId: record.workloadId,
     state: { $in: ['pending_reconciliation', 'verified'] },
     _id: { $ne: record._id }
-  });
+  }, { signal: ownershipHeartbeat.signal });
+  ownershipHeartbeat.assertActive();
   if (remaining > 0) {
     return { resolved: false, resultId: record.resultId, reason: 'other authority reconciliations remain pending' };
   }
-  await assertJournalOwner(record._id, ownerId, ownerEpoch, ['releasing']);
-  await heartbeatWorkloadRecovery(record.workloadId).then(result => {
-    if (result?.heartbeat !== true) throw new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+  await assertJournalOwner(
+    record._id,
+    ownerId,
+    ownerEpoch,
+    ['releasing'],
+    { signal: ownershipHeartbeat.signal }
+  );
+  await heartbeatWorkloadRecovery(record.workloadId, undefined, { signal: ownershipHeartbeat.signal }).then(result => {
+    if (result?.heartbeat !== true) {
+      const error = new Error(result?.reason || 'Core recovery owner heartbeat was rejected');
+      error.code = 'WORKLOAD_RECOVERY_OWNERSHIP_LOST';
+      throw error;
+    }
   });
-  const released = await releaseWorkloadAdmission(record.workloadId);
+  ownershipHeartbeat.assertActive();
+  const released = await releaseWorkloadAdmission(record.workloadId, { signal: ownershipHeartbeat.signal });
+  ownershipHeartbeat.setCoreHeartbeat(null);
+  ownershipHeartbeat.assertActive();
   if (released?.released !== true) throw new Error(released?.reason || 'Recovery quarantine release was not acknowledged');
   const resolvedAt = new Date();
   await persistJournalState(ownership, ['releasing'], 'resolved', {
@@ -452,14 +560,27 @@ async function reconcileOwnedRecord(ownership) {
     ownerId: null,
     ownerEpoch: null,
     ownerClaimedAt: null
-  });
+  }, { signal: ownershipHeartbeat.signal, assertActive: ownershipHeartbeat.assertActive });
   return { resolved: true, resultId: record.resultId, resolvedAt, recovery: released };
+  } finally {
+    await ownershipHeartbeat.stop();
+  }
 }
 
-async function releaseJournalOwnership(row, workerId, error) {
+function isRecoveryOwnershipLoss(error) {
+  return new Set([
+    'AUTHORITY_RECONCILIATION_OWNERSHIP_LOST',
+    'RECOVERY_OWNERSHIP_LOST',
+    'WORKLOAD_RECOVERY_OWNERSHIP_LOST'
+  ]).has(error?.code);
+}
+
+async function releaseJournalOwnership(ownership, error) {
+  if (!ownership || isRecoveryOwnershipLoss(error)) return;
+  const { record, ownerId, ownerEpoch } = ownership;
   try {
     await BenchmarkAuthorityReconciliation.updateOne(
-      { _id: row._id, state: { $ne: 'resolved' }, ownerId: workerId },
+      { _id: record._id, state: { $ne: 'resolved' }, ownerId, ownerEpoch },
       { $set: {
         ownerId: null,
         ownerEpoch: null,
@@ -470,7 +591,7 @@ async function releaseJournalOwnership(row, workerId, error) {
     );
   } catch (updateError) {
     logger.error('Authority recovery ownership release failed', {
-      reconciliationId: String(row._id), error: updateError.message
+      reconciliationId: String(record._id), error: updateError.message
     });
   }
 }
@@ -484,15 +605,16 @@ async function reconcilePendingResultInvalidations(options = {}) {
     const results = [];
     const workerId = String(options.workerId || `benchmark-recovery:${process.pid}`);
     for (const row of rows) {
+      let ownership = null;
       try {
-        const ownership = await claimRecoveryRecord(row, workerId);
+        ownership = await claimRecoveryRecord(row, workerId);
         if (!ownership) {
           results.push({ resolved: false, resultId: row.resultId, reason: 'journal owned by another recovery worker' });
           continue;
         }
         results.push(await reconcileOwnedRecord(ownership));
       } catch (error) {
-        await releaseJournalOwnership(row, workerId, error);
+        await releaseJournalOwnership(ownership, error);
         logger.warn('Benchmark authority reconciliation remains quarantined', {
           reconciliationId: String(row._id), resultId: row.resultId, error: error.message
         });
@@ -517,11 +639,12 @@ async function waitForResultInvalidation(reconciliationId, options = {}) {
     const row = await BenchmarkAuthorityReconciliation.findById(reconciliationId).lean();
     if (!row) throw new Error(`Authority reconciliation ${reconciliationId} disappeared`);
     if (row.state === 'resolved') return { resolved: true, reconciliationId: String(row._id) };
+    let ownership = null;
     try {
-      const ownership = await claimRecoveryRecord(row, workerId);
+      ownership = await claimRecoveryRecord(row, workerId);
       if (ownership) await reconcileOwnedRecord(ownership);
     } catch (error) {
-      await releaseJournalOwnership(row, workerId, error);
+      await releaseJournalOwnership(ownership, error);
     }
     await new Promise(resolve => setTimeout(resolve, retryMs));
   }

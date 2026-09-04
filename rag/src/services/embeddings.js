@@ -1,18 +1,20 @@
 const logger = require('../../config/logger');
 const CoreProxyProvider = require('./embeddings/coreProxyProvider');
-const OllamaProvider = require('./embeddings/ollamaProvider');
 const { getEmbeddingCache } = require('./embeddingCache');
 
 function createEmbeddingsProvider(config = {}) {
-  const providerName = (config.embeddingProvider || process.env.EMBEDDING_PROVIDER || 'ollama-direct')
+  const providerName = (config.embeddingProvider || process.env.EMBEDDING_PROVIDER || 'core-proxy')
     .trim()
     .toLowerCase();
 
   switch (providerName) {
-    case 'ollama-direct':
-      return new OllamaProvider(config);
     case 'core-proxy':
       return new CoreProxyProvider(config);
+    case 'ollama-direct': {
+      const error = new Error('Direct Ollama embeddings are disabled; use the admission-backed core-proxy provider');
+      error.code = 'DIRECT_OLLAMA_EMBEDDINGS_DISABLED';
+      throw error;
+    }
     default:
       throw new Error(`Unsupported embedding provider: ${providerName}`);
   }

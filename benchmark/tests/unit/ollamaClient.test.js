@@ -84,7 +84,7 @@ describe('ollamaClient', () => {
         beforeEach(() => {
             mockFetch.mockResolvedValue({
                 ok: true,
-                json: async () => ({ models: [] })
+                json: async () => ({ models: [], done: true, status: 'success' })
             });
         });
 
@@ -116,14 +116,12 @@ describe('ollamaClient', () => {
             expect(mockFetch.mock.calls[0][0]).toBe('http://host:11434/api/chat');
         });
 
-        it('createModel sends POST to /api/create', async () => {
-            await createModel('http://host:11434', { name: 'adapted', modelfile: 'FROM test' });
-            expect(mockFetch.mock.calls[0][0]).toBe('http://host:11434/api/create');
-            expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({
-                model: 'adapted',
-                from: 'test',
-                stream: false
-            });
+        it('keeps custom model deployment hard-off before authority admission or network dispatch', async () => {
+            await expect(createModel('http://host:11434', {
+                name: 'adapted',
+                modelfile: 'FROM test'
+            })).rejects.toMatchObject({ code: 'CUSTOM_MODEL_DEPLOY_DISABLED' });
+            expect(mockFetch).not.toHaveBeenCalled();
         });
 
         it('pullModel waits for a non-streaming Ollama pull', async () => {
@@ -141,6 +139,15 @@ describe('ollamaClient', () => {
                 'http://host:11434/api/delete',
                 expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ name: 'qwen2.5:3b' }) })
             );
+        });
+
+        it('rejects plausible HTTP 200 inference and pull bodies without exact terminals', async () => {
+            mockFetch.mockResolvedValue({ ok: true, json: async () => ({ response: 'partial' }) });
+            await expect(generate('http://host:11434', { model: 'test', stream: false }))
+                .rejects.toMatchObject({ code: 'OLLAMA_RESPONSE_INCOMPLETE' });
+
+            await expect(pullModel('http://host:11434', 'qwen2.5:3b'))
+                .rejects.toMatchObject({ code: 'OLLAMA_PULL_INCOMPLETE' });
         });
 
         it('allows timeout override via opts', async () => {

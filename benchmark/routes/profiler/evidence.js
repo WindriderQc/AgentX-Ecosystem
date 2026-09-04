@@ -6,6 +6,7 @@ const HostProfile = require('../../models/HostProfile');
 const ModelProfile = require('../../models/ModelProfile');
 const performanceProfiles = require('../../src/services/profiler/modelPerformanceProfileService');
 const contextProfiles = require('../../src/services/modelContextProfileService');
+const { resolveRuntimeArtifactReceipt } = require('../../src/services/profiler/artifactIdentityService');
 const toolQualifications = require('../../src/services/qualification/toolCapabilityQualificationService');
 const ModelPerformanceProfile = require('../../models/ModelPerformanceProfile');
 const {
@@ -167,6 +168,29 @@ router.get('/roster', async (req, res) => {
     res.json({ status: 'success', data });
   } catch (err) {
     res.status(500).json({ status: 'error', error: err.message });
+  }
+});
+
+router.get('/runtime/:modelName', async (req, res) => {
+  const modelName = normalizeModelTag(req.params.modelName);
+  const hostId = String(req.query.hostId || '').trim();
+  const hostUrl = normalizeHostUrl(req.query.hostUrl);
+  if (!modelName || !hostId || !hostUrl) {
+    return res.status(400).json({
+      status: 'error',
+      code: 'RUNTIME_ARTIFACT_IDENTITY_SELECTOR_REQUIRED',
+      error: 'modelName, hostId, and hostUrl are required'
+    });
+  }
+  try {
+    const receipt = await resolveRuntimeArtifactReceipt(modelName, hostId, hostUrl);
+    return res.json({ status: 'success', data: { receipt } });
+  } catch (err) {
+    return res.status(err.statusCode || 409).json({
+      status: 'error',
+      code: err.code || 'RUNTIME_ARTIFACT_IDENTITY_UNAVAILABLE',
+      error: err.message
+    });
   }
 });
 

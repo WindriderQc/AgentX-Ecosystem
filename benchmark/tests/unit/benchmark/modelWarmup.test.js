@@ -96,7 +96,7 @@ describe('modelWarmup', () => {
         expect(MODEL_WARMUP_OPERATION_SPECS).toMatchObject({
             [MODEL_WARMUP_OPERATIONS.UNLOAD_OTHERS]: {
                 allowSearch: false,
-                responseMode: 'discard',
+                responseMode: 'json',
                 policy: {
                     authoritySource: 'request-admitted',
                     deadlineMs: 5_000,
@@ -106,7 +106,7 @@ describe('modelWarmup', () => {
             },
             [MODEL_WARMUP_OPERATIONS.UNLOAD_ONE]: {
                 allowSearch: false,
-                responseMode: 'discard',
+                responseMode: 'json',
                 policy: {
                     authoritySource: 'request-admitted',
                     deadlineMs: 5_000,
@@ -328,7 +328,7 @@ describe('modelWarmup', () => {
         process.env.AGENTX_BENCHMARK_TOKEN = 'scoped-benchmark-token';
         const _fetch = jest.fn()
             .mockResolvedValueOnce(okJson({ models: [{ name: 'stale:7b' }] }))
-            .mockResolvedValueOnce(okJson({}))
+            .mockResolvedValueOnce(okJson({ done: true }))
             .mockResolvedValueOnce(okJson({ message: { content: 'ready' } }));
 
         const result = await warmupModel('http://localhost:11434', 'gemma4:e4b', { _fetch });
@@ -343,7 +343,7 @@ describe('modelWarmup', () => {
     it('does not treat a same-family variant as already loaded', async () => {
         const _fetch = jest.fn()
             .mockResolvedValueOnce(okJson({ models: [{ name: 'gemma4:e4b' }] }))
-            .mockResolvedValueOnce(okJson({})) // pre-unload keep_alive:0
+            .mockResolvedValueOnce(okJson({ done: true })) // pre-unload keep_alive:0
             .mockResolvedValueOnce(okJson({ message: { content: 'ready' } }));
 
         const result = await warmupModel('http://localhost:11434', 'gemma4:26b', { _fetch });
@@ -358,7 +358,7 @@ describe('modelWarmup', () => {
             .mockResolvedValueOnce(okJson({
                 models: [{ name: 'gemma4:e4b', context_length: 4096 }]
             }))
-            .mockResolvedValueOnce(okJson({}))
+            .mockResolvedValueOnce(okJson({ done: true }))
             .mockResolvedValueOnce(okJson({ message: { content: 'ready' } }));
 
         const result = await warmupModel('http://localhost:11434', 'gemma4:e4b', {
@@ -455,8 +455,8 @@ describe('modelWarmup', () => {
                     { name: 'deepseek-r1:14b' }
                 ]
             }))
-            .mockResolvedValueOnce(okJson({})) // unload qwen2.5-coder:14b
-            .mockResolvedValueOnce(okJson({})) // unload deepseek-r1:14b
+            .mockResolvedValueOnce(okJson({ done: true })) // unload qwen2.5-coder:14b
+            .mockResolvedValueOnce(okJson({ done: true })) // unload deepseek-r1:14b
             .mockResolvedValueOnce(okJson({ message: { content: 'ready' } }));
 
         const result = await warmupModel('http://localhost:11434', 'gemma4:26b', { _fetch });
@@ -465,7 +465,7 @@ describe('modelWarmup', () => {
         expect(result.pre_unloaded.sort()).toEqual(['deepseek-r1:14b', 'qwen2.5-coder:14b']);
     });
 
-    it('keeps resolved unload attempts in pre_unloaded without draining non-2xx bodies', async () => {
+    it('fails closed and retains admission when an unload returns non-2xx', async () => {
         const destroy = jest.fn();
         const read = jest.fn(() => {
             throw new Error('non-2xx unload body must not be read');
@@ -483,14 +483,27 @@ describe('modelWarmup', () => {
             })
             .mockResolvedValueOnce(okJson({ message: { content: 'ready' } }));
 
-        const result = await warmupModel('http://localhost:11434', 'gemma4:e4b', { _fetch });
-
-        expect(result).toMatchObject({
-            pre_unloaded: ['stale:7b'],
-            success: true
+        await expect(warmupModel('http://localhost:11434', 'gemma4:e4b', { _fetch }))
+            .rejects.toMatchObject({
+                code: 'OLLAMA_UNLOAD_REJECTED',
+                retainAdmission: true,
+                status: 503
         });
         expect(read).not.toHaveBeenCalled();
         expect(destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed and retains admission when an unload lacks done true', async () => {
+        const _fetch = jest.fn()
+            .mockResolvedValueOnce(okJson({ models: [{ name: 'stale:7b' }] }))
+            .mockResolvedValueOnce(okJson({}));
+
+        await expect(warmupModel('http://localhost:11434', 'gemma4:e4b', { _fetch }))
+            .rejects.toMatchObject({
+                code: 'OLLAMA_RESPONSE_INCOMPLETE',
+                retainAdmission: true
+            });
+        expect(_fetch).toHaveBeenCalledTimes(2);
     });
 
     it('keeps caller-specified judge model loaded during pre-unload', async () => {
@@ -498,7 +511,7 @@ describe('modelWarmup', () => {
             .mockResolvedValueOnce(okJson({
                 models: [{ name: 'qwen3:14b' }, { name: 'old-test:7b' }]
             }))
-            .mockResolvedValueOnce(okJson({})) // unload old-test:7b
+            .mockResolvedValueOnce(okJson({ done: true })) // unload old-test:7b
             .mockResolvedValueOnce(okJson({ message: { content: 'ready' } }));
 
         const result = await warmupModel('http://localhost:11434', 'gemma4:e4b', {
@@ -551,7 +564,7 @@ describe('modelWarmup', () => {
             // /api/generate — either an unload (keep_alive:0) or the target warmup.
             // Small delay to measure parallelism.
             return new Promise(resolve =>
-                setTimeout(() => resolve(okJson({ message: { content: 'ready' } })), delayMs)
+                setTimeout(() => resolve(okJson({ done: true, message: { content: 'ready' } })), delayMs)
             );
         });
 
