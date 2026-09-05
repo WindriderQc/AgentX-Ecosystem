@@ -1,11 +1,13 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const {
+  verifyProfilerAuthorityReceipt,
+} = require('../benchmark/src/services/profiler/profilerAuthorityReceipt');
 
 const root = path.resolve(__dirname, '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -40,7 +42,7 @@ function executeMongoSeed(relative) {
     toString() { return value; },
   });
 
-  vm.runInNewContext(read(relative), { db, ObjectId, print() {} }, { timeout: 1_000 });
+  vm.runInNewContext(read(relative), { db, ObjectId, Date, print() {}, require }, { timeout: 1_000 });
   return collections;
 }
 
@@ -57,24 +59,20 @@ test('live cancellation seed carries an exact profiler authority receipt', () =>
   assert.equal(readiness.measurementReliability, 'medium');
   assert.equal(String(readiness.evidenceId), String(evidence._id));
   assert.equal(receipt.source, 'profiler_pipeline');
-  assert.equal(receipt.version, 1);
+  assert.equal(receipt.version, 3);
   assert.equal(receipt.evidenceId, String(evidence._id));
   assert.match(receipt.digest, /^[a-f0-9]{64}$/);
   assert.equal(readiness.stale, false);
+  assert.equal(evidence.profile.benchmarkQualified, true);
   assert.deepEqual(
     JSON.parse(JSON.stringify(readiness.artifact)),
     JSON.parse(JSON.stringify(evidence.artifact)),
   );
 
-  const expectedDigest = crypto.createHash('sha256').update(JSON.stringify({
+  assert.equal(verifyProfilerAuthorityReceipt(readiness, evidence, {
     modelName: evidence.modelName,
     hostId: evidence.hostId,
-    artifact: evidence.artifact,
-    profileDepth: evidence.profile.profileDepth,
-    required: evidence.profile.requiredRetainedSamples,
-    passing: evidence.profile.measurementQuality.passingSampleCount,
-  })).digest('hex');
-  assert.equal(receipt.digest, expectedDigest);
+  }), true);
 });
 
 test('release contract requires exact green CI and prior explicitly authorized lifecycle evidence', () => {

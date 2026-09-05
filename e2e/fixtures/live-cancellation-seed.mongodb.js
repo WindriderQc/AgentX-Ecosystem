@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 const executionModel = 'agentx-cancel-fixture:1';
 const executionDigest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const hostId = 'primary';
@@ -9,8 +11,53 @@ const performanceEvidenceId = ObjectId('65f000000000000000000101');
 const prompt1Id = ObjectId('66d000000000000000000001');
 const prompt2Id = ObjectId('66d000000000000000000002');
 const runtimeFingerprint = '79047f2496ffb27ae0bc420274c2036aa42dbce3f84f260c0d6f49f38dbe35d3';
-const profileAuthorityDigest = 'a30d51d360c61b0975d5d9f5c6cbef9cf91ef6c0810a0fc2e86fe1aa34aeba0c';
 const now = new Date();
+
+function canonicalValue(value) {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(item => canonicalValue(item));
+  if (typeof value === 'object') {
+    if (value._bsontype === 'ObjectId' || value.constructor?.name === 'ObjectId') return String(value);
+    return Object.keys(value).sort().reduce((result, key) => {
+      const normalized = canonicalValue(value[key]);
+      if (normalized !== undefined) result[key] = normalized;
+      return result;
+    }, {});
+  }
+  return String(value);
+}
+
+function createProfilerAuthorityReceipt({ modelName, hostId: receiptHostId, artifact: receiptArtifact, profile, evidenceId }) {
+  const issuedAt = now.toISOString();
+  const payload = canonicalValue({
+    contract: 'agentx.profiler-authority/v3',
+    issuedAt,
+    evidenceId: String(evidenceId),
+    modelName,
+    hostId: receiptHostId,
+    artifact: canonicalValue({
+      model: receiptArtifact.model || null,
+      hostId: receiptArtifact.hostId || null,
+      hostUrl: receiptArtifact.hostUrl || null,
+      digest: receiptArtifact.digest || null,
+      runtimeFingerprint: receiptArtifact.runtimeFingerprint || null,
+      registryId: receiptArtifact.registryId || null,
+      registryDigest: receiptArtifact.registryDigest || null,
+      registryQualified: receiptArtifact.registryQualified === true,
+    }),
+    profile: canonicalValue(profile),
+  });
+  return {
+    version: 3,
+    source: 'profiler_pipeline',
+    evidenceId: String(evidenceId),
+    digest: crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex'),
+    issuedAt,
+  };
+}
 
 const seededCollections = [
   'hostprofiles',
@@ -69,6 +116,45 @@ const artifact = {
   registryDigest: executionDigest,
   registryQualified: true,
 };
+
+const performanceProfile = {
+  profiledAt: now,
+  profileDepth: 'standard',
+  requiredRetainedSamples: 5,
+  requiredTtftSamples: 5,
+  measurementQuality: {
+    sampleCount: 5,
+    retainedSampleCount: 5,
+    passingSampleCount: 5,
+    minimumRetainedSamples: 5,
+    ttftSampleCount: 5,
+    reliability: 'medium',
+  },
+  tokensPerSec: 100,
+  promptEvalTokensPerSec: 100,
+  ttftMs: 1,
+  ttftMeasurement: 'streamed_wall_clock',
+  vramUsedMiB: 1,
+  maxVerifiedContext: 4096,
+  recommendedInteractiveContext: 4096,
+  recommendedDocumentContext: 4096,
+  optimalNumCtx: 4096,
+  recommendedConfig: { num_ctx: 4096 },
+  spill: {
+    verified: true,
+    spillDetected: false,
+    lastSafeNumCtx: 4096,
+  },
+  loadTiming: { hotLoadMs: 1 },
+  benchmarkQualified: true,
+};
+const profileAuthorityReceipt = createProfilerAuthorityReceipt({
+  modelName: executionModel,
+  hostId,
+  artifact,
+  profile: performanceProfile,
+  evidenceId: performanceEvidenceId,
+});
 
 db.hostprofiles.insertOne(hostIdentity);
 
@@ -154,13 +240,7 @@ db.modelprofiles.insertOne({
       stale: false,
       staleReason: null,
       evidenceId: performanceEvidenceId,
-      authorityReceipt: {
-        version: 1,
-        source: 'profiler_pipeline',
-        evidenceId: performanceEvidenceId.toString(),
-        digest: profileAuthorityDigest,
-        issuedAt: now,
-      },
+      authorityReceipt: profileAuthorityReceipt,
       artifact,
     },
   },
@@ -228,44 +308,7 @@ db.modelperformanceprofiles.insertOne({
   modelName: executionModel,
   hostId,
   artifact,
-  profile: {
-    profiledAt: now,
-    profileDepth: 'standard',
-    requiredRetainedSamples: 5,
-    requiredTtftSamples: 5,
-    measurementQuality: {
-      passingSampleCount: 5,
-      ttftSampleCount: 5,
-      reliability: 'medium',
-    },
-    tokensPerSec: 100,
-    promptEvalTokensPerSec: 100,
-    ttftMs: 1,
-    ttftMeasurement: 'streamed_wall_clock',
-    vramUsedMiB: 1,
-    maxVerifiedContext: 4096,
-    recommendedInteractiveContext: 4096,
-    recommendedDocumentContext: 4096,
-    optimalNumCtx: 4096,
-    recommendedConfig: { num_ctx: 4096 },
-    profileDepth: 'standard',
-    requiredRetainedSamples: 5,
-    requiredTtftSamples: 5,
-    measurementQuality: {
-      sampleCount: 5,
-      retainedSampleCount: 5,
-      passingSampleCount: 5,
-      minimumRetainedSamples: 5,
-      ttftSampleCount: 5,
-      reliability: 'medium',
-    },
-    spill: {
-      verified: true,
-      spillDetected: false,
-      lastSafeNumCtx: 4096,
-    },
-    loadTiming: { hotLoadMs: 1 },
-  },
+  profile: performanceProfile,
   active: true,
   stale: false,
   staleReason: null,
