@@ -133,7 +133,9 @@ kbd { display: inline-grid; min-width: 20px; height: 20px; place-items: center; 
 .mr-chip.mr-warn, .mr-warn-text { color: #ffbd66; border-color: rgba(255,189,102,.56); }
 .mr-status-ready_for_review, .mr-status-proposed { color: #78b3ff; border-color: rgba(110,168,254,.58); }
 .mr-status-partially_reviewed, .mr-status-deferred { color: #e1c66a; border-color: rgba(208,180,94,.58); }
-.mr-status-completed, .mr-status-approved, .mr-status-applied { color: #65d49a; border-color: rgba(88,201,138,.58); }
+.mr-status-completed, .mr-status-approved, .mr-status-auto_approved, .mr-status-applied { color: #65d49a; border-color: rgba(88,201,138,.58); }
+.mr-status-shadowed { color: #78b3ff; border-color: rgba(110,168,254,.58); }
+.mr-status-parked { color: #b7a6cf; border-color: rgba(183,166,207,.58); }
 .mr-status-failed, .mr-status-rejected, .mr-status-apply_failed { color: #f48181; border-color: rgba(240,117,117,.58); }
 
 .mr-run-summary { margin-bottom: 15px; padding-bottom: 14px; border-bottom: 1px solid rgba(94,114,158,.24); }

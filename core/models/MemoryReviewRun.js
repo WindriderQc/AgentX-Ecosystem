@@ -69,6 +69,44 @@ const CandidateSchema = new mongoose.Schema({
   },
   confidence: { type: Number, default: 0 },
   score: { type: Number, default: 0 },
+  memoryKey: { type: String, default: null, maxlength: 80 },
+  scope: {
+    type: String,
+    enum: ['project', 'ecosystem', 'workflow', 'owner', 'household', 'private_domain'],
+    default: 'project',
+  },
+  sensitivity: {
+    type: String,
+    enum: ['normal', 'private', 'highly_private'],
+    default: 'normal',
+  },
+  impact: {
+    type: String,
+    enum: ['context_only', 'behavior_changing', 'operational'],
+    default: 'context_only',
+  },
+  stability: {
+    type: String,
+    enum: ['transient', 'episodic', 'durable'],
+    default: 'durable',
+  },
+  temporal: {
+    validFrom: { type: Date, default: null },
+    validTo: { type: Date, default: null },
+    expiresAt: { type: Date, default: null },
+  },
+  automation: {
+    policyVersion: { type: String, default: null },
+    disposition: {
+      type: String,
+      enum: ['auto_apply', 'soft_store', 'review', 'ignore'],
+      default: 'review',
+    },
+    evidenceClass: { type: String, default: 'unknown' },
+    reason: { type: String, default: '', maxlength: 240 },
+    evaluatedAt: { type: Date, default: null },
+    mode: { type: String, enum: ['off', 'shadow', 'safe'], default: 'off' },
+  },
   conflicts: { type: [ConflictSchema], default: [] },
   risk: {
     secret: { type: Boolean, default: false },
@@ -79,7 +117,10 @@ const CandidateSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['proposed', 'approved', 'rejected', 'edited', 'deferred', 'applying', 'applied', 'apply_failed'],
+    enum: [
+      'proposed', 'approved', 'auto_approved', 'rejected', 'edited', 'deferred',
+      'parked', 'shadowed', 'applying', 'applied', 'apply_failed',
+    ],
     default: 'proposed',
   },
   review: {
@@ -97,6 +138,7 @@ const CandidateSchema = new mongoose.Schema({
     adapter: { type: String, default: null },
     attemptId: { type: String, default: null },
     by: { type: String, default: null },
+    automated: { type: Boolean, default: false },
     startedAt: { type: Date, default: null },
     leaseUntil: { type: Date, default: null },
     attemptedAt: { type: Date, default: null },
@@ -136,7 +178,7 @@ const AuditSchema = new mongoose.Schema({
 const MemoryReviewRunSchema = new mongoose.Schema({
   runId: { type: String, required: true, unique: true },
   runKey: { type: String, required: true, index: true },
-  schemaVersion: { type: Number, default: 1 },
+  schemaVersion: { type: Number, default: 2 },
   mode: { type: String, enum: ['shadow', 'review', 'apply'], default: 'shadow' },
   applyAuthorization: {
     by: { type: String, default: null },

@@ -1,9 +1,9 @@
-// /api/memory-review — Ecosystem Memory Review (approval-first, shadow by default).
+// /api/memory-review — Ecosystem Memory Review with bounded standing policy.
 //
 // Mounted in src/app.js with a dedicated 1mb JSON parser: observation batches
 // are bounded by policy, and raw transcript payloads are refused at the
-// validation layer. There is deliberately NO bulk-approve endpoint — review is
-// candidate-by-candidate through the bounded review contract.
+// validation layer. Safe reversible writes may be policy-authorized; exception
+// review remains candidate-by-candidate and there is no bulk-approve endpoint.
 
 const express = require('express');
 
@@ -41,6 +41,9 @@ router.get('/config', requireOperatorUiAccess, (req, res) => {
     status: 'success',
     data: {
       mode: policy.serverMode(),
+      automationMode: policy.automationMode(),
+      automationPolicyVersion: policy.POLICY_VERSION,
+      reviewExceptionBudget: policy.reviewExceptionBudget(),
       schemaVersion: policy.SCHEMA_VERSION,
       coreVersion,
       limits: policy.LIMITS,
@@ -48,7 +51,12 @@ router.get('/config', requireOperatorUiAccess, (req, res) => {
       candidateTypes: policy.CANDIDATE_TYPES,
       targetKinds: policy.TARGET_KINDS,
       targetsByType: policy.TARGETS_BY_TYPE,
+      scopes: policy.MEMORY_SCOPES,
+      sensitivities: policy.SENSITIVITY_LEVELS,
+      impacts: policy.IMPACT_LEVELS,
+      stabilities: policy.STABILITY_LEVELS,
       applyEnabled: policy.serverMode() === 'apply',
+      safeAutomationEnabled: policy.serverMode() === 'apply' && policy.automationMode() === 'safe',
     },
   });
 });
