@@ -14,6 +14,7 @@ describe('EmbeddingsService connection evidence', () => {
   function buildService(provider) {
     const service = new EmbeddingsService({});
     service.provider = provider;
+    service.dimension = provider.getDimension();
     return service;
   }
 
@@ -54,7 +55,11 @@ describe('EmbeddingsService connection evidence', () => {
     await service.embed('a real question');
 
     const status = service.getCachedConnectionStatus();
-    expect(status).toEqual(expect.objectContaining({ healthy: true, stale: false }));
+    expect(status).toEqual(expect.objectContaining({
+      healthy: true,
+      stale: false,
+      source: 'traffic',
+    }));
     expect(typeof status.checkedAt).toBe('number');
   });
 
@@ -67,6 +72,28 @@ describe('EmbeddingsService connection evidence', () => {
     expect(service.getCachedConnectionStatus()).toEqual(
       expect.objectContaining({ healthy: false })
     );
+  });
+
+  it('rejects a wrong-dimension vector and records unhealthy evidence', async () => {
+    const service = buildService(stubProvider({
+      embed: jest.fn().mockResolvedValue([0.1]),
+    }));
+
+    await expect(service.embed('wrong dimension')).rejects.toThrow(
+      'expected 3 finite values, got 1'
+    );
+    expect(service.getCachedConnectionStatus()).toEqual(
+      expect.objectContaining({ healthy: false, source: 'traffic' })
+    );
+  });
+
+  it('rejects non-finite vector values and records unhealthy evidence', async () => {
+    const service = buildService(stubProvider({
+      embed: jest.fn().mockResolvedValue([0.1, Number.NaN, 0.3]),
+    }));
+
+    await expect(service.embed('invalid values')).rejects.toThrow('finite values');
+    expect(service.getCachedConnectionStatus().healthy).toBe(false);
   });
 
   it('lets a later success correct an earlier failure', async () => {
@@ -110,6 +137,42 @@ describe('EmbeddingsService connection evidence', () => {
     expect(service.getCachedConnectionStatus()).toEqual(
       expect.objectContaining({ healthy: true })
     );
+  });
+
+  it('rejects an incomplete batch and records unhealthy evidence', async () => {
+    const service = buildService(stubProvider({
+      embedBatch: jest.fn().mockResolvedValue([[0.1, 0.2, 0.3]]),
+    }));
+
+    await expect(service.embedBatch(['one', 'two'])).rejects.toThrow(
+      'expected 2 vectors, got 1'
+    );
+    expect(service.getCachedConnectionStatus().healthy).toBe(false);
+  });
+
+  it('rejects a wrong-dimension vector inside a batch', async () => {
+    const service = buildService(stubProvider({
+      embedBatch: jest.fn().mockResolvedValue([[0.1, 0.2, 0.3], [0.4]]),
+    }));
+
+    await expect(service.embedBatch(['one', 'two'])).rejects.toThrow(
+      'expected 3 finite values, got 1'
+    );
+    expect(service.getCachedConnectionStatus().healthy).toBe(false);
+  });
+
+  it('retains startup proof when later traffic becomes the latest observation', async () => {
+    const service = buildService(stubProvider());
+
+    await service.refreshConnectionStatus({ source: 'startup' });
+    const startupVerifiedAt = service.getCachedConnectionStatus().startupVerifiedAt;
+    await service.embed('later traffic');
+
+    expect(service.getCachedConnectionStatus()).toEqual(expect.objectContaining({
+      healthy: true,
+      source: 'traffic',
+      startupVerifiedAt,
+    }));
   });
 
   it('records unhealthy evidence when embedBatch fails', async () => {

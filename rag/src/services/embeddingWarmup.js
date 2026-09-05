@@ -39,7 +39,7 @@ async function warmEmbeddingConnection(options = {}) {
     let healthy = false;
 
     try {
-      healthy = await resolveService().refreshConnectionStatus();
+      healthy = await resolveService().refreshConnectionStatus({ source: 'startup' });
     } catch (err) {
       logger.warn('Embedding warm-up attempt failed', { attempt, error: err.message });
     }

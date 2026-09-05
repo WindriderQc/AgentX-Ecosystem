@@ -25,6 +25,7 @@ describe('warmEmbeddingConnection', () => {
     })).resolves.toBe(true);
 
     expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith({ source: 'startup' });
     expect(sleep).not.toHaveBeenCalled();
   });
 

@@ -352,6 +352,8 @@ describe('GET /api/rag/status — embedding evidence contract', () => {
       healthy: true,
       checkedAt: 1710000000000,
       stale: false,
+      source: 'startup',
+      startupVerifiedAt: 1710000000000,
     });
 
     const res = await api.get('/api/rag/status');
@@ -359,6 +361,8 @@ describe('GET /api/rag/status — embedding evidence contract', () => {
 
     expect(embedding.healthy).toBe(true);
     expect(embedding.evidence).toBe('active');
+    expect(embedding.evidenceSource).toBe('startup');
+    expect(embedding.startupVerifiedAt).toBe(1710000000000);
     expect(embedding.error).toBeUndefined();
   });
 
@@ -401,6 +405,8 @@ describe('GET /api/rag/status — embedding evidence contract', () => {
 
     await api.post('/api/rag/status/refresh');
 
-    expect(mockEmbeddingsService.refreshConnectionStatus).toHaveBeenCalled();
+    expect(mockEmbeddingsService.refreshConnectionStatus).toHaveBeenCalledWith({
+      source: 'operator-refresh',
+    });
   });
 });

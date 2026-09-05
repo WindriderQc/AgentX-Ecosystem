@@ -33,8 +33,8 @@ class EmbeddingsService {
     // NOTE: do NOT eagerly fire a health check here. Kicking off a detached
     // fetch in the constructor leaks timers + TCP sockets in short-lived
     // processes (e.g. Jest test runs) because the promise can outlive the
-    // process that requested it. The first /status call, or any explicit
-    // testConnection(), will trigger refreshConnectionStatus() on demand.
+    // process that requested it. The server startup warm-up, an explicit
+    // status refresh, or real embedding traffic collects connection evidence.
   }
 
   getCachedConnectionStatus() {
@@ -45,14 +45,20 @@ class EmbeddingsService {
     return {
       healthy: this._connectionStatus.healthy,
       checkedAt: this._connectionStatus.checkedAt,
-      stale: Date.now() - this._connectionStatus.checkedAt >= this.healthCheckTtlMs
+      stale: Date.now() - this._connectionStatus.checkedAt >= this.healthCheckTtlMs,
+      source: this._connectionStatus.source,
+      ...(this._connectionStatus.startupVerifiedAt
+        ? { startupVerifiedAt: this._connectionStatus.startupVerifiedAt }
+        : {})
     };
   }
 
-  async refreshConnectionStatus() {
+  async refreshConnectionStatus(options = {}) {
     if (this._connectionStatusPromise) {
       return this._connectionStatusPromise;
     }
+
+    const source = options.source || 'health-check';
 
     const runCheck = (async () => {
       let healthy = false;
@@ -66,10 +72,7 @@ class EmbeddingsService {
         });
       }
 
-      this._connectionStatus = {
-        healthy: healthy === true,
-        checkedAt: Date.now()
-      };
+      this.recordConnectionEvidence(healthy, source);
 
       return this._connectionStatus.healthy;
     })();
@@ -91,23 +94,51 @@ class EmbeddingsService {
    * refresh, which nothing in normal operation does. Real traffic is the
    * cheapest possible probe, so we let a genuine call stand in for one.
    */
-  recordConnectionEvidence(healthy) {
+  recordConnectionEvidence(healthy, source = 'traffic') {
+    const checkedAt = Date.now();
+    const startupVerifiedAt = source === 'startup' && healthy === true
+      ? checkedAt
+      : this._connectionStatus?.startupVerifiedAt;
+
     this._connectionStatus = {
       healthy: healthy === true,
-      checkedAt: Date.now()
+      checkedAt,
+      source,
+      ...(startupVerifiedAt ? { startupVerifiedAt } : {})
     };
+  }
+
+  _assertEmbeddingVector(embedding) {
+    const actualDimension = Array.isArray(embedding) ? embedding.length : null;
+    const valuesAreFinite = Array.isArray(embedding)
+      && embedding.every((value) => typeof value === 'number' && Number.isFinite(value));
+
+    if (actualDimension !== this.dimension || !valuesAreFinite) {
+      const actual = actualDimension === null ? 'non-array' : actualDimension;
+      throw new Error(`Embedding vector is invalid: expected ${this.dimension} finite values, got ${actual}`);
+    }
+  }
+
+  _assertEmbeddingBatch(embeddings, expectedCount) {
+    if (!Array.isArray(embeddings) || embeddings.length !== expectedCount) {
+      const actual = Array.isArray(embeddings) ? embeddings.length : 'non-array';
+      throw new Error(`Embedding batch is invalid: expected ${expectedCount} vectors, got ${actual}`);
+    }
+
+    embeddings.forEach((embedding) => this._assertEmbeddingVector(embedding));
   }
 
   // Runs a real provider call and records what it proved either way. A later
   // success overwrites an earlier failure, so the view is self-correcting and
   // a transient error cannot pin the dependency to unhealthy.
-  async _withConnectionEvidence(run) {
+  async _withConnectionEvidence(run, validateResult) {
     try {
       const result = await run();
-      this.recordConnectionEvidence(true);
+      validateResult(result);
+      this.recordConnectionEvidence(true, 'traffic');
       return result;
     } catch (error) {
-      this.recordConnectionEvidence(false);
+      this.recordConnectionEvidence(false, 'traffic');
       throw error;
     }
   }
@@ -118,7 +149,8 @@ class EmbeddingsService {
     if (cached) return cached;
 
     const embedding = await this._withConnectionEvidence(
-      () => this.provider.embed(text, preferredHost)
+      () => this.provider.embed(text, preferredHost),
+      (result) => this._assertEmbeddingVector(result)
     );
     cache.set(text, this.model, embedding);
     return embedding;
@@ -142,7 +174,8 @@ class EmbeddingsService {
 
     if (uncachedTexts.length > 0) {
       const freshEmbeddings = await this._withConnectionEvidence(
-        () => this.provider.embedBatch(uncachedTexts, preferredHost)
+        () => this.provider.embedBatch(uncachedTexts, preferredHost),
+        (result) => this._assertEmbeddingBatch(result, uncachedTexts.length)
       );
       for (let j = 0; j < uncachedIndices.length; j++) {
         results[uncachedIndices[j]] = freshEmbeddings[j];
@@ -170,11 +203,11 @@ class EmbeddingsService {
     }
 
     if (useCache && this._connectionStatus && !options.waitForRefresh) {
-      this.refreshConnectionStatus().catch(() => {});
+      this.refreshConnectionStatus({ source: options.source || 'health-check' }).catch(() => {});
       return this._connectionStatus.healthy;
     }
 
-    return this.refreshConnectionStatus();
+    return this.refreshConnectionStatus({ source: options.source || 'health-check' });
   }
 
   getStatusInfo() {
