@@ -8,6 +8,20 @@ const http = require('http');
 
 // Mock chatService before requiring app
 jest.mock('../../src/services/chatService');
+jest.mock('../../src/services/chat/modelUnavailability', () => ({
+    explainModelUnavailability: jest.fn(async (error) => ({
+        model: error.model,
+        tried: { hostKey: 'tertiary', name: 'UGFrank' },
+        installedOn: [{
+            hostKey: 'primary',
+            name: 'UGAlien',
+            status: 'benchmarking',
+            unavailableBecause: 'reserved by a benchmark claim'
+        }],
+        unknownHosts: [],
+        message: `Model ${error.model} is installed on UGAlien (primary), which is currently reserved by a benchmark claim.`
+    }))
+}));
 
 // Auth was stripped from core. With no auth context, getUserId(res) returns
 // the default userId 'default'. Tests below assert that behavior.
@@ -276,6 +290,50 @@ describe('POST /api/chat/stream - Streaming SSE Endpoint', () => {
                     expect(errorEvent.message).toContain('Service unavailable');
                     expect(errorEvent.code).toBe('OLLAMA_UNAVAILABLE');
                     expect(errorEvent.statusCode).toBe(503);
+                    done();
+                });
+        }, 10000);
+
+        it('should explain MODEL_UNAVAILABLE errors on the default streaming path', (done) => {
+            const serviceError = Object.assign(new Error('model not found'), {
+                code: 'MODEL_UNAVAILABLE',
+                statusCode: 404,
+                model: 'qwen3.8:27b-mtp-q8_0',
+                upstreamUrl: 'http://internal-host:11434/api/chat'
+            });
+            chatService.handleChatRequestStream = jest.fn().mockRejectedValue(serviceError);
+
+            let errorEvent = null;
+            request(app)
+                .post('/api/chat/stream')
+                .send({ model: serviceError.model, message: 'Test' })
+                .parse((res, callback) => {
+                    let text = '';
+                    res.on('data', (chunk) => {
+                        text += chunk.toString();
+                        const parts = text.split('\n\n');
+                        text = parts.pop();
+                        for (const part of parts) {
+                            if (!part.includes('event: error')) continue;
+                            const match = part.match(/data: ({.*})/);
+                            if (match) errorEvent = JSON.parse(match[1]);
+                        }
+                    });
+                    res.on('end', () => callback(null, { errorEvent }));
+                })
+                .end((err) => {
+                    if (err) return done(err);
+                    expect(errorEvent).toMatchObject({
+                        code: 'MODEL_UNAVAILABLE',
+                        statusCode: 404,
+                        detail: {
+                            tried: { hostKey: 'tertiary', name: 'UGFrank' },
+                            installedOn: [expect.objectContaining({ hostKey: 'primary' })],
+                            unknownHosts: []
+                        }
+                    });
+                    expect(errorEvent.message).toMatch(/reserved by a benchmark claim/);
+                    expect(JSON.stringify(errorEvent.detail)).not.toContain('http://');
                     done();
                 });
         }, 10000);

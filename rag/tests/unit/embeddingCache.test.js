@@ -132,7 +132,7 @@ describe('EmbeddingsService caching integration', () => {
     const { EmbeddingsService, resetEmbeddingsService } = require('../../src/services/embeddings');
     resetEmbeddingsService();
 
-    const svc = new EmbeddingsService();
+    const svc = new EmbeddingsService({ dimension: 2 });
     const mockEmbed = jest.fn().mockResolvedValue([0.5, 0.6]);
     svc.provider.embed = mockEmbed;
 
@@ -157,7 +157,7 @@ describe('EmbeddingsService caching integration', () => {
     const { EmbeddingsService, resetEmbeddingsService } = require('../../src/services/embeddings');
     resetEmbeddingsService();
 
-    const svc = new EmbeddingsService();
+    const svc = new EmbeddingsService({ dimension: 2 });
 
     // Pre-populate cache via embed()
     const mockEmbed = jest.fn().mockResolvedValue([1, 1]);
@@ -189,7 +189,7 @@ describe('EmbeddingsService caching integration', () => {
     const { EmbeddingsService, resetEmbeddingsService } = require('../../src/services/embeddings');
     resetEmbeddingsService();
 
-    const svc = new EmbeddingsService();
+    const svc = new EmbeddingsService({ dimension: 2 });
 
     // Pre-populate cache
     const mockEmbed = jest.fn()

@@ -199,4 +199,15 @@ describe('Roundtable v2 API', () => {
     expect(create.body.code).toBe('ADAPTER_REQUIRED');
     expect(roundtableService.startRoundtable).not.toHaveBeenCalled();
   });
+
+  test('GET /active serves the fallback document even when the facade exposes no reconciler', async () => {
+    const Roundtable = require('../../models/Roundtable');
+    roundtableService.getActiveRoundtableId.mockReturnValue(null);
+    Roundtable.findOne.mockReturnValue({ sort: jest.fn().mockResolvedValue(null) });
+
+    const response = await request(app).get('/api/roundtable/active').expect(200);
+
+    expect(response.body.status).toBe('ok');
+    expect(Roundtable.findOne).toHaveBeenCalledWith({ status: { $in: ['pending', 'running'] } });
+  });
 });

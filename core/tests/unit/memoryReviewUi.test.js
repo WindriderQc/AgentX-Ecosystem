@@ -34,7 +34,7 @@ describe('Dreaming Review UI contract', () => {
     expect(controller).toContain("run.status === 'completed'");
     expect(controller).toContain('Quiet night—nothing trustworthy new');
     expect(controller).toContain('Why AgentX trusts this');
-    expect(controller).toContain('If you later apply this');
+    expect(controller).toContain('Rollback removes the working-memory document');
     expect(styles).toContain('.mr-empty[hidden] { display: none; }');
     expect(styles).toContain('@media (max-width: 560px)');
   });
@@ -48,7 +48,8 @@ describe('Dreaming Review UI contract', () => {
     expect(controller).toContain("a: 'approve', r: 'reject', d: 'defer', e: 'edit_approve'");
     expect(controller).toContain('Copy clarification question');
     expect(controller).toContain('Summary unavailable; derived from run history');
-    expect(controller).toContain('Application enabled · review still required');
+    expect(controller).toContain('Safe automation ·');
+    expect(controller).toContain('Standing policy · shadow evaluation');
     expect(controller).toContain('No current collector errors');
     expect(controller).toContain('the review model was not called');
     expect(controller).toContain('No collectors');

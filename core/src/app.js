@@ -932,7 +932,10 @@ app.get('/backup', (req, res) => {
     title: 'AgentX \u2022 Backup',
     service: 'core',
     activePage: 'backup',
-    headCss: '<link rel="stylesheet" href="/styles.css">',
+    headCss: [
+      '<link rel="stylesheet" href="/styles.css">',
+      '<link rel="stylesheet" href="/css/backup.css">'
+    ].join('\n'),
     footerJs: '<script src="/js/backup.js"></script>'
   });
 });

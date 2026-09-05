@@ -2,7 +2,6 @@
 
 const express = require('express');
 const request = require('supertest');
-const { Readable } = require('stream');
 
 jest.mock('../../config/logger', () => ({
   info: jest.fn(),
@@ -14,6 +13,7 @@ jest.mock('../../src/utils/fetchWithTimeout', () => jest.fn());
 const fetchWithTimeout = require('../../src/utils/fetchWithTimeout');
 const routes = require('../../routes/snapshots.routes');
 const { recoveryTokensMatch } = require('../../src/middleware/recoveryAuth');
+const { SERVICE_OUTBOUND_OPERATION_IDS } = require('../../src/clients/serviceOutboundClient');
 
 function createApp() {
   const app = express();
@@ -26,8 +26,7 @@ function qdrantResponse(result, extra = {}) {
     ok: true,
     status: 200,
     json: jest.fn(async () => ({ result })),
-    buffer: jest.fn(async () => Buffer.from('snapshot')),
-    body: Readable.from([Buffer.from('snapshot')]),
+    arrayBuffer: jest.fn(async () => Buffer.from('snapshot')),
     ...extra
   };
 }
@@ -111,6 +110,12 @@ describe('recovery snapshot authorization and projection', () => {
       expect(serialized).not.toMatch(/qdrantUrl|http:\/\/|\/qdrant\/|"path"|"root"|"url"/i);
     }
     expect(list.body.data[0]).toMatchObject({ name: 'one.snapshot', size: 42 });
+    expect(fetchWithTimeout.mock.calls[0][3]).toMatchObject({
+      operationId: SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_LIST
+    });
+    expect(fetchWithTimeout.mock.calls[1][3]).toMatchObject({
+      operationId: SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_CREATE
+    });
   });
 
   test('serves snapshot bytes only through the authenticated internal proxy', async () => {
@@ -122,7 +127,10 @@ describe('recovery snapshot authorization and projection', () => {
       .expect(200);
     expect(response.headers['content-type']).toMatch(/application\/octet-stream/);
     expect(response.body).toEqual(Buffer.from('snapshot'));
-    expect(upstream.buffer).not.toHaveBeenCalled();
+    expect(upstream.arrayBuffer).toHaveBeenCalledTimes(1);
+    expect(fetchWithTimeout.mock.calls[0][3]).toMatchObject({
+      operationId: SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_DOWNLOAD
+    });
   });
 
   test('rejects snapshot deletion without an exact resource-bound phrase', async () => {
@@ -158,7 +166,10 @@ describe('recovery snapshot authorization and projection', () => {
     expect(fetchWithTimeout).toHaveBeenCalledWith(
       expect.stringMatching(/\/snapshots\/one\.snapshot$/),
       { method: 'DELETE' },
-      expect.any(Number)
+      expect.any(Number),
+      expect.objectContaining({
+        operationId: SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_DELETE
+      })
     );
   });
 
@@ -190,5 +201,8 @@ describe('recovery snapshot authorization and projection', () => {
       .expect(({ body }) => {
         expect(body.data).toEqual({ name: 'one.snapshot', restored: true, mode: 'controlled-rehearsal' });
       });
+    expect(fetchWithTimeout.mock.calls[0][3]).toMatchObject({
+      operationId: SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_SNAPSHOT_RESTORE
+    });
   });
 });

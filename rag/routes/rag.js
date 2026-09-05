@@ -524,7 +524,7 @@ async function handleStatus(req, res) {
         ? embSvc.getStatusInfo()
         : { provider: embSvc.providerName, model: embSvc.model };
       if (refreshRequested && typeof embSvc.refreshConnectionStatus === 'function') {
-        await embSvc.refreshConnectionStatus();
+        await embSvc.refreshConnectionStatus({ source: 'operator-refresh' });
       }
       const cachedEmbedding = typeof embSvc.getCachedConnectionStatus === 'function'
         ? embSvc.getCachedConnectionStatus()
@@ -534,7 +534,15 @@ async function handleStatus(req, res) {
         dependencies.embedding = {
           healthy: cachedEmbedding.healthy === true,
           ...embStatus,
+          // `active` means we hold a real observation (a startup probe, an
+          // explicit refresh, or a genuine embed call), as opposed to the
+          // `unknown` below where nothing has been collected yet.
+          evidence: 'active',
+          evidenceSource: cachedEmbedding.source || 'unspecified',
           checkedAt: cachedEmbedding.checkedAt,
+          ...(cachedEmbedding.startupVerifiedAt
+            ? { startupVerifiedAt: cachedEmbedding.startupVerifiedAt }
+            : {}),
           ...(cachedEmbedding.stale ? { stale: true } : {}),
           ...(cachedEmbedding.healthy === true ? {} : { error: 'Embedding connection test failed' })
         };

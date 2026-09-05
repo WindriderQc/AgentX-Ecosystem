@@ -50,6 +50,7 @@
   function refreshSummary() {
     var calls = number('infCalls');
     var errors = number('infErrors');
+    var cancellations = number('infCancellations');
     var errorRate = text('infErrorRate');
     var conversations = number('totalConversations');
     var messages = number('totalMessages');
@@ -60,14 +61,14 @@
     if (calls == null || errors == null) {
       setStatus('unknown', 'Activity is still being observed', 'Refresh if the recent inference summary does not appear.', 'fa-circle-question');
     } else if (errors > 0) {
-      setStatus('attention', 'Inference needs review', formatCount(errors) + ' failed call' + (errors === 1 ? '' : 's') + ' · ' + errorRate + ' error rate · ' + windowLabel, 'fa-circle-info');
+      setStatus('attention', 'Inference needs review', formatCount(errors) + ' operational error' + (errors === 1 ? '' : 's') + ' · ' + errorRate + ' error rate · ' + formatCount(cancellations || 0) + ' canceled · ' + windowLabel, 'fa-circle-info');
     } else {
-      setStatus('ready', 'Inference is healthy', formatCount(calls) + ' call' + (calls === 1 ? '' : 's') + ' · no failures · ' + windowLabel, 'fa-circle-check');
+      setStatus('ready', 'Inference is healthy', formatCount(calls) + ' call' + (calls === 1 ? '' : 's') + ' · no operational errors · ' + formatCount(cancellations || 0) + ' canceled · ' + windowLabel, 'fa-circle-check');
     }
 
     document.getElementById('analytics-inference-detail').textContent = calls == null
       ? 'Calls and reliability are not observed yet'
-      : formatCount(calls) + ' call' + (calls === 1 ? '' : 's') + ' · ' + formatCount(errors || 0) + ' failed · ' + windowLabel;
+      : formatCount(calls) + ' call' + (calls === 1 ? '' : 's') + ' · ' + formatCount(errors || 0) + ' errors · ' + formatCount(cancellations || 0) + ' canceled · ' + windowLabel;
     document.getElementById('analytics-chat-detail').textContent = conversations == null
       ? 'Conversation activity is not observed yet'
       : formatCount(conversations) + ' conversation' + (conversations === 1 ? '' : 's') + ' · ' + formatCount(messages || 0) + ' messages';
@@ -114,7 +115,7 @@
       button.addEventListener('click', function () { openTo(button.dataset.analyticsTarget); });
     });
     document.getElementById('analytics-experience-refresh').addEventListener('click', refreshAll);
-    ['infCalls', 'infErrors', 'infErrorRate', 'totalConversations', 'totalMessages', 'ragUsage', 'ragTotalDocs'].forEach(function (id) {
+    ['infCalls', 'infErrors', 'infCancellations', 'infErrorRate', 'totalConversations', 'totalMessages', 'ragUsage', 'ragTotalDocs'].forEach(function (id) {
       var element = document.getElementById(id);
       if (element) new MutationObserver(refreshSummary).observe(element, { childList: true, subtree: true, characterData: true });
     });

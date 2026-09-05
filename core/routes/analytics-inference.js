@@ -26,6 +26,7 @@ const router = express.Router();
 
 const InferenceLog = require('../models/InferenceLog');
 const {
+  CANCELLATION_PATTERN,
   projectInferenceLog,
   projectInferenceLogs
 } = require('../src/services/routing/inferenceLogReadProjection');
@@ -68,6 +69,22 @@ const LOG_FILTER_FIELDS = [
   'host'
 ];
 const LOG_STATUSES = new Set(['success', 'error', 'timeout']);
+
+function cancellationEvidenceExpression() {
+  return {
+    $or: [
+      '$error',
+      '$fallbackReason',
+      '$routeDecision.outcome.code',
+      '$routeDecision.outcome.reasonCode',
+    ].map((field) => ({
+      $regexMatch: {
+        input: { $ifNull: [field, ''] },
+        regex: CANCELLATION_PATTERN,
+      }
+    }))
+  };
+}
 
 function boundedText(value, max = 200) {
   const text = String(value == null ? '' : value).trim();
@@ -219,7 +236,13 @@ router.get('/summary', async (req, res) => {
 
     const groupMetrics = {
       calls: { $sum: 1 },
-      errors: { $sum: { $cond: [{ $eq: ['$status', 'success'] }, 0, 1] } },
+      errors: {
+        $sum: {
+          $cond: [{ $and: [{ $ne: ['$status', 'success'] }, { $ne: ['$_analyticsCancelled', true] }] }, 1, 0]
+        }
+      },
+      cancellations: { $sum: { $cond: ['$_analyticsCancelled', 1, 0] } },
+      nonSuccesses: { $sum: { $cond: [{ $eq: ['$status', 'success'] }, 0, 1] } },
       tokensIn: { $sum: { $ifNull: ['$tokensIn', 0] } },
       tokensOut: { $sum: { $ifNull: ['$tokensOut', 0] } },
       durationMs: { $sum: { $ifNull: ['$durationMs', 0] } },
@@ -233,6 +256,17 @@ router.get('/summary', async (req, res) => {
 
     const [facet] = await InferenceLog.aggregate([
       { $match: match },
+      {
+        $set: {
+          _analyticsCancelled: {
+            $cond: [
+              { $eq: ['$status', 'success'] },
+              false,
+              cancellationEvidenceExpression(),
+            ]
+          }
+        }
+      },
       {
         $facet: {
           totals: [{ $group: { _id: null, ...groupMetrics } }],
@@ -273,7 +307,7 @@ router.get('/summary', async (req, res) => {
             { $sort: { '_id.date': 1 } }
           ],
           topErrors: [
-            { $match: { status: { $ne: 'success' } } },
+            { $match: { status: { $ne: 'success' }, _analyticsCancelled: { $ne: true } } },
             // Legacy `error` values can contain an entire upstream body. Group
             // by the closed status enum instead; the response keeps its
             // existing `error` field but it is now a stable machine bucket.
@@ -286,18 +320,26 @@ router.get('/summary', async (req, res) => {
     ]);
 
     const t = facet?.totals?.[0] || {
-      calls: 0, errors: 0, tokensIn: 0, tokensOut: 0, durationMs: 0, fallbacks: 0
+      calls: 0, errors: 0, cancellations: 0, nonSuccesses: 0,
+      tokensIn: 0, tokensOut: 0, durationMs: 0, fallbacks: 0
     };
 
     const shape = (row, labelKey) => {
       const calls = row.calls || 0;
+      const errors = row.errors || 0;
+      const cancellations = row.cancellations || 0;
+      const nonSuccesses = row.nonSuccesses ?? (errors + cancellations);
       const tokensOut = row.tokensOut || 0;
       const seconds = (row.durationMs || 0) / 1000;
       return {
         [labelKey]: row._id ?? 'unknown',
         calls,
-        errors: row.errors || 0,
-        errorRate: rate(row.errors || 0, calls),
+        errors,
+        errorRate: rate(errors, calls),
+        cancellations,
+        cancellationRate: rate(cancellations, calls),
+        nonSuccesses,
+        nonSuccessRate: rate(nonSuccesses, calls),
         tokensIn: row.tokensIn || 0,
         tokensOut,
         totalTokens: (row.tokensIn || 0) + tokensOut,
@@ -346,6 +388,13 @@ router.get('/summary', async (req, res) => {
         calls: t.calls,
         errors: t.errors,
         errorRate: rate(t.errors, t.calls),
+        cancellations: t.cancellations || 0,
+        cancellationRate: rate(t.cancellations || 0, t.calls),
+        nonSuccesses: t.nonSuccesses ?? ((t.errors || 0) + (t.cancellations || 0)),
+        nonSuccessRate: rate(
+          t.nonSuccesses ?? ((t.errors || 0) + (t.cancellations || 0)),
+          t.calls
+        ),
         fallbackCalls: t.fallbacks,
         fallbackRate: rate(t.fallbacks, t.calls),
         tokensIn: t.tokensIn,
@@ -411,6 +460,11 @@ router.get('/summary', async (req, res) => {
           calls: r.calls
         };
       }),
+      statusSemantics: {
+        errors: 'Non-successful calls excluding caller cancellation evidence.',
+        cancellations: 'Calls ended by caller-disconnect or cancellation evidence.',
+        nonSuccesses: 'All calls whose terminal status is not success.'
+      },
       currency: process.env.COST_CURRENCY || 'USD'
     });
   } catch (err) {
