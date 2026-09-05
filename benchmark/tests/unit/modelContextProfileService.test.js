@@ -2,7 +2,8 @@
 
 jest.mock('../../models/ModelContextProfile', () => ({
   findOne: jest.fn(),
-  findOneAndUpdate: jest.fn()
+  findOneAndUpdate: jest.fn(),
+  updateOne: jest.fn()
 }));
 
 jest.mock('../../src/helpers/ollamaHostConfig', () => ({
@@ -18,6 +19,16 @@ function mockLean(value) {
   return { lean: jest.fn().mockResolvedValue(value) };
 }
 
+function stableThroughputStatistics(mean) {
+  return {
+    sampleCount: 5,
+    mean,
+    coefficientOfVariation: 0.01,
+    confidenceInterval95: { low: mean * 0.98, high: mean * 1.02 },
+    reliability: 'high'
+  };
+}
+
 describe('modelContextProfileService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -26,6 +37,7 @@ describe('modelContextProfileService', () => {
     ]);
     ModelContextProfile.findOne.mockReturnValue(mockLean(null));
     ModelContextProfile.findOneAndUpdate.mockImplementation((_filter, update) => mockLean(update.$set));
+    ModelContextProfile.updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
   });
 
   it('materializes a recommended profile from a completed probe snapshot', async () => {
@@ -38,6 +50,8 @@ describe('modelContextProfileService', () => {
       artifactDigest: 'sha256:exact',
       runtimeFingerprint: 'runtime-a',
       status: 'completed',
+      profileDepth: 'full',
+      candidateRepeats: 5,
       testedNumCtx: 237568,
       promptFillPct: 80,
       modelTheoreticalMax: 262144,
@@ -49,6 +63,7 @@ describe('modelContextProfileService', () => {
         passed: true,
         degradationPct: 12.5,
         tokensPerSec: 71.2,
+        throughputStatistics: stableThroughputStatistics(71.2),
         promptTokens: 190000,
         vramUsedMiB: 12000,
         gpuPercent: 100,
@@ -64,20 +79,33 @@ describe('modelContextProfileService', () => {
       artifactDigest: 'sha256:exact',
       runtimeFingerprint: 'runtime-a',
       hostId: 'secondary',
+      profileDepth: 'full',
+      contextProbeCandidateRepeats: 5,
       maxVerifiedContext: 237568,
       verifiedMaxContext: 237568,
       historicalMaxVerifiedContext: 237568,
       verifiedInputTokens: 190000,
       recommendedContext: 237568,
+      performanceKneeContext: 237568,
+      performanceKneeDegradationPct: 15,
       source: 'context_probe',
       stale: false
     }));
+    expect(profile).toEqual(expect.objectContaining({
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown'
+    }));
     expect(profile.latestEvidence).toEqual(expect.objectContaining({
       snapshotId: 'snapshot-1',
+      profileDepth: 'full',
+      candidateRepeats: 5,
       testedNumCtx: 237568,
       promptTokens: 190000,
       tokensPerSec: 71.2,
       completionTokens: 64
+    }));
+    expect(ModelContextProfile.findOneAndUpdate.mock.calls[0][0]).toEqual(expect.objectContaining({
+      rejectedEvidenceIds: { $ne: 'snapshot-1' }
     }));
   });
 
@@ -102,7 +130,9 @@ describe('modelContextProfileService', () => {
       maxVerifiedContext: 131072,
       verifiedMaxContext: 131072,
       historicalMaxVerifiedContext: 237568,
-      recommendedContext: 131072
+      recommendedContext: null,
+      recommendationStatus: 'unknown',
+      revalidationRequired: true
     }));
     expect(profile.latestEvidence).toEqual(expect.objectContaining({
       snapshotId: 'snapshot-2',
@@ -121,10 +151,50 @@ describe('modelContextProfileService', () => {
       historicalMaxVerifiedContext: 262144,
       recommendedInteractiveContext: null,
       recommendedDocumentContext: null,
+      performanceKneeContext: null,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown',
       recommendedContext: null,
+      performanceKneeContext: null,
       recommendationStatus: 'unknown',
       revalidationRequired: true
     });
+  });
+
+  it.each(['pending_reconciliation', 'authority_invalidated'])(
+    'never normalizes %s context evidence into a runtime recommendation',
+    authorityState => {
+      expect(service.normalizeContextProfile({
+        authorityState,
+        maxVerifiedContext: 262144,
+        recommendationStatus: 'verified',
+        recommendationEvidenceVersion: service.RECOMMENDATION_EVIDENCE_VERSION,
+        recommendedInteractiveContext: 262144,
+        recommendedDocumentContext: 262144
+      })).toBeNull();
+    }
+  );
+
+  it('persists a rejected snapshot fence before invalidating its projected authority', async () => {
+    const snapshot = {
+      _id: 'snapshot-rejected',
+      modelName: 'ax/qwen3.5:9b',
+      hostUrl: 'http://192.0.2.12:11434/',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a'
+    };
+
+    await service.invalidateIfSnapshot(snapshot, 'claim_lost');
+
+    expect(ModelContextProfile.updateOne).toHaveBeenNthCalledWith(1,
+      expect.objectContaining({ modelName: 'ax/qwen3.5:9b', hostUrl: 'http://192.0.2.12:11434' }),
+      { $addToSet: { rejectedEvidenceIds: 'snapshot-rejected' } },
+      { upsert: true }
+    );
+    expect(ModelContextProfile.updateOne).toHaveBeenNthCalledWith(2,
+      expect.objectContaining({ 'latestEvidence.snapshotId': 'snapshot-rejected' }),
+      { $set: expect.objectContaining({ stale: true, recommendationStatus: 'unknown' }) }
+    );
   });
 
   it('does not turn max verified capacity into a recommendation when degradation evidence is absent', async () => {
@@ -222,7 +292,8 @@ describe('modelContextProfileService', () => {
       modelName: 'gemma4:12b-it-qat',
       hostId: 'secondary',
       verifiedMaxContext: 32768,
-      recommendedContext: 32768
+      recommendedContext: null,
+      recommendationStatus: 'unknown'
     }));
     expect(ModelContextProfile.findOneAndUpdate).toHaveBeenCalled();
   });

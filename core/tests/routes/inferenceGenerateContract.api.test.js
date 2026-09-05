@@ -62,6 +62,16 @@ jest.mock('../../src/services/modelReadinessService', () => ({
   })),
 }));
 
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+    signal: signal || new AbortController().signal,
+    markDispatched: jest.fn(),
+    assertActive: jest.fn(),
+    complete: jest.fn(async () => ({ released: true })),
+    abandon: jest.fn(async () => ({ released: true })),
+  })),
+}));
+
 jest.mock('../../src/services/hostPreferenceService', () => ({
   getAll: jest.fn(async () => []),
   getByHost: jest.fn(async () => null),
@@ -112,7 +122,6 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
     req.headers.host = 'localhost:3180';
     req.headers.origin = 'http://localhost:3180';
     req.headers['sec-fetch-site'] = 'same-origin';
-    req.headers['x-agentx-benchmark-token'] = 'test-benchmark-token';
     next();
   });
   app.use('/api', apiRoutes);
@@ -308,7 +317,14 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       mockOllamaOk();
       await request(app)
         .post('/api/inference/generate')
-        .send({ model: 'test-model', prompt: 'hello', callerDetail: 'benchmark-batch-abc123' })
+        .set('x-agentx-benchmark-token', 'test-benchmark-token')
+        .send({
+          model: 'test-model',
+          prompt: 'hello',
+          callerDetail: 'benchmark-batch-abc123',
+          workloadAdmissionId: 'workload-admission-abc123',
+          workloadGeneration: 'workload-generation-abc123'
+        })
         .expect(200);
 
       // Bench/profiler self-sequence per host, but passive tracking is required
@@ -320,6 +336,33 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
         trackedInFlight: 0,
         inFlight: 0
       });
+    });
+
+    test('forwards native tool schemas only for an authenticated admitted benchmark campaign', async () => {
+      mockOllamaOk();
+      const tools = [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }];
+      await request(app)
+        .post('/api/inference/generate')
+        .set('x-agentx-benchmark-token', 'test-benchmark-token')
+        .send({
+          model: 'test-model',
+          messages: [{ role: 'user', content: 'use a tool' }],
+          tools,
+          rawResponse: true,
+          callerDetail: 'benchmark-batch-tool-qualification',
+          workloadAdmissionId: 'workload-admission-tools',
+          workloadGeneration: 'workload-generation-tools'
+        })
+        .expect(200);
+
+      const chatCall = fetch.mock.calls.find(([url]) => String(url).endsWith('/api/chat'));
+      expect(JSON.parse(chatCall[1].body)).toMatchObject({ tools, stream: false });
+
+      const denied = await request(app)
+        .post('/api/inference/generate')
+        .send({ model: 'test-model', messages: [], tools })
+        .expect(403);
+      expect(denied.body).toMatchObject({ code: 'INFERENCE_TOOLS_FORBIDDEN' });
     });
 
     test('the interactive lane KEEPS admission', async () => {

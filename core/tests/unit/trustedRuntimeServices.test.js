@@ -6,18 +6,25 @@ const {
   executeRoutedInference
 } = require('../../src/extensions/trustedRuntimeServices');
 
-function response({ ok = true, status = 200, body = {}, stream = null } = {}) {
+function response({ ok = true, status = 200, body = {}, raw = null, stream = null } = {}) {
   return {
     ok,
     status,
     headers: new Map(),
     body: stream,
-    text: jest.fn(async () => JSON.stringify(body))
+    text: jest.fn(async () => raw == null ? JSON.stringify(body) : raw)
   };
 }
 
 function inferenceDeps(overrides = {}) {
   return {
+    beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+      signal: signal || new AbortController().signal,
+      markDispatched: jest.fn(),
+      assertActive: jest.fn(),
+      complete: jest.fn(async () => ({ released: true })),
+      abandon: jest.fn(async () => ({ released: true }))
+    })),
     getAdvisoryModelForTask: jest.fn(),
     getTargetForModel: jest.fn(() => 'http://ollama.test:11434'),
     resolveHostKey: jest.fn(() => 'primary'),
@@ -81,6 +88,74 @@ describe('trusted runtime services', () => {
     expect(Object.isFrozen(result.metadata)).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
     expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({ caller: 'proxy' }));
+  });
+
+  test.each([
+    [
+      'a contradictory embed success and error',
+      response({ body: { embeddings: [[1]], error: 'failed' } }),
+      'embed',
+      'OLLAMA_EMBED_RESPONSE_INVALID'
+    ],
+    [
+      'a non-Ollama HTTP rejection',
+      response({ ok: false, status: 500, raw: 'proxy failure' }),
+      'generate',
+      'OLLAMA_REJECTION_UNVERIFIED'
+    ]
+  ])('quarantines admission after %s', async (_label, upstream, mode, causeCode) => {
+    const lifecycle = [];
+    const complete = jest.fn(async () => lifecycle.push('complete'));
+    const abandon = jest.fn(async () => lifecycle.push('abandon'));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(() => lifecycle.push('dispatched')),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => upstream)
+    });
+    const request = mode === 'embed'
+      ? { mode, model: 'model-a', input: 'hello' }
+      : { mode, model: 'model-a', prompt: 'hello' };
+
+    await expect(executeRoutedInference(deps, request)).rejects.toMatchObject({
+      code: 'INFERENCE_UPSTREAM_UNAVAILABLE',
+      cause: { code: causeCode }
+    });
+    expect(lifecycle).toEqual(['dispatched', 'abandon']);
+    expect(complete).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalledWith(expect.objectContaining({ code: causeCode }));
+  });
+
+  test('releases admission after an exact Ollama HTTP rejection', async () => {
+    const lifecycle = [];
+    const complete = jest.fn(async () => lifecycle.push('complete'));
+    const abandon = jest.fn(async () => lifecycle.push('abandon'));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(() => lifecycle.push('dispatched')),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => response({
+        ok: false,
+        status: 404,
+        body: { error: 'model not found' }
+      }))
+    });
+
+    const result = await executeRoutedInference(deps, {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 404, body: { error: 'model not found' } });
+    expect(lifecycle).toEqual(['dispatched', 'complete']);
+    expect(abandon).not.toHaveBeenCalled();
   });
 
   test('relays a stream and aborts it when the caller disconnects', async () => {
@@ -168,12 +243,69 @@ describe('trusted runtime services', () => {
     expect(result.ok).toBe(true);
     expect(deps.hostGate.acquire).not.toHaveBeenCalled();
     expect(deps.hostGate.acquireExclusive).toHaveBeenCalledWith(
-      'http://ollama.test:11434', 'open-model', { signal: undefined }
+      'http://ollama.test:11434', 'open-model', { signal: expect.any(AbortSignal) }
     );
     expect(deps.hostPreferenceService.prepareExclusiveModel).toHaveBeenCalledWith(
-      'http://ollama.test:11434', 'open-model'
+      'http://ollama.test:11434', 'open-model', {
+        signal: expect.any(AbortSignal),
+        assertAuthorityActive: expect.any(Function)
+      }
     );
     expect(events).toEqual(['exclusive-acquired', 'resident-released', 'inference', 'release']);
+  });
+
+  test('quarantines an exclusive handoff when authority is lost before a late unload settles', async () => {
+    const controller = new AbortController();
+    const lifecycle = [];
+    let dispatched = false;
+    const abandon = jest.fn(async () => {
+      lifecycle.push('abandon');
+      return { quarantined: dispatched };
+    });
+    const markDispatched = jest.fn(() => {
+      dispatched = true;
+      lifecycle.push('dispatched');
+    });
+    const assertActive = jest.fn(() => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+    });
+    let releaseLateUnload;
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: controller.signal,
+        markDispatched,
+        assertActive,
+        complete: jest.fn(async () => ({ released: true })),
+        abandon
+      })),
+      hostPreferenceService: {
+        getByHost: jest.fn(async () => ({ pinnedModels: [] })),
+        prepareExclusiveModel: jest.fn(async (_host, _model, options) => {
+          expect(dispatched).toBe(true);
+          expect(options.signal).toBe(controller.signal);
+          options.assertAuthorityActive();
+          await new Promise(resolve => { releaseLateUnload = resolve; });
+          options.assertAuthorityActive();
+          return { status: 'ready', unloaded: ['normal-model'] };
+        })
+      }
+    });
+
+    const pending = executeRoutedInference(deps, {
+      mode: 'generate', model: 'open-model', prompt: 'hello', exclusiveHost: true
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    const lost = Object.assign(new Error('inference admission heartbeat was lost'), {
+      code: 'RUNTIME_INFERENCE_ADMISSION_LOST'
+    });
+    controller.abort(lost);
+    releaseLateUnload();
+
+    await expect(pending).rejects.toMatchObject({ code: 'INFERENCE_UPSTREAM_UNAVAILABLE' });
+    expect(lifecycle).toEqual(['dispatched', 'abandon']);
+    expect(abandon).toHaveBeenCalledWith(lost);
+    expect(await abandon.mock.results[0].value).toEqual({ quarantined: true });
+    expect(deps.fetch).not.toHaveBeenCalled();
   });
 
   test('records only validated server-side work attribution', async () => {
@@ -265,6 +397,7 @@ describe('trusted runtime services', () => {
     for (const chunk of expected) upstream.write(chunk);
     upstream.end();
     await ended;
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(Buffer.concat(received).toString('utf8')).toBe(expected.join(''));
     expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
@@ -272,6 +405,110 @@ describe('trusted runtime services', () => {
       consumerContract: 'openclaw-pipeline-runtime-v1',
       workItemId: '0401', runtime: 'external', attempt: 1,
     }));
+  });
+
+  test('rejects and quarantines a stream that sends bytes after done:true', async () => {
+    const upstream = new PassThrough();
+    const abandon = jest.fn(async () => ({ quarantined: true }));
+    const complete = jest.fn(async () => ({ released: true }));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => response({ stream: upstream }))
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    });
+    const streamError = new Promise(resolve => result.stream.once('error', resolve));
+
+    upstream.end(`${JSON.stringify({ done: true })}\n${JSON.stringify({ message: { content: 'late' } })}\n`);
+    await expect(streamError).resolves.toMatchObject({ code: 'OLLAMA_STREAM_INCOMPLETE' });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalled();
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      error: expect.stringMatching(/terminal/i)
+    }));
+  });
+
+  test('quarantines when downstream closes after done:true but before upstream EOF', async () => {
+    const upstream = new PassThrough();
+    const abandon = jest.fn(async () => ({ quarantined: true }));
+    const complete = jest.fn(async () => ({ released: true }));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => response({ stream: upstream }))
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    });
+    result.stream.resume();
+    const firstChunk = new Promise(resolve => result.stream.once('data', resolve));
+
+    upstream.write(`${JSON.stringify({ done: true })}\n`);
+    await firstChunk;
+    result.stream.destroy();
+    await new Promise(resolve => result.stream.once('close', resolve));
+    upstream.end(`${JSON.stringify({ message: { content: 'late' } })}\n`);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalledWith(expect.any(Error));
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      error: expect.stringMatching(/terminal|closed|cancelled/i)
+    }));
+  });
+
+  test('quarantines when upstream EOF is observed but the relay closes before finish', async () => {
+    const upstream = new PassThrough();
+    const abandon = jest.fn(async () => ({ quarantined: true }));
+    const complete = jest.fn(async () => ({ released: true }));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => response({ stream: upstream }))
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    });
+    const originalFlush = result.stream._flush.bind(result.stream);
+    let flushEntered;
+    const entered = new Promise(resolve => { flushEntered = resolve; });
+    result.stream._flush = callback => originalFlush(error => {
+      flushEntered();
+      // Deliberately withhold callback: upstream EOF is known, but the relay
+      // has not emitted finish and therefore has no terminal settlement.
+      void callback;
+      void error;
+    });
+    result.stream.resume();
+    upstream.end(`${JSON.stringify({ done: true })}\n`);
+    await entered;
+    result.stream.destroy();
+    await new Promise(resolve => result.stream.once('close', resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalledTimes(1);
   });
 
   test('returns a bounded timeout error and releases admission', async () => {

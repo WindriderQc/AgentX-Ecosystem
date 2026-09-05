@@ -10,7 +10,8 @@ jest.mock('../../models/JudgeGroundTruth', () => {
     const mockFind = jest.fn();
     const mockFindOne = jest.fn();
     const mockCreate = jest.fn();
-    return { find: mockFind, findOne: mockFindOne, create: mockCreate };
+    const mockUpdateOne = jest.fn();
+    return { find: mockFind, findOne: mockFindOne, create: mockCreate, updateOne: mockUpdateOne };
 });
 
 jest.mock('../../config/logger', () => ({
@@ -221,6 +222,66 @@ describe('judgeFeedbackLoop', () => {
             const result = await autoPromoteGroundTruth();
             expect(result.promoted).toBe(0);
             expect(result.skipped).toBe(0);
+        });
+
+        it('invalidates an auto-promotion whose create races admission loss', async () => {
+            const controller = new AbortController();
+            const lost = Object.assign(new Error('admission lost'), { code: 'BENCHMARK_CLAIM_LOST' });
+            BenchmarkResult.find.mockReturnValue({
+                select: jest.fn().mockReturnValue({
+                    lean: jest.fn().mockResolvedValue([
+                        { _id: 'id1', prompt_name: 'p1', prompt: 'test', response: 'resp',
+                          prompt_category: 'reasoning', quality_score: 9, human_score: 5, model: 'm1' }
+                    ])
+                })
+            });
+            JudgeGroundTruth.find.mockReturnValue({
+                select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) })
+            });
+            JudgeGroundTruth.create.mockImplementationOnce(async () => {
+                controller.abort(lost);
+                return [{}];
+            });
+            JudgeGroundTruth.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+            await expect(autoPromoteGroundTruth({ cancelSignal: controller.signal }))
+                .rejects.toMatchObject({ code: 'BENCHMARK_BATCH_STOPPED', authorityCompensated: true });
+            expect(JudgeGroundTruth.create).toHaveBeenCalledWith(expect.any(Array), {
+                signal: controller.signal
+            });
+            expect(JudgeGroundTruth.updateOne).toHaveBeenCalledWith(
+                expect.objectContaining({ _id: expect.any(mongoose.Types.ObjectId) }),
+                { $set: expect.objectContaining({ active: false, authority_state: 'authority_invalidated' }) },
+                { upsert: true }
+            );
+        });
+
+        it('retains admission when a raced auto-promotion cannot be invalidated', async () => {
+            const controller = new AbortController();
+            const lost = Object.assign(new Error('admission lost'), { code: 'BENCHMARK_CLAIM_LOST' });
+            BenchmarkResult.find.mockReturnValue({
+                select: jest.fn().mockReturnValue({
+                    lean: jest.fn().mockResolvedValue([
+                        { _id: 'id1', prompt_name: 'p1', prompt: 'test', response: 'resp',
+                          prompt_category: 'reasoning', quality_score: 9, human_score: 5, model: 'm1' }
+                    ])
+                })
+            });
+            JudgeGroundTruth.find.mockReturnValue({
+                select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) })
+            });
+            JudgeGroundTruth.create.mockImplementationOnce(async () => {
+                controller.abort(lost);
+                return [{}];
+            });
+            JudgeGroundTruth.updateOne.mockRejectedValueOnce(new Error('invalidation unavailable'));
+
+            await expect(autoPromoteGroundTruth({ cancelSignal: controller.signal }))
+                .rejects.toMatchObject({
+                    code: 'GROUND_TRUTH_RECONCILIATION_PENDING',
+                    retainAdmission: true,
+                    compensationError: expect.any(Error)
+                });
         });
     });
 

@@ -41,6 +41,8 @@ async function assertHostAvailableForConsumer(hostUrl, {
   callerDetail = null,
   claimBatchId = null,
   claimGeneration = null,
+  workloadAdmissionId = null,
+  workloadGeneration = null,
   model = null,
   path = null,
   allowBenchmarkCallers = true,
@@ -63,7 +65,11 @@ async function assertHostAvailableForConsumer(hostUrl, {
     && typeof claimBatchId === 'string'
     && typeof claimGeneration === 'string'
     && claimBatchId === claim.batchId
-    && claimGeneration === claim.claimGeneration;
+    && claimGeneration === claim.claimGeneration
+    && typeof workloadAdmissionId === 'string'
+    && typeof workloadGeneration === 'string'
+    && workloadAdmissionId === claim.admissionId
+    && workloadGeneration === claim.admissionGeneration;
   const admissionActive = proofShapeMatches
     ? await claimWorkloadAdmissionIsActive(hostUrl, claim)
     : false;

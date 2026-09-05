@@ -13,10 +13,23 @@ describe('profiler UI evidence semantics', () => {
     expect(render).toContain('p.maxVerifiedContext');
     expect(render).toContain('p.recommendedInteractiveContext');
     expect(render).toContain('p.recommendedDocumentContext');
+    expect(render).toContain('p.performanceKneeContext');
+    expect(render).toContain('p.qualityVerifiedContext');
     expect(render).toContain('max verified');
+    expect(render).toContain('performance knee');
+    expect(render).toContain('quality-verified context');
     expect(render).not.toContain('p.optimalNumCtx');
     expect(render).not.toContain('p.recommendedContext');
     expect(render).not.toMatch(/optimal ctx/i);
+  });
+
+  test('labels missing concurrency and lab telemetry as unknown, never production-best evidence', () => {
+    const render = publicSource('models-render.js');
+    const profiling = publicSource('models-profiling.js');
+    expect(render).toContain('agentx.profiler-hardware-collector/v1');
+    expect(render).toContain('lab GPU telemetry unknown');
+    expect(profiling).toContain('quality-verified context');
+    expect(profiling).not.toMatch(/best production/i);
   });
 
   test('keeps the Full prefill/decode matrix visible and unknown offload explicit', () => {

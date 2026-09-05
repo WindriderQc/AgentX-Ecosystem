@@ -15,6 +15,13 @@ const CellSchema = new mongoose.Schema({
 }, { _id: false });
 
 const JudgeAccuracyMatrixSchema = new mongoose.Schema({
+    authority_state: {
+        type: String,
+        enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+        default: 'authoritative',
+        index: true
+    },
+    authority_reconciliation_reason: { type: String, default: null },
     judge_model: { type: String, required: true, index: true },
     judge_host: { type: String, default: null },
     reference_model: { type: String, required: true },
@@ -40,7 +47,7 @@ JudgeAccuracyMatrixSchema.index({ judge_model: 1, judge_host: 1, calibrated_at: 
  * Get the most recent accuracy matrix for a judge model
  */
 JudgeAccuracyMatrixSchema.statics.getLatest = function (judgeModel, judgeHost = null) {
-    const query = { judge_model: judgeModel };
+    const query = { judge_model: judgeModel, authority_state: { $nin: ['authority_invalidated', 'pending_reconciliation'] } };
     if (judgeHost) query.judge_host = String(judgeHost).trim().replace(/\/+$/, '');
     return this.findOne(query)
         .sort({ calibrated_at: -1 });
@@ -50,7 +57,7 @@ JudgeAccuracyMatrixSchema.statics.getLatest = function (judgeModel, judgeHost = 
  * Check if a judge has been calibrated (any matrix exists)
  */
 JudgeAccuracyMatrixSchema.statics.isCalibrated = async function (judgeModel, judgeHost = null) {
-    const query = { judge_model: judgeModel };
+    const query = { judge_model: judgeModel, authority_state: { $nin: ['authority_invalidated', 'pending_reconciliation'] } };
     if (judgeHost) query.judge_host = String(judgeHost).trim().replace(/\/+$/, '');
     const count = await this.countDocuments(query);
     return count > 0;

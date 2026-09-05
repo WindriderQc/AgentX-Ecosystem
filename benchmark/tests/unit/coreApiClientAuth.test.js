@@ -38,6 +38,8 @@ const {
   _internal: {
     classifyCoreOperation,
     CORE_OPERATION_SPECS,
+    exactBenchmarkReleaseReceipt,
+    runtimeSnapshotIdentity,
   },
 } = require('../../src/clients/coreApiClient');
 const { createCorePublicUrlsResolver } = require('../../../shared/browserPublicUrls');
@@ -78,6 +80,183 @@ function workloadAcquireBody(workloadId, hosts = []) {
       hosts: [...hosts].sort(),
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     }
+  };
+}
+
+function recoveryIdentityForAcquire(acquired) {
+  return {
+    ...acquired,
+    recoveryRequired: true,
+    recoveryId: `recovery-${acquired.workloadId}`,
+    recoveryGeneration: `recovery-generation-${acquired.workloadId}`,
+    recoveryRequestId: `recovery:${acquired.requestId}`,
+    recoveryOwnerId: null,
+    recoveryState: 'PREPARED',
+    recoveryVersion: 0,
+  };
+}
+
+function queueRecoveryArmAndMutation(acquired) {
+  const recovery = recoveryIdentityForAcquire(acquired);
+  fetch
+    .mockImplementationOnce(async url => response(url, {
+      body: JSON.stringify({ status: 'success', data: { armed: true, ...recovery } }),
+    }))
+    .mockImplementationOnce(async url => response(url, {
+      body: JSON.stringify({ status: 'success', data: {
+        transitioned: true,
+        recoveryId: recovery.recoveryId,
+        recoveryGeneration: recovery.recoveryGeneration,
+        recoveryOwnerId: null,
+        recoveryState: 'MUTATING',
+        recoveryVersion: 1,
+      } }),
+    }));
+  return { ...recovery, recoveryState: 'MUTATING', recoveryVersion: 1 };
+}
+
+function queueWorkloadAcquire(workloadId, hosts = [], overrides = {}) {
+  const acquired = { ...workloadAcquireBody(workloadId, hosts).data, ...overrides };
+  fetch.mockImplementationOnce(async url => response(url, {
+    body: JSON.stringify({ status: 'success', data: acquired }),
+  }));
+  return queueRecoveryArmAndMutation(acquired);
+}
+
+function recoveryHeartbeatBody(recovery, overrides = {}) {
+  return {
+    status: 'success',
+    data: {
+      heartbeat: true,
+      admissionId: recovery.admissionId,
+      generation: recovery.generation,
+      principal: recovery.principal,
+      requestId: recovery.requestId,
+      workloadId: recovery.workloadId,
+      kind: recovery.kind,
+      batchId: recovery.batchId || null,
+      hosts: recovery.hosts || [],
+      recoveryRequired: true,
+      recoveryId: recovery.recoveryId,
+      recoveryGeneration: recovery.recoveryGeneration,
+      recoveryState: recovery.recoveryState,
+      recoveryVersion: recovery.recoveryVersion,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      ...overrides,
+    },
+  };
+}
+
+function queueRecoveryCompletion(recovery, { releaseImplementation } = {}) {
+  const verified = { ...recovery, recoveryState: 'VERIFIED', recoveryVersion: recovery.recoveryVersion + 1 };
+  const restored = { ...verified, recoveryState: 'RESTORED', recoveryVersion: verified.recoveryVersion + 1 };
+  fetch
+    .mockImplementationOnce(async url => response(url, {
+      body: JSON.stringify({ status: 'success', data: {
+        transitioned: true,
+        recoveryId: recovery.recoveryId,
+        recoveryGeneration: recovery.recoveryGeneration,
+        recoveryOwnerId: recovery.recoveryOwnerId || null,
+        recoveryState: verified.recoveryState,
+        recoveryVersion: verified.recoveryVersion,
+      } }),
+    }))
+    .mockImplementationOnce(async url => response(url, {
+      body: JSON.stringify({ status: 'success', data: {
+        transitioned: true,
+        recoveryId: recovery.recoveryId,
+        recoveryGeneration: recovery.recoveryGeneration,
+        recoveryOwnerId: recovery.recoveryOwnerId || null,
+        recoveryState: restored.recoveryState,
+        recoveryVersion: restored.recoveryVersion,
+      } }),
+    }));
+  if (releaseImplementation) fetch.mockImplementationOnce(releaseImplementation);
+  else {
+    fetch.mockImplementationOnce(async url => response(url, {
+      body: JSON.stringify({ status: 'success', data: {
+        released: true,
+        coordinationKind: 'workload',
+        ...restored,
+        recoveryReceipt: { contract: 'agentx.workload-recovery/v1' },
+        releasedAt: new Date().toISOString(),
+      } }),
+    }));
+  }
+  return restored;
+}
+
+function runtimeSnapshot(residents = [], capturedAt = '2026-09-04T12:00:00.000Z') {
+  const snapshot = { capturedAt, source: 'ollama_ps', exact: true, residents };
+  return { ...snapshot, identityDigest: runtimeSnapshotIdentity(snapshot) };
+}
+
+function claimAcquireBody({ hostUrl, batchId, claimGeneration, prevStatus = 'idle', snapshot }) {
+  return {
+    status: 'success',
+    data: {
+      claimed: true,
+      batchId,
+      claimGeneration,
+      prevStatus,
+      snapshotExact: true,
+      snapshotIdentity: snapshot.identityDigest,
+      pref: {
+        hostUrl,
+        benchmarkClaim: {
+          batchId,
+          claimGeneration,
+          prevStatus,
+          preClaimRuntime: snapshot,
+        },
+      },
+    },
+  };
+}
+
+function exactReleaseReceipt({
+  hostUrl,
+  batchId,
+  claimGeneration,
+  prevStatus = 'idle',
+  snapshot,
+  residents = snapshot.residents,
+  excludedModels = [],
+  expiredModels = [],
+  filterEvaluatedAt = '2026-09-04T12:00:05.000Z',
+}) {
+  const appliedIdentityDigest = runtimeSnapshotIdentity(snapshot, residents);
+  return {
+    contract: 'agentx.benchmark-claim-release/v1',
+    hostUrl,
+    batchId,
+    claimGeneration,
+    snapshot: {
+      identityDigest: snapshot.identityDigest,
+      appliedIdentityDigest,
+      exact: true,
+      capturedAt: snapshot.capturedAt,
+      source: snapshot.source,
+      filterEvaluatedAt,
+      residentCount: residents.length,
+      residents,
+      excludedModels,
+      expiredModels,
+    },
+    verification: {
+      status: 'ready',
+      ready: true,
+      verified: true,
+      degraded: false,
+      mode: 'exact_runtime_snapshot',
+      snapshotIdentity: appliedIdentityDigest,
+    },
+    state: {
+      restoredStatus: prevStatus,
+      claimCleared: true,
+      finalizerCleared: true,
+    },
+    releasedAt: '2026-09-04T12:00:06.000Z',
   };
 }
 
@@ -157,6 +336,14 @@ describe('Core API client scoped outbound execution', () => {
       ['POST', '/api/nerve-center/workload-admissions/admission-1/heartbeat', CORE_OPERATIONS.WORKLOAD_HEARTBEAT],
       ['DELETE', '/api/nerve-center/workload-admissions/admission-1', CORE_OPERATIONS.WORKLOAD_RELEASE],
       ['POST', '/api/nerve-center/workload-admissions/admission-1/release-receipt', CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY],
+      ['POST', '/api/nerve-center/workload-admissions/admission-1/recovery', CORE_OPERATIONS.WORKLOAD_RECOVERY_ARM],
+      ['POST', '/api/nerve-center/workload-recoveries/recovery-1/adopt', CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT],
+      ['POST', '/api/nerve-center/workload-recoveries/recovery-1/heartbeat', CORE_OPERATIONS.WORKLOAD_RECOVERY_HEARTBEAT],
+      ['POST', '/api/nerve-center/workload-recoveries/recovery-1/assert', CORE_OPERATIONS.WORKLOAD_RECOVERY_ASSERT],
+      ['POST', '/api/nerve-center/workload-recoveries/recovery-1/transition', CORE_OPERATIONS.WORKLOAD_RECOVERY_TRANSITION],
+      ['POST', '/api/nerve-center/workload-recoveries/recovery-1/restore-hosts', CORE_OPERATIONS.WORKLOAD_RECOVERY_HOST_RESTORE],
+      ['DELETE', '/api/nerve-center/workload-recoveries/recovery-1', CORE_OPERATIONS.WORKLOAD_RECOVERY_RELEASE],
+      ['POST', '/api/inference/generate', CORE_OPERATIONS.INFERENCE_GENERATE],
     ].map(([method, path, operationId]) => classifyCoreOperation(path, method)))
       .toEqual(Object.values(CORE_OPERATIONS));
     expect(() => classifyCoreOperation('/api/nerve-center/host-preferences', 'POST'))
@@ -244,7 +431,7 @@ describe('Core API client scoped outbound execution', () => {
     expect(coreClientIndex).toBeGreaterThan(dotenvConfigIndex);
   });
 
-  test('keeps all twelve request and response contracts aligned with registry v2', () => {
+  test('keeps all request and response contracts aligned with registry v2', () => {
     const registered = new Map(outboundRegistry.operations
       .filter(({ delegateId }) => delegateId === 'benchmark.core-api.executor')
       .map((operation) => [operation.id, operation]));
@@ -297,9 +484,7 @@ describe('Core API client scoped outbound execution', () => {
   });
 
   test('enforces the claim request cap before dispatch', async () => {
-    fetch.mockImplementationOnce(async (url) => response(url, {
-      body: JSON.stringify(workloadAcquireBody('batch-1', ['http://ollama:11434']))
-    }));
+    queueWorkloadAcquire('batch-1', ['http://ollama:11434']);
     await acquireWorkloadAdmission('batch-1', { hosts: ['http://ollama:11434'] });
     fetch.mockClear();
     await expect(claimHostForBenchmark(
@@ -317,19 +502,13 @@ describe('Core API client scoped outbound execution', () => {
   test('carries one cryptographic claim generation across acquire, heartbeat, and refused release', async () => {
     const claimGeneration = '11111111-1111-4111-8111-111111111111';
     const hostUrl = 'http://claim-owner:11434';
+    const snapshot = runtimeSnapshot();
+    queueWorkloadAcquire('batch-generation', [hostUrl]);
     fetch
       .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify(workloadAcquireBody('batch-generation', [hostUrl]))
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          claimed: true,
-          batchId: 'batch-generation',
-          claimGeneration,
-          prevStatus: 'idle',
-          snapshotExact: true,
-          snapshotIdentity: 'a'.repeat(64),
-        } }),
+        body: JSON.stringify(claimAcquireBody({
+          hostUrl, batchId: 'batch-generation', claimGeneration, snapshot
+        })),
       }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({ status: 'success', data: {
@@ -338,7 +517,7 @@ describe('Core API client scoped outbound execution', () => {
           claimGeneration,
           prevStatus: 'idle',
           snapshotExact: true,
-          snapshotIdentity: 'a'.repeat(64)
+          snapshotIdentity: snapshot.identityDigest
         } }),
       }))
       .mockImplementationOnce(async (url) => response(url, {
@@ -351,7 +530,7 @@ describe('Core API client scoped outbound execution', () => {
           claimGeneration,
           prevStatus: 'idle',
           snapshotExact: true,
-          snapshotIdentity: 'a'.repeat(64)
+          snapshotIdentity: snapshot.identityDigest
         } }),
       }));
 
@@ -363,7 +542,7 @@ describe('Core API client scoped outbound execution', () => {
     await releaseBenchmarkClaim(hostUrl, 'batch-generation');
     await heartbeatBenchmarkClaim(hostUrl, 'batch-generation', 60_000);
 
-    const bodies = fetch.mock.calls.slice(1).map(([, init]) => JSON.parse(init.body));
+    const bodies = fetch.mock.calls.slice(3).map(([, init]) => JSON.parse(init.body));
     expect(bodies.map(body => body.claimGeneration)).toEqual([
       claimGeneration,
       claimGeneration,
@@ -399,57 +578,25 @@ describe('Core API client scoped outbound execution', () => {
     const hostUrl = 'http://release-receipt:11434';
     const batchId = 'batch-release-receipt';
     const claimGeneration = '55555555-5555-4555-8555-555555555555';
-    const snapshotIdentity = 'b'.repeat(64);
-    const exactReceipt = {
-      contract: 'agentx.benchmark-claim-release/v1',
-      hostUrl,
-      batchId,
-      claimGeneration,
-      snapshot: {
-        identityDigest: snapshotIdentity,
-        appliedIdentityDigest: snapshotIdentity,
-        exact: true,
-        residentCount: 1,
-        residents: [{
-          model: 'qwen:7b',
-          digest: 'sha256:model',
-          artifactSize: 4_000_000_000,
-          sizeVram: 4_500_000_000,
-          contextLength: 32768,
-          keepAlive: -1,
-          expiresAt: '9999-12-31T23:59:59.000Z'
-        }],
-        excludedModels: [],
-        expiredModels: []
-      },
-      verification: {
-        status: 'ready',
-        ready: true,
-        verified: true,
-        degraded: false,
-        mode: 'exact_runtime_snapshot',
-        snapshotIdentity
-      },
-      state: {
-        restoredStatus: 'ready',
-        claimCleared: true,
-        finalizerCleared: true
-      },
-      releasedAt: new Date().toISOString()
-    };
+    const snapshot = runtimeSnapshot([{
+      model: 'qwen:7b',
+      digest: 'sha256:model',
+      artifactSize: 4_000_000_000,
+      sizeVram: 4_500_000_000,
+      contextLength: 32768,
+      keepAlive: -1,
+      expiresAt: '9999-12-31T23:59:59.000Z'
+    }]);
+    const snapshotIdentity = snapshot.identityDigest;
+    const exactReceipt = exactReleaseReceipt({
+      hostUrl, batchId, claimGeneration, prevStatus: 'ready', snapshot
+    });
+    queueWorkloadAcquire(batchId, [hostUrl]);
     fetch
       .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify(workloadAcquireBody(batchId, [hostUrl]))
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          claimed: true,
-          batchId,
-          claimGeneration,
-          prevStatus: 'ready',
-          snapshotExact: true,
-          snapshotIdentity
-        } })
+        body: JSON.stringify(claimAcquireBody({
+          hostUrl, batchId, claimGeneration, prevStatus: 'ready', snapshot
+        }))
       }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({ status: 'success', data: {
@@ -480,46 +627,72 @@ describe('Core API client scoped outbound execution', () => {
     await expect(releaseBenchmarkClaim(hostUrl, batchId))
       .resolves.toMatchObject({ released: false, reason: expect.stringContaining('receipt is invalid') });
     await heartbeatBenchmarkClaim(hostUrl, batchId);
-    expect(JSON.parse(fetch.mock.calls[3][1].body).claimGeneration).toBe(claimGeneration);
+    expect(JSON.parse(fetch.mock.calls[5][1].body).claimGeneration).toBe(claimGeneration);
     await expect(releaseBenchmarkClaim(hostUrl, batchId))
       .resolves.toMatchObject({ released: true, releaseReceipt: exactReceipt });
     expect(getBenchmarkClaimIdentity(hostUrl, batchId)).toBeNull();
+  });
+
+  test('recomputes release digests and TTL membership instead of trusting receipt projections', () => {
+    const hostUrl = 'http://receipt-verifier:11434';
+    const batchId = 'batch-receipt-verifier';
+    const claimGeneration = '59595959-5959-4959-8959-595959595959';
+    const snapshot = runtimeSnapshot([{
+      model: 'finite-live:latest',
+      digest: 'sha256:finite-live',
+      artifactSize: 5_000_000_000,
+      sizeVram: 4_700_000_000,
+      contextLength: 65536,
+      keepAlive: 3600,
+      expiresAt: '2026-09-04T13:00:00.000Z',
+    }]);
+    const expected = {
+      hostUrl,
+      batchId,
+      claimGeneration,
+      prevStatus: 'ready',
+      snapshotIdentity: snapshot.identityDigest,
+      preClaimRuntime: snapshot,
+      excludedModels: [],
+    };
+    const validReceipt = exactReleaseReceipt({
+      hostUrl, batchId, claimGeneration, prevStatus: 'ready', snapshot
+    });
+    expect(exactBenchmarkReleaseReceipt({ released: true, releaseReceipt: validReceipt }, expected))
+      .toBe(true);
+
+    const emptyDigest = runtimeSnapshotIdentity(snapshot, []);
+    const forgedExpiry = structuredClone(validReceipt);
+    forgedExpiry.snapshot.residents = [];
+    forgedExpiry.snapshot.residentCount = 0;
+    forgedExpiry.snapshot.expiredModels = ['finite-live:latest'];
+    forgedExpiry.snapshot.appliedIdentityDigest = emptyDigest;
+    forgedExpiry.verification.snapshotIdentity = emptyDigest;
+    expect(exactBenchmarkReleaseReceipt({ released: true, releaseReceipt: forgedExpiry }, expected))
+      .toBe(false);
+
+    const forgedResident = structuredClone(validReceipt);
+    forgedResident.snapshot.residents[0].contextLength = 262144;
+    expect(exactBenchmarkReleaseReceipt({ released: true, releaseReceipt: forgedResident }, expected))
+      .toBe(false);
+
+    const impossibleTimeline = structuredClone(validReceipt);
+    impossibleTimeline.releasedAt = '2026-09-04T12:00:04.000Z';
+    expect(exactBenchmarkReleaseReceipt({ released: true, releaseReceipt: impossibleTimeline }, expected))
+      .toBe(false);
   });
 
   test('recovers a durable exact receipt when the release response is lost', async () => {
     const hostUrl = 'http://ambiguous-release:11434';
     const batchId = 'batch-ambiguous-release';
     const claimGeneration = '77777777-7777-4777-8777-777777777777';
-    const snapshotIdentity = 'c'.repeat(64);
-    const releaseReceipt = {
-      contract: 'agentx.benchmark-claim-release/v1',
-      hostUrl,
-      batchId,
-      claimGeneration,
-      snapshot: {
-        identityDigest: snapshotIdentity,
-        appliedIdentityDigest: snapshotIdentity,
-        exact: true,
-        residentCount: 0,
-        residents: [],
-        excludedModels: [],
-        expiredModels: []
-      },
-      verification: {
-        status: 'ready', ready: true, verified: true, degraded: false,
-        mode: 'exact_runtime_snapshot', snapshotIdentity
-      },
-      state: { restoredStatus: 'idle', claimCleared: true, finalizerCleared: true },
-      releasedAt: new Date().toISOString()
-    };
+    const snapshot = runtimeSnapshot();
+    const snapshotIdentity = snapshot.identityDigest;
+    const releaseReceipt = exactReleaseReceipt({ hostUrl, batchId, claimGeneration, snapshot });
+    queueWorkloadAcquire(batchId, [hostUrl]);
     fetch
       .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify(workloadAcquireBody(batchId, [hostUrl]))
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          claimed: true, batchId, claimGeneration, prevStatus: 'idle', snapshotExact: true, snapshotIdentity
-        } })
+        body: JSON.stringify(claimAcquireBody({ hostUrl, batchId, claimGeneration, snapshot }))
       }))
       .mockImplementationOnce(async (url) => response(url, {
         status: 500,
@@ -537,7 +710,7 @@ describe('Core API client scoped outbound execution', () => {
       released: true,
       releaseReceipt
     });
-    expect(fetch.mock.calls[3][0]).toContain('/release-receipt');
+    expect(fetch.mock.calls[5][0]).toContain('/release-receipt');
     expect(getBenchmarkClaimIdentity(hostUrl, batchId)).toBeNull();
   });
 
@@ -545,25 +718,13 @@ describe('Core API client scoped outbound execution', () => {
     const hostUrl = 'http://safe-release-retry:11434';
     const batchId = 'batch-safe-release-retry';
     const claimGeneration = '88888888-8888-4888-8888-888888888888';
-    const snapshotIdentity = 'd'.repeat(64);
-    const releaseReceipt = {
-      contract: 'agentx.benchmark-claim-release/v1', hostUrl, batchId, claimGeneration,
-      snapshot: {
-        identityDigest: snapshotIdentity, appliedIdentityDigest: snapshotIdentity,
-        exact: true, residentCount: 0, residents: [], excludedModels: [], expiredModels: []
-      },
-      verification: {
-        status: 'ready', ready: true, verified: true, degraded: false,
-        mode: 'exact_runtime_snapshot', snapshotIdentity
-      },
-      state: { restoredStatus: 'idle', claimCleared: true, finalizerCleared: true },
-      releasedAt: new Date().toISOString()
-    };
+    const snapshot = runtimeSnapshot();
+    const releaseReceipt = exactReleaseReceipt({ hostUrl, batchId, claimGeneration, snapshot });
+    queueWorkloadAcquire(batchId, [hostUrl]);
     fetch
-      .mockImplementationOnce(async (url) => response(url, { body: JSON.stringify(workloadAcquireBody(batchId, [hostUrl])) }))
-      .mockImplementationOnce(async (url) => response(url, { body: JSON.stringify({ status: 'success', data: {
-        claimed: true, batchId, claimGeneration, prevStatus: 'idle', snapshotExact: true, snapshotIdentity
-      } }) }))
+      .mockImplementationOnce(async (url) => response(url, {
+        body: JSON.stringify(claimAcquireBody({ hostUrl, batchId, claimGeneration, snapshot }))
+      }))
       .mockImplementationOnce(async (url) => response(url, { status: 500, body: JSON.stringify({ status: 'error' }) }))
       .mockImplementationOnce(async (url) => response(url, { body: JSON.stringify({ status: 'success', data: {
         recovered: true, released: false, retryable: true, finalizing: false
@@ -581,10 +742,8 @@ describe('Core API client scoped outbound execution', () => {
   test('rejects a successful claim receipt without exact pre-claim snapshot evidence', async () => {
     const claimGeneration = '66666666-6666-4666-8666-666666666666';
     const hostUrl = 'http://legacy-claim:11434';
+    queueWorkloadAcquire('batch-legacy-claim', [hostUrl]);
     fetch
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify(workloadAcquireBody('batch-legacy-claim', [hostUrl]))
-      }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({ status: 'success', data: {
           claimed: true,
@@ -606,50 +765,19 @@ describe('Core API client scoped outbound execution', () => {
       null,
       { claimGeneration }
     )).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_RECEIPT_MISMATCH' });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(5);
   });
 
   test('accepts only an exact Core-minted workload receipt and carries it through heartbeat and release', async () => {
     const workloadId = 'workload-client-contract';
-    fetch
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          acquired: true,
-          admissionId: 'admission-core-1',
-          generation: 'generation-core-1',
-          principal: 'benchmark-service',
-          requestId: `benchmark:${workloadId}`,
-          workloadId,
-          kind: 'benchmark',
-          batchId: null
-        } })
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          heartbeat: true,
-          admissionId: 'admission-core-1',
-          generation: 'generation-core-1',
-          principal: 'benchmark-service',
-          requestId: `benchmark:${workloadId}`,
-          workloadId,
-          kind: 'benchmark',
-          batchId: null,
-          expiresAt: new Date(Date.now() + 60_000).toISOString()
-        } })
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          released: true,
-          admissionId: 'admission-core-1',
-          generation: 'generation-core-1',
-          principal: 'benchmark-service',
-          requestId: `benchmark:${workloadId}`,
-          workloadId,
-          kind: 'benchmark',
-          batchId: null,
-          releasedAt: new Date().toISOString()
-        } })
-      }));
+    const recovery = queueWorkloadAcquire(workloadId, [], {
+      admissionId: 'admission-core-1',
+      generation: 'generation-core-1',
+    });
+    fetch.mockImplementationOnce(async url => response(url, {
+      body: JSON.stringify(recoveryHeartbeatBody(recovery)),
+    }));
+    queueRecoveryCompletion(recovery);
 
     const acquired = await acquireWorkloadAdmission(workloadId, { ttlMs: 60_000 });
     expect(acquired).toMatchObject({
@@ -664,28 +792,28 @@ describe('Core API client scoped outbound execution', () => {
     const bodies = fetch.mock.calls.map(([, init]) => JSON.parse(init.body));
     expect(bodies[0]).not.toHaveProperty('generation');
     expect(bodies[1].generation).toBe('generation-core-1');
-    expect(bodies[2].generation).toBe('generation-core-1');
+    expect(bodies[2]).toMatchObject({ recoveryGeneration: recovery.recoveryGeneration, expectedVersion: 0, state: 'MUTATING' });
+    expect(bodies[3].generation).toBe('generation-core-1');
+    expect(bodies.at(-1).recoveryGeneration).toBe(recovery.recoveryGeneration);
   });
 
   test('retries ambiguous workload acquisition with one idempotency key and rejects divergent receipts', async () => {
     const workloadId = 'workload-ambiguous-contract';
+    const acquired = {
+      ...workloadAcquireBody(workloadId).data,
+      admissionId: 'admission-core-retry',
+      generation: 'generation-core-retry',
+      requestId: 'request-stable',
+    };
     fetch
       .mockRejectedValueOnce(new Error('connection reset after write'))
       .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          acquired: true,
-          admissionId: 'admission-core-retry',
-          generation: 'generation-core-retry',
-          principal: 'benchmark-service',
-          requestId: 'request-stable',
-          workloadId,
-          kind: 'benchmark',
-          batchId: null
-        } })
+        body: JSON.stringify({ status: 'success', data: acquired })
       }));
+    queueRecoveryArmAndMutation(acquired);
     await expect(acquireWorkloadAdmission(workloadId, { requestId: 'request-stable' }))
       .resolves.toMatchObject({ admissionId: 'admission-core-retry' });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(4);
     expect(JSON.parse(fetch.mock.calls[0][1].body).requestId)
       .toBe(JSON.parse(fetch.mock.calls[1][1].body).requestId);
 
@@ -718,28 +846,35 @@ describe('Core API client scoped outbound execution', () => {
       hosts: []
     };
     const releasedAt = new Date().toISOString();
-    fetch
-      .mockImplementationOnce(async url => response(url, {
-        body: JSON.stringify({ status: 'success', data: { acquired: true, ...identity } })
-      }))
-      .mockRejectedValueOnce(new Error('connection reset after release commit'))
-      .mockImplementationOnce(async url => response(url, {
-        body: JSON.stringify({
-          status: 'success',
-          data: { recovered: true, released: true, coordinationKind: 'workload', ...identity, releasedAt }
-        })
-      }));
+    const recovery = queueWorkloadAcquire(workloadId, [], identity);
+    const restored = queueRecoveryCompletion(recovery, {
+      releaseImplementation: async () => { throw new Error('connection reset after release commit'); }
+    });
+    fetch.mockImplementationOnce(async url => response(url, {
+      body: JSON.stringify({ status: 'success', data: {
+        recovered: true,
+        released: true,
+        coordinationKind: 'workload',
+        ...restored,
+        recoveryReceipt: { contract: 'agentx.workload-recovery/v1' },
+        releasedAt,
+      } })
+    }));
 
     await acquireWorkloadAdmission(workloadId);
     await expect(releaseWorkloadAdmission(workloadId)).resolves.toMatchObject({
       recovered: true,
       released: true,
-      ...identity,
+      admissionId: identity.admissionId,
       releasedAt
     });
     expect(fetch.mock.calls.map(call => new URL(call[0]).pathname)).toEqual([
       '/api/nerve-center/workload-admissions',
-      `/api/nerve-center/workload-admissions/${identity.admissionId}`,
+      `/api/nerve-center/workload-admissions/${identity.admissionId}/recovery`,
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}/transition`,
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}/transition`,
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}/transition`,
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}`,
       `/api/nerve-center/workload-admissions/${identity.admissionId}/release-receipt`
     ]);
     await expect(releaseWorkloadAdmission(workloadId))
@@ -758,31 +893,44 @@ describe('Core API client scoped outbound execution', () => {
       batchId: null,
       hosts: []
     };
+    const recovery = queueWorkloadAcquire(workloadId, [], identity);
+    const restored = queueRecoveryCompletion(recovery, {
+      releaseImplementation: async () => { throw new Error('safe transport failure before release'); }
+    });
     fetch
-      .mockImplementationOnce(async url => response(url, {
-        body: JSON.stringify({ status: 'success', data: { acquired: true, ...identity } })
-      }))
-      .mockRejectedValueOnce(new Error('safe transport failure before release'))
       .mockImplementationOnce(async url => response(url, {
         body: JSON.stringify({
           status: 'success',
-          data: { recovered: true, released: false, retryable: true, ...identity }
+          data: {
+            recovered: true,
+            released: false,
+            retryable: true,
+            ...restored,
+            recoveryReceipt: { contract: 'agentx.workload-recovery/v1' }
+          }
         })
       }))
       .mockImplementationOnce(async url => response(url, {
         body: JSON.stringify({
-          status: 'success',
-          data: { released: true, ...identity, releasedAt: new Date().toISOString() }
+          status: 'success', data: {
+            released: true, coordinationKind: 'workload', ...restored,
+            recoveryReceipt: { contract: 'agentx.workload-recovery/v1' },
+            releasedAt: new Date().toISOString()
+          }
         })
       }));
 
     await acquireWorkloadAdmission(workloadId);
-    await expect(releaseWorkloadAdmission(workloadId)).resolves.toMatchObject({ released: true, ...identity });
+    await expect(releaseWorkloadAdmission(workloadId)).resolves.toMatchObject({ released: true, admissionId: identity.admissionId });
     expect(fetch.mock.calls.map(call => new URL(call[0]).pathname)).toEqual([
       '/api/nerve-center/workload-admissions',
-      `/api/nerve-center/workload-admissions/${identity.admissionId}`,
+      `/api/nerve-center/workload-admissions/${identity.admissionId}/recovery`,
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}/transition`,
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}/transition`,
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}/transition`,
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}`,
       `/api/nerve-center/workload-admissions/${identity.admissionId}/release-receipt`,
-      `/api/nerve-center/workload-admissions/${identity.admissionId}`
+      `/api/nerve-center/workload-recoveries/${recovery.recoveryId}`
     ]);
   });
 
@@ -798,24 +946,11 @@ describe('Core API client scoped outbound execution', () => {
       kind: 'benchmark',
       batchId: null
     };
-    fetch
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: { acquired: true, ...identity } })
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          heartbeat: true,
-          ...identity,
-          generation: 'different-generation'
-        } })
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          released: true,
-          ...identity,
-          releasedAt: new Date().toISOString()
-        } })
-      }));
+    const recovery = queueWorkloadAcquire(workloadId, [], identity);
+    fetch.mockImplementationOnce(async url => response(url, {
+      body: JSON.stringify(recoveryHeartbeatBody(recovery, { generation: 'different-generation' })),
+    }));
+    queueRecoveryCompletion(recovery);
 
     await expect(acquireWorkloadAdmission(workloadId)).resolves.toMatchObject(identity);
     await expect(heartbeatWorkloadAdmission(workloadId))
@@ -829,23 +964,17 @@ describe('Core API client scoped outbound execution', () => {
   test('re-attests cached proof, reacquires after expiry, and never rebinds host intent locally', async () => {
     const workloadId = 'workload-expiry-reacquire';
     const hosts = ['http://host-a:11434'];
-    fetch
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify(workloadAcquireBody(workloadId, hosts))
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
+    queueWorkloadAcquire(workloadId, hosts);
+    fetch.mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({ status: 'error', data: {
           heartbeat: false,
           reason: 'lease proof no longer owns coordination state'
         } })
-      }))
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify({ status: 'success', data: {
-          ...workloadAcquireBody(workloadId, hosts).data,
-          admissionId: 'admission-reacquired',
-          generation: 'generation-reacquired'
-        } })
       }));
+    queueWorkloadAcquire(workloadId, hosts, {
+      admissionId: 'admission-reacquired',
+      generation: 'generation-reacquired'
+    });
 
     await expect(acquireWorkloadAdmission(workloadId, { hosts }))
       .resolves.toMatchObject({ admissionId: `admission-${workloadId}` });
@@ -853,23 +982,25 @@ describe('Core API client scoped outbound execution', () => {
       .resolves.toMatchObject({ admissionId: 'admission-reacquired', generation: 'generation-reacquired' });
     expect(fetch.mock.calls.map(call => new URL(call[0]).pathname)).toEqual([
       '/api/nerve-center/workload-admissions',
+      `/api/nerve-center/workload-admissions/admission-${workloadId}/recovery`,
+      `/api/nerve-center/workload-recoveries/recovery-${workloadId}/transition`,
       `/api/nerve-center/workload-admissions/admission-${workloadId}/heartbeat`,
-      '/api/nerve-center/workload-admissions'
+      '/api/nerve-center/workload-admissions',
+      '/api/nerve-center/workload-admissions/admission-reacquired/recovery',
+      `/api/nerve-center/workload-recoveries/recovery-${workloadId}/transition`
     ]);
 
     await expect(acquireWorkloadAdmission(workloadId, {
       hosts: ['http://host-b:11434']
     })).rejects.toMatchObject({ code: 'WORKLOAD_ADMISSION_CONFLICT' });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(7);
   });
 
-  test('rejects a divergent claim receipt and performs only a fenced cleanup', async () => {
+  test('rejects a divergent claim receipt and retains proof when fenced cleanup is refused', async () => {
     const requestedGeneration = '33333333-3333-4333-8333-333333333333';
     const hostUrl = 'http://receipt-mismatch:11434';
+    queueWorkloadAcquire('batch-receipt', [hostUrl]);
     fetch
-      .mockImplementationOnce(async (url) => response(url, {
-        body: JSON.stringify(workloadAcquireBody('batch-receipt', [hostUrl]))
-      }))
       .mockImplementationOnce(async (url) => response(url, {
         body: JSON.stringify({
           status: 'success',
@@ -892,8 +1023,8 @@ describe('Core API client scoped outbound execution', () => {
       { claimGeneration: requestedGeneration }
     )).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_RECEIPT_MISMATCH' });
 
-    expect(fetch).toHaveBeenCalledTimes(3);
-    expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual({
+    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(JSON.parse(fetch.mock.calls[4][1].body)).toEqual({
       claimGeneration: requestedGeneration,
       admissionId: 'admission-batch-receipt',
       admissionGeneration: 'generation-batch-receipt'
@@ -901,7 +1032,12 @@ describe('Core API client scoped outbound execution', () => {
     expect(getBenchmarkClaimIdentity(
       'http://receipt-mismatch:11434',
       'batch-receipt'
-    )).toBeNull();
+    )).toEqual({
+      claimBatchId: 'batch-receipt',
+      claimGeneration: requestedGeneration,
+      workloadAdmissionId: 'admission-batch-receipt',
+      workloadGeneration: 'generation-batch-receipt'
+    });
   });
 
   test('preserves bounded Core status errors for conflict handling', async () => {

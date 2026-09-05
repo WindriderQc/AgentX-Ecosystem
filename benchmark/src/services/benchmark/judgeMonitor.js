@@ -20,16 +20,43 @@ const activeJudgingJobs = new Map();
 
 // ── Persistence ────────────────────────────────────────────────────────────────
 
-async function persistJudgeCounters(batchId, fields = {}) {
-    await BenchmarkBatch.updateOne(
-        { _id: batchId },
-        {
-            $set: {
-                ...fields,
-                last_activity_at: new Date()
+async function persistJudgeCounters(batchId, fields = {}, options = {}) {
+    options.assertAuthorityActive?.();
+    try {
+        await BenchmarkBatch.updateOne(
+            { _id: batchId },
+            {
+                $set: {
+                    ...fields,
+                    last_activity_at: new Date()
+                }
+            },
+            options.signal ? { signal: options.signal } : undefined
+        );
+        options.assertAuthorityActive?.();
+    } catch (error) {
+        if (options.signal?.aborted
+            || error?.code === 'BENCHMARK_CLAIM_LOST'
+            || error?.code === 'BENCHMARK_CLAIM_STOPPED') {
+            try {
+                await BenchmarkBatch.updateOne(
+                    { _id: batchId },
+                    {
+                        $set: {
+                            authority_state: 'pending_reconciliation',
+                            authority_reconciliation_reason: 'judge counter persistence raced workload admission loss'
+                        }
+                    }
+                );
+                error.authorityInvalidated = true;
+            } catch (compensationError) {
+                error.compensationError = compensationError;
+                error.retainAdmission = true;
+                error.code = 'JUDGE_COUNTER_RECONCILIATION_PENDING';
             }
         }
-    );
+        throw error;
+    }
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────────

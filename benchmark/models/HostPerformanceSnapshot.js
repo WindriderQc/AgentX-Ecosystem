@@ -10,6 +10,15 @@
 const mongoose = require('mongoose');
 
 const HostPerformanceSnapshotSchema = new mongoose.Schema({
+  authorityState: {
+    type: String,
+    enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+    default: 'authoritative',
+    index: true
+  },
+  authorityReconciliationReason: { type: String, default: null },
+  authorityWriteId: { type: String, default: null },
+  authorityReconciliationId: { type: String, default: null },
   modelName:                { type: String, required: true, index: true },
   hostUrl:                  { type: String, required: true },
   hostId:                   String,

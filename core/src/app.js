@@ -366,6 +366,12 @@ app.use('/api/models/registry', modelRegistryRoutes);
 const nerveCenterRoutes = require('../routes/nerve-center');
 app.use('/api/nerve-center', nerveCenterRoutes);
 
+// Minimal machine-scoped coordination membrane for separately deployed
+// runtime sidecars. It exposes no inference, host, workload, maintenance, or
+// status authority beyond the lifecycle of the caller's own shared admission.
+const runtimeInferenceAdmissionRoutes = require('../routes/runtime-inference-admissions');
+app.use('/api/runtime/inference-admissions', runtimeInferenceAdmissionRoutes);
+
 // Unified Models API (Aggregates Ollama + custom + registry)
 const modelsUnifiedRoutes = require('../routes/models-unified');
 app.use('/api/models', modelsUnifiedRoutes);

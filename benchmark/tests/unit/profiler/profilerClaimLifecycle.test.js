@@ -4,6 +4,8 @@ jest.mock('../../../src/clients/coreApiClient', () => ({
   acquireWorkloadAdmission: jest.fn().mockResolvedValue({ acquired: true }),
   heartbeatWorkloadAdmission: jest.fn().mockResolvedValue({ heartbeat: true }),
   releaseWorkloadAdmission: jest.fn().mockResolvedValue({ released: true }),
+  getWorkloadRecoveryIdentity: jest.fn(),
+  transitionWorkloadRecovery: jest.fn().mockResolvedValue({ transitioned: true }),
   claimHostForBenchmark: jest.fn().mockResolvedValue({ claimed: true }),
   heartbeatBenchmarkClaim: jest.fn(),
   releaseBenchmarkClaim: jest.fn().mockResolvedValue({
@@ -28,9 +30,15 @@ const { acquireProfilerClaimLease } = require('../../../src/services/profiler/pr
 describe('profiler claim lease cancellation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.PROFILER_RECONCILIATION_HOLD_MS;
     coreApiClient.acquireWorkloadAdmission.mockResolvedValue({ acquired: true });
     coreApiClient.heartbeatWorkloadAdmission.mockResolvedValue({ heartbeat: true });
     coreApiClient.releaseWorkloadAdmission.mockResolvedValue({ released: true });
+    coreApiClient.getWorkloadRecoveryIdentity.mockReturnValue({
+      admissionId: 'admission-profiler-1',
+      generation: 'authority-generation-1',
+      principal: 'benchmark-profiler'
+    });
     coreApiClient.claimHostForBenchmark.mockResolvedValue({ claimed: true });
     coreApiClient.heartbeatBenchmarkClaim
       .mockResolvedValueOnce({ heartbeat: true })
@@ -39,6 +47,28 @@ describe('profiler claim lease cancellation', () => {
       released: true,
       runtimeRestore: { verified: true },
     });
+  });
+
+  test('exposes only the immutable Core workload authority proof for projection writes', async () => {
+    coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({ heartbeat: true });
+    const lease = await acquireProfilerClaimLease(
+      ['http://gpu:11434'],
+      'profiler-authority-proof',
+      60_000,
+      { heartbeatIntervalMs: 5 }
+    );
+
+    const proof = lease.authorityProof();
+
+    expect(proof).toEqual({
+      admissionId: 'admission-profiler-1',
+      generation: 'authority-generation-1',
+      principal: 'benchmark-profiler'
+    });
+    expect(Object.isFrozen(proof)).toBe(true);
+    expect(coreApiClient.getWorkloadRecoveryIdentity)
+      .toHaveBeenCalledWith('profiler-authority-proof');
+    await expect(lease.finalize()).resolves.toMatchObject({ released: 1, failed: 0 });
   });
 
   test('aborts an in-flight Ollama operation on heartbeat loss and drains before release', async () => {
@@ -74,18 +104,20 @@ describe('profiler claim lease cancellation', () => {
   });
 
   test('abandons an ambiguous projection under the existing fences for TTL recovery', async () => {
+    process.env.PROFILER_RECONCILIATION_HOLD_MS = '20';
     coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({ heartbeat: true });
     const lease = await acquireProfilerClaimLease(
       ['http://gpu:11434'],
       'profiler-operation-ambiguous-projection',
-      60_000
+      60_000,
+      { heartbeatIntervalMs: 5 }
     );
     const ambiguity = new Error('projection compensation failed');
 
     await expect(lease.abandon(ambiguity)).resolves.toMatchObject({
       abandoned: true,
       failed: 2,
-      workloadAdmission: { released: false, reason: 'held for TTL recovery' }
+      workloadAdmission: { released: false, reason: 'held in durable Core recovery quarantine' }
     });
     expect(lease.signal.aborted).toBe(true);
     expect(lease.signal.reason).toBe(ambiguity);
@@ -94,5 +126,87 @@ describe('profiler claim lease cancellation', () => {
     });
     expect(coreApiClient.releaseBenchmarkClaim).not.toHaveBeenCalled();
     expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(coreApiClient.transitionWorkloadRecovery).toHaveBeenCalledWith(
+      'profiler-operation-ambiguous-projection',
+      'UNKNOWN',
+      expect.objectContaining({ receipt: expect.objectContaining({ contract: 'agentx.workload-recovery/v1' }) })
+    );
+    expect(coreApiClient.heartbeatBenchmarkClaim).toHaveBeenCalledTimes(1);
+  });
+
+  test('retains the global admission when the first heartbeat and exact runtime restore both fail', async () => {
+    coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({
+      heartbeat: false,
+      reason: 'claim generation rejected before work began'
+    });
+    coreApiClient.releaseBenchmarkClaim.mockResolvedValue({
+      released: false,
+      reason: 'runtime restore could not be verified'
+    });
+
+    await expect(acquireProfilerClaimLease(
+      ['http://gpu:11434'],
+      'profiler-first-heartbeat-failure',
+      60_000
+    )).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_LOST', statusCode: 503 });
+
+    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledTimes(1);
+    expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+  });
+
+  test('hands off to durable recovery when host restore succeeds but workload release is ambiguous', async () => {
+    process.env.PROFILER_RECONCILIATION_HOLD_MS = '20';
+    coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({ heartbeat: true });
+    coreApiClient.releaseWorkloadAdmission.mockRejectedValue(new Error('release receipt unavailable'));
+    const lease = await acquireProfilerClaimLease(
+      ['http://gpu:11434'],
+      'profiler-workload-release-ambiguous',
+      60_000,
+      { heartbeatIntervalMs: 5 }
+    );
+
+    await expect(lease.finalize()).rejects.toMatchObject({
+      code: 'PROFILER_RUNTIME_RESTORE_FAILED',
+      release: expect.objectContaining({
+        workloadAdmission: expect.objectContaining({
+          released: false,
+          reconciliationPending: true
+        })
+      })
+    });
+
+    expect(lease.signal.aborted).toBe(true);
+    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledTimes(1);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(coreApiClient.transitionWorkloadRecovery).toHaveBeenCalledWith(
+      'profiler-workload-release-ambiguous',
+      'UNKNOWN',
+      expect.objectContaining({ receipt: expect.objectContaining({ contract: 'agentx.workload-recovery/v1' }) })
+    );
+    expect(coreApiClient.heartbeatWorkloadAdmission).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns the retained recovery receipt after a fenced projection commit rejects', async () => {
+    coreApiClient.heartbeatBenchmarkClaim.mockReset().mockResolvedValue({ heartbeat: true });
+    const lease = await acquireProfilerClaimLease(
+      ['http://gpu:11434'],
+      'profiler-projection-write-ambiguous',
+      60_000,
+      { heartbeatIntervalMs: 5 }
+    );
+    const projectionError = new Error('projection acknowledgement unavailable');
+
+    await expect(lease.finalize({
+      beforeWorkloadRelease: jest.fn().mockRejectedValue(projectionError)
+    })).rejects.toBe(projectionError);
+    await expect(lease.abandon(projectionError)).resolves.toMatchObject({
+      abandoned: true,
+      workloadAdmission: expect.objectContaining({ released: false })
+    });
+
+    expect(coreApiClient.releaseBenchmarkClaim).toHaveBeenCalledTimes(1);
+    expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+    expect(lease.signal.aborted).toBe(true);
   });
 });

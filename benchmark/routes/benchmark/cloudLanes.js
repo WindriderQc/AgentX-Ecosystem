@@ -30,11 +30,13 @@ const router = express.Router();
 
 async function invalidateHarnessAuthority(campaign, error) {
     if (!campaign?._id) return;
-    await HarnessCampaign.updateOne(
+    const receipt = await HarnessCampaign.updateOne(
         { _id: campaign._id },
         {
             $set: {
-                status: 'failed',
+                status: 'pending_reconciliation',
+                authority_state: 'pending_reconciliation',
+                authority_reconciliation_reason: error?.message || 'Harness authority could not be verified',
                 failure: {
                     code: error?.code || 'WORKLOAD_ADMISSION_LOST',
                     classification: 'coordination_error'
@@ -48,8 +50,14 @@ async function invalidateHarnessAuthority(campaign, error) {
                 usage: '',
                 cost: ''
             }
-        }
-    ).catch(() => {});
+        },
+        { upsert: true }
+    );
+    if (Number(receipt?.matchedCount) === 0 && Number(receipt?.upsertedCount) !== 1) {
+        const invalidationError = new Error(`Harness campaign ${campaign._id} was not found for invalidation`);
+        invalidationError.code = 'HARNESS_AUTHORITY_INVALIDATION_MISSING';
+        throw invalidationError;
+    }
 }
 
 /**
@@ -75,6 +83,18 @@ router.get('/targets', async (_req, res) => {
 router.get('/harness-campaigns', async (_req, res) => {
     try {
         const campaigns = await HarnessCampaign.find({}).sort({ started_at: -1 }).limit(100).lean();
+        for (const campaign of campaigns) {
+            if (campaign.status === 'pending_reconciliation'
+                || campaign.authority_state === 'pending_reconciliation'
+                || campaign.authority_state === 'authority_invalidated') {
+                campaign.envelope = null;
+                campaign.receipt = null;
+                campaign.output_fingerprint = null;
+                campaign.usage = null;
+                campaign.cost = null;
+                campaign.admission_release_receipt = null;
+            }
+        }
         return res.json({ status: 'success', data: { campaigns } });
     } catch (error) {
         return res.status(500).json({ status: 'error', error: error.message });
@@ -87,6 +107,10 @@ router.post('/harness-campaigns', async (req, res) => {
     let stopHeartbeat = null;
     let responseStatus = 200;
     let responseBody = null;
+    let pendingCompletion = null;
+    let retainAdmission = false;
+    let campaignTtlMs = null;
+    let cancellation = null;
     try {
         if (req.body?.confirmation_no_secrets !== true) {
             return res.status(422).json({
@@ -121,7 +145,7 @@ router.post('/harness-campaigns', async (req, res) => {
             started_at: new Date()
         });
         lifecycleId = `native-harness-${campaign._id}`;
-        const campaignTtlMs = Math.max(
+        campaignTtlMs = Math.max(
             120_000,
             (Number(req.body?.execution_config?.per_test_timeout_ms) || 600_000) + 120_000
         );
@@ -130,7 +154,7 @@ router.post('/harness-campaigns', async (req, res) => {
             kind: 'native-harness',
             source: 'benchmark'
         });
-        const cancellation = new AbortController();
+        cancellation = new AbortController();
         stopHeartbeat = startBenchmarkClaimHeartbeat([], lifecycleId, campaignTtlMs, {
             onFatal: error => cancellation.abort(error)
         });
@@ -165,7 +189,9 @@ router.post('/harness-campaigns', async (req, res) => {
             signal: cancellation.signal
         });
         stopHeartbeat.assertActive();
-        campaign.status = 'completed';
+        campaign.status = 'pending_reconciliation';
+        campaign.authority_state = 'pending_reconciliation';
+        campaign.authority_reconciliation_reason = 'awaiting exact workload admission release receipt';
         campaign.envelope = execution.envelope;
         campaign.receipt = execution.publicReceipt;
         campaign.output_fingerprint = execution.outputFingerprint;
@@ -177,18 +203,21 @@ router.post('/harness-campaigns', async (req, res) => {
             observedAt: new Date().toISOString()
         };
         campaign.completed_at = new Date();
-        await campaign.save();
+        await campaign.save(cancellation.signal ? { signal: cancellation.signal } : undefined);
         stopHeartbeat.assertActive();
-        responseBody = {
-            status: 'success',
-            data: { campaign: campaign.toObject(), output: execution.output }
-        };
+        pendingCompletion = { execution };
     } catch (error) {
         // A lost workload lease means another owner may already hold runtime
         // maintenance. Never write a terminal authority result after that
         // fence was lost; TTL/recovery can reconcile the prior running row.
         if (campaign && stopHeartbeat?.getFailure?.()) {
-            await invalidateHarnessAuthority(campaign, stopHeartbeat.getFailure());
+            try {
+                await invalidateHarnessAuthority(campaign, stopHeartbeat.getFailure());
+            } catch (invalidationError) {
+                error.invalidationError = invalidationError;
+                error.retainAdmission = true;
+                retainAdmission = true;
+            }
         } else if (campaign) {
             campaign.status = 'failed';
             campaign.failure = {
@@ -196,11 +225,23 @@ router.post('/harness-campaigns', async (req, res) => {
                 classification: error.failureClassification || 'infrastructure_error'
             };
             campaign.completed_at = new Date();
-            await campaign.save().catch(() => {});
+            try {
+                await campaign.save(stopHeartbeat ? { signal: cancellation?.signal } : undefined);
+            } catch (persistenceError) {
+                error.persistenceError = persistenceError;
+                error.retainAdmission = true;
+                retainAdmission = true;
+            }
             try {
                 stopHeartbeat?.assertActive?.();
             } catch (authorityError) {
-                await invalidateHarnessAuthority(campaign, authorityError);
+                try {
+                    await invalidateHarnessAuthority(campaign, authorityError);
+                } catch (invalidationError) {
+                    error.invalidationError = invalidationError;
+                    error.retainAdmission = true;
+                    retainAdmission = true;
+                }
             }
         }
         responseStatus = Number(error.statusCode) || 500;
@@ -208,8 +249,27 @@ router.post('/harness-campaigns', async (req, res) => {
             status: 'error', code: error.code || 'HARNESS_EXECUTION_FAILED', error: error.message
         };
     } finally {
-        if (stopHeartbeat) await stopHeartbeat.drain().catch(() => {});
-        if (lifecycleId) {
+        if (retainAdmission && stopHeartbeat) {
+            const holdMs = Math.min(Number(campaignTtlMs) || 300_000, 300_000);
+            const timer = setTimeout(() => {
+                stopHeartbeat.drain().catch(error => logger.error('Retained harness heartbeat drain failed', {
+                    lifecycleId,
+                    error: error.message
+                }));
+            }, holdMs);
+            timer.unref?.();
+        } else if (stopHeartbeat) {
+            try {
+                await stopHeartbeat.drain();
+            } catch (drainError) {
+                retainAdmission = true;
+                responseStatus = 503;
+                responseBody = {
+                    status: 'error', code: 'WORKLOAD_ADMISSION_DRAIN_UNVERIFIED', error: drainError.message
+                };
+            }
+        }
+        if (lifecycleId && !retainAdmission) {
             let release = null;
             try {
                 release = await releaseBenchmarkClaims([], lifecycleId);
@@ -228,6 +288,7 @@ router.post('/harness-campaigns', async (req, res) => {
                             campaignId: String(campaign._id),
                             error: invalidationError.message
                         });
+                        retainAdmission = true;
                     }
                 }
                 responseStatus = 503;
@@ -236,6 +297,29 @@ router.post('/harness-campaigns', async (req, res) => {
                     code: releaseError.code,
                     error: releaseError.message
                 };
+            } else if (pendingCompletion && campaign) {
+                campaign.status = 'completed';
+                campaign.authority_state = 'authoritative';
+                campaign.authority_reconciliation_reason = null;
+                campaign.admission_release_receipt = release.workloadAdmission;
+                campaign.completed_at = new Date();
+                try {
+                    await campaign.save();
+                } catch (publicationError) {
+                    responseStatus = 503;
+                    responseBody = {
+                        status: 'error',
+                        code: 'HARNESS_AUTHORITY_PUBLICATION_FAILED',
+                        error: publicationError.message
+                    };
+                }
+                if (responseStatus !== 503) {
+                    responseStatus = 200;
+                    responseBody = {
+                        status: 'success',
+                        data: { campaign: campaign.toObject(), output: pendingCompletion.execution.output }
+                    };
+                }
             }
         }
     }

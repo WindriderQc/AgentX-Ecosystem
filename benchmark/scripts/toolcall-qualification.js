@@ -34,11 +34,6 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  readBoundedJson,
-  readBoundedText
-} = require('../../scripts/bounded-response');
-
-const {
   runHarness,
   makeScriptedTransport
 } = require('../src/services/qualification/toolCallHarness');
@@ -78,11 +73,22 @@ function parseArgs(argv) {
   return args;
 }
 
-function buildLiveTransport({ model, host, fetchImpl, timeoutMs = DEFAULT_LIVE_TIMEOUT_MS }) {
-  // Lazy import so the dry-run path never touches node-fetch.
-  const fetch = fetchImpl || require('node-fetch');
-  return async function liveTransport({ messages, tools, execution = {} }) {
-    const signal = AbortSignal.timeout(timeoutMs);
+function buildLiveTransport({ model, host, generateImpl, timeoutMs = DEFAULT_LIVE_TIMEOUT_MS }) {
+  // Lazy import so the dry-run path never initializes the authenticated Core
+  // client. Live qualification must use Core's durable workload+host claim
+  // admission; it never calls Ollama directly.
+  const generate = generateImpl
+    || require('../src/clients/coreApiClient').generateWithWorkloadAdmission;
+  return async function liveTransport({ messages, tools, execution = {}, signal: admissionSignal, workloadId }) {
+    if (!workloadId) {
+      const error = new Error('Tool qualification transport requires the exact managed workload id');
+      error.code = 'WORKLOAD_ADMISSION_REQUIRED';
+      throw error;
+    }
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = admissionSignal && typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([admissionSignal, timeoutSignal])
+      : (admissionSignal || timeoutSignal);
     const ollamaOptions = {};
     if (Number.isInteger(execution.numCtx) && execution.numCtx > 0) ollamaOptions.num_ctx = execution.numCtx;
     if (Number.isInteger(execution.numPredict) && execution.numPredict > 0) ollamaOptions.num_predict = execution.numPredict;
@@ -90,37 +96,31 @@ function buildLiveTransport({ model, host, fetchImpl, timeoutMs = DEFAULT_LIVE_T
       const value = execution.sampling?.[key];
       if (Number.isFinite(value)) ollamaOptions[key] = value;
     }
-    const res = await fetch(`${host.replace(/\/$/, '')}/api/chat`, {
-      method: 'POST',
-      redirect: 'manual',
-      signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
+    let data;
+    try {
+      data = await generate(workloadId, {
         model,
+        host,
         messages,
         tools,
         stream: false,
+        rawResponse: true,
         think: execution.think === true,
         ...(Object.keys(ollamaOptions).length ? { options: ollamaOptions } : {})
-      })
-    });
-    if (!res.ok) {
-      let detail;
-      try {
-        detail = await readBoundedText(res, { maxBytes: MAX_LIVE_ERROR_BYTES, signal });
-      } catch (error) {
-        detail = `unreadable response (${error.message})`;
-      }
-      if ([400, 404, 422].includes(res.status)
-        && /(?:does not|doesn't|not).*support.*tools?|tools?.*(?:unsupported|not supported)/i.test(detail)) {
+      }, { signal });
+    } catch (error) {
+      if ([400, 404, 422].includes(error.status)
+        && /(?:does not|doesn't|not).*support.*tools?|tools?.*(?:unsupported|not supported)/i.test(error.message)) {
         return { toolSupport: false };
       }
-      throw new Error(`ollama chat ${res.status}: ${detail}`);
+      throw error;
     }
-    const data = await readBoundedJson(res, {
-      maxBytes: MAX_LIVE_RESPONSE_BYTES,
-      signal
-    });
+    if (!data || typeof data !== 'object' || Array.isArray(data)
+      || data.done !== true || typeof data.error === 'string') {
+      const error = new Error('Ollama tool qualification response ended without an exact terminal done object');
+      error.code = 'OLLAMA_RESPONSE_INCOMPLETE';
+      throw error;
+    }
     const msg = data.message || {};
     if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
       return {

@@ -17,11 +17,29 @@ const { resolveModelNumCtxDetails } = require('../../src/services/modelContextRe
 const liveProbeService = require('../../src/services/profiler/liveProbeService');
 const baselineModelService = require('../../src/services/profiler/baselineModelService');
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
+const HostProfile = require('../../models/HostProfile');
 const { acquireProfilerClaimLease } = require('../../src/services/profiler/profilerClaimLifecycle');
 const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdmission');
 const { isSameOllamaModel } = require('../../src/helpers/ollamaModelIdentity');
+const { getWorkloadRecoveryIdentity } = require('../../src/clients/coreApiClient');
+const { safeTokenMatch } = require('../../../shared/apiHostGuard');
+const authorityReconciliation = require('../../src/services/benchmark/benchmarkAuthorityReconciliation');
 
 const logger = require('../../config/logger');
+
+function requireOperatorAccess(req, res, next) {
+  const authorization = String(req.get?.('authorization') || '');
+  const bearer = authorization.toLowerCase().startsWith('bearer ') ? authorization.slice(7).trim() : '';
+  const presented = bearer || req.get?.('x-agentx-operator-token') || '';
+  if (!safeTokenMatch(process.env.AGENTX_OPERATOR_TOKEN || process.env.AGENTX_ADMIN_TOKEN, presented)) {
+    return res.status(403).json({
+      status: 'error',
+      code: 'PROFILER_OPERATOR_AUTH_REQUIRED',
+      error: 'Exact Product operator authentication is required'
+    });
+  }
+  next();
+}
 
 // ── In-memory progress tracker for run-all ──────────────────────────────────
 const activeTests = new Map();
@@ -78,31 +96,53 @@ function buildBaselineFromResults(results = [], preferredModel = '') {
 
 async function updateBaselineUnderLease(hostId, baseline, lease) {
   lease.assertActive();
-  const prior = await hostProfileService.getById(hostId);
+  const prior = await hostProfileService.getByIdForAuthority(hostId);
   lease.assertActive();
+  const authorityProof = lease.authorityProof();
+  const persistenceReceipt = crypto.randomUUID();
+  const authorityWriteId = crypto.randomUUID();
+  let journal = null;
   try {
-    const updated = await hostProfileService.updateBaseline(hostId, baseline, {
+    journal = await authorityReconciliation.prepareProfilerAuthorityWrite({
+      kind: 'profiler_baseline_write',
+      resultId: `profiler-baseline:${lease.operationId}:${hostId}:${authorityWriteId}`,
+      workloadId: lease.operationId,
+      phase: 'profiler host baseline publication',
+      details: {
+        hostId,
+        persistenceReceipt,
+        authorityWriteId,
+        priorBaseline: prior?.baseline || null
+      }
+    });
+    lease.assertActive();
+    const updated = await hostProfileService.updateBaseline(hostId, {
+      ...baseline,
+      persistenceReceipt,
+      authorityWriteId,
+      authorityReconciliationId: String(journal._id),
+      authorityState: 'pending_reconciliation'
+    }, {
+      authorityService: 'profiler-baseline',
+      authorityProof,
+      expectedAuthorityGeneration: prior?.baseline?.authorityGeneration || null,
       signal: lease.signal,
       assertAuthorityActive: lease.assertActive
     });
     lease.assertActive();
+    await authorityReconciliation.completeProfilerAuthorityWrite(journal, {
+      details: journal.details,
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
     return updated;
   } catch (error) {
-    // The write acknowledgement may race lease loss. Restore the last known
-    // projection (or clear a newly-created baseline) without reusing the dead
-    // signal; this compensation only retracts potentially unauthorized data.
-    await hostProfileService.upsert({
-      hostId,
-      baseline: prior?.baseline || null
-    }).catch(compensationError => {
-      error.compensationError = compensationError;
-      logger.error('Host baseline compensation failed', {
-        hostId,
-        error: compensationError.message
-      });
-    });
-    if (error.compensationError && typeof lease.abandon === 'function') {
-      await lease.abandon(error.compensationError);
+    if (journal) {
+      error.retainAdmission = true;
+      error.authorityInvalidationFailed = true;
+      error.code = error.code || 'HOST_BASELINE_RECONCILIATION_PENDING';
+      error.reconciliationId = String(journal._id);
+      if (typeof lease.abandon === 'function') await lease.abandon(error);
     }
     throw error;
   }
@@ -123,7 +163,7 @@ router.post('/discover', async (req, res) => {
     for (const h of configured) {
       const status = await hostProfileService.checkStatus(h.url);
       const models = status.models || [];
-      const profile = await hostProfileService.upsert({
+      const profile = await hostProfileService.upsertMetadata({
         hostId: h.id,
         hostUrl: h.url,
         displayName: h.name,
@@ -131,12 +171,11 @@ router.post('/discover', async (req, res) => {
         status: status.status,
         lastSeenAt: status.status === 'online' ? new Date() : undefined,
         modelCount: models.length,
-        dedicated: status.dedicated || null,
       });
       // Detect CPU cores for local hosts
       const cpuCores = await hostProfileService.detectCpuCores(h.url);
       if (cpuCores) {
-        await hostProfileService.upsert({ hostId: h.id, cpu: { cores: cpuCores } });
+        await hostProfileService.upsertMetadata({ hostId: h.id, cpu: { cores: cpuCores } });
       }
       results.push(profile);
     }
@@ -205,13 +244,21 @@ router.post('/test/ensure-baseline', async (req, res) => {
   let lease;
   try {
     const target = baselineModelService.resolveConfiguredHost(req.body?.hostId);
-    lease = await acquireProfilerClaimLease([target.url], `profiler-baseline-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
+    const operationId = `profiler-baseline-${crypto.randomBytes(8).toString('hex')}`;
+    lease = await acquireProfilerClaimLease([target.url], operationId, 30 * 60 * 1000);
     const data = await baselineModelService.ensureBaselineModel(req.body?.hostId, {
       signal: lease.signal,
-      assertClaimActive: lease.assertActive
+      assertClaimActive: lease.assertActive,
+      operationId
     });
     lease.assertActive();
-    await lease.finalize();
+    await lease.finalize(data.pulled ? {
+      beforeWorkloadRelease: () => baselineModelService.resolveBaselineReconciliation(
+        req.body?.hostId,
+        data.reconciliation,
+        { assertClaimActive: lease.assertActive }
+      )
+    } : {});
     lease = null;
     res.json({
       status: 'success',
@@ -221,6 +268,10 @@ router.post('/test/ensure-baseline', async (req, res) => {
         : `${data.modelName} is already installed on ${data.hostName}.`
     });
   } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
     logger.error('Baseline model preparation failed', { hostId: req.body?.hostId, error: err.message });
     res.status(err.statusCode || 502).json({ status: 'error', message: err.message, code: err.code || null });
   } finally {
@@ -272,6 +323,7 @@ router.get('/test/live-probes/:hostId/status', async (req, res) => {
 /** POST /test/run — single model test on a host */
 router.post('/test/run', async (req, res) => {
   let lease;
+  let operationId = null;
   try {
     const { modelName, hostId } = req.body;
     if (!modelName || !hostId) {
@@ -281,11 +333,13 @@ router.post('/test/run', async (req, res) => {
     const baselineModel = await baselineModelService.getBaselineModel();
     const isBaseline = String(modelName).trim().replace(/:latest$/i, '').toLowerCase()
       === String(baselineModel).trim().replace(/:latest$/i, '').toLowerCase();
-    lease = await acquireProfilerClaimLease([configuredHost.url], `profiler-host-test-${crypto.randomBytes(8).toString('hex')}`, 30 * 60 * 1000);
+    operationId = `profiler-host-test-${crypto.randomBytes(8).toString('hex')}`;
+    lease = await acquireProfilerClaimLease([configuredHost.url], operationId, 30 * 60 * 1000);
     const preparation = isBaseline && hostId
       ? await baselineModelService.ensureBaselineModel(hostId, {
         signal: lease.signal,
-        assertClaimActive: lease.assertActive
+        assertClaimActive: lease.assertActive,
+        operationId
       })
       : null;
     const targetHostUrl = preparation?.hostUrl || configuredHost.url;
@@ -311,6 +365,10 @@ router.post('/test/run', async (req, res) => {
     lease = null;
     res.json({ status: 'success', data: { ...snapshot, preparation } });
   } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
     logger.error('Host test run failed', { error: err.message, body: req.body });
     const code = err.statusCode || (err.message.includes('not found') ? 422
       : err.message.includes('unreachable') ? 503 : 500);
@@ -358,7 +416,11 @@ router.post('/test/run-all', async (req, res) => {
         lease.assertActive();
         await updateBaselineUnderLease(hostId, baseline, lease);
       }
-    }).catch(err => { tracker.status = 'failed'; tracker.error = err.message; })
+    }).catch(async err => {
+      tracker.status = 'failed';
+      tracker.error = err.message;
+      if (err.retainAdmission === true) await lease.abandon(err);
+    })
       .finally(async () => {
         try {
           await lease.finalize();
@@ -479,6 +541,11 @@ router.post('/test/run-fleet', async (req, res) => {
         } catch (err) {
           slot.status = 'failed';
           slot.error = err.message;
+          if (err.retainAdmission === true) {
+            tracker.cancelled = true;
+            await lease.abandon(err);
+            throw err;
+          }
           logger.error('Fleet: host sweep failed', { hostUrl: slot.hostUrl, error: err.message });
         } finally {
           slot.finishedAt = Date.now();
@@ -597,7 +664,13 @@ router.post('/test/compare', async (req, res) => {
     await lease.finalize();
     lease = null;
     res.json({ status: 'success', data });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null }); }
+  } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
+    res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null });
+  }
   finally {
     if (lease) {
       await lease.finalize().catch(error => logger.error('Host comparison lease finalization failed', { error: error.message }));
@@ -640,6 +713,7 @@ router.post('/test/context-probe/run', async (req, res) => {
       contextProbeFillPct: contextProbeFillPct ?? promptFillPct,
       force: !!force,
       acknowledgeMaintenance: true,
+      workloadId: lease.operationId,
       assertClaimActive: lease.assertActive,
       signal: lease.signal
     });
@@ -647,7 +721,13 @@ router.post('/test/context-probe/run', async (req, res) => {
     await lease.finalize();
     lease = null;
     res.json({ status: 'success', data });
-  } catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null }); }
+  } catch (err) {
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
+    res.status(err.statusCode || 500).json({ status: 'error', message: err.message, code: err.code || null });
+  }
   finally {
     if (lease) {
       await lease.finalize().catch(error => logger.error('Context probe lease finalization failed', { error: error.message }));
@@ -671,12 +751,76 @@ router.get('/test/context-probe/resolve/:modelName', async (req, res) => {
 
 // ═══ PERFORMANCE RESULTS ════════════════════════════════════════════════════
 
+/**
+ * Explicit recovery for an Ollama request whose client connection ended
+ * without a terminal server response. Silence is never accepted as proof.
+ * An operator may attest a controlled runtime restart, which terminates every
+ * request from the prior runtime instance; the durable worker then performs
+ * exact host restoration before releasing Core quarantine.
+ */
+router.post('/test/recovery/:hostId/confirm-runtime-restart', requireOperatorAccess, async (req, res) => {
+  try {
+    const operationId = String(req.body?.operationId || '');
+    const runtimeInstanceId = String(req.body?.runtimeInstanceId || '');
+    const restartedAt = new Date(req.body?.restartedAt);
+    if (req.body?.confirmation !== 'RUNTIME_RESTARTED_AND_OLLAMA_REQUESTS_TERMINATED'
+      || !operationId
+      || !runtimeInstanceId
+      || !Number.isFinite(restartedAt.getTime())) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'PROFILER_RUNTIME_RESTART_RECEIPT_INVALID',
+        error: 'Exact operationId, runtimeInstanceId, restartedAt and typed confirmation are required'
+      });
+    }
+    const current = await HostProfile.findOne({
+      hostId: req.params.hostId,
+      'reconciliation.operationId': operationId,
+      'reconciliation.state': { $in: ['prepared', 'mutating', 'unknown', 'pending_reconciliation'] },
+      'reconciliation.serverTerminalObserved': { $ne: true }
+    }).lean();
+    if (!current) {
+      return res.status(409).json({ status: 'error', code: 'PROFILER_RECOVERY_INTENT_NOT_FOUND', error: 'No matching unresolved recovery intent' });
+    }
+    const receipt = {
+      contract: 'agentx.ollama-runtime-restart/v1',
+      operationId,
+      runtimeInstanceId,
+      restartedAt,
+      confirmedAt: new Date()
+    };
+    const updated = await HostProfile.findOneAndUpdate(
+      {
+        _id: current._id,
+        'reconciliation.operationId': operationId,
+        'reconciliation.serverTerminalObserved': { $ne: true }
+      },
+      { $set: {
+        'reconciliation.state': 'unknown',
+        'reconciliation.serverTerminalObserved': true,
+        'reconciliation.serverTerminalAt': restartedAt,
+        'reconciliation.operatorTerminalReceipt': receipt,
+        'reconciliation.reason': 'Runtime restart attested; awaiting exact fenced restoration'
+      } },
+      { new: true }
+    ).lean();
+    if (!updated) {
+      return res.status(409).json({ status: 'error', code: 'PROFILER_RECOVERY_INTENT_CHANGED', error: 'Recovery intent changed concurrently' });
+    }
+    return res.json({ status: 'success', data: { accepted: true, hostId: updated.hostId, operationId, receipt } });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'PROFILER_RUNTIME_RESTART_RECOVERY_FAILED', error: error.message });
+  }
+});
+
 /** GET /test/results — query host performance snapshots */
 router.get('/test/results', async (req, res) => {
   try {
     const { hostUrl, hostId, limit: rawLimit } = req.query;
     const limit = Math.min(parseInt(rawLimit, 10) || 100, 500);
-    const filter = {};
+    const filter = {
+      authorityState: { $nin: ['authority_invalidated', 'pending_reconciliation'] }
+    };
     if (hostUrl) filter.hostUrl = hostUrl;
     if (hostId) filter.hostId = hostId;
     const results = await HostPerformanceSnapshot.find(filter).sort({ testedAt: -1 }).limit(limit).lean();
@@ -694,7 +838,10 @@ router.get('/test/results', async (req, res) => {
 /** GET /test/results/:modelName — performance history for a model */
 router.get('/test/results/:modelName', async (req, res) => {
   try {
-    const snapshots = await HostPerformanceSnapshot.find({ modelName: req.params.modelName }).sort({ testedAt: -1 }).lean();
+    const snapshots = await HostPerformanceSnapshot.find({
+      modelName: req.params.modelName,
+      authorityState: { $nin: ['authority_invalidated', 'pending_reconciliation'] }
+    }).sort({ testedAt: -1 }).lean();
     res.json({ status: 'success', data: { modelName: req.params.modelName, snapshots, total: snapshots.length } });
   } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
 });
@@ -702,8 +849,8 @@ router.get('/test/results/:modelName', async (req, res) => {
 /** POST /:hostId/release — unload a pinned model from a host */
 router.post('/:hostId/release', async (req, res) => {
   let lease;
-  let projectionCommitted = false;
   let host = null;
+  let operationId = null;
   try {
     host = await hostProfileService.getById(req.params.hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
@@ -711,66 +858,143 @@ router.post('/:hostId/release', async (req, res) => {
       return res.status(400).json({ status: 'error', error: 'Host has no pinned model' });
     }
 
-    lease = await acquireProfilerClaimLease([host.hostUrl], `profiler-release-${crypto.randomBytes(8).toString('hex')}`, 5 * 60 * 1000);
+    operationId = `profiler-release-${crypto.randomBytes(8).toString('hex')}`;
+    lease = await acquireProfilerClaimLease([host.hostUrl], operationId, 5 * 60 * 1000);
+    const recovery = getWorkloadRecoveryIdentity(operationId);
+    if (!recovery?.recoveryId || !recovery?.admissionId) {
+      const error = new Error('Release-model requires a durable Core recovery quarantine');
+      error.code = 'PROFILER_RELEASE_RECOVERY_QUARANTINE_REQUIRED';
+      error.statusCode = 503;
+      throw error;
+    }
+    lease.assertActive();
+    await hostProfileService.upsertAuthority({
+      hostId: req.params.hostId,
+      reconciliation: {
+        state: 'prepared',
+        operation: 'release_model',
+        operationId,
+        workloadId: operationId,
+        admissionId: recovery.admissionId,
+        admissionGeneration: recovery.generation,
+        admissionPrincipal: recovery.principal,
+        recoveryId: recovery.recoveryId,
+        recoveryRequestId: recovery.recoveryRequestId,
+        model: host.dedicated.model,
+        priorDedicated: host.dedicated,
+        desiredDedicated: null,
+        reason: 'awaiting fenced Core runtime restore receipt',
+        startedAt: new Date()
+      }
+    }, {
+      authorityService: 'profiler-release',
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
+    lease.assertActive();
+    await hostProfileService.upsertAuthority({
+      hostId: req.params.hostId,
+      reconciliation: {
+        ...host.reconciliation,
+        state: 'mutating',
+        operation: 'release_model',
+        operationId,
+        workloadId: operationId,
+        admissionId: recovery.admissionId,
+        admissionGeneration: recovery.generation,
+        admissionPrincipal: recovery.principal,
+        recoveryId: recovery.recoveryId,
+        recoveryRequestId: recovery.recoveryRequestId,
+        model: host.dedicated.model,
+        priorDedicated: host.dedicated,
+        desiredDedicated: null,
+        reason: 'Ollama unload request is in flight without a terminal server receipt',
+        startedAt: new Date()
+      }
+    }, {
+      authorityService: 'profiler-release',
+      signal: lease.signal,
+      assertAuthorityActive: lease.assertActive
+    });
     lease.assertActive();
     const result = await hostProfileService.releaseModel(host.hostUrl, host.dedicated.model, {
       signal: lease.signal,
       assertClaimActive: lease.assertActive
     });
-    if (!result.success) {
-      return res.status(502).json({ error: `Failed to release model: ${result.error}` });
+    try {
+      await hostProfileService.upsertAuthority({
+        hostId: req.params.hostId,
+        reconciliation: {
+          state: 'verified',
+          operation: 'release_model',
+          operationId,
+          workloadId: operationId,
+          admissionId: recovery.admissionId,
+          admissionGeneration: recovery.generation,
+          admissionPrincipal: recovery.principal,
+          recoveryId: recovery.recoveryId,
+          recoveryRequestId: recovery.recoveryRequestId,
+          model: host.dedicated.model,
+          priorDedicated: host.dedicated,
+          desiredDedicated: null,
+          serverTerminalObserved: result.serverTerminalObserved === true,
+          serverTerminalAt: result.serverTerminalAt || new Date(),
+          reason: 'awaiting fenced Core runtime restore receipt',
+          startedAt: new Date()
+        }
+      }, {
+        authorityService: 'profiler-release',
+        signal: lease.signal,
+        assertAuthorityActive: lease.assertActive
+      });
+    } catch (projectionError) {
+      projectionError.code = 'PROFILER_RELEASE_RECONCILIATION_PENDING';
+      projectionError.statusCode = 503;
+      projectionError.retainAdmission = true;
+      projectionError.serverTerminalObserved = true;
+      throw projectionError;
     }
 
     const releasedModel = host.dedicated.model;
-    // Publish the intended Benchmark projection while both the exact host
-    // claim and its global workload admission are still alive. If this write
-    // has an ambiguous acknowledgement, restore the exact prior projection
-    // before Core restores/releases the pre-claim runtime in finally.
-    const status = await hostProfileService.checkStatus(host.hostUrl);
-    if (status.dedicated?.model && isSameOllamaModel(status.dedicated.model, releasedModel)) {
-      const error = new Error('Released model became resident again before release verification');
-      error.code = 'PROFILER_RELEASE_NOT_STABLE';
-      error.statusCode = 409;
-      throw error;
-    }
-    const persistenceOptions = {
-      signal: lease.signal,
-      assertAuthorityActive: lease.assertActive
-    };
-    try {
-      lease.assertActive();
-      await hostProfileService.upsert({
-        hostId: req.params.hostId,
-        status: status.status,
-        dedicated: null
-      }, persistenceOptions);
-      lease.assertActive();
-      projectionCommitted = true;
-    } catch (error) {
-      try {
-        lease.assertActive();
-        await hostProfileService.upsert({
-          hostId: req.params.hostId,
-          status: host.status,
-          dedicated: host.dedicated || null
-        }, persistenceOptions);
-        lease.assertActive();
-      } catch (compensationError) {
-        error.compensationError = compensationError;
-        logger.error('Release-model projection compensation failed under lease', {
-          hostId: req.params.hostId,
-          error: compensationError.message
-        });
-        if (typeof lease.abandon === 'function') {
-          await lease.abandon(compensationError);
-        }
-      }
-      throw error;
-    }
-
     const releaseReceipt = await lease.finalize({
       byHost: {
         [host.hostUrl]: { excludedModels: [releasedModel] }
+      },
+      beforeWorkloadRelease: async hostRelease => {
+        const status = await hostProfileService.checkStatus(host.hostUrl);
+        if (status.dedicated?.model && isSameOllamaModel(status.dedicated.model, releasedModel)) {
+          const error = new Error('Released model became resident again before projection commit');
+          error.code = 'PROFILER_RELEASE_NOT_STABLE';
+          error.statusCode = 409;
+          throw error;
+        }
+        await hostProfileService.upsertAuthority({
+          hostId: req.params.hostId,
+          status: status.status,
+          dedicated: null,
+          reconciliation: {
+            state: 'resolved',
+            operation: 'release_model',
+            operationId,
+            workloadId: operationId,
+            admissionId: recovery.admissionId,
+            admissionGeneration: recovery.generation,
+            admissionPrincipal: recovery.principal,
+            recoveryId: recovery.recoveryId,
+            recoveryRequestId: recovery.recoveryRequestId,
+            model: releasedModel,
+            priorDedicated: host.dedicated,
+            desiredDedicated: null,
+            releaseReceipt: hostRelease.details?.[0]?.releaseReceipt || null,
+            reason: null,
+            startedAt: new Date(),
+            resolvedAt: new Date()
+          }
+        }, {
+          authorityService: 'profiler-release',
+          signal: lease.signal,
+          assertAuthorityActive: lease.assertActive
+        });
       }
     });
     lease = null;
@@ -790,27 +1014,27 @@ router.post('/:hostId/release', async (req, res) => {
     };
     res.json({ status: 'success', data });
   } catch (err) {
-    // If Core could not reach its final host-release receipt, restore the
-    // Benchmark projection while the global admission remains fail-closed.
-    // A successful host receipt means the null projection is accurate even if
-    // only the final workload-admission release failed.
-    const hostReleaseSucceeded = err.release?.details?.length > 0
-      && err.release.details.every(detail => detail.released === true);
-    if (projectionCommitted && !hostReleaseSucceeded && host) {
-      await hostProfileService.upsert({
-        hostId: req.params.hostId,
-        status: host.status,
-        dedicated: host.dedicated || null
-      }).catch(compensationError => logger.error('Release-model post-finalize compensation failed', {
-        hostId: req.params.hostId,
-        error: compensationError.message
-      }));
-      projectionCommitted = false;
-    }
+    // The reconciliation marker is written before unloading. If Core restore
+    // or the projection commit fails, leave it pending and keep the global
+    // admission fenced for recovery; never issue an unfenced compensating
+    // write after finalization.
     logger.error('Release model failed', { hostId: req.params.hostId, error: err.message });
+    if (lease && err.retainAdmission === true) {
+      await lease.abandon(err);
+      lease = null;
+    }
     res.status(err.statusCode || 500).json({ status: 'error', error: err.message, code: err.code || null });
   } finally {
-    if (lease) await lease.finalize().catch(error => logger.error('Release-model lease finalization failed', { error: error.message }));
+    if (lease) {
+      try {
+        await lease.finalize();
+      } catch (error) {
+        logger.error('Release-model lease finalization failed; reconciliation remains pending', {
+          operationId,
+          error: error.message
+        });
+      }
+    }
   }
 });
 
@@ -844,11 +1068,7 @@ router.post('/:hostId/status/refresh', async (req, res) => {
     const host = await hostProfileService.getById(req.params.hostId);
     if (!host) return res.status(404).json({ status: 'error', error: 'Host not found' });
     const status = await hostProfileService.checkStatus(host.hostUrl);
-    await hostProfileService.updateStatus(req.params.hostId, status.status);
-    await hostProfileService.upsert({
-      hostId: req.params.hostId,
-      dedicated: status.dedicated || null
-    });
+    await hostProfileService.updateStatusMetadata(req.params.hostId, status.status);
     res.json({ status: 'success', data: { hostId: req.params.hostId, ...status } });
   } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
 });
@@ -864,9 +1084,37 @@ router.get('/:hostId/fit-report', async (req, res) => {
   }
 });
 
-router.put('/:hostId', async (req, res) => {
+router.put('/:hostId', requireOperatorAccess, async (req, res) => {
   try {
-    res.json({ status: 'success', data: await hostProfileService.upsert({ ...req.body, hostId: req.params.hostId }) }); }
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const allowedTopLevel = new Set(['displayName', 'cpu']);
+    const rejectedTopLevel = Object.keys(body).filter(field => !allowedTopLevel.has(field));
+    const cpu = body.cpu && typeof body.cpu === 'object' && !Array.isArray(body.cpu) ? body.cpu : {};
+    const rejectedCpu = Object.keys(cpu).filter(field => field !== 'threadOverride');
+    if (rejectedTopLevel.length || rejectedCpu.length) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'HOST_PROFILE_FIELD_NOT_WRITABLE',
+        error: 'Only displayName and cpu.threadOverride may be changed through this route',
+        fields: [...rejectedTopLevel, ...rejectedCpu.map(field => `cpu.${field}`)]
+      });
+    }
+    const updates = {};
+    if (Object.prototype.hasOwnProperty.call(body, 'displayName')) {
+      const displayName = String(body.displayName || '').trim();
+      if (!displayName) {
+        return res.status(400).json({ status: 'error', code: 'HOST_PROFILE_DISPLAY_NAME_INVALID', error: 'displayName must be non-empty' });
+      }
+      updates.displayName = displayName;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'cpu')) {
+      const threadOverride = Number(cpu.threadOverride);
+      if (!Number.isInteger(threadOverride) || threadOverride <= 0 || threadOverride > 1024) {
+        return res.status(400).json({ status: 'error', code: 'HOST_PROFILE_THREAD_OVERRIDE_INVALID', error: 'cpu.threadOverride must be an integer from 1 to 1024' });
+      }
+      updates.cpu = { threadOverride };
+    }
+    res.json({ status: 'success', data: await hostProfileService.upsertMetadata({ ...updates, hostId: req.params.hostId }) }); }
   catch (err) { res.status(err.statusCode || 500).json({ status: 'error', error: err.message }); }
 });
 

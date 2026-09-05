@@ -137,6 +137,10 @@ jest.mock('../../src/services/hostPreferenceService', () => ({
 }));
 
 jest.mock('../../src/services/runtimeCoordinationService', () => ({
+  acquireMaintenance: jest.fn(),
+  heartbeat: jest.fn(),
+  release: jest.fn(),
+  markMaintenanceUnknown: jest.fn(),
   assertWorkloadAdmission: jest.fn(() => Promise.resolve({
     admitted: true,
     admissionId: 'admission-core',
@@ -196,6 +200,17 @@ describe('Nerve Center API Routes', () => {
     hostPrefService.reload.mockResolvedValue();
     hostPrefService.getHealthCheckIntervalMs.mockReturnValue(30000);
     hostPrefService.getPinnedEntries.mockImplementation((pref) => pref.pinnedModels || []);
+    runtimeCoordinationService.acquireMaintenance.mockResolvedValue({
+      acquired: true,
+      leaseId: 'config-lease',
+      generation: 'config-generation',
+      principal: 'loopback-operator',
+      requestId: 'config-request',
+      scope: 'router-task-config:bulk-update'
+    });
+    runtimeCoordinationService.heartbeat.mockResolvedValue({ heartbeat: true });
+    runtimeCoordinationService.release.mockResolvedValue({ released: true });
+    runtimeCoordinationService.markMaintenanceUnknown.mockResolvedValue({ quarantined: true });
     const observedAt = new Date().toISOString();
     const identity = (service) => ({
       service,
@@ -348,6 +363,56 @@ describe('Nerve Center API Routes', () => {
       expect(res.body.data).toHaveProperty('hostPreferences');
       expect(res.body.data).toHaveProperty('alerts');
       expect(res.body.data).toHaveProperty('recentRouting');
+    });
+
+    it.each([
+      ['/api/nerve-center/intelligence', body => body.data.hostPreferences[0]],
+      ['/api/nerve-center/status', body => body.data.hostPreferences[0]],
+      ['/api/nerve-center/ecosystem', body => body.data.hostPreferences[0]]
+    ])('redacts coordination bearer evidence from %s', async (path, selectPreference) => {
+      hostPrefService.getAll.mockResolvedValue([{
+        hostUrl: 'http://primary:11434',
+        hostKey: 'primary',
+        status: 'benchmarking',
+        pinnedModels: [],
+        lastBenchmarkReleaseReceipt: { finalizeToken: 'released-secret' },
+        benchmarkClaim: {
+          batchId: 'public-batch',
+          claimGeneration: 'claim-secret',
+          admissionId: 'admission-secret',
+          admissionGeneration: 'admission-generation-secret',
+          admissionPrincipal: 'benchmark-service',
+          prevStatus: 'ready',
+          finalizeToken: 'finalizer-secret',
+          preClaimRuntime: {
+            exact: true,
+            identityDigest: 'snapshot-secret',
+            residents: [{ model: 'private-resident', digest: 'private-digest' }]
+          }
+        }
+      }]);
+
+      const res = await request(app).get(path).expect(200);
+      const preference = selectPreference(res.body);
+      expect(preference.benchmarkClaim).toEqual(expect.objectContaining({
+        batchId: 'public-batch',
+        prevStatus: 'ready',
+        snapshotExact: true,
+        snapshotResidentCount: 1,
+        finalizing: true
+      }));
+      const serialized = JSON.stringify(preference);
+      for (const secret of [
+        'claim-secret',
+        'admission-secret',
+        'admission-generation-secret',
+        'finalizer-secret',
+        'snapshot-secret',
+        'private-digest',
+        'released-secret'
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
     });
 
     it('returns 500 when getAllModelsHealth throws', async () => {

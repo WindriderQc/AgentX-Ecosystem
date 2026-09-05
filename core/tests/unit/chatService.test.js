@@ -57,6 +57,15 @@ jest.mock('../../src/services/inferenceContractService', () => ({
     hasQualifiedThinkingCapability: jest.fn(() => false),
     resolveInferenceContract: jest.fn()
 }));
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+    beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+        signal: signal || new AbortController().signal,
+        markDispatched: jest.fn(),
+        assertActive: jest.fn(),
+        complete: jest.fn(async () => ({ released: true })),
+        abandon: jest.fn(async () => ({ released: true }))
+    }))
+}));
 jest.mock('../../src/services/costCalculator');
 jest.mock('../../config/logger');
 
@@ -108,14 +117,16 @@ describe('chatService', () => {
             if (typeof url === 'string' && url.includes('/api/show')) {
                 return Promise.resolve({ ok: false, status: 404 });
             }
+            const body = {
+                response: 'Test response',
+                done: true,
+                ...mockStats
+            };
             return Promise.resolve({
                 ok: true,
                 statusText: 'OK',
-                json: jest.fn().mockResolvedValue({
-                    response: 'Test response',
-                    done: true,
-                    ...mockStats
-                })
+                text: jest.fn().mockResolvedValue(JSON.stringify(body)),
+                json: jest.fn().mockResolvedValue(body)
             });
         });
 
@@ -480,7 +491,8 @@ describe('chatService', () => {
         it('should throw error when Ollama request fails', async () => {
             mockFetch.mockResolvedValue({
                 ok: false,
-                statusText: 'Internal Server Error'
+                statusText: 'Internal Server Error',
+                text: jest.fn().mockResolvedValue('')
             });
 
             const request = {
@@ -497,6 +509,9 @@ describe('chatService', () => {
                 ok: false,
                 status: 404,
                 statusText: 'Not Found',
+                text: jest.fn().mockResolvedValue(JSON.stringify({
+                    error: "model 'missing-model:latest' not found"
+                })),
                 json: jest.fn().mockResolvedValue({
                     error: "model 'missing-model:latest' not found"
                 })

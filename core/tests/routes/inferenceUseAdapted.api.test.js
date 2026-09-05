@@ -73,6 +73,16 @@ jest.mock('../../src/services/modelReadinessService', () => ({
   })),
   isReadyStage: jest.fn(() => true)
 }));
+
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+    signal: signal || new AbortController().signal,
+    markDispatched: jest.fn(),
+    assertActive: jest.fn(),
+    complete: jest.fn(async () => ({ released: true })),
+    abandon: jest.fn(async () => ({ released: true })),
+  })),
+}));
 jest.mock('../../src/services/hostPreferenceService', () => ({
   getAll: jest.fn(async () => []),
   getByHost: jest.fn(async () => null),
@@ -97,7 +107,6 @@ function buildApp() {
     req.headers.host = 'localhost:3180';
     req.headers.origin = 'http://localhost:3180';
     req.headers['sec-fetch-site'] = 'same-origin';
-    req.headers['x-agentx-benchmark-token'] = 'test-benchmark-token';
     next();
   });
   app.use('/api', apiRoutes);
@@ -121,7 +130,7 @@ function mockOllama() {
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ response: 'ok', eval_count: 1, prompt_eval_count: 1 })
+      text: async () => JSON.stringify({ response: 'ok', done: true, eval_count: 1, prompt_eval_count: 1 })
     };
   });
   return calls;

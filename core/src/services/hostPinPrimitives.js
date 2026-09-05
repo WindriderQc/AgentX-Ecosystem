@@ -204,18 +204,25 @@ function entrySatisfiedByLoadedModel(entry, runningModelInfos) {
   return status.loaded && !status.contextMismatch && !status.residencyMismatch;
 }
 
-async function fetchRunningModelInfosStrict(hostUrl, timeoutMs = 5_000) {
-  const psResponse = await fetch(`${hostUrl}/api/ps`, { signal: AbortSignal.timeout(timeoutMs) });
+async function fetchRunningModelInfosStrict(hostUrl, timeoutMs = 5_000, options = {}) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeoutSignal])
+    : timeoutSignal;
+  const psResponse = await fetch(`${hostUrl}/api/ps`, { signal });
   if (!psResponse.ok) throw new Error(`Ollama model inventory returned HTTP ${psResponse.status}`);
   const psData = await psResponse.json();
   if (!Array.isArray(psData?.models)) throw new Error('Ollama model inventory is malformed');
   return psData.models;
 }
 
-async function fetchRunningModelInfos(hostUrl, timeoutMs = 5_000) {
+async function fetchRunningModelInfos(hostUrl, timeoutMs = 5_000, options = {}) {
   try {
-    return await fetchRunningModelInfosStrict(hostUrl, timeoutMs);
-  } catch {
+    return await fetchRunningModelInfosStrict(hostUrl, timeoutMs, options);
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason instanceof Error ? options.signal.reason : error;
+    }
     return [];
   }
 }

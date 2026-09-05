@@ -14,6 +14,24 @@ jest.mock('../../src/helpers/ollamaHostConfig', () => ({
   getConfiguredHosts: jest.fn(() => [])
 }));
 
+const mockRunRuntimeMutation = jest.fn(async (_options, operation) => operation({
+  signal: new AbortController().signal,
+  assertActive: jest.fn()
+}));
+jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
+  runRuntimeMutation: (...args) => mockRunRuntimeMutation(...args)
+}));
+const mockBeginInferenceAdmission = jest.fn(async () => ({
+  signal: new AbortController().signal,
+  assertActive: jest.fn(),
+  markDispatched: jest.fn(),
+  complete: jest.fn(async () => ({ released: true })),
+  abandon: jest.fn(async () => ({ quarantined: true }))
+}));
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: (...args) => mockBeginInferenceAdmission(...args)
+}));
+
 const {
   OUTBOUND_ERROR_CODES,
   readBoundedJson
@@ -114,7 +132,7 @@ describe('ollamaWatchdogService governed outbound operations', () => {
         allowSearch: false,
         method: 'POST',
         pathPattern: '^/api/generate$',
-        responseMode: 'discard',
+        responseMode: 'json',
         policy: {
           authoritySource: 'configured',
           deadlineMs: PROBE_TIMEOUT_MS,
@@ -136,10 +154,12 @@ describe('ollamaWatchdogService governed outbound operations', () => {
       },
       [WATCHDOG_OPERATIONS.UNJAM]: {
         method: 'POST',
+        responseMode: 'json',
         policy: { deadlineMs: UNJAM_TIMEOUT_MS }
       },
       [WATCHDOG_OPERATIONS.RESTORE]: {
         method: 'POST',
+        responseMode: 'json',
         policy: { deadlineMs: RESTORE_TIMEOUT_MS }
       }
     });
@@ -224,19 +244,16 @@ describe('ollamaWatchdogService governed outbound operations', () => {
     expect(destroy).toHaveBeenCalled();
   });
 
-  test('keeps generate probe, unload retry, and restore status semantics', async () => {
+  test('requires exact terminal receipts for unload and restore mutations', async () => {
     const fetchImpl = jest.fn(async (url, init) => {
       const model = JSON.parse(init.body).model;
-      const status = model === 'accepted-legacy'
-        ? 499
-        : model === 'server-failure'
-          ? 503
-          : model === 'probe-model'
-            ? 404
-            : model === 'later-success'
-              ? 200
-              : 500;
-      return response(url, { body: new Readable({ read() {} }), status });
+      const status = model === 'server-failure' ? 503 : model === 'probe-model' ? 404 : 200;
+      const body = model === 'probe-model'
+        ? '{"error":"model not found"}'
+        : (model === 'missing-terminal'
+        ? '{}'
+        : (model === 'contradictory-terminal' ? '{"done":true,"error":"failed"}' : '{"done":true}'));
+      return response(url, { body, status });
     });
     const executor = createTestExecutor(fetchImpl);
 
@@ -246,16 +263,34 @@ describe('ollamaWatchdogService governed outbound operations', () => {
     });
     await expect(unjamHost(
       HOST,
-      ['accepted-legacy', 'server-failure', 'later-success'],
+      ['later-success'],
       executor
     )).resolves.toEqual({
       success: true,
-      unloaded: ['accepted-legacy', 'later-success'],
-      errors: ['server-failure: HTTP 503'],
-      skipped: []
+      unloaded: ['later-success'],
+      errors: [],
+      skipped: [],
+      quarantined: false
     });
     await expect(reloadModel(HOST, 'restore-model', executor)).resolves.toEqual({ ok: true });
-    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    await expect(unjamHost(HOST, ['missing-terminal'], executor)).resolves.toMatchObject({
+      success: false,
+      quarantined: true
+    });
+    await expect(reloadModel(HOST, 'missing-terminal', executor)).resolves.toMatchObject({
+      ok: false,
+      quarantined: true
+    });
+    await expect(unjamHost(HOST, ['contradictory-terminal'], executor)).resolves.toMatchObject({
+      success: false,
+      quarantined: true
+    });
+    await expect(reloadModel(HOST, 'contradictory-terminal', executor)).resolves.toMatchObject({
+      ok: false,
+      quarantined: true
+    });
+    expect(mockRunRuntimeMutation).toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(7);
   });
 
   test('enforces a full response-lifecycle deadline on a hanging metadata body', async () => {

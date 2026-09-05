@@ -21,6 +21,31 @@ const {
     startBenchmarkClaimHeartbeat
 } = require('./benchmarkClaimLifecycle');
 
+async function tombstoneStandaloneResult(resultId, authorityError, phase) {
+    if (!resultId) return;
+    try {
+        await BenchmarkResult.updateOne(
+            { _id: resultId },
+            {
+                $set: {
+                    excluded_from_leaderboard: true,
+                    needs_review: true,
+                    scoring_method: 'authority_invalidated',
+                    quality_score: null,
+                    composite_score: null,
+                    review_reason: `Standalone result authority was lost during ${phase}`
+                }
+            },
+            { upsert: true }
+        );
+        authorityError.authorityCompensated = true;
+    } catch (compensationError) {
+        authorityError.compensationError = compensationError;
+        authorityError.retainAdmission = true;
+        authorityError.code = 'STANDALONE_RESULT_RECONCILIATION_PENDING';
+    }
+}
+
 /**
  * Run a single benchmark test
  */
@@ -42,7 +67,19 @@ async function runTest({ model, host, prompt }) {
         stopHeartbeat.assertActive();
     } catch (error) {
         await stopHeartbeat.drain();
-        await releaseBenchmarkClaims(claimedHosts, claimId);
+        const cleanup = await releaseBenchmarkClaims(claimedHosts, claimId, {
+            releaseWorkloadAdmission: false
+        });
+        if (cleanup.failed === 0) {
+            try {
+                await require('../../clients/coreApiClient').releaseWorkloadAdmission(claimId);
+            } catch (releaseError) {
+                error.releaseError = releaseError;
+                error.retainAdmission = true;
+            }
+        } else {
+            error.retainAdmission = true;
+        }
         throw error;
     }
 
@@ -58,7 +95,11 @@ async function runTest({ model, host, prompt }) {
             return result;
         } catch (error) {
             if (persistedResult?._id || result?._id) {
-                await BenchmarkResult.deleteOne({ _id: persistedResult?._id || result._id }).catch(() => {});
+                await tombstoneStandaloneResult(
+                    persistedResult?._id || result._id,
+                    error,
+                    'database persistence'
+                );
             }
             throw error;
         }
@@ -149,6 +190,7 @@ async function runTest({ model, host, prompt }) {
     } catch (err) {
         // Claim loss aborts the in-flight Core/Ollama request. Do not start a
         // digest lookup or persist a result after ownership has been lost.
+        if (err.authorityCompensated === true || err.retainAdmission === true) throw err;
         if (claimAbort.signal.aborted || stopHeartbeat.getFailure?.()) {
             throw (claimAbort.signal.reason instanceof Error
                 ? claimAbort.signal.reason
@@ -180,7 +222,25 @@ async function runTest({ model, host, prompt }) {
         const release = await releaseBenchmarkClaims(claimedHosts, claimId, {
             releaseWorkloadAdmission: false
         });
-        await stopHeartbeat.drain();
+        let retainHeartbeat = false;
+        if (release.failed > 0 && persistedResult?._id) {
+            const restoreError = new Error(
+                release.details?.find(detail => !detail.released)?.reason
+                || 'Benchmark runtime restore/release failed'
+            );
+            await tombstoneStandaloneResult(persistedResult._id, restoreError, 'runtime restoration');
+            persistedResult = null;
+            retainHeartbeat = restoreError.retainAdmission === true;
+        }
+        if (retainHeartbeat) {
+            const timer = setTimeout(() => stopHeartbeat.drain().catch(error => logger.error(
+                'Retained standalone heartbeat drain failed',
+                { claimId, error: error.message }
+            )), 10 * 60 * 1000);
+            timer.unref?.();
+        } else {
+            await stopHeartbeat.drain();
+        }
         if (release.failed === 0) {
             const workload = await require('../../clients/coreApiClient').releaseWorkloadAdmission(claimId);
             if (workload?.released !== true) {
@@ -193,16 +253,16 @@ async function runTest({ model, host, prompt }) {
             // snapshot was restored and the linked workload admission could
             // be released. Invalidate any possibly committed result before
             // surfacing a failed lifecycle receipt.
-            if (persistedResult?._id) {
-                await BenchmarkResult.deleteOne({ _id: persistedResult._id }).catch(() => {});
-                persistedResult = null;
-            }
             const error = new Error(
                 release.details?.find(detail => !detail.released)?.reason
                 || release.workloadAdmission?.reason
                 || 'Benchmark runtime restore/release failed'
             );
             error.code = 'BENCHMARK_RUNTIME_RESTORE_FAILED';
+            if (persistedResult?._id) {
+                await tombstoneStandaloneResult(persistedResult._id, error, 'lifecycle finalization');
+                persistedResult = null;
+            }
             throw error;
         }
     }

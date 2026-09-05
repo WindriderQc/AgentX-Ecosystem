@@ -24,19 +24,16 @@ const { normalizeModelName } = require('../modelContextResolver');
 const { parseParameterCount, parseQuantization } = require('../parameterDetection');
 const est = require('./fitEstimator');
 const logger = require('../../../config/logger');
+const { resolveArtifactIdentity, identitiesMatch } = require('./artifactIdentityService');
+const { hasQualifiedProfilerAuthority } = require('./profilerAuthorityReceipt');
 
 const MIB = est.MIB;
 
 function hasProfilerAuthority(readiness, evidence) {
-  const receipt = readiness?.authorityReceipt;
-  return readiness?.benchmarkQualified === true
-    && readiness?.stale !== true
-    && ['standard', 'full'].includes(readiness?.profileDepth)
-    && receipt?.source === 'profiler_pipeline'
-    && Number(receipt.version) === 1
-    && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
-    && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '')
-    && String(readiness?.evidenceId || '') === String(evidence?._id || '');
+  return hasQualifiedProfilerAuthority(readiness, evidence, {
+      modelName: evidence?.modelName,
+      hostId: evidence?.hostId
+    });
 }
 
 /**
@@ -66,10 +63,32 @@ async function buildHostFitReport(hostId) {
   const { vramTotalMiB, source: vramSource } = est.resolveHostVram(host, telemetry);
 
   // Measured profiles for this host, keyed by normalized model name.
-  const evidenceRecords = await ModelPerformanceProfile.find({ hostId, active: true, stale: { $ne: true } }).lean();
+  const evidenceRecords = await ModelPerformanceProfile.find({
+    hostId,
+    active: true,
+    stale: { $ne: true },
+    authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
+  }).lean();
   const profileByModel = new Map();
+  const liveArtifactByModel = new Map();
   for (const evidence of evidenceRecords) {
-    if (evidence?.profile) profileByModel.set(normalizeModelName(evidence.modelName), evidence);
+    if (!evidence?.profile) continue;
+    const normalized = normalizeModelName(evidence.modelName);
+    profileByModel.set(normalized, evidence);
+    try {
+      liveArtifactByModel.set(normalized, await resolveArtifactIdentity(
+        evidence.modelName,
+        hostId,
+        host.hostUrl,
+        { refresh: true }
+      ));
+    } catch (error) {
+      logger.warn(`fit-report: exact artifact refresh failed for ${evidence.modelName}`, {
+        hostId,
+        error: error.message
+      });
+      liveArtifactByModel.set(normalized, null);
+    }
   }
 
   // Registry metadata (params/quant/family/benchmark scores) for installed models.
@@ -89,6 +108,7 @@ async function buildHostFitReport(hostId) {
     const paramB = parseParameterCount(meta.parameters) || parseParameterCount(name);
     const quant = parseQuantization(meta.quantization) || parseQuantization(name);
     const evidence = profileByModel.get(norm);
+    const liveArtifact = liveArtifactByModel.get(norm);
     const readiness = meta?.readiness instanceof Map
       ? meta.readiness.get(hostId)
       : meta?.readiness?.[hostId];
@@ -98,6 +118,7 @@ async function buildHostFitReport(hostId) {
       && evidence.artifact.digest === readiness.artifact.digest
       && evidence.artifact.runtimeFingerprint === readiness.artifact.runtimeFingerprint
       && evidence.artifact.registryQualified === true
+      && identitiesMatch(evidence.artifact, liveArtifact)
       && hasProfilerAuthority(readiness, evidence)
     );
     const p = artifactMatches && Number(evidence.profile?.recommendedInteractiveContext) > 0
@@ -130,6 +151,12 @@ async function buildHostFitReport(hostId) {
         maxVerifiedContext: p.maxVerifiedContext || null,
         recommendedInteractiveContext: p.recommendedInteractiveContext || null,
         recommendedDocumentContext: p.recommendedDocumentContext || null,
+        performanceKneeContext: p.performanceKneeContext || null,
+        performanceKneeDegradationPct: p.performanceKneeDegradationPct || null,
+        qualityVerifiedContext: p.qualityContextStatus === 'verified'
+          ? (p.qualityVerifiedContext || null)
+          : null,
+        qualityContextStatus: p.qualityContextStatus === 'verified' ? 'verified' : 'unknown',
         spillVerified,
         spillDetected,
         spillNumCtx: p.spill?.spillNumCtx || null,
@@ -142,6 +169,13 @@ async function buildHostFitReport(hostId) {
         score: benchScore,
         bestCategory: bench.bestCategory || null,
         dims,
+        heuristicDimensions: dims,
+        qualitySignal: {
+          status: benchScore != null ? 'advisory_summary' : 'heuristic',
+          source: benchScore != null ? 'model_profile_benchmark_summary' : 'parameter_quantization_heuristic',
+          authoritative: false,
+          reason: 'host_fit_does_not_prove_semantic_response_quality'
+        },
         fit
       });
     } else {
@@ -173,6 +207,13 @@ async function buildHostFitReport(hostId) {
       score: benchScore,
       bestCategory: bench.bestCategory || null,
       dims,
+      heuristicDimensions: dims,
+      qualitySignal: {
+        status: 'heuristic',
+        source: 'parameter_quantization_heuristic',
+        authoritative: false,
+        reason: 'unprofiled_host_fit_estimate'
+      },
       ...ef
     };
   });
@@ -207,6 +248,13 @@ async function buildHostFitReport(hostId) {
   };
 
   return {
+    contract: 'agentx.host-fit-report/v2',
+    authority: {
+      status: 'advisory',
+      recommendationAuthority: false,
+      qualityAuthority: false,
+      label: 'Heuristic host fit; not model quality evidence'
+    },
     host: {
       hostId: host.hostId,
       displayName: host.displayName || host.hostId,

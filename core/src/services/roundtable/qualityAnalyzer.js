@@ -7,10 +7,10 @@
  * reached, so roundtable completion is never blocked by scoring failure.
  */
 
-const fetch = require('node-fetch');
 const logger = require('../../../config/logger');
 const Roundtable = require('../../../models/Roundtable');
 const { getTargetForModel } = require('../modelRouter');
+const { executeAdmittedOllamaAttempt } = require('../routing/inferenceAttemptExecutor');
 
 const { PRODUCT_DEFAULT_MODEL } = require('../modelRouterDefaults');
 const JUDGE_MODEL = process.env.ROUNDTABLE_JUDGE_MODEL || PRODUCT_DEFAULT_MODEL;
@@ -77,26 +77,37 @@ async function callJudge(prompt) {
   if (!target) {
     return { success: false, error: `No host for judge model ${JUDGE_MODEL}` };
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), JUDGE_TIMEOUT_MS);
   try {
-    const resp = await fetch(`${target}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: JUDGE_MODEL, prompt, stream: false, options: { temperature: 0.2 } }),
-      signal: controller.signal
+    const attempt = await executeAdmittedOllamaAttempt({
+      hostUrl: target,
+      model: JUDGE_MODEL,
+      payload: {
+        model: JUDGE_MODEL,
+        prompt,
+        stream: false,
+        options: { temperature: 0.2 }
+      },
+      useChat: false,
+      stream: false,
+      timeoutMs: JUDGE_TIMEOUT_MS,
+      admissionKind: 'council-quality-judge',
+      principal: 'core-council',
+      runtimeOptions: { temperature: 0.2 }
     });
-    clearTimeout(timer);
-    if (!resp.ok) {
-      return { success: false, error: `Judge ${resp.status}` };
+    if (!attempt.ok) {
+      return { success: false, error: `Judge ${attempt.status}` };
     }
-    const data = await resp.json();
+    const data = attempt.data;
     const scores = extractJson(data.response || '');
     if (!scores) return { success: false, error: 'Failed to parse judge JSON' };
     return { success: true, scores };
   } catch (err) {
-    clearTimeout(timer);
-    return { success: false, error: err.name === 'AbortError' ? `Timeout after ${JUDGE_TIMEOUT_MS}ms` : err.message };
+    return {
+      success: false,
+      error: err.isOllamaTimeout === true || err.name === 'AbortError'
+        ? `Timeout after ${JUDGE_TIMEOUT_MS}ms`
+        : err.message
+    };
   }
 }
 
@@ -193,4 +204,9 @@ async function analyzeQuality(roundtableId) {
   return qualityScores;
 }
 
-module.exports = { analyzeQuality, AGENT_DIMENSIONS, SYNTHESIS_DIMENSIONS };
+module.exports = {
+  analyzeQuality,
+  AGENT_DIMENSIONS,
+  SYNTHESIS_DIMENSIONS,
+  _internal: { callJudge }
+};

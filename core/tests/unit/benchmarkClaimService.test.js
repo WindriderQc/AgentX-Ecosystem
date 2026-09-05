@@ -440,6 +440,9 @@ describe('benchmarkClaimService', () => {
           identityDigest: claimed.pref.benchmarkClaim.preClaimRuntime.identityDigest,
           appliedIdentityDigest: claimed.pref.benchmarkClaim.preClaimRuntime.identityDigest,
           exact: true,
+          capturedAt: claimed.pref.benchmarkClaim.preClaimRuntime.capturedAt,
+          source: 'ollama_ps',
+          filterEvaluatedAt: expect.any(Date),
           residentCount: 0
         },
         verification: {
@@ -560,11 +563,15 @@ describe('benchmarkClaimService', () => {
       });
       expect(released.releaseReceipt.snapshot.appliedIdentityDigest)
         .not.toBe(released.releaseReceipt.snapshot.identityDigest);
+      expect(released.releaseReceipt.snapshot.filterEvaluatedAt.getTime())
+        .toBeGreaterThanOrEqual(expiringSnapshot.capturedAt.getTime());
+      expect(released.releaseReceipt.releasedAt.getTime())
+        .toBeGreaterThanOrEqual(released.releaseReceipt.snapshot.filterEvaluatedAt.getTime());
       expect(released.releaseReceipt.verification.snapshotIdentity)
         .toBe(released.releaseReceipt.snapshot.appliedIdentityDigest);
     });
 
-    it('keeps the fence recoverable when exact runtime restoration fails', async () => {
+    it('quarantines the finalizer fence when exact runtime restoration fails', async () => {
       hostPrefService.restoreBenchmarkRuntime.mockResolvedValueOnce({
         host: HOST_URL,
         status: 'error',
@@ -585,6 +592,7 @@ describe('benchmarkClaimService', () => {
       expect(stored.status).toBe('benchmarking');
       expect(stored.benchmarkClaim.batchId).toBe(BATCH_A);
       expect(stored.benchmarkClaim.claimGeneration).toBe(claimed.claimGeneration);
+      expect(stored.benchmarkClaim.finalizeToken).toEqual(expect.any(String));
     });
 
     it('keeps the fence when a restore claims success for a different snapshot identity', async () => {
@@ -610,9 +618,35 @@ describe('benchmarkClaimService', () => {
         benchmarkClaim: {
           batchId: BATCH_A,
           claimGeneration: claimed.claimGeneration,
-          finalizeToken: null
+          finalizeToken: expect.any(String)
         }
       });
+    });
+
+    it('never lets a second finalizer take over a quarantined stale token', async () => {
+      hostPrefService.restoreBenchmarkRuntime.mockResolvedValueOnce({
+        host: HOST_URL,
+        status: 'error',
+        verified: false,
+        degraded: false,
+        error: 'warm acknowledgement ambiguous'
+      });
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A);
+      await expect(service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
+      })).resolves.toMatchObject({ released: false, finalizationQuarantined: true });
+      await HostPreference.updateOne(
+        { hostUrl: HOST_URL },
+        { $set: { 'benchmarkClaim.finalizingAt': new Date(Date.now() - 31 * 60 * 1000) } }
+      );
+
+      await expect(service.releaseBenchmarkClaim(HOST_URL, BATCH_A, {
+        claimGeneration: claimed.claimGeneration
+      })).resolves.toMatchObject({
+        released: false,
+        reason: expect.stringMatching(/finalizer owns runtime restoration/)
+      });
+      expect(hostPrefService.restoreBenchmarkRuntime).toHaveBeenCalledTimes(1);
     });
 
     it('linearizes restore and release before a replacement owner can acquire', async () => {

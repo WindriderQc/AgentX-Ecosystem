@@ -5,11 +5,13 @@
  * to benchmark-owned storage instead of writing back into modelregistries.
  */
 
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const ModelProfile = require('../../models/ModelProfile');
 const ModelContextProbeSnapshot = require('../../models/ModelContextProbeSnapshot');
 const ollamaVramService = require('./ollamaVramService');
 const modelContextProfileService = require('./modelContextProfileService');
+const authorityReconciliation = require('./benchmark/benchmarkAuthorityReconciliation');
 const hostProfileService = require('./profiler/hostProfileService');
 const { identitiesMatch, resolveArtifactIdentity } = require('./profiler/artifactIdentityService');
 const { showModel, generate, listRunning } = require('../clients/ollamaClient');
@@ -62,6 +64,83 @@ function findInvalidThroughputStep(steps = []) {
   return steps.find((step) => !validateThroughput(step?.tokensPerSec).plausible);
 }
 
+function quantile(values, q) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = (sorted.length - 1) * q;
+  const lower = Math.floor(position);
+  const fraction = position - lower;
+  return sorted[lower + 1] === undefined
+    ? sorted[lower]
+    : sorted[lower] + fraction * (sorted[lower + 1] - sorted[lower]);
+}
+
+function studentTCritical95(sampleCount) {
+  const byDf = [null, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262,
+    2.228, 2.201, 2.179, 2.16, 2.145, 2.131, 2.12, 2.11, 2.101, 2.093, 2.086,
+    2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042];
+  const df = Math.max(1, Math.floor(sampleCount) - 1);
+  return byDf[Math.min(df, 30)] || 1.96;
+}
+
+function summarizeCandidateThroughput(samples = [], minimumSamples = 2) {
+  const passing = samples.filter(sample => sample?.passed === true
+    && Number.isFinite(Number(sample.tokensPerSec))
+    && Number(sample.tokensPerSec) > 0);
+  const values = passing.map(sample => Number(sample.tokensPerSec));
+  if (!values.length) {
+    return {
+      attemptedSampleCount: samples.length,
+      sampleCount: 0,
+      minimumSamples,
+      mean: null,
+      p50: null,
+      p95: null,
+      standardDeviation: null,
+      coefficientOfVariation: null,
+      confidenceInterval95: null,
+      reliability: 'unknown'
+    };
+  }
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  if (values.length < 2) {
+    return {
+      attemptedSampleCount: samples.length,
+      sampleCount: values.length,
+      minimumSamples,
+      mean: Number(mean.toFixed(3)),
+      p50: Number(mean.toFixed(3)),
+      p95: Number(mean.toFixed(3)),
+      standardDeviation: null,
+      coefficientOfVariation: null,
+      confidenceInterval95: null,
+      reliability: 'unknown'
+    };
+  }
+  const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (values.length - 1);
+  const standardDeviation = Math.sqrt(variance);
+  const cv = mean > 0 ? standardDeviation / mean : null;
+  const margin = studentTCritical95(values.length) * standardDeviation / Math.sqrt(values.length);
+  return {
+    attemptedSampleCount: samples.length,
+    sampleCount: values.length,
+    minimumSamples,
+    mean: Number(mean.toFixed(3)),
+    p50: Number(quantile(values, 0.5).toFixed(3)),
+    p95: Number(quantile(values, 0.95).toFixed(3)),
+    standardDeviation: Number(standardDeviation.toFixed(3)),
+    coefficientOfVariation: cv == null ? null : Number(cv.toFixed(4)),
+    confidenceInterval95: {
+      low: Number(Math.max(0, mean - margin).toFixed(3)),
+      high: Number((mean + margin).toFixed(3)),
+      method: 'student_t'
+    },
+    reliability: values.length < minimumSamples || cv == null
+      ? 'unknown'
+      : cv <= 0.05 ? 'high' : cv <= 0.12 ? 'medium' : 'low'
+  };
+}
+
 async function persistProbeSnapshot(data, { signal, checkpoint } = {}) {
   const payload = { _id: new mongoose.Types.ObjectId(), ...data };
   checkpoint?.();
@@ -75,7 +154,31 @@ async function persistProbeSnapshot(data, { signal, checkpoint } = {}) {
     checkpoint?.();
     return saved;
   } catch (error) {
-    await ModelContextProbeSnapshot.deleteOne({ _id: payload._id }).catch(() => {});
+    try {
+      await ModelContextProbeSnapshot.updateOne(
+        { _id: payload._id },
+        {
+          $setOnInsert: {
+            modelName: payload.modelName,
+            hostUrl: payload.hostUrl,
+            hostId: payload.hostId,
+            artifactDigest: payload.artifactDigest,
+            runtimeFingerprint: payload.runtimeFingerprint,
+            status: 'failed'
+          },
+          $set: {
+            authorityStatus: 'rejected',
+            authorityError: 'probe snapshot persistence raced profiler claim loss'
+          }
+        },
+        { upsert: true }
+      );
+      error.authorityCompensated = true;
+    } catch (compensationError) {
+      error.compensationError = compensationError;
+      error.retainAdmission = true;
+      error.code = 'CONTEXT_PROBE_SNAPSHOT_RECONCILIATION_PENDING';
+    }
     throw error;
   }
 }
@@ -373,17 +476,28 @@ async function probeModelContext(modelName, options = {}) {
   if (options.acknowledgeMaintenance !== true) {
     throw new Error('Context probe refused: caller must set acknowledgeMaintenance:true — probe evicts KV cache and breaks live traffic');
   }
+  const workloadId = String(options.workloadId || '');
+  if (!workloadId) {
+    const error = new Error('Context probe requires an exact durable profiler workload identity');
+    error.code = 'PROFILER_AUTHORITY_JOURNAL_REQUIRED';
+    throw error;
+  }
 
   const cfg = getConfig();
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
   const minCtx = options.minCtx ?? cfg.minCtx;
   const maxCtx = options.maxCtx ?? cfg.maxCtx;
   const promptFillPct = Math.min(100, Math.max(5, Number(options.contextProbeFillPct ?? options.promptFillPct ?? 80) || 80));
-  const candidateRepeats = Math.max(2, Math.min(5, Number(options.candidateRepeats) || 2));
+  const candidateRepeats = Math.max(2, Math.min(20, Number(options.candidateRepeats) || 2));
+  const profileDepth = ['quick', 'standard', 'full'].includes(options.profileDepth)
+    ? options.profileDepth
+    : 'standard';
   const interactiveThreshold = Number.isFinite(Number(options.interactiveDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(options.interactiveDegradationThreshold))) : 15;
   const documentThreshold = Number.isFinite(Number(options.documentDegradationThreshold))
     ? Math.min(100, Math.max(0, Number(options.documentDegradationThreshold))) : 30;
+  const performanceKneeThreshold = Number.isFinite(Number(options.performanceKneeDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(options.performanceKneeDegradationThreshold))) : 15;
   const checkpoint = () => {
     if (options.signal?.aborted) {
       const error = options.signal.reason instanceof Error
@@ -439,13 +553,8 @@ async function probeModelContext(modelName, options = {}) {
       const assessed = repetitions.map(step => assessProbeStep(step, comparisonSpeed));
       const failed = assessed.find(step => !step.passed);
       const representative = failed || [...assessed].sort((a, b) => Number(a.tokensPerSec) - Number(b.tokensPerSec))[0];
-      const mean = speeds.length
-        ? speeds.reduce((sum, value) => sum + value, 0) / speeds.length
-        : 0;
-      const variance = speeds.length > 1
-        ? speeds.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (speeds.length - 1)
-        : 0;
-      const stdDev = Math.sqrt(variance);
+      const throughputStatistics = summarizeCandidateThroughput(assessed, candidateRepeats);
+      const mean = Number(throughputStatistics.mean) || 0;
       return {
         ...representative,
         tokensPerSec: speeds.length ? Number(mean.toFixed(2)) : 0,
@@ -454,8 +563,11 @@ async function probeModelContext(modelName, options = {}) {
         repetitionCount: assessed.length,
         tokensPerSecMin: speeds.length ? Math.min(...speeds) : null,
         tokensPerSecMax: speeds.length ? Math.max(...speeds) : null,
-        tokensPerSecStdDev: speeds.length ? Number(stdDev.toFixed(3)) : null,
-        tokensPerSecCvPct: mean > 0 ? Number(((stdDev / mean) * 100).toFixed(2)) : null,
+        tokensPerSecStdDev: throughputStatistics.standardDeviation,
+        tokensPerSecCvPct: throughputStatistics.coefficientOfVariation == null
+          ? null
+          : Number((throughputStatistics.coefficientOfVariation * 100).toFixed(2)),
+        throughputStatistics,
         samples: assessed.map(step => ({
           requestSucceeded: step.requestSucceeded,
           tokensPerSec: step.tokensPerSec,
@@ -593,6 +705,9 @@ async function probeModelContext(modelName, options = {}) {
       .reduce((max, step) => Math.max(max, Number(step.numCtx) || 0), 0) || baseline.numCtx;
     const recommendedInteractiveContext = recommendedFor(interactiveThreshold);
     const recommendedDocumentContext = recommendedFor(documentThreshold);
+    // The knee is the largest measured/passing point whose throughput loss is
+    // within the configured threshold. It says nothing about answer quality.
+    const performanceKneeContext = recommendedFor(performanceKneeThreshold);
     probeNotify({ type: 'result', testedNumCtx, degradationPct: degradation });
 
     const invalidStep = findInvalidThroughputStep(steps);
@@ -612,12 +727,17 @@ async function probeModelContext(modelName, options = {}) {
     }
 
     checkpoint();
-    const snapshot = await persistProbeSnapshot({
+    const snapshotId = new mongoose.Types.ObjectId();
+    const authorityWriteId = crypto.randomUUID();
+    const snapshotPayload = {
+      _id: snapshotId,
       modelName: normalizedModel,
       hostUrl,
       hostId: currentArtifact.hostId,
       artifactDigest: currentArtifact.digest,
       runtimeFingerprint: currentArtifact.runtimeFingerprint,
+      profileDepth,
+      candidateRepeats,
       testedNumCtx,
       baselineTokensPerSec: baselineSpeed,
       atLimitTokensPerSec: bestStep.tokensPerSec,
@@ -625,8 +745,12 @@ async function probeModelContext(modelName, options = {}) {
       degradationThreshold: documentThreshold,
       interactiveDegradationThreshold: interactiveThreshold,
       documentDegradationThreshold: documentThreshold,
+      performanceKneeDegradationThreshold: performanceKneeThreshold,
       recommendedInteractiveContext,
       recommendedDocumentContext,
+      performanceKneeContext,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown',
       promptFillPct,
       vramAtLimitMiB: bestStep.vramUsedMiB ?? null,
       gpuPercentAtLimit: bestStep.gpuPercent ?? null,
@@ -639,22 +763,49 @@ async function probeModelContext(modelName, options = {}) {
       error: null,
       authorityStatus: 'pending',
       authorityError: null,
+      authorityWriteId,
       steps
-    }, { signal: options.signal, checkpoint });
-
-    logger.info('Benchmark context probe completed', {
-      modelName: normalizedModel,
-      hostUrl,
-      testedNumCtx,
-      durationMs: snapshot.testDurationMs
+    };
+    const priorProfile = await modelContextProfileService.getByIdentityForAuthority(snapshotPayload, {
+      signal: options.signal
     });
-
-    const snapshotObject = snapshot.toObject();
+    checkpoint();
+    const authorityJournal = await authorityReconciliation.prepareProfilerAuthorityWrite({
+      kind: 'profiler_context_write',
+      resultId: `profiler-context:${workloadId}:${authorityWriteId}`,
+      workloadId,
+      phase: 'profiler context snapshot/profile publication',
+      details: {
+        snapshotId: String(snapshotId),
+        authorityWriteId,
+        modelName: normalizedModel,
+        hostUrl,
+        artifactDigest: currentArtifact.digest,
+        runtimeFingerprint: currentArtifact.runtimeFingerprint,
+        snapshotPayload,
+        priorProfile: priorProfile || null
+      }
+    });
+    snapshotPayload.authorityReconciliationId = String(authorityJournal._id);
+    let snapshot;
     try {
+      snapshot = await persistProbeSnapshot(snapshotPayload, { signal: options.signal, checkpoint });
+
+      logger.info('Benchmark context probe completed', {
+        modelName: normalizedModel,
+        hostUrl,
+        testedNumCtx,
+        durationMs: snapshot.testDurationMs
+      });
+
+      const snapshotObject = snapshot.toObject();
       checkpoint();
       const contextAuthority = await modelContextProfileService.updateFromProbeSnapshot(snapshotObject, {
         signal: options.signal,
-        assertAuthorityActive: checkpoint
+        assertAuthorityActive: checkpoint,
+        authorityState: 'pending_reconciliation',
+        authorityWriteId,
+        authorityReconciliationId: String(authorityJournal._id)
       });
       if (!contextAuthority) {
         const error = new Error('Model context profile rejected completed probe evidence');
@@ -662,37 +813,36 @@ async function probeModelContext(modelName, options = {}) {
         throw error;
       }
       checkpoint();
-      await ModelContextProbeSnapshot.updateOne(
-        { _id: snapshotObject._id, authorityStatus: 'pending' },
-        { $set: { authorityStatus: 'committed', authorityError: null } },
-        options.signal ? { signal: options.signal } : undefined
-      );
-      checkpoint();
+      await authorityReconciliation.completeProfilerAuthorityWrite(authorityJournal, {
+        details: authorityJournal.details,
+        signal: options.signal,
+        assertAuthorityActive: checkpoint
+      });
+      return { ...snapshotObject, authorityStatus: 'committed', authorityError: null };
     } catch (profileErr) {
-      await modelContextProfileService.invalidateIfSnapshot(
-        snapshotObject,
-        profileErr.code === 'BENCHMARK_CLAIM_LOST'
-          ? 'claim_lost_during_context_authority_write'
-          : 'context_authority_write_failed'
-      ).catch(() => {});
-      await ModelContextProbeSnapshot.updateOne(
-        { _id: snapshotObject._id },
-        { $set: { authorityStatus: 'rejected', authorityError: profileErr.message } }
-      ).catch(() => {});
-      logger.warn('Failed to update model context profile from probe snapshot', {
+      profileErr.retainAdmission = true;
+      profileErr.authorityInvalidationFailed = true;
+      profileErr.code = profileErr.code || 'MODEL_CONTEXT_PROFILE_RECONCILIATION_PENDING';
+      profileErr.reconciliationId = String(authorityJournal._id);
+      logger.warn('Context authority write retained for durable reconciliation', {
         modelName: normalizedModel,
         hostUrl,
-        snapshotId: snapshotObject._id ? String(snapshotObject._id) : null,
+        snapshotId: String(snapshotId),
         error: profileErr.message
       });
-      profileErr.code = profileErr.code || 'MODEL_CONTEXT_PROFILE_PERSIST_FAILED';
       throw profileErr;
     }
-
-    return { ...snapshotObject, authorityStatus: 'committed', authorityError: null };
   } catch (err) {
+    if (err?.retainAdmission === true
+      || err?.code === 'MODEL_CONTEXT_PROFILE_RECONCILIATION_PENDING') {
+      throw err;
+    }
     if (options.signal?.aborted) {
-      throw (options.signal.reason instanceof Error ? options.signal.reason : err);
+      const authorityError = options.signal.reason instanceof Error ? options.signal.reason : err;
+      if (err?.compensationError) authorityError.compensationError = err.compensationError;
+      if (err?.authorityCompensated === true) authorityError.authorityCompensated = true;
+      if (err?.retainAdmission === true) authorityError.retainAdmission = true;
+      throw authorityError;
     }
     checkpoint();
     const snapshot = await persistProbeSnapshot({
@@ -746,6 +896,7 @@ module.exports = {
     PROBE_NUM_PREDICT,
     persistProbeSnapshot,
     findInvalidThroughputStep,
+    summarizeCandidateThroughput,
     validateThroughput,
     isValidTokensPerSec
   }

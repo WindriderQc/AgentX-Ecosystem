@@ -21,6 +21,7 @@ const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile
 const ModelProfile = require('../../../models/ModelProfile');
 const { getConfiguredHosts, normalizeHostUrl } = require('../../helpers/ollamaHostConfig');
 const { identitiesMatch, resolveArtifactIdentity } = require('../profiler/artifactIdentityService');
+const { verifyProfilerAuthorityReceipt } = require('../profiler/profilerAuthorityReceipt');
 const { toPerformanceBaseline } = require('./batchHelpers');
 
 const PROFILE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -42,15 +43,9 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
     const readiness = modelProfile?.readiness instanceof Map
         ? modelProfile.readiness.get(hostId)
         : modelProfile?.readiness?.[hostId];
-    const receipt = readiness?.authorityReceipt;
-    const receiptValid = receipt?.source === 'profiler_pipeline'
-        && Number(receipt.version) === 1
-        && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
-        && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '');
     if (readiness?.benchmarkQualified !== true
         || readiness?.stale === true
         || !['standard', 'full'].includes(readiness?.profileDepth)
-        || !receiptValid
         || !identitiesMatch(readiness?.artifact, artifact)
         || readiness?.artifact?.registryQualified !== true) {
         logger.warn('Profiler authority did not qualify the exact artifact', {
@@ -58,7 +53,7 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
             hostId,
             profileDepth: readiness?.profileDepth || null,
             benchmarkQualified: readiness?.benchmarkQualified === true,
-            authorityReceipt: receiptValid
+            authorityReceipt: false
         });
         return null;
     }
@@ -70,13 +65,15 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
         'artifact.digest': artifact.digest,
         'artifact.runtimeFingerprint': artifact.runtimeFingerprint,
         active: true,
-        stale: { $ne: true }
+        stale: { $ne: true },
+        authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
     })
         .select('profile artifact updatedAt')
         .lean()
         .catch(() => null);
 
     if (!evidence?.profile
+        || !verifyProfilerAuthorityReceipt(readiness, evidence, { modelName: artifact.model, hostId })
         || evidence.artifact?.registryQualified !== true
         || !identitiesMatch(evidence.artifact, artifact)
         || !(Number(evidence.profile.recommendedInteractiveContext) > 0)) {
@@ -168,10 +165,34 @@ async function capturePerformanceBaseline({
                     throw new Error('Benchmark claim stopped after baseline persistence');
                 }
             } catch (authorityError) {
-                await BenchmarkBatch.updateOne(
-                    { _id: batchId },
-                    { $pull: { performance_baselines: { persistenceReceipt: baseline.persistenceReceipt } } }
-                ).catch(() => {});
+                try {
+                    const compensation = await BenchmarkBatch.updateOne(
+                        { _id: batchId },
+                        { $pull: { performance_baselines: { persistenceReceipt: baseline.persistenceReceipt } } }
+                    );
+                    if (Number(compensation?.matchedCount) === 0) {
+                        throw new Error(`Benchmark batch ${batchId} was not found during baseline compensation`);
+                    }
+                    authorityError.authorityCompensated = true;
+                } catch (compensationError) {
+                    authorityError.compensationError = compensationError;
+                    try {
+                        await BenchmarkBatch.updateOne(
+                            { _id: batchId },
+                            {
+                                $set: {
+                                    authority_state: 'pending_reconciliation',
+                                    authority_reconciliation_reason: 'performance baseline compensation could not be verified'
+                                }
+                            }
+                        );
+                        authorityError.authorityInvalidated = true;
+                    } catch (invalidationError) {
+                        authorityError.invalidationError = invalidationError;
+                        authorityError.retainAdmission = true;
+                        authorityError.code = 'PERFORMANCE_BASELINE_RECONCILIATION_PENDING';
+                    }
+                }
                 throw authorityError;
             }
             logger.info('Using profiler-derived performance baseline', {

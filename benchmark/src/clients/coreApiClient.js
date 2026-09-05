@@ -17,11 +17,13 @@ const {
   readBoundedJson,
   readBoundedText,
 } = require('../../../shared/outboundHttpExecutor');
+const { normalizeModelTag } = require('../../../shared/modelNames');
 
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const SERVICE_NAME = 'benchmark';
 const DEFAULT_TIMEOUT_MS = 10000;
 const PIN_RESTORE_TIMEOUT_MS = 600000;
+const RECOVERY_OWNER_TTL_MS = PIN_RESTORE_TIMEOUT_MS + 60_000;
 const CLAIM_ACQUIRE_TIMEOUT_MS = Math.max(
   45_000,
   (Number(process.env.BENCHMARK_CLAIM_DRAIN_TIMEOUT_MS) || 30_000) + 15_000
@@ -49,6 +51,14 @@ const CORE_OPERATIONS = Object.freeze({
   WORKLOAD_HEARTBEAT: 'benchmark.core-api.workload-heartbeat',
   WORKLOAD_RELEASE: 'benchmark.core-api.workload-release',
   WORKLOAD_RELEASE_RECOVERY: 'benchmark.core-api.workload-release-recovery',
+  WORKLOAD_RECOVERY_ARM: 'benchmark.core-api.workload-recovery-arm',
+  WORKLOAD_RECOVERY_ADOPT: 'benchmark.core-api.workload-recovery-adopt',
+  WORKLOAD_RECOVERY_HEARTBEAT: 'benchmark.core-api.workload-recovery-heartbeat',
+  WORKLOAD_RECOVERY_ASSERT: 'benchmark.core-api.workload-recovery-assert',
+  WORKLOAD_RECOVERY_TRANSITION: 'benchmark.core-api.workload-recovery-transition',
+  WORKLOAD_RECOVERY_HOST_RESTORE: 'benchmark.core-api.workload-recovery-host-restore',
+  WORKLOAD_RECOVERY_RELEASE: 'benchmark.core-api.workload-recovery-release',
+  INFERENCE_GENERATE: 'benchmark.core-api.inference-generate',
 });
 
 function operation(method, pathPattern, {
@@ -132,6 +142,46 @@ const CORE_OPERATION_SPECS = Object.freeze({
     '^/api/nerve-center/workload-admissions/[^/]+/release-receipt$',
     { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
   ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_ARM]: operation(
+    'POST',
+    '^/api/nerve-center/workload-admissions/[^/]+/recovery$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/adopt$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_HEARTBEAT]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/heartbeat$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_ASSERT]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/assert$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_TRANSITION]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/transition$',
+    { maxRequestBytes: 64 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_HOST_RESTORE]: operation(
+    'POST',
+    '^/api/nerve-center/workload-recoveries/[^/]+/restore-hosts$',
+    { deadlineMs: PIN_RESTORE_TIMEOUT_MS, maxRequestBytes: 64 * 1024, maxResponseBytes: 512 * 1024 }
+  ),
+  [CORE_OPERATIONS.WORKLOAD_RECOVERY_RELEASE]: operation(
+    'DELETE',
+    '^/api/nerve-center/workload-recoveries/[^/]+$',
+    { maxRequestBytes: 32 * 1024, maxResponseBytes: 256 * 1024 }
+  ),
+  [CORE_OPERATIONS.INFERENCE_GENERATE]: operation(
+    'POST',
+    '^/api/inference/generate$',
+    { deadlineMs: PIN_RESTORE_TIMEOUT_MS, maxRequestBytes: 2 * 1024 * 1024, maxResponseBytes: 8 * 1024 * 1024 }
+  ),
 });
 
 const claimProofByOwner = new Map();
@@ -143,6 +193,66 @@ function claimOwnerKey(hostUrl, batchId) {
 
 function isSha256Hex(value) {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+}
+
+function canonicalRuntimeResident(entry) {
+  const expiryMs = entry?.expiresAt ? Date.parse(entry.expiresAt) : NaN;
+  return {
+    model: entry?.model,
+    digest: entry?.digest,
+    artifactSize: Number(entry?.artifactSize),
+    sizeVram: Number(entry?.sizeVram),
+    contextLength: Number(entry?.contextLength),
+    keepAlive: Number(entry?.keepAlive),
+    expiresAt: Number.isFinite(expiryMs) ? new Date(expiryMs).toISOString() : null,
+  };
+}
+
+function runtimeSnapshotIdentity(snapshot, residents = snapshot?.residents || []) {
+  const canonicalResidents = residents.map(canonicalRuntimeResident)
+    .sort((left, right) => left.model.localeCompare(right.model));
+  return crypto.createHash('sha256').update(JSON.stringify({
+    capturedAt: snapshot?.capturedAt ? new Date(snapshot.capturedAt).toISOString() : null,
+    source: snapshot?.source || null,
+    exact: snapshot?.exact === true,
+    residents: canonicalResidents,
+  })).digest('hex');
+}
+
+function modelIdentityKey(value) {
+  return normalizeModelTag(String(value || '')).toLowerCase();
+}
+
+function runtimeResidentComplete(entry) {
+  const keepAlive = Number(entry?.keepAlive);
+  const expiryMs = entry?.expiresAt ? Date.parse(entry.expiresAt) : NaN;
+  const infiniteExpiry = Number.isFinite(expiryMs)
+    && new Date(expiryMs).getUTCFullYear() >= 9000;
+  return typeof entry?.model === 'string' && entry.model.length > 0
+    && typeof entry?.digest === 'string' && entry.digest.length > 0
+    && Number.isFinite(Number(entry.artifactSize)) && Number(entry.artifactSize) > 0
+    && Number.isFinite(Number(entry.sizeVram)) && Number(entry.sizeVram) >= 0
+    && Number.isInteger(Number(entry.contextLength)) && Number(entry.contextLength) > 0
+    && (keepAlive === -1 || (Number.isFinite(keepAlive) && keepAlive > 0))
+    && Number.isFinite(expiryMs)
+    && (keepAlive !== -1 || infiniteExpiry);
+}
+
+function exactRuntimeSnapshot(snapshot) {
+  const capturedAtMs = Date.parse(snapshot?.capturedAt);
+  const residents = snapshot?.residents;
+  const residentKeys = Array.isArray(residents)
+    ? residents.map(entry => modelIdentityKey(entry?.model))
+    : [];
+  return snapshot?.exact === true
+    && snapshot?.source === 'ollama_ps'
+    && Number.isFinite(capturedAtMs)
+    && Array.isArray(residents)
+    && residents.every(runtimeResidentComplete)
+    && residentKeys.every(Boolean)
+    && new Set(residentKeys).size === residentKeys.length
+    && isSha256Hex(snapshot?.identityDigest)
+    && snapshot.identityDigest === runtimeSnapshotIdentity(snapshot);
 }
 
 function exactBenchmarkReleaseReceipt(result, expected) {
@@ -158,20 +268,42 @@ function exactBenchmarkReleaseReceipt(result, expected) {
   const expiredModels = Array.isArray(snapshot?.expiredModels)
     ? [...new Set(snapshot.expiredModels.map(String))].sort()
     : null;
-  const residentsComplete = Array.isArray(residents) && residents.every((entry) => (
-    typeof entry?.model === 'string' && entry.model.length > 0
-    && typeof entry?.digest === 'string' && entry.digest.length > 0
-    && Number.isFinite(Number(entry.artifactSize)) && Number(entry.artifactSize) > 0
-    && Number.isFinite(Number(entry.sizeVram)) && Number(entry.sizeVram) >= 0
-    && Number.isInteger(Number(entry.contextLength)) && Number(entry.contextLength) > 0
-    && Number.isFinite(Number(entry.keepAlive))
-    && (entry.expiresAt === null || Number.isFinite(Date.parse(entry.expiresAt)))
-  ));
+  const originalSnapshot = expected.preClaimRuntime;
+  const filterEvaluatedAtMs = Date.parse(snapshot?.filterEvaluatedAt);
+  const releasedAtMs = Date.parse(receipt?.releasedAt);
+  const expectedExcludedKeys = new Set(expectedExclusions.map(modelIdentityKey));
+  const afterExplicitExclusions = exactRuntimeSnapshot(originalSnapshot)
+    ? originalSnapshot.residents.filter(entry => !expectedExcludedKeys.has(modelIdentityKey(entry.model)))
+    : [];
+  const expectedExpired = afterExplicitExclusions
+    .filter(entry => Number(entry.keepAlive) !== -1 && Date.parse(entry.expiresAt) <= filterEvaluatedAtMs)
+    .map(entry => entry.model)
+    .sort();
+  const expectedResidents = afterExplicitExclusions
+    .filter(entry => Number(entry.keepAlive) === -1 || Date.parse(entry.expiresAt) > filterEvaluatedAtMs)
+    .map(canonicalRuntimeResident)
+    .sort((left, right) => left.model.localeCompare(right.model));
+  const actualResidents = Array.isArray(residents)
+    ? residents.map(canonicalRuntimeResident).sort((left, right) => left.model.localeCompare(right.model))
+    : null;
+  const residentsComplete = Array.isArray(residents)
+    && residents.every(runtimeResidentComplete)
+    && new Set(residents.map(entry => modelIdentityKey(entry.model))).size === residents.length;
   const identityChainExact = isSha256Hex(snapshot?.identityDigest)
     && isSha256Hex(snapshot?.appliedIdentityDigest)
+    && exactRuntimeSnapshot(originalSnapshot)
+    && snapshot.identityDigest === originalSnapshot.identityDigest
+    && snapshot.identityDigest === expected.snapshotIdentity
+    && snapshot.capturedAt === new Date(originalSnapshot.capturedAt).toISOString()
+    && snapshot.source === originalSnapshot.source
+    && Number.isFinite(filterEvaluatedAtMs)
+    && filterEvaluatedAtMs >= Date.parse(originalSnapshot.capturedAt)
+    && Number.isFinite(releasedAtMs)
+    && releasedAtMs >= filterEvaluatedAtMs
+    && snapshot.appliedIdentityDigest === runtimeSnapshotIdentity(originalSnapshot, residents)
     && verification?.snapshotIdentity === snapshot.appliedIdentityDigest
-    && (expectedExclusions.length > 0 || (expiredModels?.length || 0) > 0
-      || snapshot.identityDigest === snapshot.appliedIdentityDigest);
+    && JSON.stringify(actualResidents) === JSON.stringify(expectedResidents)
+    && JSON.stringify(expiredModels) === JSON.stringify(expectedExpired);
 
   return result?.released === true
     && receipt?.contract === 'agentx.benchmark-claim-release/v1'
@@ -183,6 +315,8 @@ function exactBenchmarkReleaseReceipt(result, expected) {
     && residentsComplete
     && identityChainExact
     && JSON.stringify(actualExclusions) === JSON.stringify(expectedExclusions)
+    && snapshot.excludedModels.length === actualExclusions.length
+    && snapshot.expiredModels.length === expiredModels.length
     && Array.isArray(expiredModels)
     && verification?.status === 'ready'
     && verification?.ready === true
@@ -192,7 +326,7 @@ function exactBenchmarkReleaseReceipt(result, expected) {
     && state?.restoredStatus === expected.prevStatus
     && state?.claimCleared === true
     && state?.finalizerCleared === true
-    && Number.isFinite(Date.parse(receipt.releasedAt));
+    && Number.isFinite(releasedAtMs);
 }
 
 function configuredCoreOrigin() {
@@ -350,6 +484,7 @@ async function getModelRegistryByName(name, options = {}) {
     const qs = params.toString();
     const data = await coreRequest(`/api/models/registry/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`, {
       operationId: CORE_OPERATIONS.MODEL_REGISTRY,
+      signal: options.signal,
     });
     return data.data?.model || data.data || null;
   } catch (err) {
@@ -481,6 +616,7 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
     const snapshotIdentity = result.snapshotIdentity
       || result.pref?.benchmarkClaim?.preClaimRuntime?.identityDigest;
     const nestedClaim = result.pref?.benchmarkClaim;
+    const preClaimRuntime = nestedClaim?.preClaimRuntime;
     if (result.claimed === true
       && (confirmedBatchId !== batchId || confirmedGeneration !== claimGeneration)) {
       const error = new Error('Core claim receipt did not attest the requested batch and generation');
@@ -498,13 +634,29 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
       throw error;
     }
     if (result.claimed === true
-      && (typeof prevStatus !== 'string' || !prevStatus || !snapshotExact || !isSha256Hex(snapshotIdentity))) {
+      && (typeof prevStatus !== 'string'
+        || !prevStatus
+        || !snapshotExact
+        || !isSha256Hex(snapshotIdentity)
+        || !exactRuntimeSnapshot(preClaimRuntime)
+        || preClaimRuntime.identityDigest !== snapshotIdentity)) {
       const error = new Error('Core claim receipt did not attest an exact pre-claim runtime snapshot');
       error.code = 'BENCHMARK_CLAIM_RECEIPT_MISMATCH';
       throw error;
     }
     if (result.claimed === true) {
-      claimProofByOwner.set(ownerKey, { claimGeneration, prevStatus, snapshotIdentity });
+      claimProofByOwner.set(ownerKey, {
+        claimGeneration,
+        prevStatus,
+        snapshotIdentity,
+        preClaimRuntime: {
+          capturedAt: new Date(preClaimRuntime.capturedAt).toISOString(),
+          source: preClaimRuntime.source,
+          exact: true,
+          identityDigest: preClaimRuntime.identityDigest,
+          residents: preClaimRuntime.residents.map(canonicalRuntimeResident),
+        },
+      });
     } else claimProofByOwner.delete(ownerKey);
     return result;
   } catch (err) {
@@ -520,7 +672,21 @@ async function claimHostForBenchmark(hostUrl, batchId, estimatedDurationMs = nul
     // Cleanup is fenced by the locally generated UUID, so it can never clear
     // another owner or a replacement generation.
     if (err.code !== 'OUTBOUND_REQUEST_TOO_LARGE') {
-      await releaseBenchmarkClaim(hostUrl, batchId).catch(() => {});
+      try {
+        const cleanup = await releaseBenchmarkClaim(hostUrl, batchId);
+        if (cleanup?.released !== true) {
+          const cleanupError = new Error(cleanup?.reason || 'Ambiguous claim cleanup was not verified');
+          cleanupError.code = 'BENCHMARK_CLAIM_CLEANUP_UNVERIFIED';
+          err.cleanupError = cleanupError;
+          err.retainAdmission = true;
+          throw err;
+        }
+      } catch (cleanupError) {
+        if (cleanupError === err) throw err;
+        err.cleanupError = cleanupError;
+        err.retainAdmission = true;
+        throw err;
+      }
     }
     claimProofByOwner.delete(ownerKey);
     throw err;
@@ -632,6 +798,8 @@ async function releaseBenchmarkClaim(hostUrl, batchId, options = {}) {
     batchId,
     claimGeneration: proof?.claimGeneration || null,
     prevStatus: proof?.prevStatus || null,
+    snapshotIdentity: proof?.snapshotIdentity || null,
+    preClaimRuntime: proof?.preClaimRuntime || null,
     excludedModels
   })) {
     return {
@@ -650,6 +818,7 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
   const expectedKind = options.kind || 'benchmark';
   const expectedBatchId = options.batchId || null;
   const requestId = options.requestId || `benchmark:${key}`;
+  const recoveryRequestId = `recovery:${requestId}`;
   const expectedHosts = [...new Set((Array.isArray(options.hosts) ? options.hosts : [])
     .map(value => String(value || '').trim())
     .filter(Boolean))].sort();
@@ -682,6 +851,7 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
       kind: expectedKind,
       batchId: expectedBatchId,
       hosts: expectedHosts,
+      recoveryRequestId,
       ttlMs: options.ttlMs || null
     })
   });
@@ -720,7 +890,73 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
     hosts: expectedHosts,
     expiresAt: result.expiresAt || null
   };
+  const arm = async () => coreRequest(
+    `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}/recovery`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ARM,
+      body: JSON.stringify({ generation: receipt.generation, recoveryRequestId })
+    }
+  );
+  let armData;
+  try {
+    armData = await arm();
+  } catch (error) {
+    try {
+      armData = await arm();
+    } catch {
+      // The caller never receives an admission before recovery quarantine is
+      // durably armed, so no Product mutation can start in this gap.
+      try {
+        await coreRequest(`/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`, {
+          method: 'DELETE',
+          operationId: CORE_OPERATIONS.WORKLOAD_RELEASE,
+          body: JSON.stringify({ generation: receipt.generation })
+        });
+      } catch (cleanupError) {
+        logger.error('Unarmed workload admission cleanup was not acknowledged', {
+          workloadId: key,
+          admissionId: receipt.admissionId,
+          error: cleanupError.message
+        });
+        error.cleanupError = cleanupError;
+      }
+      throw error;
+    }
+  }
+  const armed = armData?.data;
+  const exactArm = armed?.armed === true
+    && armed.admissionId === receipt.admissionId
+    && armed.generation === receipt.generation
+    && armed.principal === receipt.principal
+    && armed.requestId === receipt.requestId
+    && armed.workloadId === receipt.workloadId
+    && armed.kind === receipt.kind
+    && (armed.batchId || null) === (receipt.batchId || null)
+    && JSON.stringify([...(armed.hosts || [])].sort()) === JSON.stringify(receipt.hosts || [])
+    && armed.recoveryRequired === true
+    && typeof armed.recoveryId === 'string'
+    && typeof armed.recoveryGeneration === 'string'
+    && armed.recoveryRequestId === recoveryRequestId;
+  if (!exactArm) {
+    throw Object.assign(new Error(armed?.reason || 'Core recovery quarantine receipt is invalid'), {
+      code: 'WORKLOAD_RECOVERY_ARM_REJECTED',
+      retainAdmission: true
+    });
+  }
+  Object.assign(receipt, {
+    recoveryRequired: true,
+    recoveryId: armed.recoveryId,
+    recoveryGeneration: armed.recoveryGeneration,
+    recoveryRequestId,
+    recoveryOwnerId: armed.recoveryOwnerId || null,
+    recoveryState: armed.recoveryState,
+    recoveryVersion: armed.recoveryVersion
+  });
   workloadAdmissionById.set(key, receipt);
+  await transitionWorkloadRecovery(key, 'MUTATING', {
+    receipt: { contract: 'agentx.workload-recovery/v1', event: 'mutation-started', workloadId: key }
+  });
   return { acquired: true, ...receipt };
 }
 
@@ -743,7 +979,12 @@ async function heartbeatWorkloadAdmission(workloadId, ttlMs = null) {
       && result.workloadId === receipt.workloadId
       && result.kind === receipt.kind
       && (result.batchId || null) === (receipt.batchId || null)
-      && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || []);
+      && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || [])
+      && result.recoveryRequired === receipt.recoveryRequired
+      && result.recoveryId === receipt.recoveryId
+      && result.recoveryGeneration === receipt.recoveryGeneration
+      && result.recoveryState === receipt.recoveryState
+      && result.recoveryVersion === receipt.recoveryVersion;
     if (!exact) {
       return { heartbeat: false, reason: result?.reason || 'Core workload heartbeat receipt is invalid' };
     }
@@ -755,10 +996,24 @@ async function heartbeatWorkloadAdmission(workloadId, ttlMs = null) {
   }
 }
 
-async function releaseWorkloadAdmission(workloadId) {
+async function releaseWorkloadAdmission(workloadId, options = {}) {
   const key = String(workloadId || '');
   const receipt = workloadAdmissionById.get(key);
   if (!receipt) return { released: false, reason: 'local workload admission proof missing' };
+  if (receipt.recoveryRequired && receipt.recoveryState !== 'RESTORED') {
+    if (!new Set(['VERIFIED', 'RESTORED']).has(receipt.recoveryState)) {
+      await transitionWorkloadRecovery(key, 'VERIFIED', {
+        signal: options.signal,
+        receipt: { contract: 'agentx.workload-recovery/v1', event: 'workload-terminal', workloadId: key }
+      });
+    }
+    if (receipt.recoveryState !== 'RESTORED') {
+      await transitionWorkloadRecovery(key, 'RESTORED', {
+        signal: options.signal,
+        receipt: { contract: 'agentx.workload-recovery/v1', event: 'authority-restored', workloadId: key }
+      });
+    }
+  }
   const exactIdentity = result => result?.admissionId === receipt.admissionId
     && result.generation === receipt.generation
     && result.principal === receipt.principal
@@ -766,16 +1021,30 @@ async function releaseWorkloadAdmission(workloadId) {
     && result.workloadId === receipt.workloadId
     && result.kind === receipt.kind
     && (result.batchId || null) === (receipt.batchId || null)
-    && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || []);
+    && JSON.stringify([...(result.hosts || [])].sort()) === JSON.stringify(receipt.hosts || [])
+    && (!receipt.recoveryRequired || (
+      result.recoveryId === receipt.recoveryId
+      && result.recoveryGeneration === receipt.recoveryGeneration
+      && result.recoveryState === 'RESTORED'
+      && result.recoveryReceipt?.contract === 'agentx.workload-recovery/v1'
+    ));
   const exactRelease = result => result?.released === true
     && exactIdentity(result)
     && Number.isFinite(Date.parse(result.releasedAt));
   const requestRelease = () => coreRequest(
-    `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`,
+    receipt.recoveryRequired
+      ? `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}`
+      : `/api/nerve-center/workload-admissions/${encodeURIComponent(receipt.admissionId)}`,
     {
       method: 'DELETE',
-      operationId: CORE_OPERATIONS.WORKLOAD_RELEASE,
-      body: JSON.stringify({ generation: receipt.generation })
+      operationId: receipt.recoveryRequired
+        ? CORE_OPERATIONS.WORKLOAD_RECOVERY_RELEASE
+        : CORE_OPERATIONS.WORKLOAD_RELEASE,
+      signal: options.signal,
+      body: JSON.stringify(receipt.recoveryRequired ? {
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId || null
+      } : { generation: receipt.generation })
     }
   );
   let data;
@@ -788,6 +1057,7 @@ async function releaseWorkloadAdmission(workloadId) {
         {
           method: 'POST',
           operationId: CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY,
+          signal: options.signal,
           body: JSON.stringify({ generation: receipt.generation })
         }
       );
@@ -813,10 +1083,225 @@ async function releaseWorkloadAdmission(workloadId) {
   return result;
 }
 
+function getWorkloadRecoveryIdentity(workloadId) {
+  const receipt = workloadAdmissionById.get(String(workloadId || ''));
+  if (!receipt?.recoveryRequired) return null;
+  return { ...receipt };
+}
+
+async function transitionWorkloadRecovery(workloadId, state, options = {}) {
+  const key = String(workloadId || '');
+  const receipt = workloadAdmissionById.get(key);
+  if (!receipt?.recoveryRequired) return { transitioned: false, reason: 'local recovery proof missing' };
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}/transition`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_TRANSITION,
+      signal: options.signal,
+      body: JSON.stringify({
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId || null,
+        expectedVersion: receipt.recoveryVersion,
+        state,
+        receipt: options.receipt || null
+      })
+    }
+  );
+  const result = data?.data;
+  const exact = result?.transitioned === true
+    && result.recoveryId === receipt.recoveryId
+    && result.recoveryGeneration === receipt.recoveryGeneration
+    && (result.recoveryOwnerId || null) === (receipt.recoveryOwnerId || null)
+    && result.recoveryState === state
+    && result.recoveryVersion === receipt.recoveryVersion + 1;
+  if (!exact) {
+    const error = new Error(result?.reason || 'Core recovery transition receipt is invalid');
+    error.code = 'WORKLOAD_RECOVERY_TRANSITION_REJECTED';
+    error.retainAdmission = true;
+    throw error;
+  }
+  receipt.recoveryState = result.recoveryState;
+  receipt.recoveryVersion = result.recoveryVersion;
+  return result;
+}
+
+async function adoptWorkloadRecovery({ workloadId, recoveryId, recoveryRequestId, ownerId, signal }) {
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(recoveryId)}/adopt`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ADOPT,
+      signal,
+      body: JSON.stringify({ recoveryRequestId, ownerId, ttlMs: RECOVERY_OWNER_TTL_MS })
+    }
+  );
+  const result = data?.data;
+  if (result?.adopted !== true
+    || result.workloadId !== String(workloadId)
+    || result.recoveryId !== recoveryId
+    || result.recoveryRequestId !== recoveryRequestId
+    || result.recoveryOwnerId !== ownerId
+    || !result.recoveryGeneration) {
+    const error = new Error(result?.reason || 'Core recovery adoption receipt is invalid');
+    error.code = 'WORKLOAD_RECOVERY_ADOPTION_REJECTED';
+    error.retryable = result?.retryable === true;
+    throw error;
+  }
+  workloadAdmissionById.set(String(workloadId), { ...result });
+  return result;
+}
+
+async function heartbeatWorkloadRecovery(workloadId, ttlMs = RECOVERY_OWNER_TTL_MS, options = {}) {
+  const key = String(workloadId || '');
+  const receipt = workloadAdmissionById.get(key);
+  if (!receipt?.recoveryRequired || !receipt.recoveryOwnerId) {
+    return { heartbeat: false, reason: 'adopted local recovery proof missing' };
+  }
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}/heartbeat`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_HEARTBEAT,
+      signal: options.signal,
+      body: JSON.stringify({
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId,
+        ttlMs
+      })
+    }
+  );
+  const result = data?.data;
+  const exact = result?.heartbeat === true
+    && result.recoveryId === receipt.recoveryId
+    && result.recoveryGeneration === receipt.recoveryGeneration
+    && result.recoveryOwnerId === receipt.recoveryOwnerId;
+  if (!exact) return { heartbeat: false, reason: result?.reason || 'Core recovery heartbeat receipt is invalid' };
+  receipt.recoveryHeartbeatAt = result.recoveryHeartbeatAt || receipt.recoveryHeartbeatAt;
+  receipt.recoveryExpiresAt = result.recoveryExpiresAt || receipt.recoveryExpiresAt;
+  return result;
+}
+
+async function assertWorkloadRecovery(workloadId, options = {}) {
+  const receipt = workloadAdmissionById.get(String(workloadId || ''));
+  if (!receipt?.recoveryRequired) return { owned: false, reason: 'local recovery proof missing' };
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}/assert`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_ASSERT,
+      signal: options.signal,
+      body: JSON.stringify({
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId || null
+      })
+    }
+  );
+  const result = data?.data;
+  return result?.owned === true
+    && result.recoveryId === receipt.recoveryId
+    && result.recoveryGeneration === receipt.recoveryGeneration
+    ? result
+    : { owned: false, reason: result?.reason || 'Core recovery ownership is invalid' };
+}
+
+async function recoverWorkloadAdmissionRelease(identity = {}, options = {}) {
+  const data = await coreRequest(
+    `/api/nerve-center/workload-admissions/${encodeURIComponent(identity.admissionId || '')}/release-receipt`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RELEASE_RECOVERY,
+      signal: options.signal,
+      body: JSON.stringify({ generation: identity.generation })
+    }
+  );
+  const result = data?.data;
+  const exact = result?.recovered === true
+    && result.released === true
+    && result.admissionId === identity.admissionId
+    && result.generation === identity.generation
+    && result.principal === identity.principal
+    && result.workloadId === identity.workloadId
+    && result.recoveryId === identity.recoveryId
+    && result.recoveryState === 'RESTORED'
+    && result.recoveryReceipt?.contract === 'agentx.workload-recovery/v1';
+  return exact ? result : {
+    recovered: result?.recovered === true,
+    released: false,
+    retryable: result?.retryable === true,
+    reason: result?.reason || 'Core workload recovery receipt is invalid'
+  };
+}
+
+async function restoreWorkloadRecoveryHosts(workloadId, excludedModelsByHost = {}, options = {}) {
+  const receipt = workloadAdmissionById.get(String(workloadId || ''));
+  if (!receipt?.recoveryRequired || !receipt.recoveryOwnerId) {
+    return { restored: false, reason: 'adopted local recovery proof missing' };
+  }
+  const data = await coreRequest(
+    `/api/nerve-center/workload-recoveries/${encodeURIComponent(receipt.recoveryId)}/restore-hosts`,
+    {
+      method: 'POST',
+      operationId: CORE_OPERATIONS.WORKLOAD_RECOVERY_HOST_RESTORE,
+      signal: options.signal,
+      body: JSON.stringify({
+        recoveryGeneration: receipt.recoveryGeneration,
+        ownerId: receipt.recoveryOwnerId,
+        excludedModelsByHost
+      })
+    }
+  );
+  const result = data?.data;
+  return result?.restored === true
+    && result.recoveryId === receipt.recoveryId
+    && result.recoveryGeneration === receipt.recoveryGeneration
+    && result.recoveryOwnerId === receipt.recoveryOwnerId
+    ? result
+    : { restored: false, reason: result?.reason || 'Core recovery host restore receipt is invalid' };
+}
+
 function getBenchmarkClaimIdentity(hostUrl, batchId) {
   const claimGeneration = claimProofByOwner.get(claimOwnerKey(hostUrl, batchId))?.claimGeneration;
-  if (!claimGeneration) return null;
-  return { claimBatchId: batchId, claimGeneration };
+  const admission = workloadAdmissionById.get(String(batchId || ''));
+  if (!claimGeneration || !admission?.admissionId || !admission?.generation) return null;
+  return {
+    claimBatchId: batchId,
+    claimGeneration,
+    workloadAdmissionId: admission.admissionId,
+    workloadGeneration: admission.generation
+  };
+}
+
+function getWorkloadAdmissionIdentity(workloadId) {
+  const admission = workloadAdmissionById.get(String(workloadId || ''));
+  if (!admission?.admissionId || !admission?.generation) return null;
+  return {
+    workloadAdmissionId: admission.admissionId,
+    workloadGeneration: admission.generation
+  };
+}
+
+async function generateWithWorkloadAdmission(workloadId, request, { signal } = {}) {
+  const proof = getWorkloadAdmissionIdentity(workloadId);
+  if (!proof) {
+    const error = new Error(`Exact workload admission proof is unavailable for ${workloadId || 'unknown'}`);
+    error.code = 'WORKLOAD_ADMISSION_REQUIRED';
+    throw error;
+  }
+  const requestedHost = typeof request?.host === 'string' ? request.host.trim() : '';
+  const claimProof = requestedHost ? getBenchmarkClaimIdentity(requestedHost, workloadId) : null;
+  if (requestedHost && !claimProof) {
+    const error = new Error(`Exact benchmark host claim proof is unavailable for ${requestedHost}`);
+    error.code = 'BENCHMARK_HOST_CLAIM_REQUIRED';
+    throw error;
+  }
+  const data = await coreRequest('/api/inference/generate', {
+    method: 'POST',
+    operationId: CORE_OPERATIONS.INFERENCE_GENERATE,
+    signal,
+    body: JSON.stringify({ ...request, ...proof, ...(claimProof || {}) })
+  });
+  return data;
 }
 
 /**
@@ -847,15 +1332,26 @@ module.exports = {
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
   getBenchmarkClaimIdentity,
+  getWorkloadAdmissionIdentity,
+  generateWithWorkloadAdmission,
   getBenchmarkClaims,
   acquireWorkloadAdmission,
   heartbeatWorkloadAdmission,
   releaseWorkloadAdmission,
+  getWorkloadRecoveryIdentity,
+  adoptWorkloadRecovery,
+  heartbeatWorkloadRecovery,
+  assertWorkloadRecovery,
+  transitionWorkloadRecovery,
+  recoverWorkloadAdmissionRelease,
+  restoreWorkloadRecoveryHosts,
   CORE_OPERATIONS,
   _internal: {
     classifyCoreOperation,
     configuredCoreOrigin,
     CORE_OPERATION_SPECS,
     normalizeCallerHeaders,
+    exactBenchmarkReleaseReceipt,
+    runtimeSnapshotIdentity,
   },
 };

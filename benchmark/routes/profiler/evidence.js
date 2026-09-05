@@ -6,7 +6,13 @@ const HostProfile = require('../../models/HostProfile');
 const ModelProfile = require('../../models/ModelProfile');
 const performanceProfiles = require('../../src/services/profiler/modelPerformanceProfileService');
 const contextProfiles = require('../../src/services/modelContextProfileService');
+const { resolveRuntimeArtifactReceipt } = require('../../src/services/profiler/artifactIdentityService');
 const toolQualifications = require('../../src/services/qualification/toolCapabilityQualificationService');
+const ModelPerformanceProfile = require('../../models/ModelPerformanceProfile');
+const {
+  projectReadinessEntry,
+  projectReadinessProfiles
+} = require('../../src/services/profiler/profilerReadinessProjectionService');
 const { normalizeHostUrl } = require('../../../shared/artifactIdentity');
 const { normalizeModelTag } = require('../../../shared/modelNames');
 
@@ -16,10 +22,15 @@ function mapToObject(value) {
 
 function serializeModelProfile(profile) {
   if (!profile) return null;
+  const thinkingProfiles = Object.fromEntries(
+    Object.entries(mapToObject(profile.thinkingProfiles)).filter(([, entry]) =>
+      !new Set(['pending_reconciliation', 'authority_invalidated']).has(entry?.authorityState)
+    )
+  );
   return {
     name: profile.name,
     capabilities: profile.capabilities || {},
-    thinkingProfiles: mapToObject(profile.thinkingProfiles),
+    thinkingProfiles,
     readiness: mapToObject(profile.readiness),
     updatedAt: profile.updatedAt || null
   };
@@ -55,13 +66,11 @@ router.get('/readiness', async (_req, res) => {
     const profiles = await ModelProfile.find({})
       .select({ name: 1, readiness: 1, _id: 0 })
       .lean();
+    const projected = await projectReadinessProfiles(profiles);
     res.json({
       status: 'success',
       data: {
-        profiles: profiles.map((profile) => ({
-          name: profile.name,
-          readiness: mapToObject(profile.readiness)
-        }))
+        profiles: projected
       }
     });
   } catch (err) {
@@ -103,11 +112,29 @@ router.get('/inference/:modelName', async (req, res) => {
         ? toolQualifications.resolveQualification(toolIdentity)
         : missingToolEvidence()
     ]);
+    let serializedModelProfile = serializeModelProfile(modelProfile);
+    const hostId = hostProfile?.hostId || null;
+    const rawReadiness = hostId ? mapToObject(modelProfile?.readiness)?.[hostId] : null;
+    if (serializedModelProfile && hostId && rawReadiness) {
+      const evidence = rawReadiness.evidenceId
+        ? await ModelPerformanceProfile.findOne({ _id: rawReadiness.evidenceId }).lean()
+        : null;
+      const projected = await projectReadinessEntry(
+        modelName,
+        hostId,
+        rawReadiness,
+        new Map(evidence ? [[String(evidence._id), evidence]] : [])
+      );
+      serializedModelProfile = {
+        ...serializedModelProfile,
+        readiness: { [hostId]: projected }
+      };
+    }
     return res.json({
       status: 'success',
       data: {
         hostProfile: hostProfile || null,
-        modelProfile: serializeModelProfile(modelProfile),
+        modelProfile: serializedModelProfile,
         toolQualification
       }
     });
@@ -149,6 +176,29 @@ router.get('/roster', async (req, res) => {
   }
 });
 
+router.get('/runtime/:modelName', async (req, res) => {
+  const modelName = normalizeModelTag(req.params.modelName);
+  const hostId = String(req.query.hostId || '').trim();
+  const hostUrl = normalizeHostUrl(req.query.hostUrl);
+  if (!modelName || !hostId || !hostUrl) {
+    return res.status(400).json({
+      status: 'error',
+      code: 'RUNTIME_ARTIFACT_IDENTITY_SELECTOR_REQUIRED',
+      error: 'modelName, hostId, and hostUrl are required'
+    });
+  }
+  try {
+    const receipt = await resolveRuntimeArtifactReceipt(modelName, hostId, hostUrl);
+    return res.json({ status: 'success', data: { receipt } });
+  } catch (err) {
+    return res.status(err.statusCode || 409).json({
+      status: 'error',
+      code: err.code || 'RUNTIME_ARTIFACT_IDENTITY_UNAVAILABLE',
+      error: err.message
+    });
+  }
+});
+
 router.get('/:modelName/:hostId', async (req, res) => {
   try {
     const data = await performanceProfiles.getActiveProfile(req.params.modelName, req.params.hostId);
@@ -160,3 +210,4 @@ router.get('/:modelName/:hostId', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.projectReadinessEntry = projectReadinessEntry;

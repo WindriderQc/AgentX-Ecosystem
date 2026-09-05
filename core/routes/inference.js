@@ -26,6 +26,8 @@ const { resolveTarget } = require('../src/helpers/ollamaUtils');
 const { normalizeHostUrl, validateHostUrl, getHostUrls, hostUrlKey } = require('../src/helpers/ollamaHostConfig');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
+const { requireOperatorUiAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
+const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
 const {
   HOSTS,
   buildRouterConfigPayload,
@@ -54,7 +56,7 @@ const {
     fingerprintRuntimeOptions,
 } = require('../src/services/routing/routeDecision');
 const { tryAndRespondDegraded } = require('../src/services/routing/degradedRetryResponse');
-const { executeOllamaAttempt } = require('../src/services/routing/inferenceAttemptExecutor');
+const { executeAdmittedOllamaAttempt } = require('../src/services/routing/inferenceAttemptExecutor');
 const {
     buildInferenceClientData,
     classifyHttpRetryFailure,
@@ -74,6 +76,7 @@ const {
     resolveInferenceContractSnapshot
 } = require('../src/services/inferenceContractService');
 const { telemetryContextFromRequest } = require('../src/helpers/llmTelemetryContext');
+const { beginInferenceAdmission } = require('../src/services/inferenceAdmissionService');
 const { trustedNestorConsumer } = require('../src/services/nestorConsumerAttribution');
 const alertService = require('../src/services/alertService');
 const { summarizeOllamaOutcome } = require('../src/services/laneObservabilityService');
@@ -433,6 +436,7 @@ router.post('/inference/embed', async (req, res) => {
     let attemptTarget = target;
     let lastError = null;
     let lastFailureReason = null;
+    let embedAdmission = null;
 
     try {
         for (const [candidateIndex, candidate] of candidates.entries()) {
@@ -485,6 +489,15 @@ router.post('/inference/embed', async (req, res) => {
 
             try {
                 const keepAlive = await resolveEmbeddingKeepAlive(candidate, model);
+                embedAdmission = await beginInferenceAdmission({
+                    host: candidate,
+                    model,
+                    kind: 'embedding',
+                    principal: resolveInferenceRequestCaller(req).principal,
+                    ...(keepAlive !== undefined && { keepAlive }),
+                    signal: controller.signal
+                });
+                embedAdmission.markDispatched();
                 response = await fetch(`${candidate}/api/embeddings`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -493,9 +506,13 @@ router.post('/inference/embed', async (req, res) => {
                         prompt,
                         ...(keepAlive !== undefined && { keep_alive: keepAlive })
                     }),
-                    signal: controller.signal
+                    signal: embedAdmission.signal
                 });
             } catch (err) {
+                if (embedAdmission) {
+                    await embedAdmission.abandon(err);
+                    embedAdmission = null;
+                }
                 const failureReason = err.name === 'AbortError'
                     ? 'pre_response_timeout'
                     : 'connection_failure';
@@ -570,7 +587,17 @@ router.post('/inference/embed', async (req, res) => {
             reasonCode,
         });
 
-        raw = await response.text();
+        try {
+            raw = await response.text();
+            await embedAdmission.complete();
+            embedAdmission = null;
+        } catch (error) {
+            if (embedAdmission) {
+                await embedAdmission.abandon(error);
+                embedAdmission = null;
+            }
+            throw error;
+        }
         if (raw) {
             try {
                 data = JSON.parse(raw);
@@ -661,6 +688,12 @@ router.post('/inference/embed', async (req, res) => {
             embedding: data.embedding
         });
     } catch (err) {
+        if (embedAdmission) {
+            await embedAdmission.abandon(err).catch(quarantineError => {
+                err.inferenceQuarantineError = quarantineError;
+            });
+            embedAdmission = null;
+        }
         // Terminal failure — usually every candidate was rejected. The
         // decision still gets built so the exhausted-fleet case is attributed,
         // with the rejection list carrying which hosts were tried and why.
@@ -789,6 +822,25 @@ router.post('/inference/generate', async (req, res) => {
     );
     const benchmarkClaimAuthorized = callerContext.principal === 'benchmark-service'
         && laneName === 'direct';
+    const requestedTools = body.tools;
+    if (requestedTools !== undefined
+        && (!benchmarkClaimAuthorized || !Array.isArray(requestedTools) || requestedTools.length > 64)) {
+        return res.status(benchmarkClaimAuthorized ? 400 : 403).json({
+            status: 'error',
+            code: benchmarkClaimAuthorized ? 'INFERENCE_TOOLS_INVALID' : 'INFERENCE_TOOLS_FORBIDDEN',
+            message: benchmarkClaimAuthorized
+                ? 'Benchmark tool schemas must be a bounded array.'
+                : 'Native tool schemas are restricted to an authenticated benchmark campaign.'
+        });
+    }
+    if (callerContext.principal === 'benchmark-service'
+        && (!body.workloadAdmissionId || !body.workloadGeneration)) {
+        return res.status(403).json({
+            status: 'error',
+            code: 'BENCHMARK_WORKLOAD_PROOF_REQUIRED',
+            message: 'Benchmark inference requires an exact Core-minted workload admission id and generation'
+        });
+    }
     const routeManaged = lane.route === true && !hostOverride;
 
     let model = requestedModel;
@@ -1030,6 +1082,8 @@ router.post('/inference/generate', async (req, res) => {
             callerDetail: body.callerDetail || null,
             claimBatchId: body.claimBatchId || null,
             claimGeneration: body.claimGeneration || null,
+            workloadAdmissionId: body.workloadAdmissionId || null,
+            workloadGeneration: body.workloadGeneration || null,
             benchmarkAuthorized: benchmarkClaimAuthorized,
             model,
             path: '/api/inference/generate'
@@ -1185,7 +1239,15 @@ router.post('/inference/generate', async (req, res) => {
     const ollamaUrl = `${target}/api/${useChat ? 'chat' : 'generate'}`;
 
     const ollamaPayload = useChat
-        ? { model, messages, stream, options, ...(think !== undefined && { think }), ...(keepAlive !== undefined && { keep_alive: keepAlive }) }
+        ? {
+            model,
+            messages,
+            stream,
+            options,
+            ...(requestedTools !== undefined && { tools: requestedTools }),
+            ...(think !== undefined && { think }),
+            ...(keepAlive !== undefined && { keep_alive: keepAlive })
+        }
         : { model, prompt, system, stream, options, ...(think !== undefined && { think }), ...(keepAlive !== undefined && { keep_alive: keepAlive }) };
     routingTrace.request.summary = buildRequestSummary({ prompt, messages, system, options, stream, think, keepAlive });
     routingTrace.selected = {
@@ -1374,31 +1436,33 @@ router.post('/inference/generate', async (req, res) => {
         timeoutMs: INFERENCE_FETCH_TIMEOUT_MS,
         routeManaged,
         signal: disconnect.signal,
+        callerPrincipal: callerContext.principal,
     });
 
     try {
-        gateRelease = await (skipGate ? hostGate.track : hostGate.acquire)(target, model, {
-                signal: disconnect.signal,
-            });
-        // A request may have passed the first claim check and then waited in
-        // admission (or entered passive direct-lane tracking) while Benchmark
-        // fenced the host. Recheck before the Ollama write.
-        await assertHostAvailableForConsumer(target, {
-            callerDetail: body.callerDetail || null,
-            claimBatchId: body.claimBatchId || null,
-            claimGeneration: body.claimGeneration || null,
-            benchmarkAuthorized: benchmarkClaimAuthorized,
-            model,
-            path: '/api/inference/generate:post-admission'
-        });
-
-        const primaryAttempt = await executeOllamaAttempt({
+        const primaryAttempt = await executeAdmittedOllamaAttempt({
             hostUrl: target,
+            model,
             payload: ollamaPayload,
             useChat,
             stream,
+            skipGate,
             timeoutMs: INFERENCE_FETCH_TIMEOUT_MS,
             signal: disconnect.signal,
+            principal: callerContext.principal,
+            workloadAdmissionId: body.workloadAdmissionId || null,
+            workloadGeneration: body.workloadGeneration || null,
+            admissionKind: `inference-${laneName}${stream ? '-stream' : ''}`,
+            afterAdmission: () => assertHostAvailableForConsumer(target, {
+                callerDetail: body.callerDetail || null,
+                claimBatchId: body.claimBatchId || null,
+                claimGeneration: body.claimGeneration || null,
+                workloadAdmissionId: body.workloadAdmissionId || null,
+                workloadGeneration: body.workloadGeneration || null,
+                benchmarkAuthorized: benchmarkClaimAuthorized,
+                model,
+                path: '/api/inference/generate:post-admission'
+            })
         });
         const { response, raw, data } = primaryAttempt;
 
@@ -1678,12 +1742,15 @@ router.get('/router/config/defaults', async (_req, res) => {
     }
 });
 
-router.put('/router/config/tasks/:taskType', async (req, res) => {
+router.put('/router/config/tasks/:taskType', requireOperatorUiAccess, async (req, res) => {
     try {
         const { taskType } = req.params;
-        const state = req.body?.resetToDefault === true
-            ? await resetTaskModelOverride(taskType)
-            : await saveTaskModelOverride(taskType, req.body || {});
+        const state = await runRuntimeMutation({
+            principal: operatorRequestIdentity(req),
+            scope: `router-task-config:${taskType}`
+        }, () => req.body?.resetToDefault === true
+            ? resetTaskModelOverride(taskType)
+            : saveTaskModelOverride(taskType, req.body || {}));
 
         res.json({
             status: 'success',
@@ -1701,10 +1768,13 @@ router.put('/router/config/tasks/:taskType', async (req, res) => {
     }
 });
 
-router.post('/router/config/reset', async (req, res) => {
+router.post('/router/config/reset', requireOperatorUiAccess, async (req, res) => {
     if (!requireTypedConfirmation(req, res, 'RESET ROUTER CONFIG')) return;
     try {
-        const taskConfigState = await resetAllTaskModelOverrides();
+        const taskConfigState = await runRuntimeMutation({
+            principal: operatorRequestIdentity(req),
+            scope: 'router-task-config:reset-all'
+        }, () => resetAllTaskModelOverrides());
         const data = await buildRouterConfigPayload();
         data.taskConfigState = taskConfigState;
         res.json({ status: 'success', data });

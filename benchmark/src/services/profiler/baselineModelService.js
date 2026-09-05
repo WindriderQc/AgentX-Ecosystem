@@ -2,9 +2,11 @@
 
 const { getConfiguredHosts } = require('../../helpers/ollamaHostConfig');
 const { isSameOllamaModel } = require('../../helpers/ollamaModelIdentity');
-const { listModels, pullModel, deleteModel } = require('../../clients/ollamaClient');
+const { listModels, pullModel } = require('../../clients/ollamaClient');
 const settingsService = require('./settingsService');
+const hostProfileService = require('./hostProfileService');
 const logger = require('../../../config/logger');
+const { getWorkloadRecoveryIdentity } = require('../../clients/coreApiClient');
 
 function resolveConfiguredHost(hostId) {
   const id = String(hostId || '').trim();
@@ -58,32 +60,31 @@ async function getBaselineState(hostId, options = {}) {
   };
 }
 
-async function compensateBaselinePull(hostId, pullError) {
-  // The artifact was absent before this operation. Inventory without the
-  // possibly dead signal and remove any server-side install that completed
-  // after the client lost its acknowledgement or its claim authority.
-  const attempts = Math.max(1, Math.min(5, Number.parseInt(process.env.PROFILER_PULL_COMPENSATION_ATTEMPTS, 10) || 3));
-  const settleMs = Math.max(0, Math.min(5000, Number.parseInt(process.env.PROFILER_PULL_COMPENSATION_SETTLE_MS, 10) || 250));
-  try {
-    let observed = null;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      if (attempt > 1 && settleMs > 0) await new Promise(resolve => setTimeout(resolve, settleMs));
-      observed = await getBaselineState(hostId);
-      if (observed.available) {
-        await deleteModel(observed.hostUrl, observed.modelName, { timeoutMs: 120_000 });
-      }
+function pendingBaselinePullError(pullError, reconciliation) {
+  const error = new Error(`Baseline pull outcome is pending durable reconciliation: ${pullError.message}`);
+  error.code = 'BASELINE_PULL_RECONCILIATION_PENDING';
+  error.statusCode = 503;
+  error.cause = pullError;
+  error.retainAdmission = true;
+  error.reconciliation = reconciliation;
+  return error;
+}
+
+async function resolveBaselineReconciliation(hostId, reconciliation, options = {}) {
+  options.assertClaimActive?.();
+  return hostProfileService.upsertAuthority({
+    hostId,
+    reconciliation: {
+      ...reconciliation,
+      state: 'resolved',
+      reason: null,
+      resolvedAt: new Date()
     }
-    const verified = await getBaselineState(hostId);
-    if (verified.available) {
-      throw new Error('Late baseline artifact ' + verified.modelName + ' remained after compensation');
-    }
-  } catch (compensationError) {
-    const error = new Error('Baseline pull outcome is ambiguous after failure: ' + compensationError.message);
-    error.code = 'BASELINE_PULL_COMPENSATION_FAILED';
-    error.statusCode = 503;
-    error.cause = pullError;
-    throw error;
-  }
+  }, {
+    authorityService: 'profiler-baseline',
+    signal: options.signal,
+    assertAuthorityActive: options.assertClaimActive
+  });
 }
 
 async function ensureBaselineModel(hostId, options = {}) {
@@ -92,18 +93,77 @@ async function ensureBaselineModel(hostId, options = {}) {
   options.assertClaimActive?.();
   if (before.available) return { ...before, pulled: false };
 
-  const timeoutMs = Number.parseInt(process.env.OLLAMA_PULL_TIMEOUT_MS, 10) || 30 * 60 * 1000;
+  // A client deadline can close the socket while Ollama continues installing
+  // the artifact. Keep the fenced request open until Ollama emits a terminal
+  // response; the exact claim signal remains the only cancellation source.
+  const timeoutMs = 0;
+  const operationId = String(options.operationId || `baseline-pull-${Date.now()}`);
+  const recovery = getWorkloadRecoveryIdentity(operationId);
+  if (!recovery?.recoveryId || !recovery?.admissionId) {
+    const error = new Error('Baseline pull requires a durable Core recovery quarantine');
+    error.code = 'BASELINE_PULL_RECOVERY_QUARANTINE_REQUIRED';
+    error.statusCode = 503;
+    throw error;
+  }
+  const reconciliation = {
+    state: 'prepared',
+    operation: 'baseline_pull',
+    operationId,
+    workloadId: operationId,
+    admissionId: recovery.admissionId,
+    admissionGeneration: recovery.generation,
+    admissionPrincipal: recovery.principal,
+    recoveryId: recovery.recoveryId,
+    recoveryRequestId: recovery.recoveryRequestId,
+    model: before.modelName,
+    priorAvailable: false,
+    timeoutAt: new Date(Date.now() + timeoutMs),
+    reason: 'Ollama pull has not reached a server-terminal observation',
+    startedAt: new Date()
+  };
+  await hostProfileService.upsertAuthority({ hostId: before.hostId, reconciliation }, {
+    authorityService: 'profiler-baseline',
+    signal: options.signal,
+    assertAuthorityActive: options.assertClaimActive
+  });
+  options.assertClaimActive?.();
   logger.info('Profiler baseline model missing; pulling automatically', {
     hostId: before.hostId,
     hostUrl: before.hostUrl,
     modelName: before.modelName
   });
   options.assertClaimActive?.();
+  const mutatingReconciliation = {
+    ...reconciliation,
+    state: 'mutating',
+    reason: 'Ollama pull request is in flight without a terminal server receipt'
+  };
+  await hostProfileService.upsertAuthority({ hostId: before.hostId, reconciliation: mutatingReconciliation }, {
+    authorityService: 'profiler-baseline',
+    signal: options.signal,
+    assertAuthorityActive: options.assertClaimActive
+  });
+  options.assertClaimActive?.();
   try {
     await pullModel(before.hostUrl, before.modelName, { timeoutMs, signal: options.signal });
   } catch (pullError) {
-    await compensateBaselinePull(hostId, pullError);
-    throw pullError;
+    throw pendingBaselinePullError(pullError, { ...mutatingReconciliation, state: 'unknown' });
+  }
+
+  const terminalReconciliation = {
+    ...mutatingReconciliation,
+    state: 'verified',
+    serverTerminalObserved: true,
+    serverTerminalAt: new Date()
+  };
+  try {
+    await hostProfileService.upsertAuthority({ hostId: before.hostId, reconciliation: terminalReconciliation }, {
+      authorityService: 'profiler-baseline',
+      signal: options.signal,
+      assertAuthorityActive: options.assertClaimActive
+    });
+  } catch (terminalReceiptError) {
+    throw pendingBaselinePullError(terminalReceiptError, terminalReconciliation);
   }
 
   try {
@@ -121,10 +181,9 @@ async function ensureBaselineModel(hostId, options = {}) {
       hostUrl: after.hostUrl,
       modelName: after.modelName
     });
-    return { ...after, pulled: true };
+    return { ...after, pulled: true, reconciliation: terminalReconciliation };
   } catch (postPullError) {
-    await compensateBaselinePull(hostId, postPullError);
-    throw postPullError;
+    throw pendingBaselinePullError(postPullError, terminalReconciliation);
   }
 }
 
@@ -133,5 +192,6 @@ module.exports = {
   getBaselineModel,
   setBaselineModel,
   getBaselineState,
-  ensureBaselineModel
+  ensureBaselineModel,
+  resolveBaselineReconciliation
 };

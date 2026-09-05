@@ -1,33 +1,14 @@
 'use strict';
 
 const {
-  MAX_LIVE_RESPONSE_BYTES,
   buildLiveTransport,
   parseArgs
 } = require('../../../scripts/toolcall-qualification');
 
-function response(body, status = 200, declaredLength) {
-  const bytes = Buffer.from(JSON.stringify(body));
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    headers: {
-      get(name) {
-        if (String(name).toLowerCase() !== 'content-length') return null;
-        return String(declaredLength ?? bytes.byteLength);
-      }
-    },
-    body: {
-      async *[Symbol.asyncIterator]() {
-        yield bytes;
-      }
-    }
-  };
-}
-
 describe('toolcall qualification live transport bounds', () => {
-  test('owns redirects, deadline, and response size for a successful tool call', async () => {
-    const fetchImpl = jest.fn(async () => response({
+  test('uses Core workload admission for a successful tool call', async () => {
+    const generateImpl = jest.fn(async () => ({
+      done: true,
       message: {
         tool_calls: [{ function: { name: 'lookup', arguments: { id: 7 } } }]
       }
@@ -35,13 +16,14 @@ describe('toolcall qualification live transport bounds', () => {
     const transport = buildLiveTransport({
       model: 'candidate',
       host: 'http://ollama:11434',
-      fetchImpl,
+      generateImpl,
       timeoutMs: 1000
     });
 
     await expect(transport({
       messages: [],
       tools: [],
+      workloadId: 'campaign-a',
       execution: {
         numCtx: 32768,
         numPredict: 1024,
@@ -51,53 +33,57 @@ describe('toolcall qualification live transport bounds', () => {
     })).resolves.toEqual({
       toolCalls: [{ name: 'lookup', args: { id: 7 } }]
     });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      'http://ollama:11434/api/chat',
-      expect.objectContaining({
-        method: 'POST',
-        redirect: 'manual',
-        signal: expect.any(AbortSignal)
-      })
-    );
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toMatchObject({
+    expect(generateImpl).toHaveBeenCalledWith('campaign-a', expect.objectContaining({
       model: 'candidate',
+      host: 'http://ollama:11434',
       stream: false,
+      rawResponse: true,
       think: false,
       options: { num_ctx: 32768, num_predict: 1024, temperature: 0, seed: 42 }
-    });
+    }), { signal: expect.any(AbortSignal) });
   });
 
-  test('rejects a declared response overflow before buffering it', async () => {
-    const fetchImpl = jest.fn(async () => response(
-      { message: { content: 'unused' } },
-      200,
-      MAX_LIVE_RESPONSE_BYTES + 1
-    ));
+  test('refuses to dispatch without the exact workload identity', async () => {
+    const generateImpl = jest.fn();
     const transport = buildLiveTransport({
       model: 'candidate',
       host: 'http://ollama:11434',
-      fetchImpl,
+      generateImpl,
       timeoutMs: 1000
     });
 
     await expect(transport({ messages: [], tools: [] }))
-      .rejects.toThrow(/Response body exceeded its byte limit/);
+      .rejects.toMatchObject({ code: 'WORKLOAD_ADMISSION_REQUIRED' });
+    expect(generateImpl).not.toHaveBeenCalled();
   });
 
   test('classifies only an explicit Ollama no-tool-surface response as unsupported', async () => {
-    const fetchImpl = jest.fn(async () => response(
-      { error: 'model does not support tools' },
-      400
-    ));
+    const failure = Object.assign(new Error('Core API 400: model does not support tools'), { status: 400 });
+    const generateImpl = jest.fn(async () => { throw failure; });
     const transport = buildLiveTransport({
       model: 'candidate',
       host: 'http://ollama:11434',
-      fetchImpl,
+      generateImpl,
       timeoutMs: 1000
     });
 
-    await expect(transport({ messages: [], tools: [] }))
+    await expect(transport({ messages: [], tools: [], workloadId: 'campaign-a' }))
       .resolves.toEqual({ toolSupport: false });
+  });
+
+  test('rejects a successful HTTP response without Ollama terminal evidence', async () => {
+    const generateImpl = jest.fn(async () => ({
+      message: { tool_calls: [{ function: { name: 'lookup', arguments: {} } }] }
+    }));
+    const transport = buildLiveTransport({
+      model: 'candidate',
+      host: 'http://ollama:11434',
+      generateImpl,
+      timeoutMs: 1000
+    });
+
+    await expect(transport({ messages: [], tools: [], workloadId: 'campaign-a' }))
+      .rejects.toMatchObject({ code: 'OLLAMA_RESPONSE_INCOMPLETE' });
   });
 
   test('parses the typed campaign token and mandatory repetition count', () => {

@@ -32,12 +32,18 @@ function modelWithReadiness(overrides = {}) {
       'host-a': {
         profileDepth: 'full',
         benchmarkQualified: true,
+        authorityVerified: true,
         stale: false,
         evidenceId: 'evidence-1',
         artifact: { digest: 'sha256:model', runtimeFingerprint: 'runtime-1' },
+        authority: {
+          contract: 'agentx.profiler-readiness/v2',
+          verified: true,
+          liveIdentityVerified: true
+        },
         authorityReceipt: {
           source: 'profiler_pipeline',
-          version: 1,
+          version: 2,
           digest,
           evidenceId: 'evidence-1'
         },

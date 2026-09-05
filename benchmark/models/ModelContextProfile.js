@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 
 const LatestEvidenceSchema = new mongoose.Schema({
   snapshotId: String,
+  profileDepth: { type: String, enum: ['quick', 'standard', 'full'] },
+  candidateRepeats: Number,
   testedNumCtx: Number,
   promptFillPct: Number,
   promptTokens: Number,
@@ -23,6 +25,8 @@ const ModelContextProfileSchema = new mongoose.Schema({
   hostId: { type: String, default: null, index: true },
   artifactDigest: { type: String, required: true, index: true },
   runtimeFingerprint: { type: String, required: true },
+  profileDepth: { type: String, enum: ['quick', 'standard', 'full'], default: 'standard' },
+  contextProbeCandidateRepeats: { type: Number, default: null },
 
   maxVerifiedContext: { type: Number, default: null },
   // Backward-compatible alias for readers deployed before maxVerifiedContext.
@@ -31,6 +35,19 @@ const ModelContextProfileSchema = new mongoose.Schema({
   verifiedInputTokens: { type: Number, default: null },
   recommendedInteractiveContext: { type: Number, default: null },
   recommendedDocumentContext: { type: Number, default: null },
+  // Highest measured context whose throughput degradation remains within the
+  // explicitly persisted knee threshold. This is performance evidence, not a
+  // model quality claim.
+  performanceKneeContext: { type: Number, default: null },
+  performanceKneeDegradationPct: { type: Number, default: 15 },
+  // Only a separately qualified long-context Benchmark campaign may write
+  // this field. Profiler probes deliberately persist null/unknown.
+  qualityVerifiedContext: { type: Number, default: null },
+  qualityContextStatus: {
+    type: String,
+    enum: ['verified', 'unknown'],
+    default: 'unknown'
+  },
   recommendationStatus: {
     type: String,
     enum: ['verified', 'unknown'],
@@ -40,7 +57,8 @@ const ModelContextProfileSchema = new mongoose.Schema({
   revalidationRequired: { type: Boolean, default: true },
   recommendationThresholds: {
     interactiveDegradationPct: { type: Number, default: 15 },
-    documentDegradationPct: { type: Number, default: 30 }
+    documentDegradationPct: { type: Number, default: 30 },
+    performanceKneeDegradationPct: { type: Number, default: 15 }
   },
   // Compatibility alias: maps to the current document recommendation.
   recommendedContext: { type: Number, default: null },
@@ -48,6 +66,17 @@ const ModelContextProfileSchema = new mongoose.Schema({
   source: { type: String, default: 'context_probe' },
   stale: { type: Boolean, default: false },
   staleReason: { type: String, default: null },
+  authorityState: {
+    type: String,
+    enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+    default: 'authoritative',
+    index: true
+  },
+  authorityWriteId: { type: String, default: null, index: true },
+  authorityReconciliationId: { type: String, default: null },
+  // Durable tombstones for probe writes whose acknowledgement raced lease
+  // loss. The guarded upsert refuses to publish any rejected snapshot later.
+  rejectedEvidenceIds: { type: [String], default: [] },
   lastValidatedAt: { type: Date, default: null, index: true },
   latestEvidence: { type: LatestEvidenceSchema, default: () => ({}) }
 }, {

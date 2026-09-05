@@ -10,6 +10,52 @@ const { getModelDigest } = require('./modelDigestService');
 const { classifyBenchmarkError } = require('./errorClassifier');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
 const { resolveTrustCellIdentity } = require('./benchmarkTrustCampaignRuntime');
+const authorityReconciliation = require('./benchmarkAuthorityReconciliation');
+
+async function retractAmbiguousResult(resultId, batchId, authorityError, phase) {
+    try {
+        // Upsert a tombstone instead of deleting. A Mongo write may finish on
+        // the server after its client acknowledgement is lost; reserving the
+        // preallocated _id makes any delayed insert fail duplicate-key, while
+        // an already-applied row is atomically made non-authoritative.
+        await BenchmarkResult.updateOne(
+            { _id: resultId },
+            {
+                $set: {
+                    excluded_from_leaderboard: true,
+                    needs_review: true,
+                    scoring_method: 'authority_invalidated',
+                    quality_score: null,
+                    composite_score: null,
+                    review_reason: `Persistence authority was lost during ${phase}; reconciliation is required`
+                }
+            },
+            { upsert: true }
+        );
+        authorityError.authorityInvalidated = true;
+    } catch (invalidationError) {
+        authorityError.compensationError = invalidationError;
+        authorityError.retainAdmission = true;
+        authorityError.code = 'BENCHMARK_RESULT_RECONCILIATION_PENDING';
+        try {
+            const reconciliation = await authorityReconciliation.enqueueResultInvalidation({
+                resultId,
+                batchId,
+                workloadId: batchId,
+                phase,
+                reason: invalidationError.message
+            });
+            authorityError.reconciliationId = String(reconciliation._id);
+            authorityError.reconciliationPersisted = true;
+            authorityError.reconciliationPromise = authorityReconciliation.waitForResultInvalidation(
+                reconciliation._id
+            );
+        } catch (reconciliationError) {
+            authorityError.reconciliationError = reconciliationError;
+            authorityError.reconciliationPersisted = false;
+        }
+    }
+}
 
 async function persistSuccessfulResult({
     batchId,
@@ -261,7 +307,7 @@ async function persistSuccessfulResult({
         // preallocated _id is a safe retraction and prevents a late row from
         // becoming leaderboard evidence under a newer maintenance owner.
         if (signal?.aborted || error?.code === 'BENCHMARK_CLAIM_LOST') {
-            await BenchmarkResult.deleteOne({ _id: result._id }).catch(() => {});
+            await retractAmbiguousResult(result._id, batchId, error, 'successful result save');
         }
         throw error;
     }
@@ -377,7 +423,7 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
             assertAuthorityActive?.();
         } catch (error) {
             if (signal?.aborted || error?.code === 'BENCHMARK_CLAIM_LOST') {
-                await BenchmarkResult.deleteOne({ _id: result._id }).catch(() => {});
+                await retractAmbiguousResult(result._id, batchId, error, 'failed result save');
             }
             throw error;
         }

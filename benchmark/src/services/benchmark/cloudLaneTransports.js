@@ -288,8 +288,11 @@ function createOllamaTransport(config = {}) {
             }, timeoutMs);
             const latencyMs = Date.now() - started;
             const { parsed, rawText } = await responseBody(response);
+            const exactTerminal = response.ok
+                && parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                && parsed.done === true && typeof parsed.error !== 'string';
             return {
-                ok: response.ok && Boolean(parsed),
+                ok: exactTerminal,
                 observedAt: new Date().toISOString(),
                 latencyMs,
                 identity: verifiedIdentity,
@@ -304,9 +307,11 @@ function createOllamaTransport(config = {}) {
                     toolCalls: parseToolCalls(parsed?.message?.tool_calls),
                     raw: parsed || { body: rawText }
                 },
-                error: response.ok && parsed ? null : {
-                    code: `HTTP_${response.status}`,
-                    message: String(parsed?.error || rawText || response.statusText)
+                error: exactTerminal ? null : {
+                    code: response.ok ? 'OLLAMA_RESPONSE_INCOMPLETE' : `HTTP_${response.status}`,
+                    message: response.ok
+                        ? 'Ollama chat ended without an exact terminal done object'
+                        : String(parsed?.error || rawText || response.statusText)
                 }
             };
         }

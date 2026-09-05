@@ -49,7 +49,7 @@ const { createResumeRevalidation, RESUME_CODES } = require('./resumeRevalidation
 const { checkBatchPreflight, executionModelsFromHostGroups, preflightCounts, runBatchPreflight } = require('./batchPreflightLifecycle');
 const { executionHost, normalizeBatchTargets } = require('../../../../shared/benchmarkTargetContract');
 const { executeHarnessTarget, resolveHarnessTarget } = require('./harnessBrokerClient');
-const { getBenchmarkClaimIdentity, releaseWorkloadAdmission } = require('../../clients/coreApiClient');
+const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
 
 // A throughput batch can have one in-flight Core request per host. Keep the
 // controllers grouped by the exact batch id so the stop route can interrupt
@@ -1251,8 +1251,9 @@ async function runBatchOrchestrator({
         const cleanup = await releaseBenchmarkClaims(claimedHostUrls, batchId, {
             releaseWorkloadAdmission: false
         });
-        if (cleanup.failed === 0) {
-            await releaseWorkloadAdmission(String(batchId)).catch(() => {});
+        if (cleanup.failed > 0) {
+            error.retainAdmission = true;
+            error.hostRelease = cleanup;
         }
         throw error;
     }
@@ -1303,7 +1304,8 @@ async function runBatchOrchestrator({
                 await releaseAllDedication(dedicationState, {
                     batchId,
                     recordBatchTimelineEvent,
-                    failClosed: isResuming
+                    failClosed: isResuming,
+                    signal: batchCancellationController.signal
                 });
             } catch (error) {
                 if (!isResuming) throw error;

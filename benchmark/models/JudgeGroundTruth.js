@@ -340,6 +340,13 @@ function assertQueryScoreMutationIsSafe(update, operation) {
 }
 
 const JudgeGroundTruthSchema = new mongoose.Schema({
+    authority_state: {
+        type: String,
+        enum: ['authoritative', 'authority_invalidated', 'pending_reconciliation'],
+        default: 'authoritative',
+        index: true
+    },
+    authority_reconciliation_reason: { type: String, default: null },
     // Unique identifier for this ground truth entry
     name: {
         type: String,
@@ -781,6 +788,7 @@ JudgeGroundTruthSchema.index({ 'validation_stats.avg_deviation': 1 });
 JudgeGroundTruthSchema.statics.getForValidation = function(options = {}) {
     const query = {
         active: true,
+        authority_state: { $nin: ['authority_invalidated', 'pending_reconciliation'] },
         ...buildLegacyGroundTruthVisibilityFilter()
     };
 

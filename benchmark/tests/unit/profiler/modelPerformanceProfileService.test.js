@@ -28,7 +28,8 @@ describe('modelPerformanceProfileService', () => {
         modelName: 'qwen3.5:9b',
         hostId: 'host-alpha',
         'artifact.digest': 'sha256:new',
-        'artifact.runtimeFingerprint': 'runtime-new'
+        'artifact.runtimeFingerprint': 'runtime-new',
+        authorityState: { $ne: 'authority_invalidated' }
       },
       { $set: expect.objectContaining({ active: true, stale: false }) },
       { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
@@ -47,7 +48,12 @@ describe('modelPerformanceProfileService', () => {
         hostId: 'host-alpha',
         active: true
       },
-      { $set: { active: false, stale: true, staleReason: 'superseded' } }
+      { $set: {
+        active: false,
+        stale: true,
+        staleReason: 'superseded',
+        supersededByAuthorityWriteId: null
+      } }
     );
     expect(ModelPerformanceProfile.findOneAndUpdate.mock.invocationCallOrder[0])
       .toBeLessThan(ModelPerformanceProfile.updateMany.mock.invocationCallOrder[0]);
@@ -65,6 +71,7 @@ describe('modelPerformanceProfileService', () => {
     expect(ModelPerformanceProfile.find).toHaveBeenCalledWith({
       active: true,
       stale: { $ne: true },
+      authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] },
       hostId: 'host-alpha'
     });
   });

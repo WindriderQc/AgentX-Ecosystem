@@ -14,6 +14,7 @@
 const logger = require('../../../config/logger');
 const BenchmarkPrompt = require('../../../models/BenchmarkPrompt');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
 const { BENCHMARK_CATEGORIES } = require('../../../config/categories');
 const { JUDGE_CONFIG } = require('../qualityScorer');
 const { probeJudgeCapability } = require('./judgeModelValidator');
@@ -24,6 +25,7 @@ const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmissi
 const { readBoundedJson } = require('../../helpers/boundedJsonResponse');
 const { getDedicationStatuses } = require('../../clients/coreApiClient');
 const { identitiesMatch, resolveArtifactIdentity } = require('../profiler/artifactIdentityService');
+const { hasQualifiedProfilerAuthority } = require('../profiler/profilerAuthorityReceipt');
 const { normalizeJudgeNumCtx } = require('../scoring/judgeRuntimeConfig');
 const { normalizeExecutionConfig } = require('./config');
 const {
@@ -217,10 +219,24 @@ async function checkBenchmarkTargetEligibility(model, hostUrl, executionConfig =
         const readinessForHost = readMapLikeEntry(profile?.readiness, hostId);
         const stage = readinessForHost?.stage;
         const hasQualifiedDepth = ['standard', 'full'].includes(readinessForHost?.profileDepth);
+        const evidence = readinessForHost?.evidenceId
+            ? await ModelPerformanceProfile.findOne({
+                _id: readinessForHost.evidenceId,
+                modelName: artifact.model,
+                hostId,
+                active: true,
+                stale: { $ne: true },
+                authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
+            }).lean()
+            : null;
         const exactProfile = !!readinessForHost
             && hasQualifiedDepth
-            && readinessForHost.benchmarkQualified === true
-            && readinessForHost.stale !== true
+            && hasQualifiedProfilerAuthority(readinessForHost, evidence, {
+                modelName: artifact.model,
+                hostId
+            })
+            && identitiesMatch(evidence?.artifact, readinessForHost.artifact)
+            && identitiesMatch(evidence?.artifact, artifact)
             && identitiesMatch(readinessForHost.artifact, artifact);
 
         if (!exactProfile) {

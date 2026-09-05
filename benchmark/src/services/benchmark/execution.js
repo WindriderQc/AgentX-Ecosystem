@@ -26,9 +26,11 @@ const {
 const { emitBuddyEvent } = require('../../clients/buddyEventClient');
 const {
     acquireWorkloadAdmission,
-    releaseWorkloadAdmission
+    releaseWorkloadAdmission,
+    transitionWorkloadRecovery
 } = require('../../clients/coreApiClient');
 const { startBenchmarkClaimHeartbeat } = require('./benchmarkClaimLifecycle');
+const authorityReconciliation = require('./benchmarkAuthorityReconciliation');
 const {
     buildOllamaTarget,
     buildQualityCohortFingerprint,
@@ -47,6 +49,69 @@ let activeBatchId = null;
 let activeHeartbeatInterval = null;
 const TRUST_LAUNCH_AUTHORITY = Symbol('benchmark-trust-launch-authority');
 const TRUST_CAMPAIGN_SPEC_INDEX_NAME = 'uniq_benchmark_batch_trust_campaign_spec_id';
+
+function markReconciliationPending(authorityError, compensationError, code, details = {}) {
+    authorityError.compensationError = compensationError;
+    authorityError.retainAdmission = true;
+    authorityError.code = code;
+    const workloadId = String(details.workloadId || details.batchId || '');
+    const resultId = String(details.resultId || details.batchId || workloadId);
+    if (workloadId && resultId) {
+        authorityError.reconciliationPersistedPromise = authorityReconciliation.enqueueAuthorityInvalidation({
+            kind: details.kind || 'batch_invalidation',
+            resultId,
+            batchId: details.batchId || workloadId,
+            workloadId,
+            phase: details.phase || code,
+            reason: compensationError?.message || authorityError.message
+        }).then(record => {
+            authorityError.reconciliationId = String(record._id);
+            authorityError.reconciliationPersisted = true;
+            authorityError.reconciliationPromise = authorityReconciliation.waitForResultInvalidation(record._id);
+            return record;
+        }).catch(error => {
+            authorityError.reconciliationError = error;
+            authorityError.reconciliationPersisted = false;
+            logger.error('Durable batch authority reconciliation could not be journaled; Core quarantine remains armed', {
+                workloadId,
+                resultId,
+                code,
+                error: error.message
+            });
+            // Preserve the failure on the owning error without creating an
+            // unhandled rejection when the caller has already transferred
+            // authority to Core quarantine. The lifecycle still observes
+            // reconciliationPersisted=false and never releases that fence.
+            return null;
+        });
+    }
+    return authorityError;
+}
+
+function retainAdmissionHeartbeat(heartbeat, ttlMs, context = {}) {
+    // Core recovery quarantine is durable and deliberately non-reaped. Stop
+    // renewing the crashed process proof so a restarted CAS worker can adopt
+    // it; the workload itself remains fenced until a verified restore receipt.
+    const workloadId = String(context.workloadId || '');
+    Promise.resolve()
+        .then(() => workloadId ? transitionWorkloadRecovery(workloadId, 'UNKNOWN', {
+            receipt: {
+                contract: 'agentx.workload-recovery/v1',
+                event: 'owner-handoff-after-ambiguous-mutation',
+                phase: context.phase || null
+            }
+        }) : null)
+        .catch(error => logger.error('Could not hand batch recovery quarantine to the restart worker; fence remains', {
+            ...context,
+            error: error.message
+        }))
+        .finally(() => heartbeat.drain().catch(error => logger.error('Quarantined batch admission heartbeat drain failed', {
+            ...context,
+            error: error.message
+        })));
+    logger.error('Workload admission moved to durable Core recovery quarantine', context);
+    return { retained: true, holdMs: null, recoveryRequired: true };
+}
 
 async function assertTrustCampaignSpecOneShotIndex() {
     let indexes;
@@ -285,7 +350,13 @@ async function startBatch({
         // The ObjectId is allocated before admission, so cleanup is exact even
         // when the driver committed the insert but the acknowledgement or
         // post-write heartbeat checkpoint was lost.
-        await BenchmarkBatch.deleteOne({ _id: plannedBatchId }).catch(() => {});
+        try {
+            await BenchmarkBatch.deleteOne({ _id: plannedBatchId });
+        } catch (compensationError) {
+            markReconciliationPending(error, compensationError, 'BATCH_CREATION_RECONCILIATION_PENDING', {
+                workloadId: plannedBatchKey, batchId: plannedBatchId, resultId: plannedBatchId, phase: 'batch creation'
+            });
+        }
         if (trust_campaign_spec && error?.code === 11000
             && (error?.keyPattern?.trust_campaign_spec_id || error?.keyValue?.trust_campaign_spec_id)) {
             const consumed = new Error('Benchmark Trust CampaignSpec has already been consumed');
@@ -315,20 +386,28 @@ async function startBatch({
             creationHeartbeat.assertActive();
             batch = await BenchmarkBatch.findById(batch._id).select('+trust_evidence_context');
         } catch (error) {
-            await BenchmarkBatch.updateOne({
-                _id: batch._id,
-                status: 'pending',
-                trust_evidence_context: null,
-                trust_evidence_committed_at: null
-            }, {
-                $set: {
-                    status: 'failed',
-                    failure_reason: 'trust_preregistration_failed',
-                    completed_at: new Date(),
-                    last_activity_at: new Date()
-                },
-                $unset: { active_slot: 1 }
-            }).catch(() => {});
+            try {
+                await BenchmarkBatch.updateOne({
+                    _id: batch._id,
+                    status: 'pending',
+                    trust_evidence_context: null,
+                    trust_evidence_committed_at: null
+                }, {
+                    $set: {
+                        status: 'failed',
+                        failure_reason: 'trust_preregistration_failed',
+                        authority_state: 'authority_invalidated',
+                        authority_reconciliation_reason: 'trust_preregistration_failed',
+                        completed_at: new Date(),
+                        last_activity_at: new Date()
+                    },
+                    $unset: { active_slot: 1 }
+                });
+            } catch (compensationError) {
+                markReconciliationPending(error, compensationError, 'TRUST_PREREGISTRATION_RECONCILIATION_PENDING', {
+                    workloadId: plannedBatchKey, batchId: plannedBatchId, resultId: plannedBatchId, phase: 'trust preregistration'
+                });
+            }
             throw error;
         }
     }
@@ -388,9 +467,27 @@ async function startBatch({
         } : {})
     };
     } catch (error) {
-        await creationHeartbeat.drain().catch(() => {});
+        if (!admissionHandedOff && error?.retainAdmission !== true) {
+            try {
+                const released = await releaseWorkloadAdmission(plannedBatchKey);
+                if (released?.released !== true) {
+                    throw new Error(released?.reason || 'Workload admission release was not acknowledged');
+                }
+            } catch (releaseError) {
+                markReconciliationPending(error, releaseError, 'BATCH_CREATION_ADMISSION_RECONCILIATION_PENDING', {
+                    workloadId: plannedBatchKey, batchId: plannedBatchId, resultId: plannedBatchId, phase: 'batch creation release'
+                });
+            }
+        }
         if (!admissionHandedOff) {
-            await releaseWorkloadAdmission(plannedBatchKey).catch(() => {});
+            if (error?.retainAdmission === true) {
+                retainAdmissionHeartbeat(creationHeartbeat, workloadTtlMs, {
+                    workloadId: plannedBatchKey,
+                    phase: 'batch_creation'
+                });
+            } else {
+                await creationHeartbeat.drain();
+            }
         }
         throw error;
     }
@@ -503,12 +600,39 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
         );
         admissionHeartbeat.assertActive();
     } catch (error) {
-        await admissionHeartbeat.drain();
+        try {
+            await BenchmarkBatch.updateOne(
+                {
+                    _id: batchId,
+                    execution_pid: process.pid,
+                    execution_started_at: now
+                },
+                {
+                    $set: {
+                        execution_started_at: null,
+                        execution_pid: null,
+                        authority_state: 'authority_invalidated',
+                        authority_reconciliation_reason: 'execution_lock_acknowledgement_lost'
+                    }
+                }
+            );
+        } catch (compensationError) {
+            markReconciliationPending(error, compensationError, 'BATCH_LOCK_RECONCILIATION_PENDING', {
+                workloadId: String(batchId), batchId, resultId: batchId, phase: 'execution lock'
+            });
+        }
+        if (error?.retainAdmission === true) {
+            retainAdmissionHeartbeat(admissionHeartbeat, options.execution_config?.estimated_duration_ms || null, {
+                workloadId: String(batchId),
+                phase: 'execution_lock'
+            });
+        } else {
+            await admissionHeartbeat.drain();
+        }
         throw error;
     }
 
     if (!batch) {
-        await admissionHeartbeat.drain();
         const existingBatch = await BenchmarkBatch.findById(batchId);
         if (!existingBatch) {
             logger.error('Batch not found', { batchId });
@@ -520,8 +644,19 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             });
         }
         if (executionAdmission?.idempotent !== true) {
-            await releaseWorkloadAdmission(String(batchId)).catch(() => {});
+            const released = await releaseWorkloadAdmission(String(batchId));
+            if (released?.released !== true) {
+                retainAdmissionHeartbeat(admissionHeartbeat, options.execution_config?.estimated_duration_ms || null, {
+                    workloadId: String(batchId),
+                    phase: 'duplicate_execution'
+                });
+                const error = new Error(released?.reason || 'Workload admission release failed after duplicate execution');
+                error.code = 'WORKLOAD_ADMISSION_RELEASE_FAILED';
+                error.retainAdmission = true;
+                throw error;
+            }
         }
+        await admissionHeartbeat.drain();
         return;
     }
 
@@ -547,6 +682,7 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
     let heartbeatInterval = null;
     let hostLifecycleRestored = false;
     let terminalStatePersisted = false;
+    let admissionRetentionRequired = false;
 
     const stopHeartbeat = () => {
         const interval = heartbeatInterval;
@@ -669,19 +805,27 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                 // Counter acknowledgement is ambiguous at lease loss. Mark the
                 // projection non-terminal and recoverable from result rows;
                 // never publish it as completed evidence.
-                await BenchmarkBatch.updateOne(
-                    { _id: batchId, status: { $in: ['pending', 'running', 'judging'] } },
-                    {
-                        $set: {
-                            status: 'interrupted',
-                            failure_reason: 'authority_lost_during_progress_write',
-                            last_activity_at: new Date(),
-                            current_test: buildIdleCurrentTest(),
-                            active_slot: null,
-                            execution_pid: null
+                try {
+                    await BenchmarkBatch.updateOne(
+                        { _id: batchId, status: { $in: ['pending', 'running', 'judging'] } },
+                        {
+                            $set: {
+                                status: 'interrupted',
+                                failure_reason: 'authority_lost_during_progress_write',
+                                authority_state: 'authority_invalidated',
+                                authority_reconciliation_reason: 'authority_lost_during_progress_write',
+                                last_activity_at: new Date(),
+                                current_test: buildIdleCurrentTest(),
+                                active_slot: null,
+                                execution_pid: null
+                            }
                         }
-                    }
-                ).catch(() => {});
+                    );
+                } catch (compensationError) {
+                    markReconciliationPending(error, compensationError, 'BATCH_PROGRESS_RECONCILIATION_PENDING', {
+                        workloadId: String(batchId), batchId, resultId: batchId, phase: 'batch progress'
+                    });
+                }
             }
             throw error;
         }
@@ -728,10 +872,16 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
                 await batch.save({ signal: admissionAbort.signal });
                 admissionHeartbeat.assertActive();
             } catch (error) {
-                await BenchmarkBatch.updateOne(
-                    { _id: batchId, total_tests: plannedTotalTests },
-                    { $set: { total_tests: priorTotalTests } }
-                ).catch(() => {});
+                try {
+                    await BenchmarkBatch.updateOne(
+                        { _id: batchId, total_tests: plannedTotalTests },
+                        { $set: { total_tests: priorTotalTests } }
+                    );
+                } catch (compensationError) {
+                    markReconciliationPending(error, compensationError, 'BATCH_PLAN_RECONCILIATION_PENDING', {
+                        workloadId: String(batchId), batchId, resultId: batchId, phase: 'batch plan'
+                    });
+                }
                 throw error;
             }
         }
@@ -859,12 +1009,15 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
         }
     } catch (err) {
         hostLifecycleRestored = err?.hostLifecycleRestored === true;
+        admissionRetentionRequired = err?.retainAdmission === true;
         const authorityLost = admissionAbort.signal.aborted
             || admissionHeartbeat.getFailure?.()
             || err?.code === 'BENCHMARK_CLAIM_LOST'
             || err?.code === 'BENCHMARK_CLAIM_STOPPED';
         if (authorityLost) {
-            throw (admissionAbort.signal.reason instanceof Error
+            throw (err?.retainAdmission === true
+                ? err
+                : admissionAbort.signal.reason instanceof Error
                 ? admissionAbort.signal.reason
                 : admissionHeartbeat.getFailure?.() || err);
         }
@@ -885,45 +1038,63 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
             crashSnapshot = null;
         }
         let failureTransition;
+        let terminalPersistenceError = null;
         if (crashSnapshot?.trust_evidence_context
             && crashSnapshot.trust_evidence_sealed !== true
             && crashSnapshot.trust_evidence_finalized_at == null
             && ['pending', 'running', 'judging'].includes(crashSnapshot.status)) {
-            failureTransition = await BenchmarkBatch.finalizeTrustEvidenceBatch(batchId, {
-                status: 'failed',
-                failureReason: 'execution_crash',
-                allowUnstarted: true
-            }).then(() => ({ matchedCount: 1 })).catch((persistErr) => {
+            try {
+                await BenchmarkBatch.finalizeTrustEvidenceBatch(batchId, {
+                    status: 'failed',
+                    failureReason: 'execution_crash',
+                    allowUnstarted: true
+                });
+                failureTransition = { matchedCount: 1 };
+            } catch (persistErr) {
                 logger.error('Failed to preserve strict Trust crash evidence', {
                     batchId,
                     error: persistErr.message
                 });
-                return null;
-            });
-        } else {
-            failureTransition = await BenchmarkBatch.updateOne(
-            {
-                _id: batchId,
-                status: { $in: ['pending', 'running', 'judging'] }
-            },
-            {
-                $set: {
-                    status: 'failed',
-                    judge_status: 'failed',
-                    completed_at: failedAt,
-                    last_activity_at: failedAt,
-                    current_test: buildIdleCurrentTest(),
-                    active_slot: null,
-                    execution_pid: null
-                }
+                terminalPersistenceError = persistErr;
+                failureTransition = null;
             }
-            ).catch((persistErr) => {
+        } else {
+            try {
+                failureTransition = await BenchmarkBatch.updateOne(
+                    {
+                        _id: batchId,
+                        status: { $in: ['pending', 'running', 'judging'] }
+                    },
+                    {
+                        $set: {
+                            status: 'failed',
+                            judge_status: 'failed',
+                            authority_state: 'authority_invalidated',
+                            authority_reconciliation_reason: 'execution_crash',
+                            completed_at: failedAt,
+                            last_activity_at: failedAt,
+                            current_test: buildIdleCurrentTest(),
+                            active_slot: null,
+                            execution_pid: null
+                        }
+                    }
+                );
+            } catch (persistErr) {
+                terminalPersistenceError = persistErr;
+                failureTransition = null;
                 logger.error('Failed to persist batch crash state', {
                     batchId,
                     error: persistErr.message
-                });
-                return null;
+                }
+                );
+            }
+        }
+
+        if (terminalPersistenceError) {
+            markReconciliationPending(err, terminalPersistenceError, 'BATCH_TERMINAL_RECONCILIATION_PENDING', {
+                workloadId: String(batchId), batchId, resultId: batchId, phase: 'batch terminal persistence'
             });
+            admissionRetentionRequired = true;
         }
 
         // A concurrent user stop is a successful terminal transition, not a
@@ -985,21 +1156,29 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
         // restored under its fence and the terminal batch transition is
         // durable. A failed restore or failed terminal write intentionally
         // leaves the global admission recoverable until its TTL/reaper path.
-        if (!authorityLost && hostLifecycleRestored && terminalStatePersisted) {
+        if (!authorityLost && !admissionRetentionRequired && hostLifecycleRestored && terminalStatePersisted) {
             admissionHeartbeat.assertActive();
-            await admissionHeartbeat.drain();
-            const released = await releaseWorkloadAdmission(String(batchId)).catch(error => ({
-                released: false,
-                reason: error.message
-            }));
-            if (released?.released !== true) {
+            try {
+                const released = await releaseWorkloadAdmission(String(batchId));
+                if (released?.released !== true) {
+                    throw new Error(released?.reason || 'Workload admission release was not acknowledged');
+                }
+                await admissionHeartbeat.drain();
+            } catch (releaseError) {
                 logger.error('Benchmark terminal state persisted but workload admission release failed', {
                     batchId,
-                    reason: released?.reason || 'unknown'
+                    reason: releaseError.message
+                });
+                retainAdmissionHeartbeat(admissionHeartbeat, options.execution_config?.estimated_duration_ms || null, {
+                    workloadId: String(batchId),
+                    phase: 'terminal_release'
                 });
             }
         } else {
-            await admissionHeartbeat.drain();
+            retainAdmissionHeartbeat(admissionHeartbeat, options.execution_config?.estimated_duration_ms || null, {
+                workloadId: String(batchId),
+                phase: authorityLost ? 'authority_lost' : 'terminal_reconciliation'
+            });
         }
         clearActiveState();
     }
@@ -1200,8 +1379,17 @@ async function resumeBatch(batchId, options = {}) {
     try {
         resumeHeartbeat.assertActive();
     } catch (error) {
-        await resumeHeartbeat.drain().catch(() => {});
-        await releaseWorkloadAdmission(batchId).catch(() => {});
+        await resumeHeartbeat.drain();
+        try {
+            const released = await releaseWorkloadAdmission(batchId);
+            if (released?.released !== true) {
+                throw new Error(released?.reason || 'Workload admission release was not acknowledged');
+            }
+        } catch (releaseError) {
+            markReconciliationPending(error, releaseError, 'BATCH_RESUME_ADMISSION_RECONCILIATION_PENDING', {
+                workloadId: String(batchId), batchId, resultId: batchId, phase: 'batch resume admission'
+            });
+        }
         throw error;
     }
     let admissionHandedOff = false;
@@ -1231,18 +1419,48 @@ async function resumeBatch(batchId, options = {}) {
         // A lost acknowledgement or post-write lease can leave the resume
         // transition committed. Revert only the exact state written by this
         // attempt so a concurrent terminal transition is never overwritten.
-        await BenchmarkBatch.updateOne({
-            _id: batchId,
-            status: 'running',
-            active_slot: 'benchmark_singleton',
-            execution_started_at: null,
-            execution_pid: null,
-            batch_contract_fingerprint: batchContractFingerprint
-        }, {
-            $set: priorResumeState
-        }).catch(() => {});
-        await resumeHeartbeat.drain().catch(() => {});
-        await releaseWorkloadAdmission(batchId).catch(() => {});
+        try {
+            await BenchmarkBatch.updateOne({
+                _id: batchId,
+                status: 'running',
+                active_slot: 'benchmark_singleton',
+                execution_started_at: null,
+                execution_pid: null,
+                batch_contract_fingerprint: batchContractFingerprint
+            }, {
+                $set: {
+                    ...priorResumeState,
+                    authority_state: 'authority_invalidated',
+                    authority_reconciliation_reason: 'resume_transition_acknowledgement_lost'
+                }
+            });
+        } catch (compensationError) {
+            markReconciliationPending(error, compensationError, 'BATCH_RESUME_RECONCILIATION_PENDING', {
+                workloadId: String(batchId), batchId, resultId: batchId, phase: 'batch resume transition'
+            });
+        }
+        if (error?.retainAdmission === true) {
+            retainAdmissionHeartbeat(resumeHeartbeat, resumeTtlMs, {
+                workloadId: batchId,
+                phase: 'resume_transition'
+            });
+        } else {
+            try {
+                const released = await releaseWorkloadAdmission(batchId);
+                if (released?.released !== true) {
+                    throw new Error(released?.reason || 'Workload admission release was not acknowledged');
+                }
+                await resumeHeartbeat.drain();
+            } catch (releaseError) {
+                markReconciliationPending(error, releaseError, 'BATCH_RESUME_ADMISSION_RECONCILIATION_PENDING', {
+                    workloadId: String(batchId), batchId, resultId: batchId, phase: 'batch resume release'
+                });
+                retainAdmissionHeartbeat(resumeHeartbeat, resumeTtlMs, {
+                    workloadId: batchId,
+                    phase: 'resume_release'
+                });
+            }
+        }
         throw error;
     }
 
@@ -1278,8 +1496,23 @@ async function resumeBatch(batchId, options = {}) {
             admissionHandedOff = true;
             await resumeHeartbeat.drain();
         } catch (error) {
-            await resumeHeartbeat.drain().catch(() => {});
-            if (!admissionHandedOff) await releaseWorkloadAdmission(batchId).catch(() => {});
+            if (!admissionHandedOff) {
+                try {
+                    const released = await releaseWorkloadAdmission(batchId);
+                    if (released?.released !== true) {
+                        throw new Error(released?.reason || 'Workload admission release was not acknowledged');
+                    }
+                    await resumeHeartbeat.drain();
+                } catch (releaseError) {
+                    markReconciliationPending(error, releaseError, 'BATCH_RESUME_HANDOFF_RECONCILIATION_PENDING', {
+                        workloadId: String(batchId), batchId, resultId: batchId, phase: 'batch resume handoff'
+                    });
+                    retainAdmissionHeartbeat(resumeHeartbeat, resumeTtlMs, {
+                        workloadId: batchId,
+                        phase: 'resume_handoff'
+                    });
+                }
+            }
             throw error;
         }
     } else {

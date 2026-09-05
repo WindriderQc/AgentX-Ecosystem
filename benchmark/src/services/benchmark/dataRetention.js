@@ -160,7 +160,9 @@ async function archiveOldResultsUnlocked(retentionDays = DEFAULT_RETENTION_DAYS,
     // Delete externalized timeline entries for archived batches
     const staleBatchObjectIds = deletableBatches.map(b => b._id);
     if (staleBatchObjectIds.length > 0) {
-        await BenchmarkTimelineEntry.deleteMany({ batchId: { $in: staleBatchObjectIds } }).catch(() => {});
+        // Timeline deletion is part of the same retention truth. Never report
+        // archival success while leaving orphaned external evidence behind.
+        await BenchmarkTimelineEntry.deleteMany({ batchId: { $in: staleBatchObjectIds } });
 
         // Compact only unreferenced archived batches. A receipt protects both
         // the external results and the batch-local evidence arrays it binds.

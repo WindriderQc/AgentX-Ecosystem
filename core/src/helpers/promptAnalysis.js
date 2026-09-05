@@ -4,6 +4,11 @@
  */
 
 const logger = require('../../config/logger');
+const { executeAdmittedOllamaAttempt } = require('../services/routing/inferenceAttemptExecutor');
+
+const PROMPT_ANALYSIS_TIMEOUT_MS = Number(process.env.PROMPT_ANALYSIS_TIMEOUT_MS) > 0
+  ? Number(process.env.PROMPT_ANALYSIS_TIMEOUT_MS)
+  : 120_000;
 
 /**
  * Analyze failure patterns from negative conversations
@@ -210,13 +215,12 @@ Be specific and actionable. Focus on changes that directly address the identifie
       throw new Error('A configured analysis or default chat model is required for prompt analysis');
     }
 
-    const fetch = (await import('node-fetch')).default;
-
-    // Call Ollama with analysis model (configurable)
-    const response = await fetch(`${ollamaHost}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    // Use the shared executor so heartbeat loss aborts transport and a missing,
+    // malformed, or non-terminal Ollama body cannot release the admission.
+    const attempt = await executeAdmittedOllamaAttempt({
+      hostUrl: ollamaHost,
+      model: analysisModel,
+      payload: {
         model: analysisModel,
         prompt: analysisPrompt,
         stream: false,
@@ -224,14 +228,21 @@ Be specific and actionable. Focus on changes that directly address the identifie
           temperature: 0.7,
           num_predict: 2000
         }
-      })
+      },
+      useChat: false,
+      stream: false,
+      timeoutMs: PROMPT_ANALYSIS_TIMEOUT_MS,
+      admissionKind: 'prompt-analysis',
+      principal: 'core-prompt-analysis',
+      runtimeOptions: {
+        temperature: 0.7,
+        num_predict: 2000
+      }
     });
-
-    if (!response.ok) {
-      throw new Error(`Ollama API error: ${response.status}`);
+    if (!attempt.ok) {
+      throw new Error(`Ollama API error: ${attempt.status}`);
     }
-
-    const result = await response.json();
+    const result = attempt.data;
     let analysisText = result.response;
 
     // Try to extract JSON from response

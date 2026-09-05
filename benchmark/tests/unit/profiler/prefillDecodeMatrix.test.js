@@ -99,6 +99,9 @@ describe('planMatrix', () => {
 
 describe('runPrefillDecodeMatrix', () => {
   test('runs every fitting cell and computes separate prefill/decode throughput', async () => {
+    const captureTelemetry = jest.fn(async ({ prefillTokens, decodeTokens, repeat }) => ({
+      ok: true, prefillTokens, decodeTokens, repeat
+    }));
     generate.mockImplementation((host, body) => Promise.resolve(ollamaResponse({
       promptTokens: body.options.num_ctx,
       completionTokens: body.options.num_predict,
@@ -109,13 +112,16 @@ describe('runPrefillDecodeMatrix', () => {
     const result = await runPrefillDecodeMatrix('http://host:11434', 'm', {
       prefillTokens: [512, 2048],
       decodeTokens: [64, 256],
-      safeNumCtx: 8192
+      safeNumCtx: 8192,
+      captureTelemetry
     });
 
     expect(result.cellCount).toBe(4);
     expect(result.passCount).toBe(4);
     expect(result.skippedCount).toBe(0);
-    expect(generate).toHaveBeenCalledTimes(12);
+    expect(generate).toHaveBeenCalledTimes(20);
+    expect(captureTelemetry).toHaveBeenCalledTimes(20);
+    expect(result.telemetrySampleCount).toBe(20);
 
     // Single shared num_ctx across all calls
     const ctxs = generate.mock.calls.map(([, body]) => body.options.num_ctx);
@@ -127,7 +133,8 @@ describe('runPrefillDecodeMatrix', () => {
     expect(cell.decodeTokensPerSec).toBeCloseTo(120, 0);
     expect(cell.promptEvalDurationMs).toBeGreaterThan(0);
     expect(cell.runtimeContextLength).toBe(ctxs[0]);
-    expect(cell.passingSampleCount).toBe(3);
+    expect(cell.passingSampleCount).toBe(5);
+    expect(cell.samples.every(sample => sample.hardwareTelemetry?.ok === true)).toBe(true);
     expect(cell.prefillStatistics.confidenceInterval95.method).toBe('student_t');
     expect(cell).not.toHaveProperty('ttftMs');
     expect(cell.status).toBe('pass');
@@ -198,7 +205,7 @@ describe('runPrefillDecodeMatrix', () => {
     expect(result.cells[0].status).toBe('error');
     expect(result.cells[0].error).toBe('boom');
     expect(result.cells[1].status).toBe('pass');
-    expect(generate).toHaveBeenCalledTimes(4);
+    expect(generate).toHaveBeenCalledTimes(6);
   });
 
   test('rejects a cell when Ollama does not attest the requested resident context', async () => {

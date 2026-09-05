@@ -38,6 +38,20 @@ function failStatus(status) {
 
 const HOST = 'http://localhost:11434';
 
+function workloadSignal(workloadId = 'judge-validation-test') {
+    const signal = new AbortController().signal;
+    Object.defineProperty(signal, 'workloadId', { value: workloadId });
+    return signal;
+}
+
+function generated(data, statusCode = 200) {
+    return {
+        status: statusCode >= 200 && statusCode < 300 ? 'success' : 'error',
+        statusCode,
+        data
+    };
+}
+
 describe('Judge Model Validator', () => {
     describe('input validation', () => {
         it('should return invalid when host is empty', async () => {
@@ -120,92 +134,107 @@ describe('Judge Model Validator', () => {
         }
 
         it('should return valid when model produces JSON', async () => {
-            const _fetch = mockFetch(
-                tagsResponse(),
-                okJson({ response: '{"score": 5, "reason": "test"}' })
-            );
+            const _fetch = mockFetch(tagsResponse());
+            const _generate = jest.fn().mockResolvedValue(generated({
+                response: '{"score": 5, "reason": "test"}'
+            }));
 
-            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
+            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', {
+                _fetch,
+                _generate,
+                signal: workloadSignal()
+            });
             expect(result.valid).toBe(true);
             expect(result.warning).toBeUndefined();
             expect(result.latency_ms).toBeDefined();
-            expect(JSON.parse(_fetch.mock.calls[1][1].body)).toMatchObject({ think: false });
             expect(_fetch.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
-            expect(_fetch.mock.calls[1][1]).toMatchObject({ redirect: 'manual' });
+            expect(_generate).toHaveBeenCalledWith(
+                'judge-validation-test',
+                expect.objectContaining({ host: HOST, model: 'qwen2.5:7b-instruct', think: false }),
+                expect.objectContaining({ signal: expect.anything() })
+            );
         });
 
         it('should return invalid when model produces no JSON', async () => {
-            const _fetch = mockFetch(
-                tagsResponse(),
-                okJson({ response: 'I cannot produce JSON output right now.' })
-            );
+            const _fetch = mockFetch(tagsResponse());
+            const _generate = jest.fn().mockResolvedValue(generated({
+                response: 'I cannot produce JSON output right now.'
+            }));
 
-            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
+            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', {
+                _fetch, _generate, signal: workloadSignal()
+            });
             expect(result.valid).toBe(true);
             expect(result.warning).toContain('not JSON');
         });
 
         it('should return invalid when generation request fails', async () => {
-            const _fetch = mockFetch(
-                tagsResponse(),
-                failStatus(404)
-            );
+            const _fetch = mockFetch(tagsResponse());
+            const _generate = jest.fn().mockResolvedValue(generated(null, 404));
 
-            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
+            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', {
+                _fetch, _generate, signal: workloadSignal()
+            });
             expect(result.valid).toBe(true);
             expect(result.warning).toContain('HTTP 404');
         });
 
         it('should surface HTTP 500 as a warning during generation smoke-test', async () => {
-            const _fetch = mockFetch(
-                tagsResponse(),
-                failStatus(500)
-            );
+            const _fetch = mockFetch(tagsResponse());
+            const _generate = jest.fn().mockResolvedValue(generated(null, 500));
 
-            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
+            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', {
+                _fetch, _generate, signal: workloadSignal()
+            });
             expect(result.valid).toBe(true);
             expect(result.warning).toContain('HTTP 500');
         });
 
         it('should warn when output JSON is malformed', async () => {
-            const _fetch = mockFetch(
-                tagsResponse(),
-                okJson({ message: { content: '{"score": 5, bad-json}' } })
-            );
+            const _fetch = mockFetch(tagsResponse());
+            const _generate = jest.fn().mockResolvedValue(generated({
+                message: { content: '{"score": 5, bad-json}' }
+            }));
 
-            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
+            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', {
+                _fetch, _generate, signal: workloadSignal()
+            });
             expect(result.valid).toBe(true);
             expect(result.warning).toContain('malformed JSON');
         });
 
         it('should handle JSON embedded in text', async () => {
-            const _fetch = mockFetch(
-                tagsResponse(),
-                okJson({ response: 'Here is my rating: {"score": 8, "reason": "good"} hope that helps!' })
-            );
+            const _fetch = mockFetch(tagsResponse());
+            const _generate = jest.fn().mockResolvedValue(generated({
+                response: 'Here is my rating: {"score": 8, "reason": "good"} hope that helps!'
+            }));
 
-            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
+            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', {
+                _fetch, _generate, signal: workloadSignal()
+            });
             expect(result.valid).toBe(true);
         });
 
         it('should return latency_ms on all outcomes', async () => {
-            const _fetch = mockFetch(
-                tagsResponse(),
-                okJson({ response: '{"score": 5}' })
-            );
+            const _fetch = mockFetch(tagsResponse());
+            const _generate = jest.fn().mockResolvedValue(generated({ response: '{"score": 5}' }));
 
-            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
+            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', {
+                _fetch, _generate, signal: workloadSignal()
+            });
             expect(typeof result.latency_ms).toBe('number');
             expect(result.latency_ms).toBeGreaterThanOrEqual(0);
         });
 
         it('should treat timeout during generation as valid (cold start)', async () => {
-            const _fetch = mockFetch(
-                tagsResponse(),
+            const _fetch = mockFetch(tagsResponse());
+            const _generate = jest.fn().mockRejectedValue(
                 Object.assign(new Error('timeout'), { name: 'AbortError' })
             );
 
-            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', { _fetch });
+            const result = await validateJudgeModel(HOST, 'qwen2.5:7b-instruct', {
+                _fetch, _generate, signal: workloadSignal()
+            });
             expect(result.valid).toBe(true);
             expect(result.warning).toContain('cold start');
         });

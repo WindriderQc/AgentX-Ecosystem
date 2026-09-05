@@ -7,6 +7,22 @@ const { admitOllamaTargetResolved } = require('../../helpers/ollamaTargetAdmissi
 const logger = require('../../../config/logger');
 
 const STATUS_TIMEOUT_MS = 4000;
+const METADATA_FIELDS = new Set([
+  'hostId', 'hostUrl', 'displayName', 'gpu', 'ollama', 'status', 'lastSeenAt', 'cpu', 'modelCount'
+]);
+const AUTHORITY_FIELDS = new Set(['baseline', 'dedicated', 'reconciliation']);
+const AUTHORITY_SERVICES = new Set([
+  'profiler-baseline',
+  'profiler-release',
+  'profiler-recovery'
+]);
+
+function hostProfileWriteError(message, code, statusCode = 409) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
 
 function normalizeHostUrlForCompare(hostUrl) {
   return String(hostUrl || '').trim().replace(/\/+$/, '').toLowerCase();
@@ -16,26 +32,35 @@ function getConfiguredHost(hostId) {
   return getConfiguredHosts().find(host => String(host.id) === String(hostId)) || null;
 }
 
-function applyConfiguredIdentity(profile, configuredHost) {
-  if (!configuredHost) return profile;
+function maskPendingAuthority(profile) {
+  if (!profile) return profile;
+  if (new Set(['pending_reconciliation', 'authority_invalidated']).has(profile.baseline?.authorityState)) {
+    return { ...profile, baseline: null };
+  }
+  return profile;
+}
 
-  const previousUrl = normalizeHostUrlForCompare(profile?.hostUrl);
+function applyConfiguredIdentity(profile, configuredHost) {
+  const safeProfile = maskPendingAuthority(profile);
+  if (!configuredHost) return safeProfile;
+
+  const previousUrl = normalizeHostUrlForCompare(safeProfile?.hostUrl);
   const configuredUrl = normalizeHostUrlForCompare(configuredHost.url);
   const identityMoved = Boolean(previousUrl && configuredUrl && previousUrl !== configuredUrl);
   const configuredVram = Number(configuredHost.vramMb);
 
   return {
-    ...(profile || {}),
+    ...(safeProfile || {}),
     hostId: configuredHost.id,
     hostUrl: configuredHost.url,
     displayName: configuredHost.name,
     gpu: {
-      ...(profile?.gpu || {}),
+      ...(safeProfile?.gpu || {}),
       ...(Number.isFinite(configuredVram) && configuredVram > 0
         ? { vramTotalMiB: configuredVram }
         : {})
     },
-    status: profile?.status || 'unknown',
+    status: safeProfile?.status || 'unknown',
     // Measurements belong to the physical endpoint, not to a reusable host
     // slot. Do not display a baseline captured before that slot moved.
     ...(identityMoved ? { baseline: null } : {})
@@ -86,7 +111,7 @@ async function getByUrl(hostUrl) {
     host => normalizeHostUrlForCompare(host.url) === normalizeHostUrlForCompare(normalized)
   );
   if (configuredHost) return getById(configuredHost.id);
-  return HostProfile.findOne({ hostUrl: normalized }).lean();
+  return maskPendingAuthority(await HostProfile.findOne({ hostUrl: normalized }).lean());
 }
 
 /**
@@ -107,7 +132,7 @@ function flattenToDotPaths(obj, prefix = '', out = {}) {
   return out;
 }
 
-async function upsert(data, options = {}) {
+async function writeProfile(data, options = {}) {
   options.assertAuthorityActive?.();
   const input = { ...data };
   const configuredHost = getConfiguredHost(input.hostId);
@@ -131,25 +156,142 @@ async function upsert(data, options = {}) {
   // as dedicated.detectedAt into those legacy rows makes MongoDB reject the
   // whole findAndModify. Replace the complete value atomically instead.
   if (hasDedicatedInput && dedicated != null) update.dedicated = dedicated;
-  const hasHostIdentityInput = Boolean(data?.hostUrl || data?.gpu?.vramTotalMiB);
-
-  if (input?.hostId && hasHostIdentityInput) {
-    const existing = await HostProfile.findOne({ hostId: input.hostId }).lean();
-    if (hostIdentityChanged(existing, input) && !Object.prototype.hasOwnProperty.call(input, 'baseline')) {
-      update.baseline = null;
-    }
-  }
-
   const operation = { $set: update };
   if (hasDedicatedInput && dedicated == null) operation.$unset = { dedicated: '' };
 
   const updated = await HostProfile.findOneAndUpdate(
-    { hostId: input.hostId },
+    { hostId: input.hostId, ...(options.filter || {}) },
     operation,
-    { upsert: true, new: true, runValidators: true, ...(options.signal ? { signal: options.signal } : {}) }
+    {
+      upsert: options.upsert !== false,
+      new: true,
+      runValidators: true,
+      ...(options.signal ? { signal: options.signal } : {})
+    }
   );
   options.assertAuthorityActive?.();
   return updated;
+}
+
+async function getByIdForAuthority(hostId) {
+  return HostProfile.findOne({ hostId })
+    .select([
+      '+baseline.persistenceReceipt',
+      '+baseline.authorityAdmissionId',
+      '+baseline.authorityPrincipal',
+      '+baseline.authorityWriteId',
+      '+baseline.authorityReconciliationId'
+    ].join(' '))
+    .lean();
+}
+
+function assertAllowedFields(data, allowed, code) {
+  const rejected = Object.keys(data || {}).filter(field => !allowed.has(field));
+  if (rejected.length) {
+    throw hostProfileWriteError(
+      `Host profile fields are not writable through this service: ${rejected.join(', ')}`,
+      code,
+      400
+    );
+  }
+}
+
+function immutableAuthorityProof(data, options) {
+  if (!AUTHORITY_SERVICES.has(options.authorityService)) {
+    throw hostProfileWriteError(
+      'Host profile authority writes require an allowlisted internal service',
+      'HOST_PROFILE_AUTHORITY_SERVICE_REQUIRED',
+      403
+    );
+  }
+  if (!(options.signal instanceof AbortSignal) || typeof options.assertAuthorityActive !== 'function') {
+    throw hostProfileWriteError(
+      'Host profile authority writes require a live fenced signal and assertion',
+      'HOST_PROFILE_AUTHORITY_FENCE_REQUIRED'
+    );
+  }
+  const reconciliation = data?.reconciliation || {};
+  const supplied = options.authorityProof || {};
+  const proof = Object.freeze({
+    admissionId: String(supplied.admissionId || reconciliation.admissionId || '').trim(),
+    generation: String(supplied.generation || reconciliation.admissionGeneration || '').trim(),
+    principal: String(supplied.principal || reconciliation.admissionPrincipal || '').trim()
+  });
+  if (!proof.admissionId || !proof.generation || !proof.principal) {
+    throw hostProfileWriteError(
+      'Host profile authority proof is incomplete',
+      'HOST_PROFILE_AUTHORITY_PROOF_REQUIRED'
+    );
+  }
+  if (data?.reconciliation && (
+    String(reconciliation.admissionId || '') !== proof.admissionId
+    || String(reconciliation.admissionGeneration || '') !== proof.generation
+    || String(reconciliation.admissionPrincipal || '') !== proof.principal
+  )) {
+    throw hostProfileWriteError(
+      'Host profile reconciliation proof does not match the fenced authority',
+      'HOST_PROFILE_AUTHORITY_PROOF_MISMATCH'
+    );
+  }
+  return proof;
+}
+
+function reconciliationCas(reconciliation, proof) {
+  const exact = {
+    'reconciliation.admissionId': proof.admissionId,
+    'reconciliation.admissionGeneration': proof.generation,
+    'reconciliation.admissionPrincipal': proof.principal
+  };
+  if (reconciliation?.state !== 'prepared') return exact;
+  return {
+    $or: [
+      exact,
+      { 'reconciliation.state': 'resolved' },
+      { 'reconciliation.state': { $exists: false } }
+    ]
+  };
+}
+
+async function upsertMetadata(data) {
+  assertAllowedFields(data, METADATA_FIELDS, 'HOST_PROFILE_METADATA_FIELD_FORBIDDEN');
+  return writeProfile(data);
+}
+
+async function upsertAuthority(data, options = {}) {
+  assertAllowedFields(data, new Set([...METADATA_FIELDS, ...AUTHORITY_FIELDS]), 'HOST_PROFILE_AUTHORITY_FIELD_FORBIDDEN');
+  const proof = immutableAuthorityProof(data, options);
+  const authorityFilter = options.authorityFilter || (data?.reconciliation
+    ? reconciliationCas(data.reconciliation, proof)
+    : null);
+  if (!authorityFilter || typeof authorityFilter !== 'object' || Array.isArray(authorityFilter)) {
+    throw hostProfileWriteError(
+      'Host profile authority writes require an exact generation CAS',
+      'HOST_PROFILE_AUTHORITY_CAS_REQUIRED'
+    );
+  }
+  try {
+    const updated = await writeProfile(data, {
+      ...options,
+      filter: { ...authorityFilter, ...(options.filter || {}) },
+      upsert: data?.reconciliation?.state === 'prepared'
+        || (Boolean(data?.baseline) && options.expectedAuthorityGeneration == null)
+    });
+    if (!updated) {
+      throw hostProfileWriteError(
+        'Host profile authority generation changed before the write committed',
+        'HOST_PROFILE_AUTHORITY_CAS_FAILED'
+      );
+    }
+    return updated;
+  } catch (error) {
+    if (error?.code === 11000) {
+      throw hostProfileWriteError(
+        'Host profile authority generation changed before the write committed',
+        'HOST_PROFILE_AUTHORITY_CAS_FAILED'
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -213,22 +355,61 @@ async function detectHardware(hostUrl) {
   }
 }
 
-async function updateStatus(hostId, status) {
+async function updateStatusMetadata(hostId, status) {
   const update = { status, lastSeenAt: status === 'online' ? new Date() : undefined };
   return HostProfile.findOneAndUpdate({ hostId }, update, { new: true });
 }
 
 async function updateBaseline(hostId, baseline, options = {}) {
-  return upsert({
+  const persistenceReceipt = String(baseline.persistenceReceipt || '').trim() || null;
+  const proof = immutableAuthorityProof(null, options);
+  const expectedGeneration = options.expectedAuthorityGeneration == null
+    ? null
+    : String(options.expectedAuthorityGeneration);
+  return upsertAuthority({
     hostId,
     baseline: {
       referenceModel: baseline.referenceModel || null,
       tokensPerSec: baseline.tokensPerSec ?? null,
       latencyMs: baseline.latencyMs ?? null,
       ttftMs: baseline.ttftMs ?? null,
-      testedAt: baseline.testedAt || new Date()
+      ttftMeasurement: baseline.ttftMeasurement || undefined,
+      testedAt: baseline.testedAt || new Date(),
+      persistenceReceipt,
+      authorityAdmissionId: proof.admissionId,
+      authorityGeneration: proof.generation,
+      authorityPrincipal: proof.principal
     }
-  }, options);
+  }, {
+    ...options,
+    authorityProof: proof,
+    authorityFilter: expectedGeneration
+      ? { 'baseline.authorityGeneration': expectedGeneration }
+      : { 'baseline.authorityGeneration': { $exists: false } },
+    ...(persistenceReceipt
+      ? { filter: { rejectedBaselineReceipts: { $ne: persistenceReceipt } } }
+      : {})
+  });
+}
+
+async function invalidateBaselineReceipt(hostId, persistenceReceipt, priorBaseline = null) {
+  const receipt = String(persistenceReceipt || '').trim();
+  if (!receipt) throw new Error('baseline persistence receipt is required');
+  const fenced = await HostProfile.updateOne(
+    { hostId },
+    { $addToSet: { rejectedBaselineReceipts: receipt } }
+  );
+  if (Number(fenced?.matchedCount) !== 1) {
+    throw new Error(`Host profile ${hostId} was not found while fencing a baseline receipt`);
+  }
+  const replacement = priorBaseline
+    ? { $set: { baseline: priorBaseline } }
+    : { $unset: { baseline: '' } };
+  await HostProfile.updateOne(
+    { hostId, 'baseline.persistenceReceipt': receipt },
+    replacement
+  );
+  return { invalidated: true, persistenceReceipt: receipt };
 }
 
 async function detectCpuCores(hostUrl) {
@@ -252,14 +433,22 @@ async function detectCpuCores(hostUrl) {
 async function releaseModel(hostUrl, modelName, options = {}) {
   try {
     await generate(hostUrl, { model: modelName, prompt: '', keep_alive: '0', stream: false }, {
-      timeoutMs: 15000,
+      // A client timeout is not a server-terminal unload receipt. Hold the
+      // fenced request until Ollama acknowledges completion.
+      timeoutMs: 0,
       signal: options.signal
     });
     options.assertClaimActive?.();
-    return { success: true };
+    return { success: true, serverTerminalObserved: true, serverTerminalAt: new Date() };
   } catch (err) {
-    if (options.signal?.aborted) throw (options.signal.reason instanceof Error ? options.signal.reason : err);
-    return { success: false, error: err.message };
+    const error = options.signal?.aborted && options.signal.reason instanceof Error
+      ? options.signal.reason
+      : err;
+    error.code = error.code || 'PROFILER_RELEASE_RECONCILIATION_PENDING';
+    error.statusCode = error.statusCode || 503;
+    error.retainAdmission = true;
+    error.serverTerminalObserved = false;
+    throw error;
   }
 }
 
@@ -275,4 +464,26 @@ function isDedicatedConflict(host, modelName) {
   return !models.includes(modelName);
 }
 
-module.exports = { getAll, getById, getByUrl, upsert, checkStatus, updateStatus, updateBaseline, detectCpuCores, releaseModel, detectDedicated, isDedicatedConflict, hostIdentityChanged };
+module.exports = {
+  getAll,
+  getById,
+  getByIdForAuthority,
+  getByUrl,
+  upsertMetadata,
+  upsertAuthority,
+  checkStatus,
+  updateStatusMetadata,
+  updateBaseline,
+  invalidateBaselineReceipt,
+  detectCpuCores,
+  releaseModel,
+  detectDedicated,
+  isDedicatedConflict,
+  hostIdentityChanged,
+  _internal: {
+    AUTHORITY_SERVICES,
+    METADATA_FIELDS,
+    immutableAuthorityProof,
+    reconciliationCas
+  }
+};

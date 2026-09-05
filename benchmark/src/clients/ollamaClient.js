@@ -8,7 +8,7 @@
  *  - Error normalisation
  *  - Logging
  *
- * Endpoints:  /api/generate, /api/chat, /api/tags, /api/show, /api/ps, /api/create, /api/pull, /api/delete
+ * Endpoints:  /api/generate, /api/chat, /api/tags, /api/show, /api/ps, /api/pull, /api/delete
  */
 
 const { getFetchOptions } = require('../helpers/httpAgent');
@@ -89,6 +89,11 @@ function normalizeCreateBody(body = {}) {
  * @returns {Promise<any>}  parsed JSON body
  */
 async function ollamaFetch(hostUrl, path, opts = {}) {
+    if (path === '/api/create') {
+        const error = new Error('Custom model creation is disabled until it uses the fenced runtime-mutation lifecycle');
+        error.code = 'CUSTOM_MODEL_DEPLOY_DISABLED';
+        throw error;
+    }
     const host = await admitOllamaTargetResolved(hostUrl, { configuredHosts: getConfiguredHosts() });
     const url = `${host}${path}`;
     const method = opts.method || 'GET';
@@ -142,36 +147,57 @@ async function ollamaFetch(hostUrl, path, opts = {}) {
 
 // ── Convenience methods ──────────────────────────────────────────────────────
 
+function requireExactTerminal(data, kind) {
+    const complete = data && typeof data === 'object' && !Array.isArray(data)
+        && typeof data.error !== 'string'
+        && (kind === 'pull' ? data.status === 'success' : data.done === true);
+    if (!complete) {
+        const error = new Error(`Ollama ${kind} response ended without its exact terminal receipt`);
+        error.code = kind === 'pull' ? 'OLLAMA_PULL_INCOMPLETE' : 'OLLAMA_RESPONSE_INCOMPLETE';
+        throw error;
+    }
+    return data;
+}
+
 /** GET /api/tags — list available models */
 const listModels = (host, opts) => ollamaFetch(host, '/api/tags', { timeoutMs: 8_000, ...opts });
 
 /** GET /api/ps — running models and VRAM usage */
 const listRunning = (host, opts) => ollamaFetch(host, '/api/ps', { timeoutMs: 5_000, ...opts });
 
+/** GET /api/version — live Ollama runtime identity */
+const getVersion = (host, opts) => ollamaFetch(host, '/api/version', { timeoutMs: 5_000, ...opts });
+
 /** POST /api/show — model metadata */
 const showModel = (host, model, opts) =>
     ollamaFetch(host, '/api/show', { method: 'POST', body: { name: model }, timeoutMs: 15_000, ...opts });
 
 /** POST /api/generate — text completion */
-const generate = (host, body, opts) =>
-    ollamaFetch(host, '/api/generate', { method: 'POST', body, ...opts });
+const generate = async (host, body, opts) => requireExactTerminal(
+    await ollamaFetch(host, '/api/generate', { method: 'POST', body, ...opts }),
+    'generate'
+);
 
 /** POST /api/chat — chat completion */
-const chat = (host, body, opts) =>
-    ollamaFetch(host, '/api/chat', { method: 'POST', body, ...opts });
+const chat = async (host, body, opts) => requireExactTerminal(
+    await ollamaFetch(host, '/api/chat', { method: 'POST', body, ...opts }),
+    'chat'
+);
 
-/** POST /api/create — create/deploy a model */
+/** Custom model deployment remains an explicit fail-closed tombstone. */
 const createModel = (host, body, opts) =>
     ollamaFetch(host, '/api/create', { method: 'POST', body: normalizeCreateBody(body), timeoutMs: 120_000, ...opts });
 
 /** POST /api/pull — install a model and wait until Ollama finishes. */
-const pullModel = (host, name, opts) =>
-    ollamaFetch(host, '/api/pull', {
+const pullModel = async (host, name, opts) => requireExactTerminal(
+    await ollamaFetch(host, '/api/pull', {
         method: 'POST',
         body: { name, stream: false },
         timeoutMs: 30 * 60 * 1000,
         ...opts
-    });
+    }),
+    'pull'
+);
 
 /** DELETE /api/delete — remove an exact model artifact. */
 const deleteModel = (host, name, opts) =>
@@ -186,6 +212,7 @@ module.exports = {
     ollamaFetch,
     listModels,
     listRunning,
+    getVersion,
     showModel,
     generate,
     chat,
@@ -193,5 +220,6 @@ module.exports = {
     pullModel,
     deleteModel,
     normalizeCreateBody,
+    requireExactTerminal,
     DEFAULT_TIMEOUT_MS
 };

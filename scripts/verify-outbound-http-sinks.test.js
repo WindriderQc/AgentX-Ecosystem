@@ -75,22 +75,22 @@ function withFixture(sourceText, run) {
 test('checked-in registry covers every recognized physical constructor and reports the staged v2 enforcement graph', () => {
   const receipt = verifyOutboundHttpSinks();
   assert.equal(receipt.schemaVersion, 2);
-  assert.equal(receipt.total, 69);
-  assert.deepEqual(receipt.byService, { core: 43, benchmark: 25, rag: 1 });
+  assert.equal(receipt.total, 61);
+  assert.deepEqual(receipt.byService, { core: 37, benchmark: 23, rag: 1 });
   assert.deepEqual(receipt.byConstructor, {
-    fetch: 54,
+    fetch: 46,
     'deps.fetch': 1,
     fetchImpl: 10,
     fetchFn: 2,
     'deps.fetchImpl': 1,
     'https.get': 1,
   });
-  assert.deepEqual(receipt.byAuthoritySource, { configured: 92, 'request-admitted': 31, canonical: 2 });
-  assert.equal(receipt.logicalOperations, 59);
-  assert.equal(receipt.enforcedOperations, 59);
+  assert.deepEqual(receipt.byAuthoritySource, { configured: 95, 'request-admitted': 28, canonical: 2 });
+  assert.equal(receipt.logicalOperations, 67);
+  assert.equal(receipt.enforcedOperations, 67);
   assert.equal(receipt.delegates, 9);
   assert.equal(receipt.approvedTransportSinks, 3);
-  assert.equal(receipt.legacyDirectSinks, 66);
+  assert.equal(receipt.legacyDirectSinks, 58);
 });
 
 test('fails closed when a runtime constructor has no exact inventory entry', () => withFixture(
@@ -358,10 +358,10 @@ test('new shared runtime files are scanned without a manual scope-list update', 
 test('checked-in JSON is structurally valid before runtime source discovery', () => {
   const validated = validateInventory(readInventory());
   assert.equal(validated.schemaVersion, 2);
-  assert.equal(validated.sinks.size, 69);
-  assert.equal(validated.operations.size, 59);
+  assert.equal(validated.sinks.size, 61);
+  assert.equal(validated.operations.size, 67);
   assert.equal(validated.delegates.size, 9);
-  assert.equal(validated.legacySinks.size, 66);
+  assert.equal(validated.legacySinks.size, 58);
   assert(validated.policies.size > 0);
 });
 

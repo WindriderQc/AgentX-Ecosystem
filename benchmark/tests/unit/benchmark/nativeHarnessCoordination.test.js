@@ -137,8 +137,10 @@ describe('native harness runtime coordination', () => {
 
         expect(response.status).toBe(200);
         expect(mockOrder.indexOf('admission:acquired')).toBeLessThan(mockOrder.indexOf('save:1:running'));
-        expect(mockOrder.indexOf('save:2:completed')).toBeLessThan(mockOrder.indexOf('heartbeat:drained'));
+        expect(mockOrder.indexOf('save:2:pending_reconciliation')).toBeGreaterThan(mockOrder.indexOf('harness:executed'));
+        expect(mockOrder.indexOf('save:2:pending_reconciliation')).toBeLessThan(mockOrder.indexOf('heartbeat:drained'));
         expect(mockOrder.indexOf('heartbeat:drained')).toBeLessThan(mockOrder.indexOf('admission:released'));
+        expect(mockOrder.indexOf('admission:released')).toBeLessThan(mockOrder.indexOf('save:3:completed'));
         expect(mockExecuteHarnessTarget).toHaveBeenCalledWith(expect.objectContaining({
             signal: expect.any(AbortSignal)
         }));
@@ -159,9 +161,13 @@ describe('native harness runtime coordination', () => {
         expect(mockCampaignUpdateOne).toHaveBeenCalledWith(
             { _id: 'campaign-coordination-1' },
             expect.objectContaining({
-                $set: expect.objectContaining({ status: 'failed' }),
+                $set: expect.objectContaining({
+                    status: 'pending_reconciliation',
+                    authority_state: 'pending_reconciliation'
+                }),
                 $unset: expect.objectContaining({ receipt: '', envelope: '' })
-            })
+            }),
+            { upsert: true }
         );
         expect(mockOrder.indexOf('authority:invalidated')).toBeLessThan(mockOrder.indexOf('heartbeat:drained'));
         expect(mockOrder.indexOf('heartbeat:drained')).toBeLessThan(mockOrder.indexOf('admission:released'));
@@ -208,5 +214,7 @@ describe('native harness runtime coordination', () => {
             error: 'release receipt unavailable'
         });
         expect(mockCampaignUpdateOne).toHaveBeenCalledTimes(1);
+        expect(mockOrder).toContain('save:2:pending_reconciliation');
+        expect(mockOrder).not.toContain('save:3:completed');
     });
 });

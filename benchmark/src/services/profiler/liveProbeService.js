@@ -33,17 +33,41 @@ function sameUrl(a, b) {
 function summarizeTelemetry(ollamaPs, profile) {
   const models = Array.isArray(ollamaPs?.models) ? ollamaPs.models : [];
   const usedBytes = models.reduce((sum, model) => sum + Number(model.size_vram || 0), 0);
-  const usedMiB = usedBytes > 0 ? Math.round(usedBytes / (1024 * 1024)) : null;
+  const psObserved = ollamaPs?.ok === true;
+  const usedMiB = psObserved ? Math.round(usedBytes / (1024 * 1024)) : null;
   const configuredTotal = Number(profile?.gpu?.vramTotalMiB || 0);
   const totalMiB = configuredTotal > 0 ? configuredTotal : null;
-  const source = usedMiB != null ? 'ollama-ps' : totalMiB != null ? 'static-profile' : 'none';
+  const source = psObserved ? 'ollama-ps' : totalMiB != null ? 'static-profile' : 'none';
   const vramPressurePct = totalMiB && usedMiB != null
     ? Math.round((usedMiB / totalMiB) * 100)
     : null;
 
+  const advancedMetrics = [
+    'gpu_utilization', 'temperature', 'power', 'clocks', 'throttle_reasons',
+    'pcie_link', 'topology', 'per_gpu_balance'
+  ];
+  const capability = {
+    contract: 'agentx.profiler-hardware-capability/v1',
+    status: psObserved || totalMiB != null ? 'partial' : 'unavailable',
+    qualificationAuthority: 'none',
+    collector: {
+      requiredContract: 'agentx.profiler-hardware-collector/v1',
+      status: 'not_configured',
+      ownershipBoundary: 'deployment_extension'
+    },
+    metrics: {
+      runtimeResidency: { status: psObserved ? 'observed' : 'unknown', source: psObserved ? 'ollama-ps' : 'none' },
+      vramUsedMiB: { status: psObserved ? 'observed' : 'unknown', source: psObserved ? 'ollama-ps' : 'none' },
+      vramTotalMiB: { status: totalMiB != null ? 'configured' : 'unknown', source: totalMiB != null ? 'host-profile' : 'none' },
+      ...Object.fromEntries(advancedMetrics.map((metric) => [metric, { status: 'unknown', source: 'none' }]))
+    },
+    unknownMetrics: advancedMetrics
+  };
+
   return {
     ok: source !== 'none',
     source,
+    capability,
     gpuName: profile?.gpu?.name || '',
     utilization: null,
     temperature: null,
@@ -74,7 +98,7 @@ function summarizeTelemetry(ollamaPs, profile) {
       sizeTotalMiB: model.size ? Math.round(model.size / (1024 * 1024)) : null
     })),
     error: ollamaPs?.ok === false ? ollamaPs.error || 'Ollama runtime telemetry unavailable' : null,
-    actionRequired: false
+    actionRequired: capability.status !== 'available'
   };
 }
 
@@ -100,7 +124,7 @@ async function detectOllamaHost({ hostUrl, displayName } = {}) {
     || parseUrlHost(normalized)
     || 'Ollama host';
 
-  const profile = await hostProfileService.upsert({
+  const profile = await hostProfileService.upsertMetadata({
     hostId,
     hostUrl: normalized,
     displayName: name,

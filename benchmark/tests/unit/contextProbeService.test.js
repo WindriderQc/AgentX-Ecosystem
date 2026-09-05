@@ -17,7 +17,22 @@ jest.mock('../../src/services/contextProbePayload', () => ({
 }));
 jest.mock('../../src/services/modelContextProfileService', () => ({
   updateFromProbeSnapshot: jest.fn().mockResolvedValue({ recommendationStatus: 'verified' }),
-  invalidateIfSnapshot: jest.fn().mockResolvedValue({ modifiedCount: 1 })
+  invalidateIfSnapshot: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
+  getByIdentityForAuthority: jest.fn().mockResolvedValue(null)
+}));
+jest.mock('../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+  prepareProfilerAuthorityWrite: jest.fn().mockResolvedValue({
+    _id: 'context-journal-1',
+    details: {
+      snapshotId: 'context-snapshot-1',
+      authorityWriteId: 'context-write-1',
+      modelName: 'gemma4:26b',
+      hostUrl: 'http://192.0.2.66:11434',
+      artifactDigest: 'sha256:exact',
+      runtimeFingerprint: 'runtime-a'
+    }
+  }),
+  completeProfilerAuthorityWrite: jest.fn().mockResolvedValue({ publicationReceipt: { state: 'authoritative' } })
 }));
 jest.mock('../../src/services/profiler/artifactIdentityService', () => ({
   identitiesMatch: jest.fn((left, right) => (
@@ -54,6 +69,7 @@ jest.mock('../../config/logger', () => ({
 const ModelContextProbeSnapshot = require('../../models/ModelContextProbeSnapshot');
 const ollamaClient = require('../../src/clients/ollamaClient');
 const modelContextProfileService = require('../../src/services/modelContextProfileService');
+const authorityReconciliation = require('../../src/services/benchmark/benchmarkAuthorityReconciliation');
 const artifactIdentityService = require('../../src/services/profiler/artifactIdentityService');
 const contextProbeService = require('../../src/services/contextProbeService');
 
@@ -104,7 +120,8 @@ describe('contextProbeService', () => {
   test('rejects an explicit metadata host before any Ollama context probe call', async () => {
     await expect(contextProbeService.probeModelContext('gemma4:26b', {
       hostUrl: 'http://169.254.169.254:11434',
-      acknowledgeMaintenance: true
+      acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1'
     })).rejects.toMatchObject({ code: 'OLLAMA_TARGET_REJECTED', statusCode: 400 });
 
     expect(ollamaClient.showModel).not.toHaveBeenCalled();
@@ -159,7 +176,8 @@ describe('contextProbeService', () => {
     const result = await contextProbeService.probeModelContext('gemma4:26b', {
       hostUrl: 'http://192.0.2.66:11434',
       artifactIdentity: ARTIFACT,
-      acknowledgeMaintenance: true
+      acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1'
     });
 
     expect(result.testedNumCtx).toBe(262144);
@@ -188,6 +206,11 @@ describe('contextProbeService', () => {
       ]
     });
     expect(result.authorityStatus).toBe('committed');
+    expect(authorityReconciliation.prepareProfilerAuthorityWrite.mock.invocationCallOrder[0])
+      .toBeLessThan(ModelContextProbeSnapshot.create.mock.invocationCallOrder[0]);
+    expect(ModelContextProbeSnapshot.create.mock.invocationCallOrder[0])
+      .toBeLessThan(modelContextProfileService.updateFromProbeSnapshot.mock.invocationCallOrder[0]);
+    expect(authorityReconciliation.completeProfilerAuthorityWrite).toHaveBeenCalledTimes(1);
     expect(callOrder[0]).toBe(262144);
     expect(callOrder[1]).toBe(2048);
     expect(callOrder.filter(numCtx => numCtx === 262144)).toHaveLength(2);
@@ -224,7 +247,8 @@ describe('contextProbeService', () => {
     const result = await contextProbeService.probeModelContext('gemma4:26b', {
       hostUrl: 'http://192.0.2.66:11434',
       artifactIdentity: ARTIFACT,
-      acknowledgeMaintenance: true
+      acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1'
     });
 
     expect(result.testedNumCtx).toBe(32768);
@@ -252,6 +276,7 @@ describe('contextProbeService', () => {
       hostUrl: 'http://192.0.2.66:11434',
       artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1',
       maxCtx: 4096
     });
 
@@ -282,6 +307,7 @@ describe('contextProbeService', () => {
       hostUrl: 'http://192.0.2.66:11434',
       artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1',
       maxCtx: 4096
     });
 
@@ -318,6 +344,7 @@ describe('contextProbeService', () => {
       hostUrl: 'http://192.0.2.66:11434',
       artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1',
       maxCtx: 4096
     });
 
@@ -355,6 +382,7 @@ describe('contextProbeService', () => {
       hostUrl: 'http://192.0.2.66:11434',
       artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1',
       maxCtx: 4096
     });
 
@@ -367,6 +395,49 @@ describe('contextProbeService', () => {
     for (const [, payload] of ollamaClient.generate.mock.calls) {
       expect(payload.options).toMatchObject({ temperature: 0, seed: 7 });
     }
+  });
+
+  it('retains five deterministic samples with Student-t confidence for Full candidates', async () => {
+    ollamaClient.showModel.mockResolvedValue({ model_info: { 'general.context_length': 2048 } });
+    ollamaClient.listRunning.mockResolvedValue({
+      models: [{ name: 'gemma4:26b', size: 100, size_vram: 100, context_length: 2048 }]
+    });
+    const speeds = [40, 41, 39, 40, 40];
+    ollamaClient.generate.mockImplementation(async () => {
+      const speed = speeds.shift();
+      return { eval_count: 40, eval_duration: (40 / speed) * 1e9, prompt_eval_count: 1600 };
+    });
+
+    const result = await contextProbeService.probeModelContext('gemma4:26b', {
+      hostUrl: 'http://192.0.2.66:11434',
+      artifactIdentity: ARTIFACT,
+      acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1',
+      maxCtx: 2048,
+      candidateRepeats: 5
+    });
+
+    expect(ollamaClient.generate).toHaveBeenCalledTimes(5);
+    expect(result.steps[0]).toEqual(expect.objectContaining({
+      repetitionCount: 5,
+      samples: expect.arrayContaining([expect.objectContaining({ passed: true })]),
+      throughputStatistics: expect.objectContaining({
+        attemptedSampleCount: 5,
+        sampleCount: 5,
+        minimumSamples: 5,
+        p50: expect.any(Number),
+        p95: expect.any(Number),
+        coefficientOfVariation: expect.any(Number),
+        confidenceInterval95: expect.objectContaining({ method: 'student_t' }),
+        reliability: 'high'
+      })
+    }));
+    expect(result).toEqual(expect.objectContaining({
+      performanceKneeContext: 2048,
+      performanceKneeDegradationThreshold: 15,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown'
+    }));
   });
 
   it('keeps the raw snapshot diagnostic but fails the run when context authority persistence fails', async () => {
@@ -385,15 +456,18 @@ describe('contextProbeService', () => {
       hostUrl: 'http://192.0.2.66:11434',
       artifactIdentity: ARTIFACT,
       acknowledgeMaintenance: true,
+      workloadId: 'context-workload-1',
       maxCtx: 2048
     })).rejects.toThrow('mongo unavailable');
     expect(ModelContextProbeSnapshot.create).toHaveBeenCalledWith(
       [expect.objectContaining({ status: 'completed' })],
       undefined
     );
+    expect(modelContextProfileService.invalidateIfSnapshot).not.toHaveBeenCalled();
+    expect(authorityReconciliation.completeProfilerAuthorityWrite).not.toHaveBeenCalled();
   });
 
-  it('deletes an ambiguously committed snapshot when authority is lost after the write', async () => {
+  it('tombstones an ambiguously committed snapshot when authority is lost after the write', async () => {
     const controller = new AbortController();
     let checkpointCount = 0;
     const lost = Object.assign(new Error('claim heartbeat rejected'), { code: 'BENCHMARK_CLAIM_LOST' });
@@ -412,7 +486,13 @@ describe('contextProbeService', () => {
       [expect.objectContaining({ _id: expect.anything(), status: 'completed' })],
       { signal: controller.signal }
     );
-    expect(ModelContextProbeSnapshot.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
+    expect(ModelContextProbeSnapshot.updateOne).toHaveBeenCalledWith(
+      { _id: expect.anything() },
+      expect.objectContaining({
+        $set: expect.objectContaining({ authorityStatus: 'rejected' })
+      }),
+      { upsert: true }
+    );
   });
 });
 

@@ -50,8 +50,12 @@ async function updateReadiness(modelName, hostId, stage, extraFields = {}, optio
   if (stage === 'profiled') setFields[`readiness.${hostId}.profiledAt`] = new Date();
   if (stage === 'benchmarked') setFields[`readiness.${hostId}.benchmarkedAt`] = new Date();
   Object.assign(setFields, extraFields);
+  const authorityWriteId = extraFields[`readiness.${hostId}.authorityWriteId`] || null;
   return ModelProfile.findOneAndUpdate(
-    { name: modelName },
+    {
+      name: modelName,
+      ...(authorityWriteId ? { rejectedAuthorityWriteIds: { $ne: authorityWriteId } } : {})
+    },
     { $set: setFields },
     { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true, ...(options.signal ? { signal: options.signal } : {}) }
   );
@@ -85,9 +89,18 @@ async function updateThinkingCapability(modelName, hostId, thinkingProfile = {},
     recommendedPolicy: policy,
     recommendationReason: thinkingProfile.recommendationReason || null
   };
+  if (options.authorityWriteId) {
+    capability.authorityWriteId = options.authorityWriteId;
+    capability.authorityState = options.authorityState || 'pending_reconciliation';
+  }
 
   return ModelProfile.findOneAndUpdate(
-    { name: modelName },
+    {
+      name: modelName,
+      ...(options.authorityWriteId
+        ? { rejectedAuthorityWriteIds: { $ne: options.authorityWriteId } }
+        : {})
+    },
     {
       $set: {
         'capabilities.thinking': supported,

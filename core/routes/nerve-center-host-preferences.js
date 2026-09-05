@@ -22,8 +22,14 @@ const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
 const { benchmarkTokenAllowed } = require('../src/services/routing/inferenceCallerAccess');
-const { requireOperatorAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
+const {
+  requireOperatorAccess,
+  requireOperatorUiAccess,
+  operatorRequestIdentity
+} = require('../src/middleware/operatorAccess');
 const runtimeCoordinationService = require('../src/services/runtimeCoordinationService');
+const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
+const { projectHostPreferenceForRead } = require('../src/services/hostPreferencePublicProjection');
 
 function coordinationPrincipal(req) {
   return benchmarkTokenAllowed(req) ? 'benchmark-service' : operatorRequestIdentity(req);
@@ -36,35 +42,6 @@ function requireBenchmarkCoordinationAccess(req, res, next) {
     code: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     message: 'Exact Benchmark service authentication is required for runtime workload admission.'
   });
-}
-
-function redactBenchmarkClaimCapabilities(pref) {
-  if (!pref) return pref;
-  const {
-    lastBenchmarkReleaseReceipt: _releaseReceipt,
-    ...safePref
-  } = pref;
-  if (!safePref.benchmarkClaim) return safePref;
-  const claim = safePref.benchmarkClaim;
-  return {
-    ...safePref,
-    benchmarkClaim: {
-      batchId: claim.batchId || null,
-      prevStatus: claim.prevStatus || null,
-      claimedAt: claim.claimedAt || null,
-      estimatedDurationMs: claim.estimatedDurationMs || null,
-      source: claim.source || null,
-      owner: claim.owner || null,
-      note: claim.note || null,
-      heartbeatAt: claim.heartbeatAt || null,
-      heartbeatTtlMs: claim.heartbeatTtlMs || null,
-      snapshotExact: claim.preClaimRuntime?.exact === true,
-      snapshotResidentCount: Array.isArray(claim.preClaimRuntime?.residents)
-        ? claim.preClaimRuntime.residents.length
-        : null,
-      finalizing: Boolean(claim.finalizeToken)
-    }
-  };
 }
 
 function resolveHostPreferenceUrl(req, res) {
@@ -93,7 +70,7 @@ router.get('/host-preferences', async (_req, res) => {
   try {
     const prefs = await hostPrefService.getAll();
     const hostIdentityDrift = hostPrefService.detectHostPreferenceIdentityDrift(prefs);
-    const normalizedPrefs = prefs.map((pref) => redactBenchmarkClaimCapabilities(
+    const normalizedPrefs = prefs.map((pref) => projectHostPreferenceForRead(
       hostPrefService.normalizeHostPreferenceIdentity(pref)
     ));
 
@@ -224,7 +201,7 @@ router.get('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
   }
 });
 
-router.put('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
+router.put('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -232,30 +209,44 @@ router.put('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
     if (!model) {
       return res.status(400).json({ status: 'error', message: 'model is required' });
     }
-    const pref = await hostPrefService.setPinnedModel(hostUrl, model);
+    const pref = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `host-pin:set:${hostUrl}`
+    }, async ({ signal, assertActive }) => {
+      const updated = await hostPrefService.setPinnedModel(hostUrl, model);
+      if (updated?.status === 'restoring') {
+        const restored = await hostPrefService.restorePinnedModels(hostUrl, {
+          signal,
+          assertAuthorityActive: assertActive
+        });
+        if (restored?.status === 'error' || restored?.verified === false) {
+          throw new Error(restored?.error || 'Pinned model restoration was not verified');
+        }
+        return { ...updated, status: restored.status || updated.status };
+      }
+      return updated;
+    });
     if (!pref) {
       return res.status(404).json({ status: 'error', message: 'Host preference not found. Configure the host first.' });
-    }
-    if (pref.status === 'restoring') {
-      hostPrefService.restorePinnedModels(hostUrl).catch(err => {
-        logger.warn(`[NerveCenter] Background pin warmup failed: ${err.message}`);
-      });
     }
     emitBuddyEvent('model_pinned', 'infrastructure', `Pinned ${model} on ${pref.displayName || hostUrl}`, 'normal');
     logger.info('[NerveCenter] Model pinned', { hostUrl, model });
     res.json({ status: 'success', data: { pinnedModels: pref.pinnedModels || [], status: pref.status } });
   } catch (err) {
     logger.error('[NerveCenter] pin set failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_PIN_SET_FAILED', message: err.message });
   }
 });
 
-router.delete('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
+router.delete('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     if (!requireTypedConfirmation(req, res, 'CLEAR HOST PIN', hostUrl)) return;
-    const pref = await hostPrefService.clearPinnedModel(hostUrl);
+    const pref = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `host-pin:clear:${hostUrl}`
+    }, () => hostPrefService.clearPinnedModel(hostUrl));
     if (!pref) {
       return res.status(404).json({ status: 'error', message: 'Host preference not found' });
     }
@@ -264,15 +255,21 @@ router.delete('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
     res.json({ status: 'success', data: { pinnedModels: [], status: pref.status } });
   } catch (err) {
     logger.error('[NerveCenter] pin clear failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_PIN_CLEAR_FAILED', message: err.message });
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/restore', async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/restore', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
-    const result = await hostPrefService.restorePinnedModels(hostUrl);
+    const result = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `host-pin:restore:${hostUrl}`
+    }, ({ signal, assertActive }) => hostPrefService.restorePinnedModels(hostUrl, {
+      signal,
+      assertAuthorityActive: assertActive
+    }));
     if (result.status === 'error') {
       return res.status(400).json({ status: 'error', message: result.error });
     }
@@ -282,11 +279,11 @@ router.post('/host-preferences/:hostUrl(*)/restore', async (req, res) => {
     res.json({ status: 'success', data: result });
   } catch (err) {
     logger.error('[NerveCenter] pin restore failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_PIN_RESTORE_FAILED', message: err.message });
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/swap', async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/swap', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -294,13 +291,19 @@ router.post('/host-preferences/:hostUrl(*)/swap', async (req, res) => {
     if (!model) {
       return res.status(400).json({ status: 'error', message: 'model is required' });
     }
-    const result = await hostPrefService.swapModel(hostUrl, model);
+    const result = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: `host-model:swap:${hostUrl}:${model}`
+    }, ({ signal, assertActive }) => hostPrefService.swapModel(hostUrl, model, {
+      signal,
+      assertAuthorityActive: assertActive
+    }));
     emitBuddyEvent('model_swapping', 'infrastructure', `Swapping to ${model} on ${hostUrl}`, 'normal');
     logger.info('[NerveCenter] Model swap triggered', { hostUrl, model });
     res.json({ status: 'success', data: result });
   } catch (err) {
     logger.error('[NerveCenter] model swap failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_MODEL_SWAP_FAILED', message: err.message });
   }
 });
 
@@ -501,6 +504,27 @@ router.post('/maintenance-leases/:leaseId/heartbeat', requireOperatorAccess, asy
   }
 });
 
+router.post('/maintenance-leases/:leaseId/mark-unknown', requireOperatorAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.markMaintenanceUnknown({
+      id: req.params.leaseId,
+      generation: req.body?.generation,
+      principal: operatorRequestIdentity(req),
+      reason: req.body?.reason
+    });
+    return res.status(result.quarantined ? 200 : 409).json({
+      status: result.quarantined ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      code: 'MAINTENANCE_QUARANTINE_FAILED',
+      message: error.message
+    });
+  }
+});
+
 router.delete('/maintenance-leases/:leaseId', requireOperatorAccess, async (req, res) => {
   try {
     const result = await runtimeCoordinationService.release('maintenance', {
@@ -534,6 +558,32 @@ router.post('/maintenance-leases/:leaseId/release-receipt', requireOperatorAcces
   }
 });
 
+router.post('/maintenance-leases/:leaseId/recover', requireOperatorAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.recoverMaintenanceAfterOperatorReconciliation({
+      id: req.params.leaseId,
+      generation: req.body?.generation,
+      principal: operatorRequestIdentity(req),
+      receipt: {
+        contract: req.body?.contract,
+        maintenanceReconciled: req.body?.maintenanceReconciled,
+        confirmation: req.body?.confirmation,
+        reconciledAt: req.body?.reconciledAt
+      }
+    });
+    return res.status(result.recovered ? 200 : 409).json({
+      status: result.recovered ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      code: 'MAINTENANCE_RECOVERY_FAILED',
+      message: error.message
+    });
+  }
+});
+
 router.post('/workload-admissions', requireBenchmarkCoordinationAccess, async (req, res) => {
   try {
     const result = await runtimeCoordinationService.acquireWorkload({
@@ -543,6 +593,7 @@ router.post('/workload-admissions', requireBenchmarkCoordinationAccess, async (r
       kind: req.body?.kind,
       batchId: req.body?.batchId,
       hosts: req.body?.hosts,
+      recoveryRequestId: req.body?.recoveryRequestId,
       ttl: req.body?.ttlMs
     });
     return res.status(result.acquired ? 200 : 409).json({ status: result.acquired ? 'success' : 'error', data: result });
@@ -562,6 +613,116 @@ router.post('/workload-admissions/:admissionId/heartbeat', requireBenchmarkCoord
     return res.status(result.heartbeat ? 200 : 409).json({ status: result.heartbeat ? 'success' : 'error', data: result });
   } catch (error) {
     return res.status(500).json({ status: 'error', code: 'WORKLOAD_HEARTBEAT_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-admissions/:admissionId/recovery', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.armWorkloadRecovery({
+      id: req.params.admissionId,
+      generation: req.body?.generation,
+      principal: coordinationPrincipal(req),
+      recoveryRequestId: req.body?.recoveryRequestId
+    });
+    return res.status(result.armed ? 200 : 409).json({ status: result.armed ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_ARM_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/adopt', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.adoptWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      principal: coordinationPrincipal(req),
+      recoveryRequestId: req.body?.recoveryRequestId,
+      ownerId: req.body?.ownerId,
+      ttl: req.body?.ttlMs
+    });
+    return res.status(result.adopted ? 200 : 409).json({ status: result.adopted ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_ADOPT_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/heartbeat', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.heartbeatWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId,
+      ttl: req.body?.ttlMs
+    });
+    return res.status(result.heartbeat ? 200 : 409).json({ status: result.heartbeat ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_HEARTBEAT_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/assert', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.assertWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId
+    });
+    return res.status(result.owned ? 200 : 409).json({ status: result.owned ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_ASSERT_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/transition', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.transitionWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId,
+      expectedVersion: req.body?.expectedVersion,
+      state: req.body?.state,
+      receipt: req.body?.receipt
+    });
+    return res.status(result.transitioned ? 200 : 409).json({
+      status: result.transitioned ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_TRANSITION_FAILED', message: error.message });
+  }
+});
+
+router.post('/workload-recoveries/:recoveryId/restore-hosts', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await hostPrefService.restoreClaimsForWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId,
+      excludedModelsByHost: req.body?.excludedModelsByHost || {}
+    });
+    return res.status(result.restored ? 200 : 409).json({
+      status: result.restored ? 'success' : 'error',
+      data: result
+    });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_HOST_RESTORE_FAILED', message: error.message });
+  }
+});
+
+router.delete('/workload-recoveries/:recoveryId', requireBenchmarkCoordinationAccess, async (req, res) => {
+  try {
+    const result = await runtimeCoordinationService.resolveWorkloadRecovery({
+      recoveryId: req.params.recoveryId,
+      recoveryGeneration: req.body?.recoveryGeneration,
+      principal: coordinationPrincipal(req),
+      ownerId: req.body?.ownerId
+    });
+    return res.status(result.released ? 200 : 409).json({ status: result.released ? 'success' : 'error', data: result });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', code: 'WORKLOAD_RECOVERY_RELEASE_FAILED', message: error.message });
   }
 });
 
@@ -631,7 +792,7 @@ router.post('/host-preferences/benchmark-claims/reap', requireOperatorAccess, as
 // PUT /host-preferences/:hostUrl — update host preference
 // ========================================
 
-router.put('/host-preferences/:hostUrl(*)', async (req, res) => {
+router.put('/host-preferences/:hostUrl(*)', requireOperatorUiAccess, async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -657,13 +818,20 @@ router.put('/host-preferences/:hostUrl(*)', async (req, res) => {
       if (updates[key] !== undefined) filtered[key] = updates[key];
     }
 
-    const data = await hostPrefService.updatePreference(hostUrl, filtered);
+    const data = await runRuntimeMutation({
+      principal: operatorRequestIdentity(req),
+      scope: 'host-preference:update'
+    }, () => hostPrefService.updatePreference(hostUrl, filtered));
     emitBuddyEvent('host_preference_updated', 'infrastructure', `Host preference updated: ${data.displayName || hostUrl}`, 'normal');
     logger.info('[NerveCenter] Host preference updated', { hostUrl, updates: Object.keys(filtered) });
-    res.json({ status: 'success', data });
+    res.json({ status: 'success', data: projectHostPreferenceForRead(data) });
   } catch (err) {
     logger.error('[NerveCenter] host preference update failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({
+      status: 'error',
+      code: err.code || 'HOST_PREFERENCE_UPDATE_FAILED',
+      message: err.message
+    });
   }
 });
 
@@ -680,13 +848,19 @@ router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAcces
     if (!entries.length) {
       return res.status(400).json({ status: 'error', message: 'No pinned models configured for this host' });
     }
-    const results = await hostPrefService.warmHost(hostUrl);
+    const results = await runRuntimeMutation({
+      principal: coordinationPrincipal(req),
+      scope: `host-pin:reload:${hostUrl}`
+    }, ({ signal, assertActive }) => hostPrefService.warmHost(hostUrl, {
+      signal,
+      assertAuthorityActive: assertActive
+    }));
     emitBuddyEvent('host_defaults_reloaded', 'infrastructure', `Reloaded pins on ${pref.displayName || hostUrl}`, 'normal');
     logger.info('[NerveCenter] Host pinned models reloaded', { hostUrl, results });
     res.json({ status: 'success', data: results });
   } catch (err) {
     logger.error('[NerveCenter] host preference reload failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(err.statusCode || 500).json({ status: 'error', code: err.code || 'HOST_PIN_RELOAD_FAILED', message: err.message });
   }
 });
 

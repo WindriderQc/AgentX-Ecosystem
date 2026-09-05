@@ -67,7 +67,7 @@ describe('benchmark execution target admission', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     getModelDigest.mockResolvedValue('sha256:model-digest');
-    BenchmarkResult.deleteOne = jest.fn().mockResolvedValue({ deletedCount: 1 });
+    BenchmarkResult.updateOne = jest.fn().mockResolvedValue({ matchedCount: 1 });
     BenchmarkResult.mockImplementation(data => ({
       _id: 'result-single-1',
       ...data,
@@ -176,6 +176,47 @@ describe('benchmark execution target admission', () => {
       prompt: 'hello'
     })).rejects.toMatchObject({ code: 'BENCHMARK_RUNTIME_RESTORE_FAILED' });
 
-    expect(BenchmarkResult.deleteOne).toHaveBeenCalledWith({ _id: 'result-single-1' });
+    expect(BenchmarkResult.updateOne).toHaveBeenCalledWith(
+      { _id: 'result-single-1' },
+      { $set: expect.objectContaining({ scoring_method: 'authority_invalidated' }) },
+      { upsert: true }
+    );
+  });
+
+  test('never releases the global admission when the first heartbeat and host restore both fail', async () => {
+    const heartbeatLoss = Object.assign(new Error('first heartbeat rejected'), {
+      code: 'BENCHMARK_CLAIM_LOST'
+    });
+    claimLifecycle.startBenchmarkClaimHeartbeat.mockImplementationOnce(() => {
+      const stop = jest.fn();
+      stop.ready = Promise.resolve();
+      stop.assertActive = jest.fn(() => { throw heartbeatLoss; });
+      stop.getFailure = jest.fn(() => heartbeatLoss);
+      stop.drain = jest.fn(async () => stop());
+      return stop;
+    });
+    claimLifecycle.releaseBenchmarkClaims.mockResolvedValueOnce({
+      released: 0,
+      failed: 1,
+      details: [{ hostUrl: 'http://ollama:11434', released: false, reason: 'restore failed' }],
+      workloadAdmission: null
+    });
+
+    await expect(runTest({
+      model: 'qwen:7b',
+      host: 'http://ollama:11434',
+      prompt: 'hello'
+    })).rejects.toMatchObject({
+      code: 'BENCHMARK_CLAIM_LOST',
+      retainAdmission: true
+    });
+
+    expect(claimLifecycle.releaseBenchmarkClaims).toHaveBeenCalledWith(
+      ['http://ollama:11434'],
+      expect.stringMatching(/^benchmark-single-/),
+      { releaseWorkloadAdmission: false }
+    );
+    expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+    expect(benchmarkFetch).not.toHaveBeenCalled();
   });
 });

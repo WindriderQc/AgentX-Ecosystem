@@ -44,9 +44,14 @@ jest.mock('../../../src/clients/coreApiClient', () => ({
 
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const BenchmarkPrompt = require('../../../models/BenchmarkPrompt');
+const coreApiClient = require('../../../src/clients/coreApiClient');
 const { startBatch } = require('../../../src/services/benchmark/execution');
 
 describe('startBatch prompt-scoped level persistence', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
     afterEach(() => {
         jest.restoreAllMocks();
     });
@@ -80,5 +85,29 @@ describe('startBatch prompt-scoped level persistence', () => {
         expect(result.batch_id).toBe(savedBatch._id.toString());
         expect(savedBatch.levels).toEqual([4]);
         expect(savedBatch.prompt_ids).toEqual([promptId.toString()]);
+    });
+
+    it('retains the admission when an ambiguous batch insert cannot be compensated', async () => {
+        jest.spyOn(BenchmarkPrompt, 'getByLevels').mockResolvedValue([{
+            _id: new mongoose.Types.ObjectId(),
+            name: 'Prompt',
+            prompt: 'Return a bounded answer.',
+            level: 1,
+            category: 'reasoning'
+        }]);
+        jest.spyOn(BenchmarkBatch.prototype, 'save').mockRejectedValue(new Error('insert acknowledgement lost'));
+        jest.spyOn(BenchmarkBatch, 'deleteOne').mockRejectedValue(new Error('compensation unavailable'));
+
+        await expect(startBatch({
+            host: 'http://localhost:11434',
+            models: ['candidate-model'],
+            levels: [1]
+        })).rejects.toMatchObject({
+            code: 'BATCH_CREATION_RECONCILIATION_PENDING',
+            retainAdmission: true,
+            compensationError: expect.any(Error)
+        });
+
+        expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
     });
 });

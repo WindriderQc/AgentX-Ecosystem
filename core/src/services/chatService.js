@@ -7,7 +7,7 @@ const { recordInference } = require('./modelRouter');
 const hostPreferenceService = require('./hostPreferenceService');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const logger = require('../../config/logger');
-const fetch = require('node-fetch');
+const { executeAdmittedOllamaAttempt } = require('./routing/inferenceAttemptExecutor');
 
 // Extracted modules
 const { getActivePrompt, buildSystemPrompt } = require('./chat/chatPromptHelpers');
@@ -24,7 +24,6 @@ const {
     ROUTE_OUTCOME_STAGES
 } = require('./routing/routeDecision');
 const {
-    readOllamaErrorDetail,
     buildOllamaStatusError,
     wrapOllamaFetchError
 } = require('./chat/chatUpstreamErrors');
@@ -71,7 +70,8 @@ const handleChatRequest = async ({
     taskType = null,
     enableWebSearch = false,
     think,
-    thinkingMode
+    thinkingMode,
+    abortSignal = null
 }) => {
     let personaName = persona || options.persona || 'default_chat';
     const exactPromptVersion = promptVersion ?? options.promptVersion;
@@ -198,23 +198,40 @@ const handleChatRequest = async ({
             think: thinkingPolicy.think
         });
 
-        const url = `${resolveTarget(effectiveTarget)}/api/chat`;
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 300000);
+        const resolvedTarget = resolveTarget(effectiveTarget);
+        const url = `${resolvedTarget}/api/chat`;
 
-        let response;
         try {
-            inferenceDispatched = true;
-            response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(ollamaPayload),
-                signal: controller.signal
+            const attempt = await executeAdmittedOllamaAttempt({
+                hostUrl: resolvedHost,
+                model: effectiveModel,
+                payload: ollamaPayload,
+                useChat: true,
+                stream: false,
+                timeoutMs: 300_000,
+                signal: abortSignal,
+                admissionKind: 'chat',
+                principal: 'core-chat',
+                afterAdmission: () => { inferenceDispatched = true; }
             });
+            const { response, data, raw } = attempt;
             if (!response.ok) {
-                const errDetail = await readOllamaErrorDetail(response);
+                const errDetail = typeof data?.error === 'string'
+                    ? data.error
+                    : (raw || response.statusText || `HTTP ${response.status}`);
                 throw buildOllamaStatusError({ url, response, detail: errDetail, model: effectiveModel });
             }
+            observabilityOutcome = summarizeOllamaOutcome(data);
+
+            const extracted = extractResponse(data, effectiveModel, {
+                thinkingSupported: hasQualifiedThinkingCapability(inferenceContract)
+            });
+            assistantMessageContent = extracted.content;
+            thinking = extracted.thinking;
+            warning = extracted.warning;
+            stats = extracted.stats;
+
+            if (warning) logger.warn('Response extraction warning', { model, warning });
         } catch (err) {
             throw wrapOllamaFetchError({
                 url,
@@ -222,22 +239,7 @@ const handleChatRequest = async ({
                 model: effectiveModel,
                 timeoutMessage: 'Ollama request timed out (2m limit).'
             });
-        } finally {
-            clearTimeout(timeout);
         }
-
-        const data = await response.json();
-        observabilityOutcome = summarizeOllamaOutcome(data);
-
-        const extracted = extractResponse(data, effectiveModel, {
-            thinkingSupported: hasQualifiedThinkingCapability(inferenceContract)
-        });
-        assistantMessageContent = extracted.content;
-        thinking = extracted.thinking;
-        warning = extracted.warning;
-        stats = extracted.stats;
-
-        if (warning) logger.warn('Response extraction warning', { model, warning });
     } catch (err) {
         logger.error('Model request failed', { model: effectiveModel, error: err.message });
         const terminalStatus = err.code === 'OLLAMA_TIMEOUT' || err.name === 'AbortError'

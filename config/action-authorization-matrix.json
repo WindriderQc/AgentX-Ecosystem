@@ -22,7 +22,8 @@
       "evidence": [
         "core-boundary-mount",
         "core-boundary-authorities",
-        "core-runtime-bridge-boundary-scope"
+        "core-runtime-bridge-boundary-scope",
+        "core-inference-admission-bridge-boundary"
       ],
       "limitation": "publicExposureGuard admits operator tokens, exact local same-origin UI, headerless loopback, explicitly enabled product-internal hosts, and purpose-scoped credentials only on their declared path families; scoped tokens do not replace route-local validation."
     },
@@ -106,6 +107,7 @@
         "core/routes/model-registry.js#DELETE /:name/execution-config",
         "core/routes/models-unified.js#DELETE /ollama/:name",
         "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/pin",
+        "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/recover",
         "core/routes/ollama-vram.js#DELETE /override/:hostIp",
         "core/routes/operations-backup.js#DELETE /backups/:backupName",
         "core/routes/operations-backup.js#DELETE /config/backups/:name",
@@ -121,6 +123,8 @@
         "core/routes/prompts.js#DELETE /:id",
         "core/routes/rag.js#DELETE /documents/:documentId",
         "core/routes/roundtable.js#DELETE /:id",
+        "core/routes/runtime-inference-admissions.js#POST /:admissionId/recover-runtime-restart",
+        "benchmark/routes/profiler/hosts.js#POST /test/recovery/:hostId/confirm-runtime-restart",
         "rag/routes/manifest.routes.js#POST /cleanup",
         "rag/routes/migration.routes.js#POST /embedding-migration/reindex",
         "rag/routes/rag.js#DELETE /documents/:documentId",
@@ -225,6 +229,7 @@
     "benchmark/routes/profiler/hosts.js#POST /test/run-all",
     "benchmark/routes/profiler/hosts.js#POST /test/run-fleet",
     "benchmark/routes/profiler/hosts.js#POST /test/run-fleet/:queueId/cancel",
+    "benchmark/routes/profiler/hosts.js#POST /test/recovery/:hostId/confirm-runtime-restart",
     "benchmark/routes/profiler/hosts.js#PUT /:hostId",
     "benchmark/routes/profiler/hosts.js#PUT /test/config",
     "benchmark/routes/profiler/models.js#PUT /:name",
@@ -306,6 +311,7 @@
     "core/routes/nerve-center-host-preferences.js#DELETE /host-preferences/:hostUrl(*)/pin",
     "core/routes/nerve-center-host-preferences.js#DELETE /maintenance-leases/:leaseId",
     "core/routes/nerve-center-host-preferences.js#DELETE /workload-admissions/:admissionId",
+    "core/routes/nerve-center-host-preferences.js#DELETE /workload-recoveries/:recoveryId",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat",
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/benchmark-claim/:batchId/release-receipt",
@@ -315,10 +321,18 @@
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/benchmark-claims/reap",
     "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases",
     "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/heartbeat",
+    "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/mark-unknown",
+    "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/recover",
     "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/release-receipt",
     "core/routes/nerve-center-host-preferences.js#POST /workload-admissions",
     "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/heartbeat",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/recovery",
     "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/release-receipt",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/adopt",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/heartbeat",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/assert",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/restore-hosts",
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/transition",
     "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/:hostUrl(*)",
     "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/:hostUrl(*)/pin",
     "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/health-check-interval",
@@ -326,6 +340,11 @@
     "core/routes/nerve-center.js#POST /failover/reset",
     "core/routes/nerve-center.js#PUT /inference/routing-config/:taskType",
     "core/routes/nerve-center.js#PUT /routing/config",
+    "core/routes/runtime-inference-admissions.js#POST /",
+    "core/routes/runtime-inference-admissions.js#POST /:admissionId/complete",
+    "core/routes/runtime-inference-admissions.js#POST /:admissionId/heartbeat",
+    "core/routes/runtime-inference-admissions.js#POST /:admissionId/mark-unknown",
+    "core/routes/runtime-inference-admissions.js#POST /:admissionId/recover-runtime-restart",
     "core/routes/nestor-consumer-v1.js#POST /inference",
     "core/routes/nestor-consumer-v1.js#POST /memory/search",
     "core/routes/ollama-vram.js#DELETE /override/:hostIp",
@@ -450,6 +469,13 @@
       "enforcementStatus": "enforced",
       "note": "Ground-truth deletion requires DELETE GROUND TRUTH <id>, bound to the selected evidence record.",
       "evidence": ["benchmark-ground-truth-typed-confirmation"]
+    },
+    "benchmark/routes/profiler/hosts.js#POST /test/recovery/:hostId/confirm-runtime-restart": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "A controlled Ollama restart receipt requires the exact Product operator token and the exact RUNTIME_RESTARTED_AND_OLLAMA_REQUESTS_TERMINATED phrase bound to an unresolved durable recovery intent.",
+      "evidence": ["benchmark-profiler-runtime-restart-operator-validator"]
     },
     "benchmark/routes/benchmark/scoringProfile.js#POST /scoring-profile/reset": {
       "typedConfirmation": "enforced",
@@ -706,6 +732,20 @@
       "note": "Maintenance heartbeat requires the route-validated operator principal plus the Core-minted lease id and generation.",
       "evidence": ["core-maintenance-lease-operator-validator"]
     },
+    "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/mark-unknown": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "An uncertain maintenance outcome can only move the exact operator-owned lease into durable UNKNOWN quarantine; it cannot release or recover the fence.",
+      "evidence": ["core-maintenance-lease-operator-validator", "core-maintenance-quarantine-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /maintenance-leases/:leaseId/recover": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "A quarantined maintenance lease can be released only by the exact operator principal with a typed receipt attesting that all side effects were verified or rolled back.",
+      "evidence": ["core-maintenance-lease-operator-validator", "core-maintenance-recovery-validator"]
+    },
     "core/routes/nerve-center-host-preferences.js#DELETE /maintenance-leases/:leaseId": {
       "scopedMachineCredential": "validated-at-route",
       "routeLocalValidator": "enforced",
@@ -727,11 +767,53 @@
       "note": "The scoped Benchmark token is path-admitted and revalidated before Core mints a workload admission generation.",
       "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
     },
+    "core/routes/runtime-inference-admissions.js#POST /": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The runtime bridge token is path-scoped and revalidated before Core mints a shared-only inference admission under the server-owned runtime-bridge principal.",
+      "evidence": ["core-inference-admission-bridge-boundary", "core-inference-admission-bridge-validator"]
+    },
+    "core/routes/runtime-inference-admissions.js#POST /:admissionId/heartbeat": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Runtime bridge heartbeat requires the exact Core-minted admission id and generation; caller principal fields are ignored.",
+      "evidence": ["core-inference-admission-bridge-boundary", "core-inference-admission-bridge-validator"]
+    },
+    "core/routes/runtime-inference-admissions.js#POST /:admissionId/complete": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Runtime bridge completion requires exact proof and returns an idempotent durable completion receipt only after upstream terminality.",
+      "evidence": ["core-inference-admission-bridge-boundary", "core-inference-admission-bridge-validator"]
+    },
+    "core/routes/runtime-inference-admissions.js#POST /:admissionId/mark-unknown": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Runtime bridge disconnect or ambiguous completion can only move its exact admission into durable UNKNOWN quarantine.",
+      "evidence": ["core-inference-admission-bridge-boundary", "core-inference-admission-bridge-validator"]
+    },
+    "core/routes/runtime-inference-admissions.js#POST /:admissionId/recover-runtime-restart": {
+      "typedConfirmation": "enforced",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "The runtime bridge token cannot recover UNKNOWN; only an operator may present an exact controlled runtime-restart receipt.",
+      "evidence": ["core-inference-admission-recovery-operator-validator", "core-inference-admission-recovery-receipt-validator"]
+    },
     "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/heartbeat": {
       "scopedMachineCredential": "validated-at-route",
       "routeLocalValidator": "enforced",
       "enforcementStatus": "enforced",
       "note": "Workload heartbeat requires the scoped Benchmark principal plus the exact Core-minted admission proof.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-admissions/:admissionId/recovery": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Arming a durable recovery quarantine requires the scoped Benchmark principal plus the exact Core-minted workload admission proof.",
       "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
     },
     "core/routes/nerve-center-host-preferences.js#DELETE /workload-admissions/:admissionId": {
@@ -748,12 +830,60 @@
       "note": "Workload release recovery requires the scoped Benchmark principal plus the exact Core-minted admission proof.",
       "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
     },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/adopt": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Recovery adoption requires the scoped Benchmark principal, the recovery request secret, and a Core-minted owner generation acquired by CAS.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/heartbeat": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Recovery owner heartbeat requires the scoped Benchmark principal and the exact live Core-minted recovery generation.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/assert": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Recovery ownership assertion requires the scoped Benchmark principal and the exact Core-minted recovery owner generation.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/transition": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Recovery state transitions are version-CAS fenced and require the scoped Benchmark principal plus exact recovery ownership.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#POST /workload-recoveries/:recoveryId/restore-hosts": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Exact host restoration requires the scoped Benchmark principal and the current Core-minted recovery ownership before any claim finalizer runs.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
+    "core/routes/nerve-center-host-preferences.js#DELETE /workload-recoveries/:recoveryId": {
+      "scopedMachineCredential": "validated-at-route",
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Recovery quarantine release requires RESTORED state, a durable receipt, and the scoped Benchmark principal with exact Core-minted recovery ownership.",
+      "evidence": ["core-benchmark-boundary-scope", "core-workload-admission-validator"]
+    },
     "core/routes/nerve-center-host-preferences.js#POST /host-preferences/:hostUrl(*)/reload": {
       "scopedMachineCredential": "validated-at-route",
       "routeLocalValidator": "enforced",
       "enforcementStatus": "enforced",
       "note": "The scoped Benchmark token is path-admitted at Core and revalidated before remote reload; same-origin UI and operator access remain available for the interactive action.",
       "evidence": ["core-benchmark-boundary-scope", "core-benchmark-route-validator", "core-benchmark-host-control-mount"]
+    },
+    "core/routes/nerve-center-host-preferences.js#PUT /host-preferences/:hostUrl(*)": {
+      "routeLocalValidator": "enforced",
+      "enforcementStatus": "enforced",
+      "note": "Updating host pins or runtime preferences requires a route-local same-origin UI, loopback operator, or exact operator credential; the response is projected without coordination capabilities.",
+      "evidence": ["core-host-preference-operator-validator"]
     },
     "core/routes/nestor-consumer-v1.js#POST /inference": {
       "scopedMachineCredential": "validated-at-route",
@@ -1018,6 +1148,44 @@
         "if (runtimeBridgeCredentialAllowed(req)) return true;"
       ]
     },
+    "core-inference-admission-bridge-boundary": {
+      "file": "core/src/middleware/publicExposureGuard.js",
+      "contains": [
+        "const INFERENCE_ADMISSION_BRIDGE_PATH_PREFIX = '/api/runtime/inference-admissions';",
+        "function inferenceAdmissionBridgeCredentialPath(pathname, method)",
+        "process.env.AGENTX_RUNTIME_BRIDGE_TOKEN",
+        "if (inferenceAdmissionBridgeCredentialAllowed(req)) return true;"
+      ]
+    },
+    "core-inference-admission-bridge-validator": {
+      "file": "core/routes/runtime-inference-admissions.js",
+      "contains": [
+        "const RUNTIME_BRIDGE_PRINCIPAL = 'runtime-bridge';",
+        "function requireRuntimeBridgeAccess(req, res, next)",
+        "router.post('/', requireRuntimeBridgeAccess",
+        "router.post('/:admissionId/heartbeat', requireRuntimeBridgeAccess",
+        "router.post('/:admissionId/complete', requireRuntimeBridgeAccess",
+        "router.post('/:admissionId/mark-unknown', requireRuntimeBridgeAccess"
+      ]
+    },
+    "core-inference-admission-recovery-operator-validator": {
+      "file": "core/routes/runtime-inference-admissions.js",
+      "contains": [
+        "router.post('/:admissionId/recover-runtime-restart', requireOperatorAccess",
+        "contract: req.body?.contract",
+        "runtimeRestarted: req.body?.runtimeRestarted",
+        "confirmation: req.body?.confirmation",
+        "principal: RUNTIME_BRIDGE_PRINCIPAL"
+      ]
+    },
+    "core-inference-admission-recovery-receipt-validator": {
+      "file": "core/src/services/runtimeCoordinationService.js",
+      "contains": [
+        "receipt?.contract === 'agentx.ollama-runtime-restart/v1'",
+        "OLLAMA_RUNTIME_RESTARTED_AND_PRIOR_REQUESTS_TERMINATED",
+        "inferences: { $elemMatch: { admissionId: id, generation, principal, state: 'UNKNOWN' } }"
+      ]
+    },
     "benchmark-boundary-mount": {
       "file": "benchmark/server.js",
       "contains": [
@@ -1112,6 +1280,9 @@
         "path === '/api/nerve-center/workload-admissions'",
         "/^\\/api\\/nerve-center\\/workload-admissions\\/[^/]+\\/heartbeat$/",
         "/^\\/api\\/nerve-center\\/workload-admissions\\/[^/]+\\/release-receipt$/",
+        "/^\\/api\\/nerve-center\\/workload-admissions\\/[^/]+\\/recovery$/",
+        "/^\\/api\\/nerve-center\\/workload-recoveries\\/[^/]+\\/(adopt|heartbeat|assert|transition|restore-hosts)$/",
+        "/^\\/api\\/nerve-center\\/workload-recoveries\\/[^/]+$/",
         "path.endsWith('/benchmark-claim')",
         "path.endsWith('/reload')"
       ]
@@ -1144,9 +1315,28 @@
       "contains": [
         "router.post('/maintenance-leases', requireOperatorAccess",
         "router.post('/maintenance-leases/:leaseId/heartbeat', requireOperatorAccess",
+        "router.post('/maintenance-leases/:leaseId/mark-unknown', requireOperatorAccess",
+        "router.post('/maintenance-leases/:leaseId/recover', requireOperatorAccess",
         "router.post('/maintenance-leases/:leaseId/release-receipt', requireOperatorAccess",
         "router.delete('/maintenance-leases/:leaseId', requireOperatorAccess",
         "principal: operatorRequestIdentity(req)"
+      ]
+    },
+    "core-maintenance-quarantine-validator": {
+      "file": "core/src/services/runtimeCoordinationService.js",
+      "contains": [
+        "async function markMaintenanceUnknown",
+        "agentx.maintenance-quarantine/v1",
+        "'maintenance.state': 'UNKNOWN'"
+      ]
+    },
+    "core-maintenance-recovery-validator": {
+      "file": "core/src/services/runtimeCoordinationService.js",
+      "contains": [
+        "async function recoverMaintenanceAfterOperatorReconciliation",
+        "receipt?.contract === 'agentx.maintenance-recovery/v1'",
+        "MAINTENANCE_SIDE_EFFECTS_VERIFIED_OR_ROLLED_BACK",
+        "'maintenance.state': 'UNKNOWN'"
       ]
     },
     "core-benchmark-claim-reaper-operator-validator": {
@@ -1154,6 +1344,13 @@
       "contains": [
         "router.post('/host-preferences/benchmark-claims/reap', requireOperatorAccess",
         "BENCHMARK_REAPER_OPTIONS_INVALID"
+      ]
+    },
+    "core-host-preference-operator-validator": {
+      "file": "core/routes/nerve-center-host-preferences.js",
+      "contains": [
+        "router.put('/host-preferences/:hostUrl(*)', requireOperatorUiAccess",
+        "data: projectHostPreferenceForRead(data)"
       ]
     },
     "core-workload-admission-validator": {
@@ -1164,7 +1361,31 @@
         "router.post('/workload-admissions', requireBenchmarkCoordinationAccess",
         "router.post('/workload-admissions/:admissionId/heartbeat', requireBenchmarkCoordinationAccess",
         "router.post('/workload-admissions/:admissionId/release-receipt', requireBenchmarkCoordinationAccess",
+        "router.post('/workload-admissions/:admissionId/recovery', requireBenchmarkCoordinationAccess",
+        "router.post('/workload-recoveries/:recoveryId/adopt', requireBenchmarkCoordinationAccess",
+        "router.post('/workload-recoveries/:recoveryId/assert', requireBenchmarkCoordinationAccess",
+        "router.post('/workload-recoveries/:recoveryId/transition', requireBenchmarkCoordinationAccess",
+        "router.post('/workload-recoveries/:recoveryId/restore-hosts', requireBenchmarkCoordinationAccess",
+        "router.delete('/workload-recoveries/:recoveryId', requireBenchmarkCoordinationAccess",
         "router.delete('/workload-admissions/:admissionId', requireBenchmarkCoordinationAccess"
+      ]
+    },
+    "benchmark-profiler-runtime-restart-operator-validator": {
+      "file": "benchmark/routes/profiler/hosts.js",
+      "contains": [
+        "function requireOperatorAccess(req, res, next)",
+        "safeTokenMatch(process.env.AGENTX_OPERATOR_TOKEN || process.env.AGENTX_ADMIN_TOKEN, presented)",
+        "router.post('/test/recovery/:hostId/confirm-runtime-restart', requireOperatorAccess",
+        "req.body?.confirmation !== 'RUNTIME_RESTARTED_AND_OLLAMA_REQUESTS_TERMINATED'"
+      ]
+    },
+    "benchmark-profiler-host-profile-write-validator": {
+      "file": "benchmark/routes/profiler/hosts.js",
+      "contains": [
+        "router.put('/:hostId', requireOperatorAccess",
+        "const allowedTopLevel = new Set(['displayName', 'cpu']);",
+        "field !== 'threadOverride'",
+        "code: 'HOST_PROFILE_FIELD_NOT_WRITABLE'"
       ]
     },
     "benchmark-core-contract-auth-caller": {

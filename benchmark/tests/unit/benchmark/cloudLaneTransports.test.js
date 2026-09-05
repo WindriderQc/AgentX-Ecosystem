@@ -173,6 +173,7 @@ describe('cloud/local campaign transports', () => {
                 options: { num_predict: 64, num_ctx: 192, temperature: 0, seed: 42 }
             });
             return jsonResponse({
+                done: true,
                 message: { content: 'done', tool_calls: [{ function: { name: 'room', arguments: { name: 'kitchen' } } }] },
                 prompt_eval_count: 9,
                 eval_count: 2
@@ -190,6 +191,23 @@ describe('cloud/local campaign transports', () => {
             response: { text: 'done' }
         });
         expect(fetchImpl).toHaveBeenCalledTimes(4);
+    });
+
+    test('Ollama execution fails closed when HTTP 200 omits the exact terminal receipt', async () => {
+        const candidate = localCandidate();
+        const fetchImpl = jest.fn(async (url) => {
+            if (url.endsWith('/api/tags')) return jsonResponse({ models: [{ name: candidate.model, digest: DIGEST }] });
+            if (url.endsWith('/api/version')) return jsonResponse({ version: '0.11.10' });
+            if (url.endsWith('/api/show')) return jsonResponse({ model_info: { 'qwen3.context_length': 32768 } });
+            return jsonResponse({ message: { content: 'plausible but incomplete' } });
+        });
+        const transport = createOllamaTransport({ baseUrl: 'http://ollama.invalid:11434', fetchImpl });
+        await transport.preflight({ candidate });
+
+        await expect(transport.execute({ candidate, fixture, contract })).resolves.toMatchObject({
+            ok: false,
+            error: { code: 'OLLAMA_RESPONSE_INCOMPLETE' }
+        });
     });
 
     test('generic OpenAI-compatible transports refuse unverified model metadata', () => {

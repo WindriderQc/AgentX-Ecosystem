@@ -44,7 +44,7 @@
     {
       "id": "benchmark.maintenance.repo-coding.core-claim",
       "source": "benchmark/scripts/repo-coding-qualification.js",
-      "line": 266,
+      "line": 218,
       "column": 26,
       "constructor": "fetchImpl",
       "authoritySource": "operator-supplied",
@@ -52,18 +52,6 @@
       "responseBound": true,
       "redirectMode": "manual",
       "purpose": "Read the active Core benchmark claim before a live repository-coding qualification campaign."
-    },
-    {
-      "id": "benchmark.maintenance.toolcall.ollama-chat",
-      "source": "benchmark/scripts/toolcall-qualification.js",
-      "line": 93,
-      "column": 23,
-      "constructor": "fetch",
-      "authoritySource": "operator-supplied",
-      "deadlineBound": true,
-      "responseBound": true,
-      "redirectMode": "manual",
-      "purpose": "Call the operator-selected Ollama host during an explicitly confirmed live tool-call qualification campaign."
     },
     {
       "id": "maintenance.support-receipt.service-json",

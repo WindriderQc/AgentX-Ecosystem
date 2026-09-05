@@ -21,6 +21,7 @@ jest.mock('../../models/BenchmarkBatch', () => ({
 jest.mock('../../models/JudgeGroundTruth', () => ({
     findOne: jest.fn(),
     create: jest.fn(),
+    updateOne: jest.fn(),
     aggregate: jest.fn(),
     find: jest.fn()
 }));
@@ -229,6 +230,59 @@ describe('scoreAndPromote', () => {
 
         expect(result.skipped).toBe(1);
         expect(result.errors).toBe(0);
+    });
+
+    test('invalidates a promoted row whose create races admission loss', async () => {
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('retro admission lost'), { code: 'BENCHMARK_CLAIM_LOST' });
+        JudgeGroundTruth.findOne.mockResolvedValue(null);
+        scoreResponse.mockResolvedValue({
+            quality_score: 8,
+            scoring_method: 'decomposed',
+            breakdown: {}
+        });
+        JudgeGroundTruth.create.mockImplementationOnce(async () => {
+            controller.abort(lost);
+            return [{}];
+        });
+        JudgeGroundTruth.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+        await expect(scoreAndPromote([makeSample()], refConfig, {
+            cancelSignal: controller.signal
+        })).rejects.toMatchObject({
+            code: 'BENCHMARK_BATCH_STOPPED',
+            authorityCompensated: true
+        });
+
+        expect(JudgeGroundTruth.updateOne).toHaveBeenCalledWith(
+            expect.objectContaining({ _id: expect.any(mongoose.Types.ObjectId) }),
+            { $set: expect.objectContaining({ active: false, authority_state: 'authority_invalidated' }) },
+            { upsert: true }
+        );
+    });
+
+    test('retains admission when a raced promotion cannot be invalidated', async () => {
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('retro admission lost'), { code: 'BENCHMARK_CLAIM_LOST' });
+        JudgeGroundTruth.findOne.mockResolvedValue(null);
+        scoreResponse.mockResolvedValue({
+            quality_score: 8,
+            scoring_method: 'decomposed',
+            breakdown: {}
+        });
+        JudgeGroundTruth.create.mockImplementationOnce(async () => {
+            controller.abort(lost);
+            return [{}];
+        });
+        JudgeGroundTruth.updateOne.mockRejectedValueOnce(new Error('invalidation unavailable'));
+
+        await expect(scoreAndPromote([makeSample()], refConfig, {
+            cancelSignal: controller.signal
+        })).rejects.toMatchObject({
+            code: 'GROUND_TRUTH_RECONCILIATION_PENDING',
+            retainAdmission: true,
+            compensationError: expect.any(Error)
+        });
     });
 });
 

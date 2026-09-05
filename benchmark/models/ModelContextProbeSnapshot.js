@@ -39,6 +39,7 @@ const ProbeStepSchema = new mongoose.Schema({
   tokensPerSecMax: Number,
   tokensPerSecStdDev: Number,
   tokensPerSecCvPct: Number,
+  throughputStatistics: { type: mongoose.Schema.Types.Mixed, default: null },
   samples: { type: [ProbeSampleSchema], default: [] },
   completionTokens: Number,
   vramUsedMiB: Number,
@@ -62,6 +63,8 @@ const ModelContextProbeSnapshotSchema = new mongoose.Schema({
   hostId:                 { type: String, required: true, index: true },
   artifactDigest:         { type: String, required: true, index: true },
   runtimeFingerprint:     { type: String, required: true },
+  profileDepth:           { type: String, enum: ['quick', 'standard', 'full'], default: 'standard' },
+  candidateRepeats:       { type: Number, default: 2 },
   testedNumCtx:           Number,
   baselineTokensPerSec:   Number,
   atLimitTokensPerSec:    Number,
@@ -69,8 +72,12 @@ const ModelContextProbeSnapshotSchema = new mongoose.Schema({
   degradationThreshold:   Number,
   interactiveDegradationThreshold: Number,
   documentDegradationThreshold: Number,
+  performanceKneeDegradationThreshold: Number,
   recommendedInteractiveContext: Number,
   recommendedDocumentContext: Number,
+  performanceKneeContext: Number,
+  qualityVerifiedContext: { type: Number, default: null },
+  qualityContextStatus: { type: String, enum: ['verified', 'unknown'], default: 'unknown' },
   promptFillPct:          Number,
   vramAtLimitMiB:         Number,
   gpuPercentAtLimit:      Number,
@@ -95,6 +102,8 @@ const ModelContextProbeSnapshotSchema = new mongoose.Schema({
     default: 'pending'
   },
   authorityError: { type: String, default: null },
+  authorityWriteId: { type: String, default: null, index: true },
+  authorityReconciliationId: { type: String, default: null },
   steps: {
     type:    [ProbeStepSchema],
     default: []

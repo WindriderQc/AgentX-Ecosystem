@@ -26,13 +26,25 @@ process.env.OLLAMA_HOST_3 = 'http://localhost:11434';
 // Mock node-fetch so allowed hosts return 200 instead of trying to dial real
 // Ollama. The disallowed-host assertions return BEFORE fetch is called, so
 // they don't depend on this mock.
-jest.mock('node-fetch', () => jest.fn(async () => ({
-  ok: true,
-  status: 200,
-  statusText: 'OK',
-  text: async () => '{"embedding":[0.1,0.2,0.3]}',
-  json: async () => ({ status: 'ok', embedding: [0.1, 0.2, 0.3] })
-})));
+jest.mock('node-fetch', () => jest.fn(async (url) => {
+  const endpoint = new URL(String(url)).pathname;
+  const bodies = {
+    '/api/pull': { raw: '{"status":"success"}', data: { status: 'success' } },
+    '/api/generate': { raw: '{"response":"","done":true}', data: { response: '', done: true } },
+    '/api/delete': { raw: '', data: {} }
+  };
+  const body = bodies[endpoint] || {
+    raw: '{"embedding":[0.1,0.2,0.3]}',
+    data: { status: 'ok', embedding: [0.1, 0.2, 0.3] }
+  };
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: async () => body.raw,
+    json: async () => body.data
+  };
+}));
 const fetch = require('node-fetch');
 
 jest.mock('../../src/services/chatService', () => ({
@@ -249,6 +261,24 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
       expect(res.body.error).toMatch(/allowlist/i);
       expect(customModelService.deployToOllama).not.toHaveBeenCalled();
     });
+
+    it('409 — keeps the legacy deployment path hard-disabled on an allowed host', async () => {
+      customModelService.deployToOllama.mockRejectedValueOnce(Object.assign(
+        new Error('Custom model deployment is disabled until coordinated runtime mutation receipts are implemented'),
+        { code: 'CUSTOM_MODEL_DEPLOY_DISABLED', statusCode: 409 }
+      ));
+
+      const res = await request(app)
+        .post('/api/custom-models/demo-model/deploy')
+        .send({ ollamaHost: 'http://192.0.2.66:11434' });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({
+        success: false,
+        code: 'CUSTOM_MODEL_DEPLOY_DISABLED'
+      });
+      expect(customModelService.deployToOllama).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ── /api/chat target override ───────────────────────────────────────────
@@ -299,6 +329,64 @@ describe('Host allowlist gate (task 0182) — route-level', () => {
 
   // ── /api/nerve-center/host-preferences ──────────────────────────────────
   describe('Nerve Center host preference allowlist', () => {
+    it('403 — rejects a cross-origin host preference mutation before changing pins', async () => {
+      const hostUrl = encodeURIComponent('http://192.0.2.66:11434');
+      const res = await request(app)
+        .put(`/api/nerve-center/host-preferences/${hostUrl}`)
+        .set('Host', '127.0.0.1')
+        .set('Origin', 'https://attacker.example')
+        .set('Sec-Fetch-Site', 'cross-site')
+        .send({ pinnedModels: [{ model: 'attacker-model:latest' }] });
+
+      expect(res.status).toBe(403);
+      expect(hostPrefService.updatePreference).not.toHaveBeenCalled();
+    });
+
+    it('projects a same-origin host preference mutation response without claim capabilities', async () => {
+      const hostUrl = encodeURIComponent('http://192.0.2.66:11434');
+      hostPrefService.updatePreference.mockResolvedValueOnce({
+        hostUrl: 'http://192.0.2.66:11434',
+        displayName: 'Primary',
+        pinnedModels: [{ model: 'approved-model:latest' }],
+        lastBenchmarkReleaseReceipt: { claimGeneration: 'released-secret' },
+        benchmarkClaim: {
+          batchId: 'active-batch',
+          claimGeneration: 'claim-secret',
+          admissionId: 'admission-secret',
+          admissionGeneration: 'admission-generation-secret',
+          admissionPrincipal: 'benchmark-service',
+          finalizeToken: 'finalizer-secret',
+          preClaimRuntime: {
+            exact: true,
+            identityDigest: 'snapshot-secret',
+            residents: [{ model: 'private-resident', digest: 'private-digest' }]
+          }
+        }
+      });
+
+      const res = await request(app)
+        .put(`/api/nerve-center/host-preferences/${hostUrl}`)
+        .set('Host', '127.0.0.1')
+        .set('Origin', 'http://127.0.0.1')
+        .set('Sec-Fetch-Site', 'same-origin')
+        .send({ pinnedModels: [{ model: 'approved-model:latest' }] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.benchmarkClaim).toEqual(expect.objectContaining({
+        batchId: 'active-batch',
+        snapshotExact: true,
+        snapshotResidentCount: 1,
+        finalizing: true
+      }));
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('claimGeneration');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('admissionId');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('admissionGeneration');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('admissionPrincipal');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('preClaimRuntime');
+      expect(res.body.data.benchmarkClaim).not.toHaveProperty('finalizeToken');
+      expect(res.body.data).not.toHaveProperty('lastBenchmarkReleaseReceipt');
+    });
+
     it('400 — rejects unknown host path before updating preferences', async () => {
       const hostUrl = encodeURIComponent('http://192.0.2.77:11434');
       const res = await request(app)

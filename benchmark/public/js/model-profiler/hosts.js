@@ -124,7 +124,7 @@ function fitComposite(dims, weights) {
 function fitCompChip(score) {
   if (score == null) return '';
   const tone = score >= 75 ? 'mp-fit-comp--hi' : score >= 50 ? 'mp-fit-comp--mid' : 'mp-fit-comp--lo';
-  return `<span class="mp-fit-comp ${tone}" title="composite fit score for the selected use-case (quality · speed · fit · context)">⬡${score}</span>`;
+  return `<span class="mp-fit-comp ${tone}" title="advisory heuristic fit score; not model-quality evidence">⬡${score}</span>`;
 }
 
 function fitMoeChip(m) {
@@ -186,7 +186,7 @@ function renderFitReport(report, useCase) {
       : '';
     recHtml = `<div class="mp-fit-rec"><span class="mp-fit-rec__star">★</span><div>
         <div class="mp-fit-rec__name">${esc(rec.modelName)}</div>
-        <div class="mp-fit-rec__why">${esc(rec.reason)}</div>
+        <div class="mp-fit-rec__why">${esc(rec.reason)} <span class="mp-fit-dim">— advisory heuristic, not quality proof</span></div>
         ${ucLine}${benchLine}</div></div>`;
   } else {
     recHtml = `<div class="mp-fit-rec mp-fit-rec--none">No measured model yet — profile a model on this host to get a recommendation.</div>`;
@@ -243,10 +243,10 @@ function renderFitReport(report, useCase) {
     <div class="mp-fit-toolbar"><div class="mp-fit-head">${headChips}</div>${ucSelect}</div>
     <div class="mp-fit-cap">${capBits}</div>
     ${recHtml}
-    <div class="mp-fit-section-label">Measured fit <span class="mp-fit-dim">— real profiles · ⬡ = "${esc(useCase)}" score</span></div>
+    <div class="mp-fit-section-label">Measured runtime fit <span class="mp-fit-dim">— exact runtime profiles · ⬡ = advisory "${esc(useCase)}" heuristic</span></div>
     ${measuredTable}
     ${estTable ? `<div class="mp-fit-section-label">Estimated fit <span class="mp-fit-dim">— ${calib}</span></div>${estTable}` : ''}
-    <div class="mp-fit-foot">Generated ${esc(relTime(report.generatedAt))} · ⬡ composite = quality · speed · fit · context, weighted for "${esc(useCase)}" · MoE speed from active params</div>
+    <div class="mp-fit-foot">Generated ${esc(relTime(report.generatedAt))} · Host Fit is advisory and never semantic quality evidence · ⬡ combines available benchmark summary or parameter/quant heuristic with speed, fit, and context for "${esc(useCase)}" · MoE speed from active params</div>
   </div>`;
 }
 

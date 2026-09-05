@@ -17,6 +17,11 @@ const { buildOllamaPayload, buildOllamaStats, extractResponse } = require('../..
 const { getTargetForModel } = require('../modelRouter');
 const hostPreferenceService = require('../hostPreferenceService');
 const { getFetchOptions } = require('../../helpers/httpAgent');
+const { beginInferenceAdmission } = require('../inferenceAdmissionService');
+const {
+  createOllamaStreamTerminalValidator,
+  executeAdmittedOllamaAttempt
+} = require('../routing/inferenceAttemptExecutor');
 const {
   DEFAULT_PANEL,
   DEFAULT_SYNTHESIZER,
@@ -144,27 +149,26 @@ async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
     };
   }
 
-  const url = `${target}/api/chat`;
   const payload = await buildPinnedAgentPayload(agent, messages, target);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const fetchOpts = getFetchOptions(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: controller.signal
+    const attempt = await executeAdmittedOllamaAttempt({
+      hostUrl: target,
+      model: agent.model,
+      payload,
+      useChat: true,
+      stream: false,
+      timeoutMs,
+      admissionKind: 'council',
+      principal: 'core-council',
+      runtimeOptions: payload.options
     });
-    const res = await fetch(url, fetchOpts);
+    const { response: res, data, raw } = attempt;
 
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`Ollama ${res.status}: ${body.substring(0, 200)}`);
+      throw new Error(`Ollama ${res.status}: ${String(data?.error || raw).substring(0, 200)}`);
     }
 
-    const data = await res.json();
-    clearTimeout(timer);
     const parsed = extractResponse(data, agent.model);
     const completedAt = new Date();
     return {
@@ -179,9 +183,8 @@ async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
       error: null, target, hostName, startedAt, completedAt
     };
   } catch (err) {
-    clearTimeout(timer);
     const completedAt = new Date();
-    const isTimeout = err.name === 'AbortError';
+    const isTimeout = err.isOllamaTimeout === true || err.name === 'AbortError';
     const errorMsg = isTimeout ? `Timeout after ${timeoutMs}ms` : err.message;
     logger.error('Roundtable callAgent failed', { agentId: agent.agentId, model: agent.model, target, error: errorMsg });
     return {
@@ -213,18 +216,31 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
   const payload = await buildPinnedAgentPayload(agent, messages, target, true);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let inferenceAdmission = null;
 
   try {
+    inferenceAdmission = await beginInferenceAdmission({
+      host: target,
+      model: agent.model,
+      kind: 'council-stream',
+      principal: 'core-council',
+      runtimeOptions: payload.options,
+      ...(Object.prototype.hasOwnProperty.call(payload, 'keep_alive') && { keepAlive: payload.keep_alive }),
+      signal: controller.signal
+    });
     const fetchOpts = getFetchOptions(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: controller.signal
+      signal: inferenceAdmission.signal
     });
+    inferenceAdmission.markDispatched();
     const res = await fetch(url, fetchOpts);
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      await inferenceAdmission.complete();
+      inferenceAdmission = null;
       throw new Error(`Ollama ${res.status}: ${body.substring(0, 200)}`);
     }
 
@@ -232,8 +248,24 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
     let thinkingContent = '';
     let inThinking = false;
     let finalData = null;
+    const terminalValidator = createOllamaStreamTerminalValidator();
     const reader = res.body;
     let buffer = '';
+
+    const consumeLine = (line) => {
+      if (!line.trim()) return;
+      const observed = terminalValidator.observe(line);
+      if (!observed.accepted) return;
+      const obj = observed.data;
+      if (observed.terminal) { finalData = obj; return; }
+      const token = obj.message?.content || '';
+      if (!token) return;
+      if (token.includes('<think>')) { inThinking = true; return; }
+      if (token.includes('</think>')) { inThinking = false; return; }
+      if (inThinking) { thinkingContent += token; return; }
+      fullContent += token;
+      emitter.emit('chunk', { type: `${eventPrefix}-chunk`, agentId: agent.agentId, round: agent._round, content: token });
+    };
 
     await new Promise((resolve, reject) => {
       reader.on('data', (chunk) => {
@@ -241,26 +273,20 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
         const lines = buffer.split('\n');
         buffer = lines.pop();
         for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const obj = JSON.parse(line);
-            if (obj.done) { finalData = obj; continue; }
-            const token = obj.message?.content || '';
-            if (!token) continue;
-            if (token.includes('<think>')) { inThinking = true; continue; }
-            if (token.includes('</think>')) { inThinking = false; continue; }
-            if (inThinking) { thinkingContent += token; continue; }
-            fullContent += token;
-            emitter.emit('chunk', { type: `${eventPrefix}-chunk`, agentId: agent.agentId, round: agent._round, content: token });
-          } catch { /* skip malformed line */ }
+          consumeLine(line);
         }
       });
-      reader.on('end', resolve);
+      reader.on('end', () => {
+        consumeLine(buffer);
+        resolve();
+      });
       reader.on('error', reject);
     });
-    if (finalData?.done !== true) {
-      throw new Error('Ollama stream ended before its terminal record');
+    if (finalData?.done !== true || !terminalValidator.isComplete()) {
+      throw new Error('Ollama stream ended without an exact final terminal record');
     }
+    await inferenceAdmission.complete();
+    inferenceAdmission = null;
     clearTimeout(timer);
 
     const completedAt = new Date();
@@ -279,6 +305,12 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
       error: null, target, hostName, startedAt, completedAt
     };
   } catch (err) {
+    if (inferenceAdmission) {
+      await inferenceAdmission.abandon(err).catch(quarantineError => {
+        err.inferenceQuarantineError = quarantineError;
+      });
+      inferenceAdmission = null;
+    }
     clearTimeout(timer);
     const completedAt = new Date();
     const isTimeout = err.name === 'AbortError';

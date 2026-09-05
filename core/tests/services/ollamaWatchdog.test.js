@@ -22,6 +22,23 @@ jest.mock('../../src/helpers/peerVerifiedNodeFetchTransport', () => ({
   })
 }));
 
+jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
+  runRuntimeMutation: jest.fn(async (_options, operation) => operation({
+    signal: new AbortController().signal,
+    assertActive: jest.fn()
+  }))
+}));
+const mockBeginInferenceAdmission = jest.fn(async () => ({
+  signal: new AbortController().signal,
+  assertActive: jest.fn(),
+  markDispatched: jest.fn(),
+  complete: jest.fn(async () => ({ released: true })),
+  abandon: jest.fn(async () => ({ quarantined: true }))
+}));
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: (...args) => mockBeginInferenceAdmission(...args)
+}));
+
 const { getConfiguredHosts } = require('../../src/helpers/ollamaHostConfig');
 const watchdog = require('../../src/services/ollamaWatchdogService');
 const hostGate = require('../../src/services/hostGate');
@@ -69,6 +86,14 @@ beforeEach(() => {
   jest.useRealTimers();
   watchdog.stop();
   getConfiguredHosts.mockReturnValue([MOCK_HOST]);
+  mockBeginInferenceAdmission.mockReset();
+  mockBeginInferenceAdmission.mockImplementation(async () => ({
+    signal: new AbortController().signal,
+    assertActive: jest.fn(),
+    markDispatched: jest.fn(),
+    complete: jest.fn(async () => ({ released: true })),
+    abandon: jest.fn(async () => ({ quarantined: true }))
+  }));
 });
 
 afterAll(() => watchdog.stop());
@@ -79,7 +104,7 @@ describe('probeHost', () => {
     watchdog._setFetch(makeMockFetch({
       '/api/generate': (_url, opts) => {
         requestBody = JSON.parse(opts.body);
-        return { ok: true, status: 200, json: async () => ({ response: 'ok' }) };
+        return { ok: true, status: 200, json: async () => ({ response: 'ok', done: true }) };
       }
     }));
 
@@ -142,6 +167,22 @@ describe('probeHost', () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('The outbound request failed.');
   });
+
+  it('performs no probe POST when distributed workload or maintenance denies admission', async () => {
+    const denied = Object.assign(new Error('workload owns host'), {
+      code: 'RUNTIME_INFERENCE_ADMISSION_DENIED'
+    });
+    mockBeginInferenceAdmission.mockRejectedValueOnce(denied);
+    const generate = jest.fn();
+    watchdog._setFetch(makeMockFetch({ '/api/generate': generate }));
+
+    await expect(watchdog.probeHost(MOCK_HOST, 'gemma4:26b')).resolves.toEqual({
+      ok: false,
+      reason: 'coordination_busy'
+    });
+    expect(hostGate.hostHasInflight(MOCK_HOST.url)).toBe(false);
+    expect(generate).not.toHaveBeenCalled();
+  });
 });
 
 describe('checkMeta', () => {
@@ -173,7 +214,7 @@ describe('probeCycle (integration)', () => {
     const mockFetch = makeMockFetch({
       '/api/generate': (_url, opts) => {
         requestBody = JSON.parse(opts.body);
-        return { ok: true, status: 200 };
+        return { ok: true, status: 200, json: async () => ({ done: true }) };
       },
       '/api/ps': () => ({ ok: true, json: async () => ({ models: [{ name: 'gemma4:26b' }] }) })
     });
@@ -278,7 +319,7 @@ describe('forceUnjam + hostGate in-flight guard', () => {
       }),
       '/api/generate': (_url, opts) => {
         generateBodies.push(JSON.parse(opts.body));
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        return { ok: true, status: 200, json: async () => ({ done: true }) };
       }
     }));
 
@@ -303,7 +344,7 @@ describe('forceUnjam + hostGate in-flight guard', () => {
         ok: true,
         json: async () => ({ models: [{ name: 'a' }, { name: 'b' }] })
       }),
-      '/api/generate': () => ({ ok: true, status: 200, json: async () => ({}), text: async () => '' })
+      '/api/generate': () => ({ ok: true, status: 200, json: async () => ({ done: true }) })
     }));
 
     const result = await watchdog.forceUnjam(MOCK_HOST.url);

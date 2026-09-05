@@ -106,6 +106,10 @@ function getBenchmarkClaimReaperIntervalMs() {
 // host for 8+ hours. 2h ceiling matches the reaper's no-estimate hard cap.
 const CLAIM_DURATION_CAP_MS = 2 * 60 * 60 * 1000;
 const CLAIM_FINALIZE_TTL_MS = 30 * 60 * 1000;
+const CLAIM_FINALIZE_HEARTBEAT_MS = Math.max(
+  1_000,
+  Math.min(CLAIM_FINALIZE_TTL_MS / 3, Number(process.env.BENCHMARK_CLAIM_FINALIZE_HEARTBEAT_MS) || 60_000)
+);
 const CLAIM_SNAPSHOT_WAIT_MS = Math.max(
   5_000,
   (Number(process.env.BENCHMARK_CLAIM_DRAIN_TIMEOUT_MS) || 30_000) + 5_000
@@ -113,6 +117,61 @@ const CLAIM_SNAPSHOT_WAIT_MS = Math.max(
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function startFinalizeFenceHeartbeat({ preferenceId, hostUrl, batchId, claimGeneration, finalizeToken }) {
+  const controller = new AbortController();
+  let stopped = false;
+  let pending = Promise.resolve();
+  const assertActive = () => {
+    if (controller.signal.aborted) {
+      throw controller.signal.reason instanceof Error
+        ? controller.signal.reason
+        : Object.assign(new Error('Benchmark finalizer fence was lost'), { code: 'BENCHMARK_CLAIM_LOST' });
+    }
+  };
+  const refresh = async () => {
+    if (stopped || controller.signal.aborted) return;
+    const refreshedAt = new Date();
+    const result = await HostPreference.updateOne(
+      {
+        _id: preferenceId,
+        hostUrl,
+        status: 'benchmarking',
+        'benchmarkClaim.batchId': batchId,
+        'benchmarkClaim.claimGeneration': claimGeneration,
+        'benchmarkClaim.finalizeToken': finalizeToken
+      },
+      { $set: {
+        'benchmarkClaim.heartbeatAt': refreshedAt,
+        'benchmarkClaim.heartbeatTtlMs': CLAIM_FINALIZE_TTL_MS,
+        'benchmarkClaim.finalizingAt': refreshedAt
+      } }
+    );
+    const matched = Number(result?.matchedCount ?? result?.modifiedCount);
+    if (Number.isFinite(matched) && matched !== 1) {
+      const error = new Error('Benchmark finalizer fence heartbeat was rejected');
+      error.code = 'BENCHMARK_CLAIM_LOST';
+      throw error;
+    }
+  };
+  const tick = () => {
+    pending = pending.then(refresh).catch(error => {
+      if (!controller.signal.aborted) controller.abort(error);
+    });
+  };
+  const timer = setInterval(tick, CLAIM_FINALIZE_HEARTBEAT_MS);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    assertActive,
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      await pending;
+      assertActive();
+    }
+  };
 }
 
 function isMongoObjectIdLike(value) {
@@ -632,6 +691,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
   let pinRestore = null;
   let restoredSnapshot = null;
   let expiredModels = [];
+  let filterEvaluatedAt = null;
   const hostPrefService = require('./hostPreferenceService');
   const finalizeToken = crypto.randomUUID();
   const finalizingFilter = {
@@ -640,10 +700,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     status: 'benchmarking',
     'benchmarkClaim.batchId': batchId,
     'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration,
-    $or: [
-      { 'benchmarkClaim.finalizeToken': null },
-      { 'benchmarkClaim.finalizingAt': { $lte: new Date(Date.now() - CLAIM_FINALIZE_TTL_MS) } }
-    ]
+    'benchmarkClaim.finalizeToken': null
   };
   if (legacyMissingGeneration) finalizingFilter['benchmarkClaim.claimedAt'] = expectedLegacyClaimedAt;
   if (expectedHeartbeatAt !== undefined) finalizingFilter['benchmarkClaim.heartbeatAt'] = expectedHeartbeatAt;
@@ -674,15 +731,26 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       pref: current || undefined
     };
   }
+  const finalizerHeartbeat = startFinalizeFenceHeartbeat({
+    preferenceId: renewed._id,
+    hostUrl,
+    batchId,
+    claimGeneration: legacyMissingGeneration ? null : claimGeneration,
+    finalizeToken
+  });
 
   if (!skipPinRestore) {
     const originalSnapshot = renewed.benchmarkClaim?.preClaimRuntime;
     const afterExplicitExclusions = (originalSnapshot?.residents || []).filter(entry =>
       !excludedModels.some(model => hostPrefService.pinNamesMatch(model, entry.model)));
+    // Freeze the TTL decision once and attest that instant in the durable
+    // receipt. Consumers can then independently recompute which residents
+    // were naturally expired instead of trusting Core's projected arrays.
+    filterEvaluatedAt = new Date();
     const applicableResidents = hostPrefService.desiredBenchmarkResidents({
       ...originalSnapshot,
       residents: afterExplicitExclusions
-    });
+    }, filterEvaluatedAt.getTime());
     expiredModels = afterExplicitExclusions
       .filter(entry => !applicableResidents.includes(entry))
       .map(entry => entry.model);
@@ -705,9 +773,12 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
           batchId,
           claimGeneration: legacyMissingGeneration ? null : claimGeneration,
           finalizeToken,
-          snapshotAlreadyFiltered: true
+          snapshotAlreadyFiltered: true,
+          signal: finalizerHeartbeat.signal,
+          assertAuthorityActive: finalizerHeartbeat.assertActive
         }
       );
+      finalizerHeartbeat.assertActive();
     } catch (err) {
       pinRestore = {
         host: hostUrl,
@@ -730,29 +801,19 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
         error,
         source: 'benchmark-claim-fenced-release'
       });
-      await HostPreference.updateOne(
-        {
-          _id: renewed._id,
-          hostUrl,
-          status: 'benchmarking',
-          'benchmarkClaim.batchId': batchId,
-          'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration,
-          'benchmarkClaim.finalizeToken': finalizeToken
-        },
-        { $set: {
-          'benchmarkClaim.finalizeToken': null,
-          'benchmarkClaim.finalizingAt': null
-        } }
-      );
+      await finalizerHeartbeat.stop().catch(() => {});
       return {
         released: false,
         reason: `fenced runtime restore failed: ${error}`,
+        finalizationQuarantined: true,
         pinRestore,
         runtimeRestore: pinRestore,
         pref: await HostPreference.findOne({ hostUrl }).lean()
       };
     }
   }
+
+  await finalizerHeartbeat.stop();
 
   const restoreStatus = renewed.benchmarkClaim?.prevStatus || 'idle';
   const releaseFilter = {
@@ -779,6 +840,9 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       identityDigest: renewed.benchmarkClaim?.preClaimRuntime?.identityDigest || null,
       appliedIdentityDigest: restoredSnapshot?.identityDigest || null,
       exact: renewed.benchmarkClaim?.preClaimRuntime?.exact === true,
+      capturedAt: renewed.benchmarkClaim?.preClaimRuntime?.capturedAt || null,
+      source: renewed.benchmarkClaim?.preClaimRuntime?.source || null,
+      filterEvaluatedAt,
       residentCount: restoredSnapshot?.residents?.length || 0,
       residents: (restoredSnapshot?.residents || []).map(entry => ({
         model: entry.model,
@@ -1026,6 +1090,18 @@ async function reapStaleBenchmarkClaims(opts = {}) {
 
   for (const pref of claims) {
     const claim = pref.benchmarkClaim || {};
+    if (claim.admissionId && claim.admissionGeneration && claim.admissionPrincipal) {
+      const runtimeCoordinationService = require('./runtimeCoordinationService');
+      const quarantined = await runtimeCoordinationService.isWorkloadRecoveryRequired({
+        id: claim.admissionId,
+        generation: claim.admissionGeneration,
+        principal: claim.admissionPrincipal
+      });
+      // A recovery quarantine is durable precisely because ordinary TTL and
+      // claim reapers cannot expose the host after the originating process
+      // dies. Only the fenced recovery owner may resolve it.
+      if (quarantined) continue;
+    }
     const claimedAt = claim.claimedAt ? new Date(claim.claimedAt).getTime() : 0;
     if (!claimedAt) continue; // unexpectedly missing timestamp — leave alone
     const est = Number(claim.estimatedDurationMs) || 0;
@@ -1147,6 +1223,58 @@ async function listBenchmarkClaims() {
   }));
 }
 
+async function restoreClaimsForWorkloadRecovery({
+  recoveryId,
+  recoveryGeneration,
+  principal,
+  ownerId,
+  excludedModelsByHost = {}
+} = {}) {
+  const runtimeCoordinationService = require('./runtimeCoordinationService');
+  const ownership = await runtimeCoordinationService.assertWorkloadRecovery({
+    recoveryId,
+    recoveryGeneration,
+    principal,
+    ownerId
+  });
+  if (ownership.owned !== true) {
+    return { restored: false, reason: ownership.reason || 'recovery quarantine ownership required', details: [] };
+  }
+  const preferences = await HostPreference.find({
+    'benchmarkClaim.admissionId': ownership.admissionId,
+    'benchmarkClaim.admissionGeneration': ownership.generation,
+    'benchmarkClaim.admissionPrincipal': principal,
+    'benchmarkClaim.batchId': ownership.workloadId
+  }).lean();
+  const details = [];
+  for (const pref of preferences) {
+    const claim = pref.benchmarkClaim;
+    const result = await releaseBenchmarkClaim(pref.hostUrl, claim.batchId, {
+      claimGeneration: claim.claimGeneration,
+      admissionId: ownership.admissionId,
+      admissionGeneration: ownership.generation,
+      admissionPrincipal: principal,
+      requireAdmissionProof: true,
+      excludedModels: Array.isArray(excludedModelsByHost?.[pref.hostUrl])
+        ? excludedModelsByHost[pref.hostUrl]
+        : []
+    });
+    details.push({ hostUrl: pref.hostUrl, ...result });
+    if (result.released !== true) {
+      return { restored: false, reason: result.reason || `host restore failed for ${pref.hostUrl}`, details };
+    }
+  }
+  return {
+    restored: true,
+    admissionId: ownership.admissionId,
+    workloadId: ownership.workloadId,
+    recoveryId,
+    recoveryGeneration,
+    recoveryOwnerId: ownership.recoveryOwnerId || null,
+    details
+  };
+}
+
 async function recoverBenchmarkClaimRelease(hostUrl, batchId, opts = {}) {
   const claimGeneration = cleanClaimGeneration(opts.claimGeneration ?? opts.claim_generation);
   if (!hostUrl || !batchId || !claimGeneration) {
@@ -1197,6 +1325,7 @@ module.exports = {
   heartbeatBenchmarkClaim,
   releaseBenchmarkClaim,
   recoverBenchmarkClaimRelease,
+  restoreClaimsForWorkloadRecovery,
   listBenchmarkClaims,
   summarizeBenchmarkClaimReaps,
   reapStaleBenchmarkClaims,

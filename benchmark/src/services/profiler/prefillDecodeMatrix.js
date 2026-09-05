@@ -29,7 +29,7 @@ const { generate, listRunning } = require('../../clients/ollamaClient');
 const { generateFillPrompt } = require('../contextProbePayload');
 const logger = require('../../../config/logger');
 
-const DEFAULT_REPEATS = 3;
+const DEFAULT_REPEATS = 5;
 
 // Fixed absolute defaults — identical for every model/host so results are
 // directly comparable. Env-overridable as comma-separated token counts.
@@ -233,11 +233,11 @@ function _studentTCritical95(sampleCount) {
   return byDf[Math.min(df, 30)] || 1.96;
 }
 
-function summarizeMetric(values) {
+function summarizeMetric(values, minimumSamples = DEFAULT_REPEATS) {
   const finite = values.map(Number).filter(value => Number.isFinite(value) && value > 0);
   if (!finite.length) return {
     sampleCount: 0, mean: null, p50: null, p95: null, standardDeviation: null,
-    coefficientOfVariation: null, confidenceInterval95: null
+    coefficientOfVariation: null, confidenceInterval95: null, reliability: 'unknown'
   };
   const round = (value, places = 2) => Number(value.toFixed(places));
   const mean = finite.reduce((sum, value) => sum + value, 0) / finite.length;
@@ -248,7 +248,8 @@ function summarizeMetric(values) {
     p95: round(mean),
     standardDeviation: null,
     coefficientOfVariation: null,
-    confidenceInterval95: null
+    confidenceInterval95: null,
+    reliability: 'unknown'
   };
   const variance = finite.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / (finite.length - 1);
   const standardDeviation = Math.sqrt(variance);
@@ -264,15 +265,19 @@ function summarizeMetric(values) {
       low: round(Math.max(0, mean - margin)),
       high: round(mean + margin),
       method: 'student_t'
-    }
+    },
+    reliability: finite.length < minimumSamples
+      ? 'unknown'
+      : (standardDeviation / mean) <= 0.05 ? 'high'
+        : (standardDeviation / mean) <= 0.12 ? 'medium' : 'low'
   };
 }
 
 function aggregateCellSamples(samples, plan, numCtx, minimumSamples) {
   const passing = samples.filter(sample => sample.status === 'pass');
   const representative = passing[Math.floor(passing.length / 2)] || samples[0] || {};
-  const prefillStatistics = summarizeMetric(passing.map(sample => sample.prefillTokensPerSec));
-  const decodeStatistics = summarizeMetric(passing.map(sample => sample.decodeTokensPerSec));
+  const prefillStatistics = summarizeMetric(passing.map(sample => sample.prefillTokensPerSec), minimumSamples);
+  const decodeStatistics = summarizeMetric(passing.map(sample => sample.decodeTokensPerSec), minimumSamples);
   const complete = samples.length === minimumSamples
     && passing.length === minimumSamples
     && prefillStatistics.sampleCount === minimumSamples
@@ -284,9 +289,9 @@ function aggregateCellSamples(samples, plan, numCtx, minimumSamples) {
     status: complete ? 'pass' : (samples.find(sample => sample.status !== 'pass')?.status || 'error'),
     prefillTokensPerSec: prefillStatistics.p50,
     decodeTokensPerSec: decodeStatistics.p50,
-    promptEvalDurationMs: summarizeMetric(passing.map(sample => sample.promptEvalDurationMs)).p50,
-    evalDurationMs: summarizeMetric(passing.map(sample => sample.evalDurationMs)).p50,
-    latencyMs: summarizeMetric(passing.map(sample => sample.latencyMs)).p50,
+    promptEvalDurationMs: summarizeMetric(passing.map(sample => sample.promptEvalDurationMs), minimumSamples).p50,
+    evalDurationMs: summarizeMetric(passing.map(sample => sample.evalDurationMs), minimumSamples).p50,
+    latencyMs: summarizeMetric(passing.map(sample => sample.latencyMs), minimumSamples).p50,
     runtimeContextLength: complete && passing.every(sample => Number(sample.runtimeContextLength) === Number(numCtx))
       ? Number(numCtx)
       : null,
@@ -357,7 +362,26 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
       options.assertClaimActive?.();
       const sample = await _runCell(hostUrl, modelName, plan, numCtx, timeoutMs, options.signal);
       options.assertClaimActive?.();
-      samples.push({ ...sample, repeat });
+      let hardwareTelemetry = null;
+      if (typeof options.captureTelemetry === 'function') {
+        try {
+          hardwareTelemetry = await options.captureTelemetry({
+            prefillTokens: plan.prefillTokens,
+            decodeTokens: plan.decodeTokens,
+            repeat,
+            sample
+          });
+        } catch (error) {
+          hardwareTelemetry = {
+            ok: false,
+            source: 'none',
+            capturedAt: new Date(),
+            error: error.message
+          };
+        }
+        options.assertClaimActive?.();
+      }
+      samples.push({ ...sample, repeat, hardwareTelemetry });
       if (sample.status !== 'pass') break;
     }
     const result = aggregateCellSamples(samples, plan, numCtx, repeats);
@@ -383,6 +407,8 @@ async function runPrefillDecodeMatrix(hostUrl, modelName, options = {}) {
     cellCount: cells.length,
     passCount: passing.length,
     skippedCount: cells.filter((c) => c.status === 'skipped').length,
+    telemetrySampleCount: cells.reduce((sum, cell) => sum
+      + (cell.samples || []).filter(sample => sample.hardwareTelemetry).length, 0),
     cells
   };
 }

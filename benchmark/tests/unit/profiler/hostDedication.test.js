@@ -28,6 +28,20 @@ afterEach(async () => {
 // ── Task 1: Schema tests ──────────────────────────────────────────
 
 describe('HostProfile dedicated subdocument', () => {
+  const authorityOptions = () => ({
+    authorityService: 'profiler-release',
+    signal: new AbortController().signal,
+    assertAuthorityActive: jest.fn()
+  });
+  const reconciliation = (state = 'prepared') => ({
+    state,
+    operation: 'release_model',
+    operationId: 'dedication-shape-test',
+    workloadId: 'dedication-shape-test',
+    admissionId: 'admission-shape-test',
+    admissionGeneration: 'generation-shape-test',
+    admissionPrincipal: 'benchmark-service'
+  });
   const baseProfile = {
     hostId: 'ded-test',
     hostUrl: 'http://192.0.2.66:11434',
@@ -84,15 +98,16 @@ describe('HostProfile dedicated subdocument', () => {
     });
     const detectedAt = new Date();
 
-    const updated = await hostProfileService.upsert({
+    const updated = await hostProfileService.upsertAuthority({
       hostId: 'legacy-null-dedicated',
       dedicated: {
         model: 'ax/gemma4:e4b',
         expiresAt: new Date('2099-01-01T00:00:00Z'),
         vramUsedMiB: 8192,
         detectedAt
-      }
-    });
+      },
+      reconciliation: reconciliation()
+    }, authorityOptions());
 
     expect(updated.dedicated.model).toBe('ax/gemma4:e4b');
     expect(updated.dedicated.detectedAt).toEqual(detectedAt);
@@ -105,14 +120,19 @@ describe('HostProfile dedicated subdocument', () => {
       dedicated: { model: 'old:model', detectedAt: new Date() }
     });
 
-    await hostProfileService.upsert({ hostId: 'dedicated-clear-test', dedicated: null });
+    await hostProfileService.upsertAuthority({
+      hostId: 'dedicated-clear-test',
+      dedicated: null,
+      reconciliation: reconciliation()
+    }, authorityOptions());
     const cleared = await HostProfile.findOne({ hostId: 'dedicated-clear-test' }).lean();
     expect(cleared.dedicated).toBeUndefined();
 
-    const updated = await hostProfileService.upsert({
+    const updated = await hostProfileService.upsertAuthority({
       hostId: 'dedicated-clear-test',
-      dedicated: { model: 'new:model', detectedAt: new Date() }
-    });
+      dedicated: { model: 'new:model', detectedAt: new Date() },
+      reconciliation: reconciliation('resolved')
+    }, authorityOptions());
     expect(updated.dedicated.model).toBe('new:model');
   });
 });

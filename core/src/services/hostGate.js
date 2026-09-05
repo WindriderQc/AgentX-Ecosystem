@@ -658,6 +658,11 @@ function _resetForTests() {
  */
 async function hostHasInflightAnywhere(host) {
   if (!host) return false;
+  const runtimeCoordination = require('./runtimeCoordinationService');
+  if (await runtimeCoordination.hostHasActiveInferences(host)) return true;
+  // Legacy gate rows and process-local counters are conservative drain hints,
+  // never authority to admit. RuntimeCoordination is the fail-closed shared
+  // admission boundary above.
   if (hostHasInflight(host)) return true;
   if (!sharedStateReady()) return false;
   return Boolean(await _admissionModel().exists({

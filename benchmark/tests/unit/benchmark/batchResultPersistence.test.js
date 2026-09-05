@@ -6,13 +6,26 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 const savedDocs = [];
-jest.mock('../../../models/BenchmarkResult', () => jest.fn().mockImplementation(function BenchmarkResult(doc) {
-    Object.assign(this, doc);
-    this._id = 'result-id';
-    this.save = jest.fn(async () => {
-        savedDocs.push(this);
-        return this;
+let mockResultSaveHook = null;
+const mockResultUpdateOne = jest.fn();
+const mockEnqueueResultInvalidation = jest.fn();
+const mockWaitForResultInvalidation = jest.fn();
+jest.mock('../../../models/BenchmarkResult', () => {
+    const Model = jest.fn().mockImplementation(function BenchmarkResult(doc) {
+        Object.assign(this, doc);
+        this._id = 'result-id';
+        this.save = jest.fn(async () => {
+            savedDocs.push(this);
+            if (mockResultSaveHook) await mockResultSaveHook(this);
+            return this;
+        });
     });
+    Model.updateOne = (...args) => mockResultUpdateOne(...args);
+    return Model;
+});
+jest.mock('../../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+    enqueueResultInvalidation: (...args) => mockEnqueueResultInvalidation(...args),
+    waitForResultInvalidation: (...args) => mockWaitForResultInvalidation(...args)
 }));
 
 const {
@@ -108,6 +121,10 @@ function baseArgs(overrides = {}) {
 describe('batchResultPersistence truncation quarantine', () => {
     beforeEach(() => {
         savedDocs.length = 0;
+        mockResultSaveHook = null;
+        mockResultUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 });
+        mockEnqueueResultInvalidation.mockReset().mockResolvedValue({ _id: 'reconciliation-id' });
+        mockWaitForResultInvalidation.mockReset().mockReturnValue(Promise.resolve({ resolved: true }));
     });
 
     it('does not persist an unlabeled prompt-eval duration as TTFT', async () => {
@@ -380,5 +397,59 @@ describe('batchResultPersistence truncation quarantine', () => {
             code: 'BENCHMARK_TRUST_EXECUTION_RECEIPT_REQUIRED'
         });
         expect(savedDocs).toHaveLength(0);
+    });
+
+    it('tombstones a result whose save acknowledgement races workload admission loss', async () => {
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('workload admission lost after save'), {
+            code: 'BENCHMARK_CLAIM_LOST'
+        });
+        mockResultSaveHook = async () => controller.abort(lost);
+
+        await expect(persistSuccessfulResult(baseArgs({
+            signal: controller.signal,
+            assertAuthorityActive: () => {
+                if (controller.signal.aborted) throw lost;
+            }
+        }))).rejects.toMatchObject({
+            code: 'BENCHMARK_CLAIM_LOST',
+            authorityInvalidated: true
+        });
+
+        expect(mockResultUpdateOne).toHaveBeenCalledWith(
+            { _id: 'result-id' },
+            { $set: expect.objectContaining({ scoring_method: 'authority_invalidated' }) },
+            { upsert: true }
+        );
+    });
+
+    it('marks admission retention when an ambiguous result cannot be tombstoned', async () => {
+        const controller = new AbortController();
+        const lost = Object.assign(new Error('workload admission lost after save'), {
+            code: 'BENCHMARK_CLAIM_LOST'
+        });
+        mockResultSaveHook = async () => controller.abort(lost);
+        mockResultUpdateOne.mockRejectedValue(new Error('tombstone unavailable'));
+
+        await expect(persistSuccessfulResult(baseArgs({
+            signal: controller.signal,
+            assertAuthorityActive: () => {
+                if (controller.signal.aborted) throw lost;
+            }
+        }))).rejects.toMatchObject({
+            code: 'BENCHMARK_RESULT_RECONCILIATION_PENDING',
+            retainAdmission: true,
+            compensationError: expect.any(Error),
+            reconciliationId: 'reconciliation-id',
+            reconciliationPersisted: true,
+            reconciliationPromise: expect.any(Promise)
+        });
+        expect(mockEnqueueResultInvalidation).toHaveBeenCalledWith({
+            resultId: 'result-id',
+            batchId: 'batch-id',
+            workloadId: 'batch-id',
+            phase: 'successful result save',
+            reason: 'tombstone unavailable'
+        });
     });
 });

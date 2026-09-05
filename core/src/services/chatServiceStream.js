@@ -14,6 +14,8 @@ const hostPreferenceService = require('./hostPreferenceService');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const logger = require('../../config/logger');
 const fetch = require('node-fetch');
+const { beginInferenceAdmission } = require('./inferenceAdmissionService');
+const { createOllamaStreamTerminalValidator } = require('./routing/inferenceAttemptExecutor');
 
 // Extracted modules
 const { getActivePrompt, buildSystemPrompt } = require('./chat/chatPromptHelpers');
@@ -96,6 +98,7 @@ const handleChatRequestStream = async ({
     let streamTelemetry = null;
     let upstreamTimeout = null;
     let upstreamTimeoutTriggered = false;
+    let inferenceAdmission = null;
 
     logger.info('DEBUG_STREAM: handleChatRequestStream called', {
         userId, conversationId
@@ -231,13 +234,24 @@ const handleChatRequestStream = async ({
 
         let response;
         try {
+            inferenceAdmission = await beginInferenceAdmission({
+                host: resolvedHost,
+                model: effectiveModel,
+                kind: 'chat-stream',
+                principal: 'core-chat',
+                runtimeOptions: ollamaPayload.options,
+                ...(Object.prototype.hasOwnProperty.call(ollamaPayload, 'keep_alive')
+                    && { keepAlive: ollamaPayload.keep_alive }),
+                signal: controller.signal
+            });
+            inferenceAdmission.markDispatched();
             inferenceDispatched = true;
             inferenceStartedAt = Date.now();
             response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(ollamaPayload),
-                signal: controller.signal
+                signal: inferenceAdmission.signal
             });
             if (!response.ok) {
                 const errDetail = await readOllamaErrorDetail(response);
@@ -261,40 +275,48 @@ const handleChatRequestStream = async ({
         let stats = null;
         let sawDone = false;
         let finishReason = null;
+        const terminalValidator = createOllamaStreamTerminalValidator();
 
         const decoder = new TextDecoder();
         let lineBuffer = '';
         const consumeLine = (line) => {
             if (!line.trim()) return;
-            try {
-                const data = JSON.parse(line);
+            const observed = terminalValidator.observe(line);
+            if (!observed.accepted) {
+                logger.warn('Rejected malformed or post-terminal streaming chunk');
+                return;
+            }
+            const { data } = observed;
 
-                if (data.message?.thinking) {
-                    thinkingContent += data.message.thinking;
-                    if (!abortSignal?.aborted) onThinking(data.message.thinking);
-                }
+            if (data.message?.thinking) {
+                thinkingContent += data.message.thinking;
+                if (!abortSignal?.aborted) onThinking(data.message.thinking);
+            }
 
-                if (data.message?.content) {
-                    fullContent += data.message.content;
-                    if (!abortSignal?.aborted) onToken(data.message.content);
-                }
+            if (data.message?.content) {
+                fullContent += data.message.content;
+                if (!abortSignal?.aborted) onToken(data.message.content);
+            }
 
-                if (data.done) {
-                    sawDone = true;
-                    finishReason = data.done_reason || data.stop_reason || data.finish_reason || null;
-                    stats = buildOllamaStats(data, fullContent);
-                    if (stats?.performance) {
-                        stats.performance.promptEvalDuration = data.prompt_eval_duration || 0;
-                    }
+            if (observed.terminal) {
+                sawDone = true;
+                finishReason = data.done_reason || data.stop_reason || data.finish_reason || null;
+                stats = buildOllamaStats(data, fullContent);
+                if (stats?.performance) {
+                    stats.performance.promptEvalDuration = data.prompt_eval_duration || 0;
                 }
-            } catch (parseErr) {
-                logger.warn('Failed to parse streaming chunk', { error: parseErr.message });
             }
         };
 
         try {
             for await (const chunk of response.body) {
-                if (abortSignal?.aborted) return;
+                if (abortSignal?.aborted) {
+                    const abortError = abortSignal.reason instanceof Error
+                        ? abortSignal.reason
+                        : new Error('Streaming request was aborted after dispatch');
+                    abortError.name = 'AbortError';
+                    throw abortError;
+                }
 
                 lineBuffer += decoder.decode(chunk, { stream: true });
                 let boundary;
@@ -302,24 +324,21 @@ const handleChatRequestStream = async ({
                     consumeLine(lineBuffer.slice(0, boundary));
                     lineBuffer = lineBuffer.slice(boundary + 1);
                 }
-                // The terminal NDJSON record is authoritative. Do not wait for
-                // a misbehaving upstream to close its HTTP body afterwards.
-                if (sawDone) break;
             }
-            if (!sawDone) {
-                lineBuffer += decoder.decode();
-                consumeLine(lineBuffer);
-            }
+            lineBuffer += decoder.decode();
+            consumeLine(lineBuffer);
         } catch (streamErr) {
             if (!abortSignal?.aborted) logger.error('Stream reading error', { error: streamErr.message });
             throw streamErr;
         }
 
-        if (!sawDone) {
-            const terminalError = new Error('Ollama stream ended before its terminal record');
+        if (!sawDone || !terminalValidator.isComplete()) {
+            const terminalError = new Error('Ollama stream ended without an exact final terminal record');
             terminalError.code = 'OLLAMA_STREAM_INCOMPLETE';
             throw terminalError;
         }
+        await inferenceAdmission.complete();
+        inferenceAdmission = null;
         clearTimeout(upstreamTimeout);
         upstreamTimeout = null;
 
@@ -408,6 +427,12 @@ const handleChatRequestStream = async ({
         }
 
     } catch (err) {
+        if (inferenceAdmission) {
+            await inferenceAdmission.abandon(err).catch(quarantineError => {
+                err.inferenceQuarantineError = quarantineError;
+            });
+            inferenceAdmission = null;
+        }
         if (upstreamTimeoutTriggered && err.name === 'AbortError') {
             const timeoutError = new Error('Ollama request timed out (5m limit).');
             timeoutError.name = 'AbortError';

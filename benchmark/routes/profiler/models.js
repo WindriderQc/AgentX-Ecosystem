@@ -4,6 +4,14 @@ const express = require('express');
 const router = express.Router();
 const modelProfileService = require('../../src/services/profiler/modelProfileService');
 const modelPerformanceProfileService = require('../../src/services/profiler/modelPerformanceProfileService');
+const {
+  resolveArtifactIdentity,
+  resolveRuntimeArtifactReceipt,
+  identitiesMatch,
+  runtimeReceiptMatchesProfile
+} = require('../../src/services/profiler/artifactIdentityService');
+const { hasQualifiedProfilerAuthority } = require('../../src/services/profiler/profilerAuthorityReceipt');
+const { projectReadinessProfiles } = require('../../src/services/profiler/profilerReadinessProjectionService');
 
 function validateHostId(hostId, res) {
   if (/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(String(hostId || ''))) return true;
@@ -15,7 +23,8 @@ router.get('/', async (req, res) => {
   try {
     const filter = {};
     if (req.query.stage) filter.stage = req.query.stage;
-    res.json({ status: 'success', data: await modelProfileService.getAll(filter) });
+    const profiles = await modelProfileService.getAll(filter);
+    res.json({ status: 'success', data: await projectReadinessProfiles(profiles) });
   } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
 });
 
@@ -23,7 +32,8 @@ router.get('/:name', async (req, res) => {
   try {
     const model = await modelProfileService.getByName(req.params.name);
     if (!model) return res.status(404).json({ status: 'error', error: 'Model not found' });
-    res.json({ status: 'success', data: model });
+    const [projected] = await projectReadinessProfiles([model]);
+    res.json({ status: 'success', data: projected });
   } catch (err) { res.status(500).json({ status: 'error', error: err.message }); }
 });
 
@@ -40,17 +50,15 @@ router.get('/:name/config', async (req, res) => {
     const readiness = model?.readiness instanceof Map
       ? model.readiness.get(hostId)
       : model?.readiness?.[hostId];
-    const receipt = readiness?.authorityReceipt;
-    const authoritative = readiness?.benchmarkQualified === true
-      && readiness?.stale !== true
-      && ['standard', 'full'].includes(readiness?.profileDepth)
-      && receipt?.source === 'profiler_pipeline'
-      && Number(receipt.version) === 1
-      && /^[a-f0-9]{64}$/i.test(String(receipt.digest || ''))
-      && String(receipt.evidenceId || '') === String(readiness?.evidenceId || '')
-      && String(readiness?.evidenceId || '') === String(evidence?._id || '')
-      && evidence.artifact?.digest === readiness?.artifact?.digest
-      && evidence.artifact?.runtimeFingerprint === readiness?.artifact?.runtimeFingerprint
+    const liveArtifact = await resolveArtifactIdentity(req.params.name, hostId, evidence.artifact?.hostUrl, {
+      refresh: true
+    });
+    const authoritative = hasQualifiedProfilerAuthority(readiness, evidence, {
+      modelName: evidence.modelName,
+      hostId
+    })
+      && identitiesMatch(evidence.artifact, readiness?.artifact)
+      && identitiesMatch(evidence.artifact, liveArtifact)
       && Number(evidence.profile?.recommendedInteractiveContext) > 0;
     if (!authoritative) {
       return res.status(409).json({
@@ -59,15 +67,40 @@ router.get('/:name/config', async (req, res) => {
         error: 'A benchmark-qualified exact-artifact profiler receipt is required before using this runtime config'
       });
     }
+    let runtimeArtifactReceipt;
+    try {
+      runtimeArtifactReceipt = await resolveRuntimeArtifactReceipt(
+        req.params.name,
+        hostId,
+        evidence.artifact?.hostUrl
+      );
+    } catch (error) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'RUNTIME_ARTIFACT_IDENTITY_UNAVAILABLE',
+        error: error.message
+      });
+    }
+    if (!runtimeReceiptMatchesProfile(runtimeArtifactReceipt, evidence)) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'RUNTIME_ARTIFACT_IDENTITY_DRIFT',
+        error: 'Live runtime identity no longer matches the benchmark-qualified profile evidence'
+      });
+    }
     res.json({
       status: 'success',
       data: {
         modelName: req.params.name,
         hostId,
-        artifact: evidence.artifact,
+        artifact: runtimeArtifactReceipt,
         maxVerifiedContext: evidence.profile?.maxVerifiedContext || null,
         recommendedInteractiveContext: evidence.profile?.recommendedInteractiveContext || null,
         recommendedDocumentContext: evidence.profile?.recommendedDocumentContext || null,
+        performanceKneeContext: evidence.profile?.performanceKneeContext || null,
+        performanceKneeDegradationPct: evidence.profile?.performanceKneeDegradationPct || null,
+        qualityVerifiedContext: evidence.profile?.qualityVerifiedContext || null,
+        qualityContextStatus: evidence.profile?.qualityContextStatus || 'unknown',
         config: {
           num_ctx: evidence.profile?.recommendedInteractiveContext || null
         }

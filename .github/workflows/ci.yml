@@ -83,6 +83,7 @@ jobs:
       - name: Validate the portable Trust contracts
         run: >-
           node --test
+          shared/artifactRuntimeIdentity.test.js
           shared/benchmarkTrustReceipt.test.js
           shared/benchmarkTrustRatificationAttestation.test.js
           shared/benchmarkHumanEvidenceAttestation.test.js
@@ -253,6 +254,7 @@ jobs:
           node --test scripts/verify-degraded-release.test.js
           node --test scripts/verify-recovery-contract.test.js
           node --test shared/outboundHttpExecutor.test.js
+          node --test shared/artifactRuntimeIdentity.test.js
           node --test shared/recoveryBundleContract.test.js
           node --test shared/recoveryDrillReceiptContract.test.js
           node --test scripts/verify-recovery-bundle.test.js

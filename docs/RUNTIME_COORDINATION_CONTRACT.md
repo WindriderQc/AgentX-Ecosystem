@@ -127,8 +127,11 @@ Host claim acquisition remains
 Its successful `data` includes `batchId`, `claimGeneration`, `prevStatus`,
 `snapshotExact: true`, and `snapshotIdentity` (a lowercase 64-hex SHA-256).
 Benchmark must retain that entire acquisition proof and reject a legacy or
-partial acknowledgement before any host mutation. The nested `pref` remains
-for backward-compatible observation, but is not the portable receipt.
+partial acknowledgement before any host mutation. The authenticated nested
+`data.pref.benchmarkClaim.preClaimRuntime` is part of the receipt: it must
+contain `exact: true`, `capturedAt`, source `ollama_ps`, the matching
+`identityDigest`, and the complete resident identities. The top-level fields
+are convenience projections and must agree with that nested snapshot.
 Host-claim heartbeat success repeats the same `batchId`, `claimGeneration`,
 `prevStatus`, `snapshotExact`, and `snapshotIdentity`; Benchmark treats any
 divergence as ownership loss and aborts/drains in-flight work.
@@ -137,13 +140,14 @@ Host claim release remains:
 
 `DELETE /api/nerve-center/host-preferences/:encodedHost/benchmark-claim/:batchId`
 
-with `{ "claimGeneration": "claim-generation", "excludedModels": [] }` and
+with `{ "claimGeneration": "claim-generation", "admissionId": "...", "admissionGeneration": "...", "excludedModels": [] }` and
 exact Benchmark service authentication. `data.released: true` is valid only
 when `data.releaseReceipt.contract` is
 `agentx.benchmark-claim-release/v1`. The receipt binds:
 
 - `hostUrl`, `batchId`, and `claimGeneration`;
-- `snapshot.identityDigest`, `appliedIdentityDigest`, `exact`, resident count,
+- `snapshot.identityDigest`, `appliedIdentityDigest`, `exact`, `capturedAt`,
+  source, the exact `filterEvaluatedAt` used for TTL decisions, resident count,
   and every resident's model, digest, artifact size, VRAM size, context, and
   expiry;
 - `verification.ready: true`, `verified: true`, `degraded: false`, mode
@@ -153,4 +157,6 @@ when `data.releaseReceipt.contract` is
 
 If capture, restoration, verification, or fence clearing is incomplete, Core
 returns `released: false` and retains a recoverable fence. A legacy claim without
-an exact snapshot cannot produce a successful release receipt.
+an exact snapshot cannot produce a successful release receipt. Consumers must
+recompute both digests and the expired resident membership at
+`filterEvaluatedAt`; the arrays and digest strings are not trusted projections.

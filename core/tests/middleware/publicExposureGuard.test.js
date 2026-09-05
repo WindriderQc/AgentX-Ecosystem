@@ -2,6 +2,7 @@ const express = require('express');
 const request = require('supertest');
 const {
   benchmarkCredentialPath,
+  inferenceAdmissionBridgeCredentialPath,
   publicExposureGuard,
   runtimeBridgeCredentialPath,
 } = require('../../src/middleware/publicExposureGuard');
@@ -26,6 +27,11 @@ function buildApp() {
   app.post('/api/analytics/codex-usage', (_req, res) => res.json({ ok: true }));
   app.post('/api/platform-events', (_req, res) => res.json({ ok: true }));
   app.post('/api/inference/generate', (_req, res) => res.json({ ok: true }));
+  app.post('/api/runtime/inference-admissions', (_req, res) => res.json({ ok: true }));
+  app.post('/api/runtime/inference-admissions/admission-1/heartbeat', (_req, res) => res.json({ ok: true }));
+  app.post('/api/runtime/inference-admissions/admission-1/complete', (_req, res) => res.json({ ok: true }));
+  app.post('/api/runtime/inference-admissions/admission-1/mark-unknown', (_req, res) => res.json({ ok: true }));
+  app.post('/api/runtime/inference-admissions/admission-1/recover-runtime-restart', (_req, res) => res.json({ ok: true }));
   app.post('/api/nerve-center/workload-admissions', (_req, res) => res.json({ ok: true }));
   app.post('/api/nerve-center/workload-admissions/admission-1/heartbeat', (_req, res) => res.json({ ok: true }));
   app.post('/api/nerve-center/workload-admissions/admission-1/release-receipt', (_req, res) => res.json({ ok: true }));
@@ -67,6 +73,7 @@ describe('publicExposureGuard', () => {
   const savedPipelineToken = process.env.AGENTX_PIPELINE_TOKEN;
   const savedAlertDeliveryToken = process.env.AGENTX_ALERT_DELIVERY_TOKEN;
   const savedOpenClawBridgeToken = process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
+  const savedRuntimeBridgeToken = process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
   const savedInternalHostTrust = process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
   const savedLoopbackProxyUiTrust = process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
 
@@ -89,6 +96,7 @@ describe('publicExposureGuard', () => {
     delete process.env.AGENTX_PIPELINE_TOKEN;
     delete process.env.AGENTX_ALERT_DELIVERY_TOKEN;
     delete process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
+    delete process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
     delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
     delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
     app = buildApp();
@@ -127,6 +135,8 @@ describe('publicExposureGuard', () => {
     else process.env.AGENTX_ALERT_DELIVERY_TOKEN = savedAlertDeliveryToken;
     if (savedOpenClawBridgeToken === undefined) delete process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
     else process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN = savedOpenClawBridgeToken;
+    if (savedRuntimeBridgeToken === undefined) delete process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
+    else process.env.AGENTX_RUNTIME_BRIDGE_TOKEN = savedRuntimeBridgeToken;
     if (savedInternalHostTrust === undefined) delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
     else process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS = savedInternalHostTrust;
     if (savedLoopbackProxyUiTrust === undefined) delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
@@ -547,6 +557,43 @@ describe('publicExposureGuard', () => {
     expect(benchmarkCredentialPath('/api/models/registry/model/context-info', 'GET')).toBe(false);
     expect(benchmarkCredentialPath('/api/models/registry/model/execution-config', 'GET')).toBe(false);
     expect(benchmarkCredentialPath('/api/models/registry/model', 'POST')).toBe(false);
+  });
+
+  it('admits the runtime bridge bearer only for shared inference admission lifecycle', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
+    process.env.AGENTX_RUNTIME_BRIDGE_TOKEN = 'runtime-bridge-token-1234';
+    app.locals.forcedIp = '192.0.2.10';
+
+    for (const path of [
+      '/api/runtime/inference-admissions',
+      '/api/runtime/inference-admissions/admission-1/heartbeat',
+      '/api/runtime/inference-admissions/admission-1/complete',
+      '/api/runtime/inference-admissions/admission-1/mark-unknown',
+    ]) {
+      await request(app)
+        .post(path)
+        .set('Host', 'agentx.example.test')
+        .set('Authorization', 'Bearer runtime-bridge-token-1234')
+        .send({})
+        .expect(200);
+    }
+
+    for (const requestBuilder of [
+      request(app).post('/api/runtime/inference-admissions/admission-1/recover-runtime-restart'),
+      request(app).post('/api/nerve-center/workload-admissions'),
+      request(app).get('/api/nerve-center/status'),
+    ]) {
+      await requestBuilder
+        .set('Host', 'agentx.example.test')
+        .set('Authorization', 'Bearer runtime-bridge-token-1234')
+        .send({})
+        .expect(403);
+    }
+
+    expect(inferenceAdmissionBridgeCredentialPath('/api/runtime/inference-admissions', 'POST')).toBe(true);
+    expect(inferenceAdmissionBridgeCredentialPath('/api/runtime/inference-admissions/a/heartbeat', 'POST')).toBe(true);
+    expect(inferenceAdmissionBridgeCredentialPath('/api/runtime/inference-admissions/a/recover-runtime-restart', 'POST')).toBe(false);
+    expect(inferenceAdmissionBridgeCredentialPath('/api/runtime/inference-admissions', 'GET')).toBe(false);
   });
 
   it('scopes the Benchmark credential to the exact workload-admission lifecycle', () => {

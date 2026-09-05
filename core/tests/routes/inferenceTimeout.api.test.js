@@ -42,6 +42,16 @@ jest.mock('../../src/services/modelReadinessService', () => ({
   }))
 }));
 
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  beginInferenceAdmission: jest.fn(async ({ signal } = {}) => ({
+    signal: signal || new AbortController().signal,
+    markDispatched: jest.fn(),
+    assertActive: jest.fn(),
+    complete: jest.fn(async () => ({ released: true })),
+    abandon: jest.fn(async () => ({ released: true })),
+  })),
+}));
+
 jest.mock('../../src/services/hostPreferenceService', () => ({
   getAll: jest.fn(async () => []),
   getByHost: jest.fn(async () => null),
@@ -197,7 +207,7 @@ describe('POST /api/inference/generate — fetch timeout', () => {
       transportSignal = options.signal;
       return Promise.resolve({
         ok: true,
-        text: () => Promise.resolve(JSON.stringify({ response: 'hi' }))
+        text: () => Promise.resolve(JSON.stringify({ response: 'hi', done: true }))
       });
     });
 

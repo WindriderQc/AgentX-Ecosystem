@@ -70,9 +70,16 @@ function dependencies(overrides = {}) {
       }
     }
   };
+  const workload = {
+    signal: new AbortController().signal,
+    assertActive: jest.fn(),
+    complete: jest.fn(async () => ({ released: true })),
+    retainForRecovery: jest.fn(async () => ({ retained: true }))
+  };
   return {
     connectDB: jest.fn(async () => {}),
     disconnectDB: jest.fn(async () => {}),
+    beginManagedWorkload: jest.fn(async () => workload),
     getDedicationStatuses: jest.fn(async () => [{
       host: 'http://host-a:11434',
       pinnedModels: ['resident/model:8b'],
@@ -146,6 +153,14 @@ describe('toolCallCampaignRunner', () => {
       qualification: { outcome: 'supported' }
     });
     expect(deps.runHarness).toHaveBeenCalledTimes(3);
+    expect(deps.beginManagedWorkload).toHaveBeenCalledWith(
+      'toolcall-campaign-a',
+      expect.objectContaining({
+        kind: 'tool-capability-qualification',
+        batchId: 'toolcall-campaign-a',
+        hosts: ['http://host-a:11434']
+      })
+    );
     expect(campaignOptions.transport).toHaveBeenCalledWith(expect.objectContaining({
       execution: {
         numCtx: 32768,
@@ -169,7 +184,14 @@ describe('toolCallCampaignRunner', () => {
       expect.any(Object),
       expect.objectContaining({ interrupted: false, failureCode: null })
     );
+    expect(deps.finalizeQualification.mock.invocationCallOrder[0])
+      .toBeLessThan(deps.releaseBenchmarkClaim.mock.invocationCallOrder[0]);
     expect(deps.disconnectDB).toHaveBeenCalled();
+    const workload = await deps.beginManagedWorkload.mock.results[0].value;
+    expect(deps.finalizeQualification.mock.invocationCallOrder[0])
+      .toBeLessThan(workload.complete.mock.invocationCallOrder[0]);
+    expect(workload.complete).toHaveBeenCalledTimes(1);
+    expect(workload.retainForRecovery).not.toHaveBeenCalled();
   });
 
   it('marks a started campaign interrupted and releases its exact claim after a run error', async () => {
@@ -178,11 +200,18 @@ describe('toolCallCampaignRunner', () => {
 
     await expect(runToolCapabilityCampaign(options(), deps)).rejects.toBe(failure);
     expect(deps.releaseBenchmarkClaim).toHaveBeenCalledTimes(1);
+    const workload = await deps.beginManagedWorkload.mock.results[0].value;
+    expect(workload.retainForRecovery).toHaveBeenCalledWith(failure);
+    expect(workload.complete).not.toHaveBeenCalled();
     expect(deps.finalizeQualification).toHaveBeenCalledWith(
       'toolcall-campaign-a',
       expect.any(Object),
       { interrupted: true, failureCode: 'TRANSPORT_STOPPED' }
     );
+    expect(deps.finalizeQualification.mock.invocationCallOrder[0])
+      .toBeLessThan(deps.releaseBenchmarkClaim.mock.invocationCallOrder[0]);
+    expect(deps.finalizeQualification.mock.invocationCallOrder[0])
+      .toBeLessThan(workload.retainForRecovery.mock.invocationCallOrder[0]);
     expect(deps.disconnectDB).toHaveBeenCalledTimes(1);
   });
 
@@ -197,7 +226,7 @@ describe('toolCallCampaignRunner', () => {
     expect(deps.releaseBenchmarkClaim).toHaveBeenCalledTimes(1);
   });
 
-  it('turns post-release pin or residency drift into interrupted evidence', async () => {
+  it('reports post-release pin drift without rewriting already fenced campaign evidence', async () => {
     const getDedicationStatuses = jest.fn()
       .mockResolvedValueOnce([{
         host: 'http://host-a:11434',
@@ -218,7 +247,7 @@ describe('toolCallCampaignRunner', () => {
     expect(deps.finalizeQualification).toHaveBeenCalledWith(
       'toolcall-campaign-a',
       expect.any(Object),
-      expect.objectContaining({ interrupted: true, failureCode: 'TOOL_CAMPAIGN_PIN_DRIFT' })
+      expect.objectContaining({ interrupted: false, failureCode: null })
     );
   });
 
@@ -253,5 +282,35 @@ describe('toolCallCampaignRunner', () => {
         failureCode: 'TOOL_CAMPAIGN_RUNTIME_IDENTITY_DRIFT'
       })
     );
+  });
+
+  it('re-resolves the exact runtime directly before final evidence CAS', async () => {
+    const calls = [];
+    const deps = dependencies({
+      resolveArtifactIdentity: jest.fn(async () => {
+        calls.push('resolve-artifact');
+        return {
+          model: 'owner/model:8b',
+          hostId: 'host-a',
+          hostUrl: 'http://host-a:11434',
+          digest: 'sha256:a',
+          runtimeFingerprint: 'runtime-a',
+          registryQualified: true
+        };
+      }),
+      finalizeQualification: jest.fn(async () => {
+        calls.push('finalize');
+        return { runState: 'finalized', outcome: 'supported' };
+      }),
+      releaseBenchmarkClaim: jest.fn(async () => {
+        calls.push('release-claim');
+        return { released: true };
+      })
+    });
+
+    await expect(runToolCapabilityCampaign(options(), deps)).resolves.toMatchObject({
+      qualification: { outcome: 'supported' }
+    });
+    expect(calls.slice(-3)).toEqual(['resolve-artifact', 'finalize', 'release-claim']);
   });
 });

@@ -8,7 +8,8 @@ jest.mock('../../../src/services/benchmark/http', () => ({
 jest.mock('../../../src/clients/coreApiClient', () => ({
     getDedicationStatuses: jest.fn(),
     resolveHostKey: jest.fn(),
-    restoreDedication: jest.fn()
+    restoreDedication: jest.fn(),
+    generateWithWorkloadAdmission: jest.fn()
 }));
 
 const coreApiClient = require('../../../src/clients/coreApiClient');
@@ -30,11 +31,10 @@ describe('benchmark dedication lifecycle', () => {
     beforeEach(() => jest.clearAllMocks());
 
     it('unloads the exact running embedding pin without inventing an ax/ artifact', async () => {
-        mockFetch
-            // Even if /api/ps cannot identify the live artifact, an embedding
-            // pin must never gain a synthetic ax/ unload candidate.
-            .mockResolvedValueOnce(jsonResponse({ models: [] }))
-            .mockResolvedValueOnce(jsonResponse({}));
+        // Even if /api/ps cannot identify the live artifact, an embedding pin
+        // must never gain a synthetic ax/ unload candidate.
+        mockFetch.mockResolvedValueOnce(jsonResponse({ models: [] }));
+        coreApiClient.generateWithWorkloadAdmission.mockResolvedValue({ status: 'success' });
         const recordBatchTimelineEvent = jest.fn(async () => {});
         const dedication = new Map([[
             'http://secondary:11434',
@@ -46,9 +46,16 @@ describe('benchmark dedication lifecycle', () => {
 
         await releaseAllDedication(dedication, { batchId: 'batch-1', recordBatchTimelineEvent });
 
-        expect(mockFetch).toHaveBeenCalledTimes(2);
-        expect(mockFetch.mock.calls[1][0]).toBe('http://secondary:11434/api/generate');
-        expect(JSON.parse(mockFetch.mock.calls[1][1].body).model).toBe('nomic-embed-text:v1.5');
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(coreApiClient.generateWithWorkloadAdmission).toHaveBeenCalledWith(
+            'batch-1',
+            expect.objectContaining({
+                host: 'http://secondary:11434',
+                model: 'nomic-embed-text:v1.5',
+                keep_alive: 0
+            }),
+            { signal: undefined }
+        );
         expect(recordBatchTimelineEvent).toHaveBeenCalledWith('dedication_released', expect.objectContaining({
             unloadModel: 'nomic-embed-text:v1.5'
         }));
@@ -76,13 +83,8 @@ describe('benchmark dedication lifecycle', () => {
     });
 
     it('fails closed when a resume pin cannot be unloaded', async () => {
-        mockFetch
-            .mockResolvedValueOnce(jsonResponse({ models: [{ name: 'pinned-model' }] }))
-            .mockResolvedValueOnce({
-                ok: false,
-                status: 503,
-                text: jest.fn(async () => 'unload unavailable')
-            });
+        mockFetch.mockResolvedValueOnce(jsonResponse({ models: [{ name: 'pinned-model' }] }));
+        coreApiClient.generateWithWorkloadAdmission.mockRejectedValue(new Error('unload unavailable'));
         const recordBatchTimelineEvent = jest.fn(async () => {});
         const dedication = new Map([[
             'http://secondary:11434',

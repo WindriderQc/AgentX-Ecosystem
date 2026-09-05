@@ -9,6 +9,7 @@ const performanceEvidenceId = ObjectId('65f000000000000000000101');
 const prompt1Id = ObjectId('66d000000000000000000001');
 const prompt2Id = ObjectId('66d000000000000000000002');
 const runtimeFingerprint = '79047f2496ffb27ae0bc420274c2036aa42dbce3f84f260c0d6f49f38dbe35d3';
+const profileAuthorityDigest = 'a30d51d360c61b0975d5d9f5c6cbef9cf91ef6c0810a0fc2e86fe1aa34aeba0c';
 const now = new Date();
 
 const seededCollections = [
@@ -157,7 +158,7 @@ db.modelprofiles.insertOne({
         version: 1,
         source: 'profiler_pipeline',
         evidenceId: performanceEvidenceId.toString(),
-        digest: 'a30d51d360c61b0975d5d9f5c6cbef9cf91ef6c0810a0fc2e86fe1aa34aeba0c',
+        digest: profileAuthorityDigest,
         issuedAt: now,
       },
       artifact,
@@ -183,8 +184,19 @@ db.modelcontextprofiles.insertOne({
   hostId,
   artifactDigest: executionDigest,
   runtimeFingerprint,
+  maxVerifiedContext: 4096,
   verifiedMaxContext: 4096,
+  historicalMaxVerifiedContext: 4096,
   verifiedInputTokens: 3500,
+  recommendedInteractiveContext: 4096,
+  recommendedDocumentContext: 4096,
+  recommendationStatus: 'verified',
+  recommendationEvidenceVersion: 'context-probe-degradation-v3',
+  revalidationRequired: false,
+  recommendationThresholds: {
+    interactiveDegradationPct: 15,
+    documentDegradationPct: 30,
+  },
   recommendedContext: 4096,
   modelTheoreticalMax: 4096,
   source: 'context_probe',
@@ -234,9 +246,24 @@ db.modelperformanceprofiles.insertOne({
     maxVerifiedContext: 4096,
     recommendedInteractiveContext: 4096,
     recommendedDocumentContext: 4096,
-    spill: { verified: true, spillDetected: false },
     optimalNumCtx: 4096,
     recommendedConfig: { num_ctx: 4096 },
+    profileDepth: 'standard',
+    requiredRetainedSamples: 5,
+    requiredTtftSamples: 5,
+    measurementQuality: {
+      sampleCount: 5,
+      retainedSampleCount: 5,
+      passingSampleCount: 5,
+      minimumRetainedSamples: 5,
+      ttftSampleCount: 5,
+      reliability: 'medium',
+    },
+    spill: {
+      verified: true,
+      spillDetected: false,
+      lastSafeNumCtx: 4096,
+    },
     loadTiming: { hotLoadMs: 1 },
   },
   active: true,

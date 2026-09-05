@@ -185,7 +185,8 @@ async function loadCandidateEvidence(candidate, hostId, hostUrl, deps) {
             'artifact.digest': artifact.digest,
             'artifact.runtimeFingerprint': artifact.runtimeFingerprint,
             active: true,
-            stale: { $ne: true }
+            stale: { $ne: true },
+            authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
         }).lean(),
         deps.ModelContextProfile.findOne({
             modelName: candidate.model,
@@ -193,7 +194,8 @@ async function loadCandidateEvidence(candidate, hostId, hostUrl, deps) {
             hostUrl: artifact.hostUrl,
             artifactDigest: artifact.digest,
             runtimeFingerprint: artifact.runtimeFingerprint,
-            stale: { $ne: true }
+            stale: { $ne: true },
+            authorityState: { $nin: ['pending_reconciliation', 'authority_invalidated'] }
         }).lean()
     ]);
     return { profile, performance, context, artifact, identityError };

@@ -435,6 +435,12 @@ async function start() {
     recoverLeakedClaims({ recoveryStartedAt })
       .then(() => reacquireActiveBatchClaims())
       .catch(err => logger.warn('Claim recovery error', { error: err.message }));
+    const { startProfilerProjectionRecovery } = require('./src/services/profiler/profilerProjectionRecovery');
+    startProfilerProjectionRecovery();
+    const {
+      startBenchmarkAuthorityReconciliation
+    } = require('./src/services/benchmark/benchmarkAuthorityReconciliation');
+    startBenchmarkAuthorityReconciliation();
   } else {
     logger.info('[ClaimRecovery] Disabled by the demo product profile');
   }

@@ -28,7 +28,14 @@ jest.mock('../../../src/clients/ollamaClient', () => ({
   showModel: jest.fn()
 }));
 jest.mock('../../../models/ModelProfile', () => ({ findOne: jest.fn() }));
+jest.mock('../../../models/ModelPerformanceProfile', () => ({ findOne: jest.fn() }));
 jest.mock('../../../src/services/benchmark/buddySurfaceEvents', () => ({ emitLifecycle: jest.fn() }));
+const mockPrepareProfilerAuthorityWrite = jest.fn();
+const mockCompleteProfilerAuthorityWrite = jest.fn();
+jest.mock('../../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+  prepareProfilerAuthorityWrite: (...args) => mockPrepareProfilerAuthorityWrite(...args),
+  completeProfilerAuthorityWrite: (...args) => mockCompleteProfilerAuthorityWrite(...args)
+}));
 
 const hostTestService = require('../../../src/services/hostTestService');
 const contextProbeService = require('../../../src/services/contextProbeService');
@@ -41,6 +48,8 @@ const liveProbeService = require('../../../src/services/profiler/liveProbeServic
 const thinkingProfileService = require('../../../src/services/profiler/thinkingProfileService');
 const ollamaClient = require('../../../src/clients/ollamaClient');
 const ModelProfile = require('../../../models/ModelProfile');
+const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
+const { createProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
 const orchestrator = require('../../../src/services/profiler/profilerOrchestrator');
 
 const MODEL = 'owner/model:8b-q4';
@@ -55,24 +64,40 @@ const ARTIFACT = {
   registryDigest: 'sha256:exact',
   registryQualified: true
 };
+const PROFILE_OPTIONS = Object.freeze({ claimIdentity: { claimBatchId: 'profile-test' } });
 
 function readiness(overrides = {}) {
-  return {
+  const evidence = {
+    _id: 'evidence-1',
+    modelName: MODEL,
+    hostId: HOST_ID,
+    artifact: ARTIFACT,
+    profile: {
+      profileDepth: 'standard',
+      requiredRetainedSamples: 5,
+      measurementQuality: { passingSampleCount: 5 }
+    }
+  };
+  const value = {
     stage: 'profiled',
     profileDepth: 'standard',
     benchmarkQualified: true,
     evidenceId: 'evidence-1',
-    authorityReceipt: {
-      version: 1,
-      source: 'profiler_pipeline',
-      evidenceId: 'evidence-1',
-      digest: 'a'.repeat(64),
-      issuedAt: new Date('2026-09-03T00:00:00Z')
-    },
     stale: false,
     artifact: ARTIFACT,
     ...overrides
   };
+  value.authorityReceipt = overrides.authorityReceipt === null
+    ? null
+    : createProfilerAuthorityReceipt({
+      modelName: MODEL,
+      hostId: HOST_ID,
+      artifact: evidence.artifact,
+      profile: evidence.profile,
+      evidenceId: evidence._id,
+      issuedAt: new Date('2026-09-03T00:00:00Z')
+    });
+  return value;
 }
 
 beforeEach(() => {
@@ -105,11 +130,29 @@ beforeEach(() => {
     vramUsedMiB: 4096
   });
   performanceProfiles.saveProfile.mockResolvedValue({ _id: 'evidence-1' });
+  mockPrepareProfilerAuthorityWrite.mockReset().mockImplementation(async input => ({
+    _id: 'journal-evidence-1',
+    details: input.details
+  }));
+  mockCompleteProfilerAuthorityWrite.mockReset().mockResolvedValue({ record: { state: 'resolved' } });
+  ModelProfile.findOne.mockReturnValue({
+    select: jest.fn().mockReturnThis(),
+    lean: jest.fn().mockResolvedValue({ readiness: {}, thinkingProfiles: {} })
+  });
+  ModelPerformanceProfile.findOne.mockReturnValue({
+    lean: jest.fn().mockResolvedValue({
+      _id: 'evidence-1', modelName: MODEL, hostId: HOST_ID, artifact: ARTIFACT,
+      profile: {
+        profileDepth: 'standard', requiredRetainedSamples: 5,
+        measurementQuality: { passingSampleCount: 5 }
+      }
+    })
+  });
 });
 
 describe('profile', () => {
   it('records evidence for the exact requested tag without creating another model', async () => {
-    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS);
     expect(hostTestService.testModelOnHost).toHaveBeenCalledWith(MODEL, HOST_URL, expect.any(Object));
     expect(hostTestService.testModelOnHost.mock.calls[0][2]).not.toHaveProperty('numCtx');
     expect(performanceProfiles.saveProfile).toHaveBeenCalledWith(expect.objectContaining({
@@ -134,17 +177,14 @@ describe('profile', () => {
     modelProfileService.updateReadiness.mockRejectedValueOnce(new Error('readiness acknowledgement lost'));
     performanceProfiles.invalidateProfile.mockRejectedValueOnce(new Error('profile invalidation unavailable'));
 
-    const error = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick').catch(caught => caught);
+    const error = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS).catch(caught => caught);
 
     expect(error).toMatchObject({
       authorityInvalidationFailed: true,
-      invalidationErrors: [expect.any(Error)]
+      reconciliationId: 'journal-evidence-1'
     });
-    expect(performanceProfiles.invalidateProfile).toHaveBeenCalledWith(
-      'evidence-1',
-      'profiler_authority_write_failed'
-    );
-    expect(modelProfileService.invalidateReadinessIfEvidence).toHaveBeenCalled();
+    expect(performanceProfiles.invalidateProfile).not.toHaveBeenCalled();
+    expect(modelProfileService.invalidateReadinessIfEvidence).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -167,7 +207,7 @@ describe('profile', () => {
       vramUsedMiB: 4096
     });
 
-    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS);
 
     expect(result.profile.spill).toEqual(expect.objectContaining({
       spillDetected: true,
@@ -190,7 +230,7 @@ describe('profile', () => {
       ]
     });
 
-    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'standard');
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'standard', PROFILE_OPTIONS);
 
     expect(result.profile).toEqual(expect.objectContaining({
       profileDepth: 'standard',
@@ -241,7 +281,7 @@ describe('profile', () => {
     }));
     thinkingProfileService.profileThinkingBehavior.mockResolvedValue({ recommendedPolicy: 'on' });
 
-    await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick');
+    await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS);
 
     expect(hostTestService.testModelOnHost).toHaveBeenCalledWith(
       MODEL,
@@ -257,9 +297,29 @@ describe('profile', () => {
 });
 
 describe('profiler evidence qualification', () => {
+  it('declares concurrent goodput/fairness and semantic quality non-authoritative until measured', () => {
+    expect(orchestrator._buildProfilerCapabilities('full', null)).toMatchObject({
+      qualificationScope: 'single_request_exact_artifact_runtime',
+      concurrentServing: {
+        status: 'unknown',
+        authority: 'none',
+        metrics: { goodput: null, latencyP95Ms: null, fairness: null, saturationConcurrency: null }
+      },
+      responseQuality: { status: 'not_measured', authority: 'none' },
+      productionServingQualification: { qualified: false }
+    });
+  });
+
+  it('uses at least five context candidate repetitions for Full and keeps Standard diagnostic', () => {
+    expect(orchestrator._contextProbeRepeatsForDepth('standard', { fullPhaseRepeats: 10 })).toBe(2);
+    expect(orchestrator._contextProbeRepeatsForDepth('full', { fullPhaseRepeats: 3 })).toBe(5);
+    expect(orchestrator._contextProbeRepeatsForDepth('full', { fullPhaseRepeats: 10 })).toBe(10);
+    expect(orchestrator._contextProbeRepeatsForDepth('full', { fullPhaseRepeats: 99 })).toBe(20);
+  });
+
   function qualifiedFullProfile() {
     const stats = value => ({
-      sampleCount: 3,
+      sampleCount: 5,
       mean: value,
       p50: value,
       p95: value,
@@ -270,27 +330,42 @@ describe('profiler evidence qualification', () => {
     });
     return {
       profileDepth: 'full',
-      requiredFullPhaseSamples: 3,
+      requiredFullPhaseSamples: 5,
       maxVerifiedContext: 262144,
       recommendedInteractiveContext: 65536,
       recommendedDocumentContext: 131072,
       requiredRetainedSamples: 10,
-      measurementQuality: { passingSampleCount: 10, ttftSampleCount: 10, reliability: 'medium' },
+      measurementQuality: {
+        passingSampleCount: 10,
+        ttftSampleCount: 10,
+        reliability: 'medium',
+        tokensPerSecMean: 40,
+        coefficientOfVariation: 0.05,
+        confidenceInterval95: { low: 38, high: 42, method: 'student_t' }
+      },
       ttftMs: 200,
       ttftMeasurement: 'streamed_wall_clock',
       spill: { verified: true, spillDetected: false },
+      contextProbeCandidateRepeats: 5,
+      probeSteps: [262144, 65536, 131072].map(numCtx => ({
+        numCtx,
+        passed: true,
+        repetitionCount: 5,
+        throughputStatistics: stats(40),
+        samples: Array.from({ length: 5 }, () => ({ passed: true, tokensPerSec: 40 }))
+      })),
       throughputCurve: [10, 25, 50, 75, 90].map(contextFillPct => ({
         contextFillPct,
         tokensPerSec: 40,
         gpuOffloaded: false,
-        passingSampleCount: 3,
+        passingSampleCount: 5,
         throughputStatistics: stats(40)
       })),
       generationStability: [64, 256, 512].map(numPredict => ({
         numPredict,
         tokensPerSec: 40,
         totalLatencyMs: 1000,
-        passingSampleCount: 3,
+        passingSampleCount: 5,
         throughputStatistics: stats(40),
         latencyStatistics: stats(1000)
       })),
@@ -310,7 +385,7 @@ describe('profiler evidence qualification', () => {
           promptEvalDurationMs: 500,
           evalDurationMs: 500,
           runtimeContextLength: 1024,
-          passingSampleCount: 3,
+          passingSampleCount: 5,
           prefillStatistics: stats(1000),
           decodeStatistics: stats(128),
           prefillTokensPerSec: 1000,
@@ -321,7 +396,7 @@ describe('profiler evidence qualification', () => {
         coldLoadMs: 5000,
         hotLoadMs: 100,
         unloadVerified: true,
-        passingSampleCount: 3,
+        passingSampleCount: 5,
         coldStatistics: stats(5000),
         hotStatistics: stats(100)
       }
@@ -366,6 +441,28 @@ describe('profiler evidence qualification', () => {
 
   it('qualifies only when every Full phase has positive complete evidence', () => {
     expect(orchestrator.profileQualificationFailures(qualifiedFullProfile())).toEqual([]);
+  });
+
+  it.each([
+    ['fewer than five candidate repeats', profile => { profile.probeSteps[0].repetitionCount = 4; }],
+    ['unknown candidate reliability', profile => { profile.probeSteps[0].throughputStatistics.reliability = 'unknown'; }],
+    ['wide candidate confidence interval', profile => {
+      profile.probeSteps[0].throughputStatistics.confidenceInterval95 = { low: 10, high: 70, method: 'student_t' };
+    }]
+  ])('fails Full qualification for context evidence with %s', (_label, mutate) => {
+    const profile = qualifiedFullProfile();
+    mutate(profile);
+    expect(orchestrator.profileQualificationFailures(profile)).toContain('full_context_probe_incomplete');
+  });
+
+  it.each([
+    ['high CV', stats => { stats.coefficientOfVariation = 0.3; stats.reliability = 'low'; }],
+    ['wide relative CI', stats => { stats.confidenceInterval95 = { low: 10, high: 70, method: 'student_t' }; }],
+    ['too few samples', stats => { stats.sampleCount = 4; stats.reliability = 'unknown'; }]
+  ])('fails Full qualification when one phase has %s', (_label, mutate) => {
+    const profile = qualifiedFullProfile();
+    mutate(profile.throughputCurve[0].throughputStatistics);
+    expect(orchestrator.profileQualificationFailures(profile)).toContain('full_throughput_curve_incomplete');
   });
 
   it('never qualifies workload recommendations above the verified capacity ceiling', () => {

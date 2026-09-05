@@ -73,6 +73,12 @@ describe('ModelContextProfile v2 migration', () => {
       stale: true,
       staleReason: 'legacy_context_revalidation_required'
     });
+    expect(legacy).toMatchObject({
+      performanceKneeContext: null,
+      performanceKneeDegradationPct: 15,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown'
+    });
 
     const current = await collection.findOne({ _id: 'current-v3' });
     expect(current).toMatchObject({
@@ -85,6 +91,11 @@ describe('ModelContextProfile v2 migration', () => {
       recommendationEvidenceVersion: 'context-probe-degradation-v3',
       revalidationRequired: false,
       stale: false
+    });
+    expect(current).toMatchObject({
+      performanceKneeContext: null,
+      qualityVerifiedContext: null,
+      qualityContextStatus: 'unknown'
     });
 
     const filledLegacy = await collection.findOne({ _id: 'legacy-filled-262k' });

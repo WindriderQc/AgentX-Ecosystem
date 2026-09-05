@@ -22,6 +22,7 @@ const {
   identitiesMatch: artifactIdentitiesMatch,
   resolveArtifactIdentity
 } = require('../profiler/artifactIdentityService');
+const { beginManagedWorkload } = require('../benchmark/workloadAdmissionLifecycle');
 
 const CONFIRMATION_TOKEN = 'RUN_NATIVE_TOOL_QUALIFICATION';
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -244,6 +245,7 @@ function defaultDependencies(overrides = {}) {
     assertFrozenArtifactDigest,
     resolveArtifactIdentity,
     runHarness,
+    beginManagedWorkload,
     beginQualification: qualificationStore.beginQualification,
     recordRepetition: qualificationStore.recordRepetition,
     finalizeQualification: qualificationStore.finalizeQualification,
@@ -261,6 +263,7 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
   const estimatedDurationMs = Math.min(2 * 60 * 60 * 1000, Math.max(10 * 60 * 1000, repetitions * 10 * 60 * 1000));
   let connected = false;
   let claimReceipt = null;
+  let workload = null;
   let heartbeat = null;
   let identity = null;
   let persistenceStarted = false;
@@ -269,12 +272,21 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
   let pinBefore = null;
   let pinAfter = null;
   let qualification = null;
+  let frozenCampaign = null;
   const reports = [];
 
   try {
     await deps.connectDB();
     connected = true;
     pinBefore = await captureHostGuard(host, deps);
+    workload = await deps.beginManagedWorkload(campaignId, {
+      requestId: `tool-capability:${campaignId}`,
+      kind: 'tool-capability-qualification',
+      batchId: campaignId,
+      hosts: [host],
+      ttlMs: estimatedDurationMs
+    });
+    workload.assertActive();
     const claimResult = await deps.claimHostForBenchmark(host, campaignId, estimatedDurationMs, {
       source: 'tool-capability-qualification',
       owner: 'agentx-benchmark',
@@ -289,7 +301,7 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
     await heartbeat.ready;
     heartbeat.assertActive();
 
-    const frozenCampaign = await deps.resolveStandaloneCampaignInferenceContracts({
+    frozenCampaign = await deps.resolveStandaloneCampaignInferenceContracts({
       hostGroups: new Map([[host, [model]]]),
       executionConfig: {
         response_mode: 'final_only',
@@ -328,7 +340,12 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
       // The same frozen contract and exact mocked toolbox are reused for every
       // repetition. Production tools are never inputs to runHarness.
       // eslint-disable-next-line no-await-in-loop
-      const frozenTransport = (input) => options.transport({ ...input, execution: frozenExecution });
+      const frozenTransport = (input) => options.transport({
+        ...input,
+        execution: frozenExecution,
+        signal: workload.signal,
+        workloadId: campaignId
+      });
       const report = await deps.runHarness(frozenTransport, {
         artifact: {
           model: identity.modelName,
@@ -345,13 +362,31 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
       await deps.recordRepetition(campaignId, identity, report);
     }
 
-    heartbeat.assertActive();
-    await assertActiveClaim(claimReceipt, deps);
-    await deps.assertFrozenArtifactDigest(frozenCampaign, model, host);
-    await assertCurrentArtifactIdentity(identity, deps);
   } catch (error) {
     failure = error;
   } finally {
+    // Final evidence is written while both the exact host claim and the global
+    // workload admission are still live. Re-resolve the runtime immediately
+    // before the CAS so a tag/restart race can only finalize as interrupted.
+    if (persistenceStarted && identity) {
+      try {
+        heartbeat?.assertActive();
+        await assertActiveClaim(claimReceipt, deps);
+        await deps.assertFrozenArtifactDigest(frozenCampaign, model, host);
+        await assertCurrentArtifactIdentity(identity, deps);
+      } catch (error) {
+        failure = failure || error;
+      }
+      try {
+        qualification = await deps.finalizeQualification(campaignId, identity, {
+          interrupted: Boolean(failure),
+          failureCode: failure?.code || (failure ? 'TOOL_CAMPAIGN_FAILED' : null)
+        });
+      } catch (error) {
+        if (failure) failure.finalizationError = error;
+        else failure = error;
+      }
+    }
     if (heartbeat) {
       try {
         await heartbeat.stop();
@@ -374,12 +409,10 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
         failure = failure || error;
       }
     }
-    if (persistenceStarted && identity) {
+    if (workload) {
       try {
-        qualification = await deps.finalizeQualification(campaignId, identity, {
-          interrupted: Boolean(failure),
-          failureCode: failure?.code || (failure ? 'TOOL_CAMPAIGN_FAILED' : null)
-        });
+        if (failure) await workload.retainForRecovery(failure);
+        else await workload.complete();
       } catch (error) {
         failure = failure || error;
       }
