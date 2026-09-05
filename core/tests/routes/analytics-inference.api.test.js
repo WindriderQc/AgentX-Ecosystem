@@ -72,8 +72,8 @@ describe('inference analytics summary', () => {
         calls: 100, errors: 2, cancellations: 3, nonSuccesses: 5,
         tokensIn: 1000, tokensOut: 500, durationMs: 50000, fallbacks: 0
       }],
-      byCallerDetail: [{
-        _id: 'nestor/voix-native/chat', calls: 20, errors: 1,
+      byConsumerContract: [{
+        _id: 'openclaw-pipeline-runtime-v1', calls: 20, errors: 1,
         cancellations: 4, nonSuccesses: 5, durationMs: 20000
       }]
     }));
@@ -89,8 +89,8 @@ describe('inference analytics summary', () => {
       nonSuccesses: 5,
       nonSuccessRate: 5,
     });
-    expect(res.body.data.byCallerDetail[0]).toMatchObject({
-      callerDetail: 'nestor/voix-native/chat',
+    expect(res.body.data.byConsumerContract[0]).toMatchObject({
+      consumerContract: 'openclaw-pipeline-runtime-v1',
       errors: 1,
       errorRate: 5,
       cancellations: 4,
