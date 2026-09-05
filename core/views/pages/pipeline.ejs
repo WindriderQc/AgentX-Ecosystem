@@ -57,6 +57,27 @@
     <time id="pipelineStateUpdated"></time>
   </section>
 
+  <section class="pipeline-panel pipeline-delivery" id="pipelineDeliveryInbox" aria-labelledby="pipelineDeliveryTitle">
+    <div class="pipeline-panel-header pipeline-delivery-header">
+      <div>
+        <span class="pipeline-delivery-eyebrow"><i class="fas fa-inbox" aria-hidden="true"></i> Human actions first</span>
+        <h2 id="pipelineDeliveryTitle">Coding Team operator inbox</h2>
+        <p>Review, correction, exact PR and CI, protected merge, and deployment proof in one normal path.</p>
+      </div>
+      <span class="pipeline-delivery-count" id="pipelineDeliveryHumanCount" aria-label="Pending human actions">--</span>
+    </div>
+    <div class="pipeline-delivery-state" id="pipelineDeliveryState" data-tone="loading" aria-live="polite">
+      <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
+      <span>Loading exact delivery evidence&hellip;</span>
+    </div>
+    <div class="pipeline-delivery-list" id="pipelineDeliveryList">
+      <div class="pipeline-empty">Reading accepted attempts, PRs, CI, and deployment proof&hellip;</div>
+    </div>
+    <p class="pipeline-delivery-note" id="pipelineDeliveryMeta">
+      Merge always requires one explicit operator click. Deployment remains a separate protected workflow after merge.
+    </p>
+  </section>
+
   <section class="pipeline-metrics" aria-label="Task counts by status — select one to filter the work table">
     <button class="pipeline-metric metric-queued" type="button" data-status-filter="queued" aria-pressed="false">
       <span><i class="fas fa-inbox" aria-hidden="true"></i> Queued</span>
@@ -259,7 +280,9 @@
         { title: 'Measure the coding team', body: 'Coding Team joins queue, lease, verifier, change, cost, and human-review evidence. Coverage is always visible and missing metrics stay unknown rather than becoming zero.' },
         { title: 'Find the work', body: 'Search matches id, title, owner, epic, and source. Service and lane/source filters narrow the loaded rows; urgency sort surfaces blocked and overdue work first.' },
         { title: 'Open the dossier', body: 'Select any row for the full task: specification, declared coding scope, per-attempt verification, measured cost and energy evidence, and the complete feedback audit trail. Inference content is intentionally excluded.' },
-        { title: 'Record a human decision', body: 'A task in review can be confirmed done from its dossier — but only by an identity different from the worker. Current Coding Team attempts show their receipt; legacy dossiers without one are labeled explicitly and must be reconciled from their existing evidence.' },
+        { title: 'Start with the operator inbox', body: 'Human decisions appear first. Each item explains the change, evidence, risks, recommendation, and exact next action; GitHub remains available as a secondary expert link.' },
+        { title: 'Record a human decision', body: 'A task in review can be accepted or returned for correction from its dossier — but only by an identity different from the worker. Current Coding Team attempts show their receipt; legacy dossiers without one are labeled explicitly and must be reconciled from their existing evidence.' },
+        { title: 'Merge explicitly', body: 'Only a sealed exact PR with its accepted task, head SHA, required CI jobs, and GitHub mergeability revalidated can show the protected merge button. A click confirms that exact identity; there is no auto-merge.' },
         { title: 'Unstick what is stuck', body: 'Re-queue releases a task back to the queue (clearing its worker and heartbeat), and notes land in the same audit trail agents read.' },
         { title: 'Trust the heartbeat', body: 'In-progress work should heartbeat regularly. A silent hour marks it stale in Activity and raises it under Needs attention.' }
       ],
