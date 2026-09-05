@@ -6,7 +6,7 @@ ENV AGENTX_BUILD_REVISION=${AGENTX_BUILD_REVISION}
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates \
+  && apt-get install -y --no-install-recommends ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
 
 COPY benchmark/package*.json ./
@@ -14,6 +14,7 @@ RUN npm ci --omit=dev
 
 COPY benchmark/ ./
 COPY shared/ /shared/
+COPY scripts/bounded-response.js /scripts/bounded-response.js
 
 COPY core/views/layouts /core/views/layouts
 COPY core/views/partials /core/views/partials
@@ -34,7 +35,10 @@ RUN mkdir -p /app/config-data \
   && ln -sf /app/config-data/benchmark.config.json /app/benchmark.config.json \
   && find scripts -type f \
     ! -name 'migrate-exact-artifact-profile-indexes.js' \
+    ! -name 'migrate-benchmark-trust-batch-ids.js' \
     ! -name 'cloud-lane-campaign.js' \
+    ! -name 'repo-coding-qualification.js' \
+    ! -name 'paired-thinking-campaign.js' \
     -delete \
   && rm -rf tests coverage test-results .env .env.* .git
 

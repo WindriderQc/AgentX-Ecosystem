@@ -40,6 +40,11 @@ class RagServiceClient {
     return payload?.data || payload;
   }
 
+  async refreshStatus() {
+    const payload = await callRagService('POST', '/api/rag/status/refresh');
+    return payload?.data || payload;
+  }
+
   async searchSimilarChunks(query, options = {}) {
     const payload = await callRagService('POST', '/api/rag/search', {
       body: {

@@ -19,10 +19,11 @@
     var requestOptions = Object.assign({ cache: 'no-store' }, options || {});
     var res = await fetch(url, requestOptions);
     var body = await res.json();
-    if (body.ok === false) {
-      var err = new Error(body.error || 'Request failed');
+    if (!res.ok || body.ok === false || body.status === 'error') {
+      var err = new Error(body.error || body.message || ('Request failed (' + res.status + ')'));
       err.detail = body.detail;
       err.confirmation = body.confirmation;
+      err.code = body.code;
       err.status = res.status;
       throw err;
     }
@@ -40,7 +41,8 @@
 
   /**
    * POST /api/rag/status/refresh — actively refresh dependency health.
-   * Reserved for authenticated operator workflows.
+   * Used by the interactive search readiness gate through Core's protected,
+   * same-origin proxy. Dashboard polling remains observational.
    */
   async function refreshStatus() {
     return apiFetch('/api/rag/status/refresh', { method: 'POST' });

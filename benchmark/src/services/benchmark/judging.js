@@ -40,6 +40,7 @@ const { SCORER_VERSION } = require('../scoring/scorerVersion');
 // hardwareProfileService removed — profiler handles hardware detection now
 const ConcurrencyQueue = require('./ConcurrencyQueue');
 const { applyScoresToResult, judgeResult } = require('./judgeExecutor');
+const { beginManagedWorkload } = require('./workloadAdmissionLifecycle');
 
 // Active judging job state and helpers managed by judgeMonitor.js
 const {
@@ -340,10 +341,39 @@ async function judgeBatch(batchId, options = {}) {
     };
 }
 
+async function startManagedJudgeBatch(batchId, options = {}) {
+    const judgeHost = options.judgeConfig?.host || null;
+    const workloadId = `judge-batch:${batchId}`;
+    const lifecycle = await beginManagedWorkload(workloadId, {
+        requestId: `judge-batch:${batchId}`,
+        kind: 'judge',
+        batchId: String(batchId),
+        hosts: judgeHost ? [judgeHost] : []
+    });
+    const completion = judgeBatch(batchId, {
+        ...options,
+        judgeConfig: {
+            ...(options.judgeConfig || {}),
+            cancelSignal: lifecycle.signal
+        }
+    }).then(async result => {
+        lifecycle.assertActive();
+        await lifecycle.complete();
+        return result;
+    }, async error => {
+        // A failed or cancelled judge may have an uncertain terminal write.
+        // Drain requests but retain the admission for Core TTL recovery.
+        await lifecycle.abandon();
+        throw error;
+    });
+    return { workloadId, completion };
+}
+
 module.exports = {
     applyScoresToResult,
     judgeResult,
     judgeBatch,
+    startManagedJudgeBatch,
     preflightJudgeBatch,
     stopJudging,
     stopPersistedJudging,

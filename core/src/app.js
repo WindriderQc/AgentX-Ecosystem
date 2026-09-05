@@ -11,6 +11,7 @@ const logger = require('../config/logger');
 const { requestLogger, errorLogger } = require('./middleware/logging');
 const systemHealth = require('./systemHealth');
 const { normalizeHostUrl } = require('./helpers/ollamaHostConfig');
+const { getHostHomeLink } = require('./helpers/hostHomeLink');
 const { refreshOllamaHealth } = require('./services/ollamaHealthProbe');
 const { normalizePublicUrls } = require('../../shared/browserPublicUrls');
 const { createServiceIdentity } = require('../../shared/serviceIdentity');
@@ -22,6 +23,7 @@ const {
 } = require('../../shared/agentxRuntimeProfile');
 const { loadTrustedExtensions } = require('./extensions/trustedExtensionLoader');
 const { createTrustedRuntimeServices } = require('./extensions/trustedRuntimeServices');
+const { normalizeTrustedRuntimeNavItems } = require('./extensions/trustedRuntimeNavigation');
 const { conversationLifecycle } = require('./services/conversationLifecycleService');
 
 // Browser-reachable URLs for each service. Distinct from server-to-server
@@ -43,6 +45,7 @@ const app = express();
 const agentxProfile = currentAgentXProfile();
 // Expose browser-reachable service URLs to all rendered views.
 app.locals.publicUrls = getPublicUrls();
+app.locals.hostHome = getHostHomeLink();
 app.locals.agentxProfile = agentxProfile;
 const IN_PROD = process.env.NODE_ENV === 'production';
 const IN_TEST = process.env.NODE_ENV === 'test';
@@ -302,6 +305,16 @@ const trustedExtensions = loadTrustedExtensions({
   })
 });
 app.locals.trustedExtensions = trustedExtensions;
+
+// Full-profile operators may install private runtimes outside Product. Trusted
+// extensions contribute only same-origin launcher routes; Product validates the
+// bounded display contract before any item reaches a rendered navigation bar.
+app.use((_req, res, next) => {
+  res.locals.trustedRuntimeNavItems = isDemoProfile(agentxProfile)
+    ? Object.freeze([])
+    : normalizeTrustedRuntimeNavItems(app.locals.trustedRuntimeNavItems);
+  next();
+});
 
 // Agent Ops is a product-owned read-only shell whose operational projection is
 // supplied by a separately installed trusted extension. Extensions register
@@ -587,7 +600,10 @@ app.get('/api/config', (_req, res) => {
     // Browser-reachable URLs for cross-service navigation. Public JS
     // and EJS pages use these instead of hardcoded localhost:<port>
     // so remote browsers reach the right host. (0208)
-    publicUrls: app.locals.publicUrls
+    publicUrls: app.locals.publicUrls,
+    // Optional same-origin return path supplied by the composing host. It is
+    // absent by default so standalone and shareable Product remain neutral.
+    hostHome: app.locals.hostHome
   });
 });
 
@@ -910,7 +926,10 @@ app.get('/backup', (req, res) => {
     title: 'AgentX \u2022 Backup',
     service: 'core',
     activePage: 'backup',
-    headCss: '<link rel="stylesheet" href="/styles.css">',
+    headCss: [
+      '<link rel="stylesheet" href="/styles.css">',
+      '<link rel="stylesheet" href="/css/backup.css">'
+    ].join('\n'),
     footerJs: '<script src="/js/backup.js"></script>'
   });
 });

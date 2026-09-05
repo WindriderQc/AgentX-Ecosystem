@@ -1,8 +1,20 @@
 name: publish-product-images
 
 on:
-  push:
+  workflow_run:
+    workflows: [product-ci]
+    types: [completed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full 40-character current Product main commit
+        required: true
+        type: string
+      confirmation:
+        description: Type PUBLISH to authorize immutable image publication
+        required: true
+        type: string
   release:
     types: [published]
 
@@ -11,6 +23,7 @@ permissions:
 
 jobs:
   release-contract:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -19,6 +32,7 @@ jobs:
       packages: read
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
+      lifecycle_required: ${{ steps.source.outputs.lifecycle_required }}
       lifecycle_run_id: ${{ steps.release-gates.outputs.lifecycle_run_id }}
       lifecycle_run_attempt: ${{ steps.release-gates.outputs.lifecycle_run_attempt }}
       previous_asset_id: ${{ steps.previous-asset.outputs.asset_id }}
@@ -29,13 +43,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
-          fetch-depth: 1
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.source_sha }}
+          fetch-depth: 0
       - name: Resolve the exact checked-out source commit
         id: source
         shell: bash
         env:
           RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+          REQUESTED_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || '' }}
+          PUBLICATION_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || '' }}
+          CI_SOURCE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
+          CI_CONCLUSION: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || '' }}
+          CI_EVENT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event || '' }}
+          CI_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || '' }}
         run: |
           set -euo pipefail
           source_sha="$(git rev-parse HEAD)"
@@ -43,16 +63,59 @@ jobs:
             echo "Expected a full lowercase Git commit, received: $source_sha" >&2
             exit 1
           fi
-          if [ "$GITHUB_EVENT_NAME" != "release" ] && [ "$source_sha" != "$GITHUB_SHA" ]; then
-            echo "Checkout does not match the triggering source SHA" >&2
-            exit 1
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            if ! [[ "$REQUESTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Manual publication requires an exact lowercase 40-character source_sha" >&2
+              exit 1
+            fi
+            if [ "$PUBLICATION_CONFIRMATION" != "PUBLISH" ]; then
+              echo "Manual publication requires confirmation=PUBLISH" >&2
+              exit 1
+            fi
+            if [ "$source_sha" != "$REQUESTED_SOURCE_SHA" ]; then
+              echo "Checkout does not match the explicitly authorized source SHA" >&2
+              exit 1
+            fi
+            if [ "$GITHUB_REF" != "refs/heads/main" ] || [ "$source_sha" != "$GITHUB_SHA" ]; then
+              echo "Manual publication must be dispatched on main and source_sha must equal its triggering commit" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$source_sha" origin/main; then
+              echo "Explicitly authorized source SHA is not reachable from origin/main" >&2
+              exit 1
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            if [ "$CI_CONCLUSION" != "success" ] || [ "$CI_EVENT" != "push" ] || [ "$CI_BRANCH" != "main" ]; then
+              echo "Automatic publication requires one successful Product CI push on main" >&2
+              exit 1
+            fi
+            if ! [[ "$CI_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || [ "$source_sha" != "$CI_SOURCE_SHA" ]; then
+              echo "Automatic publication checkout does not match the completed Product CI commit" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$source_sha" origin/main; then
+              echo "Completed Product CI commit is not reachable from origin/main" >&2
+              exit 1
+            fi
           fi
           if [ "$GITHUB_EVENT_NAME" = "release" ] \
               && ! [[ "$RELEASE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
             echo "Release tag is not an exact Docker/OCI tag (build metadata with '+' is unsupported)" >&2
             exit 1
           fi
+          lifecycle_required=false
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            lifecycle_required=true
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            if ! git rev-parse --verify "${source_sha}^" >/dev/null 2>&1; then
+              lifecycle_required=true
+            elif git diff --name-only "${source_sha}^" "$source_sha" | grep -Eq \
+                '^(\.github/workflows/(ci|publish-images)\.yml|agentx$|docker/|docker-compose\.(yml|live-cancellation\.yml|upgrade-rollback\.yml|recovery-drill\.yml)|config/container-image-pins\.json|e2e/(run-upgrade-rollback|upgrade-rollback-|fixtures/upgrade-rollback)|scripts/(run-recovery-drill|verify-lifecycle-evidence|assemble-previous-release-baseline|verify-release-evidence)|shared/recovery)'; then
+              lifecycle_required=true
+            fi
+          fi
           echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "lifecycle_required=$lifecycle_required" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -60,7 +123,7 @@ jobs:
         env:
           AGENTX_RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
         run: node scripts/verify-release-contract.js
-      - name: Require exact green Product CI and lifecycle push runs for a release
+      - name: Require exact green Product CI and authorized lifecycle runs for a release
         id: release-gates
         if: github.event_name == 'release'
         uses: actions/github-script@v8
@@ -79,20 +142,20 @@ jobs:
               core.setFailed('release event does not contain a valid publication time');
               return;
             }
-            const exactRuns = async (workflowId) => {
+            const exactRuns = async (workflowId, eventName) => {
               const response = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 workflow_id: workflowId,
                 head_sha: sourceSha,
                 branch: 'main',
-                event: 'push',
+                event: eventName,
                 per_page: 100,
               });
               return response.data.workflow_runs
                 .filter((run) => run.head_sha === sourceSha
                   && run.head_branch === 'main'
-                  && run.event === 'push'
+                  && run.event === eventName
                   && Date.parse(run.created_at) <= publishedAt)
                 .sort((left, right) => new Date(right.created_at) - new Date(left.created_at));
             };
@@ -109,10 +172,10 @@ jobs:
               return latest;
             };
             try {
-              const ciRun = requireLatestSuccess(await exactRuns('ci.yml'), 'Product CI');
+              const ciRun = requireLatestSuccess(await exactRuns('ci.yml', 'push'), 'Product CI');
               const lifecycleRun = requireLatestSuccess(
-                await exactRuns('publish-images.yml'),
-                'publish-product-images push lifecycle'
+                await exactRuns('publish-images.yml', 'workflow_dispatch'),
+                'explicitly authorized publish-product-images lifecycle'
               );
               if (!Number.isSafeInteger(ciRun.run_attempt) || ciRun.run_attempt < 1
                   || !Number.isSafeInteger(lifecycleRun.run_attempt) || lifecycleRun.run_attempt < 1) {
@@ -268,7 +331,7 @@ jobs:
             "${baseline_args[@]}"
 
   publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run'
     needs: release-contract
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -412,7 +475,7 @@ jobs:
           retention-days: 30
 
   candidate-manifest:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run'
     needs: [release-contract, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -461,7 +524,7 @@ jobs:
           retention-days: 30
 
   previous-stable:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: needs.release-contract.outputs.lifecycle_required == 'true'
     needs: release-contract
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -539,7 +602,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
   upgrade-rollback:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: needs.release-contract.outputs.lifecycle_required == 'true'
     needs: [release-contract, candidate-manifest, previous-stable]
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -697,7 +760,7 @@ jobs:
           retention-days: 30
 
   recovery-drill:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: needs.release-contract.outputs.lifecycle_required == 'true'
     needs: [release-contract, candidate-manifest, previous-stable]
     runs-on: ubuntu-latest
     timeout-minutes: 45

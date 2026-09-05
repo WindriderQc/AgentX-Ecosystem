@@ -146,6 +146,43 @@ describe('sweeps HTTP contract', () => {
     expect(response.body.error).toMatch(/ledger\.evidenceRefs must be an array of strings/);
   });
 
+  it('downgrades caller-owned promotion metrics to an unqualified observation', async () => {
+    const response = await request(buildApp())
+      .post('/api/benchmark/sweeps/recommend')
+      .send({
+        lane: 'lightweight',
+        incumbent: 'incumbent',
+        candidates: [
+          { model: 'challenger', quality: 9, composite: 95, tokensPerSec: 80, latencyMs: 900, failures: 0 },
+          { model: 'incumbent', quality: 7, composite: 75, tokensPerSec: 40, latencyMs: 1000, failures: 0 }
+        ]
+      })
+      .expect(200);
+
+    expect(response.body.data).toMatchObject({
+      winner: 'challenger',
+      winnerMeaning: 'top_lane_score_observation',
+      qualifiedWinner: null,
+      recommendation: 'inconclusive',
+      trustVerdict: {
+        contract: 'agentx.benchmark-consumer-trust/v1',
+        qualified: false,
+        highConfidenceAllowed: false,
+        claim: 'top_exploratory_observation',
+        qualifiedWinner: null
+      }
+    });
+    expect(response.body.data.reasons).toEqual(expect.arrayContaining([
+      expect.stringMatching(/trust receipt and ratification are required/i)
+    ]));
+    expect(response.body.data.summary).toContain('top observation challenger');
+    expect(response.body.data.summary).not.toContain('incumbent -> challenger');
+    expect(response.body.data.ledgerDraft).toContain('inconclusive (no change)');
+    expect(response.body.data.ledgerDraft).toContain('top observation `challenger`');
+    expect(response.body.data.ledgerDraft).not.toContain('winner `challenger`');
+    expect(response.body.data.ledgerDraft).not.toContain('→ challenger');
+  });
+
   it('parses URL-encoded routedModelsByHost only when the staleness caller supplies it', async () => {
     ModelContextProfile.find.mockReturnValue(queryResult([]));
     ModelProfile.find.mockReturnValue(queryResult([]));

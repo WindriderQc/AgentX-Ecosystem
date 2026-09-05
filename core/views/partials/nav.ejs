@@ -7,6 +7,7 @@
    *   service    — 'core' | 'benchmark' | 'rag'
    *   activePage — slug of the current page for highlight
    *   publicUrls — normalized browser-reachable service authorities
+   *   trustedRuntimeNavItems — validated same-origin launchers from trusted extensions
    */
   const cleanBase = (value) => String(value || '').replace(/\/+$/, '');
   const urls = typeof publicUrls === 'object' && publicUrls ? publicUrls : {};
@@ -69,6 +70,7 @@
         { section: 'Evaluation' },
         { label: 'Engine Room',      href: benchBase + '/',                icon: 'fa-trophy',     id: 'benchmark' },
         { label: 'Leaderboard',      href: benchBase + '/leaderboard',     icon: 'fa-medal',      id: 'leaderboard' },
+        { label: 'Harnesses',        href: benchBase + '/harnesses',       icon: 'fa-cloud',      id: 'harnesses' },
         { label: 'Profiler',         href: benchBase + '/profiler',        icon: 'fa-microscope', id: 'profiler' },
         { label: 'Courthouse',       href: benchBase + '/courthouse',      icon: 'fa-gavel',      id: 'courthouse' },
         { label: 'Results Explorer', href: benchBase + '/results-explorer', icon: 'fa-table-list', id: 'results-explorer' },
@@ -80,6 +82,17 @@
       ]
     }
   ];
+
+  const runtimeNavItems = Array.isArray(locals.trustedRuntimeNavItems)
+    ? locals.trustedRuntimeNavItems
+    : [];
+  if (service === 'core' && runtimeNavItems.length) {
+    const operateGroup = fullNavItems.find(function(item) { return item.id === 'operate-group'; });
+    operateGroup.children.push(
+      { section: 'External runtimes' },
+      ...runtimeNavItems
+    );
+  }
 
   const demoNavItems = [
     { label: 'Chat', href: coreBase + '/playground', icon: 'fa-comments', id: 'playground', primary: true },
@@ -107,6 +120,7 @@
       children: [
         { label: 'Engine Room', href: benchBase + '/', icon: 'fa-trophy', id: 'benchmark' },
         { label: 'Leaderboard', href: benchBase + '/leaderboard', icon: 'fa-medal', id: 'leaderboard' },
+        { label: 'Harnesses', href: benchBase + '/harnesses', icon: 'fa-cloud', id: 'harnesses' },
         { label: 'Profiler', href: benchBase + '/profiler', icon: 'fa-microscope', id: 'profiler' },
         { label: 'Courthouse', href: benchBase + '/courthouse', icon: 'fa-gavel', id: 'courthouse' },
         { label: 'Results Explorer', href: benchBase + '/results-explorer', icon: 'fa-table-list', id: 'results-explorer' },

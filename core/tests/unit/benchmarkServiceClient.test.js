@@ -37,6 +37,29 @@ describe('BenchmarkServiceClient', () => {
       const url = new URL(mockFetch.mock.calls[0][0]);
       expect(url.pathname).toBe('/api/profiler/evidence/inference/owner%2Fmodel%3A8b');
       expect(url.searchParams.get('hostUrl')).toBe('http://host-a:11434');
+      expect(url.searchParams.has('artifactDigest')).toBe(false);
+    });
+
+    it('binds tool evidence lookup to the exact artifact identity', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        text: async () => JSON.stringify({
+          status: 'success',
+          data: { toolQualification: { state: 'supported', qualified: true } }
+        })
+      });
+
+      await expect(client.getInferenceEvidence('owner/model:8b', 'http://host-a:11434', {
+        hostId: 'host-a',
+        digest: 'sha256:a',
+        runtimeFingerprint: 'runtime-a'
+      })).resolves.toMatchObject({
+        toolQualification: { state: 'supported', qualified: true }
+      });
+      const url = new URL(mockFetch.mock.calls[0][0]);
+      expect(url.searchParams.get('hostId')).toBe('host-a');
+      expect(url.searchParams.get('artifactDigest')).toBe('sha256:a');
+      expect(url.searchParams.get('runtimeFingerprint')).toBe('runtime-a');
     });
 
     it('reads the compact readiness roster and exact context evidence', async () => {

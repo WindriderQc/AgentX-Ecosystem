@@ -25,6 +25,7 @@ const buddySurface = require('../../src/services/benchmark/buddySurfaceEvents');
 const { resolveJudgeHost } = require('../../src/services/benchmark/judgeHostResolution');
 const { resolveMultiJudge } = require('../../src/services/benchmark/resolveMultiJudge');
 const { releaseBenchmarkClaim } = require('../../src/clients/coreApiClient');
+const { withManagedWorkloadRoute } = require('../../src/services/benchmark/workloadAdmissionLifecycle');
 const {
     filterJudgeDefaultsForExecutionHost,
     resolveBatchMultiJudgeInput
@@ -32,6 +33,12 @@ const {
 const { normalizeHostUrl } = require('../../src/helpers/ollamaHostConfig');
 const { validateObjectId } = require('../../src/helpers/objectIdValidator');
 const { findActiveProfilingForHost } = require('../../src/services/profiler/activeProfileState');
+const {
+    buildOllamaTarget,
+    normalizeBatchTargets,
+    normalizeBenchmarkTarget
+} = require('../../../shared/benchmarkTargetContract');
+const { resolveHarnessTarget } = require('../../src/services/benchmark/harnessBrokerClient');
 const {
     getQuickJudgeCalibrationCases,
     getQuickJudgeCalibrationProtocol,
@@ -43,6 +50,9 @@ const fs = require('fs');
 // An operator may explicitly configure a secondary judge artifact. There is no
 // product-wide fallback model because installed inventory is deployment state.
 const JUDGE_FALLBACK_MODEL = String(process.env.JUDGE_FALLBACK_MODEL || '').trim() || null;
+const judgeWorkloadOptions = req => ({
+    hosts: [req.body?.host, req.body?.judge_host, req.body?.reference_host].filter(Boolean)
+});
 
 function readJudgeDefaults() {
     try {
@@ -129,6 +139,8 @@ async function resolveBatchJudgeTarget(executionHost, judgeConfig = {}, { judgeD
 
 function buildActiveBatchConflict(active) {
     const STUCK_THRESHOLD_SECONDS = 300;
+    const trustCampaign = benchmarkService.isTrustCampaignBatch(active)
+        || Boolean(active?.trust_evidence_context);
     const inactiveSeconds = active.last_activity_at
         ? Math.floor((Date.now() - new Date(active.last_activity_at).getTime()) / 1000)
         : 0;
@@ -138,16 +150,18 @@ function buildActiveBatchConflict(active) {
         error: 'Another batch is already running',
         active_batch: {
             id: active._id,
-            run_name: active.run_name,
+            ...(trustCampaign ? { privacy_redacted: true } : { run_name: active.run_name }),
             status: active.status,
             progress: active.progress,
             inactive_seconds: inactiveSeconds,
             is_stuck: inactiveSeconds > STUCK_THRESHOLD_SECONDS,
             started_at: active.started_at
         },
-        message: inactiveSeconds > STUCK_THRESHOLD_SECONDS
-            ? 'The active batch appears stuck. Use the "Recover" button to stop it before starting a new batch.'
-            : `Batch "${active.run_name}" is currently running (${active.progress}% complete). Please wait for it to finish or stop it first.`
+        message: trustCampaign
+            ? `A strict Benchmark Trust campaign is currently running (${active.progress}% complete). Please wait for it to finish or use the durable stop action.`
+            : inactiveSeconds > STUCK_THRESHOLD_SECONDS
+                ? 'The active batch appears stuck. Use the "Recover" button to stop it before starting a new batch.'
+                : `Batch "${active.run_name}" is currently running (${active.progress}% complete). Please wait for it to finish or stop it first.`
     };
 }
 
@@ -311,15 +325,29 @@ router.post('/test', async (req, res) => {
  * Start a batch benchmark test with quality scoring
  */
 router.post('/batch', async (req, res) => {
-    let { host, models, levels, prompt_ids, run_name, judge_config, execution_config, execution_mode, depth_config, tags, description, multi_judge } = req.body;
+    let { host, models, targets, levels, prompt_ids, run_name, judge_config, execution_config, execution_mode, depth_config, tags, description, multi_judge, paid_approval, campaign_kind } = req.body;
 
     // Validation
-    if (!host || !models || !Array.isArray(models) || !levels || !Array.isArray(levels)) {
+    if ((!Array.isArray(targets) || targets.length === 0) && (!host || !models || !Array.isArray(models))) {
         return res.status(400).json({
             status: 'error',
-            error: 'host, models (array), and levels (array) are required'
+            error: 'targets (array), or legacy host + models (array), are required'
         });
     }
+    if (!levels || !Array.isArray(levels)) {
+        return res.status(400).json({ status: 'error', error: 'levels (array) are required' });
+    }
+
+    let normalizedTargets;
+    try {
+        normalizedTargets = normalizeBatchTargets({ host, models, targets });
+    } catch (error) {
+        return res.status(error.statusCode || 400).json({ status: 'error', code: error.code, error: error.message });
+    }
+    const localTargets = normalizedTargets.filter((target) => target.executionKind === 'ollama');
+    const harnessTargets = normalizedTargets.filter((target) => target.executionKind === 'harness');
+    host = localTargets[0]?.host || 'harness';
+    models = normalizedTargets.map((target) => target.model);
 
     // Input length limits
     if (run_name && String(run_name).length > 200) {
@@ -336,7 +364,7 @@ router.post('/batch', async (req, res) => {
             return res.status(400).json({ status: 'error', error: 'Each tag must be 50 characters or less' });
         }
     }
-    if (models.length > 50) {
+    if (normalizedTargets.length > 50) {
         return res.status(400).json({ status: 'error', error: 'Maximum 50 models allowed per batch' });
     }
     if (levels.length > 5) {
@@ -421,33 +449,87 @@ router.post('/batch', async (req, res) => {
         }
     }
 
-    // Resolve through the same readiness authority used by Courthouse. A
-    // caller may explicitly pin an installed host/model pair; otherwise an
-    // explicitly configured active judge is required. Never fall through to a
-    // product/chat-model default that the operator did not choose as judge.
-    const judgeReadiness = await resolveReadyJudgeTarget({
-        host: judge_config?.host,
-        model: judge_config?.model
-    });
-    if (!judgeReadiness.ready) {
-        return res.status(503).json(judgeUnavailablePayload(judgeReadiness, 'Benchmark launch'));
-    }
-    const readyJudgeConfig = {
-        ...(judge_config || {}),
-        host: judgeReadiness.target.host,
-        model: judgeReadiness.target.model
-    };
-
-    // Verify execution host is an Ollama endpoint and requested models exist
-    const hostCheck = await validateExecutionHost(host, models);
-    if (!hostCheck.valid) {
+    if (campaign_kind === 'native_agent' || normalizedTargets.some((target) => target.mode === 'native_agent')) {
         return res.status(422).json({
             status: 'error',
-            error: hostCheck.error,
-            ...(hostCheck.available_models && { available_models: hostCheck.available_models })
+            code: 'NATIVE_AGENT_CAMPAIGN_SEPARATE',
+            error: 'Native-agent harness campaigns use /api/benchmark/harness-campaigns and never create model leaderboard rows'
         });
     }
-    host = hostCheck.host || host;
+
+    let readyJudgeConfig;
+    let harnessJudgeTarget = null;
+    try {
+        normalizedTargets = await Promise.all(normalizedTargets.map(async (target) => (
+            target.executionKind === 'harness'
+                ? resolveHarnessTarget(target, { force: true })
+                : target
+        )));
+        const unavailableCandidate = normalizedTargets.find((target) => target.capabilities.candidate !== true);
+        if (unavailableCandidate) {
+            return res.status(422).json({
+                status: 'error', code: 'TARGET_CANDIDATE_NOT_ALLOWED',
+                error: `Target ${unavailableCandidate.id} is not catalogued for candidate execution`
+            });
+        }
+
+        if (judge_config?.target?.executionKind === 'harness') {
+            harnessJudgeTarget = await resolveHarnessTarget(
+                normalizeBenchmarkTarget(judge_config.target),
+                { force: true }
+            );
+            if (harnessJudgeTarget.mode !== 'isolated_model' || harnessJudgeTarget.capabilities.judge !== true) {
+                return res.status(422).json({
+                    status: 'error',
+                    code: 'HARNESS_JUDGE_NOT_ALLOWED',
+                    error: 'Only isolated_model harness targets with judge capability may judge'
+                });
+            }
+            readyJudgeConfig = {
+                ...(judge_config || {}),
+                target: harnessJudgeTarget,
+                host: `harness:${harnessJudgeTarget.harness.name}`,
+                model: harnessJudgeTarget.model
+            };
+        } else {
+            // Resolve local judges through the same readiness authority used by
+            // Courthouse. Cloud judges are catalog-bound above instead.
+            const judgeReadiness = await resolveReadyJudgeTarget({
+                host: judge_config?.host,
+                model: judge_config?.model
+            });
+            if (!judgeReadiness.ready) {
+                return res.status(503).json(judgeUnavailablePayload(judgeReadiness, 'Benchmark launch'));
+            }
+            readyJudgeConfig = {
+                ...(judge_config || {}),
+                target: buildOllamaTarget(judgeReadiness.target.host, judgeReadiness.target.model),
+                host: judgeReadiness.target.host,
+                model: judgeReadiness.target.model
+            };
+        }
+
+        // Ollama keeps its existing host/model validation. Harness targets are
+        // validated against the broker catalog and never sent to /api/tags.
+        const localGroups = new Map();
+        for (const target of normalizedTargets.filter((entry) => entry.executionKind === 'ollama')) {
+            const group = localGroups.get(target.host) || [];
+            group.push(target.model);
+            localGroups.set(target.host, group);
+        }
+        for (const [localHost, localModels] of localGroups.entries()) {
+            const hostCheck = await validateExecutionHost(localHost, localModels);
+            if (!hostCheck.valid) {
+                return res.status(422).json({
+                    status: 'error',
+                    error: hostCheck.error,
+                    ...(hostCheck.available_models && { available_models: hostCheck.available_models })
+                });
+            }
+        }
+    } catch (error) {
+        return res.status(error.statusCode || 422).json({ status: 'error', code: error.code, error: error.message });
+    }
 
     // Dedication check removed — the batch orchestrator handles dedication
     // lifecycle automatically (detect pins → run batch → restore pins).
@@ -460,30 +542,50 @@ router.post('/batch', async (req, res) => {
             return res.status(409).json(buildActiveBatchConflict(activeBatches[0]));
         }
 
-        const activeProfiling = findActiveProfilingForHost({ hostUrl: host });
-        if (activeProfiling.length > 0) {
-            return res.status(409).json(buildActiveProfilingConflict(host, activeProfiling));
+        for (const localHost of new Set(localTargets.map((target) => target.host))) {
+            const activeProfiling = findActiveProfilingForHost({ hostUrl: localHost });
+            if (activeProfiling.length > 0) {
+                return res.status(409).json(buildActiveProfilingConflict(localHost, activeProfiling));
+            }
         }
 
         // Multi-judge is opt-in. Hard L4/L5 suites still preserve explicit
         // off/custom choices, but omission resolves to the global default.
-        const multiJudgeHostDefaults = filterJudgeDefaultsForExecutionHost(readJudgeDefaults(), host);
+        const multiJudgeHostDefaults = harnessJudgeTarget
+            ? {}
+            : filterJudgeDefaultsForExecutionHost(readJudgeDefaults(), host);
         const resolvedMultiJudge = resolveMultiJudge(
             resolveBatchMultiJudgeInput(levels, multi_judge),
             { hostDefaults: multiJudgeHostDefaults }
         );
+        if (harnessJudgeTarget && resolvedMultiJudge.enabled) {
+            return res.status(422).json({
+                status: 'error',
+                code: 'HARNESS_MULTI_JUDGE_NOT_SUPPORTED',
+                error: 'A harness judge must run as one exact isolated target; disable multi-judge for this batch'
+            });
+        }
         const judgeConfigWithMulti = {
             ...readyJudgeConfig,
             multi_judge: resolvedMultiJudge
         };
 
-        let {
-            normalizedJudgeConfig,
-            validationHost: actualJudgeHost,
-            validationModel: judgeModel
-        } = await resolveBatchJudgeTarget(host, judgeConfigWithMulti);
+        let normalizedJudgeConfig;
+        let actualJudgeHost;
+        let judgeModel;
+        if (harnessJudgeTarget) {
+            normalizedJudgeConfig = judgeConfigWithMulti;
+            actualJudgeHost = `harness:${harnessJudgeTarget.harness.name}`;
+            judgeModel = harnessJudgeTarget.model;
+        } else {
+            ({
+                normalizedJudgeConfig,
+                validationHost: actualJudgeHost,
+                validationModel: judgeModel
+            } = await resolveBatchJudgeTarget(host, judgeConfigWithMulti));
+        }
 
-        if (actualJudgeHost && judgeModel) {
+        if (!harnessJudgeTarget && actualJudgeHost && judgeModel) {
             let validation = await validateJudgeModel(actualJudgeHost, judgeModel);
 
             // 0219 tiered judge: if the resolved default judge isn't on this host
@@ -525,14 +627,24 @@ router.post('/batch', async (req, res) => {
             model: judgeModel || normalizedJudgeConfig.model
         };
 
-        buddySurface.emitLifecycle('preflight_start', `Preflight: validating ${models.length} model(s) before launch…`);
+        buddySurface.emitLifecycle('preflight_start', `Preflight: validating ${normalizedTargets.length} target(s) before launch…`);
+        const localPreflightTargets = normalizedTargets
+            .filter((target) => target.executionKind === 'ollama')
+            .map((target) => ({ host: target.host, model: target.model }));
         const preflight = await runPreflight({
-            targets: models.map((modelName) => ({ host, model: modelName })),
-            judgeConfig: preflightJudgeConfig,
+            targets: localPreflightTargets,
+            judgeConfig: harnessJudgeTarget
+                ? { ...preflightJudgeConfig, target: harnessJudgeTarget }
+                : preflightJudgeConfig,
             levels,
             prompt_ids,
             executionConfig: execution_config || null
         });
+        preflight.checks.harness = {
+            targets: normalizedTargets.length - localPreflightTargets.length,
+            judge: Boolean(harnessJudgeTarget),
+            catalog_revalidated: true
+        };
 
         if (!preflight.ready) {
             buddySurface.emitLifecycle(
@@ -547,11 +659,12 @@ router.post('/batch', async (req, res) => {
             });
         }
         // Pre-run only: no judge/scoring active yet, so a suggesting intent is allowed.
-        buddySurface.emitLifecycle('preflight_ok', `Preflight passed — ready to launch ${models.length} model(s).`);
+        buddySurface.emitLifecycle('preflight_ok', `Preflight passed — ready to launch ${normalizedTargets.length} target(s).`);
 
         const data = await benchmarkService.startBatch({
             host,
             models,
+            targets: normalizedTargets,
             levels,
             prompt_ids,
             run_name,
@@ -560,7 +673,9 @@ router.post('/batch', async (req, res) => {
             execution_mode: execution_mode || 'latency',
             depth_config: depth_config || null,
             tags,
-            description
+            description,
+            paid_approval,
+            campaign_kind: 'model'
         });
 
         res.json({
@@ -588,7 +703,7 @@ router.post('/batch', async (req, res) => {
         }
 
         logger.error('Failed to start batch test', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -607,6 +722,8 @@ router.post('/batch/:id/stop', async (req, res) => {
         // releases them only after every cancelled task has settled. Direct
         // release remains the recovery path for an orphaned/non-local batch.
         const claimReleaseHosts = managedLocally ? [] : releaseStoppedBatchClaims(batch);
+        const trustCampaign = benchmarkService.isTrustCampaignBatch(batch)
+            || Boolean(batch?.trust_evidence_context);
 
         res.json({
             status: 'success',
@@ -617,7 +734,9 @@ router.post('/batch/:id/stop', async (req, res) => {
                 already_stopped: alreadyStopped,
                 cleanup_managed_by_runner: managedLocally === true,
                 claim_release_started: claimReleaseHosts.length > 0,
-                claim_release_hosts: claimReleaseHosts
+                ...(trustCampaign
+                    ? { privacy_redacted: true }
+                    : { claim_release_hosts: claimReleaseHosts })
             }
         });
     } catch (err) {
@@ -636,31 +755,52 @@ router.post('/batch/:id/resume', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
         const batch = await BenchmarkBatch.findById(req.params.id)
-            .select('judge_config plan.judge_model plan.exec_hosts')
+            .select('judge_config plan.judge_model plan.exec_hosts trust_campaign_spec_id +trust_evidence_context')
             .lean();
         if (!batch) {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
         }
-        const readiness = await resolveReadyJudgeTarget({
-            host: batch.judge_config?.host || batch.plan?.exec_hosts?.[0]?.judge_host,
-            model: batch.judge_config?.model || batch.plan?.judge_model
-        });
-        if (!readiness.ready) {
-            return res.status(503).json(judgeUnavailablePayload(readiness, 'Batch resume'));
+        if (benchmarkService.isTrustCampaignBatch(batch) || batch.trust_evidence_context) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_RESUME_FORBIDDEN',
+                error: 'Strict Benchmark Trust batches are append-only and cannot be resumed'
+            });
         }
-        const data = await benchmarkService.resumeBatch(req.params.id, {
-            judgeConfig: {
-                ...(batch.judge_config || {}),
+        let resumedJudgeConfig = { ...(batch.judge_config || {}) };
+        if (batch.judge_config?.target?.executionKind === 'harness') {
+            const currentTarget = await resolveHarnessTarget(batch.judge_config.target, { force: true });
+            resumedJudgeConfig = {
+                ...resumedJudgeConfig,
+                target: currentTarget,
+                host: `harness:${currentTarget.harness.name}`,
+                model: currentTarget.model
+            };
+        } else {
+            const readiness = await resolveReadyJudgeTarget({
+                host: batch.judge_config?.host || batch.plan?.exec_hosts?.[0]?.judge_host,
+                model: batch.judge_config?.model || batch.plan?.judge_model
+            });
+            if (!readiness.ready) {
+                return res.status(503).json(judgeUnavailablePayload(readiness, 'Batch resume'));
+            }
+            resumedJudgeConfig = {
+                ...resumedJudgeConfig,
+                target: buildOllamaTarget(readiness.target.host, readiness.target.model),
                 host: readiness.target.host,
                 model: readiness.target.model
-            }
+            };
+        }
+        const data = await benchmarkService.resumeBatch(req.params.id, {
+            judgeConfig: resumedJudgeConfig,
+            paidApproval: req.body?.paid_approval || null
         });
         res.json({ status: 'success', data });
     } catch (err) {
         logger.error('Failed to resume batch', { error: err.message });
-        const statusCode = err.message.includes('not found') ? 404
-            : err.message.includes('Cannot resume') ? 409 : 500;
-        res.status(statusCode).json({ status: 'error', error: err.message });
+        const statusCode = err.statusCode || (err.message.includes('not found') ? 404
+            : err.message.includes('Cannot resume') ? 409 : 500);
+        res.status(statusCode).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -673,9 +813,18 @@ router.post('/batch/:id/rerun-invalid', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
 
-        const batch = await BenchmarkBatch.findById(req.params.id).lean();
+        const batch = await BenchmarkBatch.findById(req.params.id)
+            .select('+trust_evidence_context')
+            .lean();
         if (!batch) {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
+        }
+        if (benchmarkService.isTrustCampaignBatch(batch)) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_LEGACY_RERUN_FORBIDDEN',
+                error: 'Strict Benchmark Trust evidence cannot be cloned through the legacy rerun route'
+            });
         }
 
         const invalidRows = await BenchmarkResult.find({
@@ -830,7 +979,7 @@ router.post('/batch/:id/rerun-invalid', async (req, res) => {
  * POST /api/benchmark/validate-judge
  * Pre-flight check: validate judge model availability and output capability
  */
-router.post('/validate-judge', async (req, res) => {
+router.post('/validate-judge', withManagedWorkloadRoute('judge-validation', judgeWorkloadOptions, async (req, res) => {
     const { host, model } = req.body || {};
 
     try {
@@ -844,9 +993,9 @@ router.post('/validate-judge', async (req, res) => {
         // admission authority may reach the outbound validation sinks.
         const judgeHost = admission.target.host;
         const judgeModel = admission.target.model;
-        const validation = await validateJudgeModel(judgeHost, judgeModel);
+        const validation = await validateJudgeModel(judgeHost, judgeModel, { signal: req.workloadAdmissionSignal });
         if (validation.valid) {
-            const probe = await probeJudgeCapability(judgeHost, judgeModel);
+            const probe = await probeJudgeCapability(judgeHost, judgeModel, { signal: req.workloadAdmissionSignal });
             res.json({
                 status: 'success',
                 data: {
@@ -873,7 +1022,7 @@ router.post('/validate-judge', async (req, res) => {
         logger.error('Judge validation failed', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * GET /api/benchmark/judge/calibration-protocol
@@ -892,7 +1041,7 @@ router.get('/judge/calibration-protocol', (req, res) => {
  * POST /api/benchmark/judge/calibrate
  * Quick calibration of judge model JSON reliability, consistency, and latency.
  */
-router.post('/judge/calibrate', async (req, res) => {
+router.post('/judge/calibrate', withManagedWorkloadRoute('judge-calibration', judgeWorkloadOptions, async (req, res) => {
     const { host, model } = req.body || {};
     const readiness = await resolveReadyJudgeTarget({ host, model });
     if (!readiness.ready) {
@@ -914,7 +1063,8 @@ router.post('/judge/calibrate', async (req, res) => {
                 timeout: 20000,
                 max_retries: 1,
                 temperature: 0.1,
-                num_predict: 120
+                num_predict: 120,
+                cancelSignal: req.workloadAdmissionSignal
             });
             const latencyMs = Date.now() - startedAt;
 
@@ -964,14 +1114,14 @@ router.post('/judge/calibrate', async (req, res) => {
         logger.error('Judge calibration failed', { error: err.message, host: judgeHost, model: judgeModel });
         return res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * POST /api/benchmark/judge/calibrate-accuracy
  * Test judge accuracy against gold-standard scored responses.
  * Returns Pearson correlation, MAE, and per-tier breakdown.
  */
-router.post('/judge/calibrate-accuracy', async (req, res) => {
+router.post('/judge/calibrate-accuracy', withManagedWorkloadRoute('judge-accuracy-calibration', judgeWorkloadOptions, async (req, res) => {
     const { host, model } = req.body || {};
     const readiness = await resolveReadyJudgeTarget({ host, model });
     if (!readiness.ready) {
@@ -995,7 +1145,7 @@ router.post('/judge/calibrate-accuracy', async (req, res) => {
                         category: item.category,
                         expected_answer: item.expected_answer
                     },
-                    judgeConfig: { host: judgeHost, model: judgeModel }
+                    judgeConfig: { host: judgeHost, model: judgeModel, cancelSignal: req.workloadAdmissionSignal }
                 });
 
                 results.push({
@@ -1101,7 +1251,7 @@ router.post('/judge/calibrate-accuracy', async (req, res) => {
         logger.error('Judge accuracy calibration failed', { error: err.message, host: judgeHost, model: judgeModel });
         return res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * POST /api/benchmark/preflight

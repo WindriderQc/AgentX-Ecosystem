@@ -8,6 +8,7 @@ const { getFetchOptions } = require('../../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const { benchmarkFetch: fetch } = require('../benchmark/http');
 const { normalizeJudgeNumCtx } = require('./judgeRuntimeConfig');
+const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
 
 // Judge calls always route through the core inference proxy. Lane policy (0168)
 // classifies `callerDetail: 'benchmark-judge'`; the scoped Benchmark credential
@@ -293,6 +294,45 @@ function isRetryableError(message) {
            message.includes('returned array');
 }
 
+function parseJudgeJsonResponse(text) {
+    const rawText = String(text || '');
+    const codeBlockMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const jsonStr = codeBlockMatch ? codeBlockMatch[1] : extractBalancedJson(rawText);
+    if (!jsonStr) throw new Error('No JSON found in judge response');
+
+    let sanitized = jsonStr.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+    sanitized = sanitized.replace(/\\([^"\\/bfnrtu])/g, '\\\\$1');
+    const parsed = JSON.parse(sanitized);
+    if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error('Judge returned non-object response');
+    }
+    if (Array.isArray(parsed)) {
+        throw new Error(`Judge returned array instead of JSON object. Array content: ${JSON.stringify(parsed).substring(0, 200)}`);
+    }
+
+    const scores = {};
+    for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'number') {
+            scores[key] = Math.max(0, Math.min(10, value));
+        } else if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim())) {
+            scores[key] = Math.max(0, Math.min(10, parseFloat(value.trim())));
+        } else {
+            scores[key] = value;
+        }
+    }
+    const numericFields = Object.keys(scores).filter(key => (
+        typeof scores[key] === 'number' && key !== 'overall'
+    ));
+    if (numericFields.length === 0 && typeof scores.overall !== 'number') {
+        const receivedKeys = Object.keys(scores);
+        const receivedTypes = receivedKeys.map(key => `${key}:${typeof scores[key]}`).join(', ');
+        throw new Error(
+            `Judge response missing numeric scores after coercion. Received ${receivedKeys.length} keys. Types: [${receivedTypes}]`
+        );
+    }
+    return scores;
+}
+
 /**
  * Call the judge model to evaluate a response
  */
@@ -303,16 +343,12 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
 
     try {
         throwIfJudgeCancelled(judgeConfig);
-        if (!judgeConfig.host) {
-            throw new Error('Judge host is not configured');
-        }
         const effectiveJudgeModel = judgeConfig.model;
         const numCtx = normalizeJudgeNumCtx(judgeConfig.num_ctx);
         // think: false prevents thinking models (Qwen3.x, DeepSeek-R1) from
         // burning tokens on internal reasoning. Safe to send for all models —
         // non-thinking models simply ignore it.
         const think = judgeConfig.think !== undefined ? judgeConfig.think : false;
-        const url = `${CORE_URL}/api/inference/generate`;
         const judgeSeed = judgeConfig.seed !== undefined ? judgeConfig.seed : JUDGE_CONFIG.seed;
         const judgeOptions = {
             temperature: judgeConfig.temperature,
@@ -321,32 +357,70 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         if (numCtx) judgeOptions.num_ctx = numCtx;
         if (Number.isFinite(judgeSeed)) judgeOptions.seed = judgeSeed;
 
-        // Core proxy: host override preserves benchmark's explicit host choice,
-        // callerDetail lands in InferenceLog for observability; the scoped
-        // service credential authenticates its lane policy (0168 + 0173).
-        const requestBody = {
-            model: effectiveJudgeModel,
-            host: judgeConfig.host,
-            messages: [{ role: 'user', content: evalPrompt }],
-            stream: false,
-            responseMode: 'normalized',
-            think,
-            callerDetail: 'benchmark-judge',
-            options: judgeOptions
-        };
-        const fetchOptions = getFetchOptions(url, {
-            method: 'POST',
-            headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify(requestBody),
-            signal: abortContext.signal
-        });
-        const response = await fetch(url, fetchOptions);
+        let data;
+        let executionEvidence = null;
+        if (judgeConfig.target?.executionKind === 'harness') {
+            const { executeHarnessTarget } = require('../benchmark/harnessBrokerClient');
+            const execution = await executeHarnessTarget({
+                batchId: judgeConfig.batch_id || 'standalone-judge',
+                batchFingerprint: judgeConfig.batch_contract_fingerprint || null,
+                cellId: judgeConfig.cell_id || `judge-${Date.now()}-${retryCount}`,
+                target: judgeConfig.target,
+                promptText: evalPrompt,
+                parameters: {
+                    temperature: judgeConfig.temperature,
+                    seed: judgeSeed,
+                    maxTokens: judgeConfig.num_predict,
+                    timeoutMs: judgeConfig.timeout
+                },
+                spendGrant: judgeConfig.spend_grant || null,
+                role: 'judge',
+                signal: abortContext.signal
+            });
+            data = {
+                response: execution.output,
+                done_reason: execution.finishReason,
+                eval_count: execution.receipt?.usage?.outputTokens || 0
+            };
+            executionEvidence = {
+                target: judgeConfig.target,
+                receipt: execution.publicReceipt,
+                privateReceipt: execution.receipt,
+                usage: execution.receipt?.usage || null,
+                outputFingerprint: execution.outputFingerprint
+            };
+        } else {
+            if (!judgeConfig.host) {
+                throw new Error('Judge host is not configured');
+            }
+            const url = `${CORE_URL}/api/inference/generate`;
+            // Core proxy: host override preserves benchmark's explicit host choice,
+            // callerDetail lands in InferenceLog for observability; the scoped
+            // service credential authenticates its lane policy (0168 + 0173).
+            const requestBody = {
+                model: effectiveJudgeModel,
+                host: judgeConfig.host,
+                messages: [{ role: 'user', content: evalPrompt }],
+                stream: false,
+                responseMode: 'normalized',
+                think,
+                callerDetail: 'benchmark-judge',
+                ...(getBenchmarkClaimIdentity(judgeConfig.host, judgeConfig.batch_id) || {}),
+                options: judgeOptions
+            };
+            const fetchOptions = getFetchOptions(url, {
+                method: 'POST',
+                headers: withBenchmarkServiceAuth({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify(requestBody),
+                signal: abortContext.signal
+            });
+            const response = await fetch(url, fetchOptions);
 
-        if (!response.ok) {
-            throw new Error(`Judge HTTP ${response.status}`);
+            if (!response.ok) {
+                throw new Error(`Judge HTTP ${response.status}`);
+            }
+            data = await response.json();
         }
-
-        const data = await response.json();
         throwIfJudgeCancelled(judgeConfig);
         const text = data.message?.content || data.response || '';
 
@@ -356,7 +430,7 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
         // Retry with expanded num_predict on truncation before attempting parse
         const NUM_PREDICT_CAP = 4096;
         const currentNumPredict = judgeConfig.num_predict || JUDGE_CONFIG.num_predict;
-        if (judgeTruncated && retryCount < (judgeConfig.max_retries || 2)) {
+        if (judgeTruncated && retryCount < (judgeConfig.max_retries ?? 2)) {
             if (currentNumPredict >= NUM_PREDICT_CAP) {
                 logger.warn('Judge output truncated but num_predict already at cap, stopping retry', {
                     judge_model: judgeConfig.model || JUDGE_CONFIG.model,
@@ -379,93 +453,20 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
             }
         }
 
-        let jsonStr = null;
-
-        const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-        if (codeBlockMatch) {
-            jsonStr = codeBlockMatch[1];
-        } else {
-            jsonStr = extractBalancedJson(text);
-        }
-
-        if (!jsonStr) {
-            logger.error('Judge response format - no JSON found', {
-                fullResponse: text,
-                responseLength: text.length,
-                containsBraces: text.includes('{') && text.includes('}'),
-                containsCodeBlock: text.includes('```'),
-                judge_model: judgeConfig.model || JUDGE_CONFIG.model
-            });
-            throw new Error('No JSON found in judge response');
-        }
-
-        logger.debug('Judge JSON extraction', {
-            length: jsonStr.length,
-            preview: jsonStr.substring(0, 200)
-        });
-
         try {
-            let sanitized = jsonStr.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
-            sanitized = sanitized.replace(/\\([^"\\/bfnrtu])/g, "\\\\$1");
-
-            let scores = JSON.parse(sanitized);
-
-            if (typeof scores !== 'object' || scores === null) {
-                throw new Error('Judge returned non-object response');
-            }
-
-            if (Array.isArray(scores)) {
-                throw new Error(`Judge returned array instead of JSON object. Array content: ${JSON.stringify(scores).substring(0, 200)}`);
-            }
-
-            // Coerce string numbers to actual numbers and clamp to [0, 10]
-            const coercedScores = {};
-            for (const [key, value] of Object.entries(scores)) {
-                if (typeof value === 'number') {
-                    const clamped = Math.max(0, Math.min(10, value));
-                    if (clamped !== value) {
-                        logger.warn('Judge score clamped to [0, 10]', { key, original: value, clamped });
-                    }
-                    coercedScores[key] = clamped;
-                } else if (typeof value === 'string') {
-                    const trimmed = value.trim();
-                    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-                        const num = parseFloat(trimmed);
-                        const clamped = Math.max(0, Math.min(10, num));
-                        if (clamped !== num) {
-                            logger.warn('Judge score clamped to [0, 10]', { key, original: num, clamped });
-                        }
-                        coercedScores[key] = clamped;
-                    } else {
-                        coercedScores[key] = value;
-                    }
-                } else {
-                    coercedScores[key] = value;
-                }
-            }
-            scores = coercedScores;
-
-            const numericFields = Object.keys(scores).filter(key =>
-                typeof scores[key] === 'number' && key !== 'overall'
-            );
-
-            if (numericFields.length === 0 && typeof scores.overall !== 'number') {
-                const receivedKeys = Object.keys(scores);
-                const receivedTypes = receivedKeys.map(k => `${k}:${typeof scores[k]}`).join(', ');
-                throw new Error(`Judge response missing numeric scores after coercion. Received ${receivedKeys.length} keys. Types: [${receivedTypes}]`);
-            }
+            const scores = parseJudgeJsonResponse(text);
 
             return {
                 success: true,
                 scores,
                 raw: text,
                 judge_truncated: judgeTruncated,
-                judge_tokens: judgeTokens
+                judge_tokens: judgeTokens,
+                execution_evidence: executionEvidence
             };
         } catch (parseErr) {
             logger.error('JSON parse error details', {
                 error: parseErr.message,
-                jsonPreview: jsonStr.substring(0, 500),
                 fullText: text.substring(0, 1000)
             });
             throw new Error(`JSON parse failed: ${parseErr.message}`);
@@ -474,7 +475,7 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
     } catch (err) {
         rethrowIfJudgeCancelled(err, judgeConfig);
 
-        const maxRetries = judgeConfig.max_retries || 2;
+        const maxRetries = judgeConfig.max_retries ?? 2;
         const isRetryable = isRetryableError(err.message);
 
         if (isRetryable && retryCount < maxRetries) {
@@ -516,5 +517,6 @@ module.exports = {
     waitForJudgeRetry,
     getJudgeFailureCount,
     incrementJudgeFailureCount,
-    normalizeJudgeHost
+    normalizeJudgeHost,
+    parseJudgeJsonResponse
 };

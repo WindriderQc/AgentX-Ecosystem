@@ -48,7 +48,8 @@ describe('Efficiency Map throughput aggregation', () => {
             ...resultRows('nan-calibration-fallback', NaN, 25),
             ...resultRows('missing', null, 0),
             ...resultRows('infinite-raw', null, Infinity),
-            ...resultRows('nan-raw', null, NaN)
+            ...resultRows('nan-raw', null, NaN),
+            ...resultRows('review-pending', 80, 80).map(row => ({ ...row, needs_review: true }))
         ]);
 
         const map = await getEfficiencyMap();
@@ -61,6 +62,7 @@ describe('Efficiency Map throughput aggregation', () => {
         expect(rankedByModel.has('missing')).toBe(false);
         expect(rankedByModel.has('infinite-raw')).toBe(false);
         expect(rankedByModel.has('nan-raw')).toBe(false);
+        expect(rankedByModel.has('review-pending')).toBe(false);
 
         const unrankedByModel = new Map(map.unranked.map(entry => [entry.model, entry]));
         expect(unrankedByModel.get('missing')).toMatchObject({

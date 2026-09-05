@@ -75,6 +75,7 @@ const handleChatRequestStream = async ({
     enableWebSearch = false,
     think,
     thinkingMode,
+    upstreamTimeoutMs = 300000,
     abortSignal,
     onWebSearchStart,
     onWebSearchDone,
@@ -93,6 +94,8 @@ const handleChatRequestStream = async ({
     let inferenceStartedAt = 0;
     let telemetryRecorded = false;
     let streamTelemetry = null;
+    let upstreamTimeout = null;
+    let upstreamTimeoutTriggered = false;
 
     logger.info('DEBUG_STREAM: handleChatRequestStream called', {
         userId, conversationId
@@ -217,7 +220,14 @@ const handleChatRequestStream = async ({
         const controller = new AbortController();
         streamAbortHandler = () => controller.abort();
         if (abortSignal) abortSignal.addEventListener('abort', streamAbortHandler);
-        const timeout = setTimeout(() => controller.abort(), 300000);
+        // Keep the deadline alive for the response body too. Ollama sends
+        // headers before generation, so a headers-only timer leaves a stalled
+        // NDJSON stream holding the gateway indefinitely.
+        const boundedUpstreamTimeoutMs = Math.max(1, Math.min(300000, Number(upstreamTimeoutMs) || 300000));
+        upstreamTimeout = setTimeout(() => {
+            upstreamTimeoutTriggered = true;
+            controller.abort();
+        }, boundedUpstreamTimeoutMs);
 
         let response;
         try {
@@ -234,7 +244,6 @@ const handleChatRequestStream = async ({
                 throw buildOllamaStatusError({ url, response, detail: errDetail, model: effectiveModel });
             }
         } catch (err) {
-            clearTimeout(timeout);
             if (err.name === 'AbortError') {
                 if (abortSignal?.aborted) return;
             }
@@ -244,8 +253,6 @@ const handleChatRequestStream = async ({
                 model: effectiveModel,
                 timeoutMessage: 'Ollama request timed out (5m limit).'
             });
-        } finally {
-            clearTimeout(timeout);
         }
 
         // Parse NDJSON stream
@@ -295,13 +302,26 @@ const handleChatRequestStream = async ({
                     consumeLine(lineBuffer.slice(0, boundary));
                     lineBuffer = lineBuffer.slice(boundary + 1);
                 }
+                // The terminal NDJSON record is authoritative. Do not wait for
+                // a misbehaving upstream to close its HTTP body afterwards.
+                if (sawDone) break;
             }
-            lineBuffer += decoder.decode();
-            consumeLine(lineBuffer);
+            if (!sawDone) {
+                lineBuffer += decoder.decode();
+                consumeLine(lineBuffer);
+            }
         } catch (streamErr) {
-            logger.error('Stream reading error', { error: streamErr.message });
+            if (!abortSignal?.aborted) logger.error('Stream reading error', { error: streamErr.message });
             throw streamErr;
         }
+
+        if (!sawDone) {
+            const terminalError = new Error('Ollama stream ended before its terminal record');
+            terminalError.code = 'OLLAMA_STREAM_INCOMPLETE';
+            throw terminalError;
+        }
+        clearTimeout(upstreamTimeout);
+        upstreamTimeout = null;
 
         const successDurationMs = stats?.performance?.totalDuration
             ? Math.round(stats.performance.totalDuration / 1e6)
@@ -388,6 +408,12 @@ const handleChatRequestStream = async ({
         }
 
     } catch (err) {
+        if (upstreamTimeoutTriggered && err.name === 'AbortError') {
+            const timeoutError = new Error('Ollama request timed out (5m limit).');
+            timeoutError.name = 'AbortError';
+            timeoutError.code = 'OLLAMA_TIMEOUT';
+            err = timeoutError;
+        }
         if (inferenceDispatched && !telemetryRecorded && !abortSignal?.aborted && streamTelemetry) {
             const terminalStatus = err.code === 'OLLAMA_TIMEOUT' || err.name === 'AbortError'
                 ? 'timeout'
@@ -427,6 +453,7 @@ const handleChatRequestStream = async ({
             onError(err);
         }
     } finally {
+        if (upstreamTimeout) clearTimeout(upstreamTimeout);
         if (abortSignal && streamAbortHandler) {
             abortSignal.removeEventListener('abort', streamAbortHandler);
         }

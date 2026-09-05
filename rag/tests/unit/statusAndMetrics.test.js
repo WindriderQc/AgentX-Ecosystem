@@ -132,7 +132,23 @@ describe('GET /api/rag/status — dependency health matrix', () => {
     expect(res.body.data.healthy).toBe(false); // mongo is disconnected in test
     expect(res.body.data.serviceReady).toBe(false);
     expect(res.body.data.queryReady).toBe(false);
+    expect(res.body.data.status).toBe('red');
     expect(Number.isFinite(Date.parse(res.body.data.observedAt))).toBe(true);
+  });
+
+  it('does not preserve a green adapter status when end-to-end query readiness is false', async () => {
+    mockVectorStore.getStats.mockResolvedValue({
+      status: 'green',
+      documentCount: 10,
+      chunkCount: 50,
+      vectorDimension: 768,
+    });
+
+    const res = await api.get('/api/rag/status');
+
+    expect(res.body.data.healthy).toBe(false);
+    expect(res.body.data.queryReady).toBe(false);
+    expect(res.body.data.status).not.toBe('green');
   });
 
   it('preserves existing fields (documentCount, chunkCount, embeddingModel)', async () => {
@@ -310,5 +326,87 @@ describe('GET /api/rag/metrics', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.data.bySource).toEqual([]);
+  });
+});
+
+// The observational contract, from the reader's side. A GET reports whatever
+// evidence exists and never goes and gets some; the evidence itself is
+// collected by the startup probe, an explicit refresh, or real embed traffic.
+describe('GET /api/rag/status — embedding evidence contract', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVectorStore.getStats.mockResolvedValue({
+      documentCount: 10,
+      chunkCount: 50,
+      vectorDimension: 768,
+    });
+    mockVectorStore.healthCheck.mockResolvedValue({
+      healthy: true,
+      type: 'qdrant',
+      url: 'http://qdrant:6333',
+    });
+  });
+
+  it('labels a real observation as active evidence', async () => {
+    mockEmbeddingsService.getCachedConnectionStatus.mockReturnValue({
+      healthy: true,
+      checkedAt: 1710000000000,
+      stale: false,
+      source: 'startup',
+      startupVerifiedAt: 1710000000000,
+    });
+
+    const res = await api.get('/api/rag/status');
+    const embedding = res.body.data.dependencies.embedding;
+
+    expect(embedding.healthy).toBe(true);
+    expect(embedding.evidence).toBe('active');
+    expect(embedding.evidenceSource).toBe('startup');
+    expect(embedding.startupVerifiedAt).toBe(1710000000000);
+    expect(embedding.error).toBeUndefined();
+  });
+
+  it('still reports unhealthy when the observation says the connection failed', async () => {
+    mockEmbeddingsService.getCachedConnectionStatus.mockReturnValue({
+      healthy: false,
+      checkedAt: 1710000000000,
+      stale: false,
+    });
+
+    const res = await api.get('/api/rag/status');
+    const embedding = res.body.data.dependencies.embedding;
+
+    // Holding evidence must never be confused with the evidence being good:
+    // trading the old false negative for a false positive would be worse.
+    expect(embedding.healthy).toBe(false);
+    expect(embedding.evidence).toBe('active');
+    expect(embedding.error).toBe('Embedding connection test failed');
+    expect(res.body.data.queryReady).toBe(false);
+  });
+
+  it('reports unknown evidence, and never probes, when nothing has been collected', async () => {
+    mockEmbeddingsService.getCachedConnectionStatus.mockReturnValue(null);
+
+    const res = await api.get('/api/rag/status');
+    const embedding = res.body.data.dependencies.embedding;
+
+    expect(embedding.evidence).toBe('unknown');
+    expect(embedding.healthy).toBe(false);
+    // The whole point of the GET: observational, no embedding inference.
+    expect(mockEmbeddingsService.refreshConnectionStatus).not.toHaveBeenCalled();
+  });
+
+  it('refreshes on the operator-owned POST, which is the active path', async () => {
+    mockEmbeddingsService.getCachedConnectionStatus.mockReturnValue({
+      healthy: true,
+      checkedAt: 1710000000000,
+      stale: false,
+    });
+
+    await api.post('/api/rag/status/refresh');
+
+    expect(mockEmbeddingsService.refreshConnectionStatus).toHaveBeenCalledWith({
+      source: 'operator-refresh',
+    });
   });
 });

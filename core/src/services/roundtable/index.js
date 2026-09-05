@@ -14,6 +14,7 @@ const {
   createRoundtable,
   getRoundtable,
   listRoundtables,
+  reconcileStaleRoundtables,
   emitterRegistry
 } = require('./orchestrator');
 const { formatTranscript, formatCompactSummary } = require('./formatters');
@@ -139,6 +140,7 @@ module.exports = {
   getCouncilDefaults: resolveCouncilDefaults,
   resolveStartOptions,
   getActiveRoundtableId,
+  reconcileStaleRoundtables,
   getEmitter,
   analyzeQuality,
   addInterjection,

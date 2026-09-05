@@ -49,6 +49,34 @@ jest.mock('../../src/services/benchmark/preflight', () => ({
     }))
 }));
 
+// Runtime coordination is covered against Core by focused contract suites.
+// This integration suite owns only Benchmark's local persistence lifecycle.
+jest.mock('../../src/clients/coreApiClient', () => {
+    const actual = jest.requireActual('../../src/clients/coreApiClient');
+    return {
+        ...actual,
+        acquireWorkloadAdmission: jest.fn(async (workloadId, options = {}) => ({
+            acquired: true,
+            admissionId: `admission-${workloadId}`,
+            generation: `generation-${workloadId}`,
+            principal: 'benchmark-service',
+            requestId: options.requestId || `benchmark:${workloadId}`,
+            workloadId,
+            kind: options.kind || 'benchmark',
+            batchId: options.batchId || null
+        })),
+        heartbeatWorkloadAdmission: jest.fn(async () => ({ heartbeat: true })),
+        releaseWorkloadAdmission: jest.fn(async () => ({ released: true })),
+        claimHostForBenchmark: jest.fn(async () => ({ claimed: true })),
+        heartbeatBenchmarkClaim: jest.fn(async () => ({ heartbeat: true })),
+        releaseBenchmarkClaim: jest.fn(async () => ({ released: true })),
+        getBenchmarkClaimIdentity: jest.fn((_host, batchId) => ({
+            claimBatchId: batchId,
+            claimGeneration: `generation-${batchId}`
+        }))
+    };
+});
+
 jest.mock('../../src/services/benchmark/judgeReadiness', () => {
     const actual = jest.requireActual('../../src/services/benchmark/judgeReadiness');
     const publicReadiness = {
@@ -2142,6 +2170,40 @@ describe('Benchmark System - Integration Tests', () => {
             expect(refreshed.needs_review).toBe(false);
             expect(refreshed.review_reason).toBeNull();
             expect(refreshed.excluded_from_leaderboard).toBe(false);
+
+            const gt = await JudgeGroundTruth.findOne({
+                name: `courthouse-review-${result._id}`
+            }).lean();
+            expect(gt.provenance_class).toBe('endorsed_judge_score');
+            expect(gt.review_protocol).toBe('judge_visible_single_review');
+        });
+
+        it('cannot convert an executable-authority advisory row into leaderboard evidence', async () => {
+            const result = await BenchmarkResult.create({
+                model: 'scheduler-candidate',
+                host: 'http://localhost:11434',
+                prompt: 'Refactor the scheduler',
+                response: 'Plausible but unexecuted code',
+                latency: 300,
+                tokens: 30,
+                quality_score: 9,
+                evaluation_authority: 'executable',
+                executable_fixture_id: 'scheduler-dedup-refactor',
+                needs_review: true,
+                excluded_from_leaderboard: true,
+                success: true
+            });
+
+            const response = await api
+                .post(`/api/benchmark/results/${result._id}/human-review`)
+                .send({ action: 'approve', reviewer: 'qa-reviewer' });
+
+            expect(response.status).toBe(409);
+            expect(response.body.code).toBe('EXECUTABLE_VERIFICATION_REQUIRED');
+            const refreshed = await BenchmarkResult.findById(result._id).lean();
+            expect(refreshed.needs_review).toBe(true);
+            expect(refreshed.excluded_from_leaderboard).toBe(true);
+            expect(refreshed.human_review_status).toBeNull();
         });
 
         it('should reject a result and exclude it from leaderboard calculations', async () => {
@@ -2204,6 +2266,8 @@ describe('Benchmark System - Integration Tests', () => {
             }).lean();
             expect(gt).toBeTruthy();
             expect(gt.source).toBe('courthouse-review');
+            expect(gt.provenance_class).toBe('human_override_visible_judge');
+            expect(gt.review_protocol).toBe('judge_visible_single_review');
             expect(gt.reviewer).toBe('yb');
             expect(gt.expert_scores.overall).toBe(4.0);
             expect(gt.judge_score_at_review).toBe(7.0);
@@ -2437,7 +2501,7 @@ describe('Benchmark System - Integration Tests', () => {
             });
 
             const response = await api
-                .get('/api/benchmark/generalist-leaderboard?axis=quality&challengeScope=all&trustScope=exploratory&includeUnavailableModels=true');
+                .get('/api/benchmark/generalist-leaderboard?axis=quality&challengeScope=all&trustScope=exploratory&includeUnavailableModels=true&includeCloud=false');
 
             expect(response.status).toBe(200);
             const row = response.body.data.leaderboard.find(
@@ -2453,6 +2517,106 @@ describe('Benchmark System - Integration Tests', () => {
             expect(row.coveragePenalty).toBeGreaterThan(0);
             expect(row.fullScopeEligible).toBe(false);
             expect(row.evidenceStatus).toBe('partial_scope');
+        });
+
+        it('keeps incomplete or mixed harness evidence visible but unranked and unqualified', async () => {
+            await BenchmarkPrompt.create({
+                name: 'Cloud proof prompt',
+                prompt: 'Explain the proof boundary',
+                level: 4,
+                category: 'reasoning'
+            });
+            const cohort = 'f'.repeat(64);
+            const cloudTarget = {
+                executionKind: 'harness',
+                mode: 'isolated_model',
+                tier: 'free_cloud',
+                provider: 'test-provider',
+                model: 'test-cloud-model',
+                available: true,
+                fingerprint: 'a'.repeat(64),
+                catalogFingerprint: 'b'.repeat(64),
+                harness: { name: 'test-harness', version: '1.0.0' }
+            };
+            const completeReceipt = {
+                schema: 'agentx.worker-receipt/v1',
+                schemaVersion: 1,
+                executionProfile: 'portable',
+                finalState: 'succeeded',
+                result: { contractSatisfied: true },
+                fingerprint: 'c'.repeat(64)
+            };
+            const base = {
+                host: 'harness:test-harness',
+                prompt: 'Explain the proof boundary',
+                prompt_name: 'Cloud proof prompt',
+                prompt_category: 'reasoning',
+                prompt_level: 4,
+                quality_score: 8,
+                quality_cohort_fingerprint: cohort,
+                success: true
+            };
+            await BenchmarkResult.create([
+                {
+                    ...base,
+                    model: 'complete-cloud-model',
+                    execution_target: cloudTarget,
+                    execution_receipt: completeReceipt
+                },
+                {
+                    ...base,
+                    model: 'incomplete-cloud-model',
+                    execution_target: { ...cloudTarget, model: 'incomplete-cloud-model' },
+                    execution_receipt: null
+                },
+                {
+                    ...base,
+                    model: 'mixed-cloud-model',
+                    execution_target: { ...cloudTarget, model: 'mixed-cloud-model' },
+                    execution_receipt: completeReceipt
+                },
+                {
+                    ...base,
+                    model: 'mixed-cloud-model',
+                    execution_target: {
+                        ...cloudTarget,
+                        model: 'mixed-cloud-model',
+                        fingerprint: 'd'.repeat(64)
+                    },
+                    execution_receipt: completeReceipt
+                }
+            ]);
+
+            const response = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true&includeCloud=true');
+
+            expect(response.status).toBe(200);
+            const complete = response.body.data.leaderboard.find((row) => row.model === 'complete-cloud-model');
+            const incomplete = response.body.data.leaderboard.find((row) => row.model === 'incomplete-cloud-model');
+            const mixed = response.body.data.leaderboard.find((row) => row.model === 'mixed-cloud-model');
+            expect(complete).toMatchObject({
+                rankable: true,
+                harnessEvidence: { rankable: true, executionRows: 1, completeExecutionRows: 1 }
+            });
+            expect(incomplete).toMatchObject({
+                rankable: false,
+                evidenceCompatibility: 'incomplete_harness_evidence',
+                filterReason: 'incomplete_harness_execution_receipt',
+                harnessEvidence: { rankable: false, executionRows: 1, completeExecutionRows: 0 }
+            });
+            expect(mixed).toMatchObject({
+                rankable: false,
+                evidenceCompatibility: 'incomplete_harness_evidence',
+                filterReason: 'mixed_execution_target',
+                harnessEvidence: { rankable: false, executionRows: 2, completeExecutionRows: 2 }
+            });
+            expect(response.body.data.leaderboard.indexOf(complete)).toBeLessThan(
+                response.body.data.leaderboard.indexOf(incomplete)
+            );
+            expect(response.body.data.trustVerdict).toMatchObject({
+                qualified: false,
+                highConfidenceAllowed: false,
+                qualifiedWinner: null
+            });
         });
 
         it('can scope the generalist leaderboard to currently configured hosts', async () => {
@@ -2741,7 +2905,7 @@ describe('Benchmark System - Integration Tests', () => {
                 }
             ]);
 
-            const trusted = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=trusted&includeUnavailableModels=true');
+            const trusted = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=trusted&includeUnavailableModels=true&includeCloud=false');
             expect(trusted.status).toBe(200);
             expect(trusted.body.data.leaderboard.map(row => row.model).sort()).toEqual(['trusted-a', 'trusted-b']);
             expect(trusted.body.data.trustedFilters.cohort.selected).toMatchObject({
@@ -2763,7 +2927,7 @@ describe('Benchmark System - Integration Tests', () => {
                 'qualified_receipt_unavailable'
             ]));
 
-            const exploratory = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true');
+            const exploratory = await api.get('/api/benchmark/generalist-leaderboard?axis=quality&trustScope=exploratory&includeUnavailableModels=true&includeCloud=false');
             expect(exploratory.body.data.leaderboard.map(row => row.model)).toContain('legacy-high-score');
             expect(exploratory.body.data.trustVerdict.state).toBe('exploratory');
             expect(exploratory.body.data.trustVerdict.qualified).toBe(false);

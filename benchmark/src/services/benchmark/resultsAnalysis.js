@@ -11,6 +11,19 @@
 const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 
+function strictTrustComparisonError() {
+    const error = new Error('Strict Benchmark Trust campaigns cannot be opened through generic batch comparison');
+    error.code = 'BENCHMARK_TRUST_GENERIC_COMPARISON_FORBIDDEN';
+    error.statusCode = 409;
+    return error;
+}
+
+function isStrictTrustBatch(batch) {
+    return Boolean(batch?.trust_evidence_context)
+        || (typeof batch?.trust_campaign_spec_id === 'string'
+            && /^[0-9a-f]{64}$/.test(batch.trust_campaign_spec_id));
+}
+
 /**
  * Get quality score breakdown by category and level
  */
@@ -81,7 +94,10 @@ async function getModelTrends({ model, days = 7, groupBy = 'day' } = {}) {
 
     const matchStage = {
         timestamp: { $gte: cutoff },
-        success: true
+        success: true,
+        infra_error: { $ne: true },
+        needs_review: { $ne: true },
+        excluded_from_leaderboard: { $ne: true }
     };
 
     if (model) {
@@ -142,12 +158,16 @@ async function compareBatches(batchIds) {
         throw new Error('batchIds array is required');
     }
 
-    const batches = await BenchmarkBatch.find({ _id: { $in: batchIds } });
+    const batches = await BenchmarkBatch.find({ _id: { $in: batchIds } })
+        .select('+trust_evidence_context');
 
     const validBatches = batches.filter(b => b !== null);
 
     if (validBatches.length === 0) {
         throw new Error('No valid batches found');
+    }
+    if (validBatches.some(isStrictTrustBatch)) {
+        throw strictTrustComparisonError();
     }
 
     const comparison = await Promise.all(validBatches.map(async batch => {
@@ -158,22 +178,42 @@ async function compareBatches(batchIds) {
         let judge_failed = 0;
         let judge_pending = 0;
 
+        const hasRankableQuality = {
+            $and: [
+                { $eq: ['$success', true] },
+                { $ne: ['$infra_error', true] },
+                { $ne: ['$needs_review', true] },
+                { $ne: ['$excluded_from_leaderboard', true] },
+                { $ne: [{ $ifNull: ['$quality_score', null] }, null] }
+            ]
+        };
+
         const scores = await BenchmarkResult.aggregate([
             { $match: { batch_id: batch._id } },
             {
                 $group: {
                     _id: null,
-                    avg_quality: { $avg: '$quality_score' },
-                    avg_composite: { $avg: '$composite_score' },
-                    full_passed: {
-                        $sum: {
+                    avg_quality: {
+                        $avg: { $cond: [hasRankableQuality, '$quality_score', null] }
+                    },
+                    avg_composite: {
+                        $avg: {
                             $cond: [
                                 {
                                     $and: [
-                                        { $eq: ['$success', true] },
-                                        { $ne: [{ $ifNull: ['$quality_score', null] }, null] }
+                                        hasRankableQuality,
+                                        { $ne: [{ $ifNull: ['$composite_score', null] }, null] }
                                     ]
                                 },
+                                '$composite_score',
+                                null
+                            ]
+                        }
+                    },
+                    full_passed: {
+                        $sum: {
+                            $cond: [
+                                hasRankableQuality,
                                 1,
                                 0
                             ]

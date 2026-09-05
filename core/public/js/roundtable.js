@@ -402,6 +402,12 @@
 
     if (type === 'done') {
       setPhase('done');
+      if (liveDoc) liveDoc.status = data.status || liveDoc.status;
+      $('liveStatus').textContent = `#${liveDoc?._id?.substring(liveDoc._id.length - 8) || 'council'} — ${String(data.status || 'finished').toUpperCase()}`;
+      if (liveEventSource) {
+        try { liveEventSource.close(); } catch {}
+        liveEventSource = null;
+      }
       if (data.status === 'failed' || data.status === 'timeout') {
         showToast(`Council ${data.status}: ${data.error || 'unknown error'}`, 'error');
       } else {

@@ -121,7 +121,7 @@ function _build() {
     </div>
     <div class="ls-card">
       <div class="ls-grid">
-        <div class="ls-col" id="ls-host"><div class="ls-label">HOST</div><div class="ls-val">\u2014</div></div>
+        <div class="ls-col" id="ls-host"><div class="ls-label">TARGET</div><div class="ls-val">\u2014</div></div>
         <div class="ls-col" id="ls-models"><div class="ls-label">MODELS</div><div class="ls-val">\u2014</div></div>
         <div class="ls-col" id="ls-judge"><div class="ls-label">JUDGE</div><div class="ls-val">\u2014</div></div>
         <div class="ls-col" id="ls-tests"><div class="ls-label">TESTS</div><div class="ls-val">\u2014</div></div>
@@ -132,6 +132,7 @@ function _build() {
     <div class="ls-bar">
       <div class="ls-estimates">
         <span id="ls-est-time" class="ls-est"></span>
+        <span id="ls-est-cost" class="ls-est ls-est-cost">No paid targets selected</span>
       </div>
       <button type="button" id="ls-launch-btn" class="ls-launch-btn" disabled>Launch Benchmark</button>
     </div>`;
@@ -178,8 +179,19 @@ function _setDefaultLaunchStatus(container, ready, detail) {
 function _updateSummary(container, deps) {
     const { $infrastructure, $batchConfig, modelProfiles } = deps;
 
-    // Host
+    const modelCbs = $batchConfig
+        ? Array.from($batchConfig.querySelectorAll('.bv2-model-cb:checked'))
+        : [];
+    const modelNames = modelCbs.map(cb => cb.value);
+    const localModelNames = modelCbs
+        .filter(cb => cb.dataset.executionKind !== 'harness')
+        .map(cb => cb.value);
+    const localModelCount = localModelNames.length;
+    const cloudModelCount = modelCbs.length - localModelCount;
+
+    // Execution target
     const host = $infrastructure ? getSelectedHost($infrastructure) : null;
+    const executionTargetReady = !!host || (localModelCount === 0 && cloudModelCount > 0);
     const hostCol = container.querySelector('#ls-host .ls-val');
     if (hostCol) {
         if (host) {
@@ -188,17 +200,19 @@ function _updateSummary(container, deps) {
             const tps = host.baseline?.tokensPerSec
                 ? `${Number(host.baseline.tokensPerSec).toFixed(1)} tok/s` : '';
             hostCol.innerHTML = `<strong>${esc(name)}</strong><br>`
-                + `<span class="ls-dim">${esc(gpu)}${tps ? ` \u00B7 ${tps}` : ''}</span>`;
+                + `<span class="ls-dim">${esc(gpu)}${tps ? ` \u00B7 ${tps}` : ''}</span>`
+                + (cloudModelCount > 0
+                    ? `<br><span class="ls-dim">+ ${cloudModelCount} isolated cloud target${cloudModelCount === 1 ? '' : 's'}</span>`
+                    : '');
+        } else if (executionTargetReady) {
+            hostCol.innerHTML = '<strong>Cloud harnesses</strong><br>'
+                + `<span class="ls-dim">${cloudModelCount} isolated target${cloudModelCount === 1 ? '' : 's'}</span>`;
         } else {
-            hostCol.textContent = '\u2014 Select a host';
+            hostCol.textContent = '\u2014 Select an execution target';
         }
     }
 
     // Models
-    const modelCbs = $batchConfig
-        ? Array.from($batchConfig.querySelectorAll('.bv2-model-cb:checked'))
-        : [];
-    const modelNames = modelCbs.map(cb => cb.value);
     const modelsCol = container.querySelector('#ls-models .ls-val');
     if (modelsCol) {
         if (modelNames.length) {
@@ -258,8 +272,8 @@ function _updateSummary(container, deps) {
         const profileMap = new Map(
             (modelProfiles || []).map(p => [normModel(p.modelName || p.name), p])
         );
-        const unprofiled = modelNames.filter(m => {
-            // modelNames hold the raw Ollama tag (may include `slekrem/`-style
+        const unprofiled = localModelNames.filter(m => {
+            // localModelNames hold the raw Ollama tag (may include `slekrem/`-style
             // namespace); profileMap is keyed by the normalized form.
             const profile = profileMap.get(normModel(m));
             const readiness = profile?.readiness instanceof Map
@@ -270,6 +284,8 @@ function _updateSummary(container, deps) {
         warningsEl.innerHTML = unprofiled.length
             ? `<div class="ls-warn-msg">\u26A0 ${unprofiled.length} model${unprofiled.length !== 1 ? 's' : ''} not profiled \u2014 results may vary</div>`
             : '';
+    } else if (warningsEl) {
+        warningsEl.innerHTML = '';
     }
 
     // Estimated time
@@ -283,21 +299,55 @@ function _updateSummary(container, deps) {
         }
     }
 
+    // Worst-case manual ceiling for explicitly selected paid targets. The
+    // broker still revalidates pricing and requires a one-batch SpendGrant.
+    const repeats = Math.max(1, Math.min(5, Number($batchConfig?.querySelector('#bv2-adv-exec_repeats')?.value) || 1));
+    const judgeAttempts = Math.max(1, Math.min(6, Number($batchConfig?.querySelector('#bv2-adv-max_retries')?.value ?? 2) + 1));
+    const outputTokensPerCall = Math.max(1, Number($batchConfig?.querySelector('#bv2-adv-response_max_tokens')?.value) || 32_000);
+    const inputTokensPerCall = 32_000;
+    const callsPerCandidate = totalPrompts * repeats;
+    const paidCandidateInputs = modelCbs.filter((input) => input.dataset.paid === 'true');
+    const paidJudge = $batchConfig?.querySelector('input[name="bv2-cloud-judge"]:checked[data-paid="true"]') || null;
+    const paidUnits = [
+        ...paidCandidateInputs.map((input) => ({ input, calls: callsPerCandidate })),
+        ...(paidJudge ? [{ input: paidJudge, calls: modelNames.length * callsPerCandidate * judgeAttempts }] : []),
+    ];
+    const maxCalls = paidUnits.reduce((sum, unit) => sum + unit.calls, 0);
+    const maxCostNanodollars = paidUnits.reduce((sum, { input, calls }) => (
+        sum
+        + calls * Number(input.dataset.callNanodollars || 0)
+        + calls * Math.ceil(inputTokensPerCall * Number(input.dataset.inputNanodollars || 0) / 1_000_000)
+        + calls * Math.ceil(outputTokensPerCall * Number(input.dataset.outputNanodollars || 0) / 1_000_000)
+    ), 0);
+    const costEl = container.querySelector('#ls-est-cost');
+    if (costEl) {
+        costEl.classList.toggle('ls-est-cost-paid', maxCalls > 0);
+        costEl.textContent = maxCalls > 0
+            ? `Paid ceiling · ${maxCalls} calls · ${(maxCalls * (inputTokensPerCall + outputTokensPerCall)).toLocaleString()} tokens · ~US$${(maxCostNanodollars / 1e9).toFixed(6)} manual`
+            : paidUnits.length
+                ? 'Paid target selected · configure test depth to calculate the ceiling'
+                : 'No paid targets selected';
+    }
+
     // Enable/disable launch
     const btn = container.querySelector('#ls-launch-btn');
     if (btn) {
-        const ready = host && modelNames.length > 0 && judge.model && testCount > 0;
+        const ready = executionTargetReady && modelNames.length > 0 && judge.model && testCount > 0;
         btn.disabled = !ready;
         let blockedReason = '';
-        if (!host) blockedReason = 'Select an execution host.';
-        else if (modelNames.length === 0) blockedReason = 'Select at least one profiled model.';
+        if (modelNames.length === 0) blockedReason = 'Select at least one model.';
+        else if (!executionTargetReady) blockedReason = 'Select an execution host for local models.';
         else if (!judge.model) blockedReason = 'Choose a judge model.';
         else if (testCount <= 0) blockedReason = 'Enable at least one test level.';
         _setDefaultLaunchStatus(
             container,
             ready,
             ready
-                ? 'Preflight will check host reachability, selected models, judge availability, prompts, and active batch locks before launch.'
+                ? (host && cloudModelCount > 0
+                    ? 'Preflight will check host reachability and revalidate the attested harness targets, selected models, judge, prompts, and active batch locks before launch.'
+                    : host
+                        ? 'Preflight will check host reachability, selected models, judge availability, prompts, and active batch locks before launch.'
+                        : 'Preflight will revalidate the attested harness targets, judge, prompt contract, and active batch locks before launch.')
                 : blockedReason
         );
     }

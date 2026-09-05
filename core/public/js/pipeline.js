@@ -21,8 +21,15 @@
     tasks: [],
     summary: null,
     evidence: null,
+    performance: null,
+    performanceError: null,
+    performanceWindow: '30d',
+    dispatchControl: null,
+    dispatchControlError: null,
+    dispatchLaunching: false,
     loading: false,
     context: readContext(),
+    deepLinkedTask: readDeepLinkedTask(),
     filters: { status: null, search: '', service: '', lane: '' },
     sort: 'urgency',
     autoTimer: null,
@@ -161,6 +168,89 @@
     return `${Math.floor(hours / 24)}d ${suffix}`;
   }
 
+  function durationLabel(value) {
+    if (value == null || value === '') return 'Unknown';
+    const milliseconds = Number(value);
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) return 'Unknown';
+    const seconds = Math.round(milliseconds / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) return `${hours}h`;
+    return `${Math.round(hours / 24)}d`;
+  }
+
+  function percentLabel(value) {
+    if (value == null || value === '') return 'Unknown';
+    const ratio = Number(value);
+    return Number.isFinite(ratio) ? `${Math.round(ratio * 100)}%` : 'Unknown';
+  }
+
+  function costLabel(value) {
+    if (value == null || value === '') return 'Unknown';
+    const nanodollars = Number(value);
+    if (!Number.isFinite(nanodollars) || nanodollars < 0) return 'Unknown';
+    const dollars = nanodollars / 1_000_000_000;
+    return dollars < 0.01 && dollars > 0 ? '<$0.01' : `$${dollars.toFixed(2)}`;
+  }
+
+  function costEvidencePresentation(usage = {}) {
+    const amount = costLabel(usage.costNanodollars);
+    if (amount === 'Unknown') return { amount, detail: 'No authoritative cost evidence' };
+    if (usage.costKind === 'provider-spend') {
+      const local = usage.costSource === 'openclaw-local-provider-spend/v1';
+      return {
+        amount: `${amount} provider spend`,
+        detail: local ? 'Local compute unpriced' : 'Provider spend receipt',
+      };
+    }
+    if (usage.costKind === 'session-estimate') {
+      return {
+        amount: `${amount} session estimate`,
+        detail: 'Billing unverified · OpenClaw session receipt',
+      };
+    }
+    return { amount: 'Unknown', detail: 'Cost nature or provenance missing' };
+  }
+
+  function readDeepLinkedTask() {
+    const value = String(new URLSearchParams(window.location.search).get('task') || '').trim();
+    return /^\d{3,4}$/.test(value) ? value : null;
+  }
+
+  function energyLabel(value) {
+    if (value == null || value === '') return 'Unknown';
+    const millijoules = Number(value);
+    if (!Number.isFinite(millijoules) || millijoules < 0) return 'Unknown';
+    const wattHours = millijoules / 3_600_000;
+    if (wattHours > 0 && wattHours < 0.01) return '<0.01 Wh';
+    return `${wattHours.toFixed(2)} Wh`;
+  }
+
+  function nanoCurrencyLabel(value, currency) {
+    if (value == null || value === '' || !/^[A-Z]{3}$/.test(String(currency || ''))) return 'Unknown';
+    const nanoUnits = Number(value);
+    if (!Number.isFinite(nanoUnits) || nanoUnits < 0) return 'Unknown';
+    const amount = nanoUnits / 1_000_000_000;
+    if (amount > 0 && amount < 0.01) return `<0.01 ${currency}`;
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+
+  function localEnergyPresentation(localEnergy) {
+    if (!localEnergy || localEnergy.measurementScope !== 'gpu-incremental-lower-bound') {
+      return { energy: 'Unknown', cost: 'Unknown', detail: 'No measured local-energy evidence' };
+    }
+    const tariff = localEnergy.tariff || null;
+    return {
+      energy: energyLabel(localEnergy.energyMillijoules),
+      cost: nanoCurrencyLabel(tariff?.estimatedCostNanoCurrencyUnits, tariff?.currency),
+      detail: tariff
+        ? 'GPU incremental lower bound · operator-configured tariff'
+        : 'GPU incremental lower bound · electricity tariff not configured',
+    };
+  }
+
   function dueCell(task) {
     if (task.status === 'done' || !task.dueAt) return '<span class="pipeline-subtle">--</span>';
     const date = new Date(task.dueAt);
@@ -230,6 +320,9 @@
         priority: task.priority,
         risk: task.risk || '',
         dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : [],
+        notBefore: task.notBefore || null,
+        automation: task.automation && typeof task.automation === 'object' ? task.automation : null,
+        automationAttemptCount: Number(task.automationAttemptCount) || 0,
         dueAt: task.dueAt || null,
         createdAt: task.createdAt || null,
         updatedAt: task.updatedAt || task.createdAt || null
@@ -250,6 +343,102 @@
       throw new Error(body.message || body.error || `HTTP ${response.status}`);
     }
     return body;
+  }
+
+  function genericDispatchCandidates() {
+    const byId = new Map(state.tasks.map((task) => [String(task.pipelineId), task]));
+    return state.tasks.filter((task) => {
+      if (task.status !== 'queued' || task.assignee || String(task.risk).toLowerCase() !== 'low') return false;
+      if (task.automation?.mode !== 'review_only') return false;
+      if (!Array.isArray(task.automation?.sourceFiles) || !task.automation.sourceFiles.length) return false;
+      if (unmetDependencies(task, byId).length) return false;
+      const notBefore = task.notBefore ? new Date(task.notBefore) : null;
+      if (notBefore && !Number.isNaN(notBefore.getTime()) && notBefore.getTime() > Date.now()) return false;
+      const maxAttempts = Number(task.automation?.budgets?.maxAttempts);
+      return !Number.isFinite(maxAttempts) || task.automationAttemptCount < maxAttempts;
+    });
+  }
+
+  function renderDispatchControl() {
+    const stateEl = $('pipelineTeamLaunchState');
+    const detail = $('pipelineTeamLaunchDetail');
+    const select = $('pipelineTeamLaunchTask');
+    const confirm = $('pipelineTeamLaunchConfirm');
+    const button = $('pipelineTeamLaunchButton');
+    if (!stateEl || !detail || !select || !confirm || !button) return;
+
+    const candidates = genericDispatchCandidates();
+    const selected = select.value;
+    select.innerHTML = candidates.length
+      ? `<option value="">Choose a task&hellip;</option>${candidates.map((task) => (
+        `<option value="${escapeHtml(task.pipelineId)}">${escapeHtml(task.pipelineId)} · ${escapeHtml(task.title || 'Untitled task')}</option>`
+      )).join('')}`
+      : '<option value="">No declared candidate is ready</option>';
+    if (candidates.some((task) => task.pipelineId === selected)) select.value = selected;
+
+    if (state.dispatchControlError) {
+      stateEl.dataset.tone = 'unavailable';
+      stateEl.textContent = `One-shot control unavailable: ${state.dispatchControlError}`;
+    } else if (!state.dispatchControl) {
+      stateEl.dataset.tone = 'loading';
+      stateEl.textContent = 'Checking the operator one-shot control…';
+    } else if (state.dispatchControl.available !== true) {
+      stateEl.dataset.tone = 'unavailable';
+      stateEl.textContent = 'One-shot control is installed but its host target is unavailable.';
+    } else {
+      stateEl.dataset.tone = 'ready';
+      stateEl.textContent = 'Ready · one local worker · no persistent scheduler · provider spend ceiling $0';
+    }
+
+    const ready = state.dispatchControl?.available === true && !state.dispatchLaunching;
+    select.disabled = !ready || candidates.length === 0;
+    confirm.disabled = !ready || !select.value;
+    button.disabled = !ready || !select.value || !confirm.checked;
+    if (state.dispatchLaunching) {
+      button.innerHTML = '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i><span>Starting</span>';
+      detail.textContent = 'The host is accepting this exact one-shot run. No second task will be started.';
+    } else {
+      button.innerHTML = '<i class="fas fa-play" aria-hidden="true"></i><span>Run one task</span>';
+      detail.textContent = candidates.length
+        ? 'AIOps revalidates authority sources, scope, dependencies, locks, budgets, and the zero-provider-spend policy before claiming anything.'
+        : 'No queued low-risk review-only task with declared authority sources currently passes the visible prerequisites.';
+    }
+  }
+
+  async function loadDispatchControlStatus() {
+    state.dispatchControlError = null;
+    try {
+      const payload = await fetchJson('/api/runtime-bridges/coding-dispatch/status');
+      state.dispatchControl = payload?.data || null;
+      if (!state.dispatchControl) throw new Error('status response is missing data');
+    } catch (error) {
+      state.dispatchControl = null;
+      state.dispatchControlError = String(error.message || error);
+    }
+    renderDispatchControl();
+  }
+
+  async function launchOneTask() {
+    const select = $('pipelineTeamLaunchTask');
+    const confirm = $('pipelineTeamLaunchConfirm');
+    const pipelineId = String(select?.value || '');
+    if (!/^\d{4}$/.test(pipelineId) || confirm?.checked !== true) return;
+    state.dispatchLaunching = true;
+    renderDispatchControl();
+    try {
+      await fetchJson('/api/runtime-bridges/coding-dispatch/runs', {
+        method: 'POST',
+        body: JSON.stringify({ pipelineId, confirm: true })
+      });
+      toast('success', `Task ${pipelineId} was accepted for one bounded local run.`);
+      confirm.checked = false;
+      window.setTimeout(() => loadTasks({ silent: true }), 1500);
+    } catch (error) {
+      toast('error', error.message || String(error));
+    } finally {
+      state.dispatchLaunching = false;
+      renderDispatchControl();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -526,6 +715,23 @@
   // Attention + recently done
   // ---------------------------------------------------------------------------
 
+  function reviewContext(task) {
+    const attempts = Array.isArray(task.automationAttempts) ? task.automationAttempts : [];
+    const currentReceipt = attempts.some((attempt) => attempt && attempt.evidence);
+    if (!currentReceipt) {
+      return {
+        label: 'Human review required · legacy dossier without receipt',
+        detail: 'This review predates the current Coding Team attempt receipt and has no recorded review decision.',
+        action: 'A human must inspect the existing evidence, then record a decision or re-queue it under the current reviewed automation.',
+      };
+    }
+    return {
+      label: 'Human review required · Coding Team receipt present',
+      detail: 'A current guarded attempt receipt is ready for an independent human decision.',
+      action: 'Accept or reject it from the dossier using an identity different from the worker.',
+    };
+  }
+
   function attentionItems() {
     const items = [];
     state.tasks.filter(matchesContext).forEach((task) => {
@@ -540,14 +746,15 @@
           action: 'Open the dossier for the blocking feedback.'
         });
       } else if (task.status === 'review') {
+        const review = reviewContext(task);
         items.push({
           rank: 1,
           icon: 'fa-magnifying-glass',
           tone: 'review',
           pipelineId: task.pipelineId,
-          title: `${task.pipelineId} ready for review`,
-          detail: task.title || 'Worker feedback is waiting for overseer review.',
-          action: 'Confirm it done from the dossier — a different identity than the worker.'
+          title: `${task.pipelineId} ${review.label}`,
+          detail: `${task.title || 'Untitled task'} · ${review.detail}`,
+          action: review.action,
         });
       } else if (task.status === 'in_progress' && !task.assignee) {
         items.push({
@@ -631,6 +838,150 @@
     `).join('');
   }
 
+  function teamMetric(id, value, detailId, detail) {
+    const valueEl = $(id);
+    const detailEl = $(detailId);
+    if (valueEl) valueEl.textContent = value;
+    if (detailEl) detailEl.textContent = detail;
+  }
+
+  function attemptOutcome(attempt) {
+    if (attempt.reviewOutcome && attempt.reviewOutcome !== 'pending') return attempt.reviewOutcome;
+    return attempt.finalState || 'active';
+  }
+
+  function renderTeamPerformance() {
+    const stateEl = $('pipelineTeamState');
+    const rowsEl = $('pipelineTeamAttemptRows');
+    const metaEl = $('pipelineTeamAttemptMeta');
+    const performance = state.performance;
+    if (state.performanceError) {
+      if (stateEl) {
+        stateEl.dataset.tone = 'unavailable';
+        stateEl.innerHTML = `<i class="fas fa-circle-exclamation" aria-hidden="true"></i><span>Performance unavailable: ${escapeHtml(state.performanceError)}</span>`;
+      }
+      if (rowsEl) rowsEl.innerHTML = '<tr><td colspan="7" class="pipeline-error">Attempt evidence could not be loaded.</td></tr>';
+      return;
+    }
+    if (!performance) return;
+
+    const total = Number(performance.coverage?.total) || 0;
+    const evidence = Number(performance.coverage?.attemptEvidence) || 0;
+    const costKnown = Number(performance.coverage?.cost) || 0;
+    const accepted = Number(performance.counts?.accepted) || 0;
+    const interventions = Number(performance.autonomy?.correctiveHumanInterventions) || 0;
+    const attempts = Array.isArray(performance.attempts) ? performance.attempts : [];
+    if (stateEl) {
+      const tone = performance.state === 'observed' ? 'healthy' : (performance.state === 'no_data' ? 'empty' : 'partial');
+      const label = performance.state === 'no_data'
+        ? 'No autonomous attempts in this window.'
+        : `${total} autonomous attempt${total === 1 ? '' : 's'} · ${evidence}/${total} structured receipt${evidence === 1 ? '' : 's'} · missing fields remain unknown.`;
+      stateEl.dataset.tone = tone;
+      stateEl.innerHTML = `<i class="fas ${tone === 'healthy' ? 'fa-circle-check' : tone === 'empty' ? 'fa-circle-minus' : 'fa-circle-half-stroke'}" aria-hidden="true"></i><span>${escapeHtml(label)}</span>`;
+    }
+
+    teamMetric(
+      'pipelineTeamAccepted',
+      String(accepted),
+      'pipelineTeamAcceptedDetail',
+      `${Number(performance.counts?.awaitingReview) || 0} awaiting review · ${Number(performance.counts?.blocked) || 0} blocked`
+    );
+    teamMetric(
+      'pipelineTeamFirstPass',
+      percentLabel(performance.quality?.firstPassShare),
+      'pipelineTeamFirstPassDetail',
+      performance.quality?.firstPassShare == null
+        ? 'No accepted attempt to measure yet'
+        : `${Number(performance.quality?.firstPassAccepted) || 0} accepted on attempt 1`
+    );
+    teamMetric(
+      'pipelineTeamCycle',
+      durationLabel(performance.timing?.cycleMs?.p50),
+      'pipelineTeamCycleDetail',
+      `${Number(performance.timing?.cycleMs?.observed) || 0}/${total} observed · p95 ${durationLabel(performance.timing?.cycleMs?.p95)}`
+    );
+    teamMetric(
+      'pipelineTeamInterventions',
+      String(interventions),
+      'pipelineTeamInterventionsDetail',
+      `${Number(performance.counts?.requeued) || 0} requeued · ${Number(performance.counts?.rejected) || 0} rejected`
+    );
+    const providerSpend = performance.usage?.observedProviderSpendNanodollars;
+    const sessionEstimate = performance.usage?.observedSessionEstimateNanodollars;
+    const localEnergy = performance.usage?.observedEnergyMillijoules;
+    const electricityByCurrency = Array.isArray(performance.usage?.electricityByCurrency)
+      ? performance.usage.electricityByCurrency
+      : [];
+    const costHeadline = providerSpend != null && sessionEstimate != null
+      ? 'Mixed evidence'
+      : (providerSpend != null
+        ? `${costLabel(providerSpend)} provider spend`
+        : (sessionEstimate != null ? `${costLabel(sessionEstimate)} session est.` : 'Unknown'));
+    const costDetails = [`${costKnown}/${total} evidenced`];
+    if (providerSpend != null) costDetails.push(`${costLabel(providerSpend)} provider spend`);
+    if (sessionEstimate != null) costDetails.push(`${costLabel(sessionEstimate)} session estimate, billing unverified`);
+    if (localEnergy != null) costDetails.push(`${energyLabel(localEnergy)} measured local GPU energy`);
+    for (const electricity of electricityByCurrency) {
+      costDetails.push(`${nanoCurrencyLabel(electricity.costNanoCurrencyUnits, electricity.currency)} electricity estimate`);
+    }
+    if (localEnergy != null && electricityByCurrency.length === 0) {
+      costDetails.push('electricity tariff not configured');
+    }
+    teamMetric(
+      'pipelineTeamCost',
+      costHeadline,
+      'pipelineTeamCostDetail',
+      total === 0 ? 'No attempt to measure yet' : costDetails.join(' · ')
+    );
+    teamMetric(
+      'pipelineTeamCoverage',
+      total ? `${Math.round((evidence / total) * 100)}%` : '--',
+      'pipelineTeamCoverageDetail',
+      `${evidence}/${total} receipts · verification ${Number(performance.coverage?.verification) || 0}/${total}`
+    );
+
+    if (metaEl) metaEl.textContent = `${attempts.length} shown · ${performance.window?.days || '--'} day window`;
+    if (!rowsEl) return;
+    if (!attempts.length) {
+      rowsEl.innerHTML = '<tr><td colspan="7" class="pipeline-empty">No autonomous attempt evidence in this window.</td></tr>';
+      return;
+    }
+    rowsEl.innerHTML = attempts.map((attempt) => {
+      const outcome = attemptOutcome(attempt);
+      const verification = attempt.verification?.status || 'unknown';
+      const files = attempt.changes?.filesChanged;
+      const bytes = attempt.changes?.bytesChanged;
+      const change = files == null || bytes == null
+        ? 'Unknown'
+        : `${files} file${files === 1 ? '' : 's'} · ${Number(bytes).toLocaleString()} B`;
+      const costEvidence = costEvidencePresentation(attempt.usage);
+      const energyEvidence = localEnergyPresentation(attempt.usage?.localEnergy);
+      return `
+        <tr data-pipeline-task="${escapeHtml(attempt.pipelineId)}" tabindex="0" aria-label="Open task ${escapeHtml(attempt.pipelineId)} attempt ${escapeHtml(attempt.attempt)}">
+          <td><strong class="pipeline-id">${escapeHtml(attempt.pipelineId)}</strong><span class="pipeline-team-subtle">Attempt ${escapeHtml(attempt.attempt)}</span></td>
+          <td>${escapeHtml(attempt.assignee || 'unknown')}</td>
+          <td><span class="pipeline-team-outcome outcome-${escapeHtml(outcome)}">${escapeHtml(formatStatus(outcome))}</span></td>
+          <td>${escapeHtml(formatStatus(verification))}</td>
+          <td>${escapeHtml(change)}</td>
+          <td>${escapeHtml(durationLabel(attempt.usage?.durationMs))}</td>
+          <td>${escapeHtml(costEvidence.amount)}<span class="pipeline-team-subtle">${escapeHtml(costEvidence.detail)} · ${escapeHtml(energyEvidence.energy)} local energy · ${escapeHtml(energyEvidence.cost)} electricity</span></td>
+        </tr>`;
+    }).join('');
+  }
+
+  async function loadTeamPerformance() {
+    state.performanceError = null;
+    try {
+      const payload = await fetchJson(`/api/pipeline/performance?window=${encodeURIComponent(state.performanceWindow)}`);
+      state.performance = payload?.data?.performance || null;
+      if (!state.performance) throw new Error('performance response is missing data.performance');
+    } catch (error) {
+      state.performance = null;
+      state.performanceError = String(error.message || error);
+    }
+    renderTeamPerformance();
+  }
+
   // ---------------------------------------------------------------------------
   // Task dossier drawer
   // ---------------------------------------------------------------------------
@@ -680,6 +1031,130 @@
     return `<div class="pipeline-drawer-meta-row"><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`;
   }
 
+  function repositoryPathList(paths) {
+    const values = Array.isArray(paths) ? paths.filter((value) => typeof value === 'string' && value) : [];
+    return values.length
+      ? `<ul class="pipeline-drawer-paths">${values.map((value) => `<li><code>${escapeHtml(value)}</code></li>`).join('')}</ul>`
+      : '<span class="pipeline-subtle">Not declared</span>';
+  }
+
+  function attemptHumanSummary(attempt, evidence) {
+    const codes = new Set(Array.isArray(evidence.failureCodes) ? evidence.failureCodes : []);
+    const verification = evidence.verification || {};
+    const happened = [];
+    const next = [];
+    const attributionFailed = codes.has('attribution_request_count_mismatch')
+      || codes.has('attribution_session_model_mismatch');
+
+    if (codes.has('independent_verification_failed')) {
+      happened.push('The exact changed checkout failed its independent verification profile.');
+      next.push('Correct only the failing verification or implementation evidence, deploy the guard, then rerun this task.');
+    }
+    if (codes.has('attribution_request_count_mismatch')) {
+      happened.push('The server request count and the OpenClaw session call count did not agree.');
+    }
+    if (codes.has('attribution_session_model_mismatch')) {
+      happened.push('The OpenClaw session model did not match the model requested for the attested run.');
+    }
+    if (codes.has('cost_evidence_unavailable')) {
+      happened.push('The provider-spend receipt was unavailable; the dossier does not treat unknown cost as zero.');
+    }
+    if (attributionFailed) {
+      next.push('Inspect the session receipt and model binding before accepting another result.');
+    }
+    if (codes.size > 0 && happened.length === 0) {
+      happened.push('One or more mandatory guarded-dispatch gates failed; the machine codes and audit trail identify the exact controls.');
+      next.push('Resolve the recorded gate failure, then rerun under the same reviewed scope.');
+    }
+
+    if (codes.size > 0) {
+      return {
+        stage: codes.has('independent_verification_failed') && attributionFailed
+          ? 'Independent verification and attribution'
+          : codes.has('independent_verification_failed')
+            ? 'Independent verification'
+            : attributionFailed
+              ? 'Session attribution'
+              : 'Guarded dispatch',
+        happened: happened.join(' '),
+        impact: 'The attempt is blocked and cannot become completion evidence or a PR candidate.',
+        next: Array.from(new Set(next)).join(' '),
+      };
+    }
+    if (verification.status === 'passed') {
+      return {
+        stage: 'Human review handoff',
+        happened: 'The worker stopped and the exact changed checkout passed its independent verification profile.',
+        impact: 'The result is a review candidate only; it has not been approved, merged, or deployed.',
+        next: attempt.reviewedAt ? 'Follow the recorded human review outcome.' : 'A human reviewer must accept or reject the result.',
+      };
+    }
+    return {
+      stage: 'Worker attempt',
+      happened: attempt.completedAt ? 'The attempt ended without complete verification evidence.' : 'The bounded worker attempt is still active.',
+      impact: 'No completion or promotion may be inferred from this state.',
+      next: 'Wait for a terminal guarded result or inspect the audit trail if progress stops.',
+    };
+  }
+
+  function renderAttemptDossier(task) {
+    const attempts = Array.isArray(task.automationAttempts) ? task.automationAttempts.slice().reverse() : [];
+    if (!task.automation && attempts.length === 0) return '';
+    const automation = task.automation || {};
+    const cards = attempts.map((attempt) => {
+      const evidence = attempt.evidence || {};
+      const verification = evidence.verification || {};
+      const changes = evidence.changes || {};
+      const usage = evidence.usage || {};
+      const cost = costEvidencePresentation(usage);
+      const energy = localEnergyPresentation(usage.localEnergy);
+      const failureCodes = Array.isArray(evidence.failureCodes) ? evidence.failureCodes : [];
+      const humanSummary = attemptHumanSummary(attempt, evidence);
+      const tests = verification.testsPassed == null && verification.testsFailed == null
+        ? 'Unknown'
+        : `${verification.testsPassed ?? '?'} passed · ${verification.testsFailed ?? '?'} failed`;
+      const changed = changes.filesChanged == null && changes.bytesChanged == null
+        ? 'Unknown'
+        : `${changes.filesChanged ?? '?'} files · ${changes.bytesChanged == null ? '?' : Number(changes.bytesChanged).toLocaleString()} B`;
+      return `
+        <article class="pipeline-attempt-dossier">
+          <header>
+            <strong>Attempt ${escapeHtml(attempt.attempt || '?')}</strong>
+            <span class="pipeline-team-outcome">${escapeHtml(formatStatus(attemptOutcome(attempt)))}</span>
+          </header>
+          <dl class="pipeline-drawer-meta">
+            ${metaRow('Worker', escapeHtml(attempt.assignee || 'unknown'))}
+            ${metaRow('Lifecycle', escapeHtml(`${formatDate(attempt.acquiredAt)} → ${attempt.completedAt ? formatDate(attempt.completedAt) : 'active'}`))}
+            ${metaRow('Review', escapeHtml(attempt.reviewedAt ? `${formatStatus(attempt.reviewOutcome)} · ${formatDate(attempt.reviewedAt)}` : formatStatus(attempt.reviewOutcome || 'pending')))}
+            ${metaRow('Verification', escapeHtml(`${formatStatus(verification.status || 'unknown')} · ${durationLabel(verification.durationMs)}`))}
+            ${metaRow('Tests', escapeHtml(tests))}
+            ${metaRow('Change', escapeHtml(changed))}
+            ${metaRow('Execution', escapeHtml(durationLabel(usage.durationMs)))}
+            ${metaRow('Provider/session', `${escapeHtml(cost.amount)}<span class="pipeline-team-subtle">${escapeHtml(cost.detail)}</span>`)}
+            ${metaRow('Local energy', `${escapeHtml(energy.energy)}<span class="pipeline-team-subtle">${escapeHtml(energy.detail)}</span>`)}
+            ${metaRow('Electricity', escapeHtml(energy.cost))}
+            ${metaRow('Step', escapeHtml(humanSummary.stage))}
+            ${metaRow('What happened', escapeHtml(humanSummary.happened))}
+            ${metaRow('Impact', escapeHtml(humanSummary.impact))}
+            ${metaRow('Next action', escapeHtml(humanSummary.next))}
+            ${failureCodes.length ? metaRow('Failure codes', failureCodes.map((code) => `<code>${escapeHtml(code)}</code>`).join(' ')) : ''}
+          </dl>
+        </article>`;
+    }).join('');
+    return `
+      <section class="pipeline-drawer-section">
+        <h3><i class="fas fa-magnifying-glass-chart" aria-hidden="true"></i> Operator attempt dossier <span class="pipeline-drawer-count">${attempts.length}</span></h3>
+        <p class="pipeline-drawer-privacy">Prompts, inference transcripts, tool payloads, raw verifier output, secrets, hostnames, and absolute paths are intentionally not retained here.</p>
+        <dl class="pipeline-drawer-meta">
+          ${metaRow('Policy', escapeHtml(automation.policyRef || '--'))}
+          ${metaRow('Profile', escapeHtml(automation.executionProfile || '--'))}
+          ${metaRow('Editable scope', repositoryPathList(automation.scope))}
+          ${metaRow('Authority sources', repositoryPathList(automation.sourceFiles))}
+        </dl>
+        ${cards || '<div class="pipeline-empty">No coding attempt recorded yet.</div>'}
+      </section>`;
+  }
+
   function renderDrawer(task) {
     const { title, id, body } = drawerEls();
     if (title) title.textContent = task.title || 'Untitled task';
@@ -689,11 +1164,13 @@
     const feedback = Array.isArray(task.feedback) ? task.feedback.slice().reverse() : [];
     const deps = Array.isArray(task.dependsOn) ? task.dependsOn : [];
     const reviewer = readStorage(STORAGE_REVIEWER) || '';
+    const review = task.status === 'review' ? reviewContext(task) : null;
 
     const actions = [];
     if (task.status === 'review') {
       actions.push(`
         <form class="pipeline-drawer-action" data-drawer-action="confirm-done">
+          <p><strong>${escapeHtml(review.label)}</strong><br>${escapeHtml(review.detail)} ${escapeHtml(review.action)}</p>
           <label>
             <span>Confirm done as (must differ from worker <code>${escapeHtml(task.assignee || 'unassigned')}</code>)</span>
             <input type="text" name="by" required maxlength="80" placeholder="your identity, e.g. yanik" value="${escapeHtml(reviewer)}">
@@ -715,7 +1192,7 @@
         <form class="pipeline-drawer-action" data-drawer-action="add-note">
           <label>
             <span>Add a note to the audit trail</span>
-            <textarea name="text" rows="2" maxlength="5000" required placeholder="What should workers and overseers know?"></textarea>
+            <textarea name="text" rows="2" maxlength="5000" required placeholder="What should workers and human reviewers know?"></textarea>
           </label>
           <button type="submit" class="pipeline-btn compact"><i class="fas fa-pen"></i><span>Add note</span></button>
         </form>
@@ -742,6 +1219,7 @@
           <h3><i class="fas fa-file-lines" aria-hidden="true"></i> Specification</h3>
           <pre class="pipeline-drawer-spec">${escapeHtml(task.spec)}</pre>
         </section>` : ''}
+      ${renderAttemptDossier(task)}
       <section class="pipeline-drawer-section">
         <h3><i class="fas fa-timeline" aria-hidden="true"></i> Audit trail <span class="pipeline-drawer-count">${feedback.length}</span></h3>
         ${feedback.length ? `
@@ -848,11 +1326,14 @@
     renderOpenWork();
     renderAttention();
     renderRecentlyDone();
+    renderTeamPerformance();
+    renderDispatchControl();
   }
 
   async function loadTasks(options) {
     const silent = options && options.silent;
     if (!silent) setLoading(true);
+    const performanceLoad = loadTeamPerformance();
     try {
       const payload = await fetchJson('/api/pipeline/tasks?limit=1000&view=summary&includeDone=true');
       const normalized = normalizePayload(payload);
@@ -860,9 +1341,15 @@
       state.summary = normalized.summary;
       state.evidence = normalized.evidence;
       renderAll();
+      if (state.deepLinkedTask) {
+        const pipelineId = state.deepLinkedTask;
+        state.deepLinkedTask = null;
+        openDrawer(pipelineId, null);
+      }
     } catch (error) {
       renderError(error);
     } finally {
+      await performanceLoad;
       if (!silent) setLoading(false);
     }
   }
@@ -908,6 +1395,28 @@
         setAutoRefresh(autoBtn.getAttribute('aria-pressed') !== 'true');
       });
     }
+
+    const teamWindow = $('pipelineTeamWindow');
+    if (teamWindow) {
+      teamWindow.value = state.performanceWindow;
+      teamWindow.addEventListener('change', () => {
+        state.performanceWindow = teamWindow.value;
+        loadTeamPerformance();
+      });
+    }
+
+    const launchSelect = $('pipelineTeamLaunchTask');
+    const launchConfirm = $('pipelineTeamLaunchConfirm');
+    const launchForm = $('pipelineTeamLaunchForm');
+    if (launchSelect) launchSelect.addEventListener('change', () => {
+      if (launchConfirm) launchConfirm.checked = false;
+      renderDispatchControl();
+    });
+    if (launchConfirm) launchConfirm.addEventListener('change', renderDispatchControl);
+    if (launchForm) launchForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      launchOneTask();
+    });
 
     document.querySelectorAll('.pipeline-metric[data-status-filter]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -987,6 +1496,7 @@
     });
 
     if (readStorage(STORAGE_AUTO) === '1') setAutoRefresh(true);
+    loadDispatchControlStatus();
     loadTasks();
   });
 })();

@@ -4,6 +4,7 @@ const {
   buildEffectivenessSnapshot,
   derivePipelineOutcomes,
   normalizeOutcomeInput,
+  normalizeExactWindow,
   normalizeWindow,
   pipelineRuntime,
 } = require('../../src/services/llmEffectivenessService');
@@ -32,6 +33,40 @@ function outcome(overrides = {}) {
 const window = normalizeWindow('7d', Date.parse('2026-07-17T13:00:00Z'));
 
 describe('llmEffectivenessService', () => {
+  test('normalizes explicit offset windows as bounded half-open intervals', () => {
+    const exact = normalizeExactWindow(
+      '2026-11-01T00:00:00-04:00',
+      '2026-11-02T00:00:00-05:00',
+      Date.parse('2026-11-03T00:00:00Z')
+    );
+    expect(exact).toEqual({
+      key: 'exact',
+      from: new Date('2026-11-01T04:00:00.000Z'),
+      to: new Date('2026-11-02T05:00:00.000Z'),
+      endExclusive: true,
+    });
+    expect(() => normalizeExactWindow('2026-08-30T00:00:00', '2026-08-31T00:00:00Z'))
+      .toThrow(/explicit offset/);
+    expect(() => normalizeExactWindow('2026-02-30T00:00:00Z', '2026-03-01T00:00:00Z'))
+      .toThrow(/explicit offset/);
+    expect(() => normalizeExactWindow('2026-08-30T24:00:00Z', '2026-08-31T00:00:00Z'))
+      .toThrow(/explicit offset/);
+    expect(() => normalizeExactWindow('2026-08-30T00:00:00Z', null))
+      .toThrow(/supplied together/);
+    expect(() => normalizeExactWindow('2026-08-31T00:00:00Z', '2026-08-30T00:00:00Z'))
+      .toThrow(/increasing/);
+    expect(() => normalizeExactWindow(
+      '2026-08-01T00:00:00Z',
+      '2026-09-02T00:00:00Z',
+      Date.parse('2026-09-03T00:00:00Z')
+    )).toThrow(/no longer than 31 days/);
+    expect(() => normalizeExactWindow(
+      '2026-08-30T00:00:00Z',
+      '2026-09-02T00:00:00Z',
+      Date.parse('2026-09-01T00:00:00Z')
+    )).toThrow(/future/);
+  });
+
   test('uses source-owned reported usage instead of adding matching AgentX logs', () => {
     const snapshot = buildEffectivenessSnapshot({
       window,
@@ -76,6 +111,7 @@ describe('llmEffectivenessService', () => {
     });
 
     expect(snapshot.summary.attributionCoveragePct).toBe(50);
+    expect(snapshot.summary.attributedOutcomes).toBe(1);
     expect(snapshot.byRuntime[0].tokens).toBe(60);
     expect(snapshot.waste.unattributedTokens).toBe(0);
   });
@@ -95,6 +131,37 @@ describe('llmEffectivenessService', () => {
     expect(snapshot.summary.productiveOutcomes).toBe(1);
     expect(snapshot.summary.firstPassSuccessRatePct).toBeNull();
     expect(snapshot.coverage.pipelineDerivedOutcomes).toBe(1);
+  });
+
+  test('joins OpenClaw pipeline work to server-attested external-runtime inference', () => {
+    const tasks = [{
+      pipelineId: '0404',
+      status: 'done',
+      assignee: 'clawdx-coder',
+      updatedAt: new Date('2026-07-17T12:00:00Z'),
+    }];
+    const snapshot = buildEffectivenessSnapshot({
+      window,
+      pipelineTasks: tasks,
+      inferenceLogs: [{
+        _id: 'log-openclaw',
+        runtime: 'external',
+        callerDetail: 'openclaw-pipeline-runtime-bridge',
+        workItemId: '0404',
+        correlationId: 'pipeline:0404:lease-1',
+        tokensIn: 90,
+        tokensOut: 10,
+        durationMs: 1_500,
+        status: 'success',
+      }],
+    });
+
+    expect(snapshot.summary.reportedOutcomes).toBe(1);
+    expect(snapshot.summary.attributionCoveragePct).toBe(100);
+    expect(snapshot.waste.unattributedTokens).toBe(0);
+    expect(snapshot.byRuntime).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runtime: 'external', tokens: 100 }),
+    ]));
   });
 
   test('includes review and blocked pipeline work without pretending it is verified success', () => {
@@ -166,6 +233,8 @@ describe('llmEffectivenessService', () => {
     expect(pipelineRuntime('codex')).toBe('codex');
     expect(pipelineRuntime('claude-code')).toBe('claude-code');
     expect(pipelineRuntime('terminal-ops')).toBe('agentx');
+    expect(pipelineRuntime('clawdx-coder')).toBe('external');
+    expect(pipelineRuntime('openclaw-worker')).toBe('external');
     expect(pipelineRuntime('external-worker')).toBe('other');
     expect(pipelineRuntime('Example User')).toBe('other');
   });

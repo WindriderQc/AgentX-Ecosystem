@@ -9,14 +9,28 @@ const mongoose = require('mongoose');
 const path = require('path');
 const fs = require('fs');
 const BenchmarkResult = require('../../../models/BenchmarkResult');
+const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const JudgeGroundTruth = require('../../../models/JudgeGroundTruth');
 const { scoreResponse } = require('../qualityScorer');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
+const {
+    verifyStoredAttestedHumanGroundTruth
+} = require('./humanGroundTruthImport');
 
 // 0129 calibration loop — sources that count as "human-derived ground truth"
 // when unioning with the static config goldset for calibration.
 const HUMAN_SOURCE_TAG = 'courthouse-review';
 const SPRINT_SOURCE_PREFIX = 'human-validation-sprint-';
+const QUALIFIED_HUMAN_REVIEW_LANES = Object.freeze([
+    Object.freeze({
+        provenance_class: 'independent_human_score',
+        review_protocol: { $in: ['blind_independent', 'blind_double_review'] }
+    }),
+    Object.freeze({
+        provenance_class: 'adjudicated_human_score',
+        review_protocol: 'adjudicated'
+    })
+]);
 
 const SCORE_BUCKETS = [
     { label: '0-2', min: 0, max: 2 },
@@ -46,6 +60,8 @@ async function buildStratifiedSample(batchId, perCell = 3) {
                     $match: {
                         batch_id: batchOid,
                         prompt_category: category,
+                        needs_review: { $ne: true },
+                        excluded_from_leaderboard: { $ne: true },
                         quality_score: { $gte: bucket.min, $lte: bucket.max },
                         scoring_method: { $nin: ['empty_response', 'skipped', 'llm_failed', 'pending'] }
                     }
@@ -197,6 +213,22 @@ async function scoreAndPromote(samples, referenceJudgeConfig, options = {}) {
 async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) {
     const { perCell = 3, dryRun = false } = options;
 
+    const batch = await BenchmarkBatch.findById(batchId)
+        .select('trust_campaign_spec_id +trust_evidence_context')
+        .lean();
+    if (!batch) {
+        const error = new Error('Batch not found');
+        error.statusCode = 404;
+        throw error;
+    }
+    if (batch.trust_evidence_context
+        || /^[a-f0-9]{64}$/i.test(String(batch.trust_campaign_spec_id || ''))) {
+        const error = new Error('Strict Benchmark Trust evidence cannot be consumed by legacy retro-calibration');
+        error.code = 'BENCHMARK_TRUST_RETRO_CALIBRATION_FORBIDDEN';
+        error.statusCode = 409;
+        throw error;
+    }
+
     const samples = await buildStratifiedSample(batchId, perCell);
 
     if (samples.length === 0) {
@@ -223,45 +255,71 @@ async function runRetroCalibration(batchId, referenceJudgeConfig, options = {}) 
  * @returns {Object} Coverage matrix by category x difficulty
  */
 async function getCoverageStats() {
-    const coverage = await JudgeGroundTruth.aggregate([
-        { $match: { active: true } },
-        {
-            $group: {
-                _id: { category: '$category', difficulty: '$difficulty' },
-                count: { $sum: 1 },
-                retro_count: {
-                    $sum: { $cond: [{ $eq: ['$created_by', 'retro-calibration'] }, 1, 0] }
-                },
-                seed_count: {
-                    $sum: { $cond: [{ $eq: ['$created_by', 'seed-script'] }, 1, 0] }
+    const [coverage, qualifiedHumanRows] = await Promise.all([
+        JudgeGroundTruth.aggregate([
+            { $match: { active: true } },
+            {
+                $group: {
+                    _id: { category: '$category', difficulty: '$difficulty' },
+                    count: { $sum: 1 },
+                    retro_count: {
+                        $sum: { $cond: [{ $eq: ['$created_by', 'retro-calibration'] }, 1, 0] }
+                    },
+                    seed_count: {
+                        $sum: { $cond: [{ $eq: ['$created_by', 'seed-script'] }, 1, 0] }
+                    }
                 }
-            }
-        },
-        { $sort: { '_id.category': 1, '_id.difficulty': 1 } }
+            },
+            { $sort: { '_id.category': 1, '_id.difficulty': 1 } }
+        ]),
+        // Coverage is an operational trust signal, so its qualified counts
+        // must traverse the same current signature/revocation verification as
+        // judge calibration and drift decisions. The aggregate above remains
+        // intentionally raw so all_count/retro_count stay observable.
+        loadQualifiedHumanGroundTruth({ includePromptAuthority: true })
     ]);
+
+    const qualifiedPromptsByCell = new Map();
+    const cellByPromptFingerprint = new Map();
+    for (const row of qualifiedHumanRows) {
+        const key = `${row.category}\u0000${Number(row.difficulty)}`;
+        const promptFingerprint = row.qualified_prompt_fingerprint;
+        const priorCell = cellByPromptFingerprint.get(promptFingerprint);
+        if (priorCell && priorCell !== key) {
+            const error = new Error('one qualified prompt authority is assigned to multiple coverage cells');
+            error.code = 'HUMAN_EVIDENCE_PROMPT_CELL_CONFLICT';
+            error.statusCode = 409;
+            throw error;
+        }
+        cellByPromptFingerprint.set(promptFingerprint, key);
+        if (!qualifiedPromptsByCell.has(key)) qualifiedPromptsByCell.set(key, new Set());
+        qualifiedPromptsByCell.get(key).add(promptFingerprint);
+    }
 
     const allByCategory = {};
     const humanByCategory = {};
     let humanEntries = 0;
+    let retroEntries = 0;
     let totalAllEntries = 0;
     const targetPerCell = 5;
     let cellsMeetingTarget = 0;
     let cellsMeetingTargetWithRetro = 0;
     const totalCells = CATEGORIES.length * 5; // 7 categories x 5 difficulty levels
 
-    // Retro-calibration rows are LLM-reference re-scores, not human labels.
-    // Counting them toward the calibration target would let the judge be
-    // validated against itself, so `meets_target` and `coverage_percent` are
-    // computed from human-derived rows only; the *_with_retro fields keep the
-    // combined view visible without conflating the two.
+    // Only provenance/protocol pairs accepted by the qualified-human loader
+    // count toward judge qualification. Judge-visible endorsements, legacy
+    // rows and retro-calibration re-scores remain visible in all_count but
+    // cannot inflate meets_target or coverage_percent.
     for (const row of coverage) {
         const cat = row._id.category;
-        const humanCount = row.count - row.retro_count;
+        const key = `${cat}\u0000${Number(row._id.difficulty)}`;
+        const humanCount = qualifiedPromptsByCell.get(key)?.size || 0;
         if (!allByCategory[cat]) allByCategory[cat] = 0;
         if (!humanByCategory[cat]) humanByCategory[cat] = 0;
         allByCategory[cat] += row.count;
         humanByCategory[cat] += humanCount;
         humanEntries += humanCount;
+        retroEntries += Number(row.retro_count) || 0;
         totalAllEntries += row.count;
         if (humanCount >= targetPerCell) cellsMeetingTarget++;
         if (row.count >= targetPerCell) cellsMeetingTargetWithRetro++;
@@ -269,7 +327,8 @@ async function getCoverageStats() {
 
     return {
         cells: coverage.map(r => {
-            const humanCount = r.count - r.retro_count;
+            const key = `${r._id.category}\u0000${Number(r._id.difficulty)}`;
+            const humanCount = qualifiedPromptsByCell.get(key)?.size || 0;
             return {
                 category: r._id.category,
                 difficulty: r._id.difficulty,
@@ -279,6 +338,7 @@ async function getCoverageStats() {
                 all_count: r.count,
                 human: humanCount,
                 retro: r.retro_count,
+                unqualified_or_other: r.count - humanCount - r.retro_count,
                 seed: r.seed_count,
                 meets_target: humanCount >= targetPerCell,
                 meets_target_with_retro: r.count >= targetPerCell
@@ -290,7 +350,8 @@ async function getCoverageStats() {
         total_entries: humanEntries,
         total_all_entries: totalAllEntries,
         human_entries: humanEntries,
-        retro_entries: totalAllEntries - humanEntries,
+        retro_entries: retroEntries,
+        unqualified_or_other_entries: totalAllEntries - humanEntries - retroEntries,
         cells_meeting_target: cellsMeetingTarget,
         cells_meeting_target_with_retro: cellsMeetingTargetWithRetro,
         total_cells: totalCells,
@@ -364,6 +425,73 @@ async function loadHumanReviewGroundTruth(options = {}) {
 }
 
 /**
+ * Load only entries whose provenance contract proves that the score was
+ * authored independently of the production judge or was adjudicated from
+ * independent reviews. When an exact judge identity is supplied, MongoDB also
+ * excludes every unbound legacy row instead of mixing judge/runtime evidence.
+ */
+async function loadQualifiedHumanGroundTruth(options = {}) {
+    const query = {
+        active: true,
+        human_attestation_fingerprint: { $type: 'string' },
+        human_attestation: { $ne: null },
+        $or: QUALIFIED_HUMAN_REVIEW_LANES.map(lane => ({
+            ...lane,
+            review_protocol: typeof lane.review_protocol === 'object'
+                ? { $in: [...lane.review_protocol.$in] }
+                : lane.review_protocol
+        }))
+    };
+    if (options.category) query.category = options.category;
+    if (options.judge_identity_fingerprint) {
+        query.judge_identity_fingerprint = options.judge_identity_fingerprint;
+    }
+
+    const rows = await JudgeGroundTruth.find(query)
+        .select('+human_attestation')
+        .sort({ reviewed_at: -1, createdAt: -1 })
+        .lean();
+    const verified = [];
+    const verifiedSourceResultIds = new Set();
+    for (const row of rows) {
+        try {
+            const attestation = await verifyStoredAttestedHumanGroundTruth(row);
+            const sourceResultId = String(row.source_result_id);
+            if (verifiedSourceResultIds.has(sourceResultId)) {
+                const error = new Error('multiple current human attestations bind the same source result');
+                error.code = 'HUMAN_EVIDENCE_DUPLICATE_SOURCE';
+                error.statusCode = 409;
+                throw error;
+            }
+            verifiedSourceResultIds.add(sourceResultId);
+            const { human_attestation: _privateAttestation, ...publicRow } = row;
+            if (options.includePromptAuthority === true) {
+                const promptFingerprint = attestation?.source?.promptFingerprint;
+                if (typeof promptFingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(promptFingerprint)) {
+                    const error = new Error('qualified human evidence lacks a verified prompt authority fingerprint');
+                    error.code = 'HUMAN_EVIDENCE_PROMPT_AUTHORITY_MISSING';
+                    error.statusCode = 409;
+                    throw error;
+                }
+                publicRow.qualified_prompt_fingerprint = promptFingerprint;
+            }
+            verified.push(publicRow);
+        } catch (error) {
+            if (['HUMAN_EVIDENCE_ATTESTATION_EXPIRED', 'HUMAN_EVIDENCE_ATTESTATION_REVOKED']
+                .includes(error.code)) {
+                logger.warn('Excluded no-longer-qualified human evidence', {
+                    code: error.code,
+                    attestationFingerprint: row.human_attestation_fingerprint
+                });
+                continue;
+            }
+            throw error;
+        }
+    }
+    return options.limit ? verified.slice(0, options.limit) : verified;
+}
+
+/**
  * 0129 — Union the config goldset and human-derived ground truth. Dedupe by
  * `name` (stable identifier across both sources). If a config goldset entry
  * shares a name with a human-review entry, the human-review wins (more recent
@@ -415,9 +543,11 @@ module.exports = {
     getCoverageStats,
     loadConfigGoldset,
     loadHumanReviewGroundTruth,
+    loadQualifiedHumanGroundTruth,
     loadUnionedGoldset,
     HUMAN_SOURCE_TAG,
     SPRINT_SOURCE_PREFIX,
+    QUALIFIED_HUMAN_REVIEW_LANES,
     SCORE_BUCKETS,
     CATEGORIES
 };

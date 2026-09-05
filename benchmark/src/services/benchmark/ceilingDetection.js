@@ -71,6 +71,7 @@ async function getCategoryHeatmap(matchQuery = { success: true }) {
                 ...matchQuery,
                 quality_score: { $ne: null },
                 infra_error: { $ne: true },
+                needs_review: { $ne: true },
                 excluded_from_leaderboard: { $ne: true }
             }
         },
@@ -137,6 +138,7 @@ async function getDimensionBreakdown(matchQuery = { success: true }) {
                 quality_breakdown: { $ne: null },
                 // Defense in depth per scoring-contract-v1 §2.7 (0117): exclude infra-failed rows.
                 infra_error: { $ne: true },
+                needs_review: { $ne: true },
                 excluded_from_leaderboard: { $ne: true }
             }
         },
@@ -193,6 +195,7 @@ async function calculateEliteScores(matchQuery = { success: true }) {
                 prompt_level: { $gte: 4 },
                 // Defense in depth per scoring-contract-v1 §2.7 (0117): exclude infra-failed rows.
                 infra_error: { $ne: true },
+                needs_review: { $ne: true },
                 excluded_from_leaderboard: { $ne: true }
             }
         },

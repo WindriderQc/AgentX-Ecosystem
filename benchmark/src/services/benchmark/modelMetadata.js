@@ -42,6 +42,9 @@ async function getRecommendedCategoriesByModel(modelNames = [], matchQuery = {})
     const aggregateMatch = {
         ...(matchQuery || {}),
         success: true,
+        infra_error: { $ne: true },
+        needs_review: { $ne: true },
+        excluded_from_leaderboard: { $ne: true },
         quality_score: { $ne: null },
         model: { $in: normalizedNames }
     };
@@ -135,6 +138,7 @@ function buildHostPerformanceSnapshot(snapshot) {
         promptEvalTokensPerSec: snapshot.promptEvalTokensPerSec ?? null,
         latencyMs: snapshot.latencyMs ?? null,
         timeToFirstTokenMs: snapshot.timeToFirstTokenMs ?? null,
+        ttftMeasurement: snapshot.ttftMeasurement || undefined,
         vramUsedMiB: snapshot.vramUsedMiB ?? null,
         vramTotalMiB: snapshot.vramTotalMiB ?? null,
         numCtx: snapshot.numCtx ?? null,

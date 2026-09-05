@@ -7,8 +7,9 @@
  * Priority:
  *   1. HostPreference pinned context — operator-selected resident runtime
  *   2. Modelfile `PARAMETER num_ctx <N>` — model build default
- *   3. ModelContextProfile.verifiedMaxContext — measured exact-artifact window
- *   4. model_info `<arch>.context_length` — the model's declared capacity
+ *   3. ModelContextProfile workload recommendation — measured exact-artifact
+ *      runtime policy (interactive by default; document when requested)
+ *   4. Verified/model-declared maxima — capacity inspection only
  *   5. Unresolved (no context is invented)
  *
  * The returned `source` tells the chat UI where the number came from, so we
@@ -23,6 +24,7 @@ const { resolveArtifactIdentity } = require('./artifactIdentityService');
 const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v3';
 const cache = new Map(); // key `${host}::${model}` → { value, expiresAt }
 let _fetch = null;
 
@@ -33,8 +35,8 @@ async function getFetch() {
 
 function _setFetch(fn) { _fetch = fn; }
 
-function cacheKey(host, model, artifact = {}) {
-  return `${host || ''}::${model || ''}::${artifact.digest || ''}::${artifact.runtimeFingerprint || ''}`;
+function cacheKey(host, model, artifact = {}, workload = 'interactive') {
+  return `${host || ''}::${model || ''}::${artifact.digest || ''}::${artifact.runtimeFingerprint || ''}::${workload}`;
 }
 
 function parseNumCtxFromParameters(parametersStr) {
@@ -97,7 +99,7 @@ async function fromHostPreferencePin(model, hostUrl) {
   }
 }
 
-async function fromContextProfile(model, hostUrl, artifact, deps = {}) {
+async function fromContextProfile(model, hostUrl, artifact, deps = {}, workload = 'interactive') {
   if (!hostUrl || artifact?.identityQualified !== true || !artifact.digest || !artifact.runtimeFingerprint) {
     return null;
   }
@@ -111,7 +113,7 @@ async function fromContextProfile(model, hostUrl, artifact, deps = {}) {
         runtimeFingerprint: artifact.runtimeFingerprint,
         stale: { $ne: true }
       })
-        .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext verifiedMaxContext verifiedInputTokens lastValidatedAt source')
+        .select('modelName hostUrl artifactDigest runtimeFingerprint recommendedContext recommendedInteractiveContext recommendedDocumentContext recommendationStatus recommendationEvidenceVersion revalidationRequired maxVerifiedContext verifiedMaxContext historicalMaxVerifiedContext verifiedInputTokens lastValidatedAt source stale')
         .lean();
     } else {
       const client = deps.benchmarkClient || getBenchmarkServiceClient();
@@ -121,12 +123,29 @@ async function fromContextProfile(model, hostUrl, artifact, deps = {}) {
         runtimeFingerprint: artifact.runtimeFingerprint
       });
     }
-    const verified = Number(profile?.verifiedMaxContext || profile?.recommendedContext);
+    const verified = Number(profile?.maxVerifiedContext || profile?.verifiedMaxContext);
     if (!Number.isFinite(verified) || verified <= 0) return null;
+    const recommendationsVerified = profile?.recommendationStatus === 'verified'
+      && profile?.recommendationEvidenceVersion === RECOMMENDATION_EVIDENCE_VERSION
+      && profile?.revalidationRequired !== true
+      && profile?.stale !== true;
+    const interactive = recommendationsVerified ? Number(profile?.recommendedInteractiveContext) : null;
+    const document = recommendationsVerified ? Number(profile?.recommendedDocumentContext) : null;
+    const selected = workload === 'capacity'
+      ? verified
+      : workload === 'document'
+        ? document
+        : interactive;
     return {
-      num_ctx: Math.round(verified),
-      source: 'model_context_profile',
+      num_ctx: Number.isFinite(selected) && selected > 0 ? Math.round(selected) : null,
+      source: `model_context_profile_${workload}`,
       verifiedMaxContext: Math.round(verified),
+      maxVerifiedContext: Math.round(verified),
+      recommendedInteractiveContext: Number.isFinite(interactive) && interactive > 0 ? Math.round(interactive) : null,
+      recommendedDocumentContext: Number.isFinite(document) && document > 0 ? Math.round(document) : null,
+      recommendationStatus: recommendationsVerified ? 'verified' : 'unknown',
+      revalidationRequired: !recommendationsVerified,
+      historicalMaxVerifiedContext: Number(profile?.historicalMaxVerifiedContext) || Math.round(verified),
       verifiedInputTokens: profile.verifiedInputTokens || null,
       profiledAt: profile.lastValidatedAt || null,
       matchedName: profile.modelName || null
@@ -149,7 +168,10 @@ async function getContextInfo(model, hostUrlRaw, options = {}) {
   const artifact = options.artifactIdentity || (hostUrl
     ? await resolveArtifactIdentity(model, hostUrl, options.deps || {})
     : null);
-  const key = cacheKey(hostUrl, model, artifact || {});
+  const workload = ['interactive', 'document', 'capacity'].includes(options.workload)
+    ? options.workload
+    : 'interactive';
+  const key = cacheKey(hostUrl, model, artifact || {}, workload);
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.value;
@@ -184,16 +206,16 @@ async function getContextInfo(model, hostUrlRaw, options = {}) {
 
   // A measured profile remains evidence even when an operator pin or the
   // resident Modelfile determines the active window.
-  const profile = await fromContextProfile(model, hostUrl, artifact, options.deps || {});
+  const profile = await fromContextProfile(model, hostUrl, artifact, options.deps || {}, workload);
   if (profile) {
     profileMeta = profile;
-    if (!num_ctx) {
+    if (!num_ctx && Number.isFinite(profile.num_ctx) && profile.num_ctx > 0) {
       num_ctx = profile.num_ctx;
       source = profile.source;
     }
   }
 
-  if (!num_ctx && maxContextLength) {
+  if (!num_ctx && maxContextLength && workload === 'capacity') {
     num_ctx = maxContextLength;
     source = 'model_capacity';
   }
@@ -203,11 +225,17 @@ async function getContextInfo(model, hostUrlRaw, options = {}) {
     host: hostUrl,
     num_ctx,
     source,
+    workload,
     artifactDigest: artifact?.digest || null,
     runtimeFingerprint: artifact?.runtimeFingerprint || null,
     ...(pinMeta?.pinnedModel ? { pinnedModel: pinMeta.pinnedModel } : {}),
     ...(pinMeta?.hostDisplayName ? { hostDisplayName: pinMeta.hostDisplayName } : {}),
     ...(profileMeta?.verifiedMaxContext ? { verifiedMaxContext: profileMeta.verifiedMaxContext } : {}),
+    ...(profileMeta?.maxVerifiedContext ? { maxVerifiedContext: profileMeta.maxVerifiedContext } : {}),
+    ...(profileMeta?.recommendedInteractiveContext ? { recommendedInteractiveContext: profileMeta.recommendedInteractiveContext } : {}),
+    ...(profileMeta?.recommendedDocumentContext ? { recommendedDocumentContext: profileMeta.recommendedDocumentContext } : {}),
+    ...(profileMeta?.recommendationStatus ? { recommendationStatus: profileMeta.recommendationStatus } : {}),
+    ...(profileMeta?.revalidationRequired !== undefined ? { revalidationRequired: profileMeta.revalidationRequired } : {}),
     ...(profileMeta?.verifiedInputTokens ? { verifiedInputTokens: profileMeta.verifiedInputTokens } : {}),
     ...(profileMeta?.profiledAt ? { profiledAt: profileMeta.profiledAt } : {}),
     ...(profileMeta?.matchedName ? { matchedName: profileMeta.matchedName } : {}),

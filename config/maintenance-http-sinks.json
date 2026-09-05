@@ -30,6 +30,18 @@
   },
   "sinks": [
     {
+      "id": "benchmark.maintenance.paired-thinking.product-api",
+      "source": "benchmark/scripts/paired-thinking-campaign.js",
+      "line": 143,
+      "column": 26,
+      "constructor": "fetchImpl",
+      "authoritySource": "operator-supplied",
+      "deadlineBound": true,
+      "responseBound": true,
+      "redirectMode": "manual",
+      "purpose": "Launch, monitor, and collect bounded evidence from an operator-selected Benchmark API during an explicitly authorized paired thinking campaign."
+    },
+    {
       "id": "benchmark.maintenance.repo-coding.core-claim",
       "source": "benchmark/scripts/repo-coding-qualification.js",
       "line": 266,
@@ -44,7 +56,7 @@
     {
       "id": "benchmark.maintenance.toolcall.ollama-chat",
       "source": "benchmark/scripts/toolcall-qualification.js",
-      "line": 72,
+      "line": 93,
       "column": 23,
       "constructor": "fetch",
       "authoritySource": "operator-supplied",

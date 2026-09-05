@@ -9,6 +9,83 @@ const BenchmarkResult = require('../../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../../models/BenchmarkBatch');
 const { JUDGE_CONFIG } = require('../qualityScorer');
 const { deriveTerminalBatchOutcome } = require('./batchHelpers');
+const { getProtectedBatches } = require('./dataRetention');
+const { withBenchmarkTrustEvidenceLock } = require('./benchmarkTrustEvidenceLock');
+
+const TRUST_PUBLIC_BATCH_FIELDS = Object.freeze([
+    '_id',
+    'trust_batch_id',
+    'trust_campaign_spec_id',
+    'status',
+    'phase',
+    'campaign_kind',
+    'total_tests',
+    'completed',
+    'failed',
+    'progress',
+    'judge_status',
+    'judge_total',
+    'judge_completed',
+    'judge_failed',
+    'anomaly_count',
+    'needs_review_count',
+    'started_at',
+    'completed_at',
+    'created_at',
+    'updated_at',
+    'last_activity_at'
+]);
+
+function plainObject(value) {
+    if (value && typeof value.toObject === 'function') {
+        return value.toObject({ depopulate: true, flattenMaps: true, virtuals: false });
+    }
+    return value && typeof value === 'object' ? { ...value } : value;
+}
+
+function isTrustCampaignBatch(batch) {
+    return Boolean(batch?.trust_evidence_context)
+        || (
+            typeof batch?.trust_campaign_spec_id === 'string'
+            && /^[0-9a-f]{64}$/i.test(batch.trust_campaign_spec_id)
+        );
+}
+
+function projectBenchmarkBatchForPublicRead(value) {
+    const batch = plainObject(value);
+    if (!isTrustCampaignBatch(batch)) return batch;
+
+    const projected = {};
+    for (const field of TRUST_PUBLIC_BATCH_FIELDS) {
+        if (batch[field] !== undefined) projected[field] = batch[field];
+    }
+    projected.current_test = batch.current_test
+        ? {
+            stage: batch.current_test.stage || null,
+            test_number: Number.isSafeInteger(batch.current_test.test_number)
+                ? batch.current_test.test_number
+                : null
+        }
+        : null;
+    projected.privacy_redacted = true;
+    return projected;
+}
+
+function projectBenchmarkTimelineEventForPublicRead(value, trustCampaign = false) {
+    const event = plainObject(value);
+    if (!trustCampaign) return event;
+    return {
+        _id: event._id,
+        timestamp: event.timestamp,
+        event: event.event,
+        duration_ms: event.duration_ms ?? null,
+        tokens_per_sec: event.tokens_per_sec ?? null,
+        time_to_first_token_ms: event.time_to_first_token_ms ?? null,
+        success: event.success ?? null,
+        has_error: Boolean(event.error),
+        privacy_redacted: true
+    };
+}
 
 /**
  * Compute percentile/summary stats from a raw array of numbers.
@@ -38,7 +115,11 @@ async function getBatches({ limit = 20, status = null, tag = null } = {}) {
     if (status) filter.status = status;
     if (tag) filter.tags = tag;
     const [batches, total] = await Promise.all([
-        BenchmarkBatch.find(filter).sort({ created_at: -1 }).limit(limit).lean(),
+        BenchmarkBatch.find(filter)
+            .select('+trust_evidence_context')
+            .sort({ created_at: -1 })
+            .limit(limit)
+            .lean(),
         BenchmarkBatch.countDocuments(filter)
     ]);
 
@@ -73,7 +154,7 @@ async function getBatches({ limit = 20, status = null, tag = null } = {}) {
         }
     }
 
-    return { batches, total };
+    return { batches: batches.map(projectBenchmarkBatchForPublicRead), total };
 }
 
 /**
@@ -91,14 +172,24 @@ async function getBatch(batchId, {
 
     // Use .lean() to bypass Mongoose document tracking and guarantee a fresh
     // plain-object read straight from MongoDB — prevents stale status bugs.
-    const batch = await BenchmarkBatch.findById(batchId).lean();
+    const batch = await BenchmarkBatch.findById(batchId)
+        .select('+trust_evidence_context')
+        .lean();
 
     if (!batch) {
         throw new Error('Batch not found');
     }
 
-    const includeTextPayload = includeHeavyPayload || includeFullText;
-    const resultSelect = includeHeavyPayload
+    const trustCampaign = isTrustCampaignBatch(batch);
+    const includeTextPayload = !trustCampaign && (includeHeavyPayload || includeFullText);
+    const resultSelect = trustCampaign
+        ? (
+            '-model -host -judge_host -judge_model -prompt_name -expected_answer '
+            + '-quality_explanation -judge_prompt -prompt -response -thinking '
+            + '-judge_raw_response -hardware_snapshot -execution_settings '
+            + '-execution_target -judge_target -warmup -judge_warmup'
+        )
+        : includeHeavyPayload
         ? null
         : (
             includeTextPayload
@@ -404,6 +495,33 @@ async function getBatch(batchId, {
     };
 
     const formattedResults = results.map((r) => {
+        if (trustCampaign) {
+            return {
+                id: r._id ? r._id.toString() : null,
+                candidate_id: r.trust_candidate_id || null,
+                prompt_id: r.trust_prompt_id || null,
+                repeat_index: Number.isSafeInteger(r.repeat_index) ? r.repeat_index : null,
+                repeat_total: Number.isSafeInteger(r.repeat_total) ? r.repeat_total : null,
+                latency: r.latency,
+                tokens_per_sec: r.tokens_per_sec,
+                quality_score: r.quality_score,
+                scoring_method: r.scoring_method || (r.success ? 'pending' : 'exec_failed'),
+                scoring_type: r.scoring_type,
+                scoring_time_ms: r.scoring_time_ms,
+                composite_score: r.composite_score,
+                normalized_scores: r.normalized_scores,
+                success: r.success,
+                has_error: Boolean(r.error),
+                timestamp: r.timestamp,
+                tokens: r.tokens,
+                needs_review: r.needs_review || false,
+                excluded_from_leaderboard: r.excluded_from_leaderboard || false,
+                truncation: r.truncation,
+                response_truncated: r.truncation?.response_truncated || false,
+                judge_response_truncated: r.truncation?.judge_truncated || false,
+                privacy_redacted: true
+            };
+        }
         const promptText = typeof r.prompt === 'string' ? r.prompt : '';
         const responseText = typeof r.response === 'string' ? r.response : '';
 
@@ -428,6 +546,8 @@ async function getBatch(batchId, {
             judge_model: inferredJudgeModel,
             scoring_method: inferredScoringMethod,
             scoring_type: r.scoring_type,
+            evaluation_authority: r.evaluation_authority || 'judge',
+            executable_fixture_id: r.executable_fixture_id || null,
             scoring_time_ms: r.scoring_time_ms,
             quick_pattern: r.quick_pattern,
             composite_score: r.composite_score,
@@ -550,7 +670,9 @@ async function getBatch(batchId, {
         ? '0%'
         : (((actualResultsCount - actualFailedCount) / actualResultsCount) * 100).toFixed(1) + '%';
 
-    const batchObject = { ...batch, judge_config: batchJudgeConfig };
+    const batchObject = trustCampaign
+        ? projectBenchmarkBatchForPublicRead(batch)
+        : { ...batch, judge_config: batchJudgeConfig };
     return {
         ...batchObject,
         completed: actualResultsCount,  // Override with actual count
@@ -566,14 +688,24 @@ async function getBatch(batchId, {
         judge_progress,
         judge_progress_effective,
         judge_stats: judgeStats,
-        pipeline_activity: pipelineActivity,
+        pipeline_activity: trustCampaign
+            ? {
+                executing: isExecuting ? { active: true, stage: currentTest.stage || null } : null,
+                judging: isJudging ? {
+                    pending: judgeStats.pending,
+                    completed: judgeCompletedCount,
+                    total: effectiveJudgeTotal,
+                    lag: judgeLag
+                } : null
+            }
+            : pipelineActivity,
         success_rate: computedSuccessRate,
         exec_success_rate: execSuccessRate,
         full_pass_rate: fullPassRate,
         full_passed: fullPassedCount,
         _countMismatch: hasCounterMismatch,  // Debug flag
         _statusMismatch: statusMismatch,
-        per_model_counters: perModelCounters,
+        ...(!trustCampaign ? { per_model_counters: perModelCounters } : {}),
         results_meta: {
             returned: returnedResultsCount,
             total: actualResultsCount,
@@ -588,11 +720,12 @@ async function getBatch(batchId, {
  * Get batch statistics grouped by tag
  */
 async function getBatchStatsByTag() {
-    const batches = await BenchmarkBatch.find({ tags: { $exists: true, $ne: [] } });
+    const batches = await BenchmarkBatch.find({ tags: { $exists: true, $ne: [] } })
+        .select('+trust_evidence_context');
 
     const statsByTag = {};
 
-    batches.forEach(batch => {
+    batches.filter(batch => !isTrustCampaignBatch(batch)).forEach(batch => {
         batch.tags.forEach(tag => {
             if (!statsByTag[tag]) {
                 statsByTag[tag] = {
@@ -650,23 +783,51 @@ async function getBatchStatsByTag() {
 /**
  * Clear all results (for testing)
  */
-async function clearResults() {
-    const count = await BenchmarkResult.countDocuments();
-    await BenchmarkResult.deleteMany({});
+async function clearResultsUnlocked() {
+    const candidateBatchIds = await BenchmarkResult.distinct('batch_id');
+    const protection = await getProtectedBatches(candidateBatchIds);
+    const protectedIds = [...protection.batchIds];
+    const filter = protectedIds.length > 0
+        ? { batch_id: { $nin: protectedIds } }
+        : {};
+    const count = await BenchmarkResult.countDocuments(filter);
+    await BenchmarkResult.deleteMany(filter);
 
-    logger.info('Benchmark results cleared', { count });
+    logger.info('Benchmark results cleared', {
+        count,
+        protectedBatches: protectedIds.length,
+        protectedSourceBatchIds: [...protection.sourceBatchIds].sort()
+    });
     return count;
+}
+
+async function clearResults() {
+    return withBenchmarkTrustEvidenceLock('clear-all-benchmark-results', clearResultsUnlocked);
 }
 
 /**
  * Clear failed results only (for cleanup)
  */
-async function clearFailedResults() {
-    const count = await BenchmarkResult.countDocuments({ success: false });
-    await BenchmarkResult.deleteMany({ success: false });
+async function clearFailedResultsUnlocked() {
+    const candidateBatchIds = await BenchmarkResult.distinct('batch_id', { success: false });
+    const protection = await getProtectedBatches(candidateBatchIds);
+    const protectedIds = [...protection.batchIds];
+    const filter = protectedIds.length > 0
+        ? { success: false, batch_id: { $nin: protectedIds } }
+        : { success: false };
+    const count = await BenchmarkResult.countDocuments(filter);
+    await BenchmarkResult.deleteMany(filter);
 
-    logger.info('Benchmark failed results cleared', { count });
+    logger.info('Benchmark failed results cleared', {
+        count,
+        protectedBatches: protectedIds.length,
+        protectedSourceBatchIds: [...protection.sourceBatchIds].sort()
+    });
     return count;
+}
+
+async function clearFailedResults() {
+    return withBenchmarkTrustEvidenceLock('clear-failed-benchmark-results', clearFailedResultsUnlocked);
 }
 
 /**
@@ -675,7 +836,7 @@ async function clearFailedResults() {
 async function getActiveStats() {
     const activeBatches = await BenchmarkBatch.find({
         status: { $in: ['running', 'judging'] }
-    });
+    }).select('+trust_evidence_context');
 
     const stats = {
         active_batches: activeBatches.length,
@@ -695,16 +856,17 @@ async function getActiveStats() {
         const progress = batch.completed / batch.total_tests;
         const eta = progress > 0 ? (elapsed / progress) - elapsed : null;
 
+        const trustCampaign = isTrustCampaignBatch(batch);
         stats.batches.push({
             batch_id: batch._id.toString(),
-            run_name: batch.run_name,
+            ...(trustCampaign ? { privacy_redacted: true } : { run_name: batch.run_name }),
             progress: batch.progress,
             status: batch.status,
             completed: batch.completed,
             total: batch.total_tests,
             elapsed_ms: elapsed,
             eta_ms: eta,
-            judge_progress: batch.judge_progress
+            ...(trustCampaign ? {} : { judge_progress: batch.judge_progress })
         });
     });
 
@@ -725,5 +887,8 @@ module.exports = {
     getBatchStatsByTag,
     clearResults,
     clearFailedResults,
-    getActiveStats
+    getActiveStats,
+    isTrustCampaignBatch,
+    projectBenchmarkBatchForPublicRead,
+    projectBenchmarkTimelineEventForPublicRead
 };

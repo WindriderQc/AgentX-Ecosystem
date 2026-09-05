@@ -267,6 +267,7 @@ describe('trusted extension loader', () => {
     ).map((entry) => entry.name).sort();
     expect(productExtensionFiles).toEqual([
       'trustedExtensionLoader.js',
+      'trustedRuntimeNavigation.js',
       'trustedRuntimeServices.js'
     ]);
   });

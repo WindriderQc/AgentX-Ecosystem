@@ -4,7 +4,11 @@ const express = require('express');
 const router = express.Router();
 const { buildSweepPlan } = require('../../src/services/benchmark/sweepCoordinator');
 const { runSweep } = require('../../src/services/benchmark/sweepRunner');
-const { buildLaneRecommendation, formatLedgerEntry } = require('../../src/services/benchmark/recommendationEngine');
+const {
+    buildLaneRecommendation,
+    formatRecommendation,
+    formatLedgerEntry
+} = require('../../src/services/benchmark/recommendationEngine');
 const { analyzeStaleness, formatStalenessLedgerEntry } = require('../../src/services/benchmark/stalenessCrawler');
 const { gatherCandidates, formatIntakeTable } = require('../../src/services/benchmark/intakeScanner');
 const hfClient = require('../../src/clients/hfClient');
@@ -117,7 +121,38 @@ router.post('/sweeps/run', async (req, res) => {
  */
 router.post('/sweeps/recommend', async (req, res) => {
     try {
-        const rec = buildLaneRecommendation(req.body || {});
+        const observation = buildLaneRecommendation(req.body || {});
+        const trustVerdict = {
+            contract: 'agentx.benchmark-consumer-trust/v1',
+            requestedScope: 'exploratory',
+            state: 'exploratory',
+            comparable: false,
+            qualified: false,
+            qualification: 'insufficient',
+            highConfidenceAllowed: false,
+            claim: 'top_exploratory_observation',
+            reasons: ['caller_supplied_metrics', 'qualified_receipt_unavailable'],
+            topObservation: {
+                model: observation.winner,
+                host: observation.host,
+                score: observation.winnerScore
+            },
+            qualifiedWinner: null,
+            cohort: null
+        };
+        const rec = {
+            ...observation,
+            recommendation: observation.recommendation === 'promote'
+                ? 'inconclusive'
+                : observation.recommendation,
+            reasons: observation.recommendation === 'promote'
+                ? [...observation.reasons, 'qualified Benchmark trust receipt and ratification are required before promotion']
+                : observation.reasons,
+            winnerMeaning: 'top_lane_score_observation',
+            qualifiedWinner: null,
+            trustVerdict
+        };
+        rec.summary = formatRecommendation(rec);
         const ledgerInput = req.body?.ledger;
         if (ledgerInput != null && (!ledgerInput || typeof ledgerInput !== 'object' || Array.isArray(ledgerInput))) {
             const ledgerError = new Error('ledger must be an object');

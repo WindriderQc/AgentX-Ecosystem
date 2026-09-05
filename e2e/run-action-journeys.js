@@ -125,6 +125,12 @@ async function observeProject(browser, targetUrl, project) {
         judgeConfig: { model: 'fixture-judge:7b' },
       });
     }
+    if (method === 'GET' && pathname === '/api/benchmark/targets') {
+      return json(route, 200, {
+        status: 'success',
+        data: { enabled: false, targets: [] },
+      });
+    }
     if (method === 'GET' && pathname === '/api/profiler/hosts') {
       return json(route, 200, { status: 'success', data: [{
         hostId: 'fixture-host',

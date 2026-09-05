@@ -57,7 +57,17 @@ const round = (n, d = 2) => {
 
 const rate = (part, total) => (total > 0 ? round((part / total) * 100) : 0);
 
-const LOG_FILTER_FIELDS = ['caller', 'callerDetail', 'taskType', 'model', 'host'];
+const LOG_FILTER_FIELDS = [
+  'caller',
+  'callerDetail',
+  'consumerContract',
+  'runtime',
+  'workItemId',
+  'correlationId',
+  'taskType',
+  'model',
+  'host'
+];
 const LOG_STATUSES = new Set(['success', 'error', 'timeout']);
 
 function cancellationEvidenceExpression() {
@@ -113,10 +123,19 @@ function buildLogQuery(query = {}) {
 
   const from = parseDateFilter(query.from, 'from');
   const to = parseDateFilter(query.to, 'to');
+  const endExclusive = query.endExclusive == null || query.endExclusive === ''
+    ? false
+    : String(query.endExclusive).toLowerCase() === 'true';
+  if (query.endExclusive != null && query.endExclusive !== ''
+      && !['true', 'false'].includes(String(query.endExclusive).toLowerCase())) {
+    const error = new Error('endExclusive must be true or false');
+    error.statusCode = 400;
+    throw error;
+  }
   if (from || to) {
     filter.timestamp = {};
     if (from) filter.timestamp.$gte = from;
-    if (to) filter.timestamp.$lte = to;
+    if (to) filter.timestamp[endExclusive ? '$lt' : '$lte'] = to;
   }
   if (from && to && from > to) {
     const error = new Error('from must be earlier than or equal to to');
@@ -155,11 +174,16 @@ router.get('/logs', async (req, res) => {
         status: req.query.status || null,
         caller: req.query.caller || null,
         callerDetail: req.query.callerDetail || null,
+        consumerContract: req.query.consumerContract || null,
+        runtime: req.query.runtime || null,
+        workItemId: req.query.workItemId || null,
+        correlationId: req.query.correlationId || null,
         taskType: req.query.taskType || null,
         model: req.query.model || null,
         host: req.query.host || null,
         from: req.query.from || null,
         to: req.query.to || null,
+        endExclusive: String(req.query.endExclusive || '').toLowerCase() === 'true',
       },
       items: projectInferenceLogs(items),
       pagination: {
@@ -252,7 +276,10 @@ router.get('/summary', async (req, res) => {
             { $limit: 40 }
           ],
           byCaller: [{ $group: { _id: '$caller', ...groupMetrics } }, { $sort: { calls: -1 } }],
-          byCallerDetail: [{ $group: { _id: { $ifNull: ['$callerDetail', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
+          // callerDetail is caller-controlled legacy text and may contain a
+          // token-shaped payload. Aggregate only the server-attested contract
+          // label at this public/operator boundary.
+          byConsumerContract: [{ $group: { _id: { $ifNull: ['$consumerContract', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
           byTaskType: [{ $group: { _id: { $ifNull: ['$taskType', 'unknown'] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
           byFallbackUsed: [{ $group: { _id: '$fallbackUsed', ...groupMetrics } }, { $sort: { calls: -1 } }],
           byDegraded: [{ $group: { _id: { $ifNull: ['$routeDecision.degraded', false] }, ...groupMetrics } }, { $sort: { calls: -1 } }],
@@ -406,7 +433,10 @@ router.get('/summary', async (req, res) => {
       },
       byModel,
       byCaller: (facet?.byCaller || []).map((r) => shape(r, 'caller')),
-      byCallerDetail: (facet?.byCallerDetail || []).map((r) => shape(r, 'callerDetail')),
+      byConsumerContract: (facet?.byConsumerContract || []).map((r) => {
+        const projected = projectInferenceLog({ consumerContract: r._id });
+        return shape({ ...r, _id: projected?.consumerContract || 'unknown' }, 'consumerContract');
+      }),
       byTaskType: (facet?.byTaskType || []).map((r) => shape(r, 'taskType')),
       byFallbackUsed: (facet?.byFallbackUsed || []).map((r) => shape(r, 'fallbackUsed')),
       byDegraded: (facet?.byDegraded || []).map((r) => shape(r, 'degraded')),

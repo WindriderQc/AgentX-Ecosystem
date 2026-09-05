@@ -193,24 +193,15 @@ async function trustedGeneralistScore(params) {
       'PLANNING_METRIC_SOURCE_UNAVAILABLE'
     );
   }
-  const row = (payload.leaderboard || []).find((entry) => entry.model === params.model);
-  if (!row || !Number.isFinite(Number(row.generalistScore))) {
-    throw new PlanningMetricSourceError(
-      `No trusted Benchmark score found for ${params.model}`,
-      'PLANNING_METRIC_SOURCE_EMPTY'
-    );
-  }
-  return {
-    value: Number(row.generalistScore),
-    metadata: {
-      model: params.model,
-      host: String(row.host || ''),
-      hostScope: params.hostScope,
-      totalTests: Number(row.totalTests) || 0,
-      fullScopeEligible: row.fullScopeEligible === true,
-      evidenceStatus: String(row.evidenceStatus || '')
-    }
-  };
+  // The current Benchmark consumer projection is Phase 0. It can prove a
+  // coherent observation cohort, but it cannot verify the separate judge
+  // qualification and human/AIOps ratification attestations. Caller-supplied
+  // `qualified` fields therefore remain non-authorizing until that verified
+  // bridge exists.
+  throw new PlanningMetricSourceError(
+    `No receipt-qualified Benchmark winner is available for ${params.model}`,
+    'PLANNING_METRIC_SOURCE_UNQUALIFIED'
+  );
 }
 
 async function execute(adapter, item, { now = new Date() } = {}) {

@@ -78,7 +78,10 @@
   async function checkReadiness() {
     setReadiness('loading', 'Checking your knowledge…', 'Confirming that a source is ready to search');
     try {
-      var response = await window.RAG.getStatus();
+      // Search readiness must exercise the same embedding dependency used by
+      // the query path. Cached observational status is intentionally not
+      // sufficient for enabling an interactive search.
+      var response = await window.RAG.refreshStatus();
       var data = response && response.data ? response.data : {};
       var documents = Number(data.documentCount || 0);
       var dependencies = data.dependencies || {};
@@ -205,7 +208,7 @@
     } catch (error) {
       els.error.hidden = false;
       els.error.textContent = 'Search failed: ' + (error.message || 'unknown error');
-      setSearchStatus('error', 'Search failed', error.message || 'The retrieval request could not complete.');
+      setSearchStatus('error', 'Search failed', 'Review the error above, then try again.');
     } finally {
       searching = false;
       els.btnSearch.innerHTML = '<i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Find evidence';

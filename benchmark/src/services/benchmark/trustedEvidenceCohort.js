@@ -193,6 +193,7 @@ function assessTrustedCohort(group, batch, {
     // this bounded inventory; direct unit callers may omit it.
     if (inventory) {
         if (Number(inventory.excludedRows || 0) > 0) reasons.push('excluded_rows');
+        if (Number(inventory.reviewRows || 0) > 0) reasons.push('review_pending_rows');
         if (Number(inventory.failedRows || 0) > 0) reasons.push('incomplete_rows');
         if (Number(inventory.unscoredRows || 0) > 0) reasons.push('unscored_rows');
         if (Number(inventory.totalRows || 0) !== plannedTests) {
@@ -354,6 +355,9 @@ async function resolveTrustedEvidenceCohort(matchQuery, options = {}) {
                         totalRows: { $sum: 1 },
                         excludedRows: {
                             $sum: { $cond: [{ $eq: ['$excluded_from_leaderboard', true] }, 1, 0] }
+                        },
+                        reviewRows: {
+                            $sum: { $cond: [{ $eq: ['$needs_review', true] }, 1, 0] }
                         },
                         failedRows: {
                             $sum: { $cond: [{ $or: [

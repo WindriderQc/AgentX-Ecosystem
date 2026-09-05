@@ -32,14 +32,17 @@ new tag-specific note. Release tags must also be valid Docker/OCI tags (at most
 128 characters and no SemVer `+build` metadata), because the exact Git tag is
 used for the three promoted container references.
 
-The image workflow publishes each `main` commit once under its immutable
-`sha-<full-commit>` reference, combines the three unique service receipts into
-one closed candidate manifest, and validates the latest stable release's
-attached image manifest. It then runs the exact-digest upgrade/rollback and
-MongoDB/Qdrant recovery drills in parallel. The candidate manifest and the two
-privacy-safe receipts are retained as three separate, exact-commit-and-attempt
-artifacts for 30 days. Product CI neither publishes these images nor consumes
-their artifacts, so its result is independent of this lifecycle run.
+A successful `product-ci` run for a `main` push automatically starts the image
+workflow for that exact tested commit. It publishes the commit once under its
+immutable `sha-<full-commit>` references and combines the three unique service
+receipts into one closed candidate manifest. A manual dispatch on `main` with
+the exact full commit and literal confirmation `PUBLISH` remains available for
+an explicit lifecycle run or retry. Exact-digest upgrade/rollback and
+MongoDB/Qdrant recovery drills run only for such a manual lifecycle or when the
+merged commit changes the Docker, dependency-pin, or lifecycle implementation;
+ordinary application commits do not repeat them. Candidate manifests and any
+produced privacy-safe lifecycle receipts remain exact-commit-and-attempt
+artifacts with 30-day retention.
 
 The first upgrade rehearsal has one deliberately narrow bootstrap exception:
 the previous `v0.1.1` images predate the complete in-band health identity. The
@@ -54,14 +57,15 @@ generic legacy fallback.
 
 For a GitHub release, the workflow checks out the tag and resolves it to one
 full commit. With read-only Actions permission it requires both the latest
-successful `product-ci` main-push run and the latest successful prior
-`publish-product-images` main-push run for that exact commit. It downloads all
-three lifecycle artifacts from that exact run attempt, revalidates their closed
+successful `product-ci` main-push run and the latest successful prior,
+manually dispatched lifecycle run for that exact commit. It
+downloads all three lifecycle artifacts from that exact run attempt, revalidates their closed
 schemas, and compares every candidate service image, digest, and digest
 reference binding before release-tag promotion. A green branch badge, a run
 for another revision, an expired or ambiguous artifact, a failed receipt, or a
 candidate mismatch is insufficient. If 30-day lifecycle retention has elapsed,
-rerun the exact commit's main-push image workflow before publishing the release.
+manually dispatch the image workflow again for that exact commit before
+publishing the release.
 The release gate also downloads the exact previous-release asset named by the
 validated upgrade receipt and rebinds its bytes, digest set, revision, and tag
 before promotion. When that receipt names the one-time `v0.1.1` bootstrap, both
@@ -128,8 +132,9 @@ Windows or Linux start command after updating. Stable container images use the
 same explicit release tag. The workflow does not publish or move `latest`;
 operators must select a release tag or the attached digest set deliberately.
 
-Publication is complete only after Product CI and the separate lifecycle image
-workflow are green for the exact tagged commit, and the GitHub release records
+Stable-release promotion is complete only after Product CI, immutable candidate
+publication, and the separate manual lifecycle run are green for the exact
+tagged commit, and the GitHub release records
 the release tag, exact commit, release notes, and immutable digests for Core,
 Benchmark, and RAG together. Only the `release-record` job may create the
 explicit release tags, and it does so from the already validated digest refs;
@@ -140,9 +145,10 @@ manifest is also configured for 90-day workflow-artifact retention. Any
 pre-existing `latest` tag may be stale and is not a supported publication
 signal.
 
-The first main-push publication for a source commit creates each immutable SHA
+The first publication after green `main` CI creates each immutable SHA
 reference. Job-level concurrency serializes attempts for the same service and
-commit, and later main-push attempts reuse and reverify the existing digest.
+commit, and later automatic or manual attempts reuse and reverify the existing
+digest.
 A release fails if its previously rehearsed digest set is missing or changed;
 it never rebuilds or replaces that set. An existing release tag is accepted
 only when its digest already matches, and the workflow refuses to overwrite a
@@ -190,8 +196,9 @@ or convenience-only base tag is not a supported update mechanism.
 
 ## Main preview images
 
-Advanced users may follow `main` and select the immutable
-`sha-<full-commit>` image set for one exact revision. The workflow does not move
+Advanced users may follow `main` and select the automatically published
+immutable `sha-<full-commit>` image set for one exact green revision. The
+workflow does not move
 `test` or `latest`; any pre-existing moving tag may be stale. Main preview
 images can change between stable releases and are not appropriate for
 unattended or production deployment.

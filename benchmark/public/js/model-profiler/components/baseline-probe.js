@@ -84,7 +84,7 @@ export async function runBaselineProbe({ button, card, baselineModel, api, escap
       <div class="mp-test-metrics">
         <span><strong>${Number(snap.tokensPerSec).toFixed(1)}</strong> tok/s</span>
         <span><strong>${Math.round(snap.latencyMs)}</strong> ms latency</span>
-        ${snap.timeToFirstTokenMs ? `<span><strong>${Math.round(snap.timeToFirstTokenMs)}</strong> ms TTFT</span>` : ''}
+        ${snap.ttftMeasurement === 'streamed_wall_clock' && snap.timeToFirstTokenMs ? `<span><strong>${Math.round(snap.timeToFirstTokenMs)}</strong> ms TTFT</span>` : ''}
         ${snap.promptEvalTokensPerSec ? `<span><strong>${Number(snap.promptEvalTokensPerSec).toFixed(1)}</strong> prompt tok/s</span>` : ''}
         ${snap.vramUsedMiB ? `<span><strong>${(snap.vramUsedMiB / 1024).toFixed(1)}</strong> GB VRAM</span>` : ''}
         <span>ctx: <strong>${snap.numCtx || '?'}</strong></span>

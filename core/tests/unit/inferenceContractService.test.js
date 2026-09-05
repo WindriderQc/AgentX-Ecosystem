@@ -8,7 +8,8 @@ const {
   resolveCapabilities,
   resolveContextBudget,
   resolveInferenceContract,
-  resolveInferenceContractSnapshot
+  resolveInferenceContractSnapshot,
+  resolveToolCapability
 } = require('../../src/services/inferenceContractService');
 const { buildRuntimeFingerprint } = require('../../../shared/artifactIdentity');
 
@@ -51,6 +52,36 @@ describe('inferenceContractService', () => {
           _id: 'registry-a',
           modelName: 'ax/plain-custom-model',
           installations: [{ hostUrl: hostProfile.hostUrl, digest: 'sha256:profiled', status: 'active', isActive: true }]
+        },
+        toolQualificationEvidence: {
+          contract: 'agentx.tool-capability-qualification.v1',
+          state: 'supported',
+          supported: true,
+          qualified: true,
+          reasons: [],
+          expected: {
+            schemaVersion: 'agentx.tool-capability-qualification.v1',
+            protocolVersion: 'ollama.chat.native-tools.v1',
+            fixtureVersion: 'toolcall-fixtures.v1',
+            fixtureFingerprint: 'fixture-a'
+          },
+          evidence: {
+            schemaVersion: 'agentx.tool-capability-qualification.v1',
+            modelName: 'ax/plain-custom-model',
+            hostId: 'host-alpha',
+            hostUrl: hostProfile.hostUrl,
+            artifactDigest: 'sha256:profiled',
+            runtimeFingerprint,
+            protocolVersion: 'ollama.chat.native-tools.v1',
+            fixtureVersion: 'toolcall-fixtures.v1',
+            fixtureFingerprint: 'fixture-a',
+            outcome: 'supported',
+            repetitionsRequested: 3,
+            repetitionsCompleted: 3,
+            evidenceDigest: 'a'.repeat(64),
+            completedAt: '2026-09-04T00:00:00Z',
+            validUntil: '2099-01-01T00:00:00Z'
+          }
         },
         modelProfilesCollection: profileCollection({
           name: 'ax/plain-custom-model',
@@ -113,7 +144,9 @@ describe('inferenceContractService', () => {
     });
     expect(capabilities.tools).toMatchObject({
       supported: true,
-      qualified: true
+      qualified: true,
+      state: 'supported',
+      source: 'benchmark_tool_capability_qualification'
     });
     expect(hasQualifiedThinkingCapability({
       qualification: capabilities.qualification,
@@ -141,6 +174,127 @@ describe('inferenceContractService', () => {
       qualification: capabilities.qualification,
       capabilities: { thinking: capabilities.thinking }
     })).toBe(false);
+  });
+
+  it('treats a legacy tools false profile as unknown without dedicated evidence', async () => {
+    const capabilities = await resolveCapabilities(
+      'legacy-model:8b',
+      HOSTS[0].url,
+      {
+        configuredHosts: HOSTS,
+        modelProfilesCollection: profileCollection({
+          name: 'legacy-model:8b',
+          capabilities: { tools: false },
+          readiness: {},
+          thinkingProfiles: {}
+        })
+      }
+    );
+
+    expect(capabilities.tools).toEqual({
+      supported: null,
+      qualified: false,
+      state: 'unknown',
+      source: 'unqualified',
+      reasons: ['artifact_identity_unqualified']
+    });
+  });
+
+  it('maps only exact fresh supported or unsupported tool evidence and keeps drift unknown', () => {
+    const artifact = {
+      model: 'owner/model:8b',
+      hostId: 'host-a',
+      hostUrl: 'http://host-a:11434',
+      digest: 'sha256:a',
+      runtimeFingerprint: 'runtime-a',
+      identityQualified: true
+    };
+    const evidence = {
+      schemaVersion: 'agentx.tool-capability-qualification.v1',
+      modelName: artifact.model,
+      hostId: artifact.hostId,
+      hostUrl: artifact.hostUrl,
+      artifactDigest: artifact.digest,
+      runtimeFingerprint: artifact.runtimeFingerprint,
+      protocolVersion: 'ollama.chat.native-tools.v1',
+      fixtureVersion: 'toolcall-fixtures.v1',
+      fixtureFingerprint: 'fixture-a',
+      outcome: 'supported',
+      repetitionsRequested: 3,
+      repetitionsCompleted: 3,
+      evidenceDigest: 'a'.repeat(64),
+      completedAt: '2026-09-04T00:00:00Z',
+      validUntil: '2026-10-04T00:00:00Z'
+    };
+    const envelope = {
+      contract: 'agentx.tool-capability-qualification.v1',
+      expected: {
+        schemaVersion: 'agentx.tool-capability-qualification.v1',
+        protocolVersion: 'ollama.chat.native-tools.v1',
+        fixtureVersion: 'toolcall-fixtures.v1',
+        fixtureFingerprint: 'fixture-a'
+      },
+      qualified: true,
+      reasons: [],
+      evidence
+    };
+
+    expect(resolveToolCapability({
+      ...envelope, state: 'supported'
+    }, artifact, new Date('2026-09-04T00:00:00Z'))).toMatchObject({ supported: true, qualified: true, state: 'supported' });
+    expect(resolveToolCapability({
+      ...envelope, state: 'unsupported', evidence: { ...evidence, outcome: 'unsupported' }
+    }, artifact, new Date('2026-09-04T00:00:00Z'))).toMatchObject({ supported: false, qualified: true, state: 'unsupported' });
+    expect(resolveToolCapability({
+      state: 'stale', qualified: false, reasons: ['fixture_fingerprint_mismatch'], evidence: null
+    }, artifact, new Date('2026-09-04T00:00:00Z'))).toEqual({
+      supported: null,
+      qualified: false,
+      state: 'stale',
+      source: 'benchmark_tool_capability_qualification',
+      reasons: ['fixture_fingerprint_mismatch']
+    });
+    expect(resolveToolCapability({
+      state: 'interrupted', qualified: false, reasons: ['evidence_interrupted'], evidence
+    }, artifact)).toMatchObject({ supported: null, qualified: false, state: 'unknown' });
+    expect(resolveToolCapability({
+      ...envelope, state: 'supported', evidence: { ...evidence, artifactDigest: 'sha256:old' }
+    }, artifact, new Date('2026-09-04T00:00:00Z'))).toMatchObject({
+      supported: null,
+      qualified: false,
+      state: 'stale',
+      reasons: ['artifact_digest_mismatch']
+    });
+    expect(resolveToolCapability({
+      ...envelope,
+      state: 'supported',
+      evidence: { ...evidence, fixtureFingerprint: 'old-fixture' }
+    }, artifact, new Date('2026-09-04T00:00:00Z'))).toMatchObject({
+      supported: null,
+      qualified: false,
+      state: 'stale',
+      reasons: ['fixture_fingerprint_mismatch']
+    });
+    expect(resolveToolCapability({
+      ...envelope,
+      state: 'supported',
+      evidence: { ...evidence, validUntil: '2026-08-01T00:00:00Z' }
+    }, artifact, new Date('2026-09-04T00:00:00Z'))).toMatchObject({
+      supported: null,
+      qualified: false,
+      state: 'stale',
+      reasons: ['evidence_expired']
+    });
+    expect(resolveToolCapability({
+      ...envelope,
+      state: 'supported',
+      evidence: { ...evidence, repetitionsCompleted: 2 }
+    }, artifact, new Date('2026-09-04T00:00:00Z'))).toMatchObject({
+      supported: null,
+      qualified: false,
+      state: 'stale',
+      reasons: ['evidence_repetitions_incomplete']
+    });
   });
 
   it('calculates a reusable context budget and reports overflow without mutating input', async () => {

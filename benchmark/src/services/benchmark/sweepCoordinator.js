@@ -108,7 +108,7 @@ function classifyCandidate({ candidate, inventory, hostVramMiB, maxVramFraction,
     const vramLimitMiB = hostVramMiB && maxVramFraction
         ? Math.floor(Number(hostVramMiB) * Number(maxVramFraction))
         : Number(hostVramMiB) || null;
-    const measuredNumCtx = Number(evidence.context?.verifiedMaxContext || evidence.context?.recommendedContext) || null;
+    const measuredNumCtx = Number(evidence.context?.recommendedInteractiveContext) || null;
     const estimate = estimateCandidateFit(candidate, vramLimitMiB, requestedNumCtx || measuredNumCtx || ESTIMATE_NUM_CTX);
 
     if (vramLimitMiB && vramUsedMiB && vramUsedMiB > vramLimitMiB) {
@@ -123,7 +123,9 @@ function classifyCandidate({ candidate, inventory, hostVramMiB, maxVramFraction,
     const exactProfile = exactEvidenceMatches(readiness, evidence.performance, evidence.artifact);
     const contextValidated = Boolean(
         exactProfile
-        && Number(evidence.context?.recommendedContext) > 0
+        && evidence.context?.recommendationStatus === 'verified'
+        && evidence.context?.revalidationRequired !== true
+        && Number(evidence.context?.recommendedInteractiveContext) > 0
         && evidence.context?.stale !== true
         && evidence.context.artifactDigest === evidence.artifact.digest
         && evidence.context.runtimeFingerprint === evidence.artifact.runtimeFingerprint

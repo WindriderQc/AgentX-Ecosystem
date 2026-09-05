@@ -17,6 +17,32 @@ function joinedPromptText(prompt) {
 }
 
 describe('Benchmark prompt alignment', () => {
+    it('uses target-language answer references for translation scoring', () => {
+        const referenceTranslations = prompts.filter(
+            prompt => prompt.category === 'translation' && prompt.reference_answer
+        );
+
+        expect(referenceTranslations.length).toBeGreaterThan(0);
+        for (const prompt of referenceTranslations) {
+            const primaryExpected = prompt.expected_answer.split(/\s*\(also acceptable:/i)[0].trim().toLowerCase();
+            expect(prompt.reference_answer.toLowerCase()).toContain(primaryExpected);
+        }
+    });
+
+    it('routes the concurrent scheduler prompt to its executable fixture', () => {
+        const prompt = prompts.find(entry => entry.name === 'Concurrent Scheduler Refactor');
+        const manifestPath = path.resolve(__dirname, '../../data/repo-tasks/manifest.json');
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+        expect(prompt).toMatchObject({
+            evaluation_authority: 'executable',
+            executable_fixture_id: 'scheduler-dedup-refactor'
+        });
+        expect(manifest.tasks).toContainEqual(expect.objectContaining({
+            id: prompt.executable_fixture_id
+        }));
+    });
+
     it('keeps any remaining deterministic json prompts backed by parseable JSON expected answers', () => {
         const jsonPrompts = prompts.filter(
             prompt => prompt.deterministic_scoring && prompt.deterministic_scoring.type === 'json'

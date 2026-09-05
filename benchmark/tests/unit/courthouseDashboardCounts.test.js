@@ -10,7 +10,7 @@ describe('Courthouse dashboard count contracts', () => {
         expect(results).toContain('BenchmarkResult.countDocuments({ needs_review: true })');
         expect(results).toContain("human_review_status: { $in: ['approved', 'overridden', 'rejected'] }");
         expect(results).toContain("BenchmarkResult.countDocuments({ human_review_status: 'overridden' })");
-        expect(results).toContain('JudgeGroundTruth.countDocuments({');
+        expect(results).toContain('JudgeGroundTruth.countDocuments(buildCourthouseGroundTruthCountQuery())');
         expect(results).toContain('ground_truth_count: groundTruthCount');
     });
 

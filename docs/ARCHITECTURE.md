@@ -7,7 +7,7 @@ Status: canonical product architecture, verified 2026-08-28.
 | Component | Responsibility | Depends on |
 |---|---|---|
 | Core (`core`, internal 3080) | Inference boundary, model discovery/routing, prompts, telemetry, Dreaming, product UI and APIs | MongoDB; optional Ollama; Benchmark and RAG service contracts |
-| Benchmark (`benchmark`, internal 3081) | Runs evaluations, profiles models, scores evidence, renders comparisons | MongoDB; Core; optional Ollama |
+| Benchmark (`benchmark`, internal 3081) | Runs evaluations, profiles models, scores evidence, renders model and harness comparisons | MongoDB; Core; optional Ollama; optional authenticated AIOps harness broker |
 | RAG (`rag`, internal 3082) | Ingests bounded documents, embeds chunks, retrieves knowledge, exposes the RAG API | MongoDB; Qdrant; Core embedding proxy |
 | `shared/` | Small cross-service contracts with identical semantics | No runtime service |
 | `skills/` | Optional portable Agent Skills for open-format authoring and other reviewed procedures | No runtime service |
@@ -130,6 +130,10 @@ External harnesses may exchange versioned
 separately operated adapter. Agent X owns the neutral task/tool/policy contract
 and Benchmark comparison; it does not own harness identity, private
 conversations, memory, credentials, workspace realization, or execution loop.
+Benchmark may invoke that adapter only through the disabled-by-default
+[harness broker contract](BENCHMARK_HARNESS_BROKER.md). Product receives a
+secret-free target catalog and public receipts; the AIOps deployment retains
+all provider configuration, executable pins, profiles, sessions and secrets.
 
 ## Contract rules
 
@@ -165,6 +169,12 @@ conversations, memory, credentials, workspace realization, or execution loop.
 - Live qualification and maintenance scripts require their target host, model,
   context, and external service endpoints explicitly. Fixed benchmark matrices
   remain valid when the fixed values are the experiment being measured.
+- Native-tool support follows the fail-closed
+  [exact-artifact qualification contract](NATIVE_TOOL_QUALIFICATION.md).
+  Benchmark alone persists repeated mocked-tool evidence; Core consumes its
+  bounded projection. Legacy booleans remain inventory hints, and missing,
+  interrupted, inconclusive, expired, or identity/version-drifted evidence can
+  never become an `unsupported` conclusion.
 - Playground renders a conversational cockpit over the same routing and host
   controls used by chat. It may display bounded health, fleet, and route
   evidence, but it does not own a second router, host registry, service-health
@@ -180,8 +190,10 @@ conversations, memory, credentials, workspace realization, or execution loop.
   inference host, and cannot derive private topology from the routing snapshot.
 - External worker evidence uses shared `WorkerEnvelope v1` and
   `WorkerReceipt v1` normalization. Benchmark accepts only receipts bound to
-  their supplied normalized envelopes and cannot execute a harness, contact a
-  provider, retain a transcript, mutate routing, or promote a candidate.
+  their supplied normalized envelopes. When the optional broker is enabled,
+  Benchmark may request one bounded harness cell but still cannot contact a
+  provider directly, receive a provider credential, retain a harness
+  transcript, mutate routing, or promote a candidate.
 - Model identity is the exact installed tag, host, manifest digest, and runtime
   fingerprint. Profiling records evidence for that identity and never creates
   or silently selects a replacement tag; see
@@ -190,11 +202,11 @@ conversations, memory, credentials, workspace realization, or execution loop.
   [lane accounting contract](CLOUD_LOCAL_LANE_ACCOUNTING.md). Local,
   free-cloud, and paid-cloud observations remain separate, family/kid lanes
   fail closed to local candidates, paid receipts use immutable integer
-  nanodollars plus effective price provenance, and comparison has no network or
-  routing authority. Measured execution is a separate operator CLI/library,
-  never an HTTP route; it requires authenticated authorization before
-  transport preflight, exact live identity/price checks, per-call receipts, and
-  retained raw evidence. Its report still has no routing authority.
+  nanodollars plus effective price provenance, and comparison has no routing
+  authority. Those accounting endpoints remain stateless. Optional live cloud
+  Benchmark cells use the separate authenticated harness-broker contract,
+  exact live identity/price checks, one-use batch spend ceilings and public
+  per-call receipts. Neither path has routing authority.
 - Degraded cross-model retry is never implicit. It requires the existing
   server-side degraded-fallback policy, a Core-managed non-stream route, and
   the request field `allowCrossModelFallback: true`. The alternate must be an

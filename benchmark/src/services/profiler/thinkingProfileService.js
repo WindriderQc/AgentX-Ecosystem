@@ -189,7 +189,7 @@ function analyzeThinkingResponse(data = {}, requestedThink = false, latencyMs = 
   };
 }
 
-async function _probeCall({ hostUrl, modelName, requestedThink, probe, numCtx, numPredict, timeoutMs, attempt = 1 }) {
+async function _probeCall({ hostUrl, modelName, requestedThink, probe, numCtx, numPredict, timeoutMs, signal, attempt = 1 }) {
   const startedAt = Date.now();
   const prompt = probe?.prompt || THINKING_PROBE_PROMPT;
   const promptHash = _hashPrompt(prompt);
@@ -206,7 +206,7 @@ async function _probeCall({ hostUrl, modelName, requestedThink, probe, numCtx, n
         temperature: 0,
         seed: 7
       }
-    }, { timeoutMs });
+    }, { timeoutMs, signal });
     return analyzeThinkingResponse(data, requestedThink, Date.now() - startedAt, null, {
       probeName: probe?.name || null,
       promptHash,
@@ -216,6 +216,7 @@ async function _probeCall({ hostUrl, modelName, requestedThink, probe, numCtx, n
       numPredict
     });
   } catch (err) {
+    if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : err);
     return analyzeThinkingResponse({}, requestedThink, Date.now() - startedAt, err, {
       probeName: probe?.name || null,
       promptHash,
@@ -240,7 +241,7 @@ function _retryReason(probe, result, numPredict) {
   return `contracted think=true probe hit num_predict=${numPredict} while thinking was present`;
 }
 
-async function _probeCallWithRetry({ hostUrl, modelName, requestedThink, probe, numCtx, numPredict, timeoutMs }) {
+async function _probeCallWithRetry({ hostUrl, modelName, requestedThink, probe, numCtx, numPredict, timeoutMs, signal, assertClaimActive }) {
   const first = await _probeCall({
     hostUrl,
     modelName,
@@ -249,8 +250,10 @@ async function _probeCallWithRetry({ hostUrl, modelName, requestedThink, probe, 
     numCtx,
     numPredict,
     timeoutMs,
+    signal,
     attempt: 1
   });
+  assertClaimActive?.();
   const retryReason = requestedThink ? _retryReason(probe, first, numPredict) : null;
   const retryNumPredict = retryReason
     ? Math.max(numPredict, _positiveInt(probe.retryNumPredict, numPredict))
@@ -271,8 +274,10 @@ async function _probeCallWithRetry({ hostUrl, modelName, requestedThink, probe, 
     numCtx,
     numPredict: retryNumPredict,
     timeoutMs,
+    signal,
     attempt: 2
   });
+  assertClaimActive?.();
 
   return {
     ...second,
@@ -376,14 +381,22 @@ async function profileThinkingBehavior(modelName, hostUrl, options = {}) {
   const timeoutMs = _positiveInt(options.timeoutMs, DEFAULT_TIMEOUT_MS);
 
   const controlProbe = THINKING_PROBES[0];
-  const control = await _probeCall({ hostUrl, modelName, requestedThink: false, probe: controlProbe, numCtx, numPredict, timeoutMs });
+  const control = await _probeCall({
+    hostUrl, modelName, requestedThink: false, probe: controlProbe, numCtx, numPredict, timeoutMs,
+    signal: options.signal
+  });
+  options.assertClaimActive?.();
   const thinkProbes = {};
   const signalsByProbe = {};
   let probeAttempts = 1;
   let retryProbeCount = 0;
   let maxProbeNumPredict = control.numPredict || numPredict;
   for (const probe of THINKING_PROBES) {
-    thinkProbes[probe.name] = await _probeCallWithRetry({ hostUrl, modelName, requestedThink: true, probe, numCtx, numPredict, timeoutMs });
+    thinkProbes[probe.name] = await _probeCallWithRetry({
+      hostUrl, modelName, requestedThink: true, probe, numCtx, numPredict, timeoutMs,
+      signal: options.signal,
+      assertClaimActive: options.assertClaimActive
+    });
     const attempts = Array.isArray(thinkProbes[probe.name].attempts) ? thinkProbes[probe.name].attempts.length : 1;
     probeAttempts += attempts;
     if (thinkProbes[probe.name].retried) retryProbeCount += 1;

@@ -7,6 +7,43 @@ const { classifyBenchmarkError } = require('./errorClassifier');
 const { multiJudgeScore, shouldEscalateToMultiJudge, AGREEMENT_REVIEW_THRESHOLD } = require('./multiJudge');
 const { normalizeScoringCategory, DEFAULT_SCORING_CATEGORY } = require('../scoring/scoringConfigs');
 const { throwIfJudgeCancelled } = require('../scoring/judgeCall');
+const { buildTrustJudgeCellId } = require('./harnessBrokerClient');
+
+function cancellationSignal(config = {}) {
+    return config.cancelSignal || config.signal || null;
+}
+
+async function invalidateAmbiguousJudgeWrite(resultId, phase) {
+    await BenchmarkResult.updateOne(
+        { _id: resultId },
+        {
+            $set: {
+                excluded_from_leaderboard: true,
+                needs_review: true,
+                scoring_method: 'authority_invalidated',
+                quality_score: null,
+                composite_score: null,
+                review_reason: `Judge authority was lost during ${phase}; result requires a fenced rejudge`
+            }
+        }
+    ).catch(() => {});
+}
+
+async function persistJudgeUpdate(resultId, update, cancellationConfig, phase) {
+    throwIfJudgeCancelled(cancellationConfig);
+    const signal = cancellationSignal(cancellationConfig);
+    try {
+        await BenchmarkResult.updateOne(
+            { _id: resultId },
+            update,
+            signal ? { signal } : undefined
+        );
+        throwIfJudgeCancelled(cancellationConfig);
+    } catch (error) {
+        if (signal?.aborted) await invalidateAmbiguousJudgeWrite(resultId, phase);
+        throw error;
+    }
+}
 
 function buildPromptData(result, originalPrompt) {
     return {
@@ -62,10 +99,11 @@ async function persistMultiJudgeScores(resultId, multiJudgeResult, cancellationC
             scoring_time_ms: score.scoring_time_ms
         }));
 
-    throwIfJudgeCancelled(cancellationConfig);
-    await BenchmarkResult.updateOne(
-        { _id: resultId },
-        { $set: { judge_scores: judgeScoreRecords } }
+    await persistJudgeUpdate(
+        resultId,
+        { $set: { judge_scores: judgeScoreRecords } },
+        cancellationConfig,
+        'multi-judge score persistence'
     );
 }
 
@@ -147,9 +185,8 @@ async function applyScoresToResult(resultId, scores, resultData, cancellationCon
     const combinedNeedsReview = !!resultData.needs_review || !!scores.needs_review;
     const combinedReviewReason = mergeReviewReasons(resultData.review_reason, scores.review_reason);
 
-    throwIfJudgeCancelled(cancellationConfig);
-    await BenchmarkResult.updateOne(
-        { _id: resultId },
+    await persistJudgeUpdate(
+        resultId,
         {
             $set: {
                 scorer_version: SCORER_VERSION,
@@ -160,6 +197,13 @@ async function applyScoresToResult(resultId, scores, resultData, cancellationCon
                 judge_model: scores.judge_model,
                 judge_host: scores.judge_host || resultData.judge_host || null,
                 judge_raw_response: scores.judge_raw_response,
+                judge_target: scores.judge_target || null,
+                judge_receipt: scores.judge_receipt || null,
+                ...(scores.trust_judge_receipt
+                    ? { trust_judge_receipt: scores.trust_judge_receipt }
+                    : {}),
+                judge_provider_usage: scores.judge_provider_usage || null,
+                judge_provider_cost: scores.judge_provider_cost || null,
                 judge_hardware_snapshot: scores.judge_hardware_snapshot || null,
                 judge_consensus: scores.judge_consensus || null,
                 judge_divergence: scores.judge_divergence !== undefined ? scores.judge_divergence : null,
@@ -190,7 +234,9 @@ async function applyScoresToResult(resultId, scores, resultData, cancellationCon
                 ...truncationUpdate,
                 ...judgeFailureUpdate
             }
-        }
+        },
+        cancellationConfig,
+        'judge score persistence'
     );
 
     return {
@@ -216,14 +262,27 @@ async function judgeResult(resultId, judgeConfig = {}, batchHardwareSnapshot = n
     if (!result.response) {
         throw new Error('No response to judge');
     }
+    if ((result.trust_candidate_id || result.trust_prompt_id)
+        && judgeConfig.require_trust_worker_receipt !== true) {
+        const error = new Error('Strict Benchmark Trust evidence cannot be rejudged in place');
+        error.code = 'BENCHMARK_TRUST_RESULT_MUTATION_FORBIDDEN';
+        error.statusCode = 409;
+        throw error;
+    }
 
     const originalPrompt = await findOriginalPrompt(result);
     throwIfJudgeCancelled(judgeConfig);
     const promptData = buildPromptData(result, originalPrompt);
     const resultData = buildResultScoreContext(result);
-    const mergedConfig = resolveJudgeConfig(judgeConfig, {
+    let mergedConfig = resolveJudgeConfig(judgeConfig, {
         resultDefaults: { judge_model: result.judge_model, judge_host: result.judge_host }
     });
+    if (mergedConfig.require_trust_worker_receipt === true) {
+        mergedConfig = {
+            ...mergedConfig,
+            cell_id: buildTrustJudgeCellId(result)
+        };
+    }
 
     const baseScores = await scoreResponse({
         response: result.response,
@@ -299,5 +358,6 @@ async function judgeResult(resultId, judgeConfig = {}, batchHardwareSnapshot = n
 
 module.exports = {
     applyScoresToResult,
+    buildPromptData,
     judgeResult
 };

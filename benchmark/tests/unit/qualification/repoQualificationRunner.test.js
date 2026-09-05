@@ -225,8 +225,8 @@ describe('repoQualificationRunner.runQualification (offline dry-run)', () => {
       onRecord: (rec) => emitted.push(rec)
     });
 
-    // 2 models x 12 tasks x 3 attempts.
-    expect(result.records).toHaveLength(2 * 12 * 3);
+    // 2 models x 13 tasks x 3 attempts.
+    expect(result.records).toHaveLength(2 * 13 * 3);
     expect(emitted).toHaveLength(result.records.length);
     expect(result.records.every((r) => r.grade.pass)).toBe(true);
     expect(result.records.every((r) => r.dryRun === true)).toBe(true);
@@ -325,6 +325,14 @@ describe('repoQualificationRunner.runQualification (offline dry-run)', () => {
 });
 
 describe('repo-coding-qualification.js CLI (--dry-run smoke test)', () => {
+  test('the canonical Benchmark image packages the runner and its offline dependencies', () => {
+    const dockerfilePath = path.resolve(__dirname, '..', '..', '..', '..', 'docker', 'benchmark.Dockerfile');
+    const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
+    expect(dockerfile).toContain('apt-get install -y --no-install-recommends ca-certificates git');
+    expect(dockerfile).toContain('COPY scripts/bounded-response.js /scripts/bounded-response.js');
+    expect(dockerfile).toContain("! -name 'repo-coding-qualification.js'");
+  });
+
   test('bounds the live Core claim response and rejects redirects', async () => {
     const payload = Buffer.from(JSON.stringify({ data: { claims: [] } }));
     const fetchImpl = jest.fn(async () => ({
@@ -391,6 +399,35 @@ describe('repo-coding-qualification.js CLI (--dry-run smoke test)', () => {
     expect(requestJson).toHaveBeenCalledWith(
       'http://core:3080/api/nerve-center/host-preferences/benchmark-claims/active'
     );
+  });
+
+  test('refuses a matching legacy claim without an exact pre-claim runtime snapshot', async () => {
+    const requestJson = jest.fn(async () => ({
+      data: { claims: [{
+        hostUrl: 'http://exec:11434',
+        batchId: 'expected',
+        snapshotExact: false
+      }] }
+    }));
+    await expect(qualificationCli.assertExpectedActiveClaim({
+      core: 'http://core:3080',
+      host: 'http://exec:11434',
+      claimId: 'expected'
+    }, { requestJson })).rejects.toThrow(/refuses legacy claim expected/);
+  });
+
+  test('accepts only the matching host, batch, and exact runtime snapshot', async () => {
+    const exact = {
+      hostUrl: 'http://exec:11434',
+      batchId: 'expected',
+      snapshotExact: true
+    };
+    const requestJson = jest.fn(async () => ({ data: { claims: [exact] } }));
+    await expect(qualificationCli.assertExpectedActiveClaim({
+      core: 'http://core:3080',
+      host: 'http://exec:11434',
+      claimId: 'expected'
+    }, { requestJson })).resolves.toBe(exact);
   });
 
   test('rejects a Core contract that changes any frozen campaign setting', () => {

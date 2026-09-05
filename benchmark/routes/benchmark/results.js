@@ -25,6 +25,7 @@ const {
     combineMongoFilters
 } = require('../../src/services/benchmark/resultsExplorerEvidence');
 const { DIVERGENCE_THRESHOLD } = require('../../src/services/benchmark/multiJudge');
+const { runManagedWorkload } = require('../../src/services/benchmark/workloadAdmissionLifecycle');
 
 const ADVANCED_RESULTS_MAX_LIMIT = 5000;
 const ADVANCED_RESULTS_DEFAULT_LIMIT = 1000;
@@ -69,6 +70,16 @@ function scoreEvidenceKind(result = {}) {
         return 'judge_scored';
     }
     return 'unscored';
+}
+
+function rejectStrictTrustResultMutation(res, result) {
+    if (!result?.trust_candidate_id && !result?.trust_prompt_id) return false;
+    res.status(409).json({
+        status: 'error',
+        code: 'BENCHMARK_TRUST_RESULT_MUTATION_FORBIDDEN',
+        error: 'Strict Benchmark Trust evidence cannot be reviewed, rejudged, or promoted in place'
+    });
+    return true;
 }
 
 /**
@@ -418,6 +429,7 @@ router.post('/results/:id/human-review', async (req, res) => {
                 error: 'Result not found'
             });
         }
+        if (rejectStrictTrustResultMutation(res, result)) return;
 
         const updateFields = {
             human_reviewed_at: new Date(),
@@ -426,6 +438,15 @@ router.post('/results/:id/human-review', async (req, res) => {
         if (notes) updateFields.human_notes = String(notes).slice(0, 2000);
 
         const effectiveAction = action || ((human_score !== undefined && human_score !== null) ? 'override' : 'approve');
+
+        if (result.evaluation_authority === 'executable'
+            && (effectiveAction === 'approve' || effectiveAction === 'override')) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'EXECUTABLE_VERIFICATION_REQUIRED',
+                error: `Result correctness is owned by executable fixture ${result.executable_fixture_id || '(missing fixture id)'}; a human review cannot make this advisory row leaderboard-eligible`
+            });
+        }
 
         switch (effectiveAction) {
         case 'approve':
@@ -515,6 +536,13 @@ router.post('/results/:id/human-review', async (req, res) => {
                     : `Courthouse ${effectiveAction} by ${updateFields.human_reviewer}`;
                 const evidenceKind = scoreEvidenceKind(updated);
                 const hasJudgeEvidence = evidenceKind === 'judge_scored' || evidenceKind === 'hybrid';
+                // The current Courthouse UI is judge-visible. Approval copies
+                // the judge score and override is still a single visible
+                // review; neither may be relabelled as independent human
+                // ground truth for Benchmark Trust qualification.
+                const provenanceClass = effectiveAction === 'approve'
+                    ? 'endorsed_judge_score'
+                    : 'human_override_visible_judge';
                 const gtDoc = await JudgeGroundTruth.findOneAndUpdate(
                     { name: gtName },
                     {
@@ -531,6 +559,8 @@ router.post('/results/:id/human-review', async (req, res) => {
                             expert_rationale: rationaleBase,
                             created_by: 'courthouse-review',
                             source: 'courthouse-review',
+                            provenance_class: provenanceClass,
+                            review_protocol: 'judge_visible_single_review',
                             reviewer: updateFields.human_reviewer,
                             reviewed_at: updateFields.human_reviewed_at,
                             source_result_id: updated._id,
@@ -573,7 +603,7 @@ router.post('/results/:id/human-review', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to submit human review', { error: err.message, id: req.params.id });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -616,6 +646,14 @@ router.post('/results/:id/rejudge', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Result ID')) return;
 
+        const existingResult = await BenchmarkResult.findById(req.params.id)
+            .select('batch_id trust_candidate_id trust_prompt_id')
+            .lean();
+        if (!existingResult) {
+            return res.status(404).json({ status: 'error', error: 'Result not found' });
+        }
+        if (rejectStrictTrustResultMutation(res, existingResult)) return;
+
         const readiness = await resolveReadyJudgeTarget({
             model: req.body.judge_model,
             host: req.body.judge_host
@@ -630,7 +668,13 @@ router.post('/results/:id/rejudge', async (req, res) => {
 
         logger.info('Re-judging result', { resultId: req.params.id, judgeConfig });
 
-        const result = await judgeResult(req.params.id, judgeConfig);
+        const workloadId = `rejudge-result:${req.params.id}`;
+        const result = await runManagedWorkload(workloadId, {
+            requestId: workloadId,
+            kind: 'judge',
+            batchId: existingResult.batch_id ? String(existingResult.batch_id) : null,
+            hosts: [judgeConfig.host]
+        }, ({ signal }) => judgeResult(req.params.id, { ...judgeConfig, cancelSignal: signal }));
 
         res.json({
             status: 'success',
@@ -638,10 +682,10 @@ router.post('/results/:id/rejudge', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to rejudge result', { error: err.message, id: req.params.id });
-        const statusCode = err.message.includes('not found') ? 404
+        const statusCode = err.statusCode || (err.message.includes('not found') ? 404
             : err.message.includes('Cannot judge') || err.message.includes('No response') ? 400
-            : 500;
-        res.status(statusCode).json({ status: 'error', error: err.message });
+            : 500);
+        res.status(statusCode).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -662,7 +706,7 @@ router.delete('/results', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to clear results', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -683,7 +727,7 @@ router.delete('/results/failed', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to clear failed results', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -714,6 +758,7 @@ router.post('/results/:id/promote-ground-truth', async (req, res) => {
         if (!result) {
             return res.status(404).json({ status: 'error', error: 'Result not found' });
         }
+        if (rejectStrictTrustResultMutation(res, result)) return;
 
         const name = `promoted-${id}-${Date.now()}`;
 

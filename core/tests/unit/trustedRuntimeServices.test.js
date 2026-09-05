@@ -26,7 +26,8 @@ function inferenceDeps(overrides = {}) {
     hostPreferenceService: {
       getByHost: jest.fn(async () => ({
         pinnedModels: [{ model: 'model-a', contextSize: 32768, keepAlive: -1 }]
-      }))
+      })),
+      prepareExclusiveModel: jest.fn(async () => ({ status: 'ready', unloaded: [] }))
     },
     modelsMatch: (left, right) => left === right,
     resolveInferenceContract: jest.fn(async () => ({
@@ -34,7 +35,10 @@ function inferenceDeps(overrides = {}) {
       contextBudget: { windowTokens: 32768 }
     })),
     applyContractOutputLimit: jest.fn(),
-    hostGate: { acquire: jest.fn(async () => jest.fn()) },
+    hostGate: {
+      acquire: jest.fn(async () => jest.fn()),
+      acquireExclusive: jest.fn(async () => jest.fn())
+    },
     recordInference: jest.fn(async () => null),
     fetch: jest.fn(async () => response({ body: { model: 'model-a', response: 'ok', done: true } })),
     ...overrides
@@ -133,6 +137,105 @@ describe('trusted runtime services', () => {
     }));
   });
 
+  test('takes exclusive host admission and releases an idle resident model before inference', async () => {
+    const events = [];
+    const release = jest.fn(() => events.push('release'));
+    const deps = inferenceDeps({
+      hostGate: {
+        acquire: jest.fn(async () => jest.fn()),
+        acquireExclusive: jest.fn(async () => {
+          events.push('exclusive-acquired');
+          return release;
+        })
+      },
+      hostPreferenceService: {
+        getByHost: jest.fn(async () => ({ pinnedModels: [] })),
+        prepareExclusiveModel: jest.fn(async () => {
+          events.push('resident-released');
+          return { status: 'ready', unloaded: ['normal-model'] };
+        })
+      },
+      fetch: jest.fn(async () => {
+        events.push('inference');
+        return response({ body: { model: 'open-model', response: 'ok', done: true } });
+      })
+    });
+
+    const result = await executeRoutedInference(deps, {
+      mode: 'generate', model: 'open-model', prompt: 'hello', exclusiveHost: true
+    });
+
+    expect(result.ok).toBe(true);
+    expect(deps.hostGate.acquire).not.toHaveBeenCalled();
+    expect(deps.hostGate.acquireExclusive).toHaveBeenCalledWith(
+      'http://ollama.test:11434', 'open-model', { signal: undefined }
+    );
+    expect(deps.hostPreferenceService.prepareExclusiveModel).toHaveBeenCalledWith(
+      'http://ollama.test:11434', 'open-model'
+    );
+    expect(events).toEqual(['exclusive-acquired', 'resident-released', 'inference', 'release']);
+  });
+
+  test('records only validated server-side work attribution', async () => {
+    const deps = inferenceDeps();
+
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat',
+      model: 'model-a',
+      messages: [{ role: 'user', content: 'hello' }],
+      callerDetail: 'openclaw-runtime-bridge',
+    }, {
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      attribution: {
+        workItemId: '0401',
+        correlationId: 'lease:7f8e9d',
+        runtime: 'external',
+        attempt: 2,
+      },
+    });
+
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      workItemId: '0401',
+      correlationId: 'lease:7f8e9d',
+      runtime: 'external',
+      attempt: 2,
+    }));
+    expect(result.metadata).not.toHaveProperty('attribution');
+  });
+
+  test.each([
+    ['non-object', 'pipeline:0401'],
+    ['unknown field', { workItemId: 'pipeline:0401', runtime: 'external', prompt: 'private' }],
+    ['missing identifiers', { runtime: 'external' }],
+    ['invalid identifier', { workItemId: 'pipeline 0401', runtime: 'external' }],
+    ['invalid runtime', { workItemId: 'pipeline:0401', runtime: 'openclaw' }],
+    ['invalid attempt', { workItemId: 'pipeline:0401', runtime: 'external', attempt: 0 }],
+  ])('rejects invalid server attribution: %s', async (_label, attribution) => {
+    const deps = inferenceDeps();
+
+    await expect(executeRoutedInference(deps, {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    }, {
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      attribution,
+    })).rejects.toMatchObject({ code: 'INFERENCE_ATTRIBUTION_INVALID', statusCode: 400 });
+    expect(deps.fetch).not.toHaveBeenCalled();
+  });
+
+  test('requires server-attested consumer identity for work attribution', async () => {
+    const deps = inferenceDeps();
+
+    await expect(executeRoutedInference(deps, {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    }, {
+      attribution: { workItemId: 'pipeline:0401', runtime: 'external' },
+    })).rejects.toMatchObject({
+      code: 'INFERENCE_ATTRIBUTION_CONTRACT_REQUIRED', statusCode: 400
+    });
+    expect(deps.fetch).not.toHaveBeenCalled();
+  });
+
   test('relays streaming bytes unchanged and records split final usage metadata', async () => {
     const upstream = new PassThrough();
     const deps = inferenceDeps({
@@ -143,6 +246,9 @@ describe('trusted runtime services', () => {
       model: 'model-a',
       messages: [{ role: 'user', content: 'hello' }],
       stream: true
+    }, {
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      attribution: { workItemId: '0401', runtime: 'external' },
     });
     const expected = [
       `${JSON.stringify({ message: { content: 'hé' }, done: false })}\n`,
@@ -162,7 +268,9 @@ describe('trusted runtime services', () => {
 
     expect(Buffer.concat(received).toString('utf8')).toBe(expected.join(''));
     expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'success', tokensIn: 10, tokensOut: 4
+      status: 'success', tokensIn: 10, tokensOut: 4,
+      consumerContract: 'openclaw-pipeline-runtime-v1',
+      workItemId: '0401', runtime: 'external', attempt: 1,
     }));
   });
 
@@ -219,6 +327,42 @@ describe('trusted runtime services', () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.tasks.general_chat)).toBe(true);
     expect(() => Object.defineProperty(snapshot.tasks.general_chat, 'model', { value: 'changed' })).toThrow();
+  });
+
+  test('resolves exact artifact identity only when a trusted consumer explicitly requests it', async () => {
+    const resolveInferenceContract = jest.fn(async () => ({
+      version: 'agentx.inference-contract.v1',
+      qualification: { qualified: true, exactArtifact: true }
+    }));
+    const deps = {
+      buildRouterConfigPayload: jest.fn(async () => ({
+        authority: { operational: 'router' },
+        hosts: { primary: 'http://ollama.test:11434' },
+        taskModels: { code_generation: { model: 'model-a', host: 'primary' } }
+      })),
+      hostPreferenceService: {
+        getAll: jest.fn(async () => []),
+        getPinnedEntries: () => []
+      },
+      getContextInfo: jest.fn(async () => null),
+      resolveInferenceContract,
+      modelsMatch: (left, right) => left === right,
+      ModelRegistry: { find: jest.fn() }
+    };
+
+    await buildEffectiveRoutingSnapshot(deps, { includeCatalog: false });
+    expect(resolveInferenceContract.mock.calls[0]).toEqual([
+      { model: 'model-a', host: 'http://ollama.test:11434' }
+    ]);
+
+    await buildEffectiveRoutingSnapshot(deps, {
+      includeCatalog: false,
+      includeArtifactIdentity: true
+    });
+    expect(resolveInferenceContract.mock.calls[1]).toEqual([
+      { model: 'model-a', host: 'http://ollama.test:11434' },
+      { includeArtifactIdentity: true }
+    ]);
   });
 
   test('rejects invalid requests before routing', async () => {

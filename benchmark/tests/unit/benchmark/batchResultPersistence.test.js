@@ -19,6 +19,47 @@ const {
     persistSuccessfulResult,
     persistFailedResult
 } = require('../../../src/services/benchmark/batchResultPersistence');
+const { normalizeBenchmarkTarget } = require('../../../../shared/benchmarkTargetContract');
+const { computePromptSourceFingerprint } = require('../../../src/services/benchmark/benchmarkTrustSourceEvidence');
+const { promptEvidenceRow } = require('../../../src/services/benchmark/benchmarkTrustCampaignRuntime');
+
+const hex = character => character.repeat(64);
+
+function trustTarget() {
+    return normalizeBenchmarkTarget({
+        id: 'trust-target', label: 'Trust target', executionKind: 'harness',
+        mode: 'isolated_model', tier: 'free_cloud', provider: 'provider', model: 'test-model',
+        modelVersion: '1', harness: { name: 'harness', version: '1' },
+        adapter: { name: 'adapter', version: '1' },
+        profile: { id: 'profile', version: '1', fingerprint: hex('1') },
+        api: { name: 'api', version: '1' }, contextWindow: 131072,
+        capabilities: { candidate: true, judge: true },
+        pricing: {
+            kind: 'free', currency: 'USD', source: 'fixture', effectiveAt: null,
+            inputNanodollarsPerMillion: 0, outputNanodollarsPerMillion: 0, callNanodollars: 0
+        },
+        available: true, observedAt: '2026-09-01T00:00:00.000Z', catalogFingerprint: hex('2')
+    });
+}
+
+function trustArgs(overrides = {}) {
+    const target = trustTarget();
+    const args = baseArgs({
+        executionTarget: target,
+        executionReceipt: { identity: { model: { digest: `sha256:${hex('3')}` } } },
+        trustExecutionReceipt: { fingerprint: hex('4') },
+        ...overrides
+    });
+    const promptFingerprint = computePromptSourceFingerprint(promptEvidenceRow(args.prompt, args.promptText));
+    args.trustEvidenceContext = {
+        candidates: [{
+            candidateId: `candidate_${'a'.repeat(32)}`,
+            sourceIdentity: { executionTargetFingerprint: target.fingerprint }
+        }],
+        prompts: [{ promptId: `prompt_${'b'.repeat(32)}`, fingerprint: promptFingerprint }]
+    };
+    return args;
+}
 
 function baseArgs(overrides = {}) {
     return {
@@ -69,6 +110,26 @@ describe('batchResultPersistence truncation quarantine', () => {
         savedDocs.length = 0;
     });
 
+    it('does not persist an unlabeled prompt-eval duration as TTFT', async () => {
+        await persistSuccessfulResult(baseArgs({ timeToFirstTokenMs: 100 }));
+        expect(savedDocs[0].time_to_first_token_ms).toBeNull();
+        expect(savedDocs[0].ttft_measurement).toBeNull();
+    });
+
+    it('persists TTFT only with streamed wall-clock provenance', async () => {
+        await persistSuccessfulResult(baseArgs({
+            timeToFirstTokenMs: 100,
+            ttftMeasurement: 'streamed_wall_clock',
+            performanceBaseline: {
+                timeToFirstTokenMs: 125,
+                ttftMeasurement: 'streamed_wall_clock'
+            }
+        }));
+        expect(savedDocs[0].time_to_first_token_ms).toBe(100);
+        expect(savedDocs[0].ttft_measurement).toBe('streamed_wall_clock');
+        expect(savedDocs[0].performance_baseline.ttftMeasurement).toBe('streamed_wall_clock');
+    });
+
     it('quarantines a response that hits a hidden runtime cap', async () => {
         await persistSuccessfulResult(baseArgs());
 
@@ -103,6 +164,33 @@ describe('batchResultPersistence truncation quarantine', () => {
         expect(doc.excluded_from_leaderboard).toBe(false);
         expect(doc.truncation.hidden_response_cap).toBe(false);
         expect(doc.truncation.visible_response_budget).toBe(true);
+    });
+
+    it('keeps LLM scoring advisory when executable verification is authoritative', async () => {
+        await persistSuccessfulResult(baseArgs({
+            prompt: {
+                _id: 'scheduler-prompt-id',
+                name: 'Concurrent Scheduler Refactor',
+                prompt: 'Refactor the scheduler.',
+                level: 5,
+                category: 'coding',
+                expected_answer: 'A correct refactor.',
+                expected_tokens: 480,
+                evaluation_authority: 'executable',
+                executable_fixture_id: 'scheduler-dedup-refactor'
+            },
+            promptText: 'Refactor the scheduler.',
+            cleanedResponse: 'Plausible-looking code that has not been executed.',
+            responseTruncated: false,
+            doneReason: 'stop'
+        }));
+
+        const doc = savedDocs[0];
+        expect(doc.evaluation_authority).toBe('executable');
+        expect(doc.executable_fixture_id).toBe('scheduler-dedup-refactor');
+        expect(doc.needs_review).toBe(true);
+        expect(doc.excluded_from_leaderboard).toBe(true);
+        expect(doc.review_reason).toMatch(/LLM judge output is advisory only/);
     });
 
     it('records thinking-only output as an empty visible response without dropping the hidden reasoning', async () => {
@@ -271,5 +359,26 @@ describe('batchResultPersistence truncation quarantine', () => {
         expect(doc.needs_review).toBe(true);
         expect(doc.excluded_from_leaderboard).toBe(true);
         expect(doc.review_reason).toMatch(/Infrastructure failure/);
+    });
+
+    it('maps strict results to frozen opaque identities and retains the private WorkerReceipt', async () => {
+        const args = trustArgs();
+        await persistSuccessfulResult(args);
+
+        const doc = savedDocs[0];
+        expect(doc).toMatchObject({
+            trust_candidate_id: `candidate_${'a'.repeat(32)}`,
+            trust_prompt_id: `prompt_${'b'.repeat(32)}`,
+            trust_execution_receipt: args.trustExecutionReceipt
+        });
+        expect(doc).not.toHaveProperty('timestamp');
+    });
+
+    it('fails closed before persistence when a strict result lacks its full WorkerReceipt', async () => {
+        const args = trustArgs({ trustExecutionReceipt: null });
+        await expect(persistSuccessfulResult(args)).rejects.toMatchObject({
+            code: 'BENCHMARK_TRUST_EXECUTION_RECEIPT_REQUIRED'
+        });
+        expect(savedDocs).toHaveLength(0);
     });
 });

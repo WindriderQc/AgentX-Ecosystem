@@ -1,6 +1,12 @@
 const ModelContextProfile = require('../../models/ModelContextProfile');
 const { getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostConfig');
 
+// v3 is deliberately distinct from the first additive migration draft. That
+// draft could stamp legacy 262K maxima as if they were degradation-derived
+// recommendations. Only a fresh probe written by this implementation may
+// carry current recommendation authority.
+const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v3';
+
 function positiveInteger(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -43,12 +49,48 @@ function bestStepForSnapshot(snapshot) {
     || null;
 }
 
+function recommendationFor(snapshot, threshold) {
+  return (Array.isArray(snapshot?.steps) ? snapshot.steps : [])
+    .filter(step => step?.passed
+      && Number.isFinite(Number(step.degradationPct))
+      && Number(step.degradationPct) <= threshold)
+    .reduce((max, step) => Math.max(max, positiveInteger(step.numCtx) || 0), 0) || null;
+}
+
+function normalizeContextProfile(profile) {
+  if (!profile) return null;
+  const maxVerifiedContext = positiveInteger(profile.maxVerifiedContext)
+    || positiveInteger(profile.verifiedMaxContext);
+  const recommendationsVerified = profile.recommendationStatus === 'verified'
+    && profile.recommendationEvidenceVersion === RECOMMENDATION_EVIDENCE_VERSION
+    && profile.revalidationRequired !== true
+    && profile.stale !== true;
+  const recommendedDocumentContext = recommendationsVerified
+    ? positiveInteger(profile.recommendedDocumentContext)
+    : null;
+  const recommendedInteractiveContext = recommendationsVerified
+    ? positiveInteger(profile.recommendedInteractiveContext)
+    : null;
+  return {
+    ...profile,
+    maxVerifiedContext,
+    verifiedMaxContext: maxVerifiedContext,
+    historicalMaxVerifiedContext: positiveInteger(profile.historicalMaxVerifiedContext) || maxVerifiedContext,
+    recommendedInteractiveContext,
+    recommendedDocumentContext,
+    recommendedContext: recommendedDocumentContext,
+    recommendationStatus: recommendationsVerified ? 'verified' : 'unknown',
+    revalidationRequired: !recommendationsVerified
+  };
+}
+
 function hostIdForUrl(hostUrl) {
   const normalized = normalizeHostUrl(hostUrl);
   return getConfiguredHosts().find((host) => normalizeHostUrl(host.url) === normalized)?.id || null;
 }
 
-async function updateFromProbeSnapshot(snapshot) {
+async function updateFromProbeSnapshot(snapshot, options = {}) {
+  options.assertAuthorityActive?.();
   const tested = positiveInteger(snapshot?.testedNumCtx);
   const modelName = String(snapshot?.modelName || '').trim().replace(/:latest$/i, '');
   const hostUrl = normalizeHostUrl(snapshot?.hostUrl);
@@ -62,23 +104,43 @@ async function updateFromProbeSnapshot(snapshot) {
   }
 
   const identityFilter = { modelName, hostUrl, artifactDigest, runtimeFingerprint };
-  const existing = await ModelContextProfile.findOne(identityFilter).lean();
-  const verifiedMaxContext = Math.max(
-    positiveInteger(existing?.verifiedMaxContext) || 0,
+  const existingQuery = ModelContextProfile.findOne(identityFilter);
+  if (options.signal && typeof existingQuery.setOptions === 'function') existingQuery.setOptions({ signal: options.signal });
+  const existing = await existingQuery.lean();
+  options.assertAuthorityActive?.();
+  // The current ceiling follows the latest valid revalidation and may move
+  // down. The historical maximum remains audit evidence, never runtime policy.
+  const maxVerifiedContext = tested;
+  const historicalMaxVerifiedContext = Math.max(
+    positiveInteger(existing?.historicalMaxVerifiedContext)
+      || positiveInteger(existing?.maxVerifiedContext)
+      || positiveInteger(existing?.verifiedMaxContext)
+      || 0,
     tested
   );
-  // Keep the legacy field equal to the measured value while downstream
-  // consumers migrate to verifiedMaxContext. It is no longer a second,
-  // independently capped runtime policy.
-  const recommendedContext = verifiedMaxContext;
+  const interactiveThreshold = Number.isFinite(Number(snapshot.interactiveDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(snapshot.interactiveDegradationThreshold))) : 15;
+  const documentThreshold = Number.isFinite(Number(snapshot.documentDegradationThreshold))
+    ? Math.min(100, Math.max(0, Number(snapshot.documentDegradationThreshold))) : 30;
+  const boundedRecommendation = value => {
+    const recommendation = positiveInteger(value);
+    return recommendation ? Math.min(recommendation, maxVerifiedContext) : null;
+  };
+  const recommendedInteractiveContext = boundedRecommendation(
+    positiveInteger(snapshot.recommendedInteractiveContext)
+      || recommendationFor(snapshot, interactiveThreshold)
+  );
+  const recommendedDocumentContext = boundedRecommendation(
+    positiveInteger(snapshot.recommendedDocumentContext)
+      || recommendationFor(snapshot, documentThreshold)
+  );
+  const recommendationsVerified = Boolean(recommendedInteractiveContext && recommendedDocumentContext);
+  const recommendedContext = recommendedDocumentContext;
   const step = bestStepForSnapshot(snapshot);
-  const verifiedInputTokens = Math.max(
-    positiveInteger(existing?.verifiedInputTokens) || 0,
-    positiveInteger(step?.promptTokens) || 0
-  ) || null;
+  const verifiedInputTokens = positiveInteger(step?.promptTokens) || null;
   const evidenceTokensPerSec = Number(step?.tokensPerSec ?? snapshot.atLimitTokensPerSec ?? 0) || null;
 
-  return ModelContextProfile.findOneAndUpdate(
+  const updated = await ModelContextProfile.findOneAndUpdate(
     identityFilter,
     {
       $set: {
@@ -87,13 +149,24 @@ async function updateFromProbeSnapshot(snapshot) {
         hostId: snapshot.hostId || hostIdForUrl(hostUrl),
         artifactDigest,
         runtimeFingerprint,
-        verifiedMaxContext,
+        maxVerifiedContext,
+        verifiedMaxContext: maxVerifiedContext,
+        historicalMaxVerifiedContext,
         verifiedInputTokens,
+        recommendedInteractiveContext,
+        recommendedDocumentContext,
+        recommendationStatus: recommendationsVerified ? 'verified' : 'unknown',
+        recommendationEvidenceVersion: RECOMMENDATION_EVIDENCE_VERSION,
+        revalidationRequired: !recommendationsVerified,
+        recommendationThresholds: {
+          interactiveDegradationPct: interactiveThreshold,
+          documentDegradationPct: documentThreshold
+        },
         recommendedContext,
         modelTheoreticalMax: positiveInteger(snapshot.modelTheoreticalMax),
         source: 'context_probe',
-        stale: false,
-        staleReason: null,
+        stale: !recommendationsVerified,
+        staleReason: recommendationsVerified ? null : 'context_recommendation_unavailable',
         lastValidatedAt: snapshot.testedAt || new Date(),
         latestEvidence: {
           snapshotId: snapshot._id ? String(snapshot._id) : null,
@@ -113,8 +186,10 @@ async function updateFromProbeSnapshot(snapshot) {
         }
       }
     },
-    { upsert: true, new: true }
+    { upsert: true, new: true, ...(options.signal ? { signal: options.signal } : {}) }
   ).lean();
+  options.assertAuthorityActive?.();
+  return updated;
 }
 
 async function findContextProfile(modelName, hostUrl, artifact = {}) {
@@ -128,7 +203,32 @@ async function findContextProfile(modelName, hostUrl, artifact = {}) {
   };
   filter.artifactDigest = artifact.digest;
   filter.runtimeFingerprint = artifact.runtimeFingerprint;
-  return ModelContextProfile.findOne(filter).sort({ lastValidatedAt: -1 }).lean();
+  const profile = await ModelContextProfile.findOne(filter).sort({ lastValidatedAt: -1 }).lean();
+  return normalizeContextProfile(profile);
+}
+
+async function invalidateIfSnapshot(snapshot, reason = 'claim_lost_during_context_authority_write') {
+  if (!snapshot?._id) return { modifiedCount: 0 };
+  return ModelContextProfile.updateOne(
+    {
+      modelName: String(snapshot.modelName || '').trim().replace(/:latest$/i, ''),
+      hostUrl: normalizeHostUrl(snapshot.hostUrl),
+      artifactDigest: snapshot.artifactDigest,
+      runtimeFingerprint: snapshot.runtimeFingerprint,
+      'latestEvidence.snapshotId': String(snapshot._id)
+    },
+    {
+      $set: {
+        recommendationStatus: 'unknown',
+        revalidationRequired: true,
+        stale: true,
+        staleReason: reason,
+        recommendedInteractiveContext: null,
+        recommendedDocumentContext: null,
+        recommendedContext: null
+      }
+    }
+  );
 }
 
 module.exports = {
@@ -136,5 +236,8 @@ module.exports = {
   hasValidThroughputEvidence,
   isValidTokensPerSec,
   modelNameCandidates,
-  updateFromProbeSnapshot
+  normalizeContextProfile,
+  updateFromProbeSnapshot,
+  invalidateIfSnapshot,
+  RECOMMENDATION_EVIDENCE_VERSION
 };

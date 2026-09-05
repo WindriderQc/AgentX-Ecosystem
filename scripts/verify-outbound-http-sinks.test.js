@@ -85,10 +85,10 @@ test('checked-in registry covers every recognized physical constructor and repor
     'deps.fetchImpl': 1,
     'https.get': 1,
   });
-  assert.deepEqual(receipt.byAuthoritySource, { configured: 79, 'request-admitted': 31, canonical: 2 });
-  assert.equal(receipt.logicalOperations, 46);
-  assert.equal(receipt.enforcedOperations, 46);
-  assert.equal(receipt.delegates, 8);
+  assert.deepEqual(receipt.byAuthoritySource, { configured: 92, 'request-admitted': 31, canonical: 2 });
+  assert.equal(receipt.logicalOperations, 59);
+  assert.equal(receipt.enforcedOperations, 59);
+  assert.equal(receipt.delegates, 9);
   assert.equal(receipt.approvedTransportSinks, 3);
   assert.equal(receipt.legacyDirectSinks, 66);
 });
@@ -359,8 +359,8 @@ test('checked-in JSON is structurally valid before runtime source discovery', ()
   const validated = validateInventory(readInventory());
   assert.equal(validated.schemaVersion, 2);
   assert.equal(validated.sinks.size, 69);
-  assert.equal(validated.operations.size, 46);
-  assert.equal(validated.delegates.size, 8);
+  assert.equal(validated.operations.size, 59);
+  assert.equal(validated.delegates.size, 9);
   assert.equal(validated.legacySinks.size, 66);
   assert(validated.policies.size > 0);
 });

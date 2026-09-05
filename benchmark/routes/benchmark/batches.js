@@ -7,7 +7,7 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../../config/logger');
 const benchmarkService = require('../../src/services/benchmark');
-const { judgeBatch, preflightJudgeBatch, stopJudging, stopPersistedJudging, getJudgingStatus } = require('../../src/services/benchmark/judging');
+const { startManagedJudgeBatch, preflightJudgeBatch, stopJudging, stopPersistedJudging, getJudgingStatus } = require('../../src/services/benchmark/judging');
 const { resolveMultiJudge } = require('../../src/services/benchmark/resolveMultiJudge');
 const {
     resolveReadyJudgeTarget,
@@ -37,6 +37,23 @@ function mapJudgeStartErrorStatus(err) {
     if (msg.includes('cannot judge while batch is still running')) return 409;
     if ((msg.includes('no pending') && msg.includes('result')) || (msg.includes('no successful') && msg.includes('result'))) return 400;
     return 500;
+}
+
+async function rejectStrictTrustBatchJudgeMutation(batchId, res) {
+    const batch = await BenchmarkBatch.findById(batchId)
+        .select('trust_campaign_spec_id +trust_evidence_context')
+        .lean();
+    if (!batch) {
+        res.status(404).json({ status: 'error', error: 'Batch not found' });
+        return true;
+    }
+    if (!benchmarkService.isTrustCampaignBatch(batch) && !batch.trust_evidence_context) return false;
+    res.status(409).json({
+        status: 'error',
+        code: 'BENCHMARK_TRUST_LEGACY_JUDGE_MUTATION_FORBIDDEN',
+        error: 'Strict Benchmark Trust judging is owned by the frozen campaign runtime'
+    });
+    return true;
 }
 
 /**
@@ -87,9 +104,17 @@ router.post('/batch/:id/reconcile', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
 
-        const batch = await BenchmarkBatch.findById(req.params.id);
+        const batch = await BenchmarkBatch.findById(req.params.id)
+            .select('+trust_evidence_context');
         if (!batch) {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
+        }
+        if (benchmarkService.isTrustCampaignBatch(batch)) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_LEGACY_RECONCILE_FORBIDDEN',
+                error: 'Strict Benchmark Trust reconciliation is owned by the frozen campaign finalizer'
+            });
         }
         if (['running', 'judging'].includes(batch.status) || batch.judge_status === 'running') {
             return res.status(409).json({
@@ -138,15 +163,17 @@ router.get('/batch/:id/stream', async (req, res) => {
         if (closed) return;
         try {
             const batch = await BenchmarkBatch.findById(batchId)
-                .select('status completed failed total_tests current_test judge_status judge_stats started_at completed_at last_activity_at')
+                .select('status completed failed total_tests current_test judge_status judge_total judge_completed judge_failed started_at completed_at last_activity_at trust_campaign_spec_id trust_batch_id +trust_evidence_context')
                 .lean();
             if (!batch) { send('error', { message: 'Batch not found' }); res.end(); closed = true; return; }
 
+            const publicBatch = benchmarkService.projectBenchmarkBatchForPublicRead(batch);
+
             // Only push when data changed
-            const hash = `${batch.status}:${batch.completed}:${batch.failed}:${batch.judge_stats?.completed || 0}:${JSON.stringify(batch.current_test || {})}`;
+            const hash = `${publicBatch.status}:${publicBatch.completed}:${publicBatch.failed}:${publicBatch.judge_completed || 0}:${JSON.stringify(publicBatch.current_test || {})}`;
             if (hash !== lastHash) {
                 lastHash = hash;
-                send('progress', batch);
+                send('progress', publicBatch);
             }
 
             // End stream on terminal status
@@ -208,7 +235,7 @@ router.get('/batches/active', async (req, res) => {
             const isStuck = inactiveSeconds > STUCK_THRESHOLD_SECONDS;
 
             return {
-                ...batch,
+                ...benchmarkService.projectBenchmarkBatchForPublicRead(batch),
                 inactive_seconds: inactiveSeconds,
                 is_stuck: isStuck,
                 activity_status: isStuck ? 'stuck' : (inactiveSeconds > 60 ? 'slow' : 'active')
@@ -236,7 +263,7 @@ router.get('/batches/stuck', async (req, res) => {
 
         res.json({
             status: 'success',
-            data: stuck,
+            data: stuck.map(batch => benchmarkService.projectBenchmarkBatchForPublicRead(batch)),
             threshold_seconds: thresholdSeconds
         });
     } catch (err) {
@@ -253,7 +280,9 @@ router.get('/batch/:id/timeline', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
 
-        const batch = await BenchmarkBatch.findById(req.params.id).select('_id started_at').lean();
+        const batch = await BenchmarkBatch.findById(req.params.id)
+            .select('_id started_at trust_campaign_spec_id +trust_evidence_context')
+            .lean();
 
         if (!batch) {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
@@ -264,13 +293,14 @@ router.get('/batch/:id/timeline', async (req, res) => {
             .sort({ timestamp: 1 })
             .lean();
 
+        const trustCampaign = benchmarkService.isTrustCampaignBatch(batch);
         const enriched = timeline.map((event, index) => {
             const timeSinceStart = batch.started_at
                 ? new Date(event.timestamp) - new Date(batch.started_at)
                 : 0;
 
             return {
-                ...event,
+                ...benchmarkService.projectBenchmarkTimelineEventForPublicRead(event, trustCampaign),
                 time_since_start_ms: timeSinceStart,
                 index
             };
@@ -320,10 +350,19 @@ router.post('/batch/:id/recover', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
 
-        const batch = await BenchmarkBatch.findById(req.params.id);
+        const batch = await BenchmarkBatch.findById(req.params.id)
+            .select('+trust_evidence_context');
 
         if (!batch) {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
+        }
+
+        if (benchmarkService.isTrustCampaignBatch(batch)) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_RECOVER_FORBIDDEN',
+                error: 'Strict Benchmark Trust recovery must use the durable stop endpoint'
+            });
         }
 
         if (!['running', 'judging'].includes(batch.status) && batch.judge_status !== 'running') {
@@ -344,7 +383,7 @@ router.post('/batch/:id/recover', async (req, res) => {
         res.json({
             status: 'success',
             message: 'Batch marked as stopped',
-            data: reconciledBatch
+            data: benchmarkService.projectBenchmarkBatchForPublicRead(reconciledBatch)
         });
     } catch (err) {
         logger.error('Failed to recover batch', { error: err.message, batchId: req.params.id });
@@ -359,6 +398,7 @@ router.post('/batch/:id/recover', async (req, res) => {
 router.post('/batch/:id/rejudge-pending', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
+        if (await rejectStrictTrustBatchJudgeMutation(req.params.id, res)) return;
         const requestBody = req.body || {};
         const concurrency = parsePositiveInt(requestBody.concurrency, 2);
         const requestedJudgeConfig = requestBody.judge_config || {};
@@ -387,12 +427,13 @@ router.post('/batch/:id/rejudge-pending', async (req, res) => {
         });
 
         // Start judging in background, return immediately
-        judgeBatch(req.params.id, {
+        const { completion } = await startManagedJudgeBatch(req.params.id, {
             judgeConfig,
             concurrency,
             force: false,
             multiJudge
-        }).catch(err => {
+        });
+        completion.catch(err => {
             logger.error('Background rejudge failed', { batchId: req.params.id, error: err.message });
         });
 
@@ -417,6 +458,7 @@ router.post('/batch/:id/rejudge-pending', async (req, res) => {
 router.post('/batch/:id/judge', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
+        if (await rejectStrictTrustBatchJudgeMutation(req.params.id, res)) return;
         const requestBody = req.body || {};
         const concurrency = parsePositiveInt(requestBody.concurrency, 2);
         const force = parseBoolean(requestBody.force, false);
@@ -444,7 +486,8 @@ router.post('/batch/:id/judge', async (req, res) => {
         };
 
         // Start judging in background
-        judgeBatch(req.params.id, options).catch(err => {
+        const { completion } = await startManagedJudgeBatch(req.params.id, options);
+        completion.catch(err => {
             logger.error('Background judging failed', { batchId: req.params.id, error: err.message });
         });
 
@@ -491,6 +534,7 @@ router.get('/batch/:id/judge/status', async (req, res) => {
 router.post('/batch/:id/judge/stop', async (req, res) => {
     try {
         if (!validateObjectId(req.params.id, res, 'Batch ID')) return;
+        if (await rejectStrictTrustBatchJudgeMutation(req.params.id, res)) return;
 
         const result = await stopPersistedJudging(req.params.id);
 

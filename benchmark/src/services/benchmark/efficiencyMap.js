@@ -87,6 +87,7 @@ async function getEfficiencyMap() {
         success: true,
         quality_score: { $exists: true, $gt: 0 },
         infra_error: { $ne: true },
+        needs_review: { $ne: true },
         excluded_from_leaderboard: { $ne: true }
     };
 

@@ -1,9 +1,9 @@
-// combined-board.js — Single Model Leaderboard (Quality Ranking + Model Stats merged)
+// combined-board.js — Compact model index + complete model evidence sheet.
 //
-// Each card uses a 3-line layout:
-//   Line 1 — rank + model name + host (with judge icon)        | UGRank score (right)
-//   Line 2 — columns: Badges | Category bars | Timing | Speedo (right)
-//   Line 3 — Test compilation stats (Tests, Conf, Cal, Reviewed, Success, Coeff)
+// The index is intentionally scan-first: one graphic row per model. Every
+// field that used to occupy the three-line card remains available in the
+// dialog opened from that row. This is presentation-only; ranking, trust and
+// routing contracts stay upstream and unchanged.
 
 import { getReadinessMap, getBadgeHtml } from '../model-profiler/components/readiness-cache.js';
 import { speedometer, formatMs, valColor, shortHost } from './unified-board.js';
@@ -31,7 +31,14 @@ const CATEGORY_ORDER = Object.keys(CATEGORY_META);
 // Helpers
 // ---------------------------------------------------------------------------
 
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
+}
+
 function scoreClass(score) {
+  if (score == null || !Number.isFinite(Number(score))) return '';
   if (score > 8) return 'h';
   if (score > 6) return 'm';
   return 'l';
@@ -161,7 +168,7 @@ function compactCounts(counts, prefix = '') {
 }
 
 function playgroundUrl(entry) {
-  if (entry?.host_available === false || !entry?.model) return null;
+  if (entry?.executionTarget?.executionKind === 'harness' || entry?.host_available === false || !entry?.model) return null;
   const configuredCore = typeof document !== 'undefined' && typeof document.querySelector === 'function'
     ? document.querySelector('main[data-core-public-url]')?.dataset.corePublicUrl
     : null;
@@ -191,9 +198,11 @@ function categoryBars(dims, categoryEvidence = {}) {
     const barColor = pct != null ? scoreColor(score10) : 'var(--r-border)';
     const valText = pct != null ? `${clamped}` : '—';
     const naCls = pct == null ? ' cb-bar-na' : '';
-    const unavailableReason = categoryEvidence[cat] === 'attempted_unscored'
-      ? 'attempted; score unavailable'
-      : 'not tested';
+    const unavailableReason = categoryEvidence[cat] === 'review_pending'
+      ? 'pending human review; provisional score withheld'
+      : categoryEvidence[cat] === 'attempted_unscored'
+        ? 'attempted; score unavailable'
+        : 'not tested';
     const title = pct != null ? `${meta.label}: ${valText}%` : `${meta.label}: ${unavailableReason}`;
     return `<div class="cb-bar${naCls}" title="${title}">
       <span class="cb-bar-l">${meta.label}</span>
@@ -240,41 +249,78 @@ function speedoColumn(entry) {
 }
 
 // ---------------------------------------------------------------------------
-// Row card (3-line layout)
+// Compact row + complete model sheet
 // ---------------------------------------------------------------------------
+
+function detailKey(index) {
+  return `model-detail-${index}`;
+}
+
+function evidenceState(entry) {
+  return entry.evidenceTrustVerdict?.state || entry.evidenceTrustState || 'inconclusive';
+}
+
+function evidenceLabel(entry) {
+  return ({
+    trusted: 'Trusted evidence',
+    exploratory: 'Exploratory evidence',
+    stale: 'Stale evidence',
+    inconclusive: 'Inconclusive evidence'
+  })[evidenceState(entry)] || 'Inconclusive evidence';
+}
+
+function compactCategoryStrip(entry) {
+  return CATEGORY_ORDER.map(category => {
+    const meta = CATEGORY_META[category];
+    const score = categoryScore(entry, category);
+    const pct = score == null ? 0 : Math.min(100, Math.max(0, score * 10));
+    const state = score == null ? 'empty' : scoreClass(score);
+    const value = score == null ? 'not scored' : `${score.toFixed(1)} / 10`;
+    return `<span class="cb-spark ${state}" style="--spark-fill:${pct}%" title="${meta.label}: ${value}">
+      <span class="cb-spark-fill"></span><span class="cb-spark-label">${meta.icon}</span>
+    </span>`;
+  }).join('');
+}
+
+function rowState(entry) {
+  const notes = [evidenceLabel(entry)];
+  if (entry.fullScopeEligible === false) notes.push('partial scope');
+  if (entry.rankable === false) notes.push('unranked');
+  if (entry.host_available === false) notes.push('deleted');
+  return notes.join(' · ');
+}
+
+function renderDetailStat(label, value, { className = '', title = '', style = '' } = {}) {
+  return `<div class="cb-detail-stat"${title ? ` title="${esc(title)}"` : ''}>
+    <span class="cb-detail-stat-label">${label}</span>
+    <strong class="cb-detail-stat-value ${className}"${style ? ` style="${style}"` : ''}>${value}</strong>
+  </div>`;
+}
 
 function renderRow(entry, index, championMap, readinessMap, { provisional = false } = {}) {
   const model = entry.model || '—';
   const readinessBadge = readinessMap ? getBadgeHtml(model, readinessMap) : '';
   const hostName = entry.hostName || shortHost(entry.host) || '—';
   const judgeModel = entry.judgeModel || null;
-  const judgeIcon = judgeModel
-    ? `<span class="cb-judge" title="Judge: ${judgeModel}"><i class="fas fa-gavel"></i></span>`
-    : '';
-  const hostTtftLabel = entry.hostTtft != null ? ` · host TTFT ${formatMs(entry.hostTtft)}` : '';
   const useModelUrl = playgroundUrl(entry);
-  const evidenceLevel = entry.evidenceTrustVerdict?.state || entry.evidenceTrustState || 'inconclusive';
-  const evidenceLabels = {
-    trusted: 'Trusted evidence',
-    exploratory: 'Exploratory evidence',
-    stale: 'Stale evidence',
-    inconclusive: 'Inconclusive evidence'
-  };
-  const evidenceLabel = evidenceLabels[evidenceLevel] || evidenceLabels.inconclusive;
+  const isLocal = (entry.tier || 'local') === 'local';
+  const evidenceLevel = evidenceState(entry);
+  const evidenceProof = evidenceLabel(entry);
 
-  const canMedal = !provisional && entry.fullScopeEligible === true && index < 3;
+  const canMedal = entry.rankable !== false && !provisional && entry.fullScopeEligible === true && index < 3;
   const rank = canMedal
     ? `<span class="cb-medal ${RANK_CLASS[index]}">${MEDAL[index]}</span>`
-    : `<span class="cb-rank-num">${provisional ? 'P' : '#'}${index + 1}</span>`;
+    : `<span class="cb-rank-num">${entry.rankable === false ? '—' : `${provisional ? 'P' : '#'}${index + 1}`}</span>`;
 
-  const score = entry.score ?? 0;
+  const score = entry.score;
   const scoreCls = scoreClass(score);
   const leaderCls = index === 0 && canMedal ? ' cb-leader' : '';
+  const scorePct = Number.isFinite(score) ? Math.min(100, Math.max(0, score * 10)) : 0;
 
   const { best, watch } = categoryExtremes(entry);
   const watchTone = watch && watch.score < 6 ? 'bad' : 'watch';
 
-  // --- Line 2 columns ---
+  // --- Full-sheet graphic columns ---
   const badgesCol = `<div class="cb-col cb-col-badges">
     <div class="cb-col-head">Badges</div>
     <div class="cb-badges">${renderChampionBadges(entry, championMap)}</div>
@@ -295,17 +341,7 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
     ${dims.length > 0 ? categoryBars(dims, entry.categoryEvidence) : '<div class="cb-no-data">No scored categories yet</div>'}
   </div>`;
 
-  const timingCol = `<div class="cb-col cb-col-timing">
-    <div class="cb-col-head">Timing</div>
-    ${timingColumn(entry)}
-  </div>`;
-
-  const speedoCol = `<div class="cb-col cb-col-speedo">
-    <div class="cb-col-head">Throughput</div>
-    ${speedoColumn(entry)}
-  </div>`;
-
-  // --- Line 3 stats ---
+  // --- Full-sheet evidence stats ---
   const confidence = entry.confidence != null ? `±${entry.confidence.toFixed(2)}` : '—';
   const confCls = confidenceClass(entry.confidence);
   const tests = entry.testCount ?? '—';
@@ -330,12 +366,28 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
   const difficultyTitle = entry.fullScopeMinLevel
     ? `Required hard-level coverage: ${requiredLevels || `L${entry.fullScopeMinLevel}+`}`
     : 'Hard-level coverage';
-  const evidenceBadge = entry.fullScopeEligible === false
-    ? '<span class="cb-stat" title="Partial benchmark evidence: run the missing levels/categories before treating this as a full-scope leader"><span class="cb-stat-l">Scope</span><span class="cb-stat-v watch">PARTIAL</span></span>'
-    : '';
   const unavailableBadge = entry.host_available === false
     ? '<span class="cb-unavailable-badge" title="This model is in the benchmark archive but is not currently present on its recorded Ollama host">Deleted</span>'
     : '';
+  const nonComparableBadge = entry.rankable === false
+    ? `<span class="cb-unavailable-badge" title="Visible evidence only; excluded from rank${entry.filterReason ? `: ${esc(entry.filterReason)}` : ''}">UNRANKED</span>`
+    : '';
+  const harnessLabel = entry.harness?.name ? ` · ${entry.harness.name} ${entry.harness.version || ''}` : '';
+  const tierLabel = entry.tier === 'paid_cloud' ? 'paid cloud' : entry.tier === 'free_cloud' ? 'free cloud' : 'local';
+  const pricingLabel = entry.pricing?.kind && entry.pricing.kind !== 'free'
+    ? ` · manual estimate · ${entry.pricing.source || 'declared price'}`
+    : '';
+  const providerCost = Number(entry.providerCostNanodollars || 0);
+  const providerCostLabel = isLocal
+    ? '—'
+    : entry.pricing?.kind === 'free'
+      ? 'US$0 (declared)'
+      : `~US$${(providerCost / 1e9).toFixed(6)}`;
+  const providerCostTitle = isLocal
+    ? 'Local execution has no provider-price attribution'
+    : entry.pricing?.kind === 'free'
+      ? `Provider cost declared free by ${entry.pricing?.source || 'catalog'}`
+      : `Manual estimated provider cost for these rows; source: ${entry.pricing?.source || 'catalog snapshot'}`;
   const reviewNeeded = entry.needsReviewCount ?? entry.reviewCount ?? 0;
   const lowConfidenceKnown = evidenceKnown
     || (entry.evidenceConfidenceCoverage != null && Number(entry.evidenceConfidenceCoverage) > 0);
@@ -351,51 +403,100 @@ function renderRow(entry, index, championMap, readinessMap, { provisional = fals
     ? (entry.perfCoeff >= 0.9 ? '#4fc3f7' : entry.perfCoeff >= 0.7 ? '#ffb74d' : '#ef5350')
     : 'var(--r-text-dim)';
 
-  return `<div class="cb-row${leaderCls}">
+  const key = detailKey(index);
+  const speedValue = entry.tokPerSec != null ? `${entry.tokPerSec} tok/s` : '—';
+  const ttftValue = entry.benchmarkTtft != null ? formatMs(entry.benchmarkTtft) : '—';
+  const compactScope = difficultyKnown ? `${difficultyCoverage} hard` : `${tests} tests`;
+  const summary = `<button type="button" class="cb-row-open" data-detail-key="${key}"
+      aria-haspopup="dialog" aria-controls="cb-model-dialog" aria-label="Open full evidence sheet for ${esc(model)}">
+    <span class="cb-rank">${rank}</span>
+    <span class="cb-summary-id">
+      <span class="cb-summary-model">${esc(model)}${readinessBadge}</span>
+      <span class="cb-summary-source"><i class="fas fa-${isLocal ? 'server' : 'cloud'}" aria-hidden="true"></i> ${esc(entry.provider || 'ollama')} · ${esc(tierLabel)} · ${esc(hostName)}</span>
+      <span class="cb-summary-state" data-evidence-level="${esc(evidenceLevel)}">${esc(rowState(entry))}</span>
+    </span>
+    <span class="cb-summary-score" style="--score-pct:${scorePct}%">
+      <span class="cb-score ${scoreCls}">${Number.isFinite(score) ? score.toFixed(2) : '—'}</span>
+      <span class="cb-score-label">${entry.rankable === false ? 'Unranked' : 'UGRank'}</span>
+    </span>
+    <span class="cb-summary-categories" aria-label="Category score profile">${compactCategoryStrip(entry)}</span>
+    <span class="cb-summary-pace">
+      <strong>${speedValue}</strong><small>${ttftValue} TTFT</small>
+    </span>
+    <span class="cb-summary-coverage">
+      <strong>${compactScope}</strong><small>${confidence === '—' ? 'uncertainty unknown' : `${confidence} uncertainty`}</small>
+    </span>
+    <span class="cb-summary-open" aria-hidden="true"><i class="fas fa-chevron-right"></i></span>
+  </button>`;
 
-    <div class="cb-line cb-line-head">
-      <div class="cb-rank">${rank}</div>
-      <div class="cb-id">
-        <div class="cb-model">
-          <span class="cb-model-name">${model}</span>${readinessBadge}${unavailableBadge}
-          <a href="/courthouse?model=${encodeURIComponent(model)}" class="cb-link" title="Review in Courthouse"><i class="fas fa-gavel"></i></a>
-          <a href="/efficiency-map" class="cb-link" title="Efficiency Map"><i class="fas fa-chart-line"></i></a>
-          ${useModelUrl ? `<a href="${useModelUrl}" class="cb-link cb-use-model" title="Open this exact model and host in Manual Chat; routing will not change automatically"><i class="fas fa-comment-dots"></i><span>Use in Chat</span></a><span class="cb-use-model-proof" data-evidence-level="${evidenceLevel}">${evidenceLabel}</span>` : ''}
-        </div>
-        <div class="cb-host">
-          <i class="fas fa-server cb-host-ico"></i><span class="cb-host-name">${hostName}</span>${judgeIcon}<span class="cb-host-meta">${hostTtftLabel}</span>
-        </div>
+  const detail = `<div class="cb-detail-sheet" data-detail-model="${esc(model)}">
+    <header class="cb-detail-hero">
+      <div class="cb-detail-rank">${rank}</div>
+      <div class="cb-detail-identity">
+        <p class="cb-detail-kicker">Complete model evidence</p>
+        <h3 id="cb-model-dialog-title">${esc(model)}</h3>
+        <div class="cb-detail-badges">${readinessBadge}${unavailableBadge}${nonComparableBadge}<span class="cb-use-model-proof" data-evidence-level="${esc(evidenceLevel)}">${esc(evidenceProof)}</span></div>
       </div>
-      <div class="cb-score-block">
+      <div class="cb-detail-score" style="--score-pct:${scorePct}%">
         ${renderTrend(entry.trend)}
-        <div class="cb-score ${scoreCls}">${score.toFixed(2)}</div>
-        <div class="cb-score-label">UGRank</div>
+        <strong class="${scoreCls}">${Number.isFinite(score) ? score.toFixed(2) : '—'}</strong>
+        <span>${entry.rankable === false ? 'Unranked' : 'UGRank'} / 10</span>
       </div>
+    </header>
+
+    <section class="cb-detail-provenance" aria-label="Execution provenance">
+      <div><span>Host</span><strong>${esc(hostName)}</strong><small>${esc(entry.host || 'Host identity unavailable')}</small></div>
+      <div><span>Source</span><strong>${esc(entry.provider || 'ollama')} · ${esc(tierLabel)}</strong><small>${esc(`${harnessLabel ? harnessLabel.replace(/^ · /, '') : 'direct model'}${pricingLabel}`)}</small></div>
+      <div><span>Judge</span><strong>${esc(judgeModel || '—')}</strong><small>${judgeModel ? 'Observed judge target' : 'Judge identity unavailable'}</small></div>
+      <div><span>Evidence</span><strong>${esc(evidenceProof)}</strong><small>${esc(entry.qualityCohortFingerprint || 'Cohort fingerprint unavailable')}</small></div>
+    </section>
+
+    <div class="cb-detail-grid">
+      <section class="cb-detail-panel cb-detail-categories">
+        <div class="cb-detail-panel-head"><div><span>Capability profile</span><h4>${axisLabel} by category</h4></div><span class="cb-detail-panel-icon">◫</span></div>
+        <div class="cb-detail-highlight-row">${badgesCol}</div>
+        <div class="cb-detail-bars">${dims.length > 0 ? categoryBars(dims, entry.categoryEvidence) : '<div class="cb-no-data">No scored categories yet</div>'}</div>
+      </section>
+
+      <section class="cb-detail-panel cb-detail-performance">
+        <div class="cb-detail-panel-head"><div><span>Runtime profile</span><h4>Speed & latency</h4></div><span class="cb-detail-panel-icon">↗</span></div>
+        <div class="cb-detail-performance-grid">
+          <div><div class="cb-col-head">Timing</div>${timingColumn(entry)}</div>
+          <div><div class="cb-col-head">Throughput</div>${speedoColumn(entry)}</div>
+        </div>
+      </section>
+
+      <section class="cb-detail-panel cb-detail-evidence">
+        <div class="cb-detail-panel-head"><div><span>Evidence ledger</span><h4>Coverage, confidence & cost</h4></div><span class="cb-detail-panel-icon">◎</span></div>
+        <div class="cb-detail-stat-grid">
+          ${renderDetailStat('Tests', tests)}
+          ${renderDetailStat('Levels', levels, { title: 'Prompt level mix' })}
+          ${renderDetailStat('Contexts', contexts, { title: 'Context sizes used' })}
+          ${renderDetailStat('Hard coverage', `${difficultyCoverage}${difficultyPenalty > 0 ? ` / -${difficultyPenalty.toFixed(1)}` : ''}`, { className: difficultyClass, title: difficultyTitle })}
+          ${renderDetailStat('Evidence confidence', `${evidenceConfidence}${evidencePenalty > 0 ? ` / -${evidencePenalty.toFixed(1)}` : ''}`, { className: evidenceClass, title: evidenceTitle })}
+          ${entry.fullScopeEligible === false ? renderDetailStat('Scope', 'PARTIAL', { className: 'watch', title: 'Run missing levels/categories before treating this as full-scope evidence' }) : ''}
+          ${renderDetailStat('Uncertainty', confidence, { className: confCls, title: entry.confidenceMethod === 'weighted_category_prompt_means_t95' ? `Weighted 95% interval from ${entry.confidenceSampleSize || 0} independent prompt means; ${entry.confidenceRepeatCount || entry.testCount || 0} total attempts` : 'Uncertainty is unknown until each scored category has at least two independent prompt fixtures' })}
+          ${renderDetailStat('Calibration', renderCalBadge(entry))}
+          ${renderDetailStat('Needs review', reviewNeeded, { className: reviewNeeded > 0 ? 'watch' : 'good', title: 'Rows flagged for manual review; this is not the human-reviewed count' })}
+          ${renderDetailStat('Low confidence', lowConfidenceLabel, { className: lowConfidenceClass, title: 'Rows with an observed judge confidence below 0.70' })}
+          ${renderDetailStat('Success', successRate, { style: `color:${succColor}` })}
+          ${renderDetailStat('Provider cost', esc(providerCostLabel), { title: providerCostTitle })}
+          ${renderDetailStat('Performance coeff.', coeff, { style: `color:${coeffColor}` })}
+        </div>
+      </section>
     </div>
 
-    <div class="cb-line cb-line-body">
-      ${badgesCol}
-      ${barsCol}
-      ${timingCol}
-      ${speedoCol}
-    </div>
-
-    <div class="cb-line cb-line-stats">
-      <span class="cb-stat"><span class="cb-stat-l">Tests</span><span class="cb-stat-v">${tests}</span></span>
-      <span class="cb-stat" title="Prompt level mix"><span class="cb-stat-l">Levels</span><span class="cb-stat-v">${levels}</span></span>
-      <span class="cb-stat" title="Context sizes used"><span class="cb-stat-l">Ctx</span><span class="cb-stat-v">${contexts}</span></span>
-      <span class="cb-stat" title="${difficultyTitle}"><span class="cb-stat-l">Hard</span><span class="cb-stat-v ${difficultyClass}">${difficultyCoverage}${difficultyPenalty > 0 ? ` / -${difficultyPenalty.toFixed(1)}` : ''}</span></span>
-      <span class="cb-stat" title="${evidenceTitle}"><span class="cb-stat-l">Evid</span><span class="cb-stat-v ${evidenceClass}">${evidenceConfidence}${evidencePenalty > 0 ? ` / -${evidencePenalty.toFixed(1)}` : ''}</span></span>
-      ${evidenceBadge}
-      <span class="cb-stat" title="${entry.confidenceMethod === 'weighted_category_prompt_means_t95' ? `Weighted 95% interval from ${entry.confidenceSampleSize || 0} independent prompt means; ${entry.confidenceRepeatCount || entry.testCount || 0} total attempts` : 'Uncertainty is unknown until each scored category has at least two independent prompt fixtures'}"><span class="cb-stat-l">Conf</span><span class="cb-stat-v ${confCls}">${confidence}</span></span>
-      <span class="cb-stat"><span class="cb-stat-l">Cal</span><span class="cb-stat-v">${renderCalBadge(entry)}</span></span>
-      <span class="cb-stat" title="Rows flagged for manual review; this is not the human-reviewed count"><span class="cb-stat-l">Needs review</span><span class="cb-stat-v ${reviewNeeded > 0 ? 'watch' : 'good'}">${reviewNeeded}</span></span>
-      <span class="cb-stat" title="Rows with an observed judge confidence below 0.70"><span class="cb-stat-l">LowConf</span><span class="cb-stat-v ${lowConfidenceClass}">${lowConfidenceLabel}</span></span>
-      <span class="cb-stat"><span class="cb-stat-l">Success</span><span class="cb-stat-v" style="color:${succColor}">${successRate}</span></span>
-      <span class="cb-stat"><span class="cb-stat-l">Coeff</span><span class="cb-stat-v" style="color:${coeffColor}">${coeff}</span></span>
-    </div>
-
+    <footer class="cb-detail-actions">
+      <p><strong>Manual choice only.</strong> Opening a model never changes routing automatically.</p>
+      <div>
+        <a href="/courthouse?model=${encodeURIComponent(model)}" class="cb-detail-action"><i class="fas fa-gavel" aria-hidden="true"></i> Review in Courthouse</a>
+        <a href="/efficiency-map" class="cb-detail-action"><i class="fas fa-chart-line" aria-hidden="true"></i> Efficiency Map</a>
+        ${useModelUrl ? `<a href="${useModelUrl}" class="cb-detail-action cb-use-model" title="Open this exact model and host in Manual Chat; routing will not change automatically"><i class="fas fa-comment-dots" aria-hidden="true"></i> Use in Chat</a>` : ''}
+      </div>
+    </footer>
   </div>`;
+
+  return `<article class="cb-row${leaderCls}">${summary}<template data-cb-detail="${key}">${detail}</template></article>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +522,7 @@ function renderTriageChips(active) {
 function sortRankings(rankings, mode) {
   if (mode === 'generalist' || !mode) {
     return [...rankings].sort((a, b) => {
+      if (a.rankable !== b.rankable) return a.rankable ? -1 : 1;
       if (a.fullScopeEligible !== b.fullScopeEligible) return a.fullScopeEligible ? -1 : 1;
       return (b.score ?? 0) - (a.score ?? 0);
     });
@@ -452,7 +554,51 @@ function renderRows(rankings, championMap, readinessMap, options = {}) {
   return rankings.map((e, i) => renderRow(e, i, championMap, readinessMap, options)).join('');
 }
 
+function dialogMarkup() {
+  return `<dialog id="cb-model-dialog" class="cb-dialog" aria-labelledby="cb-model-dialog-title">
+    <div class="cb-dialog-frame">
+      <button type="button" class="cb-dialog-close" data-cb-dialog-close aria-label="Close model details">
+        <i class="fas fa-xmark" aria-hidden="true"></i>
+      </button>
+      <div class="cb-dialog-content"></div>
+    </div>
+  </dialog>`;
+}
+
+function wireModelDialog(container) {
+  if (!container || typeof container.addEventListener !== 'function') return;
+  if (container._cbDialogWired) return;
+  container._cbDialogWired = true;
+  container.addEventListener('click', (event) => {
+    const dialog = container.querySelector('#cb-model-dialog');
+    if (!dialog) return;
+
+    const closeButton = event.target.closest('[data-cb-dialog-close]');
+    if (closeButton || event.target === dialog) {
+      if (typeof dialog.close === 'function') dialog.close();
+      else dialog.removeAttribute('open');
+      return;
+    }
+
+    const trigger = event.target.closest('.cb-row-open');
+    if (!trigger || !container.contains(trigger)) return;
+    const template = Array.from(container.querySelectorAll('template[data-cb-detail]'))
+      .find(candidate => candidate.dataset.cbDetail === trigger.dataset.detailKey);
+    const content = dialog.querySelector('.cb-dialog-content');
+    if (!template || !content) return;
+
+    content.innerHTML = template.innerHTML;
+    container._cbLastTrigger = trigger;
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    requestAnimationFrame(() => dialog.querySelector('[data-cb-dialog-close]')?.focus());
+  });
+}
+
 export async function renderCombinedBoard(container, rankings) {
+    const activeDetailKey = container.querySelector?.('#cb-model-dialog[open]')
+      ? container._cbLastTrigger?.dataset?.detailKey
+      : null;
     const readinessMap = await getReadinessMap().catch(() => ({}));
     const comparableScopes = new Set((rankings || []).map(scopeKey)).size <= 1;
     const trustVerdict = (rankings || []).find((entry) => entry.evidenceTrustVerdict)?.evidenceTrustVerdict || null;
@@ -462,12 +608,16 @@ export async function renderCombinedBoard(container, rankings) {
   // Persist active triage on the container so re-renders preserve user choice.
   const active = container.dataset.triageMode || 'generalist';
 
-  const title = trustVerdict?.state === 'exploratory'
-    ? 'Exploratory observations'
+  const evidenceTitle = trustVerdict?.state === 'exploratory'
+    ? 'Exploratory observations — no qualified winner'
     : 'Evidence observations — no qualified winner';
   const head = `<div class="r-sec-head">
     <span class="r-sec-icon">🏁</span>
-    <span class="r-sec-title r-t-cyan">${title}</span>
+    <span class="r-sec-heading">
+      <span class="r-sec-title r-t-cyan">Model leaderboard</span>
+      <span class="cb-board-subtitle">${evidenceTitle} · Open any row for the complete evidence sheet.</span>
+    </span>
+    <span class="cb-board-count">${(rankings || []).length} model${(rankings || []).length === 1 ? '' : 's'}</span>
     <span class="r-sec-toggle">▼</span>
   </div>`;
 
@@ -478,11 +628,27 @@ export async function renderCombinedBoard(container, rankings) {
     ? `<div class="r-empty">No rankings yet — launch a benchmark to populate the leaderboard.</div>`
     : `${comparableScopes ? renderTriageChips(active) : '<div class="r-empty" role="note" style="text-align:left;">Scopes differ. Category comparison badges and category re-ranking are disabled.</div>'}<div class="cb-list" id="cb-list">
         ${renderRows(sorted, championMap, readinessMap, { provisional })}
-      </div>`;
+      </div>${dialogMarkup()}`;
 
   container.innerHTML = `${head}<div class="r-sec-body">${body}</div>`;
 
   if (empty) return;
+  wireModelDialog(container);
+  const dialog = container.querySelector('#cb-model-dialog');
+  if (dialog) {
+    dialog.addEventListener('close', () => {
+      const trigger = container._cbLastTrigger;
+      container._cbLastTrigger = null;
+      trigger?.focus();
+    });
+  }
+  if (activeDetailKey) {
+    requestAnimationFrame(() => {
+      const trigger = Array.from(container.querySelectorAll('.cb-row-open'))
+        .find(candidate => candidate.dataset.detailKey === activeDetailKey);
+      trigger?.click();
+    });
+  }
 
   // Wire chip clicks — re-sort and re-render only the list, preserving section state.
   const triage = container.querySelector('.cb-triage');

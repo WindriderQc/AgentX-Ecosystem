@@ -28,7 +28,7 @@ const { benchmarkFetch: fetch } = require('./http');
 const { resolveJudgeHost } = require('./judgeHostResolution');
 const { groupModelsByHost, createCurrentTestPersistenceStrategy } = require('./batchHelpers');
 const { persistSuccessfulResult, persistFailedResult } = require('./batchResultPersistence');
-const { detectDedication, releaseAllDedication, restoreAllDedication } = require('./dedicationLifecycle');
+const { detectDedication, releaseAllDedication } = require('./dedicationLifecycle');
 const { findActiveProfilingForHost } = require('../profiler/activeProfileState');
 const { capturePerformanceBaseline } = require('./performanceBaseline');
 const { evaluateAndPersistEarlyStop, EARLY_STOP_MIN_JUDGED } = require('./earlyStop');
@@ -47,6 +47,9 @@ const {
 } = require('./inferenceContractSnapshot');
 const { createResumeRevalidation, RESUME_CODES } = require('./resumeRevalidation');
 const { checkBatchPreflight, executionModelsFromHostGroups, preflightCounts, runBatchPreflight } = require('./batchPreflightLifecycle');
+const { executionHost, normalizeBatchTargets } = require('../../../../shared/benchmarkTargetContract');
+const { executeHarnessTarget, resolveHarnessTarget } = require('./harnessBrokerClient');
+const { getBenchmarkClaimIdentity, releaseWorkloadAdmission } = require('../../clients/coreApiClient');
 
 // A throughput batch can have one in-flight Core request per host. Keep the
 // controllers grouped by the exact batch id so the stop route can interrupt
@@ -80,7 +83,7 @@ function registerActiveBatchController(batchId, controller) {
     };
 }
 
-function abortActiveBatchRequests(batchId) {
+function abortActiveBatchRequests(batchId, options = {}) {
     const key = String(batchId);
     const controllers = activeBatchControllers.get(key);
     if (!controllers) {
@@ -91,10 +94,15 @@ function abortActiveBatchRequests(batchId) {
     for (const controller of controllers) {
         if (controller.signal.aborted) continue;
 
-        userStoppedControllers.add(controller);
-        const reason = new Error(`Benchmark batch ${key} stopped by user`);
-        reason.name = 'BenchmarkBatchStoppedError';
-        reason.code = 'BENCHMARK_BATCH_STOPPED';
+        const userInitiated = options.userInitiated !== false;
+        if (userInitiated) userStoppedControllers.add(controller);
+        const reason = options.reason instanceof Error
+            ? options.reason
+            : new Error(`Benchmark batch ${key} stopped by user`);
+        if (userInitiated) {
+            reason.name = 'BenchmarkBatchStoppedError';
+            reason.code = 'BENCHMARK_BATCH_STOPPED';
+        }
         controller.abort(reason);
         abortedRequestCount += 1;
     }
@@ -121,6 +129,11 @@ async function runBatchOrchestrator({
     batchId,
     defaultHost,
     models,
+    targets = null,
+    spendGrant = null,
+    qualityCohortFingerprint = null,
+    batchContractFingerprint = null,
+    trustEvidenceContext = null,
     prompts,
     judgeConfig,
     executionConfig,
@@ -139,8 +152,20 @@ async function runBatchOrchestrator({
         handleGracefulStop = () => {};
     }
     const batchCancellationController = new AbortController();
+    let assertClaimActive = () => true;
+    const claimIdentityFor = hostUrl => getBenchmarkClaimIdentity(hostUrl, String(batchId));
     let unregisterBatchCancellation = () => false;
     let orchestrationCompleted = false;
+    const normalizedTargets = normalizeBatchTargets({ host: defaultHost, models, targets });
+    const localTargets = normalizedTargets.filter((target) => target.executionKind === 'ollama');
+    const harnessTargets = normalizedTargets.filter((target) => target.executionKind === 'harness');
+    const localTargetByKey = new Map(localTargets.map((target) => [`${target.host}\0${target.model}`, target]));
+    judgeConfig = {
+        ...(judgeConfig || {}),
+        batch_id: String(batchId),
+        batch_contract_fingerprint: batchContractFingerprint,
+        spend_grant: spendGrant || null
+    };
     const judgeQueue = new ConcurrencyQueue(executionMode === 'latency' ? 1 : (judgeConfig.concurrency || 2));
     const shouldPersistCurrentTest = createCurrentTestPersistenceStrategy(executionMode);
     const judge = createJudgeOrchestrator({
@@ -153,7 +178,7 @@ async function runBatchOrchestrator({
         cancelSignal: batchCancellationController.signal,
         // Sizes the multi-judge escalation budget for the live pipeline —
         // the same role pendingResults.length plays for standalone re-judges.
-        expectedJudgeCount: (models?.length || 0) * (prompts?.length || 0)
+        expectedJudgeCount: normalizedTargets.length * (prompts?.length || 0)
     });
     const {
         resolveJudgeTargetForHost,
@@ -170,7 +195,16 @@ async function runBatchOrchestrator({
     const completedPairs = new Set(batchDoc?.checkpoint?.completed_pairs || []);
     const isResuming = completedPairs.size > 0;
     const lastCheckpointModel = batchDoc?.checkpoint?.last_model || null;
-    const requestedHostGroups = Object.entries(groupModelsByHost(defaultHost, models));
+    // Preserve the legacy host/model grouping contract exactly when callers
+    // have not opted into BenchmarkTarget v1. Explicit targets are grouped by
+    // their own frozen host identity instead.
+    const localHostMap = Array.isArray(targets) && targets.length > 0
+        ? localTargets.reduce((groups, target) => {
+            (groups[target.host] ||= []).push(target.model);
+            return groups;
+        }, {})
+        : groupModelsByHost(defaultHost, models);
+    const requestedHostGroups = Object.entries(localHostMap);
     let executionHostGroups = requestedHostGroups;
     let inferenceContractCampaign = null;
     const resumeRevalidation = isResuming ? createResumeRevalidation({
@@ -247,11 +281,13 @@ async function runBatchOrchestrator({
         pendingModelTimeline,
         repeatIndex = 0,
         repeatTotal = 1,
-        repeatGroupId = null
+        repeatGroupId = null,
+        executionTarget = null
     }) => {
         const start = Date.now();
         const think = modelExecConfig.think === true;
         let testController = null;
+        let frozenPromptText = prompt.prompt;
 
         try {
             pendingModelTimeline.push({
@@ -286,6 +322,7 @@ async function runBatchOrchestrator({
                 modelExecConfig
             );
             const promptText = promptHints.promptText;
+            frozenPromptText = promptText;
             const hintApplied = promptHints.applied;
             const hintText = promptHints.hintText;
             const ollamaOptions = { num_predict: numPredict };
@@ -308,6 +345,7 @@ async function runBatchOrchestrator({
                 stream: false,
                 responseMode: 'normalized',
                 callerDetail: `benchmark-batch-${batchId}`,
+                ...(claimIdentityFor(hostUrl) || {}),
                 options: ollamaOptions,
                 ...(sendThink ? {
                     suppressThinking: !think,
@@ -337,10 +375,7 @@ async function runBatchOrchestrator({
 
             let response;
             let data;
-            const testTimeoutId = setTimeout(
-                () => testController.abort(),
-                modelExecConfig.per_test_timeout_ms || 600000
-            );
+            const testTimeoutId = setTimeout(() => testController.abort(), modelExecConfig.per_test_timeout_ms || 600000);
             const unregisterController = registerActiveBatchController(batchId, testController);
             try {
                 response = await fetch(url, fetchOptions);
@@ -362,19 +397,13 @@ async function runBatchOrchestrator({
             const responseText = useChat ? (data.message?.content || '') : (data.response || '');
             const tokenEstimateText = `${responseText || ''}${data.thinking || data.message?.thinking || ''}`;
             const tokens = data.eval_count || Math.ceil(tokenEstimateText.length / 4);
-            // NOTE: this is NOT a true streaming TTFT. We call Ollama with
-            // stream:false, so we cannot observe when the first token actually
-            // arrives over the wire. `prompt_eval_duration` is Ollama's
-            // self-reported time to ingest+evaluate the prompt before
-            // generation begins — a reasonable lower bound for TTFT, but it
-            // excludes queueing, model-load, and network. Field is named
-            // `time_to_first_token_ms` for backwards compatibility with
-            // existing dashboards/leaderboards; treat it as "prompt eval
-            // duration" semantically. Real streaming TTFT requires switching
-            // to stream:true and timing the first chunk — out of scope here.
-            const timeToFirstTokenMs = data.prompt_eval_duration > 0
+            // Non-streamed batch execution cannot observe wall-to-wall TTFT.
+            // Preserve Ollama's prompt evaluation duration under its truthful
+            // name and leave the legacy TTFT field null.
+            const promptEvalDurationMs = data.prompt_eval_duration > 0
                 ? Number((data.prompt_eval_duration / 1e6).toFixed(1))
                 : null;
+            const timeToFirstTokenMs = null;
             const tokensPerSec = (tokens > 0 && latency > 0)
                 ? Number((tokens / (latency / 1000)).toFixed(2))
                 : 0;
@@ -486,7 +515,8 @@ async function runBatchOrchestrator({
                     latency,
                     tokens,
                     tokens_per_sec: tokensPerSec,
-                    time_to_first_token_ms: timeToFirstTokenMs
+                    time_to_first_token_ms: null,
+                    prompt_eval_duration_ms: promptEvalDurationMs
                 }).catch(err => logger.debug('Failed to update responded stage', { error: err.message }));
             }
 
@@ -504,6 +534,7 @@ async function runBatchOrchestrator({
                 tokens,
                 tokensPerSec,
                 timeToFirstTokenMs,
+                promptEvalDurationMs,
                 cleanedResponse,
                 extractedThinking,
                 hasEmptyResponse,
@@ -548,7 +579,12 @@ async function runBatchOrchestrator({
                 },
                 repeatIndex,
                 repeatTotal,
-                repeatGroupId
+                repeatGroupId,
+                executionTarget,
+                qualityCohortFingerprint,
+                trustEvidenceContext,
+                signal: batchCancellationController.signal,
+                assertAuthorityActive: assertClaimActive
             });
 
             if (!hasEmptyResponse) {
@@ -579,6 +615,7 @@ async function runBatchOrchestrator({
                 hostUrl,
                 judgeHostUrl,
                 prompt,
+                promptText: frozenPromptText,
                 err,
                 errorDuration: Date.now() - start,
                 currentBatch,
@@ -595,7 +632,12 @@ async function runBatchOrchestrator({
                     inference_contract_fingerprint: modelExecConfig.inference_contract_fingerprint || null,
                     inference_contract_request_fingerprint: modelExecConfig.inference_contract_request_fingerprint || null,
                     artifact_digest: modelExecConfig.artifact_digest || null
-                }
+                },
+                executionTarget,
+                qualityCohortFingerprint,
+                trustEvidenceContext,
+                signal: batchCancellationController.signal,
+                assertAuthorityActive: assertClaimActive
             });
             if (classified.infra) return { infraError: true };
         }
@@ -606,6 +648,190 @@ async function runBatchOrchestrator({
             return { infraError: false, stopped: true, cancelled: true };
         }
         return { infraError: false };
+    };
+
+    const runHarnessTarget = async (selectedTarget) => {
+        const target = await resolveHarnessTarget(selectedTarget, { force: true });
+        const hostUrl = executionHost(target);
+        const judgeHostUrl = await resolveJudgeTargetForHost(hostUrl);
+        const currentBatch = await loadCurrentBatch(target.model);
+        if (!currentBatch) return { stopped: true, cancelled: false };
+        const pendingModelTimeline = [];
+        const repeats = Math.max(1, Math.min(5, Number(executionConfig.repeats) || 1));
+
+        try {
+            for (const prompt of prompts) {
+                const repeatGroupId = `${batchId}:${target.id}:${prompt.name || prompt._id}`;
+                for (let repeatIndex = 0; repeatIndex < repeats; repeatIndex++) {
+                    const pairKey = `${target.id}::${prompt.name}::r${repeatIndex}`;
+                    if (completedPairs.has(pairKey)) continue;
+                    if (await shouldStopBatch(target.model, { force: true })) {
+                        return { stopped: true, cancelled: batchCancellationController.signal.aborted };
+                    }
+
+                    if (!executionState.testsStarted) {
+                        executionState.testsStarted = true;
+                        await recordBatchTimelineEvent('tests_start', { success: true });
+                        await setBatchPhase('executing', null);
+                    }
+
+                    const startedAt = Date.now();
+                    const numPredict = executionConfig.response_max_tokens || 32000;
+                    const promptHints = buildPromptHints(
+                        prompt.prompt,
+                        prompt.expected_tokens || null,
+                        numPredict,
+                        executionConfig
+                    );
+                    const controller = new AbortController();
+                    const unregisterController = registerActiveBatchController(batchId, controller);
+                    const timeoutId = setTimeout(
+                        () => controller.abort(),
+                        executionConfig.per_test_timeout_ms || 600000
+                    );
+                    let execution = null;
+                    try {
+                        pendingModelTimeline.push({
+                            timestamp: new Date(), event: 'test_start', model: target.model,
+                            host: hostUrl, prompt_id: prompt._id ? prompt._id.toString() : null,
+                            prompt_level: prompt.level, success: null
+                        });
+                        execution = await executeHarnessTarget({
+                            batchId,
+                            batchFingerprint: batchContractFingerprint,
+                            cellId: `${target.id}:${prompt._id || prompt.name}:${repeatIndex}`,
+                            target,
+                            promptText: promptHints.promptText,
+                            parameters: {
+                                temperature: executionConfig.temperature,
+                                topP: executionConfig.top_p,
+                                seed: executionConfig.seed,
+                                maxTokens: numPredict,
+                                timeoutMs: executionConfig.per_test_timeout_ms || 600000,
+                                thinking: executionConfig.think === true
+                            },
+                            spendGrant,
+                            role: 'candidate',
+                            signal: controller.signal
+                        });
+                        const usage = execution.receipt.usage;
+                        const cleanedResponse = execution.output;
+                        const resultId = await persistSuccessfulResult({
+                            batchId,
+                            judgeConfig,
+                            queueBatchProgress,
+                            flushBatchProgress,
+                            model: target.model,
+                            hostUrl,
+                            judgeHostUrl,
+                            prompt,
+                            promptText: promptHints.promptText,
+                            latency: usage.durationMs || (Date.now() - startedAt),
+                            tokens: usage.outputTokens,
+                            tokensPerSec: usage.durationMs > 0 ? usage.outputTokens / (usage.durationMs / 1000) : null,
+                            timeToFirstTokenMs: null,
+                            cleanedResponse,
+                            extractedThinking: execution.thinking || '',
+                            hasEmptyResponse: cleanedResponse.trim().length === 0,
+                            responseTruncated: execution.finishReason === 'length',
+                            doneReason: execution.finishReason,
+                            numPredict,
+                            hintApplied: promptHints.applied,
+                            hintText: promptHints.hintText,
+                            answerContract: promptHints.answerContract,
+                            lengthHintApplied: promptHints.lengthHintApplied,
+                            hardwareSnapshot: null,
+                            modelWarmupData: null,
+                            performanceBaseline: null,
+                            currentBatch,
+                            pendingModelTimeline,
+                            inputTruncated: false,
+                            promptEvalCount: usage.inputTokens,
+                            inputBudget: executionConfig.input_token_ceiling || null,
+                            executionSettings: {
+                                sampling_profile: executionConfig.sampling_profile || 'controlled',
+                                sampling_source: executionConfig.sampling_source || 'controlled_override',
+                                num_ctx: target.contextWindow,
+                                num_ctx_source: 'target_catalog',
+                                think: executionConfig.think === true,
+                                think_mode: executionConfig.think_mode || (executionConfig.think === true ? 'on' : 'off'),
+                                temperature: executionConfig.temperature ?? null,
+                                top_p: executionConfig.top_p ?? null,
+                                seed: executionConfig.seed ?? null,
+                                rankable_mode: target.mode === 'isolated_model',
+                                inference_contract_fingerprint: target.profile.fingerprint,
+                                artifact_digest: execution.receipt.identity.model.digest || null
+                            },
+                            repeatIndex,
+                            repeatTotal: repeats,
+                            repeatGroupId: repeats > 1 ? repeatGroupId : null,
+                            executionTarget: target,
+                            executionReceipt: execution.publicReceipt,
+                            trustExecutionReceipt: execution.receipt,
+                            providerUsage: usage,
+                            providerCost: {
+                                estimated: target.pricing?.estimated === true && usage.costSource !== 'provider-reported',
+                                costNanodollars: usage.costNanodollars,
+                                pricing: target.pricing,
+                                observedAt: new Date().toISOString()
+                            },
+                            qualityCohortFingerprint,
+                            trustEvidenceContext,
+                            signal: batchCancellationController.signal,
+                            assertAuthorityActive: assertClaimActive
+                        });
+                        if (cleanedResponse.trim()) {
+                            if (judgeHostUrl === hostUrl) deferJudgeTask({ hostUrl, judgeHostUrl, model: target.model, prompt, resultId });
+                            else await enqueueJudgeTask(target.model, prompt, judgeHostUrl, resultId);
+                        }
+                    } catch (error) {
+                        if (wasControllerStoppedByUser(controller) || batchCancellationController.signal.aborted) {
+                            return { stopped: true, cancelled: true };
+                        }
+                        await persistFailedResult({
+                            batchId, judgeConfig, queueBatchProgress, flushBatchProgress,
+                            model: target.model, hostUrl, judgeHostUrl, prompt, err: error,
+                            errorDuration: Date.now() - startedAt, currentBatch, pendingModelTimeline,
+                            repeatIndex, repeatTotal: repeats,
+                            repeatGroupId: repeats > 1 ? repeatGroupId : null,
+                            executionSettings: {
+                                sampling_profile: executionConfig.sampling_profile || 'controlled',
+                                sampling_source: executionConfig.sampling_source || 'controlled_override',
+                                think: executionConfig.think === true,
+                                think_mode: executionConfig.think_mode || (executionConfig.think === true ? 'on' : 'off'),
+                                rankable_mode: target.mode === 'isolated_model',
+                                inference_contract_fingerprint: target.profile.fingerprint
+                            },
+                            executionTarget: target,
+                            executionReceipt: execution?.publicReceipt || null,
+                            trustExecutionReceipt: execution?.receipt || null,
+                            providerUsage: execution?.receipt?.usage || null,
+                            qualityCohortFingerprint,
+                            trustEvidenceContext,
+                            promptText: promptHints.promptText,
+                            signal: batchCancellationController.signal,
+                            assertAuthorityActive: assertClaimActive
+                        });
+                    } finally {
+                        clearTimeout(timeoutId);
+                        unregisterController();
+                    }
+
+                    completedPairs.add(pairKey);
+                    await BenchmarkBatch.updateOne({ _id: batchId }, {
+                        $addToSet: { 'checkpoint.completed_pairs': pairKey },
+                        $set: {
+                            'checkpoint.last_model': target.id,
+                            'checkpoint.last_prompt': prompt.name,
+                            'checkpoint.updated_at': new Date()
+                        }
+                    }).catch(() => {});
+                }
+            }
+            return { stopped: false, cancelled: false };
+        } finally {
+            await flushModelTimeline(pendingModelTimeline);
+        }
     };
 
     const runModelPromptLoop = async (hostUrl, judgeHostUrl, model) => {
@@ -643,8 +869,12 @@ async function runBatchOrchestrator({
             batchId,
             model,
             hostUrl,
-            numCtx: modelExecConfig.num_ctx || null
+            numCtx: modelExecConfig.num_ctx || null,
+            claimIdentity: claimIdentityFor(hostUrl),
+            assertClaimActive,
+            signal: batchCancellationController.signal
         });
+        assertClaimActive();
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping before model warmup because batch is stopped', { batchId, model, host: hostUrl });
             return { stopped: true, cancelled: false };
@@ -659,7 +889,10 @@ async function runBatchOrchestrator({
             num_ctx: modelExecConfig.num_ctx || null,
             warmupTimeoutCold,
             warmupTimeoutLoaded,
-            onPhaseDetail: (detail) => setBatchPhase('warmup', detail)
+            onPhaseDetail: (detail) => setBatchPhase('warmup', detail),
+            claimIdentity: claimIdentityFor(hostUrl),
+            assertClaimActive,
+            signal: batchCancellationController.signal
         });
         if (await shouldStopBatch(model, { force: true })) {
             logger.info('Stopping after model warmup because batch is stopped', { batchId, model, host: hostUrl });
@@ -699,6 +932,7 @@ async function runBatchOrchestrator({
                         handleGracefulStop();
                         return { stopped: true, cancelled: false };
                     }
+                    assertClaimActive();
 
                     if (consecutiveInfraErrors >= INFRA_ERROR_CIRCUIT_BREAKER_THRESHOLD) {
                         logger.warn(`Circuit breaker: skipping remaining prompts on ${hostUrl} after ${consecutiveInfraErrors} consecutive infra errors`, {
@@ -732,7 +966,8 @@ async function runBatchOrchestrator({
                         pendingModelTimeline,
                         repeatIndex,
                         repeatTotal: repeats,
-                        repeatGroupId: repeats > 1 ? repeatGroupId : null
+                        repeatGroupId: repeats > 1 ? repeatGroupId : null,
+                        executionTarget: localTargetByKey.get(`${hostUrl}\0${model}`) || null
                     });
 
                     if (execResult?.stopped || batchCancellationController.signal.aborted) {
@@ -766,7 +1001,9 @@ async function runBatchOrchestrator({
                                 timelinePrefix: 'infra_recovery_warmup',
                                 recordTimelineEvent: recordBatchTimelineEvent,
                                 num_ctx: modelExecConfig.num_ctx || null,
-                                onPhaseDetail: (detail) => setBatchPhase('warmup', detail)
+                                onPhaseDetail: (detail) => setBatchPhase('warmup', detail),
+                                claimIdentity: claimIdentityFor(hostUrl),
+                                assertClaimActive
                             });
                             await setBatchPhase('executing', null);
                             logger.info('Model recovered after infra error', { batchId, model, host: hostUrl });
@@ -895,7 +1132,7 @@ async function runBatchOrchestrator({
     };
 
 
-    if (isResuming) {
+    if (isResuming && requestedHostGroups.length > 0) {
         await setBatchPhase('contract', `Resuming: verifying frozen campaign snapshot for ${lastCheckpointModel || 'next model'}…`);
         inferenceContractCampaign = await resumeRevalidation.loadFrozenCampaign({
             hostGroups: requestedHostGroups,
@@ -922,10 +1159,12 @@ async function runBatchOrchestrator({
     const judgeSourceHosts = hostUrls.length > 0
         ? hostUrls
         : requestedHostGroups.map(([url]) => url);
-    const judgeHostUrls = judgeSourceHosts.map(url => {
-        const { judgeHost } = resolveJudgeHost(url, judgeConfig);
-        return judgeHost;
-    }).filter(Boolean);
+    const judgeHostUrls = judgeConfig.target?.executionKind === 'harness'
+        ? []
+        : [...new Set([
+            ...judgeSourceHosts.map(url => resolveJudgeHost(url, judgeConfig).judgeHost),
+            ...(judgeSourceHosts.length === 0 && judgeConfig.host ? [judgeConfig.host] : [])
+        ].filter(Boolean))];
     const allAffectedHosts = [...new Set([...hostUrls, ...judgeHostUrls])];
 
     // Server-side profiling guard: refuse to start while a profiler run or
@@ -972,8 +1211,14 @@ async function runBatchOrchestrator({
     }) + preflightAllowanceMs;
     await setBatchPhase('claiming', `Reserving ${allAffectedHosts.length} host(s) with core…`);
     let claimedHostUrls;
+    let orchestrationError = null;
     try {
-        claimedHostUrls = await acquireBenchmarkClaims(allAffectedHosts, batchId, claimEstimateMs);
+        claimedHostUrls = await acquireBenchmarkClaims(allAffectedHosts, batchId, claimEstimateMs, {
+            kind: harnessTargets.length > 0 || judgeConfig.target?.executionKind === 'harness'
+                ? 'benchmark-cloud'
+                : 'benchmark',
+            source: 'benchmark'
+        });
     } catch (error) {
         if (!isResuming) throw error;
         await resumeRevalidation.fail(error, RESUME_CODES.CLAIM_ACQUISITION_FAILED);
@@ -981,8 +1226,37 @@ async function runBatchOrchestrator({
     const stopClaimHeartbeat = startBenchmarkClaimHeartbeat(
         claimedHostUrls,
         batchId,
-        claimEstimateMs
+        claimEstimateMs,
+        {
+            onFatal: error => {
+                if (!batchCancellationController.signal.aborted) {
+                    batchCancellationController.abort(error);
+                }
+                // Child Core and harness requests own separate controllers.
+                // Abort the whole registered set immediately on lease loss;
+                // waiting for their next checkpoint would let stale work run.
+                abortActiveBatchRequests(batchId, {
+                    reason: error,
+                    userInitiated: false
+                });
+            }
+        }
     );
+    await stopClaimHeartbeat.ready;
+    try {
+        stopClaimHeartbeat.assertActive();
+    } catch (error) {
+        if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
+        else stopClaimHeartbeat();
+        const cleanup = await releaseBenchmarkClaims(claimedHostUrls, batchId, {
+            releaseWorkloadAdmission: false
+        });
+        if (cleanup.failed === 0) {
+            await releaseWorkloadAdmission(String(batchId)).catch(() => {});
+        }
+        throw error;
+    }
+    assertClaimActive = stopClaimHeartbeat.assertActive;
     await recordBatchTimelineEvent('benchmark_claim_acquired', {
         hosts: claimedHostUrls,
         requested: allAffectedHosts,
@@ -994,21 +1268,28 @@ async function runBatchOrchestrator({
             return;
         }
         hostLifecycleFinalized = true;
-        stopClaimHeartbeat();
+        if (typeof stopClaimHeartbeat.drainHosts === 'function') await stopClaimHeartbeat.drainHosts();
 
-        const tasks = [];
-        if (claimedHostUrls.length > 0) {
-            tasks.push((async () => {
-                await releaseBenchmarkClaims(claimedHostUrls, batchId);
-                await recordBatchTimelineEvent('benchmark_claim_released', {
-                    hosts: claimedHostUrls
-                }).catch(() => {});
-            })());
+        const release = await releaseBenchmarkClaims(claimedHostUrls, batchId, {
+            releaseWorkloadAdmission: false
+        });
+        if (typeof stopClaimHeartbeat.drain === 'function') await stopClaimHeartbeat.drain();
+        else stopClaimHeartbeat();
+        await recordBatchTimelineEvent(release.failed > 0 ? 'benchmark_claim_release_failed' : 'benchmark_claim_released', {
+            hosts: claimedHostUrls,
+            ...(release.failed > 0 ? { failed: release.failed } : {})
+        }).catch(() => {});
+        if (release.failed > 0) {
+            const detail = release.details?.find(item => !item.released);
+            const error = new Error(
+                detail?.reason
+                || release.workloadAdmission?.reason
+                || 'Benchmark runtime restore/release failed'
+            );
+            error.code = 'BENCHMARK_RUNTIME_RESTORE_FAILED';
+            error.release = release;
+            throw error;
         }
-        if (dedicationState.size > 0) {
-            tasks.push(restoreAllDedication(dedicationState, { batchId, recordBatchTimelineEvent }));
-        }
-        await Promise.allSettled(tasks);
     };
 
     // Registered only once claim/dedication lifecycle protection exists. From
@@ -1016,6 +1297,7 @@ async function runBatchOrchestrator({
     unregisterBatchCancellation = registerActiveBatchController(batchId, batchCancellationController);
 
     try {
+        assertClaimActive();
         if (dedicationState.size > 0) {
             try {
                 await releaseAllDedication(dedicationState, {
@@ -1032,16 +1314,19 @@ async function runBatchOrchestrator({
                 );
             }
         }
-        if (isResuming) await resumeRevalidation.recordReady(executionHostGroups);
+        if (isResuming && requestedHostGroups.length > 0) await resumeRevalidation.recordReady(executionHostGroups);
         await runBatchPreflight({
             preflightResult,
             batchId,
             defaultHost,
             setBatchPhase,
-            recordBatchTimelineEvent
+            recordBatchTimelineEvent,
+            assertClaimActive,
+            claimIdentityFor,
+            signal: batchCancellationController.signal
         });
 
-        if (!isResuming) {
+        if (!isResuming && requestedHostGroups.length > 0) {
             await setBatchPhase('contract', 'Freezing deployed artifact and inference budgets for this campaign…');
             inferenceContractCampaign = await loadOrResolveCampaignInferenceContracts({
                 batchId,
@@ -1052,16 +1337,18 @@ async function runBatchOrchestrator({
         }
         const hostTasks = executionHostGroups
             .map(([hostUrl, hostModels]) => async () => runHostBatch(hostUrl, hostModels));
+        const harnessTasks = harnessTargets.map((target) => async () => runHarnessTarget(target));
+        const executionTasks = [...hostTasks, ...harnessTasks];
 
         const hostOutcomes = [];
         if (executionMode === 'latency') {
-            for (const task of hostTasks) {
+            for (const task of executionTasks) {
                 const outcome = await task();
                 hostOutcomes.push(outcome);
                 if (outcome?.stopped) break;
             }
         } else {
-            hostOutcomes.push(...await Promise.all(hostTasks.map((task) => task())));
+            hostOutcomes.push(...await Promise.all(executionTasks.map((task) => task())));
         }
 
         await flushBatchProgress(true);
@@ -1102,6 +1389,9 @@ async function runBatchOrchestrator({
         }
         orchestrationCompleted = true;
         return { stopped: false, cancelled: false };
+    } catch (error) {
+        orchestrationError = error;
+        throw error;
     } finally {
         try {
             if (!orchestrationCompleted || executionState.stopped || batchCancellationController.signal.aborted) {
@@ -1112,6 +1402,7 @@ async function runBatchOrchestrator({
         } finally {
             unregisterBatchCancellation();
             await finalizeHostLifecycle();
+            if (orchestrationError) orchestrationError.hostLifecycleRestored = true;
         }
     }
 }

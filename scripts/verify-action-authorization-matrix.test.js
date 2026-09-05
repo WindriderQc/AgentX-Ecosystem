@@ -16,15 +16,15 @@ function clone(value) {
 
 test('the checked-in matrix audits every non-safe route and preserves a zero-gap receipt', () => {
   const receipt = verifyActionAuthorizationMatrix();
-  assert.equal(receipt.total, 237);
-  assert.deepEqual(receipt.byService, { core: 143, benchmark: 79, rag: 15 });
+  assert.equal(receipt.total, 251);
+  assert.deepEqual(receipt.byService, { core: 154, benchmark: 82, rag: 15 });
   assert.deepEqual(receipt.byClassification, {
-    'user-mutation': 121,
-    'scoped-machine-call': 28,
-    'action-observation': 34,
+    'user-mutation': 125,
+    'scoped-machine-call': 37,
+    'action-observation': 35,
     'destructive-mutation': 54,
   });
-  assert.deepEqual(receipt.byEnforcementStatus, { enforced: 236, disabled: 1 });
+  assert.deepEqual(receipt.byEnforcementStatus, { enforced: 250, disabled: 1 });
   assert.equal(receipt.gapRoutes.length, 0);
 });
 
@@ -36,9 +36,33 @@ test('distinguishes consequence tiers and requires exact phrases only for irreve
     'ephemeral-maintenance': 1,
   });
   assert.deepEqual(receipt.byTypedConfirmation, {
-    'not-required': 197,
+    'not-required': 211,
     enforced: 40,
   });
+});
+
+test('audits human-evidence import and requires route-local operator gates', () => {
+  const validated = validateMatrix(readMatrix(), readMutationPolicy());
+  const importRoute = validated.routes.get(
+    'benchmark/routes/benchmark/humanEvidence.js#POST /judge/ground-truth/import-attested'
+  );
+  const launchRoute = validated.routes.get(
+    'benchmark/routes/benchmark/trustBatches.js#POST /trust-batches/:specId/start'
+  );
+  const costRoute = validated.routes.get(
+    'core/routes/pipeline.js#POST /tasks/:id/automation-attempts/:attempt/cost'
+  );
+
+  assert.equal(importRoute.classification, 'user-mutation');
+  assert.equal(importRoute.enforcementStatus, 'enforced');
+  assert.equal(launchRoute.classification, 'user-mutation');
+  assert.equal(launchRoute.routeLocalValidator, 'enforced');
+  assert.equal(launchRoute.enforcementStatus, 'enforced');
+  assert.deepEqual(launchRoute.evidence, ['benchmark-trust-operator-launch-validator']);
+  assert.equal(costRoute.classification, 'user-mutation');
+  assert.equal(costRoute.routeLocalValidator, 'enforced');
+  assert.equal(costRoute.enforcementStatus, 'enforced');
+  assert.deepEqual(costRoute.evidence, ['core-pipeline-cost-reconciliation-operator-gate']);
 });
 
 test('reports no scoped-machine gaps after every machine lane gains route-local identity', () => {

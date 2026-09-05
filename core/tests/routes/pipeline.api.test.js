@@ -12,6 +12,9 @@ jest.mock('../../src/services/pipelineTaskService', () => ({
   createTaskInMongo: jest.fn(),
   findNextEligibleTask: jest.fn(),
   claimEligibleTask: jest.fn(),
+  assertLeaseMutationAllowed: jest.fn(() => null),
+  heartbeatClaim: jest.fn(),
+  releaseAutomationSlot: jest.fn(),
 }));
 
 const PipelineTask = require('../../models/PipelineTask');
@@ -84,6 +87,7 @@ describe('GET /api/pipeline/tasks', () => {
       [
         'pipelineId', 'title', 'service', 'status', 'assignee', 'heartbeatAt',
         'epic', 'source', 'priority', 'dependsOn', 'notBefore', 'dueAt', 'risk',
+        'automation', 'automationAttemptCount',
         'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt'
       ].join(' ')
     );
@@ -132,6 +136,96 @@ describe('GET /api/pipeline/tasks', () => {
   });
 });
 
+describe('GET /api/pipeline/performance', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('returns privacy-safe attempt performance with explicit evidence coverage', async () => {
+    const acquiredAt = new Date(Date.now() - 60_000).toISOString();
+    const completedAt = new Date(Date.now() - 30_000).toISOString();
+    const query = createFindQuery([{
+      pipelineId: '0700',
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      automationAttempts: [{
+        leaseId: 'lease-1',
+        assignee: 'worker-a',
+        attempt: 1,
+        acquiredAt,
+        completedAt,
+        finalState: 'review',
+        evidence: {
+          verification: { status: 'passed' },
+          changes: { filesChanged: 1, bytesChanged: 100 },
+          usage: { durationMs: 60000, costNanodollars: null },
+          failureCodes: [],
+        },
+      }],
+    }]);
+    PipelineTask.find.mockReturnValue(query);
+
+    const response = await request(createApp())
+      .get('/api/pipeline/performance?window=7d')
+      .expect(200);
+
+    expect(PipelineTask.find).toHaveBeenCalledWith({
+      'automationAttempts.acquiredAt': { $gte: expect.any(Date), $lte: expect.any(Date) },
+    });
+    expect(query.select).toHaveBeenCalledWith('pipelineId createdAt automation automationAttempts');
+    expect(response.body.data.performance).toMatchObject({
+      schema: 'agentx.pipeline-automation-performance/v1',
+      authority: 'core.pipeline',
+      window: { days: 7 },
+      counts: { attempts: 1 },
+      coverage: { attemptEvidence: 1, cost: 0, total: 1 },
+      usage: { totalCostNanodollars: null },
+    });
+  });
+
+  test('keeps provider spend separate from session estimates in the API aggregate', async () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const completed = new Date(Date.now() - 30_000).toISOString();
+    const costAttempt = (costKind, costSource, costNanodollars, digest) => ({
+      assignee: 'worker-a', attempt: 1, acquiredAt: recent, completedAt: completed, finalState: 'review',
+      evidence: {
+        verification: { status: 'passed' }, changes: {}, failureCodes: [],
+        usage: { costKind, costSource, costNanodollars, costEvidenceFingerprint: digest.repeat(64) },
+      },
+    });
+    PipelineTask.find.mockReturnValue(createFindQuery([
+      {
+        pipelineId: '0701', createdAt: recent,
+        automationAttempts: [costAttempt('provider-spend', 'openclaw-local-provider-spend/v1', 0, 'a')],
+      },
+      {
+        pipelineId: '0702', createdAt: recent,
+        automationAttempts: [costAttempt('session-estimate', 'openclaw-session-usage/v1', 125971320, 'b')],
+      },
+    ]));
+
+    const response = await request(createApp())
+      .get('/api/pipeline/performance?window=30d')
+      .expect(200);
+
+    expect(response.body.data.performance.usage).toMatchObject({
+      costAggregateKind: 'mixed',
+      observedCostNanodollars: 0,
+      totalCostNanodollars: null,
+      observedProviderSpendNanodollars: 0,
+      observedSessionEstimateNanodollars: 125971320,
+    });
+  });
+
+  test('rejects unbounded performance windows', async () => {
+    const response = await request(createApp())
+      .get('/api/pipeline/performance?window=365d')
+      .expect(400);
+
+    expect(response.body.code).toBe('INVALID_PERFORMANCE_WINDOW');
+    expect(PipelineTask.find).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/pipeline/tasks/:id', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -176,6 +270,50 @@ describe('GET /api/pipeline/tasks/:id', () => {
 
     expect(pipelineTaskService.findNextEligibleTask).toHaveBeenCalled();
     expect(PipelineTask.findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/pipeline/tasks/:id/worker', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('returns one non-personal queued task without changing claim state', async () => {
+    PipelineTask.findOne.mockReturnValue({
+      lean: async () => ({
+        pipelineId: '0707',
+        status: 'queued',
+        assignee: null,
+        service: 'core',
+        spec: '# bounded worker prompt',
+      }),
+    });
+
+    const response = await request(createApp())
+      .get('/api/pipeline/tasks/0707/worker?agent=worker-a')
+      .expect(200);
+
+    expect(PipelineTask.findOne).toHaveBeenCalledWith({
+      pipelineId: '0707',
+      service: { $ne: 'personal' },
+      source: { $ne: 'idea-drop' },
+      $or: [
+        { status: 'queued', assignee: null },
+        { status: { $in: ['in_progress', 'review', 'blocked'] }, assignee: 'worker-a' },
+      ],
+    });
+    expect(response.body.data.task.spec).toBe('# bounded worker prompt');
+    expect(pipelineTaskService.claimEligibleTask).not.toHaveBeenCalled();
+  });
+
+  test('does not disclose unavailable or personal task detail', async () => {
+    PipelineTask.findOne.mockReturnValue({ lean: async () => null });
+
+    const response = await request(createApp())
+      .get('/api/pipeline/tasks/0708/worker?agent=worker-a')
+      .expect(404);
+
+    expect(response.body.code).toBe('WORKER_TASK_UNAVAILABLE');
   });
 });
 
@@ -291,11 +429,37 @@ describe('POST /api/pipeline/tasks/:id/claim', () => {
 
     expect(res.body.code).toBe('TASK_DEPENDENCIES_BLOCKED');
   });
+
+  test('requests a server-issued lease only for explicit automated claims', async () => {
+    pipelineTaskService.claimEligibleTask.mockResolvedValue({
+      pipelineId: '0520',
+      status: 'in_progress',
+      assignee: 'coding-dispatcher',
+      automationLease: { leaseId: 'lease-1' },
+    });
+
+    const res = await request(createApp())
+      .post('/api/pipeline/tasks/0520/claim')
+      .send({ assignee: 'coding-dispatcher', automated: true, leaseDurationMs: 60000 })
+      .expect(200);
+
+    expect(pipelineTaskService.claimEligibleTask).toHaveBeenCalledWith(
+      '0520',
+      'coding-dispatcher',
+      expect.any(Date),
+      { automated: true, leaseDurationMs: 60000 }
+    );
+    expect(res.body.data.task.automationLease.leaseId).toBe('lease-1');
+  });
 });
 
 describe('POST /api/pipeline/tasks/:id/feedback', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0352', status: 'in_progress', assignee: 'codex'
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue(null);
   });
 
   test('rejects empty feedback without updating the task', async () => {
@@ -372,6 +536,377 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
     expect(res.body.data.task.pipelineId).toBe('0403');
     expect(res.body.data.task.status).toBe('blocked');
   });
+
+  test('binds automated completion to the active lease and attempt', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0710',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-1', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-1', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0710', status: 'review' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0710/feedback')
+      .send({
+        status: 'done',
+        by: 'guarded-dispatch',
+        leaseAssignee: 'worker-a',
+        leaseId: 'lease-1',
+        text: 'verified',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed', durationMs: 1200, testsPassed: 12, testsFailed: 0 },
+          changes: { filesChanged: 2, bytesChanged: 900 },
+          usage: {
+            durationMs: 45000,
+            costNanodollars: 0,
+            costKind: 'provider-spend',
+            costSource: 'openclaw-local-provider-spend/v1',
+            costEvidenceFingerprint: 'a'.repeat(64),
+          },
+          failureCodes: [],
+          source: 'clawdx-guarded/v1',
+        },
+      })
+      .expect(200);
+
+    expect(PipelineTask.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pipelineId: '0710',
+        status: 'in_progress',
+        assignee: 'worker-a',
+        'automationLease.leaseId': 'lease-1',
+        'automationLease.expiresAt': { $gt: expect.any(Date) },
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'review',
+          'automationAttempts.$[attempt].finalState': 'review',
+          'automationAttempts.$[attempt].completedAt': expect.any(Date),
+          'automationAttempts.$[attempt].evidence': {
+            schema: 'agentx.pipeline-automation-evidence/v1',
+            verification: { status: 'passed', durationMs: 1200, testsPassed: 12, testsFailed: 0 },
+            changes: { filesChanged: 2, bytesChanged: 900 },
+            usage: {
+              durationMs: 45000,
+              costNanodollars: 0,
+              costKind: 'provider-spend',
+              costSource: 'openclaw-local-provider-spend/v1',
+              costEvidenceFingerprint: 'a'.repeat(64),
+            },
+            failureCodes: [],
+            workerReceiptFingerprint: null,
+            source: 'clawdx-guarded/v1',
+          },
+        }),
+        $unset: { automationLease: 1 },
+      }),
+      { new: true, arrayFilters: [{ 'attempt.leaseId': 'lease-1' }] }
+    );
+    expect(pipelineTaskService.releaseAutomationSlot).toHaveBeenCalledWith({
+      leaseId: 'lease-1',
+      pipelineId: '0710',
+      assignee: 'worker-a',
+    });
+  });
+
+  test('rejects attempt evidence that is not bound to an automation lease', async () => {
+    const response = await request(createApp())
+      .post('/api/pipeline/tasks/0352/feedback')
+      .send({
+        status: 'done',
+        by: 'manual-worker',
+        text: 'not lease bound',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'unknown' },
+          changes: {},
+          usage: {},
+        },
+      })
+      .expect(400);
+
+    expect(response.body.code).toBe('AUTOMATION_EVIDENCE_REQUIRES_LEASE');
+    expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  test('forces an observed over-budget success into blocked with bounded evidence', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0711',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-2', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-2', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0711', status: 'blocked' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0711/feedback')
+      .send({
+        status: 'done',
+        by: 'guarded-dispatch',
+        leaseAssignee: 'worker-a',
+        leaseId: 'lease-2',
+        text: 'verified',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: { filesChanged: 1, bytesChanged: 10 },
+          usage: {
+            durationMs: 1000,
+            costNanodollars: 1,
+            costKind: 'session-estimate',
+            costSource: 'openclaw-session-usage/v1',
+            costEvidenceFingerprint: 'b'.repeat(64),
+          },
+          failureCodes: [],
+          source: 'clawdx-guarded/v1',
+        },
+      })
+      .expect(200);
+
+    const update = PipelineTask.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set.status).toBe('blocked');
+    expect(update.$set['automationAttempts.$[attempt].finalState']).toBe('blocked');
+    expect(update.$set['automationAttempts.$[attempt].evidence'].failureCodes)
+      .toContain('cost_budget_exceeded');
+  });
+
+  test('forces a budgeted automated success without cost evidence into blocked', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0713',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-4', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-4', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0713', status: 'blocked' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0713/feedback')
+      .send({
+        status: 'done',
+        by: 'guarded-dispatch',
+        leaseAssignee: 'worker-a',
+        leaseId: 'lease-4',
+        text: 'verified but cost receipt missing',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: {},
+          usage: { durationMs: 1000 },
+          failureCodes: [],
+        },
+      })
+      .expect(200);
+
+    const evidence = PipelineTask.findOneAndUpdate.mock.calls[0][1]
+      .$set['automationAttempts.$[attempt].evidence'];
+    expect(PipelineTask.findOneAndUpdate.mock.calls[0][1].$set.status).toBe('blocked');
+    expect(evidence.usage.costNanodollars).toBeNull();
+    expect(evidence.failureCodes).toContain('cost_evidence_required');
+  });
+
+  test('blocks a budgeted automated success when attemptEvidence is omitted entirely', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0714', status: 'in_progress', assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-5', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-5', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0714', status: 'blocked' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0714/feedback')
+      .send({
+        status: 'done', by: 'guarded-dispatch', leaseAssignee: 'worker-a',
+        leaseId: 'lease-5', text: 'receipt omitted',
+      })
+      .expect(200);
+
+    const update = PipelineTask.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set.status).toBe('blocked');
+    expect(update.$set['automationAttempts.$[attempt].evidence'].failureCodes)
+      .toContain('cost_evidence_required');
+  });
+
+  test('blocks automated success when its persisted cost budget is absent', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0715', status: 'in_progress', assignee: 'worker-a',
+      automation: { budgets: {} },
+      automationLease: { leaseId: 'lease-6', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-6', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0715', status: 'blocked' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0715/feedback')
+      .send({
+        status: 'done', by: 'guarded-dispatch', leaseAssignee: 'worker-a',
+        leaseId: 'lease-6', text: 'invalid budget',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' }, changes: {}, failureCodes: [],
+          usage: {
+            costNanodollars: 0,
+            costKind: 'provider-spend',
+            costSource: 'openclaw-local-provider-spend/v1',
+            costEvidenceFingerprint: 'f'.repeat(64),
+          },
+        },
+      })
+      .expect(200);
+
+    const update = PipelineTask.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set.status).toBe('blocked');
+    expect(update.$set['automationAttempts.$[attempt].evidence'].failureCodes)
+      .toContain('cost_budget_invalid');
+  });
+
+  test('rejects a worker cost amount without its complete nature and provenance', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0712',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } },
+      automationLease: { leaseId: 'lease-3', assignee: 'worker-a' },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-3', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+
+    const response = await request(createApp())
+      .post('/api/pipeline/tasks/0712/feedback')
+      .send({
+        status: 'done',
+        by: 'guarded-dispatch',
+        leaseAssignee: 'worker-a',
+        leaseId: 'lease-3',
+        text: 'verified',
+        attemptEvidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: {},
+          usage: { costNanodollars: 0 },
+          failureCodes: [],
+        },
+      })
+      .expect(400);
+
+    expect(response.body.code).toBe('INVALID_AUTOMATION_INTENT');
+    expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost', () => {
+  const savedOperatorToken = process.env.AGENTX_OPERATOR_TOKEN;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.AGENTX_OPERATOR_TOKEN = 'operator-token';
+  });
+
+  afterAll(() => {
+    if (savedOperatorToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
+    else process.env.AGENTX_OPERATOR_TOKEN = savedOperatorToken;
+  });
+
+  test('write-once reconciles a completed unknown cost and records an audit entry', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0580',
+      automationAttempts: [{
+        attempt: 2,
+        completedAt: new Date('2026-09-01T12:59:53.642Z'),
+        finalState: 'review',
+        evidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed', durationMs: 406 },
+          changes: { filesChanged: 1, bytesChanged: 1283 },
+          usage: { durationMs: 67219, costNanodollars: null },
+          failureCodes: [],
+          source: 'clawdx-guarded/v1',
+        },
+      }],
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0580' });
+
+    const response = await request(createApp())
+      .post('/api/pipeline/tasks/0580/automation-attempts/2/cost')
+      .set('X-AgentX-Operator-Token', 'operator-token')
+      .send({
+        by: 'codex-cost-reconciler',
+        costNanodollars: 15281520,
+        costKind: 'session-estimate',
+        costSource: 'openclaw-session-usage/v1',
+        costEvidenceFingerprint: 'c'.repeat(64),
+      })
+      .expect(200);
+
+    const [query, update, options] = PipelineTask.findOneAndUpdate.mock.calls[0];
+    expect(query).toMatchObject({ pipelineId: '0580' });
+    expect(update.$set['automationAttempts.$[attempt].evidence'].usage).toMatchObject({
+      costNanodollars: 15281520,
+      costKind: 'session-estimate',
+      costSource: 'openclaw-session-usage/v1',
+      costEvidenceFingerprint: 'c'.repeat(64),
+    });
+    expect(update.$push.feedback).toMatchObject({ by: 'codex-cost-reconciler' });
+    expect(options).toEqual({ new: true, arrayFilters: [{ 'attempt.attempt': 2 }] });
+    expect(response.body.data.costReconciliation.reconciled).toBe(true);
+  });
+
+  test('rejects attempts to contradict existing cost evidence', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0580',
+      automationAttempts: [{
+        attempt: 2,
+        completedAt: new Date(),
+        finalState: 'review',
+        evidence: {
+          schema: 'agentx.pipeline-automation-evidence/v1',
+          verification: { status: 'passed' },
+          changes: {},
+          usage: {
+            costNanodollars: 10,
+            costKind: 'session-estimate',
+            costSource: 'openclaw-session-usage/v1',
+            costEvidenceFingerprint: 'd'.repeat(64),
+          },
+          failureCodes: [],
+        },
+      }],
+    });
+
+    const response = await request(createApp())
+      .post('/api/pipeline/tasks/0580/automation-attempts/2/cost')
+      .set('X-AgentX-Operator-Token', 'operator-token')
+      .send({
+        by: 'codex-cost-reconciler',
+        costNanodollars: 11,
+        costKind: 'session-estimate',
+        costSource: 'openclaw-session-usage/v1',
+        costEvidenceFingerprint: 'e'.repeat(64),
+      })
+      .expect(409);
+
+    expect(response.body.code).toBe('COST_EVIDENCE_CONFLICT');
+    expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+  });
 });
 
 
@@ -437,6 +972,39 @@ describe('POST /api/pipeline/tasks/:id/status (0354 review->done gate)', () => {
     expect(res.body.data.task.status).toBe('done');
   });
 
+  test('records the human review outcome against the exact latest automation attempt', async () => {
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0501',
+      status: 'review',
+      assignee: 'worker-a',
+      automationAttempts: [{
+        leaseId: 'lease-review',
+        attempt: 1,
+        finalState: 'review',
+        completedAt: new Date('2026-09-01T00:00:00.000Z'),
+      }],
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0501', status: 'done' });
+
+    await request(createApp())
+      .post('/api/pipeline/tasks/0501/status')
+      .send({ status: 'done', by: 'overseer' })
+      .expect(200);
+
+    expect(PipelineTask.findOneAndUpdate).toHaveBeenCalledWith(
+      { pipelineId: '0501' },
+      {
+        $set: {
+          status: 'done',
+          'automationAttempts.$[reviewAttempt].reviewOutcome': 'accepted',
+          'automationAttempts.$[reviewAttempt].reviewedAt': expect.any(Date),
+        },
+        $push: { feedback: expect.objectContaining({ by: 'overseer' }) },
+      },
+      { new: true, arrayFilters: [{ 'reviewAttempt.leaseId': 'lease-review' }] }
+    );
+  });
+
   test('releases the worker and heartbeat when a task is re-queued', async () => {
     PipelineTask.findOne.mockResolvedValue({ pipelineId: '0500', status: 'in_progress', assignee: 'worker-a' });
     PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0500', status: 'queued' });
@@ -468,6 +1036,7 @@ describe('pipeline scoped machine identity', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue(null);
     for (const key of ENV_KEYS) delete process.env[key];
   });
 
@@ -483,7 +1052,7 @@ describe('pipeline scoped machine identity', () => {
       expect(pipelineTaskService.claimEligibleTask).not.toHaveBeenCalled();
     }],
     ['heartbeat', '/api/pipeline/tasks/0700/heartbeat', {}, () => {
-      expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(pipelineTaskService.heartbeatClaim).not.toHaveBeenCalled();
     }],
     ['status', '/api/pipeline/tasks/0700/status', { status: 'in_progress' }, () => {
       expect(PipelineTask.findOne).not.toHaveBeenCalled();
@@ -537,7 +1106,7 @@ describe('pipeline scoped machine identity', () => {
       .send({ assignee: 'remote-worker' })
       .expect(200);
 
-    PipelineTask.findOneAndUpdate.mockResolvedValueOnce({
+    pipelineTaskService.heartbeatClaim.mockResolvedValueOnce({
       pipelineId: '0701', heartbeatAt: new Date('2026-08-28T12:00:00.000Z')
     });
     await request(app)
@@ -558,6 +1127,9 @@ describe('pipeline scoped machine identity', () => {
       .send({ status: 'blocked', by: 'remote-worker' })
       .expect(200);
 
+    PipelineTask.findOne.mockResolvedValueOnce({
+      pipelineId: '0701', status: 'in_progress', assignee: 'remote-worker'
+    });
     PipelineTask.findOneAndUpdate.mockResolvedValueOnce({
       pipelineId: '0701', status: 'review', assignee: 'remote-worker'
     });
@@ -575,6 +1147,26 @@ describe('pipeline scoped machine identity', () => {
     );
   });
 
+  test('reports an automation heartbeat lease mismatch as a conflict', async () => {
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+    pipelineTaskService.heartbeatClaim.mockRejectedValueOnce(Object.assign(
+      new Error('automation lease identity is missing or stale'),
+      { status: 409, code: 'TASK_LEASE_MISMATCH' }
+    ));
+
+    const response = await request(createApp({ ip: REMOTE_IP }))
+      .post('/api/pipeline/tasks/0701/heartbeat')
+      .set('Host', 'remote-worker.example')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-secret')
+      .send({ assignee: 'remote-worker', leaseId: 'stale-lease' })
+      .expect(409);
+
+    expect(response.body).toMatchObject({
+      ok: false,
+      code: 'TASK_LEASE_MISMATCH',
+    });
+  });
+
   test('does not let a remote worker token acquire final authority through status=done', async () => {
     process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
 
@@ -588,6 +1180,57 @@ describe('pipeline scoped machine identity', () => {
     expect(response.body.code).toBe('PIPELINE_FINALIZE_REQUIRES_CONTROL_AUTHORITY');
     expect(PipelineTask.findOne).not.toHaveBeenCalled();
     expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  test('binds a remote non-final status mutation to the active automation lease', async () => {
+    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-secret';
+    PipelineTask.findOne.mockResolvedValue({
+      pipelineId: '0711',
+      status: 'in_progress',
+      assignee: 'worker-a',
+      automationLease: {
+        leaseId: 'lease-1',
+        assignee: 'worker-a',
+        expiresAt: new Date(Date.now() + 60000),
+      },
+    });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({
+      leaseId: 'lease-1', assignee: 'worker-a', attempt: 1, durationMs: 60000,
+    });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({
+      pipelineId: '0711', status: 'blocked', assignee: 'worker-a'
+    });
+
+    await request(createApp({ ip: REMOTE_IP }))
+      .post('/api/pipeline/tasks/0711/status')
+      .set('Host', 'remote-worker.example')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-secret')
+      .send({ status: 'blocked', by: 'worker-a', leaseId: 'lease-1' })
+      .expect(200);
+
+    expect(PipelineTask.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pipelineId: '0711',
+        status: 'in_progress',
+        assignee: 'worker-a',
+        'automationLease.leaseId': 'lease-1',
+        'automationLease.expiresAt': { $gt: expect.any(Date) },
+      }),
+      {
+        $set: {
+          status: 'blocked',
+          'automationAttempts.$[attempt].finalState': 'blocked',
+          'automationAttempts.$[attempt].completedAt': expect.any(Date),
+        },
+        $unset: { automationLease: 1 },
+      },
+      { new: true, arrayFilters: [{ 'attempt.leaseId': 'lease-1' }] }
+    );
+    expect(pipelineTaskService.releaseAutomationSlot).toHaveBeenCalledWith({
+      leaseId: 'lease-1',
+      pipelineId: '0711',
+      assignee: 'worker-a',
+    });
   });
 
   test('retains remote operator finalization and its existing force override', async () => {

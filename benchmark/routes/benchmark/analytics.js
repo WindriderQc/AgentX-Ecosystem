@@ -16,6 +16,11 @@ const { validateObjectId } = require('../../src/helpers/objectIdValidator');
 const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
 const BenchmarkResult = require('../../models/BenchmarkResult');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
+const BenchmarkTrustReceipt = require('../../models/BenchmarkTrustReceipt');
+const { withBenchmarkTrustEvidenceLock } = require('../../src/services/benchmark/benchmarkTrustEvidenceLock');
+const {
+    withPublicBenchmarkResultReadPrivacy
+} = require('../../src/services/benchmark/publicReadPrivacy');
 
 function parseBool(value) {
     return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
@@ -49,13 +54,15 @@ router.get('/dashboard', async (req, res) => {
         const { sort, modelCategory, promptCategory, tag } = req.query;
         const sortBy = sort || 'latency';
         const includeUnavailableModels = parseBool(req.query.includeUnavailableModels);
+        const includeCloud = String(req.query.includeCloud ?? 'true').toLowerCase() !== 'false';
 
         const dashboard = await benchmarkService.getDashboard({
             sortBy,
             modelCategory,
             promptCategory,
             tag,
-            includeUnavailableModels
+            includeUnavailableModels,
+            includeCloud
         });
 
         res.json({
@@ -122,7 +129,7 @@ router.get('/quality-breakdown', async (req, res) => {
  * Fetch quality breakdowns for multiple model/host pairs in one request.
  * Body: { pairs: [{ model, host }] }  -- max 50 entries.
  */
-router.post('/quality-breakdown/batch', async (req, res) => {
+router.post('/quality-breakdown/batch', withPublicBenchmarkResultReadPrivacy, async (req, res) => {
     try {
         const { pairs } = req.body || {};
 
@@ -236,12 +243,14 @@ router.get('/generalist-leaderboard', async (req, res) => {
         }
         const trustScope = trustScopeRaw;
         const includeUnavailableModels = parseBool(req.query.includeUnavailableModels);
+        const includeCloud = String(req.query.includeCloud ?? 'true').toLowerCase() !== 'false';
         const data = await benchmarkService.getGeneralistLeaderboard({
             axis,
             hostScope,
             challengeScope,
             trustScope,
-            includeUnavailableModels
+            includeUnavailableModels,
+            includeCloud
         });
 
         res.json({
@@ -326,7 +335,7 @@ router.get('/truncation-stats', async (req, res) => {
  * POST /api/benchmark/compare-batches
  * Compare multiple batches side-by-side
  */
-router.post('/compare-batches', async (req, res) => {
+router.post('/compare-batches', withPublicBenchmarkResultReadPrivacy, async (req, res) => {
     try {
         const { batch_ids } = req.body;
 
@@ -353,6 +362,19 @@ router.post('/compare-batches', async (req, res) => {
             });
         }
 
+        const requestedBatches = await BenchmarkBatch.find({ _id: { $in: batch_ids } })
+            .select('_id trust_campaign_spec_id +trust_evidence_context')
+            .lean();
+        if (requestedBatches.some(batch => (
+            benchmarkService.isTrustCampaignBatch(batch) || batch.trust_evidence_context
+        ))) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_GENERIC_COMPARISON_FORBIDDEN',
+                error: 'Strict Benchmark Trust campaigns cannot be opened through generic batch comparison'
+            });
+        }
+
         const data = await benchmarkService.compareBatches(batch_ids);
 
         res.json({
@@ -361,7 +383,7 @@ router.post('/compare-batches', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to compare batches', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -524,6 +546,7 @@ router.get('/ceiling-analysis', async (req, res) => {
         const leaderboardMatch = {
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true }
         };
         const generalistScores = await calculateAllGeneralistScores(leaderboardMatch, { categoryWeights });
@@ -566,6 +589,7 @@ router.get('/category-heatmap', async (req, res) => {
         const data = await getCategoryHeatmap({
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true }
         });
         res.json({ status: 'success', data });
@@ -585,6 +609,7 @@ router.get('/dimension-breakdown', async (req, res) => {
         const data = await getDimensionBreakdown({
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true }
         });
         res.json({ status: 'success', data });
@@ -604,6 +629,7 @@ router.get('/elite-scores', async (req, res) => {
         const data = await calculateEliteScores({
             success: true,
             infra_error: { $ne: true },
+            needs_review: { $ne: true },
             excluded_from_leaderboard: { $ne: true }
         });
         res.json({ status: 'success', data });
@@ -646,7 +672,7 @@ router.get('/regression', async (req, res) => {
  * Compare two specific batches for regressions
  * Body: { current_batch_id, previous_batch_id }
  */
-router.post('/regression/compare', async (req, res) => {
+router.post('/regression/compare', withPublicBenchmarkResultReadPrivacy, async (req, res) => {
     try {
         const { current_batch_id, previous_batch_id } = req.body || {};
         if (!current_batch_id || !previous_batch_id) {
@@ -669,7 +695,7 @@ router.post('/regression/compare', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to compare batches for regression', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -705,7 +731,7 @@ router.post('/retention/archive', async (req, res) => {
         res.json({ status: 'success', data: result });
     } catch (err) {
         logger.error('Failed to archive old results', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -727,7 +753,7 @@ router.post('/retention/prune', async (req, res) => {
         res.json({ status: 'success', data: result });
     } catch (err) {
         logger.error('Failed to prune excess batches', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -748,7 +774,7 @@ router.post('/retention/purge-dead', async (req, res) => {
         res.json({ status: 'success', data: result });
     } catch (err) {
         logger.error('Failed to purge dead models', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 
@@ -767,26 +793,59 @@ router.post('/retention/reset-all', async (req, res) => {
             });
         }
 
-        const [results, batches] = await Promise.all([
-            BenchmarkResult.deleteMany({}),
-            BenchmarkBatch.deleteMany({})
-        ]);
+        const outcome = await withBenchmarkTrustEvidenceLock('reset-all-benchmark-evidence', async () => {
+            const [protectedReceiptCount, sealedResultCount, sealedBatchCount] = await Promise.all([
+                BenchmarkTrustReceipt.countDocuments({}),
+                BenchmarkResult.countDocuments({ trust_evidence_sealed: true }),
+                BenchmarkBatch.countDocuments({ trust_evidence_sealed: true })
+            ]);
+            if (protectedReceiptCount > 0 || sealedResultCount > 0 || sealedBatchCount > 0) {
+                return {
+                    blocked: true,
+                    protectedReceiptCount,
+                    sealedResultCount,
+                    sealedBatchCount
+                };
+            }
+
+            const [results, batches] = await Promise.all([
+                BenchmarkResult.deleteMany({}),
+                BenchmarkBatch.deleteMany({})
+            ]);
+
+            return {
+                blocked: false,
+                resultsDeleted: results.deletedCount,
+                batchesDeleted: batches.deletedCount
+            };
+        });
+
+        if (outcome.blocked) {
+            return res.status(409).json({
+                status: 'error',
+                code: 'BENCHMARK_TRUST_EVIDENCE_PROTECTS_RESET',
+                error: 'Reset is blocked while receipts or sealed benchmark evidence require preservation or manual recovery',
+                protected_receipts: outcome.protectedReceiptCount,
+                sealed_results: outcome.sealedResultCount,
+                sealed_batches: outcome.sealedBatchCount
+            });
+        }
 
         logger.warn('Benchmark data reset', {
-            results_deleted: results.deletedCount,
-            batches_deleted: batches.deletedCount
+            results_deleted: outcome.resultsDeleted,
+            batches_deleted: outcome.batchesDeleted
         });
 
-        res.json({
-            status: 'success',
-            data: {
-                results_deleted: results.deletedCount,
-                batches_deleted: batches.deletedCount
-            }
-        });
+        return res.json({
+                status: 'success',
+                data: {
+                    results_deleted: outcome.resultsDeleted,
+                    batches_deleted: outcome.batchesDeleted
+                }
+            });
     } catch (err) {
         logger.error('Failed to reset benchmark data', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
 });
 

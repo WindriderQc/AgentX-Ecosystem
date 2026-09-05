@@ -33,6 +33,12 @@ const SHARED_OWNER_ID = `${os.hostname()}:${process.pid}:${randomUUID()}`;
 const _stats = new Map();
 // key → array of pending waiter records waiting for a slot
 const _waitQueues = new Map();
+// host → exclusive model key. An exclusive admission is used only for a
+// model handoff that must evict another resident model before inference.
+const _exclusiveHosts = new Map();
+// host → array of pending exclusive waiter records. Pending exclusives
+// block new ordinary admissions so the current traffic can drain.
+const _exclusiveWaitQueues = new Map();
 let HostGateAdmission = null;
 
 const HOST_GATE_ABORT_CODE = 'HOST_GATE_ADMISSION_ABORTED';
@@ -44,10 +50,32 @@ function _key(host, model) {
 function _getStats(key) {
   let s = _stats.get(key);
   if (!s) {
-    s = { inFlight: 0, peak: 0, totalAcquired: 0, totalReleased: 0, waiters: 0, maxWaiters: 0 };
+    s = {
+      inFlight: 0,
+      trackedInFlight: 0,
+      peak: 0,
+      totalAcquired: 0,
+      totalReleased: 0,
+      totalTracked: 0,
+      waiters: 0,
+      maxWaiters: 0
+    };
     _stats.set(key, s);
   }
   return s;
+}
+
+function _hostInFlight(host) {
+  const prefix = `${host}::`;
+  let total = 0;
+  for (const [key, s] of _stats.entries()) {
+    if (key.startsWith(prefix)) total += s.inFlight + (s.trackedInFlight || 0);
+  }
+  return total;
+}
+
+function _hasExclusiveWaiters(host) {
+  return (_exclusiveWaitQueues.get(host)?.length || 0) > 0;
 }
 
 function _admissionModel() {
@@ -119,8 +147,9 @@ async function acquire(host, model, { signal } = {}) {
   throwIfAdmissionAborted(signal);
 
   if (!ENABLED) {
-    // No-op release — gate disabled
-    return () => {};
+    // Disabled means no concurrency throttling, not invisible traffic. Claims
+    // still need a complete in-flight set before taking their runtime snapshot.
+    return track(host, model, { signal });
   }
 
   if (sharedStateReady()) {
@@ -135,14 +164,68 @@ async function acquireLocal(host, model, { signal } = {}) {
   const s = _getStats(key);
   throwIfAdmissionAborted(signal);
 
-  if (s.inFlight < MAX_INFLIGHT) {
+  if (!_exclusiveHosts.has(host) && !_hasExclusiveWaiters(host) && s.inFlight < MAX_INFLIGHT) {
     s.inFlight++;
     s.totalAcquired++;
     if (s.inFlight > s.peak) s.peak = s.inFlight;
-    return _makeRelease(key);
+    return _makeRelease(key, host);
   }
 
-  // Need to wait — join the wait queue
+  return _enqueueLocalWaiter(key, host, s, signal);
+}
+
+/**
+ * Passively track an inference without applying the semaphore. The direct
+ * Benchmark/Profiler lane self-sequences, but it must remain observable to the
+ * pre-claim drain so a request admitted just before the claim CAS cannot race
+ * the residency snapshot.
+ */
+async function track(host, model, { signal } = {}) {
+  throwIfAdmissionAborted(signal);
+  const key = _key(host, model);
+  const s = _getStats(key);
+  if (sharedStateReady()) {
+    const ownerId = `${SHARED_OWNER_ID}:track:${randomUUID()}`;
+    const slotId = `${key}::track::${ownerId}`;
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + SHARED_SLOT_TTL_MS);
+    await _admissionModel().create({
+      _id: slotId,
+      key: slotId,
+      host: host || 'unknown',
+      model: model || 'unknown',
+      slot: 0,
+      ownerId,
+      acquiredAt: now,
+      expiresAt
+    });
+    if (signal?.aborted) {
+      await releaseSharedSlotWonAfterAbort(key, slotId, ownerId);
+      throw createAdmissionAbortError();
+    }
+    s.trackedInFlight++;
+    s.totalTracked++;
+    return _makeSharedTrackingRelease(key, slotId, ownerId);
+  }
+  s.trackedInFlight++;
+  s.totalTracked++;
+  return _makeTrackingRelease(key, host);
+}
+
+function _makeTrackingRelease(key, host) {
+  let released = false;
+  return function release() {
+    if (released) return;
+    released = true;
+    const s = _getStats(key);
+    s.trackedInFlight = Math.max(0, (s.trackedInFlight || 0) - 1);
+    _drainHost(host);
+  };
+}
+
+function _enqueueLocalWaiter(key, host, s, signal) {
+  // Need to wait — join the per-model queue. Exclusive handoffs use the same
+  // observable waiter counters but are kept in a host-level priority queue.
   s.waiters++;
   if (s.waiters > s.maxWaiters) s.maxWaiters = s.waiters;
 
@@ -183,6 +266,75 @@ async function acquireLocal(host, model, { signal } = {}) {
       reject(createAdmissionAbortError());
     };
 
+    q.push(waiter);
+    if (signal?.addEventListener) {
+      signal.addEventListener('abort', waiter.onAbort, { once: true });
+      if (signal.aborted) waiter.onAbort();
+    }
+  });
+}
+
+/**
+ * Acquire exclusive ownership of an Ollama host for one model. Existing
+ * inference is allowed to drain; new ordinary admissions wait until the
+ * exclusive release. This is intentionally fail-closed when Mongo shared
+ * slots are enabled because a process-local host lock would not protect a
+ * multi-process deployment.
+ */
+async function acquireExclusive(host, model, { signal } = {}) {
+  throwIfAdmissionAborted(signal);
+  if (!ENABLED) {
+    const error = new Error('Exclusive host admission requires the host gate');
+    error.code = 'HOST_GATE_EXCLUSIVE_DISABLED';
+    throw error;
+  }
+  if (sharedStateReady()) {
+    const error = new Error('Exclusive host admission requires local-process gate mode');
+    error.code = 'HOST_GATE_EXCLUSIVE_SHARED_UNSUPPORTED';
+    throw error;
+  }
+
+  const key = _key(host, model);
+  const s = _getStats(key);
+  if (!_exclusiveHosts.has(host) && !_hasExclusiveWaiters(host) && _hostInFlight(host) === 0) {
+    _exclusiveHosts.set(host, key);
+    s.inFlight++;
+    s.totalAcquired++;
+    if (s.inFlight > s.peak) s.peak = s.inFlight;
+    return _makeExclusiveRelease(key, host);
+  }
+
+  s.waiters++;
+  if (s.waiters > s.maxWaiters) s.maxWaiters = s.waiters;
+  logger.info('[HostGate] exclusive host handoff waiting', {
+    host,
+    model,
+    inFlight: _hostInFlight(host)
+  });
+
+  return new Promise((resolve, reject) => {
+    let q = _exclusiveWaitQueues.get(host);
+    if (!q) {
+      q = [];
+      _exclusiveWaitQueues.set(host, q);
+    }
+    const waiter = { state: 'waiting', key, host, signal, resolve, reject, onAbort: null };
+    waiter.onAbort = () => {
+      if (waiter.state !== 'waiting') return;
+      waiter.state = 'cancelled';
+      const currentQueue = _exclusiveWaitQueues.get(host);
+      if (currentQueue) {
+        const index = currentQueue.indexOf(waiter);
+        if (index >= 0) currentQueue.splice(index, 1);
+        if (currentQueue.length === 0 && _exclusiveWaitQueues.get(host) === currentQueue) {
+          _exclusiveWaitQueues.delete(host);
+        }
+      }
+      s.waiters = Math.max(0, s.waiters - 1);
+      signal?.removeEventListener('abort', waiter.onAbort);
+      reject(createAdmissionAbortError());
+      _drainHost(host);
+    };
     q.push(waiter);
     if (signal?.addEventListener) {
       signal.addEventListener('abort', waiter.onAbort, { once: true });
@@ -293,7 +445,7 @@ async function acquireShared(host, model, { signal } = {}) {
   }
 }
 
-function _makeRelease(key) {
+function _makeRelease(key, host) {
   let released = false;
   return function release() {
     if (released) return;
@@ -302,11 +454,17 @@ function _makeRelease(key) {
     s.inFlight--;
     s.totalReleased++;
 
-    _admitNextLocalWaiter(key, s);
+    if (!_exclusiveHosts.has(host) && !_hasExclusiveWaiters(host)) {
+      _admitNextLocalWaiter(key, s);
+    }
+    _drainHost(host);
   };
 }
 
 function _admitNextLocalWaiter(key, s) {
+  const separator = key.lastIndexOf('::');
+  const host = separator >= 0 ? key.slice(0, separator) : key;
+  if (_exclusiveHosts.has(host) || _hasExclusiveWaiters(host)) return;
   const q = _waitQueues.get(key);
   if (!q) return;
 
@@ -330,8 +488,58 @@ function _admitNextLocalWaiter(key, s) {
     s.inFlight++;
     s.totalAcquired++;
     if (s.inFlight > s.peak) s.peak = s.inFlight;
-    waiter.resolve(_makeRelease(key));
+    waiter.resolve(_makeRelease(key, host));
     return;
+  }
+}
+
+function _makeExclusiveRelease(key, host) {
+  let released = false;
+  return function release() {
+    if (released) return;
+    released = true;
+    const s = _getStats(key);
+    s.inFlight = Math.max(0, s.inFlight - 1);
+    s.totalReleased++;
+    if (_exclusiveHosts.get(host) === key) _exclusiveHosts.delete(host);
+    _drainHost(host);
+  };
+}
+
+function _drainHost(host) {
+  if (_exclusiveHosts.has(host) || _hostInFlight(host) > 0) return;
+
+  const exclusiveQueue = _exclusiveWaitQueues.get(host);
+  while (exclusiveQueue?.length > 0) {
+    const waiter = exclusiveQueue.shift();
+    if (exclusiveQueue.length === 0) _exclusiveWaitQueues.delete(host);
+    if (!waiter || waiter.state !== 'waiting') continue;
+    if (waiter.signal?.aborted) {
+      waiter.onAbort();
+      continue;
+    }
+    waiter.state = 'admitted';
+    waiter.signal?.removeEventListener('abort', waiter.onAbort);
+    const s = _getStats(waiter.key);
+    s.waiters = Math.max(0, s.waiters - 1);
+    s.inFlight++;
+    s.totalAcquired++;
+    if (s.inFlight > s.peak) s.peak = s.inFlight;
+    _exclusiveHosts.set(host, waiter.key);
+    waiter.resolve(_makeExclusiveRelease(waiter.key, host));
+    return;
+  }
+
+  // No exclusive owner remains. Admit ordinary per-model waiters up to their
+  // existing semaphore limits.
+  const prefix = `${host}::`;
+  for (const [key, s] of _stats.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    while (s.inFlight < MAX_INFLIGHT && (_waitQueues.get(key)?.length || 0) > 0) {
+      const before = s.inFlight;
+      _admitNextLocalWaiter(key, s);
+      if (s.inFlight === before) break;
+    }
   }
 }
 
@@ -360,15 +568,38 @@ function _makeSharedRelease(key, slotId, ownerId) {
   };
 }
 
+function _makeSharedTrackingRelease(key, slotId, ownerId) {
+  let released = false;
+  const Admission = _admissionModel();
+  const renewEveryMs = Math.max(10_000, Math.floor(SHARED_SLOT_TTL_MS / 3));
+  const renewTimer = setInterval(() => {
+    const expiresAt = new Date(Date.now() + SHARED_SLOT_TTL_MS);
+    Admission.updateOne({ _id: slotId, ownerId }, { $set: { expiresAt } }).catch(err => {
+      logger.warn('[HostGate] shared tracking renewal failed', { key, error: err.message });
+    });
+  }, renewEveryMs);
+  if (typeof renewTimer.unref === 'function') renewTimer.unref();
+
+  return function release() {
+    if (released) return;
+    released = true;
+    clearInterval(renewTimer);
+    const s = _getStats(key);
+    s.trackedInFlight = Math.max(0, (s.trackedInFlight || 0) - 1);
+    Admission.deleteOne({ _id: slotId, ownerId }).catch(err => {
+      logger.warn('[HostGate] shared tracking release failed', { key, error: err.message });
+    });
+  };
+}
+
 /**
  * Current in-flight count for a specific (host, model). Returns 0 if the
  * gate is disabled or the key has never been touched. Used by reload/unload
  * paths to avoid killing active inference.
  */
 function inFlightFor(host, model) {
-  if (!ENABLED) return 0;
   const s = _stats.get(_key(host, model));
-  return s ? s.inFlight : 0;
+  return s ? s.inFlight + (s.trackedInFlight || 0) : 0;
 }
 
 /**
@@ -377,10 +608,10 @@ function inFlightFor(host, model) {
  * swap and disrupt the active caller.
  */
 function hostHasInflight(host) {
-  if (!ENABLED || !host) return false;
+  if (!host) return false;
   const prefix = `${host}::`;
   for (const [key, s] of _stats.entries()) {
-    if (key.startsWith(prefix) && s.inFlight > 0) return true;
+    if (key.startsWith(prefix) && s.inFlight + (s.trackedInFlight || 0) > 0) return true;
   }
   return false;
 }
@@ -392,11 +623,14 @@ function stats() {
     out[key] = {
       host,
       model,
-      inFlight: s.inFlight,
+      inFlight: s.inFlight + (s.trackedInFlight || 0),
+      admittedInFlight: s.inFlight,
+      trackedInFlight: s.trackedInFlight || 0,
       peak: s.peak,
       waiters: s.waiters,
       maxWaiters: s.maxWaiters,
       totalAcquired: s.totalAcquired,
+      totalTracked: s.totalTracked || 0,
       totalReleased: s.totalReleased
     };
   }
@@ -413,6 +647,23 @@ function stats() {
 function _resetForTests() {
   _stats.clear();
   _waitQueues.clear();
+  _exclusiveHosts.clear();
+  _exclusiveWaitQueues.clear();
+}
+
+/**
+ * Host-level in-flight check that also observes admissions owned by another
+ * Core process when the shared Mongo gate is enabled. Benchmark snapshotting
+ * must use this form; a process-local zero is not a distributed quiet point.
+ */
+async function hostHasInflightAnywhere(host) {
+  if (!host) return false;
+  if (hostHasInflight(host)) return true;
+  if (!sharedStateReady()) return false;
+  return Boolean(await _admissionModel().exists({
+    host,
+    expiresAt: { $gt: new Date() }
+  }));
 }
 
 async function _clearSharedAdmissionsForTests() {
@@ -422,9 +673,12 @@ async function _clearSharedAdmissionsForTests() {
 
 module.exports = {
   acquire,
+  track,
+  acquireExclusive,
   stats,
   inFlightFor,
   hostHasInflight,
+  hostHasInflightAnywhere,
   _resetForTests,
   _clearSharedAdmissionsForTests,
   MAX_INFLIGHT,

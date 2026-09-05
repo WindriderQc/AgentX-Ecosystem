@@ -11,6 +11,14 @@ const ArtifactIdentitySchema = new mongoose.Schema({
   registryQualified: { type: Boolean, default: false }
 }, { _id: false });
 
+const AuthorityReceiptSchema = new mongoose.Schema({
+  version: { type: Number, required: true },
+  source: { type: String, enum: ['profiler_pipeline'], required: true },
+  evidenceId: { type: String, default: null },
+  digest: { type: String, required: true },
+  issuedAt: { type: Date, required: true }
+}, { _id: false });
+
 const ReadinessSchema = new mongoose.Schema({
   stage: {
     type: String,
@@ -20,10 +28,17 @@ const ReadinessSchema = new mongoose.Schema({
   profiledAt: Date,
   profileDepth: { type: String, enum: ['quick', 'standard', 'full', null], default: null },
   benchmarkQualified: { type: Boolean, default: false },
+  qualificationReason: { type: String, default: null },
+  measurementReliability: {
+    type: String,
+    enum: ['unknown', 'low', 'medium', 'high', null],
+    default: 'unknown'
+  },
   benchmarkedAt: Date,
   stale: { type: Boolean, default: false },
   staleReason: { type: String, default: null },
   evidenceId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  authorityReceipt: { type: AuthorityReceiptSchema, default: null },
   artifact: { type: ArtifactIdentitySchema, default: null }
 }, { _id: false });
 
@@ -84,7 +99,9 @@ const ModelProfileSchema = new mongoose.Schema({
   capabilities: {
     maxContext: Number,
     vision: { type: Boolean, default: false },
-    tools: { type: Boolean, default: false },
+    // Legacy booleans are inventory hints only. Exact native-tool support is
+    // qualified in ToolCapabilityQualification; absence must stay unknown.
+    tools: { type: Boolean, default: null },
     thinking: { type: Boolean, default: false },
     thinkingPolicy: {
       type: String,

@@ -177,6 +177,8 @@
     "level": 5,
     "category": "coding",
     "scoring_type": "coding",
+    "evaluation_authority": "executable",
+    "executable_fixture_id": "scheduler-dedup-refactor",
     "expected_tokens": 480,
     "expected_answer": "Refactored scheduler with clearer structure: replaced polling with proper promise resolution, explicit state transitions, and documented invariants (max concurrency, idempotent job results, FIFO ordering).",
     "judge_criteria": [
@@ -1594,7 +1596,7 @@
       "Natural French phrasing",
       "Overall meaning intact"
     ],
-    "reference_answer": "'Rain check' has no direct French equivalent. A good translation adapts it to 'remettre à plus tard' (postpone) or 'décliner pour cette fois' while keeping the cultural holiday context."
+    "reference_answer": "Le 4 juillet, il a remis le barbecue à plus tard."
   },
   {
     "name": "Legal Exception Clause",
@@ -1610,7 +1612,7 @@
       "Terms and law correctly translated",
       "Accents and spelling correct"
     ],
-    "reference_answer": "Legal Spanish uses 'usted' form and formal conjunctions like 'salvo que'. The exception clause should use 'salvo' or 'a menos que' with subjunctive."
+    "reference_answer": "Al usar este servicio, usted acepta los términos, salvo que la ley lo prohíba."
   },
   {
     "name": "Verlaine Poetic Line",
@@ -1626,7 +1628,7 @@
       "Natural English phrasing",
       "Meaning accurately conveyed"
     ],
-    "reference_answer": "This is from Verlaine's 'Il pleure dans mon coeur'. The key challenge is preserving the parallel between pleure/pleut (weep/rain), which are near-homophones in French but not in English."
+    "reference_answer": "My heart weeps as it rains upon the town."
   },
   {
     "name": "Flamenco Duende Translation",
@@ -1642,6 +1644,6 @@
       "Natural English phrasing",
       "Not reduced to a literal explanation"
     ],
-    "reference_answer": "'Duende' is an untranslatable Spanish concept referring to the heightened emotional state in artistic performance, especially flamenco. It should be kept as 'duende' in English, not translated as 'spirit' or 'ghost'. The physical sensory description (felt on skin, dark tremor) is essential to preserve."
+    "reference_answer": "In flamenco, duende cannot be explained; it is felt on the skin like a dark shiver."
   }
 ]

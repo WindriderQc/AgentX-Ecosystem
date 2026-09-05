@@ -20,6 +20,9 @@ jest.mock('../../src/services/benchmark/judgeModelValidator', () => ({
 jest.mock('../../src/services/benchmark/judging', () => ({
     stopJudging: jest.fn()
 }));
+jest.mock('../../src/services/benchmark/workloadAdmissionLifecycle', () => ({
+    withManagedWorkloadRoute: (_kind, _resolveOptions, handler) => handler
+}));
 
 const readinessService = require('../../src/services/benchmark/judgeReadiness');
 const judgeModelValidator = require('../../src/services/benchmark/judgeModelValidator');
@@ -97,11 +100,13 @@ describe('POST /api/benchmark/validate-judge target admission', () => {
         });
         expect(judgeModelValidator.validateJudgeModel).toHaveBeenCalledWith(
             'http://configured-judge:11434',
-            'judge:7b'
+            'judge:7b',
+            { signal: undefined }
         );
         expect(judgeModelValidator.probeJudgeCapability).toHaveBeenCalledWith(
             'http://configured-judge:11434',
-            'judge:7b'
+            'judge:7b',
+            { signal: undefined }
         );
         expect(response.body).toMatchObject({
             status: 'success',

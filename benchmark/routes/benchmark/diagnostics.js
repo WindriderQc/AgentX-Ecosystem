@@ -4,6 +4,7 @@
  */
 
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const logger = require('../../config/logger');
 const judgeValidation = require('../../src/services/judgeValidation');
@@ -25,11 +26,56 @@ const {
     judgeUnavailablePayload
 } = require('../../src/services/benchmark/judgeReadiness');
 const { requireExactConfirmation } = require('../../src/helpers/exactConfirmation');
+const {
+    buildStrictTrustResultExclusion,
+    withPublicBenchmarkResultReadPrivacy
+} = require('../../src/services/benchmark/publicReadPrivacy');
+const { withManagedWorkloadRoute } = require('../../src/services/benchmark/workloadAdmissionLifecycle');
+
+const diagnosticWorkloadOptions = req => ({
+    batchId: req.body?.batch_id || null,
+    hosts: [
+        req.body?.judge_host,
+        req.body?.reference_host,
+        req.query?.judge_host,
+        req.query?.reference_host
+    ].filter(Boolean)
+});
+
+function isStrictTrustBatch(batch) {
+    return Boolean(batch?.trust_evidence_context)
+        || /^[a-f0-9]{64}$/i.test(String(batch?.trust_campaign_spec_id || ''));
+}
+
+function strictTrustOperationError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    error.statusCode = 409;
+    return error;
+}
 
 function calibrationTargetKey(target) {
     const host = String(target?.host || '').trim().replace(/\/+$/, '').toLowerCase();
     const model = String(target?.model || '').trim().toLowerCase();
     return `${host}@@${model}`;
+}
+
+async function persistCalibrationUnderAdmission(payload, req) {
+    const id = new mongoose.Types.ObjectId();
+    req.assertWorkloadAdmissionActive?.();
+    try {
+        const created = await JudgeAccuracyMatrix.create(
+            [{ _id: id, ...payload }],
+            req.workloadAdmissionSignal ? { signal: req.workloadAdmissionSignal } : undefined
+        );
+        req.assertWorkloadAdmissionActive?.();
+        return Array.isArray(created) ? created[0] : created;
+    } catch (error) {
+        if (req.workloadAdmissionSignal?.aborted) {
+            await JudgeAccuracyMatrix.deleteOne({ _id: id }).catch(() => {});
+        }
+        throw error;
+    }
 }
 
 // ============ Judge Validation Endpoints ============
@@ -38,7 +84,7 @@ function calibrationTargetKey(target) {
  * POST /api/benchmark/judge/health
  * Run comprehensive judge health check
  */
-router.post('/judge/health', async (req, res) => {
+router.post('/judge/health', withPublicBenchmarkResultReadPrivacy, withManagedWorkloadRoute('judge-health', diagnosticWorkloadOptions, async (req, res) => {
     try {
         const { days } = req.query;
         const options = {};
@@ -52,7 +98,8 @@ router.post('/judge/health', async (req, res) => {
         }
         options.judgeConfig = {
             host: readiness.target.host,
-            model: readiness.target.model
+            model: readiness.target.model,
+            cancelSignal: req.workloadAdmissionSignal
         };
 
         const health = await judgeValidation.runHealthCheck(options);
@@ -65,13 +112,13 @@ router.post('/judge/health', async (req, res) => {
         logger.error('Failed to run judge health check', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * POST /api/benchmark/judge/validate/consistency
  * Run consistency test on judge
  */
-router.post('/judge/validate/consistency', async (req, res) => {
+router.post('/judge/validate/consistency', withPublicBenchmarkResultReadPrivacy, withManagedWorkloadRoute('judge-consistency', diagnosticWorkloadOptions, async (req, res) => {
     try {
         const { sampleSize, repeats, category, judge_model, judge_host } = req.body;
         const readiness = await resolveReadyJudgeTarget({ host: judge_host, model: judge_model });
@@ -85,7 +132,8 @@ router.post('/judge/validate/consistency', async (req, res) => {
             category: category || null,
             judgeConfig: {
                 host: readiness.target.host,
-                model: readiness.target.model
+                model: readiness.target.model,
+                cancelSignal: req.workloadAdmissionSignal
             }
         });
 
@@ -97,13 +145,13 @@ router.post('/judge/validate/consistency', async (req, res) => {
         logger.error('Failed to run consistency test', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * POST /api/benchmark/judge/validate/ground-truth
  * Run ground truth evaluation
  */
-router.post('/judge/validate/ground-truth', async (req, res) => {
+router.post('/judge/validate/ground-truth', withManagedWorkloadRoute('judge-ground-truth-validation', diagnosticWorkloadOptions, async (req, res) => {
     try {
         const { category, limit, judge_model, judge_host } = req.body;
         const readiness = await resolveReadyJudgeTarget({ host: judge_host, model: judge_model });
@@ -116,7 +164,8 @@ router.post('/judge/validate/ground-truth', async (req, res) => {
             limit: limit || 50,
             judgeConfig: {
                 host: readiness.target.host,
-                model: readiness.target.model
+                model: readiness.target.model,
+                cancelSignal: req.workloadAdmissionSignal
             }
         });
 
@@ -128,7 +177,7 @@ router.post('/judge/validate/ground-truth', async (req, res) => {
         logger.error('Failed to run ground truth evaluation', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * GET /api/benchmark/judge/validate/bias
@@ -206,11 +255,14 @@ router.get('/judge/ground-truth', async (req, res) => {
     try {
         const { category, active, limit } = req.query;
 
-        const query = {};
+        const query = {
+            ...JudgeGroundTruth.buildLegacyGroundTruthVisibilityFilter()
+        };
         if (category) query.category = category;
         if (active !== undefined) query.active = active === 'true';
 
         const entries = await JudgeGroundTruth.find(query)
+            .select('-reviewer -source_result_id -human_attestation_issuer_id -human_attestation_key_id -human_attestation_nonce -human_attestation_source_fingerprint')
             .sort({ createdAt: -1 })
             .limit(parseInt(limit, 10) || 100);
 
@@ -323,15 +375,30 @@ router.get('/judge/ground-truth/problematic', async (req, res) => {
     try {
         const { threshold, limit } = req.query;
 
-        const entries = await JudgeGroundTruth.getHighDeviation(
-            threshold ? parseFloat(threshold) : 2.0,
-            limit ? parseInt(limit, 10) : 20
-        );
+        const entries = await JudgeGroundTruth.find({
+            active: true,
+            ...JudgeGroundTruth.buildLegacyGroundTruthVisibilityFilter(),
+            'validation_stats.avg_deviation': {
+                $gte: threshold ? parseFloat(threshold) : 2.0
+            }
+        })
+            .sort({ 'validation_stats.avg_deviation': -1 })
+            .limit(limit ? parseInt(limit, 10) : 20);
+        const publicEntries = entries.map(entry => {
+            const value = typeof entry.toObject === 'function' ? entry.toObject() : { ...entry };
+            delete value.reviewer;
+            delete value.source_result_id;
+            delete value.human_attestation_issuer_id;
+            delete value.human_attestation_key_id;
+            delete value.human_attestation_nonce;
+            delete value.human_attestation_source_fingerprint;
+            return value;
+        });
 
         res.json({
             status: 'success',
             data: {
-                entries,
+                entries: publicEntries,
                 threshold: threshold || 2.0
             }
         });
@@ -347,19 +414,11 @@ router.get('/judge/ground-truth/problematic', async (req, res) => {
  */
 router.get('/judge/ground-truth/gaps', async (req, res) => {
     try {
-        const coverage = await JudgeGroundTruth.aggregate([
-            { $match: { active: true } },
-            {
-                $group: {
-                    _id: { category: '$category', difficulty: '$difficulty' },
-                    count: { $sum: 1 },
-                    retro_count: {
-                        $sum: { $cond: [{ $eq: ['$created_by', 'retro-calibration'] }, 1, 0] }
-                    }
-                }
-            },
-            { $sort: { '_id.category': 1, '_id.difficulty': 1 } }
-        ]);
+        const coverage = await getCoverageStats();
+        const coverageByCell = new Map(coverage.cells.map(cell => [
+            `${cell.category}\u0000${Number(cell.difficulty)}`,
+            cell
+        ]));
 
         const categories = ['coding', 'reasoning', 'math', 'knowledge', 'instruction', 'creative', 'translation'];
         const difficulties = [1, 2, 3, 4, 5];
@@ -375,19 +434,15 @@ router.get('/judge/ground-truth/gaps', async (req, res) => {
         let hardCellsMeetingTarget = 0;
         const hardGaps = [];
 
-        // Coverage is measured against human-derived ground truth only.
-        // retro-calibration rows are LLM-reference re-scores; counting them as
-        // filled cells would inflate coverage_pct and let the judge be validated
-        // against itself. all_count/retro expose the combined view without
-        // conflating the two (mirrors retroCalibration.getCoverageStats).
+        // Coverage is measured only from currently verified human attestations
+        // returned by getCoverageStats. Raw and retro-calibration rows remain
+        // visible as audit context but cannot make a cell occupied or ready.
         for (const cat of categories) {
             for (const diff of difficulties) {
-                const found = coverage.find(
-                    c => c._id.category === cat && c._id.difficulty === diff
-                );
-                const allCount = found ? found.count : 0;
-                const retro = found ? found.retro_count : 0;
-                const count = allCount - retro;
+                const found = coverageByCell.get(`${cat}\u0000${diff}`);
+                const allCount = Number(found?.all_count) || 0;
+                const retro = Number(found?.retro) || 0;
+                const count = Number(found?.count) || 0;
                 totalEntries += count;
                 totalAllEntries += allCount;
                 retroEntries += retro;
@@ -490,7 +545,11 @@ router.patch('/judge/ground-truth/:id', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to update ground truth entry', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({
+            status: 'error',
+            code: err.code,
+            error: err.message
+        });
     }
 });
 
@@ -527,7 +586,11 @@ router.delete('/judge/ground-truth/:id', async (req, res) => {
         });
     } catch (err) {
         logger.error('Failed to delete ground truth entry', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({
+            status: 'error',
+            code: err.code,
+            error: err.message
+        });
     }
 });
 
@@ -538,7 +601,7 @@ router.delete('/judge/ground-truth/:id', async (req, res) => {
  * Run a judge-agreement check: score curated corpus entries with a distinct
  * reference + candidate judge, build an agreement matrix, and save it.
  */
-router.post('/judge/matrix-calibrate', async (req, res) => {
+router.post('/judge/matrix-calibrate', withManagedWorkloadRoute('judge-matrix-calibration', diagnosticWorkloadOptions, async (req, res) => {
     try {
         const { judge_model, judge_host, reference_model, reference_host, pass_threshold } = req.body;
 
@@ -579,17 +642,19 @@ router.post('/judge/matrix-calibrate', async (req, res) => {
 
         const referenceScores = await runCalibrationBatch(entries, {
             model: referenceReadiness.target.model,
-            host: referenceReadiness.target.host
+            host: referenceReadiness.target.host,
+            cancelSignal: req.workloadAdmissionSignal
         });
 
         const challengerScores = await runCalibrationBatch(entries, {
             model: judgeReadiness.target.model,
-            host: judgeReadiness.target.host
+            host: judgeReadiness.target.host,
+            cancelSignal: req.workloadAdmissionSignal
         });
 
         const matrix = buildAccuracyMatrix(referenceScores, challengerScores, threshold);
 
-        const saved = await JudgeAccuracyMatrix.create({
+        const saved = await persistCalibrationUnderAdmission({
             judge_model: judgeReadiness.target.model,
             judge_host: String(judgeReadiness.target.host || judge_host).trim().replace(/\/+$/, ''),
             reference_model: referenceReadiness.target.model,
@@ -602,7 +667,7 @@ router.post('/judge/matrix-calibrate', async (req, res) => {
             cell_pass_rate: matrix.cell_pass_rate,
             scored_entry_count: matrix.scored_entry_count,
             comparison_kind: 'reference_judge_agreement'
-        });
+        }, req);
 
         logger.info('Calibration complete', {
             judge_model,
@@ -620,7 +685,7 @@ router.post('/judge/matrix-calibrate', async (req, res) => {
         logger.error('Failed to run calibration', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
     }
-});
+}));
 
 /**
  * GET /api/benchmark/judge/calibration-status
@@ -695,22 +760,39 @@ router.get('/judge/drift', async (req, res) => {
         const latestBatch = batch_id
             ? null
             : await BenchmarkBatch
-                .findOne({ judge_status: 'completed' })
+                .findOne({
+                    judge_status: 'completed',
+                    trust_campaign_spec_id: null,
+                    trust_evidence_context: null
+                })
                 .sort({ updatedAt: -1 })
                 .lean();
 
         const effectiveBatchId = batch_id || latestBatch?._id?.toString();
         if (!effectiveBatchId) {
-            return res.json({ status: 'success', data: { drifted: false, insufficient_data: true } });
+            return res.json({ status: 'success', data: { drifted: null, insufficient_data: true } });
         }
+        const normalizedBatchId = String(effectiveBatchId);
+        if (!/^[0-9a-f]{24}$/i.test(normalizedBatchId)) {
+            return res.status(400).json({
+                status: 'error',
+                code: 'BENCHMARK_DRIFT_BATCH_ID_INVALID',
+                error: 'batch_id must be a canonical Mongo ObjectId'
+            });
+        }
+        // Aggregation pipelines do not apply Mongoose query casting. Use the
+        // stored ObjectId type for both sides so the current batch is selected
+        // and excluded from the historical cohort exactly.
+        const batchObjectId = new mongoose.Types.ObjectId(normalizedBatchId);
+        const trustExclusion = buildStrictTrustResultExclusion();
 
         const [currentStats, historicalStats] = await Promise.all([
             BenchmarkResult.aggregate([
-                { $match: { ...match, batch_id: effectiveBatchId } },
+                { $match: { ...match, batch_id: batchObjectId, ...trustExclusion } },
                 { $group: { _id: null, mean: { $avg: '$quality_score' }, stddev: { $stdDevPop: '$quality_score' }, count: { $sum: 1 } } }
             ]),
             BenchmarkResult.aggregate([
-                { $match: { ...match, batch_id: { $ne: effectiveBatchId } } },
+                { $match: { ...match, batch_id: { $ne: batchObjectId }, ...trustExclusion } },
                 { $sort: { timestamp: -1 } },
                 { $limit: 500 },
                 { $group: { _id: null, mean: { $avg: '$quality_score' }, stddev: { $stdDevPop: '$quality_score' }, count: { $sum: 1 } } }
@@ -718,14 +800,14 @@ router.get('/judge/drift', async (req, res) => {
         ]);
 
         if (!currentStats.length || !historicalStats.length) {
-            return res.json({ status: 'success', data: { drifted: false, insufficient_data: true } });
+            return res.json({ status: 'success', data: { drifted: null, insufficient_data: true } });
         }
 
         const current = { mean: currentStats[0].mean, variance: (currentStats[0].stddev || 0) ** 2, count: currentStats[0].count };
         const historical = { mean: historicalStats[0].mean, variance: (historicalStats[0].stddev || 0) ** 2, count: historicalStats[0].count };
 
         const drift = detectDrift(current, historical);
-        res.json({ status: 'success', data: { ...drift, batch_id: effectiveBatchId } });
+        res.json({ status: 'success', data: { ...drift, batch_id: normalizedBatchId } });
     } catch (err) {
         logger.error('Drift check failed', { error: err.message });
         res.status(500).json({ status: 'error', error: err.message });
@@ -739,7 +821,7 @@ router.get('/judge/drift', async (req, res) => {
  * Expand ground truth by sampling a batch, re-scoring with a reference judge,
  * and creating JudgeGroundTruth entries with stratified coverage.
  */
-router.post('/judge/retro-calibrate', async (req, res) => {
+router.post('/judge/retro-calibrate', withManagedWorkloadRoute('judge-retro-calibration', diagnosticWorkloadOptions, async (req, res) => {
     try {
         const { batch_id, reference_model, reference_host, per_cell, dry_run } = req.body;
 
@@ -750,9 +832,16 @@ router.post('/judge/retro-calibrate', async (req, res) => {
             });
         }
 
-        const batch = await BenchmarkBatch.findById(batch_id);
+        const batch = await BenchmarkBatch.findById(batch_id)
+            .select('trust_campaign_spec_id +trust_evidence_context');
         if (!batch) {
             return res.status(404).json({ status: 'error', error: 'Batch not found' });
+        }
+        if (isStrictTrustBatch(batch)) {
+            throw strictTrustOperationError(
+                'BENCHMARK_TRUST_RETRO_CALIBRATION_FORBIDDEN',
+                'Strict Benchmark Trust evidence cannot be consumed by legacy retro-calibration'
+            );
         }
 
         const readiness = await resolveReadyJudgeTarget({
@@ -768,15 +857,16 @@ router.post('/judge/retro-calibrate', async (req, res) => {
             host: readiness.target.host
         }, {
             perCell: per_cell || 3,
-            dryRun: dry_run || false
+            dryRun: dry_run || false,
+            cancelSignal: req.workloadAdmissionSignal
         });
 
         res.json({ status: 'success', data: result });
     } catch (err) {
         logger.error('Retro-calibration failed', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
-});
+}));
 
 /**
  * GET /api/benchmark/judge/ground-truth/coverage
@@ -835,13 +925,27 @@ router.post('/judge/auto-promote', async (req, res) => {
  * All fields are optional. Sub-steps that are missing prerequisite inputs
  * are marked `skipped` in the summary instead of failing the whole run.
  */
-router.post('/judge/governance-run', async (req, res) => {
+router.post('/judge/governance-run', withManagedWorkloadRoute('judge-governance', diagnosticWorkloadOptions, async (req, res) => {
     try {
         const {
             batch_id, judge_model, judge_host, reference_model, reference_host,
             pass_threshold, run_retro_calibration, retro_per_cell, retro_dry_run,
             triggered_by
         } = req.body || {};
+
+        if (batch_id) {
+            const batch = await BenchmarkBatch.findById(batch_id)
+                .select('trust_campaign_spec_id +trust_evidence_context');
+            if (!batch) {
+                return res.status(404).json({ status: 'error', error: 'Batch not found' });
+            }
+            if (isStrictTrustBatch(batch)) {
+                throw strictTrustOperationError(
+                    'BENCHMARK_TRUST_GOVERNANCE_BATCH_FORBIDDEN',
+                    'Strict Benchmark Trust evidence cannot be consumed by legacy judge governance'
+                );
+            }
+        }
 
         if (judge_model || judge_host) {
             const readiness = await resolveReadyJudgeTarget({ host: judge_host, model: judge_model });
@@ -866,15 +970,16 @@ router.post('/judge/governance-run', async (req, res) => {
             runRetroCalibration: !!run_retro_calibration,
             retroPerCell: retro_per_cell || 3,
             retroDryRun: !!retro_dry_run,
-            triggeredBy: triggered_by || 'api'
+            triggeredBy: triggered_by || 'api',
+            cancelSignal: req.workloadAdmissionSignal
         });
 
         res.json({ status: 'success', data: summary });
     } catch (err) {
         logger.error('Governance loop failed', { error: err.message });
-        res.status(500).json({ status: 'error', error: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', code: err.code, error: err.message });
     }
-});
+}));
 
 /**
  * GET /api/benchmark/judge/governance-run/latest

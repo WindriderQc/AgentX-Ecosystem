@@ -6,13 +6,16 @@
   "license": "MIT",
   "scripts": {
     "campaign:cloud-lanes": "node scripts/cloud-lane-campaign.js",
+    "campaign:paired-thinking": "node scripts/paired-thinking-campaign.js",
     "compare:cloud-lanes:offline": "node scripts/cloud-lane-comparison-offline.js",
     "qualify:toolcalls": "node scripts/toolcall-qualification.js",
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:unit": "jest --config jest.unit.config.js --forceExit",
-    "migrate:exact-artifacts": "node scripts/migrate-exact-artifact-profile-indexes.js"
+    "migrate:exact-artifacts": "node scripts/migrate-exact-artifact-profile-indexes.js",
+    "migrate:model-context-v2": "node scripts/migrate-model-context-profile-v2.js",
+    "migrate:benchmark-trust-batches": "node scripts/migrate-benchmark-trust-batch-ids.js"
   },
   "dependencies": {
     "@fontsource-variable/space-grotesk": "5.3.0",

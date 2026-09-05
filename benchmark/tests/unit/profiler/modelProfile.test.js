@@ -67,6 +67,7 @@ describe('ModelProfile', () => {
         const profile = new ModelProfile({ name: 'minimal-model' });
         expect(Array.isArray(profile.tags)).toBe(true);
         expect(profile.tags).toHaveLength(0);
+        expect(profile.capabilities.tools).toBeNull();
     });
 
     it('defaults readiness stage to available', async () => {

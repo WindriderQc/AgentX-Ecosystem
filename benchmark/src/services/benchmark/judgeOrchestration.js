@@ -30,6 +30,8 @@ const { judgeResult } = require('./judging');
 const { resolveJudgeHost } = require('./judgeHostResolution');
 const { normalizeJudgeNumCtx } = require('../scoring/judgeRuntimeConfig');
 const { classifyBenchmarkError } = require('./errorClassifier');
+const { resolveHarnessTarget } = require('./harnessBrokerClient');
+const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
 
 function createJudgeOrchestrator({
     batchId,
@@ -57,6 +59,34 @@ function createJudgeOrchestrator({
     const isCancellationError = (error) => isCancelled()
         || error?.code === 'BENCHMARK_BATCH_STOPPED'
         || error?.code === 'QUEUE_CANCELLED';
+    const guardedBatchUpdate = async (filter, update) => {
+        if (isCancelled()) throw cancellationReason();
+        try {
+            await BenchmarkBatch.updateOne(
+                filter,
+                update,
+                cancelSignal ? { signal: cancelSignal } : undefined
+            );
+            if (isCancelled()) throw cancellationReason();
+        } catch (error) {
+            if (isCancelled()) {
+                await BenchmarkBatch.updateOne(
+                    { _id: batchId, status: { $in: ['pending', 'running', 'judging'] } },
+                    {
+                        $set: {
+                            status: 'interrupted',
+                            failure_reason: 'authority_lost_during_judge_counter_write',
+                            last_activity_at: new Date(),
+                            active_slot: null,
+                            execution_pid: null
+                        }
+                    }
+                ).catch(() => {});
+                throw cancellationReason();
+            }
+            throw error;
+        }
+    };
     const onCancel = () => {
         deferredJudgeTasks.splice(0);
         judgeQueue.cancel(cancellationReason());
@@ -102,6 +132,13 @@ function createJudgeOrchestrator({
 
     // ── Per-host judge target resolution + warmup ──────────
     async function resolveJudgeTargetForHost(hostUrl) {
+        if (judgeConfig.target?.executionKind === 'harness') {
+            const currentTarget = await resolveHarnessTarget(judgeConfig.target, { force: true });
+            judgeConfig.target = currentTarget;
+            judgeConfig.host = `harness:${currentTarget.harness.name}`;
+            judgeConfig.model = currentTarget.model;
+            return judgeConfig.host;
+        }
         const { judgeHost: judgeHostUrl, resolution: judgeHostResolution } = resolveJudgeHost(hostUrl, judgeConfig);
         if (judgeHostResolution === 'explicit') {
             logger.info('Using explicit judge host override', { judgeHost: judgeHostUrl, execHost: hostUrl });
@@ -118,13 +155,16 @@ function createJudgeOrchestrator({
                 }
             });
             try {
+                if (isCancelled()) throw cancellationReason();
                 await warmupModel(judgeHostUrl, judgeModel, {
                     timelinePrefix: 'judge_warmup',
                     recordTimelineEvent: recordBatchTimelineEvent,
                     strict: true,
                     timeoutOverride: 90000,
                     num_ctx: judgeNumCtx,
-                    onPhaseDetail: (detail) => _setPhase('judge_warmup', detail)
+                    onPhaseDetail: (detail) => _setPhase('judge_warmup', detail),
+                    claimIdentity: getBenchmarkClaimIdentity(judgeHostUrl, String(batchId)),
+                    assertClaimActive: () => { if (isCancelled()) throw cancellationReason(); }
                 });
                 logger.info('Judge model ready on configured host', { host: judgeHostUrl, model: judgeModel, num_ctx: judgeNumCtx });
             } finally {
@@ -189,7 +229,7 @@ function createJudgeOrchestrator({
                     success: true
                 }).catch(() => {}); // best-effort
 
-                await BenchmarkBatch.updateOne(
+                await guardedBatchUpdate(
                     { _id: batchId },
                     {
                         $inc: { judge_completed: 1 },
@@ -244,7 +284,7 @@ function createJudgeOrchestrator({
                     error: scoreErr.message
                 }).catch(() => {}); // best-effort
 
-                await BenchmarkBatch.updateOne(
+                await guardedBatchUpdate(
                     { _id: batchId },
                     {
                         $inc: { judge_completed: 1, judge_failed: 1 },
@@ -262,10 +302,12 @@ function createJudgeOrchestrator({
                 error: enqueueErr.message
             });
 
-            await BenchmarkBatch.updateOne(
+            await guardedBatchUpdate(
                 { _id: batchId },
                 { $inc: { judge_completed: 1, judge_failed: 1 } }
-            ).catch(() => {});
+            ).catch(error => {
+                if (isCancellationError(error)) throw error;
+            });
         });
     }
 
@@ -301,7 +343,7 @@ function createJudgeOrchestrator({
             const { judgeHostUrl, model, prompt, resultId } = deferredTask;
             const warmupKey = `${judgeHostUrl}::${judgeModel}`;
 
-            if (!warmedJudgeHosts.has(warmupKey)) {
+            if (judgeConfig.target?.executionKind !== 'harness' && !warmedJudgeHosts.has(warmupKey)) {
                 const judgeNumCtx = await resolveJudgeNumCtx(judgeModel, judgeHostUrl, judgeConfig);
                 await _setPhase('judge_warmup', `Warming judge ${judgeModel} on ${judgeHostUrl} (deferred phase)…`);
                 await BenchmarkBatch.findOneAndUpdate({ _id: batchId }, {
@@ -317,13 +359,16 @@ function createJudgeOrchestrator({
                     }
                 });
                 try {
+                    if (isCancelled()) throw cancellationReason();
                     await warmupModel(judgeHostUrl, judgeModel, {
                         timelinePrefix: 'judge_warmup',
                         recordTimelineEvent: recordBatchTimelineEvent,
                         strict: true,
                         timeoutOverride: 90000,
                         num_ctx: judgeNumCtx,
-                        onPhaseDetail: (detail) => _setPhase('judge_warmup', detail)
+                        onPhaseDetail: (detail) => _setPhase('judge_warmup', detail),
+                        claimIdentity: getBenchmarkClaimIdentity(judgeHostUrl, String(batchId)),
+                        assertClaimActive: () => { if (isCancelled()) throw cancellationReason(); }
                     });
                     warmedJudgeHosts.add(warmupKey);
                     logger.info('Judge model ready for deferred same-host phase', {

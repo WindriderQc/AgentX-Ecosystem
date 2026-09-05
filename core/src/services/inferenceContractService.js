@@ -11,6 +11,7 @@ const {
 const { getTokenCounter } = require('./tokenCounter');
 const { modelLookupNames } = require('../helpers/modelNameNormalization');
 const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
+const { exactModelNamesMatch } = require('../../../shared/artifactIdentity');
 const {
   profileMatchesArtifact,
   readLiveDigest,
@@ -138,6 +139,130 @@ async function readRegistryThinking(model, deps = {}) {
   }
 }
 
+async function readExactToolQualification(model, host, artifact, deps = {}) {
+  if (Object.prototype.hasOwnProperty.call(deps, 'toolQualificationEvidence')) {
+    return deps.toolQualificationEvidence;
+  }
+  if (!artifact?.identityQualified) return null;
+  try {
+    if (process.env.NODE_ENV === 'test' && !deps.benchmarkClient) return null;
+    const client = deps.benchmarkClient || getBenchmarkServiceClient();
+    const evidence = await client.getInferenceEvidence(model, normalizeHostUrl(host), artifact);
+    return evidence?.toolQualification || null;
+  } catch {
+    return null;
+  }
+}
+
+function toolEvidenceMatchesArtifact(evidence, artifact) {
+  return Boolean(
+    evidence
+    && artifact?.identityQualified === true
+    && exactModelNamesMatch(evidence.modelName, artifact.model)
+    && String(evidence.hostId || '') === String(artifact.hostId || '')
+    && normalizeHostUrl(evidence.hostUrl) === normalizeHostUrl(artifact.hostUrl)
+    && evidence.artifactDigest === artifact.digest
+    && evidence.runtimeFingerprint === artifact.runtimeFingerprint
+  );
+}
+
+function toolEvidenceDriftReasons(toolQualification, artifact, now = new Date()) {
+  const evidence = toolQualification?.evidence;
+  const expected = toolQualification?.expected || {};
+  const reasons = [];
+  if (!evidence || !artifact?.identityQualified) return reasons;
+  if (!exactModelNamesMatch(evidence.modelName, artifact.model)) reasons.push('model_mismatch');
+  if (String(evidence.hostId || '') !== String(artifact.hostId || '')) reasons.push('host_id_mismatch');
+  if (normalizeHostUrl(evidence.hostUrl) !== normalizeHostUrl(artifact.hostUrl)) reasons.push('host_url_mismatch');
+  if (evidence.artifactDigest !== artifact.digest) reasons.push('artifact_digest_mismatch');
+  if (evidence.runtimeFingerprint !== artifact.runtimeFingerprint) reasons.push('runtime_fingerprint_mismatch');
+  if (!toolQualification?.contract
+    || evidence.schemaVersion !== toolQualification.contract
+    || (expected.schemaVersion && evidence.schemaVersion !== expected.schemaVersion)) {
+    reasons.push('evidence_contract_mismatch');
+  }
+  if (!expected.protocolVersion || evidence.protocolVersion !== expected.protocolVersion) {
+    reasons.push('protocol_version_mismatch');
+  }
+  if (!expected.fixtureVersion || evidence.fixtureVersion !== expected.fixtureVersion) {
+    reasons.push('fixture_version_mismatch');
+  }
+  if (!expected.fixtureFingerprint || evidence.fixtureFingerprint !== expected.fixtureFingerprint) {
+    reasons.push('fixture_fingerprint_mismatch');
+  }
+  if (evidence.outcome !== toolQualification.state) reasons.push('evidence_outcome_mismatch');
+  const repetitionsRequested = Number(evidence.repetitionsRequested);
+  const repetitionsCompleted = Number(evidence.repetitionsCompleted);
+  if (!Number.isInteger(repetitionsRequested)
+    || repetitionsRequested < 3
+    || repetitionsCompleted !== repetitionsRequested) {
+    reasons.push('evidence_repetitions_incomplete');
+  }
+  if (!/^[a-f0-9]{64}$/i.test(String(evidence.evidenceDigest || ''))) {
+    reasons.push('evidence_digest_invalid');
+  }
+  const completedAt = evidence.completedAt ? new Date(evidence.completedAt) : null;
+  if (!completedAt || !Number.isFinite(completedAt.getTime())) reasons.push('evidence_completion_invalid');
+  const validUntil = evidence.validUntil ? new Date(evidence.validUntil) : null;
+  if (!validUntil || !Number.isFinite(validUntil.getTime()) || validUntil.getTime() <= now.getTime()) {
+    reasons.push('evidence_expired');
+  }
+  return [...new Set(reasons)];
+}
+
+function resolveToolCapability(toolQualification, artifact, now = new Date()) {
+  const state = String(toolQualification?.state || 'unknown').toLowerCase();
+  const source = toolQualification
+    ? 'benchmark_tool_capability_qualification'
+    : 'unqualified';
+  if (state === 'stale') {
+    return {
+      supported: null,
+      qualified: false,
+      state: 'stale',
+      source,
+      reasons: Array.isArray(toolQualification?.reasons) ? toolQualification.reasons : ['evidence_stale']
+    };
+  }
+  if (state === 'supported' || state === 'unsupported') {
+    const driftReasons = toolEvidenceDriftReasons(toolQualification, artifact, now);
+    if (driftReasons.length || !toolEvidenceMatchesArtifact(toolQualification?.evidence, artifact)) {
+      return {
+        supported: null,
+        qualified: false,
+        state: 'stale',
+        source,
+        reasons: driftReasons.length ? driftReasons : ['evidence_identity_mismatch']
+      };
+    }
+  }
+  if ((state === 'supported' || state === 'unsupported')
+    && toolQualification?.qualified === true) {
+    return {
+      supported: state === 'supported',
+      qualified: true,
+      state,
+      source,
+      evidenceDigest: toolQualification.evidence.evidenceDigest || null,
+      completedAt: toolQualification.evidence.completedAt || null,
+      validUntil: toolQualification.evidence.validUntil || null,
+      reasons: []
+    };
+  }
+  const reasons = Array.isArray(toolQualification?.reasons)
+    ? [...toolQualification.reasons]
+    : [];
+  if (!artifact?.identityQualified) reasons.push('artifact_identity_unqualified');
+  if (!reasons.length) reasons.push(toolQualification ? `evidence_${state}` : 'evidence_missing');
+  return {
+    supported: null,
+    qualified: false,
+    state: 'unknown',
+    source,
+    reasons: [...new Set(reasons)]
+  };
+}
+
 async function resolveCapabilities(model, host, deps = {}) {
   const configuredIdentity = resolveHostIdentity(host, deps.configuredHosts);
   const evidence = await readBenchmarkEvidence(model, configuredIdentity.host, deps);
@@ -155,6 +280,12 @@ async function resolveCapabilities(model, host, deps = {}) {
     })
     : null;
   if (exactArtifact?.hostId) identity.hostId = exactArtifact.hostId;
+  const toolQualification = await readExactToolQualification(
+    model,
+    identity.host,
+    exactArtifact,
+    deps
+  );
   const thinkingProfile = mapValue(profile?.thinkingProfiles, identity.hostId);
   const readiness = mapValue(profile?.readiness, identity.hostId);
   const stage = readiness?.stage || (thinkingProfile ? 'profiled' : 'unknown');
@@ -197,10 +328,6 @@ async function resolveCapabilities(model, host, deps = {}) {
     }
   }
 
-  const toolsSupported = typeof profile?.capabilities?.tools === 'boolean'
-    ? profile.capabilities.tools
-    : null;
-
   return {
     artifact: {
       model: exactArtifact?.model || model,
@@ -224,11 +351,9 @@ async function resolveCapabilities(model, host, deps = {}) {
       source: profile ? 'benchmark_model_profile' : 'fallback'
     },
     thinking,
-    tools: {
-      supported: toolsSupported,
-      qualified: qualified && toolsSupported !== null,
-      source: profile ? 'benchmark_model_profile' : 'unqualified'
-    },
+    // ModelProfile.capabilities.tools is a legacy inventory hint. Only the
+    // dedicated exact-artifact Benchmark evidence contract may qualify it.
+    tools: resolveToolCapability(toolQualification, exactArtifact, deps.now || new Date()),
     streaming: {
       supported: null,
       qualified: false,
@@ -266,10 +391,12 @@ async function resolveContextBudget(input, deps = {}) {
     if (deps.resolveContextDetails) {
       resolved = await deps.resolveContextDetails(input.model, {
         targetHost: input.host,
+        workload: input.workload || 'interactive',
         deps: deps.contextDeps
       });
     } else if (canUseDefaultResolver) {
       resolved = await getContextInfo(input.model, input.host, {
+        workload: input.workload || 'interactive',
         artifactIdentity: deps.artifactIdentity || null
       });
     }
@@ -475,5 +602,6 @@ module.exports = {
   resolveHostIdentity,
   resolveInferenceContract,
   resolveInferenceContractSnapshot,
+  resolveToolCapability,
   snapshotFingerprint
 };

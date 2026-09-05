@@ -8,6 +8,7 @@
 const BenchmarkResult = require('../../models/BenchmarkResult');
 const JudgeGroundTruth = require('../../models/JudgeGroundTruth');
 const logger = require('../../config/logger');
+const { buildStrictTrustResultExclusion } = require('./benchmark/publicReadPrivacy');
 
 const DIVERGENCE_THRESHOLD = 2.0;
 
@@ -19,7 +20,8 @@ async function getJudgeFeedbackStats() {
     const reviewed = await BenchmarkResult.find({
         human_score: { $ne: null },
         quality_score: { $ne: null },
-        excluded_from_leaderboard: { $ne: true }
+        excluded_from_leaderboard: { $ne: true },
+        ...buildStrictTrustResultExclusion()
     }).select('category prompt_category quality_score judge_quality_score human_score judge_model').lean();
 
     if (!reviewed.length) return { byCategory: {}, overall: { count: 0 } };
@@ -83,7 +85,8 @@ async function autoPromoteGroundTruth() {
         quality_score: { $ne: null },
         prompt: { $ne: null },
         response: { $ne: null },
-        excluded_from_leaderboard: { $ne: true }
+        excluded_from_leaderboard: { $ne: true },
+        ...buildStrictTrustResultExclusion()
     }).select('prompt_name prompt response category prompt_category quality_score judge_quality_score human_score human_notes model').lean();
 
     // Pre-fetch existing ground truth names to avoid N+1 queries

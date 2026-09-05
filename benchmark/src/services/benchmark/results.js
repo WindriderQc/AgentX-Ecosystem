@@ -31,6 +31,14 @@ const {
 
 const LEADERBOARD_CATEGORIES = Object.keys(CATEGORY_COMPOSITE_PROFILES);
 
+function buildCourthouseGroundTruthCountQuery() {
+    return {
+        active: true,
+        created_by: { $ne: 'retro-calibration' },
+        ...JudgeGroundTruth.buildLegacyGroundTruthVisibilityFilter()
+    };
+}
+
 function buildCategoryScoreFields(scoreValue) {
     return LEADERBOARD_CATEGORIES.reduce((fields, category) => {
         fields[`${category}_score`] = scoreValue;
@@ -133,6 +141,7 @@ async function getSummary() {
         // Defense in depth per scoring-contract-v1 §2.7 (0117): infra-failed rows never surface
         // in a leaderboard, even though success:true already excludes them.
         infra_error: { $ne: true },
+        needs_review: { $ne: true },
         excluded_from_leaderboard: { $ne: true },
         model: { $not: /diagnostic/i } // Exclude diagnostic models
     };
@@ -201,15 +210,25 @@ async function getSummary() {
 /**
  * Get dashboard data with model statistics
  */
-async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory, tag, includeUnavailableModels = false } = {}) {
+async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory, tag, includeUnavailableModels = false, includeCloud = true } = {}) {
     // Build match query for filtering.
     // Defense in depth per scoring-contract-v1 §2.7 (0117): infra-failed rows never surface
     // in a leaderboard, even though success:true already excludes them.
     const matchQuery = {
         success: true,
         infra_error: { $ne: true },
+        needs_review: { $ne: true },
         excluded_from_leaderboard: { $ne: true }
     };
+    if (!includeCloud) {
+        matchQuery.$and = [{
+            $or: [
+                { 'execution_target.tier': 'local' },
+                { execution_target: null },
+                { execution_target: { $exists: false } }
+            ]
+        }];
+    }
 
     // Filter by prompt category
     if (promptCategory) {
@@ -279,7 +298,10 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
                     avg_time_to_first_token_ms: {
                         $avg: {
                             $cond: [
-                                { $gt: ['$time_to_first_token_ms', 0] },
+                                { $and: [
+                                    { $eq: ['$ttft_measurement', 'streamed_wall_clock'] },
+                                    { $gt: ['$time_to_first_token_ms', 0] }
+                                ] },
                                 '$time_to_first_token_ms',
                                 null
                             ]
@@ -405,10 +427,7 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
         BenchmarkResult.countDocuments({ human_review_status: 'overridden' }),
         // Match the human-derived coverage contract: retro-calibration rows are
         // model-generated reference scores and must not inflate Ground Truth.
-        JudgeGroundTruth.countDocuments({
-            active: true,
-            created_by: { $ne: 'retro-calibration' }
-        })
+        JudgeGroundTruth.countDocuments(buildCourthouseGroundTruthCountQuery())
     ]);
 
     const failureByKey = new Map(
@@ -587,7 +606,8 @@ async function getDashboard({ sortBy = 'latency', modelCategory, promptCategory,
             host_test_status: hostSnapshot?.status || null,
             host_test_tokens_per_sec: hostSnapshot?.tokensPerSec ?? null,
             host_test_latency_ms: hostSnapshot?.latencyMs ?? null,
-            host_test_ttft_ms: hostSnapshot?.timeToFirstTokenMs ?? null,
+            host_test_ttft_ms: hostSnapshot?.ttftMeasurement === 'streamed_wall_clock'
+                ? (hostSnapshot?.timeToFirstTokenMs ?? null) : null,
             host_test_vram_used_mib: hostSnapshot?.vramUsedMiB ?? null,
             host_test_vram_total_mib: hostSnapshot?.vramTotalMiB ?? null,
             host_test_vram_efficiency: vramEfficiency,
@@ -712,6 +732,7 @@ async function compareModels(models) {
 }
 
 module.exports = {
+    buildCourthouseGroundTruthCountQuery,
     getResults,
     getSummary,
     getDashboard,

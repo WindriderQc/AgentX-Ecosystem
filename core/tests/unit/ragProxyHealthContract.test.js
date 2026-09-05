@@ -1,11 +1,13 @@
 'use strict';
 
 const mockGetStatus = jest.fn();
+const mockRefreshStatus = jest.fn();
 const mockListDocuments = jest.fn();
 
 jest.mock('../../src/services/ragServiceClient', () => ({
   getRagServiceClient: () => ({
     getStatus: mockGetStatus,
+    refreshStatus: mockRefreshStatus,
     listDocuments: mockListDocuments,
     searchSimilarChunks: jest.fn(),
     upsertDocumentWithChunks: jest.fn(),
@@ -83,5 +85,22 @@ describe('Core RAG proxy health contract', () => {
     expect(response.status).toBe(200);
     expect(response.body.data.healthy).toBe(true);
     expect(new Date(response.body.data.observedAt).toString()).not.toBe('Invalid Date');
+  });
+
+  test('proxies the active query-readiness refresh through the same public surface', async () => {
+    mockRefreshStatus.mockResolvedValue({
+      healthy: true,
+      queryReady: true,
+      dependencies: { embedding: { healthy: true, evidence: 'active' } }
+    });
+
+    const response = await request(app()).post('/api/rag/status/refresh');
+
+    expect(response.status).toBe(200);
+    expect(mockRefreshStatus).toHaveBeenCalledTimes(1);
+    expect(response.body).toMatchObject({
+      status: 'success',
+      data: { healthy: true, queryReady: true }
+    });
   });
 });

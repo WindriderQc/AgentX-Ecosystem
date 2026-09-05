@@ -62,13 +62,14 @@ export function renderMetrics(model, api) {
   if (!p) {
     return `<div class="mp-card-empty-state">
       <div class="mp-card-empty-kicker">No profile yet</div>
-      <div class="mp-card-empty-copy">Run a profile to capture speed, safe context, and spill behavior.</div>
+      <div class="mp-card-empty-copy">Run a profile to capture speed, verified capacity, workload recommendations, and spill behavior.</div>
     </div>`;
   }
 
   const comparisonPromptTokens = p.comparisonPromptTokens ?? null;
   const comparisonPromptTargetTokens = p.comparisonPromptTargetTokens ?? comparisonPromptTokens;
   const comparisonWorkloadMode = p.comparisonWorkloadMode || 'fixed';
+  const recommendationsAuthoritative = model?._profileAuthority?.recommendationsAuthoritative === true;
 
   // ── Hero throughput ──────────────────────────────────────────────────
   let heroHtml = '';
@@ -80,8 +81,8 @@ export function renderMetrics(model, api) {
         ? `Fixed speed run targeted ${_fmtCtx(comparisonPromptTargetTokens)} prompt tokens but clipped to ${_fmtCtx(comparisonPromptTokens || comparisonPromptTargetTokens)} by active context.`
         : `Fixed speed run using ~${_fmtCtx(comparisonPromptTargetTokens)} prompt tokens.`
       : 'Throughput from the profiler speed run.';
-    const ttft = p.ttftMs != null
-      ? `<span class="mp-hero-aux"><span class="mp-hero-aux__val">${Math.round(p.ttftMs)}</span><span class="mp-hero-aux__unit">ms TTFT</span></span>`
+    const ttft = p.ttftMeasurement === 'streamed_wall_clock' && p.ttftP50Ms != null
+      ? `<span class="mp-hero-aux"><span class="mp-hero-aux__val">${Math.round(p.ttftP50Ms)}</span><span class="mp-hero-aux__unit">ms TTFT p50</span></span>`
       : '';
     heroHtml = `<div class="mp-card-hero" title="${escAttr(heroTitle)}">
       <div class="mp-hero-main">
@@ -99,10 +100,17 @@ export function renderMetrics(model, api) {
   const safeCtx = spill?.lastSafeNumCtx;
   const spillCtx = spill?.spillNumCtx;
   let capacityHtml = '';
-  if (p.optimalNumCtx != null || spill || p.vramUsedMiB != null) {
+  const maxVerifiedContext = p.maxVerifiedContext;
+  if (maxVerifiedContext != null || spill || p.vramUsedMiB != null) {
     const bits = [];
-    if (p.optimalNumCtx != null) {
-      bits.push(`<span class="mp-strip-num">${_fmtCtx(p.optimalNumCtx)}</span><span class="mp-strip-unit">ctx</span>`);
+    if (maxVerifiedContext != null) {
+      bits.push(`<span class="mp-strip-num">${_fmtCtx(maxVerifiedContext)}</span><span class="mp-strip-unit">max verified</span>`);
+    }
+    if (recommendationsAuthoritative && p.recommendedInteractiveContext != null) {
+      bits.push(`<span class="mp-strip-num">${_fmtCtx(p.recommendedInteractiveContext)}</span><span class="mp-strip-unit">interactive</span>`);
+    }
+    if (recommendationsAuthoritative && p.recommendedDocumentContext != null) {
+      bits.push(`<span class="mp-strip-num">${_fmtCtx(p.recommendedDocumentContext)}</span><span class="mp-strip-unit">document</span>`);
     }
     if (p.vramUsedMiB != null) {
       bits.push(`<span class="mp-strip-num">${(p.vramUsedMiB / 1024).toFixed(1)}</span><span class="mp-strip-unit">GB</span>`);
@@ -112,8 +120,9 @@ export function renderMetrics(model, api) {
       const safe = safeCtx ? ` (safe ${_fmtCtx(safeCtx)})` : '';
       bits.push(`<span class="mp-strip-spill mp-strip-spill--warn" title="GPU spill detected${at}${safe}">⚠ spills${at}</span>`);
     } else if (spill) {
-      const safe = safeCtx ? `safe to ${_fmtCtx(safeCtx)}` : 'no spill';
-      bits.push(`<span class="mp-strip-spill mp-strip-spill--ok" title="No GPU spill during profiling. Higher context or different load can still spill.">✓ ${safe}</span>`);
+      const noSpill = spill?.verified === true && spill?.spillDetected === false;
+      const label = noSpill ? 'no spill verified' : 'GPU residency unknown';
+      bits.push(`<span class="mp-strip-spill ${noSpill ? 'mp-strip-spill--ok' : ''}" title="${label}">${label}</span>`);
     }
     capacityHtml = `<div class="mp-cap-strip">${bits.join('<span class="mp-strip-sep">·</span>')}</div>`;
   }
@@ -169,6 +178,17 @@ export function renderMetrics(model, api) {
   </div>`;
 }
 
+function renderProfileAuthorityBadge(model) {
+  const authority = model?._profileAuthority;
+  if (!authority || !['standard', 'full'].includes(authority.profileDepth)) return '';
+  const status = authority.status === 'qualified'
+    ? { label: 'Qualified', tone: 'qualified' }
+    : authority.status === 'stale'
+      ? { label: 'Stale', tone: 'stale' }
+      : { label: 'Not qualified', tone: 'unqualified' };
+  return `<span class="mp-profile-authority-badge mp-profile-authority-badge--${status.tone}" title="${escAttr(authority.reason || status.label)}">${status.label}</span>`;
+}
+
 // ─── Card renderer ────────────────────────────────────────────────────────────
 
 export function renderModelCard(model, api) {
@@ -202,6 +222,7 @@ export function renderModelCard(model, api) {
       </label>
       <span class="mp-card-title">${escAttr(model.name)}</span>
       ${renderBadge(highestStage, total > 0 ? hostCount : null, total > 0 ? total : null)}
+      ${renderProfileAuthorityBadge(model)}
     </div>
 
     <div class="mp-card-subhead">${meta}</div>
@@ -394,16 +415,21 @@ export function renderModelRow(model, api) {
 
   // TTFT
   let ttftCell = dash;
-  if (p?.ttftMs != null) {
-    ttftCell = `<span class="mp-list-num">${Math.round(p.ttftMs)}</span><span class="mp-list-sub">ms</span>`;
+  if (p?.ttftMeasurement === 'streamed_wall_clock' && p?.ttftP50Ms != null) {
+    ttftCell = `<span class="mp-list-num">${Math.round(p.ttftP50Ms)}</span><span class="mp-list-sub">ms p50</span>`;
   }
 
   // ctx
   let ctxCell = dash;
-  if (p?.optimalNumCtx != null) {
-    ctxCell = `<span class="mp-list-context" title="Profiled safe context window">
-      <span class="mp-list-context__value">${_fmtCtx(p.optimalNumCtx)}</span>
-      <span class="mp-list-context__label">context</span>
+  const maxVerifiedContext = p?.maxVerifiedContext;
+  if (maxVerifiedContext != null) {
+    const recommendations = [
+      model?._profileAuthority?.recommendationsAuthoritative === true && p.recommendedInteractiveContext != null ? `interactive ${_fmtCtx(p.recommendedInteractiveContext)}` : null,
+      model?._profileAuthority?.recommendationsAuthoritative === true && p.recommendedDocumentContext != null ? `document ${_fmtCtx(p.recommendedDocumentContext)}` : null
+    ].filter(Boolean).join(' · ');
+    ctxCell = `<span class="mp-list-context" title="Maximum verified context${recommendations ? `; ${recommendations}` : ''}">
+      <span class="mp-list-context__value">${_fmtCtx(maxVerifiedContext)}</span>
+      <span class="mp-list-context__label">max verified</span>
     </span>`;
   }
 
@@ -431,6 +457,8 @@ export function renderModelRow(model, api) {
   const profiledStr = p?.profiledAt ? _formatProfileDate(p.profiledAt) : null;
   if (profiledStr) metaBits.push(`<span class="mp-list-when">${profiledStr}</span>`);
   if (stalenessInfo.stale) metaBits.push(`<span class="mp-stale-badge">stale</span>`);
+  const authorityBadge = renderProfileAuthorityBadge(model);
+  if (authorityBadge) metaBits.push(authorityBadge);
   const ci = p?.contextInsight;
   if (ci?.upgradeAvailable) {
     metaBits.push(`<span class="mp-insight-chip mp-insight-chip--up" title="${ci.upgradeFactor}× ctx headroom (${_fmtCtx(ci.previousNumCtx)} → ${_fmtCtx(ci.discoveredNumCtx)})">▲ ${ci.upgradeFactor}×</span>`);
@@ -483,6 +511,8 @@ export function renderSettingsPanel(settings) {
   const warmup = s.warmup !== false;
   const timeout = s.testTimeoutSec ?? 60;
   const throughputSamples = s.throughputSamples ?? 3;
+  const interactiveThreshold = s.interactiveDegradationThreshold ?? 15;
+  const documentThreshold = s.documentDegradationThreshold ?? 30;
   const collectHardwareTelemetry = s.collectHardwareTelemetry !== false;
   const showHardwareDiagnostics = s.showHardwareDiagnostics !== false;
 
@@ -496,8 +526,18 @@ export function renderSettingsPanel(settings) {
           <span class="mp-settings-range-val" id="mp-set-degradation-val">${degradation}%</span>
         </div>
         <div style="font-size:0.62rem; color:#8892b0; margin-top:0.25rem;">
-          Visual alert only. Throughput changes never reduce the verified context window.
+          Visual alert only. Runtime recommendations use the separate thresholds below.
         </div>
+      </div>
+      <div class="mp-settings-field">
+        <label class="mp-settings-label">Interactive Context Degradation</label>
+        <input type="number" min="0" max="80" value="${interactiveThreshold}" id="mp-set-interactive-degradation" class="mp-settings-input">
+        <div style="font-size:0.62rem; color:#8892b0; margin-top:0.25rem;">Largest verified context kept within this slowdown for chat.</div>
+      </div>
+      <div class="mp-settings-field">
+        <label class="mp-settings-label">Document Context Degradation</label>
+        <input type="number" min="0" max="80" value="${documentThreshold}" id="mp-set-document-degradation" class="mp-settings-input">
+        <div style="font-size:0.62rem; color:#8892b0; margin-top:0.25rem;">Largest verified context kept within this slowdown for document workloads.</div>
       </div>
       <div class="mp-settings-field">
         <label class="mp-settings-label">Context Fill %</label>
@@ -535,10 +575,10 @@ export function renderSettingsPanel(settings) {
       <div class="mp-settings-field">
         <label class="mp-settings-label">Throughput Samples</label>
         <select id="mp-set-samples" class="mp-settings-input">
-          ${[1,2,3,4,5].map(v => `<option value="${v}"${v === throughputSamples ? ' selected' : ''}>${v}</option>`).join('')}
+          ${[3,6,11,16,21].map(v => `<option value="${v}"${v === throughputSamples ? ' selected' : ''}>${v}</option>`).join('')}
         </select>
         <div style="font-size:0.62rem; color:#8892b0; margin-top:0.25rem;">
-          Repeat speed runs improve confidence. With 3+ samples the first run is discarded as warm-up settle, so CV reflects steady state.
+          The first run is discarded. Standard retains at least 5 samples; Full retains at least 10.
         </div>
       </div>
       <div class="mp-settings-field">

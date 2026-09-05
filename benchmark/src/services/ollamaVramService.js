@@ -24,7 +24,13 @@ class OllamaVramService {
    * @param {string} hostUrl - full Ollama base URL
    * @returns {Promise<{ ok: boolean, memoryUsedMiBTotal: number|null, memoryTotalMiBTotal: number|null, error?: string }>}
    */
-  async getHostVram(hostUrl) {
+  async getHostVram(hostUrl, options = {}) {
+    if (options.signal?.aborted) {
+      if (options.signal.reason instanceof Error) throw options.signal.reason;
+      const error = new Error('VRAM snapshot aborted by caller');
+      error.code = 'CALLER_ABORTED';
+      throw error;
+    }
     if (!hostUrl) {
       return { ok: false, error: 'No host URL provided', memoryUsedMiBTotal: null, memoryTotalMiBTotal: null };
     }
@@ -36,7 +42,7 @@ class OllamaVramService {
     }
 
     try {
-      const data = await listRunning(hostUrl, { timeoutMs: 4000 });
+      const data = await listRunning(hostUrl, { timeoutMs: 4000, signal: options.signal });
       const models = Array.isArray(data.models) ? data.models : [];
 
       // Sum VRAM across all loaded models
@@ -62,6 +68,10 @@ class OllamaVramService {
       this.cache.set(hostUrl, { ts: Date.now(), value });
       return value;
     } catch (err) {
+      if (options.signal?.aborted) {
+        if (options.signal.reason instanceof Error) throw options.signal.reason;
+        throw err;
+      }
       logger.warn('VRAM snapshot unavailable', { hostUrl, error: err.message });
       const value = { ok: false, error: err.message, memoryUsedMiBTotal: null, memoryTotalMiBTotal: null };
       this.cache.set(hostUrl, { ts: Date.now(), value });

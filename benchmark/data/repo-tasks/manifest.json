@@ -13,6 +13,7 @@
     { "dir": "stats-refactor", "id": "stats-refactor", "category": "api-preserving-refactor" },
     { "dir": "user-store-multifile", "id": "user-store-multifile", "category": "multi-file-feature" },
     { "dir": "csv-validation", "id": "csv-validation", "category": "validation-edge-cases" },
-    { "dir": "public-test-repair", "id": "public-test-repair", "category": "test-repair" }
+    { "dir": "public-test-repair", "id": "public-test-repair", "category": "test-repair" },
+    { "dir": "scheduler-dedup-refactor", "id": "scheduler-dedup-refactor", "category": "concurrency-refactor" }
   ]
 }

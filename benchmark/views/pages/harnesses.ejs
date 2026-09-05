@@ -1,0 +1,35 @@
+<main class="harness-page" aria-labelledby="harness-title">
+  <header class="harness-hero">
+    <div>
+      <div class="evaluation-eyebrow">Agent X Evaluation</div>
+      <h1 id="harness-title">Harnesses</h1>
+      <p>Run full OpenClaw or Hermès profiles in a disposable workspace. These native-ceiling campaigns are evidence, not model leaderboard entries.</p>
+    </div>
+    <a class="r-nav-btn" href="/">Model benchmark →</a>
+  </header>
+
+  <section class="harness-card" aria-labelledby="native-run-title">
+    <h2 id="native-run-title">New native-agent campaign</h2>
+    <p id="harness-availability" class="harness-availability" role="status" aria-live="polite">Checking harness availability…</p>
+    <details class="harness-controls">
+      <summary>
+        <span>Take the controls</span>
+        <span class="harness-controls-summary">Choose a target, define the bounded task, and confirm the no-secrets rule.</span>
+      </summary>
+      <div class="harness-controls-body">
+        <label>Harness target<select id="harness-target" disabled><option value="">Loading catalog…</option></select></label>
+        <label>Task<textarea id="harness-prompt" rows="8" maxlength="200000" placeholder="Describe the bounded task. Do not paste credentials, secrets, private URLs or personal data." disabled></textarea></label>
+        <label class="harness-confirm"><input type="checkbox" id="harness-confirm" disabled> I confirm this task contains no credentials, secrets or private URLs.</label>
+        <button type="button" id="harness-run" class="r-nav-btn r-primary" disabled>Run in disposable workspace</button>
+        <div id="harness-status" role="status" aria-live="polite"></div>
+        <pre id="harness-output" hidden></pre>
+      </div>
+    </details>
+  </section>
+
+  <section class="harness-card" aria-labelledby="campaign-history-title">
+    <h2 id="campaign-history-title">Campaign evidence</h2>
+    <p class="harness-note">Compare like with like: portable isolated-model runs and native-ceiling agent runs have different contracts. This view declares no universal winner across different tuples.</p>
+    <div id="harness-campaigns"></div>
+  </section>
+</main>

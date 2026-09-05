@@ -5,6 +5,7 @@ const executionDigest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const hostId = 'primary';
 const hostUrl = 'http://ollama-fixture:11434';
 const registryId = ObjectId('65f000000000000000000100');
+const performanceEvidenceId = ObjectId('65f000000000000000000101');
 const prompt1Id = ObjectId('66d000000000000000000001');
 const prompt2Id = ObjectId('66d000000000000000000002');
 const runtimeFingerprint = '79047f2496ffb27ae0bc420274c2036aa42dbce3f84f260c0d6f49f38dbe35d3';
@@ -146,10 +147,19 @@ db.modelprofiles.insertOne({
       profiledAt: now,
       profileDepth: 'standard',
       benchmarkQualified: true,
+      qualificationReason: null,
+      measurementReliability: 'medium',
       benchmarkedAt: null,
       stale: false,
       staleReason: null,
-      evidenceId: null,
+      evidenceId: performanceEvidenceId,
+      authorityReceipt: {
+        version: 1,
+        source: 'profiler_pipeline',
+        evidenceId: performanceEvidenceId.toString(),
+        digest: 'a30d51d360c61b0975d5d9f5c6cbef9cf91ef6c0810a0fc2e86fe1aa34aeba0c',
+        issuedAt: now,
+      },
       artifact,
     },
   },
@@ -202,15 +212,29 @@ db.modelcontextprofiles.insertOne({
 });
 
 db.modelperformanceprofiles.insertOne({
+  _id: performanceEvidenceId,
   modelName: executionModel,
   hostId,
   artifact,
   profile: {
     profiledAt: now,
+    profileDepth: 'standard',
+    requiredRetainedSamples: 5,
+    requiredTtftSamples: 5,
+    measurementQuality: {
+      passingSampleCount: 5,
+      ttftSampleCount: 5,
+      reliability: 'medium',
+    },
     tokensPerSec: 100,
     promptEvalTokensPerSec: 100,
     ttftMs: 1,
+    ttftMeasurement: 'streamed_wall_clock',
     vramUsedMiB: 1,
+    maxVerifiedContext: 4096,
+    recommendedInteractiveContext: 4096,
+    recommendedDocumentContext: 4096,
+    spill: { verified: true, spillDetected: false },
     optimalNumCtx: 4096,
     recommendedConfig: { num_ctx: 4096 },
     loadTiming: { hotLoadMs: 1 },

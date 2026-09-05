@@ -84,23 +84,23 @@ function withFixture(files, run) {
 test('checked-in maintenance registry covers every reviewed direct call and reports its boundedness honestly', () => {
   const receipt = verifyMaintenanceHttpSinks();
   assert.equal(receipt.schemaVersion, 1);
-  assert.equal(receipt.total, 10);
+  assert.equal(receipt.total, 11);
   assert(receipt.sourcesScanned >= 28);
-  assert.deepEqual(receipt.byLanguage, { javascript: 9, powershell: 1 });
+  assert.deepEqual(receipt.byLanguage, { javascript: 10, powershell: 1 });
   assert.deepEqual(receipt.byConstructor, {
-    fetchImpl: 8,
+    fetchImpl: 9,
     fetch: 1,
     'HttpClient.SendAsync': 1,
   });
-  assert.deepEqual(receipt.deadlineBound, { bounded: 10, unbounded: 0 });
-  assert.deepEqual(receipt.responseBound, { bounded: 10, unbounded: 0 });
-  assert.deepEqual(receipt.byRedirectMode, { manual: 9, follow: 1 });
+  assert.deepEqual(receipt.deadlineBound, { bounded: 11, unbounded: 0 });
+  assert.deepEqual(receipt.responseBound, { bounded: 11, unbounded: 0 });
+  assert.deepEqual(receipt.byRedirectMode, { manual: 10, follow: 1 });
 });
 
 test('review semantics explicitly preserve the static inventory and non-enforcement boundary', () => {
   assert.match(REVIEW_SEMANTICS, /bounded static reviewed-direct inventory—not executor enforcement/);
   const validated = validateInventory(readInventory());
-  assert.equal(validated.sinks.size, 10);
+  assert.equal(validated.sinks.size, 11);
 });
 
 test('fails closed when a new JavaScript constructor has no exact inventory entry', () => withFixture(

@@ -14,6 +14,24 @@ jest.mock('../../src/services/benchmark/judging', () => ({
     stopJudging: jest.fn()
 }));
 
+jest.mock('../../src/services/benchmark/workloadAdmissionLifecycle', () => ({
+    runManagedWorkload: jest.fn(async (_id, _options, task) => task({ signal: undefined, assertActive: () => true })),
+    withManagedWorkloadRoute: (_kind, _resolveOptions, handler) => handler
+}));
+
+jest.mock('../../models/BenchmarkResult', () => ({
+    findById: jest.fn(() => ({
+        select: jest.fn(() => ({
+            lean: jest.fn(async () => ({
+                _id: '507f1f77bcf86cd799439011',
+                batch_id: null,
+                trust_candidate_id: null,
+                trust_prompt_id: null
+            }))
+        }))
+    }))
+}));
+
 jest.mock('../../src/services/benchmark/executionHostValidator', () => ({
     validateExecutionHost: jest.fn(async () => ({ valid: true, available_models: [] }))
 }));

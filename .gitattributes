@@ -6,3 +6,7 @@ Dockerfile text eol=lf
 *.Dockerfile text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+
+# This release fixture is verified by its historical byte hash. Keep the
+# repository bytes verbatim even when core.autocrlf is enabled on Windows.
+e2e/fixtures/upgrade-rollback-v0.1.1-images.json -text

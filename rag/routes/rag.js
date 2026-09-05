@@ -524,7 +524,7 @@ async function handleStatus(req, res) {
         ? embSvc.getStatusInfo()
         : { provider: embSvc.providerName, model: embSvc.model };
       if (refreshRequested && typeof embSvc.refreshConnectionStatus === 'function') {
-        await embSvc.refreshConnectionStatus();
+        await embSvc.refreshConnectionStatus({ source: 'operator-refresh' });
       }
       const cachedEmbedding = typeof embSvc.getCachedConnectionStatus === 'function'
         ? embSvc.getCachedConnectionStatus()
@@ -534,7 +534,15 @@ async function handleStatus(req, res) {
         dependencies.embedding = {
           healthy: cachedEmbedding.healthy === true,
           ...embStatus,
+          // `active` means we hold a real observation (a startup probe, an
+          // explicit refresh, or a genuine embed call), as opposed to the
+          // `unknown` below where nothing has been collected yet.
+          evidence: 'active',
+          evidenceSource: cachedEmbedding.source || 'unspecified',
           checkedAt: cachedEmbedding.checkedAt,
+          ...(cachedEmbedding.startupVerifiedAt
+            ? { startupVerifiedAt: cachedEmbedding.startupVerifiedAt }
+            : {}),
           ...(cachedEmbedding.stale ? { stale: true } : {}),
           ...(cachedEmbedding.healthy === true ? {} : { error: 'Embedding connection test failed' })
         };
@@ -577,6 +585,7 @@ async function handleStatus(req, res) {
     const serviceReady = dependencies.mongodb?.healthy === true
       && dependencies.qdrant?.healthy === true;
     const queryReady = serviceReady && dependencies.embedding?.healthy === true;
+    const status = queryReady ? 'green' : (serviceReady ? 'degraded' : 'red');
 
     // Fire-and-forget Buddy corpus-readiness surface event (surfaceScope:rag).
     // Ready = all deps healthy AND a non-empty corpus → intent:suggesting.
@@ -600,6 +609,9 @@ async function handleStatus(req, res) {
       ok: true,
       data: {
         ...sanitizePublicProjection(stats),
+        // Vector-store adapters may expose their own green status in stats.
+        // Capability status must instead follow end-to-end query readiness.
+        status,
         cache: cacheStats,
         dependencies: sanitizePublicProjection(dependencies),
         // Compatibility: `healthy` has historically meant full query

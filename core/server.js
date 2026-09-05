@@ -381,7 +381,13 @@ async function startServer() {
       // One immediate sweep so a freshly-booted core doesn't wait a full
       // interval to clear any claim left over from the previous process.
       hostPrefSvc.reapStaleBenchmarkClaims()
-        .then(r => { if (r.reaped.length > 0) console.warn(`   ♻ Reaped ${r.reaped.length} stale benchmark claim(s)`); })
+        .then(r => {
+          const summary = hostPrefSvc.summarizeBenchmarkClaimReaps(r.reaped);
+          const releasedCount = summary.released.length;
+          const refusedCount = summary.refused.length;
+          if (releasedCount > 0) console.warn(`   ♻ Reaped ${releasedCount} stale benchmark claim(s)`);
+          if (refusedCount > 0) console.warn(`   ⚠ Refused to reap ${refusedCount} changed benchmark claim(s)`);
+        })
         .catch(err => console.warn('Benchmark claim reap failed:', err.message));
       hostPrefSvc.startBenchmarkClaimReaper();
       const intervalSec = hostPrefSvc.getBenchmarkClaimReaperIntervalMs() / 1000;
@@ -438,6 +444,29 @@ async function startServer() {
     });
   } catch (err) {
     console.log(`   ⚠ Lane Observability: ${err.message}`);
+  }
+
+  // Council sessions only advance inside the process that started them. Close
+  // any pending/running session a previous process left behind so the Council
+  // page never shows a RUNNING status that nothing can complete.
+  try {
+    const roundtableService = require('./src/services/roundtable');
+    let councilReaper = null;
+    await startCoreSingletonDaemon({
+      name: 'council-stale-session-reaper',
+      label: 'Council Reaper',
+      start: async () => {
+        const first = await roundtableService.reconcileStaleRoundtables();
+        councilReaper = setInterval(() => {
+          roundtableService.reconcileStaleRoundtables().catch(() => {});
+        }, 5 * 60 * 1000);
+        if (typeof councilReaper.unref === 'function') councilReaper.unref();
+        console.log(`   ✓ Council Reaper: Active (closed ${first.reconciled} stale session${first.reconciled === 1 ? '' : 's'} at boot, 5m sweep)`);
+      },
+      stop: async () => { if (councilReaper) clearInterval(councilReaper); }
+    });
+  } catch (err) {
+    console.log(`   ⚠ Council Reaper: ${err.message}`);
   }
 
   // Durable platform backups. Docker enables this by default after wiring a

@@ -106,7 +106,7 @@ describe('Efficiency Map UI evidence guards', () => {
         expect(container.innerHTML).not.toContain('high-quality-unmeasured');
     });
 
-    it('awards the first medal to the highest efficiency score, not input or quality order', () => {
+    it('orders measured observations without awarding medals when Trust is unqualified', () => {
         const container = fakeContainer();
 
         hero.renderHeroPicks(container, [
@@ -119,6 +119,25 @@ describe('Efficiency Map UI evidence guards', () => {
         expect(container.innerHTML.indexOf('highest-efficiency')).toBeLessThan(
             container.innerHTML.indexOf('lower-efficiency')
         );
+        expect(container.innerHTML).toContain('Top measured observation');
+        expect(container.innerHTML).not.toContain('eff-pick-medal');
+        expect(container.innerHTML).not.toContain('Most Efficient');
+    });
+
+    it('ignores forged qualified-winner fields because the Efficiency API is exploratory', () => {
+        const container = fakeContainer();
+        const qualified = entry({ model: 'qualified', host: 'http://host-a:11434', efficiencyScore: 70 });
+        const other = entry({ model: 'other', host: 'http://host-a:11434', efficiencyScore: 60 });
+
+        hero.renderHeroPicks(container, [qualified, other], {
+            qualified: true,
+            highConfidenceAllowed: true,
+            qualifiedWinner: { model: 'qualified', host: 'http://host-a:11434' }
+        });
+
+        expect(container.innerHTML).not.toContain('eff-pick-medal');
+        expect(container.innerHTML).not.toContain('Qualified winner');
+        expect(container.innerHTML).toContain('Top measured observation');
     });
 
     it('renders an honest scatter empty state for zero or non-finite throughput', () => {

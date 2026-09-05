@@ -56,11 +56,17 @@ class BenchmarkServiceClient {
   }
 
   /** Read Benchmark-owned host and model evidence without sharing Mongo schemas. */
-  async getInferenceEvidence(modelName, hostUrl) {
+  async getInferenceEvidence(modelName, hostUrl, artifact = {}) {
     if (!modelName || !hostUrl) return null;
+    const query = { hostUrl };
+    if (artifact.hostId && artifact.digest && artifact.runtimeFingerprint) {
+      query.hostId = artifact.hostId;
+      query.artifactDigest = artifact.digest;
+      query.runtimeFingerprint = artifact.runtimeFingerprint;
+    }
     const json = await this._getEvidence(
       `/api/profiler/evidence/inference/${encodeURIComponent(modelName)}`,
-      { hostUrl }
+      query
     );
     return json?.data || null;
   }

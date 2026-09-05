@@ -4,7 +4,10 @@ jest.mock('../../config/logger', () => ({
     error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn()
 }));
 jest.mock('../../src/services/judgeValidation', () => ({}));
-jest.mock('../../models/JudgeGroundTruth', () => ({ findByIdAndDelete: jest.fn() }));
+jest.mock('../../models/JudgeGroundTruth', () => ({
+    findByIdAndDelete: jest.fn(),
+    findByIdAndUpdate: jest.fn()
+}));
 jest.mock('../../src/services/benchmark/calibrationRunner', () => ({}));
 jest.mock('../../models/JudgeAccuracyMatrix', () => ({}));
 jest.mock('../../src/services/benchmark/driftDetector', () => ({}));
@@ -25,6 +28,9 @@ const ID = '507f1f77bcf86cd799439011';
 const CONFIRMATION = `DELETE GROUND TRUTH ${ID}`;
 const deleteHandler = diagnosticsRouter.stack.find(candidate => (
     candidate.route?.path === '/judge/ground-truth/:id' && candidate.route.methods.delete
+)).route.stack.at(-1).handle;
+const patchHandler = diagnosticsRouter.stack.find(candidate => (
+    candidate.route?.path === '/judge/ground-truth/:id' && candidate.route.methods.patch
 )).route.stack.at(-1).handle;
 
 function createResponse() {
@@ -85,5 +91,49 @@ describe('DELETE /judge/ground-truth/:id exact confirmation', () => {
         expect(response.statusCode).toBe(200);
         expect(response.body.status).toBe('success');
         expect(JudgeGroundTruth.findByIdAndDelete).toHaveBeenCalledWith(ID);
+    });
+});
+
+describe('qualified ground-truth route conflicts', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it('returns the model 409 when PATCH would rewrite qualified evidence', async () => {
+        JudgeGroundTruth.findByIdAndUpdate.mockRejectedValue(Object.assign(
+            new Error('qualified JudgeGroundTruth evidence is append-only'),
+            { code: 'QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE', statusCode: 409 }
+        ));
+        const response = createResponse();
+
+        await patchHandler({
+            params: { id: ID },
+            body: { expert_scores: { overall: 1 } }
+        }, response);
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body).toMatchObject({
+            status: 'error',
+            code: 'QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE'
+        });
+    });
+
+    it('returns the model 409 when DELETE targets qualified evidence', async () => {
+        JudgeGroundTruth.findByIdAndDelete.mockRejectedValue(Object.assign(
+            new Error('qualified JudgeGroundTruth evidence is append-only'),
+            { code: 'QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE', statusCode: 409 }
+        ));
+        const response = createResponse();
+
+        await deleteHandler({
+            params: { id: ID },
+            body: { confirm: CONFIRMATION }
+        }, response);
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body).toMatchObject({
+            status: 'error',
+            code: 'QUALIFIED_JUDGE_GROUND_TRUTH_IMMUTABLE'
+        });
     });
 });

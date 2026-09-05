@@ -2,7 +2,8 @@ const express = require('express');
 const request = require('supertest');
 const {
   benchmarkCredentialPath,
-  publicExposureGuard
+  publicExposureGuard,
+  runtimeBridgeCredentialPath,
 } = require('../../src/middleware/publicExposureGuard');
 
 function buildApp() {
@@ -25,6 +26,10 @@ function buildApp() {
   app.post('/api/analytics/codex-usage', (_req, res) => res.json({ ok: true }));
   app.post('/api/platform-events', (_req, res) => res.json({ ok: true }));
   app.post('/api/inference/generate', (_req, res) => res.json({ ok: true }));
+  app.post('/api/nerve-center/workload-admissions', (_req, res) => res.json({ ok: true }));
+  app.post('/api/nerve-center/workload-admissions/admission-1/heartbeat', (_req, res) => res.json({ ok: true }));
+  app.post('/api/nerve-center/workload-admissions/admission-1/release-receipt', (_req, res) => res.json({ ok: true }));
+  app.delete('/api/nerve-center/workload-admissions/admission-1', (_req, res) => res.json({ ok: true }));
   app.post('/api/planning/automation/reconcile', (_req, res) => res.json({ ok: true }));
   app.post('/api/memory-review/runs', (_req, res) => res.json({ ok: true }));
   app.post('/api/memory-review/runs/run-1/observations', (_req, res) => res.json({ ok: true }));
@@ -34,9 +39,13 @@ function buildApp() {
   app.delete('/api/cluster/schedule/claim/claim-1', (_req, res) => res.json({ ok: true }));
   app.post('/api/pipeline/tasks/task-1/claim', (_req, res) => res.json({ ok: true }));
   app.get('/api/pipeline/tasks/next', (_req, res) => res.json({ ok: true }));
+  app.get('/api/pipeline/tasks/task-1/worker', (_req, res) => res.json({ ok: true }));
   app.post('/api/pipeline/tasks/task-1/status', (_req, res) => res.json({ ok: true }));
   app.post('/api/todos', (_req, res) => res.json({ ok: true }));
   app.post('/api/alerts/alert-1/delivery-status', (_req, res) => res.json({ ok: true }));
+  app.get('/api/openclaw-ollama/api/tags', (_req, res) => res.json({ models: [] }));
+  app.post('/api/openclaw-ollama/api/chat', (_req, res) => res.json({ done: true }));
+  app.get('/api/openclaw-ollama-evil/api/tags', (_req, res) => res.json({ unsafe: true }));
   app.post('/mcp', (_req, res) => res.json({ jsonrpc: '2.0', result: {} }));
   return app;
 }
@@ -57,6 +66,7 @@ describe('publicExposureGuard', () => {
   const savedScheduleToken = process.env.AGENTX_SCHEDULE_TOKEN;
   const savedPipelineToken = process.env.AGENTX_PIPELINE_TOKEN;
   const savedAlertDeliveryToken = process.env.AGENTX_ALERT_DELIVERY_TOKEN;
+  const savedOpenClawBridgeToken = process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
   const savedInternalHostTrust = process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
   const savedLoopbackProxyUiTrust = process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
 
@@ -78,6 +88,7 @@ describe('publicExposureGuard', () => {
     delete process.env.AGENTX_SCHEDULE_TOKEN;
     delete process.env.AGENTX_PIPELINE_TOKEN;
     delete process.env.AGENTX_ALERT_DELIVERY_TOKEN;
+    delete process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
     delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
     delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
     app = buildApp();
@@ -114,6 +125,8 @@ describe('publicExposureGuard', () => {
     else process.env.AGENTX_PIPELINE_TOKEN = savedPipelineToken;
     if (savedAlertDeliveryToken === undefined) delete process.env.AGENTX_ALERT_DELIVERY_TOKEN;
     else process.env.AGENTX_ALERT_DELIVERY_TOKEN = savedAlertDeliveryToken;
+    if (savedOpenClawBridgeToken === undefined) delete process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN;
+    else process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN = savedOpenClawBridgeToken;
     if (savedInternalHostTrust === undefined) delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
     else process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS = savedInternalHostTrust;
     if (savedLoopbackProxyUiTrust === undefined) delete process.env.AGENTX_TRUST_LOOPBACK_PROXY_UI;
@@ -199,6 +212,48 @@ describe('publicExposureGuard', () => {
       .set('X-AgentX-Consumer-Token', 'consumer-token')
       .send({})
       .expect(403);
+  });
+
+  it('admits the dedicated runtime token only on the exact OpenClaw proxy family', async () => {
+    process.env.AGENTX_PUBLIC_HOSTS = 'agentx.example.test';
+    process.env.AGENTX_OPENCLAW_BRIDGE_TOKEN = 'openclaw-bridge-token-1234';
+    app.locals.forcedIp = '192.0.2.10';
+
+    await request(app)
+      .get('/api/openclaw-ollama/api/tags')
+      .set('Host', 'agentx.example.test')
+      .expect(403);
+    await request(app)
+      .get('/api/openclaw-ollama/api/tags')
+      .set('Host', 'agentx.example.test')
+      .set('Authorization', 'Bearer wrong-token')
+      .expect(403);
+    await request(app)
+      .get('/api/openclaw-ollama/api/tags')
+      .set('Host', 'agentx.example.test')
+      .set('Authorization', 'Bearer openclaw-bridge-token-1234')
+      .expect(200);
+    await request(app)
+      .post('/api/openclaw-ollama/api/chat')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-OpenClaw-Token', 'openclaw-bridge-token-1234')
+      .send({ model: 'qualified-model', messages: [] })
+      .expect(200);
+
+    for (const path of [
+      '/api/nerve-center/status',
+      '/api/openclaw-ollama-evil/api/tags',
+    ]) {
+      await request(app)
+        .get(path)
+        .set('Host', 'agentx.example.test')
+        .set('Authorization', 'Bearer openclaw-bridge-token-1234')
+        .expect(403);
+    }
+
+    expect(runtimeBridgeCredentialPath('/api/openclaw-ollama')).toBe(true);
+    expect(runtimeBridgeCredentialPath('/API/OPENCLAW-OLLAMA/api/tags?refresh=true')).toBe(true);
+    expect(runtimeBridgeCredentialPath('/api/openclaw-ollama-evil/api/tags')).toBe(false);
   });
 
   it('allows default loopback-host API requests from loopback', async () => {
@@ -416,6 +471,22 @@ describe('publicExposureGuard', () => {
       .set('Host', 'agentx.example.test')
       .set('X-AgentX-Benchmark-Token', 'benchmark-token')
       .expect(200);
+    await request(app).post('/api/nerve-center/workload-admissions')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Benchmark-Token', 'benchmark-token')
+      .expect(200);
+    await request(app).post('/api/nerve-center/workload-admissions/admission-1/heartbeat')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Benchmark-Token', 'benchmark-token')
+      .expect(200);
+    await request(app).post('/api/nerve-center/workload-admissions/admission-1/release-receipt')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Benchmark-Token', 'benchmark-token')
+      .expect(200);
+    await request(app).delete('/api/nerve-center/workload-admissions/admission-1')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Benchmark-Token', 'benchmark-token')
+      .expect(200);
     await request(app).post('/api/memory-review/runs')
       .set('Host', 'agentx.example.test')
       .set('X-AgentX-Memory-Review-Token', 'memory-token')
@@ -433,6 +504,10 @@ describe('publicExposureGuard', () => {
       .set('X-AgentX-Pipeline-Token', 'pipeline-token')
       .expect(200);
     await request(app).get('/api/pipeline/tasks/next')
+      .set('Host', 'agentx.example.test')
+      .set('X-AgentX-Pipeline-Token', 'pipeline-token')
+      .expect(200);
+    await request(app).get('/api/pipeline/tasks/task-1/worker')
       .set('Host', 'agentx.example.test')
       .set('X-AgentX-Pipeline-Token', 'pipeline-token')
       .expect(200);
@@ -472,5 +547,17 @@ describe('publicExposureGuard', () => {
     expect(benchmarkCredentialPath('/api/models/registry/model/context-info', 'GET')).toBe(false);
     expect(benchmarkCredentialPath('/api/models/registry/model/execution-config', 'GET')).toBe(false);
     expect(benchmarkCredentialPath('/api/models/registry/model', 'POST')).toBe(false);
+  });
+
+  it('scopes the Benchmark credential to the exact workload-admission lifecycle', () => {
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions', 'POST')).toBe(true);
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions/admission-1/heartbeat', 'POST')).toBe(true);
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions/admission-1/release-receipt', 'POST')).toBe(true);
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions/admission-1', 'DELETE')).toBe(true);
+    expect(benchmarkCredentialPath('/api/nerve-center/host-preferences/host/benchmark-claim/batch-1/release-receipt', 'POST')).toBe(true);
+
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions', 'GET')).toBe(false);
+    expect(benchmarkCredentialPath('/api/nerve-center/workload-admissions/admission-1', 'POST')).toBe(false);
+    expect(benchmarkCredentialPath('/api/nerve-center/maintenance-leases', 'POST')).toBe(false);
   });
 });

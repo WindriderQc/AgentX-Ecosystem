@@ -11,6 +11,9 @@ const CONTRACT_VERSION = 1;
 const MAX_STREAM_TELEMETRY_LINE_CHARS = 65_536;
 const MODES = new Set(['chat', 'generate', 'embed']);
 const CONSUMER_CONTRACT_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
+const ATTRIBUTION_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,159}$/;
+const ATTRIBUTION_RUNTIME_VALUES = new Set(['agentx', 'codex', 'claude-code', 'external', 'other']);
+const ATTRIBUTION_KEYS = new Set(['workItemId', 'correlationId', 'runtime', 'attempt']);
 const LOCAL_OPTION_KEYS = new Set([
   'num_ctx', 'num_predict', 'temperature', 'top_p', 'top_k', 'min_p', 'typical_p',
   'seed', 'stop', 'repeat_last_n', 'repeat_penalty', 'presence_penalty',
@@ -52,6 +55,51 @@ function deepFreeze(value) {
 
 function frozenCopy(value) {
   return deepFreeze(clone(value));
+}
+
+function normalizeServerAttribution(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TrustedRuntimeServiceError('attribution must be an object when supplied.', {
+      code: 'INFERENCE_ATTRIBUTION_INVALID', statusCode: 400
+    });
+  }
+  const unknownKeys = Object.keys(value).filter((key) => !ATTRIBUTION_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    throw new TrustedRuntimeServiceError('attribution contains unsupported fields.', {
+      code: 'INFERENCE_ATTRIBUTION_INVALID', statusCode: 400
+    });
+  }
+  const identifier = (name) => {
+    if (value[name] == null) return null;
+    const text = String(value[name]).trim();
+    if (!ATTRIBUTION_IDENTIFIER_PATTERN.test(text)) {
+      throw new TrustedRuntimeServiceError(`${name} must be a bounded opaque identifier.`, {
+        code: 'INFERENCE_ATTRIBUTION_INVALID', statusCode: 400
+      });
+    }
+    return text;
+  };
+  const workItemId = identifier('workItemId');
+  const correlationId = identifier('correlationId');
+  if (!workItemId && !correlationId) {
+    throw new TrustedRuntimeServiceError('attribution requires workItemId or correlationId.', {
+      code: 'INFERENCE_ATTRIBUTION_INVALID', statusCode: 400
+    });
+  }
+  const runtime = String(value.runtime || '').trim().toLowerCase();
+  if (!ATTRIBUTION_RUNTIME_VALUES.has(runtime)) {
+    throw new TrustedRuntimeServiceError('attribution.runtime must be a recognized runtime.', {
+      code: 'INFERENCE_ATTRIBUTION_INVALID', statusCode: 400
+    });
+  }
+  const attempt = value.attempt == null ? 1 : Number(value.attempt);
+  if (!Number.isInteger(attempt) || attempt < 1 || attempt > 10_000) {
+    throw new TrustedRuntimeServiceError('attribution.attempt must be an integer from 1 through 10000.', {
+      code: 'INFERENCE_ATTRIBUTION_INVALID', statusCode: 400
+    });
+  }
+  return frozenCopy({ workItemId, correlationId, runtime, attempt });
 }
 
 function sanitizeHostPreference(pref, getPinnedEntries) {
@@ -108,9 +156,12 @@ async function buildEffectiveRoutingSnapshot(deps, options = {}) {
     const resolved = buildTaskSnapshot(taskType, task, routerConfig, preferencesByHost, deps.modelsMatch);
     if (resolved.model) {
       try {
+        const contractInput = { model: resolved.model, host: resolved.hostUrl };
         const [contextInfo, inferenceContract] = await Promise.all([
           deps.getContextInfo(resolved.model, resolved.hostUrl),
-          deps.resolveInferenceContract({ model: resolved.model, host: resolved.hostUrl })
+          options.includeArtifactIdentity === true
+            ? deps.resolveInferenceContract(contractInput, { includeArtifactIdentity: true })
+            : deps.resolveInferenceContract(contractInput)
         ]);
         if (!resolved.contextSize && positiveInteger(contextInfo?.num_ctx)) {
           resolved.contextSize = positiveInteger(contextInfo.num_ctx);
@@ -430,6 +481,11 @@ function validateRequest(request) {
       code: 'INFERENCE_POLICY_INVALID', statusCode: 400
     });
   }
+  if (request.exclusiveHost !== undefined && typeof request.exclusiveHost !== 'boolean') {
+    throw new TrustedRuntimeServiceError('exclusiveHost must be a boolean when supplied.', {
+      code: 'INFERENCE_POLICY_INVALID', statusCode: 400
+    });
+  }
   for (const [name, value] of [
     ['options.num_ctx', request.options?.num_ctx],
     ['options.num_predict', request.options?.num_predict],
@@ -450,13 +506,25 @@ function validateRequest(request) {
   }
 }
 
-function telemetryEntry(request, metadata, startedAt, status, data = null, error = null) {
+function telemetryEntry(
+  request,
+  metadata,
+  startedAt,
+  status,
+  data = null,
+  error = null,
+  attribution = null
+) {
   return {
     host: metadata.hostUrl,
     model: metadata.model,
     caller: request.mode === 'embed' ? 'embedding' : 'proxy',
     callerDetail: request.callerDetail || 'trusted-extension',
     consumerContract: metadata.consumerContract || null,
+    runtime: attribution?.runtime || null,
+    workItemId: attribution?.workItemId || null,
+    correlationId: attribution?.correlationId || null,
+    attempt: attribution?.attempt || 1,
     taskType: request.taskType || null,
     routed: true,
     routedModel: metadata.model,
@@ -477,6 +545,7 @@ function telemetryEntry(request, metadata, startedAt, status, data = null, error
 
 async function executeRoutedInference(deps, request, options = {}) {
   validateRequest(request);
+  const attribution = normalizeServerAttribution(options.attribution);
   const startedAt = Date.now();
   const requestedModel = String(request.model || '').trim();
   const taskType = String(request.taskType || '').trim();
@@ -508,6 +577,11 @@ async function executeRoutedInference(deps, request, options = {}) {
   if (consumerContract && !CONSUMER_CONTRACT_PATTERN.test(consumerContract)) {
     throw new TrustedRuntimeServiceError('consumerContract must be a bounded lowercase identifier.', {
       code: 'INFERENCE_CONSUMER_CONTRACT_INVALID', statusCode: 400
+    });
+  }
+  if (attribution && !consumerContract) {
+    throw new TrustedRuntimeServiceError('attribution requires a server-attested consumer contract.', {
+      code: 'INFERENCE_ATTRIBUTION_CONTRACT_REQUIRED', statusCode: 400
     });
   }
 
@@ -582,7 +656,9 @@ async function executeRoutedInference(deps, request, options = {}) {
   }
   upstreamUrl = `${hostUrl}/api/${request.mode === 'embed' ? 'embed' : request.mode}`;
   payload = buildLocalPayload(request, model, runtimeOptions, keepAlive);
-  release = await deps.hostGate.acquire(hostUrl, model);
+  release = request.exclusiveHost === true
+    ? await deps.hostGate.acquireExclusive(hostUrl, model, { signal: options.signal })
+    : await deps.hostGate.acquire(hostUrl, model, { signal: options.signal });
 
   const metadata = frozenCopy({
     requestedModel: requestedModel || null,
@@ -602,6 +678,17 @@ async function executeRoutedInference(deps, request, options = {}) {
   const releaseGate = releaseOnce(release);
 
   try {
+    if (request.exclusiveHost === true) {
+      const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model);
+      if (prepared?.status !== 'ready') {
+        throw new TrustedRuntimeServiceError('The inference host could not complete its exclusive model handoff.', {
+          code: prepared?.status === 'busy'
+            ? 'INFERENCE_EXCLUSIVE_HOST_BUSY'
+            : 'INFERENCE_EXCLUSIVE_HOST_PREPARE_FAILED',
+          statusCode: 503
+        });
+      }
+    }
     const response = await deps.fetch(upstreamUrl, {
       method: 'POST',
       headers,
@@ -616,7 +703,7 @@ async function executeRoutedInference(deps, request, options = {}) {
         onComplete: (data) => {
           void deps.recordInference(telemetryEntry(request, metadata, startedAt,
             abortBridge.signal.aborted ? 'error' : 'success', data,
-            abortBridge.signal.aborted ? 'cancelled' : null));
+            abortBridge.signal.aborted ? 'cancelled' : null, attribution));
         }
       });
       return Object.freeze({
@@ -634,7 +721,7 @@ async function executeRoutedInference(deps, request, options = {}) {
     releaseGate();
     void deps.recordInference(telemetryEntry(
       request, metadata, startedAt, response.ok ? 'success' : 'error', data,
-      response.ok ? null : `upstream_http_${response.status}`
+      response.ok ? null : `upstream_http_${response.status}`, attribution
     ));
     return Object.freeze({
       ok: response.ok,
@@ -651,7 +738,8 @@ async function executeRoutedInference(deps, request, options = {}) {
     const timedOut = abortBridge.signal.aborted && !cancelled;
     void deps.recordInference(telemetryEntry(
       request, metadata, startedAt, timedOut ? 'timeout' : 'error', null,
-      cancelled ? 'cancelled' : (timedOut ? `timeout_${timeoutMs}ms` : error.message)
+      cancelled ? 'cancelled' : (timedOut ? `timeout_${timeoutMs}ms` : error.message),
+      attribution
     ));
     throw new TrustedRuntimeServiceError(
       cancelled ? 'Inference request cancelled.' : (timedOut ? 'Inference request timed out.' : 'Routed inference failed.'),
@@ -721,5 +809,6 @@ module.exports = {
   createTrustedRuntimeServices,
   executeRoutedInference,
   frozenCopy,
+  normalizeServerAttribution,
   telemetryEntry
 };

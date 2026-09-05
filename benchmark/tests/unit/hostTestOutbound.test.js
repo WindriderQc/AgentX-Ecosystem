@@ -41,7 +41,8 @@ const {
     createHostTestExecutor,
     hostTestRequest,
     operationMatches,
-    warmUp
+    warmUp,
+    verifyAppliedContext
   }
 } = require('../../src/services/hostTestService');
 const { readBoundedJson } = require('../../../shared/outboundHttpExecutor');
@@ -328,6 +329,46 @@ describe('hostTestService governed outbound operations', () => {
       host: 'http://ollama:11434',
       model: 'model-a'
     });
+  });
+
+  test('requires /api/ps to attest the exact applied context after a probe', async () => {
+    isSameOllamaModel.mockImplementation((left, right) => left === right);
+    const exactExecutor = createTestExecutor(jest.fn(async (url) => response(url, {
+      body: JSON.stringify({ models: [{ name: 'model-a', context_length: 32768 }] })
+    })));
+    await expect(verifyAppliedContext(
+      'http://ollama:11434',
+      'model-a',
+      32768,
+      null,
+      exactExecutor
+    )).resolves.toBe(32768);
+
+    const clampedExecutor = createTestExecutor(jest.fn(async (url) => response(url, {
+      body: JSON.stringify({ models: [{ name: 'model-a', context_length: 8192 }] })
+    })));
+    await expect(verifyAppliedContext(
+      'http://ollama:11434',
+      'model-a',
+      32768,
+      null,
+      clampedExecutor
+    )).rejects.toMatchObject({
+      code: 'HOST_TEST_CONTEXT_CLAMPED',
+      requestedNumCtx: 32768,
+      observedNumCtx: 8192
+    });
+
+    const absentExecutor = createTestExecutor(jest.fn(async (url) => response(url, {
+      body: JSON.stringify({ models: [] })
+    })));
+    await expect(verifyAppliedContext(
+      'http://ollama:11434',
+      'model-a',
+      32768,
+      null,
+      absentExecutor
+    )).rejects.toMatchObject({ code: 'HOST_TEST_CONTEXT_UNVERIFIED' });
   });
 
   test('uses bounded managed JSON readers for the successful inventory response', async () => {

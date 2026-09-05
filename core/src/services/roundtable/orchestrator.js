@@ -437,10 +437,15 @@ async function runRoundtable(roundtableId, emitter) {
     const agents = doc.panelConfig.map((a) => a.toObject());
     const totalTimer = setTimeout(async () => {
       logger.error('Roundtable total timeout exceeded', { roundtableId });
-      await Roundtable.updateOne(
+      const totalDurationMs = Date.now() - startTime;
+      const timeoutError = `Total timeout after ${DEFAULT_TOTAL_TIMEOUT_MS}ms`;
+      const result = await Roundtable.updateOne(
         { _id: roundtableId, status: 'running' },
-        { $set: { status: 'timeout', error: `Total timeout after ${DEFAULT_TOTAL_TIMEOUT_MS}ms`, completedAt: new Date(), totalDurationMs: Date.now() - startTime } }
+        { $set: { status: 'timeout', error: timeoutError, completedAt: new Date(), totalDurationMs } }
       );
+      if (result?.modifiedCount > 0 && emitter) {
+        emitter.emit('chunk', { type: 'done', status: 'timeout', error: timeoutError, totalDurationMs });
+      }
     }, DEFAULT_TOTAL_TIMEOUT_MS);
 
     // Round 1 — blind
@@ -643,11 +648,44 @@ async function createRoundtable(options) {
   });
 }
 
+// ─── stale session reconciliation ────────────────────────────────────────
+// A Council session only advances inside the process that started it. When
+// Core restarts (deploys, crashes) while a session is pending/running, nothing
+// ever flips its status again and the UI shows RUNNING forever. Any session
+// that has not been touched for longer than the total ceiling cannot still be
+// alive, so it is closed as failed with an explicit reason.
+const STALE_GRACE_MS = 60 * 1000;
+const STALE_ERROR = 'Council orchestrator stopped before this session finished (Core restarted or the session exceeded its ceiling). Start a new session.';
+
+function staleCutoff(now = Date.now(), maxAgeMs = DEFAULT_TOTAL_TIMEOUT_MS + STALE_GRACE_MS) {
+  return new Date(now - maxAgeMs);
+}
+
+async function reconcileStaleRoundtables({ now = Date.now(), maxAgeMs } = {}) {
+  const cutoff = staleCutoff(now, maxAgeMs);
+  const filter = {
+    status: { $in: ['pending', 'running'] },
+    updatedAt: { $lt: cutoff }
+  };
+  const activeHere = [...emitterRegistry.keys()].map(String);
+  if (activeHere.length) filter._id = { $nin: activeHere };
+  const result = await Roundtable.updateMany(filter, {
+    $set: { status: 'failed', error: STALE_ERROR, completedAt: new Date(now) }
+  });
+  const reconciled = Number(result?.modifiedCount || 0);
+  if (reconciled > 0) {
+    logger.warn('Closed stale Council sessions left running by a previous process', { reconciled, cutoff });
+  }
+  return { reconciled, cutoff };
+}
+
 async function getRoundtable(id) {
+  await reconcileStaleRoundtables().catch(() => {});
   return Roundtable.findById(id);
 }
 
 async function listRoundtables({ limit = 20, skip = 0 } = {}) {
+  await reconcileStaleRoundtables().catch(() => {});
   const [docs, total] = await Promise.all([
     Roundtable.find({}).sort({ createdAt: -1 }).skip(skip).limit(limit),
     Roundtable.countDocuments({})
@@ -668,5 +706,7 @@ module.exports = {
   createRoundtable,
   getRoundtable,
   listRoundtables,
+  reconcileStaleRoundtables,
+  STALE_ERROR,
   emitterRegistry
 };

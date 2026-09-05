@@ -8,6 +8,21 @@ function finiteNonNegative(value, fallback = 0) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+const SAFE_NEXT_RUN_REASONS = new Set(['startup', 'normal', 'retry', 'retry-exhausted', 'non-retryable-failure']);
+const OPERATION_NAMES = ['mongo', 'config', 'qdrant'];
+
+function projectFailures(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(entry => entry && OPERATION_NAMES.includes(entry.name))
+    .map(entry => ({
+      name: entry.name,
+      error: typeof entry.error === 'string' ? entry.error.slice(0, 200) : 'unknown error',
+      code: typeof entry.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(entry.code) ? entry.code : null,
+      retryable: entry.retryable !== false
+    }));
+}
+
 function round(value, digits = 2) {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
@@ -45,6 +60,26 @@ function projectBackupPolicy(config = {}, schedule = {}, observedAt = new Date()
   if (enabled && retryDelayMs < intervalMs) {
     warnings.push('After a partial or failed cycle, the retry cadence is shorter than the normal cadence.');
   }
+
+  const lastFailures = projectFailures(schedule.lastFailures);
+  const nextRunReason = SAFE_NEXT_RUN_REASONS.has(schedule.nextRunReason) ? schedule.nextRunReason : null;
+  const blockedLayers = lastFailures.filter(entry => entry.retryable === false);
+  if (lastFailures.length > 0 && level === 'low') level = 'watch';
+  if (blockedLayers.length > 0) {
+    reasons.push(
+      `${blockedLayers.map(entry => entry.name).join(', ')} backup${blockedLayers.length > 1 ? 's are' : ' is'} failing with a non-retryable error; automatic retries are suspended for that layer until an operator fixes the configuration.`
+    );
+    for (const entry of blockedLayers) {
+      warnings.push(`${entry.name}: ${entry.error}${entry.code ? ` (${entry.code})` : ''}`);
+    }
+  } else if (lastFailures.length > 0) {
+    warnings.push(
+      `Last cycle left ${lastFailures.map(entry => entry.name).join(', ')} without a fresh artifact; only the failed layer${lastFailures.length > 1 ? 's are' : ' is'} retried.`
+    );
+  }
+  if (nextRunReason === 'retry-exhausted') {
+    warnings.push('The retry budget for the last failure was exhausted; the scheduler is back on the normal cadence.');
+  }
   warnings.push('Legacy uncompressed MongoDB backup directories are listed but excluded from automatic retention pruning.');
 
   return {
@@ -63,6 +98,12 @@ function projectBackupPolicy(config = {}, schedule = {}, observedAt = new Date()
       lastStartedAt: schedule.lastStartedAt || null,
       lastFinishedAt: schedule.lastFinishedAt || null,
       lastStatus: schedule.lastStatus || 'never',
+      lastCycleMode: schedule.lastCycleMode === 'retry' ? 'retry' : (schedule.lastCycleMode === 'full' ? 'full' : null),
+      lastFailures,
+      nextRunReason,
+      consecutiveRetries: Math.floor(finiteNonNegative(schedule.consecutiveRetries)),
+      maxRetries: Math.floor(finiteNonNegative(schedule.maxRetries, 3)),
+      maxRetriesSource: schedule.maxRetriesSource || 'unknown',
       logicalOperationsPerCycle: LOGICAL_OPERATIONS_PER_CYCLE,
       operationNames: ['mongo', 'config', 'qdrant'],
       normalCyclesPerDay,
@@ -133,5 +174,6 @@ module.exports = {
   DAY_MS,
   LOGICAL_OPERATIONS_PER_CYCLE,
   projectBackupPolicy,
+  projectFailures,
   summarizeInventory
 };
