@@ -146,13 +146,14 @@ router.post('/:admissionId/mark-unknown', requireRuntimeBridgeAccess, async (req
 
 // UNKNOWN recovery is intentionally not available to the runtime bridge.
 // Only an operator can attest the controlled runtime restart that proves old
-// Ollama requests terminated.
+// Ollama requests terminated. The stored admission owns its principal: the
+// operator supplies only the exact id and generation, so internal Core callers
+// such as the watchdog remain recoverable without trusting caller identity.
 router.post('/:admissionId/recover-runtime-restart', requireOperatorAccess, async (req, res) => {
   try {
     const result = await runtimeCoordination.recoverInferenceAfterRuntimeRestart({
       id: req.params.admissionId,
       generation: req.body?.generation,
-      principal: RUNTIME_BRIDGE_PRINCIPAL,
       receipt: {
         contract: req.body?.contract,
         runtimeRestarted: req.body?.runtimeRestarted,

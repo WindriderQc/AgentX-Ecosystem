@@ -529,24 +529,37 @@ async function recoverInferenceAfterRuntimeRestart({ id, generation, principal, 
   id = clean(id);
   generation = clean(generation);
   principal = clean(principal);
+  const restartedAt = new Date(receipt?.restartedAt || '');
   const exactReceipt = receipt?.contract === 'agentx.ollama-runtime-restart/v1'
     && receipt?.runtimeRestarted === true
     && receipt?.confirmation === 'OLLAMA_RUNTIME_RESTARTED_AND_PRIOR_REQUESTS_TERMINATED'
     && typeof receipt?.restartedAt === 'string'
-    && Number.isFinite(Date.parse(receipt.restartedAt));
-  if (!id || !generation || !principal || !exactReceipt) {
+    && Number.isFinite(restartedAt.getTime())
+    && restartedAt.getTime() <= Date.now() + 5 * 60_000;
+  if (!id || !generation || !exactReceipt) {
     return { recovered: false, reason: 'exact inference proof and runtime restart receipt required' };
   }
+  const exactInference = {
+    admissionId: id,
+    generation,
+    state: 'UNKNOWN',
+    unknownAt: { $lte: restartedAt },
+    ...(principal && { principal })
+  };
   const recovered = await RuntimeCoordination.findOneAndUpdate(
     {
       _id: 'runtime',
-      inferences: { $elemMatch: { admissionId: id, generation, principal, state: 'UNKNOWN' } }
+      inferences: { $elemMatch: exactInference }
     },
-    { $pull: { inferences: { admissionId: id, generation, principal, state: 'UNKNOWN' } } },
+    { $pull: { inferences: { admissionId: id, generation, state: 'UNKNOWN', ...(principal && { principal }) } } },
     { new: false }
   ).lean();
-  return recovered
-    ? { recovered: true, admissionId: id, generation, principal, receipt }
+  const inference = recovered?.inferences?.find((entry) => entry.admissionId === id
+    && entry.generation === generation
+    && entry.state === 'UNKNOWN'
+    && (!principal || entry.principal === principal));
+  return inference
+    ? { recovered: true, admissionId: id, generation, principal: inference.principal, receipt }
     : { recovered: false, reason: 'matching quarantined inference was not found' };
 }
 

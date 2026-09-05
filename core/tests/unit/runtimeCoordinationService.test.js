@@ -928,14 +928,23 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     await expect(service.recoverInferenceAfterRuntimeRestart({
       id: inference.admissionId,
       generation: inference.generation,
-      principal: inference.principal,
+      receipt: {
+        contract: 'agentx.ollama-runtime-restart/v1',
+        runtimeRestarted: true,
+        confirmation: 'OLLAMA_RUNTIME_RESTARTED_AND_PRIOR_REQUESTS_TERMINATED',
+        restartedAt: new Date(new Date(stored.inferences[0].unknownAt).getTime() - 1_000).toISOString()
+      }
+    })).resolves.toMatchObject({ recovered: false });
+    await expect(service.recoverInferenceAfterRuntimeRestart({
+      id: inference.admissionId,
+      generation: inference.generation,
       receipt: {
         contract: 'agentx.ollama-runtime-restart/v1',
         runtimeRestarted: true,
         confirmation: 'OLLAMA_RUNTIME_RESTARTED_AND_PRIOR_REQUESTS_TERMINATED',
         restartedAt: new Date().toISOString()
       }
-    })).resolves.toMatchObject({ recovered: true });
+    })).resolves.toMatchObject({ recovered: true, principal: 'core-service' });
     await expect(service.acquireMaintenance({
       principal: 'operator-token', requestId: 'deploy-after-restart', scope: 'deploy'
     })).resolves.toMatchObject({ acquired: true });
