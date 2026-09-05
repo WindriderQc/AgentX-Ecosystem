@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const {
+  verifyProfilerAuthorityReceipt,
+} = require('../../benchmark/src/services/profiler/profilerAuthorityReceipt');
 
 function evaluateSeed() {
   const documents = new Map();
@@ -27,7 +30,9 @@ function evaluateSeed() {
       'benchmarkprompts',
     ].map((name) => [name, collection(name)])) },
     ObjectId: (value) => ({ toString: () => value }),
+    Date,
     print: () => {},
+    require,
   });
   return documents;
 }
@@ -50,13 +55,17 @@ test('live cancellation seed provides fresh exact profiler authority and v2 cont
       evidenceId: readiness.authorityReceipt.evidenceId,
     },
     {
-      version: 1,
+      version: 3,
       source: 'profiler_pipeline',
       evidenceId: String(performance._id),
     }
   );
   assert.match(readiness.authorityReceipt.digest, /^[a-f0-9]{64}$/);
   assert.equal(Number.isNaN(Date.parse(readiness.authorityReceipt.issuedAt)), false);
+  assert.equal(verifyProfilerAuthorityReceipt(readiness, performance, {
+    modelName: modelProfile.name,
+    hostId: performance.hostId,
+  }), true);
   assert.deepEqual(performance.artifact, readiness.artifact);
   assert.equal(performance.active, true);
   assert.equal(performance.stale, false);
