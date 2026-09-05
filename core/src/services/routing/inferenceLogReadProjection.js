@@ -24,6 +24,7 @@ const RUNTIMES = new Set(['agentx', 'codex', 'claude-code', 'external', 'other']
 const STATUSES = new Set(['success', 'error', 'timeout']);
 const LANES = new Set(['direct', 'interactive', 'automated']);
 const MODES = new Set(Object.values(DECISION_MODES));
+const CANCELLATION_PATTERN = /caller_disconnected|\bcancel(?:ed|led|lation)\b/i;
 const NUM_CTX_SOURCES = new Set([
   'caller', 'modelfile', 'override', 'target_host_vram_estimate', 'context_test',
   'execution_default', 'fallback', 'host_preference_pin', 'profile', 'unresolved', 'n/a',
@@ -68,8 +69,7 @@ function isCancellationEvidence(row) {
     row?.routeDecision?.outcome?.reasonCode,
   ];
   return values.some(value => typeof value === 'string' && (
-    value === 'caller_disconnected'
-    || /\bcancel(?:ed|led|lation)\b/i.test(value)
+    CANCELLATION_PATTERN.test(value)
   ));
 }
 
@@ -187,6 +187,7 @@ function projectInferenceLogs(rows) {
 }
 
 module.exports = {
+  CANCELLATION_PATTERN,
   projectInferenceLog,
   projectInferenceLogs,
   sanitizeDecisionForRead,
