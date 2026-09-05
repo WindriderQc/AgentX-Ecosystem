@@ -1,24 +1,26 @@
-// Dreaming Review — dependency-free, approval-first, and intentionally calm.
+// Dreaming Review — confidence-tiered, policy-automatic, and intentionally calm.
 (function () {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
   const state = {
     runs: [], insights: null, selectedRunId: null, run: null,
-    filter: 'all', runFilter: 'all', runSearch: '', applyEnabled: false,
+    filter: 'all', runFilter: 'all', runSearch: '', applyEnabled: false, safeAutomationEnabled: false,
     pendingAction: null, returnFocus: null, focusAfter: null,
   };
   const labels = {
     ready_for_review: 'Ready for review', partially_reviewed: 'Partially reviewed', completed: 'Complete',
     failed: 'Needs attention', collecting: 'Collecting', synthesizing: 'Reflecting',
-    proposed: 'Pending', approved: 'Approved', rejected: 'Rejected', deferred: 'Deferred',
-    applied: 'Applied', apply_failed: 'Apply failed', applying: 'Applying',
-    shared_fact: 'Shared memory', artifact: 'Knowledge artifact', runtime_local: 'Runtime-local proposal',
+    proposed: 'Exception', approved: 'Approved', auto_approved: 'Policy approved', rejected: 'Ignored', deferred: 'Deferred',
+    parked: 'Parked', shadowed: 'Shadowed', applied: 'Applied', apply_failed: 'Apply failed', applying: 'Applying',
+    shared_fact: 'Shared memory', soft_memory: 'Working memory', artifact: 'Knowledge artifact', runtime_local: 'Runtime-local proposal',
     skill_draft: 'Skill draft', pipeline_task: 'Follow-up task', git_change: 'Source change', ignore: 'No action',
     agentx: 'AgentX', 'claude-code': 'Claude Code', codex: 'Codex', external: 'External',
   };
   const trustHelp = {
     explicit_memory_request: 'You explicitly asked an agent to remember this.',
+    authenticated_owner_statement: 'This was observed in an authenticated owner turn; Core still decides whether it is fact, inference, or noise.',
+    observed_project_event: 'This came from the configured accepted project history. It is event context, not a personal preference.',
     verified_runtime_evidence: 'The runtime directly verified this state.',
     verified_git_or_test_outcome: 'A repository or test result independently verified it.',
     explicit_owner_instruction: 'This came from a direct owner instruction.',
@@ -26,6 +28,7 @@
   };
   const targetHelp = {
     shared_fact: ['AgentX shared memory', 'Becomes searchable shared knowledge after this one approved write.', 'Rollback removes the created memory document.'],
+    soft_memory: ['AgentX working memory', 'Stores a provisional, confidence-tagged inference with expiry.', 'Rollback removes the working-memory document; recall never confirms it.'],
     artifact: ['AgentX knowledge artifact', 'Creates a concise durable artifact—never a transcript archive.', 'Rollback removes the created artifact document.'],
     pipeline_task: ['AgentX delivery pipeline', 'Creates one reviewable, unassigned follow-up task.', 'Rollback closes the task as cancelled.'],
     git_change: ['Governed source change', 'Creates a follow-up task or exact patch proposal; it does not edit git automatically.', 'No repository file is changed by this apply.'],
@@ -108,8 +111,11 @@
     try {
       const config = await apiJson('/api/memory-review/config');
       state.applyEnabled = !!config.applyEnabled;
+      state.safeAutomationEnabled = !!config.safeAutomationEnabled;
       const badge = $('mrModeBadge');
-      badge.textContent = config.applyEnabled ? 'Application enabled · review still required' : 'Proposal-only protection';
+      badge.textContent = config.safeAutomationEnabled
+        ? `Safe automation · ${config.reviewExceptionBudget} exceptions max`
+        : config.automationMode === 'shadow' ? 'Standing policy · shadow evaluation' : 'Manual compatibility mode';
       badge.classList.toggle('mr-mode-apply', config.mode === 'apply');
     } catch (error) {
       $('mrModeBadge').textContent = 'Configuration unavailable';
@@ -390,7 +396,9 @@
     }
     if (run.status === 'failed') return `<i class="fas fa-triangle-exclamation"></i><div><strong>This dream needs attention</strong><span>Accepted observations are preserved and the failure is retryable. No apply path is available.</span></div>`;
     if (!(run.candidates || []).length) return `<i class="fas fa-moon"></i><div><strong>Quiet, healthy reconciliation</strong><span>${filtered} noisy or ineligible item${filtered === 1 ? '' : 's'} filtered; ${eligible ? `${eligible} eligible observation${eligible === 1 ? '' : 's'} produced no durable proposal.` : 'the review model was not needed.'}</span></div>`;
-    return `<i class="fas fa-sparkles"></i><div><strong>${run.candidates.length} durable proposal${run.candidates.length === 1 ? '' : 's'} found</strong><span>Review each candidate below. Nothing changes until individual approval and apply.</span></div>`;
+    const auto = (run.candidates || []).filter((item) => item.apply?.automated && item.status === 'applied').length;
+    const exceptions = (run.candidates || []).filter((item) => ['proposed', 'deferred', 'apply_failed'].includes(item.status)).length;
+    return `<i class="fas fa-sparkles"></i><div><strong>${auto} automatic update${auto === 1 ? '' : 's'} · ${exceptions} exception${exceptions === 1 ? '' : 's'}</strong><span>Safe reversible context flows automatically; only exceptions ask for judgment.</span></div>`;
   }
 
   function renderRun() {
@@ -402,6 +410,7 @@
     $('mrRunFacts').innerHTML = [
       `<span class="mr-chip mr-status-${esc(run.status)}">${esc(label(run.status))}</span>`,
       `<span class="mr-chip">${run.mode === 'apply' ? 'Human-authorized apply' : 'Proposal-only run'}</span>`,
+      run.summary?.automation ? `<span class="mr-chip">Policy ${esc(run.summary.automation.mode)} · budget ${esc(run.summary.automation.exceptionBudget)}</span>` : '',
       `<span title="${esc(shortDate(run.window?.from))} → ${esc(shortDate(run.window?.to))}"><i class="fas fa-calendar"></i> ${esc(evidenceWindow(run.window))}</span>`,
       `<span class="mr-run-id" title="Technical run id"><i class="fas fa-fingerprint"></i> ${esc(run.runId)}</span>`,
       `<span><i class="fas fa-microchip"></i> ${run.summary?.modelCalled ? `Review model · ${esc(model.model || 'model recorded')}` : run.status === 'synthesizing' ? 'Review model reflecting' : run.status === 'collecting' ? 'Review model pending' : 'Review model not called'}</span>`,
@@ -485,7 +494,8 @@
   function targetPreview(candidate) {
     const target = candidate.target || {};
     const info = targetHelp[target.kind] || targetHelp.ignore;
-    return `<div class="mr-destination"><i class="fas fa-route"></i><div><span>If you later apply this</span><strong>${esc(info[0])}${target.runtime ? ` · ${esc(label(target.runtime))}` : ''}</strong><small>${esc(info[1])} ${esc(info[2])}</small></div></div>`;
+    const prefix = candidate.apply?.automated ? 'Standing policy destination' : 'Exception destination';
+    return `<div class="mr-destination"><i class="fas fa-route"></i><div><span>${prefix}</span><strong>${esc(info[0])}${target.runtime ? ` · ${esc(label(target.runtime))}` : ''}</strong><small>${esc(info[1])} ${esc(info[2])}</small></div></div>`;
   }
 
   function renderCandidate(candidate, number) {
@@ -503,10 +513,11 @@
     return `<li tabindex="-1" class="mr-candidate mr-candidate-${esc(candidate.status)}" data-candidate-id="${esc(candidate.candidateId)}">
       <span class="mr-candidate-number">${number}</span>
       <div class="mr-candidate-head"><span class="mr-chip">${esc(label(candidate.type))}</span><span class="mr-chip"><i class="fas fa-arrow-right"></i> ${esc(label(target.kind))}${target.runtime ? ` · ${esc(label(target.runtime))}` : ''}</span>
-        <span class="mr-chip mr-status-${esc(candidate.status)}">${esc(label(candidate.status))}</span>${consensus}${risks.map((risk) => `<span class="mr-chip mr-warn">${esc(risk)}</span>`).join('')}</div>
+        <span class="mr-chip mr-status-${esc(candidate.status)}">${esc(label(candidate.status))}</span><span class="mr-chip">${esc(label(candidate.scope || 'project'))} · ${esc(label(candidate.sensitivity || 'normal'))}</span>${consensus}${risks.map((risk) => `<span class="mr-chip mr-warn">${esc(risk)}</span>`).join('')}</div>
       <p class="mr-statement">${esc(candidate.statement)}</p>
       ${candidate.review?.editedStatement ? `<p class="mr-edited"><i class="fas fa-pen"></i> Approved wording: ${esc(candidate.review.editedStatement)}</p>` : ''}
       ${candidate.rationale ? `<p class="mr-rationale">${esc(candidate.rationale)}</p>` : ''}
+      ${candidate.automation?.reason ? `<p class="mr-rationale"><b>${esc(label(candidate.automation.disposition))}:</b> ${esc(candidate.automation.reason)}</p>` : ''}
       <div class="mr-signal-grid"><span><b>${(candidate.evidence || []).length}</b> evidence</span><span><b>${recurrence.independentSessions || 0}</b> ${recurrence.independentSessions === 1 ? 'session' : 'sessions'}</span><span><b>${recurrence.independentRuntimes || 0}</b> ${recurrence.independentRuntimes === 1 ? 'runtime' : 'runtimes'}</span>
         <span class="mr-confidence"><span>Confidence <b>${confidence}%</b></span><i><i style="width:${confidence}%"></i></i></span></div>
       ${targetPreview(candidate)}

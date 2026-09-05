@@ -8,9 +8,9 @@
 // - the deterministic pass (finalize) runs before any model sees anything, and
 //   a run with zero eligible observations completes WITHOUT a model call.
 // - every state change appends an audit record.
-// - nothing in this file writes memory/tasks/skills — apply lives in
-//   applyService and is four-gated (server mode, run authorization, candidate
-//   status, type-compatible adapter) with an atomic lease.
+// - semantic writes still live only in applyService. This lifecycle may ask it
+//   to apply a Core-policy-authorized reversible write when both standing-
+//   policy gates are enabled; all exceptions keep the manual four-gate path.
 
 const MemoryReviewRun = require('../../../models/MemoryReviewRun');
 const policy = require('./policy');
@@ -256,6 +256,14 @@ function buildSynthesisInput(run) {
       degraded: !!run.dedupContext?.degraded,
     },
     limits: { maxCandidates: LIMITS.MAX_CANDIDATES_PER_RUN, statementMax: LIMITS.STATEMENT_MAX },
+    policy: {
+      version: policy.POLICY_VERSION,
+      scopes: policy.MEMORY_SCOPES,
+      sensitivities: policy.SENSITIVITY_LEVELS,
+      impacts: policy.IMPACT_LEVELS,
+      stabilities: policy.STABILITY_LEVELS,
+      exceptionBudget: policy.reviewExceptionBudget(),
+    },
   };
 }
 
@@ -266,11 +274,76 @@ function riskFor(candidate) {
     ? 'high' : (candidate.target.kind === 'skill_draft' ? 'medium' : 'none');
   return {
     secret: false, // secret-bearing candidates are refused outright, never stored
-    privacy: candidate.type === 'session_summary' ? 'low' : 'none',
+    privacy: candidate.sensitivity === 'highly_private'
+      ? 'high' : (candidate.sensitivity === 'private' || candidate.type === 'session_summary' ? 'low' : 'none'),
     promptInjection: false,
     governance,
     staleness: candidate.type === 'stale_memory' ? 'high' : 'none',
   };
+}
+
+function temporalFor(candidate) {
+  const validFrom = candidate.validFrom ? new Date(candidate.validFrom) : null;
+  const validTo = candidate.validTo ? new Date(candidate.validTo) : null;
+  const expiresAt = candidate.stability === 'transient'
+    ? (validTo || new Date(Date.now() + 45 * 24 * 60 * 60 * 1000))
+    : null;
+  return { validFrom, validTo, expiresAt };
+}
+
+function configureAutomation(run) {
+  const mode = policy.automationMode();
+  const safeWritesEnabled = mode === 'safe' && policy.serverMode() === 'apply';
+  const exceptionBudget = policy.reviewExceptionBudget();
+  let reviewExceptions = 0;
+  const counts = { autoApply: 0, softStore: 0, review: 0, ignored: 0, parked: 0, shadowed: 0 };
+
+  run.candidates.forEach((candidate) => {
+    const decision = policy.automationDecision(candidate);
+    candidate.automation = {
+      policyVersion: policy.POLICY_VERSION,
+      disposition: decision.disposition,
+      evidenceClass: decision.evidenceClass,
+      reason: decision.reason,
+      evaluatedAt: new Date(),
+      mode,
+    };
+    if (mode === 'off') {
+      counts.review += 1;
+      return;
+    }
+    if (decision.disposition === 'ignore') {
+      candidate.status = 'rejected';
+      candidate.review = {
+        by: policy.POLICY_VERSION,
+        at: new Date(),
+        note: `Automatically ignored: ${decision.reason}`,
+      };
+      counts.ignored += 1;
+      return;
+    }
+    if (decision.disposition === 'review') {
+      if (reviewExceptions < exceptionBudget) {
+        candidate.status = 'proposed';
+        reviewExceptions += 1;
+        counts.review += 1;
+      } else {
+        candidate.status = 'parked';
+        candidate.automation.reason = `${decision.reason}; exception-budget-exceeded`;
+        counts.parked += 1;
+      }
+      return;
+    }
+    if (safeWritesEnabled) {
+      candidate.status = 'auto_approved';
+      if (decision.disposition === 'soft_store') counts.softStore += 1;
+      else counts.autoApply += 1;
+    } else {
+      candidate.status = 'shadowed';
+      counts.shadowed += 1;
+    }
+  });
+  return { mode, safeWritesEnabled, exceptionBudget, counts };
 }
 
 function scoreFor(candidate, recurrence) {
@@ -413,6 +486,12 @@ async function submitCandidates(runId, candidatesInput, { promptVersion, model }
       recurrence,
       confidence: clean.confidence,
       score: 0,
+      memoryKey: clean.memoryKey || `${clean.scope}:${clean.target.topic || clean.type}:${candidateId.slice(0, 12)}`,
+      scope: clean.scope,
+      sensitivity: clean.sensitivity,
+      impact: clean.impact,
+      stability: clean.stability,
+      temporal: temporalFor(clean),
       conflicts,
       risk: riskFor(clean),
       status: 'proposed',
@@ -438,29 +517,83 @@ async function submitCandidates(runId, candidatesInput, { promptVersion, model }
     };
   }
   run.candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const automation = configureAutomation(run);
   run.candidateCounts = run.candidates.reduce((acc, c) => {
     acc[c.type] = (acc[c.type] || 0) + 1;
     return acc;
   }, {});
-  run.status = 'ready_for_review';
-  run.summary = { ...(run.summary || {}), modelCalled: true, candidateCount: run.candidates.length };
+  const pending = run.candidates.filter((candidate) => ['proposed', 'deferred'].includes(candidate.status)).length;
+  const autoReady = run.candidates.filter((candidate) => candidate.status === 'auto_approved').length;
+  run.status = pending || autoReady ? 'ready_for_review' : 'completed';
+  if (run.status === 'completed') run.completedAt = new Date();
+  run.summary = {
+    ...(run.summary || {}),
+    modelCalled: true,
+    candidateCount: run.candidates.length,
+    automation: {
+      policyVersion: policy.POLICY_VERSION,
+      mode: automation.mode,
+      safeWritesEnabled: automation.safeWritesEnabled,
+      exceptionBudget: automation.exceptionBudget,
+      ...automation.counts,
+    },
+  };
   audit(run, 'candidates_submitted', {
     detail: `accepted=${accepted} suppressed=${suppressed} dropped=${dropped.length} total=${run.candidates.length}`,
   });
   await run.save();
-  return { runId, status: run.status, accepted, suppressed, dropped, total: run.candidates.length };
+  const automationFailures = [];
+  if (automation.safeWritesEnabled) {
+    const applyService = require('./applyService'); // lazy: keep lifecycle/apply modules acyclic at load time
+    const autoCandidates = run.candidates.filter((candidate) => candidate.status === 'auto_approved');
+    for (const candidate of autoCandidates) {
+      try {
+        await applyService.applyCandidate(runId, candidate.candidateId, {
+          by: policy.POLICY_VERSION,
+          automation: true,
+        });
+      } catch (err) {
+        automationFailures.push({
+          candidateId: candidate.candidateId,
+          code: err.code || 'MEMORY_REVIEW_AUTO_APPLY_FAILED',
+          message: contentGuard.redact(String(err.message)).slice(0, 200),
+        });
+      }
+    }
+  }
+  const finalized = await getRunOrThrow(runId);
+  refreshRunReviewStatus(finalized);
+  finalized.summary = {
+    ...(finalized.summary || {}),
+    automationFailures: automationFailures.length,
+  };
+  await finalized.save();
+  return {
+    runId,
+    status: finalized.status,
+    accepted,
+    suppressed,
+    dropped,
+    total: finalized.candidates.length,
+    automation: finalized.summary.automation,
+    automationFailures,
+  };
 }
 
 // ------------------------------------------------------------------- review --
 
 function refreshRunReviewStatus(run) {
   if (!run.candidates.length) return;
-  const proposed = run.candidates.filter((c) => c.status === 'proposed' || c.status === 'deferred').length;
-  if (proposed === 0) {
+  const pending = run.candidates.filter((c) => ['proposed', 'deferred', 'auto_approved', 'applying', 'apply_failed'].includes(c.status)).length;
+  if (pending === 0) {
     run.status = 'completed';
     run.completedAt = run.completedAt || new Date();
-  } else if (proposed < run.candidates.length) {
+  } else if (pending < run.candidates.length) {
     run.status = 'partially_reviewed';
+    run.completedAt = null;
+  } else {
+    run.status = 'ready_for_review';
+    run.completedAt = null;
   }
 }
 
@@ -660,10 +793,15 @@ async function buildDigest({ includeStatements = true } = {}) {
   if (!target) return { text: 'Memory review: no runs recorded yet.', runId: null, pending: 0 };
 
   const candidates = target.candidates || [];
-  const pending = candidates.filter((c) => ['proposed', 'deferred'].includes(c.status));
+  const pending = candidates.filter((c) => ['proposed', 'deferred', 'apply_failed'].includes(c.status));
+  const applied = candidates.filter((c) => c.status === 'applied');
+  const autoApplied = applied.filter((c) => c.apply?.automated);
+  const softStored = autoApplied.filter((c) => c.target?.kind === 'soft_memory');
+  const shadowed = candidates.filter((c) => c.status === 'shadowed');
+  const parked = candidates.filter((c) => c.status === 'parked');
   const reconciliation = active ? policy.reconciliationStatus(active) : null;
   const lines = [
-    `Memory review ${target.runId} (${target.status}): ${candidates.length} candidate(s), ${pending.length} awaiting review.`,
+    `Memory review ${target.runId} (${target.status}): ${autoApplied.length} auto-applied (${softStored.length} soft), ${pending.length} exception(s) awaiting review.`,
   ];
   if (reconciliation?.overdue) {
     const missing = reconciliation.missingRuntimes.length
@@ -672,16 +810,23 @@ async function buildDigest({ includeStatements = true } = {}) {
   }
   if (includeStatements) {
     candidates.forEach((candidate, index) => {
-      if (!['proposed', 'deferred'].includes(candidate.status)) return;
-      lines.push(`  ${index + 1}. [${candidate.type} -> ${candidate.target?.kind}] ${String(candidate.statement).slice(0, 140)}`);
+      if (!['proposed', 'deferred', 'apply_failed'].includes(candidate.status)) return;
+      lines.push(`  ${index + 1}. [${candidate.type} / ${candidate.scope || 'project'} / ${candidate.sensitivity || 'normal'}] ${String(candidate.statement).slice(0, 140)}`);
     });
   }
-  lines.push('Review individually in AgentX /memory-review. No changes are applied without approval.');
+  if (shadowed.length) lines.push(`${shadowed.length} safe action(s) were policy-evaluated in shadow mode; nothing was written.`);
+  if (parked.length) lines.push(`${parked.length} lower-priority exception(s) were parked beyond the ${policy.reviewExceptionBudget()}-item attention budget.`);
+  if (pending.length) lines.push('Only exceptions need individual review in AgentX /memory-review.');
+  else lines.push('No human approval is needed for this run.');
   return {
     text: lines.join('\n'),
     runId: target.runId,
     pending: pending.length,
     total: candidates.length,
+    autoApplied: autoApplied.length,
+    softStored: softStored.length,
+    shadowed: shadowed.length,
+    parked: parked.length,
     attention: !!reconciliation?.overdue,
     activeRun: active ? {
       runId: active.runId,

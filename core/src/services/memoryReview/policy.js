@@ -7,7 +7,8 @@
 
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+const POLICY_VERSION = 'memory-policy-v2.0';
 
 const RUNTIMES = ['agentx', 'claude-code', 'codex', 'external'];
 const RECONCILIATION_GRACE_MINUTES = 120;
@@ -26,8 +27,10 @@ function publicRuntime(runtime) {
 const TRUST_ELIGIBLE = [
   'explicit_owner_instruction',
   'explicit_memory_request',
+  'authenticated_owner_statement',
   'repeated_owner_preference',
   'verified_runtime_evidence',
+  'observed_project_event',
   'verified_git_or_test_outcome',
 ];
 const TRUST_INELIGIBLE = [
@@ -37,25 +40,27 @@ const TRUST_INELIGIBLE = [
 ];
 const TRUST_CLASSES = [...TRUST_ELIGIBLE, ...TRUST_INELIGIBLE];
 
-// V1 collectors have no cryptographic runtime-specific identity. Therefore a
-// generic role=user assertion cannot be centralized merely by labeling it an
-// owner instruction or repeated preference. Only explicit memory intent and
-// independently verified machine outcomes cross this API boundary.
+// V2 admits authenticated owner observations from scoped producer collectors,
+// while keeping generic role=user assertions ineligible. Admission is not
+// promotion: Core still separates explicit facts, recurrent inferences,
+// project events, and human exceptions through automationDecision().
 const CENTRAL_SUBMISSION_TRUST = [
   'explicit_memory_request',
+  'authenticated_owner_statement',
   'verified_runtime_evidence',
+  'observed_project_event',
   'verified_git_or_test_outcome',
 ];
 
 const CANDIDATE_TYPES = [
   'preference', 'durable_fact', 'decision', 'correction', 'procedure',
-  'reusable_skill_candidate', 'session_summary', 'duplicate', 'stale_memory',
+  'inferred_pattern', 'project_event', 'reusable_skill_candidate', 'session_summary', 'duplicate', 'stale_memory',
   'contradiction', 'task_or_followup', 'governed_source_change', 'ephemeral',
   'sensitive_or_secret', 'unsupported',
 ];
 
 const TARGET_KINDS = [
-  'shared_fact', 'artifact', 'runtime_local', 'skill_draft',
+  'shared_fact', 'soft_memory', 'artifact', 'runtime_local', 'skill_draft',
   'pipeline_task', 'git_change', 'ignore',
 ];
 
@@ -67,6 +72,8 @@ const TARGETS_BY_TYPE = Object.freeze({
   durable_fact: ['shared_fact', 'runtime_local'],
   decision: ['shared_fact', 'runtime_local'],
   correction: ['shared_fact', 'runtime_local'],
+  inferred_pattern: ['soft_memory'],
+  project_event: ['artifact'],
   procedure: ['artifact'],
   reusable_skill_candidate: ['skill_draft'],
   session_summary: ['artifact'],
@@ -83,14 +90,21 @@ const TARGETS_BY_TYPE = Object.freeze({
 // Which target kinds have a semantic apply adapter at all. runtime_local /
 // git_change / skill_draft never write anywhere in this build: their "apply"
 // produces a proposal payload or a pipeline task, handled in applyService.
-const APPLY_ADAPTERS = ['shared_fact', 'artifact', 'pipeline_task', 'runtime_local', 'git_change', 'skill_draft'];
+const APPLY_ADAPTERS = ['shared_fact', 'soft_memory', 'artifact', 'pipeline_task', 'runtime_local', 'git_change', 'skill_draft'];
+
+const MEMORY_SCOPES = ['project', 'ecosystem', 'workflow', 'owner', 'household', 'private_domain'];
+const SENSITIVITY_LEVELS = ['normal', 'private', 'highly_private'];
+const IMPACT_LEVELS = ['context_only', 'behavior_changing', 'operational'];
+const STABILITY_LEVELS = ['transient', 'episodic', 'durable'];
+const AUTOMATION_DISPOSITIONS = ['auto_apply', 'soft_store', 'review', 'ignore'];
 
 const RUN_STATUSES = [
   'collecting', 'synthesizing', 'ready_for_review', 'partially_reviewed',
   'completed', 'failed',
 ];
 const CANDIDATE_STATUSES = [
-  'proposed', 'approved', 'rejected', 'edited', 'deferred', 'applying', 'applied', 'apply_failed',
+  'proposed', 'approved', 'auto_approved', 'rejected', 'edited', 'deferred',
+  'parked', 'shadowed', 'applying', 'applied', 'apply_failed',
 ];
 const REVIEW_ACTIONS = ['approve', 'reject', 'defer', 'edit_approve'];
 
@@ -106,12 +120,28 @@ const LIMITS = Object.freeze({
   MAX_EVIDENCE_PER_CANDIDATE: 20,
   MAX_DEDUP_CONTEXT_LINES: 60,
   MAX_AUDIT_ENTRIES: 400,
+  MAX_REVIEW_EXCEPTIONS: 5,
 });
 
 // Server mode gate. Missing/invalid env NEVER implies apply.
 function serverMode() {
   const raw = String(process.env.MEMORY_REVIEW_MODE || '').trim().toLowerCase();
   return ['shadow', 'review', 'apply'].includes(raw) ? raw : 'shadow';
+}
+
+// A standing policy replaces per-item approval only for reversible, bounded
+// writes. Both switches are required for real automation. `shadow` evaluates
+// and records policy decisions without writing; invalid/missing values fail
+// closed to `off`.
+function automationMode() {
+  const raw = String(process.env.MEMORY_REVIEW_AUTOMATION_MODE || '').trim().toLowerCase();
+  return ['off', 'shadow', 'safe'].includes(raw) ? raw : 'off';
+}
+
+function reviewExceptionBudget() {
+  const raw = Number(process.env.MEMORY_REVIEW_EXCEPTION_BUDGET);
+  if (!Number.isFinite(raw)) return LIMITS.MAX_REVIEW_EXCEPTIONS;
+  return Math.max(1, Math.min(LIMITS.MAX_REVIEW_EXCEPTIONS, Math.trunc(raw)));
 }
 
 function normalizeText(text) {
@@ -259,8 +289,38 @@ function validateObservation(input, index) {
   };
 }
 
-const CANDIDATE_KEYS = ['type', 'statement', 'rationale', 'target', 'evidenceRefs', 'confidence', 'conflicts'];
+const CANDIDATE_KEYS = [
+  'type', 'statement', 'rationale', 'target', 'evidenceRefs', 'confidence', 'conflicts',
+  'scope', 'sensitivity', 'impact', 'stability', 'validFrom', 'validTo', 'memoryKey',
+];
 const TARGET_KEYS = ['kind', 'runtime', 'topic'];
+
+function boundedEnum(value, allowed, fallback, where) {
+  if (value == null || value === '') return fallback;
+  if (!allowed.includes(value)) throw new MemoryReviewError(`${where} invalid: ${value}`);
+  return value;
+}
+
+function boundedIsoDate(value, where) {
+  if (value == null || value === '') return null;
+  const raw = String(value).trim();
+  const parsed = new Date(raw);
+  if (raw.length > 40 || !Number.isFinite(parsed.getTime())) {
+    throw new MemoryReviewError(`${where} must be an ISO date/time`);
+  }
+  return parsed.toISOString();
+}
+
+function defaultImpact(type) {
+  return ['task_or_followup', 'governed_source_change', 'reusable_skill_candidate'].includes(type)
+    ? 'behavior_changing' : 'context_only';
+}
+
+function defaultStability(type) {
+  if (type === 'inferred_pattern') return 'transient';
+  if (['project_event', 'session_summary'].includes(type)) return 'episodic';
+  return 'durable';
+}
 
 function validateCandidateInput(input, index, knownObservationIds) {
   const where = `candidates[${index}]`;
@@ -298,6 +358,13 @@ function validateCandidateInput(input, index, knownObservationIds) {
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
     throw new MemoryReviewError(`${where}.confidence must be within [0,1]`);
   }
+  const scope = boundedEnum(input.scope, MEMORY_SCOPES, 'project', `${where}.scope`);
+  const defaultSensitivity = ['owner', 'household', 'private_domain'].includes(scope) ? 'private' : 'normal';
+  const validFrom = boundedIsoDate(input.validFrom, `${where}.validFrom`);
+  const validTo = boundedIsoDate(input.validTo, `${where}.validTo`);
+  if (validFrom && validTo && new Date(validTo) <= new Date(validFrom)) {
+    throw new MemoryReviewError(`${where}.validTo must be later than validFrom`);
+  }
   return {
     type: input.type,
     statement,
@@ -309,6 +376,17 @@ function validateCandidateInput(input, index, knownObservationIds) {
     },
     evidenceRefs: refs.slice(0, LIMITS.MAX_EVIDENCE_PER_CANDIDATE),
     confidence: Math.round(confidence * 1000) / 1000,
+    scope,
+    sensitivity: boundedEnum(
+      input.sensitivity, SENSITIVITY_LEVELS, defaultSensitivity, `${where}.sensitivity`
+    ),
+    impact: boundedEnum(input.impact, IMPACT_LEVELS, defaultImpact(input.type), `${where}.impact`),
+    stability: boundedEnum(
+      input.stability, STABILITY_LEVELS, defaultStability(input.type), `${where}.stability`
+    ),
+    validFrom,
+    validTo,
+    memoryKey: cleanRunKey(input.memoryKey || '').slice(0, 80) || null,
     conflicts: (Array.isArray(input.conflicts) ? input.conflicts : [])
       .filter((c) => c && typeof c === 'object')
       .map((c) => ({
@@ -320,8 +398,81 @@ function validateCandidateInput(input, index, knownObservationIds) {
   };
 }
 
+function evidenceTrusts(candidate) {
+  return [...new Set((candidate.evidence || []).map((item) => item.trust).filter(Boolean))];
+}
+
+function evidenceClass(candidate) {
+  const trusts = evidenceTrusts(candidate);
+  if (trusts.includes('explicit_memory_request')) return 'explicit';
+  if (trusts.includes('authenticated_owner_statement') || trusts.includes('repeated_owner_preference')) {
+    return 'owner_observed';
+  }
+  if (trusts.includes('verified_runtime_evidence')) return 'runtime_verified';
+  if (trusts.includes('observed_project_event') || trusts.includes('verified_git_or_test_outcome')) {
+    return 'project_observed';
+  }
+  return 'unknown';
+}
+
+// The model proposes meaning; Core alone decides what may happen. This policy
+// intentionally automates only reversible RAG upserts. Anything private,
+// conflicting, behavior-changing, operational, or governance-bearing remains
+// a small human exception.
+function automationDecision(candidate) {
+  const klass = evidenceClass(candidate);
+  const conflicts = candidate.conflicts || [];
+  const confidence = Number(candidate.confidence || 0);
+  const recurrence = candidate.recurrence || {};
+  const observationCount = Number(recurrence.observationCount || 0);
+  const independentSessions = Number(recurrence.independentSessions || 0);
+  const ignoreTypes = ['duplicate', 'ephemeral', 'sensitive_or_secret', 'unsupported'];
+
+  if (ignoreTypes.includes(candidate.type) || candidate.target?.kind === 'ignore'
+      && !['contradiction', 'stale_memory'].includes(candidate.type)) {
+    return { disposition: 'ignore', evidenceClass: klass, reason: `type:${candidate.type}` };
+  }
+  if (conflicts.length || ['contradiction', 'stale_memory'].includes(candidate.type)) {
+    return { disposition: 'review', evidenceClass: klass, reason: 'conflict-or-temporal-dispute' };
+  }
+  if (candidate.sensitivity !== 'normal') {
+    return { disposition: 'review', evidenceClass: klass, reason: `sensitivity:${candidate.sensitivity}` };
+  }
+  if (candidate.impact !== 'context_only' || candidate.risk?.governance !== 'none') {
+    return { disposition: 'review', evidenceClass: klass, reason: `impact:${candidate.impact}` };
+  }
+  if (candidate.type === 'inferred_pattern' && candidate.target?.kind === 'soft_memory') {
+    if (confidence >= 0.65 && (independentSessions >= 2 || observationCount >= 2)) {
+      return { disposition: 'soft_store', evidenceClass: klass, reason: 'recurrent-bounded-inference' };
+    }
+    return { disposition: 'ignore', evidenceClass: klass, reason: 'weak-or-single-use-inference' };
+  }
+  if (candidate.type === 'project_event' && candidate.target?.kind === 'artifact'
+      && klass === 'project_observed' && confidence >= 0.75) {
+    return { disposition: 'auto_apply', evidenceClass: klass, reason: 'verified-project-event' };
+  }
+  if (candidate.target?.kind === 'artifact'
+      && ['runtime_verified', 'project_observed'].includes(klass) && confidence >= 0.8) {
+    return { disposition: 'auto_apply', evidenceClass: klass, reason: 'verified-episodic-context' };
+  }
+  if (candidate.target?.kind === 'shared_fact' && klass === 'explicit' && confidence >= 0.8) {
+    return { disposition: 'auto_apply', evidenceClass: klass, reason: 'explicit-memory-intent' };
+  }
+  if (candidate.target?.kind === 'shared_fact' && klass === 'owner_observed') {
+    if (candidate.type === 'preference' && confidence >= 0.85
+        && (independentSessions >= 2 || observationCount >= 2)) {
+      return { disposition: 'auto_apply', evidenceClass: klass, reason: 'recurrent-owner-preference' };
+    }
+    if (['durable_fact', 'correction'].includes(candidate.type) && confidence >= 0.9) {
+      return { disposition: 'auto_apply', evidenceClass: klass, reason: 'high-confidence-owner-fact' };
+    }
+  }
+  return { disposition: 'review', evidenceClass: klass, reason: 'outside-safe-standing-policy' };
+}
+
 module.exports = {
   SCHEMA_VERSION,
+  POLICY_VERSION,
   RUNTIMES,
   publicRuntime,
   RECONCILIATION_GRACE_MINUTES,
@@ -333,11 +484,18 @@ module.exports = {
   TARGET_KINDS,
   TARGETS_BY_TYPE,
   APPLY_ADAPTERS,
+  MEMORY_SCOPES,
+  SENSITIVITY_LEVELS,
+  IMPACT_LEVELS,
+  STABILITY_LEVELS,
+  AUTOMATION_DISPOSITIONS,
   RUN_STATUSES,
   CANDIDATE_STATUSES,
   REVIEW_ACTIONS,
   LIMITS,
   serverMode,
+  automationMode,
+  reviewExceptionBudget,
   normalizeText,
   contentHash,
   candidateId,
@@ -348,4 +506,6 @@ module.exports = {
   validateTargetForType,
   validateObservation,
   validateCandidateInput,
+  evidenceClass,
+  automationDecision,
 };

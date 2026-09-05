@@ -1,10 +1,15 @@
-// memoryReview/applyService.js — the ONLY code path that turns an approved
-// candidate into a real write, and it is four-gated:
+// memoryReview/applyService.js — the ONLY code path that turns a reviewed or
+// standing-policy candidate into a real write.
+// Manual exceptions remain four-gated:
 //   1. server mode gate: MEMORY_REVIEW_MODE must be exactly 'apply'
 //      (default is shadow; a missing/typo'd env can never enable apply);
 //   2. the specific run has an explicit audited apply authorization;
 //   3. candidate status gate: only 'approved' (or a failed retry) applies;
 //   4. adapter gate: type and target must match the server-owned allowlist.
+// Automatic writes require BOTH server apply mode and automation mode `safe`,
+// plus a Core-owned auto_apply/soft_store disposition. They are limited to
+// reversible RAG upserts; tasks, skills, governed changes, private material,
+// and conflicts cannot cross that membrane.
 // An atomic lease prevents concurrent adapter calls; every writable adapter
 // carries a stable idempotency key for crash/lost-response retry safety.
 // The content guard runs AGAIN on the final text immediately before the write.
@@ -12,6 +17,7 @@
 // Adapter semantics:
 //   shared_fact    -> nestor-memory via nestorMemoryService (its own secret
 //                     guard runs a fourth time inside saveMemory)
+//   soft_memory    -> agentx-working-memory, provisional + expiring inference
 //   artifact       -> agent-artifacts RAG lane, stable documentId upsert
 //   pipeline_task  -> Mongo pipeline task (approval-gated by definition here)
 //   git_change     -> pipeline task carrying an exact change proposal — never
@@ -60,7 +66,7 @@ async function applySharedFact(run, candidate, deps) {
     agent: 'memory-review',
     topic: target.topic || 'general',
     tags: ['memory-review', `run:${run.runId}`, `candidate:${candidate.candidateId.slice(0, 12)}`],
-    id: `memory-review-${candidate.candidateId}`,
+    id: `memory-review-${candidate.memoryKey || candidate.candidateId}`,
   }, deps.saveMemoryOpts || {});
   return {
     result: `nestor-memory upsert ${result.documentId}`,
@@ -68,17 +74,64 @@ async function applySharedFact(run, candidate, deps) {
   };
 }
 
+async function applySoftMemory(run, candidate, deps) {
+  const statement = effectiveStatement(candidate);
+  const target = effectiveTarget(candidate);
+  const client = deps.ragClient || getRagServiceClient();
+  const documentId = `working-memory:${candidate.memoryKey || candidate.candidateId}`;
+  const expiresAt = candidate.temporal?.expiresAt
+    ? new Date(candidate.temporal.expiresAt).toISOString() : null;
+  const text = [
+    `# Working memory: ${target.topic || candidate.memoryKey || candidate.candidateId.slice(0, 12)}`,
+    '',
+    '- status: provisional inference',
+    `- confidence: ${Number(candidate.confidence || 0).toFixed(3)}`,
+    `- scope: ${candidate.scope || 'project'}`,
+    `- sensitivity: ${candidate.sensitivity || 'normal'}`,
+    `- valid-from: ${candidate.temporal?.validFrom ? new Date(candidate.temporal.validFrom).toISOString() : 'unknown'}`,
+    `- expires-at: ${expiresAt || 'none'}`,
+    `- memory-key: ${candidate.memoryKey || candidate.candidateId}`,
+    '- use: contextual hint only; never treat recall of this document as new confirming evidence',
+    '',
+    statement,
+    '',
+    candidate.rationale ? `Inference basis: ${candidate.rationale}` : '',
+    '',
+    'Evidence references (bounded, no raw transcripts):',
+    ...evidenceSummaryLines(candidate),
+  ].filter(Boolean).join('\n');
+  contentGuard.assertReviewSafe(text, 'soft memory body');
+  const tags = [
+    'working-memory', 'status:provisional', `scope:${candidate.scope || 'project'}`,
+    `confidence:${Math.round(Number(candidate.confidence || 0) * 100)}`,
+    `run:${run.runId}`, `candidate:${candidate.candidateId.slice(0, 12)}`,
+    ...(target.topic ? [`topic:${target.topic}`] : []),
+    ...(expiresAt ? [`expires:${expiresAt.slice(0, 10)}`] : []),
+  ];
+  const result = await client.upsertDocumentWithChunks(text, {
+    source: 'agentx-working-memory',
+    documentId,
+    tags,
+    chunkSize: 500,
+    chunkOverlap: 50,
+  });
+  return {
+    result: `agentx-working-memory upsert ${documentId} (${result?.chunkCount ?? '?'} chunks)`,
+    rollbackRef: `DELETE rag document ${documentId}`,
+  };
+}
+
 async function applyArtifact(run, candidate, deps) {
   const statement = effectiveStatement(candidate);
   const target = effectiveTarget(candidate);
   const client = deps.ragClient || getRagServiceClient();
-  const documentId = `artifact:memory-review:${candidate.candidateId}`;
+  const documentId = `artifact:memory-review:${candidate.memoryKey || candidate.candidateId}`;
   const text = [
     `# Memory review ${candidate.type}: ${target.topic || candidate.candidateId.slice(0, 12)}`,
     '',
     `- kind: memory-review-${candidate.type}`,
     `- run: ${run.runId}`,
-    `- approved-by: ${candidate.review?.by || 'unknown'}`,
+    `- approved-by: ${candidate.review?.by || candidate.apply?.by || candidate.automation?.policyVersion || 'unknown'}`,
     `- date: ${new Date().toISOString().slice(0, 10)}`,
     '',
     statement,
@@ -167,7 +220,7 @@ function applyRuntimeLocal(run, candidate) {
 
 // ------------------------------------------------------------------ gateway --
 
-async function applyCandidate(runId, candidateId, { by, deps = {} } = {}) {
+async function applyCandidate(runId, candidateId, { by, deps = {}, automation = false } = {}) {
   const mode = policy.serverMode();
   if (mode !== 'apply') {
     throw new MemoryReviewError(
@@ -177,6 +230,12 @@ async function applyCandidate(runId, candidateId, { by, deps = {} } = {}) {
   }
   const reviewer = String(by || '').trim().slice(0, 64);
   if (!reviewer) throw new MemoryReviewError('apply requires by (operator identity)');
+  const automated = automation === true;
+  if (automated && policy.automationMode() !== 'safe') {
+    throw new MemoryReviewError('automatic apply requires MEMORY_REVIEW_AUTOMATION_MODE=safe', {
+      status: 403, code: 'MEMORY_REVIEW_AUTOMATION_DISABLED',
+    });
+  }
 
   let run = await MemoryReviewRun.findOne({ runId });
   if (!run) {
@@ -196,12 +255,18 @@ async function applyCandidate(runId, candidateId, { by, deps = {} } = {}) {
       result: candidate.apply?.result, rollbackRef: candidate.apply?.rollbackRef,
     };
   }
-  if (run.mode !== 'apply' || !run.applyAuthorization?.at) {
+  if (!automated && (run.mode !== 'apply' || !run.applyAuthorization?.at)) {
     throw new MemoryReviewError('this run has not been explicitly authorized for apply', {
       status: 403, code: 'MEMORY_REVIEW_RUN_APPLY_DISABLED',
     });
   }
-  if (!['approved', 'apply_failed'].includes(candidate.status)) {
+  if (automated && !['auto_apply', 'soft_store'].includes(candidate.automation?.disposition)) {
+    throw new MemoryReviewError('candidate is outside the safe standing automation policy', {
+      status: 409, code: 'MEMORY_REVIEW_AUTOMATION_POLICY_REFUSED',
+    });
+  }
+  const allowedStatuses = automated ? ['auto_approved', 'apply_failed'] : ['approved', 'apply_failed'];
+  if (!allowedStatuses.includes(candidate.status)) {
     const leaseExpired = candidate.status === 'applying'
       && candidate.apply?.leaseUntil
       && new Date(candidate.apply.leaseUntil).getTime() <= Date.now();
@@ -211,7 +276,7 @@ async function applyCandidate(runId, candidateId, { by, deps = {} } = {}) {
       });
     }
     if (!leaseExpired) {
-      throw new MemoryReviewError(`candidate is ${candidate.status}; only approved candidates apply`, {
+      throw new MemoryReviewError(`candidate is ${candidate.status}; only ${automated ? 'policy-authorized' : 'approved'} candidates apply`, {
         status: 409, code: 'MEMORY_REVIEW_NOT_APPROVED',
       });
     }
@@ -231,27 +296,31 @@ async function applyCandidate(runId, candidateId, { by, deps = {} } = {}) {
   const startedAt = new Date();
   const leaseUntil = new Date(startedAt.getTime() + APPLY_LEASE_MS);
   const attemptId = `memory-review:${runId}:${candidateId}`.slice(0, 200);
-  run = await MemoryReviewRun.findOneAndUpdate(
-    {
+  const leaseFilter = {
       runId,
-      mode: 'apply',
-      'applyAuthorization.at': { $ne: null },
       candidates: {
         $elemMatch: {
           candidateId,
           $or: [
-            { status: { $in: ['approved', 'apply_failed'] } },
+            { status: { $in: allowedStatuses } },
             { status: 'applying', 'apply.leaseUntil': { $lte: startedAt } },
           ],
         },
       },
-    },
+  };
+  if (!automated) {
+    leaseFilter.mode = 'apply';
+    leaseFilter['applyAuthorization.at'] = { $ne: null };
+  }
+  run = await MemoryReviewRun.findOneAndUpdate(
+    leaseFilter,
     {
       $set: {
         'candidates.$[candidate].status': 'applying',
         'candidates.$[candidate].apply.adapter': target.kind,
         'candidates.$[candidate].apply.attemptId': attemptId,
         'candidates.$[candidate].apply.by': reviewer,
+        'candidates.$[candidate].apply.automated': automated,
         'candidates.$[candidate].apply.startedAt': startedAt,
         'candidates.$[candidate].apply.leaseUntil': leaseUntil,
         'candidates.$[candidate].apply.attemptedAt': startedAt,
@@ -283,6 +352,7 @@ async function applyCandidate(runId, candidateId, { by, deps = {} } = {}) {
   try {
     let outcome;
     if (target.kind === 'shared_fact') outcome = await applySharedFact(run, candidate, deps);
+    else if (target.kind === 'soft_memory') outcome = await applySoftMemory(run, candidate, deps);
     else if (target.kind === 'artifact') outcome = await applyArtifact(run, candidate, deps);
     else if (target.kind === 'pipeline_task') outcome = await applyPipelineTask(run, candidate, deps);
     else if (target.kind === 'git_change') {

@@ -97,6 +97,8 @@ async function seedRunWithObservation(runKey, text = 'Prefer local-first tooling
 
 afterEach(async () => {
   delete process.env.MEMORY_REVIEW_MODE;
+  delete process.env.MEMORY_REVIEW_AUTOMATION_MODE;
+  delete process.env.MEMORY_REVIEW_EXCEPTION_BUDGET;
   fakeRag.searchSimilarChunks.mockReset().mockResolvedValue([]);
   fakeRag.upsertDocumentWithChunks.mockReset().mockResolvedValue({ documentId: 'doc-1', chunkCount: 1, status: 'completed' });
   await MemoryReviewRun.deleteMany({});
@@ -107,6 +109,8 @@ describe('config and mode gate', () => {
     const res = await request(server).get('/api/memory-review/config').expect(200);
     expect(res.body.data.mode).toBe('shadow');
     expect(res.body.data.applyEnabled).toBe(false);
+    expect(res.body.data.automationMode).toBe('off');
+    expect(res.body.data.schemaVersion).toBe(2);
   });
 
   test('an invalid env value never enables apply', async () => {
@@ -141,6 +145,19 @@ describe('run lifecycle', () => {
 });
 
 describe('observation submission', () => {
+  test('accepts authenticated owner statements and observed project events as distinct evidence', async () => {
+    const run = await openRun('test-v2-evidence');
+    const res = await request(server)
+      .post(`/api/memory-review/runs/${run.runId}/observations`)
+      .send({
+        collector: collectorMeta({ runtime: 'agentx', eligibleObservations: 2 }),
+        observations: [
+          obs('Concise answers work better for me.', { runtime: 'agentx', trust: 'authenticated_owner_statement' }),
+          obs('feat: add bounded memory automation', { runtime: 'agentx', trust: 'observed_project_event' }),
+        ],
+      }).expect(200);
+    expect(res.body.data.accepted).toBe(2);
+  });
   test('accepts a valid observation and is idempotent on resubmission', async () => {
     const run = await openRun('test-obs');
     const fixed = obs('Prefer local-first tooling everywhere.', { eventId: 'ev-fixed-1' });
@@ -621,6 +638,112 @@ describe('apply gating and adapters', () => {
   });
 });
 
+describe('standing memory policy v2', () => {
+  test('explicit non-sensitive memory intent auto-applies when both standing-policy gates are enabled', async () => {
+    process.env.MEMORY_REVIEW_MODE = 'apply';
+    process.env.MEMORY_REVIEW_AUTOMATION_MODE = 'safe';
+    const seeded = await seedRunWithObservation('test-auto-explicit', 'Remember concise answers.');
+    await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/finalize`).expect(200);
+    const res = await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/candidates`).send({
+      candidates: [candidate('Owner prefers concise answers.', {
+        evidenceRefs: [seeded.observationId], confidence: 0.92,
+        scope: 'owner', sensitivity: 'normal', impact: 'context_only', stability: 'durable',
+        memoryKey: 'owner:communication:concise-answers',
+      })],
+    }).expect(200);
+    expect(res.body.data.automation).toEqual(expect.objectContaining({ mode: 'safe', autoApply: 1 }));
+    expect(res.body.data.automationFailures).toEqual([]);
+    const doc = await MemoryReviewRun.findOne({ runId: seeded.run.runId }).lean();
+    expect(doc.status).toBe('completed');
+    expect(doc.candidates[0]).toEqual(expect.objectContaining({ status: 'applied' }));
+    expect(doc.candidates[0].apply.automated).toBe(true);
+    expect(doc.candidates[0].automation.disposition).toBe('auto_apply');
+    expect(fakeRag.upsertDocumentWithChunks.mock.calls[0][1].source).toBe('nestor-memory');
+  });
+
+  test('a recurrent inference is stored automatically as expiring working memory', async () => {
+    process.env.MEMORY_REVIEW_MODE = 'apply';
+    process.env.MEMORY_REVIEW_AUTOMATION_MODE = 'safe';
+    const text = 'Short status summaries are easier to scan.';
+    const seeded = await seedRunWithObservation('test-auto-soft', text);
+    await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/observations`).send({
+      collector: collectorMeta({ runtime: 'codex' }),
+      observations: [obs(text, {
+        runtime: 'codex', sessionId: 'sess-2', eventId: 'ev-2', trust: 'authenticated_owner_statement',
+      })],
+    }).expect(200);
+    await MemoryReviewRun.updateOne(
+      { runId: seeded.run.runId },
+      { $set: { 'observations.0.trust': 'authenticated_owner_statement' } },
+    );
+    await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/finalize`).expect(200);
+    const res = await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/candidates`).send({
+      candidates: [candidate('Owner likely prefers short status summaries.', {
+        type: 'inferred_pattern',
+        target: { kind: 'soft_memory', runtime: null, topic: 'communication' },
+        evidenceRefs: [seeded.observationId], confidence: 0.72,
+        scope: 'workflow', sensitivity: 'normal', impact: 'context_only', stability: 'transient',
+      })],
+    }).expect(200);
+    expect(res.body.data.automation.softStore).toBe(1);
+    const doc = await MemoryReviewRun.findOne({ runId: seeded.run.runId }).lean();
+    expect(doc.candidates[0].status).toBe('applied');
+    expect(doc.candidates[0].temporal.expiresAt).toBeTruthy();
+    const [, metadata] = fakeRag.upsertDocumentWithChunks.mock.calls[0];
+    expect(metadata.source).toBe('agentx-working-memory');
+    expect(metadata.tags).toEqual(expect.arrayContaining(['status:provisional', 'scope:workflow']));
+  });
+
+  test('private or behavior-changing candidates remain human exceptions', async () => {
+    process.env.MEMORY_REVIEW_MODE = 'apply';
+    process.env.MEMORY_REVIEW_AUTOMATION_MODE = 'safe';
+    const seeded = await seedRunWithObservation('test-auto-private');
+    await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/finalize`).expect(200);
+    const res = await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/candidates`).send({
+      candidates: [candidate('Private household preference.', {
+        evidenceRefs: [seeded.observationId], confidence: 0.99,
+        scope: 'household', sensitivity: 'private', impact: 'context_only',
+      })],
+    }).expect(200);
+    expect(res.body.data.automation.review).toBe(1);
+    const doc = await MemoryReviewRun.findOne({ runId: seeded.run.runId }).lean();
+    expect(doc.candidates[0].status).toBe('proposed');
+    expect(doc.candidates[0].automation.reason).toBe('sensitivity:private');
+    expect(fakeRag.upsertDocumentWithChunks).not.toHaveBeenCalled();
+  });
+
+  test('human exceptions are capped and excess candidates are parked, not spammed', async () => {
+    process.env.MEMORY_REVIEW_AUTOMATION_MODE = 'shadow';
+    process.env.MEMORY_REVIEW_EXCEPTION_BUDGET = '3';
+    const seeded = await seedRunWithObservation('test-auto-budget');
+    await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/finalize`).expect(200);
+    const candidates = Array.from({ length: 7 }, (_, index) => candidate(`Behavior-changing choice ${index}.`, {
+      evidenceRefs: [seeded.observationId], confidence: 0.9, impact: 'behavior_changing',
+    }));
+    const res = await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/candidates`).send({ candidates }).expect(200);
+    expect(res.body.data.automation).toEqual(expect.objectContaining({ review: 3, parked: 4 }));
+    const doc = await MemoryReviewRun.findOne({ runId: seeded.run.runId }).lean();
+    expect(doc.candidates.filter((item) => item.status === 'proposed')).toHaveLength(3);
+    expect(doc.candidates.filter((item) => item.status === 'parked')).toHaveLength(4);
+  });
+
+  test('shadow automation records the safe action without writing or requesting approval', async () => {
+    process.env.MEMORY_REVIEW_AUTOMATION_MODE = 'shadow';
+    const seeded = await seedRunWithObservation('test-auto-shadow');
+    await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/finalize`).expect(200);
+    const res = await request(server).post(`/api/memory-review/runs/${seeded.run.runId}/candidates`).send({
+      candidates: [candidate('Owner prefers concise answers.', {
+        evidenceRefs: [seeded.observationId], confidence: 0.9,
+      })],
+    }).expect(200);
+    expect(res.body.data.automation.shadowed).toBe(1);
+    const doc = await MemoryReviewRun.findOne({ runId: seeded.run.runId }).lean();
+    expect(doc.candidates[0].status).toBe('shadowed');
+    expect(doc.status).toBe('completed');
+    expect(fakeRag.upsertDocumentWithChunks).not.toHaveBeenCalled();
+  });
+});
+
 describe('reads and reporting', () => {
   test('insights aggregate product signals without exposing candidate statements', async () => {
     const { run, observationId } = await seedRunWithObservation('test-insights', 'Remember that concise UI labels are preferred.');
@@ -679,7 +802,7 @@ describe('reads and reporting', () => {
     const digest = await request(server).get('/api/memory-review/digest').expect(200);
     expect(digest.body.data.pending).toBe(1);
     expect(digest.body.data.text).toContain('Digest-worthy preference.');
-    expect(digest.body.data.text).toContain('No changes are applied without approval');
+    expect(digest.body.data.text).toContain('Only exceptions need individual review');
   });
 
   test('digest prefers completed truth while surfacing an overdue active handoff', async () => {

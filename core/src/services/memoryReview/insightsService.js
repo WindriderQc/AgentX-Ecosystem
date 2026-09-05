@@ -75,14 +75,17 @@ function summarizeRuns(runs, limit, now = new Date(), {
   runs = [...runs].sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
   const totals = {
     runs: runs.length, completedRuns: 0, activeRuns: 0, failedRuns: 0,
-    candidates: 0, pending: 0, reviewed: 0, applied: 0,
+    candidates: 0, pending: 0, reviewed: 0, applied: 0, autoApplied: 0,
+    softStored: 0, shadowed: 0, parked: 0,
+    ownerEvidence: 0, projectEventEvidence: 0, runtimeEvidence: 0,
     sourceEvents: 0, eligibleObservations: 0, filteredObservations: 0,
     modelCalls: 0, modelSkips: 0, errors: 0, advisories: 0,
   };
-  const distributions = { candidateTypes: {}, targets: {}, statuses: {} };
+  const distributions = { candidateTypes: {}, targets: {}, statuses: {}, evidenceTrust: {}, automation: {} };
   const quality = { approved: 0, rejected: 0, deferred: 0, conflicts: 0, riskFlags: 0, crossRuntime: 0 };
   const runtimes = Object.fromEntries(policy.RUNTIMES.map((runtime) => [runtime, {
     runtime, runs: 0, sourceFiles: 0, sourceEvents: 0, eligible: 0, filtered: 0,
+    ownerEvidence: 0, projectEventEvidence: 0, runtimeEvidence: 0,
   }]));
   const rejectionReasons = {};
 
@@ -110,17 +113,40 @@ function summarizeRuns(runs, limit, now = new Date(), {
       Object.entries(collector.rejectionCounts || {}).forEach(([reason, count]) => add(rejectionReasons, reason, Number(count) || 0));
     }
 
+    for (const observation of run.observations || []) {
+      const trust = String(observation.trust || 'unknown');
+      const runtimeKey = policy.publicRuntime(observation.runtime);
+      add(distributions.evidenceTrust, trust);
+      if (['explicit_memory_request', 'authenticated_owner_statement', 'repeated_owner_preference'].includes(trust)) {
+        totals.ownerEvidence += 1;
+        if (runtimeKey && runtimes[runtimeKey]) runtimes[runtimeKey].ownerEvidence += 1;
+      } else if (['observed_project_event', 'verified_git_or_test_outcome'].includes(trust)) {
+        totals.projectEventEvidence += 1;
+        if (runtimeKey && runtimes[runtimeKey]) runtimes[runtimeKey].projectEventEvidence += 1;
+      } else if (trust === 'verified_runtime_evidence') {
+        totals.runtimeEvidence += 1;
+        if (runtimeKey && runtimes[runtimeKey]) runtimes[runtimeKey].runtimeEvidence += 1;
+      }
+    }
+
     for (const candidate of run.candidates || []) {
       totals.candidates += 1;
       add(distributions.candidateTypes, candidate.type);
       add(distributions.targets, candidate.target?.kind);
       add(distributions.statuses, candidate.status);
-      if (['proposed', 'deferred'].includes(candidate.status)) totals.pending += 1;
-      if (['approved', 'rejected', 'applied', 'apply_failed'].includes(candidate.status)) totals.reviewed += 1;
-      if (['approved', 'applied', 'apply_failed'].includes(candidate.status)) quality.approved += 1;
+      add(distributions.automation, candidate.automation?.disposition);
+      if (['proposed', 'deferred', 'apply_failed'].includes(candidate.status)) totals.pending += 1;
+      if (['approved', 'rejected', 'applied', 'apply_failed'].includes(candidate.status) && !candidate.apply?.automated) totals.reviewed += 1;
+      if (['approved', 'applied', 'apply_failed'].includes(candidate.status) && !candidate.apply?.automated) quality.approved += 1;
       if (candidate.status === 'rejected') quality.rejected += 1;
       if (candidate.status === 'deferred') quality.deferred += 1;
-      if (candidate.status === 'applied') { totals.applied += 1; }
+      if (candidate.status === 'applied') {
+        totals.applied += 1;
+        if (candidate.apply?.automated) totals.autoApplied += 1;
+        if (candidate.target?.kind === 'soft_memory') totals.softStored += 1;
+      }
+      if (candidate.status === 'shadowed') totals.shadowed += 1;
+      if (candidate.status === 'parked') totals.parked += 1;
       quality.conflicts += (candidate.conflicts || []).length;
       quality.riskFlags += countCandidateRisk(candidate);
       if ((candidate.recurrence?.independentRuntimes || 0) > 1) quality.crossRuntime += 1;
@@ -212,7 +238,7 @@ function summarizeRuns(runs, limit, now = new Date(), {
       createdAt: latest.createdAt,
       completedAt: latest.completedAt,
       candidates: (latest.candidates || []).length,
-      pending: (latest.candidates || []).filter((candidate) => ['proposed', 'deferred'].includes(candidate.status)).length,
+      pending: (latest.candidates || []).filter((candidate) => ['proposed', 'deferred', 'apply_failed'].includes(candidate.status)).length,
       modelCalled: !!latest.summary?.modelCalled,
       quiet: !!latest.summary?.noEligibleObservations,
     } : null,
@@ -235,7 +261,7 @@ function summarizeRuns(runs, limit, now = new Date(), {
     distributions,
     rejectionReasons,
     safeDigest: latest
-      ? `Dreaming Review: ${totals.pending} awaiting review across ${totals.runs} recent runs; ${currentErrors ? `${currentErrors} collector error(s)` : overdue ? `${overdue} overdue reconciliation(s)` : staleRuntimes.length ? `${staleRuntimes.length} stale collector(s)` : missingRuntimes.length ? `${missingRuntimes.length} collector(s) not observed` : 'collectors healthy'}; ${totals.applied} applied safely.`
+      ? `Dreaming Review: ${totals.autoApplied} auto-applied (${totals.softStored} soft), ${totals.pending} exception(s) awaiting review across ${totals.runs} recent runs; ${currentErrors ? `${currentErrors} collector error(s)` : overdue ? `${overdue} overdue reconciliation(s)` : staleRuntimes.length ? `${staleRuntimes.length} stale collector(s)` : missingRuntimes.length ? `${missingRuntimes.length} collector(s) not observed` : 'collectors healthy'}.`
       : 'Dreaming Review: no runs recorded yet.',
   };
 }
@@ -248,8 +274,10 @@ async function buildInsights({ limit = 30 } = {}) {
     'collectors.sourceFilesSeen': 1, 'collectors.sourceEventsSeen': 1,
     'collectors.eligibleObservations': 1, 'collectors.rejectedObservations': 1,
     'collectors.rejectionCounts': 1, 'collectors.errors': 1, 'collectors.drift': 1,
+    'observations.runtime': 1, 'observations.trust': 1,
     'candidates.type': 1, 'candidates.status': 1, 'candidates.target.kind': 1,
     'candidates.recurrence': 1, 'candidates.conflicts': 1, 'candidates.risk': 1,
+    'candidates.automation': 1, 'candidates.apply.automated': 1,
   }).sort({ createdAt: -1 }).limit(bounded).lean();
   return summarizeRuns(runs, bounded);
 }
