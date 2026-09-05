@@ -30,6 +30,7 @@ process.stderr.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
 
 const mongoose = require('mongoose');
 const { resetEmbeddingsService } = require('./src/services/embeddings');
+const { warmEmbeddingConnection } = require('./src/services/embeddingWarmup');
 const { resetRagStore } = require('./src/services/ragStore');
 const app = require('./app');
 
@@ -74,6 +75,12 @@ async function start() {
   await connectDB();
   server = app.listen(PORT, HOST, () => {
     logger.info(`agentx-rag listening on ${HOST}:${PORT}`);
+  });
+
+  // Detached on purpose: the port must accept connections (and the container
+  // healthcheck must pass) while the embedding host is still coming up.
+  warmEmbeddingConnection().catch((err) => {
+    logger.error('Embedding warm-up crashed', { error: err.message });
   });
 }
 

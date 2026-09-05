@@ -534,6 +534,10 @@ async function handleStatus(req, res) {
         dependencies.embedding = {
           healthy: cachedEmbedding.healthy === true,
           ...embStatus,
+          // `active` means we hold a real observation (a startup probe, an
+          // explicit refresh, or a genuine embed call), as opposed to the
+          // `unknown` below where nothing has been collected yet.
+          evidence: 'active',
           checkedAt: cachedEmbedding.checkedAt,
           ...(cachedEmbedding.stale ? { stale: true } : {}),
           ...(cachedEmbedding.healthy === true ? {} : { error: 'Embedding connection test failed' })

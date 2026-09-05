@@ -81,12 +81,45 @@ class EmbeddingsService {
     return this._connectionStatusPromise;
   }
 
+  /**
+   * Record what a real embedding call just proved about the connection.
+   *
+   * `/status` is deliberately observational — a GET never starts embedding
+   * inference — so it can only report evidence something else collected.
+   * Without this, a freshly started service holds no evidence at all and
+   * reports its embedding dependency unhealthy until an operator POSTs a
+   * refresh, which nothing in normal operation does. Real traffic is the
+   * cheapest possible probe, so we let a genuine call stand in for one.
+   */
+  recordConnectionEvidence(healthy) {
+    this._connectionStatus = {
+      healthy: healthy === true,
+      checkedAt: Date.now()
+    };
+  }
+
+  // Runs a real provider call and records what it proved either way. A later
+  // success overwrites an earlier failure, so the view is self-correcting and
+  // a transient error cannot pin the dependency to unhealthy.
+  async _withConnectionEvidence(run) {
+    try {
+      const result = await run();
+      this.recordConnectionEvidence(true);
+      return result;
+    } catch (error) {
+      this.recordConnectionEvidence(false);
+      throw error;
+    }
+  }
+
   async embed(text, preferredHost = null) {
     const cache = getEmbeddingCache();
     const cached = cache.get(text, this.model);
     if (cached) return cached;
 
-    const embedding = await this.provider.embed(text, preferredHost);
+    const embedding = await this._withConnectionEvidence(
+      () => this.provider.embed(text, preferredHost)
+    );
     cache.set(text, this.model, embedding);
     return embedding;
   }
@@ -108,7 +141,9 @@ class EmbeddingsService {
     }
 
     if (uncachedTexts.length > 0) {
-      const freshEmbeddings = await this.provider.embedBatch(uncachedTexts, preferredHost);
+      const freshEmbeddings = await this._withConnectionEvidence(
+        () => this.provider.embedBatch(uncachedTexts, preferredHost)
+      );
       for (let j = 0; j < uncachedIndices.length; j++) {
         results[uncachedIndices[j]] = freshEmbeddings[j];
         cache.set(uncachedTexts[j], this.model, freshEmbeddings[j]);
