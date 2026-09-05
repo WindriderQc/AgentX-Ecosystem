@@ -17,6 +17,25 @@
     done: { label: 'Done', icon: 'fa-check' }
   };
 
+  const DELIVERY_STAGE_META = {
+    review_ready: { label: 'Ready for review', icon: 'fa-magnifying-glass', tone: 'human' },
+    correction_requested: { label: 'Correction requested', icon: 'fa-rotate-left', tone: 'running' },
+    accepted_waiting_pr: { label: 'Accepted · waiting for PR', icon: 'fa-code-pull-request', tone: 'running' },
+    delivery_unavailable: { label: 'Delivery evidence unavailable', icon: 'fa-link-slash', tone: 'failed' },
+    receipt_mismatch: { label: 'Receipt mismatch', icon: 'fa-shield-halved', tone: 'failed' },
+    ci_pending: { label: 'CI pending', icon: 'fa-hourglass-start', tone: 'running' },
+    ci_running: { label: 'CI running', icon: 'fa-spinner fa-spin', tone: 'running' },
+    ci_failed: { label: 'CI failed', icon: 'fa-circle-xmark', tone: 'failed' },
+    merge_blocked: { label: 'Merge blocked', icon: 'fa-ban', tone: 'failed' },
+    pr_ready_to_merge: { label: 'PR green · ready to merge', icon: 'fa-code-merge', tone: 'human' },
+    deployment_pending: { label: 'Deployment pending', icon: 'fa-hourglass-start', tone: 'running' },
+    deployment_in_progress: { label: 'Deployment in progress', icon: 'fa-rocket fa-beat-fade', tone: 'running' },
+    deployed: { label: 'Deployed · production proven', icon: 'fa-circle-check', tone: 'success' },
+    deployment_verification_failed: { label: 'Production proof failed', icon: 'fa-triangle-exclamation', tone: 'failed' },
+    deployment_rolled_back: { label: 'Deployment rolled back', icon: 'fa-rotate-left', tone: 'failed' },
+    deployment_failed: { label: 'Deployment failed', icon: 'fa-circle-xmark', tone: 'failed' }
+  };
+
   const state = {
     tasks: [],
     summary: null,
@@ -27,6 +46,9 @@
     dispatchControl: null,
     dispatchControlError: null,
     dispatchLaunching: false,
+    delivery: null,
+    deliveryError: null,
+    deliveryMerging: null,
     loading: false,
     context: readContext(),
     deepLinkedTask: readDeepLinkedTask(),
@@ -343,6 +365,162 @@
       throw new Error(body.message || body.error || `HTTP ${response.status}`);
     }
     return body;
+  }
+
+  function safeGitHubUrl(value) {
+    try {
+      const url = new URL(String(value || ''));
+      return url.protocol === 'https:' && url.hostname === 'github.com' ? url.href : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function deliveryLink(value, label, icon) {
+    const url = safeGitHubUrl(value);
+    return url
+      ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"><i class="fas ${escapeHtml(icon)}" aria-hidden="true"></i>${escapeHtml(label)}</a>`
+      : '';
+  }
+
+  function deliveryGate(label, passed) {
+    return `<span class="pipeline-delivery-gate ${passed ? 'pass' : 'fail'}"><i class="fas ${passed ? 'fa-circle-check' : 'fa-circle-xmark'}" aria-hidden="true"></i>${escapeHtml(label)}</span>`;
+  }
+
+  function renderDeliveryInbox() {
+    const statusEl = $('pipelineDeliveryState');
+    const list = $('pipelineDeliveryList');
+    const count = $('pipelineDeliveryHumanCount');
+    const meta = $('pipelineDeliveryMeta');
+    if (!statusEl || !list) return;
+
+    if (state.deliveryError) {
+      statusEl.dataset.tone = 'unavailable';
+      statusEl.innerHTML = `<i class="fas fa-circle-exclamation" aria-hidden="true"></i><span>Delivery inbox unavailable: ${escapeHtml(state.deliveryError)}</span>`;
+      list.innerHTML = '<div class="pipeline-empty">The task queue remains available. Exact PR, CI, merge, and deployment controls fail closed until the AIOps delivery projection recovers.</div>';
+      if (count) count.textContent = '--';
+      return;
+    }
+    if (!state.delivery) return;
+
+    const items = Array.isArray(state.delivery.items) ? state.delivery.items : [];
+    const humanActions = Number(state.delivery.counts?.humanActionRequired) || 0;
+    const readyToMerge = Number(state.delivery.counts?.readyToMerge) || 0;
+    statusEl.dataset.tone = humanActions ? 'attention' : 'ready';
+    statusEl.innerHTML = humanActions
+      ? `<i class="fas fa-bell" aria-hidden="true"></i><span><strong>${humanActions}</strong> human action${humanActions === 1 ? '' : 's'} pending · ${readyToMerge} exact PR${readyToMerge === 1 ? '' : 's'} ready to merge</span>`
+      : '<i class="fas fa-circle-check" aria-hidden="true"></i><span>No human delivery decision is waiting. Active PR, CI, and deployment states remain visible below.</span>';
+    if (count) count.textContent = String(humanActions);
+    if (meta) {
+      const observed = state.delivery.observedAt ? formatDate(state.delivery.observedAt) : 'unknown';
+      meta.textContent = `Observed ${observed} · no auto-merge · GitHub credential stays server-only · production requires exact SHA, ledger, tracked-clean checkout, and healthy services.`;
+    }
+
+    if (!items.length) {
+      list.innerHTML = '<div class="pipeline-empty"><i class="fas fa-circle-check" aria-hidden="true"></i> No Coding Team delivery is waiting or moving.</div>';
+      return;
+    }
+
+    list.innerHTML = items.map((item) => {
+      const stage = DELIVERY_STAGE_META[item.stage] || { label: String(item.stage || 'Unknown delivery state'), icon: 'fa-circle-question', tone: 'failed' };
+      const summary = item.summary || {};
+      const pr = item.pullRequest || null;
+      const ci = item.ci || null;
+      const deployment = item.deployment || null;
+      const gate = item.gate || null;
+      const headSha = String(pr?.headSha || '');
+      const merging = state.deliveryMerging === item.pipelineId;
+      const mergeReady = item.stage === 'pr_ready_to_merge' && gate?.ready === true && /^[a-f0-9]{40}$/.test(headSha);
+      const gates = gate ? [
+        deliveryGate('Accepted task', gate.taskAccepted === true),
+        deliveryGate('Exact PR', gate.exactPullRequest === true),
+        deliveryGate('Exact SHA', gate.exactHead === true),
+        deliveryGate('Sealed receipt', gate.sealedReceipt === true),
+        deliveryGate('Required CI green', gate.ciGreen === true),
+        deliveryGate('GitHub mergeable', gate.mergeable === true)
+      ].join('') : '';
+      const productionGate = deployment?.production?.available
+        ? deliveryGate('Live production parity', deployment.status === 'succeeded')
+        : '';
+      const links = [
+        deliveryLink(pr?.url, pr?.number ? `PR #${pr.number}` : 'Pull request', 'fa-code-pull-request'),
+        deliveryLink(ci?.url, 'Exact CI run', 'fa-list-check'),
+        deliveryLink(deployment?.url, 'Deployment run', 'fa-rocket')
+      ].filter(Boolean).join('');
+      return `
+        <article class="pipeline-delivery-card tone-${escapeHtml(stage.tone)}">
+          <div class="pipeline-delivery-card-head">
+            <div class="pipeline-delivery-identity">
+              <strong>${escapeHtml(item.pipelineId)} · ${escapeHtml(item.title || 'Untitled task')}</strong>
+              <span>Attempt ${escapeHtml(item.attempt || '--')}${pr?.number ? ` · PR #${escapeHtml(pr.number)}` : ''}${headSha ? ` · <code>${escapeHtml(headSha.slice(0, 12))}</code>` : ''}</span>
+            </div>
+            <span class="pipeline-delivery-stage"><i class="fas ${escapeHtml(stage.icon)}" aria-hidden="true"></i>${escapeHtml(stage.label)}</span>
+          </div>
+          <dl class="pipeline-delivery-summary">
+            <div><dt>What changes</dt><dd>${escapeHtml(summary.change || 'Unknown')}</dd></div>
+            <div><dt>Tests &amp; proof</dt><dd>${escapeHtml(summary.tests || 'Unknown')}</dd></div>
+            <div><dt>Risks</dt><dd>${escapeHtml(summary.risks || 'Unknown')}</dd></div>
+            <div class="${summary.recommendation === 'CORRECT' ? 'recommend-correct' : 'recommend-merge'}"><dt>Recommendation</dt><dd>${escapeHtml(summary.recommendation || 'CORRECT')}</dd></div>
+            <div><dt>Exact next action</dt><dd>${escapeHtml(summary.nextAction || 'Refresh exact evidence.')}</dd></div>
+          </dl>
+          ${gates || productionGate ? `<div class="pipeline-delivery-gates" aria-label="Protected delivery gates">${gates}${productionGate}</div>` : ''}
+          <div class="pipeline-delivery-actions">
+            <div class="pipeline-delivery-links">
+              <button type="button" class="pipeline-btn compact" data-pipeline-task="${escapeHtml(item.pipelineId)}"><i class="fas fa-folder-open" aria-hidden="true"></i><span>Open dossier</span></button>
+              ${links}
+            </div>
+            ${mergeReady ? `<button type="button" class="pipeline-btn primary compact" data-delivery-merge data-pipeline-id="${escapeHtml(item.pipelineId)}" data-pr-number="${escapeHtml(pr.number)}" data-head-sha="${escapeHtml(headSha)}" ${merging ? 'disabled' : ''} title="Merge exact PR #${escapeHtml(pr.number)} at ${escapeHtml(headSha)} after revalidating every gate"><i class="fas ${merging ? 'fa-spinner fa-spin' : 'fa-code-merge'}" aria-hidden="true"></i><span>${merging ? 'Revalidating exact gate' : `Merge PR #${escapeHtml(pr.number)} · ${escapeHtml(headSha.slice(0, 8))}`}</span></button>` : ''}
+          </div>
+        </article>`;
+    }).join('');
+  }
+
+  async function loadDeliveryStatus() {
+    state.deliveryError = null;
+    try {
+      const payload = await fetchJson('/api/runtime-bridges/coding-delivery/status');
+      state.delivery = payload?.data || null;
+      if (!state.delivery) throw new Error('status response is missing data');
+    } catch (error) {
+      state.delivery = null;
+      state.deliveryError = String(error.message || error);
+    }
+    renderDeliveryInbox();
+  }
+
+  async function mergeDeliveryItem(button) {
+    const pipelineId = String(button?.dataset?.pipelineId || '');
+    const pullRequestNumber = Number(button?.dataset?.prNumber);
+    const expectedHeadSha = String(button?.dataset?.headSha || '').toLowerCase();
+    const item = state.delivery?.items?.find((candidate) => candidate.pipelineId === pipelineId);
+    if (!/^\d{4}$/.test(pipelineId) || !Number.isInteger(pullRequestNumber) || !/^[a-f0-9]{40}$/.test(expectedHeadSha)) return;
+    if (item?.stage !== 'pr_ready_to_merge' || item?.gate?.ready !== true) return;
+    const confirmed = window.confirm(
+      `Merge exact PR #${pullRequestNumber} at ${expectedHeadSha}?\n\n` +
+      'Pipeline will revalidate the accepted task, exact PR and SHA, sealed receipt, required green CI jobs, and GitHub mergeability. After GitHub confirms the merge, the separate protected deployment workflow starts automatically.'
+    );
+    if (!confirmed) return;
+
+    state.deliveryMerging = pipelineId;
+    renderDeliveryInbox();
+    try {
+      const payload = await fetchJson('/api/runtime-bridges/coding-delivery/merge', {
+        method: 'POST',
+        body: JSON.stringify({
+          pipelineId,
+          pullRequestNumber,
+          expectedHeadSha,
+          confirmation: `MERGE PR #${pullRequestNumber} @ ${expectedHeadSha}`
+        })
+      });
+      const mergeSha = payload?.data?.mergeCommitSha;
+      toast('success', `PR #${pullRequestNumber} merged${mergeSha ? ` at ${String(mergeSha).slice(0, 12)}` : ''}; protected deployment dispatched.`);
+    } catch (error) {
+      toast('error', error.message || String(error));
+    } finally {
+      state.deliveryMerging = null;
+      await loadTasks({ silent: true });
+    }
   }
 
   function genericDispatchCandidates() {
@@ -717,7 +895,10 @@
 
   function reviewContext(task) {
     const attempts = Array.isArray(task.automationAttempts) ? task.automationAttempts : [];
-    const currentReceipt = attempts.some((attempt) => attempt && attempt.evidence);
+    const deliveryItem = state.delivery?.items?.find((item) => item.pipelineId === task.pipelineId);
+    const currentReceipt = deliveryItem?.stage === 'review_ready'
+      || Boolean(deliveryItem?.receipt)
+      || attempts.some((attempt) => attempt && attempt.evidence);
     if (!currentReceipt) {
       return {
         label: 'Human review required · legacy dossier without receipt',
@@ -728,7 +909,7 @@
     return {
       label: 'Human review required · Coding Team receipt present',
       detail: 'A current guarded attempt receipt is ready for an independent human decision.',
-      action: 'Accept or reject it from the dossier using an identity different from the worker.',
+      action: 'Accept it or request a correction from the dossier using an identity different from the worker.',
     };
   }
 
@@ -1172,14 +1353,26 @@
         <form class="pipeline-drawer-action" data-drawer-action="confirm-done">
           <p><strong>${escapeHtml(review.label)}</strong><br>${escapeHtml(review.detail)} ${escapeHtml(review.action)}</p>
           <label>
-            <span>Confirm done as (must differ from worker <code>${escapeHtml(task.assignee || 'unassigned')}</code>)</span>
+            <span>Accept result as (must differ from worker <code>${escapeHtml(task.assignee || 'unassigned')}</code>)</span>
             <input type="text" name="by" required maxlength="80" placeholder="your identity, e.g. yanik" value="${escapeHtml(reviewer)}">
           </label>
-          <button type="submit" class="pipeline-btn primary compact"><i class="fas fa-check-double"></i><span>Confirm done</span></button>
+          <button type="submit" class="pipeline-btn primary compact"><i class="fas fa-check-double"></i><span>Accept result</span></button>
+        </form>
+        <form class="pipeline-drawer-action" data-drawer-action="request-correction">
+          <p><strong>Request a correction</strong><br>Record a precise reason, release the claim, and return this exact task to the guarded queue.</p>
+          <label>
+            <span>Reviewer identity</span>
+            <input type="text" name="by" required maxlength="80" placeholder="your identity, e.g. yanik" value="${escapeHtml(reviewer)}">
+          </label>
+          <label>
+            <span>Correction required</span>
+            <textarea name="reason" rows="3" maxlength="5000" required placeholder="What exact evidence or implementation must change?"></textarea>
+          </label>
+          <button type="submit" class="pipeline-btn compact"><i class="fas fa-rotate-left"></i><span>Request correction</span></button>
         </form>
       `);
     }
-    if (['in_progress', 'blocked', 'review'].includes(task.status)) {
+    if (['in_progress', 'blocked'].includes(task.status)) {
       actions.push(`
         <div class="pipeline-drawer-action">
           <p>Release the task back to the queue. The worker claim and heartbeat are cleared.</p>
@@ -1261,6 +1454,24 @@
           body: JSON.stringify({ status: 'done', by })
         });
         toast('success', `Task ${pipelineId} confirmed done by ${by}.`);
+      } else if (action === 'request-correction') {
+        const data = new FormData(form);
+        const by = String(data.get('by') || '').trim();
+        const reason = String(data.get('reason') || '').trim();
+        if (!by || !reason) return;
+        if (normalizedIdentity(by) === normalizedIdentity(state.drawer.task?.assignee)) {
+          throw new Error('The reviewer identity must differ from the worker.');
+        }
+        writeStorage(STORAGE_REVIEWER, by);
+        await fetchJson(`/api/pipeline/tasks/${encodeURIComponent(pipelineId)}/feedback`, {
+          method: 'POST',
+          body: JSON.stringify({ text: `Correction requested: ${reason}`, by })
+        });
+        await fetchJson(`/api/pipeline/tasks/${encodeURIComponent(pipelineId)}/status`, {
+          method: 'POST',
+          body: JSON.stringify({ status: 'queued', by })
+        });
+        toast('success', `Correction requested for task ${pipelineId}; it is back in the guarded queue.`);
       } else if (action === 'requeue') {
         const ok = window.confirm(`Release task ${pipelineId} back to the queue? Its worker claim and heartbeat will be cleared.`);
         if (!ok) return;
@@ -1328,12 +1539,14 @@
     renderRecentlyDone();
     renderTeamPerformance();
     renderDispatchControl();
+    renderDeliveryInbox();
   }
 
   async function loadTasks(options) {
     const silent = options && options.silent;
     if (!silent) setLoading(true);
     const performanceLoad = loadTeamPerformance();
+    const deliveryLoad = loadDeliveryStatus();
     try {
       const payload = await fetchJson('/api/pipeline/tasks?limit=1000&view=summary&includeDone=true');
       const normalized = normalizePayload(payload);
@@ -1349,7 +1562,7 @@
     } catch (error) {
       renderError(error);
     } finally {
-      await performanceLoad;
+      await Promise.all([performanceLoad, deliveryLoad]);
       if (!silent) setLoading(false);
     }
   }
@@ -1470,6 +1683,8 @@
       if (closer) { closeDrawer(); return; }
       const requeue = event.target.closest('button[data-drawer-action="requeue"]');
       if (requeue) { handleDrawerAction('requeue', null); return; }
+      const merge = event.target.closest('button[data-delivery-merge]');
+      if (merge) { mergeDeliveryItem(merge); return; }
       const taskEl = event.target.closest('[data-pipeline-task]');
       if (taskEl) openDrawer(taskEl.dataset.pipelineTask, taskEl);
     });

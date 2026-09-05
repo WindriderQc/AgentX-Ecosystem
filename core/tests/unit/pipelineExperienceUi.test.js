@@ -105,4 +105,60 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain("task.automation?.mode !== 'review_only'");
     expect(script).toContain('JSON.stringify({ pipelineId, confirm: true })');
   });
+
+  test('puts the complete Coding Team operator inbox before generic task counts', () => {
+    for (const id of [
+      'pipelineDeliveryInbox',
+      'pipelineDeliveryTitle',
+      'pipelineDeliveryHumanCount',
+      'pipelineDeliveryState',
+      'pipelineDeliveryList',
+      'pipelineDeliveryMeta',
+    ]) {
+      expect(view).toContain(`id="${id}"`);
+    }
+    expect(view.indexOf('id="pipelineDeliveryInbox"')).toBeLessThan(view.indexOf('class="pipeline-metrics"'));
+    expect(view).toContain('Human actions first');
+    expect(script).toContain('/api/runtime-bridges/coding-delivery/status');
+    for (const stage of [
+      'review_ready',
+      'correction_requested',
+      'accepted_waiting_pr',
+      'ci_running',
+      'ci_failed',
+      'pr_ready_to_merge',
+      'deployment_in_progress',
+      'deployed',
+      'deployment_rolled_back',
+    ]) {
+      expect(script).toContain(`${stage}:`);
+    }
+    for (const summary of ['What changes', 'Tests &amp; proof', 'Risks', 'Recommendation', 'Exact next action']) {
+      expect(script).toContain(summary);
+    }
+  });
+
+  test('keeps review acceptance and a reasoned correction request inside Pipeline', () => {
+    expect(script).toContain('data-drawer-action="confirm-done"');
+    expect(script).toContain('data-drawer-action="request-correction"');
+    expect(script).toContain('<span>Accept result</span>');
+    expect(script).toContain('<span>Request correction</span>');
+    expect(script).toContain('Correction requested: ${reason}');
+    expect(script).toContain("body: JSON.stringify({ status: 'queued', by })");
+    expect(script).toContain('The reviewer identity must differ from the worker.');
+  });
+
+  test('renders one fail-closed exact-identity merge click and secondary expert links', () => {
+    expect(script).toContain('data-delivery-merge');
+    expect(script).toContain('/api/runtime-bridges/coding-delivery/merge');
+    expect(script).toContain('MERGE PR #${pullRequestNumber} @ ${expectedHeadSha}');
+    expect(script).toContain('item?.gate?.ready !== true');
+    for (const gate of ['Accepted task', 'Exact PR', 'Exact SHA', 'Sealed receipt', 'Required CI green', 'GitHub mergeable']) {
+      expect(script).toContain(gate);
+    }
+    expect(script).toContain("url.protocol === 'https:' && url.hostname === 'github.com'");
+    expect(script).toContain('target="_blank" rel="noopener noreferrer"');
+    expect(view).toContain('Merge always requires one explicit operator click');
+    expect(view).toContain('Deployment remains a separate protected workflow after merge');
+  });
 });
