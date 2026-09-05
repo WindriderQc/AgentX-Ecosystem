@@ -16,12 +16,14 @@ const router = require('../../routes/runtime-inference-admissions');
 
 describe('runtime inference admission bridge API', () => {
   const savedToken = process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
+  const savedOperatorToken = process.env.AGENTX_OPERATOR_TOKEN;
   const savedHost = process.env.OLLAMA_HOST;
   let app;
 
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.AGENTX_RUNTIME_BRIDGE_TOKEN = 'runtime-bridge-token';
+    process.env.AGENTX_OPERATOR_TOKEN = 'operator-token';
     process.env.OLLAMA_HOST = 'http://ollama.test:11434';
     app = express();
     app.use(express.json());
@@ -35,6 +37,8 @@ describe('runtime inference admission bridge API', () => {
   afterAll(() => {
     if (savedToken === undefined) delete process.env.AGENTX_RUNTIME_BRIDGE_TOKEN;
     else process.env.AGENTX_RUNTIME_BRIDGE_TOKEN = savedToken;
+    if (savedOperatorToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
+    else process.env.AGENTX_OPERATOR_TOKEN = savedOperatorToken;
     if (savedHost === undefined) delete process.env.OLLAMA_HOST;
     else process.env.OLLAMA_HOST = savedHost;
   });
@@ -145,12 +149,36 @@ describe('runtime inference admission bridge API', () => {
     }
   });
 
-  test('runtime token cannot recover UNKNOWN; operator recovery keeps principal fixed', async () => {
+  test('runtime token cannot recover UNKNOWN; operator recovery uses the stored principal', async () => {
     await request(app)
       .post('/api/runtime/inference-admissions/inference-a/recover-runtime-restart')
       .set('Authorization', 'Bearer runtime-bridge-token')
       .send({ generation: 'generation-a' })
       .expect(403);
     expect(runtime.recoverInferenceAfterRuntimeRestart).not.toHaveBeenCalled();
+
+    runtime.recoverInferenceAfterRuntimeRestart.mockResolvedValue({
+      recovered: true,
+      admissionId: 'inference-a',
+      generation: 'generation-a',
+      principal: 'core-watchdog'
+    });
+    await request(app)
+      .post('/api/runtime/inference-admissions/inference-a/recover-runtime-restart')
+      .set('X-AgentX-Operator-Token', 'operator-token')
+      .send({
+        generation: 'generation-a',
+        principal: 'forged-caller',
+        contract: 'agentx.ollama-runtime-restart/v1',
+        runtimeRestarted: true,
+        confirmation: 'OLLAMA_RUNTIME_RESTARTED_AND_PRIOR_REQUESTS_TERMINATED',
+        restartedAt: new Date().toISOString()
+      })
+      .expect(200);
+    expect(runtime.recoverInferenceAfterRuntimeRestart).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'inference-a',
+      generation: 'generation-a'
+    }));
+    expect(runtime.recoverInferenceAfterRuntimeRestart.mock.calls[0][0]).not.toHaveProperty('principal');
   });
 });
