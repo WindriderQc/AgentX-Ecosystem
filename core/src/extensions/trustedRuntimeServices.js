@@ -342,6 +342,7 @@ function createStreamingTelemetryObserver() {
 function attachStreamLifecycle(stream, { abortBridge, release, inferenceAdmission, onComplete }) {
   const observer = createStreamingTelemetryObserver();
   let sourceEnded = false;
+  let relayFinished = false;
   const relay = new Transform({
     transform(chunk, encoding, callback) {
       observer.write(chunk, encoding);
@@ -389,11 +390,16 @@ function attachStreamLifecycle(stream, { abortBridge, release, inferenceAdmissio
   });
   // Transform.flush runs only after the upstream readable reaches EOF. The
   // writable-side finish event is therefore the sole success settlement.
-  relay.once('finish', () => settle('complete'));
+  relay.once('finish', () => {
+    relayFinished = true;
+    settle('complete');
+  });
   relay.once('close', () => {
     if (!stream.destroyed && !stream.readableEnded) stream.destroy();
-    if (!sourceEnded) {
-      settle('abandon', new Error('Trusted runtime downstream closed before upstream EOF'));
+    if (!relayFinished) {
+      settle('abandon', new Error(sourceEnded
+        ? 'Trusted runtime relay closed after upstream EOF but before terminal settlement'
+        : 'Trusted runtime downstream closed before upstream EOF'));
     }
   });
   relay.once('error', error => settle('abandon', error));

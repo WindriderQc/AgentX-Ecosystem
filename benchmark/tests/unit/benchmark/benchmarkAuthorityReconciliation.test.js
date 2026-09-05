@@ -363,6 +363,59 @@ test('publishes a context profile only after its durable journal and raw snapsho
   );
 });
 
+test('restart compensation restores profiler evidence overwritten by an ambiguous in-place write', async () => {
+  const priorEvidence = {
+    _id: 'evidence-existing',
+    modelName: 'model-a',
+    hostId: 'host-a',
+    artifact: { digest: 'sha256:model-a', runtimeFingerprint: 'runtime-a' },
+    profile: { benchmarkQualified: true, score: 91 },
+    authorityWriteId: 'write-prior',
+    authorityReconciliationId: 'journal-prior',
+    authorityState: 'authoritative',
+    active: true,
+    stale: false,
+    staleReason: null
+  };
+  mockModelPerformanceFindOneAndUpdate
+    .mockReturnValueOnce(lean({
+      ...priorEvidence,
+      authorityWriteId: 'write-ambiguous',
+      authorityState: 'authority_invalidated'
+    }))
+    .mockReturnValueOnce(lean(priorEvidence));
+
+  await expect(service._invalidateResource({
+    _id: 'journal-ambiguous',
+    kind: 'profiler_evidence_write',
+    resourceType: 'ModelPerformanceProfile',
+    resultId: 'profiler-evidence:workload-a:write-ambiguous',
+    details: {
+      modelName: 'model-a',
+      hostId: 'host-a',
+      authorityWriteId: 'write-ambiguous',
+      priorEvidence
+    }
+  })).resolves.toMatchObject({ state: 'authority_invalidated' });
+
+  expect(mockModelPerformanceFindOneAndUpdate).toHaveBeenCalledTimes(2);
+  expect(mockModelPerformanceFindOneAndUpdate.mock.calls[1]).toEqual([
+    {
+      _id: 'evidence-existing',
+      authorityWriteId: 'write-ambiguous',
+      authorityState: 'authority_invalidated'
+    },
+    { $set: expect.objectContaining({
+      profile: priorEvidence.profile,
+      authorityWriteId: 'write-prior',
+      authorityState: 'authoritative',
+      active: true,
+      stale: false
+    }) },
+    { new: true }
+  ]);
+});
+
 test('restart compensation rejects an ambiguous context snapshot and restores prior authority', async () => {
   const priorProfile = {
     modelName: 'model-a',

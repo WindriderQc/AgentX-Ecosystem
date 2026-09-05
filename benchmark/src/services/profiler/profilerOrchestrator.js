@@ -580,9 +580,18 @@ async function persistProfileEvidence({
       throw error;
     }
     const authorityWriteId = crypto.randomUUID();
-    const priorProfile = await ModelProfile.findOne({ name: modelName })
-      .select('readiness thinkingProfiles')
-      .lean();
+    const [priorProfile, priorEvidence] = await Promise.all([
+      ModelProfile.findOne({ name: modelName })
+        .select('readiness thinkingProfiles')
+        .lean(),
+      ModelPerformanceProfile.findOne({
+        modelName,
+        hostId,
+        'artifact.digest': currentArtifact.digest,
+        'artifact.runtimeFingerprint': currentArtifact.runtimeFingerprint,
+        authorityState: { $ne: 'authority_invalidated' }
+      }).lean()
+    ]);
     checkpoint();
     const priorReadinessMap = priorProfile?.readiness instanceof Map
       ? Object.fromEntries(priorProfile.readiness)
@@ -601,7 +610,11 @@ async function persistProfileEvidence({
       evidenceId: null,
       thinking: Boolean(profileData.thinking),
       priorReadiness: priorReadinessMap[hostId] || null,
-      priorThinking: priorThinkingMap[hostId] || null
+      priorThinking: priorThinkingMap[hostId] || null,
+      // saveProfile updates the exact artifact row in place. Preserve the
+      // complete previous authority projection so restart compensation can
+      // restore it instead of tombstoning the only valid evidence row.
+      priorEvidence: priorEvidence || null
     };
     authorityJournal = await authorityReconciliation.prepareProfilerAuthorityWrite({
       kind: 'profiler_evidence_write',

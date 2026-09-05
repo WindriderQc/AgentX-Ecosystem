@@ -520,27 +520,75 @@ async function invalidateResource(record, options = {}) {
   }
   if (record.kind === 'profiler_evidence_write') {
     const details = record.details || {};
-    const invalidated = await ModelPerformanceProfile.findOneAndUpdate(
+    let invalidated = await ModelPerformanceProfile.findOneAndUpdate(
       {
         modelName: details.modelName,
         hostId: details.hostId,
         authorityWriteId: details.authorityWriteId
       },
       {
-        $setOnInsert: {
-          artifact: details.artifact,
-          profile: details.profile
-        },
         $set: {
-        active: false,
-        stale: true,
-        staleReason: 'profiler_authority_write_reconciled',
-        authorityState: 'authority_invalidated',
-        authorityReconciliationId: String(record._id)
+          active: false,
+          stale: true,
+          staleReason: 'profiler_authority_write_reconciled',
+          authorityState: 'authority_invalidated',
+          authorityReconciliationId: String(record._id)
         }
       },
-      { upsert: true, new: true, ...(options.signal ? { signal: options.signal } : {}) }
+      { new: true, ...(options.signal ? { signal: options.signal } : {}) }
     ).lean();
+    const priorEvidence = details.priorEvidence || null;
+    if (!invalidated && !priorEvidence) {
+      invalidated = await ModelPerformanceProfile.findOneAndUpdate(
+        {
+          modelName: details.modelName,
+          hostId: details.hostId,
+          authorityWriteId: details.authorityWriteId
+        },
+        {
+          $setOnInsert: {
+            artifact: details.artifact,
+            profile: details.profile
+          },
+          $set: {
+            active: false,
+            stale: true,
+            staleReason: 'profiler_authority_write_reconciled',
+            authorityState: 'authority_invalidated',
+            authorityReconciliationId: String(record._id)
+          }
+        },
+        { upsert: true, new: true, ...(options.signal ? { signal: options.signal } : {}) }
+      ).lean();
+    }
+    if (invalidated && priorEvidence?._id
+      && String(priorEvidence._id) === String(invalidated._id)) {
+      const restored = await ModelPerformanceProfile.findOneAndUpdate(
+        {
+          _id: priorEvidence._id,
+          authorityWriteId: details.authorityWriteId,
+          authorityState: 'authority_invalidated'
+        },
+        { $set: {
+          modelName: priorEvidence.modelName,
+          hostId: priorEvidence.hostId,
+          artifact: priorEvidence.artifact,
+          profile: priorEvidence.profile,
+          authorityWriteId: priorEvidence.authorityWriteId || null,
+          authorityReconciliationId: priorEvidence.authorityReconciliationId || null,
+          authorityState: priorEvidence.authorityState || 'authoritative',
+          supersededByAuthorityWriteId: priorEvidence.supersededByAuthorityWriteId || null,
+          active: priorEvidence.active !== false,
+          stale: priorEvidence.stale === true,
+          staleReason: priorEvidence.staleReason || null
+        } },
+        { new: true, ...(options.signal ? { signal: options.signal } : {}) }
+      ).lean();
+      if (!restored) {
+        throw new Error(`Prior profiler evidence ${priorEvidence._id} could not be restored under the exact write fence`);
+      }
+      invalidated = restored;
+    }
     await ModelProfile.updateOne(
       { name: details.modelName },
       {

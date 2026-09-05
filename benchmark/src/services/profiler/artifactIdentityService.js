@@ -96,33 +96,75 @@ async function resolveRuntimeArtifactReceipt(modelName, hostId, hostUrl, options
     throw new Error('Exact model name, hostId, and hostUrl are required for runtime identity');
   }
 
-  const [artifact, hostProfile, tags, running, version] = await Promise.all([
-    resolveArtifactIdentity(model, hostId, normalizedHost, {
-      refresh: true,
-      requireRegistry: options.requireRegistry,
-      signal: options.signal
-    }),
-    hostProfileService.getById(hostId),
-    listModels(normalizedHost, { timeoutMs: 5_000, signal: options.signal }),
-    listRunning(normalizedHost, { timeoutMs: 5_000, signal: options.signal }),
-    getVersion(normalizedHost, { timeoutMs: 5_000, signal: options.signal })
-  ]);
-  if (normalizeHostUrl(hostProfile?.hostUrl) !== normalizedHost) {
-    throw new Error('Configured host identity does not match the requested runtime endpoint');
-  }
+  const observe = async () => {
+    const [artifact, hostProfile, tags, running, version] = await Promise.all([
+      resolveArtifactIdentity(model, hostId, normalizedHost, {
+        refresh: true,
+        requireRegistry: options.requireRegistry,
+        signal: options.signal
+      }),
+      hostProfileService.getById(hostId),
+      listModels(normalizedHost, { timeoutMs: 5_000, signal: options.signal }),
+      listRunning(normalizedHost, { timeoutMs: 5_000, signal: options.signal }),
+      getVersion(normalizedHost, { timeoutMs: 5_000, signal: options.signal })
+    ]);
+    if (normalizeHostUrl(hostProfile?.hostUrl) !== normalizedHost) {
+      throw new Error('Configured host identity does not match the requested runtime endpoint');
+    }
+    const installed = findExactModel(tags?.models, model);
+    if (!installed || !digestsMatch(installed.digest, artifact.digest)) {
+      throw new Error('Live Ollama tag and registry digest do not identify the same artifact');
+    }
+    const resident = findExactModel(running?.models, model);
+    if (!resident) {
+      throw new Error('Exact model is not resident; live sizeVram and contextLength cannot be attested');
+    }
+    if (!resident.digest || !digestsMatch(resident.digest, installed.digest)
+      || !digestsMatch(resident.digest, artifact.digest)) {
+      throw new Error('Live Ollama tag, resident runtime, and registry do not identify the same digest');
+    }
+    return {
+      artifact,
+      installed,
+      resident,
+      runtimeVersion: version?.version || null,
+      stabilityKey: JSON.stringify({
+        artifact: {
+          model: artifact.model,
+          hostId: artifact.hostId,
+          hostUrl: artifact.hostUrl,
+          digest: artifact.digest,
+          runtimeFingerprint: artifact.runtimeFingerprint,
+          registryId: artifact.registryId,
+          registryDigest: artifact.registryDigest,
+          registryQualified: artifact.registryQualified
+        },
+        installed: {
+          name: installed.name || installed.model,
+          digest: installed.digest,
+          size: installed.size
+        },
+        resident: {
+          name: resident.name || resident.model,
+          digest: resident.digest,
+          size: resident.size,
+          sizeVram: resident.size_vram,
+          contextLength: resident.context_length
+        },
+        runtimeVersion: version?.version || null
+      })
+    };
+  };
 
-  const installed = findExactModel(tags?.models, model);
-  if (!installed || !digestsMatch(installed.digest, artifact.digest)) {
-    throw new Error('Live Ollama tag and registry digest do not identify the same artifact');
+  // A runtime receipt is decision authority, not a best-effort dashboard
+  // sample. Two identical complete observations prevent a concurrent
+  // reload/context change from yielding a body assembled across two epochs.
+  const first = await observe();
+  const second = await observe();
+  if (first.stabilityKey !== second.stabilityKey) {
+    throw new Error('Live runtime identity changed while the receipt was being observed');
   }
-  const resident = findExactModel(running?.models, model);
-  if (!resident) {
-    throw new Error('Exact model is not resident; live sizeVram and contextLength cannot be attested');
-  }
-  if (!resident.digest || !digestsMatch(resident.digest, installed.digest)
-    || !digestsMatch(resident.digest, artifact.digest)) {
-    throw new Error('Live Ollama tag, resident runtime, and registry do not identify the same digest');
-  }
+  const { artifact, installed, resident, runtimeVersion } = second;
 
   return buildRuntimeArtifactReceipt({
     tag: String(installed.name || installed.model || '').trim(),
@@ -133,7 +175,7 @@ async function resolveRuntimeArtifactReceipt(modelName, hostId, hostUrl, options
     residentSize: resident.size,
     sizeVram: resident.size_vram,
     contextLength: resident.context_length,
-    runtimeVersion: version?.version
+    runtimeVersion
   }, {
     observedAt: options.observedAt || new Date(),
     freshnessMs: options.freshnessMs

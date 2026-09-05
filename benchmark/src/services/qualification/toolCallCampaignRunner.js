@@ -343,7 +343,8 @@ async function runToolCapabilityCampaign(options = {}, overrides = {}) {
       const frozenTransport = (input) => options.transport({
         ...input,
         execution: frozenExecution,
-        signal: workload.signal
+        signal: workload.signal,
+        workloadId: campaignId
       });
       const report = await deps.runHarness(frozenTransport, {
         artifact: {

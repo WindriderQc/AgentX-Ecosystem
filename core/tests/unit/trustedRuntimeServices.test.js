@@ -473,6 +473,44 @@ describe('trusted runtime services', () => {
     }));
   });
 
+  test('quarantines when upstream EOF is observed but the relay closes before finish', async () => {
+    const upstream = new PassThrough();
+    const abandon = jest.fn(async () => ({ quarantined: true }));
+    const complete = jest.fn(async () => ({ released: true }));
+    const deps = inferenceDeps({
+      beginInferenceAdmission: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        markDispatched: jest.fn(),
+        assertActive: jest.fn(),
+        complete,
+        abandon
+      })),
+      fetch: jest.fn(async () => response({ stream: upstream }))
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    });
+    const originalFlush = result.stream._flush.bind(result.stream);
+    let flushEntered;
+    const entered = new Promise(resolve => { flushEntered = resolve; });
+    result.stream._flush = callback => originalFlush(error => {
+      flushEntered();
+      // Deliberately withhold callback: upstream EOF is known, but the relay
+      // has not emitted finish and therefore has no terminal settlement.
+      void callback;
+      void error;
+    });
+    result.stream.resume();
+    upstream.end(`${JSON.stringify({ done: true })}\n`);
+    await entered;
+    result.stream.destroy();
+    await new Promise(resolve => result.stream.once('close', resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalledTimes(1);
+  });
+
   test('returns a bounded timeout error and releases admission', async () => {
     const release = jest.fn();
     const deps = inferenceDeps({

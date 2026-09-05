@@ -1214,5 +1214,28 @@ describe('hostPreferenceService', () => {
       await expect(service.unloadModel(HOST_URL, 'ax/gemma4:26b-a4b-it-qat'))
         .resolves.toMatchObject({ status: 'error' });
     });
+
+    it.each([
+      ['warmup', (signal) => service.warmDefaultModel(
+        HOST_URL,
+        'ax/gemma4:26b-a4b-it-qat',
+        { timeoutMs: 5, signal }
+      )],
+      ['unload', (signal) => service.unloadModel(
+        HOST_URL,
+        'ax/gemma4:26b-a4b-it-qat',
+        { timeoutMs: 5, signal }
+      )]
+    ])('fails %s closed when its internal timeout leaves the mutation outcome unknown', async (_label, run) => {
+      global.fetch = jest.fn((_url, options) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      }));
+      const caller = new AbortController();
+
+      await expect(run(caller.signal)).rejects.toMatchObject({
+        code: 'RUNTIME_MUTATION_OUTCOME_UNKNOWN'
+      });
+      expect(caller.signal.aborted).toBe(false);
+    });
   });
 });

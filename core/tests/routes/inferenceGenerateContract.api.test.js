@@ -338,6 +338,33 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       });
     });
 
+    test('forwards native tool schemas only for an authenticated admitted benchmark campaign', async () => {
+      mockOllamaOk();
+      const tools = [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }];
+      await request(app)
+        .post('/api/inference/generate')
+        .set('x-agentx-benchmark-token', 'test-benchmark-token')
+        .send({
+          model: 'test-model',
+          messages: [{ role: 'user', content: 'use a tool' }],
+          tools,
+          rawResponse: true,
+          callerDetail: 'benchmark-batch-tool-qualification',
+          workloadAdmissionId: 'workload-admission-tools',
+          workloadGeneration: 'workload-generation-tools'
+        })
+        .expect(200);
+
+      const chatCall = fetch.mock.calls.find(([url]) => String(url).endsWith('/api/chat'));
+      expect(JSON.parse(chatCall[1].body)).toMatchObject({ tools, stream: false });
+
+      const denied = await request(app)
+        .post('/api/inference/generate')
+        .send({ model: 'test-model', messages: [], tools })
+        .expect(403);
+      expect(denied.body).toMatchObject({ code: 'INFERENCE_TOOLS_FORBIDDEN' });
+    });
+
     test('the interactive lane KEEPS admission', async () => {
       mockOllamaOk();
       await request(app)

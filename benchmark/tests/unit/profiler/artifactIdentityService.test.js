@@ -174,4 +174,33 @@ describe('profiler artifact identity service', () => {
     await expect(resolveRuntimeArtifactReceipt('owner/model:8b-q4', 'host-a', HOST_URL))
       .rejects.toThrow(/not resident/i);
   });
+
+  it('refuses a receipt when residency or context changes across the bounded double-read', async () => {
+    getModelDigest.mockResolvedValue(EXACT_DIGEST);
+    getModelRegistryByName.mockResolvedValue({
+      _id: 'registry-a',
+      modelName: 'owner/model:8b-q4',
+      installations: [{ hostUrl: HOST_URL, digest: EXACT_DIGEST, isActive: true }]
+    });
+    ollama.listModels.mockResolvedValue({
+      models: [{ name: 'owner/model:8b-q4', digest: EXACT_DIGEST, size: 9_000_000_000 }]
+    });
+    ollama.listRunning
+      .mockResolvedValueOnce({
+        models: [{
+          name: 'owner/model:8b-q4', digest: EXACT_DIGEST,
+          size: 8_500_000_000, size_vram: 8_500_000_000, context_length: 32_768
+        }]
+      })
+      .mockResolvedValueOnce({
+        models: [{
+          name: 'owner/model:8b-q4', digest: EXACT_DIGEST,
+          size: 8_500_000_000, size_vram: 8_500_000_000, context_length: 65_536
+        }]
+      });
+    ollama.getVersion.mockResolvedValue({ version: '0.11.10' });
+
+    await expect(resolveRuntimeArtifactReceipt('owner/model:8b-q4', 'host-a', HOST_URL))
+      .rejects.toThrow(/changed while.*observed/i);
+  });
 });

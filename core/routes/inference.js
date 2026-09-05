@@ -822,6 +822,17 @@ router.post('/inference/generate', async (req, res) => {
     );
     const benchmarkClaimAuthorized = callerContext.principal === 'benchmark-service'
         && laneName === 'direct';
+    const requestedTools = body.tools;
+    if (requestedTools !== undefined
+        && (!benchmarkClaimAuthorized || !Array.isArray(requestedTools) || requestedTools.length > 64)) {
+        return res.status(benchmarkClaimAuthorized ? 400 : 403).json({
+            status: 'error',
+            code: benchmarkClaimAuthorized ? 'INFERENCE_TOOLS_INVALID' : 'INFERENCE_TOOLS_FORBIDDEN',
+            message: benchmarkClaimAuthorized
+                ? 'Benchmark tool schemas must be a bounded array.'
+                : 'Native tool schemas are restricted to an authenticated benchmark campaign.'
+        });
+    }
     if (callerContext.principal === 'benchmark-service'
         && (!body.workloadAdmissionId || !body.workloadGeneration)) {
         return res.status(403).json({
@@ -1228,7 +1239,15 @@ router.post('/inference/generate', async (req, res) => {
     const ollamaUrl = `${target}/api/${useChat ? 'chat' : 'generate'}`;
 
     const ollamaPayload = useChat
-        ? { model, messages, stream, options, ...(think !== undefined && { think }), ...(keepAlive !== undefined && { keep_alive: keepAlive }) }
+        ? {
+            model,
+            messages,
+            stream,
+            options,
+            ...(requestedTools !== undefined && { tools: requestedTools }),
+            ...(think !== undefined && { think }),
+            ...(keepAlive !== undefined && { keep_alive: keepAlive })
+        }
         : { model, prompt, system, stream, options, ...(think !== undefined && { think }), ...(keepAlive !== undefined && { keep_alive: keepAlive }) };
     routingTrace.request.summary = buildRequestSummary({ prompt, messages, system, options, stream, think, keepAlive });
     routingTrace.selected = {

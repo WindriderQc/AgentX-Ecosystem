@@ -108,8 +108,10 @@ async function warmDefaultModel(hostUrl, model, {
   keepAlive = -1,
   contextSize = 0,
   signal = null,
-  assertAuthorityActive = null
+  assertAuthorityActive = null,
+  timeoutMs = pinWarmTimeoutMs
 } = {}) {
+  let requestSignal = null;
   try {
     assertAuthorityActive?.();
     const isEmbedding = isEmbeddingModelName(model);
@@ -135,11 +137,12 @@ async function warmDefaultModel(hostUrl, model, {
         ? `${Math.round(Number(keepAlive))}s`
         : keepAlive;
     }
+    requestSignal = combineRuntimeSignal(signal, timeoutMs);
     const response = await fetch(`${hostUrl}/api/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: combineRuntimeSignal(signal, pinWarmTimeoutMs)
+      signal: requestSignal
     });
     if (!response.ok) {
       const text = await response.text();
@@ -166,18 +169,26 @@ async function warmDefaultModel(hostUrl, model, {
     if (signal?.aborted) {
       throw signal.reason instanceof Error ? signal.reason : err;
     }
+    if (requestSignal?.aborted) {
+      const error = new Error(`Ollama warmup outcome is unknown after its bounded request expired: ${err.message}`);
+      error.code = 'RUNTIME_MUTATION_OUTCOME_UNKNOWN';
+      error.cause = err;
+      throw error;
+    }
     return { host: hostUrl, model, status: 'error', error: err.message };
   }
 }
 
 async function unloadModel(hostUrl, model, options = {}) {
+  let requestSignal = null;
   try {
     options.assertAuthorityActive?.();
+    requestSignal = combineRuntimeSignal(options.signal, options.timeoutMs || 30_000);
     const response = await fetch(`${hostUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, keep_alive: 0 }),
-      signal: combineRuntimeSignal(options.signal, 30_000)
+      signal: requestSignal
     });
     if (!response.ok) {
       const text = await response.text();
@@ -197,6 +208,12 @@ async function unloadModel(hostUrl, model, options = {}) {
   } catch (err) {
     if (options.signal?.aborted) {
       throw options.signal.reason instanceof Error ? options.signal.reason : err;
+    }
+    if (requestSignal?.aborted) {
+      const error = new Error(`Ollama unload outcome is unknown after its bounded request expired: ${err.message}`);
+      error.code = 'RUNTIME_MUTATION_OUTCOME_UNKNOWN';
+      error.cause = err;
+      throw error;
     }
     return { host: hostUrl, model, status: 'error', error: err.message };
   }
@@ -1001,6 +1018,7 @@ async function restorePinnedModelsInternal(hostUrl, options = {}) {
       result.durationMs = Date.now() - t0;
       results.push(result);
     } catch (err) {
+      if (err.code === 'RUNTIME_MUTATION_OUTCOME_UNKNOWN') throw err;
       result = { host: hostUrl, model: entry.model, status: 'error', error: err.message, durationMs: Date.now() - t0 };
       results.push(result);
     }
