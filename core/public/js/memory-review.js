@@ -200,9 +200,20 @@
     } else if (health.collecting) {
       tone = 'collecting'; icon = 'fa-satellite-dish'; title = 'Agents are gathering tonight’s signal';
       text = 'A partial host submission is open. The completed dream below remains the best current summary.';
+    } else if (latest.quiet && state.collectingAlert) {
+      // The same phenomenon must not read "healthy" here while Nerve Center
+      // holds an active alert on it. The governance sweep is the authority on
+      // whether the runtimes that must contribute actually did.
+      const quiet = state.collectingAlert.context?.additionalData?.quietRuntimes || [];
+      const names = quiet.map((entry) => label(entry.runtime || entry.evidenceClass || 'runtime')).filter(Boolean);
+      tone = 'attention'; icon = 'fa-triangle-exclamation'; title = 'Quiet—and Nerve Center says that is not healthy';
+      text = `An active "collecting nothing" alert reports that${names.length ? ` ${names.join(', ')}` : ' the expected runtimes'} produced no eligible evidence over the sweep window. A quiet run is healthy only when the collectors that must contribute did.`;
+    } else if (latest.quiet && latest.overdueRun) {
+      tone = 'attention'; icon = 'fa-clock'; title = 'Quiet—and the next dream is overdue';
+      text = `The last run completed ${relativeDate(latest.lastRunAt)} and a new one was expected within ${durationLabel(latest.expectedWithinMs)}.`;
     } else if (latest.quiet) {
       tone = 'quiet'; icon = 'fa-moon'; title = 'Quiet night—nothing trustworthy new';
-      text = 'Noise was filtered locally, no proposal was needed, and the review model was not called.';
+      text = 'Noise was filtered locally, no proposal was needed, and the review model was not called. No active collecting alert contradicts this.';
     } else if (latest.candidates) {
       title = `${latest.candidates} proposal${latest.candidates === 1 ? '' : 's'} processed safely`;
       text = 'The latest completed dream is fully reflected in the review history below.';
@@ -212,7 +223,13 @@
     $('mrPulseTitle').textContent = title;
     $('mrPulseText').textContent = text;
     $('mrPulseFacts').innerHTML = [
-      `<span><i class="fas fa-clock"></i> ${esc(relativeDate(latest.completedAt || latest.createdAt))}</span>`,
+      `<span title="Last run"><i class="fas fa-clock"></i> ${esc(relativeDate(latest.completedAt || latest.createdAt))}</span>`,
+      `<span title="Last completed run"><i class="fas fa-circle-check"></i> ${latest.lastSuccessfulRunAt ? `completed ${esc(relativeDate(latest.lastSuccessfulRunAt))}` : 'no completed run'}</span>`,
+      `<span title="Last run in which a collector produced eligible evidence"><i class="fas fa-seedling"></i> ${latest.lastEligibleEvidenceAt ? `eligible evidence ${esc(relativeDate(latest.lastEligibleEvidenceAt))}` : 'no eligible evidence in this window'}</span>`,
+      `<span title="Expected cadence"><i class="fas fa-calendar-check"></i> ${latest.nextDueAt ? `${latest.overdueRun ? 'was due' : 'next due'} ${esc(relativeDate(latest.nextDueAt))} (every ${esc(durationLabel(latest.expectedWithinMs))})` : 'cadence not observed'}</span>`,
+      state.collectingAlert
+        ? `<span class="mr-fact-alert" title="Active Nerve Center alert"><i class="fas fa-bell"></i> <a href="/nerve-center#alerts">collecting-nothing alert active</a> since ${esc(relativeDate(state.collectingAlert.firstOccurrence || state.collectingAlert.createdAt))}</span>`
+        : '<span title="No active Nerve Center alert on this signal"><i class="fas fa-bell-slash"></i> no collecting alert</span>',
       `<span><i class="fas fa-filter"></i> ${totals.filteredObservations} filtered</span>`,
       `<span><i class="fas fa-leaf"></i> ${totals.modelSkips} review-model call${totals.modelSkips === 1 ? '' : 's'} avoided</span>`,
       health.advisories ? `<span title="Non-blocking schema or identity drift"><i class="fas fa-circle-info"></i> ${health.advisories} ${health.advisories === 1 ? 'advisory' : 'advisories'}</span>` : '<span><i class="fas fa-shield"></i> No semantic automation</span>',
@@ -271,9 +288,36 @@
       <div><h4>Destinations</h4>${distributionBars(insight.distributions.targets, 'No semantic destination has been proposed yet.')}</div>`;
   }
 
+  function durationLabel(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value <= 0) return 'an unknown interval';
+    const hours = Math.round(value / 3600000);
+    if (hours >= 48 && hours % 24 === 0) return `${hours / 24} days`;
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+
+  /**
+   * Cross-check with Nerve Center: an active alert on
+   * `memory_review_no_eligible_evidence` is the governance sweep's verdict
+   * that a quiet loop is not healthy. Read-only; an unavailable alert feed
+   * leaves the verdict unknown rather than assumed absent.
+   */
+  async function loadCollectingAlert() {
+    try {
+      const data = await apiJson('/api/alerts?status=active&limit=100');
+      const rows = Array.isArray(data) ? data : (data?.alerts || data?.items || []);
+      return rows.find((alert) => alert?.context?.metric === 'memory_review_no_eligible_evidence') || null;
+    } catch {
+      return null;
+    }
+  }
+
   async function loadInsights() {
     try {
-      state.insights = await apiJson('/api/memory-review/insights?limit=30');
+      [state.insights, state.collectingAlert] = await Promise.all([
+        apiJson('/api/memory-review/insights?limit=30'),
+        loadCollectingAlert(),
+      ]);
       renderOverview(); renderPulse(); renderInsights();
     } catch (error) {
       $('mrInsightsState').textContent = `Insight summary unavailable: ${error.message}`;

@@ -150,6 +150,21 @@ function getWatchdogSnapshot() {
 async function getJudgeDriftSnapshot() {
   try {
     const client = getBenchmarkServiceClient();
+    // Classified evidence separates an unreachable service from a reachable
+    // one whose drift endpoint failed or holds nothing; the legacy method is
+    // kept for clients that only expose it.
+    if (typeof client.getJudgeDriftEvidence === 'function') {
+      const evidence = await client.getJudgeDriftEvidence();
+      if (evidence?.unavailable) {
+        return {
+          unavailable: true,
+          reason: evidence.reason || 'benchmark-drift-empty',
+          ...(evidence.httpStatus != null ? { httpStatus: evidence.httpStatus } : {}),
+          benchmarkReachable: evidence.reason !== 'benchmark-unreachable'
+        };
+      }
+      return evidence.payload;
+    }
     const payload = await client.getJudgeDrift();
     if (!payload) {
       return { unavailable: true, reason: 'benchmark-unreachable' };
@@ -161,11 +176,50 @@ async function getJudgeDriftSnapshot() {
   }
 }
 
+/**
+ * Functional judge state from Benchmark's own readiness contract. This is the
+ * fact the Benchmark HTTP status cannot express: the service can be online
+ * while no judge host or model is usable.
+ */
+async function getJudgeReadinessSnapshot() {
+  try {
+    const client = getBenchmarkServiceClient();
+    if (typeof client.getJudgeReadiness !== 'function') {
+      return { unavailable: true, reason: 'not-supported' };
+    }
+    const evidence = await client.getJudgeReadiness();
+    if (evidence?.unavailable) {
+      return {
+        unavailable: true,
+        reason: evidence.reason || 'benchmark-readiness-empty',
+        ...(evidence.httpStatus != null ? { httpStatus: evidence.httpStatus } : {}),
+        benchmarkReachable: evidence.reason !== 'benchmark-unreachable'
+      };
+    }
+    const r = evidence.readiness || {};
+    return {
+      unavailable: false,
+      ready: r.ready === true,
+      status: r.status || (r.ready === true ? 'ready' : 'blocked'),
+      code: r.code || null,
+      summary: r.summary || null,
+      checkedAt: r.checked_at || null,
+      readyHostCount: Number.isFinite(r.ready_host_count) ? r.ready_host_count : null,
+      configuredHostCount: Number.isFinite(r.configured_host_count) ? r.configured_host_count : null,
+      blockers: Array.isArray(r.blockers) ? r.blockers.slice(0, 5) : []
+    };
+  } catch (err) {
+    logger.warn('[inferenceHealth] judge readiness fetch failed', { error: err.message });
+    return { unavailable: true, error: err.message };
+  }
+}
+
 async function getInferenceHealth(opts = {}) {
-  const [claims, drift, judgeDrift] = await Promise.all([
+  const [claims, drift, judgeDrift, judgeReadiness] = await Promise.all([
     hostPrefService.listBenchmarkClaims().catch(err => ({ error: err.message, claims: [] })),
     getDriftSummary(opts.driftWindowMs),
-    getJudgeDriftSnapshot()
+    getJudgeDriftSnapshot(),
+    getJudgeReadinessSnapshot()
   ]);
 
   const claimsArr = Array.isArray(claims) ? claims : [];
@@ -181,7 +235,8 @@ async function getInferenceHealth(opts = {}) {
     benchmarkClaims: enrichedClaims,
     watchdog: getWatchdogSnapshot(),
     drift,
-    judgeDrift
+    judgeDrift,
+    judgeReadiness
   };
 }
 
@@ -191,5 +246,6 @@ module.exports = {
   summarizeDriftRows,
   getGateSnapshot,
   getWatchdogSnapshot,
-  getJudgeDriftSnapshot
+  getJudgeDriftSnapshot,
+  getJudgeReadinessSnapshot
 };

@@ -58,6 +58,33 @@ function latestCollectorObservation(runtimes) {
   return timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
 }
 
+/**
+ * When did a run last complete, when did eligible evidence last arrive, and
+ * when is the next run due under the freshness window? `runs` is sorted
+ * newest first. Absent facts stay null, never "now".
+ */
+function cadenceFacts(runs, latest, now, expectedWithinMs) {
+  const at = (run) => run?.completedAt || run?.createdAt || null;
+  const iso = (value) => {
+    if (!value) return null;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? new Date(time).toISOString() : null;
+  };
+  const lastSuccessful = runs.find((run) => run.status === 'completed');
+  const lastEligible = runs.find((run) => (run.collectors || []).some((collector) => (Number(collector.eligibleObservations) || 0) > 0));
+  const latestAt = iso(at(latest));
+  const latestMs = latestAt ? new Date(latestAt).getTime() : null;
+  return {
+    lastRunAt: latestAt,
+    lastSuccessfulRunAt: iso(at(lastSuccessful)),
+    lastEligibleEvidenceAt: iso(at(lastEligible)),
+    expectedWithinMs,
+    nextDueAt: latestMs ? new Date(latestMs + expectedWithinMs).toISOString() : null,
+    ageMs: latestMs ? Math.max(0, now.getTime() - latestMs) : null,
+    overdueRun: latestMs ? now.getTime() > latestMs + expectedWithinMs : false,
+  };
+}
+
 function measuredMetric(value, denominator, evidence) {
   const hasDenominator = Number.isFinite(denominator) && denominator > 0;
   return {
@@ -241,6 +268,9 @@ function summarizeRuns(runs, limit, now = new Date(), {
       pending: (latest.candidates || []).filter((candidate) => ['proposed', 'deferred', 'apply_failed'].includes(candidate.status)).length,
       modelCalled: !!latest.summary?.modelCalled,
       quiet: !!latest.summary?.noEligibleObservations,
+      // Cadence facts, so "quiet" can be judged against when evidence last
+      // arrived and when the next run is due, instead of read as healthy by default.
+      ...cadenceFacts(runs, latest, now, runtimeStaleAfterMs),
     } : null,
     totals,
     quality: {

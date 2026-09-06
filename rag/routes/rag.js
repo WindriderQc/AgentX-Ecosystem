@@ -28,6 +28,17 @@ const jobManager = require('../src/services/ingestJobManager');
 const IngestJob = require('../models/IngestJob');
 const SearchEvent = require('../models/SearchEvent');
 const buddyRagEvents = require('../src/services/buddyRagEvents');
+const { buildSignal, serializeSignal } = require('../../shared/signalEvidence');
+
+/**
+ * Corpus freshness rule. A corpus whose last successful ingest is older than
+ * this is reported `stale`; with no recorded ingest it is `unknown`, never
+ * assumed fresh. Override with RAG_CORPUS_STALE_AFTER_MS.
+ */
+const RAG_CORPUS_STALE_AFTER_MS = (() => {
+  const configured = Number(process.env.RAG_CORPUS_STALE_AFTER_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 7 * 24 * 60 * 60 * 1000;
+})();
 const {
   getPublicIngestionPolicy,
   loadIngestionPolicy
@@ -656,6 +667,11 @@ async function handleStatus(req, res) {
     const cache = getEmbeddingCache();
     const cacheStats = cache.getStats();
 
+    // Corpus freshness is a separate fact from readiness: a ready service
+    // may serve a stale corpus, and a corpus with no recorded ingest has an
+    // unknown age, never a fresh one.
+    const freshness = await corpusFreshness(documentCount);
+
     res.json({
       ok: true,
       data: {
@@ -670,6 +686,7 @@ async function handleStatus(req, res) {
         healthy: queryReady,
         serviceReady,
         queryReady,
+        freshness,
         observedAt: new Date().toISOString()
       }
     });
@@ -679,9 +696,62 @@ async function handleStatus(req, res) {
   }
 }
 
+/**
+ * Freshness under the Signal Evidence Contract, from recorded ingest jobs.
+ * `state` is `fresh`, `stale` or `unknown`; the TTL travels with the answer
+ * so every surface renders the same rule.
+ */
+async function corpusFreshness(documentCount) {
+  let lastIngest = null;
+  let historyError = null;
+  try {
+    lastIngest = await IngestJob.findOne({ status: 'success' })
+      .sort({ createdAt: -1 })
+      .select('createdAt source')
+      .lean();
+  } catch (err) {
+    historyError = err.message;
+  }
+  const lastIngestAt = lastIngest?.createdAt ? new Date(lastIngest.createdAt).toISOString() : null;
+  const reason = historyError
+    ? 'ingest_history_unavailable'
+    : lastIngestAt
+      ? null
+      : (documentCount > 0 ? 'ingest_history_predates_telemetry' : 'no_ingest_recorded');
+  const signal = buildSignal({
+    id: 'rag.corpus.last_ingest',
+    kind: 'measure',
+    basis: 'census',
+    state: historyError ? 'unavailable' : (lastIngestAt ? 'observed' : 'missing'),
+    value: lastIngestAt ? 1 : null,
+    sample: { n: lastIngestAt ? 1 : 0 },
+    source: 'ingestjobs',
+    observedAt: lastIngestAt,
+    ttlMs: RAG_CORPUS_STALE_AFTER_MS,
+    reason,
+    detail: lastIngestAt
+      ? null
+      : (historyError ? 'Ingest history could not be read.' : (documentCount > 0
+        ? 'Documents exist but no ingest job was recorded for them, so their age is unknown.'
+        : 'No successful ingest has been recorded.'))
+  });
+  return {
+    state: signal.freshness.state,
+    lastIngestAt,
+    lastIngestSource: lastIngest?.source || null,
+    ttlMs: RAG_CORPUS_STALE_AFTER_MS,
+    ageMs: signal.freshness.ageMs,
+    source: 'ingestjobs',
+    reason,
+    signal: serializeSignal(signal)
+  };
+}
+
 // GET is observational and never starts embedding inference or emits readiness
 // events. The same-origin/operator-protected POST owns active refresh work.
 router.get('/status', handleStatus);
 router.post('/status/refresh', handleStatus);
 
 module.exports = router;
+module.exports.corpusFreshness = corpusFreshness;
+module.exports.RAG_CORPUS_STALE_AFTER_MS = RAG_CORPUS_STALE_AFTER_MS;

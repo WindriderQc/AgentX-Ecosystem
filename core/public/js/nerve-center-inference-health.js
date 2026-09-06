@@ -202,16 +202,54 @@
             </div>`;
     }
 
-    function buildJudgeDriftPanel(jd) {
+    /**
+     * "Benchmark reachable" and "judge usable" are different facts. The
+     * drift row names which one failed instead of calling every gap
+     * "benchmark unreachable", and the readiness line shows the functional
+     * judge state even when the HTTP service is online.
+     */
+    function unavailableReasonText(jd) {
+        const reason = jd.reason || (jd.error ? 'error' : 'unknown');
+        const status = jd.httpStatus != null ? ` (HTTP ${jd.httpStatus})` : '';
+        switch (reason) {
+            case 'benchmark-unreachable': return 'Benchmark service unreachable';
+            case 'benchmark-drift-error': return `Benchmark reachable, drift endpoint failed${status}`;
+            case 'benchmark-drift-empty': return 'Benchmark reachable, no drift evidence yet';
+            case 'benchmark-readiness-error': return `Benchmark reachable, readiness endpoint failed${status}`;
+            case 'benchmark-readiness-empty': return 'Benchmark reachable, no readiness evidence';
+            case 'not-supported': return 'readiness not exposed by this Core build';
+            default: return jd.error ? `error — ${jd.error}` : String(reason).replace(/-/g, ' ');
+        }
+    }
+
+    function buildJudgeReadinessLine(readiness) {
+        if (!readiness) return '';
+        if (readiness.unavailable) {
+            const reachable = readiness.benchmarkReachable === true ? 'Benchmark HTTP: reachable · ' : (readiness.benchmarkReachable === false ? 'Benchmark HTTP: unreachable · ' : '');
+            return `<div class="nc-muted" style="font-size:11px;margin-top:6px;" data-judge-readiness="unknown">${shared.escapeHtml(reachable)}Judge readiness: unknown — ${shared.escapeHtml(unavailableReasonText(readiness))}</div>`;
+        }
+        const color = readiness.ready ? '#4ade80' : '#f87171';
+        const label = readiness.ready ? 'READY' : 'BLOCKED';
+        const code = !readiness.ready && readiness.code ? ` (${readiness.code})` : '';
+        const hosts = readiness.readyHostCount != null && readiness.configuredHostCount != null
+            ? ` · ${readiness.readyHostCount}/${readiness.configuredHostCount} judge hosts ready`
+            : '';
+        const checked = readiness.checkedAt ? ` · checked ${shared.timeAgo(readiness.checkedAt)}` : '';
+        const summary = readiness.summary ? ` — ${readiness.summary}` : '';
+        return `<div style="font-size:11px;margin-top:6px;" data-judge-readiness="${readiness.ready ? 'ready' : 'blocked'}">Benchmark HTTP: reachable · Judge readiness: <strong style="color:${color}">${label}</strong>${shared.escapeHtml(code)}${shared.escapeHtml(hosts)}${shared.escapeHtml(checked)}<span class="nc-muted">${shared.escapeHtml(summary)}</span></div>`;
+    }
+
+    function buildJudgeDriftPanel(jd, readiness) {
         if (!jd) return '';
         if (jd.unavailable) {
-            const reason = jd.error || jd.reason || 'benchmark unreachable';
+            const reason = unavailableReasonText(jd);
             return `
                 <div class="nc-card" style="margin-bottom:12px;padding:12px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
                         <strong>Judge Drift <span class="nc-muted" style="font-weight:normal;font-size:11px;">(per-category ρ vs baseline)</span></strong>
-                        <span class="nc-muted" style="font-size:11px;">unavailable — ${shared.escapeHtml(reason)}</span>
+                        <span class="nc-muted" style="font-size:11px;" data-judge-drift="unavailable">unavailable — ${shared.escapeHtml(reason)}</span>
                     </div>
+                    ${buildJudgeReadinessLine(readiness)}
                 </div>`;
         }
 
@@ -335,7 +373,7 @@
                 buildClaimsPanel(data.benchmarkClaims) +
                 buildWatchdogPanel(data.watchdog) +
                 buildDriftPanel(data.drift) +
-                buildJudgeDriftPanel(data.judgeDrift);
+                buildJudgeDriftPanel(data.judgeDrift, data.judgeReadiness);
 
             const summary = document.getElementById('nc-ih-summary');
             if (summary) summary.innerHTML = buildSummary(data);
