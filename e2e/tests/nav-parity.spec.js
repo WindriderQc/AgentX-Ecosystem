@@ -3,10 +3,11 @@
 const { test, expect } = require('@playwright/test');
 const { normalizedBaseUrl, profile } = require('./support/product-surfaces');
 
-// The demo profile has no Operate group and no Nerve Center; both profiles
-// render the shared navigation, so the parity check picks pages and a group
-// that exist in the profile under test.
-const CORE_PAGE = profile === 'demo' ? '/playground' : '/nerve-center';
+// The demo profile has no Operate group and no Nerve Center, and its chat
+// page deliberately hides the chrome; both profiles render the shared
+// navigation on Models, so the parity check picks pages and a group that
+// exist in the profile under test.
+const CORE_PAGE = profile === 'demo' ? '/models' : '/nerve-center';
 const CLICK_JOURNEY = profile === 'demo'
   ? { group: 'product-group', item: 'Models', pathname: '/models' }
   : { group: 'operate-group', item: 'Nerve Center', pathname: '/nerve-center' };
