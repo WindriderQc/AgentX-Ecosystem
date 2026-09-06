@@ -112,6 +112,19 @@ describe('shared navigation public URL contract', () => {
     }
   });
 
+  test('frozen Planning lives under History & reference, with Pipeline as the execution authority', async () => {
+    const html = await renderNav('core', 'full', 'pipeline');
+    const labs = html.slice(html.indexOf('id="nav-menu-labs-group"'));
+    expect(labs).toContain('History &amp; reference');
+    expect(labs).toContain('Experimental');
+    expect(labs.indexOf('History &amp; reference')).toBeGreaterThan(labs.indexOf('Experimental'));
+    expect(labs.indexOf('Planning · frozen')).toBeGreaterThan(labs.indexOf('History &amp; reference'));
+    expect(hrefFor(html, 'Planning · frozen')).toBe('/planning');
+    expect(html).toMatch(/href="\/planning"[^>]*title="Historical strategy and evidence reference\. Frozen: current delivery lives in Pipeline\."/);
+    expect(hrefFor(html, 'Pipeline')).toBe('/pipeline');
+    expect(await renderNav('rag', 'full', 'rag')).toContain('History &amp; reference');
+  });
+
   test('the Product navigation groups are identical on every service', async () => {
     const groups = (html) => [...html.matchAll(/id="nav-trigger-([a-z-]+)"/g)].map((m) => m[1]);
     const items = (html) => [...html.matchAll(/class="dropdown-item[^"]*"[^>]*>\s*<i class="fas [^"]+" aria-hidden="true"><\/i>\s*([^<]+)/g)].map((m) => m[1].trim());

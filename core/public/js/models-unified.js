@@ -40,6 +40,9 @@ class UnifiedModels {
         this.comparisonList = new Set();
         this.sources = null;
         this.activeCategory = 'all';
+        // Capability filters hide models with no tag and no evidence by
+        // default, but always disclose how many were hidden and can show them.
+        this.includeUnknownCapability = false;
         this.activeTags = new Set();
         this.currentSort = { column: null, direction: null };
         this.uiReady = false;
@@ -244,10 +247,14 @@ class UnifiedModels {
             // Host
             if (hostFilter !== 'all' && m.source?.url !== hostFilter) return false;
 
-            // Category
+            // Category: declared tags and observed benchmark evidence both
+            // count. A model with neither is unknown for this capability; it
+            // is counted and disclosed, never silently treated as incapable.
             if (cat !== 'all') {
-                const cats = m.categories || [];
-                if (!cats.includes(cat)) return false;
+                const tier = this.capabilityEvidence(m, cat).tier;
+                if (tier === 'unknown' || tier === 'not_eligible') {
+                    if (!this.includeUnknownCapability) return false;
+                }
             }
 
             // Tags
@@ -524,11 +531,73 @@ class UnifiedModels {
     }
 
     /* ── Table rendering ────────────────────────────────── */
+    /**
+     * Capability evidence tiers for one category. Different facts, never
+     * merged: `evidence` = Benchmark observed this category on the model
+     * (best or worst category of its scored tests); `declared` = a registry
+     * tag or category says so; `not_eligible` = Benchmark admission is
+     * explicitly blocked (with its reason); `unknown` = nothing recorded. A
+     * name that merely contains "coder" proves nothing, and unknown is never
+     * rendered as "not capable". Trusted per-category qualification belongs to
+     * the Benchmark Trusted receipts and is not projected into this catalog.
+     */
+    capabilityEvidence(model, category) {
+        const wanted = String(category || '').toLowerCase();
+        const labels = new Set([...(model.categories || []), ...(model.tags || [])].map((value) => String(value).toLowerCase()));
+        const declared = labels.has(wanted);
+        const stats = model.benchmarkStats || {};
+        const scored = Number(stats.totalTests) > 0;
+        const evidence = scored && [stats.bestCategory, stats.worstCategory].map((value) => String(value || '').toLowerCase()).includes(wanted);
+        const notEligible = model.benchmarkEligibility?.eligible === false;
+        const tier = evidence ? 'evidence' : declared ? 'declared' : notEligible ? 'not_eligible' : 'unknown';
+        const reason = evidence
+            ? `Benchmark scored ${stats.totalTests} test${Number(stats.totalTests) === 1 ? '' : 's'}; ${wanted} is its ${String(stats.bestCategory || '').toLowerCase() === wanted ? 'best' : 'weakest'} category`
+            : declared ? 'Declared by a registry tag or category; no benchmark evidence for it'
+                : notEligible ? `Benchmark admission blocked: ${model.benchmarkEligibility?.blockedReason || 'no reason recorded'}`
+                    : 'No tag and no benchmark evidence for this capability';
+        return { tier, declared, evidence, notEligible, reason };
+    }
+
+    capabilityTierBadge(model, category) {
+        const { tier, reason } = this.capabilityEvidence(model, category);
+        const labels = { evidence: 'Evidence', declared: 'Declared', not_eligible: 'Not eligible', unknown: 'Unknown' };
+        return `<span class="cat-tier cat-tier-${escapeHtml(tier)}" title="${escapeHtml(reason)}">${labels[tier]}</span>`;
+    }
+
+    capabilityDisclosureRow() {
+        const cat = this.activeCategory;
+        if (cat === 'all') return '';
+        const statusFilter = document.getElementById('statusSelect')?.value || 'available';
+        const counts = { evidence: 0, declared: 0, not_eligible: 0, unknown: 0 };
+        for (const model of this.allModels) {
+            const isGone = model.deployment?.status === 'gone';
+            if (statusFilter === 'available' && isGone) continue;
+            if (statusFilter === 'gone' && !isGone) continue;
+            counts[this.capabilityEvidence(model, cat).tier] += 1;
+        }
+        const hidden = counts.unknown + counts.not_eligible;
+        const shown = counts.evidence + counts.declared;
+        return `<tr class="capability-disclosure"><td colspan="9">
+            <span><strong>${escapeHtml(cat)}</strong>: ${counts.evidence} with benchmark evidence · ${counts.declared} declared by tag · ${counts.unknown} unknown · ${counts.not_eligible} not eligible for benchmark.</span>
+            ${hidden ? `<span class="capability-disclosure-note">${hidden} model${hidden === 1 ? '' : 's'} ${this.includeUnknownCapability ? 'shown although' : 'hidden because'} nothing records this capability; unknown is not "not capable".</span>
+            <button type="button" class="btn-link" id="capabilityUnknownToggle">${this.includeUnknownCapability ? 'Hide unknown' : 'Show unknown'}</button>` : ''}
+            ${!shown && !hidden ? '<span class="capability-disclosure-note">No model in scope.</span>' : ''}
+        </td></tr>`;
+    }
+
     renderTable() {
         if (!this.tableBodyEl) return;
         this.tableBodyEl.innerHTML = '';
+        const disclosure = this.capabilityDisclosureRow();
+        if (disclosure) {
+            this.tableBodyEl.insertAdjacentHTML('beforeend', disclosure);
+            this.tableBodyEl.querySelector('#capabilityUnknownToggle')?.addEventListener('click', () => {
+                this.includeUnknownCapability = !this.includeUnknownCapability;
+                this.applyFilters();
+            });
+        }
         if (this.filteredModels.length === 0) {
-            this.tableBodyEl.innerHTML = '<tr><td colspan="9" class="text-center p-4" style="color:var(--muted);">No models found</td></tr>';
+            this.tableBodyEl.insertAdjacentHTML('beforeend', `<tr><td colspan="9" class="text-center p-4" style="color:var(--muted);">${this.activeCategory === 'all' ? 'No models found' : `No model has a tag or benchmark evidence for ${escapeHtml(this.activeCategory)} — the rest are unknown, not excluded as incapable.`}</td></tr>`);
             return;
         }
 
@@ -601,10 +670,11 @@ class UnifiedModels {
 
         // Categories
         const cats = (model.categories || []).slice(0, 3);
-        const catBadges = cats.map(c => {
+        const catBadges = (cats.map(c => {
             const col = CAT_COLORS[c] || CAT_COLORS.generalist;
             return `<span class="cat-badge" style="background:${col.bg}; border-color:${col.border}; color:${col.text};">${escapeHtml(c)}</span>`;
-        }).join('') || '<span style="color:var(--muted); font-size:12px;">--</span>';
+        }).join('') || '<span style="color:var(--muted); font-size:12px;">--</span>')
+            + (this.activeCategory !== 'all' ? ` ${this.capabilityTierBadge(model, this.activeCategory)}` : '');
 
         // Benchmark score
         const score = model.benchmarkStats?.avgCompositeScore;

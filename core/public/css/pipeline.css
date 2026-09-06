@@ -1775,3 +1775,15 @@ body.pipeline-drawer-open {
     animation: none;
   }
 }
+
+/* Mark superseded: previewed, confirmed, cancellable closure. */
+.pipeline-chip-superseded { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: #c4b5fd; border: 1px solid rgba(196,181,253,0.35); background: rgba(196,181,253,0.08); }
+.pipeline-chip-superseded a { color: inherit; }
+.pipeline-drawer-resolution { margin: 10px 0 14px; padding: 10px 12px; border-left: 3px solid #c4b5fd; border-radius: 8px; background: rgba(196,181,253,0.06); font-size: 13px; line-height: 1.5; }
+.pipeline-drawer-resolution .pipeline-muted { color: var(--muted); font-size: 12px; }
+.pipeline-supersede-preview { border-color: rgba(196,181,253,0.35); }
+.pipeline-supersede-preview[data-supersede-preview="blocked"] { border-color: rgba(248,113,113,0.4); }
+.pipeline-supersede-checks { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 4px; font-size: 12px; }
+.pipeline-supersede-checks li[data-ok="true"] i { color: #4ade80; }
+.pipeline-supersede-checks li[data-ok="false"] i { color: #f87171; }
+.pipeline-drawer-action-row { display: flex; gap: 8px; flex-wrap: wrap; }

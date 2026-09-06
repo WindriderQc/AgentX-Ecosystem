@@ -75,10 +75,14 @@
         { label: 'Courthouse',       href: benchBase + '/courthouse',      icon: 'fa-gavel',      id: 'courthouse' },
         { label: 'Results Explorer', href: benchBase + '/results-explorer', icon: 'fa-table-list', id: 'results-explorer' },
         { label: 'Efficiency Map',   href: benchBase + '/efficiency-map',  icon: 'fa-bolt',       id: 'efficiency-map' },
-        { section: 'Experimental & frozen' },
+        { section: 'Experimental' },
         { label: 'Council',          href: coreBase + '/council',          icon: 'fa-users',           id: 'council' },
         { label: 'Prompts',          href: coreBase + '/prompts',          icon: 'fa-pen-fancy',       id: 'prompts' },
-        { label: 'Planning · frozen', href: coreBase + '/planning',        icon: 'fa-snowflake',       id: 'planning' }
+        /* Frozen history stays reachable at its stable route, out of the
+           daily journey: Pipeline is the execution authority. */
+        { section: 'History & reference' },
+        { label: 'Planning · frozen', href: coreBase + '/planning',        icon: 'fa-snowflake',       id: 'planning',
+          description: 'Historical strategy and evidence reference. Frozen: current delivery lives in Pipeline.' }
       ]
     }
   ];

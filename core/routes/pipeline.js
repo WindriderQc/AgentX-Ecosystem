@@ -379,7 +379,22 @@ router.post('/tasks/:id/status', requirePipelineStatusAccess, async (req, res) =
     const current = await PipelineTask.findOne({ pipelineId: req.params.id });
     if (!current) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
 
+    // A superseded task never leaves `done` by accident: reopening it is a
+    // separate, explicit decision.
+    if (current.resolution?.kind === 'superseded' && status !== 'done' && b.reopen !== true) {
+      return envelope.error(
+        res,
+        409,
+        `Task ${current.pipelineId} was superseded by ${current.resolution.supersededBy}; pass reopen:true to reopen it deliberately`,
+        'TASK_SUPERSEDED'
+      );
+    }
+
     const update = { $set: { status } };
+    if (current.resolution?.kind === 'superseded' && status !== 'done' && b.reopen === true) {
+      update.$unset = { ...(update.$unset || {}), resolution: 1 };
+      update.$push = { feedback: { by: String(b.by || 'operator'), text: `Reopened after supersession by ${current.resolution.supersededBy}.`, at: new Date() } };
+    }
     // Re-queue means release. Keeping the previous worker and heartbeat here
     // creates a queued-but-unclaimable zombie because both /next and /claim
     // intentionally require assignee:null.
@@ -470,6 +485,78 @@ router.post('/tasks/:id/status', requirePipelineStatusAccess, async (req, res) =
 });
 
 // Submit feedback. "done" sends it to REVIEW (overseer-gated). POST .../tasks/:id/feedback { text, status?, by? }
+/**
+ * Supersede: close a task in favour of its replacement with an explicit,
+ * signed reason. Without `confirm: true` the route returns a preview of the
+ * exact transition and every check, and touches nothing, so the operator can
+ * cancel. With `confirm: true` and every check passing it moves the task to
+ * `done`, records an immutable `resolution`, appends the decision to both
+ * tasks' audit trails, and never re-queues anything. A superseded task cannot
+ * leave `done` through /status without an explicit `reopen: true`.
+ */
+router.post('/tasks/:id/supersede', requirePipelineStatusAccess, async (req, res) => {
+  const b = req.body || {};
+  const supersededBy = String(b.supersededBy || '').trim();
+  const reason = String(b.reason || '').trim();
+  const by = String(b.by || '').trim();
+  const confirm = b.confirm === true;
+  try {
+    const current = await PipelineTask.findOne({ pipelineId: req.params.id });
+    if (!current) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
+    const replacement = supersededBy && supersededBy !== current.pipelineId
+      ? await PipelineTask.findOne({ pipelineId: supersededBy })
+      : null;
+
+    const checks = [
+      { id: 'replacement_required', ok: Boolean(supersededBy), detail: supersededBy ? `Replacement: ${supersededBy}` : 'A replacement task id is required.' },
+      { id: 'replacement_differs', ok: Boolean(supersededBy) && supersededBy !== current.pipelineId, detail: supersededBy === current.pipelineId ? 'A task cannot supersede itself.' : 'Replacement is a different task.' },
+      { id: 'replacement_exists', ok: Boolean(replacement), detail: replacement ? `${replacement.pipelineId} · ${replacement.status}${replacement.title ? ` · ${replacement.title}` : ''}` : 'Replacement task not found.' },
+      { id: 'replacement_not_superseded', ok: Boolean(replacement) && replacement.resolution?.kind !== 'superseded', detail: replacement?.resolution?.kind === 'superseded' ? `${replacement.pipelineId} was itself superseded by ${replacement.resolution.supersededBy}.` : 'Replacement is not itself superseded.' },
+      { id: 'reason_required', ok: reason.length >= 8, detail: reason.length >= 8 ? 'Reason recorded verbatim in both audit trails.' : 'A reason of at least 8 characters is required.' },
+      { id: 'decision_signed', ok: Boolean(by), detail: by ? `Decided by ${by}` : 'A human identity must sign the decision.' },
+      { id: 'not_already_closed', ok: current.status !== 'done', detail: current.status === 'done' ? `Task is already done${current.resolution?.kind === 'superseded' ? ` (superseded by ${current.resolution.supersededBy})` : ''}.` : `Current status: ${current.status}.` },
+      { id: 'no_active_automation_lease', ok: !current.automationLease?.leaseId, detail: current.automationLease?.leaseId ? 'An automation lease is active; release it first.' : 'No automation lease.' },
+    ];
+    const blocked = checks.filter((check) => !check.ok).map((check) => check.id);
+    const transition = {
+      pipelineId: current.pipelineId,
+      from: current.status,
+      to: 'done',
+      resolution: { kind: 'superseded', supersededBy: supersededBy || null, reason: reason || null, by: by || null },
+      clearsHeartbeat: Boolean(current.heartbeatAt),
+      keepsAssignee: current.assignee || null,
+      requeue: false,
+      reopen: 'only through /status with reopen:true',
+    };
+
+    if (!confirm) {
+      return envelope.success(res, { preview: true, applied: false, ok: blocked.length === 0, blocked, checks, transition });
+    }
+    if (blocked.length) {
+      return envelope.error(res, 409, `Cannot supersede ${current.pipelineId}: ${blocked.join(', ')}`, 'SUPERSEDE_BLOCKED');
+    }
+
+    const at = new Date();
+    const resolution = { kind: 'superseded', supersededBy, reason, by, at };
+    const updated = await PipelineTask.findOneAndUpdate(
+      { pipelineId: current.pipelineId, status: current.status },
+      {
+        $set: { status: 'done', resolution, heartbeatAt: null },
+        $push: { feedback: { by, text: `Superseded by ${supersededBy}: ${reason}`, at } },
+      },
+      { new: true }
+    );
+    if (!updated) return envelope.error(res, 409, 'Task changed while superseding; preview it again', 'SUPERSEDE_CONFLICT');
+    await PipelineTask.updateOne(
+      { pipelineId: supersededBy },
+      { $push: { feedback: { by, text: `Supersedes ${current.pipelineId}: ${reason}`, at } } }
+    );
+    return envelope.success(res, { preview: false, applied: true, checks, transition, task: updated });
+  } catch (err) {
+    return envelope.error(res, 500, err.message, 'SUPERSEDE_FAILED');
+  }
+});
+
 router.post('/tasks/:id/feedback', requirePipelineWorkerAccess, async (req, res) => {
   const b = req.body || {};
   const text = feedbackTextFromBody(b);

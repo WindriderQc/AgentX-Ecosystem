@@ -1381,6 +1381,29 @@
       `);
     }
     if (task.status !== 'done') {
+      // Supersede is a two-step human decision: preview the exact transition
+      // and its checks first (no mutation), then confirm or cancel.
+      actions.push(`
+        <form class="pipeline-drawer-action" data-drawer-action="supersede-preview">
+          <p><strong>Mark superseded</strong><br>Close this task in favour of its replacement. Nothing is re-queued; the decision is written to both audit trails and the task can only be reopened deliberately.</p>
+          <label>
+            <span>Replaced by (pipeline id)</span>
+            <input type="text" name="supersededBy" required maxlength="16" pattern="[0-9A-Za-z_-]+" placeholder="e.g. 0620" value="${escapeHtml(state.drawer.supersede?.supersededBy || '')}">
+          </label>
+          <label>
+            <span>Reason</span>
+            <textarea name="reason" rows="2" maxlength="2000" minlength="8" required placeholder="Why this task no longer applies and what replaces it">${escapeHtml(state.drawer.supersede?.reason || '')}</textarea>
+          </label>
+          <label>
+            <span>Decided by</span>
+            <input type="text" name="by" required maxlength="80" placeholder="your identity, e.g. yanik" value="${escapeHtml(reviewer)}">
+          </label>
+          <button type="submit" class="pipeline-btn compact"><i class="fas fa-code-branch"></i><span>Preview supersede</span></button>
+        </form>
+        ${renderSupersedePreview(task)}
+      `);
+    }
+    if (task.status !== 'done') {
       actions.push(`
         <form class="pipeline-drawer-action" data-drawer-action="add-note">
           <label>
@@ -1392,8 +1415,10 @@
       `);
     }
 
+    const resolution = task.resolution && task.resolution.kind === 'superseded' ? task.resolution : null;
     body.innerHTML = `
-      <div class="pipeline-drawer-status">${statusBadge(task.status)} ${priorityChip(task.priority)} ${riskChip(task.risk)}</div>
+      <div class="pipeline-drawer-status">${statusBadge(task.status)} ${priorityChip(task.priority)} ${riskChip(task.risk)}${resolution ? ` <span class="pipeline-chip pipeline-chip-superseded" title="${escapeHtml(resolution.reason || '')}"><i class="fas fa-code-branch" aria-hidden="true"></i> Superseded by <a href="/pipeline?task=${encodeURIComponent(resolution.supersededBy)}">#${escapeHtml(resolution.supersededBy)}</a></span>` : ''}</div>
+      ${resolution ? `<div class="pipeline-drawer-resolution"><strong>Superseded</strong> by <code>${escapeHtml(resolution.supersededBy)}</code> · ${escapeHtml(resolution.by || 'operator')} · ${escapeHtml(formatDate(resolution.at))}<br>${escapeHtml(resolution.reason || '')}<br><span class="pipeline-muted">Closed without delivery. Reopening requires an explicit decision; it never re-queues by itself.</span></div>` : ''}
       <dl class="pipeline-drawer-meta">
         ${metaRow('Owner', escapeHtml(task.assignee || 'unassigned'))}
         ${metaRow('Service', escapeHtml(task.service || '--'))}
@@ -1441,11 +1466,69 @@
     } catch { /* the list refresh below still reflects truth */ }
   }
 
+  /**
+   * Preview panel for a pending supersede decision: the exact transition,
+   * every server-side check, and explicit confirm / cancel controls. Rendered
+   * only while a preview is held in drawer state; nothing has been applied.
+   */
+  function renderSupersedePreview(task) {
+    const preview = state.drawer.supersede?.preview;
+    if (!preview || state.drawer.supersede.pipelineId !== task.pipelineId) return '';
+    const t = preview.transition || {};
+    const checks = Array.isArray(preview.checks) ? preview.checks : [];
+    return `
+      <div class="pipeline-drawer-action pipeline-supersede-preview" data-supersede-preview="${preview.ok ? 'ok' : 'blocked'}">
+        <p><strong>Preview</strong> — nothing has changed yet.</p>
+        <p><code>#${escapeHtml(t.pipelineId || task.pipelineId)}</code> ${escapeHtml(t.from || task.status)} → <strong>${escapeHtml(t.to || 'done')}</strong> · superseded by <code>#${escapeHtml(t.resolution?.supersededBy || '')}</code> · decided by ${escapeHtml(t.resolution?.by || '')}<br>
+        ${t.keepsAssignee ? `Owner ${escapeHtml(t.keepsAssignee)} stays on record. ` : ''}${t.clearsHeartbeat ? 'The heartbeat is cleared. ' : ''}No re-queue. Reopen ${escapeHtml(t.reopen || 'only deliberately')}.</p>
+        <ul class="pipeline-supersede-checks">
+          ${checks.map((check) => `<li data-check="${escapeHtml(check.id)}" data-ok="${check.ok ? 'true' : 'false'}"><i class="fas ${check.ok ? 'fa-circle-check' : 'fa-circle-xmark'}" aria-hidden="true"></i> ${escapeHtml(check.id.replace(/_/g, ' '))}: ${escapeHtml(check.detail || '')}</li>`).join('')}
+        </ul>
+        <div class="pipeline-drawer-action-row">
+          <form data-drawer-action="supersede-confirm" style="display:inline">
+            <button type="submit" class="pipeline-btn primary compact" ${preview.ok ? '' : 'disabled'}><i class="fas fa-check"></i><span>Confirm supersede</span></button>
+          </form>
+          <button type="button" class="pipeline-btn compact" data-drawer-action="supersede-cancel"><i class="fas fa-xmark"></i><span>Cancel</span></button>
+        </div>
+      </div>`;
+  }
+
   async function handleDrawerAction(action, form) {
     const pipelineId = state.drawer.pipelineId;
     if (!pipelineId) return;
     try {
-      if (action === 'confirm-done') {
+      if (action === 'supersede-preview') {
+        const data = new FormData(form);
+        const supersededBy = String(data.get('supersededBy') || '').trim();
+        const reason = String(data.get('reason') || '').trim();
+        const by = String(data.get('by') || '').trim();
+        if (!supersededBy || !reason || !by) return;
+        writeStorage(STORAGE_REVIEWER, by);
+        const payload = await fetchJson(`/api/pipeline/tasks/${encodeURIComponent(pipelineId)}/supersede`, {
+          method: 'POST',
+          body: JSON.stringify({ supersededBy, reason, by })
+        });
+        const preview = payload && payload.data ? payload.data : null;
+        state.drawer.supersede = { pipelineId, supersededBy, reason, by, preview };
+        if (state.drawer.task) renderDrawer(state.drawer.task);
+        toast(preview?.ok ? 'info' : 'error', preview?.ok
+          ? `Preview ready for task ${pipelineId}; confirm or cancel.`
+          : `Supersede blocked: ${(preview?.blocked || []).join(', ') || 'checks failed'}.`);
+        return;
+      } else if (action === 'supersede-cancel') {
+        state.drawer.supersede = null;
+        if (state.drawer.task) renderDrawer(state.drawer.task);
+        return;
+      } else if (action === 'supersede-confirm') {
+        const pending = state.drawer.supersede;
+        if (!pending || pending.pipelineId !== pipelineId || !pending.preview?.ok) return;
+        await fetchJson(`/api/pipeline/tasks/${encodeURIComponent(pipelineId)}/supersede`, {
+          method: 'POST',
+          body: JSON.stringify({ supersededBy: pending.supersededBy, reason: pending.reason, by: pending.by, confirm: true })
+        });
+        state.drawer.supersede = null;
+        toast('success', `Task ${pipelineId} superseded by ${pending.supersededBy}.`);
+      } else if (action === 'confirm-done') {
         const by = String(new FormData(form).get('by') || '').trim();
         if (!by) return;
         writeStorage(STORAGE_REVIEWER, by);
@@ -1683,6 +1766,8 @@
       if (closer) { closeDrawer(); return; }
       const requeue = event.target.closest('button[data-drawer-action="requeue"]');
       if (requeue) { handleDrawerAction('requeue', null); return; }
+      const cancelSupersede = event.target.closest('button[data-drawer-action="supersede-cancel"]');
+      if (cancelSupersede) { handleDrawerAction('supersede-cancel', null); return; }
       const merge = event.target.closest('button[data-delivery-merge]');
       if (merge) { mergeDeliveryItem(merge); return; }
       const taskEl = event.target.closest('[data-pipeline-task]');
