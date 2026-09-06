@@ -15,7 +15,7 @@ const InferenceLogSchema = new mongoose.Schema({
   // Caller identity
   caller: {
     type: String,
-    enum: ['chat', 'benchmark', 'embedding', 'classification', 'proxy', 'unknown'],
+    enum: ['chat', 'council', 'benchmark', 'embedding', 'classification', 'proxy', 'unknown'],
     default: 'unknown'
   },
   callerDetail: { type: String, default: null },    // agent ID, task ID, cron job name, etc.

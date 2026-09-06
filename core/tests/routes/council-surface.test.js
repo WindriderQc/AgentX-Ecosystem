@@ -31,7 +31,16 @@ describe('AgentX Council surface', () => {
     linkedSources.forEach((source) => expect(source).toMatch(/\/council/));
     expect(read('core/public/portal/index.html')).not.toMatch(/href="http:\/\/localhost:3080\/council"/);
     expect(read('core/views/pages/chat.ejs')).toContain('id="roundtableBtn"');
-    expect(read('core/views/pages/chat.ejs')).toContain('Ask Council');
+    // The Playground button is an explicit handoff, never a convening action:
+    // it must not promise a Council answer it cannot produce in place.
+    expect(read('core/views/pages/chat.ejs')).toContain('aria-label="Open in Council"');
+    expect(read('core/views/pages/chat.ejs')).not.toContain('aria-label="Ask Council"');
+    const chatMain = read('core/public/js/chat/chat-main.js');
+    expect(chatMain).not.toContain("window.open('/council");
+    expect(chatMain).toContain("'/council?question=' + encodeURIComponent(text) + '&source=playground'");
+    expect(chatMain).toContain("link.rel = 'noopener'");
+    expect(chatMain).toContain('Question handed to Council in a new tab');
+    expect(read('core/public/js/roundtable.js')).toContain("get('source') === 'playground' ? 'playground-handoff' : 'web-ui'");
     expect(read('core/views/pages/roundtable.ejs')).toContain('Council is advisory');
   });
 
