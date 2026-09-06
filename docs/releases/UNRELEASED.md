@@ -4,6 +4,46 @@ Status: working-tree and `main` hardening after v0.1.1. These changes have no
 new version, release tag, or published release manifest yet and are not part of
 v0.1.1.
 
+## Signal evidence and honest surfaces (product review remediation, 2026-09-06)
+
+- New Signal Evidence Contract v1 (`shared/signalEvidence.js`, bundled for the
+  browser as `/dist/signal-evidence.js`): one shape for every rendered rate,
+  average, count, delta and ranking with explicit evidence states, sample
+  size, provenance, freshness and a deterministic rendering projection. A zero
+  is printed only when measured, an empty denominator never yields a
+  percentage, a ranking names a best only with two comparable candidates and
+  no tie, and freshness is unknown without a timestamp.
+- Activity: classifier time, RAG adoption, RAG-versus-non-RAG delta and the
+  cost-efficiency ranking render contract signals (`—` / Not observed, Low
+  sample with n, no Best without a comparator); the inference summary,
+  rag-stats and costs routes publish additive `signals` blocks and return
+  `null` rather than `0` on empty denominators.
+- Playground: the Council button is an explicit `Open in Council` handoff
+  (anchor navigation, in-chat feedback, `source=playground`), and private
+  reasoning renders only when Thinking is forced, inside a closed disclosure.
+- Council participant turns and synthesis are recorded as inference
+  telemetry (`caller: council`, `core-council-v1`, correlation by roundtable
+  id) without prompt, response or reasoning. RAG `POST /search` records
+  bounded search events and `GET /telemetry/search/summary` reports them
+  under the contract.
+- Navigation parity: validated deployment launchers are republished in
+  `GET /api/config` (`navigation.trustedRuntimeNavItems`, with optional
+  `owner` and `description`), Benchmark and RAG render the same
+  `External runtimes` entries as Core, and the portal lists them with an
+  honest empty state. Frozen Planning moves under `History & reference`.
+- RAG status reports corpus `freshness` (fresh, stale or unknown) from its
+  ingest history under a declared rule; Activity and Nerve Center render it
+  separately from readiness. Nerve Center distinguishes an unreachable
+  Benchmark from a reachable one whose drift endpoint failed and shows the
+  functional judge readiness. Dreaming Review cross-checks the active
+  `memory_review_no_eligible_evidence` alert and shows cadence facts.
+- Pipeline: a previewed, confirmed, cancellable `Mark superseded` action
+  closes a task in favour of its replacement with an immutable resolution and
+  audit entries on both tasks; superseded tasks cannot be re-queued without an
+  explicit reopen. Models category filters classify capability evidence as
+  evidence, declared, not eligible or unknown, and never present unknown as
+  incapable.
+
 ## Product trust and experience
 
 - Core now coordinates deployment maintenance and every Benchmark workload

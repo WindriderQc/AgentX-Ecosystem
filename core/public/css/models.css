@@ -1240,3 +1240,13 @@
     .rec-chips { gap: 4px; }
     .rec-chip { font-size: 10px; padding: 3px 7px; }
 }
+
+/* Capability evidence tiers (Models category filters): declared, evidence,
+   not eligible and unknown are different facts and are labelled as such. */
+.cat-tier { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; border: 1px solid rgba(255,255,255,0.14); color: var(--muted); }
+.cat-tier-evidence { color: #4ade80; border-color: rgba(74,222,128,0.4); }
+.cat-tier-declared { color: #7cf0ff; border-color: rgba(124,240,255,0.35); }
+.cat-tier-not_eligible { color: #f87171; border-color: rgba(248,113,113,0.4); }
+.capability-disclosure td { padding: 10px 12px; font-size: 12px; color: var(--muted); background: rgba(255,255,255,0.03); }
+.capability-disclosure .capability-disclosure-note { margin-left: 8px; }
+.capability-disclosure .btn-link { margin-left: 8px; background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; }

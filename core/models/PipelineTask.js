@@ -7,6 +7,16 @@ const FeedbackSchema = new mongoose.Schema({
   text: String,
 }, { _id: false });
 
+// Why a task was closed without being delivered. Set once by the guarded
+// supersede action; the matching feedback entry keeps the immutable history.
+const ResolutionSchema = new mongoose.Schema({
+  kind: { type: String, enum: ['superseded'], required: true },
+  supersededBy: { type: String, required: true },
+  reason: { type: String, required: true },
+  by: { type: String, required: true },
+  at: { type: Date, required: true },
+}, { _id: false });
+
 const AutomationBudgetSchema = new mongoose.Schema({
   maxDurationMs: { type: Number, required: true, min: 1 },
   maxAttempts: { type: Number, required: true, min: 1, max: 10 },
@@ -159,6 +169,7 @@ const PipelineTaskSchema = new mongoose.Schema({
   }],
   scheduleEntryIds: { type: [String], default: [] },   // ClusterScheduleEntry.sourceId
   feedback: { type: [FeedbackSchema], default: [] },
+  resolution: { type: ResolutionSchema, default: undefined },
   source: { type: String, default: 'api' },
   // Optional caller-owned idempotency key. The compound partial index lets a
   // reviewed memory candidate safely retry task creation after a lost reply.
