@@ -84,6 +84,7 @@ jobs:
         run: >-
           node --test
           shared/artifactRuntimeIdentity.test.js
+          shared/signalEvidence.test.js
           shared/benchmarkTrustReceipt.test.js
           shared/benchmarkTrustRatificationAttestation.test.js
           shared/benchmarkHumanEvidenceAttestation.test.js

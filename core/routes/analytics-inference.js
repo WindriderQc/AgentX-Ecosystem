@@ -34,6 +34,18 @@ const envelope = require('../src/helpers/responseEnvelope');
 const logger = require('../config/logger');
 const { isCloudCall, modelProvider } = require('../src/services/budgetAccountingService');
 const { resolvePricing } = require('../src/services/costCalculator');
+const {
+  averageSignal,
+  ratioSignal,
+  serializeSignal
+} = require('../../shared/signalEvidence');
+
+/**
+ * A summary is computed on demand from `inferencelogs`; a rendered copy older
+ * than this should be refreshed rather than trusted as current. Declared here
+ * so the freshness rule travels with the signal instead of hiding in a page.
+ */
+const SUMMARY_TTL_MS = 5 * 60 * 1000;
 
 const WINDOWS = {
   '24h': 24,
@@ -345,9 +357,10 @@ router.get('/summary', async (req, res) => {
         totalTokens: (row.tokensIn || 0) + tokensOut,
         inferenceSeconds: round(seconds),
         avgLatencyMs: calls > 0 ? Math.round((row.durationMs || 0) / calls) : 0,
+        // null, never 0: a row with no classified call has no classifier time.
         avgClassificationMs: row.classifiedCalls > 0
           ? Math.round((row.classificationMs || 0) / row.classifiedCalls)
-          : 0,
+          : null,
         // Real generation throughput, the number that actually tells you
         // whether a model is worth its VRAM.
         tokensOutPerSecond: seconds > 0 ? round(tokensOut / seconds) : 0
@@ -380,10 +393,52 @@ router.get('/summary', async (req, res) => {
 
     const totalSeconds = (t.durationMs || 0) / 1000;
 
+    // Classifier evidence under the Signal Evidence Contract: with zero
+    // classified calls there is no average to report, so the signal is
+    // `missing` and the raw fields are null rather than a fabricated 0.
+    const classifiedCalls = t.classifiedCalls || 0;
+    const signalBase = {
+      scope: { window: key },
+      source: 'inferencelogs',
+      observedAt: to,
+      ttlMs: SUMMARY_TTL_MS,
+      drilldown: `/api/analytics/inference/logs?from=${from.toISOString()}&to=${to.toISOString()}`
+    };
+    const classifierSignals = {
+      avgClassificationMs: averageSignal({
+        ...signalBase,
+        id: 'analytics.inference.avg_classification_ms',
+        sum: t.classificationMs || 0,
+        count: classifiedCalls,
+        unit: 'ms',
+        reason: classifiedCalls > 0 ? null : 'no_classified_calls',
+        detail: classifiedCalls > 0 ? null : 'No call invoked the classifier in this window.'
+      }),
+      avgTotalForClassifiedMs: averageSignal({
+        ...signalBase,
+        id: 'analytics.inference.avg_total_for_classified_ms',
+        sum: t.classifiedDurationMs || 0,
+        count: classifiedCalls,
+        unit: 'ms',
+        reason: classifiedCalls > 0 ? null : 'no_classified_calls'
+      }),
+      classificationOverheadPct: ratioSignal({
+        ...signalBase,
+        id: 'analytics.inference.classification_overhead_pct',
+        numerator: t.classificationMs || 0,
+        denominator: t.classifiedDurationMs || 0,
+        unit: 'percent',
+        reason: classifiedCalls > 0 ? null : 'no_classified_calls'
+      })
+    };
+
     envelope.success(res, {
       window: { key, from, to },
       source: 'inferencelogs',
       scope: 'Every AgentX-routed inference call: chat, proxy, embedding, classification, benchmark.',
+      signals: Object.fromEntries(
+        Object.entries(classifierSignals).map(([key, signal]) => [key, serializeSignal(signal)])
+      ),
       totals: {
         calls: t.calls,
         errors: t.errors,
@@ -403,14 +458,18 @@ router.get('/summary', async (req, res) => {
         inferenceSeconds: round(totalSeconds),
         inferenceHours: round(totalSeconds / 3600),
         avgLatencyMs: t.calls > 0 ? Math.round((t.durationMs || 0) / t.calls) : 0,
-        classifiedCalls: t.classifiedCalls || 0,
-        avgClassificationMs: t.classifiedCalls > 0
-          ? Math.round((t.classificationMs || 0) / t.classifiedCalls)
-          : 0,
-        avgTotalForClassifiedMs: t.classifiedCalls > 0
-          ? Math.round((t.classifiedDurationMs || 0) / t.classifiedCalls)
-          : 0,
-        classificationOverheadPct: rate(t.classificationMs || 0, t.classifiedDurationMs || 0),
+        classifiedCalls,
+        // null (not 0) when nothing was classified — the same semantics the
+        // Nerve Center routing summary already uses for this signal.
+        avgClassificationMs: classifiedCalls > 0
+          ? Math.round((t.classificationMs || 0) / classifiedCalls)
+          : null,
+        avgTotalForClassifiedMs: classifiedCalls > 0
+          ? Math.round((t.classifiedDurationMs || 0) / classifiedCalls)
+          : null,
+        classificationOverheadPct: (t.classifiedDurationMs || 0) > 0
+          ? rate(t.classificationMs || 0, t.classifiedDurationMs || 0)
+          : null,
         tokensOutPerSecond: totalSeconds > 0 ? round(t.tokensOut / totalSeconds) : 0,
         callsPerDay: round(t.calls / (WINDOWS[key] / 24), 1)
       },

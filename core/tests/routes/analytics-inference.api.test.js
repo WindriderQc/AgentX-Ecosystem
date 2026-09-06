@@ -15,6 +15,7 @@ jest.mock('../../src/services/costCalculator', () => ({
 const InferenceLog = require('../../models/InferenceLog');
 const { resolvePricing } = require('../../src/services/costCalculator');
 const router = require('../../routes/analytics-inference');
+const { validateSignal } = require('../../../shared/signalEvidence');
 
 function app() {
   const instance = express();
@@ -229,6 +230,40 @@ describe('inference analytics summary', () => {
     expect(res.body.data.totals.tokensOutPerSecond).toBe(0);
   });
 
+  test('reports classifier time as not observed, never 0ms, when no call was classified', async () => {
+    InferenceLog.aggregate.mockResolvedValue(facet({
+      totals: [{ calls: 5800, errors: 104, tokensIn: 0, tokensOut: 0, durationMs: 10000, fallbacks: 0,
+        classificationMs: 0, classifiedCalls: 0, classifiedDurationMs: 0 }],
+      byModel: [{ _id: 'qwen3.8:27b', calls: 5800, errors: 104, tokensIn: 0, tokensOut: 0, durationMs: 10000,
+        fallbacks: 0, classificationMs: 0, classifiedCalls: 0, hosts: [] }]
+    }));
+
+    const res = await request(server).get('/api/analytics/inference/summary?window=7d');
+    const { totals, signals, byModel } = res.body.data;
+
+    expect(totals.classifiedCalls).toBe(0);
+    expect(totals.avgClassificationMs).toBeNull();
+    expect(totals.avgTotalForClassifiedMs).toBeNull();
+    expect(totals.classificationOverheadPct).toBeNull();
+    expect(byModel[0].avgClassificationMs).toBeNull();
+
+    for (const signal of Object.values(signals)) expect(validateSignal(signal)).toEqual({ ok: true, errors: [] });
+    expect(signals.avgClassificationMs).toMatchObject({
+      id: 'analytics.inference.avg_classification_ms',
+      state: 'missing',
+      value: null,
+      unit: 'ms',
+      reason: 'no_classified_calls',
+      source: 'inferencelogs',
+      sample: { n: 0 },
+      scope: { window: '7d' },
+    });
+    expect(signals.avgClassificationMs.freshness.state).toBe('fresh');
+    expect(signals.avgClassificationMs.drilldown).toMatch(/^\/api\/analytics\/inference\/logs\?from=/);
+    expect(signals.classificationOverheadPct).toMatchObject({ state: 'missing', value: null, reason: 'no_classified_calls' });
+    expect(JSON.stringify(signals)).not.toMatch(/https?:\/\//);
+  });
+
   test('exposes task, fallback, degraded, and classifier-vs-total analytics', async () => {
     InferenceLog.aggregate.mockResolvedValue(facet({
       totals: [{
@@ -248,6 +283,13 @@ describe('inference analytics summary', () => {
       avgTotalForClassifiedMs: 2000,
       classificationOverheadPct: 10,
     }));
+    expect(res.body.data.signals.avgClassificationMs).toMatchObject({
+      state: 'observed', value: 200, unit: 'ms', sample: { n: 2, numerator: 400, denominator: 2 }
+    });
+    expect(res.body.data.signals.avgTotalForClassifiedMs).toMatchObject({ state: 'observed', value: 2000 });
+    expect(res.body.data.signals.classificationOverheadPct).toMatchObject({
+      state: 'observed', value: 10, unit: 'percent', sample: { numerator: 400, denominator: 4000 }
+    });
     expect(res.body.data.byTaskType[0].taskType).toBe('analysis');
     expect(res.body.data.byConsumerContract[0]).toMatchObject({
       consumerContract: 'hermes-runtime-v1', calls: 24, errorRate: 29.17

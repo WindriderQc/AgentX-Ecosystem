@@ -1,4 +1,25 @@
-const { parseCompactNumber, observedLabel } = require('../../public/js/analytics-experience');
+const { parseCompactNumber, observedLabel, knowledgeUsagePhrase } = require('../../public/js/analytics-experience');
+
+describe('analytics experience knowledge-usage phrase', () => {
+  test('repeats a low-sample rate with its n instead of presenting it as adoption', () => {
+    expect(knowledgeUsagePhrase('100.0%', 'insufficient_sample', 'n=1 of 5 needed'))
+      .toBe('100.0% of conversations used knowledge (low sample, n=1 of 5 needed)');
+  });
+
+  test('phrases an observed rate plainly', () => {
+    expect(knowledgeUsagePhrase('42.0%', 'observed', 'n=50')).toBe('42.0% of conversations used knowledge');
+    expect(knowledgeUsagePhrase('42.0%', undefined, undefined)).toBe('42.0% of conversations used knowledge');
+  });
+
+  test.each(['missing', 'unavailable', 'disabled', 'not_applicable', 'stale'])('never phrases a %s tile as usage', (state) => {
+    expect(knowledgeUsagePhrase('100.0%', state, 'n=0')).toBeNull();
+  });
+
+  test('never phrases the placeholder as usage', () => {
+    expect(knowledgeUsagePhrase('—', 'missing', 'n=0')).toBeNull();
+    expect(knowledgeUsagePhrase('', undefined, undefined)).toBeNull();
+  });
+});
 
 describe('analytics experience number parsing', () => {
   test.each([

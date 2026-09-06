@@ -3,6 +3,7 @@ import esbuild from 'esbuild';
 await esbuild.build({
   entryPoints: [
     'src/frontend/shared-utils.js',
+    'src/frontend/signal-evidence.js',
     'src/frontend/shared-tokens.css',
   ],
   bundle: true,
