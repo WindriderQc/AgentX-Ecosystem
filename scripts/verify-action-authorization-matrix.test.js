@@ -16,15 +16,15 @@ function clone(value) {
 
 test('the checked-in matrix audits every non-safe route and preserves a zero-gap receipt', () => {
   const receipt = verifyActionAuthorizationMatrix();
-  assert.equal(receipt.total, 266);
-  assert.deepEqual(receipt.byService, { core: 168, benchmark: 83, rag: 15 });
+  assert.equal(receipt.total, 267);
+  assert.deepEqual(receipt.byService, { core: 169, benchmark: 83, rag: 15 });
   assert.deepEqual(receipt.byClassification, {
     'user-mutation': 125,
-    'scoped-machine-call': 49,
+    'scoped-machine-call': 50,
     'action-observation': 35,
     'destructive-mutation': 57,
   });
-  assert.deepEqual(receipt.byEnforcementStatus, { enforced: 265, disabled: 1 });
+  assert.deepEqual(receipt.byEnforcementStatus, { enforced: 266, disabled: 1 });
   assert.equal(receipt.gapRoutes.length, 0);
 });
 
@@ -36,7 +36,7 @@ test('distinguishes consequence tiers and requires exact phrases only for irreve
     'ephemeral-maintenance': 1,
   });
   assert.deepEqual(receipt.byTypedConfirmation, {
-    'not-required': 223,
+    'not-required': 224,
     enforced: 43,
   });
 });
