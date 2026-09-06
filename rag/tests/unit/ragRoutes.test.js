@@ -58,6 +58,10 @@ jest.mock('../../models/IngestJob', () => ({
   create: jest.fn().mockResolvedValue({}),
 }));
 
+jest.mock('../../models/SearchEvent', () => ({
+  create: jest.fn().mockResolvedValue({}),
+}));
+
 const request = require('supertest');
 const express = require('express');
 const ragRoutes = require('../../routes/rag');

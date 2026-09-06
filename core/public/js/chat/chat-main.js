@@ -595,7 +595,19 @@ document.addEventListener('DOMContentLoaded', () => {
           setTimeout(() => elements.messageInput?.setAttribute('placeholder', defaultMessagePlaceholder), 2500);
           return;
         }
-        window.open('/council?question=' + encodeURIComponent(text), '_blank');
+        // Explicit handoff: Council runs on its own page, after the panel is
+        // reviewed and convened there. Nothing is sent as a chat turn. A
+        // real anchor navigation is used instead of window.open so a popup
+        // blocker cannot swallow the action silently.
+        const href = '/council?question=' + encodeURIComponent(text) + '&source=playground';
+        const link = document.createElement('a');
+        link.href = href;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        helpers.setFeedback('Question handed to Council in a new tab. Review the panel there, then convene it.', 'info');
       });
     }
     elements.sendBtn.addEventListener('click', () => handleSendButtonAction({ elements, state, helpers }));

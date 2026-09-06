@@ -14,7 +14,7 @@ const { EventEmitter } = require('events');
 const logger = require('../../../config/logger');
 const Roundtable = require('../../../models/Roundtable');
 const { buildOllamaPayload, buildOllamaStats, extractResponse } = require('../../helpers/ollamaResponseHandler');
-const { getTargetForModel } = require('../modelRouter');
+const { getTargetForModel, recordInference } = require('../modelRouter');
 const hostPreferenceService = require('../hostPreferenceService');
 const { getFetchOptions } = require('../../helpers/httpAgent');
 const { beginInferenceAdmission } = require('../inferenceAdmissionService');
@@ -134,8 +134,58 @@ async function buildPinnedAgentPayload(agent, messages, target, streamEnabled = 
   return buildOllamaPayload({ model: agent.model, messages, streamEnabled, options });
 }
 
+// ─── telemetry ────────────────────────────────────────────────────────────
+/**
+ * Council participant calls are AgentX-routed inference and must be visible
+ * in Activity like every other lane. Attribution is generated here, never
+ * taken from a request: the roundtable id is the correlation id, the
+ * participant, phase and round form the caller detail, and `core-council-v1`
+ * is the consumer contract. Prompts, responses and private reasoning never
+ * enter telemetry. Fire-and-forget: a telemetry failure never fails a turn.
+ */
+const COUNCIL_CONSUMER_CONTRACT = 'core-council-v1';
+const COUNCIL_TASK_TYPE = 'council_deliberation';
+
+function councilTelemetryStatus(result) {
+  if (!result.error) return 'success';
+  return /timeout/i.test(String(result.error)) ? 'timeout' : 'error';
+}
+
+function recordCouncilInference(agent, context, result) {
+  try {
+    const round = context?.round ?? agent?._round ?? null;
+    const phase = context?.phase || (agent?.agentId === 'synthesizer' ? 'synthesis' : 'turn');
+    const detail = [`council`, phase, agent?.agentId || 'participant']
+      .concat(round != null && phase !== 'synthesis' ? [`round${round}`] : [])
+      .join(':');
+    const pending = recordInference({
+      host: result.target || 'unknown',
+      model: agent?.model || 'unknown',
+      caller: 'council',
+      callerDetail: detail,
+      consumerContract: COUNCIL_CONSUMER_CONTRACT,
+      correlationId: context?.roundtableId || null,
+      workItemId: context?.roundtableId || null,
+      attempt: 1,
+      taskType: COUNCIL_TASK_TYPE,
+      routed: false,
+      autoRouted: false,
+      tokensIn: result.stats?.promptTokens || 0,
+      tokensOut: result.stats?.completionTokens || 0,
+      durationMs: Number.isFinite(result.stats?.latencyMs) ? result.stats.latencyMs : 0,
+      status: councilTelemetryStatus(result),
+      error: result.error || null
+    });
+    if (pending && typeof pending.catch === 'function') {
+      pending.catch((err) => logger.warn('Council telemetry write failed', { error: err.message }));
+    }
+  } catch (err) {
+    logger.warn('Council telemetry skipped', { error: err.message });
+  }
+}
+
 // ─── single-shot agent call (non-streaming path) ─────────────────────────
-async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
+async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS, context = null) {
   const startedAt = new Date();
   const readiness = await assessModelParticipantReadiness(agent);
   const { target, hostName } = readiness;
@@ -171,7 +221,7 @@ async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
 
     const parsed = extractResponse(data, agent.model);
     const completedAt = new Date();
-    return {
+    const result = {
       response: parsed.content || '',
       thinking: parsed.thinking || null,
       stats: {
@@ -182,22 +232,26 @@ async function callAgent(agent, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
       },
       error: null, target, hostName, startedAt, completedAt
     };
+    recordCouncilInference(agent, context, result);
+    return result;
   } catch (err) {
     const completedAt = new Date();
     const isTimeout = err.isOllamaTimeout === true || err.name === 'AbortError';
     const errorMsg = isTimeout ? `Timeout after ${timeoutMs}ms` : err.message;
     logger.error('Roundtable callAgent failed', { agentId: agent.agentId, model: agent.model, target, error: errorMsg });
-    return {
+    const result = {
       response: '', thinking: null,
       stats: { tokensPerSecond: null, latencyMs: completedAt - startedAt },
       error: errorMsg, target, hostName, startedAt, completedAt
     };
+    recordCouncilInference(agent, context, result);
+    return result;
   }
 }
 
 // ─── streaming agent call (NDJSON, chunks emitted live) ──────────────────
-async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPrefix) {
-  if (!emitter) return callAgent(agent, messages, timeoutMs);
+async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPrefix, context = null) {
+  if (!emitter) return callAgent(agent, messages, timeoutMs, context);
 
   const startedAt = new Date();
   const readiness = await assessModelParticipantReadiness(agent);
@@ -293,7 +347,7 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
     const latencyMs = completedAt - startedAt;
     const parsedStats = buildOllamaStats(finalData || {}, fullContent);
 
-    return {
+    const result = {
       response: fullContent,
       thinking: thinkingContent || null,
       stats: {
@@ -304,6 +358,8 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
       },
       error: null, target, hostName, startedAt, completedAt
     };
+    recordCouncilInference(agent, context, result);
+    return result;
   } catch (err) {
     if (inferenceAdmission) {
       await inferenceAdmission.abandon(err).catch(quarantineError => {
@@ -316,18 +372,20 @@ async function callAgentStreaming(agent, messages, timeoutMs, emitter, eventPref
     const isTimeout = err.name === 'AbortError';
     const errorMsg = isTimeout ? `Timeout after ${timeoutMs}ms` : err.message;
     logger.error('Roundtable streaming callAgent failed', { agentId: agent.agentId, model: agent.model, target, error: errorMsg });
-    return {
+    const result = {
       response: '', thinking: null,
       stats: { tokensPerSecond: null, latencyMs: completedAt - startedAt },
       error: errorMsg, target, hostName, startedAt, completedAt
     };
+    recordCouncilInference(agent, context, result);
+    return result;
   }
 }
 
 async function callParticipant(agent, messages, timeoutMs, emitter, eventPrefix, context) {
   const runtime = String(agent.runtime || 'model').toLowerCase();
   if (runtime === 'model') {
-    const result = await callAgentStreaming(agent, messages, timeoutMs, emitter, eventPrefix);
+    const result = await callAgentStreaming(agent, messages, timeoutMs, emitter, eventPrefix, context);
     return { ...result, runtime: 'model', runtimeRef: null };
   }
   const result = await callRuntimeParticipant(agent, messages, {
@@ -543,7 +601,8 @@ async function runRoundtable(roundtableId, emitter) {
 
     const synthResult = await callAgentStreaming(
       { agentId: 'synthesizer', role: 'Synthesizer', model: synthesizer.model, systemPrompt: synthesizer.systemPrompt, _round: 0 },
-      synthMessages, DEFAULT_TIMEOUT_MS, emitter, 'synthesis'
+      synthMessages, DEFAULT_TIMEOUT_MS, emitter, 'synthesis',
+      { roundtableId: String(doc._id), round: 0, phase: 'synthesis' }
     );
 
     if (emitter) emitter.emit('chunk', { type: 'synthesis-done', stats: synthResult.stats, error: synthResult.error });

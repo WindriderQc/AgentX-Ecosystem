@@ -19,7 +19,7 @@ const {
 } = require('./routeDecision');
 const { sanitizeRoutingTrace } = require('./inferenceTelemetry');
 
-const CALLERS = new Set(['chat', 'benchmark', 'embedding', 'classification', 'proxy', 'unknown']);
+const CALLERS = new Set(['chat', 'council', 'benchmark', 'embedding', 'classification', 'proxy', 'unknown']);
 const RUNTIMES = new Set(['agentx', 'codex', 'claude-code', 'external', 'other']);
 const STATUSES = new Set(['success', 'error', 'timeout']);
 const LANES = new Set(['direct', 'interactive', 'automated']);

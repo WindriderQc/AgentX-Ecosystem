@@ -4396,3 +4396,14 @@ button:active {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Private reasoning disclosure: opt-in (Thinking forced) and closed by default. */
+.thinking-content > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+  list-style: revert;
+}
+.thinking-content > .thinking-body {
+  margin-top: 8px;
+}

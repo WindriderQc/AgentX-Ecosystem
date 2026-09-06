@@ -12,11 +12,22 @@ describe('chat messaging browser security boundary', () => {
 
   test('sanitizes model-controlled thinking markdown before assigning innerHTML', () => {
     expect(source).toMatch(
-      /thinkingDiv\.innerHTML\s*=\s*sanitizeHTML\(`<strong>Thinking:<\/strong><br>\$\{marked\.parse\(thinkingContent\)\}`\)/
+      /thinkingBody\.innerHTML\s*=\s*sanitizeHTML\(marked\.parse\(thinkingContent\)\)/
     );
     expect(source).not.toMatch(
-      /thinkingDiv\.innerHTML\s*=\s*`[^`]*\$\{marked\.parse\(thinkingContent\)\}/
+      /(thinkingDiv|thinkingBody)\.innerHTML\s*=\s*`[^`]*\$\{marked\.parse\(thinkingContent\)\}/
     );
+  });
+
+  test('never discloses private reasoning unless Thinking was explicitly forced', () => {
+    const start = source.indexOf('const reasoningOptIn = elements.thinkingToggle?.checked === true;');
+    expect(start).toBeGreaterThan(-1);
+    expect(source).toContain("if (!reasoningOptIn) return; // discarded: never rendered, never persisted");
+    // The disclosure is a closed <details>; the reader must open it.
+    expect(source).toContain("document.createElement('details')");
+    expect(source).toContain('<summary>Reasoning (shown because Thinking is forced)</summary>');
+    expect(source).not.toMatch(/thinkingDiv\.open\s*=\s*true/);
+    expect(source).not.toContain('<strong>Thinking:</strong>');
   });
 
   test('fails closed by escaping hostile markup when DOMPurify is unavailable', () => {

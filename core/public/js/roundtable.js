@@ -583,7 +583,9 @@
       },
       enableScoring: $('formScoring').value === 'true',
       governance: { requireApproval: $('formApproval').value === 'true' },
-      source: 'web-ui'
+      // A question handed off from the Playground is recorded as such; the
+      // server still owns the session and its telemetry attribution.
+      source: new URLSearchParams(window.location.search).get('source') === 'playground' ? 'playground-handoff' : 'web-ui'
     };
 
     const btn = $('formStartBtn');
@@ -702,7 +704,7 @@
     await loadDefaults();
     loadHistory();
 
-    // Pre-fill question from URL ?question=... (Playground "Ask Council")
+    // Pre-fill question from URL ?question=... (Playground "Open in Council")
     try {
       const params = new URLSearchParams(window.location.search);
       const qParam = params.get('question');
@@ -710,7 +712,7 @@
         $('formQuestion').value = qParam;
         $('formQuestion').focus();
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        showToast('Question loaded from Playground — review panel, then Start', 'info');
+        showToast('Question handed off from Chat — nothing has been convened yet. Review the panel, then Convene Council.', 'info');
       }
     } catch {}
 

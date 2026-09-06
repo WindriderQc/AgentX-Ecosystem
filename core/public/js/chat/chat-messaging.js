@@ -953,10 +953,15 @@ export async function sendMessageStreamFetch(
   contentDiv.className = 'message-content';
   assistantMessageDiv.appendChild(contentDiv);
 
-  const thinkingDiv = document.createElement('div');
+  // Private reasoning is opt-in. It is rendered only when the operator has
+  // forced Thinking in the controls, and then inside a closed disclosure the
+  // reader must open. Otherwise it is neither rendered nor kept.
+  const reasoningOptIn = elements.thinkingToggle?.checked === true;
+  const thinkingDiv = document.createElement('details');
   thinkingDiv.className = 'thinking-content';
-  thinkingDiv.style.display = 'none';
-  thinkingDiv.innerHTML = '<strong>Thinking:</strong><br>';
+  thinkingDiv.hidden = true;
+  thinkingDiv.innerHTML = '<summary>Reasoning (shown because Thinking is forced)</summary><div class="thinking-body"></div>';
+  const thinkingBody = thinkingDiv.querySelector('.thinking-body');
   assistantMessageDiv.appendChild(thinkingDiv);
 
   elements.chatWindow.appendChild(assistantMessageDiv);
@@ -986,10 +991,11 @@ export async function sendMessageStreamFetch(
       return;
     }
     if (eventName === 'thinking') {
+      if (!reasoningOptIn) return; // discarded: never rendered, never persisted
       const data = typeof rawData === 'string' ? safeParseJson(rawData, {}) : rawData;
       thinkingContent += data.content || '';
-      thinkingDiv.innerHTML = sanitizeHTML(`<strong>Thinking:</strong><br>${marked.parse(thinkingContent)}`);
-      thinkingDiv.style.display = 'block';
+      if (thinkingBody) thinkingBody.innerHTML = sanitizeHTML(marked.parse(thinkingContent));
+      thinkingDiv.hidden = false;
       elements.chatWindow.scrollTop = elements.chatWindow.scrollHeight;
       return;
     }
