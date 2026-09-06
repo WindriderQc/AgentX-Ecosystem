@@ -1,7 +1,15 @@
 'use strict';
 
 const { test, expect } = require('@playwright/test');
-const { normalizedBaseUrl } = require('./support/product-surfaces');
+const { normalizedBaseUrl, profile } = require('./support/product-surfaces');
+
+// The demo profile has no Operate group and no Nerve Center; both profiles
+// render the shared navigation, so the parity check picks pages and a group
+// that exist in the profile under test.
+const CORE_PAGE = profile === 'demo' ? '/playground' : '/nerve-center';
+const CLICK_JOURNEY = profile === 'demo'
+  ? { group: 'product-group', item: 'Models', pathname: '/models' }
+  : { group: 'operate-group', item: 'Nerve Center', pathname: '/nerve-center' };
 
 /**
  * Navigation parity: Core, Benchmark and RAG render the same Product groups
@@ -23,7 +31,7 @@ async function navShape(page) {
 
 test('Core, Benchmark and RAG expose the same navigation groups and launchers', async ({ page }) => {
   const shapes = {};
-  for (const [service, path] of [['core', '/nerve-center'], ['benchmark', '/'], ['rag', '/']]) {
+  for (const [service, path] of [['core', CORE_PAGE], ['benchmark', '/'], ['rag', '/']]) {
     await page.goto(`${normalizedBaseUrl(service)}${path}`, { waitUntil: 'domcontentloaded' });
     await expect(page.locator('#nav-container nav.top-nav')).toBeVisible();
     shapes[service] = await navShape(page);
@@ -40,11 +48,13 @@ test('Core, Benchmark and RAG expose the same navigation groups and launchers', 
   }
 });
 
-test('the Operate menu opens from a click on RAG and reaches Core without a typed URL', async ({ page }) => {
+test('a shared menu opens from a click on RAG and reaches Core without a typed URL', async ({ page }) => {
   await page.goto(`${normalizedBaseUrl('rag')}/`, { waitUntil: 'domcontentloaded' });
-  await page.locator('#nav-trigger-operate-group').click();
-  await expect(page.locator('#nav-menu-operate-group')).toBeVisible();
-  await page.locator('#nav-menu-operate-group a.dropdown-item', { hasText: 'Nerve Center' }).click();
+  await page.locator(`#nav-trigger-${CLICK_JOURNEY.group}`).click();
+  await expect(page.locator(`#nav-menu-${CLICK_JOURNEY.group}`)).toBeVisible();
+  await page.locator(`#nav-menu-${CLICK_JOURNEY.group} a.dropdown-item`, { hasText: CLICK_JOURNEY.item }).click();
   await page.waitForLoadState('domcontentloaded');
-  expect(new URL(page.url()).pathname).toBe('/nerve-center');
+  const landed = new URL(page.url());
+  expect(landed.origin).toBe(new URL(normalizedBaseUrl('core')).origin);
+  expect(landed.pathname).toBe(CLICK_JOURNEY.pathname);
 });
