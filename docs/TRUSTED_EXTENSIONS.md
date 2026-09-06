@@ -118,17 +118,28 @@ app.locals.trustedRuntimeNavItems = [{
   id: 'private-runtime',
   label: 'Private Runtime',
   href: '/api/private-runtime/control-launch',
-  icon: 'fa-terminal'
+  icon: 'fa-terminal',
+  // optional, bounded: who provides the door, and one sentence for its tooltip
+  owner: 'Deployment',
+  description: 'Private runtime launched through this deployment. Opens in its own tab.'
 }];
 ```
 
-Core validates the list on every rendered request. IDs and Font Awesome icon
-classes are bounded, and `href` must be a same-origin `/api/...` launcher.
-Direct external URLs, script URLs, malformed fields, and duplicates are
-dropped. Items appear only in the full Core navigation under
-`Operate → External runtimes`; demo and cross-service navigation never inherit
-private runtime links. The launcher remains responsible for operator access,
-safe handoff, and any external runtime authentication.
+The contract lives in `shared/trustedRuntimeNavigation.js`. Core validates the
+list on every rendered request. IDs and Font Awesome icon classes are bounded,
+`href` must be a same-origin `/api/...` launcher, `owner` is at most 24
+characters and `description` at most 160 with no location in it. Direct
+external URLs, script URLs, malformed fields, and duplicates are dropped.
+
+The validated list is republished as `navigation.trustedRuntimeNavItems` in
+`GET /api/config` (empty in the demo profile). Benchmark and RAG read it from
+the same cached Core config they already use for public URLs, so every full
+Product service renders the same `Operate → External runtimes` entries and the
+portal lists the same launchers under `External runtimes`, each opening in its
+own tab with its provider tag. Off-Core services prefix the launcher with the
+configured Core authority; Product never hardcodes a private destination. The
+launcher remains responsible for operator access, safe handoff, and any
+external runtime authentication, including any launch preflight it offers.
 
 Agent Ops runtime projections may similarly provide a `launchUrl` on a runtime
 layer. The shell treats it as the runtime-owned destination; the AIOps adapter

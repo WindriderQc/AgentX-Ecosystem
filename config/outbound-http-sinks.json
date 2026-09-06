@@ -1406,7 +1406,7 @@
     { "id": "core.web-search.query", "service": "core", "source": "core/src/services/webSearch.js", "line": 51, "column": 23, "constructor": "fetch", "policyId": "configured.search-provider" },
 
     { "id": "benchmark.server.core-models", "service": "benchmark", "source": "benchmark/server.js", "line": 99, "column": 28, "constructor": "fetch", "policyId": "configured.product-observation" },
-    { "id": "benchmark.server.validate-judge-tags", "service": "benchmark", "source": "benchmark/server.js", "line": 370, "column": 26, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
+    { "id": "benchmark.server.validate-judge-tags", "service": "benchmark", "source": "benchmark/server.js", "line": 372, "column": 26, "constructor": "fetch", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.setup.tags", "service": "benchmark", "source": "benchmark/routes/setup.js", "line": 54, "column": 28, "constructor": "fetchImpl", "policyId": "request-admitted.ollama-observation" },
     { "id": "benchmark.buddy-event.deliver", "service": "benchmark", "source": "benchmark/src/clients/buddyEventClient.js", "line": 33, "column": 3, "constructor": "fetch", "policyId": "configured.product-telemetry" },
     { "id": "benchmark.transport.peer-verified-node-fetch", "service": "benchmark", "source": "benchmark/src/helpers/outboundHttpTransport.js", "line": 243, "column": 30, "constructor": "fetchImpl", "policyId": "delegated.benchmark-transport" },

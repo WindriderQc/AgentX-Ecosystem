@@ -350,6 +350,24 @@
       <div class="note">Qdrant-backed vector store, hybrid search, LLM rerank.</div>
     </div>
 
+    <!-- EXTERNAL RUNTIMES — supplied by the deployment through trusted extensions,
+         validated by Product (/api/config navigation). Never hardcoded here. -->
+    <div class="tile" id="external-runtimes-tile" data-service="external-runtimes" style="--tile-color: var(--c-infra);">
+      <div class="head">
+        <div class="head-left">
+          <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M21 3l-9 9"/><path d="M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/></svg></span>
+          <span class="domain">External runtimes</span>
+        </div>
+        <div class="head-right">
+          <span class="tile-status" id="external-runtimes-status" data-status="loading"><i class="sdot"></i><span class="stext">checking…</span></span>
+        </div>
+      </div>
+      <h2>Beyond the product</h2>
+      <div class="owner">Private runtimes installed by this deployment, launched through validated Core routes</div>
+      <ul id="external-runtimes-list"><li class="note">Reading the deployment's launchers…</li></ul>
+      <div class="note" id="external-runtimes-note">Each launcher names its provider and opens in its own tab. The product itself ships none.</div>
+    </div>
+
   </div>
 
   </main>
@@ -373,9 +391,12 @@
 (async () => {
   let publicUrls = {};
   let hostHome = null;
+  let cfg = null;
+  let configLoaded = false;
   try {
     const res = await fetch('/api/config', { credentials: 'include' });
-    const cfg = await res.json();
+    cfg = await res.json();
+    configLoaded = res.ok;
     publicUrls = cfg?.publicUrls || {};
     hostHome = cfg?.hostHome || null;
   } catch { /* keep safe same-origin fallbacks */ }
@@ -396,7 +417,61 @@
     hostHomeLink.textContent = String(hostHome?.label || 'Back to host');
     hostHomeLink.hidden = false;
   }
+
+  // External runtimes: the same validated launchers the navigation renders.
+  // Product never hardcodes a private destination; an empty list is stated
+  // honestly instead of hidden.
+  renderExternalRuntimes(cfg?.navigation?.trustedRuntimeNavItems, configLoaded);
 })();
+
+function renderExternalRuntimes(items, configLoaded) {
+  const list = document.getElementById('external-runtimes-list');
+  const status = document.getElementById('external-runtimes-status');
+  if (!list || !status) return;
+  const setStatus = (state, text) => {
+    status.dataset.status = state;
+    status.querySelector('.stext').textContent = text;
+  };
+  const launchers = Array.isArray(items)
+    ? items.filter((item) => item && typeof item.href === 'string' && /^\/api\/(?!\/)/.test(item.href) && !item.href.includes('\\') && item.label)
+    : [];
+  list.textContent = '';
+  if (!configLoaded) {
+    setStatus('down', 'not observed');
+    const li = document.createElement('li');
+    li.className = 'note';
+    li.textContent = 'Launchers could not be read from Core; refresh to retry.';
+    list.appendChild(li);
+    return;
+  }
+  if (!launchers.length) {
+    setStatus('ok', 'none installed');
+    const li = document.createElement('li');
+    li.className = 'note';
+    li.textContent = 'No private runtime is installed in this deployment. Deployments add them through trusted extensions.';
+    list.appendChild(li);
+    return;
+  }
+  setStatus('ok', `${launchers.length} available`);
+  for (const item of launchers) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = item.href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.dataset.externalRuntime = String(item.id || '');
+    a.textContent = String(item.label);
+    if (item.description) a.title = String(item.description);
+    li.appendChild(a);
+    if (item.owner) {
+      const tag = document.createElement('small');
+      tag.className = 'external-runtime-owner';
+      tag.textContent = ` · ${String(item.owner)}`;
+      li.appendChild(tag);
+    }
+    list.appendChild(li);
+  }
+}
 
 // Live Portal — same-origin status from core /api/portal/health (no CORS).
 // Fail-soft: a status outage never breaks the launcher; tiles stay clickable.

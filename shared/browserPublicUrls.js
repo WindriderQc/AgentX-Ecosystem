@@ -34,6 +34,13 @@ function mergePublicUrls(fallback, authority) {
   return merged;
 }
 
+/**
+ * Resolve Core's browser contract for a composed service. The returned
+ * function yields `publicUrls`; its `resolveNavigation` companion yields the
+ * validated trusted runtime launchers from the same cached `/api/config`
+ * payload, so Benchmark and RAG render exactly the launchers Core renders.
+ * Standalone services (no loader) keep environment defaults and no launchers.
+ */
 function createCorePublicUrlsResolver(options = {}) {
   const env = options.env || process.env;
   const fallback = getPublicUrls(env);
@@ -41,7 +48,9 @@ function createCorePublicUrlsResolver(options = {}) {
   const ttlMs = Number(options.ttlMs || 30_000);
   const timeoutMs = Number(options.timeoutMs || 2_000);
   const enabled = options.enabled !== false && typeof loadCoreConfig === 'function';
+  const { normalizeTrustedRuntimeNavItems } = require('./trustedRuntimeNavigation');
   let cached = fallback;
+  let cachedNavigation = Object.freeze([]);
   let expiresAt = 0;
   let inFlight = null;
 
@@ -53,11 +62,12 @@ function createCorePublicUrlsResolver(options = {}) {
     }
     const payload = await loadCoreConfig(requestOptions);
     cached = mergePublicUrls(fallback, payload?.publicUrls || {});
+    cachedNavigation = normalizeTrustedRuntimeNavItems(payload?.navigation?.trustedRuntimeNavItems);
     expiresAt = Date.now() + ttlMs;
     return cached;
   }
 
-  return async function resolvePublicUrls() {
+  async function resolvePublicUrls() {
     if (!enabled || Date.now() < expiresAt) return cached;
     if (!inFlight) {
       inFlight = refresh()
@@ -68,7 +78,14 @@ function createCorePublicUrlsResolver(options = {}) {
         .finally(() => { inFlight = null; });
     }
     return inFlight;
+  }
+
+  resolvePublicUrls.resolveNavigation = async function resolveNavigation() {
+    await resolvePublicUrls();
+    return cachedNavigation;
   };
+
+  return resolvePublicUrls;
 }
 
 module.exports = {

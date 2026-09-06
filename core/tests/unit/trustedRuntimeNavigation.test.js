@@ -35,6 +35,32 @@ describe('trusted runtime navigation contract', () => {
     ])).toEqual([]);
   });
 
+  test('keeps a bounded provider label and description, and drops unsafe ones', () => {
+    const [item] = normalizeTrustedRuntimeNavItems([{
+      id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal',
+      owner: ' AIOps ', description: 'Protected coding studio launched through AgentX.',
+    }]);
+    expect(item).toEqual({
+      id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal',
+      owner: 'AIOps', description: 'Protected coding studio launched through AgentX.',
+    });
+
+    const [bare] = normalizeTrustedRuntimeNavItems([{
+      id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal',
+      owner: 'x'.repeat(25), description: 'line\nbreak',
+    }]);
+    expect(bare).toEqual({ id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal' });
+
+    expect(normalizeTrustedRuntimeNavItems([{
+      id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal',
+      description: 'Open https://192.0.2.99:8443 directly',
+    }])).toEqual([]);
+  });
+
+  test('is the same contract Benchmark and RAG consume from shared/', () => {
+    expect(require('../../src/extensions/trustedRuntimeNavigation')).toBe(require('../../../shared/trustedRuntimeNavigation'));
+  });
+
   test('rejects invalid presentation fields without throwing', () => {
     expect(normalizeTrustedRuntimeNavItems([
       { id: 'Bad ID', label: 'DSH Studio', href: '/api/dsh/launch', icon: 'fa-terminal' },
