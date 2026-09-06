@@ -5,9 +5,30 @@ const { normalizedBaseUrl } = require('./support/product-surfaces');
 
 const QUESTION = 'Should we keep Planning frozen?';
 
+/**
+ * The handoff needs a typed question. When the environment has no inference
+ * runtime (the clean-first-run demo stack), the composer is disabled with a
+ * stated reason and the journey cannot be exercised: skip with that reason
+ * rather than pretend the journey passed or failed.
+ */
+async function openPlaygroundComposer(page) {
+  await page.goto(`${normalizedBaseUrl('core')}/playground`, { waitUntil: 'domcontentloaded' });
+  const input = page.locator('#messageInput');
+  await expect(input).toBeVisible();
+  await page.waitForFunction(() => {
+    const el = document.getElementById('messageInput');
+    const help = (document.getElementById('chatStatusHelp')?.textContent || '').trim();
+    return Boolean(el) && (!el.disabled || help.length > 0);
+  }, null, { timeout: 15000 });
+  if (await input.isDisabled()) {
+    const reason = ((await page.locator('#chatStatusHelp').textContent().catch(() => '')) || '').trim();
+    test.skip(true, `Chat composer disabled in this environment: ${reason || 'no inference runtime'}`);
+  }
+  return input;
+}
+
 test('Chat hands a question to Council explicitly, without sending it as a chat turn', async ({ page, context }) => {
-  const core = normalizedBaseUrl('core');
-  await page.goto(`${core}/playground`, { waitUntil: 'domcontentloaded' });
+  await openPlaygroundComposer(page);
 
   const button = page.locator('#roundtableBtn');
   await expect(button).toHaveAttribute('aria-label', 'Open in Council');
@@ -46,9 +67,8 @@ test('Chat hands a question to Council explicitly, without sending it as a chat 
 });
 
 test('the Council handoff is reachable from the keyboard', async ({ page, context }) => {
-  const core = normalizedBaseUrl('core');
-  await page.goto(`${core}/playground`, { waitUntil: 'domcontentloaded' });
-  await page.locator('#messageInput').fill(QUESTION);
+  const input = await openPlaygroundComposer(page);
+  await input.fill(QUESTION);
   const button = page.locator('#roundtableBtn');
   await button.focus();
   await expect(button).toBeFocused();
