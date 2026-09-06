@@ -6,9 +6,11 @@
  * unknown, never fresh.
  */
 
+jest.mock('mongoose', () => ({ ...jest.requireActual('mongoose'), connection: { readyState: 1 } }));
 jest.mock('../../models/IngestJob', () => ({ findOne: jest.fn() }));
 jest.mock('../../models/SearchEvent', () => ({ create: jest.fn(), aggregate: jest.fn(), findOne: jest.fn() }));
 
+const mongoose = require('mongoose');
 const IngestJob = require('../../models/IngestJob');
 const { corpusFreshness, RAG_CORPUS_STALE_AFTER_MS } = require('../../routes/rag');
 const { validateSignal } = require('../../../shared/signalEvidence');
@@ -18,7 +20,19 @@ const chain = (doc, error) => ({
 });
 
 describe('RAG corpus freshness', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mongoose.connection.readyState = 1;
+  });
+
+  it('is unavailable without touching the history when MongoDB is not connected', async () => {
+    mongoose.connection.readyState = 0;
+    const freshness = await corpusFreshness(42);
+    expect(IngestJob.findOne).not.toHaveBeenCalled();
+    expect(freshness).toMatchObject({ state: 'unknown', reason: 'ingest_history_unavailable', lastIngestAt: null });
+    expect(freshness.signal.state).toBe('unavailable');
+    expect(validateSignal(freshness.signal).ok).toBe(true);
+  });
 
   it('is fresh when the last successful ingest is within the rule', async () => {
     const at = new Date(Date.now() - 60 * 60 * 1000);

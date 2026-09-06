@@ -704,13 +704,19 @@ async function handleStatus(req, res) {
 async function corpusFreshness(documentCount) {
   let lastIngest = null;
   let historyError = null;
-  try {
-    lastIngest = await IngestJob.findOne({ status: 'success' })
-      .sort({ createdAt: -1 })
-      .select('createdAt source')
-      .lean();
-  } catch (err) {
-    historyError = err.message;
+  if (mongoose.connection.readyState !== 1) {
+    // Never wait on the mongoose command buffer: without a connection the
+    // history is unavailable now, and the status endpoint must stay fast.
+    historyError = 'mongodb_not_connected';
+  } else {
+    try {
+      lastIngest = await IngestJob.findOne({ status: 'success' })
+        .sort({ createdAt: -1 })
+        .select('createdAt source')
+        .lean();
+    } catch (err) {
+      historyError = err.message;
+    }
   }
   const lastIngestAt = lastIngest?.createdAt ? new Date(lastIngest.createdAt).toISOString() : null;
   const reason = historyError
