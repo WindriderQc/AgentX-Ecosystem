@@ -241,6 +241,79 @@ class BenchmarkServiceClient {
   }
 
   /**
+   * Judge-drift evidence with the failure classified. Unlike getJudgeDrift,
+   * it separates "Benchmark could not be reached" from "Benchmark answered
+   * but the drift endpoint failed or held no evidence", so a reachable
+   * service is never labelled unreachable.
+   *
+   * @returns {Promise<{unavailable: boolean, reason?: string, httpStatus?: number|null, payload?: Object}>}
+   */
+  async getJudgeDriftEvidence(opts = {}) {
+    const query = {};
+    if (opts.perCategory != null) query.per_category = String(opts.perCategory);
+    let failure = null;
+    const json = await coreRequestJson({
+      baseUrl: getBaseUrl(),
+      path: '/api/benchmark/drift',
+      method: 'GET',
+      query,
+      timeoutMs: FETCH_TIMEOUT_MS,
+      serviceName: 'benchmark',
+      errorCode: 'BENCHMARK_SERVICE_ERROR',
+      onFailure: (info) => {
+        failure = info;
+        if (info.reason === 'non-ok') logger.warn('Benchmark drift returned error', { status: info.status, url: info.url });
+        else logger.warn('Benchmark drift unreachable', { url: info.url, error: info.message });
+        return null;
+      }
+    });
+    if (failure) {
+      return {
+        unavailable: true,
+        reason: failure.reason === 'non-ok' ? 'benchmark-drift-error' : 'benchmark-unreachable',
+        // Only a real HTTP answer carries a status; transport failures do not.
+        httpStatus: failure.reason === 'non-ok' && Number.isFinite(failure.status) ? failure.status : null
+      };
+    }
+    const payload = json?.data || null;
+    if (!payload) return { unavailable: true, reason: 'benchmark-drift-empty', httpStatus: null };
+    return { unavailable: false, payload };
+  }
+
+  /**
+   * Judge readiness (Benchmark's functional judge state: selection,
+   * reachability and installed-model availability). A blocked judge is an
+   * observation, not a transport failure.
+   */
+  async getJudgeReadiness() {
+    let failure = null;
+    const json = await coreRequestJson({
+      baseUrl: getBaseUrl(),
+      path: '/api/benchmark/judge/readiness',
+      method: 'GET',
+      timeoutMs: FETCH_TIMEOUT_MS,
+      serviceName: 'benchmark',
+      errorCode: 'BENCHMARK_SERVICE_ERROR',
+      onFailure: (info) => {
+        failure = info;
+        logger.warn('Benchmark judge readiness unavailable', { status: info.status, url: info.url, error: info.message });
+        return null;
+      }
+    });
+    if (failure) {
+      return {
+        unavailable: true,
+        reason: failure.reason === 'non-ok' ? 'benchmark-readiness-error' : 'benchmark-unreachable',
+        // Only a real HTTP answer carries a status; transport failures do not.
+        httpStatus: failure.reason === 'non-ok' && Number.isFinite(failure.status) ? failure.status : null
+      };
+    }
+    const readiness = json?.data || null;
+    if (!readiness || typeof readiness !== 'object') return { unavailable: true, reason: 'benchmark-readiness-empty', httpStatus: null };
+    return { unavailable: false, readiness };
+  }
+
+  /**
    * Fetch a benchmark batch by id.
    *
    * Used by Core's benchmark-claim reaper to free host claims as soon as

@@ -689,6 +689,27 @@ async function clearCache() {
 /*                              RAG Metrics                                   */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Corpus freshness projection. The RAG service answers fresh | stale | unknown
+ * with its rule (TTL) and the last recorded ingest; an older service answers
+ * nothing, which is unknown, not fresh.
+ */
+function ragFreshnessView(freshness) {
+    const state = freshness && ['fresh', 'stale', 'unknown'].includes(freshness.state) ? freshness.state : 'unknown';
+    const lastIngestAt = freshness?.lastIngestAt ? new Date(freshness.lastIngestAt) : null;
+    const lastIngestText = lastIngestAt && !Number.isNaN(lastIngestAt.getTime()) ? lastIngestAt.toLocaleString() : 'not recorded';
+    const ttlDays = Number.isFinite(freshness?.ttlMs) ? Math.round(freshness.ttlMs / 86400000) : null;
+    const rule = ttlDays ? ` (rule: stale after ${ttlDays} day${ttlDays === 1 ? '' : 's'} without a successful ingest)` : '';
+    if (state === 'fresh') {
+        return { state, color: 'var(--success)', text: 'fresh', lastIngestText, detail: `Last successful ingest ${lastIngestText}${rule}.` };
+    }
+    if (state === 'stale') {
+        return { state, color: 'var(--danger)', text: 'stale', lastIngestText, detail: `Last successful ingest ${lastIngestText}, older than the freshness rule${rule}.` };
+    }
+    const reason = freshness?.reason ? String(freshness.reason).replace(/_/g, ' ') : 'no freshness evidence from the RAG service';
+    return { state: 'unknown', color: 'var(--warning)', text: 'freshness unknown', lastIngestText, detail: `Corpus freshness is not observed: ${reason}${rule}.` };
+}
+
 async function refreshRagMetrics() {
     try {
         const data = await fetchJSON('/api/rag/metrics');
@@ -718,7 +739,18 @@ async function refreshRagMetrics() {
                 : data.healthy === false
                     ? { icon: '✗', color: 'var(--danger)', label: 'Unhealthy' }
                     : { icon: '?', color: 'var(--warning)', label: 'Unknown' };
-            elements.ragHealth.innerHTML = `<span style="color: ${health.color}">${health.icon} ${health.label}</span>`;
+            // "Healthy" names its scope (query readiness). Corpus freshness is
+            // a separate fact and is never implied by a healthy service.
+            const freshness = ragFreshnessView(data.freshness);
+            elements.ragHealth.innerHTML = `<span style="color: ${health.color}">${health.icon} ${health.label}</span>`
+                + `<span style="display:block;font-size:11px;font-weight:400;color:${freshness.color};">readiness · corpus ${freshness.text}</span>`;
+            elements.ragHealth.title = freshness.detail;
+            elements.ragHealth.dataset.freshnessState = freshness.state;
+        }
+        if (elements.ragLastIngest) {
+            const freshness = ragFreshnessView(data.freshness);
+            elements.ragLastIngest.textContent = freshness.lastIngestText;
+            elements.ragLastIngest.title = freshness.detail;
         }
 
         // Update source breakdown table

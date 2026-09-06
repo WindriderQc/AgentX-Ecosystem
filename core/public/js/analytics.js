@@ -42,6 +42,7 @@ const elements = {
   ragSourcesBody: document.getElementById('ragSourcesBody'),
   ragOldest: document.getElementById('ragOldest'),
   ragNewest: document.getElementById('ragNewest'),
+  ragLastIngest: document.getElementById('ragLastIngest'),
   ragEmpty: document.getElementById('ragEmpty'),
 
   // Cost Tracking Elements

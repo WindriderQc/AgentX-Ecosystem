@@ -105,6 +105,10 @@ router.get('/metrics', async (_req, res) => {
       reachable: true,
       healthy,
       observedAt,
+      // Corpus freshness is reported by the RAG service from its ingest
+      // history (fresh | stale | unknown with the rule attached); absent on an
+      // older RAG release, which the UI renders as unknown.
+      freshness: data?.freshness && typeof data.freshness === 'object' ? data.freshness : null,
       stats: {
         totalDocuments,
         totalChunks,

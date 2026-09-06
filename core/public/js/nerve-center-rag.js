@@ -33,6 +33,20 @@
             if (observedAt) lastObservedAt = observedAt;
             const stateText = (known, healthy, ready = 'Ready') => known ? (healthy ? ready : 'Blocked') : 'Unknown';
             const stateColor = (known, healthy) => !known ? '#fbbf24' : (healthy ? '#4ade80' : '#f87171');
+            // Corpus freshness is reported by the RAG service from its ingest
+            // history; a ready service never implies a fresh corpus, and no
+            // recorded ingest is unknown, not fresh.
+            const freshness = (() => {
+                const raw = status.freshness && typeof status.freshness === 'object' ? status.freshness : null;
+                const state = raw && ['fresh', 'stale', 'unknown'].includes(raw.state) ? raw.state : 'unknown';
+                const lastIngest = raw?.lastIngestAt ? shared.timeAgo(raw.lastIngestAt) : null;
+                const ttlDays = Number.isFinite(raw?.ttlMs) ? Math.round(raw.ttlMs / 86400000) : null;
+                const rule = ttlDays ? `stale after ${ttlDays}d without ingest` : 'rule not reported';
+                if (state === 'fresh') return { state, label: 'Fresh', color: '#4ade80', sub: `last ingest ${lastIngest}`, detail: `Last successful ingest ${lastIngest}; ${rule}.` };
+                if (state === 'stale') return { state, label: 'Stale', color: '#f87171', sub: `last ingest ${lastIngest}`, detail: `Last successful ingest ${lastIngest}, older than the rule (${rule}).` };
+                const reason = raw?.reason ? String(raw.reason).replace(/_/g, ' ') : 'no freshness evidence';
+                return { state: 'unknown', label: 'Unknown', color: '#fbbf24', sub: reason, detail: `Corpus freshness is not observed: ${reason}.` };
+            })();
 
             // Health strip
             let html = `
@@ -52,6 +66,11 @@
                     <div class="nc-host-card" style="padding:12px">
                         <div class="nc-muted" style="font-size:0.8em;text-transform:uppercase">Query Readiness</div>
                         <div style="font-size:1.4em;font-weight:700;color:${stateColor(queryKnown, queryReady)}">${stateText(queryKnown, queryReady)}</div>
+                    </div>
+                    <div class="nc-host-card" style="padding:12px" data-rag-freshness="${shared.escapeHtml(freshness.state)}" title="${shared.escapeHtml(freshness.detail)}">
+                        <div class="nc-muted" style="font-size:0.8em;text-transform:uppercase">Corpus Freshness</div>
+                        <div style="font-size:1.4em;font-weight:700;color:${freshness.color}">${freshness.label}</div>
+                        <div class="nc-muted" style="font-size:0.72em">${shared.escapeHtml(freshness.sub)}</div>
                     </div>
                 </div>
                 <div class="nc-muted" style="font-size:0.75em;margin-bottom:16px">${observedAt ? `Live RAG evidence observed ${shared.timeAgo(observedAt)}` : 'Observation time unavailable — do not treat this as current evidence.'}</div>`;

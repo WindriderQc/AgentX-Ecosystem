@@ -754,13 +754,13 @@
                             <div class="value" id="ragAvgChunks">—</div>
                             <div class="sub">Chunking efficiency</div>
                         </div>
-                        <div class="stat-card" data-tooltip="Vector store connection status: check = Connected, X = Offline">
+                        <div class="stat-card" data-tooltip="Two separate facts: query readiness of the RAG service (Healthy means every dependency answered), and corpus freshness from the recorded ingest history. A healthy service never implies a fresh corpus; no recorded ingest means freshness Unknown.">
                             <div class="label">
                                 Store Health
-                                <i class="fas fa-info-circle" style="font-size: 11px; color: var(--muted); margin-left: 4px;" title="Qdrant vector database connection"></i>
+                                <i class="fas fa-info-circle" style="font-size: 11px; color: var(--muted); margin-left: 4px;" title="Readiness of the RAG service and freshness of its corpus, reported separately"></i>
                             </div>
                             <div class="value" id="ragHealth">—</div>
-                            <div class="sub">Connection status</div>
+                            <div class="sub">Readiness · corpus freshness</div>
                         </div>
                     </div>
                     <div style="text-align: right; font-size: 11px; color: var(--muted); margin-top: -8px; margin-bottom: 12px;">
@@ -797,9 +797,13 @@
                             <span><i class="fas fa-clock"></i> Oldest Document:</span>
                             <span id="ragOldest">—</span>
                         </div>
-                        <div style="display: flex; justify-content: space-between;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
                             <span><i class="fas fa-clock"></i> Newest Document:</span>
                             <span id="ragNewest">—</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;" title="From the RAG ingest job history; the corpus freshness rule is evaluated against this instant.">
+                            <span><i class="fas fa-file-import"></i> Last successful ingest:</span>
+                            <span id="ragLastIngest">—</span>
                         </div>
                     </div>
 
