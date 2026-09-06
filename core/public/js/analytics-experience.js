@@ -40,6 +40,21 @@
     return label;
   }
 
+  /**
+   * Knowledge-usage phrase for the cockpit summary. The tile carries the
+   * Signal Evidence Contract state on data attributes; a low-sample rate is
+   * repeated with its n, and a non-measured state is never phrased as usage.
+   */
+  function knowledgeUsagePhrase(label, state, sample) {
+    var observed = observedLabel(label);
+    if (!observed) return null;
+    if (state && state !== 'observed' && state !== 'insufficient_sample') return null;
+    if (state === 'insufficient_sample') {
+      return observed + ' of conversations used knowledge (low sample' + (sample ? ', ' + sample : '') + ')';
+    }
+    return observed + ' of conversations used knowledge';
+  }
+
   function setStatus(state, label, detail, icon) {
     status.className = 'analytics-experience-status is-' + state;
     status.querySelector('.analytics-experience-icon i').className = 'fas ' + icon;
@@ -54,7 +69,8 @@
     var errorRate = text('infErrorRate');
     var conversations = number('totalConversations');
     var messages = number('totalMessages');
-    var ragUsage = observedLabel(text('ragUsage'));
+    var ragUsageElement = document.getElementById('ragUsage');
+    var ragUsage = knowledgeUsagePhrase(text('ragUsage'), ragUsageElement?.dataset.signalState, ragUsageElement?.dataset.signalSample);
     var documents = number('ragTotalDocs');
     var windowLabel = document.querySelector('#infWindow option:checked')?.textContent.toLowerCase() || 'recent window';
 
@@ -73,8 +89,8 @@
       ? 'Conversation activity is not observed yet'
       : formatCount(conversations) + ' conversation' + (conversations === 1 ? '' : 's') + ' · ' + formatCount(messages || 0) + ' messages';
     document.getElementById('analytics-knowledge-detail').textContent = documents == null
-      ? (ragUsage ? ragUsage + ' of conversations used knowledge · ' + windowLabel : 'Knowledge usage is not observed yet')
-      : formatCount(documents) + ' source' + (documents === 1 ? '' : 's') + ' · ' + (ragUsage ? ragUsage + ' of conversations used knowledge' : 'usage not observed') + ' · ' + windowLabel;
+      ? (ragUsage ? ragUsage + ' · ' + windowLabel : 'Knowledge usage is not observed yet')
+      : formatCount(documents) + ' source' + (documents === 1 ? '' : 's') + ' · ' + (ragUsage || 'usage not observed') + ' · ' + windowLabel;
   }
 
   function syncCockpitAccessibility() {
@@ -117,7 +133,7 @@
     document.getElementById('analytics-experience-refresh').addEventListener('click', refreshAll);
     ['infCalls', 'infErrors', 'infCancellations', 'infErrorRate', 'totalConversations', 'totalMessages', 'ragUsage', 'ragTotalDocs'].forEach(function (id) {
       var element = document.getElementById(id);
-      if (element) new MutationObserver(refreshSummary).observe(element, { childList: true, subtree: true, characterData: true });
+      if (element) new MutationObserver(refreshSummary).observe(element, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-signal-state', 'data-signal-sample'] });
     });
 
     syncCockpitAccessibility();
@@ -127,7 +143,8 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       parseCompactNumber: parseCompactNumber,
-      observedLabel: observedLabel
+      observedLabel: observedLabel,
+      knowledgeUsagePhrase: knowledgeUsagePhrase
     };
   }
 })();

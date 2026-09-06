@@ -15,6 +15,21 @@ const {
   activityDayPipeline,
   conversationActivityFilter
 } = require('../src/services/conversationActivityAnalytics');
+const {
+  differenceSignal,
+  rankingSignal,
+  ratioSignal,
+  serializeSignal
+} = require('../../shared/signalEvidence');
+
+/**
+ * Signal Evidence Contract parameters for the chat lane. A rate computed on
+ * fewer conversations (or feedback votes) than this is still reported, but
+ * as `insufficient_sample` with its n, never as a bare percentage. A summary
+ * older than the TTL should be refreshed rather than trusted as current.
+ */
+const CHAT_LANE_MIN_SAMPLE = 5;
+const CHAT_LANE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * GET /api/analytics/usage
@@ -308,7 +323,8 @@ router.get('/rag-stats', async (req, res) => {
     });
     const ragConversations = await Conversation.countDocuments({ ...dateFilter, ragUsed: true });
     const noRagConversations = totalConversations - ragConversations;
-    const ragUsageRate = totalConversations > 0 ? ragConversations / totalConversations : 0;
+    // null, not 0, when there is no conversation to compute a rate on.
+    const ragUsageRate = totalConversations > 0 ? ragConversations / totalConversations : null;
 
     // Feedback for RAG vs non-RAG conversations
     const ragFeedback = await Conversation.aggregate([
@@ -337,11 +353,55 @@ router.get('/rag-stats', async (req, res) => {
 
     const ragTotal = ragFeedback.length > 0 ? ragFeedback[0].total : 0;
     const ragPositive = ragFeedback.length > 0 ? ragFeedback[0].positive : 0;
-    const ragPositiveRate = ragTotal > 0 ? ragPositive / ragTotal : 0;
+    const ragPositiveRate = ragTotal > 0 ? ragPositive / ragTotal : null;
 
     const noRagTotal = noRagFeedback.length > 0 ? noRagFeedback[0].total : 0;
     const noRagPositive = noRagFeedback.length > 0 ? noRagFeedback[0].positive : 0;
-    const noRagPositiveRate = noRagTotal > 0 ? noRagPositive / noRagTotal : 0;
+    const noRagPositiveRate = noRagTotal > 0 ? noRagPositive / noRagTotal : null;
+
+    // Signal Evidence Contract projection. Percentages exist only on a real
+    // denominator, small cohorts are flagged with their n, and the RAG versus
+    // non-RAG delta needs feedback in BOTH cohorts before it is a number.
+    const signalBase = {
+      scope: { from: fromDate.toISOString(), to: toDate.toISOString() },
+      source: 'conversations',
+      observedAt: toDate,
+      ttlMs: CHAT_LANE_TTL_MS
+    };
+    const ragUsageSignal = ratioSignal({
+      ...signalBase,
+      id: 'analytics.rag.usage_rate',
+      numerator: ragConversations,
+      denominator: totalConversations,
+      minimum: CHAT_LANE_MIN_SAMPLE,
+      unit: 'percent',
+      reason: totalConversations > 0 ? null : 'no_conversations'
+    });
+    const ragPositiveSignal = ratioSignal({
+      ...signalBase,
+      id: 'analytics.rag.positive_rate',
+      numerator: ragPositive,
+      denominator: ragTotal,
+      minimum: CHAT_LANE_MIN_SAMPLE,
+      unit: 'percent',
+      reason: ragTotal > 0 ? null : 'no_rag_feedback'
+    });
+    const noRagPositiveSignal = ratioSignal({
+      ...signalBase,
+      id: 'analytics.rag.no_rag_positive_rate',
+      numerator: noRagPositive,
+      denominator: noRagTotal,
+      minimum: CHAT_LANE_MIN_SAMPLE,
+      unit: 'percent',
+      reason: noRagTotal > 0 ? null : 'no_non_rag_feedback'
+    });
+    const ragFeedbackDelta = differenceSignal({
+      ...signalBase,
+      id: 'analytics.rag.feedback_delta_points',
+      left: ragPositiveSignal,
+      right: noRagPositiveSignal,
+      unit: 'points'
+    });
 
     res.json({
       status: 'success',
@@ -353,6 +413,12 @@ router.get('/rag-stats', async (req, res) => {
         ragConversations,
         noRagConversations,
         ragUsageRate,
+        signals: {
+          ragUsageRate: serializeSignal(ragUsageSignal),
+          ragPositiveRate: serializeSignal(ragPositiveSignal),
+          noRagPositiveRate: serializeSignal(noRagPositiveSignal),
+          ragFeedbackDelta: serializeSignal(ragFeedbackDelta)
+        },
         feedback: {
           rag: {
             total: ragTotal,
@@ -627,9 +693,12 @@ router.get('/costs', async (req, res) => {
     summary.avgCostPerConversation = formatCost(summary.avgCostPerConversation);
     summary.costPer1kTokens = formatCost(summary.costPer1kTokens);
 
-    // Format breakdown items
+    // Format breakdown items. A row is `priced` only when it carries a real
+    // cost over real tokens; local models have no per-token price and must
+    // never be ranked as the cheapest just because their cost is 0.
     const formattedBreakdown = costAgg.map(item => ({
       ...item,
+      priced: (item.cost?.total || 0) > 0 && (item.tokens?.total || 0) > 0,
       cost: {
         ...item.cost,
         total: formatCost(item.cost.total),
@@ -641,6 +710,27 @@ router.get('/costs', async (req, res) => {
       }
     }));
 
+    // Signal Evidence Contract: a "Best" needs at least two priced rows and
+    // no tie; otherwise the ranking reports why no winner can be named.
+    const groupLabel = (key) => (key && typeof key === 'object'
+      ? `${key.name || 'prompt'}@${key.version ?? '-'}`
+      : String(key ?? 'unknown'));
+    const costEfficiencyRanking = rankingSignal({
+      id: 'analytics.cost.efficiency_ranking',
+      scope: { from: fromDate.toISOString(), to: toDate.toISOString(), groupBy },
+      source: 'conversations',
+      observedAt: toDate,
+      ttlMs: CHAT_LANE_TTL_MS,
+      unit: 'usd_per_1k_tokens',
+      direction: 'asc',
+      candidates: formattedBreakdown.map((row) => ({
+        key: groupLabel(row.key),
+        value: row.cost.per1kTokens,
+        comparable: row.priced,
+        reason: row.priced ? null : 'no_price'
+      }))
+    });
+
     res.json({
       status: 'success',
       data: {
@@ -650,6 +740,9 @@ router.get('/costs', async (req, res) => {
         groupBy,
         minCost: parseFloat(minCost),
         summary,
+        signals: {
+          costEfficiencyRanking: serializeSignal(costEfficiencyRanking)
+        },
         breakdown: formattedBreakdown
       }
     });

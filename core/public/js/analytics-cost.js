@@ -11,6 +11,7 @@ import {
   buildRangeQuery, checkAuth, fetchJSON,
   formatBytes, formatNumber, refreshProduct
 } from './analytics.js';
+import { COMPARISON_STATES, parseSignal, rankingSignal } from '/dist/signal-evidence.js';
 
 
 /* -------------------------------------------------------------------------- */
@@ -239,6 +240,77 @@ async function refreshCostTrend() {
   }
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+  })[char]);
+}
+
+/** A row is comparable only when it carries a real price over real tokens. */
+function isPricedRow(row) {
+  if (typeof row?.priced === 'boolean') return row.priced;
+  return (row?.cost?.total || 0) > 0 && (row?.tokens?.total || 0) > 0;
+}
+
+/**
+ * Prefer the server-attested ranking signal; rebuild it locally only when an
+ * older payload carries none. Either way the contract decides whether a
+ * "Best" exists: at least two priced rows and no tie at the top.
+ */
+function efficiencyRanking(data) {
+  const attested = parseSignal(data?.signals?.costEfficiencyRanking);
+  if (attested) return attested;
+  return rankingSignal({
+    id: 'analytics.cost.efficiency_ranking',
+    direction: 'asc',
+    unit: 'usd_per_1k_tokens',
+    candidates: (data?.breakdown || []).map((row) => ({
+      key: String(row.key ?? 'unknown'),
+      value: row.cost?.per1kTokens,
+      comparable: isPricedRow(row),
+      reason: isPricedRow(row) ? null : 'no_price'
+    }))
+  });
+}
+
+function efficiencyRankingNote(ranking) {
+  const comparison = ranking?.comparison || {};
+  switch (comparison.state) {
+    case COMPARISON_STATES.RANKED:
+      return `Ranked ${comparison.comparable} priced model${comparison.comparable === 1 ? '' : 's'} by $/1K tokens (lower is better).`;
+    case COMPARISON_STATES.TIED:
+      return `${comparison.comparable} priced models tie on $/1K tokens — no single best.`;
+    case COMPARISON_STATES.NO_COMPARATOR:
+      return 'Only one priced model in this window — nothing to compare it against, so no Best is named.';
+    default:
+      return 'No priced model in this window. Local inference has no per-token price and is not ranked.';
+  }
+}
+
+const BADGES = {
+  best: { label: 'Best ★', color: '#4ade80', bg: 'rgba(76, 222, 128, 0.2)' },
+  worst: { label: 'Least efficient', color: '#f87171', bg: 'rgba(248, 113, 113, 0.2)' },
+  ranked: { label: null, color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.2)' },
+  neutral: { label: null, color: 'var(--muted)', bg: 'rgba(148, 163, 184, 0.16)' }
+};
+
+function efficiencyBadge(row, ranking) {
+  const comparison = ranking?.comparison || {};
+  const entry = (comparison.ranked || []).find((candidate) => candidate.key === String(row.key ?? 'unknown'));
+  if (!entry || !entry.comparable) {
+    return { ...BADGES.neutral, state: 'unpriced', label: 'No price', title: 'No per-token price: local inference is accounted in compute, not currency.' };
+  }
+  if (comparison.state === COMPARISON_STATES.RANKED) {
+    if (entry.key === comparison.best) return { ...BADGES.best, state: 'best', title: `Cheapest of ${comparison.comparable} priced models per 1K tokens.` };
+    if (entry.rank === comparison.comparable) return { ...BADGES.worst, state: 'worst', title: `Most expensive of ${comparison.comparable} priced models per 1K tokens.` };
+    return { ...BADGES.ranked, state: 'ranked', label: `${entry.rank}/${comparison.comparable}`, title: `Rank ${entry.rank} of ${comparison.comparable} priced models.` };
+  }
+  if (comparison.state === COMPARISON_STATES.TIED) {
+    return { ...BADGES.ranked, state: 'tied', label: 'Tied', title: 'Tied with another priced model — no single best.' };
+  }
+  return { ...BADGES.neutral, state: 'no_comparator', label: 'Only priced model', title: 'No other priced model to compare against, so no Best is named.' };
+}
+
 async function refreshEfficiencyTable() {
   const days = elements.periodSelect.value;
 
@@ -254,48 +326,52 @@ async function refreshEfficiencyTable() {
 
     elements.efficiencyEmpty.style.display = 'none';
 
-    // Sort by efficiency (ascending cost per 1k tokens)
-    const sorted = [...breakdown].sort((a, b) => (a.cost?.per1kTokens || 0) - (b.cost?.per1kTokens || 0));
+    const ranking = efficiencyRanking(data);
+    const comparison = ranking.comparison || {};
+    const rankByKey = new Map((comparison.ranked || []).map((entry) => [entry.key, entry]));
+
+    // Priced rows first, cheapest per 1k tokens on top; unpriced rows follow.
+    const sorted = [...breakdown].sort((a, b) => {
+      const ra = rankByKey.get(String(a.key))?.rank ?? Number.POSITIVE_INFINITY;
+      const rb = rankByKey.get(String(b.key))?.rank ?? Number.POSITIVE_INFINITY;
+      return ra - rb;
+    });
+
+    const note = document.getElementById('efficiencyRankingNote');
+    if (note) note.textContent = efficiencyRankingNote(ranking);
 
     // Create rows
-    elements.efficiencyTableBody.innerHTML = sorted.map((row, idx) => {
-      const efficiencyLabel = idx === 0 ? 'Best ★' :
-                              idx === sorted.length - 1 ? 'Least Efficient' :
-                              `${idx + 1}/${sorted.length}`;
-      const efficiencyColor = idx === 0 ? '#4ade80' :
-                              idx === sorted.length - 1 ? '#f87171' :
-                              '#fbbf24';
-      const efficiencyBg = idx === 0 ? 'rgba(76, 222, 128, 0.2)' :
-                           idx === sorted.length - 1 ? 'rgba(248, 113, 113, 0.2)' :
-                           'rgba(251, 191, 36, 0.2)';
+    elements.efficiencyTableBody.innerHTML = sorted.map((row) => {
+      const badge = efficiencyBadge(row, ranking);
+      const priced = isPricedRow(row);
 
       return `
-        <tr style="border-bottom: 1px solid var(--panel-border); transition: background 0.2s;">
+        <tr style="border-bottom: 1px solid var(--panel-border); transition: background 0.2s;" data-efficiency-state="${badge.state}">
           <td style="padding: 8px; color: var(--text); font-weight: 500;">
             <i class="fas fa-cube" style="color: var(--accent); margin-right: 6px; font-size: 11px;"></i>
-            ${row.key || 'Unknown'}
+            ${escapeHtml(row.key || 'Unknown')}
           </td>
           <td style="padding: 8px; text-align: right; color: var(--accent);">
-            <strong>$${(row.cost?.total || 0).toFixed(2)}</strong>
+            <strong>${priced ? `$${(row.cost?.total || 0).toFixed(2)}` : '—'}</strong>
           </td>
           <td style="padding: 8px; text-align: right; color: var(--muted);">
-            ${formatNumber(row.messages || 0)}
+            ${formatNumber(row.messageCount ?? row.messages ?? null)}
           </td>
           <td style="padding: 8px; text-align: right; color: var(--text);">
-            ${formatNumber(row.tokens?.total || 0)}
+            ${formatNumber(row.tokens?.total ?? null)}
           </td>
           <td style="padding: 8px; text-align: right; color: var(--text);">
-            $${(row.cost?.per1kTokens || 0).toFixed(4)}
+            ${priced ? `$${(row.cost?.per1kTokens || 0).toFixed(4)}` : '—'}
           </td>
-          <td style="padding: 8px; text-align: right; color: #4ade80;">
-            <strong>${Math.round(((row.cost?.total || 0) > 0 ? (row.tokens?.total || 0) / row.cost.total : 0) || 0).toLocaleString()}</strong>
+          <td style="padding: 8px; text-align: right; color: ${priced ? '#4ade80' : 'var(--muted)'};">
+            <strong>${priced ? Math.round((row.tokens?.total || 0) / row.cost.total).toLocaleString() : '—'}</strong>
           </td>
           <td style="padding: 8px; text-align: right; color: var(--text);">
-            $${(row.cost?.avgPerConversation || 0).toFixed(3)}
+            ${priced ? `$${(row.cost?.avgPerConversation || 0).toFixed(3)}` : '—'}
           </td>
           <td style="padding: 8px; text-align: center;">
-            <span style="background: ${efficiencyBg}; color: ${efficiencyColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">
-              ${efficiencyLabel}
+            <span title="${escapeHtml(badge.title)}" style="background: ${badge.bg}; color: ${badge.color}; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">
+              ${escapeHtml(badge.label)}
             </span>
           </td>
         </tr>

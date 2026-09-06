@@ -6,6 +6,8 @@
  * Consumed by: analytics-cost.js (the main module entry point)
  */
 
+import { differenceSignal, formatSignal, parseSignal, ratioSignal } from '/dist/signal-evidence.js';
+
 const elements = {
   // Product Analytics Elements
   periodSelect: document.getElementById('periodSelect'),
@@ -18,6 +20,8 @@ const elements = {
   positiveRate: document.getElementById('positiveRate'),
   feedbackSampleSize: document.getElementById('feedbackSampleSize'),
   ragUsage: document.getElementById('ragUsage'),
+  ragUsageNote: document.getElementById('ragUsageNote'),
+  ragDeltaNote: document.getElementById('ragDeltaNote'),
   ragConversations: document.getElementById('ragConversations'),
   ragRequestedConversations: document.getElementById('ragRequestedConversations'),
   ragRequestedNotUsed: document.getElementById('ragRequestedNotUsed'),
@@ -125,6 +129,71 @@ function formatNumber(num) {
 function formatPercent(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return '–';
   return `${(value * 100).toFixed(1)}%`;
+}
+
+/**
+ * Signal Evidence Contract for the RAG lane. The server attests these
+ * signals; when an older payload carries none they are rebuilt from the raw
+ * counts with the same rules, so a single conversation is never a bare 100%
+ * and a delta without both cohorts is never "+0.0 pts".
+ */
+const RAG_MIN_SAMPLE = 5;
+
+function ragSignals(rag = {}) {
+  const attested = rag.signals || {};
+  const feedback = rag.feedback || {};
+  const usage = parseSignal(attested.ragUsageRate) || ratioSignal({
+    id: 'analytics.rag.usage_rate',
+    numerator: rag.ragConversations,
+    denominator: rag.totalConversations,
+    minimum: RAG_MIN_SAMPLE,
+    unit: 'percent'
+  });
+  const ragPositive = parseSignal(attested.ragPositiveRate) || ratioSignal({
+    id: 'analytics.rag.positive_rate',
+    numerator: feedback.rag?.positive,
+    denominator: feedback.rag?.total,
+    minimum: RAG_MIN_SAMPLE,
+    unit: 'percent'
+  });
+  const noRagPositive = parseSignal(attested.noRagPositiveRate) || ratioSignal({
+    id: 'analytics.rag.no_rag_positive_rate',
+    numerator: feedback.noRag?.positive,
+    denominator: feedback.noRag?.total,
+    minimum: RAG_MIN_SAMPLE,
+    unit: 'percent'
+  });
+  const delta = parseSignal(attested.ragFeedbackDelta) || differenceSignal({
+    id: 'analytics.rag.feedback_delta_points',
+    left: ragPositive,
+    right: noRagPositive,
+    unit: 'points'
+  });
+  return { usage, ragPositive, noRagPositive, delta };
+}
+
+/** Value text plus state attributes; returns the rendering projection. */
+function renderSignal(el, signal) {
+  const view = formatSignal(signal);
+  if (el) {
+    el.textContent = view.text;
+    el.dataset.signalState = view.state;
+    el.dataset.signalTone = view.tone;
+    el.dataset.signalSample = view.sample;
+    el.title = view.detail;
+  }
+  return view;
+}
+
+/** Human note under a tile: the real counts first, then the evidence label. */
+function sampleNote(signal, noun, observedText) {
+  const view = formatSignal(signal);
+  const sample = signal?.sample || {};
+  const counts = Number.isFinite(sample.numerator) && Number.isFinite(sample.denominator) && sample.denominator > 0
+    ? `${formatNumber(sample.numerator)} of ${formatNumber(sample.denominator)} ${noun}`
+    : null;
+  if (view.state === 'observed') return [counts, observedText].filter(Boolean).join(' · ');
+  return [counts, view.detail].filter(Boolean).join(' · ');
 }
 
 function formatBytes(bytes) {
@@ -378,7 +447,7 @@ function renderRagChart(data) {
     },
   });
 
-  elements.ragDonutLabel.textContent = formatPercent(data.ragUsageRate);
+  renderSignal(elements.ragDonutLabel, ragSignals(data).usage);
 }
 
 function updateProductSummary(usage = {}, feedback = {}, rag = {}) {
@@ -394,7 +463,9 @@ function updateProductSummary(usage = {}, feedback = {}, rag = {}) {
     elements.feedbackSampleSize.textContent = formatNumber(total);
   }
 
-  if (elements.ragUsage) elements.ragUsage.textContent = formatPercent(rag.ragUsageRate);
+  const signals = ragSignals(rag);
+  renderSignal(elements.ragUsage, signals.usage);
+  if (elements.ragUsageNote) elements.ragUsageNote.textContent = sampleNote(signals.usage, 'conversations', 'using retrieval');
   if (elements.ragConversations) elements.ragConversations.textContent = formatNumber(rag.ragConversations);
   if (elements.ragRequestedConversations)
     elements.ragRequestedConversations.textContent = formatNumber(rag.ragRequestedConversations);
@@ -427,10 +498,10 @@ function updateProductSummary(usage = {}, feedback = {}, rag = {}) {
     elements.ragRequestedNotUsed.textContent = formatNumber(notUsed);
   }
 
-  const delta = ragPositiveRate - noRagPositiveRate;
-  if (elements.ragDelta) {
-    elements.ragDelta.textContent = Number.isFinite(delta) ? `${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(1)} pts` : '–';
-  }
+  // The delta is a number only when BOTH cohorts carry feedback; the contract
+  // reports why otherwise instead of printing "+0.0 pts".
+  renderSignal(elements.ragDelta, signals.delta);
+  if (elements.ragDeltaNote) elements.ragDeltaNote.textContent = sampleNote(signals.delta, 'votes per cohort', 'delta in positive rate');
 }
 
 function toggleEmptyState(container, emptyEl, hasData) {
@@ -471,7 +542,7 @@ async function refreshProduct() {
 
     const ragHasData = !!(rag && rag.totalConversations > 0);
     if (ragHasData) renderRagChart(rag);
-    else if (elements.ragDonutLabel) elements.ragDonutLabel.textContent = '–';
+    else if (elements.ragDonutLabel) renderSignal(elements.ragDonutLabel, ragSignals(rag || {}).usage);
 
     if (usageResult.status === 'rejected') console.warn('Usage analytics failed', usageResult.reason);
     if (feedbackResult.status === 'rejected') console.warn('Feedback analytics failed', feedbackResult.reason);

@@ -9,6 +9,8 @@
  * a caller keeps its colour when the filter changes the series count.
  */
 
+import { averageSignal, buildSignal, formatSignal, parseSignal } from '/dist/signal-evidence.js';
+
 const SERIES = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181'];
 const SURFACE = '#121726';
 const TEXT = '#e8edf5';
@@ -35,6 +37,54 @@ function ms(n) {
 function setText(id, value) {
   const el = $(id);
   if (el) el.textContent = value;
+}
+
+/**
+ * Render one Signal Evidence Contract signal into a tile value. The text is
+ * the measured value or the shared placeholder; the state travels on data
+ * attributes so the cockpit summary and tests can read it, and the optional
+ * note carries the human label (`Not observed`, `Low sample`, …).
+ */
+function renderSignal(id, signal, noteId) {
+  const view = formatSignal(signal);
+  const el = $(id);
+  if (el) {
+    el.textContent = view.text;
+    el.dataset.signalState = view.state;
+    el.dataset.signalTone = view.tone;
+    el.dataset.signalSample = view.sample;
+    el.title = view.detail;
+  }
+  const note = noteId ? $(noteId) : null;
+  if (note) note.textContent = view.label ? ` · ${view.label}` : '';
+  return view;
+}
+
+/**
+ * Prefer the server-attested signals; derive them from the raw totals only
+ * when an older payload carries none, so n=0 never renders as "0ms".
+ */
+function classifierSignals(d) {
+  const t = d.totals || {};
+  const signals = d.signals || {};
+  const n = t.classifiedCalls || 0;
+  return {
+    avg: parseSignal(signals.avgClassificationMs) || averageSignal({
+      id: 'analytics.inference.avg_classification_ms',
+      sum: (t.avgClassificationMs || 0) * n, count: n, unit: 'ms'
+    }),
+    total: parseSignal(signals.avgTotalForClassifiedMs) || averageSignal({
+      id: 'analytics.inference.avg_total_for_classified_ms',
+      sum: (t.avgTotalForClassifiedMs || 0) * n, count: n, unit: 'ms'
+    }),
+    overhead: parseSignal(signals.classificationOverheadPct) || buildSignal({
+      id: 'analytics.inference.classification_overhead_pct',
+      state: n > 0 && Number.isFinite(t.classificationOverheadPct) ? 'observed' : 'missing',
+      value: n > 0 && Number.isFinite(t.classificationOverheadPct) ? t.classificationOverheadPct : null,
+      unit: 'percent',
+      sample: { n }
+    })
+  };
 }
 
 function escapeHtml(value) {
@@ -73,10 +123,12 @@ function renderTiles(d) {
   setText('infFallbackRate', `${(t.fallbackRate ?? 0).toFixed(2)}%`);
   setText('infFallbacks', compact(t.fallbackCalls));
   setText('infAvgLatency', ms(t.avgLatencyMs));
-  setText('infAvgClassification', ms(t.avgClassificationMs));
-  setText('infClassifiedCalls', compact(t.classifiedCalls));
-  setText('infClassificationPct', `${(t.classificationOverheadPct ?? 0).toFixed(1)}%`);
-  setText('infClassifiedTotal', ms(t.avgTotalForClassifiedMs));
+  const classifier = classifierSignals(d);
+  renderSignal('infAvgClassification', classifier.avg, 'infAvgClassificationNote');
+  setText('infClassifiedCalls', compact(t.classifiedCalls ?? 0));
+  renderSignal('infClassificationPct', classifier.overhead, 'infClassificationPctNote');
+  const totalView = formatSignal(classifier.total);
+  setText('infClassifiedTotal', totalView.text);
 
   const errorLink = $('infErrorLink');
   if (errorLink) {

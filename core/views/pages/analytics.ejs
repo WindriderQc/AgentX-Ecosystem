@@ -128,15 +128,15 @@
                         </div>
                     </div>
                     <div class="stats-row">
-                        <div class="stat-card" data-tooltip="Mean classifier round-trip only among calls that actually invoked classification; zero-duration direct routes are excluded.">
+                        <div class="stat-card" data-tooltip="Mean classifier round-trip only among calls that actually invoked classification; zero-duration direct routes are excluded. With zero classified calls there is no average, so the tile reads Not observed rather than 0ms.">
                             <div class="label">Avg Classifier Time</div>
                             <div class="value" id="infAvgClassification">—</div>
-                            <div class="sub"><span id="infClassifiedCalls">—</span> classified calls</div>
+                            <div class="sub"><span id="infClassifiedCalls">—</span> classified calls<span id="infAvgClassificationNote"></span></div>
                         </div>
-                        <div class="stat-card" data-tooltip="Classifier time divided by end-to-end time for classified calls.">
+                        <div class="stat-card" data-tooltip="Classifier time divided by end-to-end time for classified calls. Not observed when no call was classified.">
                             <div class="label">Classifier Overhead</div>
                             <div class="value" id="infClassificationPct">—</div>
-                            <div class="sub"><span id="infClassifiedTotal">—</span> avg total for same calls</div>
+                            <div class="sub"><span id="infClassifiedTotal">—</span> avg total for same calls<span id="infClassificationPctNote"></span></div>
                         </div>
                     </div>
                 </div>
@@ -259,10 +259,10 @@
                 <div class="value"><span id="positiveFeedback">—</span> <small id="positiveRate" style="font-size: 14px; color: var(--muted);"></small></div>
                 <div class="sub"><span id="feedbackSampleSize">—</span> total feedback</div>
             </div>
-            <div class="stat-card" data-tooltip="Percentage of conversations using RAG (Retrieval-Augmented Generation) to enhance responses with context">
+            <div class="stat-card" data-tooltip="Share of conversations that used RAG (Retrieval-Augmented Generation). Shown with its sample size; fewer than 5 conversations is flagged as a low sample, and no conversation means Not observed rather than 0%.">
                 <div class="label">RAG Adoption</div>
                 <div class="value" id="ragUsage">—</div>
-                <div class="sub">Using retrieval</div>
+                <div class="sub" id="ragUsageNote">Using retrieval</div>
             </div>
         </div>
 
@@ -542,10 +542,10 @@
                                 <div class="value" id="noRagConversations">—</div>
                                 <div class="sub">Positive: <span id="noRagPositiveRate">—</span></div>
                             </div>
-                            <div class="rag-stat" data-tooltip="Difference in positive feedback rates between RAG and non-RAG conversations. Positive delta means RAG performs better.">
+                            <div class="rag-stat" data-tooltip="Difference in positive feedback rates between RAG and non-RAG conversations. Positive delta means RAG performs better. Needs feedback in both cohorts; otherwise it is Not observed rather than +0.0.">
                                 <div class="label">RAG vs Non-RAG</div>
                                 <div class="value" id="ragDelta">—</div>
-                                <div class="sub">Delta in positive rate</div>
+                                <div class="sub" id="ragDeltaNote">Delta in positive rate</div>
                             </div>
                         </div>
                     </div>
@@ -627,7 +627,7 @@
                                     <th style="padding: 8px; text-align: right; border-bottom: 1px solid var(--panel-border); font-weight: 600; color: var(--text);" data-tooltip="Average cost per conversation">
                                         Avg Cost/Conv
                                     </th>
-                                    <th style="padding: 8px; text-align: center; border-bottom: 1px solid var(--panel-border); font-weight: 600; color: var(--text);" data-tooltip="Cost efficiency indicator: higher is better">
+                                    <th style="padding: 8px; text-align: center; border-bottom: 1px solid var(--panel-border); font-weight: 600; color: var(--text);" data-tooltip="Rank by $/1K tokens among priced models (lower is better). Best ★ needs at least two priced models and no tie; local models have no price and are not ranked.">
                                         Efficiency
                                     </th>
                                 </tr>
@@ -641,6 +641,7 @@
                             </tbody>
                         </table>
                     </div>
+                    <div id="efficiencyRankingNote" style="margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 1.5;"></div>
                     <div class="chart-empty" id="efficiencyEmpty" style="display: none;">
                         No cost efficiency data available.
                     </div>
