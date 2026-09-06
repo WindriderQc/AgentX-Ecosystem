@@ -86,11 +86,26 @@
   const runtimeNavItems = Array.isArray(locals.trustedRuntimeNavItems)
     ? locals.trustedRuntimeNavItems
     : [];
-  if (service === 'core' && runtimeNavItems.length) {
+  /* External runtimes are supplied by the deployment through trusted
+     extensions and validated by Product. They render identically on every
+     Product service: a launcher is always a Core route, so non-Core services
+     prefix it with the configured Core authority. Each launcher leaves the
+     Product surface, so it opens in its own tab and names its provider. */
+  if (runtimeNavItems.length) {
     const operateGroup = fullNavItems.find(function(item) { return item.id === 'operate-group'; });
     operateGroup.children.push(
       { section: 'External runtimes' },
-      ...runtimeNavItems
+      ...runtimeNavItems.map(function(item) {
+        return {
+          id: item.id,
+          label: item.label,
+          icon: item.icon,
+          href: coreBase + item.href,
+          external: true,
+          owner: item.owner || null,
+          description: item.description || null
+        };
+      })
     );
   }
 
@@ -177,8 +192,13 @@
                   <a href="<%= child.href %>"
                      class="dropdown-item<%= isActive(child.id) ? ' active' : '' %>"
                      <% if (isActive(child.id)) { %>aria-current="page"<% } %>
-                     <% if (child.external) { %>target="_blank" rel="noopener"<% } %>>
+                     <% if (child.external) { %>target="_blank" rel="noopener"<% } %>
+                     <% if (child.owner) { %>data-nav-owner="<%= child.owner %>"<% } %>
+                     <% if (child.description) { %>title="<%= child.description %>"<% } %>>
                     <i class="fas <%= child.icon %>" aria-hidden="true"></i> <%= child.label %>
+                    <% if (child.owner) { %>
+                      <span class="nav-owner-tag"><%= child.owner %></span>
+                    <% } %>
                     <% if (child.external) { %>
                       <i class="fas fa-arrow-up-right-from-square" style="font-size:9px;opacity:0.4;margin-left:2px;"></i>
                     <% } %>

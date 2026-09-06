@@ -80,5 +80,25 @@ describe('Health Check API', () => {
     expect(res.body).toHaveProperty('ollama');
     expect(res.body.ollama).toHaveProperty('host');
     expect(res.body).toHaveProperty('hostHome', null);
+    // The navigation projection Benchmark and RAG consume for parity. Product
+    // ships no launcher of its own.
+    expect(res.body.navigation).toEqual({ trustedRuntimeNavItems: [] });
+  });
+
+  it('projects validated trusted runtime launchers through /api/config', async () => {
+    const previous = app.locals.trustedRuntimeNavItems;
+    app.locals.trustedRuntimeNavItems = [
+      { id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal', owner: 'AIOps' },
+      { id: 'bad', label: 'Bad', href: 'https://evil.example/', icon: 'fa-bug' },
+    ];
+    try {
+      const res = await request(app).get('/api/config');
+      expect(res.statusCode).toBe(200);
+      expect(res.body.navigation.trustedRuntimeNavItems).toEqual([
+        { id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal', owner: 'AIOps' },
+      ]);
+    } finally {
+      app.locals.trustedRuntimeNavItems = previous;
+    }
   });
 });

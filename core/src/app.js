@@ -609,7 +609,15 @@ app.get('/api/config', (_req, res) => {
     publicUrls: app.locals.publicUrls,
     // Optional same-origin return path supplied by the composing host. It is
     // absent by default so standalone and shareable Product remain neutral.
-    hostHome: app.locals.hostHome
+    hostHome: app.locals.hostHome,
+    // Validated launchers supplied by trusted extensions. Benchmark and RAG
+    // read this projection so every Product service renders the same
+    // "External runtimes" entries; the launcher hrefs are Core routes.
+    navigation: {
+      trustedRuntimeNavItems: isDemoProfile(agentxProfile)
+        ? []
+        : normalizeTrustedRuntimeNavItems(app.locals.trustedRuntimeNavItems)
+    }
   });
 });
 

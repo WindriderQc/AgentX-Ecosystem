@@ -129,6 +129,8 @@ app.use(async (req, res, next) => {
     const publicUrls = await resolvePublicUrls();
     app.locals.publicUrls = publicUrls;
     res.locals.publicUrls = publicUrls;
+    // Same validated launchers Core renders, so navigation stays identical.
+    res.locals.trustedRuntimeNavItems = await resolvePublicUrls.resolveNavigation();
   }
   next();
 });

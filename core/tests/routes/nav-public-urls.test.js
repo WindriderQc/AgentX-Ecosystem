@@ -72,18 +72,56 @@ describe('shared navigation public URL contract', () => {
     }
   });
 
-  test('full Core navigation exposes validated trusted runtime launchers only where supplied', async () => {
-    const items = [
-      { id: 'openclaw-runtime', label: 'OpenClaw', href: '/api/openclaw/control-launch/overview', icon: 'fa-paw' },
-      { id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal' },
-    ];
-    const core = await renderNav('core', 'full', 'nerve-center', items);
+  const runtimeLaunchers = normalizeTrustedRuntimeNavItems([
+    { id: 'openclaw-runtime', label: 'OpenClaw', href: '/api/openclaw/control-launch/overview', icon: 'fa-paw', owner: 'AIOps', description: 'Protected agent desk.' },
+    { id: 'dsh-studio', label: 'DSH Studio', href: '/api/dsh/control-launch', icon: 'fa-terminal', owner: 'AIOps' },
+  ]);
+
+  function externalRuntimeAnchors(html) {
+    const section = html.split('External runtimes')[1] || '';
+    return [...section.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*data-nav-owner="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)]
+      .map((match) => ({ href: match[1], owner: match[2], label: match[3].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() }));
+  }
+
+  test('full navigation exposes validated trusted runtime launchers as two distinct, provider-tagged doors', async () => {
+    const core = await renderNav('core', 'full', 'nerve-center', runtimeLaunchers);
     expect(core).toContain('External runtimes');
     expect(hrefFor(core, 'OpenClaw')).toBe('/api/openclaw/control-launch/overview');
     expect(hrefFor(core, 'DSH Studio')).toBe('/api/dsh/control-launch');
+    expect(core).toMatch(/href="\/api\/openclaw\/control-launch\/overview"[^>]*target="_blank" rel="noopener"[^>]*data-nav-owner="AIOps"[^>]*title="Protected agent desk\."/);
+    expect(core).toContain('<span class="nav-owner-tag">AIOps</span>');
 
-    expect(await renderNav('core', 'demo', 'demo', items)).not.toContain('DSH Studio');
-    expect(await renderNav('benchmark', 'full', 'benchmark', items)).not.toContain('DSH Studio');
+    expect(await renderNav('core', 'demo', 'demo', runtimeLaunchers)).not.toContain('DSH Studio');
+  });
+
+  test('Benchmark and RAG render exactly the launchers Core renders, through the configured Core authority', async () => {
+    const core = externalRuntimeAnchors(await renderNav('core', 'full', 'nerve-center', runtimeLaunchers));
+    const benchmark = externalRuntimeAnchors(await renderNav('benchmark', 'full', 'benchmark', runtimeLaunchers));
+    const rag = externalRuntimeAnchors(await renderNav('rag', 'full', 'rag', runtimeLaunchers));
+
+    expect(core.map((a) => a.label)).toEqual(['OpenClaw AIOps', 'DSH Studio AIOps']);
+    const absolute = (anchors) => anchors.map((a) => ({ ...a, href: new URL(a.href, 'https://core.example').href }));
+    expect(absolute(benchmark)).toEqual(absolute(core));
+    expect(absolute(rag)).toEqual(absolute(core));
+    expect(benchmark[0].href).toBe('https://core.example/api/openclaw/control-launch/overview');
+    expect(rag[1].href).toBe('https://core.example/api/dsh/control-launch');
+
+    // Without launchers, no service invents a section.
+    for (const service of ['core', 'benchmark', 'rag']) {
+      expect(await renderNav(service, 'full', 'nerve-center', [])).not.toContain('External runtimes');
+    }
+  });
+
+  test('the Product navigation groups are identical on every service', async () => {
+    const groups = (html) => [...html.matchAll(/id="nav-trigger-([a-z-]+)"/g)].map((m) => m[1]);
+    const items = (html) => [...html.matchAll(/class="dropdown-item[^"]*"[^>]*>\s*<i class="fas [^"]+" aria-hidden="true"><\/i>\s*([^<]+)/g)].map((m) => m[1].trim());
+    const core = await renderNav('core', 'full', 'nerve-center', runtimeLaunchers);
+    const benchmark = await renderNav('benchmark', 'full', 'benchmark', runtimeLaunchers);
+    const rag = await renderNav('rag', 'full', 'rag', runtimeLaunchers);
+    expect(groups(benchmark)).toEqual(groups(core));
+    expect(groups(rag)).toEqual(groups(core));
+    expect(items(benchmark)).toEqual(items(core));
+    expect(items(rag)).toEqual(items(core));
   });
 
   test('trusted runtime labels stay escaped in rendered navigation', async () => {
@@ -158,5 +196,15 @@ describe('shared navigation public URL contract', () => {
     expect(source).toContain('hostHomeLink.hidden = false');
     expect(source).not.toContain('192.168.2.99');
     expect(source).not.toContain('Mon écosystème');
+  });
+
+  test('portal lists deployment launchers from the validated navigation projection, never hardcoded', () => {
+    const source = fs.readFileSync(portalPath, 'utf8');
+    expect(source).toContain('id="external-runtimes-tile"');
+    expect(source).toContain("renderExternalRuntimes(cfg?.navigation?.trustedRuntimeNavItems, configLoaded)");
+    expect(source).toContain('No private runtime is installed in this deployment.');
+    expect(source).toContain("Launchers could not be read from Core; refresh to retry.");
+    expect(source).toMatch(/\/\^\\\/api\\\/\(\?!\\\/\)\/\.test\(item\.href\)/);
+    expect(source).not.toMatch(/openclaw|dsh/i);
   });
 });

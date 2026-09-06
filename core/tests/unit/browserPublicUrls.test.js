@@ -50,6 +50,33 @@ describe('browser public URL authority', () => {
     }));
   });
 
+  test('composed services receive the validated trusted runtime launchers from the same Core config', async () => {
+    const loadCoreConfig = jest.fn().mockResolvedValue({
+      publicUrls: { core: 'https://core.example/' },
+      navigation: {
+        trustedRuntimeNavItems: [
+          { id: 'openclaw-runtime', label: 'OpenClaw', href: '/api/openclaw/control-launch/overview', icon: 'fa-paw', owner: 'AIOps' },
+          { id: 'evil', label: 'Evil', href: 'https://evil.example/', icon: 'fa-bug' },
+        ],
+      },
+    });
+    const resolve = createCorePublicUrlsResolver({ loadCoreConfig, env: {} });
+
+    await expect(resolve.resolveNavigation()).resolves.toEqual([
+      { id: 'openclaw-runtime', label: 'OpenClaw', href: '/api/openclaw/control-launch/overview', icon: 'fa-paw', owner: 'AIOps' },
+    ]);
+    // One cached payload serves both projections.
+    await resolve();
+    expect(loadCoreConfig).toHaveBeenCalledTimes(1);
+  });
+
+  test('standalone services render no launchers when Core config is unavailable', async () => {
+    const resolve = createCorePublicUrlsResolver({ env: {} });
+    await expect(resolve.resolveNavigation()).resolves.toEqual([]);
+    const failing = createCorePublicUrlsResolver({ loadCoreConfig: jest.fn().mockRejectedValue(new Error('down')), env: {} });
+    await expect(failing.resolveNavigation()).resolves.toEqual([]);
+  });
+
   test('does not own a fallback transport when no bounded config loader is injected', async () => {
     const fetchImpl = jest.fn();
     const resolve = createCorePublicUrlsResolver({
