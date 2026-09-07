@@ -702,6 +702,11 @@ a:hover {
   color: var(--text-muted);
 }
 
+.filter-bar .control-group {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .filter-bar select,
 .filter-bar input[type="text"] {
   min-width: 140px;
