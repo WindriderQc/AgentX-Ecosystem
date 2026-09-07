@@ -148,6 +148,13 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain('The reviewer identity must differ from the worker.');
   });
 
+  test('reopens the existing correction path for a closed unmerged delivery', () => {
+    expect(script).toContain("deliveryItem?.stage === 'merge_blocked'");
+    expect(script).toContain("String(deliveryItem?.pullRequest?.state || '').toLowerCase() === 'closed'");
+    expect(script).toContain("task.status === 'review' || closedUnmergedDelivery");
+    expect(script).toContain('is closed without merge. Record the required replacement');
+  });
+
   test('renders one fail-closed exact-identity merge click and secondary expert links', () => {
     expect(script).toContain('data-delivery-merge');
     expect(script).toContain('/api/runtime-bridges/coding-delivery/merge');

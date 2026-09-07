@@ -1346,6 +1346,12 @@
     const deps = Array.isArray(task.dependsOn) ? task.dependsOn : [];
     const reviewer = readStorage(STORAGE_REVIEWER) || '';
     const review = task.status === 'review' ? reviewContext(task) : null;
+    const deliveryItem = Array.isArray(state.delivery?.items)
+      ? state.delivery.items.find((item) => item?.pipelineId === task.pipelineId)
+      : null;
+    const closedUnmergedDelivery = task.status === 'done'
+      && deliveryItem?.stage === 'merge_blocked'
+      && String(deliveryItem?.pullRequest?.state || '').toLowerCase() === 'closed';
 
     const actions = [];
     if (task.status === 'review') {
@@ -1358,8 +1364,15 @@
           </label>
           <button type="submit" class="pipeline-btn primary compact"><i class="fas fa-check-double"></i><span>Accept result</span></button>
         </form>
+      `);
+    }
+    if (task.status === 'review' || closedUnmergedDelivery) {
+      const correctionDetail = closedUnmergedDelivery
+        ? `PR #${deliveryItem.pullRequest.number} is closed without merge. Record the required replacement, release the accepted result, and return this exact task to the guarded queue.`
+        : 'Record a precise reason, release the claim, and return this exact task to the guarded queue.';
+      actions.push(`
         <form class="pipeline-drawer-action" data-drawer-action="request-correction">
-          <p><strong>Request a correction</strong><br>Record a precise reason, release the claim, and return this exact task to the guarded queue.</p>
+          <p><strong>Request a correction</strong><br>${escapeHtml(correctionDetail)}</p>
           <label>
             <span>Reviewer identity</span>
             <input type="text" name="by" required maxlength="80" placeholder="your identity, e.g. yanik" value="${escapeHtml(reviewer)}">
