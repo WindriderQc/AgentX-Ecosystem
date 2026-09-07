@@ -18,7 +18,17 @@
     var url = path.startsWith('/') ? path : API_BASE + '/' + path;
     var requestOptions = Object.assign({ cache: 'no-store' }, options || {});
     var res = await fetch(url, requestOptions);
-    var body = await res.json();
+    var body;
+    try {
+      body = await res.json();
+    } catch (_) {
+      var parseError = new Error(res.ok ? 'The service returned an unreadable response. Try again.' : 'Request failed (' + res.status + '). Try again.');
+      parseError.status = res.status;
+      throw parseError;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new Error('The service returned an unreadable response. Try again.');
+    }
     if (!res.ok || body.ok === false || body.status === 'error') {
       var err = new Error(body.error || body.message || ('Request failed (' + res.status + ')'));
       err.detail = body.detail;
@@ -32,8 +42,7 @@
 
   /**
    * GET /api/rag/status — read the latest dependency evidence without mutation.
-   * Dashboard polling must stay observational so it works through the public
-   * read-only surface without weakening the mutation guard.
+   * Dashboard polling reads cached observations without starting an embedding probe.
    */
   async function getStatus() {
     return apiFetch('/api/rag/status');
@@ -41,8 +50,7 @@
 
   /**
    * POST /api/rag/status/refresh — actively refresh dependency health.
-   * Used by the interactive search readiness gate through Core's protected,
-   * same-origin proxy. Dashboard polling remains observational.
+   * Search uses a fresh embedding probe before enabling retrieval.
    */
   async function refreshStatus() {
     return apiFetch('/api/rag/status/refresh', { method: 'POST' });

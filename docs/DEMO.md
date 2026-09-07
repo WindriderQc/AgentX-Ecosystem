@@ -44,3 +44,21 @@ details. The exercise isolates prompt behavior from model and routing changes.
 This workflow also needs the configured embedding model. Environment-specific
 operations, private data, and external adapters are intentionally absent from
 all three demos.
+
+For a repeatable first try, paste this fictional note:
+
+```text
+The Cedar project launches on October 12. Maya owns the launch checklist.
+The team reviews open issues every Tuesday at 10:00.
+```
+
+Search for **Who owns the Cedar launch checklist?** The matching passage
+should contain Maya's name. Choose **Open exact source** to inspect the indexed
+document and its passages. Search returns supporting passages, rather than a
+generated conversational answer.
+
+If a dependency is unavailable, you can write your question and set filters
+while fixing it. Select **Check again** on the search page to refresh readiness
+without leaving or losing that input. In **Indexed documents**, use **Load more
+documents** to continue beyond the first 200; active source and tag filters
+stay applied.

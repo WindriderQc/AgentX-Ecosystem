@@ -30,6 +30,9 @@
     els.emptyBanner = document.getElementById('empty-index-banner');
     els.emptyDetail = document.getElementById('empty-banner-detail');
     els.status      = document.getElementById('documents-status');
+    els.pagination = document.getElementById('documents-pagination');
+    els.pageSummary = document.getElementById('documents-page-summary');
+    els.more = document.getElementById('btn-more-documents');
     els.deleteDialog = document.getElementById('delete-document-dialog');
     els.deleteForm = document.getElementById('delete-document-form');
     els.deleteDocumentId = document.getElementById('delete-document-id');
@@ -70,6 +73,9 @@
   var pageContext = { docId: '', source: '', invalid: false, invalidFields: [] };
   var deleteConfirmationResolve = null;
   var deleteConfirmationOpener = null;
+  var loadVersion = 0;
+  var nextPage = null;
+  var documentTotal = null;
 
   // ── Helpers ───────────────────────────────────────────────
 
@@ -113,6 +119,10 @@
   }
 
   function beginLoad(title, detail) {
+    // Invalidate older responses when filters or exact-source context change.
+    loadVersion += 1;
+    nextPage = null;
+    els.pagination.hidden = true;
     els.loadingState.hidden = false;
     els.emptyState.hidden = true;
     els.contextNotFound.hidden = true;
@@ -122,6 +132,7 @@
   }
 
   function showContextNotFound(title, detail) {
+    els.pagination.hidden = true;
     allDocuments = [];
     expandedIds = {};
     els.loadingState.hidden = true;
@@ -138,6 +149,7 @@
   }
 
   function showDeleteReceipt(documentData) {
+    els.pagination.hidden = true;
     var source = documentData.source || 'Unknown provenance';
     pageContext = { docId: '', source: '', invalid: false, invalidFields: [] };
     replaceUrlContext(pageContext);
@@ -194,21 +206,52 @@
 
   // ── Load documents ────────────────────────────────────────
 
-  async function loadDocuments(filters, context) {
-    beginLoad(
-      hasFilters(filters) ? 'Filtering corpus' : 'Loading corpus',
-      'Reading document identifiers, source provenance and indexed passage counts.'
-    );
+  async function loadDocuments(filters, context, offset) {
+    var append = offset > 0;
+    if (append) {
+      if (els.more.disabled) return;
+      els.more.disabled = true;
+      els.more.textContent = 'Loading…';
+      els.errorState.hidden = true;
+    } else {
+      beginLoad(
+        hasFilters(filters) ? 'Filtering corpus' : 'Loading corpus',
+        'Reading document identifiers, source provenance and indexed passage counts.'
+      );
+    }
+    var version = loadVersion;
 
     try {
-      var params = { limit: 200 };
+      var params = { limit: 200, offset: offset || 0 };
       if (filters && filters.source) params.source = filters.source;
       if (filters && filters.tags) params.tags = filters.tags;
 
       var resp = await window.RAG.getDocuments(params);
+      if (version !== loadVersion) return;
       var data = resp.data;
-      allDocuments = data.documents || [];
-      expandedIds = {};
+      var page = data.documents || [];
+      documentTotal = Number.isInteger(data.total) && data.total >= 0 ? data.total : null;
+      var followingOffset = params.offset + page.length;
+      var hasMore = documentTotal === null ? page.length === params.limit : followingOffset < documentTotal;
+      nextPage = page.length && hasMore ? { filters: filters, context: context, offset: followingOffset } : null;
+      if (append) {
+        var knownIds = new Set(allDocuments.map(function (doc) { return doc.documentId; }));
+        var firstNewRow = null;
+        page.forEach(function (doc) {
+          if (knownIds.has(doc.documentId)) return;
+          knownIds.add(doc.documentId);
+          allDocuments.push(doc);
+          var row = createDocRow(doc);
+          els.tbody.appendChild(row);
+          if (!firstNewRow) firstNewRow = row;
+        });
+        if (firstNewRow) firstNewRow.querySelector('.source-expand').focus({ preventScroll: true });
+      } else {
+        allDocuments = page;
+        expandedIds = {};
+        renderTable(allDocuments);
+      }
+      updatePagination();
 
       els.loadingState.hidden = true;
 
@@ -230,7 +273,6 @@
       els.table.hidden = false;
       populateSourceFilter(allDocuments, filters && filters.source);
       updateCounts(allDocuments);
-      renderTable(allDocuments);
       setDocumentsStatus(
         'ok',
         context && context.source ? 'Exact source filter active' : 'Documents ready',
@@ -239,11 +281,23 @@
           : allDocuments.length.toLocaleString() + ' indexed document' + (allDocuments.length === 1 ? '' : 's') + ' visible in this view.'
       );
     } catch (err) {
+      if (version !== loadVersion) return;
       els.loadingState.hidden = true;
       els.errorState.hidden = false;
       els.errorState.textContent = 'Failed to load indexed documents: ' + (err.message || 'unknown error');
       setDocumentsStatus('error', 'Could not load documents', err.message || 'Unknown document browser error.');
+    } finally {
+      if (version === loadVersion) {
+        els.more.disabled = false;
+        els.more.textContent = 'Load more documents';
+      }
     }
+  }
+
+  function updatePagination() {
+    els.pagination.hidden = !nextPage;
+    els.pageSummary.textContent = allDocuments.length.toLocaleString() +
+      (documentTotal === null ? ' documents loaded' : ' of ' + documentTotal.toLocaleString() + ' documents loaded');
   }
 
   function normalizeDetailDocument(data) {
@@ -515,6 +569,9 @@
 
       // Update local state and counts
       allDocuments = allDocuments.filter(function (d) { return d.documentId !== docId; });
+      if (nextPage) nextPage.offset = Math.max(0, nextPage.offset - 1);
+      if (documentTotal !== null) documentTotal = Math.max(0, documentTotal - 1);
+      updatePagination();
       updateCounts(allDocuments);
       populateSourceFilter(allDocuments);
 
@@ -548,6 +605,10 @@
   document.addEventListener('DOMContentLoaded', function () {
     cacheElements();
     checkEmptyIndex();
+
+    els.more.addEventListener('click', function () {
+      if (nextPage) loadDocuments(nextPage.filters, nextPage.context, nextPage.offset);
+    });
 
     els.deleteInput.addEventListener('input', function () {
       var matches = els.deleteInput.value === els.deleteExpected.textContent;
