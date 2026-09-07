@@ -649,6 +649,49 @@ describe('benchmarkClaimService', () => {
       expect(hostPrefService.restoreBenchmarkRuntime).toHaveBeenCalledTimes(1);
     });
 
+    it('lets only the adopted UNKNOWN recovery owner replace a quarantined finalizer fence', async () => {
+      const runtimeCoordinationService = require('../../src/services/runtimeCoordinationService');
+      const claimed = await service.claimBenchmark(HOST_URL, BATCH_A, null, {
+        admissionId: 'admission-profiler',
+        admissionGeneration: 'admission-generation',
+        admissionPrincipal: 'benchmark-service'
+      });
+      await HostPreference.updateOne(
+        { hostUrl: HOST_URL },
+        { $set: { 'benchmarkClaim.finalizeToken': 'quarantined-finalizer' } }
+      );
+      jest.spyOn(runtimeCoordinationService, 'assertWorkloadRecovery').mockResolvedValue({
+        owned: true,
+        admissionId: 'admission-profiler',
+        generation: 'admission-generation',
+        principal: 'benchmark-service',
+        workloadId: BATCH_A,
+        recoveryState: 'UNKNOWN'
+      });
+
+      const restored = await service.restoreClaimsForWorkloadRecovery({
+        recoveryId: 'recovery-profiler',
+        recoveryGeneration: 'recovery-generation',
+        principal: 'benchmark-service',
+        ownerId: 'recovery-worker'
+      });
+
+      expect(restored).toMatchObject({ restored: true });
+      expect(runtimeCoordinationService.assertWorkloadRecovery).toHaveBeenCalledTimes(2);
+      expect(hostPrefService.restoreBenchmarkRuntime).toHaveBeenCalledWith(
+        HOST_URL,
+        expect.objectContaining({ exact: true }),
+        expect.objectContaining({
+          batchId: BATCH_A,
+          claimGeneration: claimed.claimGeneration,
+          finalizeToken: expect.not.stringMatching(/^quarantined-finalizer$/)
+        })
+      );
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.status).toBe('ready');
+      expect(stored.benchmarkClaim?.batchId).toBeNull();
+    });
+
     it('linearizes restore and release before a replacement owner can acquire', async () => {
       let finishRestore;
       let expectedSnapshotIdentity;

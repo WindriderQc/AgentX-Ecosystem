@@ -113,6 +113,86 @@ describe('hostPreferenceService', () => {
       });
     });
 
+    it('recognizes the Ollama 0.33 maximum-duration expiry as permanent residency', async () => {
+      const permanentExpiry = new Date(Date.now() + 292 * 365.25 * 24 * 60 * 60 * 1000);
+      global.fetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          models: [{
+            name: 'qwen:latest',
+            digest: 'sha256:qwen',
+            size: 8_000_000_000,
+            size_vram: 7_500_000_000,
+            context_length: 262144,
+            expires_at: permanentExpiry.toISOString()
+          }]
+        })
+      }));
+
+      await expect(service.captureBenchmarkRuntime(HOST_URL)).resolves.toMatchObject({
+        residents: [{ model: 'qwen:latest', keepAlive: -1 }]
+      });
+    });
+
+    it('restores a legacy maximum-duration snapshot with permanent keep-alive semantics', async () => {
+      await HostPreference.create({
+        hostUrl: HOST_URL,
+        hostKey: 'primary',
+        status: 'benchmarking',
+        benchmarkClaim: {
+          batchId: 'batch-permanent',
+          claimGeneration: 'generation-permanent',
+          prevStatus: 'ready',
+          claimedAt: new Date()
+        }
+      });
+      const permanentExpiry = new Date(Date.now() + 292 * 365.25 * 24 * 60 * 60 * 1000);
+      global.fetch = jest.fn(async (url, options = {}) => {
+        if (String(url).endsWith('/api/ps')) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [{
+                name: 'qwen:latest',
+                digest: 'sha256:qwen',
+                size: 8_000_000_000,
+                size_vram: 7_500_000_000,
+                context_length: 262144,
+                expires_at: permanentExpiry.toISOString()
+              }]
+            })
+          };
+        }
+        expect(JSON.parse(options.body).keep_alive).toBe(-1);
+        return { ok: true, text: async () => JSON.stringify({ done: true }) };
+      });
+      const snapshot = {
+        capturedAt: new Date(),
+        source: 'ollama_ps',
+        exact: true,
+        residents: [{
+          model: 'qwen:latest',
+          digest: 'sha256:qwen',
+          artifactSize: 8_000_000_000,
+          sizeVram: 7_500_000_000,
+          contextLength: 262144,
+          keepAlive: 9_223_372_011,
+          expiresAt: permanentExpiry
+        }]
+      };
+      snapshot.identityDigest = service.benchmarkRuntimeSnapshotIdentity(snapshot);
+
+      await expect(service.restoreBenchmarkRuntime(HOST_URL, snapshot, {
+        batchId: 'batch-permanent',
+        claimGeneration: 'generation-permanent'
+      })).resolves.toMatchObject({
+        status: 'ready',
+        verified: true,
+        mode: 'exact_runtime_snapshot',
+        snapshotIdentity: snapshot.identityDigest
+      });
+    });
+
     it('fails verification when an infinite pre-claim resident returns with only a finite TTL', async () => {
       await HostPreference.create({
         hostUrl: HOST_URL,

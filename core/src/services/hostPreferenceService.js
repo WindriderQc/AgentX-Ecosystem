@@ -67,6 +67,11 @@ if (!Number.isFinite(pinWarmTimeoutMs) || pinWarmTimeoutMs < 30_000) {
 }
 
 const activePinRestores = new Map();
+// Ollama currently represents keep_alive=-1 by adding Go's maximum Duration
+// (about 292 years) to the current time. Older releases exposed year 9999.
+// Treat any expiry at least a century away as the same permanent-residency
+// sentinel; a real operator TTL is never remotely close to that horizon.
+const OLLAMA_PERMANENT_EXPIRY_MIN_MS = 100 * 365.25 * 24 * 60 * 60 * 1000;
 
 // ── CRUD ────────────────────────────────────────────────────
 
@@ -219,6 +224,15 @@ async function unloadModel(hostUrl, model, options = {}) {
   }
 }
 
+function isOllamaPermanentExpiry(value, referenceTime = Date.now()) {
+  const parsed = value ? new Date(value) : null;
+  const reference = referenceTime instanceof Date ? referenceTime.getTime() : Number(referenceTime);
+  return Boolean(parsed
+    && Number.isFinite(parsed.getTime())
+    && Number.isFinite(reference)
+    && parsed.getTime() - reference >= OLLAMA_PERMANENT_EXPIRY_MIN_MS);
+}
+
 function benchmarkSnapshotKeepAlive(modelInfo, capturedAt) {
   const expiresAt = modelInfo?.expires_at || modelInfo?.expiresAt;
   const parsed = expiresAt ? new Date(expiresAt) : null;
@@ -228,7 +242,7 @@ function benchmarkSnapshotKeepAlive(modelInfo, capturedAt) {
     throw error;
   }
   // Ollama represents an infinite keep-alive with a far-future timestamp.
-  if (parsed.getUTCFullYear() >= 9000) return { keepAlive: -1, expiresAt: parsed };
+  if (isOllamaPermanentExpiry(parsed, capturedAt)) return { keepAlive: -1, expiresAt: parsed };
   return {
     keepAlive: Math.max(1, Math.ceil((parsed.getTime() - capturedAt.getTime()) / 1000)),
     expiresAt: parsed
@@ -341,7 +355,9 @@ function benchmarkResidentExpiryMatches(target, runningEntry, now = Date.now()) 
   const actualRaw = runningEntry?.expires_at || runningEntry?.expiresAt;
   const actual = actualRaw ? new Date(actualRaw) : null;
   if (!actual || !Number.isFinite(actual.getTime())) return false;
-  if (Number(target.keepAlive) === -1) return actual.getUTCFullYear() >= 9000;
+  const targetIsPermanent = Number(target.keepAlive) === -1
+    || isOllamaPermanentExpiry(target.expiresAt, now);
+  if (targetIsPermanent) return isOllamaPermanentExpiry(actual, now);
   const expected = target.expiresAt ? new Date(target.expiresAt).getTime() : NaN;
   if (!Number.isFinite(expected) || expected <= now) return false;
   // Ollama exposes second-resolution expiry and reload itself consumes time.
@@ -448,7 +464,11 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
         };
       }
     }
+    // Interpret snapshots captured by older Product builds too: Ollama 0.33.x
+    // exposes its permanent sentinel near year 2318, so the stored numeric
+    // delta may be huge even though the requested policy was keep_alive=-1.
     const remainingKeepAlive = target.keepAlive === -1
+      || isOllamaPermanentExpiry(target.expiresAt, Date.now())
       ? -1
       : Math.max(1, Math.ceil((new Date(target.expiresAt).getTime() - Date.now()) / 1000));
     const warmed = await warmDefaultModel(hostUrl, target.model, {
