@@ -5,6 +5,7 @@ import { fetchActiveProfilingState, findProfilingForHost } from './profiling-loc
   'use strict';
 
   var els = {};
+  var refreshRevision = 0;
 
   function cacheElements() {
     els.cockpit = document.getElementById('benchmark-cockpit');
@@ -68,21 +69,23 @@ import { fetchActiveProfilingState, findProfilingForHost } from './profiling-loc
   }
 
   async function refreshExperience() {
+    var revision = ++refreshRevision;
     setReadiness('loading', 'Checking evaluation…', 'Confirming models, host profile, judge and history');
     var responses = await Promise.allSettled([
       fetchJson('/api/ollama-hosts'),
       fetchJson('/api/profiler/hosts'),
-      fetchJson('/api/benchmark/batches?limit=1'),
+      fetchJson('/api/benchmark/batches?status=completed&limit=1'),
       fetchJson('/api/benchmark/batches/active'),
       fetchJson('/api/benchmark/judge/readiness'),
       fetchActiveProfilingState()
     ]);
+    if (revision !== refreshRevision) return;
 
     var runtimes = responses[0].status === 'fulfilled' ? (responses[0].value.hosts || []) : [];
     var profilePayload = responses[1].status === 'fulfilled' ? responses[1].value : {};
     var profiles = profilePayload.data || profilePayload || [];
-    var batchPayload = responses[2].status === 'fulfilled' ? responses[2].value : {};
-    var batches = (batchPayload.data && batchPayload.data.batches) || [];
+    var batchPayload = responses[2].status === 'fulfilled' ? (responses[2].value || {}) : {};
+    var completedTotal = batchPayload.data && batchPayload.data.total;
     var activePayload = responses[3].status === 'fulfilled' ? responses[3].value : {};
     var activeData = activePayload.data || activePayload;
     var active = Array.isArray(activeData)
@@ -98,9 +101,9 @@ import { fetchActiveProfilingState, findProfilingForHost } from './profiling-loc
       return host.status === 'online' && host.baseline && host.baseline.testedAt;
     }) : [];
 
-    els.historyDetail.textContent = batches.length
-      ? batches.length + ' recent comparison' + (batches.length === 1 ? '' : 's')
-      : 'No completed comparisons yet';
+    els.historyDetail.textContent = Number.isInteger(completedTotal) && completedTotal >= 0
+      ? (completedTotal ? completedTotal + ' completed comparison' + (completedTotal === 1 ? '' : 's') : 'No completed comparisons yet')
+      : 'Comparison history unavailable';
 
     if (responses[0].status !== 'fulfilled') {
       setReadiness('unknown', 'Model runtime status is unknown', 'The live check did not finish. Refresh or open connection setup.');
@@ -112,6 +115,11 @@ import { fetchActiveProfilingState, findProfilingForHost } from './profiling-loc
       setReadiness('ok', 'Comparison in progress', 'Live evidence is updating in the expert lab');
       setPrimary('View live comparison', 'Follow progress, rankings and anomalies', '#benchmark-cockpit');
       els.cockpit.open = true;
+      return;
+    }
+    if (responses[3].status !== 'fulfilled') {
+      setReadiness('unknown', 'Comparison status is unknown', 'Refresh or inspect the lab before starting another comparison.');
+      setPrimary('Check comparison progress', 'Verify whether a comparison is already running', '#benchmark-cockpit');
       return;
     }
     if (onlineModels === 0) {
@@ -152,6 +160,15 @@ import { fetchActiveProfilingState, findProfilingForHost } from './profiling-loc
     setPrimary('Set up a comparison', 'Choose contenders and a focused test depth', '#benchmark-cockpit');
   }
 
+  function requestRefresh() {
+    var pending = refreshExperience();
+    var revision = refreshRevision;
+    return pending.catch(function (error) {
+      if (revision !== refreshRevision) return;
+      setReadiness('error', 'Could not check evaluation', error.message || 'Benchmark did not respond.');
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     cacheElements();
     els.primary.addEventListener('click', function (event) {
@@ -159,18 +176,22 @@ import { fetchActiveProfilingState, findProfilingForHost } from './profiling-loc
       event.preventDefault();
       openCockpit();
     });
-    els.refresh.addEventListener('click', refreshExperience);
+    els.refresh.addEventListener('click', requestRefresh);
     els.cockpit.addEventListener('toggle', syncCockpitAccessibility);
     if (location.hash === '#benchmark-cockpit' || document.body.classList.contains('state-live')) els.cockpit.open = true;
     syncCockpitAccessibility();
+    var wasLive = document.body.classList.contains('state-live');
     new MutationObserver(function () {
-      if (document.body.classList.contains('state-live')) {
+      var isLive = document.body.classList.contains('state-live');
+      if (isLive) {
         els.cockpit.open = true;
         syncCockpitAccessibility();
       }
+      if (isLive !== wasLive) {
+        wasLive = isLive;
+        requestRefresh();
+      }
     }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
-    refreshExperience().catch(function (error) {
-      setReadiness('error', 'Could not check evaluation', error.message || 'Benchmark did not respond.');
-    });
+    requestRefresh();
   });
 })();

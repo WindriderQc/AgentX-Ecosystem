@@ -90,6 +90,10 @@ stay applied.
    responses, speed, and scores on the same prompts. Rule-based checks and
    judge scores are different kinds of evidence; missing scores are not zero.
 
+The entry status refreshes when a comparison starts or finishes. Its history
+count includes completed comparisons only. If status or history cannot be
+checked, the page says so; use **Refresh** after the connection recovers.
+
 This small run demonstrates the workflow, not a general model ranking. For
 quality conclusions, use representative tasks, repeat the comparison, and
 prefer a judge independent of the contenders.

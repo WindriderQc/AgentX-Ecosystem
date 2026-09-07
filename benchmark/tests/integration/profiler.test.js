@@ -1,4 +1,4 @@
-const request = require('supertest');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 
 jest.mock('../../src/services/profiler/hostProfileService', () => ({
     getAll: jest.fn()
@@ -15,6 +15,18 @@ const hostProfileService = require('../../src/services/profiler/hostProfileServi
 const modelProfileService = require('../../src/services/profiler/modelProfileService');
 
 describe('Profiler Routes', () => {
+    let httpHarness;
+    let api;
+
+    beforeAll(async () => {
+        httpHarness = await startTestHttpHarness(app, {
+            transport: process.platform === 'win32' ? 'pipe' : 'tcp'
+        });
+        api = httpHarness.request;
+    });
+
+    afterAll(async () => { await httpHarness?.close(); });
+
     afterEach(() => {
         jest.clearAllMocks();
     });
@@ -36,7 +48,7 @@ describe('Profiler Routes', () => {
                 'gemma3:12b'
             ]);
 
-            const response = await request(app).get('/api/profiler/dashboard');
+            const response = await api.get('/api/profiler/dashboard');
 
             expect(response.status).toBe(200);
             expect(response.body.data).toEqual({
@@ -64,7 +76,7 @@ describe('Profiler Routes', () => {
                 'phi4:14b'
             ]);
 
-            const response = await request(app).get('/api/profiler/dashboard');
+            const response = await api.get('/api/profiler/dashboard');
 
             expect(response.status).toBe(200);
             expect(response.body.data.funnel.benchmarked).toBe(2);
@@ -73,7 +85,7 @@ describe('Profiler Routes', () => {
         it('should return 500 when the dashboard query fails', async () => {
             hostProfileService.getAll.mockRejectedValue(new Error('host db unavailable'));
 
-            const response = await request(app).get('/api/profiler/dashboard');
+            const response = await api.get('/api/profiler/dashboard');
 
             expect(response.status).toBe(500);
             expect(response.body).toMatchObject({ error: 'host db unavailable' });
