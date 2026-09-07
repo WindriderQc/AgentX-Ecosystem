@@ -28,7 +28,7 @@ import {
 } from './chat-profile.js';
 
 document.addEventListener('DOMContentLoaded', () => {
-  const defaultMessagePlaceholder = 'Ask Agent X anything…';
+  const defaultMessagePlaceholder = 'Ask a question or explore an idea…';
 
   const elements = {
     chatWindow: document.getElementById('chatWindow'),
@@ -318,7 +318,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const hostField = document.querySelector('.chat-expert-strip [data-ci-field="host"]');
     const routeField = document.querySelector('.chat-expert-strip [data-ci-field="route"]');
 
-    if (modeEl) modeEl.textContent = modeLabel;
+    if (modeEl) {
+      modeEl.textContent = mode === 'manual' ? (elements.modelSelect?.value || 'Choose a model') : modeLabel;
+      modeEl.title = modeEl.textContent;
+    }
     if (automationEl) automationEl.textContent = hostState.mode === 'router' ? 'Automatic' : 'Pinned';
     const ready = hostState.available && !hostState.requiresModel;
     if (helpEl) {
@@ -641,11 +644,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Config drawer
     if (elements.toggleConfigBtn) elements.toggleConfigBtn.addEventListener('click', toggleConfigDrawer);
+    document.getElementById('composerModeBtn')?.addEventListener('click', () => {
+      setConfigDrawerState(true);
+      elements.routingModeSelect?.focus({ preventScroll: true });
+    });
+    document.getElementById('workspaceNewChatBtn')?.addEventListener('click', () => {
+      clearChat();
+      elements.messageInput.focus({ preventScroll: true });
+    });
     if (elements.configDrawerClose) elements.configDrawerClose.addEventListener('click', closeConfigDrawer);
     if (elements.configDrawerBackdrop) elements.configDrawerBackdrop.addEventListener('click', closeConfigDrawer);
     if (elements.routeRecoveryAction) elements.routeRecoveryAction.addEventListener('click', () => { void activateManualRouteRecovery(); });
 
-    elements.chatWindow?.addEventListener('click', (event) => {
+    const composerTools = document.querySelector('.composer-tools');
+    composerTools?.addEventListener('click', (event) => {
+      if (!event.target.closest('button')) return;
+      composerTools.open = false;
+      elements.messageInput.focus({ preventScroll: true });
+    });
+    composerTools?.addEventListener('change', () => { composerTools.open = false; });
+    document.addEventListener('click', (event) => {
+      if (composerTools?.open && !composerTools.contains(event.target)) composerTools.open = false;
+    });
+    composerTools?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      composerTools.open = false;
+      composerTools.querySelector('summary')?.focus({ preventScroll: true });
+      event.stopPropagation();
+    });
+
+    document.querySelector('.chat-layout')?.addEventListener('click', (event) => {
       const starter = event.target.closest('[data-chat-starter]');
       if (!starter) return;
       elements.messageInput.value = starter.dataset.chatStarter || '';
