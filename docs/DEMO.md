@@ -67,3 +67,23 @@ while fixing it. Select **Check again** on the search page to refresh readiness
 without leaving or losing that input. In **Indexed documents**, use **Load more
 documents** to continue beyond the first 200; active source and tag filters
 stay applied.
+
+## Demo 4 — complete a model comparison
+
+1. Open **Compare models**, then **Prepare the host**. Choose an installed
+   baseline model and run **Baseline Probe**.
+2. Use **Profile exact models** to run a **Standard** profile for two installed
+   chat models. Wait for both to finish. Long-context probes can take several
+   minutes, especially when a model exceeds GPU memory.
+3. Return to **Compare models**. If prompted, choose an installed judge in
+   setup and save it.
+4. Open **Set up a comparison**, choose the prepared host and two contenders.
+   For a small first run, set all levels to **Off**, then choose **1 per
+   category** for **L1 Basic**. Review the model and test counts before starting.
+5. Wait for generation and judging to finish. Open the results to compare
+   responses, speed, and scores on the same prompts. Rule-based checks and
+   judge scores are different kinds of evidence; missing scores are not zero.
+
+This small run demonstrates the workflow, not a general model ranking. For
+quality conclusions, use representative tasks, repeat the comparison, and
+prefer a judge independent of the contenders.
