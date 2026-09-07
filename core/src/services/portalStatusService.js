@@ -2,7 +2,7 @@
  * Portal status aggregator — "Live Portal".
  *
  * Server-side health probe of every AgentX service so the portal landing page
- * (core/public/portal/index.html) can show live status WITHOUT cross-origin
+ * (core/views/pages/home.ejs) can show live status WITHOUT cross-origin
  * requests (the browser only ever calls same-origin core `/api/portal/health`).
  *
  * Best-effort and fail-soft: bounded per-service timeout, never throws, and a

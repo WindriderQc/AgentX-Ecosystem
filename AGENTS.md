@@ -49,3 +49,14 @@ contracts.
 - Wait for the launcher result; keep its `test-results/<run-id>` evidence.
   A retry is not a fix. Do not hide leaks with `--forceExit`, borrow application
   Mongo URIs, or kill unrelated Mongo/Node processes.
+
+## Worktree cleanup
+
+Concurrent agents should use separate worktrees. The agent completing the
+merge/integration owns cleanup: remove the finished task's worktree and local
+branch after verifying the work is integrated, no agent/process still uses it,
+and no modified, untracked, or ignored files need preserving. Use Git worktree
+removal without force; never delete the primary checkout or another active
+task's files. Verify absolute paths before removal. If cleanup must wait,
+state the retained worktree, reason, and owner in the handoff; the integrating
+agent finishes it. Report cleanup in the final status. No new gate or CI job.

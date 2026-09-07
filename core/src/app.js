@@ -45,6 +45,7 @@ const app = express();
 const agentxProfile = currentAgentXProfile();
 // Expose browser-reachable service URLs to all rendered views.
 app.locals.publicUrls = getPublicUrls();
+app.locals.buildProductNavigation = require('../../shared/productNavigation').buildProductNavigation;
 app.locals.hostHome = getHostHomeLink();
 app.locals.agentxProfile = agentxProfile;
 const IN_PROD = process.env.NODE_ENV === 'production';
@@ -601,25 +602,23 @@ app.get('/hosts', (req, res) => res.redirect(301, '/nerve-center'));
 // ============================================
 // EJS PAGE ROUTES
 // ============================================
-// Root \u2192 Portal (cross-app landing). The former "/" chat page is now Playground.
-app.get('/', (req, res) => {
-  if (isDemoProfile(agentxProfile)) return res.redirect(302, '/demo');
-  res.sendFile(path.join(__dirname, '..', 'public', 'portal', 'index.html'));
-});
-
-app.get('/demo', (_req, res) => {
+// One Product home. Trusted extensions may own the deployment's root page.
+function renderProductHome(_req, res) {
   res.render('layouts/main', {
-    pageView: '../pages/demo',
-    title: 'Agent X · Demo',
+    pageView: '../pages/home',
+    title: 'Agent X · Home',
     service: 'core',
-    activePage: 'demo',
+    activePage: 'portal',
     showNav: false,
-    headCss: [
-      '<link rel="stylesheet" href="/styles.css">',
-      '<link rel="stylesheet" href="/css/demo.css">'
-    ].join('\n'),
-    footerJs: '<script src="/js/demo.js" defer></script>'
+    headCss: '<link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/css/home.css">',
+    footerJs: '<script src="/js/home.js" defer></script>'
   });
+}
+app.get('/', renderProductHome);
+app.get('/portal', renderProductHome);
+app.get(['/demo', '/portal/index.html'], (req, res) => {
+  const queryIndex = req.originalUrl.indexOf('?');
+  res.redirect(302, '/portal/' + (queryIndex >= 0 ? req.originalUrl.slice(queryIndex) : ''));
 });
 
 // Legacy alias: redirect /chat \u2192 /playground (page rename 2026-04-23)

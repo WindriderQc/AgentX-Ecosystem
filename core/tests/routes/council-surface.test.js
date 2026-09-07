@@ -23,12 +23,12 @@ describe('AgentX Council surface', () => {
 
   it('links Council from AgentX surfaces and declares the advisory boundary', () => {
     const linkedSources = [
-      read('core/views/partials/nav.ejs'),
+      read('shared/productNavigation.js'),
       read('core/public/js/chat/chat-main.js'),
     ];
 
     linkedSources.forEach((source) => expect(source).toMatch(/\/council/));
-    expect(read('core/public/portal/index.html')).not.toMatch(/href="http:\/\/localhost:3080\/council"/);
+    expect(read('core/views/pages/home.ejs')).not.toMatch(/href="http:\/\/localhost:3080\/council"/);
     expect(read('core/views/pages/chat.ejs')).toContain('id="roundtableBtn"');
     // The Playground button is an explicit handoff, never a convening action:
     // it must not promise a Council answer it cannot produce in place.
