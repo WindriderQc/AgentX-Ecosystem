@@ -155,12 +155,6 @@
   .agentx-home__tasks { grid-template-columns: 1fr; }
   .agentx-task-card--primary { grid-column: auto; }
   .agentx-task-card { min-height: 220px; }
-  .agentx-home__mechanics summary { align-items: flex-start; }
-  .agentx-home__mechanics-action { display: none !important; }
-  .agentx-home__flow { grid-template-columns: 1fr; }
-  .agentx-home__flow > i { transform: rotate(90deg); justify-self: center; }
-  .agentx-home__mechanics-footer { align-items: flex-start; flex-direction: column; }
-  .agentx-home__mechanics-links { justify-content: flex-start; }
 }
 
 @media (prefers-reduced-motion: reduce) {
