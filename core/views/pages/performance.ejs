@@ -7,7 +7,7 @@
             <div class="header-content">
                 <div class="eyebrow">SYSTEM PERFORMANCE</div>
                 <h1><i class="fas fa-chart-line"></i>Performance Monitoring Dashboard</h1>
-                <p class="lede">Real-time performance metrics, load test results, and baseline comparisons</p>
+                <p class="lede">Request performance over the selected period, load test results, and baseline comparisons</p>
             </div>
             <div class="header-controls">
                 <select id="timeRangeSelect">
@@ -28,18 +28,21 @@
             </div>
         </header>
 
-        <div class="sources-indicator" id="sourcesIndicator">
-            <strong>Sources:</strong> Production request snapshots (hourly) &bull; Load tests &bull; Baselines
-        </div>
+        <details class="sources-disclosure">
+            <summary>Sources and measurement details</summary>
+            <div class="sources-indicator" id="sourcesIndicator">
+                <strong>Sources:</strong> Production request snapshots (hourly) &bull; Load tests &bull; Baselines
+            </div>
+        </details>
 
         <!-- System Health Overview -->
         <div class="stats-grid">
-            <div class="stat-card" data-tooltip="Overall system health status based on error rates and response times">
-                <div class="label">System Status</div>
+            <div class="stat-card" data-tooltip="Request health over the selected period, based on error rates and response times">
+                <div class="label">Request Health</div>
                 <div class="value">
-                    <span class="badge healthy" id="systemStatus">Healthy</span>
+                    <span class="badge" id="systemStatus">Loading</span>
                 </div>
-                <div class="sub">Overall health</div>
+                <div class="sub">Selected period</div>
             </div>
             <div class="stat-card" data-tooltip="Average response time across all requests in the selected time period">
                 <div class="label">Avg Response Time</div>
@@ -47,7 +50,7 @@
                     <span id="avgResponseTime">—</span>
                     <span class="trend" id="responseTrend"></span>
                 </div>
-                <div class="sub">24h average</div>
+                <div class="sub">Selected-period average</div>
             </div>
             <div class="stat-card" data-tooltip="Requests per second processed by the system">
                 <div class="label">Throughput</div>
@@ -65,10 +68,10 @@
                 </div>
                 <div class="sub">Error percentage</div>
             </div>
-            <div class="stat-card" data-tooltip="System uptime percentage over the last 24 hours">
-                <div class="label">Uptime</div>
+            <div class="stat-card" data-tooltip="Percentage of recorded requests that succeeded over the selected period">
+                <div class="label">Request Success</div>
                 <div class="value" id="uptime">—</div>
-                <div class="sub">24h uptime</div>
+                <div class="sub">Selected period</div>
             </div>
             <div class="stat-card" data-tooltip="95th percentile latency - 95% of requests completed faster than this">
                 <div class="label">P95 Latency</div>

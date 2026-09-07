@@ -93,6 +93,16 @@
             color: var(--muted);
         }
 
+        .sources-disclosure {
+            margin-bottom: 24px;
+        }
+
+        .sources-disclosure > summary {
+            padding: 10px 14px;
+            color: var(--text);
+            cursor: pointer;
+        }
+
         .sources-indicator {
             margin: 0 0 24px;
             padding: 10px 14px;
