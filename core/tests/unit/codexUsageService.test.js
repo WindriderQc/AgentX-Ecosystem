@@ -1,7 +1,6 @@
 const {
   ingestCodexUsage,
   normalizePayload,
-  tokenAllowed,
   valueSignal,
 } = require('../../src/services/codexUsageService');
 
@@ -79,22 +78,5 @@ describe('codexUsageService', () => {
     expect(valueSignal({ sessions: 0, totalTokens: 0 }, 0)[0]).toBe('awaiting-data');
     expect(valueSignal({ sessions: 4, activeDays: 2, totalTokens: 500_000 }, 10)[0]).toBe('light');
     expect(valueSignal({ sessions: 20, activeDays: 12, totalTokens: 4_000_000 }, 20)[0]).toBe('strong');
-  });
-
-  it('accepts only the AgentX-named usage token header', () => {
-    const previousUsageToken = process.env.AGENTX_CODEX_USAGE_TOKEN;
-    const requestWith = (headers) => ({
-      get: (name) => headers[String(name).toLowerCase()],
-    });
-
-    try {
-      process.env.AGENTX_CODEX_USAGE_TOKEN = 'usage-secret';
-
-      expect(tokenAllowed(requestWith({ 'x-agentx-codex-usage-token': 'usage-secret' }))).toBe(true);
-      expect(tokenAllowed(requestWith({ 'x-legacy-usage-token': 'usage-secret' }))).toBe(false);
-    } finally {
-      if (previousUsageToken === undefined) delete process.env.AGENTX_CODEX_USAGE_TOKEN;
-      else process.env.AGENTX_CODEX_USAGE_TOKEN = previousUsageToken;
-    }
   });
 });

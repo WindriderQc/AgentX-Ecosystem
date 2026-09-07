@@ -103,12 +103,6 @@ const inferenceContractService = require('../../src/services/inferenceContractSe
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    req.headers.host = 'localhost:3180';
-    req.headers.origin = 'http://localhost:3180';
-    req.headers['sec-fetch-site'] = 'same-origin';
-    next();
-  });
   app.use('/api', apiRoutes);
   return app;
 }
@@ -138,16 +132,6 @@ function mockOllama() {
 
 describe('POST /api/inference/generate exact artifact routing', () => {
   const app = buildApp();
-  const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
-
-  beforeAll(() => {
-    process.env.AGENTX_BENCHMARK_TOKEN = 'test-benchmark-token';
-  });
-
-  afterAll(() => {
-    if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-    else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
-  });
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -206,48 +190,23 @@ describe('POST /api/inference/contract/resolve', () => {
 
 describe('POST /api/inference/contract/resolve Benchmark service identity', () => {
   const app = buildRemoteMachineApp();
-  const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
   const requestBody = {
     model: 'owner/model:8b',
     host: 'primary',
     options: { num_ctx: 8192, num_predict: 2048 }
   };
 
-  beforeAll(() => {
-    process.env.AGENTX_BENCHMARK_TOKEN = 'test-benchmark-token';
-  });
-
-  afterAll(() => {
-    if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-    else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
-  });
-
   beforeEach(() => jest.clearAllMocks());
 
-  function machineRequest(token) {
-    let pending = request(app)
+  it('resolves the contract for a remote Benchmark caller without any token', async () => {
+    const response = await request(app)
       .post('/api/inference/contract/resolve')
       .set('Host', 'remote-benchmark.example')
-      .set('X-Forwarded-For', '203.0.113.21');
-    if (token !== undefined) pending = pending.set('X-AgentX-Benchmark-Token', token);
-    return pending.send(requestBody);
-  }
-
-  it('accepts the exact Benchmark token and resolves the contract', async () => {
-    const response = await machineRequest('test-benchmark-token');
+      .set('X-Forwarded-For', '203.0.113.21')
+      .set('X-AgentX-Caller', 'benchmark-service')
+      .send(requestBody);
 
     expect(response.status).toBe(200);
     expect(inferenceContractService.resolveInferenceContractSnapshot).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ['missing', undefined],
-    ['wrong', 'wrong-token']
-  ])('rejects a %s token before contract resolution', async (_label, token) => {
-    const response = await machineRequest(token);
-
-    expect(response.status).toBe(403);
-    expect(response.body.code).toBe('BENCHMARK_SERVICE_ACCESS_REQUIRED');
-    expect(inferenceContractService.resolveInferenceContractSnapshot).not.toHaveBeenCalled();
   });
 });

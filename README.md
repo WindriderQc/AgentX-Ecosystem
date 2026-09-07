@@ -117,66 +117,10 @@ The measurable delivery horizons and release quality bars are in the
 [Product evolution plan](docs/PRODUCT_EVOLUTION_PLAN.md).
 
 The canonical product-owned page inventory is
-[`config/product-surfaces.json`](config/product-surfaces.json). After startup,
-verify every supported demo page (or only the release-critical set) with:
-
-```bash
-node scripts/verify-product-surfaces.js --profile demo
-node scripts/verify-product-surfaces.js --profile demo --critical-only
-```
-
-Full-profile deployments run the same verifier with `--profile full`; private
-adapters and redirect aliases are intentionally outside this product registry.
-
-For a release candidate, collect one fail-closed, machine-readable receipt that
-reconciles the release contract, live health identity and freshness, every
-registered page, and (in the full profile) the zero-contradiction ecosystem
-evidence budget. A release-candidate receipt must bind the runtime to the exact
-full 40-character Git commit under test:
-
-```bash
-candidate_revision="$(git rev-parse HEAD)"
-node scripts/verify-release-evidence.js \
-  --profile demo \
-  --expected-revision "$candidate_revision" \
-  --output reports/release-evidence.json
-```
-
-Omitting `--expected-revision` is allowed only for a local working-tree
-rehearsal; that receipt does not prove an explicitly selected release revision.
-
-For troubleshooting, export a separate bounded, privacy-safe support receipt.
-It records only allowlisted identity, component readiness, trust/freshness
-counts, contradiction categories, and surface-registry fields—never raw logs,
-addresses, paths, secrets, configuration, or conversation content:
-
-```bash
-node scripts/export-support-receipt.js --profile demo --output support-receipt.json
-```
-
-See [Support receipts](docs/SUPPORT_RECEIPTS.md) for the exact privacy and
-failure contract.
-
-For source tests, dependency preparation, Mongo isolation, and interruption
-diagnostics, see [Running Product tests](docs/TESTING.md).
-
-The browser gate then exercises every critical page for the running profile at
-desktop and mobile widths, checks serious accessibility failures and overflow,
-and runs the Playground and Courthouse keyboard journeys:
-
-```bash
-cd e2e
-npm ci
-npx playwright install chromium
-npm test
-```
-
-It defaults to `demo`; set `AGENTX_E2E_PROFILE=full` against a full-profile
-runtime. Product CI runs both.
-
-Ollama remains optional in both gates. Missing required databases, stale or
-contradictory evidence, mixed service identity, or a broken critical journey is
-a release failure rather than a green-looking partial result.
+[`config/product-surfaces.json`](config/product-surfaces.json). Product CI runs
+each service's test suite and renders the Compose files; a green `main` commit
+then publishes the three product images (see
+[Install and update modes](docs/RELEASES.md)). Ollama remains optional.
 
 ## Stop, clean up, and troubleshoot
 
@@ -193,8 +137,7 @@ protection; export it separately. MongoDB and Qdrant restore are disabled by
 default with `OFFLINE_RESTORE_REQUIRED` until a controlled offline release
 rehearsal is explicitly enabled. Existing artifacts are recovery inputs, not
 proof of a coherent or restorable recovery set.
-See [Recovery contract](docs/RECOVERY.md) for the strict portable bundle,
-offline verifier, and disposable exact-image capture/restore drill.
+See [Recovery contract](docs/RECOVERY.md) for the portable bundle format.
 
 Port conflicts can be handled without editing Compose:
 
@@ -248,14 +191,14 @@ by default with `BENCHMARK_HARNESS_ENABLED=false`.
 Normal users should follow the latest stable GitHub release. Controlled
 deployments pin the Core, Benchmark, and RAG container digests. Advanced users
 may follow `main` and select the immutable `sha-<full-commit>` images for one
-exact revision. The workflow does not move `test` or `latest` tags. Exact
+exact revision. Exact
 commands and rollback expectations are in
 [Install and update modes](docs/RELEASES.md).
 
 Agent X does not require an operations repository. Host-specific automation
 and private integrations stay outside this repository and may call the bounded
 product APIs. Independently deployed applications can use the generic,
-stateless [external consumer API](docs/EXTERNAL_CONSUMERS.md) for authenticated
+stateless [external consumer API](docs/EXTERNAL_CONSUMERS.md) for
 routed inference, effective capability discovery, streaming, and cancellation
 without loading application code or storing application transcripts in Core.
 All separately operated consumers follow the
@@ -266,9 +209,6 @@ Nestor-style assistants can instead use the fixed-operation
 [Nestor consumer API](docs/NESTOR_CONSUMER.md), including bounded SSE inference
 for live speech overlap while keeping persona and transcript ownership outside
 the product.
-Both contracts, product health identity, ecosystem evidence, and bounded RAG
-reads can be checked with the address-free
-[adapter-consumer conformance verifier](docs/ADAPTER_CONSUMER_CONFORMANCE.md).
 External execution harnesses can exchange provider-neutral, fingerprinted
 [worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md). Benchmark
 owns only the neutral target/envelope/receipt, scoring and comparison
@@ -291,3 +231,5 @@ implementation owned by this repository.
 
 Agent X is available under the [MIT License](LICENSE). Report security issues
 through the private process described in [Security policy](SECURITY.md).
+
+For isolated local test runs and interruption diagnostics, see [Running Product tests](docs/TESTING.md).

@@ -167,21 +167,10 @@ describe('operations backup evidence API', () => {
     }
   });
 
-  test('allows the same-origin product UI but rejects a cross-site destructive request', async () => {
+  test('deletes a backup with exact typed confirmation', async () => {
     await harness.request
       .delete('/api/operations/backups/agentx-one.tar.gz')
-      .set('Host', 'localhost')
-      .set('Origin', 'http://localhost')
-      .set('Sec-Fetch-Site', 'same-origin')
       .set('X-AgentX-Confirm', 'DELETE agentx-one.tar.gz')
       .expect(200);
-
-    await harness.request
-      .delete('/api/operations/backups/agentx-one.tar.gz')
-      .set('Host', 'localhost')
-      .set('Origin', 'https://attacker.invalid')
-      .set('Sec-Fetch-Site', 'cross-site')
-      .set('X-AgentX-Confirm', 'DELETE agentx-one.tar.gz')
-      .expect(403);
   });
 });

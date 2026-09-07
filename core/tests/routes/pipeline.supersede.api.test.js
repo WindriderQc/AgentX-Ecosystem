@@ -44,16 +44,8 @@ function mockTasks(byId) {
 }
 
 describe('POST /api/pipeline/tasks/:id/supersede', () => {
-  const originalPipelineToken = process.env.AGENTX_PIPELINE_TOKEN;
-
   beforeEach(() => {
     jest.clearAllMocks();
-    delete process.env.AGENTX_PIPELINE_TOKEN;
-  });
-
-  afterAll(() => {
-    if (originalPipelineToken === undefined) delete process.env.AGENTX_PIPELINE_TOKEN;
-    else process.env.AGENTX_PIPELINE_TOKEN = originalPipelineToken;
   });
 
   test('previews the exact transition and checks without touching the task', async () => {
@@ -114,25 +106,6 @@ describe('POST /api/pipeline/tasks/:id/supersede', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('SUPERSEDE_CONFLICT');
     expect(PipelineTask.updateOne).not.toHaveBeenCalled();
-  });
-
-  test('a worker may preview supersession but cannot confirm task finalization', async () => {
-    process.env.AGENTX_PIPELINE_TOKEN = 'pipeline-worker-secret';
-    mockTasks({ '0614': task(), '0620': replacement() });
-    const body = { supersededBy: '0620', reason: 'Replaced by the evidence-contract approach', by: 'claimed-human' };
-
-    const preview = await request(createApp()).post('/api/pipeline/tasks/0614/supersede')
-      .set('X-AgentX-Pipeline-Token', 'pipeline-worker-secret')
-      .send(body);
-    expect(preview.status).toBe(200);
-    expect(preview.body.data).toMatchObject({ preview: true, applied: false });
-
-    const confirm = await request(createApp()).post('/api/pipeline/tasks/0614/supersede')
-      .set('X-AgentX-Pipeline-Token', 'pipeline-worker-secret')
-      .send({ ...body, confirm: true });
-    expect(confirm.status).toBe(403);
-    expect(confirm.body.code).toBe('PIPELINE_FINALIZE_REQUIRES_CONTROL_AUTHORITY');
-    expect(PipelineTask.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });
 

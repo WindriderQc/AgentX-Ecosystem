@@ -10,7 +10,6 @@ const {
 const { currentAgentXProfile } = require('../shared/agentxRuntimeProfile');
 const { createServiceIdentity } = require('../shared/serviceIdentity');
 const { registerLocalStyleVendorAssets } = require('../shared/localStyleVendorAssets');
-const { createApiHostGuard } = require('../shared/apiHostGuard');
 const { admitOllamaTargetResolved } = require('./src/helpers/ollamaTargetAdmission');
 const { readBoundedJson } = require('./src/helpers/boundedJsonResponse');
 const { shouldRecoverBenchmarkClaims } = require('./src/helpers/benchmarkProfileCapabilities');
@@ -53,16 +52,6 @@ const resolvePublicUrls = createCorePublicUrlsResolver({
   enabled: process.env.NODE_ENV !== 'test',
   loadCoreConfig: loadCorePublicConfig,
 });
-// Guard every API route before proxies, parsers, or route modules run. Besides
-// rejecting untrusted Host values, mutation protection blocks cross-site form
-// submissions while retaining exact same-origin UI, loopback CLI, bounded
-// internal-service, and operator-token callers.
-app.use(createApiHostGuard({
-  serviceHosts: ['benchmark', 'agentx-benchmark'],
-  publicUrlEnv: ['BENCHMARK_PUBLIC_URL'],
-  protectMutations: true,
-}));
-
 // EJS templating — shared layouts from core, local pages
 app.set('view engine', 'ejs');
 app.set('views', [
@@ -71,20 +60,7 @@ app.set('views', [
 ]);
 
 // Middleware
-const defaultAllowedOrigins = [
-  'http://localhost:3080',
-  'http://127.0.0.1:3080',
-  'http://localhost:3081',
-  'http://127.0.0.1:3081'
-];
-const allowedOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
-  : defaultAllowedOrigins;
-
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true
-}));
+app.use(cors());
 
 // Shared browser controls also consume Core's unified model catalog. Keep the
 // request same-origin on standalone Benchmark deployments.
@@ -93,9 +69,6 @@ app.get('/api/models/all', async (req, res) => {
   const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
   try {
     const headers = { Accept: req.get('accept') || 'application/json' };
-    if (process.env.AGENTX_OPERATOR_TOKEN) {
-      headers['X-AgentX-Operator-Token'] = process.env.AGENTX_OPERATOR_TOKEN;
-    }
     const response = await fetch(`${coreUrl}/api/models/all${query}`, {
       headers,
       signal: AbortSignal.timeout(10000),

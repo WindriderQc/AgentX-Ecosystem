@@ -87,22 +87,6 @@ function resolveConfiguredModule(configuredPath) {
   };
 }
 
-function boundedSecurityContract(security) {
-  if (!security
-    || security.contractVersion !== 1
-    || typeof security.requireOperatorAccess !== 'function'
-    || typeof security.requireOperatorUiAccess !== 'function') {
-    throw new Error('Trusted extension security contract v1 is unavailable or invalid.');
-  }
-
-  // operatorAccess also owns token-reading and request-inspection helpers.
-  // Those are deliberately not part of the injected extension contract.
-  return Object.freeze({
-    contractVersion: 1,
-    requireOperatorAccess: security.requireOperatorAccess,
-    requireOperatorUiAccess: security.requireOperatorUiAccess
-  });
-}
 
 function loadTrustedExtensions({
   app,
@@ -113,7 +97,6 @@ function loadTrustedExtensions({
   standardJsonParser,
   conversationLifecycle,
   runtimeServices,
-  security,
   env = process.env,
   requireModule = require
 }) {
@@ -131,7 +114,6 @@ function loadTrustedExtensions({
     || typeof runtimeServices.routing?.getEffectiveSnapshot !== 'function') {
     throw new Error('Trusted extension runtimeServices contract v1 is unavailable or invalid.');
   }
-  const injectedSecurity = boundedSecurityContract(security);
 
   const seenPaths = new Set();
   const seenIds = new Set();
@@ -170,7 +152,6 @@ function loadTrustedExtensions({
       standardJsonParser,
       conversationLifecycle,
       runtimeServices,
-      security: injectedSecurity,
       extensionRoot
     });
     let result;

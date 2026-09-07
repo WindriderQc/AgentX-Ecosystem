@@ -418,8 +418,7 @@ contain letters, numbers, dots, underscores, and hyphens only.
 | `/api/rag/snapshots/:name` | DELETE | Delete a named snapshot |
 | `/api/rag/snapshots/:name/restore` | POST | Controlled offline rehearsal only |
 
-Every snapshot route is an internal Core↔RAG contract and requires
-`X-AgentX-Recovery-Token`; missing server or caller credentials fail closed.
+Every snapshot route is an internal Core↔RAG contract.
 Responses expose logical snapshot metadata only, never Qdrant URLs, storage
 roots, or filesystem paths. Restore returns `OFFLINE_RESTORE_REQUIRED` by
 default and remains disabled until a controlled offline rehearsal is explicitly

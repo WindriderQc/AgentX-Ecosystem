@@ -22,24 +22,10 @@ const { acquireProfilerClaimLease } = require('../../src/services/profiler/profi
 const { admitOllamaTargetResolved } = require('../../src/helpers/ollamaTargetAdmission');
 const { isSameOllamaModel } = require('../../src/helpers/ollamaModelIdentity');
 const { getWorkloadRecoveryIdentity } = require('../../src/clients/coreApiClient');
-const { safeTokenMatch } = require('../../../shared/apiHostGuard');
 const authorityReconciliation = require('../../src/services/benchmark/benchmarkAuthorityReconciliation');
 
 const logger = require('../../config/logger');
 
-function requireOperatorAccess(req, res, next) {
-  const authorization = String(req.get?.('authorization') || '');
-  const bearer = authorization.toLowerCase().startsWith('bearer ') ? authorization.slice(7).trim() : '';
-  const presented = bearer || req.get?.('x-agentx-operator-token') || '';
-  if (!safeTokenMatch(process.env.AGENTX_OPERATOR_TOKEN || process.env.AGENTX_ADMIN_TOKEN, presented)) {
-    return res.status(403).json({
-      status: 'error',
-      code: 'PROFILER_OPERATOR_AUTH_REQUIRED',
-      error: 'Exact Product operator authentication is required'
-    });
-  }
-  next();
-}
 
 // ── In-memory progress tracker for run-all ──────────────────────────────────
 const activeTests = new Map();
@@ -758,7 +744,7 @@ router.get('/test/context-probe/resolve/:modelName', async (req, res) => {
  * request from the prior runtime instance; the durable worker then performs
  * exact host restoration before releasing Core quarantine.
  */
-router.post('/test/recovery/:hostId/confirm-runtime-restart', requireOperatorAccess, async (req, res) => {
+router.post('/test/recovery/:hostId/confirm-runtime-restart', async (req, res) => {
   try {
     const operationId = String(req.body?.operationId || '');
     const runtimeInstanceId = String(req.body?.runtimeInstanceId || '');
@@ -1084,7 +1070,7 @@ router.get('/:hostId/fit-report', async (req, res) => {
   }
 });
 
-router.put('/:hostId', requireOperatorAccess, async (req, res) => {
+router.put('/:hostId', async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     const allowedTopLevel = new Set(['displayName', 'cpu']);

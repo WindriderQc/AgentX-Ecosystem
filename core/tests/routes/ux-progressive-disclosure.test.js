@@ -91,10 +91,10 @@ describe('simple-to-expert UX contract', () => {
     const html = await renderChat();
     const source = fs.readFileSync(chatMainPath, 'utf8');
 
-    expect(html).toContain('Ask Agent X anything.');
-    expect(html).toContain('data-chat-starter="Help me brainstorm: "');
-    expect(html).toContain('Balanced uses the configured Standard route.');
-    expect(html).toContain('Agent X will name an installed model you can choose.');
+    expect(html).toContain('What are we working on?');
+    expect(html).toContain('data-chat-starter="Help me brainstorm a few fresh approaches to: "');
+    expect(html).toContain('id="composerModeBtn"');
+    expect(html).toContain('id="chatRouteRecoveryStatus"');
     expect(html).not.toMatch(/Pick a model/i);
     expect(source).toContain("state.history.length === 0 ? welcomeMarkup : ''");
   });
@@ -157,7 +157,7 @@ describe('simple-to-expert UX contract', () => {
     expect(demoCss).toContain('@media (prefers-reduced-motion: reduce)');
     expect(chatCss).toContain('@media (prefers-reduced-motion: reduce)');
     expect(chatCss).toContain('.agent-selector.single-option');
-    expect(chatCss).toContain('body[data-agentx-profile="demo"] .chat-routing-lab > summary { padding-left: 62px; }');
+    expect(chatCss).toContain('body[data-agentx-profile="demo"] .chat-command-bar { padding-left: 66px; }');
   });
 
   test('navigation uses the human Chat label while preserving the route', async () => {

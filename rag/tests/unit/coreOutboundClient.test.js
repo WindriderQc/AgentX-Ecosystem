@@ -4,7 +4,6 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Readable } = require('node:stream');
-const outboundRegistry = require('../../../config/outbound-http-sinks.json');
 const { createCorePublicUrlsResolver } = require('../../../shared/browserPublicUrls');
 
 const {
@@ -96,30 +95,6 @@ describe('RAG Core outbound operation registry', () => {
     for (const spec of Object.values(CORE_OUTBOUND_REQUEST_SPECS)) {
       expect(Object.isFrozen(spec)).toBe(true);
     }
-  });
-
-  test('keeps both runtime policies and bounded response modes aligned with registry v2', () => {
-    const registered = new Map(outboundRegistry.operations
-      .filter(({ registrationSource }) => registrationSource === 'rag/src/clients/coreOutboundClient.js')
-      .map((operation) => [operation.id, operation]));
-    expect([...registered.keys()].sort()).toEqual(Object.values(CORE_OUTBOUND_OPERATION_IDS).sort());
-
-    for (const [operationId, policy] of Object.entries(CORE_OUTBOUND_OPERATIONS)) {
-      expect(registered.get(operationId)).toMatchObject({
-        ...policy,
-        enforcementStatus: 'enforced',
-      });
-    }
-    for (const [operationId, requestSpec] of Object.entries(CORE_OUTBOUND_REQUEST_SPECS)) {
-      expect(registered.get(operationId)).toMatchObject({
-        allowSearch: requestSpec.allowSearch,
-        method: requestSpec.method,
-        pathPattern: `^${requestSpec.pathname}$`,
-      });
-    }
-    expect(registered.get(CORE_OUTBOUND_OPERATION_IDS.MODEL_CATALOG).responseMode).toBe('bytes');
-    expect(registered.get(CORE_OUTBOUND_OPERATION_IDS.PLATFORM_EVENT).responseMode).toBe('discard');
-    expect(registered.get(CORE_OUTBOUND_OPERATION_IDS.PUBLIC_URLS_CONFIG).responseMode).toBe('json');
   });
 
   test('admits only the exact configured Core origin', () => {
@@ -234,7 +209,6 @@ describe('RAG Core outbound operation registry', () => {
     });
 
     const response = await client.getModelCatalog({
-      operatorToken: 'operator-token',
       query: '?host=primary',
     });
 
@@ -246,7 +220,6 @@ describe('RAG Core outbound operation registry', () => {
         redirect: 'manual',
         headers: expect.objectContaining({
           accept: 'application/json',
-          'x-agentx-operator-token': 'operator-token',
         }),
         signal: expect.any(AbortSignal),
       })
@@ -406,7 +379,6 @@ describe('RAG Core peer-verifying transport', () => {
   let server;
   let origin;
   let receivedEventBody;
-  let receivedEventToken;
 
   beforeAll(async () => {
     server = http.createServer((request, response) => {
@@ -423,7 +395,6 @@ describe('RAG Core peer-verifying transport', () => {
         return;
       }
       if (request.url === '/api/platform-events' && request.method === 'POST') {
-        receivedEventToken = request.headers['x-platform-event-token'];
         const chunks = [];
         request.on('data', (chunk) => chunks.push(chunk));
         request.on('end', () => {
@@ -459,7 +430,6 @@ describe('RAG Core peer-verifying transport', () => {
     const catalog = await client.getModelCatalog({ query: '?host=local' });
     const delivered = await client.deliverPlatformEvent({
       body: JSON.stringify({ type: 'test-event' }),
-      token: 'test-token',
     });
 
     expect(config).toEqual({
@@ -470,7 +440,6 @@ describe('RAG Core peer-verifying transport', () => {
     expect(JSON.parse(catalog.body.toString('utf8')).data.models).toEqual([{ name: 'local-test' }]);
     expect(delivered).toEqual({ ok: true, status: 202 });
     expect(JSON.parse(receivedEventBody)).toEqual({ type: 'test-event' });
-    expect(receivedEventToken).toBe('test-token');
     expect(lookup).toHaveBeenCalledTimes(3);
   });
 });

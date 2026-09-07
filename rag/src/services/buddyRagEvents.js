@@ -15,7 +15,7 @@
  *     can never bubble into the ingest/search/delete code path.
  *
  * In Docker, RAG publishes through Core's generic `/api/platform-events`
- * ingress with the product-owned `AGENTX_PLATFORM_EVENT_TOKEN` shared secret.
+ * ingress.
  */
 
 const { emitBuddyEvent } = require('../clients/buddyEventClient');

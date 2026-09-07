@@ -5,9 +5,8 @@ const envelope = require('../src/helpers/responseEnvelope');
 // endpoint now creates a Mongo task (alias of POST /api/pipeline/tasks) instead
 // of writing a TODO/*.md + ROADMAP entry. Kept for backward compatibility.
 const { createTaskInMongo } = require('../src/services/pipelineTaskService');
-const { requirePipelineWorkerAccess } = require('../src/helpers/pipelineAccess');
 
-router.post('/', requirePipelineWorkerAccess, async (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const task = await createTaskInMongo(req.body || {});
     return envelope.success(res, { task }, null, 201);

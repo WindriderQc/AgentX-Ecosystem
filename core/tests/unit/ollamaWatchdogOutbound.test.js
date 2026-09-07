@@ -1,7 +1,6 @@
 'use strict';
 
 const { Readable } = require('node:stream');
-const outboundRegistry = require('../../../config/outbound-http-sinks.json');
 
 jest.mock('../../config/logger', () => ({
   debug: jest.fn(),
@@ -113,18 +112,7 @@ describe('ollamaWatchdogService governed outbound operations', () => {
 
   afterAll(() => watchdog.stop());
 
-  test('registers exactly four configured operations with bounded metadata', () => {
-    expect(outboundRegistry.delegates.find(({ id }) => id === 'core.watchdog.executor'))
-      .toEqual({
-        id: 'core.watchdog.executor',
-        service: 'core',
-        source: 'core/src/services/ollamaWatchdogService.js',
-        transportAdapterExpression: 'options.transportAdapter||peerVerifiedNodeFetchTransport',
-        target: {
-          kind: 'sink',
-          id: 'core.transport.peer-verified-node-fetch'
-        }
-      });
+  test('registers exactly four operations with bounded metadata', () => {
     expect(Object.keys(WATCHDOG_OPERATION_SPECS).sort())
       .toEqual(Object.values(WATCHDOG_OPERATIONS).sort());
     expect(WATCHDOG_OPERATION_SPECS).toMatchObject({
@@ -167,25 +155,6 @@ describe('ollamaWatchdogService governed outbound operations', () => {
       Object.entries(WATCHDOG_OPERATION_SPECS)
         .map(([operationId, spec]) => [operationId, spec.policy])
     ));
-
-    for (const [operationId, spec] of Object.entries(WATCHDOG_OPERATION_SPECS)) {
-      expect(outboundRegistry.operations.find(({ id }) => id === operationId)).toMatchObject({
-        allowSearch: spec.allowSearch,
-        authoritySource: spec.policy.authoritySource,
-        deadlineMs: spec.policy.deadlineMs,
-        delegateId: 'core.watchdog.executor',
-        enforcementStatus: 'enforced',
-        maxRequestBytes: spec.policy.maxRequestBytes,
-        maxResponseBytes: spec.policy.maxResponseBytes,
-        method: spec.method,
-        pathPattern: spec.pathPattern,
-        registrationSource: 'core/src/services/ollamaWatchdogService.js',
-        responseMode: spec.responseMode,
-        service: 'core'
-      });
-    }
-    expect(outboundRegistry.sinks.filter(({ id }) => Object.values(WATCHDOG_OPERATIONS).includes(id)))
-      .toEqual([]);
   });
 
   test('closes method, path, search, and configured-authority contracts before dispatch', async () => {

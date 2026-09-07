@@ -26,11 +26,6 @@ describe('trusted extension loader', () => {
         inference: { execute: jest.fn() },
         routing: { getEffectiveSnapshot: jest.fn() }
       },
-      security: {
-        contractVersion: 1,
-        requireOperatorAccess: jest.fn(),
-        requireOperatorUiAccess: jest.fn()
-      },
       env: { [EXTENSION_ENV]: extensionA },
       requireModule: jest.fn(() => ({
         id: 'example-extension',
@@ -83,21 +78,12 @@ describe('trusted extension loader', () => {
     const app = {};
     const conversationLifecycle = { capabilities: { provider: 'agentx-core', contractVersion: 1 } };
     const logger = { info: jest.fn() };
-    const requireOperatorAccess = jest.fn();
-    const requireOperatorUiAccess = jest.fn();
     const deploymentSecret = 'do-not-expose-this-token';
     const privateAddress = 'https://private-adapter.invalid:9999';
     const loaded = load({
       app,
       conversationLifecycle,
       logger,
-      security: {
-        contractVersion: 1,
-        requireOperatorAccess,
-        requireOperatorUiAccess,
-        expectedOperatorToken: () => deploymentSecret,
-        privateAddress
-      },
       env: {
         [EXTENSION_ENV]: extensionA,
         PRIVATE_ADAPTER_TOKEN: deploymentSecret,
@@ -129,18 +115,11 @@ describe('trusted extension loader', () => {
       'mongoose',
       'profile',
       'runtimeServices',
-      'security',
       'standardJsonParser'
     ]);
     const injected = register.mock.calls[0][0];
-    expect(injected.security).toEqual({
-      contractVersion: 1,
-      requireOperatorAccess,
-      requireOperatorUiAccess
-    });
-    expect(Object.isFrozen(injected.security)).toBe(true);
-    expect(injected.security.expectedOperatorToken).toBeUndefined();
-    expect(injected.security.privateAddress).toBeUndefined();
+    expect(Object.isFrozen(injected)).toBe(true);
+    expect(injected.security).toBeUndefined();
     expect(loaded).toEqual([{
       id: 'example-extension',
       version: '1.2.3',
@@ -216,8 +195,6 @@ describe('trusted extension loader', () => {
   test('fails startup when a configured extension cannot receive the generic runtime contracts', () => {
     expect(() => load({ runtimeServices: null }))
       .toThrow('runtimeServices contract v1');
-    expect(() => load({ security: null }))
-      .toThrow('security contract v1');
   });
 
   test('fails closed without reflecting module paths or extension-thrown secrets', () => {

@@ -10,17 +10,12 @@ const { currentAgentXProfile } = require('../shared/agentxRuntimeProfile');
 const { createServiceIdentity } = require('../shared/serviceIdentity');
 const { sanitizePublicProjection } = require('./src/utils/publicProjection');
 const { registerLocalStyleVendorAssets } = require('../shared/localStyleVendorAssets');
-const { createApiHostGuard } = require('../shared/apiHostGuard');
 const {
   createCoreOutboundClient,
   createCorePublicUrlsConfigLoader,
 } = require('./src/clients/coreOutboundClient');
 
 const SERVICE_VERSION = require('./package.json').version || '0.0.0';
-const RAG_SAME_ORIGIN_ACTION_OBSERVATIONS = Object.freeze([
-  Object.freeze({ method: 'POST', path: '/api/rag/status/refresh' }),
-  Object.freeze({ method: 'POST', path: '/api/rag/search' }),
-]);
 
 const app = express();
 app.locals.publicUrls = getPublicUrls();
@@ -32,12 +27,6 @@ const resolvePublicUrls = createCorePublicUrlsResolver({
     coreOutboundClient: app.locals.coreOutboundClient,
   }),
 });
-app.use(createApiHostGuard({
-  serviceHosts: ['rag', 'agentx-rag'],
-  publicUrlEnv: ['RAG_PUBLIC_URL'],
-  protectMutations: true,
-  sameOriginActionObservationRoutes: RAG_SAME_ORIGIN_ACTION_OBSERVATIONS,
-}));
 
 // EJS templating — shared layouts from core, local pages
 app.set('view engine', 'ejs');
@@ -46,20 +35,7 @@ app.set('views', [
   path.join(__dirname, '..', 'core', 'views')
 ]);
 
-const defaultAllowedOrigins = [
-  'http://localhost:3080',
-  'http://127.0.0.1:3080',
-  'http://localhost:3082',
-  'http://127.0.0.1:3082'
-];
-const allowedOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
-  : defaultAllowedOrigins;
-
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true
-}));
+app.use(cors());
 
 // Shared browser controls also consume Core's unified model catalog. Keep the
 // request same-origin on standalone RAG deployments.
@@ -68,7 +44,6 @@ app.get('/api/models/all', async (req, res) => {
   try {
     const response = await req.app.locals.coreOutboundClient.getModelCatalog({
       accept: req.get('accept') || 'application/json',
-      operatorToken: process.env.AGENTX_OPERATOR_TOKEN,
       query,
     });
     for (const header of ['content-type', 'cache-control', 'x-require-profiled-models']) {
@@ -276,4 +251,3 @@ app.use((err, req, res, next) => {
 
 module.exports = app;
 module.exports.checkVectorStoreHealth = checkVectorStoreHealth;
-module.exports.RAG_SAME_ORIGIN_ACTION_OBSERVATIONS = RAG_SAME_ORIGIN_ACTION_OBSERVATIONS;

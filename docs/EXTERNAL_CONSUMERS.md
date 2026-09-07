@@ -17,30 +17,8 @@ routing include fresh `generatedAt` evidence, and the routing projection is a
 strict allowlist: absolute URLs and runtime location fields never cross the
 consumer boundary.
 
-## Authentication
-
-A separately deployed application uses the route-scoped credential configured
-on Core as `AGENTX_EXTERNAL_CONSUMER_TOKEN`. Supply it as either:
-
-```text
-Authorization: Bearer <token>
-```
-
-or:
-
-```text
-X-AgentX-Consumer-Token: <token>
-```
-
-Headerless loopback calls remain available for local development. Non-loopback
-calls fail closed when the scoped token is absent or invalid. The existing
-operator token is accepted as an administrative path, but applications should
-not receive that broader credential. The external-consumer token does not
-authorize unrelated operator routes.
-
 Secrets and deployment addresses stay outside this repository. A consumer
-typically receives `AGENTX_BASE_URL` and the scoped token from its own runtime
-environment.
+typically receives `AGENTX_BASE_URL` from its own runtime environment.
 
 ## Effective routing snapshot
 

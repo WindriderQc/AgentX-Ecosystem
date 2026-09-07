@@ -25,13 +25,7 @@ function createBuddyEventClient(options = {}) {
       surfaceScope: opts.surfaceScope,
     });
 
-    // Task 0277: cross-container emits (rag -> core over the Docker bridge)
-    // are non-loopback, so core rejects them unless a shared secret is
-    // presented. Send it only when configured; otherwise stay loopback-only.
-    void coreOutboundClient.deliverPlatformEvent({
-      body,
-      token: process.env.AGENTX_PLATFORM_EVENT_TOKEN,
-    }).catch(() => {
+    void coreOutboundClient.deliverPlatformEvent({ body }).catch(() => {
       // Silent — companion events are best-effort observability.
     });
   }

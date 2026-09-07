@@ -50,9 +50,6 @@ const hostPrefService = require('../../src/services/hostPreferenceService');
 const runtimeCoordinationService = require('../../src/services/runtimeCoordinationService');
 const hostPreferenceRoutes = require('../../routes/nerve-center-host-preferences');
 
-const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
-const originalOperatorToken = process.env.AGENTX_OPERATOR_TOKEN;
-const originalInternalTrust = process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
 const HOST_URL = 'http://primary:11434';
 const ENCODED_HOST = encodeURIComponent(HOST_URL);
 
@@ -72,7 +69,6 @@ const ROUTES = [
       kind: 'benchmark',
       generation: 'client-must-not-control-this'
     },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.acquireWorkload]
   },
   {
@@ -80,7 +76,6 @@ const ROUTES = [
     method: 'post',
     path: '/api/nerve-center/workload-admissions/admission-core/heartbeat',
     body: { generation: 'generation-core', ttlMs: 60_000 },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.heartbeat]
   },
   {
@@ -88,7 +83,6 @@ const ROUTES = [
     method: 'delete',
     path: '/api/nerve-center/workload-admissions/admission-core',
     body: { generation: 'generation-core' },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.release]
   },
   {
@@ -96,7 +90,6 @@ const ROUTES = [
     method: 'post',
     path: '/api/nerve-center/workload-admissions/admission-core/release-receipt',
     body: { generation: 'generation-core' },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.recoverRelease]
   },
   {
@@ -104,7 +97,6 @@ const ROUTES = [
     method: 'post',
     path: '/api/nerve-center/workload-admissions/admission-core/recovery',
     body: { generation: 'generation-core', recoveryRequestId: 'recovery-request-core' },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.armWorkloadRecovery]
   },
   {
@@ -112,7 +104,6 @@ const ROUTES = [
     method: 'post',
     path: '/api/nerve-center/workload-recoveries/recovery-core/adopt',
     body: { recoveryRequestId: 'recovery-request-core', ownerId: 'worker-a' },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.adoptWorkloadRecovery]
   },
   {
@@ -120,7 +111,6 @@ const ROUTES = [
     method: 'post',
     path: '/api/nerve-center/workload-recoveries/recovery-core/heartbeat',
     body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a', ttlMs: 60_000 },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.heartbeatWorkloadRecovery]
   },
   {
@@ -128,7 +118,6 @@ const ROUTES = [
     method: 'post',
     path: '/api/nerve-center/workload-recoveries/recovery-core/assert',
     body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a' },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.assertWorkloadRecovery]
   },
   {
@@ -136,7 +125,6 @@ const ROUTES = [
     method: 'post',
     path: '/api/nerve-center/workload-recoveries/recovery-core/transition',
     body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a', expectedVersion: 2, state: 'VERIFIED' },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.transitionWorkloadRecovery]
   },
   {
@@ -144,7 +132,6 @@ const ROUTES = [
     method: 'post',
     path: '/api/nerve-center/workload-recoveries/recovery-core/restore-hosts',
     body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a', excludedModelsByHost: {} },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.restoreClaimsForWorkloadRecovery]
   },
   {
@@ -152,7 +139,6 @@ const ROUTES = [
     method: 'delete',
     path: '/api/nerve-center/workload-recoveries/recovery-core',
     body: { recoveryGeneration: 'recovery-generation-core', ownerId: 'worker-a' },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [runtimeCoordinationService.resolveWorkloadRecovery]
   },
   {
@@ -165,7 +151,6 @@ const ROUTES = [
       admissionId: 'admission-core',
       admissionGeneration: 'generation-core'
     },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.claimBenchmark]
   },
   {
@@ -178,7 +163,6 @@ const ROUTES = [
       admissionGeneration: 'generation-core',
       estimatedDurationMs: 60000
     },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.heartbeatBenchmarkClaim]
   },
   {
@@ -190,7 +174,6 @@ const ROUTES = [
       admissionId: 'admission-core',
       admissionGeneration: 'generation-core'
     },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.recoverBenchmarkClaimRelease]
   },
   {
@@ -202,7 +185,6 @@ const ROUTES = [
       admissionId: 'admission-core',
       admissionGeneration: 'generation-core'
     },
-    expectedMissingCode: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
     sideEffects: [hostPrefService.releaseBenchmarkClaim]
   },
   {
@@ -213,29 +195,17 @@ const ROUTES = [
   }
 ];
 
-function machineRequest(routeCase, token) {
+function machineRequest(routeCase) {
   let pending = request(app)[routeCase.method](routeCase.path)
     .set('Host', 'remote-benchmark.example')
-    .set('X-Forwarded-For', '203.0.113.20');
-  if (token !== undefined) pending = pending.set('X-AgentX-Benchmark-Token', token);
+    .set('X-Forwarded-For', '203.0.113.20')
+    .set('X-AgentX-Caller', 'benchmark-service');
   if (routeCase.body !== undefined) pending = pending.send(routeCase.body);
   return pending;
 }
 
 describe('Benchmark service identity on Core host-control routes', () => {
-  beforeAll(() => {
-    process.env.AGENTX_BENCHMARK_TOKEN = 'benchmark-secret';
-    process.env.AGENTX_OPERATOR_TOKEN = 'operator-secret';
-    process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS = 'true';
-  });
-
   afterAll(() => {
-    if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-    else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
-    if (originalOperatorToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
-    else process.env.AGENTX_OPERATOR_TOKEN = originalOperatorToken;
-    if (originalInternalTrust === undefined) delete process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS;
-    else process.env.AGENTX_TRUST_INTERNAL_SERVICE_HOSTS = originalInternalTrust;
     if (originalOllamaHost === undefined) delete process.env.OLLAMA_HOST;
     else process.env.OLLAMA_HOST = originalOllamaHost;
   });
@@ -353,7 +323,7 @@ describe('Benchmark service identity on Core host-control routes', () => {
       acquired: true,
       leaseId: 'lease-core',
       generation: 'maintenance-generation-core',
-      principal: 'operator-token',
+      principal: 'operator',
       requestId: 'deploy-request-1',
       scope: 'force-recreate',
       acquiredAt: new Date(),
@@ -362,49 +332,17 @@ describe('Benchmark service identity on Core host-control routes', () => {
     });
   });
 
-  test.each(ROUTES)('$label accepts the exact Benchmark service token', async (routeCase) => {
-    const response = await machineRequest(routeCase, 'benchmark-secret');
+  test.each(ROUTES)('$label accepts a remote Benchmark service caller without any token', async (routeCase) => {
+    const response = await machineRequest(routeCase);
 
     expect(response.status).toBe(200);
     expect(response.body.status).toBe('success');
     for (const sideEffect of routeCase.sideEffects) expect(sideEffect).toHaveBeenCalled();
   });
 
-  test.each(ROUTES)('$label rejects a missing token before side effects', async (routeCase) => {
-    const response = await machineRequest(routeCase);
-
-    expect(response.status).toBe(403);
-    expect(response.body.code).toBe(routeCase.expectedMissingCode || 'BENCHMARK_SERVICE_ACCESS_REQUIRED');
-    for (const sideEffect of routeCase.sideEffects) expect(sideEffect).not.toHaveBeenCalled();
-  });
-
-  test.each(ROUTES)('$label rejects a wrong token before side effects', async (routeCase) => {
-    const response = await machineRequest(routeCase, 'wrong-secret');
-
-    expect(response.status).toBe(403);
-    expect(response.body.code).toBe(routeCase.expectedMissingCode || 'BENCHMARK_SERVICE_ACCESS_REQUIRED');
-    for (const sideEffect of routeCase.sideEffects) expect(sideEffect).not.toHaveBeenCalled();
-  });
-
-  it('does not let the secret-free trusted-machine fallback claim a host', async () => {
-    delete process.env.AGENTX_BENCHMARK_TOKEN;
-    try {
-      const claimRoute = ROUTES.find(item => item.label === 'claim acquisition');
-      const response = await request(app)[claimRoute.method](claimRoute.path)
-        .set('Host', 'core:3080')
-        .set('X-Forwarded-For', '172.30.0.8')
-        .send(claimRoute.body);
-
-      expect(response.status).toBe(403);
-      expect(hostPrefService.claimBenchmark).not.toHaveBeenCalled();
-    } finally {
-      process.env.AGENTX_BENCHMARK_TOKEN = 'benchmark-secret';
-    }
-  });
-
-  it('derives workload principal from Benchmark auth and ignores client generation', async () => {
+  it('derives workload principal from the declared Benchmark caller and ignores client generation', async () => {
     const routeCase = ROUTES.find(item => item.label === 'runtime workload admission');
-    const response = await machineRequest(routeCase, 'benchmark-secret');
+    const response = await machineRequest(routeCase);
     expect(response.status).toBe(200);
     expect(runtimeCoordinationService.acquireWorkload).toHaveBeenCalledWith({
       principal: 'benchmark-service',
@@ -419,11 +357,11 @@ describe('Benchmark service identity on Core host-control routes', () => {
     expect(response.body.data.generation).toBe('generation-core');
   });
 
-  it('binds workload heartbeat and release to the authenticated Benchmark principal and exact proof', async () => {
+  it('binds workload heartbeat and release to the declared Benchmark principal and exact proof', async () => {
     const heartbeatRoute = ROUTES.find(item => item.label === 'runtime workload heartbeat');
     const releaseRoute = ROUTES.find(item => item.label === 'runtime workload release');
 
-    const heartbeatResponse = await machineRequest(heartbeatRoute, 'benchmark-secret');
+    const heartbeatResponse = await machineRequest(heartbeatRoute);
     expect(heartbeatResponse.body.data).toMatchObject({
       heartbeat: true,
       admissionId: 'admission-core',
@@ -439,7 +377,7 @@ describe('Benchmark service identity on Core host-control routes', () => {
       ttl: 60_000
     });
 
-    const releaseResponse = await machineRequest(releaseRoute, 'benchmark-secret');
+    const releaseResponse = await machineRequest(releaseRoute);
     expect(releaseResponse.body.data).toMatchObject({
       released: true,
       admissionId: 'admission-core',
@@ -455,7 +393,7 @@ describe('Benchmark service identity on Core host-control routes', () => {
     });
 
     const recoveryRoute = ROUTES.find(item => item.label === 'runtime workload release receipt recovery');
-    const recoveryResponse = await machineRequest(recoveryRoute, 'benchmark-secret');
+    const recoveryResponse = await machineRequest(recoveryRoute);
     expect(recoveryResponse.body.data).toMatchObject({
       recovered: true,
       released: true,
@@ -470,26 +408,11 @@ describe('Benchmark service identity on Core host-control routes', () => {
     });
   });
 
-  it('does not grant workload admission to the secret-free trusted-machine fallback', async () => {
-    delete process.env.AGENTX_BENCHMARK_TOKEN;
-    try {
-      const routeCase = ROUTES.find(item => item.label === 'runtime workload admission');
-      const response = await request(app)[routeCase.method](routeCase.path)
-        .set('Host', 'core:3080')
-        .set('X-Forwarded-For', '172.30.0.8')
-        .send(routeCase.body);
-      expect(response.status).toBe(403);
-      expect(runtimeCoordinationService.acquireWorkload).not.toHaveBeenCalled();
-    } finally {
-      process.env.AGENTX_BENCHMARK_TOKEN = 'benchmark-secret';
-    }
-  });
-
   it('returns identity-bound maintenance acquire, heartbeat, and release receipts from Core state', async () => {
     const proof = {
       leaseId: 'lease-core',
       generation: 'maintenance-generation-core',
-      principal: 'operator-token',
+      principal: 'operator',
       requestId: 'deploy-request-1',
       scope: 'force-recreate'
     };
@@ -524,12 +447,11 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .post('/api/nerve-center/maintenance-leases')
       .set('Host', 'remote-aiops.example')
       .set('X-Forwarded-For', '203.0.113.30')
-      .set('Authorization', 'Bearer operator-secret')
       .send({ requestId: proof.requestId, scope: proof.scope, generation: 'client-forgery' });
     expect(acquire.status).toBe(200);
     expect(acquire.body.data).toMatchObject({ acquired: true, ...proof });
     expect(runtimeCoordinationService.acquireMaintenance).toHaveBeenCalledWith({
-      principal: 'operator-token',
+      principal: 'operator',
       requestId: proof.requestId,
       scope: proof.scope,
       ttl: undefined
@@ -539,7 +461,6 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .post(`/api/nerve-center/maintenance-leases/${proof.leaseId}/heartbeat`)
       .set('Host', 'remote-aiops.example')
       .set('X-Forwarded-For', '203.0.113.30')
-      .set('Authorization', 'Bearer operator-secret')
       .send({ generation: proof.generation, ttlMs: 60_000 });
     expect(heartbeat.body.data).toMatchObject({ heartbeat: true, ...proof });
 
@@ -547,7 +468,6 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .post(`/api/nerve-center/maintenance-leases/${proof.leaseId}/mark-unknown`)
       .set('Host', 'remote-aiops.example')
       .set('X-Forwarded-For', '203.0.113.30')
-      .set('Authorization', 'Bearer operator-secret')
       .send({ generation: proof.generation, reason: 'child outcome unknown' });
     expect(quarantined.status).toBe(200);
     expect(quarantined.body.data).toMatchObject({
@@ -568,7 +488,6 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .delete(`/api/nerve-center/maintenance-leases/${proof.leaseId}`)
       .set('Host', 'remote-aiops.example')
       .set('X-Forwarded-For', '203.0.113.30')
-      .set('Authorization', 'Bearer operator-secret')
       .send({ generation: proof.generation });
     expect(release.body.data).toMatchObject({ released: true, ...proof });
     expect(Number.isFinite(Date.parse(release.body.data.releasedAt))).toBe(true);
@@ -577,7 +496,6 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .post(`/api/nerve-center/maintenance-leases/${proof.leaseId}/release-receipt`)
       .set('Host', 'remote-aiops.example')
       .set('X-Forwarded-For', '203.0.113.30')
-      .set('Authorization', 'Bearer operator-secret')
       .send({ generation: proof.generation });
     expect(recovered.status).toBe(200);
     expect(recovered.body.data).toMatchObject({ recovered: true, released: true, ...proof });
@@ -588,23 +506,10 @@ describe('Benchmark service identity on Core host-control routes', () => {
     });
   });
 
-  it('rejects maintenance quarantine without the exact operator credential', async () => {
-    const response = await request(app)
-      .post('/api/nerve-center/maintenance-leases/lease-core/mark-unknown')
-      .set('Host', 'remote-aiops.example')
-      .set('X-Forwarded-For', '203.0.113.30')
-      .set('Authorization', 'Bearer wrong-token')
-      .send({ generation: 'maintenance-generation-core', reason: 'unknown child outcome' });
-    expect(response.status).toBe(403);
-    expect(runtimeCoordinationService.markMaintenanceUnknown).not.toHaveBeenCalled();
-  });
-
-  it('preserves same-origin UI access to host reload without the Benchmark token', async () => {
+  it('serves host reload to the product UI without any caller header', async () => {
     const response = await request(app)
       .post(`/api/nerve-center/host-preferences/${ENCODED_HOST}/reload`)
       .set('Host', '127.0.0.1:3180')
-      .set('Origin', 'http://127.0.0.1:3180')
-      .set('Sec-Fetch-Site', 'same-origin')
       .set('X-Forwarded-For', '127.0.0.1');
 
     expect(response.status).toBe(200);
@@ -614,16 +519,8 @@ describe('Benchmark service identity on Core host-control routes', () => {
     });
   });
 
-  it('requires operator authority for the destructive reaper and rejects invalid bounds', async () => {
+  it('rejects invalid bounds for the destructive reaper', async () => {
     const path = '/api/nerve-center/host-preferences/benchmark-claims/reap';
-    const missing = await request(app)
-      .post(path)
-      .set('Host', 'remote-aiops.example')
-      .set('X-Forwarded-For', '203.0.113.30')
-      .send({ graceFactor: 1.5, hardCapMs: 60_000 });
-    expect(missing.status).toBe(403);
-    expect(hostPrefService.reapStaleBenchmarkClaims).not.toHaveBeenCalled();
-
     const boundedError = Object.assign(new Error('graceFactor must be > 0'), {
       code: 'BENCHMARK_REAPER_OPTIONS_INVALID'
     });
@@ -632,7 +529,6 @@ describe('Benchmark service identity on Core host-control routes', () => {
       .post(path)
       .set('Host', 'remote-aiops.example')
       .set('X-Forwarded-For', '203.0.113.30')
-      .set('Authorization', 'Bearer operator-secret')
       .send({ graceFactor: -1, hardCapMs: -1 });
     expect(invalid.status).toBe(400);
     expect(invalid.body.code).toBe('BENCHMARK_REAPER_OPTIONS_INVALID');

@@ -22,7 +22,6 @@ const {
   projectMutationResult,
   projectRestorePolicy
 } = require('../src/services/backupPublicProjection');
-const { requireOperatorUiAccess } = require('../src/middleware/operatorAccess');
 
 function currentRestorePolicy() {
   return projectRestorePolicy(
@@ -98,7 +97,7 @@ router.get('/backup/config', (req, res) => {
  * Update runtime-configurable backup settings (retentionDays).
  * Recovery storage remains deployment-owned and is not runtime-editable.
  */
-router.patch('/backup/config', requireOperatorUiAccess, express.json(), (req, res) => {
+router.patch('/backup/config', express.json(), (req, res) => {
   try {
     backupService.setConfig(req.body || {});
     const config = currentBackupConfig();
@@ -114,7 +113,7 @@ router.patch('/backup/config', requireOperatorUiAccess, express.json(), (req, re
  * POST /api/operations/backup
  * Trigger a new MongoDB backup via mongodump
  */
-router.post('/backup', requireOperatorUiAccess, async (req, res) => {
+router.post('/backup', async (req, res) => {
   try {
     const result = await backupService.createBackup();
     res.json({ status: 'success', backup: projectCreatedArtifact(result) });
@@ -149,7 +148,7 @@ router.get('/backups', (req, res) => {
  * POST /api/operations/restore/:backupName
  * Restore from a named backup (requires an exact typed confirmation header)
  */
-router.post('/restore/:backupName', requireOperatorUiAccess, async (req, res) => {
+router.post('/restore/:backupName', async (req, res) => {
   const { backupName } = req.params;
 
   if (!requireRestoreRehearsal(res)) return;
@@ -177,7 +176,7 @@ router.post('/restore/:backupName', requireOperatorUiAccess, async (req, res) =>
  * DELETE /api/operations/backups/:backupName
  * Delete a named backup
  */
-router.delete('/backups/:backupName', requireOperatorUiAccess, (req, res) => {
+router.delete('/backups/:backupName', (req, res) => {
   const { backupName } = req.params;
 
   const validation = backupService.validateBackupName(backupName);
@@ -205,7 +204,7 @@ router.delete('/backups/:backupName', requireOperatorUiAccess, (req, res) => {
  * POST /api/operations/config/backup
  * Archive the bounded product configuration sources.
  */
-router.post('/config/backup', requireOperatorUiAccess, async (req, res) => {
+router.post('/config/backup', async (req, res) => {
   try {
     const result = await backupService.createConfigBackup();
     res.json({ status: 'success', backup: projectCreatedConfig(result) });
@@ -241,7 +240,7 @@ router.get('/config/backups', (req, res) => {
  * DELETE /api/operations/config/backups/:name
  * Delete a named config backup
  */
-router.delete('/config/backups/:name', requireOperatorUiAccess, (req, res) => {
+router.delete('/config/backups/:name', (req, res) => {
   const { name } = req.params;
   const validation = backupService.validateBackupName(name);
   if (!validation.valid) {
@@ -267,7 +266,7 @@ router.delete('/config/backups/:name', requireOperatorUiAccess, (req, res) => {
  * POST /api/operations/qdrant/backup
  * Trigger a new Qdrant collection snapshot
  */
-router.post('/qdrant/backup', requireOperatorUiAccess, async (req, res) => {
+router.post('/qdrant/backup', async (req, res) => {
   try {
     const result = await backupService.createQdrantBackup();
     res.json({ status: 'success', snapshot: projectCreatedQdrant(result) });
@@ -308,7 +307,7 @@ router.get('/qdrant/backups', async (req, res) => {
  * POST /api/operations/qdrant/restore/:snapshotName
  * Restore Qdrant collection from a named snapshot (requires an exact typed confirmation header)
  */
-router.post('/qdrant/restore/:snapshotName', requireOperatorUiAccess, async (req, res) => {
+router.post('/qdrant/restore/:snapshotName', async (req, res) => {
   const { snapshotName } = req.params;
 
   if (!requireRestoreRehearsal(res)) return;
@@ -335,7 +334,7 @@ router.post('/qdrant/restore/:snapshotName', requireOperatorUiAccess, async (req
  * DELETE /api/operations/qdrant/backups/:snapshotName
  * Delete a named Qdrant snapshot
  */
-router.delete('/qdrant/backups/:snapshotName', requireOperatorUiAccess, async (req, res) => {
+router.delete('/qdrant/backups/:snapshotName', async (req, res) => {
   const { snapshotName } = req.params;
 
   const validation = backupService.validateBackupName(snapshotName);

@@ -1,8 +1,5 @@
 const request = require('supertest');
 
-// Mock rate limit
-jest.mock('express-rate-limit', () => jest.fn(() => (req, res, next) => next()));
-
 jest.mock('../../src/helpers/promptAnalysis', () => ({
   analyzeFailurePatterns: jest.fn(() => ({
     patterns: [],
