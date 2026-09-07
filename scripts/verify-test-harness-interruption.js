@@ -21,7 +21,9 @@ async function probe(service, mode) {
   let output = '';
   let owned;
   let signalled = false;
-  const child = spawn(process.execPath, ['scripts/run-jest.js', '--runTestsByPath', fixture, '--verbose=false'], {
+  // One fixture, one Jest process: killing a worker would let Jest restart it
+  // and could accidentally validate the timeout path instead of the signal.
+  const child = spawn(process.execPath, ['scripts/run-jest.js', '--runInBand', '--runTestsByPath', fixture, '--verbose=false'], {
     cwd: dir, windowsHide: true, env: { ...process.env, TEST_USE_EXTERNAL_MONGO: 'false', TEST_RUN_TIMEOUT_MS: '10000', MONGOMS_RUNTIME_DOWNLOAD: 'false' }, stdio: ['ignore', 'pipe', 'pipe']
   });
   const read = data => {
@@ -45,9 +47,11 @@ async function probe(service, mode) {
     });
     assert.ok(owned?.mongoPid, `Mongo never became ready: ${output}`);
     assert.notEqual(result.code, 0, output);
+    if (mode === 'signal') assert.notEqual(result.code, 124, 'Signal probe must not pass via the timeout fallback');
     if (mode === 'timeout') assert.equal(result.code, 124, output);
     const deadline = Date.now() + 10000;
-    while ((alive(owned.mongoPid) || (owned.pid && alive(owned.pid))) && Date.now() < deadline) await delay(100);
+    while ((alive(owned.ownerPid) || alive(owned.mongoPid) || (owned.pid && alive(owned.pid))) && Date.now() < deadline) await delay(100);
+    assert.equal(alive(owned.ownerPid), false, `owned Jest ${owned.ownerPid} survived`);
     assert.equal(alive(owned.mongoPid), false, `owned Mongo ${owned.mongoPid} survived`);
     if (owned.pid) assert.equal(alive(owned.pid), false, `owned daemon ${owned.pid} survived`);
     const receipt = { service, mode, ...result, mongoPid: owned.mongoPid, mongoStopped: true };
