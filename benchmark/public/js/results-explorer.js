@@ -14,7 +14,7 @@ let evidencePolicy = { basis: 'timestamp', recent_max_age_days: 30, aging_max_ag
 let resultsRequestSequence = 0;
 let selectedResults = new Set();
 let visibleColumns = new Set([
-    'select', 'expand', 'inspect', 'model', 'category', 'level', 'evidence_age', 'quality_score',
+    'select', 'expand', 'inspect', 'model', 'prompt', 'category', 'level', 'evidence_age', 'quality_score',
     'latency', 'tokens_per_sec', 'success', 'timestamp'
 ]);
 
@@ -46,10 +46,11 @@ const AVAILABLE_COLUMNS = {
     inspect: { label: 'Inspect', sortable: false, width: '70px' },
     courthouse: { label: 'Review', sortable: false, width: '60px', tooltip: 'Open in Courthouse for human review.' },
     model: { label: 'Model', sortable: true, width: 'auto', tooltip: 'The model that generated this response.' },
+    prompt: { label: 'Prompt', sortable: false, width: '180px', tooltip: 'The recorded prompt name or a short text preview. Select results to read their full prompts and answers together.' },
     host: { label: 'Host', sortable: true, width: 'auto', tooltip: 'The Ollama host that ran this model.' },
     category: { label: 'Category', sortable: true, width: '120px', tooltip: 'Which of the 7 evaluation categories this prompt belongs to (coding, reasoning, math, knowledge, instruction, creative, translation).' },
     level: { label: 'Level', sortable: true, width: '80px', tooltip: 'Difficulty level (1=basic, 5=master). Higher levels test harder tasks requiring deeper expertise.' },
-    quality_score: { label: 'Quality', sortable: true, width: '90px', tooltip: 'Judge-assigned quality score (0-10). Based on category-specific dimensions such as accuracy, clarity, and completeness.' },
+    quality_score: { label: 'Quality', sortable: true, width: '90px', tooltip: 'Recorded quality score (0-10). Compare responses to see its source: rule-based checks, a judge, both, or a human override.' },
     composite_score: { label: 'Composite', sortable: true, width: '100px', tooltip: 'Combined score (0-100) blending quality, latency, and speed. Weights vary by category (e.g., coding weights quality more heavily).' },
     latency: { label: 'Latency (ms)', sortable: true, width: '110px', tooltip: 'Time in milliseconds from sending the request to receiving the complete response.' },
     tokens: { label: 'Tokens', sortable: true, width: '80px', tooltip: 'Total number of tokens in the model response.' },
@@ -598,7 +599,7 @@ function renderTableRow(result) {
     // Select checkbox
     if (visibleColumns.has('select')) {
         html += `<td class="checkbox-cell">
-            <input type="checkbox" class="result-checkbox" data-id="${result._id}" ${isSelected ? 'checked' : ''}>
+            <input type="checkbox" class="result-checkbox" data-id="${result._id}" aria-label="${escapeHtml(`Select ${result.model}: ${result.prompt_name || 'response'}`)}" ${isSelected ? 'checked' : ''}>
         </td>`;
     }
 
@@ -646,6 +647,10 @@ function renderTableRow(result) {
             : '';
         html += `<td>${escapeHtml(result.model)}${modelBadge}</td>`;
     }
+    if (visibleColumns.has('prompt')) {
+        const prompt = result.prompt_name || result.prompt || 'Not recorded';
+        html += `<td class="result-prompt-preview">${escapeHtml(prompt.length > 100 ? prompt.slice(0, 100) + '…' : prompt)}</td>`;
+    }
     if (visibleColumns.has('host')) {
         html += `<td>${escapeHtml(result.host)}</td>`;
     }
@@ -662,13 +667,13 @@ function renderTableRow(result) {
         html += `<td>${renderScore(result.composite_score, '0-100')}</td>`;
     }
     if (visibleColumns.has('latency')) {
-        html += `<td>${result.latency ? result.latency.toFixed(0) : 'N/A'}</td>`;
+        html += `<td>${Number.isFinite(result.latency) && result.latency >= 0 ? result.latency.toFixed(0) : 'N/A'}</td>`;
     }
     if (visibleColumns.has('tokens')) {
         html += `<td>${result.tokens != null ? result.tokens : 'N/A'}</td>`;
     }
     if (visibleColumns.has('tokens_per_sec')) {
-        html += `<td>${result.tokens_per_sec ? parseFloat(result.tokens_per_sec).toFixed(1) : 'N/A'}</td>`;
+        html += `<td>${Number.isFinite(result.tokens_per_sec) && result.tokens_per_sec >= 0 ? result.tokens_per_sec.toFixed(1) : 'N/A'}</td>`;
     }
     if (visibleColumns.has('backend')) {
         html += `<td>${result.hardware_snapshot?.backend || 'N/A'}</td>`;

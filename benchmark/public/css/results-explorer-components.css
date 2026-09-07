@@ -99,51 +99,96 @@
 }
 
 /* Comparison Styles */
+.comparison-dialog {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: min(1240px, calc(100% - 2rem));
+    max-width: none;
+    max-height: calc(100dvh - 2rem);
+    padding: 0;
+    border: 1px solid rgba(124, 240, 255, 0.28);
+    border-radius: 12px;
+    background: #0b0f19;
+    color: #e6edf3;
+}
+.comparison-dialog::backdrop { background: rgba(0, 0, 0, 0.8); }
+.comparison-dialog .modal-content {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    overflow: visible;
+    background: transparent;
+}
+.comparison-dialog .modal-header { background: #0b0f19; gap: 1rem; padding: 1rem 1.5rem; }
+.comparison-dialog .modal-header h2 { font-size: 1.3rem; }
+.comparison-dialog .modal-body { padding: 1.5rem; }
+.comparison-dialog .modal-close { flex-shrink: 0; padding: 0.35rem; }
+.comparison-dialog :focus-visible { outline: 2px solid #7cf0ff; outline-offset: 3px; }
+.comparison-selection-hint,
+.comparison-scope { color: #a8b7c9; line-height: 1.6; font-size: 0.9rem; }
+.comparison-scope { margin: 0 0 1rem; }
+.comparison-notices { padding: 0.8rem 1rem 0.8rem 2rem; margin: 0 0 1rem; background: #192333; border-radius: 6px; line-height: 1.6; }
+.comparison-shared-prompt { padding: 1rem; margin-bottom: 1.25rem; border-left: 3px solid #7cf0ff; background: #101927; }
+.comparison-shared-prompt h3 { margin: 0 0 0.5rem; font-size: 0.9rem; color: #7cf0ff; }
 .comparison-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 1.5rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: start;
 }
-
 .comparison-card {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    min-width: 0;
+    background: #101927;
+    border: 1px solid rgba(124, 240, 255, 0.15);
     border-radius: 8px;
-    padding: 1.5rem;
+    padding: 1.1rem;
+    overflow-wrap: anywhere;
 }
-
 .comparison-card h3 {
-    margin: 0 0 1rem 0;
-    color: var(--primary, #6366f1);
+    margin: 0 0 0.35rem;
+    color: #7cf0ff;
     font-size: 1.125rem;
     font-weight: 600;
 }
-
-.comparison-field {
-    margin-bottom: 1rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+.comparison-status { font-size: 0.85rem; color: #a8b7c9; }
+.comparison-card h4 { margin: 1rem 0 0.5rem; font-size: 0.9rem; }
+.comparison-dialog pre {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: inherit;
+    font-size: 0.95rem;
+    line-height: 1.65;
 }
-
-.comparison-field:last-child {
-    margin-bottom: 0;
-    padding-bottom: 0;
-    border-bottom: none;
+.comparison-prompt { color: #b8c6d7; }
+.comparison-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+    margin: 1.25rem 0;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(124, 240, 255, 0.15);
 }
-
-.comparison-field label {
-    display: block;
-    font-size: 1rem;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.6);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 0.25rem;
-}
-
-.comparison-field .value {
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 1rem;
+.comparison-dialog dt { color: #a8b7c9; font-size: 0.8rem; margin-bottom: 0.4rem; }
+.comparison-dialog dd { margin: 0; line-height: 1.5; }
+.comparison-score-source { color: #a8b7c9; font-size: 0.78rem; }
+.comparison-notice,
+.comparison-failure { padding: 0.65rem; border-left: 2px solid #ffc66d; color: #ffe1b5; font-size: 0.9rem; line-height: 1.5; }
+.comparison-missing { color: #a8b7c9; line-height: 1.6; }
+.comparison-dialog summary { padding: 0.65rem 0; cursor: pointer; color: #7cf0ff; font-size: 0.9rem; }
+.comparison-metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.comparison-details > p { font-size: 0.9rem; line-height: 1.6; }
+.result-prompt-preview { max-width: 220px; min-width: 130px; white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 800px) {
+    .comparison-grid { grid-template-columns: 1fr; }
+    .comparison-dialog { width: calc(100% - 1rem); max-height: calc(100dvh - 1rem); }
+    .comparison-dialog .modal-header,
+    .comparison-dialog .modal-body { padding: 1rem; }
+    .comparison-card { padding: 0.85rem; }
+    .comparison-metrics { gap: 0.65rem; }
 }
 
 /* Loading/Empty States */

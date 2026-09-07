@@ -219,8 +219,8 @@
             <button id="exportJsonBtn" class="btn-action" disabled>
                 <i class="fas fa-file-code"></i> Export JSON
             </button>
-            <button id="compareBtn" class="btn-action" disabled>
-                <i class="fas fa-code-compare"></i> Compare Selected
+            <button id="compareBtn" class="btn-action" aria-describedby="comparisonSelectionHint" disabled>
+                <i class="fas fa-code-compare" aria-hidden="true"></i> Compare responses
             </button>
             <button id="toggleColumnsBtn" class="btn-action">
                 <i class="fas fa-columns"></i> Columns
@@ -229,6 +229,7 @@
     </div>
 
     <!-- Results Table -->
+    <p id="comparisonSelectionHint" class="comparison-selection-hint">Select 2–4 results on this page to compare their prompts, answers, and scores.</p>
     <div class="results-table-container">
         <div id="resultsTable" class="loading-state">
             <i class="fas fa-spinner fa-spin"></i>
@@ -255,11 +256,11 @@
     </div>
 
     <!-- Comparison Modal -->
-    <div id="comparisonModal" class="modal">
+    <dialog id="comparisonModal" class="comparison-dialog" aria-labelledby="comparisonTitle">
         <div class="modal-content large">
             <div class="modal-header">
-                <h2><i class="fas fa-code-compare"></i> Compare Results</h2>
-                <button class="modal-close" onclick="closeComparisonModal()">
+                <h2 id="comparisonTitle"><i class="fas fa-code-compare" aria-hidden="true"></i> Compare responses</h2>
+                <button class="modal-close" onclick="closeComparisonModal()" aria-label="Close response comparison" autofocus>
                     <i class="fas fa-times"></i>
                 </button>
             </div>
@@ -269,7 +270,7 @@
                 </div>
             </div>
         </div>
-    </div>
+    </dialog>
 
     <!-- Test Inspector Modal -->
     <div id="testInspectorModal" class="modal">
