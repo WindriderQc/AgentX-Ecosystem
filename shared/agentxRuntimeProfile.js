@@ -44,8 +44,7 @@ const DEMO_DISABLED_PREFIXES = Object.freeze([
   '/planning',
   '/portal',
   '/voice',
-  '/voice-personas',
-  '/voix'
+  '/voice-personas'
 ]);
 
 function normalizeAgentXProfile(value) {

@@ -24,7 +24,7 @@ describe('Agent X runtime profile', () => {
     '/api/pipeline/tasks',
     '/agent-ops',
     '/portal',
-    '/voice-personas.html'
+    '/voice-personas'
   ])('disables integration surface %s', (pathname) => {
     expect(demoSurfaceDisabled(pathname)).toBe(true);
   });

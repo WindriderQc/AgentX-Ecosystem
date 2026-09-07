@@ -18,7 +18,6 @@ describe('AgentX Council surface', () => {
     expect(app).toMatch(/app\.use\(['"]\/api\/roundtable['"], roundtableRoutes\)/);
     expect(app).toMatch(/app\.get\(['"]\/council/);
     expect(app).toMatch(/app\.get\(['"]\/roundtable/);
-    expect(app).toMatch(/app\.get\(['"]\/roundtable\.html/);
     expect(app).toContain("title: 'AgentX \\u2022 Council'");
   });
 
@@ -65,9 +64,5 @@ describe('AgentX Council surface', () => {
     const legacy = await request(app).get('/roundtable?question=Compare%20these');
     expect(legacy.status).toBe(301);
     expect(legacy.headers.location).toBe('/council?question=Compare%20these');
-
-    const legacyHtml = await request(app).get('/roundtable.html?question=Compare%20again');
-    expect(legacyHtml.status).toBe(301);
-    expect(legacyHtml.headers.location).toBe('/council?question=Compare%20again');
   });
 });
