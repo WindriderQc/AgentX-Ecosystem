@@ -59,4 +59,26 @@ describe('Agent X runtime profile', () => {
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ code: 'AGENTX_DEMO_SURFACE_DISABLED' }));
     expect(next).not.toHaveBeenCalled();
   });
+
+  test('allows a Benchmark reservation lifecycle in demo while keeping host editing hidden', () => {
+    const host = encodeURIComponent('http://127.0.0.1:11434');
+    const prefix = '/api/nerve-center';
+    for (const [method, path] of [
+      ['POST', '/workload-admissions'],
+      ['POST', '/workload-admissions/run-1/heartbeat'],
+      ['POST', `/host-preferences/${host}/benchmark-claim`],
+      ['POST', `/host-preferences/${host}/benchmark-claim/run-1/heartbeat`],
+      ['DELETE', `/host-preferences/${host}/benchmark-claim/run-1`],
+      ['POST', `/host-preferences/${host}/benchmark-claim/run-1/release-receipt`],
+      ['DELETE', '/workload-admissions/run-1'],
+      ['POST', '/workload-admissions/run-1/release-receipt']
+    ]) expect(demoSurfaceDisabled(prefix + path, method)).toBe(false);
+
+    expect(demoSurfaceDisabled(`${prefix}/host-preferences/${host}`, 'PUT')).toBe(true);
+    expect(demoSurfaceDisabled(`${prefix}/host-preferences/${host}/swap`, 'POST')).toBe(true);
+    expect(demoSurfaceDisabled(`${prefix}/maintenance-leases`, 'POST')).toBe(true);
+    expect(demoSurfaceDisabled(`${prefix}/ecosystem`, 'GET')).toBe(true);
+    expect(demoSurfaceDisabled(`${prefix}/workload-admissions`, 'GET')).toBe(true);
+    expect(demoSurfaceDisabled('/nerve-center')).toBe(true);
+  });
 });

@@ -119,6 +119,22 @@ describe('RagStore (in-memory, mocked embeddings)', () => {
     expect(callArg.length).toBeGreaterThanOrEqual(1);
   });
 
+  test.each(['document', 'store'])('preserves zero chunk overlap configured on the %s', async (level) => {
+    const options = { chunkSize: 50, chunkOverlap: 0 };
+    if (level === 'store') {
+      const embeddingsService = store.embeddingsService;
+      store = new RagStore({ type: 'memory', ...options });
+      store.embeddingsService = embeddingsService;
+    }
+    const text = 'abcdefghijklmnopqrstuvwxyz'.repeat(10);
+    await store.upsertDocumentWithChunks(text, {
+      documentId: 'no-overlap', ...(level === 'document' ? options : {})
+    });
+    const chunks = await store.getDocumentChunks('no-overlap');
+    expect(chunks.map(chunk => chunk.text).join('')).toBe(text);
+    expect(chunks).toHaveLength(Math.ceil(text.length / 50));
+  });
+
   test('exact source/content repeat returns unchanged without re-embedding', async () => {
     // First ingest to populate
     await store.upsertDocumentWithChunks('Original text', {

@@ -13,6 +13,7 @@ const { resolveLane } = require('../../src/services/inferenceLanePolicy');
 const SAMPLES = {
   'benchmark-batch': 'benchmark-batch-6a1c80b7c2551d3c75492131',
   'benchmark-warmup': 'benchmark-warmup',
+  'benchmark-single-test': 'benchmark-single-test',
   'benchmark-host-test': 'benchmark-host-test-primary',
   'benchmark-decomposed-judge': 'benchmark-decomposed-judge',
   profiler: 'profiler-host-alpha',

@@ -13,6 +13,8 @@ describe('inferenceLanePolicy', () => {
 
   it.each([
     ['benchmark-warmup', 'direct'],
+    ['benchmark-single-test', 'direct'],
+    ['benchmark-single-test-extra', 'automated'],
     ['benchmark-host-test-primary', 'direct'],
     ['benchmark-decomposed-judge', 'direct'],
     ['profiler-host-alpha', 'direct'],

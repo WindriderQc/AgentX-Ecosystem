@@ -3,12 +3,12 @@ doc_type: permanent
 authority: canonical
 status: active
 owner: rag
-last_verified: 2026-07-27
+last_verified: 2026-09-07
 ---
 
 # AgentX RAG — API Contract
 
-> Base URL: `http://localhost:3082`
+> Default Compose URL: `http://127.0.0.1:3182`. A direct `npm start` uses port 3082 unless `PORT` is set.
 
 **Envelope:** `{ "ok": true, "data": { ... }, "meta": { "durationMs": 42, "observedAt": "2026-08-28T12:00:00.000Z" } }`
 **Errors:** `{ "ok": false, "error": "CODE", "detail": "..." }`
@@ -26,7 +26,7 @@ configured vector store is unavailable. The embedding model remains an
 optional capability and is reported by `/api/rag/status`.
 
 ```bash
-curl http://localhost:3082/health
+curl http://127.0.0.1:3182/health
 # => { "ok": true, "status": "ok", "service": "agentx-rag", "db": "connected", "vectorStore": { "healthy": true, "type": "qdrant" } }
 ```
 
@@ -35,7 +35,7 @@ curl http://localhost:3082/health
 Full health with dependency matrix and cache stats.
 
 ```bash
-curl http://localhost:3082/api/rag/status
+curl http://127.0.0.1:3182/api/rag/status
 ```
 
 ```json
@@ -47,7 +47,7 @@ curl http://localhost:3082/api/rag/status
     "cache": { "hits": 50, "misses": 12, "size": 62 },
     "dependencies": {
       "mongodb": { "healthy": true },
-      "embedding": { "healthy": true, "provider": "core-proxy", "model": "nomic-embed-text:v1.5", "endpoint": "http://localhost:3080" },
+      "embedding": { "healthy": true, "provider": "core-proxy", "model": "nomic-embed-text:v1.5" },
       "qdrant": { "healthy": true }
     },
     "healthy": true
@@ -70,6 +70,9 @@ Ingest a text document (chunk + embed + store). `POST /api/rag/documents` is an 
 | chunkOverlap | int | no | 50 | 0 to chunkSize/2 |
 | documentId | string | no | MD5 auto | Stable ID; re-ingest replaces |
 
+An explicit `chunkOverlap: 0` disables overlap. If you reduce `chunkSize`
+below 100, also supply an overlap no greater than half that size.
+
 Ingestion is idempotent at the source/content boundary:
 
 - A supplied `documentId` is an opaque, caller-owned source identity. Repeating
@@ -88,7 +91,7 @@ Ingestion is idempotent at the source/content boundary:
   deleted by ingestion.
 
 ```bash
-curl -X POST http://localhost:3082/api/rag/ingest \
+curl -X POST http://127.0.0.1:3182/api/rag/ingest \
   -H 'Content-Type: application/json' \
   -d '{ "text": "Content...", "source": "my-source", "tags": ["docs"] }'
 # => { "ok": true, "data": { "documentId": "abc123", "chunkCount": 7, "status": "ok" } }
@@ -106,6 +109,11 @@ An exact repeat returns the existing document and its passage count:
 
 Bulk ingest up to 50 documents sequentially (configurable via `BATCH_MAX_DOCS`).
 
+Each document uses the same fields, defaults, and validation as a single
+import. Invalid input rejects the entire batch before any document is written;
+the error identifies its index. Runtime failures after validation are reported
+per document, so earlier successful imports may remain.
+
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | documents | array | yes | Max 50 items |
@@ -115,7 +123,7 @@ Bulk ingest up to 50 documents sequentially (configurable via `BATCH_MAX_DOCS`).
 | documents[].documentId | string | no | |
 
 ```bash
-curl -X POST http://localhost:3082/api/rag/ingest/batch \
+curl -X POST http://127.0.0.1:3182/api/rag/ingest/batch \
   -H 'Content-Type: application/json' \
   -d '{ "documents": [{ "text": "First...", "source": "batch" }, { "text": "Second...", "source": "batch" }] }'
 ```
@@ -141,7 +149,7 @@ policy. Roots and files are realpath-checked before reads.
 | roots | string[] | configured | Restrict to specific dirs |
 
 ```bash
-curl -X POST http://localhost:3082/api/rag/ingest-scan \
+curl -X POST http://127.0.0.1:3182/api/rag/ingest-scan \
   -H 'Content-Type: application/json' -d '{ "limit": 100 }'
 # => 202 { "ok": true, "data": { "jobId": "uuid", "status": "running" } }
 ```
@@ -153,7 +161,7 @@ curl -X POST http://localhost:3082/api/rag/ingest-scan \
 Poll scan progress. Status: `running` | `completed` | `failed` | `cancelled`.
 
 ```bash
-curl http://localhost:3082/api/rag/ingest-scan/uuid
+curl http://127.0.0.1:3182/api/rag/ingest-scan/uuid
 ```
 
 ```json
@@ -169,7 +177,7 @@ curl http://localhost:3082/api/rag/ingest-scan/uuid
 Cancel a running scan. **Errors:** 404, 400 `JOB_NOT_RUNNING`
 
 ```bash
-curl -X DELETE http://localhost:3082/api/rag/ingest-scan/uuid
+curl -X DELETE http://127.0.0.1:3182/api/rag/ingest-scan/uuid
 # => { "ok": true, "data": { "jobId": "uuid", "status": "cancelled" } }
 ```
 
@@ -180,7 +188,7 @@ roots, extension/size limits, and deterministic exclusions. It contains no
 secrets or document contents.
 
 ```bash
-curl http://localhost:3082/api/rag/ingestion/policy
+curl http://127.0.0.1:3182/api/rag/ingestion/policy
 ```
 
 ## Search
@@ -201,7 +209,7 @@ Semantic vector search across chunks.
 | compress | bool | no | false | Extract query-relevant sentences after retrieval; fail-soft |
 
 ```bash
-curl -X POST http://localhost:3082/api/rag/search \
+curl -X POST http://127.0.0.1:3182/api/rag/search \
   -H 'Content-Type: application/json' \
   -d '{ "query": "How does the alert system work?", "topK": 5, "minScore": 0.3 }'
 ```
@@ -236,7 +244,7 @@ provenance label.
 | offset | int | 0 | |
 
 ```bash
-curl "http://localhost:3082/api/rag/documents?source=docs&limit=20"
+curl "http://127.0.0.1:3182/api/rag/documents?source=docs&limit=20"
 # => { "ok": true, "data": { "documents": [...], "total": 1, "limit": 20, "offset": 0 } }
 ```
 
@@ -245,7 +253,7 @@ curl "http://localhost:3082/api/rag/documents?source=docs&limit=20"
 Document metadata. **Errors:** 404
 
 ```bash
-curl http://localhost:3082/api/rag/documents/abc123
+curl http://127.0.0.1:3182/api/rag/documents/abc123
 # => { "ok": true, "data": { "documentId": "abc123", "source": "docs", "chunkCount": 7, "metadata": { "tags": ["api"], "hash": "md5" } } }
 ```
 
@@ -254,7 +262,7 @@ curl http://localhost:3082/api/rag/documents/abc123
 All chunks for a document. **Errors:** 404
 
 ```bash
-curl http://localhost:3082/api/rag/documents/abc123/chunks
+curl http://127.0.0.1:3182/api/rag/documents/abc123/chunks
 # => { "ok": true, "data": { "documentId": "abc123", "chunks": [{ "chunkIndex": 0, "text": "...", "metadata": {} }] } }
 ```
 
@@ -268,7 +276,7 @@ replace or grant operator authorization at the deployment boundary.
 **Errors:** 400 `CONFIRMATION_REQUIRED`, 404
 
 ```bash
-curl -X DELETE http://localhost:3082/api/rag/documents/abc123 \
+curl -X DELETE http://127.0.0.1:3182/api/rag/documents/abc123 \
   -H 'Content-Type: application/json' \
   -d '{ "confirmation": "DELETE abc123" }'
 # => { "ok": true, "data": { "documentId": "abc123" } }
@@ -292,7 +300,7 @@ Store a folder scan snapshot. Used by ingest-scan.
 | files | array | yes | `[{ path, size }]` |
 
 ```bash
-curl -X POST http://localhost:3082/api/rag/manifests \
+curl -X POST http://127.0.0.1:3182/api/rag/manifests \
   -H 'Content-Type: application/json' \
   -d '{ "source": "local-import", "root": "/data/imports", "files": [{ "path": "/data/imports/f.txt", "size": 1024 }] }'
 # => { "ok": true, "data": { "manifestId": "...", "source": "local-import", "stats": { "fileCount": 1, "totalBytes": 1024 } } }
@@ -303,7 +311,7 @@ curl -X POST http://localhost:3082/api/rag/manifests \
 Most recent manifest. Optional `?source=X` filter. Returns `data: null` if none exists.
 
 ```bash
-curl "http://localhost:3082/api/rag/manifests/latest?source=local-import"
+curl "http://127.0.0.1:3182/api/rag/manifests/latest?source=local-import"
 ```
 
 ### GET /api/rag/deletion-preview
@@ -311,7 +319,7 @@ curl "http://localhost:3082/api/rag/manifests/latest?source=local-import"
 Compare manifest vs indexed docs. Omit `source` for multi-source aggregate.
 
 ```bash
-curl "http://localhost:3082/api/rag/deletion-preview?source=local-import"
+curl "http://127.0.0.1:3182/api/rag/deletion-preview?source=local-import"
 # => { "ok": true, "data": { "source": "local-import", "manifestFiles": 50, "indexedDocs": 55, "stale": [...], "fresh": 50 } }
 ```
 
@@ -327,7 +335,7 @@ Delete stale documents. Dry-run by default.
 | maxDeletes | int | no | 100 | Safety cap (max 500) |
 
 ```bash
-curl -X POST http://localhost:3082/api/rag/cleanup \
+curl -X POST http://127.0.0.1:3182/api/rag/cleanup \
   -H 'Content-Type: application/json' \
   -d '{ "source": "local-import", "dryRun": false, "maxDeletes": 100 }'
 # => { "ok": true, "data": { "dryRun": false, "deleted": ["doc1"], "errors": [], "stats": { "attempted": 1, "succeeded": 1, "failed": 0, "elapsedMs": 150 } } }
@@ -340,7 +348,7 @@ curl -X POST http://localhost:3082/api/rag/cleanup \
 Check dimension mismatch between current model and stored vectors.
 
 ```bash
-curl http://localhost:3082/api/rag/embedding-migration/status
+curl http://127.0.0.1:3182/api/rag/embedding-migration/status
 # => { "ok": true, "data": { "currentModel": "nomic-embed-text:v1.5", "currentDimension": 768, "storedDimension": 768, "dimensionMatch": true, "migrationNeeded": false, "documentCount": 12, "chunkCount": 340 } }
 ```
 
@@ -349,7 +357,7 @@ curl http://localhost:3082/api/rag/embedding-migration/status
 Re-embed all documents with current model. Requires `{ "confirm": true }`. Async 202 + jobId.
 
 ```bash
-curl -X POST http://localhost:3082/api/rag/embedding-migration/reindex \
+curl -X POST http://127.0.0.1:3182/api/rag/embedding-migration/reindex \
   -H 'Content-Type: application/json' -d '{ "confirm": true }'
 # => 202 { "ok": true, "data": { "jobId": "reindex-...", "status": "running" } }
 ```
@@ -361,7 +369,7 @@ curl -X POST http://localhost:3082/api/rag/embedding-migration/reindex \
 Poll reindex progress.
 
 ```bash
-curl http://localhost:3082/api/rag/embedding-migration/reindex/reindex-123
+curl http://127.0.0.1:3182/api/rag/embedding-migration/reindex/reindex-123
 # => { "ok": true, "data": { "jobId": "reindex-123", "status": "running", "progress": { "total": 12, "processed": 5, "succeeded": 5, "failed": 0, "errors": [] } } }
 ```
 
@@ -372,7 +380,7 @@ curl http://localhost:3082/api/rag/embedding-migration/reindex/reindex-123
 Totals, per-source breakdown, last ingest timestamp.
 
 ```bash
-curl http://localhost:3082/api/rag/metrics
+curl http://127.0.0.1:3182/api/rag/metrics
 # => { "ok": true, "data": { "totals": { "documents": 12, "chunks": 340 }, "bySource": [...], "lastIngest": { "timestamp": "...", "source": "docs" } } }
 ```
 
@@ -381,7 +389,7 @@ curl http://localhost:3082/api/rag/metrics
 Recent ingest telemetry. Params: `?limit=50&source=X&status=success|failed`
 
 ```bash
-curl "http://localhost:3082/api/rag/telemetry/ingest?limit=10"
+curl "http://127.0.0.1:3182/api/rag/telemetry/ingest?limit=10"
 # => { "ok": true, "data": { "jobs": [{ "jobId": "...", "source": "api", "status": "success", "totalTimeMs": 230 }], "count": 1 } }
 ```
 
@@ -390,7 +398,7 @@ curl "http://localhost:3082/api/rag/telemetry/ingest?limit=10"
 Aggregate ingest stats (all-time + last 24h).
 
 ```bash
-curl http://localhost:3082/api/rag/telemetry/ingest/summary
+curl http://127.0.0.1:3182/api/rag/telemetry/ingest/summary
 # => { "ok": true, "data": { "totalIngests": 150, "successRate": 97.33, "avgTotalTimeMs": 450, "last24h": { "total": 12, "success": 11, "failed": 1 }, "lastIngestAt": "..." } }
 ```
 
@@ -401,7 +409,7 @@ curl http://localhost:3082/api/rag/telemetry/ingest/summary
 Clear in-memory embedding cache.
 
 ```bash
-curl -X POST http://localhost:3082/api/rag/cache/clear
+curl -X POST http://127.0.0.1:3182/api/rag/cache/clear
 # => { "ok": true, "data": { "cleared": true } }
 ```
 

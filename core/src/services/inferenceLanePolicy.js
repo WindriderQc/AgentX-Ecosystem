@@ -6,8 +6,8 @@ const { resolveCallerPolicy } = require('./routing/callerPolicy');
  * Caller-aware execution lanes for /api/inference/generate.
  * Lane selection controls routing, admission, and telemetry cost. It never
  * rewrites model names: every lane sends the exact caller-selected tag.
- * Privileged performance policies are authenticated by the HTTP boundary and
- * supplied to resolvePolicyLane; callerDetail remains telemetry metadata.
+ * The HTTP boundary supplies the declared policy to resolvePolicyLane;
+ * callerDetail remains telemetry metadata, not authentication.
  */
 const LANE_POLICY = Object.freeze({
   direct: Object.freeze({

@@ -48,4 +48,24 @@ describe('chat messaging browser security boundary', () => {
     expect(source).toMatch(/parsed\.protocol === 'http:' \|\| parsed\.protocol === 'https:'/);
     expect(source).toContain('Number.isInteger(data.resultCount) && data.resultCount >= 0');
   });
+
+  test('source details preserve the full retrieved passage and literal markup', () => {
+    const start = source.indexOf('function buildRagSourceViewer');
+    const end = source.indexOf('export function renderMessage', start);
+    const showModal = jest.fn();
+    const context = vm.createContext({
+      showModal,
+      document: { createElement: tag => ({
+        tag, children: [], appendChild(child) { this.children.push(child); }
+      }) }
+    });
+    vm.runInContext(source.slice(start, end) + '\nthis.view = buildRagSourceViewer;', context);
+    const text = '<button>Example & literal source</button>\n'.repeat(20);
+    context.view({ title: 'HTML example', text, excerpt: text.slice(0, 220), score: 0 }, 0)();
+    const [title, body] = showModal.mock.calls[0];
+    expect(title).toBe('Source [1]: HTML example');
+    expect(body.children[0].textContent).toContain('0% match');
+    expect(body.children.at(-1).textContent).toBe(text);
+    expect(body.children.at(-1).innerHTML).toBeUndefined();
+  });
 });

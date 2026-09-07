@@ -289,6 +289,21 @@ body[data-agentx-profile="demo"] .chat-command-bar { padding-left: 186px; }
   .chat-layout:has(.chat-welcome) .chat-window { padding-top: 12px; padding-bottom: 20px; }
   .chat-layout:has(.chat-welcome) .chat-welcome__starters { margin-top: 18px; }
 }
+.chat-detail-dialog {
+  width: min(600px, calc(100vw - 32px));
+  max-height: 85dvh;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--chat-canvas, #151a21);
+  color: var(--text);
+  overflow: auto;
+}
+.chat-detail-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.chat-detail-dialog .modal-content { width: 100%; margin: 0; max-width: none; }
+.chat-detail-dialog h2, .chat-detail-dialog p { overflow-wrap: anywhere; }
+.chat-source-text { padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+
 @media (prefers-reduced-motion: reduce) {
   .chat-command-bar *, .chat-routing-lab *, .config-drawer,
   .config-drawer-backdrop, .chat-layout * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

@@ -1,22 +1,15 @@
 /**
- * Inference routes — caller-aware lane policy (task 0168).
+ * Inference routes — caller-aware execution lanes.
  *
  * /api/inference/generate selects one of three performance lanes from the
- * authenticated caller policy. `callerDetail` remains telemetry metadata.
+ * declared caller policy. `callerDetail` remains telemetry metadata.
  * Every lane preserves the exact requested model tag. The
  * retired `useAdapted: true` property is rejected instead of silently changing
  * artifact identity.
  *
- * Trust model — LOAD-BEARING ASSUMPTION
- * --------------------------------------
- * `callerDetail` is a free-form string set by the caller. Benchmark lanes
- * require the scoped Benchmark token; interactive lanes require same-origin
- * UI proof or the existing operator token. Untrusted claims degrade to the
- * automated safe path and remain visible in telemetry.
- *
- * Safety invariant — the interactive lane keeps hostGate.acquire. Skipping
- * it would let chat/buddy cut in line on a cron mid-call and force model
- * swaps. The "buddy can't interrupt cron" rule is non-negotiable.
+ * The private-LAN product uses plain caller attribution. Benchmark operations
+ * still carry exact Core-owned reservation proof so chat and evaluation do
+ * not change a host's loaded model while another request is using it.
  */
 const express = require('express');
 const { requestPrincipal } = require('../src/helpers/requestCaller');

@@ -13,7 +13,7 @@ const { flagEnabled, startSingletonDaemon } = require('./src/services/leaderLeas
 const { currentAgentXProfile, isDemoProfile } = require('../shared/agentxRuntimeProfile');
 
 const PORT = process.env.PORT || 3080;
-const HOST = process.env.HOST || 'localhost';
+const HOST = process.env.HOST || '127.0.0.1';
 const OLLAMA_HOST = normalizeHostUrl(process.env.OLLAMA_HOST);
 const AGENTX_PROFILE = currentAgentXProfile();
 const DEMO_RUNTIME = isDemoProfile(AGENTX_PROFILE);
@@ -497,10 +497,10 @@ async function startServer() {
   }
 
   // Start Express server
-  app.listen(PORT, () => {
+  app.listen(PORT, HOST, () => {
     console.log(`\n${'─'.repeat(58)}`);
     console.log(`🚀 Server:    http://${HOST}:${PORT}`);
-    console.log(`💚 Health:    http://${HOST}:${PORT}/health/detailed`);
+    console.log(`💚 Health:    http://${HOST}:${PORT}/health`);
     console.log(`📚 Docs:      /docs folder`);
     console.log(`📋 Logs:      logs/combined.log & logs/error.log`);
     console.log(`${'─'.repeat(58)}\n`);
@@ -522,7 +522,7 @@ async function startServer() {
 
     logger.info('AgentX Core server started', {
       port: PORT,
-      host: process.env.SERVER_HOST || 'localhost',
+      host: HOST,
       environment: process.env.NODE_ENV || 'development',
       mongodb: systemHealth.mongodb.status,
       ollama: systemHealth.ollama.status,

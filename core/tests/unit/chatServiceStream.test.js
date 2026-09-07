@@ -590,7 +590,7 @@ describe('chatServiceStream', () => {
     expect(recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
   });
 
-  it('quarantines a dispatched admission when the caller disconnects between stream chunks', async () => {
+  it('keeps quarantine when a stopped stream ends without terminal proof', async () => {
     const controller = new AbortController();
     const lifecycle = {
       signal: new AbortController().signal,
@@ -618,12 +618,60 @@ describe('chatServiceStream', () => {
     expect(lifecycle.markDispatched).toHaveBeenCalledTimes(1);
     expect(lifecycle.complete).not.toHaveBeenCalled();
     expect(lifecycle.abandon).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'AbortError',
-      message: 'client disconnected'
+      code: 'OLLAMA_STREAM_INCOMPLETE'
     }));
   });
 
-  it('keeps the five-minute deadline active while the upstream body is stalled', async () => {
+  it('drains a stopped response to terminal proof without sending or saving late text', async () => {
+    const controller = new AbortController();
+    const onToken = jest.fn();
+    const onComplete = jest.fn();
+    const onError = jest.fn();
+    let upstreamSignal;
+    mockFetch.mockImplementation(async (_url, { signal }) => {
+      upstreamSignal = signal;
+      return { ok: true, body: (async function* () {
+        yield Buffer.from(JSON.stringify({ message: { content: 'first' }, done: false }) + '\n');
+        controller.abort();
+        expect(upstreamSignal.aborted).toBe(false);
+        yield Buffer.from(JSON.stringify({ message: { content: 'late' }, done: false }) + '\n');
+        yield Buffer.from(JSON.stringify({ done: true, eval_count: 2 }) + '\n');
+      })() };
+    });
+    await handleChatRequestStream({
+      userId: 'user-1', model: 'qwen3:14b', message: 'stop me',
+      target: 'http://192.0.2.66:11434', abortSignal: controller.signal,
+      onToken, onThinking: jest.fn(), onComplete, onError
+    });
+    const lifecycle = await beginInferenceAdmission.mock.results.at(-1).value;
+    expect(lifecycle.complete).toHaveBeenCalledTimes(1);
+    expect(lifecycle.abandon).not.toHaveBeenCalled();
+    expect(onToken.mock.calls).toEqual([['first']]);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(mockPersistConversation).not.toHaveBeenCalled();
+    expect(recordInference).not.toHaveBeenCalled();
+  });
+
+  it('releases an undispatched admission if Stop arrives while acquiring it', async () => {
+    const controller = new AbortController();
+    const lifecycle = { abandon: jest.fn(), markDispatched: jest.fn() };
+    beginInferenceAdmission.mockImplementationOnce(async () => {
+      controller.abort();
+      return lifecycle;
+    });
+    await handleChatRequestStream({
+      userId: 'user-1', model: 'qwen3:14b', message: 'stop before dispatch',
+      target: 'http://192.0.2.66:11434', abortSignal: controller.signal,
+      onToken: jest.fn(), onThinking: jest.fn(), onComplete: jest.fn(), onError: jest.fn()
+    });
+    expect(mockFetch).not.toHaveBeenCalledWith(expect.stringMatching(/\/api\/chat$/), expect.anything());
+    expect(lifecycle.markDispatched).not.toHaveBeenCalled();
+    expect(lifecycle.abandon).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('keeps the upstream deadline while the body is stalled (caller stopped: %s)', async stopped => {
+    const controller = new AbortController();
     let upstreamSignal;
     let markStreaming;
     const streaming = new Promise(resolve => { markStreaming = resolve; });
@@ -651,13 +699,23 @@ describe('chatServiceStream', () => {
     const request = handleChatRequestStream({
       userId: 'user-1', model: 'qwen3:14b', message: 'bounded deep request',
       target: 'http://192.0.2.66:11434', upstreamTimeoutMs: 20,
+      abortSignal: controller.signal,
       onToken: jest.fn(), onThinking: jest.fn(), onComplete: jest.fn(), onError
     });
     await streaming;
+    if (stopped) controller.abort();
     expect(upstreamSignal.aborted).toBe(false);
     await request;
 
     expect(upstreamSignal.aborted).toBe(true);
+    const lifecycle = await beginInferenceAdmission.mock.results.at(-1).value;
+    expect(lifecycle.complete).not.toHaveBeenCalled();
+    expect(lifecycle.abandon).toHaveBeenCalledTimes(1);
+    if (stopped) {
+      expect(onError).not.toHaveBeenCalled();
+      expect(recordInference).not.toHaveBeenCalled();
+      return;
+    }
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({
       name: 'AbortError',
       code: 'OLLAMA_TIMEOUT',
