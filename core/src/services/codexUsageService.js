@@ -237,21 +237,11 @@ async function readCodexSubscriptionValue(now = Date.now(), models = {}) {
   };
 }
 
-function tokenAllowed(req) {
-  const expected = String(
-    process.env.AGENTX_CODEX_USAGE_TOKEN || ''
-  ).trim();
-  if (!expected) return false;
-  const actual = String(req.get('x-agentx-codex-usage-token') || '').trim();
-  if (actual.length !== expected.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
-}
 
 module.exports = {
   ingestCodexUsage,
   normalizePayload,
   readCodexSubscriptionValue,
   readTotals,
-  tokenAllowed,
   valueSignal,
 };

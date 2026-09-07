@@ -7,9 +7,7 @@ and repeat count. It launches the two modes as separate sequential batches so
 their evidence cohorts cannot be silently mixed.
 
 The command is a dry plan unless `--execute` is present. Live runs require the
-Benchmark singleton to be free and accept an operator token only through the
-named environment variable; the token is never written to the plan or report.
-After each batch reaches terminal row counts, the runner also waits for the
+Benchmark singleton to be free. After each batch reaches terminal row counts, the runner also waits for the
 persisted singleton slot to become idle. This covers the bounded pin-restore
 window without racing the next mode.
 

@@ -19,14 +19,13 @@
  * swaps. The "buddy can't interrupt cron" rule is non-negotiable.
  */
 const express = require('express');
+const { requestPrincipal } = require('../src/helpers/requestCaller');
 const router = express.Router();
 const logger = require('../config/logger');
 const fetch = require('node-fetch');
 const { resolveTarget } = require('../src/helpers/ollamaUtils');
 const { normalizeHostUrl, validateHostUrl, getHostUrls, hostUrlKey } = require('../src/helpers/ollamaHostConfig');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
-const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
-const { requireOperatorUiAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
 const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
 const {
   HOSTS,
@@ -731,7 +730,7 @@ router.post('/inference/embed', async (req, res) => {
  * returned snapshot and reuse it rather than resolving capabilities between
  * attempts.
  */
-router.post('/inference/contract/resolve', requireBenchmarkServiceAccess, async (req, res) => {
+router.post('/inference/contract/resolve', async (req, res) => {
     const body = req.body || {};
     const model = typeof body.model === 'string' ? body.model.trim() : '';
     const host = typeof body.host === 'string' ? body.host.trim() : '';
@@ -1742,11 +1741,11 @@ router.get('/router/config/defaults', async (_req, res) => {
     }
 });
 
-router.put('/router/config/tasks/:taskType', requireOperatorUiAccess, async (req, res) => {
+router.put('/router/config/tasks/:taskType', async (req, res) => {
     try {
         const { taskType } = req.params;
         const state = await runRuntimeMutation({
-            principal: operatorRequestIdentity(req),
+            principal: requestPrincipal(req),
             scope: `router-task-config:${taskType}`
         }, () => req.body?.resetToDefault === true
             ? resetTaskModelOverride(taskType)
@@ -1768,11 +1767,11 @@ router.put('/router/config/tasks/:taskType', requireOperatorUiAccess, async (req
     }
 });
 
-router.post('/router/config/reset', requireOperatorUiAccess, async (req, res) => {
+router.post('/router/config/reset', async (req, res) => {
     if (!requireTypedConfirmation(req, res, 'RESET ROUTER CONFIG')) return;
     try {
         const taskConfigState = await runRuntimeMutation({
-            principal: operatorRequestIdentity(req),
+            principal: requestPrincipal(req),
             scope: 'router-task-config:reset-all'
         }, () => resetAllTaskModelOverrides());
         const data = await buildRouterConfigPayload();

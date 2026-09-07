@@ -1,7 +1,6 @@
 /**
  * Recovery snapshot routes. These are an internal Core↔RAG contract, not a
- * public Qdrant topology API. Every route requires the ephemeral recovery
- * token supplied only to Core and RAG by the launcher.
+ * public Qdrant topology API.
  */
 
 const express = require('express');
@@ -13,7 +12,6 @@ const {
   SERVICE_OUTBOUND_TIMEOUTS,
   configuredServiceOrigin
 } = require('../src/clients/serviceOutboundClient');
-const { requireRecoveryToken } = require('../src/middleware/recoveryAuth');
 const { sendOk, sendError } = require('../src/utils/response');
 
 const QDRANT_URL = configuredServiceOrigin(process.env.QDRANT_URL || 'http://localhost:6333');
@@ -55,7 +53,6 @@ function projectSnapshot(value) {
   return projected;
 }
 
-router.use(requireRecoveryToken);
 
 router.post('/snapshots', async (req, res) => {
   try {

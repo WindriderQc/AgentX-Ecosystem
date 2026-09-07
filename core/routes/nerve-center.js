@@ -8,6 +8,7 @@
  */
 
 const express = require('express');
+const { requestPrincipal } = require('../src/helpers/requestCaller');
 const router = express.Router();
 const logger = require('../config/logger');
 
@@ -42,7 +43,6 @@ const { describeHost } = require('../src/services/hostIdentityService');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { projectHealthFeed } = require('../src/services/alertFeedProjection');
 const { projectHostPreferencesForRead } = require('../src/services/hostPreferencePublicProjection');
-const { requireOperatorUiAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
 const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
 
 // ========================================
@@ -335,12 +335,12 @@ router.get('/routing/config', async (_req, res) => {
 // 3. PUT /routing/config — update in-memory
 // ========================================
 
-router.put('/routing/config', requireOperatorUiAccess, async (req, res) => {
+router.put('/routing/config', async (req, res) => {
   try {
     const { taskModels } = req.body || {};
 
     await runRuntimeMutation({
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       scope: 'router-task-config:bulk-update'
     }, async () => {
       if (taskModels && typeof taskModels === 'object') {
@@ -585,11 +585,11 @@ router.get('/inference/routing-config', async (_req, res) => {
 // 14. PUT /inference/routing-config/:taskType — update a task-model assignment
 // ========================================
 
-router.put('/inference/routing-config/:taskType', requireOperatorUiAccess, async (req, res) => {
+router.put('/inference/routing-config/:taskType', async (req, res) => {
   try {
     const { taskType } = req.params;
     const state = await runRuntimeMutation({
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       scope: `router-task-config:${taskType}`
     }, () => req.body?.resetToDefault === true
       ? resetTaskModelOverride(taskType)
@@ -732,10 +732,8 @@ const RAG_EVIDENCE_TIMEOUT_MS = Math.min(
 router.get('/rag/status', async (_req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
-        const operatorToken = String(process.env.AGENTX_OPERATOR_TOKEN || '').trim();
         const response = await fetch(`${RAG_SERVICE_URL}/api/rag/status/refresh`, {
           method: 'POST',
-          headers: operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {},
           signal: AbortSignal.timeout(RAG_EVIDENCE_TIMEOUT_MS)
         });
         const data = await response.json();

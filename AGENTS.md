@@ -30,6 +30,8 @@ cached index. Historical and operational documents do not belong here.
 - A private Data service may be called only through a separately operated,
   bounded read-only API; it is not an Agent X skill or product service.
 - Dreaming is a Core product capability and remains in this repository.
+- The product is a private-LAN prototype with no built-in authentication (see
+  `SECURITY.md`). Do not add tokens, origin checks, rate limits, or CI gates.
 - Never commit `.env`, credentials, personal data, model volumes, caches, or
   generated test/build output.
 

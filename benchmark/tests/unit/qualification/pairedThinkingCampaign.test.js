@@ -185,7 +185,6 @@ describe('paired thinking campaign plan', () => {
 
     await waitForSingletonIdle({
       api: 'http://benchmark:3081',
-      operatorTokenEnv: null,
       singletonIdleTimeoutMs: 60_000,
       pollMs: 1000
     }, { requestJson, delay });
@@ -225,15 +224,4 @@ describe('paired thinking campaign plan', () => {
     })).toThrow(/seed: expected 42, got 99/);
   });
 
-  test('reads operator authorization from an environment variable without embedding it in the plan', () => {
-    process.env.PAIRED_THINKING_TEST_TOKEN = 'secret';
-    try {
-      expect(headersFor({ operatorTokenEnv: 'PAIRED_THINKING_TEST_TOKEN' }, true)).toEqual({
-        'Content-Type': 'application/json',
-        'X-AgentX-Operator-Token': 'secret'
-      });
-    } finally {
-      delete process.env.PAIRED_THINKING_TEST_TOKEN;
-    }
-  });
 });

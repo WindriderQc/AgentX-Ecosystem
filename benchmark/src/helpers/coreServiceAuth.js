@@ -1,19 +1,18 @@
 'use strict';
 
-const BENCHMARK_TOKEN_HEADER = 'X-AgentX-Benchmark-Token';
+const CALLER_HEADER = 'X-AgentX-Caller';
+const BENCHMARK_PRINCIPAL = 'benchmark-service';
 
 /**
- * Add Benchmark's scoped Core credential when one was configured externally.
- * The token is intentionally absent from source and from the default runtime.
+ * Declare Benchmark's identity to Core. Plain attribution on a private LAN,
+ * not a credential.
  */
 function withBenchmarkServiceAuth(headers = {}) {
-  const token = process.env.AGENTX_BENCHMARK_TOKEN || '';
-  return token
-    ? { ...headers, [BENCHMARK_TOKEN_HEADER]: token }
-    : { ...headers };
+  return { ...headers, [CALLER_HEADER]: BENCHMARK_PRINCIPAL };
 }
 
 module.exports = {
-  BENCHMARK_TOKEN_HEADER,
+  CALLER_HEADER,
+  BENCHMARK_PRINCIPAL,
   withBenchmarkServiceAuth
 };

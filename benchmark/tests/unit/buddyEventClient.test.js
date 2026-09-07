@@ -9,7 +9,6 @@ describe('Benchmark platform event client', () => {
     jest.resetModules();
     global.fetch = jest.fn(() => Promise.resolve({ ok: true }));
     process.env.CORE_URL = 'http://core.test:3080';
-    process.env.AGENTX_PLATFORM_EVENT_TOKEN = 'shared-token';
   });
 
   afterEach(() => {
@@ -20,7 +19,7 @@ describe('Benchmark platform event client', () => {
     else process.env.CORE_URL = savedCoreUrl;
   });
 
-  it('posts to the generic ingress with the rolling-compatible shared token', () => {
+  it('posts to the generic ingress', () => {
     const { emitBuddyEvent } = require('../../src/clients/buddyEventClient');
     emitBuddyEvent('judge_start', 'benchmark', 'Judge started', 'normal', {
       intent: 'watching',
@@ -31,7 +30,6 @@ describe('Benchmark platform event client', () => {
       'http://core.test:3080/api/platform-events',
       expect.objectContaining({
         method: 'POST',
-        headers: expect.objectContaining({ 'X-Platform-Event-Token': 'shared-token' }),
       })
     );
   });

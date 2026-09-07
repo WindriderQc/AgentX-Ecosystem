@@ -48,8 +48,7 @@ returns only Product-admissible low-risk tasks; deployment policy must still
 apply its local gates before dispatch.
 
 A guarded remote worker may read one exact non-personal task through
-`GET /api/pipeline/tasks/:id/worker?agent=:identity` using the purpose-scoped
-pipeline token. The route returns queued unassigned work or an in-progress,
+`GET /api/pipeline/tasks/:id/worker?agent=:identity`. The route returns queued unassigned work or an in-progress,
 review, or blocked task already assigned to that identity. It does not list the
 queue, change
 eligibility, or claim the task.
@@ -75,8 +74,8 @@ mismatched, inactive, or expired lease. A successful or blocked feedback call
 also includes `leaseId` plus `leaseAssignee`, so a guard may remain the feedback
 author without impersonating the worker identity bound to the lease.
 
-Automated success still maps only to `review`. The assignee cannot confirm its
-own task `done`, merge code, or authorize deployment. Review, blocked, and
+Automated success still maps only to `review`; confirming `done` is a separate
+status call. Review, blocked, and
 re-queue transitions release both the task lease and global slot while
 retaining the attempt count and bounded attempt history.
 

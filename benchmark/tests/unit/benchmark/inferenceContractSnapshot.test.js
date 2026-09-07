@@ -68,9 +68,7 @@ function batchModel(existingDocs = []) {
 }
 
 describe('campaign inference contract snapshots', () => {
-    it('sends the scoped Benchmark token when resolving a Core contract snapshot', async () => {
-        const previousToken = process.env.AGENTX_BENCHMARK_TOKEN;
-        process.env.AGENTX_BENCHMARK_TOKEN = 'scoped-benchmark-token';
+    it('declares the Benchmark caller when resolving a Core contract snapshot', async () => {
         try {
             const fetchImpl = jest.fn(async () => response(snapshot()));
             await resolveStandaloneCampaignInferenceContracts({
@@ -83,13 +81,12 @@ describe('campaign inference contract snapshots', () => {
                 expect.objectContaining({
                     headers: expect.objectContaining({
                         'Content-Type': 'application/json',
-                        'X-AgentX-Benchmark-Token': 'scoped-benchmark-token'
+                        'X-AgentX-Caller': 'benchmark-service'
                     })
                 })
             );
         } finally {
-            if (previousToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-            else process.env.AGENTX_BENCHMARK_TOKEN = previousToken;
+            // no environment to restore
         }
     });
 

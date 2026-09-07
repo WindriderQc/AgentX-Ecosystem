@@ -7,16 +7,10 @@ Core owns one MongoDB coordination record. A maintenance lease and Benchmark
 workload admissions are mutually exclusive through a single atomic compare-and-
 set boundary. Core mints every `leaseId`, `admissionId`, and `generation`.
 Clients may choose only a stable `requestId` (or `idempotencyKey`) for retry.
-The authenticated service identity, never a request-body field, becomes the
-stored `principal`.
+The stored `principal` is the caller identity declared with the plain
+`X-AgentX-Caller` header (attribution only, never a request-body field).
 
-## Authentication and envelope
-
-Maintenance calls require Core operator access. An AIOps service normally sends
-`Authorization: Bearer <AGENTX_OPERATOR_TOKEN>` (the existing
-`X-AgentX-Operator-Token` form is also supported). Workload-admission calls
-require the exact `X-AgentX-Benchmark-Token`; trusted-origin and loopback UI
-classification do not grant Benchmark capability.
+## Envelope
 
 Successful responses use:
 
@@ -25,7 +19,7 @@ Successful responses use:
 ```
 
 An exclusion conflict is HTTP 409 with `status: "error"` and a non-capability
-`data` object. Authentication failures are HTTP 403. A client must validate all
+`data` object. A client must validate all
 identity fields in the receipt below, not only the boolean result.
 
 ## Maintenance lease
@@ -47,7 +41,7 @@ The generation is deliberately absent from the acquire body. HTTP 200 returns:
     "acquired": true,
     "leaseId": "core-uuid",
     "generation": "core-uuid",
-    "principal": "operator-token",
+    "principal": "operator",
     "requestId": "deploy-unique-id",
     "scope": "force-recreate",
     "acquiredAt": "2026-09-04T00:00:00.000Z",
@@ -74,7 +68,7 @@ returns the identity from the removed record:
     "released": true,
     "leaseId": "core-uuid",
     "generation": "core-uuid",
-    "principal": "operator-token",
+    "principal": "operator",
     "requestId": "deploy-unique-id",
     "scope": "force-recreate",
     "releasedAt": "2026-09-04T00:01:00.000Z"
@@ -102,7 +96,7 @@ profile-host, host-test, context sweeps, and native harness campaigns.
 ```
 
 HTTP 200 returns `acquired: true` plus Core-minted `admissionId` and
-`generation`, authenticated `principal`, and the exact `requestId`,
+`generation`, `principal`, and the exact `requestId`,
 `workloadId`, `kind`, `batchId`, `hosts`, `acquiredAt`, `heartbeatAt`, and
 `expiresAt`. Retry after an ambiguous transport failure must reuse the same
 request id; Core returns the same proof rather than creating another admission.
@@ -115,8 +109,7 @@ admission identity; release also contains an ISO `releasedAt`. Benchmark keeps
 the admission through terminal persistence/finalization and releases host
 claims before releasing this runtime-wide admission.
 
-`GET /api/nerve-center/runtime-coordination/active` is operator-only and
-redacts generations and request ids. Expired entries are removed with
+`GET /api/nerve-center/runtime-coordination/active` redacts generations and request ids. Expired entries are removed with
 generation/expiry-fenced writes; a renewed lease cannot be erased by a stale
 reaper observation.
 
@@ -140,8 +133,8 @@ Host claim release remains:
 
 `DELETE /api/nerve-center/host-preferences/:encodedHost/benchmark-claim/:batchId`
 
-with `{ "claimGeneration": "claim-generation", "admissionId": "...", "admissionGeneration": "...", "excludedModels": [] }` and
-exact Benchmark service authentication. `data.released: true` is valid only
+with `{ "claimGeneration": "claim-generation", "admissionId": "...", "admissionGeneration": "...", "excludedModels": [] }`.
+`data.released: true` is valid only
 when `data.releaseReceipt.contract` is
 `agentx.benchmark-claim-release/v1`. The receipt binds:
 

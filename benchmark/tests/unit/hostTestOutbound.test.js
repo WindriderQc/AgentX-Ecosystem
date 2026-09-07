@@ -87,13 +87,9 @@ function createTestExecutor(fetchImpl, options = {}) {
 }
 
 describe('hostTestService governed outbound operations', () => {
-  const originalToken = process.env.AGENTX_BENCHMARK_TOKEN;
-
   afterEach(() => {
     jest.useRealTimers();
     isSameOllamaModel.mockReset();
-    if (originalToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-    else process.env.AGENTX_BENCHMARK_TOKEN = originalToken;
   });
 
   test('closes all seven operation IDs over exact method, path, and search rules', () => {
@@ -299,8 +295,7 @@ describe('hostTestService governed outbound operations', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  test('keeps the Benchmark credential on the loaded Core warm-up only', async () => {
-    process.env.AGENTX_BENCHMARK_TOKEN = 'benchmark-host-test-token';
+  test('declares the Benchmark caller on the loaded Core warm-up only', async () => {
     isSameOllamaModel.mockImplementation((left, right) => left === right);
     const fetchImpl = jest.fn(async (url) => {
       if (url.endsWith('/api/ps')) {
@@ -318,12 +313,12 @@ describe('hostTestService governed outbound operations', () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl.mock.calls[0][1].headers || {}).not.toHaveProperty(
-      'x-agentx-benchmark-token'
+      'x-agentx-caller'
     );
     expect(fetchImpl.mock.calls[1][0]).toMatch(/\/api\/inference\/generate$/);
     expect(fetchImpl.mock.calls[1][1].headers).toMatchObject({
       'content-type': 'application/json',
-      'x-agentx-benchmark-token': 'benchmark-host-test-token'
+      'x-agentx-caller': 'benchmark-service'
     });
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toMatchObject({
       callerDetail: 'benchmark-host-test-warmup',

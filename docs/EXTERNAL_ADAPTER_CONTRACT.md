@@ -97,15 +97,9 @@ An independently deployed application may offer a separately configured direct
 provider, but the user must select that mode explicitly and its evidence must
 remain separate from Agent X provenance.
 
-## Authentication and deployment ownership
+## Deployment ownership
 
-Non-loopback generic consumer calls use only the route-scoped
-`AGENTX_EXTERNAL_CONSUMER_TOKEN`, supplied as a bearer token or
-`X-AgentX-Consumer-Token`. Headerless loopback access is for local development.
-The broader operator credential must not be distributed to adapters.
-
-The deployment owner supplies the Core base URL, TLS or trusted reverse proxy,
-network policy, token injection and rotation, clocks, freshness budgets,
+The deployment owner supplies the Core base URL, network policy, clocks, freshness budgets,
 timeouts, logging/redaction, and private-service credentials. None of those
 values belongs in source control. Default Compose remains loopback-only and
 does not create an externally reachable adapter deployment.
@@ -146,7 +140,6 @@ An external adapter must not:
       distinct from ready.
 - [ ] Routing stays Core-owned; no direct-host or silent-provider fallback
       exists.
-- [ ] The scoped consumer token is injected and rotated outside source control.
 - [ ] Adapter transcripts and private state remain adapter-owned.
 - [ ] Private Data/AIOps access is separately authenticated, read-only, and
       provenance-bearing.

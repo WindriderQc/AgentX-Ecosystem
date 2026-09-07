@@ -11,8 +11,6 @@
 process.env.OLLAMA_HOST = 'http://primary:11434';
 process.env.OLLAMA_HOST_SECONDARY = 'http://secondary:11434';
 process.env.OLLAMA_HOST_TERTIARY = 'http://tertiary:11434';
-const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
-process.env.AGENTX_BENCHMARK_TOKEN = 'nerve-center-benchmark-secret';
 
 const mockRouterTaskOverrideState = new Map();
 
@@ -180,11 +178,6 @@ app.use('/api/nerve-center', require('../../routes/nerve-center'));
 // ── Test suite ──────────────────────────────────────────────────────────────
 
 describe('Nerve Center API Routes', () => {
-  afterAll(() => {
-    if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-    else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
-  });
-
   beforeEach(async () => {
     jest.clearAllMocks();
     mockRouterTaskOverrideState.clear();
@@ -1451,7 +1444,7 @@ describe('Nerve Center API Routes', () => {
     const path = `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim`;
     const benchmarkRequest = () => request(app)
       .post(path)
-      .set('X-AgentX-Benchmark-Token', 'nerve-center-benchmark-secret');
+      .set('X-AgentX-Caller', 'benchmark-service');
     const admissionProof = {
       admissionId: 'admission-core',
       admissionGeneration: 'admission-generation-core'
@@ -1568,7 +1561,7 @@ describe('Nerve Center API Routes', () => {
     const heartbeatPath = `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`;
     const benchmarkRequest = () => request(app)
       .post(heartbeatPath)
-      .set('X-AgentX-Benchmark-Token', 'nerve-center-benchmark-secret');
+      .set('X-AgentX-Caller', 'benchmark-service');
 
     it('refreshes an active claim heartbeat', async () => {
       hostPrefService.heartbeatBenchmarkClaim.mockResolvedValue({
@@ -1628,7 +1621,7 @@ describe('Nerve Center API Routes', () => {
     const releasePath = (batchId) => `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/${batchId}`;
     const benchmarkRequest = (batchId) => request(app)
       .delete(releasePath(batchId))
-      .set('X-AgentX-Benchmark-Token', 'nerve-center-benchmark-secret');
+      .set('X-AgentX-Caller', 'benchmark-service');
 
     it('releases claim and returns released=true', async () => {
       hostPrefService.releaseBenchmarkClaim.mockResolvedValue({

@@ -6,7 +6,6 @@ const planningReferencePlanService = require('../src/services/planningReferenceP
 const planningMetricRegistry = require('../src/services/planningMetricRegistry');
 const planningAutomationService = require('../src/services/planningAutomationService');
 const planningEvidenceService = require('../src/services/planningEvidenceService');
-const { planningAutomationAllowed } = require('../src/helpers/planningAutomationAuth');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 const router = express.Router();
@@ -73,8 +72,6 @@ router.get('/automation/status', async (_req, res) => {
 });
 
 router.post('/automation/reconcile', async (req, res) => {
-  const auth = planningAutomationAllowed(req);
-  if (!auth.allowed) return envelope.error(res, auth.status, auth.message, auth.code);
   try {
     const result = await planningAutomationService.reconcile({
       dryRun: req.body?.dryRun !== false,

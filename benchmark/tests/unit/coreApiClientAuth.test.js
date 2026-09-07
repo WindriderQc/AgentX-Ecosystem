@@ -3,7 +3,6 @@
 const { Readable } = require('node:stream');
 const fs = require('node:fs');
 const path = require('node:path');
-const outboundRegistry = require('../../../config/outbound-http-sinks.json');
 
 jest.mock('node-fetch', () => jest.fn());
 jest.mock('../../src/helpers/outboundHttpTransport', () => ({
@@ -261,16 +260,12 @@ function exactReleaseReceipt({
 }
 
 describe('Core API client scoped outbound execution', () => {
-  const originalToken = process.env.AGENTX_BENCHMARK_TOKEN;
-
   beforeEach(() => {
     fetch.mockImplementation(async (url) => response(url));
   });
 
   afterEach(() => {
     fetch.mockReset();
-    if (originalToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-    else process.env.AGENTX_BENCHMARK_TOKEN = originalToken;
   });
 
   afterAll(() => {
@@ -278,9 +273,7 @@ describe('Core API client scoped outbound execution', () => {
     else process.env.CORE_URL = savedCoreUrl;
   });
 
-  test('attaches the configured Benchmark credential through a peer-verifying manual-redirect transport', async () => {
-    process.env.AGENTX_BENCHMARK_TOKEN = 'benchmark-token';
-
+  test('declares the Benchmark caller identity through a peer-verifying manual-redirect transport', async () => {
     await coreRequest('/api/models/registry', {
       headers: { Accept: 'application/json' },
     });
@@ -292,7 +285,7 @@ describe('Core API client scoped outbound execution', () => {
         signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           accept: 'application/json',
-          'x-agentx-benchmark-token': 'benchmark-token',
+          'x-agentx-caller': 'benchmark-service',
           'x-service-caller': 'benchmark',
         }),
       })
@@ -429,24 +422,6 @@ describe('Core API client scoped outbound execution', () => {
     const coreClientIndex = serverSource.indexOf("require('./src/clients/coreApiClient')");
     expect(dotenvConfigIndex).toBeGreaterThanOrEqual(0);
     expect(coreClientIndex).toBeGreaterThan(dotenvConfigIndex);
-  });
-
-  test('keeps all request and response contracts aligned with registry v2', () => {
-    const registered = new Map(outboundRegistry.operations
-      .filter(({ delegateId }) => delegateId === 'benchmark.core-api.executor')
-      .map((operation) => [operation.id, operation]));
-
-    expect([...registered.keys()].sort()).toEqual(Object.values(CORE_OPERATIONS).sort());
-    for (const [operationId, spec] of Object.entries(CORE_OPERATION_SPECS)) {
-      expect(registered.get(operationId)).toMatchObject({
-        ...spec.policy,
-        allowSearch: spec.allowSearch,
-        method: spec.method,
-        pathPattern: spec.pathPattern,
-        responseMode: 'json',
-        enforcementStatus: 'enforced',
-      });
-    }
   });
 
   test('publishes immutable path sources instead of mutable RegExp instances', () => {

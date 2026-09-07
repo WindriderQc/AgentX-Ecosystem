@@ -105,15 +105,7 @@ describe('cluster schedule evidence routes', () => {
   });
 });
 
-describe('cluster schedule scoped machine mutations', () => {
-  const ENV_KEYS = [
-    'AGENTX_SCHEDULE_TOKEN',
-    'AGENTX_OPERATOR_TOKEN',
-    'AGENTX_ADMIN_TOKEN',
-    'AGENTX_TRUST_INTERNAL_SERVICE_HOSTS',
-    'AGENTX_TRUST_LOOPBACK_PROXY_UI',
-  ];
-  const originalEnv = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]));
+describe('cluster schedule remote machine mutations', () => {
   const mutations = [
     {
       label: 'sync',
@@ -141,59 +133,16 @@ describe('cluster schedule scoped machine mutations', () => {
     }
   ];
 
-  beforeEach(() => {
-    for (const key of ENV_KEYS) delete process.env[key];
-  });
-
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  afterAll(() => {
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  });
-
-  it.each(mutations)('denies remote $label calls before their service side effect', async (mutation) => {
-    const sideEffect = jest.spyOn(clusterScheduleService, mutation.serviceMethod)
-      .mockResolvedValue(mutation.result);
-    const denialCases = [
-      { configured: 'schedule-secret' },
-      { configured: 'schedule-secret', presented: 'not-the-secret' },
-      {},
-      { presented: 'invented-without-configuration' }
-    ];
-
-    for (const denial of denialCases) {
-      if (denial.configured === undefined) delete process.env.AGENTX_SCHEDULE_TOKEN;
-      else process.env.AGENTX_SCHEDULE_TOKEN = denial.configured;
-
-      let pending = request(buildRemoteApp())[mutation.method](mutation.path)
-        .set('Host', 'remote-scheduler.example');
-      if (denial.presented !== undefined) {
-        pending = pending.set('X-AgentX-Schedule-Token', denial.presented);
-      }
-
-      const response = await pending.send(mutation.body).expect(403);
-      expect(response.body).toMatchObject({
-        status: 'error',
-        code: 'SCHEDULE_MACHINE_ACCESS_REQUIRED'
-      });
-    }
-
-    expect(sideEffect).not.toHaveBeenCalled();
-  });
-
-  it.each(mutations)('allows a remote $label call with the exact schedule token', async (mutation) => {
-    process.env.AGENTX_SCHEDULE_TOKEN = 'schedule-secret';
+  it.each(mutations)('allows a remote $label call without any token', async (mutation) => {
     const sideEffect = jest.spyOn(clusterScheduleService, mutation.serviceMethod)
       .mockResolvedValue(mutation.result);
 
     await request(buildRemoteApp())[mutation.method](mutation.path)
       .set('Host', 'remote-scheduler.example')
-      .set('X-AgentX-Schedule-Token', 'schedule-secret')
       .send(mutation.body)
       .expect(200);
 

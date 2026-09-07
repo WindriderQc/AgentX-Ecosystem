@@ -15,7 +15,7 @@ describe('backupService durable storage behavior', () => {
   const originalEnv = {};
   const envNames = [
     'BACKUP_DIR', 'BACKUP_CONFIG_ROOT', 'BACKUP_OWNER_UID', 'BACKUP_OWNER_GID',
-    'AGENTX_RESTORE_REHEARSAL_ENABLED', 'AGENTX_RECOVERY_TOKEN'
+    'AGENTX_RESTORE_REHEARSAL_ENABLED'
   ];
 
   beforeEach(() => {
@@ -133,8 +133,7 @@ describe('backupService durable storage behavior', () => {
     });
   });
 
-  test('Core attaches the scoped recovery token to internal RAG snapshot calls', async () => {
-    process.env.AGENTX_RECOVERY_TOKEN = 'scoped-recovery-token';
+  test('Core lists RAG snapshots through the internal snapshot endpoint', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -148,14 +147,11 @@ describe('backupService durable storage behavior', () => {
     });
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/api\/rag\/snapshots$/),
-      expect.objectContaining({
-        headers: expect.objectContaining({ 'X-AgentX-Recovery-Token': 'scoped-recovery-token' })
-      })
+      expect.objectContaining({ timeout: expect.any(Number) })
     );
   });
 
   test('Core binds an exact typed confirmation to internal snapshot deletion', async () => {
-    process.env.AGENTX_RECOVERY_TOKEN = 'scoped-recovery-token';
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -172,19 +168,10 @@ describe('backupService durable storage behavior', () => {
       expect.objectContaining({
         method: 'DELETE',
         headers: expect.objectContaining({
-          'X-AgentX-Recovery-Token': 'scoped-recovery-token',
           'X-AgentX-Confirm': 'DELETE agentx-test.snapshot'
         })
       })
     );
-  });
-
-  test('Core fails closed instead of calling RAG when recovery auth is missing', async () => {
-    delete process.env.AGENTX_RECOVERY_TOKEN;
-    const service = require('../../src/services/backupService');
-
-    await expect(service.listQdrantBackups()).rejects.toMatchObject({ code: 'RECOVERY_AUTH_REQUIRED' });
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   test('failed Mongo backup removes partial dump data and archives', async () => {
@@ -222,7 +209,6 @@ describe('backupService durable storage behavior', () => {
   });
 
   test('Qdrant downloads publish atomically and remove failed partial files', async () => {
-    process.env.AGENTX_RECOVERY_TOKEN = 'scoped-recovery-token';
     const service = require('../../src/services/backupService');
     const createResponse = {
       ok: true,

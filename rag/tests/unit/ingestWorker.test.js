@@ -31,7 +31,7 @@ const {
 describe('ingestWorker utilities', () => {
   beforeEach(() => fetchWithTimeout.mockReset());
 
-  it('submits API ingestion through the exact bounded worker operation and preserves operator auth', async () => {
+  it('submits API ingestion through the exact bounded worker operation', async () => {
     fetchWithTimeout.mockResolvedValue({
       ok: true,
       status: 200,
@@ -39,7 +39,6 @@ describe('ingestWorker utilities', () => {
     });
     const ingest = createIngestApiClient({
       baseUrl: 'http://rag.test:3082',
-      operatorToken: 'operator-token',
     });
 
     await expect(ingest({ text: 'hello', source: 'worker' })).resolves.toEqual({
@@ -50,7 +49,6 @@ describe('ingestWorker utilities', () => {
       expect.objectContaining({
         headers: {
           'Content-Type': 'application/json',
-          'X-AgentX-Operator-Token': 'operator-token',
         },
         method: 'POST',
       }),
