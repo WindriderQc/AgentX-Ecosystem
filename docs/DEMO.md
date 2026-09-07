@@ -81,9 +81,10 @@ stay applied.
 4. Open **Set up a comparison**, choose the prepared host and two contenders.
    For a small first run, set all levels to **Off**, then choose **1 per
    category** for **L1 Basic**. In **Advanced settings**, set **Force num_ctx**
-   to `4096`, after checking both profiles verified at least that context.
-   This explicit choice keeps the small run within measured capacity; automatic
-   context recommendations require Full preparation. Review the model and
+   to the context used for both models' throughput measurements, such as `8192`
+   when both profiles measured at 8K. It must fit their current verified capacity
+   and match their performance baseline; a smaller context alone is not enough.
+   Automatic context recommendations require Full preparation. Review the model and
    test counts before starting.
 5. Wait for generation and judging to finish. Open the results to compare
    responses, speed, and scores on the same prompts. Rule-based checks and

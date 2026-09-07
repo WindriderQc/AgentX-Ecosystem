@@ -50,8 +50,8 @@ qualification, capability evidence, and pin state remain independent.
 Standard records performance and diagnostic context capacity. Automatic
 interactive/document context recommendations require Full's repeated context
 samples; a Standard performance qualification alone does not supply them.
-Standard can support a comparison with an explicitly selected context within
-its current measured capacity. Fresh capacity remains usable for that check
+Standard can support a comparison with an explicitly selected context matching
+its throughput baseline and within its current measured capacity. Fresh capacity remains usable for that check
 even when automatic recommendations are unknown. Neither a historical maximum
 nor an unknown recommendation selects a runtime context.
 
