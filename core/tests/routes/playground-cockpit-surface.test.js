@@ -17,8 +17,9 @@ async function render(profile = 'full') {
 }
 
 describe('Playground conversational cockpit', () => {
-  test('renders one visible route workflow, mode controls, fleet evidence, and contextual guide', async () => {
+  test('keeps the route workflow, mode controls, fleet evidence, and guide behind a closed disclosure', async () => {
     const html = await render('full');
+    expect(html).toContain('<details class="chat-routing-lab">');
 
     expect(html).toContain('Talk with your models');
     expect(html).toContain('How this answer will run');

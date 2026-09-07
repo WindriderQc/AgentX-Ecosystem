@@ -1,4 +1,3 @@
-  <div class="bg-grid"></div>
   <main class="page history-hidden" id="main-content">
     <aside class="sidebar">
       <div class="sidebar-head">
@@ -102,127 +101,14 @@
 
     <div class="main-content chat-page-content" style="padding: 0;">
       <% const fullPlayground = locals.agentxProfile !== 'demo'; %>
-      <details class="chat-routing-lab" <%= fullPlayground ? 'open' : '' %>>
-        <summary>
-          <span><i class="fas fa-route" aria-hidden="true"></i> Routing cockpit</span>
-          <small>Intent, host fleet, route evidence, and manual controls</small>
-        </summary>
-        <div class="chat-routing-lab__surface">
-      <section class="playground-cockpit" id="playgroundCockpit" data-state="loading" aria-labelledby="playgroundCockpitTitle">
-        <div class="pg-cockpit-ambient" aria-hidden="true"></div>
-        <header class="pg-cockpit-hero">
-          <div class="pg-cockpit-copy">
-            <div class="pg-cockpit-eyebrow">
-              <span class="pg-live-dot" id="pgLiveDot"></span>
-              Conversational control plane
-            </div>
-            <div class="pg-cockpit-title-row">
-              <div>
-                <h2 id="playgroundCockpitTitle">Talk with your models</h2>
-                <p>Choose the intent, see the route, inspect the fleet, then keep the conversation in one place.</p>
-              </div>
-              <button class="pg-icon-button" id="pgToggleCockpit" type="button" aria-expanded="true" title="Collapse cockpit">
-                <i class="fas fa-chevron-up"></i><span class="sr-only">Collapse cockpit</span>
-              </button>
-            </div>
-            <div class="pg-cockpit-actions">
-              <button class="pg-action primary" id="pgFocusComposer" type="button"><i class="fas fa-message"></i> Start talking</button>
-              <button class="pg-action" id="pgOpenConfiguration" type="button" data-cockpit-tip-title="Advanced route controls" data-cockpit-tip="Choose the system prompt, RAG, streaming, thinking, and web-search behavior. Routing authority stays in Core."><i class="fas fa-sliders"></i> Route controls</button>
-              <button class="pg-action subtle" id="pgRefreshCockpit" type="button" data-cockpit-tip-title="Refresh evidence" data-cockpit-tip="Re-read product health, routing posture, and fleet inventory without sending a model request."><i class="fas fa-rotate"></i> Refresh evidence</button>
-              <button class="cockpit-help-button" type="button" data-cockpit-guide-open="playgroundGuide"><i class="fas fa-circle-question"></i><span>Page guide</span></button>
-            </div>
-          </div>
-          <aside class="pg-cockpit-posture" aria-label="Product posture">
-            <div class="pg-posture-label"><i class="fas fa-satellite-dish"></i> Product posture</div>
-            <strong id="pgServiceSummary">Checking the ecosystem…</strong>
-            <span id="pgFleetSummary">Core · Benchmark · RAG</span>
-            <time id="pgCockpitUpdated"></time>
-          </aside>
-        </header>
-
-        <div class="pg-cockpit-body" id="pgCockpitBody">
-          <section class="pg-cockpit-panel pg-route-panel" aria-labelledby="pgRouteTitle">
-            <div class="pg-panel-head">
-              <div><span class="pg-kicker">Live workflow</span><h2 id="pgRouteTitle">How this answer will run <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Planned route" data-cockpit-tip="This flow shows the current routing intent. After a reply, the compact receipt below the cockpit records the host, model, and route that actually ran." aria-label="Explain the planned route"><i class="fas fa-question"></i></button></h2></div>
-              <span class="pg-state-pill" id="pgRouteState" data-tone="loading">Resolving</span>
-            </div>
-            <div class="pg-mode-switch" aria-label="Conversation routing mode">
-              <button type="button" data-playground-mode="quick" data-cockpit-tip-title="Quick" data-cockpit-tip="Prefer the fastest eligible route for short, lightweight work."><i class="fas fa-bolt"></i><span>Quick</span></button>
-              <button type="button" data-playground-mode="standard" data-cockpit-tip-title="Standard" data-cockpit-tip="Use the normal server-owned route for everyday conversation."><i class="fas fa-route"></i><span>Standard</span></button>
-              <button type="button" data-playground-mode="deep" data-cockpit-tip-title="Deep" data-cockpit-tip="Prefer the deep-reasoning lane for harder analysis; the server still selects the eligible host and model."><i class="fas fa-brain"></i><span>Deep</span></button>
-              <button type="button" data-playground-mode="manual" data-cockpit-tip-title="Manual" data-cockpit-tip="Unlock explicit host and exact-model selection for inspection or controlled experiments."><i class="fas fa-crosshairs"></i><span>Manual</span></button>
-            </div>
-            <div class="pg-route-flow" aria-label="Current inference workflow">
-              <div class="pg-route-node" tabindex="0" data-cockpit-tip-title="Request intent" data-cockpit-tip="The selected conversation mode translated into a routing intent."><i class="fas fa-message"></i><span>Request</span><strong id="pgRouteIntent">Standard chat</strong></div>
-              <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
-              <div class="pg-route-node router" tabindex="0" data-cockpit-tip-title="Core decision" data-cockpit-tip="Core applies the active routing policy. Playground displays that decision; it does not maintain a second router."><i class="fas fa-code-branch"></i><span>Decision</span><strong id="pgRouteDecision">Core router</strong></div>
-              <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
-              <div class="pg-route-node" tabindex="0" data-cockpit-tip-title="Inference host" data-cockpit-tip="Routed modes resolve the host on the server. Manual mode uses the explicit host selected in the fleet panel."><i class="fas fa-server"></i><span>Host</span><strong id="pgRouteHost">Server-routed</strong></div>
-              <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
-              <div class="pg-route-node model" tabindex="0" data-cockpit-tip-title="Effective model" data-cockpit-tip="Routed modes reveal the exact model after the first reply. Manual mode shows the model currently selected in configuration."><i class="fas fa-microchip"></i><span>Model</span><strong id="pgRouteModel">On first reply</strong></div>
-            </div>
-          </section>
-
-          <section class="pg-cockpit-panel pg-fleet-panel" aria-labelledby="pgFleetTitle">
-            <div class="pg-panel-head">
-              <div><span class="pg-kicker">Ollama fleet</span><h2 id="pgFleetTitle">Pick a host when Manual is active <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Fleet cards" data-cockpit-tip="Cards are live inventory evidence. They become selectable only in Manual mode; routed modes remain server-owned." aria-label="Explain fleet cards"><i class="fas fa-question"></i></button></h2></div>
-              <% if (fullPlayground) { %>
-                <a href="/nerve-center">Full topology <i class="fas fa-arrow-right"></i></a>
-              <% } else { %>
-                <a href="/models">Model details <i class="fas fa-arrow-right"></i></a>
-              <% } %>
-            </div>
-            <div class="pg-host-deck" id="pgHostDeck" aria-live="polite">
-              <div class="pg-loading"><i class="fas fa-spinner fa-spin"></i> Reading configured hosts…</div>
-            </div>
-          </section>
-
-        </div>
-      </section>
-        </div>
-      </details>
-
-      <%- include('../partials/cockpit-guide', {
-        cockpitGuide: {
-          id: 'playgroundGuide',
-          title: 'Talk, route, and verify without leaving the conversation',
-          summary: 'Playground is the conversational cockpit. It selects intent through existing chat controls, displays the planned path, and then preserves the actual route receipt below.',
-          sections: [
-            { title: 'Choose the intent', body: 'Quick, Standard, and Deep ask Core to route. Manual unlocks an explicit host and exact model for controlled work.' },
-            { title: 'Read the workflow', body: 'Request → Decision → Host → Model separates your intent from the server decision and the effective runtime.' },
-            { title: 'Configure only when needed', body: 'Route controls hold prompt, RAG, streaming, thinking, and web-search settings. The cockpit reuses them instead of owning duplicates.' },
-            { title: 'Verify the receipt', body: 'After the answer, the compact bar and message badge record the model, host, route, timing, tokens, and feedback evidence.' }
-          ],
-          note: { title: 'One routing authority', body: 'Playground reads bounded product APIs and drives the canonical chat controls. It never invents a fallback host, model, health store, or parallel router.' },
-          links: (fullPlayground ? [
-            { href: '/nerve-center', icon: 'fa-brain', label: 'Nerve Center', detail: 'Hosts, models, and routing' },
-            { href: '/models', icon: 'fa-cubes', label: 'Models', detail: 'Registry and exact pins' },
-            { href: '/agent-ops', icon: 'fa-users-gear', label: 'Agent Ops', detail: 'People, cadence, and work' },
-            { href: '/pipeline', icon: 'fa-list-check', label: 'Pipeline', detail: 'Coding delivery queue' }
-          ] : [
-            { href: '/models', icon: 'fa-cubes', label: 'Models', detail: 'Registry and exact pins' }
-          ])
-        }
-      }) %>
-
       <header class="chat-command-bar" aria-label="Conversation status and controls">
-        <div class="chat-command-status">
-          <span class="chat-command-status__icon" aria-hidden="true"><i class="fas fa-circle-notch"></i></span>
-          <span class="chat-command-status__copy">
-            <strong class="status-chip" id="statusChip" data-tone="muted" aria-live="polite">Getting ready</strong>
-            <small id="chatStatusHelp">Agent X is checking the configured route.</small>
-          </span>
-        </div>
-
-        <div class="chat-command-mode" aria-label="Current response strategy">
-          <span>Response</span>
-          <strong id="simpleModeLabel">Balanced</strong>
-          <small id="simpleModeAutomation">Automatic</small>
-        </div>
-
+        <div class="chat-workspace-title"><span>Workspace /</span> Chat</div>
         <div class="chat-command-actions">
           <button id="toggleHistoryBtn" class="chat-command-secondary" type="button" title="Show conversation history" aria-label="Show conversation history">
             <i class="fas fa-clock-rotate-left" aria-hidden="true"></i><span>Conversations</span>
+          </button>
+          <button id="workspaceNewChatBtn" class="chat-command-secondary" type="button" title="Start new chat" aria-label="Start new chat">
+            <i class="fas fa-plus" aria-hidden="true"></i><span>New chat</span>
           </button>
           <button id="toggleConfigBtn" class="take-controls-button" type="button" aria-label="Open precision controls" aria-expanded="false" aria-controls="configDrawer">
             <i class="fas fa-sliders" aria-hidden="true"></i><span>Take the controls</span>
@@ -260,6 +146,29 @@
           <button id="showChatTutorialBtn" class="icon-btn" title="Open page guide" aria-label="Open page guide"><i class="fas fa-circle-question" aria-hidden="true"></i></button>
         </div>
       </header>
+
+      <%- include('../partials/cockpit-guide', {
+        cockpitGuide: {
+          id: 'playgroundGuide',
+          title: 'Talk, route, and verify without leaving the conversation',
+          summary: 'Playground is the conversational cockpit. It selects intent through existing chat controls, displays the planned path, and then preserves the actual route receipt below.',
+          sections: [
+            { title: 'Choose the intent', body: 'Quick, Standard, and Deep ask Core to route. Manual unlocks an explicit host and exact model for controlled work.' },
+            { title: 'Read the workflow', body: 'Request → Decision → Host → Model separates your intent from the server decision and the effective runtime.' },
+            { title: 'Configure only when needed', body: 'Route controls hold prompt, RAG, streaming, thinking, and web-search settings. The cockpit reuses them instead of owning duplicates.' },
+            { title: 'Verify the receipt', body: 'After the answer, the compact bar and message badge record the model, host, route, timing, tokens, and feedback evidence.' }
+          ],
+          note: { title: 'One routing authority', body: 'Playground reads bounded product APIs and drives the canonical chat controls. It never invents a fallback host, model, health store, or parallel router.' },
+          links: (fullPlayground ? [
+            { href: '/nerve-center', icon: 'fa-brain', label: 'Nerve Center', detail: 'Hosts, models, and routing' },
+            { href: '/models', icon: 'fa-cubes', label: 'Models', detail: 'Registry and exact pins' },
+            { href: '/agent-ops', icon: 'fa-users-gear', label: 'Agent Ops', detail: 'People, cadence, and work' },
+            { href: '/pipeline', icon: 'fa-list-check', label: 'Pipeline', detail: 'Coding delivery queue' }
+          ] : [
+            { href: '/models', icon: 'fa-cubes', label: 'Models', detail: 'Registry and exact pins' }
+          ])
+        }
+      }) %>
 
       <section class="chat-layout">
 
@@ -313,19 +222,18 @@
           </div>
         </div>
 
+        <div class="chat-command-status">
+          <span class="chat-command-status__icon" aria-hidden="true"><i class="fas fa-circle-notch"></i></span>
+          <span class="chat-command-status__copy">
+            <strong class="status-chip" id="statusChip" data-tone="muted" aria-live="polite">Getting ready</strong>
+            <small id="chatStatusHelp">Agent X is checking the configured route.</small>
+          </span>
+        </div>
+
         <!-- Chat Window (fills remaining height) -->
         <div class="chat-window" id="chatWindow" role="region" aria-label="Conversation transcript" tabindex="0">
           <section class="chat-welcome" aria-labelledby="chat-welcome-title">
-            <span class="chat-welcome__icon" aria-hidden="true"><i class="fas fa-message"></i></span>
-            <p class="chat-welcome__eyebrow">Quick chat</p>
-            <h1 id="chat-welcome-title">Ask Agent X anything.</h1>
-            <p>Start typing when the configured route is ready. If it needs attention, Agent X will name an installed model you can choose.</p>
-            <div class="chat-welcome__starters" aria-label="Conversation starters">
-              <button type="button" data-chat-starter="Summarize this topic for me: ">Summarize a topic</button>
-              <button type="button" data-chat-starter="Help me brainstorm: ">Brainstorm</button>
-              <button type="button" data-chat-starter="Explain this clearly: ">Explain something</button>
-            </div>
-            <small><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> Balanced uses the configured Standard route. You can take control at any time.</small>
+            <h1 id="chat-welcome-title">What are we working on?<span class="chat-welcome__cursor" aria-hidden="true"></span></h1>
           </section>
         </div>
         <p class="chat-announcements" id="chatAnnouncements" role="status" aria-live="polite" aria-atomic="true"></p>
@@ -342,22 +250,119 @@
         <!-- Composer -->
         <div class="composer">
           <label class="chat-announcements" for="messageInput">Message Agent X</label>
-          <textarea id="messageInput" rows="1" placeholder="Ask Agent X anything…" aria-describedby="chatStatusHelp"></textarea>
+          <textarea id="messageInput" rows="1" placeholder="Ask a question or explore an idea…" aria-describedby="chatStatusHelp composerHint"></textarea>
           <div class="composer-actions">
-            <select class="quick-select" id="quickActionSelect" title="Quick prompts" aria-label="Choose a conversation starter">
-              <option value="" disabled selected>Try a prompt...</option>
-              <option value="What can you help me with?">Help</option>
-              <option value="Summarize recent events.">Summary</option>
-              <option value="List available tools.">Tools</option>
-              <option value="Brainstorm next steps for my project.">Brainstorm</option>
-            </select>
-            <button class="icon-btn" id="roundtableBtn" title="Open in Council — hands this question to the multi-model deliberation page; you review the panel and convene it there" aria-label="Open in Council"><i class="fas fa-users"></i></button>
+            <button class="chat-command-mode" id="composerModeBtn" type="button" aria-label="Change response strategy" aria-describedby="simpleModeLabel simpleModeAutomation" aria-haspopup="dialog" aria-controls="configDrawer">
+              <i class="fas fa-sliders" aria-hidden="true"></i>
+              <strong id="simpleModeLabel">Balanced</strong>
+              <small id="simpleModeAutomation">Automatic</small>
+              <i class="fas fa-chevron-down" aria-hidden="true"></i>
+            </button>
+            <details class="composer-tools">
+              <summary aria-label="More conversation tools" title="More conversation tools"><i class="fas fa-ellipsis" aria-hidden="true"></i></summary>
+              <div class="composer-tools__menu">
+                <select class="quick-select" id="quickActionSelect" title="Quick prompts" aria-label="Choose a conversation starter">
+                  <option value="" disabled selected>Prompts</option>
+                  <option value="What can you help me with?">Help</option>
+                  <option value="Summarize recent events.">Summary</option>
+                  <option value="List available tools.">Tools</option>
+                  <option value="Brainstorm next steps for my project.">Brainstorm</option>
+                </select>
+                <button class="icon-btn" id="roundtableBtn" title="Open in Council — hands this question to the multi-model deliberation page; you review the panel and convene it there" aria-label="Open in Council"><i class="fas fa-users" aria-hidden="true"></i><span>Open in Council</span></button>
+                <button class="ghost small" id="clearBtn">Clear conversation</button>
+              </div>
+            </details>
             <span class="char-count" id="charCount"></span>
             <div class="flex-spacer"></div>
-            <button class="ghost small" id="clearBtn">Clear</button>
             <button class="primary" id="sendBtn" disabled title="Checking chat readiness">Send</button>
           </div>
         </div>
+        <p class="composer-hint" id="composerHint"><span>Enter to send <span aria-hidden="true">·</span> Shift + Enter for a new line</span><span>AI can make mistakes. Check what matters.</span></p>
+        <div class="chat-welcome__starters" aria-label="Conversation starters">
+          <button type="button" data-chat-starter="Explain this clearly, with a useful example: "><span>Explain something</span><i class="fas fa-arrow-right" aria-hidden="true"></i></button>
+          <button type="button" data-chat-starter="Help me brainstorm a few fresh approaches to: "><span>Explore an idea</span><i class="fas fa-arrow-right" aria-hidden="true"></i></button>
+          <button type="button" data-chat-starter="Help me break this down into practical next steps: "><span>Plan next steps</span><i class="fas fa-arrow-right" aria-hidden="true"></i></button>
+        </div>
+
+        <details class="chat-routing-lab">
+          <summary>
+            <span><i class="fas fa-route" aria-hidden="true"></i> Routing &amp; models <i class="fas fa-chevron-down chat-routing-chevron" aria-hidden="true"></i></span>
+            <small>Inspect how your answer runs</small>
+          </summary>
+          <div class="chat-routing-lab__surface">
+        <section class="playground-cockpit" id="playgroundCockpit" data-state="loading" aria-labelledby="playgroundCockpitTitle">
+          <div class="pg-cockpit-ambient" aria-hidden="true"></div>
+          <header class="pg-cockpit-hero">
+            <div class="pg-cockpit-copy">
+              <div class="pg-cockpit-eyebrow">
+                <span class="pg-live-dot" id="pgLiveDot"></span>
+                Conversational control plane
+              </div>
+              <div class="pg-cockpit-title-row">
+                <div>
+                  <h2 id="playgroundCockpitTitle">Talk with your models</h2>
+                  <p>Choose the intent, see the route, inspect the fleet, then keep the conversation in one place.</p>
+                </div>
+                <button class="pg-icon-button" id="pgToggleCockpit" type="button" aria-expanded="true" title="Collapse cockpit">
+                  <i class="fas fa-chevron-up"></i><span class="sr-only">Collapse cockpit</span>
+                </button>
+              </div>
+              <div class="pg-cockpit-actions">
+                <button class="pg-action primary" id="pgFocusComposer" type="button"><i class="fas fa-message"></i> Start talking</button>
+                <button class="pg-action" id="pgOpenConfiguration" type="button" data-cockpit-tip-title="Advanced route controls" data-cockpit-tip="Choose the system prompt, RAG, streaming, thinking, and web-search behavior. Routing authority stays in Core."><i class="fas fa-sliders"></i> Route controls</button>
+                <button class="pg-action subtle" id="pgRefreshCockpit" type="button" data-cockpit-tip-title="Refresh evidence" data-cockpit-tip="Re-read product health, routing posture, and fleet inventory without sending a model request."><i class="fas fa-rotate"></i> Refresh evidence</button>
+                <button class="cockpit-help-button" type="button" data-cockpit-guide-open="playgroundGuide"><i class="fas fa-circle-question"></i><span>Page guide</span></button>
+              </div>
+            </div>
+            <aside class="pg-cockpit-posture" aria-label="Product posture">
+              <div class="pg-posture-label"><i class="fas fa-satellite-dish"></i> Product posture</div>
+              <strong id="pgServiceSummary">Checking the ecosystem…</strong>
+              <span id="pgFleetSummary">Core · Benchmark · RAG</span>
+              <time id="pgCockpitUpdated"></time>
+            </aside>
+          </header>
+
+          <div class="pg-cockpit-body" id="pgCockpitBody">
+            <section class="pg-cockpit-panel pg-route-panel" aria-labelledby="pgRouteTitle">
+              <div class="pg-panel-head">
+                <div><span class="pg-kicker">Live workflow</span><h2 id="pgRouteTitle">How this answer will run <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Planned route" data-cockpit-tip="This flow shows the current routing intent. After a reply, the compact receipt below the cockpit records the host, model, and route that actually ran." aria-label="Explain the planned route"><i class="fas fa-question"></i></button></h2></div>
+                <span class="pg-state-pill" id="pgRouteState" data-tone="loading">Resolving</span>
+              </div>
+              <div class="pg-mode-switch" aria-label="Conversation routing mode">
+                <button type="button" data-playground-mode="quick" data-cockpit-tip-title="Quick" data-cockpit-tip="Prefer the fastest eligible route for short, lightweight work."><i class="fas fa-bolt"></i><span>Quick</span></button>
+                <button type="button" data-playground-mode="standard" data-cockpit-tip-title="Standard" data-cockpit-tip="Use the normal server-owned route for everyday conversation."><i class="fas fa-route"></i><span>Standard</span></button>
+                <button type="button" data-playground-mode="deep" data-cockpit-tip-title="Deep" data-cockpit-tip="Prefer the deep-reasoning lane for harder analysis; the server still selects the eligible host and model."><i class="fas fa-brain"></i><span>Deep</span></button>
+                <button type="button" data-playground-mode="manual" data-cockpit-tip-title="Manual" data-cockpit-tip="Unlock explicit host and exact-model selection for inspection or controlled experiments."><i class="fas fa-crosshairs"></i><span>Manual</span></button>
+              </div>
+              <div class="pg-route-flow" aria-label="Current inference workflow">
+                <div class="pg-route-node" tabindex="0" data-cockpit-tip-title="Request intent" data-cockpit-tip="The selected conversation mode translated into a routing intent."><i class="fas fa-message"></i><span>Request</span><strong id="pgRouteIntent">Standard chat</strong></div>
+                <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
+                <div class="pg-route-node router" tabindex="0" data-cockpit-tip-title="Core decision" data-cockpit-tip="Core applies the active routing policy. Playground displays that decision; it does not maintain a second router."><i class="fas fa-code-branch"></i><span>Decision</span><strong id="pgRouteDecision">Core router</strong></div>
+                <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
+                <div class="pg-route-node" tabindex="0" data-cockpit-tip-title="Inference host" data-cockpit-tip="Routed modes resolve the host on the server. Manual mode uses the explicit host selected in the fleet panel."><i class="fas fa-server"></i><span>Host</span><strong id="pgRouteHost">Server-routed</strong></div>
+                <i class="fas fa-arrow-right pg-route-arrow" aria-hidden="true"></i>
+                <div class="pg-route-node model" tabindex="0" data-cockpit-tip-title="Effective model" data-cockpit-tip="Routed modes reveal the exact model after the first reply. Manual mode shows the model currently selected in configuration."><i class="fas fa-microchip"></i><span>Model</span><strong id="pgRouteModel">On first reply</strong></div>
+              </div>
+            </section>
+
+            <section class="pg-cockpit-panel pg-fleet-panel" aria-labelledby="pgFleetTitle">
+              <div class="pg-panel-head">
+                <div><span class="pg-kicker">Ollama fleet</span><h2 id="pgFleetTitle">Pick a host when Manual is active <button class="cockpit-help-dot" type="button" data-cockpit-tip-title="Fleet cards" data-cockpit-tip="Cards are live inventory evidence. They become selectable only in Manual mode; routed modes remain server-owned." aria-label="Explain fleet cards"><i class="fas fa-question"></i></button></h2></div>
+                <% if (fullPlayground) { %>
+                  <a href="/nerve-center">Full topology <i class="fas fa-arrow-right"></i></a>
+                <% } else { %>
+                  <a href="/models">Model details <i class="fas fa-arrow-right"></i></a>
+                <% } %>
+              </div>
+              <div class="pg-host-deck" id="pgHostDeck" aria-live="polite">
+                <div class="pg-loading"><i class="fas fa-spinner fa-spin"></i> Reading configured hosts…</div>
+              </div>
+            </section>
+
+          </div>
+        </section>
+          </div>
+        </details>
 
         <!-- Thread ID (hidden, used by JS) -->
         <span id="threadId" style="display:none;"></span>
