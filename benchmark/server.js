@@ -289,6 +289,7 @@ app.get('/results-explorer', (req, res) => {
     footerJs: [
       '<script src="/js/results-explorer.js"></script>',
       '<script src="/js/results-explorer-charts.js"></script>',
+      '<script src="/js/results-explorer-comparison.js"></script>',
       '<script src="/js/results-explorer-inspector.js"></script>'
     ].join('\n')
   });

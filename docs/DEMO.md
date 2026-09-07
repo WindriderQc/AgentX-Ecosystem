@@ -84,9 +84,17 @@ stay applied.
    one **L1 Basic** prompt per category, and limits each response to 512 tokens.
    It also resets advanced execution/judge settings and uses one judge and one
    repeat. Review the summary and test count, then launch.
-5. Wait for generation and judging to finish. Open the results to compare
-   responses, speed, and scores on the same prompts. Rule-based checks and
-   judge scores are different kinds of evidence; missing scores are not zero.
+5. Wait for generation and judging to finish. Open **Results**, use the Prompt
+   column to find matching tasks, and select 2–4 results on the current page.
+   **Compare responses** shows the prompts and answers alongside response time,
+   speed, and quality. Identical recorded prompts appear once above the answers;
+   different or missing prompts remain visible with each answer. The view shows
+   the selected sample size and points out different runs or scoring sources.
+   Rule-based checks, judge scores, and human overrides are labeled separately;
+   missing scores are not zero, and excluded results stay identified.
+   Open **Scoring and run details** for the recorded settings,
+   judge, composite score, and date. These individual responses support inspection;
+   use repeated representative tasks before drawing a broader ranking.
 
 The entry status refreshes when a comparison starts or finishes. Its history
 count includes completed comparisons only. If status or history cannot be

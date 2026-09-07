@@ -10,7 +10,7 @@ const read = (...segments) => fs.readFileSync(path.join(root, ...segments), 'utf
 function loadExplorerHelpers() {
     const sourcePath = path.join(root, 'public', 'js', 'results-explorer.js');
     const source = `${fs.readFileSync(sourcePath, 'utf8')}
-module.exports = { buildResultsParams, renderEvidenceAge, formatRecordedAt };`;
+module.exports = { buildResultsParams, renderEvidenceAge, formatRecordedAt, renderTableRow };`;
     const context = {
         module: { exports: {} },
         exports: {},
@@ -95,6 +95,18 @@ describe('Results Explorer trust surface', () => {
         expect(params.get('evidenceEra')).toBe('historical');
         expect(main).toContain('/api/benchmark/results/advanced?');
         expect(main).not.toContain('/api/benchmark/results?page=');
+    });
+
+    test('the table preserves recorded zero timings and treats missing values separately', () => {
+        const { renderTableRow } = loadExplorerHelpers();
+        const record = { _id: 'zero', model: 'model-a', latency: 0, tokens_per_sec: 0 };
+        const zero = renderTableRow(record);
+        expect(zero).toContain('<td>0</td>');
+        expect(zero).toContain('<td>0.0</td>');
+        const missing = renderTableRow({ ...record, latency: null, tokens_per_sec: null });
+        expect(missing).not.toContain('<td>0</td>');
+        expect(missing).not.toContain('<td>0.0</td>');
+        expect(missing).toContain('<td>N/A</td>');
     });
 
     test('labels page-only aggregates and makes pagination stable and count-backed', () => {
