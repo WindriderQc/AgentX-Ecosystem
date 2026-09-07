@@ -321,6 +321,6 @@ describe('campaign inference contract snapshots', () => {
                 response_max_tokens_source: 'caller',
                 response_mode: 'final_only'
             }
-        }, { BatchModel, fetchImpl })).rejects.toThrow(/not within a validated/);
+        }, { BatchModel, fetchImpl })).rejects.toThrow(/Run a Full profile/);
     });
 });

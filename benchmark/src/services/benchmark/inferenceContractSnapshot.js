@@ -131,7 +131,7 @@ function validateSnapshot(snapshot, requested) {
     if (!Number.isInteger(validatedWindowTokens) || validatedWindowTokens <= 0
         || windowTokens > validatedWindowTokens) {
         throw new Error(
-            `Cannot freeze ${requested.model} on ${requested.host}: context ${windowTokens} is not within a validated host/artifact window`
+            `Context ${windowTokens} is not verified for ${requested.model} on ${requested.host}. Run a Full profile in Model Profiler, then choose a context within its verified range.`
         );
     }
 }

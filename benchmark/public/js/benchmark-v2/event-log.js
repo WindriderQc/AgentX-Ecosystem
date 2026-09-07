@@ -41,7 +41,7 @@ function eventTypeClass(entry) {
     if (raw === 'warmup' || raw === 'warm' || raw === 'judge_warmup')              return 'ev-warm';
     if (raw === 'model_early_stopped')                                             return 'ev-warm';
     if (raw.startsWith('judge') || raw === 'judging')                              return 'ev-jdg';
-    if (raw === 'error' || raw === 'failed' || raw === 'err')                      return 'ev-err';
+    if (raw === 'error' || raw === 'failed' || raw === 'err' || raw === 'execution_crash') return 'ev-err';
 
     // test_start, test_complete, exec, executing, scored, completed, etc.
     return 'ev-exec';
@@ -98,6 +98,8 @@ function entryMessage(entry) {
         case 'model_warmup':
         case 'judge_warmup':
             return `Warming up ${model || 'model'}${dur ? ` (${dur})` : ''}`;
+        case 'execution_crash':
+            return `Comparison stopped: ${entry.error || 'Execution failed. Check the run details.'}`;
         case 'error':
             return `Error: ${model}${shortPrompt ? ` — ${shortPrompt}` : ''}${entry.error ? ` — ${String(entry.error).slice(0, 60)}` : ''}`;
         case 'tests_start':
