@@ -322,7 +322,7 @@ document.addEventListener('DOMContentLoaded', () => {
       modeEl.textContent = mode === 'manual' ? (elements.modelSelect?.value || 'Choose a model') : modeLabel;
       modeEl.title = modeEl.textContent;
     }
-    if (automationEl) automationEl.textContent = hostState.mode === 'router' ? 'Automatic' : 'Pinned';
+    if (automationEl) automationEl.textContent = hostState.mode === 'router' ? 'Automatic' : 'Manual';
     const ready = hostState.available && !hostState.requiresModel;
     if (helpEl) {
       helpEl.textContent = ready
@@ -744,9 +744,7 @@ document.addEventListener('DOMContentLoaded', () => {
       state.settings.model = elements.modelSelect.value;
       helpers.persistSettings();
       updateConfigSummary(elements);
-      if (typeof ChatIntelligence !== 'undefined') {
-        ChatIntelligence.updateStatusBar({ model: elements.modelSelect.value || '---' });
-      }
+      applyChatAvailability();
       // Refresh the Modelfile-derived context indicator (badge + limit pill)
       if (typeof ChatContextIndicator !== 'undefined') {
         if (!isRouterMode(elements, state) && elements.modelSelect.value) {
