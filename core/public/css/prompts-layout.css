@@ -166,6 +166,8 @@
 
 .prompt-card-header {
     display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
     justify-content: space-between;
     align-items: flex-start;
     margin-bottom: 12px;
