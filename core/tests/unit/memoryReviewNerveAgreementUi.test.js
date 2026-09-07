@@ -11,6 +11,9 @@ describe('Dreaming Review agrees with Nerve Center on a quiet loop', () => {
     expect(controller).toContain('Quiet—and Nerve Center says that is not healthy');
     expect(controller).toContain('} else if (latest.quiet && latest.overdueRun) {');
     expect(controller).toContain('No active collecting alert contradicts this.');
+    expect(controller).toContain('Quiet run; current collector coverage needs attention');
+    expect(controller).toContain('This historical run does not override the current coverage warning above.');
+    expect(controller).toContain('Nothing new in this run; current coverage needs attention.');
   });
 
   test('the pulse states last run, last completed run, last eligible evidence, cadence and next due', () => {

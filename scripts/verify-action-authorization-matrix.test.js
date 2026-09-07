@@ -19,8 +19,8 @@ test('the checked-in matrix audits every non-safe route and preserves a zero-gap
   assert.equal(receipt.total, 267);
   assert.deepEqual(receipt.byService, { core: 169, benchmark: 83, rag: 15 });
   assert.deepEqual(receipt.byClassification, {
-    'user-mutation': 125,
-    'scoped-machine-call': 50,
+    'user-mutation': 126,
+    'scoped-machine-call': 49,
     'action-observation': 35,
     'destructive-mutation': 57,
   });

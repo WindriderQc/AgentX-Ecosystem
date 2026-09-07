@@ -6,6 +6,7 @@ const {
   PIPELINE_AUTHORITY,
   requirePipelineWorkerAccess,
   requirePipelineStatusAccess,
+  requirePipelineSupersedeAccess,
 } = require('../src/helpers/pipelineAccess');
 const {
   createTaskInMongo,
@@ -494,7 +495,7 @@ router.post('/tasks/:id/status', requirePipelineStatusAccess, async (req, res) =
  * tasks' audit trails, and never re-queues anything. A superseded task cannot
  * leave `done` through /status without an explicit `reopen: true`.
  */
-router.post('/tasks/:id/supersede', requirePipelineStatusAccess, async (req, res) => {
+router.post('/tasks/:id/supersede', requirePipelineSupersedeAccess, async (req, res) => {
   const b = req.body || {};
   const supersededBy = String(b.supersededBy || '').trim();
   const reason = String(b.reason || '').trim();

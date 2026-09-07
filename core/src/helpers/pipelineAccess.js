@@ -99,6 +99,14 @@ function requirePipelineStatusAccess(req, res, next) {
   });
 }
 
+function requirePipelineSupersedeAccess(req, res, next) {
+  return enforcePipelineDecision(req, res, next, {
+    // A preview is non-mutating, but confirm closes the task as `done` and
+    // therefore needs the same control authority as an explicit finalization.
+    finalizesTask: req.body?.confirm === true,
+  });
+}
+
 module.exports = {
   PIPELINE_TOKEN_HEADER,
   PIPELINE_AUTHORITY,
@@ -110,4 +118,5 @@ module.exports = {
   pipelineMutationDecision,
   requirePipelineWorkerAccess,
   requirePipelineStatusAccess,
+  requirePipelineSupersedeAccess,
 };

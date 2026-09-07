@@ -430,6 +430,13 @@
     const collectors = run.collectors || [];
     const eligible = collectors.reduce((sum, item) => sum + (item.eligibleObservations || 0), 0);
     const filtered = collectors.reduce((sum, item) => sum + (item.rejectedObservations || 0), 0);
+    const currentCoverageNeedsAttention = Boolean(
+      state.collectingAlert
+      || state.insights?.health?.errors
+      || state.insights?.health?.overdue
+      || state.insights?.health?.stale
+      || state.insights?.health?.missing
+    );
     if (['collecting', 'synthesizing'].includes(run.status)) {
       const missing = run.reconciliation?.missingRuntimes || ['agentx', 'claude-code', 'codex', 'external'].filter((runtime) => !collectors.some((item) => item.runtime === runtime));
       if (run.reconciliation?.overdue) {
@@ -439,7 +446,7 @@
       return `<i class="fas ${reflecting ? 'fa-wand-magic-sparkles' : 'fa-satellite-dish'}"></i><div><strong>${reflecting ? 'Review in progress' : 'Collection in progress'}</strong><span>${reflecting ? 'Sanitized evidence is being turned into bounded proposals.' : missing.length ? `Waiting for ${missing.map(label).join(' and ')}.` : 'All contributors have checked in; finalization is next.'} The most recent completed run remains selected by default.</span></div>`;
     }
     if (run.status === 'failed') return `<i class="fas fa-triangle-exclamation"></i><div><strong>This dream needs attention</strong><span>Accepted observations are preserved and the failure is retryable. No apply path is available.</span></div>`;
-    if (!(run.candidates || []).length) return `<i class="fas fa-moon"></i><div><strong>Quiet, healthy reconciliation</strong><span>${filtered} noisy or ineligible item${filtered === 1 ? '' : 's'} filtered; ${eligible ? `${eligible} eligible observation${eligible === 1 ? '' : 's'} produced no durable proposal.` : 'the review model was not needed.'}</span></div>`;
+    if (!(run.candidates || []).length) return `<i class="fas ${currentCoverageNeedsAttention ? 'fa-triangle-exclamation' : 'fa-moon'}"></i><div><strong>${currentCoverageNeedsAttention ? 'Quiet run; current collector coverage needs attention' : 'Quiet, healthy reconciliation'}</strong><span>${filtered} noisy or ineligible item${filtered === 1 ? '' : 's'} filtered; ${eligible ? `${eligible} eligible observation${eligible === 1 ? '' : 's'} produced no durable proposal.` : 'the review model was not needed.'}${currentCoverageNeedsAttention ? ' This historical run does not override the current coverage warning above.' : ''}</span></div>`;
     const auto = (run.candidates || []).filter((item) => item.apply?.automated && item.status === 'applied').length;
     const exceptions = (run.candidates || []).filter((item) => ['proposed', 'deferred', 'apply_failed'].includes(item.status)).length;
     return `<i class="fas fa-sparkles"></i><div><strong>${auto} automatic update${auto === 1 ? '' : 's'} · ${exceptions} exception${exceptions === 1 ? '' : 's'}</strong><span>Safe reversible context flows automatically; only exceptions ask for judgment.</span></div>`;
@@ -512,11 +519,20 @@
       .filter(({ candidate }) => state.filter === 'all' || candidate.status === state.filter);
     const message = $('mrCandidatesState');
     if (!all.length) {
+      const currentCoverageNeedsAttention = Boolean(
+        state.collectingAlert
+        || state.insights?.health?.errors
+        || state.insights?.health?.overdue
+        || state.insights?.health?.stale
+        || state.insights?.health?.missing
+      );
       message.hidden = false;
       message.innerHTML = ['collecting', 'synthesizing'].includes(state.run?.status)
         ? '<div class="mr-quiet-state mr-waiting-state"><i class="fas fa-hourglass-half"></i><strong>Waiting for reconciliation</strong><span>No candidate exists yet. Accepted evidence remains inert until collection and bounded review finish.</span></div>'
         : state.run?.summary?.noEligibleObservations
-        ? '<div class="mr-quiet-state"><i class="fas fa-moon"></i><strong>Nothing new—and that is healthy.</strong><span>No trustworthy durable observation reached synthesis, so the review model was not called.</span></div>'
+        ? currentCoverageNeedsAttention
+          ? '<div class="mr-quiet-state"><i class="fas fa-triangle-exclamation"></i><strong>Nothing new in this run; current coverage needs attention.</strong><span>No trustworthy durable observation reached synthesis. The current collector warning above still applies.</span></div>'
+          : '<div class="mr-quiet-state"><i class="fas fa-moon"></i><strong>Nothing new—and that is healthy.</strong><span>No trustworthy durable observation reached synthesis, so the review model was not called.</span></div>'
         : '<div class="mr-quiet-state"><i class="fas fa-circle-check"></i><strong>No candidate was needed.</strong><span>This run remains part of the audit history.</span></div>';
       $('mrCandidateList').innerHTML = '';
       return;
