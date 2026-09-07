@@ -221,6 +221,7 @@ async function capturePerformanceBaseline({
 
 module.exports = {
     capturePerformanceBaseline,
+    getProfilePerformanceBaseline,
     // exposed for tests / inspection
     _resolveHostIdForUrl: resolveHostIdForUrl,
     _getProfilePerformanceBaseline: getProfilePerformanceBaseline

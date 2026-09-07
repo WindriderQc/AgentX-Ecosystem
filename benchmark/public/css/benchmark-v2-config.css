@@ -174,12 +174,12 @@
 @media (max-width: 640px) {
   .depth-matrix {
     padding: 0.4rem;
-    overflow-x: hidden;
+    overflow-x: auto;
   }
 
   .dm-table {
-    min-width: 0;
-    table-layout: fixed;
+    min-width: 560px;
+    table-layout: auto;
     font-size: 0.82rem;
   }
 
@@ -189,7 +189,7 @@
   }
 
   .dm-cat {
-    width: 46%;
+    width: 100px;
     white-space: normal;
     font-size: 0.78rem;
     padding-right: 0.25rem !important;
@@ -886,6 +886,40 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.bf-quick-comparison {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  margin: 1rem 0;
+  border: 1px solid var(--r-active);
+  border-radius: 8px;
+  background: rgba(124, 240, 255, 0.04);
+}
+.bf-quick-comparison > div:first-child { flex: 1 1 260px; min-width: 0; }
+.bf-quick-comparison h3 { margin: 0 0 0.4rem; font-size: 1rem; }
+.bf-quick-comparison p { margin: 0; color: var(--r-text-muted); line-height: 1.5; }
+#bv2-quick-comparison {
+  padding: 0.7rem 1rem;
+  border: 1px solid #78ff98;
+  border-radius: 6px;
+  background: #78ff98;
+  color: #0b0f19;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+#bv2-quick-comparison:disabled { opacity: 0.65; cursor: wait; }
+#bv2-quick-comparison:focus-visible, .bf-custom-depth > summary:focus-visible {
+  outline: 2px solid var(--r-active);
+  outline-offset: 4px;
+}
+#bv2-quick-status { flex-basis: 100%; line-height: 1.5; overflow-wrap: anywhere; }
+#bv2-quick-status:empty { display: none; }
+.bf-custom-depth > summary { padding: 0.75rem 0; cursor: pointer; color: var(--r-active); }
+.bf-custom-depth .depth-matrix { overflow-x: auto; }
 
 .dc.dy { background: rgba(102, 187, 106, 0.12); color: var(--r-good);  }
 .dc.dn { background: rgba(239,  83,  80, 0.12); color: var(--r-error); }

@@ -1,4 +1,5 @@
 const { getPortalStatus } = require('../../src/services/portalStatusService');
+const { version: productVersion } = require('../../package.json');
 
 describe('portalStatusService', () => {
   const originalFetch = global.fetch;
@@ -7,7 +8,7 @@ describe('portalStatusService', () => {
   function identity(service, overrides = {}) {
     return {
       service,
-      version: '0.1.1',
+      version: productVersion,
       profile: process.env.AGENTX_PROFILE || 'demo',
       revision: 'test-revision',
       ts: '2026-08-28T12:00:00.000Z',
@@ -102,7 +103,7 @@ describe('portalStatusService', () => {
         json: jest.fn().mockResolvedValue({
           ok: true,
           status: 'ok',
-          ...identity(service, { version: isBenchmark ? '0.1.0' : '0.1.1' })
+          ...identity(service, { version: isBenchmark ? '0.1.0' : productVersion })
         })
       };
     });
@@ -113,7 +114,7 @@ describe('portalStatusService', () => {
     });
 
     expect(status.summary).toMatchObject({ status: 'degraded', identityStatus: 'degraded' });
-    expect(status.consistency.issues).toContain('Mixed product versions: 0.1.1, 0.1.0');
+    expect(status.consistency.issues).toContain(`Mixed product versions: ${productVersion}, 0.1.0`);
   });
 
   it('rejects a reachable endpoint that reports the wrong service identity', async () => {

@@ -10,8 +10,10 @@ import { buildJudgeRoster, wireJudgeRoster, getSelectedJudge } from './judge-ros
 import { save, load, loadObj, loadSet, loadArr, normModel, esc } from './helpers.js';
 import { showToast } from '../components/toast.js';
 import { fetchActiveProfilingState, findProfilingForHost, formatProfilingLockout } from './profiling-lockout.js';
+import { buildQuickComparison, wireQuickComparison } from './quick-comparison.js';
 import {
     SK_DEPTH, SK_JUDGE, SK_MODELS, SK_HOST, SK_THINK, SK_ADVANCED,
+    ADV_JUDGE_DEFAULTS, ADV_PIPELINE_DEFAULTS, ADV_FAIRNESS_DEFAULTS,
     _parseParamSize, _emptyMsg, _slug,
 } from './batch-config-constants.js';
 import {
@@ -99,6 +101,19 @@ export function renderBatchConfig(container, { host = null, modelProfiles = [], 
     _wireMultiJudgeCard(container);
     _wireSubmit(container, host, onLaunch);
     _wirePersistenceUI(container, onlineHosts, config, judgeRoster, onLaunch);
+    wireQuickComparison(container, { host, apply: (preset) => {
+        _applyLastBatchAdvancedSettings(container, preset, true);
+        _applyDepthPreset(container, preset.depth_config);
+        const thinkSelect = container.querySelector('#bv2-think');
+        if (thinkSelect) thinkSelect.value = 'auto';
+        const multiJudgeRule = container.querySelector('#bv2-mj-rule');
+        if (multiJudgeRule) {
+            multiJudgeRule.value = 'off';
+            multiJudgeRule.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        container.querySelectorAll('.dm-preset-btn').forEach(button => button.classList.remove('dm-preset-active'));
+        _notifyConfigChanged(container);
+    } });
 
     // Inject per-host readiness badges
     const hostId = host?.hostId || '';
@@ -245,7 +260,7 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [],
             ${_buildMultiJudgeCard(judgeRoster)}
             <label class="bf-field-mini">
               <span>Thinking Policy <span style="color:var(--r-text-muted);font-size:0.65rem">(execution models)</span></span>
-              <select id="bv2-think">
+              <select id="bv2-think" class="bf-select">
                 <option value="auto" ${(!load(SK_THINK) || load(SK_THINK) === 'auto') ? 'selected' : ''}>Auto from profile</option>
                 <option value="false" ${load(SK_THINK) === 'false' ? 'selected' : ''}>Force off control</option>
                 <option value="true" ${load(SK_THINK) === 'true' ? 'selected' : ''}>Force on A/B</option>
@@ -257,10 +272,14 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [],
       </div>
 
       <!-- Level depth -->
+      ${buildQuickComparison()}
       <div class="bf-field">
+        <details class="bf-custom-depth">
+          <summary>Customize test depth</summary>
         <div class="depth-matrix">
           ${_buildLevelDepth()}
         </div>
+        </details>
         <div id="bv2-depth-summary" class="bf-depth-summary"></div>
       </div>
 
@@ -619,9 +638,11 @@ function _wireThinkPersist(container) {
     select.addEventListener('change', () => save(SK_THINK, select.value || 'auto'));
 }
 
-function _applyLastBatchAdvancedSettings(container, lastBatch) {
+function _applyLastBatchAdvancedSettings(container, lastBatch, reset = false) {
     if (!lastBatch) return;
-    const current = _loadAdvancedSettings();
+    const current = reset
+        ? { ...ADV_JUDGE_DEFAULTS, ...ADV_PIPELINE_DEFAULTS, ...ADV_FAIRNESS_DEFAULTS }
+        : _loadAdvancedSettings();
     // Restore judge behavior from last batch's judge_config
     if (lastBatch.judge_config && typeof lastBatch.judge_config === 'object') {
         const jc = lastBatch.judge_config;
@@ -652,7 +673,7 @@ function _applyLastBatchAdvancedSettings(container, lastBatch) {
         } else if (el.tagName === 'SELECT') {
             el.value = String(current[k]);
         } else {
-            el.value = current[k];
+            el.value = current[k] ?? '';
         }
     });
     _updateAdvancedSummary(container, current);
@@ -824,6 +845,11 @@ async function _launchBatch(container, host, onLaunch) {
     const errEl = container.querySelector('#bv2-form-error');
     const btn   = document.querySelector('#ls-launch-btn');
 
+    if (container.dataset.quickPending) {
+        _publishLaunchStatus(container, 'blocked', 'Checking measured settings', 'Wait for Quick comparison to finish checking, then launch.');
+        return;
+    }
+
     function showErr(msg) { if (errEl) { errEl.textContent = msg; errEl.style.display = ''; } }
     function clearErr()   { if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; } }
 
@@ -945,6 +971,7 @@ async function _launchBatch(container, host, onLaunch) {
             },
             levels,
             execution_config: {
+                force_num_ctx: advSettings.force_num_ctx,
                 response_max_tokens: advSettings.response_max_tokens,
                 answer_contract_mode: advSettings.answer_contract_mode,
                 include_length_hint: !!advSettings.include_length_hint,

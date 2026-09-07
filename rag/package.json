@@ -1,6 +1,6 @@
 {
   "name": "agentx-rag",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "AgentX RAG — Document ingestion, embeddings, and semantic search",
   "main": "server.js",
   "license": "MIT",
