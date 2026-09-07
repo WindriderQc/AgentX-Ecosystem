@@ -13,6 +13,16 @@ function loadApi(fetchImpl) {
 }
 
 describe('RAG browser API error envelopes', () => {
+  test('a non-JSON service failure keeps its status and a readable retry message', async () => {
+    const api = loadApi(async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError('Unexpected token <'); } }));
+    await expect(api.search('question')).rejects.toMatchObject({ message: 'Request failed (502). Try again.', status: 502 });
+  });
+
+  test.each([null, [], 'unavailable'])('rejects an unusable JSON response: %p', async body => {
+    const api = loadApi(async () => ({ ok: true, status: 200, json: async () => body }));
+    await expect(api.search('question')).rejects.toThrow('The service returned an unreadable response. Try again.');
+  });
+
   test('throws the Core proxy message on a non-2xx response', async () => {
     const api = loadApi(jest.fn(async () => ({
       ok: false,

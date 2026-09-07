@@ -10,6 +10,7 @@
   var els = {};
   var searching = false;
   var searchReady = false;
+  var checkingReadiness = false;
 
   function cacheElements() {
     els.query = document.getElementById('search-query');
@@ -33,6 +34,7 @@
     els.readinessLabel = document.getElementById('knowledge-search-readiness-label');
     els.readinessDetail = document.getElementById('knowledge-search-readiness-detail');
     els.prerequisiteAction = document.getElementById('search-prerequisite-action');
+    els.recheck = document.getElementById('btn-recheck-search');
     els.starters = document.querySelectorAll('.starter-prompt');
   }
 
@@ -49,7 +51,7 @@
 
   function setSearchStatus(state, title, detail) {
     if (!els.status) return;
-    var icons = { ok: 'fa-circle-check', warn: 'fa-circle-info', error: 'fa-circle-exclamation', loading: 'fa-circle-notch fa-spin' };
+    var icons = { idle: 'fa-circle-info', ok: 'fa-circle-check', warn: 'fa-circle-info', error: 'fa-circle-exclamation', loading: 'fa-circle-notch fa-spin' };
     els.status.className = 'flow-status is-' + state;
     els.status.innerHTML = '<i class="fa-solid ' + icons[state] + '" aria-hidden="true"></i>' +
       '<span><strong>' + escapeHtml(title) + '</strong><span class="flow-status-detail">' + escapeHtml(detail) + '</span></span>';
@@ -63,9 +65,11 @@
     if (icon) icon.className = 'fa-solid ' + icons[state];
     els.readinessLabel.textContent = label;
     els.readinessDetail.textContent = detail;
-    els.query.disabled = !searchReady;
-    els.starters.forEach(function (starter) { starter.disabled = !searchReady; });
+    els.starters.forEach(function (starter) { starter.disabled = false; });
     els.btnSearch.disabled = searching || !searchReady || !els.query.value.trim();
+    els.recheck.hidden = searchReady;
+    els.recheck.disabled = state === 'loading';
+    els.recheck.textContent = state === 'loading' ? 'Checking…' : 'Check again';
     if (action) {
       els.prerequisiteAction.textContent = action.label;
       els.prerequisiteAction.href = action.href;
@@ -76,6 +80,9 @@
   }
 
   async function checkReadiness() {
+    if (checkingReadiness || searching) return;
+    var returnToQuestion = document.activeElement === els.recheck;
+    checkingReadiness = true;
     setReadiness('loading', 'Checking your knowledge…', 'Confirming that a source is ready to search');
     try {
       // Search readiness must exercise the same embedding dependency used by
@@ -100,18 +107,29 @@
               ? 'The embedding route is unavailable.'
               : 'One or more required knowledge dependencies are unavailable.';
         setReadiness('error', 'Search needs attention', dependencyDetail, { label: 'View status', href: '/' });
-        setSearchStatus('error', 'Search is unavailable', 'Open knowledge status for the affected dependency.');
+        setSearchStatus('error', 'Search is unavailable', 'You can keep writing. Once the dependency is ready, select Check again.');
       } else if (documents === 0) {
         setReadiness('warn', 'Add a source first', 'Search is healthy, but there is nothing to retrieve yet.', { label: 'Add knowledge', href: '/upload' });
         setSearchStatus('warn', 'Your knowledge is empty', 'Add one source, then return to ask a question.');
       } else {
         setReadiness('ok', 'Ready to find evidence', documents.toLocaleString() + ' source' + (documents === 1 ? '' : 's') + ' available');
-        setSearchStatus('loading', 'Waiting for a question', 'Ask in plain language; Agent X will return matching passages.');
+        updateQuestionStatus();
       }
     } catch (error) {
       setReadiness('error', 'Could not check knowledge', error.message || 'The knowledge service did not respond.', { label: 'View status', href: '/' });
-      setSearchStatus('error', 'Search is unavailable', 'Try again from the knowledge status page.');
+      setSearchStatus('error', 'Search is unavailable', 'Select Check again to retry without losing your question or filters.');
+    } finally {
+      checkingReadiness = false;
+      if (searchReady && returnToQuestion) els.query.focus();
     }
+  }
+
+  function updateQuestionStatus() {
+    els.btnSearch.disabled = searching || !searchReady || !els.query.value.trim();
+    if (!searchReady || searching) return;
+    var hasQuestion = !!els.query.value.trim();
+    setSearchStatus(hasQuestion ? 'ok' : 'idle', hasQuestion ? 'Question ready' : 'Waiting for a question',
+      hasQuestion ? 'Select Find evidence or press Enter.' : 'Ask in plain language; Agent X will return matching passages.');
   }
 
   function wireSliders() {
@@ -222,13 +240,11 @@
     var initialQuery = new URLSearchParams(window.location.search).get('query');
     if (initialQuery) els.query.value = initialQuery;
     els.btnSearch.addEventListener('click', executeSearch);
+    els.recheck.addEventListener('click', checkReadiness);
     els.query.addEventListener('keydown', function (event) {
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); executeSearch(); }
     });
-    els.query.addEventListener('input', function () {
-      els.btnSearch.disabled = !searchReady || !els.query.value.trim();
-      if (searchReady) setSearchStatus(els.query.value.trim() ? 'ok' : 'loading', els.query.value.trim() ? 'Question ready' : 'Waiting for a question', els.query.value.trim() ? 'Select Find evidence or press Enter.' : 'Ask in plain language; Agent X will return matching passages.');
-    });
+    els.query.addEventListener('input', updateQuestionStatus);
     els.starters.forEach(function (starter) {
       starter.addEventListener('click', function () {
         els.query.value = starter.getAttribute('data-query');

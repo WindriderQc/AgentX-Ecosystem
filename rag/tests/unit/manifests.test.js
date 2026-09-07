@@ -69,6 +69,19 @@ function buildApp() {
   return app;
 }
 
+// Reuse one explicitly bound listener; transient per-request listeners can
+// time out on Windows before a route is reached.
+let server;
+beforeAll(async () => {
+  server = buildApp().listen(0, '127.0.0.1');
+  await require('node:events').once(server, 'listening');
+});
+afterAll(async () => {
+  if (server?.listening) {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
 // ── Tests ────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -79,9 +92,7 @@ beforeEach(() => {
 describe('POST /api/rag/manifests', () => {
   it('creates a manifest and auto-computes stats', async () => {
     RagManifest.findOneAndUpdate.mockResolvedValue(mockManifestDoc);
-    const app = buildApp();
-
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/manifests')
       .send({
         source: 'test-source',
@@ -103,8 +114,7 @@ describe('POST /api/rag/manifests', () => {
   });
 
   it('rejects if source is missing', async () => {
-    const app = buildApp();
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/manifests')
       .send({ root: '/data', files: [] });
 
@@ -113,8 +123,7 @@ describe('POST /api/rag/manifests', () => {
   });
 
   it('rejects if files is not an array', async () => {
-    const app = buildApp();
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/manifests')
       .send({ source: 'x', root: '/data', files: 'bad' });
 
@@ -134,9 +143,7 @@ describe('GET /api/rag/deletion-preview', () => {
       ],
       total: 2
     });
-
-    const app = buildApp();
-    const res = await request(app).get('/api/rag/deletion-preview?source=test-source');
+    const res = await request(server).get('/api/rag/deletion-preview?source=test-source');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -169,9 +176,7 @@ describe('GET /api/rag/deletion-preview', () => {
         ],
         total: 1
       });
-
-    const app = buildApp();
-    const res = await request(app).get('/api/rag/deletion-preview');
+    const res = await request(server).get('/api/rag/deletion-preview');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -206,9 +211,7 @@ describe('POST /api/rag/cleanup', () => {
 
   it('dry-run returns what would be deleted without deleting', async () => {
     setupStaleMocks();
-    const app = buildApp();
-
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', dryRun: true });
 
@@ -222,9 +225,7 @@ describe('POST /api/rag/cleanup', () => {
   });
 
   it('rejects a destructive cleanup without a source-bound phrase before reading or deleting documents', async () => {
-    const app = buildApp();
-
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', dryRun: false });
 
@@ -240,9 +241,7 @@ describe('POST /api/rag/cleanup', () => {
   });
 
   it('rejects the wrong cleanup phrase before reading or deleting documents', async () => {
-    const app = buildApp();
-
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', dryRun: false, confirmation: 'DELETE STALE DOCUMENTS' });
 
@@ -254,9 +253,7 @@ describe('POST /api/rag/cleanup', () => {
 
   it('accepts the exact source-bound phrase and deletes stale documents with per-doc results', async () => {
     setupStaleMocks();
-    const app = buildApp();
-
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', dryRun: false, confirmation: CLEANUP_CONFIRMATION });
 
@@ -274,9 +271,7 @@ describe('POST /api/rag/cleanup', () => {
 
   it('defaults to dry-run when dryRun not specified', async () => {
     setupStaleMocks();
-    const app = buildApp();
-
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source' });
 
@@ -297,9 +292,7 @@ describe('POST /api/rag/cleanup', () => {
       ],
       total: 4
     });
-
-    const app = buildApp();
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', dryRun: false, maxDeletes: 2, confirmation: CLEANUP_CONFIRMATION });
 
@@ -321,9 +314,7 @@ describe('POST /api/rag/cleanup', () => {
       ],
       total: 3
     });
-
-    const app = buildApp();
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', dryRun: true, maxDeletes: 1 });
 
@@ -346,9 +337,7 @@ describe('POST /api/rag/cleanup', () => {
     mockVectorStore.deleteDocument
       .mockRejectedValueOnce(new Error('Qdrant timeout'))
       .mockResolvedValueOnce(true);
-
-    const app = buildApp();
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', dryRun: false, maxDeletes: 100, confirmation: CLEANUP_CONFIRMATION });
 
@@ -373,9 +362,7 @@ describe('POST /api/rag/cleanup', () => {
       total: 2
     });
     mockVectorStore.deleteDocument.mockResolvedValue(true);
-
-    const app = buildApp();
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', manifestId: 'specific-manifest-id', dryRun: false, confirmation: CLEANUP_CONFIRMATION });
 
@@ -387,9 +374,7 @@ describe('POST /api/rag/cleanup', () => {
 
   it('returns 404 when manifestId does not exist', async () => {
     RagManifest.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
-
-    const app = buildApp();
-    const res = await request(app)
+    const res = await request(server)
       .post('/api/rag/cleanup')
       .send({ source: 'test-source', manifestId: 'nonexistent-id', dryRun: false, confirmation: CLEANUP_CONFIRMATION });
 
@@ -408,9 +393,7 @@ describe('GET /api/rag/documents/:id', () => {
       { text: 'chunk0', chunkIndex: 0 },
       { text: 'chunk1', chunkIndex: 1 }
     ]);
-
-    const app = buildApp();
-    const res = await request(app).get('/api/rag/documents/doc1');
+    const res = await request(server).get('/api/rag/documents/doc1');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -421,9 +404,7 @@ describe('GET /api/rag/documents/:id', () => {
 
   it('returns 404 for unknown document', async () => {
     mockVectorStore.getDocument.mockResolvedValue(null);
-    const app = buildApp();
-
-    const res = await request(app).get('/api/rag/documents/unknown');
+    const res = await request(server).get('/api/rag/documents/unknown');
     expect(res.status).toBe(404);
   });
 });
@@ -437,9 +418,7 @@ describe('GET /api/rag/documents/:id/chunks', () => {
       { text: 'first chunk', chunkIndex: 0 },
       { text: 'second chunk', chunkIndex: 1 }
     ]);
-
-    const app = buildApp();
-    const res = await request(app).get('/api/rag/documents/doc1/chunks');
+    const res = await request(server).get('/api/rag/documents/doc1/chunks');
 
     expect(res.status).toBe(200);
     expect(res.body.data.chunks).toHaveLength(2);
