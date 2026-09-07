@@ -18,8 +18,7 @@
     }
   },
   "surfaces": [
-    { "id": "core-demo", "service": "core", "path": "/demo", "profiles": ["demo"], "journey": "learn", "critical": true, "performanceBudget": "standard" },
-    { "id": "core-portal", "service": "core", "path": "/", "profiles": ["full"], "journey": "operate", "critical": true, "performanceBudget": "standard" },
+    { "id": "core-portal", "service": "core", "path": "/portal/", "profiles": ["demo", "full"], "journey": "operate", "critical": true, "performanceBudget": "standard" },
     { "id": "core-playground", "service": "core", "path": "/playground", "profiles": ["demo", "full"], "journey": "try", "critical": true, "performanceBudget": "standard" },
     { "id": "core-models", "service": "core", "path": "/models", "profiles": ["demo", "full"], "journey": "configure", "critical": true, "performanceBudget": "standard" },
     { "id": "core-analytics", "service": "core", "path": "/analytics", "profiles": ["demo", "full"], "journey": "understand", "critical": false },
