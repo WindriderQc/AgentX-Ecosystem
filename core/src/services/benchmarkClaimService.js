@@ -651,6 +651,39 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     }
   }
 
+  // A failed exact restore deliberately leaves its finalizer token in place so
+  // neither the reaper nor an ordinary retry can race an ambiguous mutation.
+  // The sole takeover path is an adopted, live workload-recovery quarantine.
+  // Revalidate that durable ownership here (not only in the route caller), then
+  // CAS the old token directly to a new token below so there is no unfenced gap.
+  let quarantinedFinalizeToken = null;
+  if (existing.benchmarkClaim?.finalizeToken) {
+    const recovery = opts.recoveryOwnership;
+    if (recovery) {
+      const runtimeCoordinationService = require('./runtimeCoordinationService');
+      const ownership = await runtimeCoordinationService.assertWorkloadRecovery({
+        recoveryId: recovery.recoveryId,
+        recoveryGeneration: recovery.recoveryGeneration,
+        principal: recovery.principal,
+        ownerId: recovery.ownerId
+      });
+      const exactRecoveryOwner = ownership.owned === true
+        && ownership.recoveryState === 'UNKNOWN'
+        && ownership.admissionId === existing.benchmarkClaim.admissionId
+        && ownership.generation === existing.benchmarkClaim.admissionGeneration
+        && ownership.principal === existing.benchmarkClaim.admissionPrincipal
+        && ownership.workloadId === existing.benchmarkClaim.batchId;
+      if (!exactRecoveryOwner) {
+        return {
+          released: false,
+          reason: ownership.reason || 'exact UNKNOWN recovery quarantine does not own finalizer takeover',
+          pref: existing
+        };
+      }
+      quarantinedFinalizeToken = existing.benchmarkClaim.finalizeToken;
+    }
+  }
+
   if (!skipPinRestore && !legacyMissingGeneration
     && existing.benchmarkClaim?.preClaimRuntime?.exact !== true) {
     const deadline = Date.now() + CLAIM_SNAPSHOT_WAIT_MS;
@@ -700,7 +733,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
     status: 'benchmarking',
     'benchmarkClaim.batchId': batchId,
     'benchmarkClaim.claimGeneration': legacyMissingGeneration ? null : claimGeneration,
-    'benchmarkClaim.finalizeToken': null
+    'benchmarkClaim.finalizeToken': quarantinedFinalizeToken
   };
   if (legacyMissingGeneration) finalizingFilter['benchmarkClaim.claimedAt'] = expectedLegacyClaimedAt;
   if (expectedHeartbeatAt !== undefined) finalizingFilter['benchmarkClaim.heartbeatAt'] = expectedHeartbeatAt;
@@ -1240,6 +1273,9 @@ async function restoreClaimsForWorkloadRecovery({
   if (ownership.owned !== true) {
     return { restored: false, reason: ownership.reason || 'recovery quarantine ownership required', details: [] };
   }
+  if (ownership.recoveryState !== 'UNKNOWN') {
+    return { restored: false, reason: 'recovery quarantine must be UNKNOWN before host restoration', details: [] };
+  }
   const preferences = await HostPreference.find({
     'benchmarkClaim.admissionId': ownership.admissionId,
     'benchmarkClaim.admissionGeneration': ownership.generation,
@@ -1255,6 +1291,12 @@ async function restoreClaimsForWorkloadRecovery({
       admissionGeneration: ownership.generation,
       admissionPrincipal: principal,
       requireAdmissionProof: true,
+      recoveryOwnership: {
+        recoveryId,
+        recoveryGeneration,
+        principal,
+        ownerId
+      },
       excludedModels: Array.isArray(excludedModelsByHost?.[pref.hostUrl])
         ? excludedModelsByHost[pref.hostUrl]
         : []
