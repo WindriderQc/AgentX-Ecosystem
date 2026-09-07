@@ -49,7 +49,8 @@ const thinkingProfileService = require('../../../src/services/profiler/thinkingP
 const ollamaClient = require('../../../src/clients/ollamaClient');
 const ModelProfile = require('../../../models/ModelProfile');
 const ModelPerformanceProfile = require('../../../models/ModelPerformanceProfile');
-const { createProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+const { createProfilerAuthorityReceipt, verifyProfilerAuthorityReceipt } = require('../../../src/services/profiler/profilerAuthorityReceipt');
+const { BSON } = require('mongoose').mongo;
 const orchestrator = require('../../../src/services/profiler/profilerOrchestrator');
 
 const MODEL = 'owner/model:8b-q4';
@@ -151,6 +152,26 @@ beforeEach(() => {
 });
 
 describe('profile', () => {
+  it('keeps saved receipts valid after BSON persists absent probe measurements', async () => {
+    contextProbeService.probeModelContext.mockResolvedValue({
+      testedNumCtx: 8192,
+      steps: [{ numCtx: 8192, tokensPerSec: 42, passed: true, vramMiB: undefined }]
+    });
+    await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'standard', PROFILE_OPTIONS);
+    const payload = performanceProfiles.saveProfile.mock.calls[0][0];
+    const persisted = BSON.deserialize(BSON.serialize({ ...payload, _id: 'evidence-1' }));
+    const fields = modelProfileService.updateReadiness.mock.calls[0][3];
+    const readiness = {
+      evidenceId: 'evidence-1',
+      authorityReceipt: fields[`readiness.${HOST_ID}.authorityReceipt`]
+    };
+    expect(persisted.profile.probeSteps[0]).not.toHaveProperty('vramMiB');
+    expect(verifyProfilerAuthorityReceipt(readiness, persisted)).toBe(true);
+    expect(mockPrepareProfilerAuthorityWrite.mock.calls[0][0].details.profile).toEqual(payload.profile);
+    persisted.profile.probeSteps[0].tokPerSec = 999;
+    expect(verifyProfilerAuthorityReceipt(readiness, persisted)).toBe(false);
+  });
+
   it('records evidence for the exact requested tag without creating another model', async () => {
     const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS);
     expect(hostTestService.testModelOnHost).toHaveBeenCalledWith(MODEL, HOST_URL, expect.any(Object));
