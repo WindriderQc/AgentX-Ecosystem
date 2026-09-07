@@ -2,6 +2,7 @@ const JEST_TEST_TIMEOUT = Number(process.env.JEST_TEST_TIMEOUT || 60000);
 
 module.exports = {
   testEnvironment: 'node',
+  workerIdleMemoryLimit: '256MB',
   coverageDirectory: 'coverage',
   collectCoverageFrom: [
     'src/**/*.js',

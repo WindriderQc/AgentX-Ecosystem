@@ -41,7 +41,7 @@ async function run(serviceDir, args = process.argv.slice(2)) {
   const workerMode = args.some(arg => /^--(?:runInBand|maxWorkers)(?:=|$)/.test(arg) || /^-w(?:\d+)?$/.test(arg));
   console.log(`[test-run ${id}] log: ${path.join(outputDir, 'run.log')}`);
   const child = spawn(process.execPath, ['--max-old-space-size=4096', '--require', path.join(__dirname, 'ownerWatchdog.js'), jestBin,
-    ...(!workerMode ? [process.platform === 'win32' ? '--runInBand' : '--maxWorkers=2'] : []), ...args], {
+    ...(!workerMode ? ['--maxWorkers=2'] : []), ...args], {
     cwd: serviceDir, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['inherit', 'pipe', 'pipe']
   });
   child.stdout.on('data', data => { process.stdout.write(data); log.write(data); });

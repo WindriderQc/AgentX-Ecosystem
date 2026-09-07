@@ -22,9 +22,9 @@ and executable repository fixture tests remain in `test:unit` and `npm test`.
 Add pure tests to the no-DB config and verify that lane when expanding it.
 
 `test:unit`, `test:integration`, `test:nodb`, and `npm test` use the same launcher.
-It preserves Jest arguments/configuration, runs serially by default on Windows
-and with at most two workers elsewhere, and accepts explicit `--maxWorkers=2`
-or `--runInBand`. Multiple agents can run independent commands. Bound their
+It preserves Jest arguments/configuration, uses at most two workers by default,
+and recycles full-suite workers above 256 MB between files. Explicit
+`--maxWorkers` and `--runInBand` remain available. Multiple agents can run independent commands. Bound their
 combined resource use to the machine; worktrees alone do not isolate a shared
 external database.
 
