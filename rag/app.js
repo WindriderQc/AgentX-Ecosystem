@@ -19,6 +19,7 @@ const SERVICE_VERSION = require('./package.json').version || '0.0.0';
 
 const app = express();
 app.locals.publicUrls = getPublicUrls();
+app.locals.buildProductNavigation = require('../shared/productNavigation').buildProductNavigation;
 app.locals.agentxProfile = currentAgentXProfile();
 app.locals.coreOutboundClient = createCoreOutboundClient();
 const resolvePublicUrls = createCorePublicUrlsResolver({

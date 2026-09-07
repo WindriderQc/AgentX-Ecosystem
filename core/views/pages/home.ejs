@@ -1,0 +1,101 @@
+<main class="agentx-home">
+  <header class="agentx-home__masthead">
+    <a class="agentx-home__brand" href="/portal/" aria-label="Agent X home">
+      <span class="agentx-home__brand-mark" aria-hidden="true"><i class="fas fa-bolt"></i></span>
+      <span>Agent X</span>
+    </a>
+
+    <% if (locals.hostHome) { %>
+      <a class="home-host-link" id="host-home-link" href="<%= hostHome.url %>"><%= hostHome.label || 'Back to host' %></a>
+    <% } %>
+    <div class="agentx-home__readiness" id="homeReadiness" data-state="loading" role="status" aria-live="polite">
+      <span class="agentx-home__readiness-icon" aria-hidden="true"><i class="fas fa-circle-notch"></i></span>
+      <span class="agentx-home__readiness-copy">
+        <strong id="homeReadinessLabel">Checking readiness</strong>
+        <small id="homeReadinessDetail">Looking at chat, documents, and evaluation</small>
+      </span>
+      <button id="homeStatusRefresh" type="button" aria-label="Refresh Agent X readiness">
+        <i class="fas fa-rotate" aria-hidden="true"></i><span>Refresh</span>
+      </button>
+    </div>
+  </header>
+
+  <section class="agentx-home__hero" aria-labelledby="demo-title">
+    <p class="agentx-home__eyebrow">Local-first AI workspace</p>
+    <h1 id="demo-title">What do you want to do?</h1>
+    <p class="agentx-home__lede">
+      Start a conversation, explore your documents, or compare models.
+      Open the tools below whenever you want more control.
+    </p>
+  </section>
+
+  <section class="agentx-home__tasks" aria-label="Start with Agent X">
+    <a class="agentx-task-card agentx-task-card--primary" href="/playground">
+      <span class="agentx-task-card__icon" aria-hidden="true"><i class="fas fa-message"></i></span>
+      <span class="agentx-task-card__content">
+        <span class="agentx-task-card__kicker">Chat</span>
+        <strong>Start a conversation</strong>
+        <small>Ask, write, analyze, or brainstorm. If chat is not ready, it names an installed model you can choose.</small>
+      </span>
+      <span class="agentx-task-card__action">Start <i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+    </a>
+
+    <a class="agentx-task-card" href="/playground?persona=learning_guide">
+      <span class="agentx-task-card__icon" aria-hidden="true"><i class="fas fa-graduation-cap"></i></span>
+      <span class="agentx-task-card__content">
+        <span class="agentx-task-card__kicker">Persona</span>
+        <strong>Try a guided conversation</strong>
+        <small>Keep the decision visible while Learning Guide adapts the way Agent X explains.</small>
+      </span>
+      <span class="agentx-task-card__action">Try Learning Guide <i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+    </a>
+
+    <a class="agentx-task-card" href="<%= publicUrls.rag %>/upload">
+      <span class="agentx-task-card__icon" aria-hidden="true"><i class="fas fa-file-lines"></i></span>
+      <span class="agentx-task-card__content">
+        <span class="agentx-task-card__kicker">Your documents</span>
+        <strong>Use your own knowledge</strong>
+        <small>Add a document, then ask questions grounded in its contents.</small>
+      </span>
+      <span class="agentx-task-card__action">Add a document <i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+    </a>
+
+    <a class="agentx-task-card" href="<%= publicUrls.benchmark %>/">
+      <span class="agentx-task-card__icon" aria-hidden="true"><i class="fas fa-scale-balanced"></i></span>
+      <span class="agentx-task-card__content">
+        <span class="agentx-task-card__kicker">Model evidence</span>
+        <strong>Compare models</strong>
+        <small>See which models are faster, stronger, or more efficient on the same work.</small>
+      </span>
+      <span class="agentx-task-card__action">Open comparison <i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+    </a>
+  </section>
+
+  <details class="home-tools" id="homeTools">
+    <summary><span>All tools</span><small>Expand the workspace</small><i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+    <div class="home-tool-grid">
+      <% buildProductNavigation({ ...locals, service: 'core' }).navItems.filter(item => item.children).forEach(group => { %>
+        <section class="home-tool-group" aria-labelledby="home-<%= group.id %>">
+          <h2 id="home-<%= group.id %>"><i class="fas <%= group.icon %>" aria-hidden="true"></i> <%= group.label %></h2>
+          <ul>
+          <% group.children.forEach(item => { %>
+            <% if (item.section) { %>
+              <li class="home-tool-section"><%= item.section %></li>
+            <% } else if (item.action) { %>
+              <li><button type="button" data-home-action="<%= item.action %>"><%= item.label %></button></li>
+            <% } else { %>
+              <li><a href="<%= item.href %>" <% if (item.external) { %>target="_blank" rel="noopener"<% } %> <% if (item.description) { %>title="<%= item.description %>"<% } %>><%= item.label %><% if (item.owner) { %> <small><%= item.owner %></small><% } %></a></li>
+            <% } %>
+          <% }); %>
+          </ul>
+        </section>
+      <% }); %>
+    </div>
+  </details>
+  <details class="home-tools home-health">
+    <summary><span>System details</span><small id="homeUpdated">Not observed yet</small><i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+    <p>Core, Benchmark, and RAG HTTP contracts, required dependency health, and deployment consistency.</p>
+    <ul id="homeServiceDetails"><li>Checking services…</li></ul>
+    <p id="homeConsistency"></p>
+  </details>
+</main>
